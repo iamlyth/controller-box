@@ -1,0 +1,62 @@
+# Huntley-style implementation loop: fresh context, one repository writer.
+cli:
+  backend: "pi"
+  command: "./scripts/pi2-ollama.sh"
+
+event_loop:
+  prompt_file: "PROMPT.md"
+  completion_promise: "LOOP_COMPLETE"
+  starting_event: "factory.implement"
+  max_iterations: 1000
+  max_runtime_seconds: 31536000 # quota waits may span session or weekly resets
+
+core:
+  scratchpad: ".ralph/agent/scratchpad.md"
+  specs_dir: "docs/"
+
+features:
+  parallel: false
+  auto_merge: false
+
+hats:
+  worker:
+    name: "Factory Worker"
+    description: "Single repository writer with adaptive read-only subagents."
+    triggers: ["factory.implement"]
+    publishes: ["factory.implement"]
+    default_publishes: "factory.implement"
+    instructions: |
+      Follow PROMPT.md exactly. Complete one bounded ready task per fresh context.
+      You are the sole repository writer; all Pi subagents must remain read-only.
+
+hooks:
+  enabled: true
+  defaults:
+    timeout_seconds: 30
+  events:
+    pre.iteration.start:
+      - name: branch-guard
+        command: ["./scripts/branch-guard.sh"]
+        on_error: block
+      - name: plan-freshness
+        command: ["./scripts/check-plan-freshness.sh"]
+        on_error: block
+    post.iteration.start:
+      - name: protect-committed-spec
+        command: ["./scripts/check-plan-freshness.sh"]
+        on_error: block
+      - name: git-checkpoint
+        command: ["./scripts/git-commit-hook.sh"]
+        on_error: block
+      - name: ollama-usage-wait
+        command: ["./scripts/ollama-usage-guard.sh", "--wait"]
+        timeout_seconds: 691200 # eight days
+        on_error: block
+    pre.loop.complete:
+      - name: final-implementation-gate
+        command: ["./scripts/final-gate.sh", "--implementation"]
+        timeout_seconds: 3600
+        on_error: block
+      - name: final-git-checkpoint
+        command: ["./scripts/git-commit-hook.sh"]
+        on_error: block

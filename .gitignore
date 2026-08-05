@@ -1,0 +1,45 @@
+# Ralph volatile runtime state (durable recovery scratchpad is tracked)
+.ralph/api/
+.ralph/current-events
+.ralph/current-loop-id
+.ralph/diagnostics/
+.ralph/events*.jsonl
+.ralph/history.jsonl*
+.ralph/loop.lock
+.ralph/loops.json
+.ralph/restart-requested
+.ralph/tui-exports/
+.ralph/agent/*
+!.ralph/agent/scratchpad.md
+
+# Factory runtime state
+.factory-state/
+.factory-lock
+
+# Pi runtime output (agent definitions/settings remain tracked)
+.pi/output/
+.pi/subagent-schedules/
+.pi/agent-memory-local/
+
+# Ollama credentials and quota snapshots
+.ollama-usage-env
+.ollama-usage-state.json
+*.env
+
+# Generic build and generated artifacts
+build/
+build-*/
+target/
+dist/
+out/
+coverage/
+*.o
+*.a
+*.so
+*.log
+
+# Editor and OS files
+.DS_Store
+*.swp
+*.swo
+*~

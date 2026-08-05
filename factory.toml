@@ -1,0 +1,35 @@
+[project]
+spec = "docs/SPEC.md"
+plan = "IMPLEMENTATION_PLAN.md"
+development_branch = "develop"
+release_branch = "main"
+
+[concurrency]
+adaptive = true
+planning_subagents = 8
+research_subagents = 8
+review_subagents = 8
+implementation_advisors = 2
+mutating_workers = 1
+integration_workers = 1
+min_model_requests = 1
+max_model_requests = 8
+
+[quota]
+threshold_percent = 80
+poll_interval_seconds = 300
+max_wait_seconds = 0
+resume_after_reset = true
+retry_transient_errors = true
+
+[documentation]
+required = true
+readme = "README.md"
+operations = "docs/OPERATIONS.md"
+final_task_title = "Final documentation and specification audit"
+
+[git]
+autonomous_branch = "develop"
+human_release_branch = "main"
+allow_worktrees = false
+checkpoint_each_iteration = true

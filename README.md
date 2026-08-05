@@ -1,0 +1,180 @@
+# Ralph Software Factory Boilerplate
+
+A reusable, single-writer implementation of Geoffrey Huntley's Ralph Wiggum development technique using Ralph Orchestrator, jailed Pi, Ollama, adaptive read-only subagents, Git checkpoints, quota waiting, and crash recovery.
+
+`docs/SPEC.md` is retained as the first trial specification. Product implementation is intentionally absent on this branch.
+
+## Operating model
+
+- `main` is the human-controlled release branch.
+- `develop` is the autonomous implementation branch.
+- One committed `docs/SPEC.md` is the source of truth; Git versions it.
+- A planning-only Ralph loop creates `IMPLEMENTATION_PLAN.md` for the exact spec commit.
+- Each implementation iteration selects one bounded task and starts with fresh model context.
+- Pi subagents perform parallel read-only planning, research, review, security, and documentation analysis.
+- Exactly one primary worker may edit, stage, or commit repository files.
+- Tests and documentation are completion gates.
+- You review `develop` and manually promote it to `main`.
+
+No Git worktrees are used. `features.parallel` is disabled in both Ralph configurations.
+
+## Prerequisites
+
+- Ralph Orchestrator with the native Pi backend
+- `pi2` configured with the `@tintinweb/pi-subagents` extension
+- Ollama provider/model access
+- Bash, Git, Python 3.11+, curl, flock, and optionally ShellCheck
+- A clean `develop` branch with at least one commit
+
+The project tracks `.pi/subagents.json` with a maximum of eight simultaneous read-only subagents. Project agents in `.pi/agents/` intentionally expose no `bash`, `edit`, or `write` tools.
+
+## Initial setup
+
+1. Merge this boilerplate branch into `develop`.
+2. Configure Ollama Cloud usage credentials:
+
+   ```bash
+   source scripts/update-ollama-cookies.sh
+   ```
+
+3. Confirm access and quota parsing:
+
+   ```bash
+   ./scripts/ollama-usage-guard.sh --check
+   ```
+
+4. Edit `docs/SPEC.md` and commit it separately:
+
+   ```bash
+   git add docs/SPEC.md
+   git commit -m "spec: define the next release"
+   ```
+
+## Plan
+
+Run the planning-only fresh-context loop:
+
+```bash
+./scripts/ralph-plan.sh
+```
+
+The planner may only modify `IMPLEMENTATION_PLAN.md` and the recovery scratchpad. The generated plan records:
+
+- the spec path;
+- the latest commit that changed the spec;
+- the exact spec blob ID;
+- the base commit;
+- bounded tasks, dependencies, acceptance evidence, and documentation impact;
+- a mandatory final documentation/specification audit.
+
+Inspect the plan before implementation. `scripts/check-plan-freshness.sh` prevents a stale plan from running after the specification changes.
+
+For a headless planning loop:
+
+```bash
+./scripts/ralph-plan.sh --no-tui
+```
+
+## Implement
+
+Start the single-writer build loop:
+
+```bash
+./scripts/ralph-run.sh
+```
+
+Each iteration:
+
+1. validates branch and plan freshness;
+2. waits for Ollama quota when necessary;
+3. selects one ready task;
+4. fans out only read-only analysis;
+5. implements and tests one task with one writer;
+6. updates the plan and recovery scratchpad;
+7. creates a Git checkpoint;
+8. exits so the next task receives fresh context.
+
+Only the final documentation and specification audit may produce `LOOP_COMPLETE`.
+
+## Adaptive concurrency
+
+Configured ceilings live in `factory.toml`:
+
+```toml
+[concurrency]
+adaptive = true
+planning_subagents = 8
+research_subagents = 8
+review_subagents = 8
+implementation_advisors = 2
+mutating_workers = 1
+integration_workers = 1
+min_model_requests = 1
+max_model_requests = 8
+```
+
+These are ceilings, not targets. The coordinating agent starts with the smallest useful fan-out and increases only for independent read-only work. Source mutation and integration remain serialized.
+
+## Quota waiting
+
+Every iteration invokes:
+
+```bash
+./scripts/ollama-usage-guard.sh --wait
+```
+
+When session or weekly utilization reaches the configured threshold, the hook remains alive and polls until usage resets below it. Transient network errors are retried. Expired cookies stop with an actionable error rather than waiting forever.
+
+Useful settings in `.ollama-usage-env`:
+
+```bash
+OLLAMA_THRESHOLD=80
+OLLAMA_WAIT_INTERVAL_SECONDS=300
+OLLAMA_WAIT_MAX_SECONDS=0  # unlimited
+```
+
+If the backend reaches quota during an already-running request, `scripts/ralph-run.sh` checks quota, waits, repairs runtime markers, and resumes with `--continue`.
+
+## Stop and recover
+
+Ralph has no true pause control. `Ctrl+C` aborts the active backend. Resume later with:
+
+```bash
+./scripts/ralph-recover.sh
+```
+
+Preview recovery without changes:
+
+```bash
+./scripts/ralph-recover.sh --dry-run
+```
+
+Planning recovery uses:
+
+```bash
+./scripts/ralph-recover.sh --mode planning
+```
+
+Recovery never resets Git or starts a second writer. See `docs/OPERATIONS.md` for details.
+
+## Verify
+
+```bash
+./scripts/verify-boilerplate.sh
+```
+
+The verifier checks shell syntax, ShellCheck when available, TOML/JSON configuration, read-only agent tools, single-writer settings, quota behavior, plan freshness, branch policy, removed product artifacts, and secret tracking.
+
+Project implementation plans should add their own build, lint, test, and documentation commands to the final gate.
+
+## Release
+
+After Ralph reports completion, review `develop`. Release manually:
+
+```bash
+git switch main
+git merge --no-ff develop
+git tag vX.Y.Z
+```
+
+For the next release, update the same `docs/SPEC.md` in a dedicated commit, run a new planning loop, and execute a new implementation loop. Git retains prior specifications and plans.
