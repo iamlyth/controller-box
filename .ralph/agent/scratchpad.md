@@ -850,3 +850,106 @@ Alternatively Task 15 (CreateCompositeDevice temp file + GamepadOrder persistenc
 — deps: Task 11+12+6 (all done).
 Alternatively Task 16 (SVG assets + icon mapping) — deps: Task 1 (done).
 Check `ralph tools task ready` and the plan.
+
+## Task 14 (complete) — Source/target device properties and InputEvent signal handling
+
+### What landed
+- `tests/dbus_mock.h`: Added 5 new DBus interface constants:
+  IP_IFACE_SOURCE_EVENT ("org.shadowblip.Input.Source.EventDevice"),
+  IP_IFACE_SOURCE_UDEV ("org.shadowblip.Input.Source.UdevDevice"),
+  IP_IFACE_SOURCE_HIDRAW ("org.shadowblip.Input.Source.HIDRawDevice"),
+  IP_IFACE_TARGET ("org.shadowblip.Input.Target"),
+  IP_IFACE_DBUS_DEVICE ("org.shadowblip.Input.DBusDevice").
+  Added ip_input_event_payload struct (sender, path, event, value).
+- `src/dbus/ip_source.h/c`: 7 source device property getters. Each takes
+  iface parameter since source interface varies by device type
+  (EventDevice/UdevDevice vs HIDRawDevice). Properties: Name, UniqueId,
+  PhysPath, IdVendor, IdProduct, IdBustype, SerialNumber.
+- `src/dbus/ip_target.h/c`: 2 target device property getters. Properties:
+  Name, DeviceType. Uses IP_IFACE_TARGET constant (no iface parameter).
+- `src/dbus/ip_input_signal.h/c`: InputEvent signal handler. Includes:
+  - ip_input_id enum (23 inputs: UP/DOWN/LEFT/RIGHT, A/B/X/Y,
+    START/SELECT/GUIDE, L1/R1/L2/R2, L3/R3, LEFT/RIGHT_STICK_X/Y)
+  - ip_input_category (BUTTON/AXIS)
+  - Event string parsing with alias support (Back→Select, Home→Guide,
+    LeftBumper→L1, LeftTrigger→L2, LeftStick→L3, etc.)
+  - Value validation: buttons 0.0/1.0, axes [-1.0, 1.0], NaN/infinity rejected
+  - Rate limiting: max 200 events/sec per device path (sliding 1-sec window,
+    per-device tracking in ip_rate_limiter_entry array of 64 slots)
+  - Sender verification on all signals
+  - ip_input_events struct with backend, bus, expected_sender, callback,
+    cb_userdata, rate_limiters[64]
+- `src/dbus/dbus_client.c`: Added sd_input_event_callback (parses "sd"
+  signature), routing in sd_subscribe_signal for IP_IFACE_DBUS_DEVICE
+  InputEvent. Added #include "ip_input_signal.h".
+- `tests/test_source_props.c`: 30 cmocka tests (4 per property × 7 properties
+  + 2 extra: Name hidraw, IdVendor hidraw). Tests: success, error,
+  no-expectation, NULL args.
+- `tests/test_target_props.c`: 10 cmocka tests (4 per property × 2 properties
+  + 2 extra: ds5, deck DeviceType). Tests: success, error, no-expectation,
+  NULL args.
+- `tests/test_input_signal.c`: 37 cmocka tests. Tests: parsing (dpad, face,
+  center, shoulders, stick clicks, axes, unknown/NULL/case-sensitive),
+  category (buttons, axes), value validation (button 0/1/NaN/Inf, axis
+  range), init, subscribe, handler (valid button/axis, release, wrong/null
+  sender, unknown event, invalid values, null payload/handler/callback/
+  path/event), rate limiting (under 200, over 201st dropped, per-device,
+  reset), integration (inject_signal, wrong sender, multiple events, axis).
+- `CMakeLists.txt`: Added ip_input_signal.c, ip_source.c, ip_target.c.
+- `tests/CMakeLists.txt`: Added test_source_props, test_target_props,
+  test_input_signal targets.
+- `docs/DBus-API.md`: Added Source/Target Device Properties and InputEvent
+  section with interface tables, wrapper APIs, input enum mapping table,
+  production backend details.
+- `IMPLEMENTATION_PLAN.md`: Task 14 status → complete.
+
+### Verification (all pass)
+- clean build (Debug -Werror, no warnings)
+- ctest 19/19: all previous + test_source_props, test_target_props,
+  test_input_signal
+- test_source_props 30/30 cmocka tests pass
+- test_target_props 10/10 cmocka tests pass
+- test_input_signal 37/37 cmocka tests pass
+- verify-boilerplate, check-plan-freshness, branch-guard → exit 0
+
+### Gotchas fixed
+- **Missing <stdio.h> in ip_input_signal.c**: snprintf needs <stdio.h>.
+  Initially only had <errno.h>, <math.h>, <string.h>, <time.h>.
+- **Missing <stdio.h> in test_input_signal.c**: Same issue, snprintf in
+  capture_cb. Also added <stdbool.h> for bool type.
+- **Include path for source headers**: Test files must include
+  "dbus/ip_source.h" not "ip_source.h" since include path is src/ not src/dbus/.
+- **NULL bus not checked by wrappers**: Source/target wrappers initially
+  only checked !backend, not !bus. When bus=NULL, mock returned -ENXIO not
+  -EINVAL. Fixed by adding !bus to the NULL check in all source/target
+  wrappers.
+
+### Design decisions
+- **Source wrappers take iface as parameter**: Unlike target (fixed
+  IP_IFACE_TARGET) and composite (fixed IP_IFACE_COMPOSITE), source device
+  properties are spread across 3 interfaces (EventDevice, UdevDevice,
+  HIDRawDevice). The caller must pass the correct interface for the device
+  type. This is because serial is UniqueId on evdev/udev but SerialNumber
+  on HIDRaw (SPEC §10.2).
+- **L2/R2 as buttons by default**: In the input table, L2 and R2 are
+  categorized as BUTTON (value 0.0/1.0). Some controllers send them as
+  analog axes (0.0..1.0), but the category is determined by the event
+  string, not the value. If InputPlumber sends L2 as a button event,
+  it gets BUTTON category; if as an axis, it would need a different
+  event string. This may need revisiting in Task 22 (input event mapping).
+- **Alias event strings**: Included common aliases (Back→Select,
+  Home→Guide, LeftBumper→L1, RightBumper→R1, LeftTrigger→L2,
+  RightTrigger→R2, LeftStick→L3, RightStick→R3) for robustness against
+  InputPlumber naming variations.
+- **Rate limiter uses clock_gettime(CLOCK_MONOTONIC)**: In tests, all
+  events arrive within the same millisecond, so 201 events triggers the
+  200/sec limit naturally without mocking time.
+- **Per-device rate limiting**: Rate limiter tracks up to 64 devices
+  (IP_INPUT_MAX_DEVICES). Each entry stores device_path, event_count,
+  and window_start_ms. Window resets after 1000ms.
+
+### Next
+Task 15 (CreateCompositeDevice temp file + GamepadOrder persistence) —
+deps: Task 11+12+6 (all done).
+Alternatively Task 16 (SVG assets + icon mapping) — deps: Task 1 (done).
+Check `ralph tools task ready` and the plan.
