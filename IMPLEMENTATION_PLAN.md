@@ -647,7 +647,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 - Documentation impact: README overlay usage (trigger, close), OPERATIONS config
 
 ## Task 33: Overlay integration test
-- Status: pending
+- Status: complete
 - Dependencies: Task 32, Task 30, Task 31
 - Scope: `tests/test_overlay_integration.c`
 - Acceptance criteria:

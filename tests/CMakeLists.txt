@@ -346,6 +346,15 @@ if(CMOCKA_FOUND)
     target_link_libraries(test_close PRIVATE controllerbox cbx_test_support)
     add_test(NAME test_close COMMAND test_close)
 
+    # Task 33 — Overlay integration test: full lifecycle with mock DBus +
+    # SDL2 dummy driver (trigger → activate → navigate → profile → conflict →
+    # host mode → close → assignments saved).
+    add_executable(test_overlay_integration tests/test_overlay_integration.c)
+    target_link_libraries(test_overlay_integration PRIVATE controllerbox cbx_test_support)
+    add_test(NAME test_overlay_integration COMMAND test_overlay_integration)
+    set_tests_properties(test_overlay_integration PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+
     # Help later tasks: tests that need the dummy driver can set it here.
     set_tests_properties(test_sdl_dummy PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
