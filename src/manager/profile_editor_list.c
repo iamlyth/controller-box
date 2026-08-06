@@ -32,6 +32,11 @@
 #define CBX_PE_STATUS_H   36
 #define CBX_PE_TARGET_LIST_H 420
 
+/* Progress bar (sequential mode, Task 38) */
+#define CBX_PE_PROGRESS_W  580
+#define CBX_PE_PROGRESS_H  24
+#define CBX_PE_PROGRESS_Y  (CBX_PE_LIST_Y + CBX_PE_LIST_H + 8)
+
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
@@ -252,12 +257,28 @@ cbx_profile_editor_init(cbx_profile_editor *ed,
         CBX_PE_STATUS_H };
     cbx_widget_set_rect(&ed->status_lbl.base, &status_rect);
 
+    /* --- Progress bar (Task 38 — sequential mode) ------------------- */
+    rc = cbx_progress_init(&ed->progress_bar, theme);
+    if (rc != 0) {
+        cbx_widget_destroy(&ed->diagram.base);
+        cbx_widget_destroy(&ed->title_lbl.base);
+        cbx_widget_destroy(&ed->binding_list.base);
+        cbx_widget_destroy(&ed->target_list.base);
+        cbx_widget_destroy(&ed->status_lbl.base);
+        return rc;
+    }
+    SDL_Rect prog_rect = { CBX_PE_LIST_X, CBX_PE_PROGRESS_Y,
+                             CBX_PE_PROGRESS_W, CBX_PE_PROGRESS_H };
+    cbx_widget_set_rect(&ed->progress_bar.base, &prog_rect);
+    cbx_widget_set_visible(&ed->progress_bar.base, false);
+
     /* --- Add widgets to panel ------------------------------------- */
     cbx_panel_add_child(panel, &ed->title_lbl.base);
     cbx_panel_add_child(panel, &ed->diagram.base);
     cbx_panel_add_child(panel, &ed->binding_list.base);
     cbx_panel_add_child(panel, &ed->target_list.base);
     cbx_panel_add_child(panel, &ed->status_lbl.base);
+    cbx_panel_add_child(panel, &ed->progress_bar.base);
 
     return 0;
 }
@@ -275,6 +296,7 @@ cbx_profile_editor_shutdown(cbx_profile_editor *ed)
         cbx_panel_remove_child(ed->panel, &ed->binding_list.base);
         cbx_panel_remove_child(ed->panel, &ed->target_list.base);
         cbx_panel_remove_child(ed->panel, &ed->status_lbl.base);
+        cbx_panel_remove_child(ed->panel, &ed->progress_bar.base);
     }
 
     cbx_widget_destroy(&ed->title_lbl.base);
@@ -282,6 +304,7 @@ cbx_profile_editor_shutdown(cbx_profile_editor *ed)
     cbx_widget_destroy(&ed->binding_list.base);
     cbx_widget_destroy(&ed->target_list.base);
     cbx_widget_destroy(&ed->status_lbl.base);
+    cbx_widget_destroy(&ed->progress_bar.base);
 
     memset(ed, 0, sizeof(*ed));
 }
@@ -535,6 +558,11 @@ cbx_profile_editor_cancel(cbx_profile_editor *ed)
         return 0;
     }
 
+    if (ed->mode == CBX_EDITOR_MODE_SEQUENTIAL) {
+        cbx_profile_editor_cancel_sequential(ed);
+        return 0;
+    }
+
     return -ENOENT;  /* in list mode, nothing to cancel */
 }
 
@@ -681,12 +709,19 @@ cbx_profile_editor_on_input_event(ip_input_id input,
                                     const char *device_path,
                                     void *userdata)
 {
-    (void)input;
-    (void)category;
-    (void)device_path;
-
     cbx_profile_editor *ed = (cbx_profile_editor *)userdata;
-    if (!ed || !ed->capture_active)
+    if (!ed)
+        return;
+
+    /* Dispatch to sequential mode handler if active */
+    if (ed->mode == CBX_EDITOR_MODE_SEQUENTIAL) {
+        cbx_profile_editor_seq_on_input(input, category, value,
+                                           raw_event, device_path, userdata);
+        return;
+    }
+
+    /* Otherwise, handle capture mode */
+    if (!ed->capture_active)
         return;
 
     /* Only capture button presses (value == 1.0), not releases */

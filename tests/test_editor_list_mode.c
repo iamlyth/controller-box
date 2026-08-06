@@ -152,7 +152,7 @@ static void test_init_basic(void **state)
     pe_fixture *f = *state;
 
     /* Panel should have children added by editor */
-    assert_int_equal(cbx_panel_child_count(&f->panel), 5);
+    assert_int_equal(cbx_panel_child_count(&f->panel), 6);
 
     /* Mode should be LIST */
     assert_int_equal(cbx_profile_editor_get_mode(&f->ed),

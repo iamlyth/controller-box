@@ -397,6 +397,18 @@ if(CMOCKA_FOUND)
     set_tests_properties(test_editor_list_mode PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
 
+    # Task 38 — Profile editor: sequential binding mode and validation.
+    add_executable(test_profile_validate tests/test_profile_validate.c)
+    target_link_libraries(test_profile_validate PRIVATE controllerbox cbx_test_support PkgConfig::CMOCKA)
+    add_test(NAME test_profile_validate COMMAND test_profile_validate)
+
+    add_executable(test_editor_seq_mode tests/test_editor_seq_mode.c)
+    target_link_libraries(test_editor_seq_mode PRIVATE controllerbox cbx_test_support PkgConfig::CMOCKA)
+    target_compile_definitions(test_editor_seq_mode PRIVATE CBX_FONT_PATH="${CBX_FONT_PATH}")
+    add_test(NAME test_editor_seq_mode COMMAND test_editor_seq_mode)
+    set_tests_properties(test_editor_seq_mode PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+
 else()
     message(STATUS "cmocka not found — unit tests skipped (smoke tests still built)")
 endif()

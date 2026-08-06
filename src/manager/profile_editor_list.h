@@ -52,6 +52,7 @@ typedef enum {
     CBX_EDITOR_MODE_LIST = 0,      /* browsing bindings */
     CBX_EDITOR_MODE_TARGET_PICK,  /* choosing target event */
     CBX_EDITOR_MODE_CAPTURE,      /* waiting for physical button press */
+    CBX_EDITOR_MODE_SEQUENTIAL,   /* sequential binding mode (Task 38) */
 } cbx_editor_mode;
 
 /* ------------------------------------------------------------------ */
@@ -110,6 +111,11 @@ typedef struct {
     ip_input_events input_events;
     bool            capture_active;
     cbx_diag_button captured_button;
+
+    /* --- Sequential binding mode state (Task 38) ------------------ */
+    cbx_progress progress_bar;     /* completion progress bar */
+    int           seq_step;        /* current button index in sequence */
+    bool          seq_active;      /* sequential mode in progress */
 } cbx_profile_editor;
 
 /* ------------------------------------------------------------------ */
@@ -279,5 +285,53 @@ int             cbx_profile_editor_get_editing_index(
     const cbx_profile_editor *ed);
 bool            cbx_profile_editor_is_capture_active(
     const cbx_profile_editor *ed);
+
+/* ------------------------------------------------------------------ */
+/*  Sequential binding mode (Task 38)                                */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Begin sequential binding mode: the editor prompts for each button
+ * in order (UP, DOWN, LEFT, RIGHT, A, B, X, Y, START, SELECT, GUIDE,
+ * L1, R1, L2, R2, L3, R3).  The diagram lights up the current button.
+ * Press a physical button -> captured -> auto-advance.  B skips,
+ * Start cancels.
+ *
+ * Returns 0 on success, negative errno on error.
+ */
+int cbx_profile_editor_begin_sequential(cbx_profile_editor *ed);
+
+/* Cancel sequential mode and return to list mode. */
+void cbx_profile_editor_cancel_sequential(cbx_profile_editor *ed);
+
+/*
+ * Skip the current button in sequential mode (B button action).
+ * Returns 0 on success, -ENOENT if not in sequential mode.
+ */
+int cbx_profile_editor_seq_skip(cbx_profile_editor *ed);
+
+/*
+ * InputEvent handler for sequential mode — called when a physical
+ * button is pressed.  Captures the button, advances to the next step.
+ */
+void cbx_profile_editor_seq_on_input(ip_input_id input,
+                                        ip_input_category category,
+                                        double value,
+                                        const char *raw_event,
+                                        const char *device_path,
+                                        void *userdata);
+
+/* Get sequential mode progress (0.0 to 1.0). */
+double cbx_profile_editor_seq_progress(const cbx_profile_editor *ed);
+
+/* Get the current button being prompted in sequential mode. */
+cbx_diag_button cbx_profile_editor_seq_current_button(
+    const cbx_profile_editor *ed);
+
+/* Get the current step index (0-based) in sequential mode. */
+int cbx_profile_editor_seq_get_step(const cbx_profile_editor *ed);
+
+/* Check if sequential mode is active. */
+bool cbx_profile_editor_seq_is_active(const cbx_profile_editor *ed);
 
 #endif /* CBX_PROFILE_EDITOR_LIST_H */

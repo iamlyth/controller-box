@@ -728,9 +728,9 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 - Documentation impact: PROFILES.md editor section
 
 ## Task 38: Profile editor — sequential binding mode and validation
-- Status: pending
+- Status: complete
 - Dependencies: Task 37, Task 21
-- Scope: `src/manager/profile_editor_seq.c`, `src/manager/profile_validate.c`
+- Scope: `src/manager/profile_editor_seq.c`, `src/manager/profile_validate.c`, `src/manager/profile_editor_seq.h`, `src/manager/profile_validate.h`
 - Acceptance criteria:
   - Sequential mode: prompts for each button in order, diagram lights current button
   - Press physical button → captured → auto-advance
