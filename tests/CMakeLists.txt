@@ -66,6 +66,15 @@ if(CMOCKA_FOUND)
 
     add_test(NAME test_profile_yaml COMMAND test_profile_yaml)
 
+    # Profile metadata sidecar + filesystem enumeration test (Task 8):
+    # sidecar parse/serialize/save/load, filename validation, O_NOFOLLOW,
+    # realpath verification, YAML security, profile enumeration, metadata
+    # merging, sorting, device config/capability map listing.
+    add_executable(test_profile_list tests/test_profile_list.c)
+    target_link_libraries(test_profile_list PRIVATE controllerbox PkgConfig::CMOCKA)
+
+    add_test(NAME test_profile_list COMMAND test_profile_list)
+
     # Help later tasks: tests that need the dummy driver can set it here.
     set_tests_properties(test_sdl_dummy PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")

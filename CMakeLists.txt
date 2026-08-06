@@ -75,6 +75,8 @@ add_library(controllerbox STATIC
     src/config/config_settings.c
     src/config/config_assignments.c
     src/config/config_profile.c
+    src/config/config_profile_meta.c
+    src/config/config_profile_list.c
     src/dbus/dbus_client.c
     src/ui/widget.c)
 target_include_directories(controllerbox

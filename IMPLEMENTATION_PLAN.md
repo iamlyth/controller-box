@@ -218,7 +218,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 - Evidence: `cmake --build build` clean (Debug -Werror, no warnings); ctest 8/8 pass; `test_profile_yaml` 26/26 cmocka tests pass (init defaults, parse spec example, parse empty mapping, parse multiple mappings, parse multiple source props, parse missing fields, parse empty file, parse scalar source event, serialize basic, round-trip, round-trip multiple mappings, round-trip empty mapping, validate valid/invalid version/invalid kind/null, save rejects invalid, file round-trip, load nonexistent, save atomic mode 0644, max doc size 1MB, custom tags rejected, tag directives rejected, max depth 50, serialize null args, complex target event accepted); `src/config/config_profile.{h,c}` implement libyaml event-based parser with state machine for nested device_profile_v1 schema (source_event with dynamic device-class key + props mapping, target_events with device-class + scalar value; complex target events with mapping values accepted via skip mechanism) + document-based emitter with 2-space indent + atomic write (mkstemp + fchmod 0644 + fsync + rename); API: `cbx_profile_init/load/parse/validate/save/serialize` (load from file path, parse from YAML string, serialize to malloc'd buffer via open_memstream); verify-boilerplate, check-plan-freshness, branch-guard exit 0.
 
 ## Task 8: Profile metadata sidecar and filesystem enumeration
-- Status: pending
+- Status: complete
 - Dependencies: Task 7
 - Scope: `src/config/config_profile_meta.c`, `src/config/config_profile_list.c`
 - Acceptance criteria:
@@ -240,6 +240,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
   - `tests/test_profile_list.c` passes with fixture directory
 - Verification: `cmake --build build && ./build/test_profile_list`
 - Documentation impact: PROFILES.md file layout section
+- Evidence: `cmake --build build` clean (Debug -Werror, no warnings); ctest 9/9 pass; `test_profile_list` 34/34 cmocka tests pass (12 simple + 22 env: meta init/parse-all-fields/parse-partial/parse-empty/parse-unknown-keys/serialize, filename validation, custom-tags-rejected, tag-directives-rejected, max-depth, save-for-invalid-name, enumerate-dirs-null, meta round-trip-file mode 0600, load-nonexistent, O_NOFOLLOW load (symlink → -ELOOP), save-for/load-for with realpath verification, load-for-nonexistent, max-doc-size 1MB, enumerate empty/user-only/system-only/both-dedup/default-readonly/with-sidecar/partial-sidecar/no-sidecar/no-profile-name-fallback/sorted-by-order-then-name/sorted-same-order-by-name/ignores-non-yaml, file-list-enumerate/empty/nonexistent-dir, enumerate-real-paths integration); `src/config/config_profile_meta.{h,c}` implement sidecar parse/serialize/load/save with O_NOFOLLOW, atomic write (mkstemp + fchmod 0600 + fsync + rename), realpath + base-dir verification, filename validation ^[a-zA-Z0-9_-]+$, libyaml parser (max depth 50, max doc 1MB, no tags/tag directives); `src/config/config_profile_list.{h,c}` implement profile enumeration from user+system dirs with dedup, sidecar merge, default profile read-only, sorted by display_order then display_name, device config/capability map enumeration; `cbx_validate_filename()` utility; verify-boilerplate, check-plan-freshness, branch-guard exit 0.
 
 ### Phase 3: DBus Client Layer
 
