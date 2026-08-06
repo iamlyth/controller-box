@@ -499,7 +499,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 - Documentation impact: none
 
 ## Task 24: Pre-built overlay surface infrastructure (render-to-texture)
-- Status: pending
+- Status: complete
 - Dependencies: Task 23, Task 18
 - Scope: `src/overlay/surface_build.c`, `src/overlay/surface_build.h`
 - Acceptance criteria:

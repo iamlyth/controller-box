@@ -109,7 +109,8 @@ add_library(controllerbox STATIC
     src/ui/focus.c
     src/ui/input_map.c
     src/ui/animation.c
-    src/ui/dirty_rect.c)
+    src/ui/dirty_rect.c
+    src/overlay/surface_build.c)
 target_include_directories(controllerbox
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/src"

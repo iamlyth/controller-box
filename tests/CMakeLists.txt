@@ -276,6 +276,13 @@ if(CMOCKA_FOUND)
     set_tests_properties(test_animation PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
 
+    # Task 24 — Pre-built overlay surface infrastructure
+    add_executable(test_surface_build tests/test_surface_build.c)
+    target_link_libraries(test_surface_build PRIVATE controllerbox PkgConfig::CMOCKA)
+    add_test(NAME test_surface_build COMMAND test_surface_build)
+    set_tests_properties(test_surface_build PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+
     # Help later tasks: tests that need the dummy driver can set it here.
     set_tests_properties(test_sdl_dummy PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
