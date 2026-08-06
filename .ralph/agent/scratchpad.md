@@ -2765,3 +2765,99 @@ Alternatively Task 38 (Profile editor — sequential binding mode and
 validation) — deps: Task 37.
 Alternatively Task 39 (Profile save and Settings tab) — deps: Task 38.
 Check `ralph tools task ready` and the plan.
+
+## Task 37 (complete) — Profile editor — controller diagram and binding list mode
+
+### What landed
+- `src/manager/profile_diagram.h`: cbx_profile_diagram struct (custom
+  cbx_widget with base_texture, highlight_color, highlighted button).
+  cbx_diag_button enum (17 buttons: UP/DOWN/LEFT/RIGHT, A/B/X/Y,
+  START/SELECT/GUIDE, L1/R1/L2/R2, L3/R3). cbx_diag_button_pos struct
+  with normalized (0.0–1.0) coordinates. API: init/shutdown,
+  highlight/clear/get_highlight, get_button_pos, button_from_name,
+  button_name, button_count.
+- `src/manager/profile_diagram.c`: Full implementation. Static button
+  position table for generic gamepad layout. SVG base texture loading
+  via nanosvg (optional, falls back to plain background). Custom vtable
+  with draw (background + base texture + highlight overlay),
+  get_rect, set_rect, destroy. NULL-safe throughout.
+- `src/manager/profile_editor_list.h`: cbx_profile_editor struct
+  (profile, diagram, binding_list, target_list, status/title labels,
+  panel borrowed, rendering deps borrowed, DBus deps borrowed, targets
+  array, cap_maps, mode, selected/editing indices, capture state).
+  Modes: LIST, TARGET_PICK, CAPTURE. API: init/shutdown,
+  load_profile/get_profile, set_dbus, load_capabilities, refresh,
+  move_up/down, activate, cancel, begin/confirm/cancel_target_pick,
+  begin/cancel_capture, on_input_event, accessors.
+- `src/manager/profile_editor_list.c`: Full implementation. Init
+  populates panel with 5 children (title, diagram, binding_list,
+  target_list hidden, status). Load_profile copies profile and
+  refreshes. Refresh rebuilds binding list from mappings with
+  "source → target" labels. Navigation wraps around. Diagram syncs
+  via source_event button name → cbx_profile_diagram_button_from_name.
+  Target pick populates from capabilities (DBus or defaults). Capture
+  uses ip_input_events, only captures button presses (value 1.0).
+- `tests/test_profile_diagram.c`: 23 cmocka tests (button count=17,
+  position lookup valid/all/invalid, name mapping known/unknown/
+  roundtrip/invalid, highlight set/clear/none/all/invalid/null-safe,
+  init basic/null-args, shutdown null-safe/cleans-up, render no-crash/
+  all-buttons/with-rect/null-safe, SVG nonexistent path).
+- `tests/test_editor_list_mode.c`: 35 cmocka tests with SDL2 dummy
+  driver + mock DBus. Tests: init basic/null/shutdown, load_profile/
+  null/empty, move_down/up/wrap_down/wrap_up/empty, diagram_sync_on_load/
+  on_move/empty/unknown, activate_enters/no_selection, target_pick_
+  has_targets/confirm/cancel, cancel_in_list_mode, load_capabilities_
+  defaults/dbus/dbus_error, begin_capture/no_selection, cancel_capture,
+  capture_input_event/ignores_release/null_safe, accessors_null_safe,
+  status_message, render_no_crash/target_pick, full_workflow.
+- `CMakeLists.txt`: Added profile_diagram.c and profile_editor_list.c
+  to controllerbox STATIC.
+- `tests/CMakeLists.txt`: Added test_profile_diagram and
+  test_editor_list_mode with SDL_VIDEODRIVER=dummy.
+- `IMPLEMENTATION_PLAN.md`: Task 37 → complete.
+
+### Verification (all pass)
+- clean build (Debug -Werror, no warnings)
+- ctest 55/55: all previous + test_profile_diagram (23) + test_editor_list_mode (35)
+- verify-boilerplate → exit 0
+
+### Gotchas fixed
+- nanosvg headers must NOT be included with NANOSVG_IMPLEMENTATION/
+  NANOSVGRAST_IMPLEMENTATION defines in profile_diagram.c — the
+  implementation is already compiled in nanosvg_impl.c (separate static
+  library). Use `#include <nanosvg.h>` (angle brackets, via include path)
+  not `#include "nanosvg.h"` (which would need the defines).
+- CBX_DIAG_BTN_COUNT is 17 (not 18) — the enum has 17 button entries
+  (UP through R3), CBX_DIAG_BTN_NONE is -1 and not counted.
+- After cbx_profile_diagram_shutdown (which memsets to 0), the
+  `highlighted` field becomes 0 (= CBX_DIAG_BTN_UP), not -1 (= NONE).
+  Don't assert NONE after shutdown — just check no crash.
+- Tests need `#include <errno.h>` for EINVAL/ENOENT constants.
+- `cbx_panel_destroy` doesn't exist — use `cbx_widget_destroy(&panel->base)`
+  to destroy a standalone panel via the widget vtable.
+
+### Design decisions
+- **Static button position table**: Instead of parsing SVG element IDs,
+  a static table of 17 normalized button positions covers all standard
+  gamepad inputs. This is simpler, more testable, and works with any
+  base image (or none). Positions are approximate for a generic gamepad.
+- **Optional SVG base texture**: The diagram can render with or without
+  an SVG base image. Without SVG (NULL path or load failure), it draws
+  a plain background rectangle. This keeps tests headless-friendly.
+- **Default targets when no DBus**: If capabilities can't be loaded from
+  DBus (no backend or errors), 10 default targets (keyboard:KeyA-KeyF,
+  KeyEsc, KeyReturn, mouse:ButtonLeft, ButtonRight) are provided.
+- **Capture mode uses value 1.0 only**: Button releases (value 0.0) are
+  ignored during capture — only button presses trigger capture.
+- **Source event button lookup**: The editor looks for a "button" prop
+  (or "axis" for sticks) in the source_event to determine the diagram
+  button. Unknown button names map to CBX_DIAG_BTN_NONE (no highlight).
+- **Target pick is a mode switch**: Like controllers_tab's type picker,
+  the binding list is hidden and the target list is shown in its place.
+  This keeps the UI controller-navigable without a separate window.
+
+### Next
+Task 38 (Profile editor — sequential binding mode and validation) —
+deps: Task 37 (done), Task 21 (done). All dependencies complete.
+Alternatively Task 39 (Profile save and Settings tab) — deps: Task 38.
+Check `ralph tools task ready` and the plan.
