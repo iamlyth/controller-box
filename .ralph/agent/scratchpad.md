@@ -298,3 +298,80 @@ Task 8 (profile metadata sidecar + filesystem enumeration) — deps: Task 7
 (profile editor), Task 39 (profile save + settings tab).
 Alternatively, Task 9 (sd-bus connection) — deps: Task 2 (done). Check
 `ralph tools task ready` and the plan.
+
+## Task 8 (complete) — Profile metadata sidecar and filesystem enumeration
+
+### What landed
+- `src/config/config_profile_meta.h`: API for `*.meta.yaml` sidecars (SPEC §7.5).
+  `cbx_profile_meta` struct (display_name, icon, display_order, description +
+  has_* flags). Functions: init, load (O_NOFOLLOW), parse (YAML string),
+  save (atomic, mode 0600), serialize (libyaml emitter), load_for/save_for
+  (profile-name based, with realpath + base-dir verification). `cbx_validate_filename()`
+  validates ^[a-zA-Z0-9_-]+$.
+- `src/config/config_profile_meta.c`: libyaml event-based parser (flat
+  mapping, max depth 50, max doc 1MB, no custom tags/tag directives) +
+  document-based emitter + atomic write (mkstemp + fchmod 0600 + fsync +
+  rename). O_NOFOLLOW on all file opens. `build_sidecar_path()` constructs
+  path in `<config_dir>/profile-metadata/`, ensures dir exists, realpath-
+  canonicalizes both meta dir and config dir, verifies meta dir is within
+  config dir (rejects path escape).
+- `src/config/config_profile_list.h`: API for profile enumeration + file
+  listing. `cbx_profile_entry` (filename, path, display_name, description,
+  icon, display_order, is_system, is_default, read_only, has_meta).
+  `cbx_profile_list` (max 64 entries). `cbx_file_entry` + `cbx_file_list`
+  for device configs/capability maps (max 64). Functions:
+  `cbx_profile_list_enumerate()` (default paths), `cbx_profile_list_enumerate_dirs()`
+  (explicit paths for testing), `cbx_file_list_enumerate()`,
+  `cbx_device_config_list_enumerate()`, `cbx_capability_map_list_enumerate()`.
+- `src/config/config_profile_list.c`: Enumerates *.yaml files from user +
+  system dirs. User dir takes precedence (dedup). For each profile: loads
+  name/description from profile YAML (via cbx_profile_load), loads sidecar
+  (if exists), merges (sidecar overrides). Default profile (filename ==
+  "default") marked read-only. System profiles marked read-only. Sorted by
+  display_order, then display_name. Device configs/capability maps: simple
+  *.yaml file listing, sorted by name.
+- `tests/test_profile_list.c`: 34 cmocka tests (12 simple + 22 env with
+  setup/teardown fixture). Tests: meta init/parse-all/parse-partial/parse-empty/
+  unknown-keys/serialize, filename validation (valid+invalid), YAML security
+  (custom tags, tag directives, max depth 50, max doc 1MB), meta round-trip
+  file (mode 0600), load nonexistent, O_NOFOLLOW symlink rejection (→ -ELOOP),
+  save_for/load_for with realpath verification + mode 0600, save_for invalid
+  name rejection, enumerate empty/user-only/system-only/both-dedup/
+  default-readonly/with-sidecar/partial-sidecar/no-sidecar/
+  no-profile-name-fallback/sorted-by-order-then-name/sorted-same-order-by-name/
+  ignores-non-yaml, file-list-enumerate/empty/nonexistent-dir,
+  enumerate-real-paths integration (isolated HOME, sidecar override verified).
+- `CMakeLists.txt`: added config_profile_meta.c + config_profile_list.c to
+  controllerbox lib.
+- `tests/CMakeLists.txt`: added test_profile_list target + CTest registration.
+
+### Verification (all pass)
+- clean build (Debug -Werror, no warnings)
+- ctest 9/9: smoke_test_sdl2, smoke_test_nanosvg, test_sample, test_sdl_dummy,
+  test_config_paths, test_settings, test_assignments, test_profile_yaml,
+  test_profile_list
+- test_profile_list 34/34 cmocka tests pass (12 simple + 22 env)
+- verify-boilerplate, check-plan-freshness, branch-guard → exit 0
+
+### Gotchas fixed
+- **Format-truncation warnings (again)**: test_env fields are PATH_MAX+32,
+  so local buffers that append suffixes need PATH_MAX+512 to avoid
+  -Werror=format-truncation under GCC Debug. Same pattern as Tasks 4-7.
+- **Max depth test**: Flat `"a:\n  "` repeated 60× is NOT nested — it's a flat
+  mapping at depth 1. Must increment indentation per level to create actual
+  nesting. Same issue as Task 7.
+- **Directory creation order**: `mkdir(.local/share)` fails if `.local`
+  doesn't exist. Must create parent dirs bottom-up: `.local` → `.local/share`
+  → `.local/share/inputplumber` → `.local/share/inputplumber/profiles`.
+  Same for `.config` → `.config/controller-box` → `.config/controller-box/profile-metadata`.
+- **Unused function warning**: Removed `open_read_nofollow` from
+  config_profile_list.c (profile loading uses `cbx_profile_load` which uses
+  `fopen`). Sidecar loading handles O_NOFOLLOW in config_profile_meta.c.
+- **config_profile_list.c missing `#include <unistd.h>`**: For `close()` if
+  needed (though we removed the function that used it, still good to include).
+
+### Next
+Task 9 (sd-bus connection, version check, NameOwnerChanged tracking) — deps:
+Task 2 (done). Unblocks Task 10 (ObjectManager enumeration), then all DBus
+layer tasks. Alternatively Task 16 (SVG assets + icon mapping) — deps: Task 1
+(done). Check `ralph tools task ready` and the plan.
