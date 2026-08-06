@@ -19,6 +19,24 @@ template at `/usr/share/controller-box/controller-box.service` is a reference
 copy; the manager generates the unit content dynamically (adjusting the
 ExecStart path for Flatpak if needed).
 
+### Desktop entry
+
+```ini
+[Desktop Entry]
+Type=Application
+Name=Controller-Box
+Comment=Configure virtual controllers and profiles for InputPlumber
+Exec=/usr/bin/controller-box --manager
+Icon=controller-box
+Categories=Game;Settings;
+Terminal=false
+```
+
+Under Flatpak, the manifest renames this to
+`org.shadowblip.ControllerBox.desktop` and fixes the `Exec` path to
+`controller-box` (the Flatpak runtime resolves the binary via the `command`
+key in the manifest).
+
 ## Tarball install (v1 fallback)
 
 ### Build from source

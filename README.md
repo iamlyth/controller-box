@@ -1,244 +1,191 @@
-# Ralph Software Factory Boilerplate
+# Controller-Box
 
-A reusable, single-writer implementation of Geoffrey Huntley's Ralph Wiggum development technique using Ralph Orchestrator, jailed Pi, Ollama, adaptive read-only subagents, Git checkpoints, quota waiting, and crash recovery.
+Controller-Box is a controller-only SDL2 GUI for Linux that wraps
+[InputPlumber](https://github.com/shadowblip/InputPlumber) to provide a
+console-like controller management experience — no keyboard, no mouse,
+no Steam required.
 
-`docs/SPEC.md` is retained as the first trial specification. Product implementation is intentionally absent on this branch.
+A single binary, `controller-box`, runs in two modes:
 
-## Building Controller-Box from source
+- **Overlay service** (`controller-box --overlay-service`): an always-resident
+  systemd user service that shows a fighting-game-style character-select
+  screen when any player presses **Select+A**, allowing per-controller slot
+  assignment and profile cycling mid-game.
+- **Manager** (`controller-box --manager`): a tab-based configuration app for
+  creating virtual controllers, building/editing profiles with a visual
+  controller diagram, and adjusting settings.
 
-Controller-Box is a C11 project built with CMake. It depends on the SDL2
-core and satellite libraries, sd-bus (from `libsystemd`), libyaml, and
-cmocka (tests). A Nix shell provides all native dependencies:
+Both modes share one codebase, one config directory, and one DBus connection.
+
+## Requirements
+
+- **Linux** (x86_64 or aarch64), any compositor (X11, Wayland, Gamescope)
+- **InputPlumber** installed and running as a system service
+- **SDL2**, **SDL2_ttf**, **SDL2_image** (runtime; bundled in Flatpak)
+- **systemd** (for sd-bus and the user service)
+- Minimum hardware: Raspberry Pi 4 or equivalent (ARM64, OpenGL ES 3.0)
+
+See [docs/OPERATIONS.md](docs/OPERATIONS.md) for service architecture and
+[docs/PACKAGING.md](docs/PACKAGING.md) for install methods.
+
+## Install
+
+### Flatpak (primary)
 
 ```bash
-nix-shell --run 'cmake -B build && cmake --build build'
+flatpak install flathub org.shadowblip.ControllerBox
 ```
 
-On a Debian/Ubuntu host, install the dev packages directly:
+On first launch, the manager prompts to enable the overlay service. It writes
+`~/.config/systemd/user/controller-box.service` and enables it via
+`flatpak-spawn --host systemctl --user`.
+
+### Tarball (any distro)
 
 ```bash
+# Install build dependencies (Debian/Ubuntu example):
+sudo apt install build-essential cmake pkg-config \
+    libsdl2-dev libsdl2-ttf-dev libsdl2-image-dev \
+    libsystemd-dev libyaml-dev
+
+# Build and install:
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+sudo cmake --install build
+
+# Enable the overlay service via the manager (Settings → Install Service),
+# or manually:
+systemctl --user enable --now controller-box
+```
+
+See [docs/PACKAGING.md](docs/PACKAGING.md) for full build instructions,
+dependencies, and install layout.
+
+**Install order:** InputPlumber first, then Controller-Box, then enable the
+overlay service.
+
+## Overlay usage
+
+The overlay is a character-select screen — rows are physical controllers,
+columns are player slots (virtual controllers). The leftmost column is
+**Unassigned**.
+
+| Action | Button |
+|--------|--------|
+| Open overlay | **Select + A** (default, configurable) |
+| Move slot position | Left / Right |
+| Cycle profile | Up / Down |
+| Enter/exit Host Mode | R3 |
+| Close overlay | B |
+
+In **Player Mode** (default), all controllers edit simultaneously — each
+navigates its own row. In **Host Mode** (press R3), the first controller to
+press R3 becomes the exclusive host; all others freeze. Press R3 again to
+exit Host Mode.
+
+If two controllers land on the same slot, the cell turns red. On close, the
+conflicted controller is automatically moved to the lowest unoccupied slot.
+
+Profiles are **per-controller, not per-slot** — your profile follows your
+controller as you move between columns.
+
+The overlay renders in under 10 ms because the surface is pre-built in memory
+at daemon startup with icons pre-rasterized via nanosvg.
+
+## Manager usage
+
+The manager has three tabs, navigated by controller:
+
+### Controllers tab
+
+Add/remove virtual controllers (player slots) and set each slot's virtual
+controller type. Mixed types are allowed (e.g., P1 = Xbox 360, P2 = DualSense).
+Removing a slot mid-session moves the affected physical controller to
+Unassigned — no input is lost.
+
+### Profiles tab
+
+Browse, create, edit, and delete profiles. The **Default** profile is
+built-in, read-only, and always the fallback. New profiles can start from a
+copy of Default, an empty template, or a clone of an existing profile.
+
+The profile editor has two modes sharing one always-visible controller diagram:
+
+- **Binding list**: scroll through bindings; the highlighted row lights up the
+  corresponding button on the diagram. Press A to edit a binding.
+- **Sequential binding**: the editor prompts for each button in order. Press
+  the physical button to capture it; B skips, Start cancels.
+
+A profile must bind at least **A, B, D-Pad Up, D-Pad Down, D-Pad Left, and
+D-Pad Right** (the NES minimum). Other bindings are optional.
+
+See [docs/PROFILES.md](docs/PROFILES.md) for the full profile format and editor
+documentation.
+
+### Settings tab
+
+- Launch at boot
+- Theme
+- Overlay opacity
+- Number of virtual controllers on startup and their types
+- Overlay trigger combo (the single hotkey — no other quick-action combos exist)
+- Controller icon overrides
+
+## Config file locations
+
+| Path | Purpose |
+|------|---------|
+| `~/.local/share/inputplumber/profiles/` | InputPlumber + Controller-Box profiles (read/write) |
+| `~/.config/controller-box/settings.yaml` | App settings |
+| `~/.config/controller-box/assignments.yaml` | Auto-assignment table + gamepad order |
+| `~/.config/controller-box/profile-metadata/` | Optional per-profile sidecar metadata |
+| `~/.config/systemd/user/controller-box.service` | Systemd user service (installed by manager) |
+| `/usr/share/controller-box/icons/svg/` | Default controller icons (read-only) |
+| `/usr/share/controller-box/controller-icons.yaml` | Icon mapping table (read-only) |
+| `/usr/share/inputplumber/` | InputPlumber system profiles, devices, capability maps (read-only) |
+
+## Building from source
+
+```bash
+# Using Nix (provides all dependencies):
+nix-shell --run 'cmake -B build && cmake --build build'
+
+# Or install dependencies manually (Debian/Ubuntu):
 sudo apt install build-essential cmake pkg-config \
     libsdl2-dev libsdl2-ttf-dev libsdl2-image-dev \
     libsystemd-dev libyaml-dev libcmocka-dev
-```
 
-Smoke tests confirm the toolchain and the vendored nanosvg rasterizer:
+# Configure, build, test:
+cmake -B build
+cmake --build build
+cd build && ctest --output-on-failure && cd ..
 
-```bash
-./build/smoke_test_sdl2 && ./build/smoke_test_nanosvg
-ctest --test-dir build --output-on-failure
-```
-
-Install paths are generated into `build/config.h` at configure time (see
-`config.h.in`). Runtime XDG path resolution is implemented in later tasks.
-
-## Running Controller-Box
-
-`controller-box` is a single binary with two modes (SPEC §2.3). The overlay
-service is the default; the manager is launched on demand.
-
-```bash
-# Overlay service (default) — runs as a systemd user service, always resident.
-./build/controller-box
-./build/controller-box --overlay-service
-
-# Manager configuration app (Controllers / Profiles / Settings tabs).
-./build/controller-box --manager
-
-# Print the build version.
+# Version check:
 ./build/controller-box --version
 
-# Dry-run: print the selected mode and exit without running (headless-safe).
+# Dry-run (headless-safe):
 ./build/controller-box --overlay-service --dry-run
 ./build/controller-box --manager --dry-run
 ```
 
-Both modes link against the shared `libcontrollerbox.a` static library, which
-aggregates the reusable product sources. The mode run-paths are filled in by
-later tasks; until then each mode prints a banner and exits.
+## Documentation
 
-## Operating model
-
-- `main` is the human-controlled release branch.
-- `develop` is the autonomous implementation branch.
-- One committed `docs/SPEC.md` is the source of truth; Git versions it.
-- A planning-only Ralph loop creates `IMPLEMENTATION_PLAN.md` for the exact spec commit.
-- Each implementation iteration selects one bounded task and starts with fresh model context.
-- Pi subagents perform parallel read-only planning, research, review, security, and documentation analysis.
-- Exactly one primary worker may edit, stage, or commit repository files.
-- Tests and documentation are completion gates.
-- You review `develop` and manually promote it to `main`.
-
-No Git worktrees are used. `features.parallel` is disabled in both Ralph configurations.
-
-## Prerequisites
-
-- Ralph Orchestrator with the native Pi backend
-- `pi2` configured with the `@tintinweb/pi-subagents` extension
-- Ollama provider/model access
-- Bash, Git, Python 3.11+, curl, flock, and optionally ShellCheck
-- A clean `develop` branch with at least one commit
-
-The project tracks `.pi/subagents.json` with a maximum of eight simultaneous read-only subagents. Project agents in `.pi/agents/` intentionally expose no `bash`, `edit`, or `write` tools.
-
-## Initial setup
-
-1. Merge this boilerplate branch into `develop`.
-2. Configure Ollama Cloud usage credentials:
-
-   ```bash
-   source scripts/update-ollama-cookies.sh
-   ```
-
-3. Confirm access and quota parsing:
-
-   ```bash
-   ./scripts/ollama-usage-guard.sh --check
-   ```
-
-4. Edit `docs/SPEC.md` and commit it separately:
-
-   ```bash
-   git add docs/SPEC.md
-   git commit -m "spec: define the next release"
-   ```
-
-## Plan
-
-Run the planning-only fresh-context loop:
-
-```bash
-./scripts/ralph-plan.sh
-```
-
-The planner may only modify `IMPLEMENTATION_PLAN.md` and the recovery scratchpad. The generated plan records:
-
-- the spec path;
-- the latest commit that changed the spec;
-- the exact spec blob ID;
-- the base commit;
-- bounded tasks, dependencies, acceptance evidence, and documentation impact;
-- a mandatory final documentation/specification audit.
-
-Inspect the plan before implementation. `scripts/check-plan-freshness.sh` prevents a stale plan from running after the specification changes.
-
-For a headless planning loop:
-
-```bash
-./scripts/ralph-plan.sh --no-tui
-```
-
-## Implement
-
-Start the single-writer build loop:
-
-```bash
-./scripts/ralph-run.sh
-```
-
-Each iteration:
-
-1. validates branch and plan freshness;
-2. waits for Ollama quota when necessary;
-3. selects one ready task;
-4. fans out only read-only analysis;
-5. implements and tests one task with one writer;
-6. updates the plan and recovery scratchpad;
-7. creates a Git checkpoint;
-8. exits so the next task receives fresh context.
-
-Only the final documentation and specification audit may produce `LOOP_COMPLETE`.
-
-## Adaptive concurrency
-
-Configured ceilings live in `factory.toml`:
-
-```toml
-[concurrency]
-adaptive = true
-planning_subagents = 8
-research_subagents = 8
-review_subagents = 8
-implementation_advisors = 2
-mutating_workers = 1
-integration_workers = 1
-min_model_requests = 1
-max_model_requests = 8
-```
-
-These are ceilings, not targets. The coordinating agent starts with the smallest useful fan-out and increases only for independent read-only work. Source mutation and integration remain serialized.
-
-## Quota waiting
-
-Every iteration invokes:
-
-```bash
-./scripts/ollama-usage-guard.sh --wait
-```
-
-When session or weekly utilization reaches the configured threshold, the hook remains alive and polls until usage resets below it. Transient network errors are retried. Expired cookies stop with an actionable error rather than waiting forever.
-
-Useful settings in `.ollama-usage-env`:
-
-```bash
-OLLAMA_THRESHOLD=80
-OLLAMA_WAIT_INTERVAL_SECONDS=300
-OLLAMA_WAIT_MAX_SECONDS=0  # unlimited
-```
-
-If the backend reaches quota during an already-running request, `scripts/ralph-run.sh` checks quota, waits, repairs runtime markers, and resumes with `--continue`.
-
-## Stop and recover
-
-Ralph has no true pause control. `Ctrl+C` aborts the active backend. Resume later with:
-
-```bash
-./scripts/ralph-recover.sh
-```
-
-Preview recovery without changes:
-
-```bash
-./scripts/ralph-recover.sh --dry-run
-```
-
-Planning recovery uses:
-
-```bash
-./scripts/ralph-recover.sh --mode planning
-```
-
-Recovery never resets Git or starts a second writer. See `docs/OPERATIONS.md` for details.
-
-## Verify
-
-```bash
-./scripts/verify-boilerplate.sh
-```
-
-The verifier checks shell syntax, ShellCheck when available, TOML/JSON configuration, read-only agent tools, single-writer settings, quota behavior, plan freshness, branch policy, removed product artifacts, and secret tracking.
-
-Project implementation plans should add their own build, lint, test, and documentation commands to the final gate.
-
-## Release
-
-After Ralph reports completion, review `develop`. Release manually:
-
-```bash
-git switch main
-git merge --no-ff develop
-git tag vX.Y.Z
-```
-
-For the next release, update the same `docs/SPEC.md` in a dedicated commit, run a new planning loop, and execute a new implementation loop. Git retains prior specifications and plans.
+- [docs/OPERATIONS.md](docs/OPERATIONS.md) — Service architecture, systemd management, troubleshooting
+- [docs/DBus-API.md](docs/DBus-API.md) — Full DBus API reference and gaps
+- [docs/PROFILES.md](docs/PROFILES.md) — Profile format, editor modes, validation
+- [docs/PACKAGING.md](docs/PACKAGING.md) — Flatpak, tarball, install layout
+- [docs/FACTORY.md](docs/FACTORY.md) — Development factory boilerplate (Ralph orchestration)
 
 ## Credits
 
 Controller icons are sourced from:
 
-- [Controllercons](https://controllercons.github.io/) by Kieran McClung — 30 controller
-  SVG icons licensed under the [SIL Open Font License 1.1](data/icons/svg/LICENSE.controllercons).
-  Covers PS5, PS4, PS3, Xbox Series X, Xbox One, Xbox 360, Switch Pro, Joy-Cons, SNES,
-  NES, N64, GameCube, Wii, Dreamcast, and more.
-- Custom icons (arcade-stick, hitbox, steam-deck, generic-gamepad, mouse, keyboard) are
-  created by the controller-box project under GPL-3.0.
+- [Controllercons](https://controllercons.github.io/) by Kieran McClung — 30
+  controller SVG icons licensed under the [SIL Open Font License 1.1](data/icons/svg/LICENSE.controllercons).
+  Covers PS5, PS4, PS3, Xbox Series X, Xbox One, Xbox 360, Switch Pro, Joy-Cons,
+  SNES, NES, N64, GameCube, Wii, Dreamcast, and more.
+- Custom icons (arcade-stick, hitbox, steam-deck, generic-gamepad, mouse,
+  keyboard) are created by the Controller-Box project under GPL-3.0.
+
+Controller-Box is licensed under GPL-3.0. nanosvg is vendored under the
+zlib license (`third_party/nanosvg/LICENSE.txt`).

@@ -216,7 +216,8 @@ to receive updates for tracked properties:
   with `IP_PROP_TYPE_INVALIDATED` and a NULL value.
 
 **Note:** `InterceptMode` does NOT emit `PropertiesChanged` (gap #1, §10.3).
-The GUI polls it separately (~500 ms interval).
+The GUI polls it separately at 50 ms intervals (DEC-002; see the
+InterceptMode polling section below for details).
 
 ```c
 ip_properties props;
@@ -554,6 +555,57 @@ int ip_gamepad_order_load(char **out_csv);
 The save/load functions are the **persistence layer only**. The orchestration
 of when to save (on every GamepadOrder change) and when to restore (after
 daemon restart, mapping IDs back to composite paths via the device model) is
-defined in Task 27. The ID-to-path mapping on restore requires querying
-`PersistentId` for each composite in the device model and matching against
-saved IDs.
+handled by the identity downgrade detection layer (Task 27). The ID-to-path
+mapping on restore requires querying `PersistentId` for each composite in
+the device model and matching against saved IDs.
+
+## Five DBus Gaps Summary
+
+All five InputPlumber DBus API gaps confirmed during implementation. Each has
+a workaround sufficient for v1; no upstream changes are required.
+
+| # | Gap | Workaround | Where Documented |
+|---|-----|------------|------------------|
+| 1 | No `PropertiesChanged` signal for `InterceptMode` | Poll at 50 ms interval (DEC-002); state machine with timeout handling | CompositeDevice section above |
+| 2 | `GamepadOrder` not persisted (in-memory only, resets on restart) | Save to `assignments.yaml` keyed by `PersistentId`; re-apply after restart | GamepadOrder Persistence section above |
+| 3 | `CreateCompositeDevice` requires YAML file path (no string variant) | Write temp YAML via `mkstemp` (mode 0600), pass path, unlink after call | CreateCompositeDevice section above |
+| 4 | No DBus method to enumerate profiles/configs/capability maps on disk | Read filesystem directly: `~/.local/share/inputplumber/profiles/`, `/usr/share/inputplumber/profiles/`, `/usr/share/inputplumber/devices/`, `/usr/share/inputplumber/capability_maps/` | PACKAGING.md (Flatpak filesystem permissions) |
+| 5 | No DBus method to add/remove source devices on running composites | Not needed for v1; InputPlumber auto-manages composites from device configs | SPEC §12 (out of scope) |
+
+## Object Tree
+
+```
+/org/shadowblip/InputPlumber
+├── Manager                        (org.shadowblip.InputManager)
+│   ├── CreateTargetDevice
+│   ├── StopTargetDevice
+│   ├── AttachTargetDevice
+│   ├── CreateCompositeDevice
+│   ├── GamepadOrder (rw)
+│   ├── SupportedTargetDeviceIds (r)
+│   ├── SupportedTargetDevices (r)
+│   ├── Version (r)
+│   └── ManageAllDevices (rw)
+├── CompositeDevice{N}             (org.shadowblip.Input.CompositeDevice)
+│   ├── SetInterceptActivation
+│   ├── InterceptMode (rw, no change signal — gap #1)
+│   ├── LoadProfilePath / LoadProfileFromYaml
+│   ├── GetProfileYaml
+│   ├── ProfileName / ProfilePath (r)
+│   ├── SetTargetDevices / TargetDevices (rw)
+│   ├── SourceDevicePaths (r)
+│   ├── PersistentId (r)
+│   ├── Name / Capabilities / OutputCapabilities / TargetCapabilities (r)
+│   ├── Stop()
+│   ├── SendEvent / SendButtonChord
+│   ├── DbusDevices (r)
+│   ├── FilteredEvents / FilterableEvents (r)
+│   └── DBusDevice objects       (org.shadowblip.Input.DBusDevice)
+│       └── InputEvent(event: s, value: d)
+├── devices/source/{...}           (org.shadowblip.Input.Source.EventDevice |
+│                                   org.shadowblip.Input.Source.UdevDevice |
+│                                   org.shadowblip.Input.Source.HIDRawDevice)
+└── devices/target/{...}           (org.shadowblip.Input.Target)
+    ├── Name (r)
+    ├── DeviceType (r)
+    └── .Gamepad / .Keyboard / .Mouse / .Touchscreen interfaces

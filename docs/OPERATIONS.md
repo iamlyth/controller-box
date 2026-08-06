@@ -1,159 +1,361 @@
-# Factory Operations
+# Operations
 
-## Durable and volatile state
+Controller-Box runs as a **systemd user service** that communicates with
+InputPlumber over the **system DBus**. This document covers service
+architecture, management commands, configuration, performance expectations,
+and troubleshooting.
 
-Durable, tracked state:
+## Service architecture
 
-- `docs/SPEC.md`: approved requirements
-- `IMPLEMENTATION_PLAN.md`: task status and verification evidence
-- `.ralph/agent/scratchpad.md`: concise crash handoff
-- source, tests, README, and operational documentation
-- `factory.toml`, Ralph configs, prompts, and project subagent definitions
-
-Volatile, ignored state:
-
-- event streams and pointer files under `.ralph/`
-- loop locks, diagnostics, API state, task/memory stores, and TUI exports
-- Pi transcripts and scheduled-agent state
-- `.factory-lock`
-- `.ollama-usage-env`
-
-Git checkpoints make the plan, scratchpad, and implementation recoverable. Event/task files improve same-disk recovery but are not treated as portable project history.
-
-## Branch policy
-
-The autonomous lifecycle runs only on `develop`. `main` is protected by policy and never modified by the factory. `scripts/branch-guard.sh` also rejects multiple Git worktrees.
-
-A boilerplate experiment on a `factory/*` branch requires the explicit temporary override:
-
-```bash
-FACTORY_ALLOW_TRIAL_BRANCH=1 ./scripts/ralph-plan.sh
+```
+inputplumber.service  (system service — input engine)
+    ↑ Requires= / After=
+controller-box.service  (user service — overlay + control surface)
 ```
 
-Do not carry this override into normal development.
+- **InputPlumber** (`inputplumber.service`, system): owns evdev grab, virtual
+  devices, event translation, profiles, intercept mode, and player ordering.
+  Controller-Box never touches input routing directly — every state change goes
+  through InputPlumber's DBus API.
+- **Controller-Box** (`controller-box.service`, user): always-resident overlay
+  service with `Restart=always`. The service unit hard-depends on InputPlumber
+  via `After=inputplumber.service` and `Requires=inputplumber.service`. If
+  InputPlumber is not running, the overlay service will not start until it is.
 
-## Quota states
+**Install order:** (1) InputPlumber, (2) Controller-Box, (3) enable the overlay
+service.
 
-### Allowed
+If InputPlumber is not installed, Controller-Box enters **degraded mode** —
+the DBus connection stays open, and `NameOwnerChanged` signals notify when
+InputPlumber starts.
 
-The session and weekly percentages are below `OLLAMA_THRESHOLD`; Ralph starts the next iteration.
+## Systemd management
 
-### Waiting
-
-At or above the threshold, the guard sleeps for `OLLAMA_WAIT_INTERVAL_SECONDS` and checks again. A zero `OLLAMA_WAIT_MAX_SECONDS` means unlimited waiting. SIGINT/SIGTERM still stop the process.
-
-### Transient failure
-
-Network and server failures are retried in wait mode. Single-check mode returns status 3 so supervisors can distinguish them from quota and credential failures.
-
-### Fatal failure
-
-Missing/expired cookies or an unparseable settings page return status 2 and require operator action:
-
-```bash
-source scripts/update-ollama-cookies.sh
-```
-
-## Clean stop
-
-In TUI or foreground mode, press `Ctrl+C`. Ralph aborts the backend and leaves durable state for recovery. Do not use `kill -9` unless the process cannot terminate normally.
-
-For a headless process, read `.ralph/loop.lock` and send SIGINT to its PID from the host.
-
-## Recovery
-
-1. Confirm no Ralph process is alive.
-2. Run:
-
-   ```bash
-   ./scripts/ralph-recover.sh --dry-run
-   ```
-
-3. Check the inferred loop ID and event stream.
-4. Resume:
-
-   ```bash
-   ./scripts/ralph-recover.sh
-   ```
-
-The script restores a missing tracked scratchpad, removes only a stale lock, recognizes timestamped and fallback event streams, reconstructs pointer files, and starts `ralph-run.sh --resume`.
-
-If unfinished runtime tasks belong to multiple loop IDs, recovery refuses to guess; pass the intended ID explicitly:
+The overlay service runs as a **user service** (not system-wide). The manager
+installs it on first run; you can also manage it manually:
 
 ```bash
-./scripts/ralph-recover.sh --loop-id primary-YYYYMMDD-HHMMSS
+# Check status
+systemctl --user status controller-box
+
+# Start / stop / restart
+systemctl --user start controller-box
+systemctl --user stop controller-box
+systemctl --user restart controller-box
+
+# Enable at boot (done by manager on first run)
+systemctl --user enable --now controller-box
+
+# Disable
+systemctl --user disable controller-box
+
+# View logs
+journalctl --user -u controller-box -f
 ```
 
-## Specification changes
+### Service unit file
 
-Never edit the specification during implementation. `check-plan-freshness.sh` compares both the latest spec commit and the exact Git blob against plan metadata. If they differ:
+The service unit is written to `~/.config/systemd/user/controller-box.service`
+by the manager. It contains:
 
-1. stop the implementation loop;
-2. commit the revised `docs/SPEC.md`;
-3. run `./scripts/ralph-plan.sh`;
-4. inspect the replacement plan;
-5. start a new implementation loop.
+```ini
+[Unit]
+Description=Controller-Box Overlay Service
+After=inputplumber.service
+Requires=inputplumber.service
 
-## Documentation gate
+[Service]
+ExecStart=/usr/bin/controller-box --overlay-service
+Restart=always
 
-Every implementation plan ends with **Final documentation and specification audit**. Read-only reviewers compare source, tests, configuration, README, operations, and the specification. The sole writer corrects documentation and runs final verification. `LOOP_COMPLETE` is forbidden until this gate passes.
+[Install]
+WantedBy=default.target
+```
+
+Under Flatpak, `ExecStart` uses `flatpak run org.shadowblip.ControllerBox
+--overlay-service` and systemctl calls go through `flatpak-spawn --host`.
+
+### Group membership
+
+If your system uses polkit for DBus authorization, add your user to the
+`inputplumber` group:
+
+```bash
+sudo usermod -aG inputplumber $USER
+# Log out and back in for group changes to take effect.
+```
+
+The manager checks group membership during service installation and shows a
+warning with this guidance if the user is not in the group. Installation
+proceeds regardless — the group check is advisory.
+
+## InputPlumber dependency
+
+InputPlumber is a separate package and a hard prerequisite. Install it first
+from its own Flatpak or system package. Controller-Box's service unit will not
+start until InputPlumber is available.
+
+Controller-Box communicates with InputPlumber via:
+
+- **Bus:** system DBus (`sd_bus_open_system()`)
+- **Well-known name:** `org.shadowblip.InputPlumber`
+- **Root path:** `/org/shadowblip/InputPlumber`
+- **Manager interface:** `org.shadowblip.InputManager` at
+  `/org/shadowblip/InputPlumber/Manager`
+
+See [DBus-API.md](DBus-API.md) for the full API reference.
+
+## Configuration
+
+### Config directory
+
+`~/.config/controller-box/` holds Controller-Box's own configuration. It is
+created automatically with mode 0700 on first use.
+
+### settings.yaml
+
+App-level settings, written atomically (mode 0600):
+
+```yaml
+overlay_trigger: "Select+A"
+launch_at_boot: true
+theme: "default"
+overlay_opacity: 0.85
+virtual_controllers:
+  count: 4
+  types: [xb360, xb360, xb360, xb360]
+icon_overrides: []
+```
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `overlay_trigger` | string | `"Select+A"` | The single hotkey to open the overlay |
+| `launch_at_boot` | bool | `true` | Start overlay service at login |
+| `theme` | string | `"default"` | Theme name (format TBD, see deferred items) |
+| `overlay_opacity` | float | `0.85` | Overlay transparency (0.0–1.0) |
+| `virtual_controllers.count` | int | `4` | Number of virtual controllers on startup (1–16) |
+| `virtual_controllers.types` | list[string] | `[xb360, xb360, xb360, xb360]` | Per-slot virtual types |
+| `icon_overrides` | list | `[]` | Per-type icon overrides (max 16 entries) |
+
+Known controller types: `xb360`, `ds5`, `deck`, `gamepad`, `mouse`, `keyboard`,
+`touchscreen`. The full list is dynamic — the manager populates the type picker
+from InputPlumber's `SupportedTargetDeviceIds` DBus property.
+
+### assignments.yaml
+
+Auto-assignment table and gamepad order persistence (mode 0600):
+
+```yaml
+assignments:
+  - id: "BT:AB:CD:01:EF:23"
+    slot: 0
+    profile: "fighting"
+  - id: "USB:SN12345"
+    slot: 1
+    profile: ""
+gamepad_order:
+  - "BT:AB:CD:01:EF:23"
+  - "USB:SN12345"
+```
+
+The `gamepad_order` field is a workaround for DBus gap #2: InputPlumber's
+`Manager.GamepadOrder` property is in-memory only and resets on daemon restart.
+Controller-Box saves the order keyed by `PersistentId` and re-applies it after
+restart.
+
+**Identity ID prefixes:**
+
+| Prefix | Identity layer | Stability |
+|--------|---------------|-----------|
+| `BT:` | Bluetooth MAC (evdev `uniq`) | Stable, unique |
+| `USB:SN` | USB serial | Stable when present |
+| `USB:phys:` | USB port path | Stable only if same port |
+| `ORDER:` | Connection order (fallback) | Session-level |
+
+See [PROFILES.md](PROFILES.md) for the profile format and the controller
+identification model.
+
+### profile-metadata/
+
+Optional sidecar files per profile (e.g., `fighting.meta.yaml`):
+
+```yaml
+display_name: "Fighting Profile"
+icon: "cc-ps5"                    # built-in icon name
+# icon: "/path/to/custom.png"    # or absolute path to custom PNG
+display_order: 1
+description: "Tournament fighting setup"
+```
 
 ## Icon mapping
 
 Controller-Box maps InputPlumber `DeviceType` strings to SVG icons using
-`/usr/share/controller-box/controller-icons.yaml` (SPEC §8.4).  The mapping file
-is a YAML list of entries with `type`, `icon`, and `name` fields.
+`/usr/share/controller-box/controller-icons.yaml`. The mapping file is a YAML
+list of entries with `type`, `icon`, and `name` fields.
+
+```yaml
+virtual_types:
+  - type: "xb360"
+    icon: "cc-xbox-360"
+    name: "Xbox 360 Controller"
+  - type: "ds5"
+    icon: "cc-ps5"
+    name: "DualSense"
+  - type: "deck"
+    icon: "cc-steam-deck"
+    name: "Steam Deck Controller"
+  - type: "gamepad"
+    icon: "generic-gamepad"
+    name: "Generic Gamepad"
+custom_icons:
+  - icon: "arcade-stick"
+    name: "Arcade Stick"
+  - icon: "hitbox"
+    name: "Hit Box"
+```
 
 At runtime, `cbx_icon_map_load()` parses the YAML, and
 `cbx_icon_map_lookup(type, ...)` returns the icon name and display name for a
-given `DeviceType`.  Unknown types fall back to `generic-gamepad` with the raw
+given `DeviceType`. Unknown types fall back to `generic-gamepad` with the raw
 type string as the label.
 
-SVG files live in `/usr/share/controller-box/icons/svg/`.  Controllercons
-icons are prefixed `cc-` (e.g. `cc-xbox-360`, `cc-ps5`).  Custom icons use
+SVG files live in `/usr/share/controller-box/icons/svg/`. Controllercons
+icons are prefixed `cc-` (e.g. `cc-xbox-360`, `cc-ps5`). Custom icons use
 plain names (`steam-deck`, `generic-gamepad`, `arcade-stick`, `hitbox`,
 `mouse`, `keyboard`).
 
 To add a new device type mapping, append an entry to `controller-icons.yaml`
-under `virtual_types:`.  To add a new icon, place the SVG in `data/icons/svg/`
+under `virtual_types:`. To add a new icon, place the SVG in the icons directory
 and reference it by filename (without `.svg`).
 
-## Icon override (profile sidecar)
+### Icon override (profile sidecar)
 
-Each profile can override its icon via the metadata sidecar (SPEC §7.5,
-§8.5).  In `~/.config/controller-box/profile-metadata/<name>.meta.yaml`:
+Each profile can override its icon via the metadata sidecar:
 
 ```yaml
 icon: "cc-ps5"                 # built-in icon name
 icon: "/path/to/custom.png"    # absolute path to custom image
 ```
 
-At runtime, `cbx_icon_lookup()` resolves the icon with this precedence
-(SPEC §8.5):
+Resolution precedence:
 
 1. **Profile icon override** (from sidecar metadata):
-   - Absolute path (`/...`) → loads custom PNG via SDL2_image.  The path is
+   - Absolute path (`/...`) → loads custom PNG via SDL2_image. The path is
      validated: no `..` traversal, `realpath()` must resolve within a safe
-     directory (user config dir, user data dir, or system data dir).
-     If validation fails, falls back to step 2.
-   - Built-in icon name (e.g. `cc-ps5`) → looked up in the icon cache
-     (loaded on demand from the SVG directory if not already cached).
+     directory (user config dir, user data dir, or system data dir). If
+     validation fails, falls back to step 2.
+   - Built-in icon name (e.g. `cc-ps5`) → looked up in the icon cache.
 2. **Icon map lookup** by `DeviceType` string → icon name + display name.
 3. **Unknown DeviceType** → `generic-gamepad` silhouette + raw type string.
 
-The display label always comes from the icon map (or the raw type string
-for unknown types), regardless of whether an icon override is present.
+Icons show the **virtual controller type** (what the game sees), not the
+physical controller — no VID:PID lookup needed.
 
-Custom PNG textures are cached in the icon cache (keyed by absolute path)
-for subsequent lookups, so repeated lookups for the same profile do not
-re-load the file.
+## DBus gaps and workarounds
+
+Five InputPlumber DBus API gaps were identified during implementation. All have
+workarounds; no upstream changes are required for v1.
+
+| # | Gap | Workaround |
+|---|-----|------------|
+| 1 | No `PropertiesChanged` signal for `InterceptMode` | Poll at 50 ms interval (DEC-002); track state via state machine with timeout handling |
+| 2 | `GamepadOrder` not persisted (resets on daemon restart) | Save to `assignments.yaml` keyed by `PersistentId`; re-apply after restart |
+| 3 | `CreateCompositeDevice` requires a YAML file path (no string variant) | Write temp YAML via `mkstemp` (mode 0600), pass path, unlink after call |
+| 4 | No DBus method to enumerate profiles/configs on disk | Read filesystem directly: `~/.local/share/inputplumber/profiles/`, `/usr/share/inputplumber/profiles/`, `/usr/share/inputplumber/devices/`, `/usr/share/inputplumber/capability_maps/` |
+| 5 | No DBus method to add/remove source devices on running composites | Not needed for v1; InputPlumber auto-manages composites from device configs |
+
+See [DBus-API.md](DBus-API.md) for the full DBus API reference.
+
+## Performance expectations
+
+| Metric | Target | Mechanism |
+|--------|--------|-----------|
+| Overlay appearance | **<10 ms** (button press → visible) | Pre-built surface in memory; icons pre-rasterized via nanosvg at startup; incremental dirty-rect rendering |
+| Gameplay input latency | **~1–2 ms** | InputPlumber intercept overhead only; DBus is a side branch, never inline during gameplay |
+| Overlay close → game input | **<1 ms** | Single `InterceptMode` → PASS; overlay hidden, not destroyed |
+| Daemon footprint | Always resident, no measurable impact | SDL2 minimal memory; idles on DBus signals + 50 ms poll |
+| Player reorder | Atomic, InputPlumber-managed | `GamepadOrder` setter suspends all, resumes in new order with 100 ms stagger |
+
+The `InterceptMode` poll interval is 50 ms (DEC-002), yielding ~51 ms worst-case
+detection. The spec's ~500 ms figure was reduced to meet the <10 ms overlay
+appearance target for the render path. Detection latency is bounded by the poll
+interval; the render path itself is <1 ms.
 
 ## Troubleshooting
 
-- **`expected develop`**: merge/switch to `develop`; use the trial override only for this boilerplate branch.
-- **`exactly one working tree`**: remove stale worktrees and run `git worktree prune`.
-- **`plan is unplanned`**: run the planning loop.
-- **`specification changed after planning`**: commit the spec and replan.
-- **`another factory process holds .factory-lock`**: confirm the existing planner/worker is stopped before deleting a stale `.factory-lock`.
-- **quota wait appears idle**: the guard prints each usage poll; lower the polling interval temporarily for diagnostics.
-- **cookie expired**: refresh with `source scripts/update-ollama-cookies.sh`.
+### InputPlumber not detected
+
+Controller-Box enters degraded mode if InputPlumber is not running. Check:
+
+```bash
+systemctl status inputplumber    # system service
+```
+
+If InputPlumber is not installed, install it first. Controller-Box will
+auto-connect when InputPlumber starts (via `NameOwnerChanged` signal).
+
+### Overlay service won't start
+
+```bash
+systemctl --user status controller-box
+journalctl --user -u controller-box --no-pager -n 50
+```
+
+Common causes: InputPlumber not running (the `Requires=` directive blocks
+start), or the user is not in the `inputplumber` group (DBus access denied).
+
+### DBus access denied
+
+If the DBus connection returns `AccessDenied`, add your user to the
+`inputplumber` group:
+
+```bash
+sudo usermod -aG inputplumber $USER
+# Log out and back in.
+```
+
+### GamepadOrder not persisting after restart
+
+This is expected behavior (DBus gap #2). Controller-Box saves the order to
+`assignments.yaml` and re-applies it automatically after InputPlumber restarts.
+If the order is not restored, check that `assignments.yaml` contains
+`gamepad_order` entries with valid `PersistentId` values.
+
+### InterceptMode stuck
+
+If the overlay appears but input doesn't route to the game on close, the
+`InterceptMode` property may be stuck at `ALL`. The poll state machine has a
+timeout that fires after consecutive ticks with no mode change. Restart the
+overlay service:
+
+```bash
+systemctl --user restart controller-box
+```
+
+### Icons not showing
+
+Check that `/usr/share/controller-box/controller-icons.yaml` exists and is
+valid YAML. Unknown device types show the `generic-gamepad` silhouette — this
+is expected, not an error. To add a mapping, see the icon mapping section
+above.
+
+### Overlay trigger not working
+
+Ensure the trigger combo is registered on each composite device. The default
+is `Select+A` (configurable in Settings). The combo is set via
+`SetInterceptActivation` on each composite device. If you add a new virtual
+controller, restart the overlay service to re-register the trigger.
+
+### Flatpak: systemctl not found
+
+Under Flatpak, systemctl calls go through `flatpak-spawn --host systemctl
+--user`. If this fails, ensure the `org.freedesktop.Flatpak` talk-name
+permission is present (it is in the manifest). If the host system doesn't have
+systemd user services, the overlay service cannot be auto-installed — use the
+tarball install instead.
+
+### Profile validation fails
+
+Profiles must bind at least A, B, D-Pad Up, D-Pad Down, D-Pad Left, and D-Pad
+Right (the NES minimum). The manager shows which bindings are missing. See
+[PROFILES.md](PROFILES.md) for the full profile format.
