@@ -149,7 +149,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 - Evidence: `cmake --build build` clean (no warnings under -Wall -Wextra -Wpedantic, Debug -Werror); ctest 4/4 pass (smoke_test_sdl2, smoke_test_nanosvg, test_sample [6 cmocka assertions incl. DBus mock vtable], test_sdl_dummy [SDL2 dummy driver via test_harness]); `tests/CMakeLists.txt` modularises test targets; `tests/test_harness.{h,c}` provide headless SDL2 init (auto-falls-back to dummy driver); `tests/dbus_mock.{h,c}` provide `ip_dbus_backend` function-pointer vtable + canned-response mock backend for DBus client testing (Tasks 9-15); verify-boilerplate, check-plan-freshness, branch-guard exit 0.
 
 ## Task 4: Config directory resolution and YAML library integration
-- Status: pending
+- Status: complete
 - Dependencies: Task 1
 - Scope: `src/config/config_paths.c`, `src/config/config_paths.h`, CMake addition of
   libyaml (`pkg_check_modules(YAML REQUIRED yaml)`), XDG base directory resolution
@@ -162,6 +162,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
   - `tests/test_config_paths.c` passes with cmocka
 - Verification: `cmake --build build && ./build/test_config_paths`
 - Documentation impact: OPERATIONS config file locations section
+- Evidence: `cmake --build build` clean (Debug -Werror); ctest 5/5 pass; `test_config_paths` 16/16 cmocka tests pass (XDG absolute/fallback/relative/empty/buf-too-small for both config+profiles dirs, recursive dir creation with 0700, idempotent create, system path accessors); `src/config/config_paths.{h,c}` implement XDG resolution + `cbx_ensure_dir()` recursive mkdir + system path getters; libyaml already linked via `PkgConfig::YAML` from Task 1; verify-boilerplate, check-plan-freshness, branch-guard exit 0.
 
 ### Phase 2: Config Layer
 

@@ -38,8 +38,14 @@ if(CMOCKA_FOUND)
     add_executable(test_sdl_dummy tests/test_sdl_dummy.c)
     target_link_libraries(test_sdl_dummy PRIVATE cbx_test_support)
 
+    # Config path resolution test (Task 4): XDG dirs, directory creation.
+    # Links controllerbox for config_paths functions + cmocka for assertions.
+    add_executable(test_config_paths tests/test_config_paths.c)
+    target_link_libraries(test_config_paths PRIVATE controllerbox PkgConfig::CMOCKA)
+
     add_test(NAME test_sample    COMMAND test_sample)
     add_test(NAME test_sdl_dummy  COMMAND test_sdl_dummy)
+    add_test(NAME test_config_paths COMMAND test_config_paths)
 
     # Help later tasks: tests that need the dummy driver can set it here.
     set_tests_properties(test_sdl_dummy PROPERTIES
