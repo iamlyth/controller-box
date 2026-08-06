@@ -618,7 +618,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 - Documentation impact: README overlay usage (Host Mode, conflict resolution)
 
 ## Task 31: Profile cycling and dynamic columns
-- Status: pending
+- Status: complete
 - Dependencies: Task 29, Task 8
 - Scope: `src/overlay/profile_cycle.c`, `src/overlay/dynamic_columns.c`
 - Acceptance criteria:

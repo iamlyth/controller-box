@@ -116,6 +116,8 @@ add_library(controllerbox STATIC
     src/overlay/player_mode.c
     src/overlay/host_mode.c
     src/overlay/conflict.c
+    src/overlay/profile_cycle.c
+    src/overlay/dynamic_columns.c
     src/identify/identity.c
     src/identify/assign.c
     src/identify/assign_persist.c

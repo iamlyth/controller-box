@@ -328,6 +328,15 @@ if(CMOCKA_FOUND)
     target_link_libraries(test_conflict PRIVATE controllerbox cbx_test_support)
     add_test(NAME test_conflict COMMAND test_conflict)
 
+    # Task 31 — Profile cycling and dynamic columns.
+    add_executable(test_profile_cycle tests/test_profile_cycle.c)
+    target_link_libraries(test_profile_cycle PRIVATE controllerbox cbx_test_support)
+    add_test(NAME test_profile_cycle COMMAND test_profile_cycle)
+
+    add_executable(test_dynamic_columns tests/test_dynamic_columns.c)
+    target_link_libraries(test_dynamic_columns PRIVATE controllerbox cbx_test_support)
+    add_test(NAME test_dynamic_columns COMMAND test_dynamic_columns)
+
     # Help later tasks: tests that need the dummy driver can set it here.
     set_tests_properties(test_sdl_dummy PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
