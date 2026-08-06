@@ -2861,3 +2861,104 @@ Task 38 (Profile editor — sequential binding mode and validation) —
 deps: Task 37 (done), Task 21 (done). All dependencies complete.
 Alternatively Task 39 (Profile save and Settings tab) — deps: Task 38.
 Check `ralph tools task ready` and the plan.
+
+## Task 38 (complete) — Profile editor — sequential binding mode and validation
+
+### What landed
+- `src/manager/profile_editor_seq.h`: Header for sequential binding mode
+  (API declared in profile_editor_list.h).
+- `src/manager/profile_editor_seq.c`: Full implementation. Sequential
+  mode prompts for each of 17 buttons in cbx_diag_button order (UP=0
+  through R3=16). Diagram highlights current button. Physical button
+  press → captured → auto-advance. B skips current button (no mapping
+  created). Start cancels sequential mode. Progress bar
+  (cbx_progress) shows completion fraction = step/17. On completion
+  (all 17 processed), returns to list mode and refreshes binding list.
+- `src/manager/profile_validate.h`: NES minimum validation API.
+  CBX_NES_MINIMUM_COUNT=6, cbx_nes_minimum_buttons(), has_binding(),
+  validate_nes_minimum() (returns 0 valid / -EINVAL with missing names),
+  validate_missing_count().
+- `src/manager/profile_validate.c`: Full implementation. Checks if
+  profile has bindings for A, B, Up, Down, Left, Right by searching
+  source_event props for "button" or "axis" with matching canonical
+  name. Builds comma-separated missing names in caller-provided buffer.
+- `src/manager/profile_editor_list.h`: Added CBX_EDITOR_MODE_SEQUENTIAL
+  to editor mode enum. Added cbx_progress progress_bar, int seq_step,
+  bool seq_active to struct. Added sequential API declarations
+  (begin_sequential, cancel_sequential, seq_skip, seq_on_input,
+  seq_progress, seq_current_button, seq_get_step, seq_is_active).
+- `src/manager/profile_editor_list.c`: Modified init to create progress
+  bar widget (panel now 6 children). Modified shutdown to destroy
+  progress bar. Modified on_input_event to dispatch to seq_on_input
+  when mode is SEQUENTIAL. Modified cancel() to handle SEQUENTIAL mode.
+- `tests/test_editor_seq_mode.c`: 28 cmocka tests with SDL2 dummy
+  driver + mock DBus. Tests: begin sequential (basic, no profile, null,
+  diagram highlight, progress zero, hides binding list, panel 6
+  children), capture auto-advance (single, multiple, ignores release,
+  diagram advances, progress increases), skip (explicit, creates no
+  mapping, via B input, not active), cancel (via Start, explicit, via
+  editor cancel, shows binding list, null safe), complete all steps,
+  accessors null safe, current button when inactive, validation
+  integration (after capture, with correct capture), full workflow,
+  rendering no crash.
+- `tests/test_profile_validate.c`: 22 cmocka tests. Tests: NES minimum
+  count/button names/bad index/contains A-B-dpad, has_binding
+  (yes/no/empty/null/none/dpad/axis prop), validate (complete, with
+  extras, missing A, missing multiple, empty, null, no missing buf),
+  missing count (zero/some/all/null).
+- `tests/test_editor_list_mode.c`: Updated panel child count assertion
+  5→6 (added progress bar widget).
+- `CMakeLists.txt`: Added profile_editor_seq.c and profile_validate.c
+  to controllerbox STATIC.
+- `tests/CMakeLists.txt`: Added test_profile_validate and
+  test_editor_seq_mode with SDL_VIDEODRIVER=dummy.
+- `IMPLEMENTATION_PLAN.md`: Task 38 → complete.
+
+### Verification (all pass)
+- clean build (Debug -Werror, no warnings)
+- ctest 57/57: all previous + test_profile_validate (22) +
+  test_editor_seq_mode (28)
+- test_editor_seq_mode 28/28 cmocka tests pass
+- test_profile_validate 22/22 cmocka tests pass
+- verify-boilerplate → exit 0
+
+### Gotchas fixed
+- test_seq_capture_multiple: Pressing "B" at step 1 (DOWN) triggers
+  a skip, not a capture. Only 2 mappings created. Fixed test to use
+  X, Y, L1 button names instead of A, B, X.
+- test_seq_complete_all: The `if (i < CBX_DIAG_BTN_COUNT - 1)`
+  condition skipped the last step (R3), so sequential mode never
+  completed. Removed the condition — all 17 steps now processed.
+- panel child count: Added progress bar widget in init, so panel now
+  has 6 children (was 5). Updated existing test assertion.
+
+### Design decisions
+- **Sequential button order = cbx_diag_button enum order**: Steps 0-16
+  follow UP, DOWN, LEFT, RIGHT, A, B, X, Y, START, SELECT, GUIDE, L1,
+  R1, L2, R2, L3, R3. This is the natural order and covers all
+  highlightable buttons.
+- **B and Start are special in sequential mode**: B skips the current
+  button (no mapping created, advance to next). Start cancels
+  sequential mode entirely. These are checked before the capture logic
+  in seq_on_input.
+- **find_or_create_mapping**: Sequential capture creates a new mapping
+  for the prompted button (using its canonical name as the mapping
+  name and source device_class="gamepad"). If a mapping already exists
+  for that button (e.g., from list mode), it updates the source event.
+- **Progress bar hidden in list mode**: The progress bar widget is
+  created in init but hidden (visible=false). It becomes visible when
+  sequential mode begins and hidden when it ends.
+- **Validation checks source button props**: has_binding searches
+  mappings for "button" or "axis" props matching the canonical button
+  name. This works for both list mode (where the user sets the prop)
+  and sequential mode (where the prop is set from the captured event).
+- **Validation is separate from editor**: profile_validate.c is a
+  standalone module that operates on cbx_profile. It doesn't depend
+  on the editor struct. This makes it reusable for Task 39's save gate.
+
+### Next
+Task 39 (Profile save and Settings tab) — deps: Task 38 (done),
+Task 5 (done), Task 7 (done), Task 8 (done). All dependencies complete.
+Alternatively Task 40 (Systemd service installation and manager
+integration test) — deps: Task 39.
+Check `ralph tools task ready` and the plan.
