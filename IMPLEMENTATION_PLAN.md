@@ -828,7 +828,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 - Documentation impact: PACKAGING.md Flatpak section
 
 ## Task 43: Version embedding and packaging integration test
-- Status: pending
+- Status: complete
 - Dependencies: Task 41, Task 42
 - Scope: CMake version injection into `config.h.in`, `--version` flag, end-to-end
   packaging test

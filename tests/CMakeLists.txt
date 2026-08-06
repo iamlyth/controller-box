@@ -35,6 +35,19 @@ else()
     message(STATUS "Python3 not found — test_flatpak_manifest skipped")
 endif()
 
+# --- Packaging integration test (Task 43) ----------------------------------
+# End-to-end packaging pipeline: build → install to temp dir → verify
+# layout + binary runs.  Uses bash; requires cmake to be available.
+find_program(BASH_EXECUTABLE bash QUIET)
+if(BASH_EXECUTABLE)
+    add_test(NAME test_packaging
+        COMMAND ${BASH_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_packaging.sh
+            ${CMAKE_CURRENT_BINARY_DIR})
+else()
+    message(STATUS "bash not found — test_packaging skipped")
+endif()
+
 # --- cmocka unit tests ------------------------------------------------------
 # Built only when cmocka is found.  These link against the cmocka library
 # and the shared test harness (test_harness + dbus_mock).

@@ -170,9 +170,34 @@ not start until InputPlumber is available.
 
 ## Version
 
-The version is embedded at build time from CMake's `project(VERSION ...)`.
-Run `controller-box --version` to check the installed version. See Task 43
-for version embedding details.
+The version is embedded at build time from CMake's `project(VERSION ...)`
+and injected into `config.h` via `@PROJECT_VERSION@`. The version is
+available at compile time as `CONTROLLER_BOX_VERSION` and at runtime
+via `controller-box --version`.
+
+```bash
+$ controller-box --version
+controller-box 0.1.0
+```
+
+The `--version` flag works in both modes (`--overlay-service` and
+`--manager`) — it is processed before mode dispatch and exits immediately.
+
+### Release tarball
+
+To produce a distributable tarball:
+
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+DESTDIR=/tmp/staging cmake --install build
+# The staging area contains the full install layout under /tmp/staging/usr/
+tar -czf controller-box-0.1.0.tar.gz -C /tmp/staging usr/
+```
+
+The packaging integration test (`tests/test_packaging.sh`) verifies the
+full pipeline: build → install → file layout → binary execution → version
+match.
 
 ## Post-v1 roadmap
 
