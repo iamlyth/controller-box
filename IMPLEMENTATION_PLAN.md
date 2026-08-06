@@ -786,7 +786,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 ### Phase 9: Packaging
 
 ## Task 41: CMake install rules, systemd service file, and desktop entry
-- Status: pending
+- Status: complete
 - Dependencies: Task 40, Task 2
 - Scope: `CMakeLists.txt` install targets, `packaging/controller-box.service`,
   `packaging/controller-box-manager.desktop`

@@ -18,9 +18,14 @@ if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
 endif()
 
 # Canonical install layout (SPEC §9.3). Computed before config.h generation.
+# These absolute paths go into config.h (compiled into the binary for
+# runtime lookups). Install rules use the *relative* GNUInstallDirs
+# variables so that `cmake --install --prefix` overrides work correctly.
 include(GNUInstallDirs)
 set(CBX_DATA_DIR "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/controller-box")
 set(CBX_ICON_DIR "${CBX_DATA_DIR}/icons")
+set(CBX_DATA_INSTALL_DIR "${CMAKE_INSTALL_DATADIR}/controller-box")
+set(CBX_ICON_INSTALL_DIR "${CBX_DATA_INSTALL_DIR}/icons")
 
 # Warn early on missing build dependencies rather than failing deep in the build.
 find_package(PkgConfig REQUIRED)
@@ -168,9 +173,21 @@ install(TARGETS controllerbox nanosvg
 
 # --- Data files (Task 16) ---------------------------------------------------
 # Install icon SVGs and controller-icons.yaml to the data directory.
-install(DIRECTORY data/icons/svg/ DESTINATION "${CBX_ICON_DIR}/svg"
+# Uses relative install dirs so `cmake --install --prefix` works correctly.
+install(DIRECTORY data/icons/svg/ DESTINATION "${CBX_ICON_INSTALL_DIR}/svg"
     FILES_MATCHING PATTERN "*.svg")
 install(FILES data/icons/svg/LICENSE.controllercons
-    DESTINATION "${CBX_ICON_DIR}/svg")
+    DESTINATION "${CBX_ICON_INSTALL_DIR}/svg")
 install(FILES data/controller-icons.yaml
-    DESTINATION "${CBX_DATA_DIR}")
+    DESTINATION "${CBX_DATA_INSTALL_DIR}")
+
+# --- Packaging files (Task 41) ----------------------------------------------
+# Systemd user service file (SPEC §2.4, §9.2).  Installed to the data
+# directory as a reference template; the manager copies it to
+# ~/.config/systemd/user/ on first run (or generates the unit content
+# at runtime via service_install.c).
+install(FILES packaging/controller-box.service
+    DESTINATION "${CBX_DATA_INSTALL_DIR}")
+# Desktop entry (SPEC §9.2–§9.3).  Launches the manager mode.
+install(FILES packaging/controller-box-manager.desktop
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/applications")

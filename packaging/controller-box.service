@@ -1,0 +1,11 @@
+[Unit]
+Description=Controller-Box Overlay Service
+After=inputplumber.service
+Requires=inputplumber.service
+
+[Service]
+ExecStart=/usr/bin/controller-box --overlay-service
+Restart=always
+
+[Install]
+WantedBy=default.target
