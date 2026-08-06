@@ -3322,3 +3322,89 @@ Check `ralph tools task ready` and the plan.
 Task 44 (Final documentation and specification audit) — deps: all tasks
 including 43. All implementation tasks complete. Task 44 is the final gate.
 Check `ralph tools task ready` and the plan.
+
+## Task 44 (complete) — Final documentation and specification audit
+
+### What landed
+- `README.md`: Full product rewrite. What Controller-Box is, requirements, install
+  (Flatpak + tarball), overlay usage (Select+A, B, Left/Right, Up/Down, R3), manager
+  usage (Controllers/Profiles/Settings tabs), config file locations, build from source,
+  documentation index, credits. No factory boilerplate remains.
+- `docs/OPERATIONS.md`: Full product rewrite. Service architecture (InputPlumber →
+  Controller-Box), systemd management commands, InputPlumber dependency, group
+  membership (inputplumber group, advisory), config formats (settings.yaml keys
+  with defaults, assignments.yaml with ID prefixes, profile-metadata sidecar), icon
+  mapping (kept from existing), DBus gaps (5-gap summary table), performance
+  expectations (<10ms overlay, ~1-2ms gameplay, <1ms close, 50ms poll, 100ms stagger),
+  9 troubleshooting entries (InputPlumber not detected, service won't start, DBus
+  access denied, GamepadOrder not persisting, InterceptMode stuck, icons not showing,
+  trigger not working, Flatpak systemctl not found, profile validation fails).
+- `docs/DBus-API.md`: Fixed InterceptMode poll interval discrepancy (changed "~500 ms"
+  to "50 ms (DEC-002)" for consistency). Added 5-gap summary table with cross-references.
+  Added full object tree diagram showing all interfaces, methods, properties, and signals.
+  Updated Task 27 forward-reference to past tense.
+- `docs/PROFILES.md`: New. Ownership model (InputPlumber owns content, GUI owns
+  presentation), file layout (user profiles, system profiles, sidecar metadata),
+  DeviceProfile YAML schema (version, kind, name, description, mapping with
+  source_event/target_events), device classes (gamepad, keyboard, mouse, touchscreen),
+  advanced mappings note (chord, delayed_chord — valid but not exposed in v1 editor),
+  editor modes (binding list + sequential with controls), NES minimum validation
+  (A, B, D-Pad U/D/L/R required), default profile (built-in, read-only, fallback),
+  new-profile flow (Default copy / Empty / Clone), per-controller scope (profiles
+  follow controller across columns), save/load (atomic, mode 0644).
+- `docs/PACKAGING.md`: Added desktop entry content with Flatpak rename note.
+- `docs/FACTORY.md`: New. All factory boilerplate relocated from README and OPERATIONS:
+  operating model, durable/volatile state, branch policy, prerequisites, initial setup,
+  plan/implement/verify/release workflow, adaptive concurrency, quota states/waiting,
+  clean stop, recovery, specification changes, documentation gate.
+- `IMPLEMENTATION_PLAN.md`: Task 44 → complete. Front-matter status → complete.
+
+### Verification (all pass)
+- check-docs-sync.sh → passed
+- verify-boilerplate.sh → passed
+- final-gate.sh --implementation → accepted
+- ctest 63/63 (in nix-shell) → 100% passed
+- Git tree clean after commit
+
+### 14 sync points verified consistent across docs and spec
+1. Trigger combo: Select+A (README, OPERATIONS, PROFILES)
+2. Config paths: all 15 paths consistent (README, OPERATIONS, PACKAGING)
+3. settings.yaml keys: 7 keys with defaults (README, OPERATIONS)
+4. assignments.yaml prefixes: BT:/USB:SN/USB:phys:/ORDER: (OPERATIONS, PROFILES)
+5. DeviceProfile schema: version 1, kind DeviceProfile (PROFILES)
+6. Virtual type list: xb360, ds5, deck, gamepad, mouse, keyboard, touchscreen (OPERATIONS)
+7. Icon mapping: controller-icons.yaml format, cc- prefix (OPERATIONS)
+8. Systemd unit: After/Requires inputplumber.service, Restart=always (OPERATIONS, PACKAGING)
+9. Flatpak permissions: 9 permissions with rationale (PACKAGING)
+10. DBus gaps: all 5 with workarounds (OPERATIONS, DBus-API.md)
+11. NES minimum: A, B, D-Pad U/D/L/R (README, PROFILES)
+12. Performance targets: <10ms, ~1-2ms, <1ms, 50ms poll, 100ms stagger (OPERATIONS)
+13. Install order: InputPlumber → GUI → enable service (README, OPERATIONS, PACKAGING)
+14. Out-of-scope items: documented via FACTORY.md and SPEC §12 reference
+
+### Spec coverage audit (§1–§13)
+All 13 spec sections have corresponding implementation (Tasks 1-43) and documentation
+(README, OPERATIONS, DBus-API, PROFILES, PACKAGING). No spec requirement is unaddressed.
+
+### Design decisions
+- Factory boilerplate fully relocated to docs/FACTORY.md rather than deleted —
+  preserves development context for future spec iterations and factory reuse.
+- DBus-API.md polling interval: documented the actual implementation (50ms, DEC-002)
+  rather than the spec's ~500ms figure. The spec value was a design target that was
+  revised during implementation to meet the <10ms overlay appearance requirement.
+  This is a documentation-of-implementation decision, not a spec change.
+- Object tree added to DBus-API.md as a visual reference summarizing all interfaces,
+  methods, properties, and signals in one diagram. Derived from source code headers
+  (ip_manager.h, ip_composite.h, ip_source.h, ip_target.h, dbus_mock.h).
+
+### Final completion gates
+1. ✅ Specification coverage: all §1-§13 covered
+2. ✅ Tests: 63/63 pass
+3. ✅ Documentation: README, OPERATIONS, DBus-API, PROFILES, PACKAGING all match behavior
+4. ✅ Clean Git state: committed to develop, tree clean
+5. ✅ Build: cmake --build build succeeds with -Werror, 0 warnings
+6. ✅ Security: DBus sender verification, temp file security, path validation, YAML
+   safety, systemd unit atomic write, Flatpak least-privilege, polkit group check —
+   all implemented and tested
+
+LOOP_COMPLETE
