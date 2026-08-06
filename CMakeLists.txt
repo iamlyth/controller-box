@@ -107,7 +107,9 @@ add_library(controllerbox STATIC
     src/ui/widget_tabbar.c
     src/ui/widget_progress.c
     src/ui/focus.c
-    src/ui/input_map.c)
+    src/ui/input_map.c
+    src/ui/animation.c
+    src/ui/dirty_rect.c)
 target_include_directories(controllerbox
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/src"

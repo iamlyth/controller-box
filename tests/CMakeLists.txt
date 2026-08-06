@@ -269,6 +269,13 @@ if(CMOCKA_FOUND)
     target_link_libraries(test_input_map PRIVATE controllerbox PkgConfig::CMOCKA)
     add_test(NAME test_input_map COMMAND test_input_map)
 
+    # Task 23 — Animation primitives and dirty rect optimization
+    add_executable(test_animation tests/test_animation.c)
+    target_link_libraries(test_animation PRIVATE controllerbox PkgConfig::CMOCKA)
+    add_test(NAME test_animation COMMAND test_animation)
+    set_tests_properties(test_animation PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+
     # Help later tasks: tests that need the dummy driver can set it here.
     set_tests_properties(test_sdl_dummy PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")

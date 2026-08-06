@@ -486,7 +486,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 - Documentation impact: none
 
 ## Task 23: Animation primitives and dirty rect optimization
-- Status: pending
+- Status: complete
 - Dependencies: Task 19
 - Scope: `src/ui/animation.c`, `src/ui/dirty_rect.c`
 - Acceptance criteria:
