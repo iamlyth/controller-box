@@ -288,6 +288,14 @@ if(CMOCKA_FOUND)
     target_link_libraries(test_identity PRIVATE controllerbox PkgConfig::CMOCKA)
     add_test(NAME test_identity COMMAND test_identity)
 
+    add_executable(test_assign tests/test_assign.c)
+    target_link_libraries(test_assign PRIVATE controllerbox PkgConfig::CMOCKA)
+    add_test(NAME test_assign COMMAND test_assign)
+
+    add_executable(test_assign_persist tests/test_assign_persist.c)
+    target_link_libraries(test_assign_persist PRIVATE controllerbox PkgConfig::CMOCKA)
+    add_test(NAME test_assign_persist COMMAND test_assign_persist)
+
     # Help later tasks: tests that need the dummy driver can set it here.
     set_tests_properties(test_sdl_dummy PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")

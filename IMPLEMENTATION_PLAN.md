@@ -535,7 +535,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 - Documentation impact: OPERATIONS controller identification section
 
 ## Task 26: Assignment lookup, default assignment, and persistence
-- Status: pending
+- Status: complete
 - Dependencies: Task 25, Task 6
 - Scope: `src/identify/assign.c`, `src/identify/assign_persist.c`
 - Acceptance criteria:
