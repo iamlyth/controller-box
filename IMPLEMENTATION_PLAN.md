@@ -600,7 +600,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 - Documentation impact: README overlay usage section
 
 ## Task 30: Host Mode and conflict detection/resolution
-- Status: pending
+- Status: complete
 - Dependencies: Task 29
 - Scope: `src/overlay/host_mode.c`, `src/overlay/conflict.c`
 - Acceptance criteria:

@@ -320,6 +320,14 @@ if(CMOCKA_FOUND)
     target_link_libraries(test_player_mode PRIVATE controllerbox cbx_test_support)
     add_test(NAME test_player_mode COMMAND test_player_mode)
 
+    add_executable(test_host_mode tests/test_host_mode.c)
+    target_link_libraries(test_host_mode PRIVATE controllerbox cbx_test_support)
+    add_test(NAME test_host_mode COMMAND test_host_mode)
+
+    add_executable(test_conflict tests/test_conflict.c)
+    target_link_libraries(test_conflict PRIVATE controllerbox cbx_test_support)
+    add_test(NAME test_conflict COMMAND test_conflict)
+
     # Help later tasks: tests that need the dummy driver can set it here.
     set_tests_properties(test_sdl_dummy PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
