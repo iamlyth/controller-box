@@ -111,6 +111,7 @@ add_library(controllerbox STATIC
     src/ui/animation.c
     src/ui/dirty_rect.c
     src/overlay/surface_build.c
+    src/overlay/lifecycle.c
     src/identify/identity.c
     src/identify/assign.c
     src/identify/assign_persist.c

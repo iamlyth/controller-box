@@ -567,7 +567,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 ### Phase 7: Overlay Mode
 
 ## Task 28: Overlay state machine and lifecycle
-- Status: pending
+- Status: complete
 - Dependencies: Task 13, Task 24
 - Scope: `src/overlay/lifecycle.c`, `src/overlay/lifecycle.h`
 - Acceptance criteria:

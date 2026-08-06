@@ -283,6 +283,11 @@ if(CMOCKA_FOUND)
     set_tests_properties(test_surface_build PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
 
+    # Task 28 — Overlay state machine and lifecycle.
+    add_executable(test_overlay_lifecycle tests/test_overlay_lifecycle.c)
+    target_link_libraries(test_overlay_lifecycle PRIVATE controllerbox cbx_test_support)
+    add_test(NAME test_overlay_lifecycle COMMAND test_overlay_lifecycle)
+
     # Task 25 — Identity extraction from source device properties.
     add_executable(test_identity tests/test_identity.c)
     target_link_libraries(test_identity PRIVATE controllerbox PkgConfig::CMOCKA)
