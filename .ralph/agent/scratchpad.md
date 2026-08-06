@@ -26,3 +26,5 @@
 4. Maintenance verification and documentation audit
 
 **Status:** MAINTENANCE_PLAN.md written. Parser validation passed. Ready for completion.
+
+**Iteration 3 update:** Fixed parser error — removed stray `## Tasks` heading (line 75) that matched `## Task` prefix but failed the full task-header regex. Committed as 4d2ff57. `validate-maintenance-plan.py planning` now passes: "valid (4 tasks, status=active)". Emitted `factory.maintenance.plan` completion event.
