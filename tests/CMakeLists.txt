@@ -296,6 +296,14 @@ if(CMOCKA_FOUND)
     target_link_libraries(test_assign_persist PRIVATE controllerbox PkgConfig::CMOCKA)
     add_test(NAME test_assign_persist COMMAND test_assign_persist)
 
+    add_executable(test_identity_downgrade tests/test_identity_downgrade.c)
+    target_link_libraries(test_identity_downgrade PRIVATE controllerbox PkgConfig::CMOCKA)
+    add_test(NAME test_identity_downgrade COMMAND test_identity_downgrade)
+
+    add_executable(test_order_restore tests/test_order_restore.c)
+    target_link_libraries(test_order_restore PRIVATE controllerbox cbx_test_support)
+    add_test(NAME test_order_restore COMMAND test_order_restore)
+
     # Help later tasks: tests that need the dummy driver can set it here.
     set_tests_properties(test_sdl_dummy PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")

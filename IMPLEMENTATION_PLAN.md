@@ -549,7 +549,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 - Documentation impact: none
 
 ## Task 27: Identity downgrade detection and GamepadOrder restoration
-- Status: pending
+- Status: complete
 - Dependencies: Task 11, Task 25, Task 15
 - Scope: `src/identify/identity_downgrade.c`, `src/identify/gamepad_order_restore.c`
 - Acceptance criteria:
