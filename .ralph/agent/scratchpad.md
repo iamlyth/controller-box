@@ -3268,3 +3268,57 @@ Task 43 (Version embedding and packaging integration test) — deps: Task 41
 Alternatively Task 44 (Final documentation and specification audit) — deps:
 all tasks including 43.
 Check `ralph tools task ready` and the plan.
+
+## Task 43 (complete) — Version embedding and packaging integration test
+
+### What landed
+- `tests/test_packaging.sh`: End-to-end packaging integration test (9 steps):
+  1. Build verification (configure + build if needed)
+  2. DESTDIR install to temp staging area
+  3. File layout verification (delegates to test_packaging_install.sh)
+  4. Binary `--version` prints version string
+  5. `--version` works with both mode flags (--overlay-service, --manager)
+  6. `--dry-run` in both modes succeeds
+  7. Version string matches CMake project(VERSION ...)
+  8. Clean configure+build from source tree
+  9. Optional Flatpak build if flatpak-builder available
+- `tests/CMakeLists.txt`: Registered test_packaging as CTest test
+  (find_program for bash, conditional).
+- `docs/PACKAGING.md`: Expanded version section with --version usage,
+  release tarball instructions, packaging test reference.
+- `IMPLEMENTATION_PLAN.md`: Task 43 → complete.
+
+### Verification (all pass)
+- clean build (Debug, 0 warnings)
+- ctest 63/63: all previous 62 + test_packaging (1)
+- test_packaging.sh: 12 PASS, 1 SKIP (flatpak-builder not available)
+- verify-boilerplate → exit 0
+
+### Gotchas fixed
+- Version extraction from CMakeLists.txt: `project(controller-box` and
+  `VERSION 0.1.0` are on separate lines, so single-line grep pattern
+  failed. Fixed by grepping for `VERSION\s+\K[0-9]+\.[0-9]+\.[0-9]+` and
+  taking the first match.
+- Shellcheck SC2329: `cleanup()` function invoked via `trap cleanup EXIT`
+  triggers shellcheck warning. Fixed with `# shellcheck disable=SC2329`
+  comment on the function definition line.
+- Initial edit caused a duplicate `cleanup()` function definition.
+  Fixed by carefully merging the edit.
+
+### Design decisions
+- Version injection was already in place: config.h.in defines
+  `CONTROLLER_BOX_VERSION` from `@PROJECT_VERSION@`, and main.c already
+  implements `--version` flag (added in Task 2). No source changes needed
+  for the version embedding itself — only the integration test was new.
+- Flatpak build is optional: test skips gracefully if flatpak-builder is
+  not installed. This matches the acceptance criteria ("If Flatpak builder
+  available").
+- Test delegates file layout checks to existing test_packaging_install.sh
+  (from Task 41) to avoid duplication.
+- Clean build test builds from the source tree as a proxy for tarball
+  extraction — CMake source tree and tarball layout are identical.
+
+### Next
+Task 44 (Final documentation and specification audit) — deps: all tasks
+including 43. All implementation tasks complete. Task 44 is the final gate.
+Check `ralph tools task ready` and the plan.
