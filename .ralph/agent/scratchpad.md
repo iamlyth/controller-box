@@ -1730,3 +1730,78 @@ Task 18 (done).
 Alternatively Task 25 (Identity extraction) — deps: Task 14 (done),
 Task 6 (done).
 Check `ralph tools task ready` and the plan.
+
+## Task 24 (complete) — Pre-built overlay surface infrastructure
+
+### What landed
+- `src/overlay/surface_build.h`: API for cbx_overlay_surface struct
+  (SDL_Texture target, width/height, visible flag, opacity 0-255,
+  cbx_dirty_rect tracker, built flag). Functions: init, destroy,
+  set_opacity/get_opacity, show/hide/is_visible, mark_dirty/
+  mark_dirty_all/clear_dirty/is_dirty/dirty_count, render (delegates
+  to dirty_rect_render with render target switching), get_texture,
+  get_size, is_built. Render callback type: cbx_overlay_render_fn
+  (same shape as cbx_dirty_render_fn).
+- `src/overlay/surface_build.c`: Full implementation. Init creates
+  SDL_TEXTUREACCESS_TARGET texture, applies alpha mod + blend mode.
+  Show = SDL_SetRenderTarget(NULL) + SDL_RenderCopy + SDL_RenderPresent.
+  Hide = visible=false (texture NOT destroyed). Render = set target to
+  overlay texture, merge dirty rects, delegate to cbx_dirty_rect_render
+  (handles clip rects + callback), restore target to NULL, clear dirty
+  on success. Opacity clamped 0.0-1.0 → 0-255 via opacity_to_u8().
+- `tests/test_surface_build.c`: 31 cmocka tests. Init (basic, null args,
+  opacity clamping). Destroy (safe on NULL/zeroed, after init). Opacity
+  (set, clamp, null). Show/hide (show, hide, no-texture-creation
+  structural check, null args, unbuilt, null). Dirty rect (mark, all,
+  null rect, unbuilt). Render (dirty, empty→full-screen, overlapping
+  merge, target switch verification, fail keeps dirty, null args).
+  Accessors (size, texture, built, visible, dirty count, is_dirty,
+  clear null). Full show→render→show cycle.
+- `CMakeLists.txt`: Added src/overlay/surface_build.c to controllerbox
+  STATIC library.
+- `tests/CMakeLists.txt`: Added test_surface_build target with
+  SDL_VIDEODRIVER=dummy env.
+- `IMPLEMENTATION_PLAN.md`: Task 24 → complete.
+
+### Verification (all pass)
+- clean build (Debug -Werror, no warnings)
+- ctest 35/35: all previous + test_surface_build
+- test_surface_build 31/31 cmocka tests pass
+- verify-boilerplate, check-plan-freshness → exit 0
+
+### Gotchas fixed
+- Missing <errno.h>: EINVAL/ENOMEM used in surface_build.c but not
+  included. Added #include <errno.h>.
+- Unused parameter warnings: Many test functions take `void **state`
+  but don't use it. Added `(void)state;` to each. Also removed unused
+  `cbx_overlay_surface s` variable in test_surface_get_size.
+- Missing <errno.h> in test file: test_surface_render_null_args uses
+  EINVAL. Added #include <errno.h> to test file.
+
+### Design decisions
+- **Render delegates to dirty_rect_render**: cbx_overlay_surface_render
+  calls cbx_dirty_rect_render (from Task 23) with the overlay texture
+  as the render target. This reuses the existing per-rect clip + callback
+  mechanism. The render callback type is the same shape as
+  cbx_dirty_render_fn, cast for type compatibility.
+- **Merge before render**: Dirty rects are merged (cbx_dirty_rect_merge)
+  before rendering to reduce overdraw. This handles chains of
+  overlapping/adjacent dirty regions.
+- **Clear dirty on success only**: If the render callback returns
+  non-zero, dirty rects are preserved so the caller can retry.
+- **Blend mode BLEND**: The overlay texture uses SDL_BLENDMODE_BLEND so
+  alpha modulation composites correctly when RenderCopy'd to the screen.
+- **No animation in this layer**: The animation system (Task 23) is
+  available for fade-in/fade-out but is NOT wired in here. That's
+  Task 28's job (overlay state machine lifecycle). This module just
+  provides the pre-built surface infrastructure.
+- **Show path structural check**: test_surface_show_no_texture_creation
+  verifies the texture pointer is identical before and after show(),
+  proving no texture allocation occurs in the show path.
+
+### Next
+Task 25 (Identity extraction from source device properties) — deps:
+Task 14 (done), Task 6 (done).
+Alternatively Task 28 (Overlay state machine and lifecycle) — deps:
+Task 13 (done), Task 24 (done).
+Check `ralph tools task ready` and the plan.
