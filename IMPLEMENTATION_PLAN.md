@@ -806,7 +806,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 - Documentation impact: PACKAGING.md tarball install section
 
 ## Task 42: Flatpak manifest
-- Status: pending
+- Status: complete
 - Dependencies: Task 41
 - Scope: `packaging/org.shadowblip.ControllerBox.yaml`
 - Acceptance criteria:

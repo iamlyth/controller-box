@@ -7,7 +7,7 @@
 { pkgs ? import <nixpkgs> {} }:
 
 pkgs.mkShell {
-  nativeBuildInputs = with pkgs; [ cmake pkg-config gcc ];
+  nativeBuildInputs = with pkgs; [ cmake pkg-config gcc python3 python3Packages.pyyaml ];
   buildInputs = with pkgs; [
     SDL2
     SDL2_ttf

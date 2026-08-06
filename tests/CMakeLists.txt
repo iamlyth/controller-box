@@ -15,6 +15,26 @@ target_link_libraries(smoke_test_nanosvg PRIVATE nanosvg m)
 add_test(NAME smoke_test_sdl2    COMMAND smoke_test_sdl2)
 add_test(NAME smoke_test_nanosvg COMMAND smoke_test_nanosvg)
 
+# --- Flatpak manifest validation (Task 42) --------------------------------
+# Validates packaging/org.shadowblip.ControllerBox.yaml against SPEC §9.1.
+# Requires Python3 + PyYAML (provided by nix-shell / build environment).
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    execute_process(
+        COMMAND ${Python3_EXECUTABLE} -c "import yaml"
+        RESULT_VARIABLE PY_YAML_RESULT
+        OUTPUT_QUIET ERROR_QUIET)
+    if(PY_YAML_RESULT EQUAL 0)
+        add_test(NAME test_flatpak_manifest
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_flatpak_manifest.py)
+    else()
+        message(STATUS "PyYAML not found — test_flatpak_manifest skipped")
+    endif()
+else()
+    message(STATUS "Python3 not found — test_flatpak_manifest skipped")
+endif()
+
 # --- cmocka unit tests ------------------------------------------------------
 # Built only when cmocka is found.  These link against the cmocka library
 # and the shared test harness (test_harness + dbus_mock).

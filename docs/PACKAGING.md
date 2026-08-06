@@ -100,9 +100,73 @@ service will not start until it is.
 
 ## Flatpak
 
-See Task 42 for the Flatpak manifest. The Flatpak build uses the same CMake
-build system. The manager installs the service at first run using
-`flatpak run <app-id> --overlay-service` as the ExecStart line.
+Flatpak is the primary install method (SPEC §9.1), targeting Steam Deck,
+desktop Linux, Bazzite, Nobara, ChimeraOS, and any Flatpak-capable distro.
+Published on Flathub.
+
+### Manifest
+
+The Flatpak manifest is at `packaging/org.shadowblip.ControllerBox.yaml`.
+It builds SDL2, SDL2_ttf, SDL2_image, and libyaml from source as Flatpak
+build modules, then builds Controller-Box with CMake. nanosvg is vendored
+in the source tree (`third_party/nanosvg/`) and compiled by CMake directly.
+libsystemd (sd-bus) is provided by the freedesktop SDK.
+
+### Building
+
+```bash
+# Install flatpak-builder and the freedesktop SDK
+flatpak install flathub org.freedesktop.Sdk//24.08
+flatpak install flathub org.freedesktop.Platform//24.08
+
+# Build and install locally
+flatpak-builder --user --install --force build-dir \
+    packaging/org.shadowblip.ControllerBox.yaml
+
+# Or just verify dependencies (no build)
+flatpak-builder --show-deps packaging/org.shadowblip.ControllerBox.yaml
+```
+
+### Permissions
+
+The Flatpak manifest requests only the minimum permissions needed:
+
+| Permission | Rationale |
+|---|---|
+| `--socket=wayland` | SDL2 Wayland backend (primary on Steam Deck) |
+| `--socket=fallback-x11` | SDL2 X11 fallback for non-Wayland desktops |
+| `--device=dri` | GPU acceleration for SDL2 rendering |
+| `--system-talk-name=org.shadowblip.InputPlumber` | Talk to InputPlumber on system DBus (§10.1) |
+| `--talk-name=org.freedesktop.Flatpak` | `flatpak-spawn --host systemctl --user` for service install |
+| `--filesystem=~/.local/share/inputplumber/profiles` | Read/write InputPlumber user profiles (gap #4) |
+| `--filesystem=/usr/share/inputplumber:ro` | Read system profiles/devices/capability maps (gap #4) |
+| `--filesystem=~/.config/controller-box` | Read/write Controller-Box settings and assignments (§3.1) |
+| `--filesystem=~/.config/systemd/user` | Install systemd user service on first run (§9.1) |
+
+No `--filesystem=host`, `--filesystem=home`, or `--device=all` permissions
+are requested. Each permission is documented with a rationale comment in
+the manifest.
+
+### Systemd service under Flatpak
+
+Flatpak cannot ship systemd units to the host. The manager installs the
+service on first run:
+
+1. User installs the Flatpak and opens the manager.
+2. Manager prompts: "Enable overlay service?"
+3. Manager writes `~/.config/systemd/user/controller-box.service` with
+   `ExecStart=flatpak run org.shadowblip.ControllerBox --overlay-service`.
+4. Manager calls `flatpak-spawn --host systemctl --user enable --now
+   controller-box`.
+
+The unit has `Restart=always` and survives reboots.
+
+### InputPlumber dependency
+
+InputPlumber is a documented prerequisite. Install it first from its own
+Flatpak or system package. The overlay service unit declares
+`After=inputplumber.service` / `Requires=inputplumber.service` so it will
+not start until InputPlumber is available.
 
 ## Version
 

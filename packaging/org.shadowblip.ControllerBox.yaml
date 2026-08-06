@@ -1,0 +1,126 @@
+# Flatpak manifest for Controller-Box (SPEC §9.1).
+#
+# Build:  flatpak-builder --user --install --force build-dir \
+#           packaging/org.shadowblip.ControllerBox.yaml
+# Verify: flatpak-builder --show-deps packaging/org.shadowblip.ControllerBox.yaml
+#
+# SDL2, SDL2_ttf, SDL2_image are built from source so the manifest is
+# self-contained and does not depend on SDK extension availability.
+# nanosvg is vendored in the source tree (third_party/nanosvg/) and compiled
+# by CMake — no separate module needed.
+# libsystemd (sd-bus) and libyaml are provided by the freedesktop SDK.
+
+app-id: org.shadowblip.ControllerBox
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+command: controller-box
+
+finish-args:
+  # --- Display (required for SDL2 graphical application) ---
+  - --socket=wayland         # SDL2 Wayland backend (primary on Steam Deck)
+  - --socket=fallback-x11    # SDL2 X11 fallback for non-Wayland desktops
+  - --device=dri              # GPU / Vulkan acceleration for SDL2 rendering
+
+  # --- DBus: talk to InputPlumber on the system bus (SPEC §9.1, §10.1) ---
+  # Controller-Box communicates with InputPlumber exclusively via sd-bus on
+  # the system DBus. This permission is the minimum required for the overlay
+  # service to enumerate devices, create composite devices, set intercept
+  # mode, and receive signals.
+  - --system-talk-name=org.shadowblip.InputPlumber
+
+  # --- DBus: flatpak-spawn --host for systemctl --user (SPEC §9.1) ---
+  # The manager installs a systemd user service by writing a unit file and
+  # calling `systemctl --user enable --now`. Inside Flatpak this is done via
+  # `flatpak-spawn --host systemctl --user ...`, which requires talk access
+  # to the Flatpak session bus.
+  - --talk-name=org.freedesktop.Flatpak
+
+  # --- Filesystem: read/write InputPlumber user profiles (SPEC §9.1, §10.5 gap #4) ---
+  # InputPlumber has no DBus API to enumerate profiles on disk (gap #4).
+  # Controller-Box reads and writes user profiles directly from this path.
+  - --filesystem=~/.local/share/inputplumber/profiles
+
+  # --- Filesystem: read system profiles, devices, capability maps (SPEC §9.1, §10.5 gap #4) ---
+  # InputPlumber ships default profiles, device configs, and capability maps
+  # in /usr/share/inputplumber/. Controller-Box reads these read-only to
+  # populate the profile browser and device property views.
+  - --filesystem=/usr/share/inputplumber:ro
+
+  # --- Filesystem: read/write Controller-Box settings (SPEC §3.1, §5.1) ---
+  # Controller-Box stores its own configuration (settings.yaml,
+  # assignments.yaml) under ~/.config/controller-box/. The overlay service
+  # reads assignments; the manager reads and writes settings.
+  - --filesystem=~/.config/controller-box
+
+  # --- Filesystem: install systemd user service (SPEC §9.1) ---
+  # The manager writes controller-box.service to ~/.config/systemd/user/ on
+  # first run, then calls systemctl --user enable --now (via flatpak-spawn).
+  - --filesystem=~/.config/systemd/user
+
+modules:
+  # --- SDL2 2.30.0 (core library) ---
+  - name: SDL2
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DSDL_STATIC=OFF
+      - -DSDL_SHARED=ON
+      - -DSDL_TEST=OFF
+      - -DSDL_INSTALL_TESTS=OFF
+    sources:
+      - type: git
+        url: https://github.com/libsdl-org/SDL.git
+        tag: release-2.30.0
+
+  # --- SDL2_ttf 2.22.0 (font rendering for TTF text) ---
+  - name: SDL2_ttf
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DSDL2TTF_VENDORED=OFF
+      - -DSDL2TTF_SHARED=ON
+    sources:
+      - type: git
+        url: https://github.com/libsdl-org/SDL_ttf.git
+        tag: release-2.22.0
+
+  # --- SDL2_image 2.8.0 (image loading; used for texture loading) ---
+  - name: SDL2_image
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DSDL2IMAGE_VENDORED=OFF
+      - -DSDL2IMAGE_SHARED=ON
+      - -DSDL2IMAGE_TESTS=OFF
+    sources:
+      - type: git
+        url: https://github.com/libsdl-org/SDL_image.git
+        tag: release-2.8.0
+
+  # --- libyaml 0.2.5 (YAML parser for settings/profiles/assignments) ---
+  # Included as a build module for reliability; the freedesktop SDK may
+  # include libyaml but we vendor it to guarantee availability.
+  - name: libyaml
+    buildsystem: autotools
+    sources:
+      - type: archive
+        url: https://github.com/yaml/libyaml/releases/download/0.2.5/yaml-0.2.5.tar.gz
+        sha256: c642ae9c75bcce2395fce901abe213cda5de2440c809ee92c1bb08c5e9e0d76
+
+  # --- Controller-Box (main application) ---
+  - name: controller-box
+    buildsystem: cmake-ninja
+    builddir: true
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+    sources:
+      - type: git
+        url: https://github.com/iamlyth/controller-box.git
+        branch: develop
+    post-install:
+      # Rename desktop entry to match app-id (required by Flatpak spec)
+      - >
+        mv /app/share/applications/controller-box-manager.desktop
+        /app/share/applications/org.shadowblip.ControllerBox.desktop
+      # Fix Exec path: Flatpak resolves `controller-box` via the command field
+      - >
+        sed -i 's|/usr/bin/controller-box|controller-box|'
+        /app/share/applications/org.shadowblip.ControllerBox.desktop
