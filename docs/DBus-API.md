@@ -396,3 +396,86 @@ associated with a composite device. When `InterceptMode` is `ALL` or
 `GAMEPAD_ONLY`, input is routed to these `DBusDevice` objects and emitted as
 `InputEvent` signals. Task 14 uses this property to discover `DBusDevice`
 object paths per composite and subscribe to `InputEvent` signals.
+
+## Source/Target Device Properties and InputEvent (Task 14)
+
+### Source device interfaces
+
+Source devices expose identification properties on per-type interfaces:
+
+| Interface | Properties |
+|-----------|-----------|
+| `org.shadowblip.Input.Source.EventDevice` | `Name`, `PhysPath`, `IdVendor`, `IdProduct`, `UniqueId`, `IdBustype` |
+| `org.shadowblip.Input.Source.UdevDevice` | `Name`, `PhysPath`, `IdVendor`, `IdProduct`, `UniqueId`, `IdBustype` |
+| `org.shadowblip.Input.Source.HIDRawDevice` | `Name`, `SerialNumber`, `IdVendor`, `IdProduct`, `Manufacturer`, `Product` |
+
+**Note:** serial is `UniqueId` on evdev/udev but `SerialNumber` on HIDRaw.
+The caller must pass the correct interface for the device type.
+
+Wrappers (`ip_source.h`):
+
+```c
+int ip_source_get_name(backend, bus, source_path, iface, &out);
+int ip_source_get_unique_id(backend, bus, source_path, iface, &out);
+int ip_source_get_phys_path(backend, bus, source_path, iface, &out);
+int ip_source_get_id_vendor(backend, bus, source_path, iface, &out);
+int ip_source_get_id_product(backend, bus, source_path, iface, &out);
+int ip_source_get_id_bustype(backend, bus, source_path, iface, &out);
+int ip_source_get_serial_number(backend, bus, source_path, iface, &out);
+```
+
+All wrappers take `iface` as a parameter since the source interface varies
+by device type (EventDevice, UdevDevice, HIDRawDevice).
+
+### Target device interface
+
+Target devices expose display properties on `org.shadowblip.Input.Target`:
+
+| Property | Type | Purpose |
+|----------|------|---------|
+| `Name` | `s` | Display name |
+| `DeviceType` | `s` | Icon-mapping key (e.g. `"xb360"`, `"ds5"`, `"deck"`) |
+
+Wrappers (`ip_target.h`):
+
+```c
+int ip_target_get_name(backend, bus, target_path, &out);
+int ip_target_get_device_type(backend, bus, target_path, &out);
+```
+
+### InputEvent signal handling
+
+The `org.shadowblip.Input.DBusDevice` interface emits `InputEvent(event: s,
+value: d)` during intercept mode. The handler (`ip_input_signal.h`):
+
+1. **Sender verification** — verifies the signal sender matches
+   InputPlumber's unique bus name.
+2. **Event string parsing** — parses the event string into a normalized
+   `ip_input_id` enum. Unknown events are silently dropped.
+3. **Value validation** — buttons must be `0.0` or `1.0`; axes must be in
+   `[-1.0, 1.0]`. NaN/infinity are rejected.
+4. **Rate limiting** — max 200 events/second per device path (sliding
+   1-second window). Events over the limit are silently dropped.
+5. **Dispatch** — fires the user callback with parsed input, category,
+   validated value, raw event string, and device path.
+
+#### Normalized input enum
+
+| InputPlumber event string | `ip_input_id` | Category |
+|--------------------------|---------------|----------|
+| `Up`, `Down`, `Left`, `Right` | `IP_INPUT_UP/DOWN/LEFT/RIGHT` | Button |
+| `A`, `B`, `X`, `Y` | `IP_INPUT_A/B/X/Y` | Button |
+| `Start`, `Select`, `Back`, `Guide`, `Home` | `IP_INPUT_START/SELECT/GUIDE` | Button |
+| `L1`, `R1`, `LeftBumper`, `RightBumper` | `IP_INPUT_L1/R1` | Button |
+| `L2`, `R2`, `LeftTrigger`, `RightTrigger` | `IP_INPUT_L2/R2` | Button |
+| `L3`, `R3`, `LeftStick`, `RightStick` | `IP_INPUT_L3/R3` | Button |
+| `LeftStickX/Y`, `RightStickX/Y` | `IP_INPUT_LEFT/RIGHT_STICK_X/Y` | Axis |
+
+Unknown event strings map to `IP_INPUT_UNKNOWN` and are dropped.
+
+#### Production backend
+
+The production sd-bus backend (`dbus_client.c`) parses `InputEvent` signals
+with signature `(sd)` using `sd_bus_message_read(msg, "sd", &event, &value)`.
+Sender and path are extracted from the message via `sd_bus_message_get_sender`
+and `sd_bus_message_get_path`.

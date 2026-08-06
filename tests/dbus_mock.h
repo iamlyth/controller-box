@@ -30,6 +30,11 @@
 #define IP_IFACE_COMPOSITE "org.shadowblip.Input.CompositeDevice"
 #define IP_IFACE_PROPERTIES "org.freedesktop.DBus.Properties"
 #define IP_IFACE_OBJECT_MANAGER "org.freedesktop.DBus.ObjectManager"
+#define IP_IFACE_SOURCE_EVENT "org.shadowblip.Input.Source.EventDevice"
+#define IP_IFACE_SOURCE_UDEV "org.shadowblip.Input.Source.UdevDevice"
+#define IP_IFACE_SOURCE_HIDRAW "org.shadowblip.Input.Source.HIDRawDevice"
+#define IP_IFACE_TARGET "org.shadowblip.Input.Target"
+#define IP_IFACE_DBUS_DEVICE "org.shadowblip.Input.DBusDevice"
 
 /*
  * Opaque handle representing the bus connection in the vtable.  In
@@ -89,6 +94,19 @@ typedef struct {
     const char  *value;        /* string (for s), comma-separated (for as), NULL (invalidated) */
     int          array_count;  /* number of elements (for as), 0 otherwise */
 } ip_properties_changed_payload;
+
+/*
+ * InputEvent signal payload (Task 14).
+ * DBusDevice interface emits InputEvent(event: s, value: d) during
+ * intercept mode.  The production callback parses the sd-bus message
+ * into this struct; tests construct and inject it directly.
+ */
+typedef struct {
+    const char *sender;   /* unique bus name of the signal sender */
+    const char *path;     /* DBusDevice object path */
+    const char *event;    /* raw event string (e.g. "A", "Up", "LeftStickX") */
+    double      value;    /* event value (buttons: 0.0 or 1.0; axes: -1.0..1.0) */
+} ip_input_event_payload;
 
 /*
  * Function-pointer vtable — the interface abstraction.

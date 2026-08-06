@@ -129,6 +129,28 @@ if(CMOCKA_FOUND)
 
     add_test(NAME test_intercept_poll COMMAND test_intercept_poll)
 
+    # Task 14: Source/target device properties and InputEvent signal handling.
+    # Source device property getters (UniqueId, PhysPath, IdVendor, IdProduct,
+    # IdBustype, SerialNumber, Name) for EventDevice/UdevDevice/HIDRawDevice.
+    add_executable(test_source_props tests/test_source_props.c)
+    target_link_libraries(test_source_props PRIVATE controllerbox cbx_test_support)
+
+    add_test(NAME test_source_props COMMAND test_source_props)
+
+    # Target device property getters (Name, DeviceType).
+    add_executable(test_target_props tests/test_target_props.c)
+    target_link_libraries(test_target_props PRIVATE controllerbox cbx_test_support)
+
+    add_test(NAME test_target_props COMMAND test_target_props)
+
+    # InputEvent signal handling: event parsing (button/axis), value
+    # validation, sender verification, rate limiting (200/sec/device),
+    # integration via inject_signal.
+    add_executable(test_input_signal tests/test_input_signal.c)
+    target_link_libraries(test_input_signal PRIVATE controllerbox cbx_test_support)
+
+    add_test(NAME test_input_signal COMMAND test_input_signal)
+
     # Help later tasks: tests that need the dummy driver can set it here.
     set_tests_properties(test_sdl_dummy PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")

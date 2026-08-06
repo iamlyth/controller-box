@@ -12,6 +12,7 @@
 #include "dbus_mock.h"      /* vtable interface + constants */
 #include "ip_connection.h"  /* ip_owner_changed_payload */
 #include "ip_properties.h"  /* ip_prop_type */
+#include "ip_input_signal.h" /* ip_input_event_payload */
 
 #include <systemd/sd-bus.h>
 
@@ -356,6 +357,39 @@ sd_properties_changed_callback(sd_bus_message *msg, void *userdata,
     return 0;
 }
 
+/* --- sd-bus signal callback for InputEvent (Task 14) --------------------- */
+
+static int
+sd_input_event_callback(sd_bus_message *msg, void *userdata,
+                         sd_bus_error *ret_error)
+{
+    (void)ret_error;
+    sd_signal_data *data = (sd_signal_data *)userdata;
+    if (!data || !data->cb)
+        return 0;
+
+    const char *sender = sd_bus_message_get_sender(msg);
+    const char *path   = sd_bus_message_get_path(msg);
+
+    const char *event = NULL;
+    double      value  = 0.0;
+
+    int r = sd_bus_message_read(msg, "sd", &event, &value);
+    if (r < 0)
+        return 0;
+
+    ip_input_event_payload payload = {
+        .sender = sender,
+        .path   = path,
+        .event  = event,
+        .value  = value,
+    };
+
+    data->cb(IP_IFACE_DBUS_DEVICE, "InputEvent",
+             &payload, data->userdata);
+    return 0;
+}
+
 /* --- Vtable: connect ----------------------------------------------------- */
 
 static int
@@ -553,6 +587,15 @@ sd_subscribe_signal(ip_bus_handle bus, const char *iface,
                  iface, member);
         r = sd_bus_add_match(w->bus, &slot, match,
                              sd_properties_changed_callback, data);
+    } else if (strcmp(iface, IP_IFACE_DBUS_DEVICE) == 0 &&
+               strcmp(member, "InputEvent") == 0) {
+        /* InputEvent signal from DBusDevice interface. */
+        char match[512];
+        snprintf(match, sizeof(match),
+                 "type='signal',interface='%s',member='%s'",
+                 iface, member);
+        r = sd_bus_add_match(w->bus, &slot, match,
+                             sd_input_event_callback, data);
     } else {
         /* Generic signal subscription (fallback for future signal types). */
         char match[512];

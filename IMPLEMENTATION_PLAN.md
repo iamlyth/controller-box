@@ -334,7 +334,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 - Documentation impact: DBus-API.md CompositeDevice section, gap #1 workaround
 
 ## Task 14: Source/target device properties and InputEvent signal handling
-- Status: pending
+- Status: complete
 - Dependencies: Task 10
 - Scope: `src/dbus/ip_source.c`, `src/dbus/ip_target.c`, `src/dbus/ip_input_signal.c`
 - Acceptance criteria:

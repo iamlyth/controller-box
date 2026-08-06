@@ -82,10 +82,13 @@ add_library(controllerbox STATIC
     src/dbus/ip_connection.c
     src/dbus/ip_device_model.c
     src/dbus/ip_hotplug.c
+    src/dbus/ip_input_signal.c
     src/dbus/ip_intercept_poll.c
     src/dbus/ip_manager.c
     src/dbus/ip_objectmanager.c
     src/dbus/ip_properties.c
+    src/dbus/ip_source.c
+    src/dbus/ip_target.c
     src/ui/widget.c)
 target_include_directories(controllerbox
     PUBLIC
