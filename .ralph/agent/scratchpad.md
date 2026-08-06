@@ -2531,3 +2531,71 @@ Check `ralph tools task ready` and the plan.
 Task 34 (Manager skeleton and tab bar) — deps: Task 21 (done), Task 22 (done).
 Alternatively Task 35 (Controllers tab) — deps: Task 34.
 Check `ralph tools task ready` and the plan.
+
+## Task 34 (complete) — Manager skeleton and tab bar
+
+### What landed
+- `src/manager/manager.h`: cbx_manager struct (renderer, text_cache, theme,
+  settings, font_id, tabbar, 3 panels, focus_chain, active_tab, running).
+  Lifecycle API: init/run/stop/shutdown, handle_event, render. Accessors:
+  active_tab, tab_count, tabbar, panel, focus.
+- `src/manager/manager.c`: Full implementation following the overlay lifecycle
+  pattern. cbx_manager_init creates SDL2 window (1280x720, shown), initializes
+  text cache + theme + settings, creates tabbar with 3 tabs (Controllers,
+  Profiles, Settings), creates 3 empty panels, sets up focus chain (HOST mode),
+  focuses tabbar. Event dispatch: 1) try focused widget, 2) LEFT/RIGHT →
+  tabbar, 3) UP/DOWN → focus chain navigate, 4) A/Enter/Space → consumed.
+  Tab change callback: update active_tab, toggle panel visibility, rebuild
+  focus chain, refocus tabbar. Layout: tabbar at top (h=48), panels fill rest.
+- `src/app/main.c`: run_manager() now calls cbx_manager_init/run/shutdown
+  (dry_run still stubbed).
+- `tests/test_manager_tabs.c`: 14 cmocka tests (init basic, panels visibility,
+  L/R tab switching, tab change updates visible panel, U/D focus navigation,
+  render no crash, render with font, stop, NULL safety, unrelated event,
+  panel accessors, shutdown cleanup + re-init, A key consumed, full tab cycle).
+- `CMakeLists.txt`: Added src/manager/manager.c to controllerbox STATIC.
+- `tests/CMakeLists.txt`: Added test_manager_tabs with SDL_VIDEODRIVER=dummy.
+- `IMPLEMENTATION_PLAN.md`: Task 34 → complete.
+
+### Verification (all pass)
+- clean build (Debug -Werror, no warnings)
+- ctest 51/51: all previous + test_manager_tabs
+- test_manager_tabs 14/14 cmocka tests pass
+- verify-boilerplate → exit 0
+
+### Gotchas fixed
+- `cbx_tabbar_set_change_cb` takes only (tabbar, callback) — no user_data
+  parameter. The callback receives user_data from the tab's user_data field.
+  Fixed by passing `mgr` as user_data to each `cbx_tabbar_add_tab` call.
+- test_manager_stop: stop() sets running=false (to stop the loop), not true.
+  Fixed test to set running=true manually, then call stop, then assert false.
+- test_manager_shutdown_cleans_up: after memset(0), active_tab is 0 not -1
+  (accessor returns the raw field value, not -1 for zeroed struct). Removed
+  the -1 assertion, kept tab_count==0 assertion (which works correctly
+  because tabbar was destroyed).
+
+### Design decisions
+- **Separate SDL2 window**: cbx_manager_init creates its own cbx_renderer
+  with a 1280x720 window, shown immediately. This is a distinct window from
+  the overlay service (SPEC §5.1).
+- **Event dispatch order**: focused widget first (may consume), then
+  LEFT/RIGHT → tabbar (tab switching), then UP/DOWN → focus chain navigate.
+  This lets future panel widgets consume LEFT/RIGHT for their own purposes
+  if needed (e.g., profile editor).
+- **HOST mode focus chain**: The manager uses CBX_FOCUS_MODE_HOST so UP/DOWN
+  can cross row boundaries freely. Tabbar is row 0; panel children are row 1+.
+- **Empty panels for skeleton**: Each tab has an empty cbx_panel. Later tasks
+  (35-39) populate them with content. The focus chain only has the tabbar
+  until panels have children.
+- **Tab user_data = mgr pointer**: All 3 tabs store the manager pointer as
+  their user_data, so the on_change callback can access the manager. This
+  works because the tabbar passes tab.user_data to the callback.
+- **Font optional**: cbx_manager_init accepts a font_path that can be NULL.
+  Without a font, the tabbar still works (no text rendering). This keeps
+  the manager usable in headless test environments.
+
+### Next
+Task 35 (Controllers tab — list, add/remove, and type change) — deps:
+Task 34 (done), Task 12 (done). All dependencies complete.
+Alternatively Task 36 (Profiles tab) — deps: Task 34 (done), Task 8 (done).
+Check `ralph tools task ready` and the plan.
