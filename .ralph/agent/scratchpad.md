@@ -540,3 +540,122 @@ Alternatively Task 14 (Source/target device properties + InputEvent) —
 deps: Task 10.
 Alternatively Task 16 (SVG assets + icon mapping) — deps: Task 1 (done).
 Check `ralph tools task ready` and the plan.
+
+## Task 11 (complete) — Hotplug and PropertiesChanged signal handling
+
+### What landed
+- `tests/dbus_mock.h`: Added `ip_interfaces_changed_payload` (sender, path,
+  interfaces — comma-separated), `ip_prop_type` enum (STRING, ARRAY,
+  INVALIDATED), `ip_properties_changed_payload` (sender, iface_name,
+  prop_name, prop_type, value, array_count).
+- `src/dbus/ip_device_model.h/c`: Added mutation functions:
+  set_manager/remove_manager, add/remove composite (idempotent, index
+  parsed from path), add/remove source/target (name extracted from path),
+  all with dedup and shift-down removal. Added `dbus_mock.h` include for
+  IP_DBUS_PATH. Added `<stdlib.h>` for atoi.
+- `src/dbus/ip_hotplug.h/c`: Hotplug handler. ip_hotplug struct (backend,
+  bus, expected_sender, model). subscribe() registers InterfacesAdded +
+  InterfacesRemoved via backend->subscribe_signal. Signal callback
+  dispatches to handle_added/handle_removed by member name.
+  handle_added: verifies sender, validates path (must start with
+  IP_DBUS_PATH "/"), classifies by interface (Manager/Composite) and
+  path pattern (source/target), adds to model.
+  handle_removed: same verification, removes by classification.
+- `src/dbus/ip_properties.h/c`: Properties handler. ip_properties struct
+  (backend, bus, expected_sender, cb, cb_userdata). prop_spec table maps
+  property names to expected types + max element lengths:
+    GamepadOrder=ARRAY/256, ProfileName=STRING/256, ProfilePath=STRING/4096,
+    TargetDevices=ARRAY/256, SourceDevicePaths=ARRAY/4096.
+  subscribe() registers PropertiesChanged via backend->subscribe_signal.
+  handle_changed: verifies sender, looks up prop_spec, validates type
+  matches expected, validates string length or array element lengths +
+  array count (max 256). Invalidated properties dispatched with count=-1.
+  User callback fired only if all validation passes.
+- `src/dbus/dbus_client.c`: Added production sd-bus callbacks:
+  sd_interfaces_added_callback (oa{sa{sv}} → builds comma-separated
+  interfaces string via open_memstream), sd_interfaces_removed_callback
+  (oas → builds comma-separated string), sd_properties_changed_callback
+  (sa{sv}as → peeks variant type, reads string or string array, dispatches
+  per-property payload, also dispatches invalidated properties).
+  Updated sd_subscribe_signal to dispatch to correct callback by
+  iface+member, with proper match rules (ObjectManager signals filtered
+  by path, PropertiesChanged filtered by interface+member).
+- `tests/test_hotplug.c`: 34 cmocka tests (6 simple + 28 fixture). Tests:
+  init, subscribe (registers both signals, fail first/second), model
+  mutations (add/remove/dup/full for composite/source/target/manager),
+  handle added/removed (composite, source, target, manager, multi-iface,
+  wrong sender, invalid path, null interfaces, null payload/model),
+  integration (inject via mock, add-remove-add resurrection).
+- `tests/test_properties_changed.c`: 33 cmocka tests (4 simple + 29
+  fixture). Tests: init, subscribe, string properties (ProfileName,
+  ProfilePath, too-long rejection for both 256/4096 limits), array
+  properties (GamepadOrder, TargetDevices, SourceDevicePaths, single,
+  empty, elem-too-long, too-many, max-elems, path-long-elem), type
+  validation (mismatch string→array, array→string), invalidated
+  (tracked + untracked), sender verification (wrong + null), edge cases
+  (untracked prop, null payload/handler/callback, null value),
+  integration (inject via mock, multiple changes).
+- `CMakeLists.txt`: added ip_hotplug.c + ip_properties.c.
+- `tests/CMakeLists.txt`: added test_hotplug + test_properties_changed
+  targets, both linking controllerbox + cbx_test_support.
+- `docs/DBus-API.md`: added Signal Handling section (Hotplug +
+  PropertiesChanged with property table, validation rules, API examples).
+
+### Verification (all pass)
+- clean build (Debug -Werror, no warnings)
+- ctest 13/13: smoke_test_sdl2, smoke_test_nanosvg, test_sample,
+  test_sdl_dummy, test_config_paths, test_settings, test_assignments,
+  test_profile_yaml, test_profile_list, test_connection,
+  test_objectmanager_parse, test_hotplug, test_properties_changed
+- test_hotplug 34/34 cmocka tests pass
+- test_properties_changed 33/33 cmocka tests pass
+- verify-boilerplate, check-plan-freshness, branch-guard → exit 0
+
+### Gotchas fixed
+- **Missing `<stdlib.h>` in ip_device_model.c**: Added for atoi()
+  (parse_composite_index). Previously only had <string.h> + <stdio.h>.
+- **Fixture tests declared as cmocka_unit_test**: test_hotplug_subscribe,
+  test_hotplug_subscribe_fail_first/second, and test_props_subscribe
+  used *state but were declared without setup/teardown. Changed to
+  cmocka_unit_test_setup_teardown with proper fixture functions.
+  Otherwise *state was NULL → segfault.
+- **Unused `contents` array**: In sd_properties_changed_callback, declared
+  `char contents[256]` but used `contents_ptr` from peek_type directly.
+  Removed the unused array.
+- **Production callback match rules**: ObjectManager signals
+  (InterfacesAdded/Removed) filtered by path=IP_DBUS_PATH in match rule.
+  PropertiesChanged uses broad match (interface+member only) with sender
+  verification in the callback (not in match rule, to avoid issues when
+  InputPlumber isn't running at subscription time).
+
+### Design decisions
+- **Payload structs with `sender` field**: Added sender to all new payload
+  structs for sender verification. In production, sd_bus_message_get_sender()
+  fills it. In tests, the test sets it directly. The handler verifies
+  sender matches expected_sender before processing.
+- **Single property per payload for PropertiesChanged**: The production
+  callback calls the handler once per changed property we care about,
+  rather than batching all changes in one payload. This keeps the payload
+  struct simple and makes testing straightforward (one property per
+  inject_signal call).
+- **Comma-separated arrays**: Array property values are represented as
+  comma-separated strings in the payload. Works because DBus object paths
+  and device names don't contain commas. open_memstream builds the string
+  in production; tests construct it directly.
+- **Idempotent adds**: Device model add functions reject duplicates
+  (return false). This prevents double-adds if InterfacesAdded fires for
+  an already-known path.
+- **PropertiesChanged callback uses sd_bus_message_peek_type**: To
+  determine variant inner type (string vs array), the callback peeks
+  the variant, then enters it and peeks again for the actual type.
+  String arrays checked via inner_sig == "s".
+
+### Next
+Task 12 (Manager interface method wrappers) — deps: Task 10 (done).
+Unblocks Task 15 (depends on 11+12+6).
+Alternatively Task 13 (CompositeDevice wrappers + InterceptMode polling) —
+deps: Task 10.
+Alternatively Task 14 (Source/target device properties + InputEvent) —
+deps: Task 10.
+Alternatively Task 16 (SVG assets + icon mapping) — deps: Task 1 (done).
+Check `ralph tools task ready` and the plan.
