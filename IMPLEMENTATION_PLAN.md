@@ -167,7 +167,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 ### Phase 2: Config Layer
 
 ## Task 5: settings.yaml read/write
-- Status: pending
+- Status: complete
 - Dependencies: Task 4
 - Scope: `src/config/config_settings.c`, `src/config/config_settings.h`
 - Acceptance criteria:
@@ -181,6 +181,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
   - `tests/test_settings.c` passes (round-trip read/write, defaults, validation)
 - Verification: `cmake --build build && ./build/test_settings`
 - Documentation impact: OPERATIONS settings.yaml format section
+- Evidence: `cmake --build build` clean (Debug -Werror, no warnings); ctest 6/6 pass; `test_settings` 18/18 cmocka tests pass (defaults no-file, defaults function, round-trip save/load, round-trip defaults, opacity validation, count validation, unknown type validation, save rejects invalid, missing fields → defaults, out-of-range clamp on load, file mode 0600, flow-style types array, known-good type list, max doc size 1MB rejection, custom tags rejection, tag directives rejection, empty file → defaults, YAML 1.1 bool variants); `src/config/config_settings.{h,c}` implement libyaml event-based parser (max depth 50, max doc size 1MB, no custom tags/tag directives) + document-based emitter + atomic write (mkstemp + fchmod 0600 + fsync + rename); known-good types: xb360/ds5/deck/gamepad/mouse/keyboard/touchscreen; verify-boilerplate, check-plan-freshness, branch-guard exit 0.
 
 ## Task 6: assignments.yaml read/write and gamepad order persistence
 - Status: pending
