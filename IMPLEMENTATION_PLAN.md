@@ -390,7 +390,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 - Documentation impact: README credits section, OPERATIONS icon mapping section
 
 ## Task 17: nanosvg rasterization and SDL2 texture cache
-- Status: pending
+- Status: complete
 - Dependencies: Task 16
 - Scope: `src/icons/icon_cache.c`, `src/icons/icon_cache.h`
 - Acceptance criteria:

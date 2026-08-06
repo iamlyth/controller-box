@@ -92,6 +92,7 @@ add_library(controllerbox STATIC
     src/dbus/ip_source.c
     src/dbus/ip_target.c
     src/icons/icon_map.c
+    src/icons/icon_cache.c
     src/ui/widget.c)
 target_include_directories(controllerbox
     PUBLIC

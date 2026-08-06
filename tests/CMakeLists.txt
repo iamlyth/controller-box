@@ -174,6 +174,16 @@ if(CMOCKA_FOUND)
 
     add_test(NAME test_icon_map COMMAND test_icon_map)
 
+    # Task 17: SVG-to-SDL2 texture cache
+    add_executable(test_icon_cache tests/test_icon_cache.c)
+    target_link_libraries(test_icon_cache PRIVATE
+        controllerbox PkgConfig::CMOCKA nanosvg cbx_test_support)
+    target_compile_definitions(test_icon_cache PRIVATE
+        CBX_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME test_icon_cache COMMAND test_icon_cache)
+    set_tests_properties(test_icon_cache PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+
     # Help later tasks: tests that need the dummy driver can set it here.
     set_tests_properties(test_sdl_dummy PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
