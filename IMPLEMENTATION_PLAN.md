@@ -371,7 +371,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 ### Phase 4: Controller Icons
 
 ## Task 16: SVG assets and icon mapping table
-- Status: pending
+- Status: complete
 - Dependencies: Task 1
 - Scope: `data/icons/svg/` (Controllercons SVGs + custom SVGs), `LICENSE.controllercons`,
   `data/controller-icons.yaml`, `src/icons/icon_map.c`, `src/icons/icon_map.h`

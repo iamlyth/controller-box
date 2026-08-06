@@ -91,6 +91,7 @@ add_library(controllerbox STATIC
     src/dbus/ip_properties.c
     src/dbus/ip_source.c
     src/dbus/ip_target.c
+    src/icons/icon_map.c
     src/ui/widget.c)
 target_include_directories(controllerbox
     PUBLIC
@@ -122,3 +123,12 @@ install(TARGETS controller-box
     RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 install(TARGETS controllerbox nanosvg
     ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}")
+
+# --- Data files (Task 16) ---------------------------------------------------
+# Install icon SVGs and controller-icons.yaml to the data directory.
+install(DIRECTORY data/icons/svg/ DESTINATION "${CBX_ICON_DIR}/svg"
+    FILES_MATCHING PATTERN "*.svg")
+install(FILES data/icons/svg/LICENSE.controllercons
+    DESTINATION "${CBX_ICON_DIR}/svg")
+install(FILES data/controller-icons.yaml
+    DESTINATION "${CBX_DATA_DIR}")

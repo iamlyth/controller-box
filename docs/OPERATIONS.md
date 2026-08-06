@@ -98,6 +98,26 @@ Never edit the specification during implementation. `check-plan-freshness.sh` co
 
 Every implementation plan ends with **Final documentation and specification audit**. Read-only reviewers compare source, tests, configuration, README, operations, and the specification. The sole writer corrects documentation and runs final verification. `LOOP_COMPLETE` is forbidden until this gate passes.
 
+## Icon mapping
+
+Controller-Box maps InputPlumber `DeviceType` strings to SVG icons using
+`/usr/share/controller-box/controller-icons.yaml` (SPEC §8.4).  The mapping file
+is a YAML list of entries with `type`, `icon`, and `name` fields.
+
+At runtime, `cbx_icon_map_load()` parses the YAML, and
+`cbx_icon_map_lookup(type, ...)` returns the icon name and display name for a
+given `DeviceType`.  Unknown types fall back to `generic-gamepad` with the raw
+type string as the label.
+
+SVG files live in `/usr/share/controller-box/icons/svg/`.  Controllercons
+icons are prefixed `cc-` (e.g. `cc-xbox-360`, `cc-ps5`).  Custom icons use
+plain names (`steam-deck`, `generic-gamepad`, `arcade-stick`, `hitbox`,
+`mouse`, `keyboard`).
+
+To add a new device type mapping, append an entry to `controller-icons.yaml`
+under `virtual_types:`.  To add a new icon, place the SVG in `data/icons/svg/`
+and reference it by filename (without `.svg`).
+
 ## Troubleshooting
 
 - **`expected develop`**: merge/switch to `develop`; use the trial override only for this boilerplate branch.

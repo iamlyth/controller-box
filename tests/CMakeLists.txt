@@ -163,6 +163,17 @@ if(CMOCKA_FOUND)
 
     add_test(NAME test_gamepad_order COMMAND test_gamepad_order)
 
+    # Task 16: SVG assets and icon mapping table.  Tests the runtime
+    # icon mapping parser: parse, load, lookup (known/unknown types),
+    # default path, YAML security constraints, max entries, truncation.
+    # Also verifies all SVG assets parse and rasterize via nanosvg.
+    add_executable(test_icon_map tests/test_icon_map.c)
+    target_link_libraries(test_icon_map PRIVATE controllerbox PkgConfig::CMOCKA nanosvg)
+    target_compile_definitions(test_icon_map PRIVATE
+        CBX_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+
+    add_test(NAME test_icon_map COMMAND test_icon_map)
+
     # Help later tasks: tests that need the dummy driver can set it here.
     set_tests_properties(test_sdl_dummy PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")

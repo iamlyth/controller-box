@@ -231,3 +231,14 @@ git tag vX.Y.Z
 ```
 
 For the next release, update the same `docs/SPEC.md` in a dedicated commit, run a new planning loop, and execute a new implementation loop. Git retains prior specifications and plans.
+
+## Credits
+
+Controller icons are sourced from:
+
+- [Controllercons](https://controllercons.github.io/) by Kieran McClung — 30 controller
+  SVG icons licensed under the [SIL Open Font License 1.1](data/icons/svg/LICENSE.controllercons).
+  Covers PS5, PS4, PS3, Xbox Series X, Xbox One, Xbox 360, Switch Pro, Joy-Cons, SNES,
+  NES, N64, GameCube, Wii, Dreamcast, and more.
+- Custom icons (arcade-stick, hitbox, steam-deck, generic-gamepad, mouse, keyboard) are
+  created by the controller-box project under GPL-3.0.
