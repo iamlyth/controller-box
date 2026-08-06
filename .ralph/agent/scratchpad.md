@@ -1564,3 +1564,94 @@ Task 22 (Focus chain system and input event mapping) — deps: Task 21
 Alternatively Task 23 (Animation primitives and dirty rect optimization) —
 deps: Task 19 (done).
 Check `ralph tools task ready` and the plan.
+
+## Task 22 (complete) — Focus chain system and input event mapping
+
+### What landed
+- `src/ui/focus.h/c`: Focus chain manager with directional (spatial)
+  navigation. Maintains a flat list of up to 64 focusable widgets with
+  their screen rectangles and row groups. Navigation: up/down/left/right
+  finds the nearest widget whose center is in that direction, scoring
+  by primary-axis distance + 1.5× lateral offset penalty. Player Mode
+  restricts up/down to the same row group (SPEC §4.3); Host Mode allows
+  crossing rows (SPEC §4.4). Left/right ignores row grouping in both
+  modes. Focus/blur via widget vtable dispatchers. API: init, add (with
+  optional rect override and row group), clear, count, set/get mode,
+  get_focused/get_focused_widget/get_entry, focus (by index),
+  focus_first, focus_widget, blur, navigate (directional), update_rect.
+- `src/ui/input_map.h/c`: Input event mapping from InputPlumber's
+  normalized input enum (ip_input_id + ip_input_category) to synthetic
+  SDL_Event structures for the widget vtable's handle_event. Buttons:
+  value >= 0.5 → SDL_KEYDOWN, < 0.5 → SDL_KEYUP with semantic SDLK_*
+  codes (UP/DOWN/LEFT/RIGHT, RETURN for A, ESCAPE for B, TAB for START,
+  BACKSPACE for SELECT, MENU for GUIDE, PAGEUP/PAGEDOWN for L1/R1,
+  F1/F2 for L3/R3). Axes: |value| > 0.5 threshold → directional
+  keydown (LeftStickY+ → UP, LeftStickY- → DOWN, LeftStickX+ → RIGHT,
+  LeftStickX- → LEFT, same for RightStick). Deadzone (|value| <= 0.5)
+  produces no event. Stateless: each call produces 0 or 1 SDL_Event.
+  Helpers: cbx_input_map_keycode (button → SDL_Keycode),
+  cbx_input_map_axis_direction (axis + value → directional ip_input_id).
+- `tests/test_focus.c`: 39 cmocka tests. Init (basic, null), add (basic,
+  custom rect, null args, overflow), clear, count, mode (set/get, null),
+  focus (first, empty, by index, invalid, switches blur, by widget,
+  not found), blur (with/without focus), get focused/widget/entry,
+  navigation (right, left, right boundary, left boundary, no focus, null,
+  down host, up host, down player restricted, down player same row,
+  up player restricted, left/right ignore mode, picks nearest, diagonal
+  prefers aligned, host crosses rows), rect update (valid, invalid).
+- `tests/test_input_map.c`: 30 cmocka tests. Keycode mapping (dpad, face,
+  center, shoulders, stick clicks, axes unknown, unknown input). Button
+  events (press, release, dpad, R3, release value 0, threshold press,
+  threshold release). Axis events (left stick up/down/right/left, right
+  stick up/left, deadzone, at threshold). Axis direction helper
+  (positive, negative, deadzone, unknown axis). Edge cases (unknown
+  input, null out, all buttons mapped, all axes mapped).
+- `CMakeLists.txt`: Added focus.c, input_map.c to controllerbox STATIC.
+- `tests/CMakeLists.txt`: Added test_focus + test_input_map targets
+  linked with controllerbox + cmocka.
+- `IMPLEMENTATION_PLAN.md`: Task 22 → complete.
+
+### Verification (all pass)
+- clean build (Debug -Werror, no warnings)
+- ctest 33/33: all previous + test_focus + test_input_map
+- test_focus 39/39 cmocka tests pass
+- test_input_map 30/30 cmocka tests pass
+- verify-boilerplate, check-plan-freshness → exit 0
+
+### Gotchas fixed
+- **Wrong include for ip_input_id**: Initially included `dbus_mock.h`
+  in input_map.h, but ip_input_id/ip_input_category are defined in
+  `dbus/ip_input_signal.h`, not dbus_mock.h. Fixed to include
+  `dbus/ip_input_signal.h` in both header and test file.
+- **typeof() not available in C11 strict mode**: CMAKE_C_EXTENSIONS=OFF
+  means `typeof()` (GCC extension) is unavailable. Replaced with
+  explicit `struct axis_map_entry` type definition.
+
+### Design decisions
+- **Spatial scoring with lateral penalty**: Score = primary_distance +
+  1.5 × lateral_distance. This ensures directly-aligned candidates
+  beat diagonally-offset ones at the same Euclidean distance, which
+  matches user expectations for grid-style navigation.
+- **Player Mode row restriction on up/down only**: Left/right works
+  across rows in both modes. This matches SPEC §4.3 where each controller
+  moves left/right across columns and up/down cycles within its row.
+- **Stateless axis mapping**: Each axis event independently produces a
+  keydown if above threshold or nothing if in deadzone. This avoids
+  needing state tracking in the mapper itself. The widget's handle_event
+  handles repeated keydowns gracefully.
+- **Button threshold at 0.5**: Buttons are binary (0.0/1.0) but the
+  mapper accepts any value >= 0.5 as press and < 0.5 as release. This
+  handles analog triggers (L2/R2) that may report intermediate values.
+- **Axis threshold at 0.5**: Matches InputPlumber's typical deadzone.
+  Configurable via CBX_INPUT_AXIS_THRESHOLD define.
+- **SDLK_TAB for START**: Chosen to avoid collision with SDLK_RETURN
+  (mapped to A/activate). START is a separate action in console UIs.
+- **SDLK_F2 for R3**: R3 toggles Host Mode (SPEC §4.4). F2 is an
+  unlikely collision with other widget key handling.
+
+### Next
+Task 23 (Animation primitives and dirty rect optimization) — deps:
+Task 19 (done).
+Alternatively Task 24 (Pre-built overlay surface infrastructure) — deps:
+Task 23, Task 18 (done).
+Check `ralph tools task ready` and the plan.
