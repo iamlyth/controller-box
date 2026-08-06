@@ -279,12 +279,174 @@ sd_set_property(ip_bus_handle bus, const char *dest,
     return -ENOSYS;  /* Task 12 */
 }
 
+/* --- Vtable: get_managed_objects (Task 10) ------------------------------- */
+
+/* Translate sd-bus errors to categorized codes (same as get_property). */
+static int
+translate_sd_error(int rc, const sd_bus_error *error)
+{
+    if (rc >= 0)
+        return rc;
+    if (sd_bus_error_has_name(error,
+            "org.freedesktop.DBus.Error.ServiceUnknown"))
+        return IP_ERR_SERVICE_UNKNOWN;
+    if (sd_bus_error_has_name(error,
+            "org.freedesktop.DBus.Error.NameHasNoOwner"))
+        return IP_ERR_SERVICE_UNKNOWN;
+    if (sd_bus_error_has_name(error,
+            "org.freedesktop.DBus.Error.AccessDenied"))
+        return IP_ERR_ACCESS_DENIED;
+    if (sd_bus_error_has_name(error,
+            "org.freedesktop.DBus.Error.NoReply"))
+        return IP_ERR_NO_REPLY;
+    if (sd_bus_error_has_name(error,
+            "org.freedesktop.DBus.Error.InvalidArgs"))
+        return IP_ERR_INVALID_ARGS;
+    return rc;  /* already negative errno */
+}
+
+/*
+ * Calls GetManagedObjects() on the ObjectManager interface at `path`,
+ * iterates the a{oa{sa{sv}}} reply, and serialises it into a text
+ * representation (one line per object: "path\tiface1,iface2,…").
+ *
+ * The text format is consumed by cbx_objectmanager_parse_reply(), which
+ * is shared by the production and mock backends.
+ */
 static int
 sd_get_managed_objects(ip_bus_handle bus, const char *dest,
                        const char *path, char **out_reply)
 {
-    (void)bus; (void)dest; (void)path; (void)out_reply;
-    return -ENOSYS;  /* Task 10 */
+    sd_bus_wrapper *w = (sd_bus_wrapper *)bus;
+    if (!w || !dest || !path || !out_reply)
+        return -EINVAL;
+
+    sd_bus_error   error = SD_BUS_ERROR_NULL;
+    sd_bus_message *reply = NULL;
+
+    int r = sd_bus_call_method(w->bus, dest, path,
+                               IP_IFACE_OBJECT_MANAGER, "GetManagedObjects",
+                               &error, &reply, "");
+    if (r < 0) {
+        r = translate_sd_error(r, &error);
+        goto cleanup;
+    }
+
+    /* Build text representation via open_memstream. */
+    char  *buf = NULL;
+    size_t sz   = 0;
+    FILE  *fp   = open_memstream(&buf, &sz);
+    if (!fp) {
+        r = -ENOMEM;
+        goto cleanup;
+    }
+
+    /* Iterate the outer array: a{oa{sa{sv}}} */
+    r = sd_bus_message_enter_container(reply, 'a', "{oa{sa{sv}}}");
+    if (r < 0) {
+        fclose(fp);
+        free(buf);
+        goto cleanup;
+    }
+
+    while ((r = sd_bus_message_enter_container(reply, 'e',
+                                                "oa{sa{sv}}")) > 0) {
+        const char *obj_path = NULL;
+        r = sd_bus_message_read(reply, "o", &obj_path);
+        if (r < 0) {
+            fclose(fp);
+            free(buf);
+            goto cleanup;
+        }
+
+        /* Write path + tab to the stream first. */
+        fputs(obj_path ? obj_path : "", fp);
+        fputc('\t', fp);
+
+        /* Inner array: a{sa{sv}} — interface → properties */
+        r = sd_bus_message_enter_container(reply, 'a', "{sa{sv}}");
+        if (r < 0) {
+            fclose(fp);
+            free(buf);
+            goto cleanup;
+        }
+
+        /* Iterate interfaces, writing comma-separated names. */
+        bool first = true;
+        while ((r = sd_bus_message_enter_container(reply, 'e',
+                                                    "sa{sv}")) > 0) {
+            const char *iface = NULL;
+            r = sd_bus_message_read(reply, "s", &iface);
+            if (r < 0) {
+                fclose(fp);
+                free(buf);
+                goto cleanup;
+            }
+
+            /* Skip the a{sv} property dict — we don't need values. */
+            r = sd_bus_message_skip(reply, "a{sv}");
+            if (r < 0) {
+                fclose(fp);
+                free(buf);
+                goto cleanup;
+            }
+
+            r = sd_bus_message_exit_container(reply);  /* exit {sa{sv}} */
+            if (r < 0) {
+                fclose(fp);
+                free(buf);
+                goto cleanup;
+            }
+
+            if (!first)
+                fputc(',', fp);
+            fputs(iface ? iface : "", fp);
+            first = false;
+        }
+        if (r < 0) {
+            fclose(fp);
+            free(buf);
+            goto cleanup;
+        }
+
+        r = sd_bus_message_exit_container(reply);  /* exit a{sa{sv}} */
+        if (r < 0) {
+            fclose(fp);
+            free(buf);
+            goto cleanup;
+        }
+
+        r = sd_bus_message_exit_container(reply);  /* exit {oa{sa{sv}}} */
+        if (r < 0) {
+            fclose(fp);
+            free(buf);
+            goto cleanup;
+        }
+
+        fputc('\n', fp);
+    }
+    if (r < 0) {
+        fclose(fp);
+        free(buf);
+        goto cleanup;
+    }
+
+    r = sd_bus_message_exit_container(reply);  /* exit a{oa{sa{sv}}} */
+
+    fclose(fp);
+
+    if (r < 0) {
+        free(buf);
+        goto cleanup;
+    }
+
+    *out_reply = buf;
+    r = 0;
+
+cleanup:
+    sd_bus_message_unref(reply);
+    sd_bus_error_free(&error);
+    return r;
 }
 
 static int

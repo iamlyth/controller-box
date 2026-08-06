@@ -93,3 +93,68 @@ int rc = ip_connection_connect(&conn);
 // ip_connection_handle_name_changed() is called internally
 // by the signal callback, updating state and firing user callbacks.
 ```
+
+## Object Enumeration (Task 10)
+
+### GetManagedObjects
+
+`org.freedesktop.DBus.ObjectManager.GetManagedObjects()` at the root path
+(`/org/shadowblip/InputPlumber`) returns all managed objects in one call.
+The reply has DBus signature `a{oa{sa{sv}}}` — a dict mapping object paths
+to dicts of interface names to property dicts.
+
+### Text format
+
+Both the production sd-bus backend and the mock backend serialise the
+reply into a text representation consumed by a single parser:
+
+```
+# one line per managed object
+<object_path>\t<iface1>,<iface2>,...
+# comment lines start with '#'
+# (empty lines are ignored)
+```
+
+The production backend (`sd_get_managed_objects` in `dbus_client.c`)
+iterates the `sd_bus_message` and builds this text via `open_memstream`.
+The mock backend returns a canned text fixture registered by tests via
+`ip_dbus_mock_expect_ok(mock, IP_IFACE_OBJECT_MANAGER, "GetManagedObjects", fixture)`.
+
+### Device model
+
+The parser populates a `cbx_device_model`:
+
+| Category | Classification | Limit |
+|---|---|---|
+| Manager | Interface list contains `org.shadowblip.InputManager` | 1 |
+| Composite | Interface list contains `org.shadowblip.Input.CompositeDevice` | 16 |
+| Source | Path contains `/devices/source/` | 64 |
+| Target | Path contains `/devices/target/` | 64 |
+
+**Security:** All object paths are validated to start with
+`/org/shadowblip/InputPlumber/`.  Invalid paths are silently skipped.
+
+### API
+
+```c
+/* Full enumeration via backend vtable. */
+cbx_device_model model;
+int rc = cbx_objectmanager_enumerate(conn.backend, conn.bus, &model);
+// rc == 0 → success (model may be empty if InputPlumber is starting up)
+// rc < 0  → backend error (e.g. IP_ERR_NO_REPLY)
+
+/* Direct parser (for testing with fixtures). */
+int rc = cbx_objectmanager_parse_reply(fixture_text, &model);
+
+/* Lookups. */
+const cbx_composite_entry *c = cbx_device_model_find_composite(&model, path);
+const cbx_device_entry    *s = cbx_device_model_find_source(&model, path);
+const cbx_device_entry    *t = cbx_device_model_find_target(&model, path);
+```
+
+### Re-enumeration hook
+
+`ip_connection` fires its `reenumerate_cb` when InputPlumber's bus name is
+(re-)acquired (see Connection Model above).  The caller should invoke
+`cbx_objectmanager_enumerate()` from this callback to refresh the device
+model after daemon restart or initial startup.

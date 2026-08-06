@@ -82,6 +82,13 @@ if(CMOCKA_FOUND)
 
     add_test(NAME test_connection COMMAND test_connection)
 
+    # ObjectManager enumeration test (Task 10): GetManagedObjects parsing,
+    # device model population, path validation, mock backend integration.
+    add_executable(test_objectmanager_parse tests/test_objectmanager_parse.c)
+    target_link_libraries(test_objectmanager_parse PRIVATE controllerbox cbx_test_support)
+
+    add_test(NAME test_objectmanager_parse COMMAND test_objectmanager_parse)
+
     # Help later tasks: tests that need the dummy driver can set it here.
     set_tests_properties(test_sdl_dummy PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
