@@ -2599,3 +2599,80 @@ Task 35 (Controllers tab — list, add/remove, and type change) — deps:
 Task 34 (done), Task 12 (done). All dependencies complete.
 Alternatively Task 36 (Profiles tab) — deps: Task 34 (done), Task 8 (done).
 Check `ralph tools task ready` and the plan.
+
+## Task 35 (complete) — Controllers tab — list, add/remove, and type change
+
+### What landed
+- `src/manager/controllers_tab.h`: cbx_controllers_tab struct (DBus
+  backend/bus borrowed, device model owned, supported_types[],
+  device_types[], widgets: device_list, type_picker, add_btn,
+  remove_btn, change_type_btn). Modes: LIST and TYPE_PICK. Actions:
+  NONE, ADD, CHANGE. Full lifecycle API: init/refresh/shutdown.
+  Action API: load_supported_types, add, remove, change_type,
+  begin_type_pick, confirm_type_pick, cancel_type_pick. Accessors
+  for testing.
+- `src/manager/controllers_tab.c`: Full implementation. Init populates
+  panel with 5 children (device_list, 3 buttons, type_picker hidden).
+  Refresh calls cbx_objectmanager_enumerate + ip_target_get_device_type
+  per target, rebuilds list. Add calls ip_manager_create_target_device.
+  Remove calls ip_manager_stop_target_device. Change_type calls
+  ip_composite_set_target_devices on the composite at same index,
+  building types CSV from current device types with the one changed.
+  Type picker: begin populates picker from supported_types, hides
+  device list + buttons, shows type_picker. Confirm executes pending
+  action (add or change). Cancel restores list view.
+- `tests/test_controllers_tab.c`: 33 cmocka tests with mock DBus +
+  SDL2 dummy driver. Tests: init populates panel (5 children), init
+  without DBus, init NULL args, refresh enumerates devices, refresh
+  empty, refresh re-enumerates, refresh enumerate error, refresh NULL,
+  load supported types success/error/whitespace, add success/error/null,
+  remove success/error/bad-index, change type success/mixed/error/
+  bad-index/no-composite, type picker begin/confirm-add/confirm-change/
+  cancel/no-types/not-in-pick-mode, shutdown removes children/null-safe,
+  accessors null-safe/bad-index, full workflow (add→change→remove).
+- `CMakeLists.txt`: Added src/manager/controllers_tab.c to controllerbox.
+- `tests/CMakeLists.txt`: Added test_controllers_tab with cbx_test_support
+  and SDL_VIDEODRIVER=dummy.
+- `IMPLEMENTATION_PLAN.md`: Task 35 → complete.
+
+### Verification (all pass)
+- clean build (Debug -Werror, no warnings)
+- ctest 52/52: all previous + test_controllers_tab
+- test_controllers_tab 33/33 cmocka tests pass
+- verify-boilerplate → exit 0
+
+### Gotchas fixed
+- Mock DBus returns FIRST match for (iface, member) — cannot test
+  per-device DeviceType differentiation. Both targets get the same
+  type. Fixed test_refresh_enumerates_devices and test_change_type_mixed
+  to use single type expectation and verify count/paths instead of
+  per-device types.
+- `font_available` unused function → -Werror=unused-function. Removed.
+- Need cbx_test_support link for mock DBus symbols (ip_dbus_mock_*).
+
+### Design decisions
+- **Composite index = target index**: Change type finds the composite
+  at the same index as the target. In the common case (1 target per
+  composite), this works correctly. If there's no composite at that
+  index, returns -EINVAL.
+- **Types CSV for change_type**: Builds CSV from all current target
+  types with the selected one replaced. For unchached types, queries
+  DeviceType live. Fallback to "gamepad" if query fails.
+- **Type picker is a mode switch**: Not a separate window. The device
+  list is hidden and the type picker list is shown in its place.
+  Buttons are hidden during type pick. This keeps the UI simple and
+  controller-navigable.
+- **Refresh is non-fatal on type query failure**: If a DeviceType query
+  fails for one target, that target shows with empty type. The refresh
+  still succeeds (rc from enumerate, not from type queries).
+- **Init auto-loads supported types + refresh**: When backend and bus
+  are provided, init calls load_supported_types and refresh. This
+  means the tab is ready to use immediately after init. Tests that
+  don't want this can pass NULL backend.
+
+### Next
+Task 36 (Profiles tab — browse, create, and delete) — deps: Task 34
+(done), Task 8 (done). All dependencies complete.
+Alternatively Task 37 (Profile editor) — deps: Task 36, Task 18, Task 13,
+Task 8.
+Check `ralph tools task ready` and the plan.
