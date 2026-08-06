@@ -78,10 +78,12 @@ add_library(controllerbox STATIC
     src/config/config_profile_meta.c
     src/config/config_profile_list.c
     src/dbus/dbus_client.c
+    src/dbus/ip_connection.c
     src/ui/widget.c)
 target_include_directories(controllerbox
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests"
         "${CMAKE_CURRENT_BINARY_DIR}")  # for generated config.h
 target_link_libraries(controllerbox
     PUBLIC

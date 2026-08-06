@@ -40,10 +40,21 @@ typedef void *ip_bus_handle;
 /*
  * Callback type for signal subscriptions (production and mock).
  * `member` is the signal name (e.g. "PropertiesChanged"); `payload` is a
- * test-supplied opaque pointer registered with the expectation.
+ * signal-specific struct (see ip_owner_changed_payload below).
  */
 typedef void (*ip_signal_cb)(const char *interface, const char *member,
                             const void *payload, void *userdata);
+
+/*
+ * NameOwnerChanged signal payload (Task 9).
+ * Shared by production (sd-bus backend parses the message into this struct)
+ * and tests (test constructs and injects it via inject_signal).
+ */
+typedef struct {
+    const char *name;       /* well-known name (e.g. IP_DBUS_NAME) */
+    const char *old_owner;  /* previous unique name ("" if just acquired) */
+    const char *new_owner;  /* new unique name ("" if just lost) */
+} ip_owner_changed_payload;
 
 /*
  * Function-pointer vtable — the interface abstraction.
@@ -111,10 +122,27 @@ typedef struct {
     char       *value;   /* canned string value (heap-owned by mock, or NULL) */
 } ip_mock_expectation;
 
+/*
+ * Signal subscription table (Task 9 extension).
+ * Stores registered callbacks for (iface, member) pairs so that
+ * inject_signal can dispatch to the correct callback.
+ */
+#define IP_MOCK_MAX_SUBSCRIPTIONS 8
+
 typedef struct {
-    ip_mock_expectation expectations[IP_MOCK_MAX_EXPECTATIONS];
-    int                 count;
-    ip_bus_handle       bus;   /* opaque, points back to this struct */
+    const char   *iface;
+    const char   *member;
+    ip_signal_cb  cb;
+    void         *userdata;
+} ip_mock_subscription;
+
+typedef struct {
+    ip_mock_expectation  expectations[IP_MOCK_MAX_EXPECTATIONS];
+    int                  count;
+    ip_bus_handle        bus;   /* opaque, points back to this struct */
+    ip_mock_subscription subscriptions[IP_MOCK_MAX_SUBSCRIPTIONS];
+    int                  sub_count;
+    int                  subscribe_fail_rc;  /* 0 = normal, <0 = fail subscribe */
 } ip_dbus_mock;
 
 /* --- Mock lifecycle -------------------------------------------------------- */

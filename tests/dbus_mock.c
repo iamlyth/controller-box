@@ -32,6 +32,8 @@ void ip_dbus_mock_reset(ip_dbus_mock *mock) {
         mock->expectations[i].value = NULL;
     }
     mock->count = 0;
+    mock->sub_count = 0;
+    mock->subscribe_fail_rc = 0;
 }
 
 int ip_dbus_mock_expect(ip_dbus_mock *mock, const char *iface,
@@ -150,16 +152,38 @@ static int mock_get_managed_objects(ip_bus_handle bus, const char *dest,
 static int mock_subscribe_signal(ip_bus_handle bus, const char *iface,
                                  const char *member, ip_signal_cb cb,
                                  void *userdata) {
-    (void)bus; (void)iface; (void)member; (void)cb; (void)userdata;
-    /* The mock accepts all subscriptions; inject_signal triggers them. */
+    ip_dbus_mock *mock = (ip_dbus_mock *)bus;
+    if (!mock || !iface || !member) return -EINVAL;
+
+    /* Allow tests to simulate subscribe failure. */
+    if (mock->subscribe_fail_rc != 0)
+        return mock->subscribe_fail_rc;
+
+    if (mock->sub_count >= IP_MOCK_MAX_SUBSCRIPTIONS) return -ENOMEM;
+
+    mock->subscriptions[mock->sub_count].iface    = iface;
+    mock->subscriptions[mock->sub_count].member   = member;
+    mock->subscriptions[mock->sub_count].cb       = cb;
+    mock->subscriptions[mock->sub_count].userdata = userdata;
+    mock->sub_count++;
     return 0;
 }
 
 static int mock_inject_signal(ip_bus_handle bus, const char *iface,
                               const char *member, const void *payload) {
-    (void)bus; (void)iface; (void)member; (void)payload;
-    /* Signal callback dispatch is extended in later tasks; for now the
-     * infrastructure is in place. */
+    ip_dbus_mock *mock = (ip_dbus_mock *)bus;
+    if (!mock || !iface || !member) return -EINVAL;
+
+    for (int i = 0; i < mock->sub_count; i++) {
+        if (strcmp(mock->subscriptions[i].iface, iface) == 0 &&
+            strcmp(mock->subscriptions[i].member, member) == 0) {
+            if (mock->subscriptions[i].cb) {
+                mock->subscriptions[i].cb(
+                    iface, member, payload,
+                    mock->subscriptions[i].userdata);
+            }
+        }
+    }
     return 0;
 }
 

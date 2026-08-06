@@ -75,6 +75,13 @@ if(CMOCKA_FOUND)
 
     add_test(NAME test_profile_list COMMAND test_profile_list)
 
+    # DBus connection management test (Task 9): connect, version check,
+    # NameOwnerChanged tracking, degraded mode, categorized errors.
+    add_executable(test_connection tests/test_connection.c)
+    target_link_libraries(test_connection PRIVATE controllerbox cbx_test_support)
+
+    add_test(NAME test_connection COMMAND test_connection)
+
     # Help later tasks: tests that need the dummy driver can set it here.
     set_tests_properties(test_sdl_dummy PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
