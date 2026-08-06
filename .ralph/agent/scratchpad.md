@@ -3040,3 +3040,95 @@ Check `ralph tools task ready` and the plan.
 Task 40 (Systemd service installation and manager integration test) —
 deps: Task 39 (done). All dependencies complete.
 Check `ralph tools task ready` and the plan.
+
+## Task 40 (complete) — Systemd service installation and manager integration test
+
+### What landed
+- `src/manager/service_install.h`: Systemd user service installation API.
+  Result codes (CBX_SVC_OK/ALREADY_ACTIVE/INSTALLED/NO_SYSTEMD/WRITE_FAILED/
+  ENABLE_FAILED/VERIFY_FAILED/NOT_IN_GROUP). API: unit_path, unit_content,
+  write_unit, check_group, systemd_available, is_active, install, uninstall.
+  Test override hooks: set_mock_systemctl, set_mock_group_file,
+  set_mock_username.
+- `src/manager/service_install.c`: Full implementation. Unit path resolution
+  (XDG_CONFIG_HOME/systemd/user or HOME/.config/systemd/user). Unit file
+  content generation — static template with compiled-in binary path or
+  Flatpak app ID detection (FLATPAK_ID env var). Flatpak uses
+  `flatpak-spawn --host systemctl --user` prefix. Atomic write (mkstemp +
+  rename, mode 0644, recursive parent dir creation). Group membership check
+  via /etc/group parsing. systemd availability via `systemctl --user
+  is-system-running` (exit 127 = not found). Full install flow: check systemd
+  → check group (advisory) → check already active → write unit → enable --now
+  → verify active. Group warning with usermod guidance. Uninstall: disable +
+  unlink.
+- `tests/test_service_install.c`: 32 cmocka tests. Unit path (home/xdg/
+  no-home/overflow/null), unit content (basic/flatpak/overflow/null), atomic
+  write (creates-file/custom-content/auto-path/null), group check
+  (in-group/not-in/no-group/file-not-found/no-username), systemd available
+  (mock-true/false), is-active (mock-true/false), install (no-systemd/
+  already-active/success/enable-failed/verify-failed/group-warning/
+  null-status), uninstall (removes-file/no-file), mock-overrides-reset.
+- `tests/test_manager_integration.c`: 11 cmocka tests with SDL2 dummy driver +
+  mock DBus + mock systemctl. Full manager flow: init (3 tabs), controllers
+  tab (types loaded, add controller), profiles tab (init, create profile),
+  full profile workflow (create, load editor, validate NES minimum, save),
+  settings save (toggle, navigate, save), service install (mock script with
+  state file, verify unit file, group warning), service uninstall, full
+  integration (all steps), render all tabs.
+- `CMakeLists.txt`: Added service_install.c to controllerbox STATIC.
+- `tests/CMakeLists.txt`: Added test_service_install, test_manager_integration
+  with SDL_VIDEODRIVER=dummy env.
+- `IMPLEMENTATION_PLAN.md`: Task 40 → complete.
+
+### Verification (all pass)
+- clean build (Debug, 0 warnings)
+- ctest 61/61: all previous + test_service_install (32) +
+  test_manager_integration (11)
+- verify-boilerplate → exit 0
+
+### Gotchas fixed
+- `/bin/true` does not exist in nix-shell environment. Used `/bin/sh -c
+  'exit 0'` for mock systemctl commands that need to always succeed.
+- Format-truncation: tmppath buffer must be PATH_MAX + 8 (not PATH_MAX)
+  to hold the ".XXXXXX" suffix for mkstemp. Test buffers use PATH_MAX + 64
+  or + 128 for paths with appended suffixes.
+- Mock systemctl script must be stateful: is-active returns "inactive"
+  before enable, "active" after. Used a state file (touch on enable) to
+  simulate service lifecycle. Otherwise install sees already-active and
+  returns CBX_SVC_ALREADY_ACTIVE instead of CBX_SVC_OK.
+- DBus mock iface names: IP_IFACE_MANAGER is "org.shadowblip.InputManager"
+  (not "org.shadowblip.InputPlumber.Manager"). Must include dbus_mock.h
+  for the constant definitions.
+- cbx_profile_entry struct has `filename` field (not `name`). NES minimum
+  validation functions are `cbx_profile_validate_nes_minimum` and
+  `cbx_profile_validate_missing_count` (with cbx_profile_ prefix).
+- Unused variable in cbx_service_is_active: added `(void)status;` to
+  suppress -Werror=unused-variable.
+
+### Design decisions
+- **Static unit template**: The unit file content is a compile-time template
+  with only the binary path (or Flatpak app ID from env) substituted. No
+  user-supplied values are interpolated at runtime (security: no injection
+  through unit files). The template matches SPEC §2.4 exactly.
+- **Flatpak detection via FLATPAK_ID**: When the FLATPAK_ID env var is set
+  (by the Flatpak runtime), the unit uses `flatpak run <app-id>
+  --overlay-service` and systemctl calls use `flatpak-spawn --host
+  systemctl --user` prefix.
+- **Group check is advisory**: If the user is not in the inputplumber group,
+  the service is still installed but a warning is included in the status
+  message with usermod guidance. This follows the plan's "guides if not"
+  requirement without blocking installation.
+- **Test override hooks**: Three static override variables (mock_systemctl,
+  mock_group_file, mock_username) allow tests to mock systemctl, /etc/group,
+  and the current username without affecting real system state. All are
+  reset to NULL in teardown.
+- **Stateful mock systemctl**: Integration and service install tests use a
+  shell script that tracks enable state via a marker file, so is-active
+  returns "inactive" before enable and "active" after, matching real
+  systemctl behavior.
+
+### Next
+Task 41 (CMake install rules, systemd service file, and desktop entry) —
+deps: Task 40 (done), Task 2 (done). All dependencies complete.
+Alternatively Task 42 (Flatpak manifest) — deps: Task 41.
+Check `ralph tools task ready` and the plan.
