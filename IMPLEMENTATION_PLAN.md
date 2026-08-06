@@ -135,7 +135,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 - Documentation impact: README usage section (binary invocation)
 
 ## Task 3: Test harness setup
-- Status: pending
+- Status: complete
 - Dependencies: Task 1
 - Scope: `tests/CMakeLists.txt`, cmocka integration, SDL2 dummy driver test utility,
   CTest `enable_testing()`, one passing sample test
@@ -146,6 +146,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
   - Test fixture helper for DBus mock interface abstraction created
 - Verification: `cmake --build build && ctest --test-dir build --output-on-failure`
 - Documentation impact: none
+- Evidence: `cmake --build build` clean (no warnings under -Wall -Wextra -Wpedantic, Debug -Werror); ctest 4/4 pass (smoke_test_sdl2, smoke_test_nanosvg, test_sample [6 cmocka assertions incl. DBus mock vtable], test_sdl_dummy [SDL2 dummy driver via test_harness]); `tests/CMakeLists.txt` modularises test targets; `tests/test_harness.{h,c}` provide headless SDL2 init (auto-falls-back to dummy driver); `tests/dbus_mock.{h,c}` provide `ip_dbus_backend` function-pointer vtable + canned-response mock backend for DBus client testing (Tasks 9-15); verify-boilerplate, check-plan-freshness, branch-guard exit 0.
 
 ## Task 4: Config directory resolution and YAML library integration
 - Status: pending

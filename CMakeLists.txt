@@ -38,6 +38,7 @@ pkg_check_modules(SYSTEMD REQUIRED IMPORTED_TARGET libsystemd)
 pkg_check_modules(YAML REQUIRED IMPORTED_TARGET yaml-0.1)
 
 # cmocka unit testing (used from Task 3 on).
+# CMOCKA_FOUND is set by pkg_check_modules when cmocka is available.
 pkg_check_modules(CMOCKA IMPORTED_TARGET cmocka)
 
 # --- Compile / link flags -----------------------------------------------------
@@ -92,17 +93,10 @@ target_link_libraries(controllerbox
 add_executable(controller-box src/app/main.c)
 target_link_libraries(controller-box PRIVATE controllerbox)
 
-# --- Task 1 smoke tests -------------------------------------------------------
-add_executable(smoke_test_sdl2 tests/smoke_test_sdl2.c)
-target_link_libraries(smoke_test_sdl2 PRIVATE PkgConfig::SDL2)
-
-add_executable(smoke_test_nanosvg tests/smoke_test_nanosvg.c)
-target_link_libraries(smoke_test_nanosvg PRIVATE nanosvg m)
-
 # --- Testing ------------------------------------------------------------------
 enable_testing()
-add_test(NAME smoke_test_sdl2    COMMAND smoke_test_sdl2)
-add_test(NAME smoke_test_nanosvg COMMAND smoke_test_nanosvg)
+# Test targets and CTest registrations live in tests/CMakeLists.txt (Task 3).
+include(tests/CMakeLists.txt)
 
 # --- Install rules (expanded in Task 41) -------------------------------------
 install(TARGETS controller-box
