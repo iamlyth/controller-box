@@ -353,7 +353,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 - Documentation impact: DBus-API.md source/target interfaces section
 
 ## Task 15: CreateCompositeDevice temp file workaround and GamepadOrder persistence
-- Status: pending
+- Status: complete
 - Dependencies: Task 11, Task 12, Task 6
 - Scope: `src/dbus/ip_create_composite.c`, `src/dbus/ip_gamepad_order.c`
 - Acceptance criteria:

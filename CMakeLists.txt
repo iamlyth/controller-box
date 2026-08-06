@@ -79,6 +79,8 @@ add_library(controllerbox STATIC
     src/config/config_profile_list.c
     src/dbus/dbus_client.c
     src/dbus/ip_composite.c
+    src/dbus/ip_create_composite.c
+    src/dbus/ip_gamepad_order.c
     src/dbus/ip_connection.c
     src/dbus/ip_device_model.c
     src/dbus/ip_hotplug.c

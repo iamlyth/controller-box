@@ -151,6 +151,18 @@ if(CMOCKA_FOUND)
 
     add_test(NAME test_input_signal COMMAND test_input_signal)
 
+    # Task 15: CreateCompositeDevice temp file workaround + GamepadOrder
+    # persistence.  Both use the mock backend + controllerbox (for config).
+    add_executable(test_create_composite tests/test_create_composite.c)
+    target_link_libraries(test_create_composite PRIVATE controllerbox cbx_test_support)
+
+    add_test(NAME test_create_composite COMMAND test_create_composite)
+
+    add_executable(test_gamepad_order tests/test_gamepad_order.c)
+    target_link_libraries(test_gamepad_order PRIVATE controllerbox cbx_test_support)
+
+    add_test(NAME test_gamepad_order COMMAND test_gamepad_order)
+
     # Help later tasks: tests that need the dummy driver can set it here.
     set_tests_properties(test_sdl_dummy PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
