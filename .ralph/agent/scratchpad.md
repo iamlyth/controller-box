@@ -1805,3 +1805,68 @@ Task 14 (done), Task 6 (done).
 Alternatively Task 28 (Overlay state machine and lifecycle) — deps:
 Task 13 (done), Task 24 (done).
 Check `ralph tools task ready` and the plan.
+
+## Task 25 (complete) — Identity extraction from source device properties
+
+### What landed
+- `src/identify/identity.h`: cbx_identity_layer enum (NONE=0, BT_MAC=1,
+  USB_SERIAL=2, USB_PORT=3, ORDER=4), cbx_source_iface enum (EVDEV, HIDRAW),
+  cbx_source_props struct (iface, unique_id, phys_path, serial_number,
+  id_bustype), cbx_identity struct (id string + layer). API: init, extract,
+  parse_layer, is_downgrade, is_mac_address, parse_bustype.
+- `src/identify/identity.c`: Full implementation. Resolution order:
+  1. BT bus (0x05) + valid MAC in unique_id or serial_number → BT: (uppercase)
+  2. Serial (evdev UniqueId or HIDRaw SerialNumber, cross-fallback) non-MAC
+     → USB:SNxxxxx (alnum/underscore/dash only)
+  3. PhysPath non-empty → USB:phys:xxxxx (printable non-space)
+  4. Connection order >= 0 → ORDER:n
+  Returns -ENOENT if nothing found, -EINVAL for null args.
+  parse_layer validates prefixed IDs and returns the layer. is_downgrade
+  checks new_layer > old_layer.
+- `tests/test_identity.c`: 42 cmocka tests. Init, MAC address helper (valid/
+  invalid), bustype parser (valid/invalid), all 4 layers (BT MAC, USB serial
+  evdev/HIDRaw/cross-fallback, USB phys, order), edge cases (empty BT uniq,
+  BT invalid MAC falls through, invalid serial chars, too-long serial,
+  MAC-on-USB-bus, no bustype), null args, layer precedence (all combinations),
+  parse_layer (all formats + invalid), roundtrip extract→parse, downgrade
+  detection (yes/no), integration.
+- `CMakeLists.txt`: Added src/identify/identity.c to controllerbox STATIC.
+- `tests/CMakeLists.txt`: Added test_identity target.
+- `IMPLEMENTATION_PLAN.md`: Task 25 → complete.
+
+### Verification (all pass)
+- clean build (Debug -Werror, no warnings)
+- ctest 36/36: all previous + test_identity
+- test_identity 42/42 cmocka tests pass
+- verify-boilerplate, check-plan-freshness → exit 0
+
+### Gotchas fixed
+- Missing <stdlib.h>: strtol() used in parse_bustype but not included.
+  Added #include <stdlib.h>.
+
+### Design decisions
+- **MAC uppercased**: BT MAC is always stored uppercase (BT:AB:CD:...) for
+  consistency, regardless of input case. This simplifies string comparison.
+- **evdev/HIDRaw cross-fallback**: If the primary serial source is empty,
+  the code falls back to the other interface's serial. This handles
+  dual-interface devices (evdev + HIDRaw) where one interface may report
+  empty but the other has the serial.
+- **MAC-on-USB-bus falls to phys**: If a USB device reports a MAC-like
+  unique_id (contains colons), it can't be formatted as USB:SN (colons
+  aren't valid serial chars). Rather than failing, it falls through to
+  phys path. This is an edge case for composite devices.
+- **No DBus calls in identity module**: cbx_identity_extract is a pure
+  function operating on already-fetched properties. The caller gathers
+  properties via ip_source_get_* (Task 14) and passes them in. This keeps
+  the identity module testable without DBus mock infrastructure.
+- **Layer NONE is not a downgrade**: is_downgrade returns false if either
+  layer is NONE. NONE means "no identity" which isn't comparable.
+
+### Next
+Task 26 (Assignment lookup, default assignment, and persistence) — deps:
+Task 25 (done), Task 6 (done).
+Alternatively Task 27 (Identity downgrade detection and GamepadOrder
+restoration) — deps: Task 11 (done), Task 25 (done), Task 15 (done).
+Alternatively Task 28 (Overlay state machine and lifecycle) — deps:
+Task 13 (done), Task 24 (done).
+Check `ralph tools task ready` and the plan.
