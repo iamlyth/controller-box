@@ -2676,3 +2676,92 @@ Task 36 (Profiles tab — browse, create, and delete) — deps: Task 34
 Alternatively Task 37 (Profile editor) — deps: Task 36, Task 18, Task 13,
 Task 8.
 Check `ralph tools task ready` and the plan.
+
+## Task 36 (complete) — Profiles tab — browse, create, and delete
+
+### What landed
+- `src/manager/profiles_tab.h`: cbx_profiles_tab struct (profile_list,
+  widgets: profile_list_w, create_picker, create/edit/delete buttons,
+  status_lbl, panel borrowed, text_cache/theme/font_id borrowed).
+  Modes: LIST, CONFIRM_DELETE, NAME_INPUT, CREATE_PICK. Create sources:
+  DEFAULT_COPY, EMPTY, CLONE. Full lifecycle: init/refresh/shutdown.
+  Actions: create, delete, begin_create, name_input_char/backspace/
+  confirm/cancel, begin_delete/confirm_delete/cancel_delete.
+  Test dir overrides: set_test_dirs for isolated filesystem testing.
+- `src/manager/profiles_tab.c`: Full implementation. Init populates
+  panel with 6 children. Refresh enumerates via cbx_profile_list_enumerate
+  (default) or cbx_profile_list_enumerate_dirs (test override). Create
+  builds profile from source (default copy loads mappings, empty = just
+  header, clone loads selected profile), saves via cbx_profile_save.
+  Delete unlinks YAML + sidecar. Name input mode validates chars against
+  ^[a-zA-Z0-9_-]+$. Delete confirmation mode shows prompt.
+- `tests/test_profiles_tab.c`: 37 cmocka tests with SDL2 dummy driver
+  and temp directory fixture. Tests: init populates panel/enumerates/
+  null args; refresh updates/null/empty; create default copy/empty/clone/
+  no default/clone no selection/invalid name/duplicate/null; delete user/
+  with sidecar/default rejected/system rejected/bad index/null; name input
+  basic/backspace/invalid chars/confirm/confirm empty/cancel/not in mode;
+  delete confirm basic/readonly rejected/cancel/not in mode; accessors
+  null safe/entry; shutdown null safe/removes children; full workflow;
+  clone copies mappings.
+- `CMakeLists.txt`: Added profiles_tab.c to controllerbox STATIC.
+- `tests/CMakeLists.txt`: Added test_profiles_tab with SDL_VIDEODRIVER=dummy.
+- `IMPLEMENTATION_PLAN.md`: Task 36 → complete.
+
+### Verification (all pass)
+- clean build (Debug -Werror, no warnings)
+- ctest 53/53: all previous + test_profiles_tab
+- test_profiles_tab 37/37 cmocka tests pass
+- verify-boilerplate → exit 0
+
+### Gotchas fixed
+- Format-truncation: build_profile_path/build_sidecar_path use `char
+  dir[PATH_MAX]` intermediate, `char path[PATH_MAX + 128]` output. Test
+  pt_env struct uses `char tmp[256]` (short path) + `char *_dir[PATH_MAX]`
+  to avoid same-size buffer truncation.
+- Profile YAML format: `mapping:` is a sequence (each entry with `- `),
+  `target_events:` (plural) not `target_event`, `gamepad: {}` for empty
+  props. The parser only finds 1 mapping if the YAML uses `target_event`
+  (singular) instead of `target_events` (plural).
+- Sidecar path: `cbx_profile_meta_save_for` uses
+  `$XDG_CONFIG_HOME/controller-box/profile-metadata/<name>.meta.yaml`.
+  Test env must create `<config_dir>/controller-box/profile-metadata/`
+  (with `controller-box/` subdirectory).
+- `system()` return value must be checked or cast with `(void)!system()`
+  under GCC -Werror=unused-result.
+- Removed unused `write_sidecar` function (tests use
+  `cbx_profile_meta_save_for` instead).
+- Per-test setup/teardown: use `cmocka_unit_test_setup_teardown(test,
+  pt_setup, pt_teardown)` for each test. Group setup runs once.
+- Init does NOT auto-refresh: caller must call refresh after init.
+  Test fixture calls `init_tab()` helper which does init + set_test_dirs
+  + refresh. This allows test dirs to be set before enumeration.
+
+### Design decisions
+- **Test dir overrides**: The profiles tab accepts optional test
+  directories (user_dir, system_dir, meta_dir) via
+  `cbx_profiles_tab_set_test_dirs()`. When set, refresh and file ops use
+  these paths instead of the compile-time defaults. This is needed
+  because system profiles dir is compile-time and can't be redirected
+  via env vars.
+- **No auto-refresh in init**: init creates widgets and layout but does
+  NOT call refresh. This allows test dirs to be set before enumeration.
+  Production code (manager) calls init then refresh.
+- **Name input validates per-char**: Only a-zA-Z0-9_- are accepted.
+  Invalid chars return -EINVAL (not added to buffer). This is stricter
+  than validating the final string.
+- **Delete removes both YAML and sidecar**: The delete operation unlinks
+  the profile YAML and attempts to unlink the sidecar (ignoring errors
+  if it doesn't exist).
+- **Clone can clone read-only profiles**: Cloning a system/default
+  profile creates a new editable copy. The new profile's name is set to
+  the user-provided name, not the source's name.
+
+### Next
+Task 37 (Profile editor — controller diagram and binding list mode) —
+deps: Task 36 (done), Task 18 (done), Task 13 (done), Task 8 (done).
+All dependencies complete.
+Alternatively Task 38 (Profile editor — sequential binding mode and
+validation) — deps: Task 37.
+Alternatively Task 39 (Profile save and Settings tab) — deps: Task 38.
+Check `ralph tools task ready` and the plan.
