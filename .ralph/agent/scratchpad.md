@@ -143,3 +143,51 @@ Task 5 (settings.yaml read/write) or Task 6 (assignments.yaml) — both depend
 on Task 4 (now done). Task 5 unblocks Task 39 (Settings tab), Task 6 unblocks
 Task 15 (CreateCompositeDevice + GamepadOrder persistence). Prefer Task 5
 (settings is simpler, no ID validation complexity).
+
+## Task 5 (complete) — settings.yaml read/write
+
+### What landed
+- `src/config/config_settings.h`: API for settings.yaml (SPEC §7.3).
+  `cbx_settings` struct with overlay_trigger, launch_at_boot, theme,
+  overlay_opacity, virtual_controllers (count + types[16]). Functions:
+  `cbx_settings_defaults()`, `cbx_settings_load()`, `cbx_settings_validate()`,
+  `cbx_settings_save()`, `cbx_is_known_controller_type()`.
+- `src/config/config_settings.c`: libyaml event-based parser + document-based
+  emitter. Parser enforces: max depth 50, max doc size 1MB (file stat before
+  parse), no custom tags (checks scalar/mapping/sequence tag != NULL, rejects
+  tag directives in document start). Load starts with defaults, overwrites from
+  YAML, clamps out-of-range values, pads types to count. Save validates first,
+  writes atomically (mkstemp in same dir + fchmod 0600 + fsync + rename).
+  Known-good types: xb360, ds5, deck, gamepad, mouse, keyboard, touchscreen.
+- `tests/test_settings.c`: 18 cmocka tests with cmocka_unit_test_setup_teardown
+  fixture (temp HOME + unset XDG). Tests: defaults (no-file + function),
+  round-trip (modified + defaults), validation (opacity/count/types),
+  save-rejects-invalid, missing-fields → defaults, clamp-on-load,
+  file-mode-0600, flow-style types, known-good types, max-doc-size (1MB+),
+  custom-tags rejected, tag-directives rejected, empty-file → defaults,
+  YAML 1.1 bool variants (yes/no/on/off/true/false).
+
+### Verification (all pass)
+- clean build (Debug -Werror, no warnings)
+- ctest 6/6: smoke_test_sdl2, smoke_test_nanosvg, test_sample, test_sdl_dummy,
+  test_config_paths, test_settings
+- test_settings 18/18 cmocka tests pass
+- verify-boilerplate, check-plan-freshness, branch-guard → exit 0
+
+### Gotchas fixed
+- **Emitter key bug**: First version used `s->overlay_trigger` as the YAML key
+  instead of literal `"overlay_trigger"`. Fix: use plain string literal for keys,
+  struct member only for values.
+- **Document deletion**: `yaml_emitter_dump()` does NOT delete the document;
+  caller must call `yaml_document_delete()`. Moved to `out:` label to handle
+  all error paths after document initialization.
+- **Format-truncation warnings** (same as Task 4 mem): test helper buffers for
+  path construction use `PATH_MAX + 64` when snprintf appends suffixes to
+  `test_home` (which is PATH_MAX). Also `system()` return values must be
+  captured under -Werror=unused-result (glibc attribute).
+
+### Next
+Task 6 (assignments.yaml read/write + gamepad order persistence) — deps: Task 4
+(done). Unblocks Task 15 (CreateCompositeDevice + GamepadOrder persistence).
+Alternatively, Task 7+ (whatever is next in the plan). Check `ralph tools task
+ready` and the plan.
