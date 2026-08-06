@@ -222,6 +222,15 @@ if(CMOCKA_FOUND)
     set_tests_properties(test_text PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
 
+    # Task 20: Widget base and concrete widgets (Button, Label, Image, Panel).
+    add_executable(test_widgets tests/test_widgets.c)
+    target_link_libraries(test_widgets PRIVATE controllerbox PkgConfig::CMOCKA)
+    target_compile_definitions(test_widgets PRIVATE
+        CBX_FONT_PATH="${CBX_FONT_PATH}")
+    add_test(NAME test_widgets COMMAND test_widgets)
+    set_tests_properties(test_widgets PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+
     # Help later tasks: tests that need the dummy driver can set it here.
     set_tests_properties(test_sdl_dummy PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")

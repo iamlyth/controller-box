@@ -438,7 +438,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 - Documentation impact: none
 
 ## Task 20: Widget base and concrete widgets (Button, Label, Image, Panel)
-- Status: pending
+- Status: complete
 - Dependencies: Task 19
 - Scope: `src/ui/widget.c`, `src/ui/widget.h`, `src/ui/widget_button.c`,
   `src/ui/widget_label.c`, `src/ui/widget_image.c`, `src/ui/widget_panel.c`

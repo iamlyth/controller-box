@@ -97,7 +97,11 @@ add_library(controllerbox STATIC
     src/ui/renderer.c
     src/ui/theme.c
     src/ui/text.c
-    src/ui/widget.c)
+    src/ui/widget.c
+    src/ui/widget_button.c
+    src/ui/widget_label.c
+    src/ui/widget_image.c
+    src/ui/widget_panel.c)
 target_include_directories(controllerbox
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
