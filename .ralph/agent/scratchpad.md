@@ -1405,3 +1405,85 @@ Check `ralph tools task ready` and the plan.
 Task 20 (Widget base and concrete widgets) — deps: Task 19 (done).
 Alternatively Task 21 (Layout engine) — deps: Task 20.
 Check `ralph tools task ready` and the plan.
+
+## Task 20 (complete) — Widget base and concrete widgets (Button, Label, Image, Panel)
+
+### What landed
+- `src/ui/widget.h`: Base widget struct `cbx_widget` with vtable
+  (draw, handle_event, focus, blur, get_rect, set_rect, destroy).
+  Generic dispatchers (NULL-safe). Concrete widget declarations: Button,
+  Label, Image, Panel.
+- `src/ui/widget.c`: Base dispatcher implementation (forwards through
+  vtable, NULL-safe no-ops).
+- `src/ui/widget_button.c`: Button with label texture from text cache,
+  focused/pressed visual states (panel_bg → panel_bg_hover → text_accent
+  when pressed, border → border_focus when focused). Mouse click (in-rect
+  press/release) + keyboard Return/Space handling. Press callback with
+  user_data. Re-renders label text with focus color on focus/blur.
+- `src/ui/widget_label.c`: Static text label, optional multi-line (splits
+  on '\n', renders each line via text cache, stacks vertically using
+  cbx_text_line_height). Non-interactive (handle_event returns false).
+- `src/ui/widget_image.c`: Image widget with 3 scale modes: FIT (preserve
+  aspect, fit within rect), FILL (stretch), CENTER (1:1 centered).
+  Optional texture ownership (owns_texture → destroy frees texture).
+- `src/ui/widget_panel.c`: Container holding up to 32 children. Optional
+  bg fill (panel_bg) and border draw. Focus management: focus_first,
+  focus_next (wraps), focus_prev (wraps), clear_focus. Event forwarding
+  to focused child. Panel does NOT own children (caller manages lifetime).
+- `tests/test_widgets.c`: 49 cmocka tests. Base dispatchers (null-safety,
+  accessors, rect get/set). Button (init, null, draw, focus/blur, mouse
+  press in/out, keyboard Return/Space, no-callback, set-label, set-cb,
+  unrelated-event, font rendering). Label (init, null, draw with font,
+  multiline, no-event, set-color, set-multiline). Image (init, null,
+  draw fit/fill/center, no-event, set-texture, set-scale-mode, null
+  texture, dims). Panel (init, null, add/remove, add-null, overflow,
+  draw, focus management, empty focus, event forwarding, remove-focused,
+  get-child-invalid, set-options).
+- `CMakeLists.txt`: Added widget_button.c, widget_label.c, widget_image.c,
+  widget_panel.c to controllerbox STATIC library.
+- `tests/CMakeLists.txt`: Added test_widgets target linked with
+  controllerbox + cmocka. CBX_FONT_PATH compile def.
+  SDL_VIDEODRIVER=dummy environment.
+- `IMPLEMENTATION_PLAN.md`: Task 20 → complete.
+
+### Verification (all pass)
+- clean build (Debug -Werror, no warnings)
+- ctest 27/27: all previous + test_widgets
+- test_widgets 49/49 cmocka tests pass
+- verify-boilerplate, check-plan-freshness → exit 0
+
+### Gotchas fixed
+- **Include path for test file**: Test files use `#include "ui/widget.h"`
+  (not `"widget.h"`) because the include directory is `src/`, not `src/ui/`.
+  Source files within `src/ui/` use `"widget.h"` (same directory).
+- **Unused button_press_count**: Initially defined a static counter at file
+  scope but all tests use local counters. Removed unused variable to fix
+  -Werror=unused-variable.
+
+### Design decisions
+- **C struct inheritance**: Base `cbx_widget` is embedded as first member
+  of each concrete widget. Vtable assigned at init. Generic code casts
+  to `cbx_widget*` and calls dispatchers. Concrete vtable functions cast
+  back to the specific type.
+- **Panel does NOT own children**: Caller is responsible for destroying
+  child widgets. This avoids double-free when children are stack-allocated
+  (as in tests) or shared between containers.
+- **Button label texture from text cache**: The button borrows the texture
+  from the text cache (cbx_text_render returns a cached, cache-owned
+  texture). Button's destroy is a no-op — it does not free the label
+  texture.
+- **Label re-renders on each draw call**: Rather than caching the texture
+  pointer, the label calls cbx_text_render() in its draw function. The
+  text cache handles deduplication (same text+font+color returns same
+  texture). This simplifies set_text/set_color (no need to re-render).
+- **Image owns_texture flag**: When true, destroy() calls
+  SDL_DestroyTexture. set_texture() also frees the previously owned
+  texture. This supports both borrowed (icon cache) and owned (custom
+  PNG) textures.
+- **Panel focus wraps around**: focus_next/focus_prev use modulo
+  arithmetic for wrap-around behavior. This matches console-style
+  navigation.
+
+### Next
+Task 21 (List, Grid, TabBar, and ProgressBar widgets) — deps: Task 20 (done).
+Check `ralph tools task ready` and the plan.
