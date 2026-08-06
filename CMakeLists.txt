@@ -94,6 +94,9 @@ add_library(controllerbox STATIC
     src/icons/icon_map.c
     src/icons/icon_cache.c
     src/icons/icon_lookup.c
+    src/ui/renderer.c
+    src/ui/theme.c
+    src/ui/text.c
     src/ui/widget.c)
 target_include_directories(controllerbox
     PUBLIC

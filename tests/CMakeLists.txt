@@ -194,6 +194,34 @@ if(CMOCKA_FOUND)
     set_tests_properties(test_icon_lookup PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
 
+    # Task 19: Renderer init, theme system, and text rendering cache.
+    add_executable(test_renderer_init tests/test_renderer_init.c)
+    target_link_libraries(test_renderer_init PRIVATE controllerbox PkgConfig::CMOCKA)
+    add_test(NAME test_renderer_init COMMAND test_renderer_init)
+    set_tests_properties(test_renderer_init PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+
+    # Text rendering cache test.  Needs a TTF font path at compile time.
+    # Search common locations for DejaVuSans.ttf.
+    set(CBX_FONT_PATH "")
+    foreach(candidate
+            /nix/store/zzs2q7lk5mn6y2rywd3snhak7098zs66-system-path/share/X11/fonts/DejaVuSans.ttf
+            /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
+            /usr/share/fonts/dejavu/DejaVuSans.ttf
+            /usr/share/fonts/TTF/DejaVuSans.ttf)
+        if(EXISTS ${candidate})
+            set(CBX_FONT_PATH ${candidate})
+            break()
+        endif()
+    endforeach()
+    add_executable(test_text tests/test_text.c)
+    target_link_libraries(test_text PRIVATE controllerbox PkgConfig::CMOCKA)
+    target_compile_definitions(test_text PRIVATE
+        CBX_FONT_PATH="${CBX_FONT_PATH}")
+    add_test(NAME test_text COMMAND test_text)
+    set_tests_properties(test_text PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+
     # Help later tasks: tests that need the dummy driver can set it here.
     set_tests_properties(test_sdl_dummy PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")

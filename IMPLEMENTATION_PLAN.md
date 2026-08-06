@@ -422,7 +422,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 ### Phase 5: SDL2 Rendering and Widget System
 
 ## Task 19: Renderer init, theme system, and text rendering cache
-- Status: pending
+- Status: complete
 - Dependencies: Task 2
 - Scope: `src/ui/renderer.c`, `src/ui/theme.c`, `src/ui/text.c`
 - Acceptance criteria:
