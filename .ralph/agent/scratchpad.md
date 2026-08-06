@@ -191,3 +191,49 @@ Task 6 (assignments.yaml read/write + gamepad order persistence) — deps: Task 
 (done). Unblocks Task 15 (CreateCompositeDevice + GamepadOrder persistence).
 Alternatively, Task 7+ (whatever is next in the plan). Check `ralph tools task
 ready` and the plan.
+
+## Task 6 (complete) — assignments.yaml read/write and gamepad order persistence
+
+### What landed
+- `src/config/config_assignments.h`: API for assignments.yaml (SPEC §7.4).
+  `cbx_assignment` struct (id, slot, profile), `cbx_assignments` struct
+  (assignments[32] + gamepad_order[16]). Functions: `cbx_assignments_init()`,
+  `cbx_assignments_load()`, `cbx_assignments_validate()`, `cbx_assignments_save()`,
+  `cbx_validate_id()`, `cbx_validate_profile()`.
+- `src/config/config_assignments.c`: libyaml event-based parser (max depth 50,
+  max doc 1MB, no custom tags/tag directives) + document-based emitter + atomic
+  write (mkstemp + fchmod 0600 + fsync + rename). ID validation for 4 formats:
+  BT:6-octet MAC (hex pairs), USB:serial (alnum/dash/underscore), USB:phys:port-path,
+  ORDER:n (non-negative int). Profile validation ^[a-zA-Z0-9_-]+$ or empty/NULL.
+- `tests/test_assignments.c`: 31 cmocka tests — ID validation (all 4 formats +
+  invalid variants), profile validation, no-file→empty, empty-file→empty,
+  round-trip (BT/USB, empty, USB:phys, empty profile, ORDER), save rejects
+  invalid id/negative slot/invalid profile/invalid gamepad_order, file mode 0600,
+  YAML security (max doc 1MB, custom tags, tag directives), parse from YAML,
+  gamepad_order-only, no-gamepad_order, validate empty/NULL.
+- `CMakeLists.txt`: added `src/config/config_assignments.c` to controllerbox lib.
+- `tests/CMakeLists.txt`: added `test_assignments` target + CTest registration.
+
+### Verification (all pass)
+- clean build (Debug -Werror, no warnings)
+- ctest 7/7: smoke_test_sdl2, smoke_test_nanosvg, test_sample, test_sdl_dummy,
+  test_config_paths, test_settings, test_assignments
+- test_assignments 31/31 cmocka tests pass
+- verify-boilerplate, check-plan-freshness, branch-guard → exit 0
+
+### Gotchas fixed
+- **BT:MAC octet count**: SPEC §7.4 example `BT:AB:CD:01:EF:23` has only 5
+  octets, but the format string `BT:xx:xx:xx:xx:xx:xx` in the acceptance criteria
+  has 6. A real MAC address is 6 bytes = 6 hex octet pairs. The spec example is a
+  typo. Validator requires 6 octets; tests use 6-octet MACs.
+- **cbx_validate_profile(NULL)**: Initially returned false, but NULL should be
+  treated as "no profile" (valid, same as empty string). Fixed to return true.
+- **fsync return value**: On some systems fsync may fail non-fatally; the
+  existing pattern (from config_settings.c) ignores the return. Cast not needed
+  since the return is not attribute-warned (unlike system()).
+
+### Next
+Task 7 (Profile YAML parse and generate — InputPlumber device_profile_v1) —
+deps: Task 4 (done). Unblocks Task 8 (profile metadata sidecar + enumeration).
+Alternatively, Task 9 (sd-bus connection) — deps: Task 2 (done). Check
+`ralph tools task ready` and the plan.
