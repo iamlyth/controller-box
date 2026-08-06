@@ -202,7 +202,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 - Evidence: `cmake --build build` clean (Debug -Werror, no warnings); ctest 7/7 pass; `test_assignments` 31/31 cmocka tests pass (BT:MAC 6-octet valid/invalid, USB:serial valid/invalid, USB:phys valid/invalid, ORDER valid/invalid, other rejects, profile valid/invalid, no-file→empty, empty-file→empty, round-trip with BT/USB, round-trip empty, round-trip USB:phys, round-trip empty profile, round-trip ORDER, save rejects invalid id/negative slot/invalid profile/invalid gamepad_order, file mode 0600, max doc 1MB, custom tags rejected, tag directives rejected, parse from YAML, gamepad_order-only, no-gamepad_order, validate empty/NULL); `src/config/config_assignments.{h,c}` implement libyaml event-based parser (max depth 50, max doc 1MB, no custom tags/tag directives) + document-based emitter + atomic write (mkstemp + fchmod 0600 + fsync + rename); ID validation: BT:6-octet MAC (hex pairs), USB:serial (alnum/dash/underscore), USB:phys:port-path, ORDER:n (non-negative int); profile validation ^[a-zA-Z0-9_-]+$ or empty/NULL; verify-boilerplate, check-plan-freshness, branch-guard exit 0.
 
 ## Task 7: Profile YAML parse and generate (InputPlumber device_profile_v1)
-- Status: pending
+- Status: complete
 - Dependencies: Task 4
 - Scope: `src/config/config_profile.c`, `src/config/config_profile.h`
 - Acceptance criteria:
@@ -215,6 +215,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
   - `tests/test_profile_yaml.c` passes with a sample InputPlumber profile fixture
 - Verification: `cmake --build build && ./build/test_profile_yaml`
 - Documentation impact: PROFILES.md YAML schema section
+- Evidence: `cmake --build build` clean (Debug -Werror, no warnings); ctest 8/8 pass; `test_profile_yaml` 26/26 cmocka tests pass (init defaults, parse spec example, parse empty mapping, parse multiple mappings, parse multiple source props, parse missing fields, parse empty file, parse scalar source event, serialize basic, round-trip, round-trip multiple mappings, round-trip empty mapping, validate valid/invalid version/invalid kind/null, save rejects invalid, file round-trip, load nonexistent, save atomic mode 0644, max doc size 1MB, custom tags rejected, tag directives rejected, max depth 50, serialize null args, complex target event accepted); `src/config/config_profile.{h,c}` implement libyaml event-based parser with state machine for nested device_profile_v1 schema (source_event with dynamic device-class key + props mapping, target_events with device-class + scalar value; complex target events with mapping values accepted via skip mechanism) + document-based emitter with 2-space indent + atomic write (mkstemp + fchmod 0644 + fsync + rename); API: `cbx_profile_init/load/parse/validate/save/serialize` (load from file path, parse from YAML string, serialize to malloc'd buffer via open_memstream); verify-boilerplate, check-plan-freshness, branch-guard exit 0.
 
 ## Task 8: Profile metadata sidecar and filesystem enumeration
 - Status: pending

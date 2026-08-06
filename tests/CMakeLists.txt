@@ -59,6 +59,13 @@ if(CMOCKA_FOUND)
     add_test(NAME test_settings     COMMAND test_settings)
     add_test(NAME test_assignments   COMMAND test_assignments)
 
+    # Profile YAML parse/generate test (Task 7): device_profile_v1 round-trip,
+    # validation, YAML security constraints.
+    add_executable(test_profile_yaml tests/test_profile_yaml.c)
+    target_link_libraries(test_profile_yaml PRIVATE controllerbox PkgConfig::CMOCKA)
+
+    add_test(NAME test_profile_yaml COMMAND test_profile_yaml)
+
     # Help later tasks: tests that need the dummy driver can set it here.
     set_tests_properties(test_sdl_dummy PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
