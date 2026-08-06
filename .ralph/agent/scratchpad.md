@@ -2474,3 +2474,60 @@ Task 33 (Overlay integration test) — deps: Task 32 (done), Task 30
 Alternatively Task 34 (Manager skeleton and tab bar) — deps: Task 21
 (done), Task 22 (done).
 Check `ralph tools task ready` and the plan.
+
+## Task 33 (complete) — Overlay integration test
+
+### What landed
+- `tests/test_overlay_integration.c`: 13 cmocka integration tests exercising
+  the full overlay lifecycle with mock DBus + SDL2 dummy driver. Tests:
+  trigger registration (single + multiple composites), full lifecycle
+  (activate → Player Mode navigate → profile cycle → close → verify
+  assignments saved), profile change applied via LoadProfilePath mock,
+  profile follows controller across column moves, conflict detection +
+  auto-resolution, Host Mode integration (enter → navigate → edit other
+  row → exit), Host Mode close via B, full workflow (trigger → activate →
+  navigate → conflict → host mode resolve → close → verify), close
+  auto-resolves triple conflict, grid rendering with dummy driver,
+  force close, tick in VISIBLE.
+- `tests/CMakeLists.txt`: Added test_overlay_integration target with
+  SDL_VIDEODRIVER=dummy environment.
+- `IMPLEMENTATION_PLAN.md`: Task 33 → complete.
+
+### Verification (all pass)
+- clean build (Debug -Werror, no warnings)
+- ctest 50/50: all previous + test_overlay_integration
+- test_overlay_integration 13/13 cmocka tests pass
+- verify-boilerplate → exit 0
+
+### Gotchas fixed
+- `cycle_profile_up` wraps BACKWARDS (decrement with wrap): "default" →
+  "fps" (last profile). To cycle forward ("default" → "fighting"), use
+  `cycle_profile_down` (increment with wrap). This is counter-intuitive
+  but matches the implementation in grid_render.c. Fixed tests to use
+  CBX_PM_DOWN for forward profile cycling.
+- `cbx_conflict_resolve` returns the NUMBER of conflicts resolved (moved),
+  not 0 on success. Assert rc == 1 for single conflict resolution.
+- Format-truncation: snprintf with test_home (PATH_MAX) as source into
+  e->path (PATH_MAX) triggers GCC -Werror=format-truncation. Fixed by
+  using fixed profile paths (not dependent on test_home) since the mock
+  DBus doesn't require real file paths.
+
+### Design decisions
+- **Fixed profile paths in test fixture**: Profile paths in the
+  cbx_profile_list don't need to exist on disk — they're just used for
+  lookup by cbx_profile_cycle_find_path and passed to the mocked
+  LoadProfilePath call. Using fixed paths avoids the format-truncation
+  issue with PATH_MAX-sized test_home buffer.
+- **SDL2 dummy renderer in fixture**: The integration fixture creates
+  a real SDL2 window/renderer via test_harness_sdl_init with the dummy
+  driver. This allows testing grid rendering (test_grid_renders_with_dummy_driver)
+  alongside the state machine tests.
+- **Comprehensive integration coverage**: The test suite covers all
+  overlay modules: trigger, lifecycle, player_mode, host_mode, conflict,
+  close, profile_cycle, grid_render — wired together with mock DBus,
+  mock profile list, and real SDL2 rendering.
+
+### Next
+Task 34 (Manager skeleton and tab bar) — deps: Task 21 (done), Task 22 (done).
+Alternatively Task 35 (Controllers tab) — deps: Task 34.
+Check `ralph tools task ready` and the plan.
