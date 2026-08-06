@@ -100,3 +100,46 @@ later test-bearing tasks, so prefer it.
 Task 4 (config paths + libyaml) — deps: Task 1 (done). Now that the test harness
 is in place, Task 4's `tests/test_config_paths.c` can use cmocka + the test support
 library. Task 5+ (settings.yaml) also unblocked.
+
+## Task 4 (complete) — Config directory resolution and YAML library integration
+
+### What landed
+- `src/config/config_paths.h`: API for XDG path resolution + system path getters.
+  `cbx_resolve_config_dir()` / `cbx_resolve_user_profiles_dir()` return paths
+  without side effects. `cbx_config_dir()` / `cbx_user_profiles_dir()` resolve AND
+  create with mode 0700. `cbx_ensure_dir()` does recursive mkdir. System getters:
+  `cbx_system_inputplumber_dir()`, `cbx_system_profiles_dir()`,
+  `cbx_system_devices_dir()`, `cbx_system_capability_maps_dir()`, `cbx_data_dir()`,
+  `cbx_icon_dir()`.
+- `src/config/config_paths.c`: implements XDG spec — $XDG_CONFIG_HOME/
+  controller-box or $HOME/.config/controller-box; $XDG_DATA_HOME/inputplumber/
+  profiles or $HOME/.local/share/inputplumber/profiles. Relative/empty XDG values
+  ignored per spec. System paths from config.h compile-time constants.
+- `tests/test_config_paths.c`: 16 cmocka tests — XDG absolute/fallback/relative/
+  empty/buf-too-small for both config and profiles dirs, recursive dir creation
+  with 0700 mode, idempotent creation, system path accessors.
+- `tests/CMakeLists.txt`: added `test_config_paths` target linking `controllerbox`
+  + `PkgConfig::CMOCKA`.
+- libyaml (`pkg_check_modules yaml-0.1`) already linked from Task 1 — no CMake
+  change needed.
+
+### Verification (all pass)
+- clean build (Debug -Werror, no warnings)
+- ctest 5/5: smoke_test_sdl2, smoke_test_nanosvg, test_sample, test_sdl_dummy,
+  test_config_paths
+- `test_config_paths` 16/16 cmocka tests pass
+- verify-boilerplate, check-plan-freshness, branch-guard → exit 0
+
+### Gotchas fixed
+- `-Werror=format-truncation` in Debug mode flags snprintf into PATH_MAX buffer
+  when the source variable is also PATH_MAX. Fix: use `char intermediate[PATH_MAX
+  + 32]` for intermediate buffers that append suffixes to PATH_MAX-length paths.
+- Tests set/unset env vars (HOME, XDG_CONFIG_HOME, XDG_DATA_HOME) directly —
+  cmocka tests are not isolated by default. Each test cleans up its env vars
+  afterward. No fixtures needed.
+
+### Next
+Task 5 (settings.yaml read/write) or Task 6 (assignments.yaml) — both depend
+on Task 4 (now done). Task 5 unblocks Task 39 (Settings tab), Task 6 unblocks
+Task 15 (CreateCompositeDevice + GamepadOrder persistence). Prefer Task 5
+(settings is simpler, no ID validation complexity).
