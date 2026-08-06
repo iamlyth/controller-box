@@ -472,7 +472,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 - Documentation impact: none
 
 ## Task 22: Focus chain system and input event mapping
-- Status: pending
+- Status: complete
 - Dependencies: Task 21, Task 14
 - Scope: `src/ui/focus.c`, `src/ui/input_map.c`
 - Acceptance criteria:

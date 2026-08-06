@@ -260,6 +260,15 @@ if(CMOCKA_FOUND)
     set_tests_properties(test_widget_progress PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
 
+    # Task 22: Focus chain system and input event mapping.
+    add_executable(test_focus tests/test_focus.c)
+    target_link_libraries(test_focus PRIVATE controllerbox PkgConfig::CMOCKA)
+    add_test(NAME test_focus COMMAND test_focus)
+
+    add_executable(test_input_map tests/test_input_map.c)
+    target_link_libraries(test_input_map PRIVATE controllerbox PkgConfig::CMOCKA)
+    add_test(NAME test_input_map COMMAND test_input_map)
+
     # Help later tasks: tests that need the dummy driver can set it here.
     set_tests_properties(test_sdl_dummy PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
