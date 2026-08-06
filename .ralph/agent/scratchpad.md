@@ -2304,3 +2304,88 @@ Task 8 (done).
 Alternatively Task 32 (Overlay trigger registration and activation/close)
 — deps: Task 28 (done), Task 13 (done).
 Check `ralph tools task ready` and the plan.
+
+## Task 31 (complete) — Profile cycling and dynamic columns
+
+### What landed
+- `src/overlay/profile_cycle.h/c`: Profile cycling workflow. Coordinates
+  profile enumeration → grid population → profile change → LoadProfilePath
+  + assignment update. cbx_profile_cycle struct (backend, bus, assignments,
+  profiles). cbx_profile_cycle_load_profiles populates grid from
+  cbx_profile_list enumeration. cbx_profile_cycle_find_path looks up full
+  filesystem path by profile name. cbx_profile_cycle_apply does full
+  workflow: find path → ip_composite_load_profile_path via backend → update
+  assignment profile. cbx_profile_cycle_update_assignment finds existing
+  assignment by ID and updates profile, or creates new at lowest free slot.
+  cbx_profile_cycle_profile_follows verifies per-controller profile model
+  (profile is stored per-row in grid, inherently follows controller across
+  column moves — SPEC §4.6).
+- `src/overlay/dynamic_columns.h/c`: Dynamic column management from device
+  model. cbx_dynamic_columns_build_vcs builds cbx_virtual_controllers from
+  target device types. cbx_dynamic_columns_needs_rebuild checks if target
+  count changed (col_count != target_count + 1). cbx_dynamic_columns_rebuild
+  rebuilds grid with new column count, preserving profile list and
+  re-deriving row positions from assignments (removed slots → Unassigned).
+  cbx_dynamic_columns_clamp_positions moves rows at removed columns to
+  Unassigned. cbx_dynamic_columns_extract_types queries DeviceType for each
+  target via callback (mockable for testing). SPEC §4.7.
+- `tests/test_profile_cycle.c`: 26 cmocka tests (init, load_profiles,
+  find_path, apply success/error/null/no-backend/no-assignments/no-profiles,
+  backend error propagation, update assignment existing/new/null, profile
+  follows controller across moves, full workflow).
+- `tests/test_dynamic_columns.c`: 24 cmocka tests (build_vcs, needs_rebuild,
+  clamp_positions, rebuild more/fewer columns, preserve profiles/assignments,
+  null/bad-count, extract_types, hotplug add/remove target with/without
+  assignment).
+- `CMakeLists.txt`: Added profile_cycle.c, dynamic_columns.c to controllerbox.
+- `tests/CMakeLists.txt`: Added test_profile_cycle + test_dynamic_columns.
+- `IMPLEMENTATION_PLAN.md`: Task 31 → complete.
+
+### Verification (all pass)
+- clean build (Debug -Werror, no warnings)
+- ctest 47/47: all previous + test_profile_cycle + test_dynamic_columns
+- test_profile_cycle 26/26 cmocka tests pass
+- test_dynamic_columns 24/24 cmocka tests pass
+- verify-boilerplate → exit 0
+
+### Gotchas fixed
+- `IP_ERR_NO_REPLY` defined in `dbus/ip_connection.h`, not in dbus_mock.h.
+  Added include to test file.
+- `cbx_assign_make_default` validates ID format via `cbx_validate_id`.
+  Test IDs must match supported formats (BT:xx:xx:xx:xx:xx:xx, USB:phys:xxx,
+  USB:xxx, ORDER:n). Initial test used "ID:001" which failed validation
+  (-EINVAL). Fixed to "ORDER:0"/"ORDER:5".
+- Profile count in test_rebuild_more_columns: build_grid_with_types already
+  adds "default" and "fighting" (2 profiles), then test adds "test_profile"
+  (3 total). Fixed assertion from 4 to 3.
+
+### Design decisions
+- **Profile is per-row, not per-column**: The grid stores profile in
+  rows[row_idx].profile. Navigation (move_left/right) only changes
+  cur_col, never the profile field. This is a structural guarantee —
+  profile inherently follows the controller across columns (SPEC §4.6).
+- **Profile cycle apply is a callback handler**: cbx_profile_cycle_apply
+  is designed to be called from the player_mode on_profile_change callback.
+  It takes the grid (for identity lookup), row_idx, profile_name, and
+  composite_path — exactly what the callback provides.
+- **Dynamic columns reuse grid_build**: cbx_dynamic_columns_rebuild
+  constructs a cbx_settings with virtual_controllers from target types,
+  then calls the existing cbx_select_grid_build. This reuses the proven
+  build logic (assignment lookup, slot-to-column mapping, clamping).
+- **Profile list preserved across rebuilds**: The rebuild function saves
+  the grid's profile list before calling grid_build (which zeros the grid),
+  then restores it. This ensures the cycling list survives hotplug events.
+- **Type extraction via callback**: cbx_dynamic_columns_extract_types takes
+  a query function callback to get each target's DeviceType. This keeps
+  the module testable without DBus — tests provide a mock query function.
+- **Removed slot → Unassigned**: When target_count decreases, grid_build
+  re-derives positions from assignments. If an assignment's slot >= new
+  col_count, the row stays at Unassigned (col 0). This matches SPEC §5.2:
+  "the physical controller in that slot auto-moves to Unassigned."
+
+### Next
+Task 32 (Overlay trigger registration and activation/close) — deps: Task 28
+(done), Task 13 (done).
+Alternatively Task 33 (Overlay integration test) — deps: Task 32, Task 30,
+Task 31 (all done after Task 32).
+Check `ralph tools task ready` and the plan.
