@@ -1129,3 +1129,79 @@ Check `ralph tools task ready` and the plan.
 Task 17 (nanosvg rasterization and SDL2 texture cache) — deps: Task 16 (done).
 Alternatively Task 18 (Runtime icon lookup API) — deps: Task 17 + Task 8 (done).
 Check `ralph tools task ready` and the plan.
+
+## Task 17 (complete) — nanosvg rasterization and SDL2 texture cache
+
+### What landed
+- `src/icons/icon_cache.h`: API for SVG-to-SDL2 texture cache. Structs:
+  cbx_icon_cache_entry (name, texture, width, height), cbx_icon_cache
+  (renderer, rasterizer, entries[256], count, icon_dir, target_size).
+  Constants: CBX_ICON_CACHE_MAX=128, CBX_ICON_CACHE_HASH_SIZE=256.
+  Functions: cbx_icon_cache_init/load/get/get_dims/load_one/cleanup.
+- `src/icons/icon_cache.c`: Implementation. djb2 hash function, open
+  addressing with linear probing. Rasterizes SVGs via nsvgParseFromFile +
+  nsvgRasterize (single reusable NSVGrasterizer). Creates SDL2 textures
+  (SDL_PIXELFORMAT_ABGR8888, TEXTUREACCESS_STATIC), uploads pixels via
+  SDL_UpdateTexture, sets SDL_BLENDMODE_BLEND. Strips "cc-" prefix from
+  icon names when building SVG file paths (Controllercons convention:
+  YAML uses "cc-xbox-360" but file is "xbox-360.svg"). Scale preserves
+  aspect ratio, fits within target_size. Deduplication: shared icons
+  (e.g., generic-gamepad used by 7+ types) rasterized only once.
+- `tests/test_icon_cache.c`: 26 cmocka tests using test_harness SDL2
+  dummy driver + real YAML from source tree. Tests: init (basic, null
+  args), load (all, texture exists, dims, aspect ratio, idempotent,
+  null args), lookup (known, unknown, null args, empty cache, dims
+  known/unknown/null), load_one (new, already cached, nonexistent, null),
+  recolour (SDL_SetTextureColorMod), blend mode (SDL_BLENDMODE_BLEND),
+  cleanup (basic, null, double-cleanup), shared icons deduplicated,
+  different target sizes, hash collision lookup (all 36 SVGs).
+- `CMakeLists.txt`: Added icon_cache.c to controllerbox STATIC library.
+- `tests/CMakeLists.txt`: Added test_icon_cache target linked with
+  controllerbox + cmocka + nanosvg + cbx_test_support. CBX_SOURCE_DIR
+  compile def. SDL_VIDEODRIVER=dummy environment.
+- `IMPLEMENTATION_PLAN.md`: Task 17 → complete.
+
+### Verification (all pass)
+- clean build (Debug -Werror, no warnings)
+- ctest 23/23: all previous + test_icon_cache
+- test_icon_cache 26/26 cmocka tests pass
+- verify-boilerplate, check-plan-freshness → exit 0
+
+### Gotchas fixed
+- **cc- prefix stripping**: YAML icon names use "cc-" prefix (e.g.,
+  "cc-xbox-360") but actual SVG files on disk don't have it (e.g.,
+  "xbox-360.svg"). Added prefix stripping in rasterize_svg() before
+  building the file path. Non-cc icons (generic-gamepad, arcade-stick,
+  keyboard, mouse, hitbox, steam-deck) are unaffected.
+- **Unused find_slot function**: Initially wrote a separate find_slot()
+  helper but the lookup functions each do their own probing inline.
+  Removed the unused function to fix -Werror=unused-function.
+- **Double slash in path**: SVG_DIR ends with "/" so paths like
+  "svg_dir//cc-ps5.svg" had double slashes — harmless on Linux but
+  fixed implicitly by the cc- prefix stripping (path construction now
+  uses icon_dir + "/" + file_name + ".svg").
+
+### Design decisions
+- **djb2 hash with open addressing**: Simple hash function, power-of-two
+  table size (256) for bitmask modulo. Linear probing for collision
+  resolution. Table size > max entries (128) keeps load factor < 0.5.
+- **Tombstone support**: When cleanup destroys a texture, the entry
+  name is retained (tombstone) so lookups during probing don't stop
+  prematurely. This is important for correctness but in practice the
+  hash map is always cleaned up wholesale, not entry-by-entry.
+- **Aspect ratio preservation**: SVGs are scaled to fit within
+  target_size (the larger dimension). Non-square SVGs produce
+  non-square textures. The test verifies this with
+  test_load_aspect_ratio.
+- **Deduplication via cbx_icon_cache_get check**: Before rasterizing
+  an icon, load() checks if the icon is already cached. This means
+  "generic-gamepad" (mapped by 7+ types) and "cc-ps5" (mapped by 6 DS5
+  variants) are only rasterized once.
+- **SDL2_image include**: Added #include <SDL2/SDL_image.h> in icon_cache.c
+  for potential future PNG loading (Task 18 will use SDL_image for custom
+  icon paths). Currently not called but the include is harmless.
+
+### Next
+Task 18 (Runtime icon lookup API) — deps: Task 17 + Task 8 (all done).
+Alternatively Task 19 (Renderer init, theme system, text rendering) — deps: Task 2 (done).
+Check `ralph tools task ready` and the plan.
