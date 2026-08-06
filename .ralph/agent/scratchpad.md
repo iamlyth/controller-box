@@ -2132,3 +2132,94 @@ deps: Task 28 (done), Task 22 (done), Task 18 (done), Task 26 (done).
 Alternatively Task 30 (Overlay input handling and B-button close) —
 deps: Task 28 (done), Task 13 (done).
 Check `ralph tools task ready` and the plan.
+
+## Task 29 (complete) — Character select grid rendering and Player Mode navigation
+
+### What landed
+- `src/overlay/grid_render.h/c`: Pure data model for the character select
+  grid + SDL render callback. cbx_select_grid struct with rows
+  (composites), cols (Unassigned + player slots), and profile list.
+  Build from cbx_grid_composite_info[] + cbx_settings + cbx_assignments.
+  Navigation: move_left/right (boundary-aware, -ERANGE at edges),
+  cycle_profile_up/down (wraps around profile list). Slot↔col conversion
+  (col 0=Unassigned=-1, col N=slot N-1). Render function draws column
+  headers, row labels (model name + profile), cell icons (via icon_lookup),
+  position indicators (filled circle on current, hollow on others),
+  highlight rect on current column. NULL-safe (no-op if renderer NULL).
+  Compatible with cbx_overlay_surface_render via cbx_select_grid_render_cb.
+- `src/overlay/player_mode.h/c`: Per-controller row navigation.
+  cbx_player_mode_handle dispatches LEFT/RIGHT (move + on_slot_change
+  callback with new slot, -1 for Unassigned), UP/DOWN (cycle profile +
+  on_profile_change callback with profile name + composite_path for
+  LoadProfilePath), B (returns CLOSE), R3 (returns HOST for Task 30).
+  Independence: each controller only modifies its own row_idx.
+- `tests/test_grid_render.c`: 29 cmocka tests (init, build with/without
+  assignments, column types, slot out of range, profile management,
+  navigation, cycle profile (wrap, not-in-list, no-profiles), accessors,
+  slot/col conversion, render NULL-safe + dummy SDL renderer).
+- `tests/test_player_mode.c`: 22 cmocka tests (init, LEFT/RIGHT + boundary,
+  UP/DOWN + wrap, no-profiles, B, R3, independence across 3 controllers,
+  slot change to Unassigned (-1), NULL safety, no callbacks, accessors).
+- `CMakeLists.txt`: Added grid_render.c, player_mode.c to controllerbox.
+- `tests/CMakeLists.txt`: Added test_grid_render + test_player_mode targets.
+- `IMPLEMENTATION_PLAN.md`: Task 29 → complete.
+
+### Verification (all pass)
+- clean build (Debug -Werror, no warnings)
+- ctest 43/43: all previous + test_grid_render + test_player_mode
+- test_grid_render 29/29 cmocka tests pass
+- test_player_mode 22/22 cmocka tests pass
+- verify-boilerplate, check-plan-freshness → exit 0
+
+### Gotchas fixed
+- `CBX_DEFAULT_PROFILE` and `cbx_assign_lookup` are in `identify/assign.h`,
+  not in `config/config_assignments.h`. Added `#include "identify/assign.h"`
+  to grid_render.c.
+- `strncpy` truncation warning: `strncpy(row->profile, found.profile, 63)`
+  triggers `-Werror=stringop-truncation` because both source and dest are
+  64 bytes. Fixed with `snprintf(row->profile, CBX_GRID_PROFILE_LEN, "%s",
+  found.profile)`.
+- Unused variable `cy` in render function: removed the unused `int cy`
+  that was left over from an earlier circle-drawing approach.
+- `make_settings` helper in test: required 5 args but many calls passed
+  fewer. Fixed by passing NULL for unused type args (the function already
+  checks for NULL before strncpy).
+- `test_build_no_composites` passed NULL composites with count=0. The
+  build function initially rejected NULL composites unconditionally. Fixed:
+  only reject NULL composites when count > 0.
+- `test_render_with_dummy` was skipped under ctest because SDL_VIDEODRIVER
+  env var was set via CMake `ENVIRONMENT` property but SDL_Init was called
+  before the hint was set. Fixed: `setenv("SDL_VIDEODRIVER", "dummy", 1)`
+  at the start of the test, before SDL_Init.
+
+### Design decisions
+- **Pure data model + callbacks**: grid_render is pure data (no I/O, no
+  DBus). player_mode uses callbacks for side effects (on_slot_change,
+  on_profile_change). This keeps both modules fully testable without
+  DBus mock infrastructure or file I/O fixtures.
+- **cbx_grid_composite_info struct**: The caller gathers composite info
+  (identity ID, model name, DBus path) and passes it to grid_build. This
+  avoids DBus calls in the build function. The caller uses
+  ip_composite_get_name + identity extraction to populate this struct.
+- **Col 0 = Unassigned**: Column 0 is always Unassigned (empty device type).
+  Columns 1..N are player slots P1..PN with device types from settings.
+  Slot = col - 1, col = slot + 1.
+- **Profile cycling wraps**: When cycling past the end of the profile list,
+  it wraps around to the beginning. If the current profile is not in the
+  list (e.g., deleted), cycling starts from the first profile.
+- **Render is best-effort**: The render function gracefully handles NULL
+  icon_cache, text_cache, and theme. Without these, it draws basic
+  shapes (rectangles, circles) but no icons or text. This allows testing
+  the render function with a dummy SDL renderer without full asset init.
+- **Player Mode independence**: cbx_player_mode_handle takes a row_idx
+  parameter, so each controller only navigates its own row. The grid's
+  navigation functions (move_left/right, cycle_profile) also take row_idx,
+  ensuring no cross-row modification is possible.
+
+### Next
+Task 30 (Host Mode and conflict detection/resolution) — deps: Task 29 (done).
+Alternatively Task 31 (Profile cycling and dynamic columns) — deps: Task 29
+(done), Task 8 (done).
+Alternatively Task 32 (Overlay trigger registration and activation/close) —
+deps: Task 28 (done), Task 13 (done).
+Check `ralph tools task ready` and the plan.
