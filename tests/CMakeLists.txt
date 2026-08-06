@@ -48,10 +48,16 @@ if(CMOCKA_FOUND)
     add_executable(test_settings tests/test_settings.c)
     target_link_libraries(test_settings PRIVATE controllerbox PkgConfig::CMOCKA)
 
+    # Assignments.yaml read/write test (Task 6): round-trip, validation, defaults,
+    # gamepad_order persistence, YAML security constraints.
+    add_executable(test_assignments tests/test_assignments.c)
+    target_link_libraries(test_assignments PRIVATE controllerbox PkgConfig::CMOCKA)
+
     add_test(NAME test_sample    COMMAND test_sample)
     add_test(NAME test_sdl_dummy  COMMAND test_sdl_dummy)
     add_test(NAME test_config_paths COMMAND test_config_paths)
     add_test(NAME test_settings     COMMAND test_settings)
+    add_test(NAME test_assignments   COMMAND test_assignments)
 
     # Help later tasks: tests that need the dummy driver can set it here.
     set_tests_properties(test_sdl_dummy PROPERTIES

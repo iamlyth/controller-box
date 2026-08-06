@@ -73,6 +73,7 @@ target_compile_options(nanosvg PRIVATE -w)
 add_library(controllerbox STATIC
     src/config/config_paths.c
     src/config/config_settings.c
+    src/config/config_assignments.c
     src/dbus/dbus_client.c
     src/ui/widget.c)
 target_include_directories(controllerbox

@@ -184,7 +184,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 - Evidence: `cmake --build build` clean (Debug -Werror, no warnings); ctest 6/6 pass; `test_settings` 18/18 cmocka tests pass (defaults no-file, defaults function, round-trip save/load, round-trip defaults, opacity validation, count validation, unknown type validation, save rejects invalid, missing fields → defaults, out-of-range clamp on load, file mode 0600, flow-style types array, known-good type list, max doc size 1MB rejection, custom tags rejection, tag directives rejection, empty file → defaults, YAML 1.1 bool variants); `src/config/config_settings.{h,c}` implement libyaml event-based parser (max depth 50, max doc size 1MB, no custom tags/tag directives) + document-based emitter + atomic write (mkstemp + fchmod 0600 + fsync + rename); known-good types: xb360/ds5/deck/gamepad/mouse/keyboard/touchscreen; verify-boilerplate, check-plan-freshness, branch-guard exit 0.
 
 ## Task 6: assignments.yaml read/write and gamepad order persistence
-- Status: pending
+- Status: complete
 - Dependencies: Task 4
 - Scope: `src/config/config_assignments.c`, `src/config/config_assignments.h`
 - Acceptance criteria:
@@ -199,6 +199,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
   - `tests/test_assignments.c` passes (round-trip, validation, defaults)
 - Verification: `cmake --build build && ./build/test_assignments`
 - Documentation impact: OPERATIONS assignments.yaml format section
+- Evidence: `cmake --build build` clean (Debug -Werror, no warnings); ctest 7/7 pass; `test_assignments` 31/31 cmocka tests pass (BT:MAC 6-octet valid/invalid, USB:serial valid/invalid, USB:phys valid/invalid, ORDER valid/invalid, other rejects, profile valid/invalid, no-file→empty, empty-file→empty, round-trip with BT/USB, round-trip empty, round-trip USB:phys, round-trip empty profile, round-trip ORDER, save rejects invalid id/negative slot/invalid profile/invalid gamepad_order, file mode 0600, max doc 1MB, custom tags rejected, tag directives rejected, parse from YAML, gamepad_order-only, no-gamepad_order, validate empty/NULL); `src/config/config_assignments.{h,c}` implement libyaml event-based parser (max depth 50, max doc 1MB, no custom tags/tag directives) + document-based emitter + atomic write (mkstemp + fchmod 0600 + fsync + rename); ID validation: BT:6-octet MAC (hex pairs), USB:serial (alnum/dash/underscore), USB:phys:port-path, ORDER:n (non-negative int); profile validation ^[a-zA-Z0-9_-]+$ or empty/NULL; verify-boilerplate, check-plan-freshness, branch-guard exit 0.
 
 ## Task 7: Profile YAML parse and generate (InputPlumber device_profile_v1)
 - Status: pending
