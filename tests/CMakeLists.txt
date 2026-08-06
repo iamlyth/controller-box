@@ -231,6 +231,35 @@ if(CMOCKA_FOUND)
     set_tests_properties(test_widgets PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
 
+    # Task 21: List, Grid, TabBar, and ProgressBar widgets.
+    add_executable(test_widget_list tests/test_widget_list.c)
+    target_link_libraries(test_widget_list PRIVATE controllerbox PkgConfig::CMOCKA)
+    target_compile_definitions(test_widget_list PRIVATE
+        CBX_FONT_PATH="${CBX_FONT_PATH}")
+    add_test(NAME test_widget_list COMMAND test_widget_list)
+    set_tests_properties(test_widget_list PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+
+    add_executable(test_widget_grid tests/test_widget_grid.c)
+    target_link_libraries(test_widget_grid PRIVATE controllerbox PkgConfig::CMOCKA)
+    add_test(NAME test_widget_grid COMMAND test_widget_grid)
+    set_tests_properties(test_widget_grid PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+
+    add_executable(test_widget_tabbar tests/test_widget_tabbar.c)
+    target_link_libraries(test_widget_tabbar PRIVATE controllerbox PkgConfig::CMOCKA)
+    target_compile_definitions(test_widget_tabbar PRIVATE
+        CBX_FONT_PATH="${CBX_FONT_PATH}")
+    add_test(NAME test_widget_tabbar COMMAND test_widget_tabbar)
+    set_tests_properties(test_widget_tabbar PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+
+    add_executable(test_widget_progress tests/test_widget_progress.c)
+    target_link_libraries(test_widget_progress PRIVATE controllerbox PkgConfig::CMOCKA)
+    add_test(NAME test_widget_progress COMMAND test_widget_progress)
+    set_tests_properties(test_widget_progress PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+
     # Help later tasks: tests that need the dummy driver can set it here.
     set_tests_properties(test_sdl_dummy PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")

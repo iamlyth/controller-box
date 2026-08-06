@@ -455,7 +455,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 - Documentation impact: none
 
 ## Task 21: List, Grid, TabBar, and ProgressBar widgets
-- Status: pending
+- Status: complete
 - Dependencies: Task 20
 - Scope: `src/ui/widget_list.c`, `src/ui/widget_grid.c`, `src/ui/widget_tabbar.c`,
   `src/ui/widget_progress.c`

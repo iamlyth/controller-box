@@ -202,4 +202,134 @@ void cbx_panel_set_padding(cbx_panel *panel, int padding);
 void cbx_panel_set_draw_bg(cbx_panel *panel, bool draw_bg);
 void cbx_panel_set_draw_border(cbx_panel *panel, bool draw_border);
 
+/* ------------------------------------------------------------------ */
+/*  List (scrollable, up/down navigation, highlight, optional icon)  */
+/* ------------------------------------------------------------------ */
+
+#define CBX_LIST_MAX_ITEMS 64
+#define CBX_LIST_LABEL_LEN 128
+
+typedef struct {
+    char   label[CBX_LIST_LABEL_LEN];
+    SDL_Texture *icon;    /* optional — borrowed, not owned */
+    void  *user_data;      /* opaque per-item data */
+} cbx_list_item;
+
+typedef void (*cbx_list_select_cb)(cbx_widget *w, int index,
+                                    void *user_data);
+
+typedef struct {
+    cbx_widget base;
+    cbx_text_cache   *text_cache;   /* borrowed */
+    const cbx_theme  *theme;        /* borrowed */
+    int   font_id;
+    cbx_list_item items[CBX_LIST_MAX_ITEMS];
+    int   item_count;
+    int   selected;          /* highlighted index, -1 = none */
+    int   scroll_offset;      /* first visible item */
+    int   visible_count;     /* computed from rect height / item_h */
+    int   item_h;            /* pixel height per item */
+    int   icon_size;         /* icon dimension (square) */
+    cbx_list_select_cb on_select;
+} cbx_list;
+
+int  cbx_list_init(cbx_list *lst, int font_id,
+                    cbx_text_cache *cache, const cbx_theme *theme);
+
+int  cbx_list_add_item(cbx_list *lst, const char *label,
+                        SDL_Texture *icon, void *user_data);
+void cbx_list_clear(cbx_list *lst);
+int  cbx_list_item_count(const cbx_list *lst);
+int  cbx_list_get_selected(const cbx_list *lst);
+void cbx_list_set_selected(cbx_list *lst, int index);
+int  cbx_list_scroll_up(cbx_list *lst);
+int  cbx_list_scroll_down(cbx_list *lst);
+void cbx_list_set_select_cb(cbx_list *lst, cbx_list_select_cb cb);
+
+/* ------------------------------------------------------------------ */
+/*  Grid (N rows × M columns, independent row/col nav)                */
+/* ------------------------------------------------------------------ */
+
+#define CBX_GRID_MAX_CELLS 256
+
+typedef struct {
+    cbx_widget base;
+    const cbx_theme *theme;    /* borrowed */
+    cbx_widget *cells[CBX_GRID_MAX_CELLS];
+    int   cell_count;
+    int   rows;
+    int   cols;
+    int   cur_row;
+    int   cur_col;
+    int   cell_w;       /* computed from rect / cols */
+    int   cell_h;       /* computed from rect / rows */
+} cbx_grid;
+
+int  cbx_grid_init(cbx_grid *grid, const cbx_theme *theme);
+int  cbx_grid_set_dims(cbx_grid *grid, int rows, int cols);
+int  cbx_grid_set_cell(cbx_grid *grid, int row, int col,
+                       cbx_widget *cell);
+cbx_widget *cbx_grid_get_cell(cbx_grid *grid, int row, int col);
+int  cbx_grid_get_cursor(const cbx_grid *grid, int *row, int *col);
+int  cbx_grid_move_up(cbx_grid *grid);
+int  cbx_grid_move_down(cbx_grid *grid);
+int  cbx_grid_move_left(cbx_grid *grid);
+int  cbx_grid_move_right(cbx_grid *grid);
+void cbx_grid_clear(cbx_grid *grid);
+
+/* ------------------------------------------------------------------ */
+/*  TabBar (horizontal tabs, left/right, callback on change)         */
+/* ------------------------------------------------------------------ */
+
+#define CBX_TABBAR_MAX_TABS 16
+#define CBX_TABBAR_LABEL_LEN 64
+
+typedef void (*cbx_tabbar_change_cb)(cbx_widget *w, int new_tab,
+                                       void *user_data);
+
+typedef struct {
+    char label[CBX_TABBAR_LABEL_LEN];
+    void *user_data;
+} cbx_tab;
+
+typedef struct {
+    cbx_widget base;
+    cbx_text_cache   *text_cache;   /* borrowed */
+    const cbx_theme  *theme;        /* borrowed */
+    int   font_id;
+    cbx_tab tabs[CBX_TABBAR_MAX_TABS];
+    int   tab_count;
+    int   active_tab;       /* index, -1 = none */
+    cbx_tabbar_change_cb on_change;
+} cbx_tabbar;
+
+int  cbx_tabbar_init(cbx_tabbar *tb, int font_id,
+                      cbx_text_cache *cache, const cbx_theme *theme);
+int  cbx_tabbar_add_tab(cbx_tabbar *tb, const char *label, void *user_data);
+int  cbx_tabbar_tab_count(const cbx_tabbar *tb);
+int  cbx_tabbar_get_active(const cbx_tabbar *tb);
+void cbx_tabbar_set_active(cbx_tabbar *tb, int index);
+int  cbx_tabbar_move_left(cbx_tabbar *tb);
+int  cbx_tabbar_move_right(cbx_tabbar *tb);
+void cbx_tabbar_set_change_cb(cbx_tabbar *tb,
+                                cbx_tabbar_change_cb cb);
+
+/* ------------------------------------------------------------------ */
+/*  ProgressBar (fill bar 0.0–1.0, configurable color)              */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    cbx_widget base;
+    const cbx_theme *theme;    /* borrowed */
+    double fraction;          /* 0.0 – 1.0 */
+    SDL_Color bar_color;     /* configurable fill color */
+    SDL_Color bg_color;      /* configurable bg color */
+} cbx_progress;
+
+int  cbx_progress_init(cbx_progress *prog, const cbx_theme *theme);
+void cbx_progress_set_fraction(cbx_progress *prog, double frac);
+double cbx_progress_get_fraction(const cbx_progress *prog);
+void cbx_progress_set_bar_color(cbx_progress *prog, SDL_Color color);
+void cbx_progress_set_bg_color(cbx_progress *prog, SDL_Color color);
+
 #endif /* CBX_WIDGET_H */
