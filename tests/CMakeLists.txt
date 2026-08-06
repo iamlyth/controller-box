@@ -359,6 +359,14 @@ if(CMOCKA_FOUND)
     set_tests_properties(test_sdl_dummy PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
 
+    # Task 34 — Manager skeleton and tab bar.
+    add_executable(test_manager_tabs tests/test_manager_tabs.c)
+    target_link_libraries(test_manager_tabs PRIVATE controllerbox PkgConfig::CMOCKA)
+    target_compile_definitions(test_manager_tabs PRIVATE CBX_FONT_PATH="${CBX_FONT_PATH}")
+    add_test(NAME test_manager_tabs COMMAND test_manager_tabs)
+    set_tests_properties(test_manager_tabs PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+
 else()
     message(STATUS "cmocka not found — unit tests skipped (smoke tests still built)")
 endif()

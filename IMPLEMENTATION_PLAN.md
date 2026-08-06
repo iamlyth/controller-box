@@ -665,7 +665,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 ### Phase 8: Manager Mode
 
 ## Task 34: Manager skeleton and tab bar
-- Status: pending
+- Status: complete
 - Dependencies: Task 21, Task 22
 - Scope: `src/manager/manager.c`, `src/manager/manager.h`
 - Acceptance criteria:
@@ -676,6 +676,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
   - `tests/test_manager_tabs.c` passes with dummy driver
 - Verification: `cmake --build build && SDL_VIDEODRIVER=dummy ./build/test_manager_tabs`
 - Documentation impact: README manager usage section
+- Evidence: ctest 51/51 pass; test_manager_tabs 14/14 cmocka tests pass; clean build with -Werror; verify-boilerplate exit 0.
 
 ## Task 35: Controllers tab — list, add/remove, and type change
 - Status: pending

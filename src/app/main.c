@@ -11,12 +11,13 @@
  *                    (kept headless-safe for acceptance checks)
  *   -h, --help       print usage and exit
  *
- * The mode run-paths are filled in by later tasks. Until then both modes
- * print a mode banner and exit. --dry-run forces the stub path so the
- * acceptance checks remain runnable in a headless sandbox.
+ * The manager run-path is implemented in Task 34. The overlay service
+ * run-path is filled in by later tasks. --dry-run forces the stub path
+ * so the acceptance checks remain runnable in a headless sandbox.
  */
 #include "config.h"
 #include "controllerbox.h"
+#include "manager/manager.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -68,8 +69,19 @@ static int run_manager(int dry_run)
 {
     printf("controller-box: %s mode%s\n", mode_name(CB_MODE_MANAGER),
            dry_run ? " (dry-run)" : "");
-    /* TODO manager tab UI (Controllers / Profiles / Settings). */
-    return 0;
+    if (dry_run)
+        return 0;
+
+    /* Task 34: manager skeleton with tab bar (SPEC §5.1). */
+    cbx_manager mgr;
+    int rc = cbx_manager_init(&mgr, NULL);
+    if (rc != 0) {
+        fprintf(stderr, "controller-box: manager init failed: %d\n", rc);
+        return 1;
+    }
+    rc = cbx_manager_run(&mgr);
+    cbx_manager_shutdown(&mgr);
+    return rc;
 }
 
 int main(int argc, char **argv)
