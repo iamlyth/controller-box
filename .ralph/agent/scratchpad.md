@@ -3197,3 +3197,74 @@ Task 42 (Flatpak manifest) — deps: Task 41 (done). All dependencies complete.
 Alternatively Task 43 (Version embedding and packaging integration test) —
 deps: Task 41 (done), Task 42.
 Check `ralph tools task ready` and the plan.
+
+## Task 42 (complete) — Flatpak manifest
+
+### What landed
+- `packaging/org.shadowblip.ControllerBox.yaml`: Full Flatpak manifest.
+  App ID: org.shadowblip.ControllerBox, runtime: org.freedesktop.Platform
+  24.08, SDK: org.freedesktop.Sdk 24.08, command: controller-box.
+  5 build modules: SDL2 2.30.0 (cmake-ninja), SDL2_ttf 2.22.0 (cmake-ninja),
+  SDL2_image 2.8.0 (cmake-ninja), libyaml 0.2.5 (autotools), controller-box
+  (cmake-ninja from git develop branch). nanosvg vendored in source tree
+  (no separate module). libsystemd (sd-bus) from freedesktop SDK.
+  9 finish-args with rationale comments: display (wayland, fallback-x11,
+  dri), DBus (system-talk-name=org.shadowblip.InputPlumber,
+  talk-name=org.freedesktop.Flatpak for flatpak-spawn --host), filesystem
+  (inputplumber profiles rw, inputplumber system ro, controller-box config,
+  systemd/user). Post-install: rename desktop file to app-id, fix Exec path.
+- `tests/test_flatpak_manifest.py`: 30 structural checks validating manifest
+  against SPEC §9.1 and Task 42 acceptance criteria. Checks: YAML validity,
+  app-id, runtime/sdk, command, modules (SDL2/SDL2_ttf/SDL2_image/controller-box
+  + libyaml), nanosvg not separate module, all 5 SPEC-required permissions,
+  3 display permissions, flatpak-spawn permission, no overly broad permissions,
+  all permissions have rationale comments, cmake buildsystems, git sources,
+  post-install desktop file fix. Registered as CTest test_flatpak_manifest
+  (conditional on Python3+PyYAML).
+- `docs/PACKAGING.md`: Expanded Flatpak section with manifest overview, build
+  instructions, permissions rationale table, systemd service install flow
+  (flatpak-spawn --host), InputPlumber dependency note.
+- `shell.nix`: Added python3 + python3Packages.pyyaml to nativeBuildInputs
+  for manifest test.
+- `tests/CMakeLists.txt`: Added find_package(Python3) + conditional
+  test_flatpak_manifest registration.
+- `IMPLEMENTATION_PLAN.md`: Task 42 → complete.
+
+### Verification (all pass)
+- clean Debug build (0 warnings)
+- ctest 62/62: all previous 61 + test_flatpak_manifest (1)
+- verify-boilerplate → exit 0
+
+### Gotchas fixed
+- Removed test_flatpak_manifest.sh (broken shell script with inline Python
+  escaping issues). Replaced with test_flatpak_manifest.py (clean Python).
+- shell.nix needed python3Packages.pyyaml added so CMake's
+  execute_process(Python3 -c "import yaml") check passes in nix-shell.
+- Desktop file post-install: manifest renames
+  controller-box-manager.desktop → org.shadowblip.ControllerBox.desktop
+  and fixes Exec path from /usr/bin/controller-box → controller-box.
+
+### Design decisions
+- **Build SDL2 from source, not SDK extension**: More self-contained and
+  reliable. SDL2, SDL2_ttf, SDL2_image each have a git source with release
+  tags and cmake-ninja buildsystem. No dependency on SDK extension
+  availability or runtime extension setup.
+- **libyaml from source**: Included as a build module for reliability, even
+  though the freedesktop SDK likely includes it. Small, autotools build.
+- **flatpak-spawn --host permission**: Added --talk-name=org.freedesktop.Flatpak
+  for flatpak-spawn --host (needed by manager to call systemctl --user on
+  the host). Not in SPEC §9.1 but functionally necessary for the service
+  install flow.
+- **Display permissions**: Added --socket=wayland, --socket=fallback-x11,
+  --device=dri (standard for SDL2 GUI apps). Not in SPEC §9.1 permission list
+  but functionally required for any graphical application.
+- **No overly broad permissions**: Manifest explicitly avoids
+  --filesystem=host, --filesystem=home, --device=all. Each permission is
+  scoped to the minimum path needed.
+
+### Next
+Task 43 (Version embedding and packaging integration test) — deps: Task 41
+(done), Task 42 (done). All dependencies complete.
+Alternatively Task 44 (Final documentation and specification audit) — deps:
+all tasks including 43.
+Check `ralph tools task ready` and the plan.
