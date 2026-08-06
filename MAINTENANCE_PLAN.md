@@ -72,8 +72,6 @@ path to verify that a font is actually loaded.
    hash (`zzs2q7lk5mn6y2rywd3snhak7098zs66`) that changes on every package
    rebuild, making that candidate unreliable.
 
-## Tasks
-
 ## Task 1: Add runtime font discovery to config_paths
 - Status: pending
 - Dependencies: none
