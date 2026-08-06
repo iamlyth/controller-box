@@ -710,7 +710,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 - Documentation impact: README manager usage (Profiles tab), PROFILES.md
 
 ## Task 37: Profile editor — controller diagram and binding list mode
-- Status: pending
+- Status: complete
 - Dependencies: Task 36, Task 18, Task 13, Task 8
 - Scope: `src/manager/profile_diagram.c`, `src/manager/profile_editor_list.c`
 - Acceptance criteria:

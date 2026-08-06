@@ -383,6 +383,20 @@ if(CMOCKA_FOUND)
     set_tests_properties(test_profiles_tab PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
 
+    # Task 37 — Profile editor: controller diagram and binding list mode.
+    add_executable(test_profile_diagram tests/test_profile_diagram.c)
+    target_link_libraries(test_profile_diagram PRIVATE controllerbox cbx_test_support PkgConfig::CMOCKA)
+    add_test(NAME test_profile_diagram COMMAND test_profile_diagram)
+    set_tests_properties(test_profile_diagram PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+
+    add_executable(test_editor_list_mode tests/test_editor_list_mode.c)
+    target_link_libraries(test_editor_list_mode PRIVATE controllerbox cbx_test_support PkgConfig::CMOCKA)
+    target_compile_definitions(test_editor_list_mode PRIVATE CBX_FONT_PATH="${CBX_FONT_PATH}")
+    add_test(NAME test_editor_list_mode COMMAND test_editor_list_mode)
+    set_tests_properties(test_editor_list_mode PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+
 else()
     message(STATUS "cmocka not found — unit tests skipped (smoke tests still built)")
 endif()

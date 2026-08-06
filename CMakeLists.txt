@@ -123,6 +123,8 @@ add_library(controllerbox STATIC
     src/manager/manager.c
     src/manager/controllers_tab.c
     src/manager/profiles_tab.c
+    src/manager/profile_diagram.c
+    src/manager/profile_editor_list.c
     src/identify/identity.c
     src/identify/assign.c
     src/identify/assign_persist.c
