@@ -1870,3 +1870,76 @@ restoration) — deps: Task 11 (done), Task 25 (done), Task 15 (done).
 Alternatively Task 28 (Overlay state machine and lifecycle) — deps:
 Task 13 (done), Task 24 (done).
 Check `ralph tools task ready` and the plan.
+
+## Task 26 (complete) — Assignment lookup, default assignment, and persistence
+
+### What landed
+- `src/identify/assign.h/c`: Pure assignment lookup functions on in-memory
+  cbx_assignments struct (no I/O). cbx_assign_find_index (find by ID),
+  cbx_assign_lookup (return matching assignment), cbx_assign_slot_occupied
+  (check slot in use), cbx_assign_lowest_free_slot (lowest unoccupied slot
+  0..max_slots-1, or -1 if full), cbx_assign_make_default (create entry with
+  CBX_DEFAULT_PROFILE="default"), cbx_assign_resolve (lookup or create
+  default for on-connect; returns 0=existing, 1=new default, -ENOENT=full).
+- `src/identify/assign_persist.h/c`: Atomic load-modify-save operations.
+  cbx_assign_persist_set (add/update by ID), set_slot, set_profile,
+  remove (idempotent), auto_assign (load→lookup→find-free-slot→insert→save
+  in one call — the atomic lowest-free-slot computation per SPEC §6.2).
+  All preserve existing gamepad_order entries. Delegates atomic write
+  to cbx_assignments_save (temp file + rename, mode 0600).
+- `tests/test_assign.c`: 35 cmocka tests (no I/O, pure functions).
+- `tests/test_assign_persist.c`: 39 cmocka tests with per-test HOME temp
+  dir setup/teardown (cmocka_unit_test_setup_teardown).
+- `CMakeLists.txt`: Added assign.c, assign_persist.c to controllerbox STATIC.
+- `tests/CMakeLists.txt`: Added test_assign + test_assign_persist targets.
+- `IMPLEMENTATION_PLAN.md`: Task 26 → complete.
+
+### Verification (all pass)
+- clean build (Debug -Werror, no warnings)
+- ctest 38/38: all previous + test_assign + test_assign_persist
+- test_assign 35/35 cmocka tests pass
+- test_assign_persist 39/39 cmocka tests pass
+- verify-boilerplate, check-plan-freshness → exit 0
+
+### Gotchas fixed
+- **BT MAC must have 6 hex pairs**: Test used "BT:AB:CD:01:02:03" (5 pairs)
+  which fails cbx_validate_id. Fixed to "BT:AB:CD:01:02:03:04" (6 pairs).
+- **Per-test setup/teardown for file I/O tests**: Initially used group-level
+  setup/teardown (cmocka_run_group_tests) for test_assign_persist, but tests
+  shared the same HOME temp dir and polluted each other's state (e.g.
+  test_set_full_table left 32 entries, test_remove_existing found them).
+  Fixed by using cmocka_unit_test_setup_teardown per test that does I/O.
+  Tests that don't do I/O (null/invalid arg checks) use plain cmocka_unit_test.
+- **Missing stdio.h**: test_assign.c used snprintf but didn't include stdio.h.
+  Added #include <stdio.h>.
+- **Format truncation**: write_raw_assignments path buffer was PATH_MAX+64,
+  same as dir buffer. GCC -Werror=format-truncation flagged it. Fixed path
+  to PATH_MAX+128.
+
+### Design decisions
+- **CBX_DEFAULT_PROFILE = "default"**: SPEC §5.3 says "The Default profile
+  is built-in, always present, read-only, always the fallback." New
+  controllers get profile="default" when no existing preference is found.
+- **Pure vs I/O split**: assign.c has pure functions (no I/O, easily
+  testable without file fixtures). assign_persist.c has load-modify-save
+  operations (needs temp HOME setup/teardown). This separation makes the
+  lookup logic testable in isolation.
+- **auto_assign is the atomic path**: cbx_assign_persist_auto_assign does
+  load→lookup→compute-lowest-free→insert→save in one call, minimizing the
+  race window for simultaneous connects. The save is atomic (temp+rename).
+- **resolve does not mutate**: cbx_assign_resolve operates on an in-memory
+  struct and returns a copy of the assignment — it does NOT modify the
+  input struct. The caller must persist separately (or use auto_assign).
+- **remove is idempotent**: Removing a non-existent ID returns 0, not
+  -ENOENT. This matches REST semantics and simplifies caller code.
+- **set preserves gamepad_order**: All persist operations load the full
+  cbx_assignments struct (including gamepad_order), modify only the
+  assignments array, and save the whole thing. This preserves gamepad_order
+  entries across assignment changes.
+
+### Next
+Task 27 (Identity downgrade detection and GamepadOrder restoration) — deps:
+Task 11 (done), Task 25 (done), Task 15 (done).
+Alternatively Task 28 (Overlay state machine and lifecycle) — deps:
+Task 13 (done), Task 24 (done).
+Check `ralph tools task ready` and the plan.
