@@ -2962,3 +2962,81 @@ Task 5 (done), Task 7 (done), Task 8 (done). All dependencies complete.
 Alternatively Task 40 (Systemd service installation and manager
 integration test) — deps: Task 39.
 Check `ralph tools task ready` and the plan.
+
+## Task 39 (complete) — Profile save and Settings tab
+
+### What landed
+- `src/manager/profile_save.h`: Manager-level profile save API.
+  cbx_profile_save_named/to_dir (with profiles_dir override for testing),
+  cbx_profile_save_meta_to_dir (sidecar metadata save with dir override).
+- `src/manager/profile_save.c`: Full implementation. Validates filename
+  (cbx_validate_filename), validates profile (cbx_profile_validate),
+  validates NES minimum (cbx_profile_validate_nes_minimum), builds path,
+  canonicalizes with realpath(), verifies path within profiles dir
+  (boundary check), delegates atomic write to cbx_profile_save. Sidecar
+  via cbx_profile_meta_save_for or cbx_profile_meta_save to test dir.
+- `src/manager/settings_tab.h`: Settings tab struct, enums (setting IDs
+  for launch_boot/theme/opacity/vc_count/vc_type_0-3/trigger/save),
+  modes (LIST, EDIT). API: init/shutdown/refresh, save, move_up/down,
+  activate, edit_up/down, confirm_edit, cancel_edit, accessors.
+- `src/manager/settings_tab.c`: Full implementation. Init loads settings
+  from disk (or defaults), creates list + save button + status label (3
+  panel children). Refresh builds 10 setting rows (CBX_ST_SET_COUNT=10).
+  Navigation wraps. Toggle for launch_boot. Edit mode for
+  theme/opacity/count/types/trigger with Up/Down adjust, A confirm,
+  B cancel (reverts from disk). Save writes atomically via
+  cbx_settings_save.
+- `src/config/config_settings.h`: Extended with cbx_icon_override struct,
+  icon_overrides[]/icon_override_count in cbx_settings. Added
+  cbx_settings_icon_override (lookup), set_icon_override, remove_icon_override.
+- `src/config/config_settings.c`: Updated defaults (icon_overrides zeroed
+  by memset), validation (rejects empty type/icon in overrides), YAML parser
+  (handles icon_overrides sequence of {type, icon} mappings), emitter
+  (emits icon_overrides when non-empty). All existing tests pass unchanged.
+- `tests/test_profile_save.c`: 13 cmocka tests.
+- `tests/test_settings_tab.c`: 21 cmocka tests (SDL2 dummy driver + manager).
+- `CMakeLists.txt`: Added profile_save.c, settings_tab.c to controllerbox.
+- `tests/CMakeLists.txt`: Added test_profile_save, test_settings_tab.
+- `IMPLEMENTATION_PLAN.md`: Task 39 → complete.
+
+### Verification (all pass)
+- clean build (Debug -Werror, no warnings)
+- ctest 59/59: all previous + test_profile_save (13) + test_settings_tab (21)
+- test_settings 18/18 still pass (icon overrides backward compatible)
+- verify-boilerplate → exit 0
+
+### Gotchas fixed
+- Zero-length format string: `snprintf(buf, buflen, "")` triggers
+  -Werror=format-zero-length. Fixed by using `buf[0] = '\0'` instead.
+- Format-truncation: test_profile_save.c uses `char test_home[256]`
+  (not PATH_MAX) to avoid format-truncation when snprintf into PATH_MAX
+  buffers with `%s/profiles` suffix. Same pattern as mem-1785994416-3022.
+- cbx_settings_tab_init takes 5 args (tab, panel, cache, theme, font_id),
+  not 6 — test initially passed NULL for font_id as a 6th arg.
+- Unused `test_home` variable removed from test_settings_tab.c.
+
+### Design decisions
+- **NES minimum is a hard gate**: cbx_profile_save_to_dir validates NES
+  minimum before writing. If validation fails, returns -EINVAL and the
+  missing button names are written to missing_buf. The profile file is NOT
+  created if validation fails.
+- **Path canonicalization**: verify_path_within_dir uses realpath() on
+  the base dir and the target path (or its parent if the file doesn't
+  exist yet). Checks prefix match with boundary ('/' or '\0').
+- **Icon overrides in settings.yaml**: Added as a new YAML section
+  `icon_overrides:` (sequence of {type, icon} mappings). Backward
+  compatible — old settings.yaml without this section loads with
+  icon_override_count=0. New saves only emit the section when non-empty.
+- **Settings tab edit mode**: The settings tab has two modes: LIST (browse)
+  and EDIT (adjust selected setting). In edit mode, Up/Down adjusts the
+  value, A confirms, B cancels (reloads from disk). Toggles (launch_boot)
+  don't use edit mode — A flips directly.
+- **Cancel edit reverts from disk**: Cancel reloads settings from disk
+  to discard in-memory changes. This is simpler than storing a backup
+  copy and works correctly because the save button is the only way to
+  persist changes.
+
+### Next
+Task 40 (Systemd service installation and manager integration test) —
+deps: Task 39 (done). All dependencies complete.
+Check `ralph tools task ready` and the plan.
