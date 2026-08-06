@@ -659,3 +659,99 @@ Alternatively Task 14 (Source/target device properties + InputEvent) —
 deps: Task 10.
 Alternatively Task 16 (SVG assets + icon mapping) — deps: Task 1 (done).
 Check `ralph tools task ready` and the plan.
+
+## Task 12 (complete) — Manager interface method wrappers
+
+### What landed
+- `src/dbus/ip_manager.h`: API for Manager interface wrappers —
+  CreateTargetDevice(kind)→path, StopTargetDevice(path), AttachTargetDevice
+  (target,composite), SetTargetDevices(composite_path, types_csv) on
+  CompositeDevice iface, GamepadOrder get/set (with device model validation),
+  SupportedTargetDeviceIds get, SupportedTargetDevices get. Defines
+  IP_DBUS_MANAGER_PATH constant.
+- `src/dbus/ip_manager.c`: Implementations. Method calls go through
+  backend->call_method with variadic convention: sig encodes input types,
+  last variadic arg is char **out (NULL for void, valid for string return).
+  Property gets use backend->get_property. Property sets use
+  backend->set_property. GamepadOrder setter validates each comma-separated
+  path against cbx_device_model_find_composite before calling DBus.
+- `tests/dbus_mock.c`: Extended mock_call_method to support output values.
+  Added mock_count_sig_args() to parse sig and count input args. Mock counts
+  input args from sig, skips them via va_arg, reads trailing char **out, fills
+  *out with strdup(e->value) if non-NULL and rc>=0. Added <stdarg.h> include.
+- `src/dbus/dbus_client.c`: Implemented production sd_call_method (was stub):
+  sd_bus_message_new_method_call, manual arg appending based on sig ('s' =
+  append_basic, 'as' = open_container 'a' "s" + split CSV + append each),
+  sd_bus_call, read reply string into *out. Implemented production
+  sd_set_property (was stub): Properties.Set method call with ssv signature,
+  builds variant for array properties (as) or string properties (s) via
+  sd_is_array_property() lookup. Added sd_append_string_array() helper. Added
+  forward declaration for translate_sd_error. Added <stdarg.h> include.
+- `tests/test_manager_calls.c`: 38 cmocka tests with setup/teardown fixture.
+  Tests: path constant, CreateTargetDevice (success/error/no-expectation/null),
+  StopTargetDevice (same 4), AttachTargetDevice (same 4), SetTargetDevices
+  (same 4), GetGamepadOrder (success/empty/error/no-expectation/null),
+  SetGamepadOrder (success/empty/invalid-path/partial-invalid/null-model/
+  null-args/path-too-long/dbus-error), GetSupportedTargetDeviceIds (success/
+  error/no-expectation/null), GetSupportedTargetDevices (same 4).
+- `tests/test_sample.c`: Updated mock_call_method calls to pass trailing NULL
+  (new variadic convention).
+- `CMakeLists.txt`: Added ip_manager.c to controllerbox.
+- `tests/CMakeLists.txt`: Added test_manager_calls target.
+- `docs/DBus-API.md`: Added Manager Interface Wrappers section.
+
+### Verification (all pass)
+- clean build (Debug -Werror, no warnings)
+- ctest 14/14: smoke_test_sdl2, smoke_test_nanosvg, test_sample, test_sdl_dummy,
+  test_config_paths, test_settings, test_assignments, test_profile_yaml,
+  test_profile_list, test_connection, test_objectmanager_parse, test_hotplug,
+  test_properties_changed, test_manager_calls
+- test_manager_calls 38/38 cmocka tests pass
+- verify-boilerplate, check-plan-freshness, branch-guard → exit 0
+
+### Gotchas fixed
+- **FIX macro bug**: The original `#define FIX(state) ((manager_fixture *)(state))`
+  cast `void **state` directly to `manager_fixture *`, interpreting the cmocka
+  state pointer itself as the fixture struct (stack memory). Fixed to
+  `#define FIX(state) (*(manager_fixture **)(state))` which dereferences state
+  to get the actual fixture pointer. This was the root cause of the "free():
+  invalid pointer" crash — teardown was reading garbage from the wrong memory.
+  Pattern to remember: cmocka fixture tests use `*state` to get the fixture,
+  not `state`.
+- **call_method variadic convention**: Extended mock_call_method to support
+  output values. The last variadic arg is always `char **out` (NULL for void
+  methods). The mock counts input args from sig ('a' is a prefix, 's' is one
+  arg), skips them, reads the trailing char **. This required updating
+  test_sample.c's existing call_method calls to pass trailing NULL.
+- **translate_sd_error forward declaration**: Production sd_call_method uses
+  translate_sd_error which was defined later in dbus_client.c. Added a forward
+  declaration after the sd_bus_wrapper struct definition.
+- **Production sd_set_property for arrays**: Uses Properties.Set with a variant
+  container. For array properties (GamepadOrder, TargetDevices, etc.), builds
+  variant "as" from comma-separated value. For string properties, builds
+  variant "s". Uses sd_is_array_property() lookup to determine type.
+
+### Design decisions
+- **SetTargetDevices on CompositeDevice iface**: Although the plan lists
+  SetTargetDevices under Task 12 (Manager wrappers), the DBus method is on
+  the CompositeDevice interface, not Manager. The wrapper takes a
+  composite_path parameter and calls the method on IP_IFACE_COMPOSITE at that
+  path.
+- **GamepadOrder validation**: Each comma-separated path is validated against
+  the device model's composites before calling the DBus setter. This prevents
+  the GUI from sending invalid paths that could cause InputPlumber to suspend
+  all devices indefinitely (the GamepadOrder setter suspends/resumes devices).
+- **call_method sig convention**: 's' = one string arg, 'as' = one array arg
+  (comma-separated string). The mock counts args by iterating sig chars,
+  treating 'a' as a prefix that pairs with the next char. This is a simplified
+  convention for our use case, not full DBus type system support.
+
+### Next
+Task 13 (CompositeDevice wrappers + InterceptMode polling) — deps: Task 10
+(done). Unblocks Task 15 (depends on 11+12+6, all done now).
+Alternatively Task 14 (Source/target device properties + InputEvent) — deps:
+Task 10 (done).
+Alternatively Task 16 (SVG assets + icon mapping) — deps: Task 1 (done).
+Alternatively Task 15 (CreateCompositeDevice temp file + GamepadOrder persistence)
+— deps: Task 11+12+6 (all done).
+Check `ralph tools task ready` and the plan.
