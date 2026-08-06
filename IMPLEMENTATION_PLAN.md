@@ -281,9 +281,9 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 - Documentation impact: DBus-API.md enumeration section
 
 ## Task 11: Hotplug and PropertiesChanged signal handling
-- Status: pending
+- Status: complete
 - Dependencies: Task 10
-- Scope: `src/dbus/ip_hotplug.c`, `src/dbus/ip_properties.c`
+- Scope: `src/dbus/ip_hotplug.c`, `src/dbus/ip_properties.c`, `src/dbus/ip_device_model.c` (mutation fns), `src/dbus/dbus_client.c` (production callbacks), `tests/test_hotplug.c`, `tests/test_properties_changed.c`
 - Acceptance criteria:
   - Subscribes to `InterfacesAdded`/`InterfacesRemoved` signals, updates device model
   - Subscribes to `PropertiesChanged` for `GamepadOrder`, `ProfileName`,
@@ -295,6 +295,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
   - `tests/test_hotplug.c` and `tests/test_properties_changed.c` pass with mock signals
 - Verification: `cmake --build build && ./build/test_hotplug && ./build/test_properties_changed`
 - Documentation impact: DBus-API.md signal handling section
+- Evidence: ctest 13/13 pass (test_hotplug 34/34, test_properties_changed 33/33); clean build Debug -Werror; verify-boilerplate, check-plan-freshness, branch-guard all exit 0
 
 ## Task 12: Manager interface method wrappers
 - Status: pending

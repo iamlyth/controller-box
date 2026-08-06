@@ -83,4 +83,44 @@ const cbx_device_entry *
 cbx_device_model_find_target(const cbx_device_model *model,
                               const char *path);
 
+/* --- Incremental mutation (Task 11 — Hotplug) ----------------------------- */
+/* These functions add or remove individual entries from the model.
+ * They are used by the hotplug signal handlers to keep the model
+ * in sync with InterfacesAdded / InterfacesRemoved signals.
+ *
+ * All add functions return true on success, false if the model is full
+ * or the entry already exists (idempotent — duplicates are silently
+ * rejected without error).  All remove functions return true if an
+ * entry was removed, false if it was not found.
+ *
+ * Path validation (must start with IP_DBUS_PATH "/") is the caller's
+ * responsibility — these functions trust the caller. */
+
+/* Set the Manager entry (path + has_manager flag). */
+bool cbx_device_model_set_manager(cbx_device_model *model, const char *path);
+
+/* Remove the Manager entry. */
+bool cbx_device_model_remove_manager(cbx_device_model *model);
+
+/* Add a composite device entry (index parsed from path). */
+bool cbx_device_model_add_composite(cbx_device_model *model, const char *path);
+
+/* Remove a composite device entry by path. */
+bool cbx_device_model_remove_composite(cbx_device_model *model,
+                                         const char *path);
+
+/* Add a source device entry (name extracted from path). */
+bool cbx_device_model_add_source(cbx_device_model *model, const char *path);
+
+/* Remove a source device entry by path. */
+bool cbx_device_model_remove_source(cbx_device_model *model,
+                                     const char *path);
+
+/* Add a target device entry (name extracted from path). */
+bool cbx_device_model_add_target(cbx_device_model *model, const char *path);
+
+/* Remove a target device entry by path. */
+bool cbx_device_model_remove_target(cbx_device_model *model,
+                                     const char *path);
+
 #endif /* CBX_IP_DEVICE_MODEL_H */

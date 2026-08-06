@@ -158,3 +158,77 @@ const cbx_device_entry    *t = cbx_device_model_find_target(&model, path);
 (re-)acquired (see Connection Model above).  The caller should invoke
 `cbx_objectmanager_enumerate()` from this callback to refresh the device
 model after daemon restart or initial startup.
+
+## Signal Handling (Task 11)
+
+### Hotplug — InterfacesAdded / InterfacesRemoved
+
+Controller-Box subscribes to ObjectManager `InterfacesAdded` and
+`InterfacesRemoved` signals at the root path to keep the device model in
+sync with InputPlumber's object tree without full re-enumeration on every
+device change.
+
+| Signal | Signature | Action |
+|---|---|---|
+| `InterfacesAdded` | `oa{sa{sv}}` | Classify path (Manager/Composite/Source/Target), add to model |
+| `InterfacesRemoved` | `oas` | Remove matching entry from model by path + interface |
+
+**Security:**
+- Sender verification: the signal's sender unique name must match
+  InputPlumber's tracked unique bus name.  Mismatched senders are silently
+  dropped.
+- Path validation: object paths must start with
+  `/org/shadowblip/InputPlumber/` to be accepted.
+
+**Device model mutation:**
+
+```c
+ip_hotplug hp;
+ip_hotplug_init(&hp, conn.backend, conn.bus,
+                 conn.unique_name, &model);
+ip_hotplug_subscribe(&hp);
+// Signals are dispatched via the vtable's subscribe_signal callback.
+// On InterfacesAdded: ip_hotplug_handle_added() classifies and adds.
+// On InterfacesRemoved: ip_hotplug_handle_removed() removes by path.
+```
+
+### PropertiesChanged
+
+Controller-Box subscribes to `org.freedesktop.DBus.Properties.PropertiesChanged`
+to receive updates for tracked properties:
+
+| Property | Interface | Type | Max element length |
+|---|---|---|---|
+| `GamepadOrder` | Manager | `as` (string array) | 256 (name) |
+| `ProfileName` | CompositeDevice | `s` (string) | 256 (name) |
+| `ProfilePath` | CompositeDevice | `s` (string) | 4096 (path) |
+| `TargetDevices` | CompositeDevice | `as` (string array) | 256 (name) |
+| `SourceDevicePaths` | CompositeDevice | `as` (string array) | 4096 (path) |
+
+**Validation:**
+- **Type validation:** the variant type must match the expected type for
+  the property (e.g., `ProfileName` expects a string; `GamepadOrder` expects
+  an array).  Type mismatches are silently rejected.
+- **String length limits:** names max 256 bytes, paths max 4096 bytes.
+- **Array size limits:** max 256 elements per array property.
+- **Invalidated properties:** `PropertiesChanged` can include an
+  invalidated-properties list.  Invalidated tracked properties are dispatched
+  with `IP_PROP_TYPE_INVALIDATED` and a NULL value.
+
+**Note:** `InterceptMode` does NOT emit `PropertiesChanged` (gap #1, §10.3).
+The GUI polls it separately (~500 ms interval).
+
+```c
+ip_properties props;
+ip_properties_init(&props, conn.backend, conn.bus,
+                    conn.unique_name, on_prop_changed, userdata);
+ip_properties_subscribe(&props);
+
+void on_prop_changed(const char *prop_name, ip_prop_type type,
+                      const char *value, int count, void *ud) {
+    // prop_name: "GamepadOrder", "ProfileName", etc.
+    // type: IP_PROP_TYPE_STRING, IP_PROP_TYPE_ARRAY, or IP_PROP_TYPE_INVALIDATED
+    // value: string value or comma-separated array elements (NULL if invalidated)
+    // count: array element count (-1 if invalidated)
+}
+```

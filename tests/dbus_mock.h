@@ -57,6 +57,40 @@ typedef struct {
 } ip_owner_changed_payload;
 
 /*
+ * InterfacesAdded / InterfacesRemoved signal payload (Task 11).
+ * `interfaces` is a comma-separated list of interface names
+ * (e.g. "org.shadowblip.Input.CompositeDevice,org.shadowblip.Input.DBusDevice").
+ * In production, the sd-bus callback builds this string from the message;
+ * in tests, the test constructs and injects it directly.
+ */
+typedef struct {
+    const char *sender;       /* unique bus name of the signal sender */
+    const char *path;         /* object path of the added/removed object */
+    const char *interfaces;   /* comma-separated interface names */
+} ip_interfaces_changed_payload;
+
+/*
+ * PropertiesChanged signal payload (Task 11).
+ * Represents a single property change within a PropertiesChanged signal.
+ * The production callback calls the handler once per changed property we
+ * care about; tests construct and inject individual payloads.
+ */
+typedef enum {
+    IP_PROP_TYPE_STRING     = 0,  /* 's' — string value in `value` */
+    IP_PROP_TYPE_ARRAY      = 1,  /* 'as' — comma-separated values in `value`, count in `array_count` */
+    IP_PROP_TYPE_INVALIDATED = 2, /* property invalidated (value is NULL) */
+} ip_prop_type;
+
+typedef struct {
+    const char  *sender;       /* unique bus name of the signal sender */
+    const char  *iface_name;   /* interface that emitted the change */
+    const char  *prop_name;    /* property name */
+    ip_prop_type prop_type;    /* value type */
+    const char  *value;        /* string (for s), comma-separated (for as), NULL (invalidated) */
+    int          array_count;  /* number of elements (for as), 0 otherwise */
+} ip_properties_changed_payload;
+
+/*
  * Function-pointer vtable — the interface abstraction.
  * Production provides a real sd-bus implementation; tests provide the
  * mock implementation from dbus_mock.c.

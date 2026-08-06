@@ -11,6 +11,7 @@
  */
 #include "dbus_mock.h"      /* vtable interface + constants */
 #include "ip_connection.h"  /* ip_owner_changed_payload */
+#include "ip_properties.h"  /* ip_prop_type */
 
 #include <systemd/sd-bus.h>
 
@@ -60,6 +61,294 @@ sd_noc_callback(sd_bus_message *msg, void *userdata, sd_bus_error *ret_error)
 
     data->cb("org.freedesktop.DBus", "NameOwnerChanged",
              &payload, data->userdata);
+    return 0;
+}
+
+/* --- sd-bus signal callback for InterfacesAdded (Task 11) --------------- */
+/* Message signature: oa{sa{sv}}
+ * We only need the object path and the interface names (not property
+ * values), so we serialise interfaces into a comma-separated string. */
+static int
+sd_interfaces_added_callback(sd_bus_message *msg, void *userdata,
+                               sd_bus_error *ret_error)
+{
+    (void)ret_error;
+    sd_signal_data *data = (sd_signal_data *)userdata;
+    if (!data || !data->cb)
+        return 0;
+
+    const char *sender = sd_bus_message_get_sender(msg);
+    const char *path   = NULL;
+
+    int r = sd_bus_message_read(msg, "o", &path);
+    if (r < 0)
+        return 0;  /* ignore parse errors */
+
+    /* Read a{sa{sv}} — interface names only. */
+    char  *buf = NULL;
+    size_t sz  = 0;
+    FILE  *fp  = open_memstream(&buf, &sz);
+    if (!fp)
+        return 0;
+
+    r = sd_bus_message_enter_container(msg, 'a', "{sa{sv}}");
+    if (r < 0) {
+        fclose(fp);
+        free(buf);
+        return 0;
+    }
+
+    bool first = true;
+    while ((r = sd_bus_message_enter_container(msg, 'e', "sa{sv}")) > 0) {
+        const char *iface = NULL;
+        r = sd_bus_message_read(msg, "s", &iface);
+        if (r < 0) {
+            fclose(fp);
+            free(buf);
+            return 0;
+        }
+
+        r = sd_bus_message_skip(msg, "a{sv}");
+        if (r < 0) {
+            fclose(fp);
+            free(buf);
+            return 0;
+        }
+
+        r = sd_bus_message_exit_container(msg);
+        if (r < 0) {
+            fclose(fp);
+            free(buf);
+            return 0;
+        }
+
+        if (!first)
+            fputc(',', fp);
+        fputs(iface ? iface : "", fp);
+        first = false;
+    }
+    if (r < 0) {
+        fclose(fp);
+        free(buf);
+        return 0;
+    }
+
+    r = sd_bus_message_exit_container(msg);
+    fclose(fp);
+    if (r < 0) {
+        free(buf);
+        return 0;
+    }
+
+    ip_interfaces_changed_payload payload = {
+        .sender     = sender,
+        .path       = path,
+        .interfaces = buf,
+    };
+    data->cb(IP_IFACE_OBJECT_MANAGER, "InterfacesAdded",
+             &payload, data->userdata);
+
+    free(buf);
+    return 0;
+}
+
+/* --- sd-bus signal callback for InterfacesRemoved (Task 11) ------------ */
+/* Message signature: oas */
+static int
+sd_interfaces_removed_callback(sd_bus_message *msg, void *userdata,
+                                  sd_bus_error *ret_error)
+{
+    (void)ret_error;
+    sd_signal_data *data = (sd_signal_data *)userdata;
+    if (!data || !data->cb)
+        return 0;
+
+    const char *sender = sd_bus_message_get_sender(msg);
+    const char *path    = NULL;
+
+    int r = sd_bus_message_read(msg, "o", &path);
+    if (r < 0)
+        return 0;
+
+    /* Read 'as' — array of removed interface names. */
+    char  *buf = NULL;
+    size_t sz  = 0;
+    FILE  *fp  = open_memstream(&buf, &sz);
+    if (!fp)
+        return 0;
+
+    r = sd_bus_message_enter_container(msg, 'a', "s");
+    if (r < 0) {
+        fclose(fp);
+        free(buf);
+        return 0;
+    }
+
+    bool first = true;
+    const char *iface = NULL;
+    while ((r = sd_bus_message_read(msg, "s", &iface)) > 0) {
+        if (!first)
+            fputc(',', fp);
+        fputs(iface ? iface : "", fp);
+        first = false;
+    }
+
+    sd_bus_message_exit_container(msg);
+    fclose(fp);
+
+    ip_interfaces_changed_payload payload = {
+        .sender     = sender,
+        .path       = path,
+        .interfaces = buf,
+    };
+    data->cb(IP_IFACE_OBJECT_MANAGER, "InterfacesRemoved",
+             &payload, data->userdata);
+
+    free(buf);
+    return 0;
+}
+
+/* --- sd-bus signal callback for PropertiesChanged (Task 11) ------------ */
+/* Message signature: sa{sv}as
+ * For each changed property we care about, we extract the value and
+ * dispatch a separate payload.  For string arrays, we build a
+ * comma-separated string (heap-allocated, freed after dispatch). */
+static int
+sd_properties_changed_callback(sd_bus_message *msg, void *userdata,
+                                 sd_bus_error *ret_error)
+{
+    (void)ret_error;
+    sd_signal_data *data = (sd_signal_data *)userdata;
+    if (!data || !data->cb)
+        return 0;
+
+    const char *sender = sd_bus_message_get_sender(msg);
+    const char *iface_name = NULL;
+
+    int r = sd_bus_message_read(msg, "s", &iface_name);
+    if (r < 0)
+        return 0;
+
+    /* Read a{sv} — changed properties dict. */
+    r = sd_bus_message_enter_container(msg, 'a', "{sv}");
+    if (r < 0)
+        return 0;
+
+    while ((r = sd_bus_message_enter_container(msg, 'e', "sv")) > 0) {
+        const char *prop_name = NULL;
+        r = sd_bus_message_read(msg, "s", &prop_name);
+        if (r < 0)
+            break;
+
+        /* Peek at the variant to determine the inner type. */
+        const char *contents_ptr = NULL;
+        char vtype = sd_bus_message_peek_type(msg, NULL, &contents_ptr);
+        if (vtype < 0)
+            break;
+
+        if (vtype == 'v' && contents_ptr) {
+            /* Enter the variant container. */
+            r = sd_bus_message_enter_container(msg, 'v', contents_ptr);
+            if (r < 0)
+                break;
+
+            /* Peek inside the variant to get the actual type. */
+            char inner_type = 0;
+            const char *inner_sig = NULL;
+            r = sd_bus_message_peek_type(msg, &inner_type, &inner_sig);
+            if (r < 0) {
+                sd_bus_message_exit_container(msg);
+                break;
+            }
+
+            if (inner_type == 's') {
+                /* String property. */
+                const char *value = NULL;
+                r = sd_bus_message_read(msg, "s", &value);
+                if (r >= 0) {
+                    ip_properties_changed_payload payload = {
+                        .sender      = sender,
+                        .iface_name  = iface_name,
+                        .prop_name   = prop_name,
+                        .prop_type   = IP_PROP_TYPE_STRING,
+                        .value       = value,
+                        .array_count = 0,
+                    };
+                    data->cb(IP_IFACE_PROPERTIES, "PropertiesChanged",
+                             &payload, data->userdata);
+                }
+            } else if (inner_type == 'a' && inner_sig &&
+                       strcmp(inner_sig, "s") == 0) {
+                /* String array property: build comma-separated string. */
+                r = sd_bus_message_enter_container(msg, 'a', "s");
+                if (r >= 0) {
+                    char  *buf = NULL;
+                    size_t sz  = 0;
+                    FILE  *fp  = open_memstream(&buf, &sz);
+                    if (fp) {
+                        bool first = true;
+                        const char *elem = NULL;
+                        int count = 0;
+                        while ((r = sd_bus_message_read(msg, "s", &elem)) > 0) {
+                            if (!first)
+                                fputc(',', fp);
+                            fputs(elem ? elem : "", fp);
+                            first = false;
+                            count++;
+                        }
+                        fclose(fp);
+
+                        ip_properties_changed_payload payload = {
+                            .sender      = sender,
+                            .iface_name  = iface_name,
+                            .prop_name   = prop_name,
+                            .prop_type   = IP_PROP_TYPE_ARRAY,
+                            .value       = buf,
+                            .array_count = count,
+                        };
+                        data->cb(IP_IFACE_PROPERTIES, "PropertiesChanged",
+                                 &payload, data->userdata);
+                        free(buf);
+                    }
+                    sd_bus_message_exit_container(msg);
+                }
+            } else {
+                /* Unknown variant type — skip it. */
+                sd_bus_message_skip(msg, NULL);
+            }
+
+            sd_bus_message_exit_container(msg);  /* exit variant */
+        } else {
+            /* Not a variant — skip. */
+            sd_bus_message_skip(msg, NULL);
+        }
+
+        r = sd_bus_message_exit_container(msg);  /* exit {sv} */
+        if (r < 0)
+            break;
+    }
+
+    sd_bus_message_exit_container(msg);  /* exit a{sv} */
+
+    /* Read 'as' — invalidated properties. */
+    r = sd_bus_message_enter_container(msg, 'a', "s");
+    if (r >= 0) {
+        const char *inv_name = NULL;
+        while ((r = sd_bus_message_read(msg, "s", &inv_name)) > 0) {
+            ip_properties_changed_payload payload = {
+                .sender      = sender,
+                .iface_name  = iface_name,
+                .prop_name   = inv_name,
+                .prop_type   = IP_PROP_TYPE_INVALIDATED,
+                .value       = NULL,
+                .array_count = 0,
+            };
+            data->cb(IP_IFACE_PROPERTIES, "PropertiesChanged",
+                     &payload, data->userdata);
+        }
+        sd_bus_message_exit_container(msg);
+    }
+
     return 0;
 }
 
@@ -236,16 +525,37 @@ sd_subscribe_signal(ip_bus_handle bus, const char *iface,
             "member='NameOwnerChanged',"
             "arg0='org.shadowblip.InputPlumber'";
         r = sd_bus_add_match(w->bus, &slot, match, sd_noc_callback, data);
+    } else if (strcmp(iface, IP_IFACE_OBJECT_MANAGER) == 0 &&
+               strcmp(member, "InterfacesAdded") == 0) {
+        char match[512];
+        snprintf(match, sizeof(match),
+                 "type='signal',interface='%s',member='%s',path='%s'",
+                 iface, member, IP_DBUS_PATH);
+        r = sd_bus_add_match(w->bus, &slot, match,
+                             sd_interfaces_added_callback, data);
+    } else if (strcmp(iface, IP_IFACE_OBJECT_MANAGER) == 0 &&
+               strcmp(member, "InterfacesRemoved") == 0) {
+        char match[512];
+        snprintf(match, sizeof(match),
+                 "type='signal',interface='%s',member='%s',path='%s'",
+                 iface, member, IP_DBUS_PATH);
+        r = sd_bus_add_match(w->bus, &slot, match,
+                             sd_interfaces_removed_callback, data);
+    } else if (strcmp(iface, IP_IFACE_PROPERTIES) == 0 &&
+               strcmp(member, "PropertiesChanged") == 0) {
+        char match[512];
+        snprintf(match, sizeof(match),
+                 "type='signal',interface='%s',member='%s'",
+                 iface, member);
+        r = sd_bus_add_match(w->bus, &slot, match,
+                             sd_properties_changed_callback, data);
     } else {
-        /* Generic signal subscription — later tasks add specific parsers. */
+        /* Generic signal subscription (fallback for future signal types). */
         char match[512];
         snprintf(match, sizeof(match),
                  "type='signal',interface='%s',member='%s'",
                  iface, member);
         r = sd_bus_add_match(w->bus, &slot, match, sd_noc_callback, data);
-        /* Note: for non-NOC signals, sd_noc_callback will try to read
-         * "sss" which will fail silently. Later tasks replace this with
-         * signal-specific callbacks. */
     }
 
     if (r < 0) {

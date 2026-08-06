@@ -89,6 +89,20 @@ if(CMOCKA_FOUND)
 
     add_test(NAME test_objectmanager_parse COMMAND test_objectmanager_parse)
 
+    # Hotplug signal handling test (Task 11): InterfacesAdded/Removed,
+    # device model incremental update, sender verification, path validation.
+    add_executable(test_hotplug tests/test_hotplug.c)
+    target_link_libraries(test_hotplug PRIVATE controllerbox cbx_test_support)
+
+    add_test(NAME test_hotplug COMMAND test_hotplug)
+
+    # PropertiesChanged signal handling test (Task 11): type validation,
+    # string/array length limits, invalidated properties, sender verification.
+    add_executable(test_properties_changed tests/test_properties_changed.c)
+    target_link_libraries(test_properties_changed PRIVATE controllerbox cbx_test_support)
+
+    add_test(NAME test_properties_changed COMMAND test_properties_changed)
+
     # Help later tasks: tests that need the dummy driver can set it here.
     set_tests_properties(test_sdl_dummy PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
