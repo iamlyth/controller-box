@@ -129,6 +129,7 @@ add_library(controllerbox STATIC
     src/manager/profile_validate.c
     src/manager/profile_save.c
     src/manager/settings_tab.c
+    src/manager/service_install.c
     src/identify/identity.c
     src/identify/assign.c
     src/identify/assign_persist.c

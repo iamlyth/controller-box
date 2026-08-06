@@ -765,7 +765,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 - Documentation impact: README manager usage (Settings tab), OPERATIONS config
 
 ## Task 40: Systemd service installation and manager integration test
-- Status: pending
+- Status: complete
 - Dependencies: Task 39
 - Scope: `src/manager/service_install.c`, `tests/test_manager_integration.c`
 - Acceptance criteria:
