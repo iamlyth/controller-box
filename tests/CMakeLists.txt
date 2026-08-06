@@ -309,6 +309,17 @@ if(CMOCKA_FOUND)
     target_link_libraries(test_order_restore PRIVATE controllerbox cbx_test_support)
     add_test(NAME test_order_restore COMMAND test_order_restore)
 
+    # Task 29 — Character select grid rendering and Player Mode navigation.
+    add_executable(test_grid_render tests/test_grid_render.c)
+    target_link_libraries(test_grid_render PRIVATE controllerbox cbx_test_support)
+    add_test(NAME test_grid_render COMMAND test_grid_render)
+    set_tests_properties(test_grid_render PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+
+    add_executable(test_player_mode tests/test_player_mode.c)
+    target_link_libraries(test_player_mode PRIVATE controllerbox cbx_test_support)
+    add_test(NAME test_player_mode COMMAND test_player_mode)
+
     # Help later tasks: tests that need the dummy driver can set it here.
     set_tests_properties(test_sdl_dummy PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")

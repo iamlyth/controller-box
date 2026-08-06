@@ -112,6 +112,8 @@ add_library(controllerbox STATIC
     src/ui/dirty_rect.c
     src/overlay/surface_build.c
     src/overlay/lifecycle.c
+    src/overlay/grid_render.c
+    src/overlay/player_mode.c
     src/identify/identity.c
     src/identify/assign.c
     src/identify/assign_persist.c

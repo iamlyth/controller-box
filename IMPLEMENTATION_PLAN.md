@@ -581,7 +581,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 - Documentation impact: none
 
 ## Task 29: Character select grid rendering and Player Mode navigation
-- Status: pending
+- Status: complete
 - Dependencies: Task 28, Task 22, Task 18, Task 26
 - Scope: `src/overlay/grid_render.c`, `src/overlay/player_mode.c`
 - Acceptance criteria:
