@@ -2038,3 +2038,97 @@ Task 24 (done).
 Alternatively Task 29 (Character select grid rendering) — deps: Task 28,
 Task 22, Task 18, Task 26.
 Check `ralph tools task ready` and the plan.
+
+## Task 28 (complete) — Overlay state machine and lifecycle
+
+### What landed
+- `src/overlay/lifecycle.h`: cbx_overlay_state enum (IDLE=0, ACTIVATING,
+  VISIBLE, CLOSING). cbx_overlay_lifecycle struct composing: DBus backend
+  + bus + composite_path (for InterceptMode set on close), optional
+  cbx_overlay_surface + SDL_Renderer, cbx_anim fade with configurable
+  fade_in_ms/fade_out_ms/target_opacity, visible_ticks/max_visible_ticks
+  timeout watchdog, error_count/max_errors tracking, callbacks
+  (on_visible, on_closed, on_save, on_error).
+- `src/overlay/lifecycle.c`: Full implementation. State machine:
+  - activate(): IDLE → ACTIVATING (start fade-in if fade_in_ms > 0) or
+    instant → VISIBLE (if fade_in_ms == 0)
+  - tick(): polls animation in ACTIVATING/CLOSING, increments timeout in
+    VISIBLE (force-closes if max_visible_ticks exceeded)
+  - close(): VISIBLE/ACTIVATING → CLOSING (fire on_save, set
+    InterceptMode=PASS, start fade-out) or instant → IDLE (if
+    fade_out_ms == 0)
+  - force_close(): any state → IDLE, sets InterceptMode=PASS, skips save
+  - enter_visible/enter_idle: transition helpers that show/hide surface
+    and fire callbacks
+- `tests/test_overlay_lifecycle.c`: 29 cmocka tests in two fixtures:
+  - Basic fixture (no SDL, instant transitions, mock DBus): init, defaults,
+    null, activate (instant, not-idle, null), close (instant, from
+    activating, from idle, null), tick (idle, null, timeout, no-timeout),
+    force close (from visible, from idle, null), error handling
+    (InterceptMode fail, save fail), no callbacks, state helpers,
+    full lifecycle instant
+  - Animation fixture (SDL_INIT_TIMER, fade durations > 0): activate with
+    fade, close with fade, full lifecycle with fade, close activating
+    with fade
+- `CMakeLists.txt`: Added src/overlay/lifecycle.c to controllerbox STATIC.
+- `tests/CMakeLists.txt`: Added test_overlay_lifecycle target linked to
+  controllerbox + cbx_test_support.
+- `IMPLEMENTATION_PLAN.md`: Task 28 → complete.
+
+### Verification (all pass)
+- clean build (Debug -Werror, no warnings)
+- ctest 41/41: all previous + test_overlay_lifecycle
+- test_overlay_lifecycle 29/29 cmocka tests pass
+- verify-boilerplate → exit 0
+
+### Gotchas fixed
+- Include path: `dbus_mock.h` is in tests/ (not src/dbus/), included
+  as `#include "dbus_mock.h"` because tests/ is in the include path.
+  Initially used `#include "dbus/dbus_mock.h"` which failed.
+- `IP_ERR_NO_REPLY` defined in `src/dbus/ip_connection.h`, not in
+  dbus_mock.h. Added include to test file.
+- Animation runs without surface: Initially begin_fade_in/begin_fade_out
+  checked `&& lc->surface`, causing fade durations to be ignored when
+  surface is NULL (instant transitions even with fade_ms > 0). Fixed:
+  animation runs regardless of surface; only rendering side effects
+  (show/hide/mark_dirty) are gated on surface being non-NULL.
+- test_close_activating_with_fade: Updated to expect CLOSING state
+  (not instant IDLE) after close(), then tick through the fade-out
+  animation to reach IDLE.
+
+### Design decisions
+- **Surface optional for testability**: The lifecycle module accepts
+  NULL surface/renderer. Without a surface, it's a pure state machine
+  with no rendering side effects. This allows testing the state machine
+  with just mock DBus (no SDL rendering needed). The animation still
+  runs (it's just opacity values, not rendering).
+- **Save via callback**: The on_save callback handles persistence and
+  conflict resolution (SPEC §4.5). The lifecycle module fires it on close
+  and reports errors but doesn't implement the save logic itself. This
+  keeps the module decoupled from file I/O and conflict resolution
+  algorithms.
+- **InterceptMode set on close via backend vtable**: close() calls
+  ip_composite_set_intercept_mode(PASS) through the injectable backend.
+  If it fails, on_error is fired but the close proceeds (overlay is hidden,
+  but input may be stuck in intercept mode — the daemon can retry).
+- **Close from ACTIVATING cancels activation**: If the user somehow
+  triggers close while still fading in, the activation is cancelled and
+  the overlay closes. This is a clean cancel path.
+- **force_close skips save**: force_close is for emergency shutdown
+  (timeout, error). It doesn't fire on_save because the user's changes
+  may be in an inconsistent state. The normal close() path is for
+  intentional close (B button) which fires on_save.
+- **Timeout uses tick counting**: max_visible_ticks counts main-loop
+  ticks in VISIBLE state. 0 = disabled (no timeout). This mirrors the
+  ip_intercept_poll timeout pattern.
+- **Animation decoupled from surface**: The fade animation runs even
+  without a surface. This allows the state machine to use animation
+  timing for state transitions (ACTIVATING duration = fade_in_ms,
+  CLOSING duration = fade_out_ms) even in headless/test mode.
+
+### Next
+Task 29 (Character select grid rendering and Player Mode navigation) —
+deps: Task 28 (done), Task 22 (done), Task 18 (done), Task 26 (done).
+Alternatively Task 30 (Overlay input handling and B-button close) —
+deps: Task 28 (done), Task 13 (done).
+Check `ralph tools task ready` and the plan.
