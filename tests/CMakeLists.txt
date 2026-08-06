@@ -375,6 +375,14 @@ if(CMOCKA_FOUND)
     set_tests_properties(test_controllers_tab PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
 
+    # Task 36 — Profiles tab.
+    add_executable(test_profiles_tab tests/test_profiles_tab.c)
+    target_link_libraries(test_profiles_tab PRIVATE controllerbox cbx_test_support PkgConfig::CMOCKA)
+    target_compile_definitions(test_profiles_tab PRIVATE CBX_FONT_PATH="${CBX_FONT_PATH}")
+    add_test(NAME test_profiles_tab COMMAND test_profiles_tab)
+    set_tests_properties(test_profiles_tab PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+
 else()
     message(STATUS "cmocka not found — unit tests skipped (smoke tests still built)")
 endif()

@@ -694,7 +694,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 - Documentation impact: README manager usage (Controllers tab)
 
 ## Task 36: Profiles tab — browse, create, and delete
-- Status: pending
+- Status: complete
 - Dependencies: Task 34, Task 8
 - Scope: `src/manager/profiles_tab.c`
 - Acceptance criteria:

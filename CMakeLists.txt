@@ -122,6 +122,7 @@ add_library(controllerbox STATIC
     src/overlay/close.c
     src/manager/manager.c
     src/manager/controllers_tab.c
+    src/manager/profiles_tab.c
     src/identify/identity.c
     src/identify/assign.c
     src/identify/assign_persist.c
