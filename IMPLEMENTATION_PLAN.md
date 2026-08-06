@@ -105,7 +105,8 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 ### Phase 1: Foundation
 
 ## Task 1: CMake skeleton, dependency detection, and nanosvg vendoring
-- Status: pending
+- Status: complete
+- Evidence: `cmake -B build && cmake --build build` clean; `./build/smoke_test_sdl2` OK (dummy-driver fallback for headless); `./build/smoke_test_nanosvg` OK (parses+rasterizes a 64x64 SVG, finds red pixel); `ctest` 2/2 pass; `build/config.h` has `DATA_DIR=/usr/share/controller-box`, `ICON_DIR=/usr/share/controller-box/icons`, `CONFIG_DIR=.config/controller-box`. Vendored nanosvg (zlib license) in `third_party/nanosvg/` with `nanosvg_impl.c`. `shell.nix` provides native deps.
 - Dependencies: none
 - Scope: `CMakeLists.txt` (root), `config.h.in`, `third_party/nanosvg/` (nanosvg.h,
   nanosvgrast.h, nanosvg_impl.c), `src/` directory structure with empty `.c` stubs

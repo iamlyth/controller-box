@@ -4,6 +4,34 @@ A reusable, single-writer implementation of Geoffrey Huntley's Ralph Wiggum deve
 
 `docs/SPEC.md` is retained as the first trial specification. Product implementation is intentionally absent on this branch.
 
+## Building Controller-Box from source
+
+Controller-Box is a C11 project built with CMake. It depends on the SDL2
+core and satellite libraries, sd-bus (from `libsystemd`), libyaml, and
+cmocka (tests). A Nix shell provides all native dependencies:
+
+```bash
+nix-shell --run 'cmake -B build && cmake --build build'
+```
+
+On a Debian/Ubuntu host, install the dev packages directly:
+
+```bash
+sudo apt install build-essential cmake pkg-config \
+    libsdl2-dev libsdl2-ttf-dev libsdl2-image-dev \
+    libsystemd-dev libyaml-dev libcmocka-dev
+```
+
+Smoke tests confirm the toolchain and the vendored nanosvg rasterizer:
+
+```bash
+./build/smoke_test_sdl2 && ./build/smoke_test_nanosvg
+ctest --test-dir build --output-on-failure
+```
+
+Install paths are generated into `build/config.h` at configure time (see
+`config.h.in`). Runtime XDG path resolution is implemented in later tasks.
+
 ## Operating model
 
 - `main` is the human-controlled release branch.
