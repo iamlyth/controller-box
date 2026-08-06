@@ -744,7 +744,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 - Documentation impact: PROFILES.md editor + validation sections
 
 ## Task 39: Profile save and Settings tab
-- Status: pending
+- Status: complete
 - Dependencies: Task 38, Task 5, Task 7, Task 8
 - Scope: `src/manager/profile_save.c`, `src/manager/settings_tab.c`
 - Acceptance criteria:

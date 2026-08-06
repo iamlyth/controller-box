@@ -28,19 +28,36 @@ extern "C" {
 /* Maximum length of overlay_trigger and theme strings (NUL-terminated). */
 #define CBX_MAX_STR_LEN    64
 
+/* Maximum number of per-type icon overrides (SPEC §5.5, §8.4). */
+#define CBX_MAX_ICON_OVERRIDES 16
+
+/* Maximum length of an icon override type/icon string. */
+#define CBX_ICON_OVR_TYPE_LEN 32
+#define CBX_ICON_OVR_ICON_LEN 64
+
 /* Virtual controller configuration (SPEC §7.3). */
 typedef struct {
     int count;                                            /* 1–16 */
     char types[CBX_MAX_CONTROLLERS][CBX_MAX_TYPE_LEN];   /* type per slot */
 } cbx_virtual_controllers;
 
-/* Application settings (SPEC §7.3). */
+/* Per-type icon override entry (SPEC §5.5, §8.4).
+ * Overrides the system controller-icons.yaml mapping for the user's
+ * session.  Distinct from per-profile icon override in §8.5 sidecar. */
+typedef struct {
+    char type[CBX_ICON_OVR_TYPE_LEN];   /* InputPlumber DeviceType string */
+    char icon[CBX_ICON_OVR_ICON_LEN];   /* built-in icon name or absolute path */
+} cbx_icon_override;
+
+/* Application settings (SPEC §7.3, §5.5). */
 typedef struct {
     char overlay_trigger[CBX_MAX_STR_LEN];   /* e.g. "Select+A" */
     bool launch_at_boot;
     char theme[CBX_MAX_STR_LEN];            /* e.g. "default" */
     double overlay_opacity;                  /* 0.0–1.0 */
     cbx_virtual_controllers virtual_controllers;
+    cbx_icon_override icon_overrides[CBX_MAX_ICON_OVERRIDES]; /* §5.5 */
+    int               icon_override_count;
 } cbx_settings;
 
 /*
@@ -83,6 +100,29 @@ int cbx_settings_save(const cbx_settings *settings);
  * Known types: xb360, ds5, deck, gamepad, mouse, keyboard, touchscreen.
  */
 bool cbx_is_known_controller_type(const char *type);
+
+/*
+ * Look up the icon override for a given controller type.
+ * Returns the override icon string, or NULL if no override is set.
+ */
+const char *cbx_settings_icon_override(const cbx_settings *s,
+                                         const char *type);
+
+/*
+ * Set or update an icon override for a controller type.
+ * If an override for this type already exists, it is updated.
+ * If not and there is room, a new entry is added.
+ *
+ * @return 0 on success; -ENOSPC if no room; -EINVAL if NULL args.
+ */
+int cbx_settings_set_icon_override(cbx_settings *s, const char *type,
+                                    const char *icon);
+
+/*
+ * Remove an icon override for a controller type.
+ * @return 0 on success; -ENOENT if not found; -EINVAL if NULL args.
+ */
+int cbx_settings_remove_icon_override(cbx_settings *s, const char *type);
 
 #ifdef __cplusplus
 }

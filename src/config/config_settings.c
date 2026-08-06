@@ -82,6 +82,68 @@ bool cbx_is_known_controller_type(const char *type)
     return false;
 }
 
+/* --- Icon overrides ----------------------------------------------------- */
+
+const char *cbx_settings_icon_override(const cbx_settings *s,
+                                         const char *type)
+{
+    if (!s || !type)
+        return NULL;
+    for (int i = 0; i < s->icon_override_count; i++) {
+        if (strcmp(s->icon_overrides[i].type, type) == 0)
+            return s->icon_overrides[i].icon;
+    }
+    return NULL;
+}
+
+int cbx_settings_set_icon_override(cbx_settings *s, const char *type,
+                                    const char *icon)
+{
+    if (!s || !type || !icon)
+        return -EINVAL;
+
+    /* Check if an override for this type already exists. */
+    for (int i = 0; i < s->icon_override_count; i++) {
+        if (strcmp(s->icon_overrides[i].type, type) == 0) {
+            strncpy(s->icon_overrides[i].icon, icon,
+                    sizeof(s->icon_overrides[i].icon) - 1);
+            s->icon_overrides[i].icon[sizeof(s->icon_overrides[i].icon) - 1] = '\0';
+            return 0;
+        }
+    }
+
+    if (s->icon_override_count >= CBX_MAX_ICON_OVERRIDES)
+        return -ENOSPC;
+
+    int idx = s->icon_override_count;
+    strncpy(s->icon_overrides[idx].type, type,
+            sizeof(s->icon_overrides[idx].type) - 1);
+    s->icon_overrides[idx].type[sizeof(s->icon_overrides[idx].type) - 1] = '\0';
+    strncpy(s->icon_overrides[idx].icon, icon,
+            sizeof(s->icon_overrides[idx].icon) - 1);
+    s->icon_overrides[idx].icon[sizeof(s->icon_overrides[idx].icon) - 1] = '\0';
+    s->icon_override_count++;
+    return 0;
+}
+
+int cbx_settings_remove_icon_override(cbx_settings *s, const char *type)
+{
+    if (!s || !type)
+        return -EINVAL;
+    for (int i = 0; i < s->icon_override_count; i++) {
+        if (strcmp(s->icon_overrides[i].type, type) == 0) {
+            /* Shift remaining entries down. */
+            for (int j = i; j < s->icon_override_count - 1; j++)
+                s->icon_overrides[j] = s->icon_overrides[j + 1];
+            s->icon_override_count--;
+            memset(&s->icon_overrides[s->icon_override_count], 0,
+                   sizeof(s->icon_overrides[s->icon_override_count]));
+            return 0;
+        }
+    }
+    return -ENOENT;
+}
+
 /* --- Validation ---------------------------------------------------------- */
 
 int cbx_settings_validate(const cbx_settings *s)
@@ -98,6 +160,16 @@ int cbx_settings_validate(const cbx_settings *s)
 
     for (int i = 0; i < s->virtual_controllers.count; i++) {
         if (!cbx_is_known_controller_type(s->virtual_controllers.types[i]))
+            return -EINVAL;
+    }
+
+    /* Validate icon overrides. */
+    if (s->icon_override_count < 0 ||
+        s->icon_override_count > CBX_MAX_ICON_OVERRIDES)
+        return -EINVAL;
+    for (int i = 0; i < s->icon_override_count; i++) {
+        if (s->icon_overrides[i].type[0] == '\0' ||
+            s->icon_overrides[i].icon[0] == '\0')
             return -EINVAL;
     }
 
@@ -229,9 +301,13 @@ static int parse_settings_yaml(cbx_settings *s, FILE *f)
     bool root_started = false;
     bool in_vc_map = false;
     bool in_types_seq = false;
+    bool in_icon_ovr_seq = false;
+    bool in_icon_ovr_item = false;
     bool have_key = false;
     char current_key[CBX_MAX_STR_LEN] = "";
     int type_count = 0;
+    int ovr_type_idx = -1;  /* current override item index */
+    char ovr_key[CBX_ICON_OVR_TYPE_LEN] = "";  /* current override key */
     bool got_stream_end = false;
 
     if (!yaml_parser_initialize(&parser))
@@ -268,6 +344,12 @@ static int parse_settings_yaml(cbx_settings *s, FILE *f)
                     in_vc_map = true;
                 have_key = false;
             }
+            /* Entering an icon_override item mapping (inside the seq). */
+            if (in_icon_ovr_seq && !in_icon_ovr_item) {
+                in_icon_ovr_item = true;
+                ovr_type_idx = -1;
+                ovr_key[0] = '\0';
+            }
             break;
 
         case YAML_SEQUENCE_START_EVENT:
@@ -280,6 +362,8 @@ static int parse_settings_yaml(cbx_settings *s, FILE *f)
             if (have_key) {
                 if (strcmp(current_key, "types") == 0)
                     in_types_seq = true;
+                else if (strcmp(current_key, "icon_overrides") == 0)
+                    in_icon_ovr_seq = true;
                 have_key = false;
             }
             break;
@@ -290,6 +374,33 @@ static int parse_settings_yaml(cbx_settings *s, FILE *f)
                 val = "";
             if (in_types_seq) {
                 add_type_entry(s, val, &type_count);
+            } else if (in_icon_ovr_item) {
+                /* Inside an icon_override item: key-value pairs (type, icon). */
+                if (ovr_type_idx < 0) {
+                    /* This is a key. */
+                    strncpy(ovr_key, val, sizeof(ovr_key) - 1);
+                    ovr_key[sizeof(ovr_key) - 1] = '\0';
+                    ovr_type_idx = 0; /* mark expecting value next */
+                } else {
+                    /* This is a value for the key in ovr_key. */
+                    if (s->icon_override_count < CBX_MAX_ICON_OVERRIDES) {
+                        int idx = s->icon_override_count;
+                        if (strcmp(ovr_key, "type") == 0) {
+                            strncpy(s->icon_overrides[idx].type, val,
+                                    sizeof(s->icon_overrides[idx].type) - 1);
+                            s->icon_overrides[idx].type[sizeof(s->icon_overrides[idx].type) - 1] = '\0';
+                        } else if (strcmp(ovr_key, "icon") == 0) {
+                            strncpy(s->icon_overrides[idx].icon, val,
+                                    sizeof(s->icon_overrides[idx].icon) - 1);
+                            s->icon_overrides[idx].icon[sizeof(s->icon_overrides[idx].icon) - 1] = '\0';
+                        }
+                        /* When we have both type and icon, commit the entry. */
+                        if (s->icon_overrides[idx].type[0] != '\0' &&
+                            s->icon_overrides[idx].icon[0] != '\0')
+                            s->icon_override_count++;
+                    }
+                    ovr_type_idx = -1; /* expect key next */
+                }
             } else if (!have_key) {
                 strncpy(current_key, val, sizeof(current_key) - 1);
                 current_key[sizeof(current_key) - 1] = '\0';
@@ -303,12 +414,17 @@ static int parse_settings_yaml(cbx_settings *s, FILE *f)
 
         case YAML_SEQUENCE_END_EVENT:
             depth--;
-            in_types_seq = false;
+            if (in_types_seq)
+                in_types_seq = false;
+            else if (in_icon_ovr_seq)
+                in_icon_ovr_seq = false;
             break;
 
         case YAML_MAPPING_END_EVENT:
             depth--;
-            if (in_vc_map) {
+            if (in_icon_ovr_item) {
+                in_icon_ovr_item = false;
+            } else if (in_vc_map) {
                 in_vc_map = false;
             }
             break;
@@ -517,6 +633,39 @@ static int emit_settings_yaml(const cbx_settings *s, FILE *f)
         }
     }
 
+    /* icon_overrides (sequence of mappings, only if non-empty) */
+    if (s->icon_override_count > 0) {
+        int ik = yaml_document_add_scalar(&doc, NULL,
+            (yaml_char_t *)"icon_overrides", -1, YAML_PLAIN_SCALAR_STYLE);
+        int ovr_seq = yaml_document_add_sequence(&doc, NULL,
+            YAML_BLOCK_SEQUENCE_STYLE);
+        if (!ik || !ovr_seq) { rc = -ENOMEM; goto out; }
+        yaml_document_append_mapping_pair(&doc, root, ik, ovr_seq);
+
+        for (int i = 0; i < s->icon_override_count; i++) {
+            int item_map = yaml_document_add_mapping(&doc, NULL,
+                YAML_BLOCK_MAPPING_STYLE);
+            if (!item_map) { rc = -ENOMEM; goto out; }
+            yaml_document_append_sequence_item(&doc, ovr_seq, item_map);
+
+            int tk2 = yaml_document_add_scalar(&doc, NULL,
+                (yaml_char_t *)"type", -1, YAML_PLAIN_SCALAR_STYLE);
+            int tv2 = yaml_document_add_scalar(&doc, NULL,
+                (yaml_char_t *)s->icon_overrides[i].type, -1,
+                YAML_PLAIN_SCALAR_STYLE);
+            if (!tk2 || !tv2) { rc = -ENOMEM; goto out; }
+            yaml_document_append_mapping_pair(&doc, item_map, tk2, tv2);
+
+            int ik2 = yaml_document_add_scalar(&doc, NULL,
+                (yaml_char_t *)"icon", -1, YAML_PLAIN_SCALAR_STYLE);
+            int iv2 = yaml_document_add_scalar(&doc, NULL,
+                (yaml_char_t *)s->icon_overrides[i].icon, -1,
+                YAML_PLAIN_SCALAR_STYLE);
+            if (!ik2 || !iv2) { rc = -ENOMEM; goto out; }
+            yaml_document_append_mapping_pair(&doc, item_map, ik2, iv2);
+        }
+    }
+
     if (!yaml_emitter_dump(&emitter, &doc))
         rc = -EIO;
 
@@ -526,6 +675,10 @@ out:
     yaml_emitter_delete(&emitter);
     return rc;
 }
+
+/* --- Icon overrides (helper functions are above) ----------------------- */
+/* The icon override functions (cbx_settings_icon_override, set, remove)
+ * are defined above, before the validation section. */
 
 int cbx_settings_save(const cbx_settings *settings)
 {
