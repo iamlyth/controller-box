@@ -1943,3 +1943,98 @@ Task 11 (done), Task 25 (done), Task 15 (done).
 Alternatively Task 28 (Overlay state machine and lifecycle) — deps:
 Task 13 (done), Task 24 (done).
 Check `ralph tools task ready` and the plan.
+
+## Task 27 (complete) — Identity downgrade detection and GamepadOrder restoration
+
+### What landed
+- `src/identify/identity_downgrade.h/c`: Pure-function downgrade detection
+  with 3 API levels:
+  - `cbx_downgrade_check(old_id, new_ident, order, out)`: Compares old vs
+    new identity layers via `cbx_identity_parse_layer` +
+    `cbx_identity_is_downgrade`. If downgrade, builds ORDER:n fallback.
+    Returns 0=no downgrade (out=*new_ident), 1=downgrade (out=ORDER:n).
+  - `cbx_downgrade_find_stronger(a, new_layer, out_id, len)`: Scans all
+    assignments for IDs at a lower (stronger) layer than new_layer.
+    Returns the strongest (lowest layer number) found.
+  - `cbx_downgrade_resolve(a, new_ident, order, out)`: High-level — if
+    new ID matches existing assignment → no downgrade. Else if stronger-
+    layer assignment exists → downgrade → ORDER:n fallback.
+- `src/identify/gamepad_order_restore.h/c`: GamepadOrder restoration after
+  InputPlumber restart.
+  - `cbx_gamepad_order_map_ids(backend, bus, model, saved_ids_csv,
+    out_paths_csv, len, &restored, &skipped)`: Maps saved IDs → composite
+    paths by querying `ip_composite_get_persistent_id` on each composite.
+    CSV iterator with whitespace trimming and empty-token skip.
+  - `cbx_gamepad_order_restore(backend, bus, model, &restored, &skipped)`:
+    Full restore flow — `ip_gamepad_order_load` → `map_ids` →
+    `ip_manager_set_gamepad_order`. Returns -ENOENT if no saved order.
+- `tests/test_identity_downgrade.c`: 33 cmocka tests (pure functions, no I/O).
+  Tests: check (no downgrade same/upgrade, BT→SN, SN→phys, phys→order, BT→
+  order, null/empty/invalid old_id, new=NONE, null args, negative order),
+  find_stronger (basic, picks strongest, none found, same layer not stronger,
+  empty, null args, NONE layer, invalid IDs skipped), resolve (matching ID,
+  stronger exists, no stronger, BT stronger, empty, null, NONE, null args,
+  negative order, multiple stronger, ID matches), integration (full downgrade
+  flow with extract→resolve→assign_resolve, new controller no downgrade).
+- `tests/test_order_restore.c`: 20 cmocka tests with mock DBus + temp HOME.
+  Tests: map_ids (single match, stale, empty CSV, partial match, no composites,
+  null args, null counts OK, DBus error, ORDER ID, whitespace trimmed, empty
+  token), restore (success, no saved order, empty saved order, all stale,
+  null args, null counts, partial, no composites, round-trip save→restore).
+- `CMakeLists.txt`: Added identity_downgrade.c, gamepad_order_restore.c to
+  controllerbox STATIC.
+- `tests/CMakeLists.txt`: Added test_identity_downgrade (CMOCKA) and
+  test_order_restore (cbx_test_support) targets.
+- `IMPLEMENTATION_PLAN.md`: Task 27 → complete.
+
+### Verification (all pass)
+- clean build (Debug -Werror, no warnings)
+- ctest 40/40: all previous + test_identity_downgrade + test_order_restore
+- test_identity_downgrade 33/33 cmocka tests pass
+- test_order_restore 20/20 cmocka tests pass
+- verify-boilerplate, check-plan-freshness → exit 0
+
+### Gotchas fixed
+- Missing `<stdio.h>`: snprintf() used in identity_downgrade.c but not
+  included. Added #include <stdio.h>.
+- Missing `assign.h`: cbx_assign_lookup() used in identity_downgrade.c
+  but assign.h not included. Added #include "assign.h".
+- Mock limitation: ip_dbus_mock matches by (iface, member) only, not by
+  path. All PersistentId queries return the same value. Tests account for
+  this by testing one composite or acknowledging all composites match the
+  same ID (first match wins, stops searching).
+
+### Design decisions
+- **Two-tier downgrade API**: cbx_downgrade_check is the low-level
+  comparison (old_id vs new_ident). cbx_downgrade_resolve is the high-level
+  scan (assignments table vs new_ident). The caller can use whichever level
+  is appropriate — if the caller already knows the old identity (e.g.,
+  tracked per-slot), use check(). If the caller only has the assignments
+  table, use resolve().
+- **ORDER:n fallback**: The downgrade fallback is always ORDER:n (layer 4,
+  session-level). This avoids creating permanent assignments with unstable
+  identifiers (USB:phys changes on port move, USB:SN may disappear on
+  driver change). ORDER:n is explicitly transient.
+- **First match wins in map_ids**: When multiple composites have the same
+  PersistentId (shouldn't happen in practice but the mock returns the same
+  value for all), the first matching composite is used and we stop
+  searching. This prevents duplicate paths in the output CSV.
+- **Empty saved order → -ENOENT**: cbx_gamepad_order_restore returns
+  -ENOENT when there's no saved gamepad_order (file doesn't exist or
+  gamepad_order is empty). This signals the caller that there's nothing
+  to restore — not an error, just "nothing to do."
+- **Stale IDs are skipped, not failed**: When a saved ID has no matching
+  composite (device was removed), it's counted in skipped_count and
+  excluded from the restored path CSV. The restore still succeeds for
+  the remaining IDs.
+- **CSV iterator is reusable**: csv_for_each is a static helper that
+  takes a callback. It trims whitespace and skips empty tokens. This
+  pattern could be extracted to a shared utility if other modules need
+  CSV iteration.
+
+### Next
+Task 28 (Overlay state machine and lifecycle) — deps: Task 13 (done),
+Task 24 (done).
+Alternatively Task 29 (Character select grid rendering) — deps: Task 28,
+Task 22, Task 18, Task 26.
+Check `ralph tools task ready` and the plan.
