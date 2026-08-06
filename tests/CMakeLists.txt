@@ -283,6 +283,11 @@ if(CMOCKA_FOUND)
     set_tests_properties(test_surface_build PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
 
+    # Task 25 — Identity extraction from source device properties.
+    add_executable(test_identity tests/test_identity.c)
+    target_link_libraries(test_identity PRIVATE controllerbox PkgConfig::CMOCKA)
+    add_test(NAME test_identity COMMAND test_identity)
+
     # Help later tasks: tests that need the dummy driver can set it here.
     set_tests_properties(test_sdl_dummy PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")

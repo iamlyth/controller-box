@@ -517,7 +517,8 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 ### Phase 6: Controller Identification
 
 ## Task 25: Identity extraction from source device properties
-- Status: pending
+- Status: complete
+- Evidence: `./build/test_identity` 42/42 cmocka tests pass; ctest 36/36 all pass; clean build with -Werror. Identity extraction implements all 4 layers (BT MAC > USB serial > USB port path > connection order) per SPEC §6.2–6.3. Handles evdev UniqueId vs HIDRaw SerialNumber, empty uniq fallback for BT devices, MAC-on-USB-bus edge case, invalid characters, and connection order fallback. parse_layer and downgrade detection helpers included.
 - Dependencies: Task 14, Task 6
 - Scope: `src/identify/identity.c`, `src/identify/identity.h`
 - Acceptance criteria:
