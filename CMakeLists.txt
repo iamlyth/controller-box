@@ -118,6 +118,8 @@ add_library(controllerbox STATIC
     src/overlay/conflict.c
     src/overlay/profile_cycle.c
     src/overlay/dynamic_columns.c
+    src/overlay/trigger.c
+    src/overlay/close.c
     src/identify/identity.c
     src/identify/assign.c
     src/identify/assign_persist.c

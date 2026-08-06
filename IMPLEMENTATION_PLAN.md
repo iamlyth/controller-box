@@ -632,7 +632,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 - Documentation impact: README overlay usage (profile cycling, dynamic columns)
 
 ## Task 32: Overlay trigger registration and activation/close
-- Status: pending
+- Status: complete
 - Dependencies: Task 28, Task 13
 - Scope: `src/overlay/trigger.c`, `src/overlay/close.c`
 - Acceptance criteria:

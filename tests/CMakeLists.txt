@@ -337,6 +337,15 @@ if(CMOCKA_FOUND)
     target_link_libraries(test_dynamic_columns PRIVATE controllerbox cbx_test_support)
     add_test(NAME test_dynamic_columns COMMAND test_dynamic_columns)
 
+    # Task 32 — Overlay trigger registration and activation/close.
+    add_executable(test_trigger tests/test_trigger.c)
+    target_link_libraries(test_trigger PRIVATE controllerbox cbx_test_support)
+    add_test(NAME test_trigger COMMAND test_trigger)
+
+    add_executable(test_close tests/test_close.c)
+    target_link_libraries(test_close PRIVATE controllerbox cbx_test_support)
+    add_test(NAME test_close COMMAND test_close)
+
     # Help later tasks: tests that need the dummy driver can set it here.
     set_tests_properties(test_sdl_dummy PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
