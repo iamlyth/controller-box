@@ -1655,3 +1655,78 @@ Task 19 (done).
 Alternatively Task 24 (Pre-built overlay surface infrastructure) — deps:
 Task 23, Task 18 (done).
 Check `ralph tools task ready` and the plan.
+
+## Task 23 (complete) — Animation primitives and dirty rect optimization
+
+### What landed
+- `src/ui/animation.h/c`: Alpha tween system with 4 easing functions
+  (linear, ease-in, ease-out, ease-in-out). State machine (IDLE→RUNNING→
+  COMPLETE) driven by SDL_GetTicks(). API: init, start (from/to alpha,
+  duration_ms, easing), update (returns current alpha), stop,
+  is_running/is_complete, alpha getter. Convenience: fade_in (0→target),
+  fade_out (cur→0). Handles tick wraparound. Idempotent on COMPLETE.
+- `src/ui/dirty_rect.h/c`: Dirty-rect tracker (max 64 rects) for
+  incremental overlay re-rendering. Add rects (clamped to screen bounds),
+  merge overlapping/adjacent (iterative union), render via callback with
+  SDL_RenderSetClipRect set per-rect. Empty list → single full-screen
+  render (first paint). Intersects test for widget redraw decisions.
+  Overflow: merges into entry 0 as fallback.
+- `tests/test_animation.c`: 45 cmocka tests. Easing (linear, in, out,
+  in_out, clamp, unknown). Animation (init, null-safe, start, instant,
+  progress, idle update, complete idempotent, stop, fade_in, fade_out,
+  restart, ease_in/out progress). Dirty rect (init, add, null, zero-area,
+  clamp, multiple, clear, add_all, get_invalid, merge overlapping/
+  adjacent/non-overlapping/empty/single/chain, intersects/empty, render
+  empty/single/multiple/abort/null_fn/null_renderer, overflow, merge
+  after overflow, integration fade+dirty).
+- `CMakeLists.txt`: Added animation.c, dirty_rect.c to controllerbox STATIC.
+- `tests/CMakeLists.txt`: Added test_animation target with
+  SDL_VIDEODRIVER=dummy env.
+- `IMPLEMENTATION_PLAN.md`: Task 23 → complete.
+
+### Verification (all pass)
+- clean build (Debug, no warnings)
+- ctest 34/34: all previous + test_animation
+- test_animation 45/45 cmocka tests pass
+- verify-boilerplate, check-plan-freshness → exit 0
+
+### Gotchas fixed
+- **Integration test timing**: fade_in with 1ms duration immediately
+  followed by update returns 0ms elapsed (same tick), so animation stays
+  RUNNING. Fixed by adding SDL_Delay(2) before the update call to ensure
+  elapsed > duration_ms. This matches the pattern in
+  test_anim_update_progress.
+
+### Design decisions
+- **Stateless easing**: cbx_ease_eval is a pure function — no state, no
+  side effects. Takes linear t∈[0,1], returns eased value. Clamps
+  out-of-range input.
+- **IDLE update returns from_alpha**: Calling update on an IDLE animation
+  doesn't start it — returns from_alpha. This is deliberate: the caller
+  must explicitly call start(). This prevents accidental animations from
+  spurious update calls.
+- **COMPLETE is idempotent**: Repeated updates on a COMPLETE animation
+  always return to_alpha. This simplifies the render loop — no need to
+  guard against double-update.
+- **Dirty-rect empty → full render**: When no dirty rects exist,
+  cbx_dirty_rect_render calls fn once with a full-screen clip rect. This
+  ensures the first render paints everything without requiring the caller
+  to special-case it.
+- **Overflow merges into entry 0**: When the 64-rect limit is reached,
+  new rects are unioned into entry 0 rather than dropped. This is a
+  conservative fallback — the entire screen gets dirtied rather than
+  missing a region.
+- **Merge is iterative**: The merge loop repeats until no more merges
+  happen. This handles chains (r1↔r2↔r3 where r1 doesn't overlap r3) by
+  first merging r1+r2, then the merged rect overlaps r3.
+- **No animation config in settings**: The SPEC doesn't specify fade
+  durations. Animation timing is hardcoded in the caller (e.g. 300ms
+  fade-in). If configurable timing is needed later, add fields to
+  cbx_settings.
+
+### Next
+Task 24 (Pre-built overlay surface infrastructure) — deps: Task 23 (done),
+Task 18 (done).
+Alternatively Task 25 (Identity extraction) — deps: Task 14 (done),
+Task 6 (done).
+Check `ralph tools task ready` and the plan.
