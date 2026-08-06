@@ -1487,3 +1487,80 @@ Check `ralph tools task ready` and the plan.
 ### Next
 Task 21 (List, Grid, TabBar, and ProgressBar widgets) — deps: Task 20 (done).
 Check `ralph tools task ready` and the plan.
+
+## Task 21 (complete) — List, Grid, TabBar, and ProgressBar widgets
+
+### What landed
+- `src/ui/widget_list.c`: Scrollable list with up/down keyboard nav,
+  highlight (panel_bg_hover + border_focus when focused), optional icon
+  per item (SDL_Texture borrowed), mouse wheel scroll, mouse click
+  selection, select callback. Auto-scrolls to keep selected visible.
+  Max 64 items. Item height and icon size configurable (defaults 32px,
+  24px). visible_count computed from rect height / item_h.
+- `src/ui/widget_grid.c`: N rows × M columns grid. Independent row/col
+  navigation via move_up/down/left/right. Current position highlighted
+  with border_focus rectangle. Cell widgets auto-positioned and drawn.
+  Grid does NOT own cells (caller manages). Max 256 cells (16×16).
+  set_cell accepts (row, col) pair; computes flat index.
+- `src/ui/widget_tabbar.c`: Horizontal tab bar. Left/Right switches
+  active tab (always consumed even at boundary). Active tab rendered
+  with panel_bg_hover + accent underline. Change callback fires on tab
+  switch (not on same-tab set). Mouse click selects tab by x position.
+  Max 16 tabs.
+- `src/ui/widget_progress.c`: Fill bar 0.0–1.0 with clamping.
+  Configurable bar_color and bg_color (default to theme text_accent
+  and panel_bg). Non-interactive (handle_event returns false, focus
+  is no-op).
+- `src/ui/widget.h`: Added declarations for cbx_list, cbx_grid,
+  cbx_tabbar, cbx_progress structs and their public APIs.
+- `CMakeLists.txt`: Added 4 new source files to controllerbox STATIC lib.
+- `tests/CMakeLists.txt`: Added 4 test targets with dummy driver env.
+  List and tabbar tests get CBX_FONT_PATH for font-dependent tests.
+- `IMPLEMENTATION_PLAN.md`: Task 21 → complete.
+
+### Verification (all pass)
+- clean build (Debug -Werror, no warnings)
+- ctest 31/31: all previous + 4 new widget tests
+- test_widget_list 20/20, test_widget_grid 16/16,
+  test_widget_tabbar 14/14, test_widget_progress 12/12
+- verify-boilerplate, check-plan-freshness → exit 0
+
+### Gotchas fixed
+- **Mouse wheel direction**: SDL wheel.y > 0 = scroll up (earlier
+  items), < 0 = scroll down (later items). Initial code added wheel.y
+  to scroll_offset directly (wrong direction). Fixed to subtract
+  wheel.y so scroll up decrements offset and scroll down increments.
+- **TabBar key consumption at boundary**: Left/Right keydowns should
+  always be consumed (return true) even when at the boundary and no
+  movement occurs. Initial code returned false when move_left/right
+  returned -1. Fixed to always return true for these keys.
+- **maybe-uninitialized TestCtx**: GCC -Werror=maybe-uninitialized
+  flags `TestCtx ctx;` (uninitialized struct) because test_teardown
+  checks ctx->renderer which could be uninitialized if test_setup
+  fails. Fixed by zero-initializing: `TestCtx ctx = {0};` in all
+  four test files.
+- **Unused cache variable in test_grid_set_get_cell**: Declared
+  cbx_text_cache cache but never used it (test uses raw widget
+  pointers). Removed the unused declaration.
+
+### Design decisions
+- **List icons borrowed**: Icons are SDL_Texture* borrowed from the
+  icon cache — not freed by the list. Same pattern as button labels.
+- **Grid does NOT own cells**: Same as Panel — caller manages cell
+  widget lifetime. Prevents double-free with stack-allocated widgets.
+- **TabBar always consumes left/right**: Console-style UX where
+  directional keys are always consumed by the focused widget, even
+  at boundaries. This prevents the event from propagating to parent
+  containers.
+- **ProgressBar not focusable**: Focus is a no-op. The progress bar
+  is display-only, not interactive.
+- **Grid highlight drawn after cells**: The border_focus rectangle
+  is drawn on top of the cell content to ensure it's visible. The
+  cell widget's own focus handling (if any) is separate.
+
+### Next
+Task 22 (Focus chain system and input event mapping) — deps: Task 21
+(done), Task 14 (done).
+Alternatively Task 23 (Animation primitives and dirty rect optimization) —
+deps: Task 19 (done).
+Check `ralph tools task ready` and the plan.
