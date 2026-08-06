@@ -1205,3 +1205,96 @@ Check `ralph tools task ready` and the plan.
 Task 18 (Runtime icon lookup API) — deps: Task 17 + Task 8 (all done).
 Alternatively Task 19 (Renderer init, theme system, text rendering) — deps: Task 2 (done).
 Check `ralph tools task ready` and the plan.
+
+## Task 18 (complete) — Runtime icon lookup API
+
+### What landed
+- `src/icons/icon_lookup.h`: API for resolving device_type + profile icon
+  override to SDL2 texture + display label. Struct cbx_icon_result
+  (texture, width, height, label). Functions: cbx_icon_lookup,
+  cbx_icon_validate_path. Constants: CBX_ICON_LABEL_LEN=256.
+- `src/icons/icon_lookup.c`: Implementation. Resolution order per SPEC
+  §8.5: (1) profile override → absolute path PNG via SDL2_image with
+  path validation, or built-in icon name → cache lookup with on-demand
+  load; (2) icon map lookup by device_type; (3) unknown → generic-
+  gamepad + raw type string. Path validation: checks for absolute path,
+  rejects ".." traversal, canonicalizes via realpath(), verifies within
+  safe directories (user config, user data, system data, system IP data).
+  Rejected/failed override paths fall back to device_type icon lookup.
+- `src/icons/icon_cache.h/c`: Added cbx_icon_cache_insert() public API
+  for inserting externally-created textures (PNGs from SDL2_image) into
+  the cache hash map. Cache takes ownership of the texture.
+- `tests/fixtures/test_icon.png`: Minimal 8x8 RGBA PNG fixture for
+  PNG loading tests.
+- `tests/test_icon_lookup.c`: 36 cmocka tests using test_harness SDL2
+  dummy driver + real YAML from source tree. Tests: basic lookup
+  (known/unknown/null/empty device_type, null map), override built-in
+  icon (known/unknown type, nonexistent, empty), override PNG path
+  (load, cached, nonexistent, traversal, relative), path validation
+  (safe/not-absolute/empty/null/traversal/double-dot/prefix/dotdot-only),
+  NULL args, label correctness (from map, raw for unknown), on-demand
+  load (device type + override), dimensions, PNG in user config dir,
+  cache insert API (basic, null args, replace).
+- `CMakeLists.txt`: Added icon_lookup.c to controllerbox STATIC library.
+- `tests/CMakeLists.txt`: Added test_icon_lookup target linked with
+  controllerbox + cmocka + nanosvg + cbx_test_support. CBX_SOURCE_DIR
+  compile def. SDL_VIDEODRIVER=dummy environment.
+- `docs/OPERATIONS.md`: Added icon override (profile sidecar) section
+  describing cbx_icon_lookup resolution order and path validation.
+- `IMPLEMENTATION_PLAN.md`: Task 18 → complete.
+
+### Verification (all pass)
+- clean build (Debug -Werror, no warnings)
+- ctest 24/24: all previous + test_icon_lookup
+- test_icon_lookup 36/36 cmocka tests pass
+- verify-boilerplate, check-plan-freshness → exit 0
+
+### Gotchas fixed
+- **assert_in_range deprecated in cmocka**: Used assert_in_range which
+  is deprecated; replaced with assert_true(rc == 0 || rc == -EACCES).
+- **PNG fixture path not in safe dirs**: The source tree fixture path
+  (/workspace/controller-box/tests/fixtures/test_icon.png) is not within
+  any safe directory (user config, user data, system data, system IP
+  data). Tests that need to actually load the PNG copy it to the user
+  config dir first via copy_png_to_safe_dir() helper. Tests that only
+  check fallback behavior (nonexistent, traversal, relative) use the
+  raw paths since they're expected to fail validation.
+- **IMG_LoadTexture needs renderer, not cache**: The PNG loading in
+  load_png() uses cache->renderer (the SDL_Renderer from the cache
+  struct) to call IMG_LoadTexture. This is correct since the cache
+  stores the renderer at init time.
+
+### Design decisions
+- **PNG textures cached by original path**: PNG textures are stored
+  in the icon cache keyed by the original (non-canonical) path string
+  from the profile sidecar. This allows subsequent lookups to hit the
+  cache without re-validating. If two different sidecars reference
+  different paths that resolve to the same file, they'll create
+  separate cache entries (minor waste, acceptable for v1).
+- **Label always from icon map**: The display label comes from the
+  icon map lookup for the device_type, not from the override. This
+  means a profile that overrides the icon for a known device type still
+  shows the mapped display name. For unknown types, the raw type string
+  is the label regardless of override.
+- **Fallback on override failure**: If a profile override fails (PNG
+  not found, path validation fails, SVG missing for built-in name),
+  the lookup falls back to the device_type icon. If that also fails,
+  it falls back to generic-gamepad. This ensures the lookup always
+  returns a texture if the cache has any icons at all.
+- **cbx_icon_cache_insert as public API**: Added to icon_cache.h to
+  allow icon_lookup.c to store PNG textures in the shared cache. This
+  avoids a separate PNG cache and keeps all icon textures in one place
+  for unified cleanup and lookup.
+- **Safe directories for PNG paths**: User config dir
+  (~/.config/controller-box), user data/profiles dir
+  (~/.local/share/inputplumber/profiles), system data dir
+  (/usr/share/controller-box), system InputPlumber dir
+  (/usr/share/inputplumber). These are the only directories where
+  custom PNG icons can be loaded from. Any other absolute path is
+  rejected with -EACCES.
+
+### Next
+Task 19 (Renderer init, theme system, text rendering cache) — deps:
+Task 2 (done).
+Alternatively Task 20 (Widget base and concrete widgets) — deps: Task 19.
+Check `ralph tools task ready` and the plan.
