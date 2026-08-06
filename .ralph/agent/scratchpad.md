@@ -237,3 +237,64 @@ Task 7 (Profile YAML parse and generate — InputPlumber device_profile_v1) —
 deps: Task 4 (done). Unblocks Task 8 (profile metadata sidecar + enumeration).
 Alternatively, Task 9 (sd-bus connection) — deps: Task 2 (done). Check
 `ralph tools task ready` and the plan.
+
+## Task 7 (complete) — Profile YAML parse and generate (device_profile_v1)
+
+### What landed
+- `src/config/config_profile.h`: API for InputPlumber device_profile_v1 YAML
+  (SPEC §7.6). `cbx_profile` struct (version, kind, name, description,
+  mappings[128]). `cbx_profile_mapping` (name, source_event, target_events[16]).
+  `cbx_source_event` (device_class, props[8]). `cbx_target_event` (device_class,
+  value). Functions: `cbx_profile_init`, `cbx_profile_load` (from file path),
+  `cbx_profile_parse` (from YAML string), `cbx_profile_validate`,
+  `cbx_profile_save` (atomic write to arbitrary path), `cbx_profile_serialize`
+  (to malloc'd buffer via open_memstream).
+- `src/config/config_profile.c`: libyaml event-based parser with state machine
+  for nested device_profile_v1 schema. source_event has dynamic device-class
+  key → props mapping (e.g. gamepad: { button: Start }). target_events has
+  device-class → scalar (e.g. keyboard: KeyEsc). Complex target events (mapping
+  values for chord/delayed_chord) accepted via skip_depth mechanism (stored with
+  empty value, nested content skipped). Document-based emitter with 2-space
+  indent. Security: max depth 50, max doc size 1MB, no custom tags/tag directives.
+  Atomic write: mkstemp + fchmod 0644 + fsync + rename. Profile files use 0644
+  (InputPlumber format, readable by other tools — not sensitive config files).
+- `tests/test_profile_yaml.c`: 26 cmocka tests — init defaults, parse spec
+  example, parse empty/multiple/multi-prop/missing-fields/empty-file/scalar-source,
+  serialize basic, round-trip (simple/multiple/empty), validation
+  (valid/invalid version/invalid kind/null), save rejects invalid, file I/O
+  (round-trip, load nonexistent, atomic mode 0644), YAML security (max doc size,
+  custom tags, tag directives, max depth), serialize null args, complex target
+  event.
+- `CMakeLists.txt`: added `src/config/config_profile.c` to controllerbox lib.
+- `tests/CMakeLists.txt`: added `test_profile_yaml` target + CTest registration.
+
+### Verification (all pass)
+- clean build (Debug -Werror, no warnings)
+- ctest 8/8: smoke_test_sdl2, smoke_test_nanosvg, test_sample, test_sdl_dummy,
+  test_config_paths, test_settings, test_assignments, test_profile_yaml
+- test_profile_yaml 26/26 cmocka tests pass
+- verify-boilerplate, check-plan-freshness, branch-guard → exit 0
+
+### Gotchas fixed
+- **Missing `<stdbool.h>`**: The .c file uses `bool` in internal parse_ctx
+  struct. Must include `<stdbool.h>` (the header includes it, but the .c file
+  uses bool before the header's include takes effect — actually the header IS
+  included first, but C11 requires stdbool.h to be explicitly included for bool
+  in the .c file's own type definitions).
+- **strncpy truncation warning**: `safe_copy()` used strncpy which triggers
+  `-Werror=stringop-truncation` under GCC Debug. Fix: use `snprintf(dst,
+  dst_size, "%s", src)` instead.
+- **`%TAG` directive YAML**: libyaml requires `---` after `%TAG` directive,
+  otherwise the parser errors (returns false from yaml_parser_parse). Without
+  `---`, the error is -EIO (parser error), not -EPERM (tag check). Test fixed to
+  include `---`.
+- **Max depth test**: Each `a:` at the same indentation level is at depth 2,
+  not nested. Must increase indentation (2 spaces per level) to create actual
+  nesting that exceeds MAX_YAML_DEPTH=50.
+
+### Next
+Task 8 (profile metadata sidecar + filesystem enumeration) — deps: Task 7
+(now done). Unblocks Task 18 (icon lookup), Task 36 (profiles tab), Task 37/38
+(profile editor), Task 39 (profile save + settings tab).
+Alternatively, Task 9 (sd-bus connection) — deps: Task 2 (done). Check
+`ralph tools task ready` and the plan.
