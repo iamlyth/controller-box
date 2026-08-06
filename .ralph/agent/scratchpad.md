@@ -1030,3 +1030,102 @@ Check `ralph tools task ready` and the plan.
 Task 16 (SVG assets + icon mapping) — deps: Task 1 (done).
 Alternatively Task 17 (nanosvg rasterization) — deps: Task 16.
 Check `ralph tools task ready` and the plan.
+
+## Task 16 (complete) — SVG assets and icon mapping table
+
+### What landed
+- `data/icons/svg/`: 30 Controllercons solid SVGs vendored (atari-2600,
+  atari-jaguar, dreamcast, gamecube, joy-con-l, joy-con-r, joy-cons,
+  master-system, mega-drive, n64, nes, ps1, ps2, ps3, ps4, ps5,
+  sega-saturn, snes, stadia, switch-pro, virtual-boy, wii-classic,
+  wii-u-pro, wii-u, wii, xbox-360, xbox-controller-s, xbox-one,
+  xbox-series-x, xbox) + 6 custom SVGs (steam-deck, generic-gamepad,
+  arcade-stick, hitbox, mouse, keyboard) = 36 total.
+- `data/icons/svg/LICENSE.controllercons`: SIL OFL 1.1 license file
+  with attribution to Kieran McClung.
+- `data/controller-icons.yaml`: Maps 18 InputPlumber DeviceType strings
+  to icons + display names (xb360, ds5, ds5-usb, ds5-bt, ds5-edge,
+  ds5-edge-usb, ds5-edge-bt, deck, deck-uhid, gamepad, unified-gamepad,
+  hori-steam, 8bitdo-u2, mouse, keyboard, touchpad, touchscreen, null,
+  dbus, debug). Includes custom_icons section (arcade-stick, hitbox).
+- `src/icons/icon_map.h`: API: cbx_icon_map_init/load/parse/lookup/
+  default_path. Structs: cbx_icon_entry (type/icon/name),
+  cbx_icon_map (entries array, count, loaded, yaml_path).
+  Constants: CBX_ICON_MAP_MAX_ENTRIES=64, CBX_ICON_DEFAULT_ICON.
+- `src/icons/icon_map.c`: Event-based libyaml parser. Security: max
+  depth 50, max doc 1MB, no custom tags. State machine: TOP →
+  VIRTUAL_TYPES (on sequence start after "virtual_types" key) →
+  ENTRY (on mapping start within sequence) → VIRTUAL_TYPES (on mapping
+  end, store entry if type field present). custom_icons section
+  parsed but entries without type field are not stored. Unknown keys
+  silently ignored (forward-compatible).
+- `tests/test_icon_map.c`: 42 cmocka tests. 32 parser tests (init,
+  parse basic/with-custom/null/empty/no-virtual, lookup known/ds5/
+  unknown/null-map/unloaded/null-type/null-outputs/small-buffer,
+  default-path/null/small, load nonexistent/null/tempfile, tags-
+  rejected/too-large/many-entries/full-mapping, unknown-raw-type,
+  icon-only/name-only, missing-icon/type, long-type-truncated,
+  reparse-resets) + 10 nanosvg compatibility tests (ps5, xbox-360,
+  steam-deck, generic-gamepad, arcade-stick, hitbox, mouse, keyboard,
+  all-compat (iterates entire svg dir), load-real-yaml from source).
+- `CMakeLists.txt`: Added icon_map.c to controllerbox. Added install
+  rules for SVG dir + license + controller-icons.yaml.
+- `tests/CMakeLists.txt`: Added test_icon_map target with nanosvg
+  link and CBX_SOURCE_DIR compile definition for SVG path resolution.
+- `README.md`: Added Credits section for Controllercons + custom icons.
+- `docs/OPERATIONS.md`: Added Icon mapping section.
+- `IMPLEMENTATION_PLAN.md`: Task 16 status → complete.
+
+### Verification (all pass)
+- clean build (Debug -Werror, no warnings)
+- ctest 22/22: all previous + test_icon_map
+- test_icon_map 42/42 cmocka tests pass (incl. nanosvg compat for all
+  36 SVGs and real YAML file loading from source dir)
+- verify-boilerplate, check-plan-freshness → exit 0
+
+### Gotchas fixed
+- **SEQUENCE_START not handled in state machine**: Initial parser
+  only handled scalar keys at top level, not the sequence that follows.
+  When "virtual_types" key was followed by a sequence, the state didn't
+  transition to VIRTUAL_TYPES. Fixed by adding state transition in the
+  SEQUENCE_START event handler when state==TOP and have_key is true.
+- **parse() didn't set loaded=1**: cbx_icon_map_parse called init
+  which sets loaded=0, then parse_icon_map_from_string, but never set
+  loaded=1. Lookups against a parsed (but not loaded) map always fell
+  through to defaults. Fixed by setting loaded=1 on successful parse.
+- **Missing errno.h/limits.h/unistd.h/dirent.h in test**: Test used
+  EINVAL, ENAMETOOLONG, EPERM, EFBIG, PATH_MAX, unlink, opendir/readdir
+  without including the right headers. Added errno.h, limits.h,
+  unistd.h, dirent.h.
+- **Unused YAML_MALFORMED variable**: Removed the unused static
+  variable that triggered -Werror=unused-variable.
+
+### Design decisions
+- **6 custom SVGs instead of 4**: Plan required 4 (arcade-stick,
+  hitbox, steam-deck, generic-gamepad). Added mouse and keyboard SVGs
+  because the mapping table needs icons for non-controller device types
+  (mouse, keyboard, touchpad, touchscreen). Touchpad/touchscreen map
+  to generic-gamepad since they're rare and a custom icon adds little
+  value for these edge cases.
+- **cc- prefix convention for Controllercons**: Following the spec §8.4
+  example which uses "cc-xbox-360", "cc-ps5", "cc-steam-deck" for icon
+  names. Custom non-Controllercons icons use plain names (generic-
+  gamepad, arcade-stick, hitbox, mouse, keyboard).
+- **18 device types mapped**: All InputPlumber SupportedTargetDeviceIds
+  are mapped (from source analysis of input/target/mod.rs). Includes
+  subtypes (ds5-usb, ds5-bt, ds5-edge-usb, ds5-edge-bt) that are
+  available via _type_identifiers but not in supported_types(). null,
+  dbus, debug mapped to generic-gamepad (internal types, not shown
+  to users but handled gracefully).
+- **custom_icons section in YAML**: Informational only, not stored in
+  the map. These icons are available for profile overrides (SPEC §8.5)
+  but don't correspond to DeviceType strings.
+- **nanosvg compat test uses source dir path**: Passed CBX_SOURCE_DIR
+  via compile definition so tests can find SVG files relative to
+  CMAKE_CURRENT_SOURCE_DIR. test_svg_all_compat iterates the entire
+  svg directory using opendir/readdir.
+
+### Next
+Task 17 (nanosvg rasterization and SDL2 texture cache) — deps: Task 16 (done).
+Alternatively Task 18 (Runtime icon lookup API) — deps: Task 17 + Task 8 (done).
+Check `ralph tools task ready` and the plan.
