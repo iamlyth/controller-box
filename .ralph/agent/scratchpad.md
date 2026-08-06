@@ -3132,3 +3132,68 @@ Task 41 (CMake install rules, systemd service file, and desktop entry) —
 deps: Task 40 (done), Task 2 (done). All dependencies complete.
 Alternatively Task 42 (Flatpak manifest) — deps: Task 41.
 Check `ralph tools task ready` and the plan.
+
+## Task 41 (complete) — CMake install rules, systemd service file, and desktop entry
+
+### What landed
+- `packaging/controller-box.service`: Systemd user service file (SPEC §2.4).
+  [Unit] After=inputplumber.service, Requires=inputplumber.service;
+  [Service] ExecStart=/usr/bin/controller-box --overlay-service, Restart=always;
+  [Install] WantedBy=default.target.
+- `packaging/controller-box-manager.desktop`: Desktop entry launching manager mode
+  (Exec=/usr/bin/controller-box --manager, Type=Application, Categories=Game;Settings).
+- `CMakeLists.txt`: Added CBX_DATA_INSTALL_DIR and CBX_ICON_INSTALL_DIR as
+  relative install variables (using CMAKE_INSTALL_DATADIR, not CMAKE_INSTALL_PREFIX).
+  This fixes DESTDIR/--prefix overrides — previously CBX_DATA_DIR was an absolute
+  path baked at configure time, causing data files to go to the wrong location.
+  Install rules: service → data dir, desktop → applications dir.
+- `tests/test_packaging_install.sh`: Shell test verifying file layout (binary,
+  icons dir, controller-icons.yaml, service file, desktop entry) and content
+  (service directives: After/Requires/Restart/ExecStart overlay, desktop: manager
+  mode, Type=Application). Uses `grep -qF --` to handle patterns starting with `--`.
+- `docs/PACKAGING.md`: Full packaging doc — install layout, tarball install
+  (build-from-source, dependency table, post-install steps, service unit spec),
+  Flatpak placeholder, version placeholder, post-v1 roadmap.
+- `IMPLEMENTATION_PLAN.md`: Task 41 → complete.
+
+### Verification (all pass)
+- clean Debug build (-Werror, 0 warnings)
+- ctest 61/61: all previous tests pass
+- DESTDIR install: `DESTDIR=/tmp/test-install cmake --install build` places all
+  files correctly under /tmp/test-install/usr/ (binary, icons, controller-icons.yaml,
+  service file, desktop entry)
+- tests/test_packaging_install.sh /tmp/test-install → all checks pass
+- verify-boilerplate → exit 0
+
+### Gotchas fixed
+- **Absolute vs relative install paths**: CBX_DATA_DIR was computed as
+  `${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/controller-box` at configure
+  time — an absolute path. When using `cmake --install --prefix` or `DESTDIR`,
+  CMake overrides the install prefix but NOT our custom variable. Fixed by adding
+  CBX_DATA_INSTALL_DIR as `${CMAKE_INSTALL_DATADIR}/controller-box` (relative) and
+  using it in install rules. CBX_DATA_DIR (absolute) still used for config.h.
+- **grep -qF with -- patterns**: `grep -qF "--overlay-service"` fails with exit 2
+  because grep interprets `--overlay-service` as an option even with -F. Fixed by
+  using `grep -qF -- "$pattern"` (the `--` terminates option parsing).
+- **DESTDIR vs --prefix**: Acceptance criteria uses DESTDIR semantics
+  (`make DESTDIR=/tmp/test-install install`), which prepends to CMAKE_INSTALL_PREFIX
+  (/usr → /tmp/test-install/usr/). Using `--prefix /tmp/test-install` instead gives
+  /tmp/test-install/bin/ (no usr/). The test script expects DESTDIR layout.
+
+### Design decisions
+- **Service file installed to data dir, not systemd user dir**: The systemd
+  service file is installed to /usr/share/controller-box/controller-box.service
+  as a reference template. The manager generates and writes the actual user unit
+  at runtime (~/.config/systemd/user/controller-box.service) via service_install.c,
+  adjusting the ExecStart path for Flatpak if needed. This matches SPEC §9.2
+  ("make install places the systemd user service file") and §9.3 layout.
+- **Relative install variables**: CMakeLists.txt now has both CBX_DATA_DIR
+  (absolute, for config.h compilation) and CBX_DATA_INSTALL_DIR (relative,
+  for install rules). This is the standard CMake pattern for handling
+  DESTDIR/prefix overrides correctly.
+
+### Next
+Task 42 (Flatpak manifest) — deps: Task 41 (done). All dependencies complete.
+Alternatively Task 43 (Version embedding and packaging integration test) —
+deps: Task 41 (done), Task 42.
+Check `ralph tools task ready` and the plan.
