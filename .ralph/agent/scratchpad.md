@@ -458,3 +458,85 @@ done). Unblocks Tasks 11-14 (hotplug, PropertiesChanged, Manager wrappers,
 CompositeDevice wrappers, source/target device properties).
 Alternatively Task 16 (SVG assets + icon mapping) — deps: Task 1 (done).
 Check `ralph tools task ready` and the plan.
+
+## Task 10 (complete) — ObjectManager enumeration and device model
+
+### What landed
+- `src/dbus/ip_device_model.h`: `cbx_device_model` struct (has_manager +
+  manager_path, composites[16] with parsed index, sources[64] + targets[64]
+  with last-component name). Limits: 16 composites, 64 sources/targets.
+  Lookup helpers: find_composite/source/target (by path, NULL-safe).
+- `src/dbus/ip_device_model.c`: init (memset zero), lookup implementations.
+- `src/dbus/ip_objectmanager.h`: API — `cbx_objectmanager_enumerate()`
+  (calls backend->get_managed_objects, parses reply) and
+  `cbx_objectmanager_parse_reply()` (pure text parser).
+- `src/dbus/ip_objectmanager.c`: Text format parser: one line per object
+  ("path\tiface1,iface2,..."), comments (#), empty lines skipped, CRLF
+  handled. Classification: Manager by interface, Composite by interface,
+  source/target by path pattern (/devices/source/ and /devices/target/).
+  Security: validates all paths start with IP_DBUS_PATH "/", skips invalid.
+  `enumerate()` calls backend, parses reply, frees heap-allocated reply.
+- `src/dbus/dbus_client.c`: Implemented `sd_get_managed_objects()` —
+  sd_bus_call_method for GetManagedObjects, iterates a{oa{sa{sv}}}
+  containers, builds text via open_memstream. Added `translate_sd_error()`
+  helper (extracted from sd_get_property's inline error translation).
+- `tests/test_objectmanager_parse.c`: 31 cmocka tests — parser (null,
+  empty, null-model, manager-only, composites with index, sources with
+  name, targets with name, full tree, invalid-paths-skipped, all-invalid,
+  malformed, CRLF, comments/empty), device model lookups (composite/
+  source/target find, null args, init), truncation (composites/sources/
+  targets), enumerate via mock (full, empty, null-reply, error,
+  no-expectation, null-args, CRLF), edge cases (multi-interface target,
+  root-path excluded, composite-no-index).
+- `CMakeLists.txt`: added ip_device_model.c + ip_objectmanager.c.
+- `tests/CMakeLists.txt`: added test_objectmanager_parse target.
+- `docs/DBus-API.md`: added Object Enumeration section.
+
+### Verification (all pass)
+- clean build (Debug -Werror, no warnings)
+- ctest 11/11: smoke_test_sdl2, smoke_test_nanosvg, test_sample,
+  test_sdl_dummy, test_config_paths, test_settings, test_assignments,
+  test_profile_yaml, test_profile_list, test_connection,
+  test_objectmanager_parse
+- test_objectmanager_parse 31/31 cmocka tests pass
+- verify-boilerplate, check-plan-freshness, branch-guard → exit 0
+
+### Gotchas fixed
+- **Missing includes in test**: test_objectmanager_parse.c needed
+  `#include <errno.h>` (for EINVAL, ENXIO) and `#include "dbus/ip_connection.h"`
+  (for IP_ERR_NO_REPLY).
+- **Text format generation order**: Initially wrote interfaces to the
+  stream during iteration, then tried to write the path separately.
+  Fixed by writing path+tab first, then interfaces during iteration,
+  then newline — produces correct "path\tiface1,iface2,...\n".
+- **translate_sd_error helper**: Extracted from sd_get_property's inline
+  error translation. Used by both sd_get_property and
+  sd_get_managed_objects. Note: sd_get_property still has its own inline
+  translation (didn't change existing working code); the new helper is
+  for sd_get_managed_objects only.
+
+### Design decisions
+- **Text format for GetManagedObjects**: The vtable's get_managed_objects
+  returns char** (text string in both mock and production). Production
+  sd-bus backend iterates a{oa{sa{sv}}} and builds text via open_memstream.
+  Mock returns canned text fixture. Single parser (cbx_objectmanager_parse_reply)
+  handles both. This makes the parser fully testable without real sd-bus.
+- **Path-based classification for source/target**: Source interfaces have
+  multiple types (EventDevice, HIDRawDevice, UdevDevice, etc.). Rather
+  than listing all, classification uses path pattern (/devices/source/).
+  Manager and Composite use interface-based classification since they
+  have single well-known interfaces.
+- **Root path excluded**: The root path /org/shadowblip/InputPlumber (no
+  trailing /) does NOT start with IP_DBUS_PATH "/" so it's correctly
+  excluded from the model (it's the ObjectManager, not a device).
+
+### Next
+Task 11 (Hotplug and PropertiesChanged signal handling) — deps: Task 10
+(now done). Unblocks Task 15 (which depends on Tasks 11+12+6).
+Alternatively Task 12 (Manager interface method wrappers) — deps: Task 10.
+Alternatively Task 13 (CompositeDevice wrappers + InterceptMode polling) —
+deps: Task 10.
+Alternatively Task 14 (Source/target device properties + InputEvent) —
+deps: Task 10.
+Alternatively Task 16 (SVG assets + icon mapping) — deps: Task 1 (done).
+Check `ralph tools task ready` and the plan.
