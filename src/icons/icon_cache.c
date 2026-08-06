@@ -261,6 +261,15 @@ int cbx_icon_cache_load_one(cbx_icon_cache *cache, const char *icon_name)
     return rasterize_svg(cache, icon_name);
 }
 
+int cbx_icon_cache_insert(cbx_icon_cache *cache, const char *key,
+                           SDL_Texture *tex, int w, int h)
+{
+    if (!cache || !key || key[0] == '\0' || !tex || w <= 0 || h <= 0)
+        return -EINVAL;
+
+    return insert_entry(cache, key, tex, w, h);
+}
+
 void cbx_icon_cache_cleanup(cbx_icon_cache *cache)
 {
     if (!cache)

@@ -118,6 +118,36 @@ To add a new device type mapping, append an entry to `controller-icons.yaml`
 under `virtual_types:`.  To add a new icon, place the SVG in `data/icons/svg/`
 and reference it by filename (without `.svg`).
 
+## Icon override (profile sidecar)
+
+Each profile can override its icon via the metadata sidecar (SPEC §7.5,
+§8.5).  In `~/.config/controller-box/profile-metadata/<name>.meta.yaml`:
+
+```yaml
+icon: "cc-ps5"                 # built-in icon name
+icon: "/path/to/custom.png"    # absolute path to custom image
+```
+
+At runtime, `cbx_icon_lookup()` resolves the icon with this precedence
+(SPEC §8.5):
+
+1. **Profile icon override** (from sidecar metadata):
+   - Absolute path (`/...`) → loads custom PNG via SDL2_image.  The path is
+     validated: no `..` traversal, `realpath()` must resolve within a safe
+     directory (user config dir, user data dir, or system data dir).
+     If validation fails, falls back to step 2.
+   - Built-in icon name (e.g. `cc-ps5`) → looked up in the icon cache
+     (loaded on demand from the SVG directory if not already cached).
+2. **Icon map lookup** by `DeviceType` string → icon name + display name.
+3. **Unknown DeviceType** → `generic-gamepad` silhouette + raw type string.
+
+The display label always comes from the icon map (or the raw type string
+for unknown types), regardless of whether an icon override is present.
+
+Custom PNG textures are cached in the icon cache (keyed by absolute path)
+for subsequent lookups, so repeated lookups for the same profile do not
+re-load the file.
+
 ## Troubleshooting
 
 - **`expected develop`**: merge/switch to `develop`; use the trial override only for this boilerplate branch.

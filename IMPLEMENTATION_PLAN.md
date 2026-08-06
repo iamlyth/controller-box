@@ -405,7 +405,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 - Documentation impact: none
 
 ## Task 18: Runtime icon lookup API
-- Status: pending
+- Status: complete
 - Dependencies: Task 17, Task 8
 - Scope: `src/icons/icon_lookup.c`, `src/icons/icon_lookup.h`
 - Acceptance criteria:

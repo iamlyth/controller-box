@@ -98,6 +98,23 @@ int cbx_icon_cache_get_dims(const cbx_icon_cache *cache,
 int cbx_icon_cache_load_one(cbx_icon_cache *cache, const char *icon_name);
 
 /*
+ * Insert an externally-created texture into the cache under the given
+ * key.  Used by Task 18 (icon_lookup) to cache PNG textures loaded via
+ * SDL2_image.  The cache takes ownership of the texture — it will be
+ * destroyed by cbx_icon_cache_cleanup().  If the key already exists,
+ * the old texture is destroyed and replaced.
+ *
+ * @param cache  Initialized icon cache.
+ * @param key    Cache key (e.g. absolute path of the PNG file).
+ * @param tex    SDL_Texture* to store (must not be NULL).
+ * @param w      Texture width.
+ * @param h      Texture height.
+ * @return 0 on success, -EINVAL on bad args, -ENOMEM if cache is full.
+ */
+int cbx_icon_cache_insert(cbx_icon_cache *cache, const char *key,
+                           SDL_Texture *tex, int w, int h);
+
+/*
  * Destroy all cached textures and the rasterizer.  Safe to call on a
  * zeroed/empty cache.  After cleanup the struct can be re-initialised
  * with cbx_icon_cache_init().
