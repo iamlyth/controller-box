@@ -2389,3 +2389,88 @@ Task 32 (Overlay trigger registration and activation/close) — deps: Task 28
 Alternatively Task 33 (Overlay integration test) — deps: Task 32, Task 30,
 Task 31 (all done after Task 32).
 Check `ralph tools task ready` and the plan.
+
+## Task 32 (complete) — Overlay trigger registration and activation/close
+
+### What landed
+- `src/overlay/trigger.h/c`: Trigger combo parsing ("Select+A" → events
+  CSV "Select,A" + target "Select+A"). Register on single composite:
+  SetInterceptActivation + set InterceptMode=PASS (1). Register on all
+  composites with failure counting (returns -N failures).
+- `src/overlay/close.h/c`: Close coordination. cbx_close_sync_assignments
+  syncs grid state back to assignments (update slot+profile for
+  assigned, remove for Unassigned, create for new, preserve for
+  disconnected). cbx_close_on_save: detect+resolve conflicts → sync →
+  save assignments. cbx_overlay_request_close: wires on_save callback +
+  calls lifecycle close (which sets InterceptMode=PASS, hides surface,
+  transitions to IDLE).
+- `tests/test_trigger.c`: 22 cmocka tests (parse simple/multi/single/
+  whitespace/empty/whitespace-only/null/buffer-too-small/target-too-small/
+  zero-size; register success/activation-fails/intercept-mode-fails/
+  no-expectation/null-args/bad-trigger; register_all success/some-fail/
+  all-fail/null-args/null-path-entry/single).
+- `tests/test_close.c`: 21 cmocka tests (sync update-existing/create-new/
+  remove-unassigned/preserve-disconnected/empty-grid/no-id-row/null-args/
+  multiple/update-profile; on_save null-safety/no-conflicts/with-conflicts/
+  all-unassigned; request_close from-visible/from-idle/null-args/
+  full-lifecycle/with-conflict/intercept-mode-fail).
+- `CMakeLists.txt`: Added trigger.c, close.c to controllerbox STATIC.
+- `tests/CMakeLists.txt`: Added test_trigger + test_close targets.
+- `IMPLEMENTATION_PLAN.md`: Task 32 → complete.
+
+### Verification (all pass)
+- clean build (Debug -Werror, no warnings)
+- ctest 49/49: all previous + test_trigger + test_close
+- test_trigger 22/22 cmocka tests pass
+- test_close 21/21 cmocka tests pass
+- verify-boilerplate → exit 0
+
+### Gotchas fixed
+- `bool`/`true`/`false` used in trigger.c without `#include <stdbool.h>`.
+  Added the include.
+- `strncpy` into same-sized buffers (CBX_MAX_ID_LEN, CBX_MAX_PROFILE_LEN)
+  triggers -Werror=stringop-truncation. Fixed with `snprintf`.
+- `IP_ERR_NO_REPLY` not included in test_trigger.c. Added
+  `#include "dbus/ip_connection.h"`.
+- `calloc`/`free` not declared in test_trigger.c. Added
+  `#include <stdlib.h>`.
+- `cmocka_run_group_tests` group setup runs ONCE before all tests, not
+  per test. Changed from `cmocka_run_group_tests(tests, setup, teardown)`
+  to `cmocka_unit_test_setup_teardown(test, setup, teardown)` per test
+  with `cmocka_run_group_tests(tests, NULL, NULL)`.
+- Mock DBus returns FIRST match for (iface, member) — cannot test
+  per-device differentiation with same member name. Redesigned
+  test_register_all_some_fail to use NULL path entry for failure
+  injection instead of duplicate expectations.
+- test_sync_update_profile: controller was at Unassigned (col 0), so
+  sync removed the assignment instead of updating profile. Fixed by
+  moving controller to P1 (col 1) before cycling profile.
+
+### Design decisions
+- **Trigger parse splits on '+'**: "Select+A" → events_csv "Select,A",
+  target "Select+A". Whitespace around each token is trimmed. At least
+  one event is required.
+- **Register_all continues on failure**: If a device fails, the function
+  continues with remaining devices and returns -(failure count). This
+  ensures all devices get the trigger registered even if one fails.
+- **Close sync preserves disconnected controllers**: Assignments for
+  controllers not in the grid (disconnected) are left unchanged. Only
+  controllers in the grid have their assignments updated/created/removed.
+- **Unassigned → remove assignment**: Controllers at col 0 (Unassigned)
+  have their existing assignment removed (shifted down in array). This
+  means "I don't want this controller assigned to any player slot."
+- **on_save is synchronous**: The lifecycle calls on_save synchronously
+  during cbx_overlay_lifecycle_close, before setting InterceptMode=PASS.
+  This ensures conflicts are resolved and assignments are saved before
+  input flows back to the game.
+- **Stack-local close context**: cbx_overlay_request_close uses a
+  stack-local cbx_close_ctx for on_save_data. This is safe because
+  on_save is called synchronously within lifecycle_close, and the
+  pointer is never used after close returns.
+
+### Next
+Task 33 (Overlay integration test) — deps: Task 32 (done), Task 30
+(done), Task 31 (done). All dependencies complete.
+Alternatively Task 34 (Manager skeleton and tab bar) — deps: Task 21
+(done), Task 22 (done).
+Check `ralph tools task ready` and the plan.
