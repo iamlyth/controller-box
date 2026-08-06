@@ -105,3 +105,4 @@ path to verify that a font is actually loaded.
 - Documentation impact: Bug ledger updated with resolution and verification. No spec changes. Source comments corrected where misleading.
 
 MAINTENANCE_PLAN_COMPLETE
+<!-- Strict maintenance-plan schema validated after draft checkpoint recovery. -->
