@@ -679,7 +679,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 - Evidence: ctest 51/51 pass; test_manager_tabs 14/14 cmocka tests pass; clean build with -Werror; verify-boilerplate exit 0.
 
 ## Task 35: Controllers tab — list, add/remove, and type change
-- Status: pending
+- Status: complete
 - Dependencies: Task 34, Task 12
 - Scope: `src/manager/controllers_tab.c`
 - Acceptance criteria:
