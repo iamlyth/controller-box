@@ -81,6 +81,7 @@ add_library(controllerbox STATIC
     src/dbus/ip_connection.c
     src/dbus/ip_device_model.c
     src/dbus/ip_hotplug.c
+    src/dbus/ip_manager.c
     src/dbus/ip_objectmanager.c
     src/dbus/ip_properties.c
     src/ui/widget.c)

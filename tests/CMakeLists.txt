@@ -103,6 +103,14 @@ if(CMOCKA_FOUND)
 
     add_test(NAME test_properties_changed COMMAND test_properties_changed)
 
+    # Manager interface method wrappers test (Task 12): CreateTargetDevice,
+    # StopTargetDevice, AttachTargetDevice, SetTargetDevices, GamepadOrder
+    # get/set (with device model validation), SupportedTargetDeviceIds/Devices get.
+    add_executable(test_manager_calls tests/test_manager_calls.c)
+    target_link_libraries(test_manager_calls PRIVATE controllerbox cbx_test_support)
+
+    add_test(NAME test_manager_calls COMMAND test_manager_calls)
+
     # Help later tasks: tests that need the dummy driver can set it here.
     set_tests_properties(test_sdl_dummy PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")

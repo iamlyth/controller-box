@@ -232,3 +232,69 @@ void on_prop_changed(const char *prop_name, ip_prop_type type,
     // count: array element count (-1 if invalidated)
 }
 ```
+
+## Manager Interface Wrappers (Task 12)
+
+Thin wrappers for the InputPlumber Manager interface
+(`org.shadowblip.InputManager`) at `/org/shadowblip/InputPlumber/Manager`.
+All wrappers go through the vtable and return categorized error codes.
+
+### Method calls
+
+| Wrapper | DBus method | Signature | Returns |
+|---|---|---|---|
+| `ip_manager_create_target_device` | `CreateTargetDevice` | `s` | path string (heap-allocated) |
+| `ip_manager_stop_target_device` | `StopTargetDevice` | `s` | void |
+| `ip_manager_attach_target_device` | `AttachTargetDevice` | `ss` | void |
+| `ip_manager_set_target_devices` | `SetTargetDevices` (CompositeDevice iface) | `as` | void |
+
+### Property access
+
+| Wrapper | DBus property | Type | Access |
+|---|---|---|---|
+| `ip_manager_get_gamepad_order` | `GamepadOrder` | `as` | read (comma-separated paths) |
+| `ip_manager_set_gamepad_order` | `GamepadOrder` | `as` | write (with device model validation) |
+| `ip_manager_get_supported_target_device_ids` | `SupportedTargetDeviceIds` | `as` | read (comma-separated IDs) |
+| `ip_manager_get_supported_target_devices` | `SupportedTargetDevices` | `as` | read (comma-separated names) |
+
+### GamepadOrder validation
+
+The `ip_manager_set_gamepad_order` wrapper validates every path in the
+comma-separated value against the device model before calling InputPlumber.
+If any path does not correspond to a known composite device
+(`cbx_device_model_find_composite`), the wrapper returns `-EINVAL`
+without making the DBus call.  This prevents the GUI from sending
+invalid paths that could cause InputPlumber to suspend all devices
+indefinitely.
+
+### Calling convention for method calls
+
+The vtable's `call_method` uses a variadic calling convention:
+
+- `sig` encodes input argument types (`s` = string, `as` = string array
+  passed as a comma-separated string)
+- The last variadic argument is always a `char **out_value`: `NULL` for
+  void methods, a valid pointer for methods that return a string
+- The mock backend counts input args from `sig`, skips them, and fills
+  `*out_value` from the canned expectation's value string
+- The production backend builds a `sd_bus_message` from the input args,
+  calls the method, and reads the reply string into `*out_value`
+
+```c
+/* Create a virtual controller. */
+char *path = NULL;
+int rc = ip_manager_create_target_device(conn.backend, conn.bus,
+                                           "xb360", &path);
+// rc == 0, path = "/org/shadowblip/InputPlumber/devices/target/gamepad0"
+free(path);
+
+/* Get GamepadOrder. */
+char *order = NULL;
+rc = ip_manager_get_gamepad_order(conn.backend, conn.bus, &order);
+// rc == 0, order = "/org/.../CompositeDevice0,/org/.../CompositeDevice1"
+free(order);
+
+/* Set GamepadOrder (validated against device model). */
+rc = ip_manager_set_gamepad_order(conn.backend, conn.bus, order, &model);
+// rc == 0, or -EINVAL if any path is not in the model
+```

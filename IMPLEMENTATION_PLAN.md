@@ -298,7 +298,8 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 - Evidence: ctest 13/13 pass (test_hotplug 34/34, test_properties_changed 33/33); clean build Debug -Werror; verify-boilerplate, check-plan-freshness, branch-guard all exit 0
 
 ## Task 12: Manager interface method wrappers
-- Status: pending
+- Status: complete
+  - Evidence: test_manager_calls 38/38 cmocka tests pass; ctest 14/14 pass; clean build Debug -Werror.
 - Dependencies: Task 10
 - Scope: `src/dbus/ip_manager.c`, `src/dbus/ip_manager.h`
 - Acceptance criteria:

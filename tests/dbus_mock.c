@@ -9,6 +9,7 @@
 #include "dbus_mock.h"
 
 #include <errno.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -109,13 +110,57 @@ static int mock_get_unique_name(ip_bus_handle bus, const char *well_known,
     return 0;
 }
 
+/*
+ * Count the number of input arguments encoded in a DBus type signature.
+ * Convention: each 's' is one string arg; 'a' is a container prefix that
+ * pairs with the following element type (e.g. "as" = one array arg).
+ * All other characters count as one arg each.
+ */
+static int
+mock_count_sig_args(const char *sig)
+{
+    int count = 0;
+    for (const char *p = sig; *p; p++) {
+        if (*p == 'a') {
+            p++;            /* skip element type char */
+            count++;
+        } else {
+            count++;
+        }
+    }
+    return count;
+}
+
+/*
+ * Mock call_method: looks up by (iface, method) and returns the canned
+ * rc.  If the expectation has a value string and the last variadic arg
+ * (a char **) is non-NULL, fills it with a strdup'd copy of the value.
+ *
+ * Calling convention: the last variadic argument is always a char **out
+ * (NULL for void methods, a valid pointer for methods that return a
+ * string).  The mock counts input args from `sig`, skips them, and reads
+ * the trailing char **.
+ */
 static int mock_call_method(ip_bus_handle bus, const char *dest,
                             const char *path, const char *iface,
                             const char *method, const char *sig, ...) {
-    (void)dest; (void)path; (void)sig;
+    (void)dest; (void)path;
     ip_dbus_mock *mock = (ip_dbus_mock *)bus;
     const ip_mock_expectation *e = ip_dbus_mock_find(mock, iface, method);
-    return e ? e->rc : -ENXIO;
+    int rc = e ? e->rc : -ENXIO;
+
+    /* Process variadic args: skip input args, read output ptr. */
+    va_list ap;
+    va_start(ap, sig);
+    int nargs = mock_count_sig_args(sig ? sig : "");
+    for (int i = 0; i < nargs; i++)
+        (void)va_arg(ap, const char *);
+    char **out = va_arg(ap, char **);
+    if (out && e && e->value && rc >= 0)
+        *out = strdup(e->value);
+    va_end(ap);
+
+    return rc;
 }
 
 static int mock_get_property(ip_bus_handle bus, const char *dest,

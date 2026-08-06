@@ -67,13 +67,15 @@ static void test_mock_backend_call(void **state) {
 
     /* Unregistered call returns -ENXIO. */
     assert_int_equal(be->call_method(mock.bus, IP_DBUS_NAME, IP_DBUS_PATH,
-                                     IP_IFACE_MANAGER, "NoSuchMethod", ""),
+                                     IP_IFACE_MANAGER, "NoSuchMethod", "",
+                                     NULL),
                      -ENXIO);
 
     /* Registered call returns the canned rc (0). */
     assert_int_equal(be->call_method(mock.bus, IP_DBUS_NAME, IP_DBUS_PATH,
                                      IP_IFACE_MANAGER,
-                                     "GetSupportedTargetDevices", ""),
+                                     "GetSupportedTargetDevices", "",
+                                     NULL),
                      0);
 
     ip_dbus_mock_free(&mock);
@@ -143,7 +145,7 @@ static void test_mock_error_expectation(void **state) {
     const ip_dbus_backend *be = ip_dbus_mock_backend(&mock);
     assert_int_equal(be->call_method(mock.bus, IP_DBUS_NAME, IP_DBUS_PATH,
                                      IP_IFACE_MANAGER, "CreateTargetDevice",
-                                     ""),
+                                     "", NULL),
                      -EACCES);
 
     ip_dbus_mock_free(&mock);

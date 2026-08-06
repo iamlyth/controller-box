@@ -16,6 +16,7 @@
 #include <systemd/sd-bus.h>
 
 #include <errno.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,6 +32,9 @@ typedef struct {
     void        *slot_data[MAX_SD_SLOTS];   /* heap-allocated callback data */
     int          slot_count;
 } sd_bus_wrapper;
+
+/* Forward declaration — defined after the vtable stubs section. */
+static int translate_sd_error(int rc, const sd_bus_error *error);
 
 /* Callback data for signal subscriptions. */
 typedef struct {
@@ -569,15 +573,155 @@ sd_subscribe_signal(ip_bus_handle bus, const char *iface,
     return 0;
 }
 
-/* --- Vtable: stubs (implemented in later tasks) -------------------------- */
+/* --- Vtable: call_method (Task 12) --------------------------------------- */
+/*
+ * Production sd-bus method call.  Creates a method-call message, appends
+ * input args based on `sig`, calls the method, and optionally reads a
+ * string reply.
+ *
+ * Calling convention (shared with the mock backend):
+ *   - `sig` encodes the input argument types.  Each 's' is one string
+ *     arg; 'as' is one array-of-strings arg (passed as a comma-separated
+ *     string, split here into a DBus array).
+ *   - The last variadic argument is always a char **out_value: NULL for
+ *     void methods, a valid pointer for methods that return a string.
+ *   - On success with a non-NULL out_value, *out_value is set to a
+ *     heap-allocated copy of the reply string.
+ */
+
+/* Append a comma-separated string as a DBus string array ('as'). */
+static int
+sd_append_string_array(sd_bus_message *m, const char *csv)
+{
+    int r = sd_bus_message_open_container(m, 'a', "s");
+    if (r < 0)
+        return r;
+
+    if (csv && *csv) {
+        const char *p = csv;
+        while (*p) {
+            const char *comma = strchr(p, ',');
+            size_t len = comma ? (size_t)(comma - p) : strlen(p);
+
+            char *elem = malloc(len + 1);
+            if (!elem) {
+                sd_bus_message_close_container(m);
+                return -ENOMEM;
+            }
+            memcpy(elem, p, len);
+            elem[len] = '\0';
+
+            r = sd_bus_message_append_basic(m, 's', elem);
+            free(elem);
+            if (r < 0) {
+                sd_bus_message_close_container(m);
+                return r;
+            }
+
+            if (!comma)
+                break;
+            p = comma + 1;
+        }
+    }
+
+    return sd_bus_message_close_container(m);
+}
 
 static int
 sd_call_method(ip_bus_handle bus, const char *dest,
                const char *path, const char *iface,
                const char *method, const char *sig, ...)
 {
-    (void)bus; (void)dest; (void)path; (void)iface; (void)method; (void)sig;
-    return -ENOSYS;  /* Task 12 */
+    sd_bus_wrapper *w = (sd_bus_wrapper *)bus;
+    if (!w || !dest || !path || !iface || !method)
+        return -EINVAL;
+
+    sd_bus_error   error = SD_BUS_ERROR_NULL;
+    sd_bus_message *m    = NULL;
+    sd_bus_message *reply = NULL;
+    int r;
+
+    r = sd_bus_message_new_method_call(w->bus, &m, dest, path, iface, method);
+    if (r < 0)
+        return r;
+
+    /* Append input args based on sig. */
+    va_list ap;
+    va_start(ap, sig);
+
+    if (sig) {
+        for (const char *p = sig; *p; p++) {
+            if (*p == 'a' && p[1] == 's') {
+                p++;  /* skip element type */
+                const char *csv = va_arg(ap, const char *);
+                r = sd_append_string_array(m, csv);
+                if (r < 0)
+                    goto fail_va;
+            } else if (*p == 's') {
+                const char *str = va_arg(ap, const char *);
+                r = sd_bus_message_append_basic(m, 's', str);
+                if (r < 0)
+                    goto fail_va;
+            } else {
+                /* Unsupported type — skip the corresponding arg. */
+                (void)va_arg(ap, const char *);
+            }
+        }
+    }
+
+    /* Read the output pointer (always present as the last variadic arg). */
+    char **out = va_arg(ap, char **);
+    va_end(ap);
+
+    r = sd_bus_call(w->bus, m, 0, &error, &reply);
+    if (r < 0) {
+        r = translate_sd_error(r, &error);
+        goto fail;
+    }
+
+    if (out) {
+        const char *str = NULL;
+        r = sd_bus_message_read(reply, "s", &str);
+        if (r < 0)
+            goto fail;
+        *out = strdup(str);
+        if (!*out) {
+            r = -ENOMEM;
+            goto fail;
+        }
+    }
+
+    sd_bus_message_unref(m);
+    sd_bus_message_unref(reply);
+    sd_bus_error_free(&error);
+    return 0;
+
+fail_va:
+    va_end(ap);
+fail:
+    sd_bus_message_unref(m);
+    sd_bus_message_unref(reply);
+    sd_bus_error_free(&error);
+    return r;
+}
+
+/* --- Vtable: set_property (Task 12) ------------------------------------- */
+/*
+ * Production sd-bus property setter.  Uses the Properties.Set method call
+ * with signature ssv (interface, property, variant).  For array
+ * properties, the variant contains an 'as' built from the comma-separated
+ * value string.  For string properties, the variant contains an 's'.
+ */
+
+/* Properties that are string arrays (as) — need variant "as". */
+static bool
+sd_is_array_property(const char *prop)
+{
+    return strcmp(prop, "GamepadOrder") == 0 ||
+           strcmp(prop, "TargetDevices") == 0 ||
+           strcmp(prop, "SourceDevicePaths") == 0 ||
+           strcmp(prop, "SupportedTargetDeviceIds") == 0 ||
+           strcmp(prop, "SupportedTargetDevices") == 0;
 }
 
 static int
@@ -585,8 +729,68 @@ sd_set_property(ip_bus_handle bus, const char *dest,
                 const char *path, const char *iface,
                 const char *prop, const char *value)
 {
-    (void)bus; (void)dest; (void)path; (void)iface; (void)prop; (void)value;
-    return -ENOSYS;  /* Task 12 */
+    sd_bus_wrapper *w = (sd_bus_wrapper *)bus;
+    if (!w || !dest || !path || !iface || !prop || !value)
+        return -EINVAL;
+
+    sd_bus_error   error = SD_BUS_ERROR_NULL;
+    sd_bus_message *m    = NULL;
+    sd_bus_message *reply = NULL;
+    int r;
+
+    r = sd_bus_message_new_method_call(w->bus, &m, dest, path,
+                                         IP_IFACE_PROPERTIES, "Set");
+    if (r < 0)
+        return r;
+
+    /* Append: interface name (s), property name (s). */
+    r = sd_bus_message_append_basic(m, 's', iface);
+    if (r < 0)
+        goto fail;
+    r = sd_bus_message_append_basic(m, 's', prop);
+    if (r < 0)
+        goto fail;
+
+    /* Build the variant value (v). */
+    if (sd_is_array_property(prop)) {
+        r = sd_bus_message_open_container(m, 'v', "as");
+        if (r < 0)
+            goto fail;
+        r = sd_append_string_array(m, value);
+        if (r < 0)
+            goto fail;
+        r = sd_bus_message_close_container(m);  /* close variant */
+        if (r < 0)
+            goto fail;
+    } else {
+        /* Default: string property. */
+        r = sd_bus_message_open_container(m, 'v', "s");
+        if (r < 0)
+            goto fail;
+        r = sd_bus_message_append_basic(m, 's', value);
+        if (r < 0)
+            goto fail;
+        r = sd_bus_message_close_container(m);  /* close variant */
+        if (r < 0)
+            goto fail;
+    }
+
+    r = sd_bus_call(w->bus, m, 0, &error, &reply);
+    if (r < 0) {
+        r = translate_sd_error(r, &error);
+        goto fail;
+    }
+
+    sd_bus_message_unref(m);
+    sd_bus_message_unref(reply);
+    sd_bus_error_free(&error);
+    return 0;
+
+fail:
+    sd_bus_message_unref(m);
+    sd_bus_message_unref(reply);
+    sd_bus_error_free(&error);
+    return r;
 }
 
 /* --- Vtable: get_managed_objects (Task 10) ------------------------------- */
