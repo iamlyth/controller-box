@@ -721,7 +721,18 @@ sd_is_array_property(const char *prop)
            strcmp(prop, "TargetDevices") == 0 ||
            strcmp(prop, "SourceDevicePaths") == 0 ||
            strcmp(prop, "SupportedTargetDeviceIds") == 0 ||
-           strcmp(prop, "SupportedTargetDevices") == 0;
+           strcmp(prop, "SupportedTargetDevices") == 0 ||
+           strcmp(prop, "Capabilities") == 0 ||
+           strcmp(prop, "OutputCapabilities") == 0 ||
+           strcmp(prop, "TargetCapabilities") == 0 ||
+           strcmp(prop, "DbusDevices") == 0;
+}
+
+/* Properties that are uint32 (u) — need variant "u". */
+static bool
+sd_is_uint_property(const char *prop)
+{
+    return strcmp(prop, "InterceptMode") == 0;
 }
 
 static int
@@ -757,6 +768,23 @@ sd_set_property(ip_bus_handle bus, const char *dest,
         if (r < 0)
             goto fail;
         r = sd_append_string_array(m, value);
+        if (r < 0)
+            goto fail;
+        r = sd_bus_message_close_container(m);  /* close variant */
+        if (r < 0)
+            goto fail;
+    } else if (sd_is_uint_property(prop)) {
+        /* InterceptMode is uint32 — parse the string value. */
+        char *end = NULL;
+        unsigned long uval = strtoul(value, &end, 10);
+        if (!end || *end != '\0') {
+            r = -EINVAL;
+            goto fail;
+        }
+        r = sd_bus_message_open_container(m, 'v', "u");
+        if (r < 0)
+            goto fail;
+        r = sd_bus_message_append_basic(m, 'u', &uval);
         if (r < 0)
             goto fail;
         r = sd_bus_message_close_container(m);  /* close variant */

@@ -298,3 +298,101 @@ free(order);
 rc = ip_manager_set_gamepad_order(conn.backend, conn.bus, order, &model);
 // rc == 0, or -EINVAL if any path is not in the model
 ```
+## CompositeDevice Interface Wrappers (Task 13)
+
+### Overview
+
+Thin wrappers around the `org.shadowblip.Input.CompositeDevice` interface at
+per-device paths `/org/shadowblip/InputPlumber/CompositeDevice{N}`. All
+wrappers go through the `ip_dbus_backend` vtable for testability.
+
+### Method calls
+
+| Wrapper | DBus method | Signature | Returns |
+|---|---|---|---|
+| `ip_composite_set_intercept_activation` | `SetInterceptActivation` | `ass` | void |
+| `ip_composite_load_profile_path` | `LoadProfilePath` | `s` | void |
+| `ip_composite_load_profile_from_yaml` | `LoadProfileFromYaml` | `s` | void |
+| `ip_composite_get_profile_yaml` | `GetProfileYaml` | `` | string |
+| `ip_composite_set_target_devices` | `SetTargetDevices` | `as` | void |
+| `ip_composite_stop` | `Stop` | `` | void |
+
+### Property access
+
+| Wrapper | Property | Type | Access |
+|---|---|---|---|
+| `ip_composite_get_intercept_mode` | `InterceptMode` | `u` | read |
+| `ip_composite_set_intercept_mode` | `InterceptMode` | `u` | write |
+| `ip_composite_get_target_devices` | `TargetDevices` | `as` | read |
+| `ip_composite_get_source_device_paths` | `SourceDevicePaths` | `as` | read |
+| `ip_composite_get_persistent_id` | `PersistentId` | `s` | read |
+| `ip_composite_get_name` | `Name` | `s` | read |
+| `ip_composite_get_capabilities` | `Capabilities` | `as` | read |
+| `ip_composite_get_output_capabilities` | `OutputCapabilities` | `as` | read |
+| `ip_composite_get_target_capabilities` | `TargetCapabilities` | `as` | read |
+| `ip_composite_get_dbus_devices` | `DbusDevices` | `as` | read |
+
+### Production backend: uint32 property support
+
+`InterceptMode` is a `u` (uint32) property. The production `sd_set_property`
+implementation detects uint properties via `sd_is_uint_property()` and builds
+a variant `"u"` by parsing the string value to `unsigned long` and appending
+via `sd_bus_message_append_basic(m, 'u', &uval)`.
+
+### InterceptMode polling (gap #1 workaround)
+
+`InterceptMode` does NOT emit `PropertiesChanged` (gap #1). The GUI must poll
+the property at 50ms intervals (DEC-002) to detect mode transitions.
+
+**State machine:**
+
+```
+IDLE → start() → PASS_WAIT (polling at 50ms, PASS expected)
+                 → detect ALL/GAMEPAD_ONLY → fire activating_cb → ACTIVE
+ACTIVE → detect PASS/NONE → fire deactivating_cb → IDLE
+        → timeout (mode stuck at ALL) → fire error_cb → IDLE
+```
+
+**SDL integration:** `ip_intercept_poll_start()` creates an `SDL_AddTimer`
+(50ms interval). The timer callback pushes a custom `SDL_UserEvent` onto the
+event queue. The main event loop calls `ip_intercept_poll_tick()` when it
+sees the custom event.
+
+**Timeout handling:**
+- In `PASS_WAIT`: if InterceptMode is `NONE` (unexpected reset) for
+  `max_timeout_ticks` consecutive ticks, fire error callback and reset to IDLE.
+- In `ACTIVE`: if InterceptMode stays at `ALL`/`GAMEPAD_ONLY` for
+  `max_timeout_ticks` consecutive ticks (GUI set PASS but InputPlumber didn't
+  switch), fire error callback with `-ETIMEDOUT` and reset to IDLE.
+- Consecutive property read errors: after `max_errors` (default 5), fire
+  error callback and reset to IDLE.
+- Parse failures (invalid mode string): treated as transient errors, count
+  toward `max_errors`.
+
+**API example:**
+
+```c
+ip_intercept_poll poll;
+ip_intercept_poll_init(&poll, conn.backend, conn.bus,
+    "/org/shadowblip/InputPlumber/CompositeDevice0",
+    on_activating, &overlay_data,
+    on_deactivating, &overlay_data,
+    on_error, &error_data);
+
+uint32_t event_type = SDL_RegisterEvents(1);
+ip_intercept_poll_start(&poll, IP_INTERCEPT_POLL_INTERVAL_MS, event_type);
+
+/* In main event loop, when event_type is received: */
+ip_intercept_poll_tick(&poll);
+
+/* To stop polling: */
+ip_intercept_poll_stop(&poll);
+```
+
+### DbusDevices correlation
+
+The `DbusDevices` property returns the object paths of `DBusDevice` objects
+associated with a composite device. When `InterceptMode` is `ALL` or
+`GAMEPAD_ONLY`, input is routed to these `DBusDevice` objects and emitted as
+`InputEvent` signals. Task 14 uses this property to discover `DBusDevice`
+object paths per composite and subscribe to `InputEvent` signals.

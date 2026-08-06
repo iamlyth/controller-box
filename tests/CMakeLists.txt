@@ -111,6 +111,24 @@ if(CMOCKA_FOUND)
 
     add_test(NAME test_manager_calls COMMAND test_manager_calls)
 
+    # CompositeDevice interface method wrappers test (Task 13):
+    # SetInterceptActivation, InterceptMode get/set, LoadProfilePath,
+    # LoadProfileFromYaml, GetProfileYaml, SetTargetDevices, Stop,
+    # TargetDevices/SourceDevicePaths/PersistentId/Name/Capabilities/
+    # OutputCapabilities/TargetCapabilities/DbusDevices gets.
+    add_executable(test_composite_calls tests/test_composite_calls.c)
+    target_link_libraries(test_composite_calls PRIVATE controllerbox cbx_test_support)
+
+    add_test(NAME test_composite_calls COMMAND test_composite_calls)
+
+    # InterceptMode polling state machine test (Task 13): state transitions
+    # (IDLE/PASS_WAIT/ACTIVE), activation/deactivation callbacks, timeout,
+    # error handling, parse failures, full lifecycle simulation.
+    add_executable(test_intercept_poll tests/test_intercept_poll.c)
+    target_link_libraries(test_intercept_poll PRIVATE controllerbox cbx_test_support)
+
+    add_test(NAME test_intercept_poll COMMAND test_intercept_poll)
+
     # Help later tasks: tests that need the dummy driver can set it here.
     set_tests_properties(test_sdl_dummy PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")

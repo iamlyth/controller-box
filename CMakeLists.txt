@@ -78,9 +78,11 @@ add_library(controllerbox STATIC
     src/config/config_profile_meta.c
     src/config/config_profile_list.c
     src/dbus/dbus_client.c
+    src/dbus/ip_composite.c
     src/dbus/ip_connection.c
     src/dbus/ip_device_model.c
     src/dbus/ip_hotplug.c
+    src/dbus/ip_intercept_poll.c
     src/dbus/ip_manager.c
     src/dbus/ip_objectmanager.c
     src/dbus/ip_properties.c

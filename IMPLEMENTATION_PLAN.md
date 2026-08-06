@@ -266,7 +266,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 - Evidence: clean build (Debug -Werror, no warnings); ctest 10/10 pass; test_connection 25/25 cmocka tests pass (connect success/service-unknown/access-denied/subscribe-fail/null-backend, NameOwnerChanged lost/acquired/version-reread, degraded/reenumerate callbacks, lost-then-reacquired, disconnect, null safety, both-empty/both-nonempty NameOwnerChanged, init defaults, set-bus, NoReply/InvalidArgs, unique-name, subscribe-once); `src/dbus/dbus_client.c` implements production sd-bus vtable (connect/disconnect/get_unique_name/get_property/subscribe_signal with NameOwnerChanged match rule + arg0 filter, error translation via sd_bus_error_has_name); `src/dbus/ip_connection.c` implements connection state machine with categorized error codes; `tests/dbus_mock.c` extended with signal subscription storage and inject_signal dispatch; `docs/DBus-API.md` created with connection model section; verify-boilerplate, check-plan-freshness, branch-guard exit 0.
 
 ## Task 10: ObjectManager enumeration and device model
-- Status: pending
+- Status: complete
 - Dependencies: Task 9
 - Scope: `src/dbus/ip_objectmanager.c`, `src/dbus/ip_device_model.c`,
   `src/dbus/ip_device_model.h`
@@ -313,7 +313,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 - Documentation impact: DBus-API.md Manager interface section
 
 ## Task 13: CompositeDevice interface wrappers and InterceptMode polling
-- Status: pending
+- Status: complete
 - Dependencies: Task 10
 - Scope: `src/dbus/ip_composite.c`, `src/dbus/ip_intercept_poll.c`
 - Acceptance criteria:
