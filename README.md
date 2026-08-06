@@ -168,6 +168,23 @@ cd build && ctest --output-on-failure && cd ..
 ./build/controller-box --manager --dry-run
 ```
 
+## Bug maintenance
+
+Portable bug state is tracked in `open-bugs.md` and `closed-bugs.md`. A bug may
+reference a GitHub issue, a Forgejo issue, both, or neither; external tickets do
+not replace the local ledger. Ordinary defects use the dedicated maintenance
+cycle and do not modify `docs/SPEC.md`:
+
+```bash
+./scripts/bug-ledger.py validate
+./scripts/ralph-maintenance-plan.sh BUG-0001
+./scripts/ralph-maintenance-run.sh
+```
+
+Contract changes return to the human specification and full planning workflow.
+See [docs/BUG_WORKFLOW.md](docs/BUG_WORKFLOW.md) for intake, triage, external
+links, maintenance, verification, and recovery.
+
 ## Documentation
 
 - [docs/OPERATIONS.md](docs/OPERATIONS.md) — Service architecture, systemd management, troubleshooting
@@ -175,6 +192,7 @@ cd build && ctest --output-on-failure && cd ..
 - [docs/PROFILES.md](docs/PROFILES.md) — Profile format, editor modes, validation
 - [docs/PACKAGING.md](docs/PACKAGING.md) — Flatpak, tarball, install layout
 - [docs/FACTORY.md](docs/FACTORY.md) — Development factory boilerplate (Ralph orchestration)
+- [docs/BUG_WORKFLOW.md](docs/BUG_WORKFLOW.md) — GitHub/Forgejo tickets and portable maintenance ledgers
 
 ## Credits
 

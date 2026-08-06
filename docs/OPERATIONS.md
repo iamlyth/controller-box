@@ -281,6 +281,27 @@ detection. The spec's ~500 ms figure was reduced to meet the <10 ms overlay
 appearance target for the render path. Detection latency is bounded by the poll
 interval; the render path itself is <1 ms.
 
+## Bug maintenance
+
+GitHub and Forgejo issues are optional external references. The portable,
+canonical workflow state is `open-bugs.md` and `closed-bugs.md`; never put PATs
+or credential-bearing URLs in either ledger. Use `scripts/bug-ledger.py` for
+validated intake, links, transitions, closure evidence, and interrupted-close
+recovery.
+
+An ordinary defect is triaged and handled with:
+
+```bash
+./scripts/ralph-maintenance-plan.sh BUG-0001
+./scripts/ralph-maintenance-run.sh
+```
+
+One cycle handles one bug and runs the configured project verifier before
+closure. If expected behavior requires a product decision or specification
+change, block maintenance and return to the human specification workflow.
+Recovery modes are `maintenance-planning` and `maintenance`. See
+[BUG_WORKFLOW.md](BUG_WORKFLOW.md) for the complete process.
+
 ## Troubleshooting
 
 ### InputPlumber not detected

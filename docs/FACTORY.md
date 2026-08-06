@@ -36,7 +36,9 @@ No Git worktrees are used. `features.parallel` is disabled in both Ralph configu
 Durable, tracked state:
 
 - `docs/SPEC.md`: approved requirements
-- `IMPLEMENTATION_PLAN.md`: task status and verification evidence
+- `IMPLEMENTATION_PLAN.md`: feature task status and verification evidence
+- `open-bugs.md` / `closed-bugs.md`: portable canonical defect state
+- `MAINTENANCE_PLAN.md`: one selected bug, fingerprint, tasks, and evidence
 - `.ralph/agent/scratchpad.md`: concise crash handoff
 - source, tests, README, and operational documentation
 - `factory.toml`, Ralph configs, prompts, and project subagent definitions
@@ -46,7 +48,7 @@ Volatile, ignored state:
 - event streams and pointer files under `.ralph/`
 - loop locks, diagnostics, API state, task/memory stores, and TUI exports
 - Pi transcripts and scheduled-agent state
-- `.factory-lock`
+- `.factory-lock`, `.bug-ledger.lock`, and `.factory-state/` lifecycle markers
 - `.ollama-usage-env`
 
 Git checkpoints make the plan, scratchpad, and implementation recoverable. Event/task files improve same-disk recovery but are not treated as portable project history.
@@ -141,6 +143,24 @@ Each iteration:
 
 Only the final documentation and specification audit may produce `LOOP_COMPLETE`.
 
+## Maintain one bug
+
+Ordinary defects stay out of `docs/SPEC.md`. Canonical state is tracked in
+`open-bugs.md` and `closed-bugs.md`, with optional manual references to GitHub,
+Forgejo, or both. After human triage, run:
+
+```bash
+./scripts/ralph-maintenance-plan.sh BUG-0001
+./scripts/ralph-maintenance-run.sh
+```
+
+The dedicated plan is bound to the immutable bug intake, committed spec, and
+planning checkpoint. The single-writer maintenance loop adds regression tests,
+implements the fix, runs the configured project verifier, records closure
+evidence, and moves only that bug into the closed ledger. Contract changes are
+blocked and returned to the specification workflow. See
+[BUG_WORKFLOW.md](BUG_WORKFLOW.md).
+
 ## Adaptive concurrency
 
 Configured ceilings live in `factory.toml`:
@@ -232,12 +252,15 @@ If unfinished runtime tasks belong to multiple loop IDs, recovery refuses to gue
 ./scripts/ralph-recover.sh --loop-id primary-YYYYMMDD-HHMMSS
 ```
 
-Planning recovery uses:
+Planning and maintenance recovery use:
 
 ```bash
 ./scripts/ralph-recover.sh --mode planning
+./scripts/ralph-recover.sh --mode maintenance-planning
+./scripts/ralph-recover.sh --mode maintenance
 ```
 
+New loops persist their lifecycle mode and recovery rejects a mismatched mode.
 Recovery never resets Git or starts a second writer.
 
 ## Specification changes
