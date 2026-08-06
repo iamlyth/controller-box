@@ -375,3 +375,86 @@ Task 9 (sd-bus connection, version check, NameOwnerChanged tracking) — deps:
 Task 2 (done). Unblocks Task 10 (ObjectManager enumeration), then all DBus
 layer tasks. Alternatively Task 16 (SVG assets + icon mapping) — deps: Task 1
 (done). Check `ralph tools task ready` and the plan.
+
+## Task 9 (complete) — sd-bus connection, version check, NameOwnerChanged tracking
+
+### What landed
+- `src/dbus/ip_connection.h`: API for InputPlumber DBus connection management
+  (SPEC §10.1). `ip_connection` struct (backend, bus, state, unique_name,
+  version, reenumerate_cb, degraded_cb). `ip_conn_state` enum (DISCONNECTED,
+  CONNECTED, DEGRADED). Categorized error code macros (IP_ERR_SERVICE_UNKNOWN
+  = -EUNATCH, IP_ERR_ACCESS_DENIED = -EACCES, IP_ERR_NO_REPLY = -ETIMEDOUT,
+  IP_ERR_INVALID_ARGS = -EINVAL). Functions: init, set_bus, connect,
+  disconnect, get_state, get_version, get_unique_name, is_connected,
+  is_degraded, set_reenumerate_cb, set_degraded_cb, handle_name_changed.
+- `src/dbus/ip_connection.c`: Connection state machine. Connect: bus
+  connect → subscribe NameOwnerChanged (before Version read so degraded
+  mode still gets signals) → read Version property → on success: get unique
+  name, state=CONNECTED → on ServiceUnknown: state=DEGRADED (bus stays
+  connected) → on AccessDenied: log guidance, disconnect → on other: disconnect,
+  return error. handle_name_changed: acquired → update unique name, re-read
+  version, state=CONNECTED, fire reenumerate callback; lost → clear name/
+  version, state=DEGRADED, fire degraded callback. Both non-empty
+  (transfer) = no-op. Both empty = no-op.
+- `src/dbus/dbus_client.c`: Production sd-bus vtable backend. Replaces Task 2
+  stub. `sd_bus_wrapper` struct holds sd_bus* + slot array. connect:
+  sd_bus_open_system. disconnect: unref all slots + bus, free wrapper.
+  get_unique_name: GetNameOwner method call (NameHasNoOwner →
+  IP_ERR_SERVICE_UNKNOWN). get_property: sd_bus_get_property_string with
+  sd_bus_error_has_name translation to categorized errno codes.
+  subscribe_signal: sd_bus_add_match with NameOwnerChanged match rule
+  (arg0='org.shadowblip.InputPlumber'), slot callback parses "sss" into
+  ip_owner_changed_payload. Stubs for call_method, set_property,
+  get_managed_objects (later tasks). `ip_dbus_sd_backend()` accessor.
+- `tests/dbus_mock.h`: Extended with ip_owner_changed_payload struct,
+  ip_mock_subscription struct, IP_MOCK_MAX_SUBSCRIPTIONS, subscriptions[]
+  + sub_count + subscribe_fail_rc fields in ip_dbus_mock.
+- `tests/dbus_mock.c`: mock_subscribe_signal stores subscriptions (or fails
+  if subscribe_fail_rc set). mock_inject_signal dispatches to matching
+  registered callbacks. ip_dbus_mock_reset clears subscriptions.
+- `tests/test_connection.c`: 25 cmocka tests with setup/teardown fixture.
+- `CMakeLists.txt`: added ip_connection.c to controllerbox lib, added tests/
+  to controllerbox PUBLIC include dirs (production code includes dbus_mock.h
+  for vtable definition).
+- `tests/CMakeLists.txt`: added test_connection target linking controllerbox +
+  cbx_test_support (for mock functions).
+- `docs/DBus-API.md`: created with connection model section.
+
+### Verification (all pass)
+- clean build (Debug -Werror, no warnings)
+- ctest 10/10: smoke_test_sdl2, smoke_test_nanosvg, test_sample,
+  test_sdl_dummy, test_config_paths, test_settings, test_assignments,
+  test_profile_yaml, test_profile_list, test_connection
+- test_connection 25/25 cmocka tests pass
+- verify-boilerplate, check-plan-freshness, branch-guard → exit 0
+
+### Gotchas fixed
+- **Include path for dbus_mock.h**: Production code (ip_connection.c,
+  dbus_client.c) includes dbus_mock.h which is in tests/. Fixed by adding
+  tests/ to controllerbox PUBLIC include dirs. This is how the vtable
+  architecture was designed in Task 3 — the vtable interface is in
+  dbus_mock.h, shared between production and tests.
+- **test_connection include path**: test_connection.c includes
+  "dbus/ip_connection.h" (not "ip_connection.h") because the include path
+  is src/ (PUBLIC from controllerbox). Same pattern as other tests that
+  include "config/config_paths.h" etc.
+- **test_connection linking**: Must link both controllerbox (for
+  ip_connection functions) AND cbx_test_support (for dbus_mock functions).
+  Other config tests only need controllerbox because they don't use the
+  mock.
+- **Mock subscribe_signal**: Original mock was a no-op that didn't store
+  callbacks. Extended to store subscriptions in a fixed-size table and
+  dispatch via inject_signal. Also added subscribe_fail_rc for testing
+  subscribe failure scenarios.
+- **Mock get_unique_name always returns ":1.42"**: This is hardcoded and
+  ignores expectations. For NameOwnerChanged tests, the unique name is set
+  from the signal payload (new_owner), not from get_unique_name. This is
+  correct behavior — on initial connect we resolve via GetNameOwner, on
+  name change we get the new name from the signal.
+
+### Next
+Task 10 (ObjectManager enumeration and device model) — deps: Task 9 (now
+done). Unblocks Tasks 11-14 (hotplug, PropertiesChanged, Manager wrappers,
+CompositeDevice wrappers, source/target device properties).
+Alternatively Task 16 (SVG assets + icon mapping) — deps: Task 1 (done).
+Check `ralph tools task ready` and the plan.
