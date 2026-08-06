@@ -121,7 +121,7 @@ Install rules for tarball. Flatpak manifest for primary distribution.
 - Documentation impact: README build-from-source section (placeholder)
 
 ## Task 2: Dual-mode entry point and shared library structure
-- Status: pending
+- Status: complete
 - Dependencies: Task 1
 - Scope: `src/app/main.c` with `--overlay-service` / `--manager` arg parsing, shared
   static library target `libcontrollerbox.a` aggregating all source

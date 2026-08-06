@@ -66,9 +66,10 @@ target_link_libraries(nanosvg PUBLIC m)
 target_compile_options(nanosvg PRIVATE -w)
 
 # --- Shared static library (libcontrollerbox) --------------------------------
-# Aggregates all product sources. Later tasks append their .c files here.
+# Aggregates all reusable product sources (everything except the thin entry
+# point in src/app/main.c, which lives in the executable). Later tasks append
+# their .c files here.
 add_library(controllerbox STATIC
-    src/app/main.c
     src/config/config_paths.c
     src/dbus/dbus_client.c
     src/ui/widget.c)
@@ -85,6 +86,12 @@ target_link_libraries(controllerbox
         PkgConfig::YAML
         nanosvg)
 
+# --- Dual-mode executable (Task 2, SPEC §2.3) --------------------------------
+# controller-box is one binary with two modes (--overlay-service default,
+# --manager). Both link against the shared static library.
+add_executable(controller-box src/app/main.c)
+target_link_libraries(controller-box PRIVATE controllerbox)
+
 # --- Task 1 smoke tests -------------------------------------------------------
 add_executable(smoke_test_sdl2 tests/smoke_test_sdl2.c)
 target_link_libraries(smoke_test_sdl2 PRIVATE PkgConfig::SDL2)
@@ -98,5 +105,7 @@ add_test(NAME smoke_test_sdl2    COMMAND smoke_test_sdl2)
 add_test(NAME smoke_test_nanosvg COMMAND smoke_test_nanosvg)
 
 # --- Install rules (expanded in Task 41) -------------------------------------
+install(TARGETS controller-box
+    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 install(TARGETS controllerbox nanosvg
     ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}")

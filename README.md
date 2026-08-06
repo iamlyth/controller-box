@@ -32,6 +32,31 @@ ctest --test-dir build --output-on-failure
 Install paths are generated into `build/config.h` at configure time (see
 `config.h.in`). Runtime XDG path resolution is implemented in later tasks.
 
+## Running Controller-Box
+
+`controller-box` is a single binary with two modes (SPEC §2.3). The overlay
+service is the default; the manager is launched on demand.
+
+```bash
+# Overlay service (default) — runs as a systemd user service, always resident.
+./build/controller-box
+./build/controller-box --overlay-service
+
+# Manager configuration app (Controllers / Profiles / Settings tabs).
+./build/controller-box --manager
+
+# Print the build version.
+./build/controller-box --version
+
+# Dry-run: print the selected mode and exit without running (headless-safe).
+./build/controller-box --overlay-service --dry-run
+./build/controller-box --manager --dry-run
+```
+
+Both modes link against the shared `libcontrollerbox.a` static library, which
+aggregates the reusable product sources. The mode run-paths are filled in by
+later tasks; until then each mode prints a banner and exits.
+
 ## Operating model
 
 - `main` is the human-controlled release branch.
