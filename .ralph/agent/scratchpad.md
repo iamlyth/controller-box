@@ -953,3 +953,80 @@ Task 15 (CreateCompositeDevice temp file + GamepadOrder persistence) —
 deps: Task 11+12+6 (all done).
 Alternatively Task 16 (SVG assets + icon mapping) — deps: Task 1 (done).
 Check `ralph tools task ready` and the plan.
+
+## Task 15 (complete) — CreateCompositeDevice temp file + GamepadOrder persistence
+
+### What landed
+- `src/dbus/ip_create_composite.h/c`: CreateCompositeDevice temp file workaround
+  (gap #3). ip_create_composite_device(backend, bus, yaml_content, out_path).
+  Resolves temp dir (XDG_RUNTIME_DIR or /tmp), creates temp file via
+  mkstemps() (glibc, with .yaml suffix) or mkstemp() (fallback, no suffix),
+  fchmod 0600, writes YAML, fsync, close, calls Manager.CreateCompositeDevice,
+  always unlinks temp file regardless of result.
+- `src/dbus/ip_gamepad_order.h/c`: GamepadOrder persistence layer (gap #2).
+  ip_gamepad_order_save(backend, bus, model, paths_csv) — loads existing
+  assignments.yaml, clears gamepad_order, iterates composite paths, skips
+  stale (not in model), queries PersistentId via ip_composite_get_persistent_id,
+  skips DBus errors, validates IDs via cbx_validate_id, deduplicates, saves.
+  ip_gamepad_order_load(out_csv) — reads assignments.yaml, builds CSV of
+  gamepad_order IDs, skips invalid IDs.
+- `tests/test_create_composite.c`: 11 cmocka tests (success, error, null
+  backend/yaml/out, no-expectation, temp-unlinked-after-success/error,
+  xdg-runtime-dir-preferred, empty-yaml, large-yaml).
+- `tests/test_gamepad_order.c`: 14 cmocka tests (save success, empty-csv,
+  stale-path-skipped, dbus-error-skipped, preserves-assignments, null-args,
+  order-id, load no-file/with-order/empty/invalid-id-skipped/null, round-trip,
+  save-replaces-order).
+- `CMakeLists.txt`: Added ip_create_composite.c + ip_gamepad_order.c.
+- `tests/CMakeLists.txt`: Added test_create_composite + test_gamepad_order.
+- `docs/DBus-API.md`: Added gap #2 and #3 workaround sections.
+- `IMPLEMENTATION_PLAN.md`: Task 15 → complete.
+
+### Verification (all pass)
+- clean build (Debug -Werror, no warnings)
+- ctest 21/21: all previous + test_create_composite + test_gamepad_order
+- test_create_composite 11/11 cmocka tests pass
+- test_gamepad_order 14/14 cmocka tests pass
+- verify-boilerplate, check-plan-freshness, branch-guard → exit 0
+
+### Gotchas fixed
+- **mkstemp requires XXXXXX at END of template**: Initially used
+  "controller-box-XXXXXX.yaml" but mkstemp requires the last 6 chars to
+  be X's. Fixed by using mkstemps() (glibc extension) which supports a
+  suffix after XXXXXX, with a fallback to mkstemp() without the .yaml
+  suffix for non-glibc systems.
+- **Mock returns same value for same (iface, member)**: The mock's
+  ip_dbus_mock_find returns the first matching expectation. Setting two
+  PersistentId expectations on IP_IFACE_COMPOSITE returns the same value
+  for both calls. Tests with multiple composites use one valid + one
+  stale path instead, since the mock can't return different values per
+  call path.
+- **(void)system(cmd) doesn't suppress warn_unused_result**: GCC with
+  -Werror=unused-result flags (void)system(cmd). Fixed by capturing the
+  return value: `int __r = system(cmd); (void)__r;`
+
+### Design decisions
+- **Deduplication in gamepad_order_save**: append_order_id() skips
+  duplicate IDs. This is a safety measure — GamepadOrder from DBus
+  shouldn't have duplicate paths, and even if it does, the same
+  PersistentId should only appear once in the saved order.
+- **Save replaces, not appends**: ip_gamepad_order_save clears the
+  existing gamepad_order before populating it with the current order.
+  This ensures the saved order always reflects the current DBus state.
+- **Stale path = skip, not error**: If a composite path in the GamepadOrder
+  CSV doesn't exist in the device model, it's skipped (the device was
+  probably removed). This is not an error — the function continues with
+  the remaining valid paths.
+- **DBus error during PersistentId = skip, not error**: If the
+  PersistentId query fails for a valid composite, that entry is skipped
+  but the function continues. This is resilient behavior — a single DBus
+  failure shouldn't prevent saving the rest of the order.
+- **Orchestration deferred to Task 27**: The persistence layer only
+  saves/loads gamepad_order. The orchestration (when to save after
+  GamepadOrder changes, when to restore after daemon restart, mapping
+  IDs back to composite paths) is Task 27.
+
+### Next
+Task 16 (SVG assets + icon mapping) — deps: Task 1 (done).
+Alternatively Task 17 (nanosvg rasterization) — deps: Task 16.
+Check `ralph tools task ready` and the plan.
