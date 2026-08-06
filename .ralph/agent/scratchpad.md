@@ -2223,3 +2223,84 @@ Alternatively Task 31 (Profile cycling and dynamic columns) — deps: Task 29
 Alternatively Task 32 (Overlay trigger registration and activation/close) —
 deps: Task 28 (done), Task 13 (done).
 Check `ralph tools task ready` and the plan.
+
+## Task 30 (complete) — Host Mode and conflict detection/resolution
+
+### What landed
+- `src/overlay/host_mode.h/c`: Host Mode state machine. R3 toggle:
+  first controller to press R3 becomes exclusive host (all others
+  freeze). Host navigates between rows with Up/Down (clamped, no wrap),
+  edits slots within selected row with Left/Right (fires on_slot_change
+  callback with selected_row's row_idx + new slot). R3 again exits back
+  to Player Mode. B returns CLOSE. Non-host controllers get FROZEN.
+  Visual state queries: cbx_host_mode_row_state returns HOST/SELECTED/
+  FROZEN/NORMAL for rendering integration. cbx_host_mode_is_frozen for
+  input gating.
+- `src/overlay/conflict.h/c`: Conflict detection and resolution.
+  cbx_conflict_detect scans grid rows in order; first row on a column
+  > 0 is the owner, subsequent rows are second arrivals (conflicted).
+  Col 0 (Unassigned) never conflicts. cbx_conflict_resolve moves each
+  conflicted row to the lowest unoccupied P-slot (deterministic, row
+  order). Edge cases: all slots occupied → leave in place; Unassigned →
+  not a conflict. cbx_conflict_find_lowest_free_slot excludes the
+  conflicted row's own position. cbx_conflict_is_row_conflicted for
+  rendering (red highlight on second arrivals).
+- `tests/test_host_mode.c`: 41 cmocka tests (init, enter/exit, toggle
+  enter/exit/frozen, Up/Down navigation + boundaries, Left/Right slot
+  change + callbacks, host edits other row, R3 exit, B close, frozen
+  controller, NULL safety, accessors, visual state, is_frozen, full
+  lifecycle).
+- `tests/test_conflict.c`: 33 cmocka tests (list init, detect
+  no-conflicts/all-different/two-same/multiple/three-same/unassigned/
+  empty/single/null/null-out, is_row_conflicted, find_lowest_free_slot
+  all-free/some-occupied/all-occupied/no-slot/null, count_occupied,
+  resolve move-to-free/all-occupied-leave/all-slots-stay/unassigned/
+  multiple/no-conflicts/null/null-list/resolves-all, spec example).
+- `CMakeLists.txt`: Added host_mode.c, conflict.c to controllerbox STATIC.
+- `tests/CMakeLists.txt`: Added test_host_mode + test_conflict targets.
+- `IMPLEMENTATION_PLAN.md`: Task 30 → complete.
+
+### Verification (all pass)
+- clean build (Debug -Werror, no warnings)
+- ctest 45/45: all previous + test_host_mode + test_conflict
+- test_host_mode 41/41 cmocka tests pass
+- test_conflict 33/33 cmocka tests pass
+- verify-boilerplate → exit 0
+
+### Gotchas fixed
+- Unused variable `target_col` in cbx_conflict_resolve: computed
+  `int target_col = free_slot + 1` but never used it (move via
+  move_left/move_right loop instead). Removed.
+- Type mismatch in test_detect_null: passed `cbx_conflict_list*` as
+  first arg (grid) to cbx_conflict_detect. Fixed by removing the
+  bogus second call.
+
+### Design decisions
+- **First-by-index = owner**: Conflict detection scans rows in index
+  order. The first row found on a column is the "first arrival" (owner);
+  subsequent rows are "second arrivals" (conflicted, shown red). This is
+  deterministic and doesn't require temporal tracking.
+- **Resolution is sequential**: Conflicts are resolved in row order. Each
+  move updates the grid, so subsequent conflicts see the updated layout.
+  This prevents cascading conflicts from resolution moves.
+- **Re-check in resolve**: cbx_conflict_resolve re-checks each conflicted
+  row to see if it's still conflicted (a prior resolution may have freed
+  the column). If no longer conflicted, it's skipped.
+- **Clamped row navigation**: Up/Down in host mode clamps at row
+  boundaries (no wrap). This matches player_mode boundary behavior.
+- **Host edits selected row, not its own**: The host's selected_row can
+  differ from host_row. Left/Right operates on selected_row, not
+  host_row. The slot change callback fires with selected_row's row_idx.
+- **Visual state for rendering**: cbx_host_mode_row_state provides a
+  4-level enum (NORMAL/HOST/SELECTED/FROZEN) that the renderer can query.
+  Actual rendering integration deferred to Task 33 (integration test).
+- **Conflict resolution moves via grid API**: cbx_conflict_resolve uses
+  cbx_select_grid_move_left/right to move conflicted rows. This keeps
+  the grid's internal state consistent and reusable.
+
+### Next
+Task 31 (Profile cycling and dynamic columns) — deps: Task 29 (done),
+Task 8 (done).
+Alternatively Task 32 (Overlay trigger registration and activation/close)
+— deps: Task 28 (done), Task 13 (done).
+Check `ralph tools task ready` and the plan.
