@@ -21,4 +21,8 @@ cmake -S . -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Debug
 cmake --build "$BUILD_DIR" --parallel
 ctest --test-dir "$BUILD_DIR" --output-on-failure
 "$PROJECT_ROOT/tests/test_packaging.sh" "$BUILD_DIR"
+# Installed production smoke test (Task 9, §11.1.5):
+# Exits 77 (skip) if Xvfb/xdotool/ImageMagick are unavailable.
+"$PROJECT_ROOT/tests/test_installed_smoke.sh" "$BUILD_DIR" || \
+    { rc=$?; if [ "$rc" -ne 77 ]; then echo "verify-project: installed smoke test failed (exit $rc)" >&2; exit 1; fi; }
 echo "verify-project: Controller-Box build, tests, smoke checks, and packaging passed"

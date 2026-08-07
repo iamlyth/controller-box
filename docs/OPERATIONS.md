@@ -562,3 +562,72 @@ and ctest reports the test as Skipped.
 On a machine with a GPU, the test renders both overlay and manager
 frames through the accelerated backend and verifies pixel content
 against the golden baselines.
+
+## Installed production smoke test
+
+The `test_installed_smoke` ctest (SPEC §11.1.5) exercises the real
+`main()` entry point of the **installed** binary (not `--dry-run`)
+under a headless X11 server (Xvfb).  It verifies that the binary
+builds, installs, launches, renders a visible window, responds to
+keyboard input, and produces a non-blank framebuffer capture.
+
+### What it does
+
+1. Builds the binary and installs it to a staging prefix (`.test-install`).
+2. Starts Xvfb on display `:99` (1280×720×24).
+3. Sets `DISPLAY=:99` and `SDL_VIDEODRIVER=x11`.
+4. Sets up a temporary HOME with DejaVuSans.ttf so the manager can
+   render text.
+5. **Manager mode**: launches `controller-box --manager`, sends Tab
+   and Arrow key presses via `xdotool`, captures the root window via
+   `import -window root` (ImageMagick), and verifies pixel variance
+   (mean > 5.0 on 0–255 scale) in both the tab-bar region (top 48px)
+   and the body region (below 48px).
+6. **Overlay service mode**: launches `controller-box --overlay-service`.
+   If InputPlumber is available on the system DBus, the service runs
+   and is terminated via SIGTERM.  If InputPlumber is unavailable
+   (expected in test environments), the service exits cleanly with
+   code 1 (not a crash).
+7. Cleans up Xvfb and temporary files.
+
+### Prerequisites
+
+- **Xvfb** (`xorg.xorgserver` in nix-shell)
+- **xdotool** (keyboard input injection)
+- **ImageMagick** (`import` for screenshots, `convert` for pixel
+  variance analysis)
+- **bc** (floating-point arithmetic for threshold checks)
+
+If any of these tools is unavailable, the test exits with code 77
+(ctest `SKIP_RETURN_CODE`) and is reported as Skipped.
+
+### Running
+
+```sh
+nix-shell --run "ctest --test-dir build-check -R test_installed_smoke --output-on-failure"
+```
+
+### Output
+
+A successful run shows:
+```
+PASS: all required tools available (Xvfb, xdotool, import, convert)
+PASS: installed binary: .test-install/bin/controller-box
+PASS: installed --version: controller-box 0.1.0
+PASS: Xvfb running (PID ...)
+PASS: font available: ...
+PASS: manager launched and running (PID ...)
+PASS: keyboard input sent (Tab, Arrow keys)
+PASS: screenshot captured: ...
+PASS: tab bar region is non-blank (mean=...)
+PASS: body region is non-blank (mean=...)
+PASS: manager terminated cleanly
+PASS: overlay service exited cleanly (code 1: InputPlumber not found)
+PASS: all installed smoke test checks passed
+```
+
+If Xvfb or ImageMagick is not installed:
+```
+SKIP: required tool 'Xvfb' is not installed
+```
+(ctest reports the test as Skipped, not Failed.)

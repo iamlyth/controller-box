@@ -48,6 +48,21 @@ else()
     message(STATUS "bash not found — test_packaging skipped")
 endif()
 
+# --- Installed production smoke test (Task 9, §11.1.5) -------------------
+# Exercises the real main() entry point under Xvfb with xdotool input
+# and ImageMagick screenshot capture.  Skips (exit 77) when Xvfb,
+# xdotool, or ImageMagick is unavailable.
+if(BASH_EXECUTABLE)
+    add_test(NAME test_installed_smoke
+        COMMAND ${BASH_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_installed_smoke.sh
+            ${CMAKE_CURRENT_BINARY_DIR})
+    set_tests_properties(test_installed_smoke PROPERTIES
+        SKIP_RETURN_CODE 77)
+else()
+    message(STATUS "bash not found — test_installed_smoke skipped")
+endif()
+
 # --- cmocka unit tests ------------------------------------------------------
 # Built only when cmocka is found.  These link against the cmocka library
 # and the shared test harness (test_harness + dbus_mock).
