@@ -1,10 +1,12 @@
 /*
- * test_overlay_service.c — cmocka tests for run_overlay_service (Task 3).
+ * test_overlay_service.c — cmocka tests for run_overlay_service (Tasks 3–4).
  *
  * Verifies:
  *   (a) run_overlay_service(0) with SDL_VIDEODRIVER=nonexistent returns
  *       non-zero (SDL init failure, no crash).
  *   (b) run_overlay_service(1) (dry-run) returns 0.
+ *   (c) SIGTERM handler sets the shutdown flag (clean exit mechanism).
+ *   (d) SIGINT handler sets the shutdown flag (clean exit mechanism).
  */
 #include <stdarg.h>
 #include <stddef.h>
@@ -13,6 +15,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
 
 #include <SDL2/SDL.h>
 
@@ -52,11 +55,56 @@ static void test_dry_run_returns_zero(void **state)
 }
 
 /* ------------------------------------------------------------------ */
+/*  Test (c): SIGTERM handler sets shutdown flag                      */
+/* ------------------------------------------------------------------ */
+static void test_sigterm_sets_shutdown_flag(void **state)
+{
+    (void)state;
+
+    /* Reset and install handlers. */
+    cbx_overlay_service_reset_shutdown();
+    assert_int_equal(cbx_overlay_service_install_signal_handlers(), 0);
+
+    /* Before signal: shutdown not requested. */
+    assert_false(cbx_overlay_service_shutdown_requested());
+
+    /* Send SIGTERM to self — handler sets g_running = 0. */
+    raise(SIGTERM);
+
+    /* After signal: shutdown requested. */
+    assert_true(cbx_overlay_service_shutdown_requested());
+
+    /* Reset for other tests. */
+    cbx_overlay_service_reset_shutdown();
+}
+
+/* ------------------------------------------------------------------ */
+/*  Test (d): SIGINT handler sets shutdown flag                       */
+/* ------------------------------------------------------------------ */
+static void test_sigint_sets_shutdown_flag(void **state)
+{
+    (void)state;
+
+    cbx_overlay_service_reset_shutdown();
+    assert_int_equal(cbx_overlay_service_install_signal_handlers(), 0);
+
+    assert_false(cbx_overlay_service_shutdown_requested());
+
+    raise(SIGINT);
+
+    assert_true(cbx_overlay_service_shutdown_requested());
+
+    cbx_overlay_service_reset_shutdown();
+}
+
+/* ------------------------------------------------------------------ */
 /*  Test runner                                                        */
 /* ------------------------------------------------------------------ */
 static const struct CMUnitTest tests[] = {
     cmocka_unit_test(test_sdl_init_failure_returns_nonzero),
     cmocka_unit_test(test_dry_run_returns_zero),
+    cmocka_unit_test(test_sigterm_sets_shutdown_flag),
+    cmocka_unit_test(test_sigint_sets_shutdown_flag),
 };
 
 int main(void)

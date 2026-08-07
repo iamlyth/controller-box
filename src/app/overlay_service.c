@@ -1,12 +1,14 @@
 /*
- * overlay_service.c — overlay service startup (Task 3, SPEC §2.3–§2.5).
+ * overlay_service.c — overlay service startup and poll loop (Tasks 3–4).
  *
  * Implements run_overlay_service(): the production init path for the
  * overlay service mode.  The function initialises SDL, connects to
  * InputPlumber via the system DBus, enumerates composite devices,
  * pre-builds the overlay surface, registers intercept triggers, and
- * enters a minimal poll loop.  Task 4 replaces the loop body with full
- * InterceptMode polling, signal handling, and input processing.
+ * enters the poll loop with full InterceptMode polling, signal handling,
+ * and input processing.
+ *
+ * SPEC §2.3–§2.5, §4.3–§4.5, §10.2–§10.3.
  */
 #include "config.h"
 #include "app/overlay_service.h"
@@ -29,14 +31,221 @@
 #include "overlay/lifecycle.h"
 #include "overlay/grid_render.h"
 #include "overlay/trigger.h"
+#include "overlay/player_mode.h"
+#include "overlay/host_mode.h"
+#include "overlay/conflict.h"
+#include "overlay/profile_cycle.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
+#include <errno.h>
 
-/* ------------------------------------------------------------------ */
+/* ================================================================== */
+/*  Signal handling (SIGTERM / SIGINT)                                 */
+/* ================================================================== */
+
+static volatile sig_atomic_t g_running = 1;
+
+static void
+signal_handler(int signo)
+{
+    (void)signo;
+    g_running = 0;
+}
+
+int
+cbx_overlay_service_install_signal_handlers(void)
+{
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = signal_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;            /* no SA_RESTART — interrupt SDL_PollEvent */
+
+    if (sigaction(SIGTERM, &sa, NULL) != 0)
+        return -1;
+    if (sigaction(SIGINT, &sa, NULL) != 0)
+        return -1;
+    return 0;
+}
+
+bool
+cbx_overlay_service_shutdown_requested(void)
+{
+    return g_running == 0;
+}
+
+void
+cbx_overlay_service_reset_shutdown(void)
+{
+    g_running = 1;
+}
+
+/* ================================================================== */
+/*  Poll-loop context (shared with callbacks)                         */
+/* ================================================================== */
+
+typedef struct {
+    cbx_select_grid       *grid;
+    cbx_assignments       *assignments;
+    cbx_overlay_surface   *surface;
+    SDL_Renderer          *renderer;
+    cbx_grid_render_ctx   *render_ctx;
+    const ip_dbus_backend *backend;
+    ip_bus_handle          bus;
+    cbx_player_mode        pm;
+    cbx_host_mode          hm;
+    cbx_conflict_list      conflicts;
+    int                    comp_count;
+} overlay_ctx;
+
+/* ================================================================== */
+/*  InterceptMode poll callbacks                                       */
+/* ================================================================== */
+
+static void
+on_intercept_activating(void *userdata)
+{
+    cbx_overlay_lifecycle *lc = (cbx_overlay_lifecycle *)userdata;
+    cbx_overlay_lifecycle_activate(lc);
+}
+
+static void
+on_intercept_deactivating(void *userdata)
+{
+    cbx_overlay_lifecycle *lc = (cbx_overlay_lifecycle *)userdata;
+    /* If already closing/closed, close() returns -EPERM — that's fine. */
+    cbx_overlay_lifecycle_close(lc);
+}
+
+static void
+on_intercept_error(int error_code, void *userdata)
+{
+    (void)userdata;
+    fprintf(stderr,
+            "controller-box: intercept poll error: %d\n", error_code);
+}
+
+/* ================================================================== */
+/*  Lifecycle on_save callback: conflict resolution + assignment save */
+/* ================================================================== */
+
+static int
+on_overlay_save(void *userdata)
+{
+    overlay_ctx *ctx = (overlay_ctx *)userdata;
+
+    /* Detect and resolve conflicts (SPEC §4.5). */
+    cbx_conflict_list_init(&ctx->conflicts);
+    cbx_conflict_detect(ctx->grid, &ctx->conflicts);
+    cbx_conflict_resolve(ctx->grid, &ctx->conflicts);
+
+    /* Sync grid state back to assignments and save. */
+    for (int i = 0; i < ctx->grid->row_count; i++) {
+        const cbx_grid_row *row = &ctx->grid->rows[i];
+        int slot = cbx_select_grid_col_to_slot(row->cur_col);
+
+        /* Find existing assignment by id. */
+        int found = -1;
+        for (int j = 0; j < ctx->assignments->assignment_count; j++) {
+            if (strcmp(ctx->assignments->assignments[j].id,
+                       row->id) == 0) {
+                found = j;
+                break;
+            }
+        }
+
+        if (slot >= 0) {
+            /* Assigned: update or add. */
+            if (found >= 0) {
+                ctx->assignments->assignments[found].slot = slot;
+                snprintf(ctx->assignments->assignments[found].profile,
+                         sizeof(ctx->assignments->assignments[found].profile),
+                         "%s", row->profile);
+            } else if (ctx->assignments->assignment_count <
+                       CBX_MAX_ASSIGNMENTS) {
+                cbx_assignment *a =
+                    &ctx->assignments->assignments[
+                        ctx->assignments->assignment_count++];
+                snprintf(a->id, sizeof(a->id), "%s", row->id);
+                a->slot = slot;
+                snprintf(a->profile, sizeof(a->profile),
+                         "%s", row->profile);
+            }
+        } else {
+            /* Unassigned: remove entry if present. */
+            if (found >= 0) {
+                ctx->assignments->assignments[found] =
+                    ctx->assignments->assignments[
+                        --ctx->assignments->assignment_count];
+            }
+        }
+    }
+
+    cbx_assignments_save(ctx->assignments);  /* best-effort */
+
+    /* Mark surface dirty so it's re-rendered before next activation. */
+    cbx_overlay_surface_mark_dirty_all(ctx->surface);
+    return 0;
+}
+
+/* ================================================================== */
+/*  Player Mode callbacks (slot/profile change side effects)          */
+/* ================================================================== */
+
+static int
+on_slot_change(int row_idx, int new_slot, void *userdata)
+{
+    overlay_ctx *ctx = (overlay_ctx *)userdata;
+    (void)row_idx;
+    (void)new_slot;
+    /* Grid is already updated by player_mode_handle.
+     * Mark surface dirty for re-render. */
+    cbx_overlay_surface_mark_dirty_all(ctx->surface);
+    return 0;
+}
+
+static int
+on_profile_change(int row_idx, const char *profile,
+                   const char *composite_path, void *userdata)
+{
+    overlay_ctx *ctx = (overlay_ctx *)userdata;
+    (void)row_idx;
+
+    /* Load the profile on InputPlumber via DBus (best-effort). */
+    if (ctx->backend && composite_path && profile && profile[0]) {
+        char profiles_dir[512];
+        char profile_path[576];
+
+        if (cbx_resolve_user_profiles_dir(profiles_dir,
+                                           sizeof(profiles_dir)) == 0) {
+            snprintf(profile_path, sizeof(profile_path),
+                     "%s/%s.yaml", profiles_dir, profile);
+            ip_composite_load_profile_path(ctx->backend, ctx->bus,
+                                            composite_path, profile_path);
+        }
+    }
+
+    /* Mark surface dirty for re-render. */
+    cbx_overlay_surface_mark_dirty_all(ctx->surface);
+    return 0;
+}
+
+/* ================================================================== */
+/*  Host Mode slot change callback                                     */
+/* ================================================================== */
+
+static int
+on_host_slot_change(int row_idx, int new_slot, void *userdata)
+{
+    return on_slot_change(row_idx, new_slot, userdata);
+}
+
+/* ================================================================== */
 /*  Helper: fill cbx_grid_composite_info from the device model + DBus  */
-/* ------------------------------------------------------------------ */
+/* ================================================================== */
 static void fill_composite_info(cbx_grid_composite_info *info,
                                  const cbx_composite_entry *entry,
                                  const ip_dbus_backend *backend,
@@ -68,9 +277,9 @@ static void fill_composite_info(cbx_grid_composite_info *info,
     }
 }
 
-/* ------------------------------------------------------------------ */
+/* ================================================================== */
 /*  Helper: set InterceptMode = PASS on all composites                 */
-/* ------------------------------------------------------------------ */
+/* ================================================================== */
 static void set_all_pass(const ip_dbus_backend *backend, ip_bus_handle bus,
                           const cbx_composite_entry *composites, int count)
 {
@@ -79,15 +288,55 @@ static void set_all_pass(const ip_dbus_backend *backend, ip_bus_handle bus,
                                          composites[i].path, "1");
 }
 
-/* ------------------------------------------------------------------ */
+/* ================================================================== */
+/*  Helper: map SDL key to player_mode / host_mode input               */
+/* ================================================================== */
+static int
+sdl_key_to_pm_input(SDL_Keycode key, cbx_pm_input *out)
+{
+    switch (key) {
+    case SDLK_LEFT:   *out = CBX_PM_LEFT;  return 1;
+    case SDLK_RIGHT:  *out = CBX_PM_RIGHT; return 1;
+    case SDLK_UP:     *out = CBX_PM_UP;    return 1;
+    case SDLK_DOWN:   *out = CBX_PM_DOWN;  return 1;
+    case SDLK_b:      *out = CBX_PM_B;     return 1;
+    case SDLK_r:      *out = CBX_PM_R3;    return 1;
+    default:          return 0;
+    }
+}
+
+static int
+sdl_key_to_hm_input(SDL_Keycode key, cbx_hm_input *out)
+{
+    switch (key) {
+    case SDLK_LEFT:   *out = CBX_HM_LEFT;  return 1;
+    case SDLK_RIGHT:  *out = CBX_HM_RIGHT; return 1;
+    case SDLK_UP:     *out = CBX_HM_UP;    return 1;
+    case SDLK_DOWN:   *out = CBX_HM_DOWN;  return 1;
+    case SDLK_b:      *out = CBX_HM_B;     return 1;
+    case SDLK_r:      *out = CBX_HM_R3;    return 1;
+    default:          return 0;
+    }
+}
+
+/* ================================================================== */
 /*  Main entry                                                         */
-/* ------------------------------------------------------------------ */
+/* ================================================================== */
 int run_overlay_service(int dry_run)
 {
     printf("controller-box: overlay-service mode%s\n",
            dry_run ? " (dry-run)" : "");
     if (dry_run)
         return 0;
+
+    /* --- 0. Install signal handlers ------------------------------- */
+    g_running = 1;
+    if (cbx_overlay_service_install_signal_handlers() != 0) {
+        fprintf(stderr,
+                "controller-box: warning: signal handler setup failed\n");
+        /* Continue anyway — the service still works, just no clean
+         * shutdown on SIGTERM. */
+    }
 
     /* --- 1. SDL video + hidden renderer ----------------------------- */
     cbx_renderer rend;
@@ -217,27 +466,147 @@ int run_overlay_service(int dry_run)
     cbx_overlay_lifecycle_init(&lifecycle, conn.backend, conn.bus,
                                primary_path, &surface, rend.renderer);
 
-    /* --- 10. Poll loop (skeleton — Task 4 fills in the body) --------- *
-     *                                                                    *
-     * Task 4 will add:                                                    *
-     *   - ip_intercept_poll per composite at 50 ms (DEC-002)             *
-     *   - SDL event processing (input navigation)                        *
-     *   - SIGTERM / SIGINT handling for clean shutdown                   *
-     *   - overlay activate / close lifecycle calls                      *
-     *                                                                    *
-     * For now a minimal event loop keeps the service alive.             */
-    SDL_Event ev;
-    int running = 1;
-    while (running) {
-        while (SDL_PollEvent(&ev)) {
-            if (ev.type == SDL_QUIT)
-                running = 0;
+    /* --- 10. Set up poll-loop context -------------------------------- */
+    overlay_ctx ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.grid         = &grid;
+    ctx.assignments  = &assignments;
+    ctx.surface      = &surface;
+    ctx.renderer     = rend.renderer;
+    ctx.render_ctx   = &render_ctx;
+    ctx.backend      = conn.backend;
+    ctx.bus          = conn.bus;
+    ctx.comp_count   = comp_count;
+
+    /* Player Mode (SPEC §4.3). */
+    cbx_player_mode_init(&ctx.pm, &grid);
+    ctx.pm.on_slot_change     = on_slot_change;
+    ctx.pm.slot_change_data   = &ctx;
+    ctx.pm.on_profile_change  = on_profile_change;
+    ctx.pm.profile_change_data = &ctx;
+
+    /* Host Mode (SPEC §4.4). */
+    cbx_host_mode_init(&ctx.hm);
+    ctx.hm.on_slot_change    = on_host_slot_change;
+    ctx.hm.slot_change_data  = &ctx;
+
+    /* Lifecycle on_save callback: conflict resolution + assignment save. */
+    lifecycle.on_save       = on_overlay_save;
+    lifecycle.on_save_data  = &ctx;
+
+    /* --- 11. Set up InterceptMode polling --------------------------- */
+    /* Register a custom SDL event type for the poll timer. */
+    uint32_t poll_event_type = SDL_RegisterEvents(1);
+    ip_intercept_poll polls[CBX_MAX_COMPOSITES];
+    int poll_count = 0;
+
+    if (poll_event_type != (uint32_t)-1) {
+        for (int i = 0; i < comp_count && i < CBX_MAX_COMPOSITES; i++) {
+            ip_intercept_poll_init(&polls[i],
+                                    conn.backend, conn.bus,
+                                    composites[i].composite_path,
+                                    on_intercept_activating, &lifecycle,
+                                    on_intercept_deactivating, &lifecycle,
+                                    on_intercept_error, NULL);
+            if (ip_intercept_poll_start(&polls[i],
+                                         IP_INTERCEPT_POLL_INTERVAL_MS,
+                                         poll_event_type) == 0) {
+                poll_count++;
+            }
         }
-        SDL_Delay(IP_INTERCEPT_POLL_INTERVAL_MS);
     }
 
-    /* --- 11. Clean shutdown ------------------------------------------- */
+    /* --- 12. Poll loop (Task 4) -------------------------------------- */
+    /*
+     * Main loop:
+     *   1. SDL_PollEvent processes:
+     *      - Custom poll timer events → ip_intercept_poll_tick
+     *      - SDL_KEYDOWN → grid navigation (player/host mode)
+     *      - SDL_QUIT → shutdown
+     *   2. cbx_overlay_lifecycle_tick advances fade animation / timeout.
+     *   3. If surface is dirty, re-render + re-show (when visible).
+     *   4. Check g_running flag (set by SIGTERM/SIGINT handler).
+     */
+    SDL_Event ev;
+    while (g_running) {
+        /* Process all pending SDL events. */
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == poll_event_type) {
+                /* InterceptMode poll timer fired — tick all polls. */
+                for (int i = 0; i < poll_count; i++)
+                    ip_intercept_poll_tick(&polls[i]);
+            } else if (ev.type == SDL_QUIT) {
+                g_running = 0;
+            } else if (ev.type == SDL_KEYDOWN &&
+                       cbx_overlay_lifecycle_is_active(&lifecycle)) {
+                /* Process input only when overlay is visible. */
+                SDL_Keycode key = ev.key.keysym.sym;
+
+                if (cbx_host_mode_is_active(&ctx.hm)) {
+                    /* Host Mode: host navigates rows + slots. */
+                    cbx_hm_input hm_in;
+                    if (sdl_key_to_hm_input(key, &hm_in)) {
+                        int host_row = cbx_host_mode_get_host_row(&ctx.hm);
+                        int result = cbx_host_mode_handle(
+                            &ctx.hm, host_row, hm_in, &grid);
+
+                        if (result == CBX_HM_RESULT_EXIT) {
+                            cbx_host_mode_exit(&ctx.hm);
+                        } else if (result == CBX_HM_RESULT_CLOSE) {
+                            cbx_overlay_lifecycle_close(&lifecycle);
+                        } else if (result == CBX_HM_RESULT_MOVED ||
+                                   result == CBX_HM_RESULT_SLOT) {
+                            cbx_overlay_surface_mark_dirty_all(&surface);
+                        }
+                    }
+                } else {
+                    /* Player Mode: each controller edits its own row. */
+                    cbx_pm_input pm_in;
+                    if (sdl_key_to_pm_input(key, &pm_in)) {
+                        /* Use row 0 (primary controller) for keyboard
+                         * input.  In production, DBus InputEvent signals
+                         * carry the device path, which maps to a row. */
+                        int result = cbx_player_mode_handle(
+                            &ctx.pm, 0, pm_in);
+
+                        if (result == CBX_PM_RESULT_CLOSE) {
+                            cbx_overlay_lifecycle_close(&lifecycle);
+                        } else if (result == CBX_PM_RESULT_HOST) {
+                            cbx_host_mode_toggle(&ctx.hm, 0);
+                        }
+                        /* Surface dirty flag is set by callbacks. */
+                    }
+                }
+            }
+        }
+
+        /* Advance lifecycle (fade animation, timeout). */
+        cbx_overlay_lifecycle_tick(&lifecycle);
+
+        /* Re-render dirty surface (when overlay is active). */
+        if (cbx_overlay_lifecycle_is_active(&lifecycle) &&
+            cbx_overlay_surface_is_dirty(&surface)) {
+            cbx_overlay_surface_render(&surface, rend.renderer,
+                                        cbx_select_grid_render_cb,
+                                        &render_ctx);
+            cbx_overlay_surface_show(&surface, rend.renderer);
+        }
+
+        /* Small delay to prevent busy-looping (the poll timers drive
+         * InterceptMode checks at 50 ms; this just limits the SDL
+         * event polling rate). */
+        SDL_Delay(10);
+    }
+
+    /* --- 13. Clean shutdown ------------------------------------------- */
+    /* Stop all InterceptMode poll timers. */
+    for (int i = 0; i < poll_count; i++)
+        ip_intercept_poll_stop(&polls[i]);
+
+    /* Force-close the overlay if still visible. */
     cbx_overlay_lifecycle_force_close(&lifecycle);
+
+    /* Destroy surface, cleanup caches, disconnect, shutdown renderer. */
     cbx_overlay_surface_destroy(&surface);
     cbx_icon_cache_cleanup(&icon_cache);
     cbx_text_cache_cleanup(&text_cache);

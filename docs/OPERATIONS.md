@@ -132,8 +132,29 @@ initialization sequence on startup:
 7. **Lifecycle init** — initializes the overlay state machine
    (`IDLE → ACTIVATING → VISIBLE → CLOSING → IDLE`).
 8. **Poll loop** — enters the main event loop (50 ms interval, DEC-002).
-   The loop polls `InterceptMode`, processes SDL events, and handles
-   `SIGTERM`/`SIGINT` for clean shutdown.
+   The loop polls `InterceptMode` via `ip_intercept_poll` (one per
+   composite device), processes SDL events for grid navigation, and
+   handles `SIGTERM`/`SIGINT` for clean shutdown.
+
+**Poll loop behavior (Task 4):**
+
+- **InterceptMode polling:** Each composite device has an
+  `ip_intercept_poll` state machine with a 50 ms SDL timer. When
+  `InterceptMode` transitions to `ALL` (activation), the poll fires
+  `cbx_overlay_lifecycle_activate()`, which shows the pre-built surface
+  via `SDL_RenderCopy` + `SDL_RenderPresent` (<10 ms target).
+- **Input processing:** While the overlay is visible, SDL keyboard events
+  drive grid navigation: Left/Right moves slot, Up/Down cycles profile,
+  R3 toggles Host Mode, B closes. In production, DBus `InputEvent`
+  signals from InputPlumber carry per-controller input.
+- **Close sequence:** On B press or deactivation, `cbx_overlay_lifecycle_close()`
+  fires the `on_save` callback (conflict detection → conflict resolution
+  → assignment save), sets `InterceptMode = PASS`, and hides the surface
+  (not destroyed) for instant re-activation.
+- **Signal handling:** `SIGTERM` and `SIGINT` set a shutdown flag that
+  causes the poll loop to exit cleanly: stops all poll timers,
+  force-closes the overlay if visible, destroys the surface, cleans up
+  caches, disconnects DBus, and shuts down the renderer. Exit code 0.
 
 **Prerequisites:**
 - InputPlumber must be running and accessible on the system DBus.
