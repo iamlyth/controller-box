@@ -48,3 +48,11 @@ Integration tests manually call these, masking the bug.
 ## Build notes
 - `build-manual` was stale (wrong path cache); reconfigured fresh
 - `nix-shell --run 'cmake -B build-manual ...'` + `cmake --build build-manual`
+### Final Verification (post-completion check)
+- check-maintenance-freshness.sh: passes, fingerprint matches
+- bug-ledger: BUG-0003 closed, resolution + verification recorded
+- ctest: 66/66 pass (100%, 0 failures)
+- SPEC.md: unchanged (git diff --exit-code = 0)
+- MAINTENANCE_PLAN.md: status: complete
+- No open runtime tasks
+- All work committed (5977459 through 44892c4)
