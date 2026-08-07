@@ -101,3 +101,35 @@
 - Task 4 (Overlay poll loop) — now unblocked (depends on Task 3, which is complete)
 - Task 2 (Conflict red rendering) — depends on Task 1 (complete), should be ready
 - Task 10 (Backend smoke coverage) — depends on Task 1 (complete), should be ready
+
+## Iteration: Task 2 — Conflict red rendering in overlay grid
+
+### What was done
+- Discovered the conflict red rendering was already implemented in `grid_render.c`:
+  - `cbx_grid_render_ctx` already had `const struct cbx_conflict_list *conflicts` field (NULL-safe)
+  - `cbx_select_grid_render()` already uses `cbx_conflict_is_row_conflicted()` to draw conflicted rows with red indicator (`{220, 40, 40, 255}`) for cell background, border, and position indicator
+  - Non-conflicted rows render unchanged (highlight or dim)
+- The visual test `test_conflict_red_rendering` already existed in `test_conflict.c`:
+  - Renders via `cbx_overlay_surface_render(surface, renderer, cbx_select_grid_render_cb, &ctx)`
+  - Reads back pixels with `fb_read_pixels`
+  - Asserts `fb_region_has_color` finds red in conflicted cell
+  - Asserts non-conflicted cell does NOT have red
+  - Asserts no red after re-render without conflicts
+- Fixed bug: second `fb_read_pixels` call was not setting render target to the overlay surface texture before reading. Added `SDL_SetRenderTarget` calls.
+
+### Verification
+- `ctest --test-dir build-check -R 'test_conflict|test_grid_render' --output-on-failure` → 2/2 PASS
+- Full suite: 69/69 tests pass
+
+### Key decisions
+- The rendering implementation was already in place from the original 44-task implementation (Task 30 — conflict detection). The plan's Task 2 was primarily about adding the pixel-level visual test, which was also already present but had a render target bug.
+- Fix was minimal: 3 lines added to set render target before second pixel readback.
+
+### Next task
+- Task 4 (Overlay poll loop) — unblocked (depends on Task 3, complete)
+- Task 5 (Overlay visual tests) — unblocked (depends on Tasks 1+2, both complete)
+- Task 7 (Manager visual tests) — unblocked (depends on Tasks 1+6, both complete)
+- Task 10 (Backend smoke coverage) — unblocked (depends on Task 1, complete)
+- Task 9 (Installed smoke test) — depends on Task 4
+- Task 8 (Golden images) — depends on Tasks 5+7
+- Task 11 (Final audit) — depends on all others
