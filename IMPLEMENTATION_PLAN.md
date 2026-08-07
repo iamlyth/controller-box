@@ -2,7 +2,7 @@
 spec_path: docs/SPEC.md
 spec_commit: 60aa67a7de962a8dd617d44dbaf7d8038a24ea72
 spec_blob: f81db26137e0a58ef384eadd0f517547f3484778
-base_commit: c99e137bdf3f9e304b5dca0e546d6693d73b7378
+base_commit: 6281781e6818a5547af1d3b0fc17bc2905a471ce
 status: active
 ---
 
@@ -79,7 +79,7 @@ specification. Adding post-v1 features (§§12–13).
 | REQ-027 | §9 Packaging | verified | `test_packaging.sh`, `test_packaging_install.sh`; Flatpak manifest, tarball `make install`, systemd unit, desktop entry | — |
 | REQ-028 | §10 DBus integration | verified | All `ip_*.c` wrappers tested: `test_manager_calls.c`, `test_composite_calls.c`, `test_connection.c`, `test_objectmanager_parse.c`, `test_properties_changed.c`, `test_hotplug.c`, `test_input_signal.c`, `test_source_props.c`, `test_target_props.c`, `test_intercept_poll.c`, `test_gamepad_order.c`, `test_order_restore.c`, `test_create_composite.c` | — |
 | REQ-029 | §11.1 Rendering verification (7 layers) | partial | Layers 1–4 and 6 verified (framebuffer tests, golden images, backend smoke, failure artifacts); layer 5 (installed smoke) verified for keyboard input but **lacks coordinate-based mouse clicks on body controls** (§5.7 requirement); layer 7 (human release acceptance) is a pre-promotion gate documented in OPERATIONS.md, not an autonomous-cycle verification | Task 12 |
-| REQ-030 | §11.2 Autonomous definition of done | missing | Items 1 (conformance matrix — multiple partial/missing entries), 2 (production-path behavior — event dispatch broken: mouse not routed, tab activation not wired, editor not wired, overlay InputEvent not wired), 3 (interaction traversal — no tests exist), 6 (known-defect accounting — BUG-0002 open) not met | Tasks 1–14 |
+| REQ-030 | §11.2 Autonomous definition of done | missing | Items 1 (conformance matrix — multiple partial/missing entries), 2 (production-path behavior — event dispatch broken: mouse not routed, tab activation not wired, editor not wired, overlay InputEvent not wired), 3 (interaction traversal — no tests exist), 6 (known-defect accounting — BUG-0002 open) not met | Task 1; Task 2; Task 3; Task 4; Task 5; Task 6; Task 7; Task 8; Task 9; Task 10; Task 11; Task 12; Task 13; Task 14 |
 | REQ-031 | BUG-0002 | missing | Open bug: `test_create_composite` XDG runtime test asserts global `/tmp/controller-box-*` count is zero instead of comparing before/after; leaks temp dir on assertion failure | Task 13 |
 | REQ-032 | §11 Performance targets | verified | Five targets are architectural guarantees: overlay <10 ms (pre-built surface, REQ-015), gameplay ~1–2 ms (no inline DBus, REQ-001), close <1 ms (single `InterceptMode` set, REQ-005), footprint (SDL2 minimal, DEC-001), atomic reorder (`GamepadOrder` setter, REQ-012). No runtime benchmark test needed — the design enforces these; verified by production-path composition tests (REQ-016, REQ-029) and DBus wrapper tests (REQ-028) | — |
 
@@ -387,7 +387,7 @@ dispatch path, and the task that provides executable evidence.
 ## Task 14: Final documentation and specification audit
 - Status: pending
 - Dependencies: Task 1, Task 2, Task 3, Task 4, Task 5, Task 6, Task 7, Task 8, Task 9, Task 10, Task 11, Task 12, Task 13
-- Scope: `docs/SPEC.md` (§11.2 audit only — no spec changes), `README.md`, `docs/OPERATIONS.md`, `IMPLEMENTATION_PLAN.md`, `open-bugs.md`, `closed-bugs.md`
+- Scope: canonical definition of done in `docs/SPEC.md` §11.2 (audit only — no spec changes), `README.md`, `docs/OPERATIONS.md`, `IMPLEMENTATION_PLAN.md`, `open-bugs.md`, `closed-bugs.md`
 - Acceptance criteria:
   - **Conformance matrix**: every requirement (REQ-001–REQ-032) is classified `verified` with specific source evidence and an executable test or acceptance command. No requirement remains `partial`, `missing`, or `ambiguous`. REQ-010 (host-mode profile cycling) is resolved: either implemented and verified, or explicitly documented as deferred per §13. REQ-021 (icon override UI) is resolved: documented as deferred per §13 (config API verified in REQ-026; settings tab UI deferred — interface details for compound settings not specified in v1).
   - **Production-path audit** (§11.2 item 2): verify that no acceptance test in the suite bypasses production event dispatch, initialization, or composition paths. Direct callback tests may exist as supplemental unit tests but must not be the sole evidence for any v1 workflow. The final audit audits all test files for direct-call-only patterns and flags any that are the sole evidence for a conformance requirement.
