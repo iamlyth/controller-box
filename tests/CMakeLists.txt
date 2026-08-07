@@ -505,6 +505,16 @@ if(CMOCKA_FOUND)
     set_tests_properties(test_fb_assert PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
 
+    # Task 6 — Manager DBus backend injection point.
+    # Verifies cbx_manager_init_with_dbus wires a mock backend into the
+    # controllers tab without post-init field replacement.
+    add_executable(test_manager_dbus_inject tests/test_manager_dbus_inject.c)
+    target_link_libraries(test_manager_dbus_inject PRIVATE controllerbox cbx_test_support PkgConfig::CMOCKA)
+    target_compile_definitions(test_manager_dbus_inject PRIVATE CBX_FONT_PATH="${CBX_FONT_PATH}")
+    add_test(NAME test_manager_dbus_inject COMMAND test_manager_dbus_inject)
+    set_tests_properties(test_manager_dbus_inject PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+
 else()
     message(STATUS "cmocka not found — unit tests skipped (smoke tests still built)")
 endif()

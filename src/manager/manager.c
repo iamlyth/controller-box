@@ -50,6 +50,14 @@ static void cbx_manager_layout(cbx_manager *mgr);
 int
 cbx_manager_init(cbx_manager *mgr, const char *font_path)
 {
+    return cbx_manager_init_with_dbus(mgr, font_path, NULL, NULL);
+}
+
+int
+cbx_manager_init_with_dbus(cbx_manager *mgr, const char *font_path,
+                            const ip_dbus_backend *backend,
+                            ip_bus_handle bus)
+{
     if (!mgr)
         return -EINVAL;
 
@@ -124,24 +132,33 @@ cbx_manager_init(cbx_manager *mgr, const char *font_path)
     }
 
     /* --- Tab modules (manager owns the full lifecycle) ------------- */
-    /* Connect to the system DBus (best-effort). If InputPlumber is
-     * unavailable or there is no system bus, the controllers tab will
-     * still initialise with an empty device list and functional
-     * buttons — the degraded state. */
-    mgr->dbus_backend = ip_dbus_sd_backend();
-    mgr->dbus_bus = NULL;
-    mgr->dbus_connected = false;
-    if (mgr->dbus_backend && mgr->dbus_backend->connect) {
-        int dbrc = mgr->dbus_backend->connect(&mgr->dbus_bus);
-        if (dbrc == 0 && mgr->dbus_bus) {
-            mgr->dbus_connected = true;
-        } else {
-            /* DBus connect failed — proceed in degraded mode. */
-            mgr->dbus_backend = NULL;
-            mgr->dbus_bus = NULL;
-        }
+    /* DBus connection: use injected backend if provided, otherwise
+     * fall back to the production sd-bus backend (best-effort).
+     * If InputPlumber is unavailable or there is no system bus, the
+     * controllers tab will still initialise with an empty device list
+     * and functional buttons — the degraded state. */
+    if (backend) {
+        /* Caller-provided (mock) backend — use directly, no connect. */
+        mgr->dbus_backend = backend;
+        mgr->dbus_bus = bus;
+        mgr->dbus_connected = true;
     } else {
-        mgr->dbus_backend = NULL;
+        /* Production path: get sd-bus backend and connect. */
+        mgr->dbus_backend = ip_dbus_sd_backend();
+        mgr->dbus_bus = NULL;
+        mgr->dbus_connected = false;
+        if (mgr->dbus_backend && mgr->dbus_backend->connect) {
+            int dbrc = mgr->dbus_backend->connect(&mgr->dbus_bus);
+            if (dbrc == 0 && mgr->dbus_bus) {
+                mgr->dbus_connected = true;
+            } else {
+                /* DBus connect failed — proceed in degraded mode. */
+                mgr->dbus_backend = NULL;
+                mgr->dbus_bus = NULL;
+            }
+        } else {
+            mgr->dbus_backend = NULL;
+        }
     }
 
     /* Controllers tab (DBus-backed; works in degraded mode with NULL). */

@@ -95,6 +95,29 @@ typedef struct {
 int  cbx_manager_init(cbx_manager *mgr, const char *font_path);
 
 /*
+ * Initialise the manager with an optional DBus backend injection point.
+ *
+ * When @p backend is non-NULL, it is used directly instead of calling
+ * ip_dbus_sd_backend() and no connect() is attempted — the caller is
+ * responsible for providing a pre-connected @p bus handle.  This enables
+ * production-path connected-mode testing with a mock backend without
+ * post-init field replacement.
+ *
+ * When @p backend is NULL, falls back to the current behaviour:
+ * ip_dbus_sd_backend() + real connect (best-effort, degraded mode on
+ * failure).
+ *
+ * @param mgr       Output struct (overwritten).
+ * @param font_path Path to a TTF font, or NULL to skip font loading.
+ * @param backend   Optional DBus backend vtable (NULL = production).
+ * @param bus       Pre-connected bus handle (used only when backend != NULL).
+ * @return 0 on success, negative errno on error.
+ */
+int  cbx_manager_init_with_dbus(cbx_manager *mgr, const char *font_path,
+                                  const ip_dbus_backend *backend,
+                                  ip_bus_handle bus);
+
+/*
  * Run the main event loop.  Polls SDL events, dispatches them, renders
  * the frame, and presents.  Returns when the window is closed or
  * cbx_manager_stop() is called.
