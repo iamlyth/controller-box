@@ -13,6 +13,7 @@
 
 #include "icons/icon_lookup.h"
 #include "identify/assign.h"  /* CBX_DEFAULT_PROFILE, cbx_assign_lookup */
+#include "overlay/conflict.h"  /* cbx_conflict_is_row_conflicted */
 
 /* --- Helpers ---------------------------------------------------------- */
 
@@ -340,6 +341,8 @@ cbx_select_grid_render(SDL_Renderer *r,
     SDL_Color fg       = {220, 220, 220, 255};
     SDL_Color highlight = {100, 200, 255, 255};
     SDL_Color dim      = {60, 60, 70, 255};
+    /* Conflict indicator color (SPEC §4.5 — red for second arrivals). */
+    SDL_Color conflict_red = {220, 40, 40, 255};
 
     if (ctx->theme) {
         bg        = ctx->theme->bg;
@@ -435,16 +438,24 @@ cbx_select_grid_render(SDL_Renderer *r,
         }
 
         /* Draw cells. */
+        bool is_conflicted = (ctx->conflicts != NULL &&
+                             cbx_conflict_is_row_conflicted(ctx->conflicts, row));
         for (int col = 0; col < g->col_count; col++) {
             int x = grid_x + col * cell_w;
             int y = row_y;
             int w = cell_w - CELL_MARGIN;
             int h = cell_h - CELL_MARGIN;
 
-            /* Cell background. */
+            /* Cell background.
+             * - Conflicted row's current column: red indicator (SPEC §4.5).
+             * - Current column (non-conflicted): highlight color.
+             * - Other columns: dim color. */
             SDL_Rect cell_rect = { .x = x + CELL_MARGIN, .y = y + CELL_MARGIN,
                                    .w = w, .h = h };
-            if (col == gr->cur_col) {
+            if (is_conflicted && col == gr->cur_col) {
+                SDL_SetRenderDrawColor(r, conflict_red.r, conflict_red.g,
+                                       conflict_red.b, conflict_red.a);
+            } else if (col == gr->cur_col) {
                 SDL_SetRenderDrawColor(r, highlight.r, highlight.g,
                                        highlight.b, highlight.a);
             } else {
@@ -452,8 +463,13 @@ cbx_select_grid_render(SDL_Renderer *r,
             }
             SDL_RenderFillRect(r, &cell_rect);
 
-            /* Draw cell border. */
-            SDL_SetRenderDrawColor(r, fg.r, fg.g, fg.b, fg.a / 2);
+            /* Draw cell border — red for conflicted row's current cell. */
+            if (is_conflicted && col == gr->cur_col) {
+                SDL_SetRenderDrawColor(r, conflict_red.r, conflict_red.g,
+                                       conflict_red.b, conflict_red.a);
+            } else {
+                SDL_SetRenderDrawColor(r, fg.r, fg.g, fg.b, fg.a / 2);
+            }
             SDL_RenderDrawRect(r, &cell_rect);
 
             /* Draw icon (if icon cache + map available). */
@@ -490,12 +506,18 @@ cbx_select_grid_render(SDL_Renderer *r,
                 }
             }
 
-            /* Draw position indicator. */
+            /* Draw position indicator.
+             * Conflicted row's current cell uses red indicator. */
             int cx = x + cell_w / 2;
             /* Position indicator at bottom of cell. */
             int indicator_y = y + cell_h - INDICATOR_R - 4;
             if (col == gr->cur_col) {
-                SDL_SetRenderDrawColor(r, fg.r, fg.g, fg.b, fg.a);
+                if (is_conflicted) {
+                    SDL_SetRenderDrawColor(r, conflict_red.r, conflict_red.g,
+                                           conflict_red.b, conflict_red.a);
+                } else {
+                    SDL_SetRenderDrawColor(r, fg.r, fg.g, fg.b, fg.a);
+                }
                 draw_filled_circle(r, cx, indicator_y, INDICATOR_R);
             } else {
                 SDL_SetRenderDrawColor(r, dim.r, dim.g, dim.b, dim.a);

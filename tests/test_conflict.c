@@ -24,12 +24,17 @@
  */
 #include "overlay/conflict.h"
 #include "overlay/grid_render.h"
+#include "overlay/surface_build.h"
 #include "identify/assign.h"
 #include "config/config_settings.h"
+#include "fb_assert.h"
+#include "test_harness.h"
 
 #include <errno.h>
 #include <string.h>
+#include <stdlib.h>
 
+#include <SDL2/SDL.h>
 #include <cmocka.h>
 
 /* --- Helpers ---------------------------------------------------------- */
@@ -576,6 +581,109 @@ test_resolve_spec_example(void **state)
     assert_int_equal(cbx_select_grid_get_cur_col(&g, 2), 1);
 }
 
+/* --- Visual: conflict red rendering (Task 2) ------------------------ */
+
+#define VIS_W 800
+#define VIS_H 600
+#define VIS_TOL 20
+
+static void
+test_conflict_red_rendering(void **state)
+{
+    (void)state;
+    TestSdlState sdl;
+    if (test_harness_sdl_init(&sdl) != 0) {
+        skip();
+        return;
+    }
+
+    /* Build a grid with 3 controllers, 4 virtual slots. */
+    cbx_select_grid g;
+    build_test_grid(&g, 3);
+    /* Row 0 → P1 (col 1), Row 1 → P1 (col 1) → conflict (second arrival). */
+    move_to_col(&g, 0, 1);
+    move_to_col(&g, 1, 1);
+    /* Row 2 stays on Unassigned. */
+
+    cbx_conflict_list conflicts;
+    cbx_conflict_detect(&g, &conflicts);
+    assert_int_equal(conflicts.count, 1);
+    assert_int_equal(conflicts.conflicts[0].row_idx, 1);
+
+    /* Set up render context with conflicts. */
+    cbx_grid_render_ctx ctx = {0};
+    ctx.grid = &g;
+    ctx.conflicts = &conflicts;
+
+    /* Render via the production composition path. */
+    cbx_overlay_surface surface;
+    memset(&surface, 0, sizeof(surface));
+    int rc = cbx_overlay_surface_init(&surface, sdl.renderer,
+                                       VIS_W, VIS_H, 1.0);
+    assert_int_equal(rc, 0);
+    cbx_overlay_surface_mark_dirty_all(&surface);
+    rc = cbx_overlay_surface_render(&surface, sdl.renderer,
+                                     cbx_select_grid_render_cb, &ctx);
+    assert_int_equal(rc, 0);
+
+    /* Read back pixels from the overlay texture. */
+    uint8_t *buf = malloc(VIS_W * VIS_H * 4);
+    assert_non_null(buf);
+    SDL_SetRenderTarget(sdl.renderer, cbx_overlay_surface_get_texture(&surface));
+    assert_int_equal(fb_read_pixels(sdl.renderer, NULL, buf,
+                                     VIS_W * VIS_H * 4), 0);
+    SDL_SetRenderTarget(sdl.renderer, NULL);
+
+    /* Compute the cell layout to find the conflicted cell region.
+     * This mirrors the layout in cbx_select_grid_render(). */
+    int header_h = 32;
+    int label_w  = 200;
+    int profile_w = 160;
+    int grid_x = label_w;
+    int grid_y = header_h;
+    int grid_w = VIS_W - label_w - profile_w;
+    int grid_h = VIS_H - header_h;
+    int cell_w = grid_w / g.col_count;
+    int cell_h = grid_h / g.row_count;
+
+    /* Row 1 (conflicted), col 1 (current) → the red cell. */
+    int cell_x = grid_x + 1 * cell_w + 4;  /* +CELL_MARGIN */
+    int cell_y = grid_y + 1 * cell_h + 4;
+    int cell_rw = cell_w - 4;  /* -CELL_MARGIN */
+    int cell_rh = cell_h - 4;
+
+    SDL_Rect conflict_cell = { .x = cell_x, .y = cell_y,
+                               .w = cell_rw, .h = cell_rh };
+
+    /* Assert that the conflicted cell region contains red pixels. */
+    uint8_t red_target[3] = {220, 40, 40};
+    assert_true(fb_region_has_color(buf, VIS_W, VIS_H, &conflict_cell,
+                                     red_target, VIS_TOL));
+
+    /* Assert that a non-conflicted cell (row 0, col 1) does NOT have red. */
+    int nc_x = grid_x + 1 * cell_w + 4;
+    int nc_y = grid_y + 0 * cell_h + 4;
+    SDL_Rect normal_cell = { .x = nc_x, .y = nc_y,
+                             .w = cell_w - 4, .h = cell_h - 4 };
+    assert_false(fb_region_has_color(buf, VIS_W, VIS_H, &normal_cell,
+                                      red_target, VIS_TOL));
+
+    /* Render without conflicts → no red in row 1's cell. */
+    cbx_overlay_surface_mark_dirty_all(&surface);
+    ctx.conflicts = NULL;
+    rc = cbx_overlay_surface_render(&surface, sdl.renderer,
+                                     cbx_select_grid_render_cb, &ctx);
+    assert_int_equal(rc, 0);
+    assert_int_equal(fb_read_pixels(sdl.renderer, NULL, buf,
+                                     VIS_W * VIS_H * 4), 0);
+    assert_false(fb_region_has_color(buf, VIS_W, VIS_H, &conflict_cell,
+                                      red_target, VIS_TOL));
+
+    free(buf);
+    cbx_overlay_surface_destroy(&surface);
+    test_harness_sdl_shutdown(&sdl);
+}
+
 /* --- Main ------------------------------------------------------------ */
 
 int
@@ -625,6 +733,8 @@ main(void)
         cmocka_unit_test(test_resolve_resolves_all_conflicts),
         /* Spec example */
         cmocka_unit_test(test_resolve_spec_example),
+        /* Visual: conflict red rendering */
+        cmocka_unit_test(test_conflict_red_rendering),
     };
 
     return cmocka_run_group_tests(tests, NULL, NULL);

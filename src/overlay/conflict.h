@@ -22,7 +22,7 @@ typedef struct {
     int conflicting_col;   /* the column where the conflict occurs      */
 } cbx_conflict_info;
 
-typedef struct {
+typedef struct cbx_conflict_list {
     cbx_conflict_info conflicts[CBX_GRID_MAX_ROWS];
     int               count;
 } cbx_conflict_list;

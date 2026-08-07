@@ -382,6 +382,8 @@ if(CMOCKA_FOUND)
     add_executable(test_conflict tests/test_conflict.c)
     target_link_libraries(test_conflict PRIVATE controllerbox cbx_test_support)
     add_test(NAME test_conflict COMMAND test_conflict)
+    set_tests_properties(test_conflict PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy")
 
     # Task 31 — Profile cycling and dynamic columns.
     add_executable(test_profile_cycle tests/test_profile_cycle.c)

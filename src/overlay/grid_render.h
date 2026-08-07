@@ -36,6 +36,9 @@
 #include "ui/text.h"
 #include "ui/theme.h"
 
+/* Forward declaration — conflict.h includes this header. */
+struct cbx_conflict_list;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -94,6 +97,7 @@ typedef struct {
     const cbx_theme   *theme;          /* optional — NULL uses defaults */
     cbx_text_cache    *text_cache;     /* optional — NULL skips text */
     int                font_id;        /* font ID for text cache */
+    const struct cbx_conflict_list *conflicts; /* optional — NULL skips red */
 } cbx_grid_render_ctx;
 
 /* --- Lifecycle ---------------------------------------------------------- */
