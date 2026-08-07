@@ -209,6 +209,11 @@ void ip_dbus_mock_free(ip_dbus_mock *mock);
  * valid as long as `mock` is alive. */
 const ip_dbus_backend *ip_dbus_mock_backend(ip_dbus_mock *mock);
 
+/* Return the production sd-bus backend vtable.  Defined in
+ * src/dbus/dbus_client.c; declared here so production code (manager.c)
+ * can obtain it without a dedicated header. */
+const ip_dbus_backend *ip_dbus_sd_backend(void);
+
 /* --- Expectation helpers (test-side) --------------------------------------- */
 
 /* Register a canned return value for (iface, member).  `value` is

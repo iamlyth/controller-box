@@ -1,10 +1,15 @@
 /*
- * manager.c — Manager application skeleton with tab bar.
+ * manager.c — Manager application.
  *
  * Implements the manager mode (SPEC §5.1): a separate SDL2 window with a
  * tab bar at the top (Controllers / Profiles / Settings).  Left/Right
  * switches tabs; Up/Down navigates within the active panel via the
  * focus chain.
+ *
+ * The manager owns the complete lifecycle of all three tab modules:
+ * controllers, profiles, and settings.  cbx_manager_init() connects to
+ * the system DBus (best-effort) and initialises all three tabs.
+ * cbx_manager_shutdown() tears down the tabs and disconnects DBus.
  *
  * Event dispatch flow:
  *   1. Try the currently focused widget — it may consume the event.
@@ -17,10 +22,9 @@
  * Tab switching (on_change callback):
  *   - Update active_tab
  *   - Show only the active panel, hide the others
+ *   - Refresh the newly active tab (replace stale data)
  *   - Rebuild the focus chain: tabbar (row 0) + active panel's children
  *   - Focus the tabbar (or first panel child if any)
- *
- * Task 34 — Manager skeleton and tab bar.
  */
 #include "manager/manager.h"
 
@@ -119,6 +123,81 @@ cbx_manager_init(cbx_manager *mgr, const char *font_path)
                                 i == mgr->active_tab);
     }
 
+    /* --- Tab modules (manager owns the full lifecycle) ------------- */
+    /* Connect to the system DBus (best-effort). If InputPlumber is
+     * unavailable or there is no system bus, the controllers tab will
+     * still initialise with an empty device list and functional
+     * buttons — the degraded state. */
+    mgr->dbus_backend = ip_dbus_sd_backend();
+    mgr->dbus_bus = NULL;
+    mgr->dbus_connected = false;
+    if (mgr->dbus_backend && mgr->dbus_backend->connect) {
+        int dbrc = mgr->dbus_backend->connect(&mgr->dbus_bus);
+        if (dbrc == 0 && mgr->dbus_bus) {
+            mgr->dbus_connected = true;
+        } else {
+            /* DBus connect failed — proceed in degraded mode. */
+            mgr->dbus_backend = NULL;
+            mgr->dbus_bus = NULL;
+        }
+    } else {
+        mgr->dbus_backend = NULL;
+    }
+
+    /* Controllers tab (DBus-backed; works in degraded mode with NULL). */
+    rc = cbx_controllers_tab_init(&mgr->ct, &mgr->panels[0],
+                                   mgr->dbus_backend, mgr->dbus_bus,
+                                   &mgr->text_cache, &mgr->theme,
+                                   mgr->font_id);
+    if (rc != 0) {
+        /* Clean up DBus + already-initialised resources. */
+        if (mgr->dbus_connected && mgr->dbus_backend &&
+            mgr->dbus_backend->disconnect)
+            mgr->dbus_backend->disconnect(mgr->dbus_bus);
+        cbx_widget_destroy(&mgr->tabbar.base);
+        for (int i = 0; i < CBX_MGR_TAB_COUNT; i++)
+            cbx_widget_destroy(&mgr->panels[i].base);
+        cbx_text_cache_cleanup(&mgr->text_cache);
+        cbx_renderer_shutdown(&mgr->rend);
+        return rc;
+    }
+
+    /* Profiles tab (filesystem-backed; does not auto-refresh). */
+    rc = cbx_profiles_tab_init(&mgr->pt, &mgr->panels[1],
+                                &mgr->text_cache, &mgr->theme,
+                                mgr->font_id);
+    if (rc != 0) {
+        cbx_controllers_tab_shutdown(&mgr->ct);
+        if (mgr->dbus_connected && mgr->dbus_backend &&
+            mgr->dbus_backend->disconnect)
+            mgr->dbus_backend->disconnect(mgr->dbus_bus);
+        cbx_widget_destroy(&mgr->tabbar.base);
+        for (int i = 0; i < CBX_MGR_TAB_COUNT; i++)
+            cbx_widget_destroy(&mgr->panels[i].base);
+        cbx_text_cache_cleanup(&mgr->text_cache);
+        cbx_renderer_shutdown(&mgr->rend);
+        return rc;
+    }
+    cbx_profiles_tab_refresh(&mgr->pt);
+
+    /* Settings tab (auto-refreshes on init). */
+    rc = cbx_settings_tab_init(&mgr->st, &mgr->panels[2],
+                                &mgr->text_cache, &mgr->theme,
+                                mgr->font_id);
+    if (rc != 0) {
+        cbx_profiles_tab_shutdown(&mgr->pt);
+        cbx_controllers_tab_shutdown(&mgr->ct);
+        if (mgr->dbus_connected && mgr->dbus_backend &&
+            mgr->dbus_backend->disconnect)
+            mgr->dbus_backend->disconnect(mgr->dbus_bus);
+        cbx_widget_destroy(&mgr->tabbar.base);
+        for (int i = 0; i < CBX_MGR_TAB_COUNT; i++)
+            cbx_widget_destroy(&mgr->panels[i].base);
+        cbx_text_cache_cleanup(&mgr->text_cache);
+        cbx_renderer_shutdown(&mgr->rend);
+        return rc;
+    }
+
     /* --- Layout + focus chain -------------------------------------- */
     cbx_manager_layout(mgr);
     cbx_focus_chain_init(&mgr->focus);
@@ -170,6 +249,16 @@ cbx_manager_shutdown(cbx_manager *mgr)
 {
     if (!mgr)
         return;
+
+    /* Tear down tab modules first (they remove widgets from panels). */
+    cbx_controllers_tab_shutdown(&mgr->ct);
+    cbx_profiles_tab_shutdown(&mgr->pt);
+    cbx_settings_tab_shutdown(&mgr->st);
+
+    /* Disconnect DBus if connected. */
+    if (mgr->dbus_connected && mgr->dbus_backend &&
+        mgr->dbus_backend->disconnect)
+        mgr->dbus_backend->disconnect(mgr->dbus_bus);
 
     /* Destroy widgets. */
     cbx_widget_destroy(&mgr->tabbar.base);
@@ -372,4 +461,24 @@ const cbx_focus_chain *
 cbx_manager_focus(const cbx_manager *mgr)
 {
     return mgr ? &mgr->focus : NULL;
+}
+
+/* --- Tab module accessors ----------------------------------------- */
+
+cbx_controllers_tab *
+cbx_manager_controllers_tab(cbx_manager *mgr)
+{
+    return mgr ? &mgr->ct : NULL;
+}
+
+cbx_profiles_tab *
+cbx_manager_profiles_tab(cbx_manager *mgr)
+{
+    return mgr ? &mgr->pt : NULL;
+}
+
+cbx_settings_tab *
+cbx_manager_settings_tab(cbx_manager *mgr)
+{
+    return mgr ? &mgr->st : NULL;
 }

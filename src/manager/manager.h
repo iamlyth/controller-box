@@ -1,5 +1,5 @@
 /*
- * manager.h — Manager application skeleton with tab bar.
+ * manager.h — Manager application.
  *
  * The manager is a separate SDL2 window mode (SPEC §5.1) providing a
  * console-style settings menu navigated entirely by controller:
@@ -7,15 +7,12 @@
  *   - Up/Down navigates within the active panel
  *
  * The manager owns its own cbx_renderer (a separate window from the
- * overlay service), text cache, theme, and focus chain.  Each tab has
- * a cbx_panel container; only the active tab's panel is visible.
- *
- * Subsequent tasks (35–39) populate the panel contents (controllers list,
- * profiles browser, settings editor, profile editor).  This skeleton
- * provides the tab bar, event dispatch, focus management, and rendering
- * loop.
- *
- * Task 34 — Manager skeleton and tab bar.
+ * overlay service), text cache, theme, and focus chain.  It also owns
+ * the complete lifecycle of all three tab modules — cbx_controllers_tab,
+ * cbx_profiles_tab, and cbx_settings_tab — which are initialised during
+ * cbx_manager_init() and torn down during cbx_manager_shutdown().
+ * Each tab populates its corresponding cbx_panel; only the active tab's
+ * panel is visible.
  */
 #ifndef CBX_MANAGER_H
 #define CBX_MANAGER_H
@@ -29,6 +26,10 @@
 #include "ui/theme.h"
 #include "ui/focus.h"
 #include "config/config_settings.h"
+#include "manager/controllers_tab.h"
+#include "manager/profiles_tab.h"
+#include "manager/settings_tab.h"
+#include "dbus_mock.h"  /* ip_dbus_backend, ip_bus_handle, ip_dbus_sd_backend */
 
 /* ------------------------------------------------------------------ */
 /*  Tab identifiers                                                   */
@@ -66,6 +67,16 @@ typedef struct {
 
     /* Focus navigation. */
     cbx_focus_chain focus;
+
+    /* Tab module state — manager owns the full lifecycle. */
+    cbx_controllers_tab ct;   /* Controllers tab (DBus-backed)  */
+    cbx_profiles_tab    pt;   /* Profiles tab (filesystem)      */
+    cbx_settings_tab    st;   /* Settings tab (local settings)  */
+
+    /* DBus connection (for controllers tab). */
+    const ip_dbus_backend *dbus_backend;  /* NULL if no bus available  */
+    ip_bus_handle          dbus_bus;      /* NULL if not connected      */
+    bool                   dbus_connected;
 
     /* Running flag. */
     bool          running;
@@ -120,5 +131,16 @@ int  cbx_manager_tab_count(const cbx_manager *mgr);
 const cbx_tabbar *cbx_manager_tabbar(const cbx_manager *mgr);
 const cbx_panel  *cbx_manager_panel(const cbx_manager *mgr, int tab);
 const cbx_focus_chain *cbx_manager_focus(const cbx_manager *mgr);
+
+/* --- Tab module accessors (for testing) --------------------------- */
+
+/*
+ * Return a pointer to the manager-owned controllers/profiles/settings
+ * tab instance.  These are populated by cbx_manager_init() and allow
+ * tests to inspect or configure the tabs without manual init.
+ */
+cbx_controllers_tab *cbx_manager_controllers_tab(cbx_manager *mgr);
+cbx_profiles_tab    *cbx_manager_profiles_tab(cbx_manager *mgr);
+cbx_settings_tab    *cbx_manager_settings_tab(cbx_manager *mgr);
 
 #endif /* CBX_MANAGER_H */

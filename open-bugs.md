@@ -25,7 +25,7 @@ Schema: `ralph-bug-ledger/v1`
   {
     "id": "BUG-0003",
     "title": "Production manager leaves every tab body uninitialized",
-    "status": "planned",
+    "status": "in_progress",
     "severity": "critical",
     "reported": "2026-08-06",
     "external": [],
