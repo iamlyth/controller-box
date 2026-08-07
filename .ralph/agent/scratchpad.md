@@ -54,3 +54,16 @@ behavior change, no API contract change.
 
 Plan is coherent, fresh, and limited to an ordinary defect. Ready for
 MAINTENANCE_PLAN_COMPLETE.
+### Iteration 2 — Verification and completion
+
+Verified MAINTENANCE_PLAN.md against strict parser requirements:
+- Front matter: 7 keys at byte zero, all values verified against git and bug-ledger.py
+- 5 tasks, contiguous numbering 1-5, all status=pending
+- Each task has all 6 required fields (Status, Dependencies, Scope, Acceptance criteria, Verification, Documentation impact)
+- Last task: "Maintenance verification and documentation audit", depends on Tasks 1-4
+- contract_change: false — no spec change needed
+- Goal, Non-goals, Defect analysis all present
+
+Plan is coherent, fresh, and limited to an ordinary defect.
+
+MAINTENANCE_PLAN_COMPLETE
