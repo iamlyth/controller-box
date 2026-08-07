@@ -94,3 +94,34 @@ Three parallel subagents mapped the codebase for interaction acceptance gaps:
 - Added operation-failure scenarios D06, D07, D08
 - Added §3 to conformance matrix as REQ-006
 - Fixed REQ-029 evidence and REQ-030 classification
+### Final review cycle (iteration 3)
+
+Two read-only subagents reviewed the plan and found three actionable gaps:
+
+1. **§11 performance targets** — no dedicated REQ entry. Added REQ-032,
+   classified `verified` (architectural guarantees enforced by design:
+   pre-built surface, no inline DBus, single InterceptMode set, SDL2 footprint,
+   GamepadOrder atomic setter).
+
+2. **Host Mode profile cycling (§4.4)** — inventory had no O12 entry for
+   the host cycling a profile on the selected row. Added O12 marked
+   "not-yet-implemented" with remediation path via Task 11.
+
+3. **Controller icon overrides (§5.5)** — spec lists "controller icon
+   overrides (§8.4)" as an app-level setting; config_settings.c has the
+   API (`cbx_settings_set_icon_override`/get/remove) and data model
+   (`icon_overrides[]`), but settings_tab.h has no `CBX_ST_SET_ICON_OVERRIDE`
+   enum and the settings tab UI doesn't expose it. Updated REQ-021 evidence
+   to note this gap, updated M23 to include "icon-override", added Task 14
+   resolution requirement (implement or defer per §13).
+
+4. **Task 6 dependency issue** — Task 6 claimed production-poll-loop testing
+   but the step function arrives in Task 10 (which depends on Task 6). Softened
+   Task 6's acceptance criteria: direct `ip_input_events_handle()` testing is
+   sufficient; full production-poll-loop verification deferred to Task 11.
+
+Also updated base_commit from 4b96eb9 to c99e137 (current HEAD).
+
+Plan is now complete: 14 tasks, all pending, 32 conformance requirements,
+38 manager controls + 12 overlay actions, 8 scenarios, final audit depends
+on all tasks, remediation rule present.

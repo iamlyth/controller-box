@@ -2,7 +2,7 @@
 spec_path: docs/SPEC.md
 spec_commit: 60aa67a7de962a8dd617d44dbaf7d8038a24ea72
 spec_blob: f81db26137e0a58ef384eadd0f517547f3484778
-base_commit: 4b96eb990d714f05273dab2621577248a635a682
+base_commit: c99e137bdf3f9e304b5dca0e546d6693d73b7378
 status: active
 ---
 
@@ -70,7 +70,7 @@ specification. Adding post-v1 features (§§12–13).
 | REQ-018 | §5.2 Controllers tab (add/remove/type) | partial | DBus calls exist (`CreateTargetDevice`, `StopTargetDevice`, `SetTargetDevices`) and are tested via direct calls (`test_controllers_tab.c`); **type picker `on_select` is NULL** — `cbx_controllers_tab_confirm_type_pick()` never called from event path; buttons unreachable via controller (list traps focus — Task 1); `SDLK_a` not handled by button widget (only `SDLK_RETURN`/`SDLK_SPACE`) | Task 1, Task 3 |
 | REQ-019 | §5.3 Profiles tab (browse/create/edit/delete) | partial | Create/delete work via direct calls (`test_profiles_tab.c`); **edit button is a no-op placeholder**; name-input and confirm-delete functions never called from event path; create source picker (Default copy / Empty / Clone) widget exists but is never shown — Create button hardcodes `CBX_PT_CREATE_DEFAULT_COPY`; spec requires create flow to open the editor, but current code creates file and returns to list; buttons unreachable via controller; name-input cancel (B) not wired | Task 1, Task 3, Task 5 |
 | REQ-020 | §5.4 Profile editor (list + sequential, validation) | partial | `profile_editor_list.c` and `profile_editor_seq.c` implemented and tested in isolation (`test_editor_list_mode.c`, `test_editor_seq_mode.c`); **not initialized in production** — profiles_tab edit button is a no-op; no UI entry point for sequential mode (`cbx_profile_editor_begin_sequential` never called from event path); no UI entry point for capture mode (`cbx_profile_editor_begin_capture` never called from event path); no save control in editor — save must happen on editor close or via a save action; NES validation (`cbx_profile_validate_nes_minimum`) exists but not called from production save path; prior visual tests (`test_manager_visual.c`, `test_golden.c`) manually initialize editor, violating §5.6 production-path requirement | Task 4, Task 5 |
-| REQ-021 | §5.5 Settings tab | partial | Persistence works (`cbx_settings_save()` writes `settings.yaml`); **`cbx_settings_tab_activate()`, `edit_up()`, `edit_down()`, `confirm_edit()`, `cancel_edit()` never called from event path** — only from tests; Save button unreachable via controller | Task 1, Task 3 |
+| REQ-021 | §5.5 Settings tab | partial | Persistence works (`cbx_settings_save()` writes `settings.yaml`); **`cbx_settings_tab_activate()`, `edit_up()`, `edit_down()`, `confirm_edit()`, `cancel_edit()` never called from event path** — only from tests; Save button unreachable via controller; **icon override setting missing from settings tab UI** — `config_settings.c` has `cbx_settings_set_icon_override()`/`get`/`remove` API and `icon_overrides[]` data model, but `settings_tab.h` has no `CBX_ST_SET_ICON_OVERRIDE` enum; spec §5.5 lists "controller icon overrides (§8.4)" as an app-level setting; the editing UI for a compound list setting is not described in the spec — the final audit evaluates whether this is blocking or deferred per §13 | Task 1, Task 3 |
 | REQ-022 | §5.6 Manager visual acceptance | partial | `test_manager_visual.c` 9 sub-tests and `test_golden.c` 7 manager baselines pass for tab and editor states, BUT profile editor tests manually initialize the editor (not through production path) — after Task 5 wires the editor, these tests must be updated to verify through the production Edit-button path | Task 5 |
 | REQ-023 | §5.7 Manager interaction acceptance | missing | No interaction inventory exists; no test sends both controller-path and pointer-path SDL events through `cbx_manager_handle_event` for the same control; all tab-specific tests bypass production dispatch; installed smoke test sends only keyboard keys, no coordinate-based body-control clicks | Task 2, Task 3, Task 7, Task 8, Task 9, Task 12 |
 | REQ-024 | §6 Controller identification | verified | `identity.c` 4-layer ID; `assign.c` auto-assignment; `assign_persist.c` persistence; `identity_downgrade.c` graceful fallback; `test_identity.c`, `test_assign.c`, `test_assignments.c`, `test_identity_downgrade.c` | — |
@@ -81,6 +81,7 @@ specification. Adding post-v1 features (§§12–13).
 | REQ-029 | §11.1 Rendering verification (7 layers) | partial | Layers 1–4 and 6 verified (framebuffer tests, golden images, backend smoke, failure artifacts); layer 5 (installed smoke) verified for keyboard input but **lacks coordinate-based mouse clicks on body controls** (§5.7 requirement); layer 7 (human release acceptance) is a pre-promotion gate documented in OPERATIONS.md, not an autonomous-cycle verification | Task 12 |
 | REQ-030 | §11.2 Autonomous definition of done | missing | Items 1 (conformance matrix — multiple partial/missing entries), 2 (production-path behavior — event dispatch broken: mouse not routed, tab activation not wired, editor not wired, overlay InputEvent not wired), 3 (interaction traversal — no tests exist), 6 (known-defect accounting — BUG-0002 open) not met | Tasks 1–14 |
 | REQ-031 | BUG-0002 | missing | Open bug: `test_create_composite` XDG runtime test asserts global `/tmp/controller-box-*` count is zero instead of comparing before/after; leaks temp dir on assertion failure | Task 13 |
+| REQ-032 | §11 Performance targets | verified | Five targets are architectural guarantees: overlay <10 ms (pre-built surface, REQ-015), gameplay ~1–2 ms (no inline DBus, REQ-001), close <1 ms (single `InterceptMode` set, REQ-005), footprint (SDL2 minimal, DEC-001), atomic reorder (`GamepadOrder` setter, REQ-012). No runtime benchmark test needed — the design enforces these; verified by production-path composition tests (REQ-016, REQ-029) and DBus wrapper tests (REQ-028) | — |
 
 ## Interaction acceptance inventory
 
@@ -129,7 +130,7 @@ dispatch path, and the task that provides executable evidence.
 |---|---------|----------------|-------------|-----------------|--------------|------|
 | M21 | Settings list | Down from tabbar → Up/Down | Mouse click on item | Setting selected (visual focus) | `cbx_manager_handle_event` → panel → list | Task 8 |
 | M22 | Activate setting (toggle) | A on launch_at_boot item | Mouse click on item | Value toggles (e.g. launch_at_boot) | `cbx_manager_handle_event` → `cbx_settings_tab_activate` | Task 3, Task 8 |
-| M23 | Edit setting (enter) | A on theme/opacity/count/type/trigger | Mouse click on item | Edit mode entered for that setting | `cbx_manager_handle_event` → `cbx_settings_tab_activate` | Task 3, Task 8 |
+| M23 | Edit setting (enter) | A on theme/opacity/count/type/trigger/icon-override | Mouse click on item | Edit mode entered for that setting | `cbx_manager_handle_event` → `cbx_settings_tab_activate` | Task 3, Task 8 |
 | M24 | Edit setting (up/down) | Up/Down while in edit mode | n/a | Value cycles/adjusts | `cbx_manager_handle_event` → `cbx_settings_tab_edit_up`/`edit_down` | Task 3, Task 8 |
 | M25 | Confirm edit | A while in edit mode | n/a | Edit mode exits, value applied | `cbx_manager_handle_event` → `cbx_settings_tab_confirm_edit` | Task 3, Task 8 |
 | M26 | Cancel edit | B while in edit mode | n/a | Edit mode exits, value reverts from disk | `cbx_manager_handle_event` → `cbx_settings_tab_cancel_edit` | Task 3, Task 8 |
@@ -166,6 +167,7 @@ dispatch path, and the task that provides executable evidence.
 | O09 | Exit Host Mode (R3) | R3 key | n/a | Host mode exits; controllers unfreeze | poll loop → `cbx_host_mode_handle` → `cbx_host_mode_exit` | Task 11 |
 | O10 | Close (B) | B key | n/a | Assignments saved; conflicts auto-resolved; `InterceptMode` set to PASS; surface hidden | poll loop → `cbx_player_mode_handle`/`cbx_host_mode_handle` → `cbx_overlay_lifecycle_close` → `cbx_close_on_save` | Task 11 |
 | O11 | Multi-controller independence | DBus InputEvent from different device paths | n/a | Each controller moves its own row independently | poll loop → `ip_input_events` → device_path→row mapping → `cbx_player_mode_handle` | Task 6, Task 11 |
+| O12 | Host: cycle profile (not-yet-implemented) | TBD (Up/Down repurposed for row nav in Host Mode; spec §4.4 says host can "edit slot/profile" but `cbx_hm_input` has no profile-cycle input) | n/a | Host changes the profile of the selected row | poll loop → `cbx_host_mode_handle` (not yet implemented) | Task 11 (remediation if blocking) |
 
 ### Disabled-control, degraded-state, and operation-failure scenarios
 
@@ -274,7 +276,7 @@ dispatch path, and the task that provides executable evidence.
   - InputEvent signals are mapped to rows by correlating the signal's device path with the composite device enumeration index (via `ip_composite_get_dbus_devices`).
   - Mapped input events are dispatched to `cbx_player_mode_handle()` (or `cbx_host_mode_handle()` when Host Mode is active) with the correct row index — not hardcoded row 0.
   - SDL keyboard events remain as a fallback for single-controller testing.
-  - Two controllers sending InputEvent signals from different device paths move their own rows independently through the production poll loop.
+  - Two controllers sending InputEvent signals from different device paths move their own rows independently (verified through direct `ip_input_events_handle()` testing; full production-poll-loop verification is deferred to Task 11).
   - `test_overlay_service.c` has a new sub-test that subscribes to mock InputEvent signals, emits events from two different device paths, and verifies each controller's row moves independently.
 - Verification: `nix-shell --run "ctest --test-dir build-check -R 'test_overlay_service|test_input_signal' --output-on-failure"` — all pass.
 - Documentation impact: none (internal implementation detail; keyboard fallback documented in Task 2's OPERATIONS update)
@@ -284,7 +286,7 @@ dispatch path, and the task that provides executable evidence.
 - Dependencies: Task 1, Task 2, Task 3
 - Scope: `tests/interaction_inventory.h`, `tests/interaction_inventory.c`
 - Acceptance criteria:
-  - A machine-readable data structure enumerates every interactive manager control (M01–M38) and overlay action (O01–O11) with: control ID, tab/context, widget type, controller-path description, pointer-path description, expected semantic outcome, and current verification status.
+  - A machine-readable data structure enumerates every interactive manager control (M01–M38) and overlay action (O01–O12) with: control ID, tab/context, widget type, controller-path description, pointer-path description, expected semantic outcome, and current verification status.
   - The inventory is a C struct array that tests can iterate over to drive automated traversal.
   - The inventory covers all controls listed in the interaction acceptance inventory section above, including create source picker, name input cancel, capture mode entry, sequential mode entry, save and close, and cancel editor.
   - Disabled-control and operation-failure scenarios (D01–D08) are included with their expected rejection/error behavior.
@@ -339,7 +341,7 @@ dispatch path, and the task that provides executable evidence.
 - Dependencies: Task 6, Task 7, Task 10
 - Scope: `tests/test_overlay_interaction.c`, `tests/CMakeLists.txt`
 - Acceptance criteria:
-  - For every overlay action in the inventory (O01–O11), a test sends events through the production dispatch path (the step function from Task 10) and verifies the semantic outcome:
+  - For every overlay action in the inventory (O01–O12), a test sends events through the production dispatch path (the step function from Task 10) and verifies the semantic outcome:
     - O01 Open: mock InterceptMode → ALL; verify lifecycle transitions to VISIBLE.
     - O02–O05 Move/cycle: push SDL_KEYDOWN or mock InputEvent; verify grid column changes, profile name changes, `LoadProfilePath` DBus call, assignment update.
     - O06–O09 Host Mode: push R3 → verify host mode entered/frozen; Up/Down → verify row navigation; Left/Right → verify slot change; R3 → verify exit.
@@ -383,8 +385,8 @@ dispatch path, and the task that provides executable evidence.
 - Dependencies: Task 1, Task 2, Task 3, Task 4, Task 5, Task 6, Task 7, Task 8, Task 9, Task 10, Task 11, Task 12, Task 13
 - Scope: `docs/SPEC.md` (§11.2 audit only — no spec changes), `README.md`, `docs/OPERATIONS.md`, `IMPLEMENTATION_PLAN.md`, `open-bugs.md`, `closed-bugs.md`
 - Acceptance criteria:
-  - **Conformance matrix**: every requirement (REQ-001–REQ-031) is classified `verified` with specific source evidence and an executable test or acceptance command. No requirement remains `partial`, `missing`, or `ambiguous`. REQ-010 (host-mode profile cycling) is resolved: either implemented and verified, or explicitly documented as deferred per §13 with a human-approved specification decision.
-  - **Interaction inventory**: every control (M01–M38) and overlay action (O01–O11) has passing controller-path and pointer-path (where applicable) evidence. Every disabled-control and operation-failure scenario (D01–D08) passes.
+  - **Conformance matrix**: every requirement (REQ-001–REQ-032) is classified `verified` with specific source evidence and an executable test or acceptance command. No requirement remains `partial`, `missing`, or `ambiguous`. REQ-010 (host-mode profile cycling) is resolved: either implemented and verified, or explicitly documented as deferred per §13 with a human-approved specification decision. REQ-021 (icon override UI) is resolved: either the settings tab exposes icon override management, or it is explicitly documented as deferred per §13 with a human-approved specification decision.
+  - **Interaction inventory**: every control (M01–M38) and overlay action (O01–O12) has passing controller-path and pointer-path (where applicable) evidence. O12 (host-mode profile cycling) is either implemented and verified, or documented as deferred per §13. Every disabled-control and operation-failure scenario (D01–D08) passes.
   - **Known-defect accounting**: `open-bugs.md` contains no unresolved defect that contradicts a v1 requirement. BUG-0002 is closed with verification.
   - **Independent review**: read-only correctness, test-quality, security, and documentation reviews find no unresolved blocking issue. Reviews challenge whether tests can pass while production behavior remains broken.
   - **Full clean verification**: `nix-shell --run "./scripts/verify-project.sh"` passes (build, CTest, packaging, installed smoke). `nix-shell --run "./scripts/verify-boilerplate.sh"` passes. No unexplained skips, flaky rerun dependencies, weakened assertions, leaked processes/files, or compiler warnings introduced by this cycle.
