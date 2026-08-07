@@ -157,7 +157,8 @@ conflict-specific red rendering. This plan closes those gaps.
 - Documentation impact: none (test code)
 
 ## Task 6: Manager DBus backend injection point
-- Status: pending
+- Status: complete
+- Evidence: 68/68 ctest pass (incl. test_manager_dbus_inject with 4 sub-tests). cbx_manager_init_with_dbus added to manager.h/c; cbx_manager_init is now a thin wrapper. Existing test_manager_production and test_manager_tabs pass unchanged.
 - Dependencies: none
 - Scope: `src/manager/manager.c`, `src/manager/manager.h`
 - Acceptance criteria:
