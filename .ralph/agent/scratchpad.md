@@ -1,58 +1,35 @@
-# Maintenance BUG-0003 — Scratchpad
+# Planning Iteration — Framebuffer Visual Acceptance
 
-## Bug: Production manager leaves every tab body uninitialized
+## Context
+- Spec updated (commit 2f2903d) added §4.10, §5.6, §11.1 requiring framebuffer-backed visual acceptance
+- Prior implementation completed 44 tasks (all functional components done)
+- Key gaps: no SDL_RenderReadPixels anywhere, no golden images, overlay service run path is stub, no conflict red rendering
 
-**Root cause:** `cbx_manager_init()` creates three empty panels but never calls
-`cbx_controllers_tab_init()`, `cbx_profiles_tab_init()`, or `cbx_settings_tab_init()`.
-Integration tests manually call these, masking the bug.
+## Analysis (3 parallel planner-scout subagents)
+1. **Overlay tests**: All 11 overlay test files are structural/state-machine level. Zero pixel readback. grid_render.c has no red conflict rendering. Production render path exercised only for crash-safety (NULL caches, return-code-only).
+2. **Manager tests**: 12 test files, all structural. 6/12 manually attach modules (violates §5.6). test_manager_production.c checks child counts only. No pixel readback.
+3. **Rendering infra**: test_harness uses SDL software renderer + dummy driver (good foundation). No SDL_RenderReadPixels, no golden images, no failure artifacts, no installed smoke test, no backend smoke.
 
-## Progress
+## Plan decisions
+- 11 tasks total, ordered by dependencies
+- Task 1: fb_assert infrastructure (foundational)
+- Task 2: conflict red rendering (deps: 1, uses fb_region_has_color)
+- Task 3-4: overlay service init + poll loop (split for sizing)
+- Task 5: overlay visual tests (deps: 1, 2)
+- Task 6: manager DBus backend injection (enables connected-mode production-path testing)
+- Task 7: manager visual tests (deps: 1, 6)
+- Task 8: golden images (deps: 5, 7)
+- Task 9: installed smoke test (deps: 4)
+- Task 10: backend smoke (deps: 1)
+- Task 11: final docs + spec audit (deps: all)
 
-### Task 1: Extend cbx_manager to own all three tab module lifecycles — COMPLETE
-- Added `ct`, `pt`, `st` tab state fields + DBus fields to `cbx_manager` struct
-- Added includes for `controllers_tab.h`, `profiles_tab.h`, `settings_tab.h`, `dbus_mock.h`
-- Added accessor declarations and implementations: `cbx_manager_controllers_tab()`,
-  `cbx_manager_profiles_tab()`, `cbx_manager_settings_tab()`
-- `cbx_manager_init()`: best-effort DBus connect, then init all three tabs + profiles refresh
-- `cbx_manager_shutdown()`: tab shutdown before panel destruction, then DBus disconnect
-- Declared `ip_dbus_sd_backend()` in `tests/dbus_mock.h`
-- Commit: 5977459
-
-### Task 2: Wire tab refresh into tab switching — COMPLETE
-- Added refresh calls in `cbx_manager_on_tab_change()` for the newly active tab
-- Controllers refresh guarded by backend NULL check (degraded mode)
-- Commit: a62ca3e
-
-### Task 3: Update existing skeleton and integration tests — COMPLETE
-- Updated test_manager_tabs.c: nonempty panel assertions, focus chain > 1, DOWN navigation
-- Updated test_manager_integration.c: removed manual tab init/shutdown, use accessors
-- Also fixed test_controllers_tab.c, test_profiles_tab.c, test_settings_tab.c: shut down
-  manager-owned tab in setup before test-specific re-init
-- All 65 tests pass
-- Commit: c0bad65 + fix commit
-
-### Task 4: Add production-path regression test — COMPLETE
-- New test_manager_production.c: 6 tests exercising production init/shutdown path only
-- Verifies nonempty panels, visible rendered content, focus chain, tab switching, clean shutdown
-- Registered in ctest with SDL_VIDEODRIVER=dummy
-- Commit: dcc8cbc
-
-### Task 5: Maintenance verification and documentation audit — COMPLETE
-- Full ctest suite: 65/65 pass (excluding test_packaging)
-- BUG-0003 closed with resolution and verification
-- SPEC.md unchanged (git diff --exit-code)
-- Stale comments cleaned up in manager.h and manager.c
-- Bug ledger validates: 1 open, 2 closed
-- MAINTENANCE_PLAN.md status set to complete, all tasks complete
-
-## Build notes
-- `build-manual` was stale (wrong path cache); reconfigured fresh
-- `nix-shell --run 'cmake -B build-manual ...'` + `cmake --build build-manual`
-### Final Verification (post-completion check)
-- check-maintenance-freshness.sh: passes, fingerprint matches
-- bug-ledger: BUG-0003 closed, resolution + verification recorded
-- ctest: 66/66 pass (100%, 0 failures)
-- SPEC.md: unchanged (git diff --exit-code = 0)
-- MAINTENANCE_PLAN.md: status: complete
-- No open runtime tasks
-- All work committed (5977459 through 44892c4)
+## Review fixes applied
+- Fixed cbx_overlay_surface_build → cbx_overlay_surface_init
+- Split overlay service into init + poll loop tasks
+- Added Task 6 (manager DBus injection) for connected-mode testing
+- Task 2 now depends on Task 1 (uses fb_region_has_color for red pixel assertion)
+- Added spec text correction (500ms → 50ms) to Task 11
+- Clarified composition path as callback-based (cbx_overlay_surface_render with cbx_select_grid_render_cb)
+- Added partial progress state testing to Task 7
+- Added build-check configuration note
+- Clarified installed smoke test region checks with ImageMagick commands
