@@ -125,3 +125,40 @@ Also updated base_commit from 4b96eb9 to c99e137 (current HEAD).
 Plan is now complete: 14 tasks, all pending, 32 conformance requirements,
 38 manager controls + 12 overlay actions, 8 scenarios, final audit depends
 on all tasks, remediation rule present.
+
+### Review iteration 4 — fixes applied
+
+Three read-only subagents reviewed the plan (reviewer, security-reviewer, planner-scout).
+
+**Blocking fixes:**
+1. B1 (reviewer): List widget on_select/tab-activate double-action. Fixed by
+   changing list to fire on_select on KEYUP (not KEYDOWN) for RETURN/SPACE/A,
+   matching button press/release semantics. Manager tab-activate forwarding
+   fires only when focused widget doesn't consume KEYUP. All activation lists
+   (settings, type picker, create picker) have on_select wired. test_widget_list.c
+   updated for KEYUP firing.
+2. B-2 (security): Profile editor expected_sender uses well-known name not unique
+   bus name → all InputEvent signals silently dropped in production. Added
+   explicit acceptance criterion to Task 5: must use ip_connection_get_unique_name().
+3. B-1 (security)/H2 (reviewer): Task 4 TOCTOU fix insufficient guidance. Added
+   explicit sub-task: verify_path_within_dir returns canonicalized path, save
+   uses it for write. Added grep verification for direct cbx_profile_save bypass.
+
+**High fixes:**
+4. REQ-021 icon override UI: Changed from "human-approved deferral" to
+   "deferred per §13" (interface details for compound settings not in v1).
+5. H-1 (security): Direct cbx_profile_save bypass in profiles_tab.c:403
+   explicitly called out in Task 4 with grep verification.
+6. Task 14 §11.2 coverage: Added explicit acceptance criteria for items 2
+   (production-path audit), 4 (visual and degraded-state), 5 (sanitizer clause),
+   and human visual acceptance gate acknowledgment.
+
+**Medium fixes:**
+7. M37 pointer path: Changed from "Mouse click on close area" to "n/a
+   (controller-only — editor save/close via B key)".
+8. Task 12: Added Task 1 as explicit dependency (was transitive only).
+9. Task 6: Added device path validation acceptance criterion (InputEvent
+   signals only from known composite device paths).
+
+Plan committed as e18263f. 14 tasks, 32 REQs, 38 M-controls, 12 O-actions,
+8 scenarios. All blocking issues resolved. Ready for PLAN_COMPLETE.
