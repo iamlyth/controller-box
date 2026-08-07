@@ -81,6 +81,19 @@ test_manager_init_basic(void **state)
     assert_int_equal(cbx_tabbar_tab_count(tb), 3);
     assert_int_equal(cbx_tabbar_get_active(tb), 0);
 
+    /* All three panels are populated (tab modules initialised by
+     * cbx_manager_init). */
+    for (int i = 0; i < CBX_MGR_TAB_COUNT; i++) {
+        const cbx_panel *p = cbx_manager_panel(&mgr, i);
+        assert_non_null(p);
+        assert_true(p->child_count > 0);
+    }
+
+    /* Tab module accessors return non-NULL. */
+    assert_non_null(cbx_manager_controllers_tab(&mgr));
+    assert_non_null(cbx_manager_profiles_tab(&mgr));
+    assert_non_null(cbx_manager_settings_tab(&mgr));
+
     cbx_manager_shutdown(&mgr);
 }
 
@@ -101,6 +114,11 @@ test_manager_panels_visibility(void **state)
         else
             assert_false(cbx_widget_is_visible(&p->base));
     }
+
+    /* Active panel has children (populated by tab module). */
+    const cbx_panel *active = cbx_manager_panel(&mgr, mgr.active_tab);
+    assert_non_null(active);
+    assert_true(active->child_count > 0);
 
     cbx_manager_shutdown(&mgr);
 }
@@ -197,10 +215,11 @@ test_manager_up_down_focus_navigation(void **state)
     cbx_manager mgr;
     assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
 
-    /* The focus chain should have the tab bar as the first entry. */
+    /* The focus chain should have the tab bar as the first entry, plus
+     * at least one panel child (panels are now populated). */
     const cbx_focus_chain *fc = cbx_manager_focus(&mgr);
     assert_non_null(fc);
-    assert_int_equal(fc->count, 1);  /* tabbar only (panels are empty) */
+    assert_true(fc->count > 1);  /* tabbar + at least one panel child */
     assert_int_equal(fc->focused, 0);  /* tabbar is focused */
 
     /* UP from tabbar — no candidate above, focus unchanged. */
@@ -208,10 +227,10 @@ test_manager_up_down_focus_navigation(void **state)
     assert_false(consumed);  /* no candidate = not consumed */
     assert_int_equal(fc->focused, 0);
 
-    /* DOWN from tabbar — no candidate below (empty panels), unchanged. */
+    /* DOWN from tabbar — navigates to a panel child. */
     consumed = send_key(&mgr, SDLK_DOWN);
-    assert_false(consumed);
-    assert_int_equal(fc->focused, 0);
+    assert_true(consumed);  /* navigated to a panel child */
+    assert_true(fc->focused > 0);  /* moved past tabbar */
 
     cbx_manager_shutdown(&mgr);
 }

@@ -82,9 +82,9 @@ typedef struct {
     ip_dbus_mock mock;
     const ip_dbus_backend *backend;
 
-    cbx_controllers_tab ct;     /* controllers tab */
-    cbx_profiles_tab pt;         /* profiles tab */
-    cbx_settings_tab st;        /* settings tab */
+    cbx_controllers_tab *ct;  /* manager-owned (via accessor) */
+    cbx_profiles_tab    *pt;  /* manager-owned (via accessor) */
+    cbx_settings_tab    *st;  /* manager-owned (via accessor) */
 
     char mock_systemctl_path[PATH_MAX];
 } mi_fixture;
@@ -136,9 +136,17 @@ static int setup(void **state)
 
     cbx_service_set_mock_systemctl(f->mock_systemctl_path);
 
-    /* Init manager. */
+    /* Init manager — this now initialises all three tab modules. */
     int rc = cbx_manager_init(&f->mgr, NULL);
     assert_int_equal(rc, 0);
+
+    /* Obtain the manager-owned tab instances via accessors. */
+    f->ct = cbx_manager_controllers_tab(&f->mgr);
+    f->pt = cbx_manager_profiles_tab(&f->mgr);
+    f->st = cbx_manager_settings_tab(&f->mgr);
+    assert_non_null(f->ct);
+    assert_non_null(f->pt);
+    assert_non_null(f->st);
 
     /* Init mock DBus. */
     ip_dbus_mock_init(&f->mock);
@@ -149,34 +157,17 @@ static int setup(void **state)
         IP_IFACE_MANAGER, "SupportedTargetDeviceIds",
         "evdev,evdev-gamepad,evdev-keyboard,evdev-mouse");
 
-    /* Init controllers tab. */
-    rc = cbx_controllers_tab_init(&f->ct,
-                                   &f->mgr.panels[CBX_MGR_TAB_CONTROLLERS],
-                                   f->backend, f->mock.bus,
-                                   &f->mgr.text_cache, &f->mgr.theme,
-                                   f->mgr.font_id);
-    assert_int_equal(rc, 0);
+    /* Replace the production DBus backend/bus on the controllers tab
+     * with the mock backend so tests can inject canned responses. */
+    f->ct->backend = f->backend;
+    f->ct->bus = f->mock.bus;
+    cbx_controllers_tab_load_supported_types(f->ct);
+    cbx_controllers_tab_refresh(f->ct);
 
-    /* Init profiles tab with test dirs. */
-    rc = cbx_profiles_tab_init(&f->pt,
-                                &f->mgr.panels[CBX_MGR_TAB_PROFILES],
-                                &f->mgr.text_cache, &f->mgr.theme,
-                                f->mgr.font_id);
-    assert_int_equal(rc, 0);
-
-    /* Override profiles tab dirs to use our test home. */
-    cbx_profiles_tab_set_test_dirs(&f->pt, profiles_dir,
+    /* Override profiles tab dirs to use our test home and re-refresh. */
+    cbx_profiles_tab_set_test_dirs(f->pt, profiles_dir,
                                     cbx_system_profiles_dir(), NULL);
-
-    /* Re-refresh with test dirs. */
-    cbx_profiles_tab_refresh(&f->pt);
-
-    /* Init settings tab. */
-    rc = cbx_settings_tab_init(&f->st,
-                                &f->mgr.panels[CBX_MGR_TAB_SETTINGS],
-                                &f->mgr.text_cache, &f->mgr.theme,
-                                f->mgr.font_id);
-    assert_int_equal(rc, 0);
+    cbx_profiles_tab_refresh(f->pt);
 
     *state = f;
     return 0;
@@ -186,9 +177,7 @@ static int teardown(void **state)
 {
     mi_fixture *f = *state;
 
-    cbx_settings_tab_shutdown(&f->st);
-    cbx_profiles_tab_shutdown(&f->pt);
-    cbx_controllers_tab_shutdown(&f->ct);
+    /* Manager shutdown now handles tab shutdown + DBus disconnect. */
     cbx_manager_shutdown(&f->mgr);
     ip_dbus_mock_free(&f->mock);
     cbx_service_set_mock_systemctl(NULL);
@@ -222,7 +211,7 @@ static void test_manager_init(void **state)
 static void test_controllers_tab_loaded(void **state)
 {
     mi_fixture *f = FIX(state);
-    assert_true(cbx_controllers_tab_supported_type_count(&f->ct) > 0);
+    assert_true(cbx_controllers_tab_supported_type_count(f->ct) > 0);
 }
 
 /* Test: add a controller via mock DBus. */
@@ -240,7 +229,7 @@ static void test_add_controller(void **state)
         IP_IFACE_MANAGER, "SupportedTargetDeviceIds",
         "evdev,evdev-gamepad,evdev-keyboard,evdev-mouse");
 
-    int rc = cbx_controllers_tab_add(&f->ct, "evdev-gamepad");
+    int rc = cbx_controllers_tab_add(f->ct, "evdev-gamepad");
     assert_int_equal(rc, 0);
 }
 
@@ -249,7 +238,7 @@ static void test_profiles_tab_initialized(void **state)
 {
     mi_fixture *f = FIX(state);
     /* The default profile should be in system dir; user dir starts empty. */
-    assert_true(cbx_profiles_tab_profile_count(&f->pt) >= 0);
+    assert_true(cbx_profiles_tab_profile_count(f->pt) >= 0);
 }
 
 /* Test: create a profile from empty source. */
@@ -257,18 +246,18 @@ static void test_create_profile(void **state)
 {
     mi_fixture *f = FIX(state);
 
-    int rc = cbx_profiles_tab_create(&f->pt, "testprof",
+    int rc = cbx_profiles_tab_create(f->pt, "testprof",
                                      CBX_PT_CREATE_EMPTY);
     assert_int_equal(rc, 0);
 
     /* Refresh and verify. */
-    cbx_profiles_tab_refresh(&f->pt);
+    cbx_profiles_tab_refresh(f->pt);
 
     /* Find the profile in the list. */
     bool found = false;
-    int count = cbx_profiles_tab_profile_count(&f->pt);
+    int count = cbx_profiles_tab_profile_count(f->pt);
     for (int i = 0; i < count; i++) {
-        const cbx_profile_entry *e = cbx_profiles_tab_entry(&f->pt, i);
+        const cbx_profile_entry *e = cbx_profiles_tab_entry(f->pt, i);
         if (e && strcmp(e->filename, "testprof") == 0)
             found = true;
     }
@@ -281,7 +270,7 @@ static void test_full_profile_workflow(void **state)
     mi_fixture *f = FIX(state);
 
     /* Create an empty profile. */
-    int rc = cbx_profiles_tab_create(&f->pt, "workflow",
+    int rc = cbx_profiles_tab_create(f->pt, "workflow",
                                       CBX_PT_CREATE_EMPTY);
     assert_int_equal(rc, 0);
 
@@ -362,24 +351,24 @@ static void test_settings_save(void **state)
     mi_fixture *f = FIX(state);
 
     /* Navigate to the launch_at_boot setting (index 0). */
-    assert_int_equal(cbx_settings_tab_selected(&f->st), 0);
+    assert_int_equal(cbx_settings_tab_selected(f->st), 0);
 
     /* Activate to toggle. */
-    int rc = cbx_settings_tab_activate(&f->st);
+    int rc = cbx_settings_tab_activate(f->st);
     assert_int_equal(rc, 0);
 
     /* Verify the toggle changed. */
-    const cbx_settings *s = cbx_settings_tab_settings(&f->st);
+    const cbx_settings *s = cbx_settings_tab_settings(f->st);
     assert_false(s->launch_at_boot);  /* was true by default → now false */
 
     /* Navigate to save (index 9 = CBX_ST_SET_SAVE). */
     for (int i = 0; i < CBX_ST_SET_COUNT - 1; i++)
-        cbx_settings_tab_move_down(&f->st);
+        cbx_settings_tab_move_down(f->st);
 
-    assert_int_equal(cbx_settings_tab_selected(&f->st), CBX_ST_SET_SAVE);
+    assert_int_equal(cbx_settings_tab_selected(f->st), CBX_ST_SET_SAVE);
 
     /* Save. */
-    rc = cbx_settings_tab_activate(&f->st);
+    rc = cbx_settings_tab_activate(f->st);
     assert_int_equal(rc, 0);
 
     /* Verify settings file exists. */
@@ -453,7 +442,7 @@ static void test_full_integration(void **state)
     mi_fixture *f = FIX(state);
 
     /* Step 1: Create a profile. */
-    int rc = cbx_profiles_tab_create(&f->pt, "integration",
+    int rc = cbx_profiles_tab_create(f->pt, "integration",
                                       CBX_PT_CREATE_EMPTY);
     assert_int_equal(rc, 0);
 
@@ -498,12 +487,12 @@ static void test_full_integration(void **state)
 
     /* Step 5: Save settings. */
     /* Toggle launch_at_boot. */
-    cbx_settings_tab_activate(&f->st);  /* toggle (at index 0) */
+    cbx_settings_tab_activate(f->st);  /* toggle (at index 0) */
 
     /* Navigate to save and activate. */
     for (int i = 0; i < CBX_ST_SET_COUNT - 1; i++)
-        cbx_settings_tab_move_down(&f->st);
-    cbx_settings_tab_activate(&f->st);  /* save */
+        cbx_settings_tab_move_down(f->st);
+    cbx_settings_tab_activate(f->st);  /* save */
 
     /* Verify settings file. */
     char settings_path[PATH_MAX + 128];
