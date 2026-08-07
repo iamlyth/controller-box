@@ -160,7 +160,13 @@ Each iteration:
 
 Only the final documentation and specification audit may produce `LOOP_COMPLETE`. It must satisfy `docs/SPEC.md` §11.2: all conformance rows verified, every control exercised through production event dispatch with semantic outcomes, full visual/degraded/installed verification, no contradictory open bugs, adversarial reviews, current documentation, and a clean tree.
 
-There is no minimum iteration count: high quality is determined by evidence, not loop volume. Conversely, completing the originally planned tasks is not enough when acceptance discovers another gap. The worker preserves the ledger, appends a new uniquely numbered remediation task, adds it to the final audit dependencies, returns the audit to pending, and continues. `ralph.yml` permits up to 1000 iterations and a one-year runtime as safety ceilings. If those or an external session ceiling are reached, the plan remains active/blocked with a recovery handoff; a ceiling never produces `LOOP_COMPLETE`.
+There is no minimum iteration count: high quality is determined by evidence, not loop volume. Conversely, completing the originally planned tasks is not enough when acceptance discovers another gap. The worker preserves the ledger, appends a new uniquely numbered remediation task, adds it to the final audit dependencies, returns the audit to pending, and continues. `ralph.yml` permits up to 1000 iterations and a one-year runtime as safety ceilings. If those or an external session ceiling are reached, the plan remains active/blocked with a recovery handoff; a ceiling never constitutes completion.
+
+### Completion protocol and checkpoint guards
+
+Ralph recognizes a completion promise only when the reserved token is the exact final non-empty output line outside all `<event>` tags. A token inside any event payload is deliberately ignored. Each prompt therefore forbids its token in events, summaries, plans, and scratchpads and requires the standalone final line after the normal event is closed.
+
+Before every checkpoint, planning revalidates the launcher's immutable specification metadata and cycle `base_commit`; maintenance planning performs its equivalent freshness check. `scripts/check-scratchpad.sh` rejects completion tokens, multiple/appended handoff sections, historical subheadings, more than 80 lines, or more than 8 KiB. A failed or stale Ralph process can still be accepted by the supervisor only when these guards and the final gate pass; otherwise the artifacts remain recoverable but explicitly incomplete.
 
 ## Maintain one bug
 
