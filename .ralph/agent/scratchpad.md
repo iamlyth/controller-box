@@ -33,3 +33,30 @@
 - Task 2 (Conflict red rendering) — depends on Task 1 (now complete)
 - Task 3 (Overlay service init) — no dependencies, can proceed in parallel
 - Task 6 (Manager DBus backend injection) — no dependencies, can proceed in parallel
+## Iteration: Task 6 — Manager DBus backend injection point
+
+### What was done
+- Added `cbx_manager_init_with_dbus(mgr, font_path, backend, bus)` to `manager.h`/`manager.c`
+  - When `backend` is non-NULL: uses it directly, sets `dbus_connected=true`, no `connect()` call
+  - When `backend` is NULL: falls back to `ip_dbus_sd_backend()` + real connect (existing behavior)
+- Refactored `cbx_manager_init` to a thin wrapper: `return cbx_manager_init_with_dbus(mgr, font_path, NULL, NULL)`
+- Created `tests/test_manager_dbus_inject.c` with 4 sub-tests:
+  1. `test_injected_backend_wired` — mock backend wired into `mgr->ct->backend` and `mgr->dbus_backend`
+  2. `test_null_backend_falls_back` — NULL backend uses production path (degraded mode in CI)
+  3. `test_wrapper_delegates` — `cbx_manager_init` wrapper works correctly
+  4. `test_null_mgr_returns_einval` — NULL manager returns -EINVAL
+- Registered `test_manager_dbus_inject` in `tests/CMakeLists.txt`
+
+### Verification
+- 3/3 targeted tests PASS (test_manager_dbus_inject, test_manager_production, test_manager_tabs)
+- Full suite: 68/68 tests pass (67 existing + 1 new)
+
+### Key decisions
+- Used `const ip_dbus_backend *backend` (not `ip_dbus_backend *`) to match the struct field type
+- Used `ip_bus_handle bus` (value, not pointer) to match struct field — mock bus is pre-connected
+- No documentation impact (internal API extension per plan)
+
+### Next task
+- Task 3 (Overlay service init) — still ready, no dependencies
+- Task 2 (Conflict red rendering) — depends on Task 1 (complete), should be ready
+- Task 4 (Overlay poll loop) — depends on Task 3
