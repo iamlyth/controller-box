@@ -181,6 +181,8 @@ cycle and do not modify `docs/SPEC.md`:
 ./scripts/ralph-maintenance-run.sh
 ```
 
+A fresh specification or maintenance planning command replaces the prior active plan and scratchpad with a minimal cycle skeleton before Ralph starts; completed tasks remain only in Git history and are not carried into future prompts. `--resume` preserves an interrupted draft, and newly accepted plans may contain only pending tasks.
+
 Contract changes return to the human specification and full planning workflow.
 See [docs/BUG_WORKFLOW.md](docs/BUG_WORKFLOW.md) for intake, triage, external
 links, maintenance, verification, and recovery.

@@ -105,7 +105,7 @@ Run the planning-only fresh-context loop:
 ./scripts/ralph-plan.sh
 ```
 
-The planner may only modify `IMPLEMENTATION_PLAN.md` and the recovery scratchpad. The generated plan records:
+The planner may only modify `IMPLEMENTATION_PLAN.md` and the recovery scratchpad. A fresh invocation atomically replaces both with minimal cycle state before Ralph starts, so completed tasks are not carried into future prompts. Previous plans remain available through Git history; `--resume` preserves the active draft. The generated plan records:
 
 - the spec path;
 - the latest commit that changed the spec;
@@ -114,7 +114,7 @@ The planner may only modify `IMPLEMENTATION_PLAN.md` and the recovery scratchpad
 - bounded tasks, dependencies, acceptance evidence, and documentation impact;
 - a mandatory final documentation/specification audit.
 
-Inspect the plan before implementation. `scripts/check-plan-freshness.sh` prevents a stale plan from running after the specification changes.
+Inspect the plan before implementation. Every newly accepted task must be `pending`; inherited completed, in-progress, or blocked tasks fail the planning gate. `scripts/check-plan-freshness.sh` prevents a stale plan or altered cycle base from running after the specification changes.
 
 For a headless planning loop:
 
@@ -154,7 +154,7 @@ Forgejo, or both. After human triage, run:
 ./scripts/ralph-maintenance-run.sh
 ```
 
-The dedicated plan is bound to the immutable bug intake, committed spec, and
+A fresh invocation replaces the previous maintenance plan and scratchpad with a minimal selected-bug skeleton; prior evidence remains in Git and the closed ledger, while `--resume` preserves an interrupted draft. Every newly accepted maintenance task must be pending. The dedicated plan is bound to the immutable bug intake, committed spec, and
 planning checkpoint. The single-writer maintenance loop adds regression tests,
 implements the fix, runs the configured project verifier, records closure
 evidence, and moves only that bug into the closed ledger. Contract changes are
@@ -269,8 +269,8 @@ Never edit the specification during implementation. `check-plan-freshness.sh` co
 
 1. stop the implementation loop;
 2. commit the revised `docs/SPEC.md`;
-3. run `./scripts/ralph-plan.sh`;
-4. inspect the replacement plan;
+3. run `./scripts/ralph-plan.sh`, which seeds minimal plan/scratchpad state and leaves the completed plan only in Git history;
+4. inspect the replacement plan and confirm it contains only current pending gaps;
 5. start a new implementation loop.
 
 ## Documentation gate

@@ -297,7 +297,10 @@ An ordinary defect is triaged and handled with:
 ```
 
 One cycle handles one bug and runs the configured project verifier before
-closure. If expected behavior requires a product decision or specification
+closure. Fresh specification and maintenance planning atomically seed minimal
+plan/scratchpad state, leaving completed plans only in Git history; `--resume`
+preserves the active draft, and planning gates reject carried-over non-pending
+tasks. If expected behavior requires a product decision or specification
 change, block maintenance and return to the human specification workflow.
 Recovery modes are `maintenance-planning` and `maintenance`. See
 [BUG_WORKFLOW.md](BUG_WORKFLOW.md) for the complete process.
