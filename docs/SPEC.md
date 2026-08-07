@@ -173,6 +173,12 @@ Controllers are shown by **model name + slot position** (plus the virtual-type i
 
 The overlay surface is **pre-built in memory** at daemon startup — icons rasterized, textures cached, layout computed from current state and dirtied only on device/slot/profile change events. Nothing is constructed on demand. Target: **visible in <10 ms from button press** (see §11).
 
+### 4.10 Visual acceptance
+
+The overlay is not considered implemented merely because its state machine, widget tree, or texture objects exist. Verification must demonstrate actual framebuffer output through the same composition path used by `controller-box --overlay-service`.
+
+At minimum, deterministic visual tests must render and read back pixels for: the normal Player Mode grid, Host Mode, conflict highlighting, Unassigned plus at least two player columns, controller model/profile text, and virtual-device icons. Each state must contain meaningful non-background output in its expected regions, and transitions must produce a materially different frame. The conflict state must contain the specified red indication. Tests must fail if text, icons, rows, columns, or highlights are absent even when their in-memory objects and dimensions are valid.
+
 ---
 
 ## 5. Manager Specification
@@ -226,6 +232,12 @@ Browse, create, edit, delete profiles.
 ### 5.5 Settings tab
 
 App-level settings: launch at boot, theme, overlay opacity, number of virtual controllers on startup (and their types), overlay trigger combo (the single hotkey), controller icon overrides (§8.4).
+
+### 5.6 Visual acceptance
+
+The installed manager must render usable body content, not only a window, tab labels, widget metadata, or non-zero rectangles. Production-path verification must render and read back pixels for all three tabs using the same initialization and composition path as `controller-box --manager`; tests must not manually attach modules that production startup omits.
+
+Required deterministic states are: Controllers with controls visible in both connected and InputPlumber-unavailable degraded modes; Profiles with the built-in Default profile and create/edit/delete controls; Settings with every configurable setting and its current/default value; and the profile editor with its controller diagram, binding list, sequential-binding prompt, validation error, and progress state. Every expected control and text region must contain meaningful non-background framebuffer output. Switching tabs or editor modes must change the captured frame. A test that checks only child counts, visibility flags, geometry, focus membership, or "render did not crash" does not satisfy this requirement.
 
 ---
 
@@ -539,6 +551,20 @@ Object tree:
 | Overlay close | Input flowing to game in **<1 ms** | Single DBus property set: `InterceptMode` back to PASS. Overlay hidden, not destroyed. |
 | Daemon footprint | Always resident without measurable impact | SDL2's minimal memory profile was the deciding factor in the toolkit choice (Decision 1); the daemon idles waiting on DBus signals and a 500 ms property poll. |
 | Player reorder | Atomic, InputPlumber-managed | `GamepadOrder` setter suspends all devices and resumes them in the new order (100 ms stagger between devices). The GUI calls the setter; it does not manage suspend/resume itself. |
+
+### 11.1 Rendering verification and release evidence
+
+Visual requirements in §§4–5 are release gates. The automated suite must include all of the following layers:
+
+1. **Deterministic framebuffer tests.** Run a fixed-size SDL software renderer with deterministic fixture data, theme, and readable test font. Render through production composition functions and read the current render target or backbuffer with `SDL_RenderReadPixels` (or an equivalent API that proves final pixel output). Target textures must not be treated as readable by `SDL_LockTexture` unless they were explicitly created with a lockable access mode.
+2. **Region-level assertions.** Assert meaningful non-background and foreground/text-colored pixels inside required controls, labels, icons, lists, diagrams, and status regions. Assert important state changes alter the appropriate regions. These invariants are mandatory and must tolerate harmless rasterization differences.
+3. **Golden images.** Keep reviewed baseline images for each major state listed in §§4.10 and 5.6. Compare deterministic software-renderer captures with a documented per-pixel/per-image tolerance rather than an unrestricted exact hash. A baseline update is an explicit reviewed change, never an automatic test side effect.
+4. **Failure artifacts.** On mismatch, save actual, expected, and visual-diff images with the test name and renderer metadata so a human can diagnose the frame without rerunning interactively.
+5. **Installed production smoke test.** Launch the installed binary under a real or headless X11/Wayland compositor, navigate representative manager and overlay states through normal input events, capture the application window, and verify it is nonblank and consistent with deterministic expectations. Test-only setup must not bypass production initialization.
+6. **Backend smoke coverage.** Exercise the deployment renderer backend (OpenGL/OpenGL ES where available) with broad framebuffer invariants. Deterministic golden comparison may remain on the software renderer, but successful object creation or draw calls alone are insufficient for hardware-backend acceptance.
+7. **Human release acceptance.** Before promotion to `main`, a human reviews representative manager and overlay captures on target hardware for legibility, clipping, focus indication, contrast, and controller-only usability. Automation catches missing or divergent output; it does not approve aesthetics.
+
+The verification suite must explicitly fail when a required screen is blank or incomplete even if unit, state-machine, geometry, and no-crash tests pass. Screenshot/framebuffer artifacts and the exact commands that produced them are part of final verification evidence.
 
 ---
 
