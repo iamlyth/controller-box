@@ -526,6 +526,15 @@ if(CMOCKA_FOUND)
     set_tests_properties(test_manager_dbus_inject PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
 
+    # Task 7 — Manager deterministic framebuffer visual tests (SPEC §5.6).
+    add_executable(test_manager_visual tests/test_manager_visual.c)
+    target_link_libraries(test_manager_visual PRIVATE controllerbox cbx_test_support)
+    target_compile_definitions(test_manager_visual PRIVATE
+        CBX_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME test_manager_visual COMMAND test_manager_visual)
+    set_tests_properties(test_manager_visual PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+
     # --- Task 3: Overlay service initialization -----------------------
     # Tests that run_overlay_service() handles SDL init failure and dry-run.
     add_executable(test_overlay_service tests/test_overlay_service.c)

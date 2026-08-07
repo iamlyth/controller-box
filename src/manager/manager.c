@@ -131,6 +131,10 @@ cbx_manager_init_with_dbus(cbx_manager *mgr, const char *font_path,
                                 i == mgr->active_tab);
     }
 
+    /* --- Layout (must precede tab-module init so widgets read the
+     *     correct panel rect during their layout phase) ------------- */
+    cbx_manager_layout(mgr);
+
     /* --- Tab modules (manager owns the full lifecycle) ------------- */
     /* DBus connection: use injected backend if provided, otherwise
      * fall back to the production sd-bus backend (best-effort).
@@ -215,8 +219,7 @@ cbx_manager_init_with_dbus(cbx_manager *mgr, const char *font_path,
         return rc;
     }
 
-    /* --- Layout + focus chain -------------------------------------- */
-    cbx_manager_layout(mgr);
+    /* --- Focus chain (depends on tab modules being initialised) ----- */
     cbx_focus_chain_init(&mgr->focus);
     cbx_focus_chain_set_mode(&mgr->focus, CBX_FOCUS_MODE_HOST);
     cbx_manager_rebuild_focus(mgr);
