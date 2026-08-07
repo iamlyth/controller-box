@@ -1,0 +1,314 @@
+/*
+ * test_manager_production.c — Production-path regression test (BUG-0003).
+ *
+ * Exercises the same composition path as the executable: calls only
+ * cbx_manager_init() and cbx_manager_shutdown() — no manual tab
+ * initialization. Verifies that all three tab panels are populated,
+ * rendered body content is visible, focus chain is populated, tab
+ * switching works, and shutdown is clean.
+ *
+ * Uses SDL2 dummy driver and an isolated $HOME with a profiles directory.
+ */
+#include <stdarg.h>
+#include <stddef.h>
+#include <setjmp.h>
+#include <cmocka.h>
+
+#include <SDL2/SDL.h>
+#include <SDL2/SDL_ttf.h>
+
+#include "manager/manager.h"
+#include "ui/widget.h"
+#include "ui/focus.h"
+#include "config/config_paths.h"
+
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
+
+#ifndef CBX_FONT_PATH
+#define CBX_FONT_PATH ""
+#endif
+
+/* ------------------------------------------------------------------ */
+/*  Helpers                                                            */
+/* ------------------------------------------------------------------ */
+
+static void ensure_dummy_driver(void)
+{
+    if (getenv("SDL_VIDEODRIVER") == NULL)
+        SDL_SetHintWithPriority(SDL_HINT_VIDEODRIVER, "dummy",
+                                 SDL_HINT_OVERRIDE);
+}
+
+static bool font_available(void)
+{
+    return CBX_FONT_PATH[0] != '\0' && access(CBX_FONT_PATH, R_OK) == 0;
+}
+
+/* Helper: inject a keydown event into the manager. */
+static bool
+send_key(cbx_manager *mgr, SDL_Keycode sym)
+{
+    SDL_Event ev = {0};
+    ev.type = SDL_KEYDOWN;
+    ev.key.keysym.sym = sym;
+    return cbx_manager_handle_event(mgr, &ev);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Fixture — isolated HOME with profiles directory                    */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    char tmp[256];
+    char saved_home[256];
+    bool saved_home_set;
+} mp_fixture;
+
+static int setup(void **state)
+{
+    ensure_dummy_driver();
+
+    mp_fixture *f = malloc(sizeof(*f));
+    assert_non_null(f);
+    memset(f, 0, sizeof(*f));
+
+    /* Save original HOME. */
+    const char *home = getenv("HOME");
+    if (home) {
+        snprintf(f->saved_home, sizeof(f->saved_home), "%s", home);
+        f->saved_home_set = true;
+    }
+
+    /* Isolated HOME. */
+    snprintf(f->tmp, sizeof(f->tmp), "/tmp/cbx_mp_test_%d", (int)getpid());
+    char cmd[PATH_MAX * 2 + 32];
+    snprintf(cmd, sizeof(cmd), "rm -rf '%s'", f->tmp);
+    int r0 = system(cmd);
+    (void)r0;
+    mkdir(f->tmp, 0700);
+    setenv("HOME", f->tmp, 1);
+    unsetenv("XDG_CONFIG_HOME");
+    unsetenv("XDG_DATA_HOME");
+    unsetenv("FLATPAK_ID");
+
+    /* Create a profiles directory so profiles tab refresh succeeds. */
+    char profiles_dir[PATH_MAX + 64];
+    snprintf(profiles_dir, sizeof(profiles_dir),
+             "%s/.local/share/inputplumber/profiles", f->tmp);
+    cbx_ensure_dir(profiles_dir, 0700);
+
+    *state = f;
+    return 0;
+}
+
+static int teardown(void **state)
+{
+    mp_fixture *f = *state;
+
+    /* Restore HOME. */
+    if (f->saved_home_set)
+        setenv("HOME", f->saved_home, 1);
+    else
+        unsetenv("HOME");
+
+    char cmd[PATH_MAX * 2 + 32];
+    snprintf(cmd, sizeof(cmd), "rm -rf '%s'", f->tmp);
+    int r = system(cmd);
+    (void)r;
+    free(f);
+    return 0;
+}
+
+#define FIX(s) ((mp_fixture *)*(s))
+
+/* ------------------------------------------------------------------ */
+/*  Tests                                                              */
+/* ------------------------------------------------------------------ */
+
+/* (a) Nonempty panels: after cbx_manager_init(), all three panels have
+ *     child_count > 0. */
+static void test_nonempty_panels(void **state)
+{
+    (void)state;
+    ensure_dummy_driver();
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+
+    for (int i = 0; i < CBX_MGR_TAB_COUNT; i++) {
+        const cbx_panel *p = cbx_manager_panel(&mgr, i);
+        assert_non_null(p);
+        assert_true(p->child_count > 0);
+    }
+
+    /* Accessors return non-NULL. */
+    assert_non_null(cbx_manager_controllers_tab(&mgr));
+    assert_non_null(cbx_manager_profiles_tab(&mgr));
+    assert_non_null(cbx_manager_settings_tab(&mgr));
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* (b) Visible rendered body content: for each tab, set active_tab,
+ *     render, and assert at least one child widget has non-zero width
+ *     and height and is visible. */
+static void test_visible_rendered_content(void **state)
+{
+    (void)state;
+    ensure_dummy_driver();
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+
+    for (int tab = 0; tab < CBX_MGR_TAB_COUNT; tab++) {
+        /* Switch to this tab. */
+        while (cbx_manager_active_tab(&mgr) != tab)
+            send_key(&mgr, SDLK_RIGHT);
+
+        cbx_manager_render(&mgr);
+
+        const cbx_panel *p = cbx_manager_panel(&mgr, tab);
+        assert_non_null(p);
+        assert_true(p->child_count > 0);
+
+        /* At least one child is visible with non-zero dimensions. */
+        bool found_visible = false;
+        for (int i = 0; i < p->child_count; i++) {
+            cbx_widget *child = p->children[i];
+            if (!child)
+                continue;
+            if (cbx_widget_is_visible(child) &&
+                child->rect.w > 0 && child->rect.h > 0) {
+                found_visible = true;
+                break;
+            }
+        }
+        assert_true(found_visible);
+    }
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* (c) Focus chain populated: assert focus chain count > 1 (tabbar + at
+ *     least one panel child). */
+static void test_focus_chain_populated(void **state)
+{
+    (void)state;
+    ensure_dummy_driver();
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+
+    const cbx_focus_chain *fc = cbx_manager_focus(&mgr);
+    assert_non_null(fc);
+    assert_true(fc->count > 1);  /* tabbar + at least one panel child */
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* (d) Tab switching: send SDLK_RIGHT/LEFT and verify active_tab changes
+ *     and the newly active panel has children. */
+static void test_tab_switching(void **state)
+{
+    (void)state;
+    ensure_dummy_driver();
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+
+    /* Right: Controllers -> Profiles. */
+    assert_true(send_key(&mgr, SDLK_RIGHT));
+    assert_int_equal(cbx_manager_active_tab(&mgr), CBX_MGR_TAB_PROFILES);
+    assert_true(cbx_manager_panel(&mgr, CBX_MGR_TAB_PROFILES)->child_count > 0);
+
+    /* Right: Profiles -> Settings. */
+    assert_true(send_key(&mgr, SDLK_RIGHT));
+    assert_int_equal(cbx_manager_active_tab(&mgr), CBX_MGR_TAB_SETTINGS);
+    assert_true(cbx_manager_panel(&mgr, CBX_MGR_TAB_SETTINGS)->child_count > 0);
+
+    /* Left: Settings -> Profiles. */
+    assert_true(send_key(&mgr, SDLK_LEFT));
+    assert_int_equal(cbx_manager_active_tab(&mgr), CBX_MGR_TAB_PROFILES);
+    assert_true(cbx_manager_panel(&mgr, CBX_MGR_TAB_PROFILES)->child_count > 0);
+
+    /* Left: Profiles -> Controllers. */
+    assert_true(send_key(&mgr, SDLK_LEFT));
+    assert_int_equal(cbx_manager_active_tab(&mgr), CBX_MGR_TAB_CONTROLLERS);
+    assert_true(cbx_manager_panel(&mgr, CBX_MGR_TAB_CONTROLLERS)->child_count > 0);
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* (e) Shutdown clean: cbx_manager_shutdown() does not crash; struct is
+ *     zeroed; can re-init. */
+static void test_shutdown_clean(void **state)
+{
+    (void)state;
+    ensure_dummy_driver();
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+
+    cbx_manager_shutdown(&mgr);
+
+    /* After shutdown, struct is zeroed — tab_count returns 0. */
+    assert_int_equal(cbx_manager_tab_count(&mgr), 0);
+
+    /* Can re-init after shutdown. */
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+    assert_int_equal(cbx_manager_tab_count(&mgr), 3);
+
+    /* Panels are populated after re-init. */
+    for (int i = 0; i < CBX_MGR_TAB_COUNT; i++) {
+        const cbx_panel *p = cbx_manager_panel(&mgr, i);
+        assert_non_null(p);
+        assert_true(p->child_count > 0);
+    }
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* (f) Render with font: if a font is available, verify rendering with
+ *     font-loaded manager produces visible content. */
+static void test_render_with_font(void **state)
+{
+    (void)state;
+    if (!font_available())
+        skip();
+    ensure_dummy_driver();
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, CBX_FONT_PATH), 0);
+
+    for (int tab = 0; tab < CBX_MGR_TAB_COUNT; tab++) {
+        while (cbx_manager_active_tab(&mgr) != tab)
+            send_key(&mgr, SDLK_RIGHT);
+        cbx_manager_render(&mgr);
+
+        const cbx_panel *p = cbx_manager_panel(&mgr, tab);
+        assert_true(p->child_count > 0);
+    }
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Test runner                                                        */
+/* ------------------------------------------------------------------ */
+
+static const struct CMUnitTest tests[] = {
+    cmocka_unit_test_setup_teardown(test_nonempty_panels, setup, teardown),
+    cmocka_unit_test_setup_teardown(test_visible_rendered_content, setup, teardown),
+    cmocka_unit_test_setup_teardown(test_focus_chain_populated, setup, teardown),
+    cmocka_unit_test_setup_teardown(test_tab_switching, setup, teardown),
+    cmocka_unit_test_setup_teardown(test_shutdown_clean, setup, teardown),
+    cmocka_unit_test_setup_teardown(test_render_with_font, setup, teardown),
+};
+
+int main(void)
+{
+    return cmocka_run_group_tests(tests, NULL, NULL);
+}
