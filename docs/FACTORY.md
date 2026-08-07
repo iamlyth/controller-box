@@ -31,11 +31,26 @@ tracks task status and verification evidence.
 
 No Git worktrees are used. `features.parallel` is disabled in both Ralph configurations.
 
+## Relationship to Huntley's playbook
+
+The prompts are periodically compared against [`ghuntley/how-to-ralph-wiggum`](https://github.com/ghuntley/how-to-ralph-wiggum) (reviewed at commit `88d488a148af97e4a3f22b11b4c3598c79d6a577`). Controller-Box adopts its highest-value context and backpressure patterns:
+
+- deterministic orientation: study the specification, plan, concise `AGENTS.md`, source, tests, and shared patterns every iteration;
+- **do not assume functionality is missing**—search and trace production behavior first;
+- keep the primary context as scheduler and use parallel subagents as disposable read-only memory;
+- derive tests from behavioral acceptance criteria, including performance and edge cases, while leaving implementation choices to the worker;
+- keep operational learning in brief `AGENTS.md`, progress/evidence in the plan, and only the current crash handoff in the scratchpad;
+- update the plan immediately when discoveries create work, implement completely without placeholders, investigate unrelated failures, and use tests/build/lint/install checks as backpressure;
+- capture why tests and documentation constraints matter.
+
+Deliberate safety differences are retained: at most eight adaptive read-only subagents rather than hundreds of mutating agents; one repository writer and serialized builds; a jailed Pi backend rather than skipped permissions; no worktrees; no autonomous specification edits; no pruning of the active-cycle ledger; no automatic push, tag, or promotion to `main`. Fresh planning still discards the prior active plan from working context while Git preserves its history.
+
 ## Durable and volatile state
 
 Durable, tracked state:
 
 - `docs/SPEC.md`: approved requirements
+- `AGENTS.md`: concise build/run/validation commands and durable operational patterns
 - `IMPLEMENTATION_PLAN.md`: feature task status and verification evidence
 - `open-bugs.md` / `closed-bugs.md`: portable canonical defect state
 - `MAINTENANCE_PLAN.md`: one selected bug, fingerprint, tasks, and evidence
