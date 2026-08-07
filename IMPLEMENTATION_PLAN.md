@@ -248,7 +248,8 @@ conflict-specific red rendering. This plan closes those gaps.
 - Documentation impact: `docs/OPERATIONS.md` — document backend smoke test and hardware requirements.
 
 ## Task 11: Final documentation and specification audit
-- Status: pending
+- Status: complete
+- Evidence: 74/74 ctest pass (73 pass + 1 skip backend_smoke headless). verify-project.sh passes. verify-boilerplate.sh passes. SPEC.md §2.5, §10.3, §11 corrected from ~500 ms to ~50 ms (DEC-002). README.md updated with verification suite table (7 layers). OPERATIONS.md updated with visual framebuffer tests section, running all visual tests section, human release acceptance checklist (§11.1.7), and specification coverage audit mapping every §4.10/§5.6/§11.1 requirement to a test. shellcheck warnings in test_installed_smoke.sh fixed.
 - Dependencies: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
 - Scope: `README.md`, `docs/OPERATIONS.md`, `docs/` (all docs), `docs/SPEC.md` (spec text correction), `scripts/verify-project.sh`
 - Acceptance criteria:

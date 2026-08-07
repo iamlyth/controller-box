@@ -91,7 +91,7 @@ Mechanism:
 
 1. GUI registers the trigger combo via `SetInterceptActivation` on each composite device, and sets `InterceptMode = 1` (PASS). InputPlumber watches for the combo at kernel level (~1 ms overhead).
 2. On activation, InputPlumber auto-switches to `InterceptMode = 2` (ALL) and routes input over DBus signals instead of to the game.
-3. The GUI daemon detects the mode change (poll, ~500 ms — no signal exists; gap workaround #1, §10.3) and displays the pre-built overlay.
+3. The GUI daemon detects the mode change (poll, ~50 ms (DEC-002) — no signal exists; gap workaround #1, §10.3) and displays the pre-built overlay.
 4. The user interacts; **B** closes.
 5. On close, the GUI sets `InterceptMode = 1` (PASS) again. Input flows back to the game in <1 ms. The overlay is hidden, not destroyed.
 
@@ -532,7 +532,7 @@ Object tree:
 
 | # | Gap | Workaround |
 |---|---|---|
-| 1 | **No `PropertiesChanged` signal for `InterceptMode`** — internal `set_intercept_mode()` never calls the signal emitter, for both external sets and the PASS→ALL auto-switch | GUI polls `InterceptMode` (~500 ms interval). Since the GUI initiates the overlay trigger and the close, it tracks state locally and treats the poll as confirmation. |
+| 1 | **No `PropertiesChanged` signal for `InterceptMode`** — internal `set_intercept_mode()` never calls the signal emitter, for both external sets and the PASS→ALL auto-switch | GUI polls `InterceptMode` (~50 ms interval (DEC-002)). Since the GUI initiates the overlay trigger and the close, it tracks state locally and treats the poll as confirmation. |
 | 2 | **`GamepadOrder` not persisted** — in-memory only, resets to empty on daemon restart | GUI saves the order in its own config (§7.4) and re-applies it via the property setter after daemon restart / device changes. |
 | 3 | **`CreateCompositeDevice` requires a YAML file path** — no string-based or source-path-based variant on DBus | GUI writes a temp composite-device YAML (e.g. `/tmp/controller-box-XXXX.yaml`) and passes the path. |
 | 4 | **No DBus method to enumerate profiles / device configs / capability maps on disk** | GUI reads the filesystem directly: `~/.local/share/inputplumber/profiles/`, `/usr/share/inputplumber/profiles/`, `/usr/share/inputplumber/devices/`, `/usr/share/inputplumber/capability_maps/`. (Covered by the Flatpak filesystem permissions, §9.1.) |
@@ -549,7 +549,7 @@ Object tree:
 | Overlay appearance | **<10 ms** from button press to visible | Pre-built overlay surface held in memory by the always-resident daemon (Decision 6). Icons pre-rasterized at startup (§8.3). Nothing is constructed on demand — state changes dirty the surface incrementally. |
 | Gameplay input latency | **~1–2 ms** (InputPlumber's own intercept overhead only) | InputPlumber does **not** route gameplay input over DBus — the DBus channel is a side branch, never inline. During gameplay, intercept mode is PASS (kernel-level watch only). During overlay use, input goes over DBus — but the game is not receiving input then anyway. |
 | Overlay close | Input flowing to game in **<1 ms** | Single DBus property set: `InterceptMode` back to PASS. Overlay hidden, not destroyed. |
-| Daemon footprint | Always resident without measurable impact | SDL2's minimal memory profile was the deciding factor in the toolkit choice (Decision 1); the daemon idles waiting on DBus signals and a 500 ms property poll. |
+| Daemon footprint | Always resident without measurable impact | SDL2's minimal memory profile was the deciding factor in the toolkit choice (Decision 1); the daemon idles waiting on DBus signals and a ~50 ms property poll (DEC-002). |
 | Player reorder | Atomic, InputPlumber-managed | `GamepadOrder` setter suspends all devices and resumes them in the new order (100 ms stagger between devices). The GUI calls the setter; it does not manage suspend/resume itself. |
 
 ### 11.1 Rendering verification and release evidence

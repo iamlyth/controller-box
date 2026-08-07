@@ -168,6 +168,55 @@ cd build && ctest --output-on-failure && cd ..
 ./build/controller-box --manager --dry-run
 ```
 
+## Verification suite
+
+The project includes a multi-layer visual acceptance suite (SPEC §11.1)
+that verifies actual framebuffer pixel output, not just state-machine or
+geometry correctness:
+
+| Layer | Test | What it verifies |
+|-------|------|-----------------|
+| 1. Deterministic framebuffer | `test_overlay_visual`, `test_manager_visual` | Renders through production composition path, reads back pixels via `SDL_RenderReadPixels`, asserts content in expected regions |
+| 2. Region-level assertions | `test_fb_assert` | `fb_assert.c` library: `fb_region_has_content`, `fb_region_has_color`, `fb_frames_differ`, `fb_golden_compare` |
+| 3. Golden images | `test_golden` | Compares 11 baseline PNGs (4 overlay + 7 manager states) with ±3 per-channel and <2% image tolerance |
+| 4. Failure artifacts | `test_golden` (on mismatch) | Saves actual/expected/diff PNGs to `tests/golden-fail/` for diagnosis |
+| 5. Installed production smoke | `test_installed_smoke` | Launches installed binary under Xvfb, sends input via xdotool, captures screenshots, verifies non-blank output |
+| 6. Backend smoke | `test_backend_smoke` | Exercises accelerated renderer (OpenGL/ES) with same invariants; skips (exit 77) in headless environments |
+| 7. Human release acceptance | (documented process) | Human reviews captures on target hardware for legibility, clipping, contrast, controller-only usability |
+
+Run the full suite:
+
+```bash
+nix-shell --run './scripts/verify-project.sh'
+```
+
+Or run individual test groups:
+
+```bash
+# Visual framebuffer tests:
+nix-shell --run "ctest --test-dir build-check -R 'test_overlay_visual|test_manager_visual|test_fb_assert' --output-on-failure"
+
+# Golden image comparison:
+nix-shell --run "ctest --test-dir build-check -R test_golden --output-on-failure"
+
+# Installed smoke test (requires Xvfb, xdotool, ImageMagick):
+nix-shell --run "ctest --test-dir build-check -R test_installed_smoke --output-on-failure"
+
+# Backend smoke test (requires real GPU/display):
+nix-shell --run "ctest --test-dir build-check -R test_backend_smoke --output-on-failure"
+```
+
+Golden image baselines are in `tests/golden/`. To regenerate them (explicit,
+reviewed change — never automatic):
+
+```bash
+./scripts/generate-golden.sh
+```
+
+See [docs/OPERATIONS.md](docs/OPERATIONS.md) for the golden image workflow,
+tolerance values, failure artifact diagnosis, and the human release acceptance
+checklist.
+
 ## Bug maintenance
 
 Portable bug state is tracked in `open-bugs.md` and `closed-bugs.md`. A bug may

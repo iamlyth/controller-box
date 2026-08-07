@@ -38,6 +38,7 @@ TMPDIR=""
 pass() { echo "PASS: $*"; }
 fail() { echo "FAIL: $*" >&2; FAILURES=$((FAILURES + 1)); }
 
+# shellcheck disable=SC2329
 cleanup() {
     # Kill any lingering controller-box binary processes (not the test script)
     pkill -x "controller-box" 2>/dev/null || true
@@ -275,7 +276,7 @@ OVERLAY_PID=$!
 # Wait up to OVERLAY_TIMEOUT seconds for the process to either stay
 # running (InputPlumber available) or exit (InputPlumber unavailable)
 OVERLAY_RUNNING=0
-for i in $(seq 1 "$OVERLAY_TIMEOUT"); do
+for _ in $(seq 1 "$OVERLAY_TIMEOUT"); do
     if ! kill -0 "$OVERLAY_PID" 2>/dev/null; then
         break
     fi

@@ -344,9 +344,8 @@ See [DBus-API.md](DBus-API.md) for the full DBus API reference.
 | Player reorder | Atomic, InputPlumber-managed | `GamepadOrder` setter suspends all, resumes in new order with 100 ms stagger |
 
 The `InterceptMode` poll interval is 50 ms (DEC-002), yielding ~51 ms worst-case
-detection. The spec's ~500 ms figure was reduced to meet the <10 ms overlay
-appearance target for the render path. Detection latency is bounded by the poll
-interval; the render path itself is <1 ms.
+detection. Detection latency is bounded by the poll interval; the render path
+itself is <1 ms.
 
 ## Bug maintenance
 
@@ -631,3 +630,176 @@ If Xvfb or ImageMagick is not installed:
 SKIP: required tool 'Xvfb' is not installed
 ```
 (ctest reports the test as Skipped, not Failed.)
+
+## Visual framebuffer tests
+
+The `test_overlay_visual` and `test_manager_visual` ctests (SPEC §11.1.1–2)
+are the foundation of the visual acceptance suite.  They render through the
+**same production composition path** used by the real binary and assert on
+actual pixel content — not struct fields, geometry, or visibility flags.
+
+### test_overlay_visual (SPEC §4.10)
+
+Renders 7 overlay states through `cbx_select_grid_build()` →
+`cbx_overlay_surface_init()` → `cbx_overlay_surface_render()` →
+`fb_read_pixels()`, then asserts:
+
+1. **Player Mode grid** — content in grid cells, text regions, icon regions
+2. **Host Mode differs** — `fb_frames_differ` between Player and Host Mode
+3. **Conflict highlighting** — red `{220,40,40}` in conflicted cell, not in
+   non-conflicted cell
+4. **Unassigned + ≥2 columns** — content in all column headers + ≥2 player
+   slot regions
+5. **Controller model/profile text** — text-colored pixels in label regions
+6. **Virtual-device icons** — content in icon regions for each occupied slot
+7. **State transitions differ** — no-conflict→conflict frames differ,
+   same-state frames don't differ (deterministic rendering)
+
+### test_manager_visual (SPEC §5.6)
+
+Renders 9 manager states through `cbx_manager_init()` →
+`cbx_manager_render()` → `fb_read_pixels()`, then asserts:
+
+1. **Controllers tab (degraded)** — content in device list + 3 buttons + body
+2. **Controllers tab (connected)** — mock DBus devices, content in all regions
+3. **Connected vs degraded differ** — `fb_frames_differ`
+4. **Profiles tab** — content in profile list + create/edit/delete buttons
+5. **Settings tab** — content in settings list + save button + text pixels
+6. **Tab switch differs** — `fb_frames_differ` between all 3 tabs
+7. **Profile editor (list mode)** — content in diagram + binding list + title
+8. **Profile editor (sequential mode)** — prompt + progress bar content
+9. **Profile editor (validation error)** — red text in status region
+
+### test_fb_assert
+
+Self-test for the `fb_assert.c` framebuffer assertion library.  Renders a
+known colored rectangle via SDL software renderer, reads back pixels, and
+verifies `fb_region_has_content`, `fb_region_has_color`, `fb_golden_compare`,
+and `fb_frames_differ` all behave correctly.
+
+### Running
+
+```sh
+nix-shell --run "ctest --test-dir build-check -R 'test_overlay_visual|test_manager_visual|test_fb_assert' --output-on-failure"
+```
+
+All three tests use `SDL_VIDEODRIVER=dummy` (software renderer) and run in
+headless environments.
+
+## Running all visual acceptance tests
+
+The complete visual acceptance suite (layers 1–6) runs as part of the full
+ctest suite:
+
+```sh
+nix-shell --run './scripts/verify-project.sh'
+```
+
+Or run just the visual layers:
+
+```sh
+nix-shell --run "ctest --test-dir build-check -R 'test_fb_assert|test_overlay_visual|test_manager_visual|test_golden|test_backend_smoke|test_installed_smoke' --output-on-failure"
+```
+
+Expected results in a headless environment (no GPU, no Xvfb):
+
+- `test_fb_assert`: PASS (9 sub-tests)
+- `test_overlay_visual`: PASS (7 sub-tests)
+- `test_manager_visual`: PASS (9 sub-tests)
+- `test_golden`: PASS (11 sub-tests)
+- `test_backend_smoke`: Skipped (exit 77 — no GPU)
+- `test_installed_smoke`: PASS (requires Xvfb/xdotool/ImageMagick in nix-shell)
+
+## Human release acceptance checklist (SPEC §11.1.7)
+
+Before promotion to `main`, a human reviews representative manager and overlay
+captures on **target hardware** for qualities that automation cannot assess.
+Automation catches missing or divergent output; it does not approve aesthetics.
+
+### Procedure
+
+1. **Build and install** on target hardware:
+   ```sh
+   cmake -B build -DCMAKE_BUILD_TYPE=Release
+   cmake --build build
+   sudo cmake --install build
+   systemctl --user start controller-box
+   ```
+
+2. **Capture representative frames** — one for each major state:
+   - Overlay: Player Mode, Host Mode, conflict, unassigned
+   - Manager: Controllers (connected), Profiles, Settings, Profile editor
+     (list mode), Profile editor (sequential mode)
+   - Use `import -window root` (ImageMagick) or a screenshot tool to capture
+     each state.
+
+3. **Review each capture** against the following checklist:
+
+   | Criterion | What to check |
+   |-----------|---------------|
+   | **Legibility** | Is all text readable at the target display resolution and viewing distance? Are fonts rendered correctly (no missing glyphs, no overflow)? |
+   | **Clipping** | Does any text, icon, or widget extend beyond its container? Are grid cells fully visible without truncation? |
+   | **Focus indication** | Is the currently focused element clearly distinguishable? Is the highlight color visible against the background? |
+   | **Contrast** | Is there sufficient contrast between text and background, between focused and unfocused elements, between conflict-red and normal cells? |
+   | **Controller-only usability** | Can every action be performed with only a controller (no keyboard/mouse fallback needed)? Navigate all tabs, edit a profile, resolve a conflict, and adjust settings using only D-pad and face buttons. |
+
+4. **Document the review**: record the reviewer name, date, hardware,
+   display resolution, and any issues found. File issues for any failing
+   criterion before promotion.
+
+5. **Store evidence**: the captured screenshots and the exact commands that
+   produced them are part of final verification evidence (SPEC §11.1 closing
+   mandate). Keep them in the release artifact or issue tracker.
+
+### When to perform
+
+- Before every promotion to `main`
+- After any change to theme, font, layout, or rendering code
+- After any change to the golden image baselines
+
+## Specification coverage audit
+
+Every requirement in SPEC §4.10, §5.6, and §11.1 is mapped to an automated
+test or documented process:
+
+### §4.10 — Overlay Visual Acceptance
+
+| Requirement | Test/Process |
+|-------------|-------------|
+| Framebuffer output through production composition path | `test_overlay_visual` (renders via `cbx_overlay_surface_render` + `cbx_select_grid_render_cb`) |
+| Player Mode grid with content in cells, text, icons | `test_overlay_visual::test_player_mode_grid` |
+| Host Mode differs from Player Mode | `test_overlay_visual::test_host_mode_differs` |
+| Conflict highlighting (red indicator) | `test_overlay_visual::test_conflict_highlighting` + `test_conflict::test_conflict_red_rendering` |
+| Unassigned + ≥2 player columns | `test_overlay_visual::test_unassigned_with_columns` |
+| Controller model/profile text | `test_overlay_visual::test_model_profile_text` |
+| Virtual-device icons | `test_overlay_visual::test_virtual_device_icons` |
+| State transitions produce different frames | `test_overlay_visual::test_state_transitions_differ` |
+| Tests fail if text/icons/rows/columns absent | All `test_overlay_visual` sub-tests assert on pixel content, not struct fields |
+
+### §5.6 — Manager Visual Acceptance
+
+| Requirement | Test/Process |
+|-------------|-------------|
+| Render and read back pixels for all 3 tabs | `test_manager_visual` (Controllers, Profiles, Settings) |
+| Same initialization as `controller-box --manager` | `test_manager_visual` uses `cbx_manager_init()` / `cbx_manager_render()` |
+| No manually attached modules | `test_manager_visual` relies on production init path only |
+| Controllers: connected + degraded modes | `test_manager_visual::test_controllers_tab_degraded` + `test_controllers_tab_connected` |
+| Profiles: Default profile + create/edit/delete | `test_manager_visual::test_profiles_tab` |
+| Settings: every setting + current/default value | `test_manager_visual::test_settings_tab` |
+| Profile editor: diagram, binding list, sequential, validation, progress | `test_manager_visual::test_profile_editor_list_mode` + `test_profile_editor_sequential_mode` + `test_profile_editor_validation_error` |
+| Meaningful non-background output in every region | All `test_manager_visual` sub-tests assert `fb_region_has_content` |
+| Tab/mode switching changes captured frame | `test_manager_visual::test_tab_switch_differs` |
+| No struct-field-only checks | All sub-tests assert on pixel content |
+
+### §11.1 — Seven-Layer Rendering Verification
+
+| Layer | Requirement | Test/Process |
+|-------|-------------|-------------|
+| 1. Deterministic framebuffer | Software renderer, production path, `SDL_RenderReadPixels` | `test_overlay_visual`, `test_manager_visual`, `test_fb_assert` |
+| 2. Region-level assertions | Non-background + text-colored pixels, state changes alter regions | `fb_assert.c` library, used by all visual tests |
+| 3. Golden images | Reviewed baselines, documented tolerance, explicit updates | `test_golden` (11 baselines, ±3/channel, <2% image) + `scripts/generate-golden.sh` |
+| 4. Failure artifacts | Actual/expected/diff PNGs on mismatch | `test_golden` writes to `tests/golden-fail/` |
+| 5. Installed production smoke | Installed binary under X11, input events, non-blank capture | `test_installed_smoke.sh` (Xvfb + xdotool + ImageMagick) |
+| 6. Backend smoke | Accelerated renderer (OpenGL/ES), broad invariants | `test_backend_smoke.c` (skips exit 77 if no GPU) |
+| 7. Human release acceptance | Human review on target hardware | Documented checklist above (§Human release acceptance checklist) |
+| Closing mandate | Suite fails on blank/incomplete screens | All visual tests assert `fb_region_has_content`; golden test fails on >2% pixel diff |
