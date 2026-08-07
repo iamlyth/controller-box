@@ -89,7 +89,7 @@ path to verify that a font is actually loaded.
 - Documentation impact: No spec changes. The misleading code comment in `manager.c` is corrected. `main.c` `run_manager()` gains a brief comment explaining font discovery.
 
 ## Task 3: Automated regression test for font initialization and text rendering
-- Status: pending
+- Status: complete
 - Dependencies: Task 2
 - Scope: `tests/test_font_init.c`, `tests/CMakeLists.txt`. Add a regression test that exercises the full production font path: call `cbx_font_path()` to discover a font (or use `CBX_FONT_PATH` compile-time fallback as tests already do), call `cbx_manager_init()` with the discovered path, and assert `mgr.font_id >= 0`. Then call `cbx_text_render()` on the manager's text cache with the loaded `font_id` and assert the returned `SDL_Texture *` is non-NULL. Also test the failure path: call `cbx_manager_init()` with a non-NULL invalid path (e.g., `"/nonexistent/font.ttf"`) and assert the return code is non-zero. The test must be headless-safe (`SDL_VIDEODRIVER=dummy` environment set via `set_tests_properties`). If no system font is available in the test environment, the font-dependent assertions use `skip()` (matching the existing `test_manager_tabs` pattern at line 40), but the invalid-path failure assertion always runs.
 - Acceptance criteria: A `test_font_init` ctest exists, is registered in `tests/CMakeLists.txt`, runs headless with `SDL_VIDEODRIVER=dummy`, and asserts (a) discovered font → `font_id >= 0` → `cbx_text_render()` returns non-NULL, and (b) invalid font path → `cbx_manager_init()` returns non-zero. The test passes in the nix-shell environment.

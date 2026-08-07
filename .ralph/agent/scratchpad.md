@@ -46,3 +46,39 @@ PATH_MAX+16, PATH_MAX+32, PATH_MAX+64, PATH_MAX+128 in the chain.
 ### Next iteration
 - Task 3: Automated regression test for font initialization and text rendering.
   Runtime task task-1786062047-5ca0 is open. Depends on Task 2 (now complete).
+
+## Iteration 3: Task 3 complete
+
+- Implemented Task 3: Automated regression test for font initialization and text rendering.
+  - Created `tests/test_font_init.c` with 4 test cases:
+    1. `test_font_init_and_render`: Discovers font via `cbx_font_path()` or
+       `CBX_FONT_PATH` compile-time fallback, calls `cbx_manager_init()`, asserts
+       `font_id >= 0`, then calls `cbx_text_render()` and asserts non-NULL
+       `SDL_Texture*`. Skips if no font available.
+    2. `test_invalid_font_path_fails`: `cbx_manager_init()` with nonexistent path
+       (`/nonexistent/font.ttf`) returns non-zero. Always runs.
+    3. `test_null_font_path_succeeds`: NULL path skips font loading, init succeeds
+       with `font_id = -1`.
+    4. `test_empty_font_path_succeeds`: Empty string treated like NULL.
+  - Registered in `tests/CMakeLists.txt` after the `CBX_FONT_PATH` discovery loop
+    (important: must be after `set(CBX_FONT_PATH ...)` or the compile definition
+    will be empty).
+  - Headless-safe via `set_tests_properties(... ENVIRONMENT "SDL_VIDEODRIVER=dummy")`.
+- Verification:
+  - Build succeeds in Debug mode with no warnings (clean build).
+  - `ctest -R test_font_init --output-on-failure` passes.
+  - Full suite: 65/65 tests pass in nix-shell (was 64, +1 new test).
+  - The 2 failures outside nix-shell (test_flatpak_manifest, test_packaging) are
+    pre-existing environment issues (PyYAML not installed, clean configure can't
+    find sdl2 without nix-shell) — not regressions.
+- Committed as c252627.
+
+### CMakeLists.txt ordering lesson
+The `CBX_FONT_PATH` variable is set by a `foreach` loop at line ~258 in
+`tests/CMakeLists.txt`. Test targets that use `target_compile_definitions(...
+CBX_FONT_PATH="${CBX_FONT_PATH}")` MUST be registered AFTER that loop, not
+before it, or the compile definition will be empty.
+
+### Next iteration
+- Task 4: Maintenance verification and documentation audit.
+  Runtime task task-1786062047-6a0c is open. Depends on Tasks 1-3 (all complete).
