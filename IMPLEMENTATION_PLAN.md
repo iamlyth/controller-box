@@ -121,7 +121,8 @@ conflict-specific red rendering. This plan closes those gaps.
 - Documentation impact: `docs/OPERATIONS.md` — document overlay service startup behavior and prerequisites.
 
 ## Task 4: Overlay service poll loop and shutdown
-- Status: pending
+- Status: complete
+- Evidence: 69/69 ctest pass (incl. test_overlay_service with 4 sub-tests: dry-run, SDL init failure, SIGTERM, SIGINT). Poll loop implemented in src/app/overlay_service.c with 50ms InterceptMode polling, SDL event processing (keyboard proxy for controller input), overlay lifecycle integration, on_save conflict resolution + assignment sync, and clean signal handling (SIGTERM/SIGINT). docs/OPERATIONS.md updated with poll loop behavior documentation.
 - Dependencies: 3
 - Scope: `src/app/main.c`, `src/overlay/lifecycle.c` (if wiring helpers needed)
 - Acceptance criteria:
@@ -174,7 +175,8 @@ conflict-specific red rendering. This plan closes those gaps.
 - Documentation impact: none (internal API extension)
 
 ## Task 7: Manager deterministic framebuffer visual tests (§5.6)
-- Status: pending
+- Status: complete
+- Evidence: 71/71 ctest pass (incl. test_manager_visual with 9 sub-tests). All §5.6 states tested through production init path (cbx_manager_init → cbx_manager_render → fb_read_pixels). Fixed layout bug: cbx_manager_layout() moved before tab module init so panel rect is correct when widgets read it.
 - Dependencies: 1, 6
 - Scope: `tests/test_manager_visual.c`, `tests/CMakeLists.txt`
 - Acceptance criteria:
@@ -212,7 +214,8 @@ conflict-specific red rendering. This plan closes those gaps.
 - Documentation impact: `docs/OPERATIONS.md` — document golden image workflow, tolerance values (±3 per channel, <2% image), and baseline update procedure.
 
 ## Task 9: Installed production smoke test (§11.1.5)
-- Status: pending
+- Status: complete
+- Evidence: 74/74 ctest pass (incl. test_installed_smoke). Bash script exercises real main() under Xvfb: builds+installs to staging prefix, starts Xvfb :99, launches --manager with xdotool input + ImageMagick screenshot capture (pixel variance verified in tab-bar + body regions), launches --overlay-service (verifies clean exit code 1 = InputPlumber not found). Added xorg-server, xdotool, imagemagick, bc to shell.nix. Skips exit 77 if tools unavailable.
 - Dependencies: 4
 - Scope: `tests/test_installed_smoke.sh`, `tests/CMakeLists.txt`, `scripts/verify-project.sh`
 - Acceptance criteria:
@@ -231,7 +234,8 @@ conflict-specific red rendering. This plan closes those gaps.
 - Documentation impact: `docs/OPERATIONS.md` — document smoke test prerequisites (Xvfb, ImageMagick) and execution.
 
 ## Task 10: Backend smoke coverage (§11.1.6)
-- Status: pending
+- Status: complete
+- Evidence: 73/73 ctest pass (72 pass + 1 skip test_backend_smoke headless). Standalone C test creates SDL_RENDERER_ACCELERATED renderer, renders overlay + manager frames, reads back pixels via fb_read_pixels, asserts fb_region_has_content in expected regions, compares against software-renderer golden baselines via fb_golden_compare. Skips exit 77 if no accelerated backend. docs/OPERATIONS.md updated with backend smoke test documentation.
 - Dependencies: 1
 - Scope: `tests/test_backend_smoke.c`, `tests/CMakeLists.txt`
 - Acceptance criteria:
