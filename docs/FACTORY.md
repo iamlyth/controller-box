@@ -111,10 +111,12 @@ The planner may only modify `IMPLEMENTATION_PLAN.md` and the recovery scratchpad
 - the latest commit that changed the spec;
 - the exact spec blob ID;
 - the base commit;
+- a requirement-by-requirement specification conformance matrix;
+- an exhaustive manager-control and overlay-action interaction inventory;
 - bounded tasks, dependencies, acceptance evidence, and documentation impact;
-- a mandatory final documentation/specification audit.
+- a mandatory final documentation/specification audit that depends on every other task and executes the specification's definition of done.
 
-Inspect the plan before implementation. Every newly accepted task must be `pending`; inherited completed, in-progress, or blocked tasks fail the planning gate. `scripts/check-plan-freshness.sh` prevents a stale plan or altered cycle base from running after the specification changes.
+Inspect the plan before implementation. Every newly accepted task must be `pending`; inherited completed, in-progress, or blocked tasks fail the planning gate. Every `partial`, `missing`, or `ambiguous` conformance row must map to a task. `scripts/check-plan-freshness.sh` prevents a stale plan or altered cycle base from running after the specification changes.
 
 For a headless planning loop:
 
@@ -141,7 +143,9 @@ Each iteration:
 7. creates a Git checkpoint;
 8. exits so the next task receives fresh context.
 
-Only the final documentation and specification audit may produce `LOOP_COMPLETE`.
+Only the final documentation and specification audit may produce `LOOP_COMPLETE`. It must satisfy `docs/SPEC.md` §11.2: all conformance rows verified, every control exercised through production event dispatch with semantic outcomes, full visual/degraded/installed verification, no contradictory open bugs, adversarial reviews, current documentation, and a clean tree.
+
+There is no minimum iteration count: high quality is determined by evidence, not loop volume. Conversely, completing the originally planned tasks is not enough when acceptance discovers another gap. The worker preserves the ledger, appends a new uniquely numbered remediation task, adds it to the final audit dependencies, returns the audit to pending, and continues. `ralph.yml` permits up to 1000 iterations and a one-year runtime as safety ceilings. If those or an external session ceiling are reached, the plan remains active/blocked with a recovery handoff; a ceiling never produces `LOOP_COMPLETE`.
 
 ## Maintain one bug
 
@@ -275,7 +279,9 @@ Never edit the specification during implementation. `check-plan-freshness.sh` co
 
 ## Documentation gate
 
-Every implementation plan ends with **Final documentation and specification audit**. Read-only reviewers compare source, tests, configuration, README, operations, and the specification. The sole writer corrects documentation and runs final verification. `LOOP_COMPLETE` is forbidden until this gate passes.
+Every implementation plan ends with **Final documentation and specification audit**. `scripts/validate-implementation-plan.py` requires the plan to contain a conformance matrix, interaction inventory, canonical task statuses, and a final audit depending on every other task. At implementation completion it rejects unfinished tasks and any matrix classification other than `verified`. The final gate also validates the bug ledgers and rejects unresolved open bugs before running documentation, boilerplate, and project verification.
+
+Read-only reviewers compare source, tests, configuration, README, operations, and the specification, specifically looking for tests that bypass production initialization/event dispatch or assert pixels without semantic behavior. The sole writer corrects documentation and runs final verification. If review finds a gap, Ralph appends remediation and continues; `LOOP_COMPLETE` is forbidden until the complete §11.2 definition of done passes.
 
 ## Verify
 
