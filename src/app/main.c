@@ -11,12 +11,13 @@
  *                    (kept headless-safe for acceptance checks)
  *   -h, --help       print usage and exit
  *
- * The manager run-path is implemented in Task 34. The overlay service
- * run-path is filled in by later tasks. --dry-run forces the stub path
- * so the acceptance checks remain runnable in a headless sandbox.
+ * The manager run-path is implemented in manager.c. The overlay service
+ * run-path is implemented in overlay_service.c (Task 3). --dry-run forces
+ * a banner-only exit so acceptance checks remain runnable headlessly.
  */
 #include "config.h"
 #include "controllerbox.h"
+#include "app/overlay_service.h"
 #include "config/config_paths.h"
 #include "manager/manager.h"
 
@@ -55,17 +56,9 @@ static void print_usage(const char *argv0)
         argv0);
 }
 
-/* Run-paths. Real implementations arrive in later tasks; for now each prints a
- * mode banner and returns success. --dry-run annotates the banner so the
- * acceptance checks can distinguish a forced stub from a not-yet-built run. */
-static int run_overlay_service(int dry_run)
-{
-    printf("controller-box: %s mode%s\n", mode_name(CB_MODE_OVERLAY),
-           dry_run ? " (dry-run)" : "");
-    /* TODO overlay service loop (pre-built surface, intercept poll). */
-    return 0;
-}
-
+/* Manager run-path. The overlay service run-path lives in overlay_service.c
+ * (Task 3) so that cmocka tests can link against it without pulling in main().
+ */
 static int run_manager(int dry_run)
 {
     printf("controller-box: %s mode%s\n", mode_name(CB_MODE_MANAGER),

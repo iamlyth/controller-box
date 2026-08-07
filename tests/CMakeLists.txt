@@ -515,6 +515,14 @@ if(CMOCKA_FOUND)
     set_tests_properties(test_manager_dbus_inject PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
 
+    # --- Task 3: Overlay service initialization -----------------------
+    # Tests that run_overlay_service() handles SDL init failure and dry-run.
+    add_executable(test_overlay_service tests/test_overlay_service.c)
+    target_link_libraries(test_overlay_service PRIVATE controllerbox cbx_test_support PkgConfig::CMOCKA)
+    add_test(NAME test_overlay_service COMMAND test_overlay_service)
+    set_tests_properties(test_overlay_service PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+
 else()
     message(STATUS "cmocka not found — unit tests skipped (smoke tests still built)")
 endif()

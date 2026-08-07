@@ -141,7 +141,8 @@ add_library(controllerbox STATIC
     src/identify/assign.c
     src/identify/assign_persist.c
     src/identify/identity_downgrade.c
-    src/identify/gamepad_order_restore.c)
+    src/identify/gamepad_order_restore.c
+    src/app/overlay_service.c)
 target_include_directories(controllerbox
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/src"

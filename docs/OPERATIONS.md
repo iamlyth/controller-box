@@ -105,6 +105,52 @@ Controller-Box communicates with InputPlumber via:
 
 See [DBus-API.md](DBus-API.md) for the full API reference.
 
+### Overlay service startup
+
+The overlay service (`controller-box --overlay-service`) follows this
+initialization sequence on startup:
+
+1. **SDL video init** — creates a hidden SDL2 window and renderer
+   (1280×720). If SDL cannot initialize (e.g., no display driver
+   available), the service logs an error to stderr and exits non-zero.
+2. **DBus connection** — connects to the system bus and verifies that
+   InputPlumber is running. If InputPlumber is not found, the service
+   logs `InputPlumber not found on system DBus` to stderr and exits
+   non-zero.
+3. **Device enumeration** — calls `GetManagedObjects` to discover all
+   composite devices, source devices, and target devices.
+4. **Settings + assignments** — loads `settings.yaml` and
+   `assignments.yaml` from `~/.config/controller-box/` (best-effort;
+   defaults are used if files are absent).
+5. **Surface pre-build** — creates a target-texture overlay surface at
+   the configured opacity, builds the selection grid from composites +
+   settings + assignments, and pre-renders it. This ensures the overlay
+   appears in <10 ms when activated.
+6. **Trigger registration** — registers the overlay trigger combo
+   (default `Select+A`) on every composite device via
+   `SetInterceptActivation`, then sets `InterceptMode = PASS`.
+7. **Lifecycle init** — initializes the overlay state machine
+   (`IDLE → ACTIVATING → VISIBLE → CLOSING → IDLE`).
+8. **Poll loop** — enters the main event loop (50 ms interval, DEC-002).
+   The loop polls `InterceptMode`, processes SDL events, and handles
+   `SIGTERM`/`SIGINT` for clean shutdown.
+
+**Prerequisites:**
+- InputPlumber must be running and accessible on the system DBus.
+- A display or dummy video driver must be available for SDL.
+- A system TTF font (e.g., DejaVuSans) is recommended for text rendering
+  (best-effort — the service runs without a font but shows no text).
+
+**Dry-run mode:** `controller-box --overlay-service --dry-run` prints a
+banner and exits 0 without performing any initialization. This is
+headless-safe for acceptance checks.
+
+**Failure modes:**
+- SDL init failure → exit 1, stderr message (no crash).
+- InputPlumber not found → exit 1, stderr message.
+- Device enumeration failure → exit 1, stderr message.
+- Missing settings/assignments → defaults used, service continues.
+
 ## Configuration
 
 ### Config directory

@@ -98,9 +98,10 @@ conflict-specific red rendering. This plan closes those gaps.
 - Documentation impact: none (internal rendering detail)
 
 ## Task 3: Overlay service initialization
-- Status: pending
+- Status: complete
+- Evidence: 69/69 ctest pass (incl. test_overlay_service with 2 sub-tests). run_overlay_service() implemented in src/app/overlay_service.c (extracted from main.c for testability). SDL init failure with SDL_VIDEODRIVER=nonexistent returns 1. --dry-run returns 0. --manager path unaffected. docs/OPERATIONS.md updated with startup behavior.
 - Dependencies: none
-- Scope: `src/app/main.c`
+- Scope: `src/app/main.c`, `src/app/overlay_service.c`, `src/app/overlay_service.h`, `tests/test_overlay_service.c`
 - Acceptance criteria:
   - `run_overlay_service()` in `main.c` is no longer a stub. It:
     1. Initializes SDL video, creates a hidden `cbx_renderer`.
