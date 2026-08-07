@@ -133,3 +133,50 @@
 - Task 9 (Installed smoke test) — depends on Task 4
 - Task 8 (Golden images) — depends on Tasks 5+7
 - Task 11 (Final audit) — depends on all others
+
+## Iteration: Task 4 — Overlay service poll loop and shutdown
+
+### What was done
+- Replaced the skeleton poll loop in `src/app/overlay_service.c` with full implementation:
+  1. **Signal handling**: `sigaction` for SIGTERM/SIGINT → `volatile sig_atomic_t g_running = 0`
+  2. **InterceptMode polling**: `ip_intercept_poll` per composite device with 50ms SDL timer (DEC-002)
+     - Activating callback → `cbx_overlay_lifecycle_activate()` (shows pre-built surface)
+     - Deactivating callback → `cbx_overlay_lifecycle_close()` (hides surface, saves assignments)
+     - Error callback → logs to stderr
+  3. **SDL event processing**: Keyboard events mapped to Player Mode / Host Mode inputs
+     - Left/Right → move slot, Up/Down → cycle profile, B → close, R → toggle Host Mode
+     - Player Mode: `cbx_player_mode_handle()` with on_slot_change/on_profile_change callbacks
+     - Host Mode: `cbx_host_mode_handle()` with on_slot_change callback
+  4. **Lifecycle integration**: `cbx_overlay_lifecycle_tick()` for fade animation, dirty surface re-render + re-show
+  5. **on_save callback**: conflict detection → conflict resolution → grid-to-assignments sync → `cbx_assignments_save()`
+  6. **Clean shutdown**: stop all poll timers, force_close lifecycle, destroy surface, cleanup caches, disconnect DBus, shutdown renderer
+- Exposed signal handler test functions in `overlay_service.h`:
+  - `cbx_overlay_service_install_signal_handlers()` — sets up SIGTERM/SIGINT
+  - `cbx_overlay_service_shutdown_requested()` — returns true if signal received
+  - `cbx_overlay_service_reset_shutdown()` — resets flag (for testing)
+- Added 2 new cmocka sub-tests in `test_overlay_service.c`:
+  - `test_sigterm_sets_shutdown_flag` — raise(SIGTERM) → shutdown_requested() == true
+  - `test_sigint_sets_shutdown_flag` — raise(SIGINT) → shutdown_requested() == true
+- Updated `docs/OPERATIONS.md` with detailed poll loop behavior documentation
+
+### Verification
+- `./build-check/controller-box --overlay-service --dry-run` → exit 0 ✓
+- `timeout 2 ./build-check/controller-box --overlay-service 2>/dev/null` → exit 1 (DBus unavailable in CI, clean init failure) ✓
+- `ctest --test-dir build-check -R test_overlay_service --output-on-failure` → 4/4 PASS
+- Full suite: 69/69 tests pass
+
+### Key decisions
+- Used SDL keyboard events as proxy for controller input (Left/Right/Up/Down/B/R keys). In production, DBus InputEvent signals carry per-controller input with device path → row_idx mapping. The keyboard proxy is sufficient for the poll loop implementation and testing.
+- Used row 0 (primary controller) for keyboard input row_idx. Multi-controller input requires DBus InputEvent signal handling (future enhancement).
+- `on_profile_change` callback calls `ip_composite_load_profile_path` via DBus (best-effort) to load the profile on InputPlumber.
+- `on_save` callback syncs grid state back to assignments: iterates grid rows, matches by ID, updates slot + profile, removes unassigned entries.
+- Signal handler uses `sa_flags = 0` (no SA_RESTART) to ensure SDL_PollEvent is interrupted by the signal.
+- `SDL_Delay(10)` in the main loop limits event polling rate; the 50ms poll timers drive InterceptMode checks independently.
+
+### Next task
+- Task 5 (Overlay visual tests) — unblocked (depends on Tasks 1+2, both complete)
+- Task 7 (Manager visual tests) — unblocked (depends on Tasks 1+6, both complete)
+- Task 9 (Installed smoke test) — now unblocked (depends on Task 4, complete)
+- Task 10 (Backend smoke coverage) — unblocked (depends on Task 1, complete)
+- Task 8 (Golden images) — depends on Tasks 5+7
+- Task 11 (Final audit) — depends on all others
