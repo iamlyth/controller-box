@@ -554,6 +554,18 @@ if(CMOCKA_FOUND)
     set_tests_properties(test_golden PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
 
+    # --- Task 10: Backend smoke coverage (SPEC §11.1.6) --------------
+    # Verifies accelerated backend (OpenGL/OpenGL ES) produces correct
+    # pixel output.  Skips (exit 77) when no accelerated backend is
+    # available (headless CI).  Does NOT set SDL_VIDEODRIVER=dummy.
+    add_executable(test_backend_smoke tests/test_backend_smoke.c)
+    target_link_libraries(test_backend_smoke PRIVATE controllerbox cbx_test_support)
+    target_compile_definitions(test_backend_smoke PRIVATE
+        CBX_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME test_backend_smoke COMMAND test_backend_smoke)
+    set_tests_properties(test_backend_smoke PROPERTIES
+        SKIP_RETURN_CODE 77)
+
 else()
     message(STATUS "cmocka not found — unit tests skipped (smoke tests still built)")
 endif()

@@ -513,3 +513,52 @@ On mismatch, the test writes three PNGs to `tests/golden-fail/`:
 - `<name>.diff.png` — red for differing pixels, dimmed for matches
 
 This directory is gitignored and should not be committed.
+
+## Backend smoke test
+
+The `test_backend_smoke` ctest (SPEC §11.1.6) verifies that rendering
+through an **accelerated** SDL2 backend (OpenGL or OpenGL ES) produces
+correct pixel output — not just successful draw calls, but actual
+framebuffer content verified via `fb_read_pixels`.
+
+### What it does
+
+1. Creates an SDL2 renderer with `SDL_RENDERER_ACCELERATED |
+   SDL_RENDERER_TARGETTEXTURE`.
+2. Detects the backend name via `SDL_GetRendererInfo`.
+3. If no accelerated backend is available, exits with code 77
+   (ctest `SKIP_RETURN_CODE`) — the test is skipped, not failed.
+4. If an accelerated backend is available:
+   - Renders a representative overlay grid frame via
+     `cbx_overlay_surface_render` + `cbx_select_grid_render_cb`.
+   - Renders a manager tab frame via `cbx_manager_render()`.
+   - Reads back pixels via `fb_read_pixels`.
+   - Asserts `fb_region_has_content` in expected regions (grid cells,
+     tab bar, body, buttons).
+   - Asserts no all-black or all-background frames.
+   - Compares the accelerated output against the software-renderer
+     golden baselines (`fb_golden_compare` with ±3 per-channel,
+     <2% image tolerance).
+
+### Hardware requirements
+
+This test requires a real display with GPU acceleration.  It does
+**not** set `SDL_VIDEODRIVER=dummy`.  In headless CI environments
+(no display), the test skips (exit 77).
+
+### Running
+
+```sh
+nix-shell --run "cmake --build build-check --target test_backend_smoke"
+nix-shell --run "ctest --test-dir build-check -R test_backend_smoke --output-on-failure"
+```
+
+On a headless machine, the output will show:
+```
+test_backend_smoke: SDL_Init failed: No available video device
+```
+and ctest reports the test as Skipped.
+
+On a machine with a GPU, the test renders both overlay and manager
+frames through the accelerated backend and verifies pixel content
+against the golden baselines.
