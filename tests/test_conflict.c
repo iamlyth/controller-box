@@ -674,8 +674,11 @@ test_conflict_red_rendering(void **state)
     rc = cbx_overlay_surface_render(&surface, sdl.renderer,
                                      cbx_select_grid_render_cb, &ctx);
     assert_int_equal(rc, 0);
+    SDL_SetRenderTarget(sdl.renderer,
+                        cbx_overlay_surface_get_texture(&surface));
     assert_int_equal(fb_read_pixels(sdl.renderer, NULL, buf,
                                      VIS_W * VIS_H * 4), 0);
+    SDL_SetRenderTarget(sdl.renderer, NULL);
     assert_false(fb_region_has_color(buf, VIS_W, VIS_H, &conflict_cell,
                                       red_target, VIS_TOL));
 
