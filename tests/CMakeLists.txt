@@ -385,6 +385,15 @@ if(CMOCKA_FOUND)
     set_tests_properties(test_conflict PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
 
+    # Task 5 — Overlay deterministic framebuffer visual tests (SPEC §4.10).
+    add_executable(test_overlay_visual tests/test_overlay_visual.c)
+    target_link_libraries(test_overlay_visual PRIVATE controllerbox cbx_test_support)
+    target_compile_definitions(test_overlay_visual PRIVATE
+        CBX_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME test_overlay_visual COMMAND test_overlay_visual)
+    set_tests_properties(test_overlay_visual PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+
     # Task 31 — Profile cycling and dynamic columns.
     add_executable(test_profile_cycle tests/test_profile_cycle.c)
     target_link_libraries(test_profile_cycle PRIVATE controllerbox cbx_test_support)
