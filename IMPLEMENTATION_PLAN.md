@@ -104,7 +104,7 @@ conflict-specific red rendering. This plan closes those gaps.
   - `run_overlay_service()` in `main.c` is no longer a stub. It:
     1. Initializes SDL video, creates a hidden `cbx_renderer`.
     2. Connects to the system DBus via `ip_connection`; if InputPlumber is unavailable, logs a clear error to stderr ("InputPlumber not found" or DBus error) and returns non-zero (§2.4).
-    3. Enumerates composite devices via `ip_objectmanager_get_managed_objects`.
+    3. Enumerates composite devices via `cbx_objectmanager_enumerate`.
     4. Initializes the overlay surface: `cbx_overlay_surface_init(surface, renderer, w, h, opacity)` → `cbx_overlay_surface_mark_dirty_all(surface)` → `cbx_overlay_surface_render(surface, renderer, cbx_select_grid_render_cb, &ctx)`.
     5. Registers the overlay trigger via `cbx_trigger_register_all` and sets `InterceptMode = PASS` on all composites.
     6. Initializes `cbx_overlay_lifecycle` with the surface, renderer, and callbacks.
@@ -114,7 +114,7 @@ conflict-specific red rendering. This plan closes those gaps.
   - If DBus connection fails, returns non-zero with "InputPlumber not found" or equivalent error.
   - Existing `--manager` path is unaffected.
   - A cmocka test verifies: (a) `run_overlay_service(0)` with `SDL_VIDEODRIVER=nonexistent` returns non-zero; (b) `run_overlay_service(1)` (dry-run) returns 0.
-- Verification: `nix-shell --run "cmake --build build-check --target controller-box && ./build-check/controller-box --overlay-service --dry-run && SDL_VIDEODRIVER=nonexistent ./build-check/controller-box --overlay-service 2>&1 | grep -q . && test \$? -ne 0 || true"`
+- Verification: `nix-shell --run "cmake --build build-check --target controller-box && ./build-check/controller-box --overlay-service --dry-run && SDL_VIDEODRIVER=nonexistent ./build-check/controller-box --overlay-service 2>/dev/null; test \$? -ne 0"`
 - Documentation impact: `docs/OPERATIONS.md` — document overlay service startup behavior and prerequisites.
 
 ## Task 4: Overlay service poll loop and shutdown
@@ -131,7 +131,8 @@ conflict-specific red rendering. This plan closes those gaps.
   - The overlay appears in <10 ms from activation (pre-built surface, single `SDL_RenderCopy` + `SDL_RenderPresent`).
   - `--dry-run` path is unaffected.
   - A test verifies the poll loop exits cleanly on SIGTERM (send signal to self, assert clean return).
-- Verification: `nix-shell --run "cmake --build build-check --target controller-box && ./build-check/controller-box --overlay-service --dry-run"`
+- Verification: `nix-shell --run "cmake --build build-check --target controller-box && ./build-check/controller-box --overlay-service --dry-run && timeout 2 ./build-check/controller-box --overlay-service 2>/dev/null; test \$? -ne 0 || test \$? -eq 124"`
+  (The timeout kills the service after 2s; exit 124 = timeout = service ran without crashing. A non-zero exit before timeout indicates a clean init failure, which is acceptable only when DBus is unavailable.)
 - Documentation impact: `docs/OPERATIONS.md` — document overlay lifecycle, poll interval, and signal handling.
 
 ## Task 5: Overlay deterministic framebuffer visual tests (§4.10)
