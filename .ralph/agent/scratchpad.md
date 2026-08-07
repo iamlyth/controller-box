@@ -180,3 +180,42 @@
 - Task 10 (Backend smoke coverage) — unblocked (depends on Task 1, complete)
 - Task 8 (Golden images) — depends on Tasks 5+7
 - Task 11 (Final audit) — depends on all others
+
+## Iteration: Task 5 — Overlay deterministic framebuffer visual tests
+
+### What was done
+- Created `tests/test_overlay_visual.c` with 7 cmocka sub-tests covering all SPEC §4.10 visual states:
+  1. `test_player_mode_grid` — content in grid cell regions, text regions, icon regions
+  2. `test_host_mode_differs` — `fb_frames_differ` between Player Mode and Host Mode (host navigates row to different slot, creating conflict)
+  3. `test_conflict_highlighting` — red {220,40,40} in conflicted cell, not in non-conflicted cell
+  4. `test_unassigned_with_columns` — content in ALL column header regions + ≥2 player slot regions
+  5. `test_model_profile_text` — text-colored pixels (theme.text_primary) in label region for each row + profile label on right
+  6. `test_virtual_device_icons` — content in icon regions for each occupied player slot
+  7. `test_state_transitions_differ` — no-conflict→conflict frames differ, conflict→no-conflict frames differ, same-state frames don't differ
+- Fixture (`vis_setup`/`vis_teardown`) initializes:
+  - SDL via `test_harness_sdl_init()` (software renderer, dummy driver)
+  - Text cache with `cbx_font_path()` or nix-store fallback for DejaVuSans.ttf
+  - Icon cache from `data/icons/svg/` + icon map from `data/controller-icons.yaml`
+  - Theme via `cbx_theme_default()`
+- All tests render through production composition path: `cbx_select_grid_build()` → `cbx_overlay_surface_init()` → `cbx_overlay_surface_render(surface, renderer, cbx_select_grid_render_cb, &ctx)` → `fb_read_pixels()`
+- Each assertion checks pixel content (not struct fields)
+- Registered in `tests/CMakeLists.txt` with `CBX_SOURCE_DIR` compile definition and `SDL_VIDEODRIVER=dummy` environment
+
+### Verification
+- `ctest --test-dir build-check -R test_overlay_visual --output-on-failure` → 1/1 PASS (7 sub-tests)
+- Full suite: 70/70 tests pass (69 existing + 1 new)
+- Font and icons confirmed loaded (text/icon tests show [ OK ], not [ SKIPPED ])
+
+### Key decisions
+- Used `cmocka_unit_test_setup_teardown` for per-test fixture isolation (SDL + text + icon setup per test)
+- `find_font()` helper tries `cbx_font_path()` first, then nix-store `find` command as fallback
+- Icon lookup falls back to `generic-gamepad.svg` when `cc-xbox-360.svg` is not found (expected behavior)
+- Host Mode test simulates host navigation by changing grid state (move_to_col), since `cbx_grid_render_ctx` doesn't have a host_mode field — the visual difference comes from different grid state (highlight position + conflict)
+- `test_state_transitions_differ` also verifies that same-state frames (A vs C, both no-conflict) do NOT differ, confirming deterministic rendering
+
+### Next task
+- Task 7 (Manager visual tests) — unblocked (depends on Tasks 1+6, both complete)
+- Task 9 (Installed smoke test) — unblocked (depends on Task 4, complete)
+- Task 10 (Backend smoke coverage) — unblocked (depends on Task 1, complete)
+- Task 8 (Golden images) — depends on Tasks 5+7 (Task 5 complete, Task 7 still pending)
+- Task 11 (Final audit) — depends on all others
