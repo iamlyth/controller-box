@@ -252,3 +252,35 @@
 - Task 9 (Installed smoke test) — unblocked (depends on Task 4, complete)
 - Task 10 (Backend smoke coverage) — unblocked (depends on Task 1, complete)
 - Task 11 (Final audit) — depends on all others
+
+## Iteration: Task 8 — Golden image baselines and comparison
+
+### What was done
+- Created `tests/test_golden.c` with 11 golden image tests covering all visual states from Tasks 5 (overlay) and 7 (manager):
+  - Overlay (4): player_mode, host_mode, conflict, unassigned (800×600)
+  - Manager (7): controllers_degraded, controllers_connected, profiles, settings, editor_list, editor_sequential, editor_validation_error (1280×720)
+- `golden_check()` helper: in generate mode (CBX_GENERATE_GOLDEN=1), saves PNG to tests/golden/; in compare mode, uses fb_golden_compare with ±3 per-channel and <2% image tolerance; on mismatch saves actual/expected/diff to tests/golden-fail/
+- Generated 11 baseline PNGs via generate mode
+- Created `scripts/generate-golden.sh` for explicit, reviewed baseline regeneration
+- Registered test_golden in CMakeLists.txt with CBX_SOURCE_DIR and SDL_VIDEODRIVER=dummy
+- Updated docs/OPERATIONS.md with golden image workflow, tolerance values, baseline table, regeneration procedure, failure artifacts
+- Added tests/golden-fail/ to .gitignore
+- Fixed stale blocked_by references in tasks.jsonl (non-existent placeholder task IDs from planning)
+
+### Verification
+- Generate mode: 11/11 [SAVED] ✓
+- Compare mode: 11/11 [ OK ] ✓
+- ctest: 72/72 pass (71 existing + 1 new)
+- All 11 PNGs verified as valid (file command: correct dimensions, RGBA, non-interlaced)
+
+### Key decisions
+- Used environment variable CBX_GENERATE_GOLDEN=1 instead of --generate-golden flag (cmocka parses argv, custom flags are awkward)
+- Two separate fixture types (overlay + manager) with per-test setup/teardown, matching the existing visual test patterns
+- Validation error test skips if no font (error indicator is red text, requires font rendering)
+- Golden images are full-frame captures at the rendering resolution (800×600 overlay, 1280×720 manager)
+- Tolerance ±3 per channel and <2% image per plan spec
+
+### Next task
+- Task 9 (Installed smoke test) — unblocked (depends on Task 4, complete)
+- Task 10 (Backend smoke coverage) — unblocked (depends on Task 1, complete)
+- Task 11 (Final audit) — blocked by Tasks 8, 9, 10 (Task 8 complete, 9+10 still pending)
