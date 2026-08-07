@@ -139,7 +139,8 @@ conflict-specific red rendering. This plan closes those gaps.
 - Documentation impact: `docs/OPERATIONS.md` — document overlay lifecycle, poll interval, and signal handling.
 
 ## Task 5: Overlay deterministic framebuffer visual tests (§4.10)
-- Status: pending
+- Status: complete
+- Evidence: 70/70 ctest pass (incl. test_overlay_visual with 7 sub-tests). All §4.10 states tested through production composition path (cbx_select_grid_build → cbx_overlay_surface_init → cbx_overlay_surface_render → fb_read_pixels). Text cache (DejaVuSans.ttf), icon cache (data/icons/svg/), icon map, theme (cbx_theme_default) all set up in fixture. Tests assert on pixel content, not struct fields.
 - Dependencies: 1, 2
 - Scope: `tests/test_overlay_visual.c`, `tests/CMakeLists.txt`
 - Acceptance criteria:
