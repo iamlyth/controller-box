@@ -198,7 +198,7 @@ conflict-specific red rendering. This plan closes those gaps.
 - Documentation impact: none (test code)
 
 ## Task 8: Golden image baselines and comparison
-- Status: pending
+- Status: complete
 - Dependencies: 5, 7
 - Scope: `tests/golden/` (new directory), `tests/test_golden.c`, `tests/CMakeLists.txt`, `scripts/generate-golden.sh`
 - Acceptance criteria:

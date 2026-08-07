@@ -543,6 +543,17 @@ if(CMOCKA_FOUND)
     set_tests_properties(test_overlay_service PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
 
+    # --- Task 8: Golden image baselines and comparison -----------------
+    # Compares live framebuffer captures against reviewed baseline PNGs.
+    # Set CBX_GENERATE_GOLDEN=1 to regenerate baselines instead of comparing.
+    add_executable(test_golden tests/test_golden.c)
+    target_link_libraries(test_golden PRIVATE controllerbox cbx_test_support PkgConfig::CMOCKA)
+    target_compile_definitions(test_golden PRIVATE
+        CBX_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME test_golden COMMAND test_golden)
+    set_tests_properties(test_golden PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+
 else()
     message(STATUS "cmocka not found — unit tests skipped (smoke tests still built)")
 endif()

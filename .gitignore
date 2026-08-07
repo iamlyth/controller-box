@@ -49,3 +49,4 @@ __pycache__/
 *.swo
 *~
 Testing/
+tests/golden-fail/

@@ -450,3 +450,66 @@ tarball install instead.
 Profiles must bind at least A, B, D-Pad Up, D-Pad Down, D-Pad Left, and D-Pad
 Right (the NES minimum). The manager shows which bindings are missing. See
 [PROFILES.md](PROFILES.md) for the full profile format.
+
+## Golden image workflow
+
+The `test_golden` ctest compares live deterministic framebuffer captures
+against reviewed baseline PNG images in `tests/golden/`.  This catches
+unintended visual regressions across all overlay and manager UI states.
+
+### Tolerance values
+
+- **Per-pixel tolerance**: ±3 per RGB channel (accounts for minor renderer
+  rounding differences)
+- **Per-image tolerance**: <2% of total pixels may differ (allows small
+  anti-aliasing or font hinting variations)
+
+### Baseline images
+
+Baselines live in `tests/golden/` and cover every visual state from the
+overlay (§4.10) and manager (§5.6) visual tests:
+
+| Image | Dimensions | State |
+|-------|------------|-------|
+| `overlay_player_mode.png` | 800×600 | 3 controllers on P1, P2, P3 |
+| `overlay_host_mode.png` | 800×600 | Row 1 moved to P1 (conflict) |
+| `overlay_conflict.png` | 800×600 | Rows 0+1 on P1, row 2 unassigned |
+| `overlay_unassigned.png` | 800×600 | Rows on P1, P2, Unassigned |
+| `manager_controllers_degraded.png` | 1280×720 | Controllers tab, no DBus |
+| `manager_controllers_connected.png` | 1280×720 | Controllers tab, mock devices |
+| `manager_profiles.png` | 1280×720 | Profiles tab |
+| `manager_settings.png` | 1280×720 | Settings tab |
+| `manager_editor_list.png` | 1280×720 | Profile editor, binding list |
+| `manager_editor_sequential.png` | 1280×720 | Profile editor, 3/6 captured |
+| `manager_editor_validation_error.png` | 1280×720 | Profile editor, red error text |
+
+### Regenerating baselines
+
+Baseline update is a **manual, reviewed commit** — the test never auto-updates
+baselines.  To regenerate:
+
+```bash
+scripts/generate-golden.sh
+```
+
+This builds the `test_golden` target and runs it with `CBX_GENERATE_GOLDEN=1`,
+writing PNGs to `tests/golden/`.  Review the images, then commit them if
+correct.
+
+Alternatively, run manually:
+
+```bash
+nix-shell --run "cmake --build build-check --target test_golden"
+CBX_GENERATE_GOLDEN=1 SDL_VIDEODRIVER=dummy \
+  ctest --test-dir build-check -R test_golden --output-on-failure
+```
+
+### Failure artifacts
+
+On mismatch, the test writes three PNGs to `tests/golden-fail/`:
+
+- `<name>.actual.png` — the live capture
+- `<name>.expected.png` — the golden baseline
+- `<name>.diff.png` — red for differing pixels, dimmed for matches
+
+This directory is gitignored and should not be committed.
