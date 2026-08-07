@@ -185,7 +185,9 @@ At minimum, deterministic visual tests must render and read back pixels for: the
 
 ### 5.1 Structure (Decisions 10, 11; ticket #2)
 
-The manager is a separate mode from the overlay (§2.3), navigated by controller with a **tab bar at the top** (console settings-menu style): Left/Right switches tabs, Up/Down navigates within a panel. Three tabs: **Controllers**, **Profiles**, **Settings**. (Ticket #2 originally sketched a Hotkeys tab; ticket #4's single-hotkey decision collapsed it into one Settings entry.)
+The manager is a separate mode from the overlay (§2.3), navigated by controller with a **tab bar at the top** (console settings-menu style): Left/Right switches tabs, Up/Down navigates within a panel, and A activates the focused control. Three tabs: **Controllers**, **Profiles**, **Settings**. (Ticket #2 originally sketched a Hotkeys tab; ticket #4's single-hotkey decision collapsed it into one Settings entry.)
+
+Controller navigation is the mandatory primary path, but the manager also supports a mouse pointer as a secondary path. Every visible enabled tab, button, list row, selector, editor control, and dialog action must respond to pointer hover and a left-button click inside its rendered bounds. Controller activation and pointer activation must invoke the same behavior and validation. No required operation may be available only by mouse, and decorative labels, diagrams, and progress indicators must not masquerade as interactive controls.
 
 ### 5.2 Controllers tab
 
@@ -238,6 +240,21 @@ App-level settings: launch at boot, theme, overlay opacity, number of virtual co
 The installed manager must render usable body content, not only a window, tab labels, widget metadata, or non-zero rectangles. Production-path verification must render and read back pixels for all three tabs using the same initialization and composition path as `controller-box --manager`; tests must not manually attach modules that production startup omits.
 
 Required deterministic states are: Controllers with controls visible in both connected and InputPlumber-unavailable degraded modes; Profiles with the built-in Default profile and create/edit/delete controls; Settings with every configurable setting and its current/default value; and the profile editor with its controller diagram, binding list, sequential-binding prompt, validation error, and progress state. Every expected control and text region must contain meaningful non-background framebuffer output. Switching tabs or editor modes must change the captured frame. A test that checks only child counts, visibility flags, geometry, focus membership, or "render did not crash" does not satisfy this requirement.
+
+### 5.7 Interaction acceptance
+
+The manager must maintain a machine-readable or test-enumerated inventory of every interactive control and its expected semantic outcome. Automated acceptance must traverse that inventory through normal SDL events and production dispatch—not by calling a control callback or tab-specific activation function directly.
+
+For every visible enabled control, tests must prove both paths:
+
+- **Controller path:** reach the control from the tab bar using the normal focus chain, visibly indicate focus, activate it with the controller A event, and verify the intended outcome.
+- **Pointer path:** derive a click point from the control's final rendered bounds, send normal mouse motion plus left-button down/up events, visibly indicate hover/press state, and verify the same outcome.
+
+An event-handler return value is not outcome evidence. Depending on the control, evidence must include an observable state transition, dialog/editor navigation, changed framebuffer region, exact mock DBus request, validated file/configuration mutation, or persisted value after restart. Disabled controls must reject both activation paths and produce no backend or filesystem side effect. Hit testing must follow final layout after resize and must not use stale pre-layout rectangles.
+
+End-to-end scenarios must cover at least: Controllers add/remove/type-change; Profiles create from each starting point, select, edit, validate, save, and delete; Settings change and persistence; profile-editor list and sequential modes including cancel/error paths; tab switching; and recovery from InputPlumber-unavailable and operation-failure states. Overlay interaction remains controller-driven and must similarly be exercised through its production event path for open, movement, profile cycling, Host Mode, conflict resolution, and close.
+
+The installed-production smoke test must perform representative coordinate-based manager clicks in body controls as well as tab clicks and controller/keyboard-proxy navigation. A visual change without the specified semantic outcome, or a semantic unit test that bypasses production event routing, does not satisfy interaction acceptance.
 
 ---
 
@@ -566,13 +583,29 @@ Visual requirements in §§4–5 are release gates. The automated suite must inc
 
 The verification suite must explicitly fail when a required screen is blank or incomplete even if unit, state-machine, geometry, and no-crash tests pass. Screenshot/framebuffer artifacts and the exact commands that produced them are part of final verification evidence.
 
+### 11.2 Autonomous implementation definition of done
+
+Iteration count, task count, compilation, and a green unit-test subset are not definitions of done. The autonomous implementation loop may claim completion only when all of the following are objectively true:
+
+1. **Complete conformance matrix.** Every normative requirement in this specification is classified `verified` with specific source evidence and an executable test or acceptance command. No requirement remains `partial`, `missing`, `ambiguous`, assumed, or verified only by prose.
+2. **Production-path behavior.** All v1 workflows run through the same initialization, event dispatch, rendering, backend, persistence, and shutdown paths as the installed binaries. Test-only assembly or direct callback invocation may supplement but never replace production-path acceptance.
+3. **Complete interaction traversal.** Every enabled control in the §5.7 inventory has passing controller and pointer activation evidence, and every overlay action has passing controller-event evidence. Tests verify semantic outcomes, not merely event consumption, focus movement, pixels, or lack of a crash.
+4. **Visual and degraded-state acceptance.** §§4.10, 5.6, and 11.1 pass for normal, empty, loading, unavailable, validation-error, backend-error, and recovery states required by the affected workflow. No required screen or region is blank, clipped, unreachable, or misleadingly enabled.
+5. **Regression and quality gates.** The full clean-build, unit, integration, end-to-end, installed-package, and project verification suites pass. There are no unexplained skips, flaky rerun dependencies, weakened assertions, leaked processes/files, compiler warnings introduced by the cycle, or sanitizer/static-analysis defects in changed code where those checks are supported.
+6. **Known-defect accounting.** Open bug ledgers and review findings contain no unresolved defect that contradicts a v1 requirement. A defect may be deferred only by an explicit human-approved specification or release decision; silently treating it as out of scope is prohibited.
+7. **Independent review.** Read-only correctness, test-quality, security, and documentation reviews find no unresolved blocking issue. Review must challenge whether tests can pass while production behavior remains broken.
+8. **Documentation and reproducibility.** README and operational documentation match observed behavior; build, install, acceptance, artifact, and recovery commands work from a clean checkout; final evidence records exact commands and results.
+9. **Repository integrity.** The complete active-cycle task ledger remains present, every task is complete with evidence, the canonical specification binding is fresh, and the Git tree is clean on `develop`.
+
+If final verification discovers any gap, the loop must not emit its completion promise. It must preserve existing task history, append a uniquely numbered pending remediation task, add that task as a dependency of the final audit, implement and verify it in a later fresh iteration, and rerun the entire definition of done. If an iteration, runtime, quota, or external session ceiling is reached first, the cycle remains explicitly `active` or `blocked` with a recovery handoff; reaching a ceiling is never success. Human visual acceptance on target hardware remains required before promotion from `develop` to `main` (§11.1).
+
 ---
 
 ## 12. Out of Scope (v1)
 
 - **Bare DRM/framebuffer support** (no compositor) — RetroPie-class users are CLI-comfortable (Decision 3).
 - **Pi Zero / Pi 3 class hardware** (Decision 2).
-- **Touch/mouse-only navigation** — controller-first, always.
+- **Touch-first or mouse-only product mode** — controller-first, always. Secondary manager pointer activation is nevertheless required by §§5.1 and 5.7 and must cover every manager operation.
 - **Replacing InputPlumber's input routing engine** — the GUI is a control surface only (Decision 5).
 - **Steam integration or any Steam API dependency.**
 - **Quick-action hotkey combos** — only the overlay trigger exists (ticket #4).
