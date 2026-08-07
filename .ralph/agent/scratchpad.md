@@ -314,3 +314,33 @@
 ### Next task
 - Task 9 (Installed smoke test) — unblocked (depends on Task 4, complete)
 - Task 11 (Final audit) — blocked by Tasks 9 and 10 (Task 10 complete, Task 9 still pending)
+
+## Iteration: Task 9 — Installed production smoke test
+
+### What was done
+- Created `tests/test_installed_smoke.sh` — bash script that exercises the real main() entry point (no --dry-run) of the installed binary under Xvfb:
+  1. Builds and installs to `.test-install` staging prefix via `cmake --install`
+  2. Starts Xvfb on `:99` (1280×720×24)
+  3. Sets up temporary HOME with DejaVuSans.ttf (found via nix-store search) so manager can render text
+  4. **Manager mode**: launches `controller-box --manager`, sends Tab + Arrow keys via `xdotool`, captures root window via `import -window root` (ImageMagick), verifies pixel variance (mean > 5.0 on 0-255 scale) in tab-bar region (top 48px) and body region (below 48px)
+  5. **Overlay service**: launches `controller-box --overlay-service`, verifies clean exit (code 1 = InputPlumber not found, expected in test env; not a crash/segfault)
+  6. Cleans up Xvfb (SIGTERM → SIGKILL) and temp files
+- Skips with exit 77 if Xvfb/xdotool/ImageMagick unavailable
+- Added `xorg-server` (Xvfb), `xdotool`, `imagemagick`, `bc` to `shell.nix`
+- Registered in `tests/CMakeLists.txt` with `SKIP_RETURN_CODE 77`
+- Updated `scripts/verify-project.sh` to run installed smoke test (tolerates exit 77)
+- Updated `docs/OPERATIONS.md` with prerequisites, execution, and expected output
+
+### Verification
+- `nix-shell --run "ctest --test-dir build-check -R test_installed_smoke --output-on-failure"` → 1/1 PASS (6.91 sec)
+- Full suite: 74/74 tests pass (73 pass + 1 skip for backend_smoke)
+
+### Key decisions
+- Used `pkill -x "controller-box"` (exact match) instead of `pkill -f "controller-box"` (pattern match) in cleanup — the `-f` flag was matching the test script itself (path contains "controller-box"), killing the script before `exit 0` and causing ctest timeout
+- Font setup: cbx_font_path() searches $HOME/.local/share/fonts/ among other dirs — created temp HOME with DejaVuSans.ttf symlinked there
+- Overlay service uses hidden window (SDL_WINDOW_HIDDEN) — can't capture via `import -window root` until activated, which requires InputPlumber. So overlay test verifies clean exit (code 1) rather than visual capture.
+- `set +e` / `set -e` wrapping `wait` calls to capture non-zero exit codes without triggering premature script exit
+- Xvfb cleanup uses SIGTERM → sleep 0.5 → SIGKILL (no `wait` which can block)
+
+### Next task
+- Task 11 (Final audit) — blocked by Tasks 9 and 10 (both now complete) and task-1786081253-eb4d (need to check status)
