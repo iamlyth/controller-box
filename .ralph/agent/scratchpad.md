@@ -344,3 +344,40 @@
 
 ### Next task
 - Task 11 (Final audit) — blocked by Tasks 9 and 10 (both now complete) and task-1786081253-eb4d (need to check status)
+
+## Iteration: Task 11 — Final documentation and specification audit
+
+### What was done
+- **Spec text correction**: Updated docs/SPEC.md §2.5 (line 94), §10.3 (line 535), and §11 (line 552) from "~500 ms" to "~50 ms (DEC-002)" to match the implementation
+- **README.md update**: Added "Verification suite" section with 7-layer table (framebuffer tests, golden images, installed smoke, backend smoke, human release acceptance) and commands to run each layer
+- **docs/OPERATIONS.md update**: Added 4 new sections:
+  1. Visual framebuffer tests (test_overlay_visual, test_manager_visual, test_fb_assert) — documents all sub-tests and SPEC coverage
+  2. Running all visual acceptance tests — expected results in headless environment
+  3. Human release acceptance checklist (SPEC §11.1.7) — procedure, review criteria table (legibility, clipping, focus, contrast, controller-only usability), when to perform
+  4. Specification coverage audit — maps every §4.10, §5.6, §11.1 requirement to its test or documented process
+- Fixed stale reference to spec's ~500 ms figure in OPERATIONS.md performance section
+- Fixed shellcheck warnings in test_installed_smoke.sh:
+  - SC2329: cleanup() called via trap, added disable comment
+  - SC2034: unused loop variable `i` → `_`
+- Updated IMPLEMENTATION_PLAN.md: Task 11 marked complete with evidence, plan status set to complete, spec_commit/spec_blob updated
+
+### Verification
+- `nix-shell --run "ctest --test-dir build-check --output-on-failure"` → 74/74 pass (73 pass + 1 skip backend_smoke)
+- `nix-shell --run "./scripts/verify-project.sh"` → passes (build, ctest, packaging, installed smoke)
+- `nix-shell --run "./scripts/verify-boilerplate.sh"` → passes (shellcheck, factory.toml, bug ledger, boilerplate tests)
+- `scripts/check-plan-freshness.sh` → passes (spec commit matches plan metadata)
+- Git tree clean after two commits: Task 11 changes + plan status update
+
+### Key decisions
+- Spec text correction is explicitly authorized by the plan ("Task 11 includes correcting the spec text to match"). This is a text fix, not a behavior change — the implementation already used 50 ms per DEC-002.
+- Updated plan metadata (spec_commit, spec_blob) in a separate commit after the Task 11 commit, since the new spec commit hash could only be known after committing the spec change.
+- Shellcheck disable comment (SC2329) is the standard approach for functions called via trap, which shellcheck cannot detect.
+- The specification coverage audit is documented in OPERATIONS.md rather than a separate file, keeping all operational documentation in one place.
+
+### Final state
+- All 11 plan tasks complete
+- 74/74 tests pass
+- verify-project.sh passes
+- verify-boilerplate.sh passes
+- Plan status: complete
+- Git tree: clean
