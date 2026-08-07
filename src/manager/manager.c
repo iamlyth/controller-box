@@ -365,6 +365,23 @@ cbx_manager_on_tab_change(cbx_widget *w, int new_tab, void *user_data)
     for (int i = 0; i < CBX_MGR_TAB_COUNT; i++)
         cbx_widget_set_visible(&mgr->panels[i].base, i == new_tab);
 
+    /* Refresh the newly active tab to replace stale data. */
+    switch (new_tab) {
+    case CBX_MGR_TAB_CONTROLLERS:
+        /* Guard against NULL backend (degraded mode). */
+        if (mgr->ct.backend)
+            cbx_controllers_tab_refresh(&mgr->ct);
+        break;
+    case CBX_MGR_TAB_PROFILES:
+        cbx_profiles_tab_refresh(&mgr->pt);
+        break;
+    case CBX_MGR_TAB_SETTINGS:
+        cbx_settings_tab_refresh(&mgr->st);
+        break;
+    default:
+        break;
+    }
+
     /* Rebuild the focus chain with the new active panel's children. */
     cbx_manager_rebuild_focus(mgr);
 
