@@ -284,3 +284,33 @@
 - Task 9 (Installed smoke test) — unblocked (depends on Task 4, complete)
 - Task 10 (Backend smoke coverage) — unblocked (depends on Task 1, complete)
 - Task 11 (Final audit) — blocked by Tasks 8, 9, 10 (Task 8 complete, 9+10 still pending)
+
+## Iteration: Task 10 — Backend smoke coverage
+
+### What was done
+- Created `tests/test_backend_smoke.c` — standalone test (no cmocka) that:
+  1. Creates SDL2 renderer with SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE
+  2. Detects backend name via SDL_GetRendererInfo
+  3. If no accelerated backend: exits 77 (ctest SKIP_RETURN_CODE)
+  4. If accelerated backend available:
+     - **Overlay test**: renders grid frame via cbx_overlay_surface_render + cbx_select_grid_render_cb, reads back pixels via fb_read_pixels, asserts fb_region_has_content in grid cells + label region, asserts no all-black/all-background, compares with golden baseline (overlay_player_mode.png) via fb_golden_compare (±3/channel, <2%)
+     - **Manager test**: inits manager via cbx_manager_init (which tries accelerated first), checks manager's renderer is accelerated, renders via cbx_manager_render, reads back pixels, asserts fb_region_has_content in tab bar + body + button regions, asserts no all-black/all-background, compares with golden baseline (manager_controllers_degraded.png)
+- Registered in `tests/CMakeLists.txt` with SKIP_RETURN_CODE 77 (no SDL_VIDEODRIVER=dummy env)
+- Updated `docs/OPERATIONS.md` with backend smoke test documentation, hardware requirements, running instructions
+
+### Verification
+- `nix-shell --run "cmake --build build-check --target test_backend_smoke"` → builds ✓
+- `ctest --test-dir build-check -R test_backend_smoke` → Skipped (exit 77) ✓ (headless CI, no display)
+- Full suite: 73/73 tests pass (72 pass + 1 skip)
+
+### Key decisions
+- Standalone test (not cmocka) — uses `check()` helper function that returns -1 on failure, caller does `goto cleanup`
+- Does NOT set SDL_VIDEODRIVER=dummy — requires real display with GPU
+- Golden baselines (generated with software renderer) serve as the "software renderer output" for cross-backend consistency comparison
+- Overlay test creates its own renderer (passed as parameter); manager test creates its own via cbx_manager_init
+- Overlay renderer is destroyed before manager init to avoid resource conflicts
+- Isolated HOME for manager test (same pattern as test_manager_visual.c)
+
+### Next task
+- Task 9 (Installed smoke test) — unblocked (depends on Task 4, complete)
+- Task 11 (Final audit) — blocked by Tasks 9 and 10 (Task 10 complete, Task 9 still pending)
