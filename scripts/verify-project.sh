@@ -20,5 +20,5 @@ fi
 cmake -S . -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Debug
 cmake --build "$BUILD_DIR" --parallel
 ctest --test-dir "$BUILD_DIR" --output-on-failure
-"$PROJECT_ROOT/tests/test-packaging.sh" "$BUILD_DIR"
+"$PROJECT_ROOT/tests/test_packaging.sh" "$BUILD_DIR"
 echo "verify-project: Controller-Box build, tests, smoke checks, and packaging passed"

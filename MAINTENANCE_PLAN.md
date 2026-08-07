@@ -5,7 +5,7 @@ spec_path: docs/SPEC.md
 spec_commit: 12f82db38f999986de4216dfc50a6e13452db4c9
 spec_blob: 0522f7f1aa79d70b343ed6022956683a7c11695f
 base_commit: 2a8fc0ae27b49e557fcd06e198e2c1de3326918e
-status: active
+status: complete
 ---
 
 # Maintenance Plan: BUG-0001 — Manager launches with an effectively blank interface
@@ -97,7 +97,7 @@ path to verify that a font is actually loaded.
 - Documentation impact: None. Test-only addition.
 
 ## Task 4: Maintenance verification and documentation audit
-- Status: pending
+- Status: complete
 - Dependencies: Task 1, Task 2, Task 3
 - Scope: Run the full project verifier, confirm all acceptance criteria from the bug record are met, close BUG-0001 in the ledger with non-empty resolution and verification strings, and audit documentation for accuracy. Verify that `docs/SPEC.md` was not modified. Confirm the plan's `spec_blob` still matches `git rev-parse HEAD:docs/SPEC.md`. Update `src/config/config_paths.h` doxygen if the public API surface changed. Check that no misleading "Non-fatal" comments remain in the manager initialization path.
 - Acceptance criteria: Full test suite passes (`ctest --output-on-failure`) with zero failures. Build succeeds in Debug mode with no new warnings. `python3 scripts/bug-ledger.py validate` reports valid. BUG-0001 is closed via `python3 scripts/bug-ledger.py close BUG-0001 --resolution "<summary>" --verification "<evidence>"` with non-empty resolution and verification. `docs/SPEC.md` is unchanged (`git diff --exit-code docs/SPEC.md`). The bug's acceptance criteria are all met: (1) manager visibly renders labels and controls with a system font, (2) missing font produces actionable failure, (3) automated regression test exercises real font init and text rendering, (4) full project verifier passes.

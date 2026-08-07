@@ -82,3 +82,26 @@ before it, or the compile definition will be empty.
 ### Next iteration
 - Task 4: Maintenance verification and documentation audit.
   Runtime task task-1786062047-6a0c is open. Depends on Tasks 1-3 (all complete).
+
+## Iteration 4: Task 4 complete — MAINTENANCE COMPLETE
+
+- Implemented Task 4: Maintenance verification and documentation audit.
+  - Ran `scripts/check-maintenance-freshness.sh` — passed (BUG-0001, spec matches).
+  - Full build in Debug mode: 0 warnings, clean build.
+  - Full test suite: 65/65 tests pass (nix-shell, ctest --output-on-failure).
+  - Full project verifier (`scripts/verify-project.sh`): passes — build, tests,
+    packaging integration all pass.
+  - Fixed pre-existing typo in `scripts/verify-project.sh`: called
+    `tests/test-packaging.sh` (hyphen) instead of `tests/test_packaging.sh`
+    (underscore). This was blocking the maintenance completion gate.
+  - `docs/SPEC.md` unchanged (`git diff --exit-code` = 0).
+  - `spec_blob` in plan matches `git rev-parse HEAD:docs/SPEC.md`.
+  - No misleading "Non-fatal" comments in manager init path (manager.c, main.c).
+  - `config_paths.h` doxygen comments are accurate for `cbx_font_path()` and
+    `cbx_font_dir()`.
+  - `python3 scripts/bug-ledger.py validate` — valid (0 open, 1 closed).
+  - Closed BUG-0001 via `bug-ledger.py close` with non-empty resolution and
+    verification strings.
+  - Updated MAINTENANCE_PLAN.md: Task 4 status → complete, front-matter
+    status → complete.
+- All 4 maintenance plan tasks complete. BUG-0001 closed.
