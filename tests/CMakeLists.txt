@@ -262,6 +262,18 @@ if(CMOCKA_FOUND)
     set_tests_properties(test_text PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
 
+    # Regression test for font initialization and text rendering
+    # (BUG-0001, Task 3): exercises the full production font path
+    # (cbx_font_path() → cbx_manager_init() → cbx_text_render()) and
+    # the invalid-font-path failure path.  Headless-safe.
+    add_executable(test_font_init tests/test_font_init.c)
+    target_link_libraries(test_font_init PRIVATE controllerbox PkgConfig::CMOCKA)
+    target_compile_definitions(test_font_init PRIVATE
+        CBX_FONT_PATH="${CBX_FONT_PATH}")
+    add_test(NAME test_font_init COMMAND test_font_init)
+    set_tests_properties(test_font_init PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+
     # Task 20: Widget base and concrete widgets (Button, Label, Image, Panel).
     add_executable(test_widgets tests/test_widgets.c)
     target_link_libraries(test_widgets PRIVATE controllerbox PkgConfig::CMOCKA)
