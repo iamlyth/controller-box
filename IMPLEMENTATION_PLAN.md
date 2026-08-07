@@ -85,7 +85,8 @@ conflict-specific red rendering. This plan closes those gaps.
 - Documentation impact: none (test infrastructure)
 
 ## Task 2: Conflict red rendering in overlay grid
-- Status: pending
+- Status: complete
+- Evidence: 69/69 ctest pass. cbx_grid_render_ctx already had conflicts field; cbx_select_grid_render() already draws conflicted rows with red indicator ({220,40,40,255}). test_conflict_red_rendering in test_conflict.c renders via cbx_overlay_surface_render + cbx_select_grid_render_cb, reads back pixels with fb_read_pixels, asserts fb_region_has_color finds red in conflicted cell, asserts non-conflicted cell has no red, and asserts no red after re-render without conflicts. Fixed render target not being set before second fb_read_pixels call.
 - Dependencies: 1
 - Scope: `src/overlay/grid_render.c`, `src/overlay/grid_render.h`, `tests/test_conflict.c`
 - Acceptance criteria:
