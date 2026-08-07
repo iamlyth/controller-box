@@ -70,7 +70,17 @@ cbx_manager_init(cbx_manager *mgr, const char *font_path)
     if (font_path && font_path[0] != '\0') {
         mgr->font_id = cbx_text_load_font(&mgr->text_cache, font_path,
                                            CBX_MGR_FONT_SIZE);
-        /* Non-fatal: manager works without text rendering. */
+        if (mgr->font_id < 0) {
+            /* A font path was provided but could not be loaded — the manager
+             * is unusable without text, so fail with an actionable error
+             * instead of silently degrading to a blank UI. */
+            fprintf(stderr,
+                    "controller-box: failed to load font '%s' (error %d)\n",
+                    font_path, mgr->font_id);
+            cbx_text_cache_cleanup(&mgr->text_cache);
+            cbx_renderer_shutdown(&mgr->rend);
+            return mgr->font_id;
+        }
     }
 
     /* --- Theme + settings ------------------------------------------ */

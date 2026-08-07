@@ -81,7 +81,7 @@ path to verify that a font is actually loaded.
 - Documentation impact: `config.h.in` gains a `FONT_DIR` comment block. `src/config/config_paths.h` gains a `cbx_font_path()` declaration with a doxygen comment. No spec changes.
 
 ## Task 2: Wire font discovery into manager launch and make failure actionable
-- Status: pending
+- Status: complete
 - Dependencies: Task 1
 - Scope: `src/app/main.c`, `src/manager/manager.c`. Update `run_manager()` in `main.c` to call `cbx_font_path()` and pass the result to `cbx_manager_init()` instead of `NULL`. When `cbx_font_path()` returns `NULL`, print an actionable error to stderr (e.g., `"controller-box: no system font found; install DejaVuSans or a TTF font in standard font directories"`) and return `1` without launching the manager. In `manager.c`, update `cbx_manager_init()`: when `font_path` is non-NULL but `cbx_text_load_font()` fails (returns negative), print a clear error to stderr naming the font path and the error code, and return the error code rather than silently continuing with `font_id = -1`. Remove or update the misleading "Non-fatal" comment.
 - Acceptance criteria: `controller-box --manager` with a font available produces a manager with `font_id >= 0` and visibly rendered tab labels and controls. `controller-box --manager` with no font available prints an actionable error message to stderr and exits non-zero instead of showing a blank window. `cbx_manager_init()` with a non-NULL but invalid font path returns a non-zero error code and prints the path and error.

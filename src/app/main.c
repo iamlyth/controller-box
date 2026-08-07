@@ -17,6 +17,7 @@
  */
 #include "config.h"
 #include "controllerbox.h"
+#include "config/config_paths.h"
 #include "manager/manager.h"
 
 #include <stdio.h>
@@ -72,9 +73,19 @@ static int run_manager(int dry_run)
     if (dry_run)
         return 0;
 
-    /* Task 34: manager skeleton with tab bar (SPEC §5.1). */
+    /* Discover a system font at runtime so the manager can render text.
+     * Without a font the manager would show a blank, unusable window. */
+    const char *font_path = cbx_font_path();
+    if (!font_path) {
+        fprintf(stderr,
+                "controller-box: no system font found; install DejaVuSans "
+                "or a TTF font in standard font directories\n");
+        return 1;
+    }
+
+    /* Manager skeleton with tab bar (SPEC §5.1). */
     cbx_manager mgr;
-    int rc = cbx_manager_init(&mgr, NULL);
+    int rc = cbx_manager_init(&mgr, font_path);
     if (rc != 0) {
         fprintf(stderr, "controller-box: manager init failed: %d\n", rc);
         return 1;
