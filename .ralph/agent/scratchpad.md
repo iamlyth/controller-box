@@ -60,3 +60,44 @@
 - Task 3 (Overlay service init) — still ready, no dependencies
 - Task 2 (Conflict red rendering) — depends on Task 1 (complete), should be ready
 - Task 4 (Overlay poll loop) — depends on Task 3
+
+## Iteration: Task 3 — Overlay service initialization
+
+### What was done
+- Created `src/app/overlay_service.h` — declares `int run_overlay_service(int dry_run);`
+- Created `src/app/overlay_service.c` — full implementation:
+  1. SDL video init + hidden renderer (cbx_renderer_init)
+  2. DBus connect via ip_connection; "InputPlumber not found" error on failure
+  3. Device enumeration via cbx_objectmanager_enumerate
+  4. Settings/assignments loading (best-effort, defaults OK)
+  5. Text cache, theme, icon cache/map setup
+  6. Grid build (cbx_select_grid_build) + overlay surface init + pre-render
+  7. Trigger registration (cbx_trigger_register_all) + InterceptMode=PASS
+  8. Lifecycle init (cbx_overlay_lifecycle_init)
+  9. Minimal poll loop skeleton (Task 4 fills in InterceptMode polling, signals)
+  10. Clean shutdown (force_close, destroy surface, cleanup caches, disconnect)
+- Modified `src/app/main.c` — removed inline stub, includes overlay_service.h
+- Added `src/app/overlay_service.c` to controllerbox library in CMakeLists.txt
+- Created `tests/test_overlay_service.c` — 2 cmocka sub-tests:
+  (a) SDL_VIDEODRIVER=nonexistent → run_overlay_service(0) returns non-zero
+  (b) dry-run → run_overlay_service(1) returns 0
+- Registered test_overlay_service in tests/CMakeLists.txt
+- Updated docs/OPERATIONS.md with overlay service startup sequence, prerequisites, failure modes
+
+### Verification
+- `./build-check/controller-box --overlay-service --dry-run` → exit 0 ✓
+- `SDL_VIDEODRIVER=nonexistent ./build-check/controller-box --overlay-service` → exit 1 ✓
+- `./build-check/controller-box --manager --dry-run` → exit 0 ✓ (unaffected)
+- 69/69 ctest pass (67 existing + 2 new; 2 pre-existing packaging failures unchanged)
+
+### Key decisions
+- Extracted run_overlay_service into separate overlay_service.c (not main.c) so cmocka tests can link against it via the controllerbox library without pulling in main()
+- Used `dbus_mock.h` for ip_dbus_backend/ip_dbus_sd_backend (this is where the production vtable is declared, not a separate ip_dbus.h)
+- Best-effort loading for settings, assignments, icon map, icon cache — service runs with defaults if files are missing
+- font_id = -1 when no font available; text_cache set to NULL in render_ctx to skip text rendering gracefully
+- Poll loop is a minimal SDL event loop with 50ms delay (IP_INTERCEPT_POLL_INTERVAL_MS) — Task 4 adds InterceptMode polling, signal handling, input processing
+
+### Next task
+- Task 4 (Overlay poll loop) — now unblocked (depends on Task 3, which is complete)
+- Task 2 (Conflict red rendering) — depends on Task 1 (complete), should be ready
+- Task 10 (Backend smoke coverage) — depends on Task 1 (complete), should be ready
