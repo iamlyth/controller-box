@@ -53,14 +53,17 @@ endif()
 # and the shared test harness (test_harness + dbus_mock).
 if(CMOCKA_FOUND)
 
-    # Shared test support library: SDL2 dummy-driver utility + DBus mock.
+    # Shared test support library: SDL2 dummy-driver utility + DBus mock
+    # + framebuffer pixel assertion utilities (Task 1).
     add_library(cbx_test_support STATIC
         tests/test_harness.c
-        tests/dbus_mock.c)
+        tests/dbus_mock.c
+        tests/fb_assert.c)
     target_include_directories(cbx_test_support PUBLIC tests)
     target_link_libraries(cbx_test_support
         PUBLIC
             PkgConfig::SDL2
+            PkgConfig::SDL2IMG
             PkgConfig::CMOCKA)
 
     # Sample cmocka assertion test + DBus mock infrastructure validation.
@@ -491,6 +494,15 @@ if(CMOCKA_FOUND)
     target_compile_definitions(test_manager_production PRIVATE CBX_FONT_PATH="${CBX_FONT_PATH}")
     add_test(NAME test_manager_production COMMAND test_manager_production)
     set_tests_properties(test_manager_production PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+
+    # Task 1 — Framebuffer pixel assertion self-test.
+    # Verifies fb_read_pixels, fb_region_has_content, fb_region_has_color,
+    # fb_frames_differ, fb_golden_compare, fb_save_png, fb_save_diff.
+    add_executable(test_fb_assert tests/test_fb_assert.c)
+    target_link_libraries(test_fb_assert PRIVATE cbx_test_support)
+    add_test(NAME test_fb_assert COMMAND test_fb_assert)
+    set_tests_properties(test_fb_assert PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
 
 else()

@@ -65,7 +65,8 @@ conflict-specific red rendering. This plan closes those gaps.
 ## Task list
 
 ## Task 1: Framebuffer test infrastructure
-- Status: pending
+- Status: complete
+- Evidence: 67/67 ctest pass (incl. test_fb_assert with 9 sub-tests). fb_assert.c/h added to cbx_test_support with SDL2_image (PUBLIC). All functions use integer-only comparisons.
 - Dependencies: none
 - Scope: `tests/fb_assert.c`, `tests/fb_assert.h`, `tests/test_fb_assert.c`, `tests/CMakeLists.txt`
 - Acceptance criteria:

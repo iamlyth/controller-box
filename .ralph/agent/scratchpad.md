@@ -1,44 +1,35 @@
-# Planning Iteration — Framebuffer Visual Acceptance
+# Scratchpad — Framebuffer Visual Acceptance Implementation
 
-## Context
-- Spec updated (commit 2f2903d) added §4.10, §5.6, §11.1 requiring framebuffer-backed visual acceptance
-- Prior implementation completed 44 tasks (all functional components done)
-- Key gaps: no SDL_RenderReadPixels anywhere, no golden images, overlay service run path is stub, no conflict red rendering
+## Iteration: Task 1 — Framebuffer test infrastructure
 
-## Analysis (3 parallel planner-scout subagents)
-1. **Overlay tests**: All 11 overlay test files are structural/state-machine level. Zero pixel readback. grid_render.c has no red conflict rendering. Production render path exercised only for crash-safety (NULL caches, return-code-only).
-2. **Manager tests**: 12 test files, all structural. 6/12 manually attach modules (violates §5.6). test_manager_production.c checks child counts only. No pixel readback.
-3. **Rendering infra**: test_harness uses SDL software renderer + dummy driver (good foundation). No SDL_RenderReadPixels, no golden images, no failure artifacts, no installed smoke test, no backend smoke.
+### What was done
+- Created `tests/fb_assert.h` — API for pixel readback, region assertions, golden compare, PNG save
+- Created `tests/fb_assert.c` — implementation with integer-only comparisons (no floats)
+  - `fb_read_pixels` — wraps `SDL_RenderReadPixels` with `SDL_PIXELFORMAT_ABGR8888`
+  - `fb_region_has_content` — checks if any pixel differs from bg_color beyond tolerance
+  - `fb_region_has_color` — checks if any pixel matches target_rgb within tolerance
+  - `fb_frames_differ` — integer percentage comparison (differ*100 > total*threshold)
+  - `fb_golden_compare` — loads PNG via IMG_Load, converts to ABGR8888, per-pixel compare
+  - `fb_save_png` — creates SDL_Surface from RGBA buffer, IMG_SavePNG
+  - `fb_save_diff` — highlights differing pixels in red, matches dimmed to 50%
+- Created `tests/test_fb_assert.c` — 9 cmocka sub-tests covering all functions
+- Updated `tests/CMakeLists.txt`:
+  - Added `fb_assert.c` to `cbx_test_support` static library
+  - Added `PkgConfig::SDL2IMG` as PUBLIC dep on `cbx_test_support`
+  - Registered `test_fb_assert` as ctest with `SDL_VIDEODRIVER=dummy`
+- Fixed deprecated `assert_in_range` → `assert_int_in_range` (cmocka 2.0.2)
 
-## Plan decisions
-- 11 tasks total, ordered by dependencies
-- Task 1: fb_assert infrastructure (foundational)
-- Task 2: conflict red rendering (deps: 1, uses fb_region_has_color)
-- Task 3-4: overlay service init + poll loop (split for sizing)
-- Task 5: overlay visual tests (deps: 1, 2)
-- Task 6: manager DBus backend injection (enables connected-mode production-path testing)
-- Task 7: manager visual tests (deps: 1, 6)
-- Task 8: golden images (deps: 5, 7)
-- Task 9: installed smoke test (deps: 4)
-- Task 10: backend smoke (deps: 1)
-- Task 11: final docs + spec audit (deps: all)
+### Verification
+- `nix-shell --run "cmake --build build-check --target test_fb_assert && ctest --test-dir build-check -R test_fb_assert --output-on-failure"` → PASS
+- Full suite: 67/67 tests pass (66 existing + 1 new)
 
-## Review fixes applied
-- Fixed cbx_overlay_surface_build → cbx_overlay_surface_init
-- Split overlay service into init + poll loop tasks
-- Added Task 6 (manager DBus injection) for connected-mode testing
-- Task 2 now depends on Task 1 (uses fb_region_has_color for red pixel assertion)
-- Added spec text correction (500ms → 50ms) to Task 11
-- Clarified composition path as callback-based (cbx_overlay_surface_render with cbx_select_grid_render_cb)
-- Added partial progress state testing to Task 7
-- Added build-check configuration note
-- Clarified installed smoke test region checks with ImageMagick commands
+### Key decisions
+- Used `SDL_PIXELFORMAT_ABGR8888` for pixel readback: on little-endian, bytes in memory are R,G,B,A — simplest direct access
+- `threshold_pct` and `image_tol_pct` are `int` (0-100) to comply with "no floating-point" requirement
+- `fb_assert.c` added to `cbx_test_support` so all future visual tests (Tasks 5, 7, 8, 10) can use it transitively
+- `SDL2IMG` added as PUBLIC to `cbx_test_support` so all tests linking it get IMG_Load/IMG_SavePNG
 
-## Review iteration (post-commit)
-- Launched 3 parallel read-only subagents (reviewer, researcher, Explore)
-- Reviewer found 3 issues: Task 3 verification command broken ($? captures grep not binary), Task 4 verification incomplete (only dry-run), Task 3 borderline sizing (left as-is)
-- Researcher confirmed all spec sections (§4.10, §5.6, §11.1) exist and match plan; poll interval correction correctly deferred to Task 11
-- Explorer found 1 hard mismatch: ip_objectmanager_get_managed_objects → cbx_objectmanager_enumerate (src/dbus/ip_objectmanager.h:33)
-- All other 14 function names verified against codebase
-- Applied 3 fixes, committed as 8d4ec15
-- Plan is complete, internally consistent, executable one task at a time, tied to committed spec
+### Next task
+- Task 2 (Conflict red rendering) — depends on Task 1 (now complete)
+- Task 3 (Overlay service init) — no dependencies, can proceed in parallel
+- Task 6 (Manager DBus backend injection) — no dependencies, can proceed in parallel
