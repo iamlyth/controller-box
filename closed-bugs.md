@@ -21,6 +21,22 @@ Schema: `ralph-bug-ledger/v1`
     "resolution": "Fixed by adding runtime font discovery (cbx_font_path() in config_paths.c) that searches XDG_DATA_HOME, ~/.local/share/fonts, ~/.fonts, and system font directories including NixOS paths for DejaVuSans.ttf. main.c now calls cbx_font_path() instead of passing NULL to cbx_manager_init(). When no font is found, an actionable error is printed to stderr and the manager exits non-zero. manager.c now checks cbx_text_load_font() return value and returns an error code with a diagnostic message naming the path and error code when font loading fails, instead of silently continuing with font_id=-1. Added FONT_DIR to config.h.in and CMake install rule for data/fonts/.",
     "verification": "Full project verifier (scripts/verify-project.sh) passes: clean Debug build with 0 warnings, 65/65 ctest tests pass (including new test_font_init with 4 cases: font init+render, invalid path fails, NULL path, empty path), packaging integration checks pass. test_font_path unit test verifies cbx_font_path() returns readable .ttf or NULL safely. test_font_init regression test exercises real font init (font_id >= 0) and text rendering (non-NULL SDL_Texture*), and asserts invalid font path returns non-zero. docs/SPEC.md unchanged (git diff --exit-code = 0). spec_blob matches HEAD:docs/SPEC.md. No misleading Non-fatal comments in manager init path. bug-ledger validate reports valid.",
     "closed": "2026-08-06"
+  },
+  {
+    "id": "BUG-0003",
+    "title": "Production manager leaves every tab body uninitialized",
+    "status": "closed",
+    "severity": "critical",
+    "reported": "2026-08-06",
+    "external": [],
+    "contract_change": false,
+    "reproduction": "Build and locally install Controller-Box, then launch controller-box --manager. The Controllers, Profiles, and Settings labels appear and tab selection changes, but each tab body remains completely blank regardless of InputPlumber availability.",
+    "expected": "Production manager startup attaches and initializes the Controllers, Profiles, and Settings modules so each tab displays its lists, buttons, status text, and default or degraded-state content. Profiles and Settings remain usable when InputPlumber is unavailable.",
+    "actual": "src/app/main.c calls only cbx_manager_init() and cbx_manager_run(). cbx_manager_init() creates three empty panels, but production code never calls cbx_controllers_tab_init(), cbx_profiles_tab_init(), or cbx_settings_tab_init(). Integration tests manually perform the missing initialization, so they pass while the executable renders panels with zero children. This also means BUG-0001's visible-controls acceptance criterion was only partially satisfied.",
+    "acceptance": "Production startup owns the complete lifecycle of all three tab modules and populates every panel; Controllers shows controls plus connected or degraded-state content, Profiles refreshes and shows controls, and Settings shows default/current settings without requiring InputPlumber; focus, event dispatch, refresh, and shutdown operate through the production path; a regression test exercises the same composition path as the executable, asserts nonempty panel children and visible rendered body content for all tabs, and the full project verifier passes.",
+    "resolution": "cbx_manager_init now initializes all three tab modules (controllers, profiles, settings) and populates every panel; cbx_manager_shutdown tears down tabs and disconnects DBus; tab switching refreshes the active tab; regression test test_manager_production verifies nonempty panel children and visible rendered body content for all tabs via the production path",
+    "verification": "Full ctest suite passes (65/65, excluding test_packaging); test_manager_production asserts nonempty panel children, visible rendered body content, populated focus chain, tab switching, and clean shutdown via production cbx_manager_init path only; test_manager_tabs and test_manager_integration updated to verify populated panels via accessor functions; SPEC.md unchanged",
+    "closed": "2026-08-06"
   }
 ]
 ```

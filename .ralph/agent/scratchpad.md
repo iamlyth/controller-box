@@ -16,21 +16,34 @@ Integration tests manually call these, masking the bug.
 - `cbx_manager_init()`: best-effort DBus connect, then init all three tabs + profiles refresh
 - `cbx_manager_shutdown()`: tab shutdown before panel destruction, then DBus disconnect
 - Declared `ip_dbus_sd_backend()` in `tests/dbus_mock.h`
-- Build succeeds; `test_manager_up_down_focus_navigation` fails as expected (panels now populated)
 - Commit: 5977459
 
-### Task 2: Wire tab refresh into tab switching — PENDING
-- Add refresh calls in `cbx_manager_on_tab_change()` for the newly active tab
+### Task 2: Wire tab refresh into tab switching — COMPLETE
+- Added refresh calls in `cbx_manager_on_tab_change()` for the newly active tab
+- Controllers refresh guarded by backend NULL check (degraded mode)
+- Commit: a62ca3e
 
-### Task 3: Update existing skeleton and integration tests — PENDING
-- Update `test_manager_tabs.c` assertions for populated panels
-- Update `test_manager_integration.c` to use accessors instead of manual tab init
+### Task 3: Update existing skeleton and integration tests — COMPLETE
+- Updated test_manager_tabs.c: nonempty panel assertions, focus chain > 1, DOWN navigation
+- Updated test_manager_integration.c: removed manual tab init/shutdown, use accessors
+- Also fixed test_controllers_tab.c, test_profiles_tab.c, test_settings_tab.c: shut down
+  manager-owned tab in setup before test-specific re-init
+- All 65 tests pass
+- Commit: c0bad65 + fix commit
 
-### Task 4: Add production-path regression test — PENDING
-- New `test_manager_production.c` exercising production init/shutdown path only
+### Task 4: Add production-path regression test — COMPLETE
+- New test_manager_production.c: 6 tests exercising production init/shutdown path only
+- Verifies nonempty panels, visible rendered content, focus chain, tab switching, clean shutdown
+- Registered in ctest with SDL_VIDEODRIVER=dummy
+- Commit: dcc8cbc
 
-### Task 5: Maintenance verification and documentation audit — PENDING
-- Full ctest, close BUG-0003, verify SPEC.md unchanged
+### Task 5: Maintenance verification and documentation audit — COMPLETE
+- Full ctest suite: 65/65 pass (excluding test_packaging)
+- BUG-0003 closed with resolution and verification
+- SPEC.md unchanged (git diff --exit-code)
+- Stale comments cleaned up in manager.h and manager.c
+- Bug ledger validates: 1 open, 2 closed
+- MAINTENANCE_PLAN.md status set to complete, all tasks complete
 
 ## Build notes
 - `build-manual` was stale (wrong path cache); reconfigured fresh

@@ -5,7 +5,7 @@ spec_path: docs/SPEC.md
 spec_commit: 12f82db38f999986de4216dfc50a6e13452db4c9
 spec_blob: 0522f7f1aa79d70b343ed6022956683a7c11695f
 base_commit: f5701e816bb8df97d75df7c8426c6b82043959da
-status: active
+status: complete
 ---
 
 # Maintenance Plan: BUG-0003 — Production manager leaves every tab body uninitialized
@@ -78,7 +78,7 @@ independently.
 
 ## Task 1: Extend cbx_manager to own all three tab module lifecycles
 
-- Status: pending
+- Status: complete
 - Dependencies: none
 - Scope: bounded files and behavior
   - `src/manager/manager.h`: Add `cbx_controllers_tab ct`, `cbx_profiles_tab
@@ -119,7 +119,7 @@ independently.
 
 ## Task 2: Wire tab refresh into tab switching
 
-- Status: pending
+- Status: complete
 - Dependencies: Task 1
 - Scope: bounded files and behavior
   - `src/manager/manager.c`: In `cbx_manager_on_tab_change()`, after updating
@@ -140,7 +140,7 @@ independently.
 
 ## Task 3: Update existing skeleton and integration tests for populated panels
 
-- Status: pending
+- Status: complete
 - Dependencies: Task 1
 - Scope: bounded files and behavior
   - `tests/test_manager_tabs.c`: Update assertions that assume empty panels:
@@ -175,7 +175,7 @@ independently.
 
 ## Task 4: Add production-path regression test
 
-- Status: pending
+- Status: complete
 - Dependencies: Task 1, Task 2
 - Scope: bounded files and behavior
   - `tests/test_manager_production.c` (new): A regression test that exercises
@@ -209,7 +209,7 @@ independently.
 
 ## Task 5: Maintenance verification and documentation audit
 
-- Status: pending
+- Status: complete
 - Dependencies: Task 1, Task 2, Task 3, Task 4
 - Scope: bounded files and behavior
   - Run the full project verifier: `nix-shell --run 'cmake --build build-manual

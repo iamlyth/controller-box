@@ -101,13 +101,17 @@ setup(void **state)
     ip_dbus_mock_init(&f->mock);
     f->backend = ip_dbus_mock_backend(&f->mock);
 
-    /* Init manager (creates SDL2 window, panels, tabbar). */
+    /* Init manager (creates SDL2 window, panels, tabbar, and now
+     * initialises all three tab modules).  Shut down the manager-owned
+     * controllers tab so these tests can re-initialise it with
+     * specific mock DBus data. */
     int rc = cbx_manager_init(&f->mgr, NULL);
     if (rc != 0) {
         ip_dbus_mock_free(&f->mock);
         free(f);
         return -1;
     }
+    cbx_controllers_tab_shutdown(cbx_manager_controllers_tab(&f->mgr));
 
     *state = f;
     return 0;

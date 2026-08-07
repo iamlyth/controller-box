@@ -79,9 +79,12 @@ static int st_setup(void **state)
     unsetenv("XDG_CONFIG_HOME");
     unsetenv("XDG_DATA_HOME");
 
-    /* Init manager (creates window, renderer, text cache, panels). */
+    /* Init manager (creates window, renderer, text cache, panels, and
+     * now initialises all three tab modules).  Shut down the manager-owned
+     * settings tab so these tests can re-initialise it. */
     int rc = cbx_manager_init(&f->mgr, NULL);
     assert_int_equal(rc, 0);
+    cbx_settings_tab_shutdown(cbx_manager_settings_tab(&f->mgr));
 
     *state = f;
     return 0;

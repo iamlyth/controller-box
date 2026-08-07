@@ -175,13 +175,16 @@ pt_setup(void **state)
     snprintf(fps_path, sizeof(fps_path), "%s/fps.yaml", f->env.system_dir);
     write_profile_yaml(fps_path, "FPS", 2);
 
-    /* Init manager (creates SDL2 window, panels, tabbar). */
+    /* Init manager (creates SDL2 window, panels, tabbar, and now
+     * initialises all three tab modules).  Shut down the manager-owned
+     * profiles tab so these tests can re-initialise it with test dirs. */
     int rc = cbx_manager_init(&f->mgr, NULL);
     if (rc != 0) {
         env_teardown(&f->env);
         free(f);
         return -1;
     }
+    cbx_profiles_tab_shutdown(cbx_manager_profiles_tab(&f->mgr));
 
     *state = f;
     return 0;

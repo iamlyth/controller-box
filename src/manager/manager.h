@@ -84,8 +84,9 @@ typedef struct {
 
 /*
  * Initialise the manager: create the SDL2 window, load theme/settings,
- * build the tab bar with 3 tabs, create empty panels, set up the focus
- * chain, and show the window.
+ * build the tab bar with 3 tabs, create panels, connect to the system DBus
+ * (best-effort), initialise all three tab modules (controllers, profiles,
+ * settings), set up the focus chain, and show the window.
  *
  * @param mgr       Output struct (overwritten).
  * @param font_path Path to a TTF font, or NULL to skip font loading.

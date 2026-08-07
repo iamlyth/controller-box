@@ -309,13 +309,11 @@ cbx_manager_handle_event(cbx_manager *mgr, const SDL_Event *ev)
         case SDLK_SPACE:
         case SDLK_a:
             /* A/Enter: activate the focused widget if it has a callback. */
-            /* For the skeleton, just consume. */
             return true;
 
         case SDLK_ESCAPE:
         case SDLK_b:
-            /* B/Escape: in the skeleton, B does nothing special.
-             * Later tasks may use B to go back. */
+            /* B/Escape: does nothing special in the manager. */
             return false;
 
         default:

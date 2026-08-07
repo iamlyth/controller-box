@@ -21,22 +21,6 @@ Schema: `ralph-bug-ledger/v1`
     "resolution": "",
     "verification": "",
     "closed": null
-  },
-  {
-    "id": "BUG-0003",
-    "title": "Production manager leaves every tab body uninitialized",
-    "status": "in_progress",
-    "severity": "critical",
-    "reported": "2026-08-06",
-    "external": [],
-    "contract_change": false,
-    "reproduction": "Build and locally install Controller-Box, then launch controller-box --manager. The Controllers, Profiles, and Settings labels appear and tab selection changes, but each tab body remains completely blank regardless of InputPlumber availability.",
-    "expected": "Production manager startup attaches and initializes the Controllers, Profiles, and Settings modules so each tab displays its lists, buttons, status text, and default or degraded-state content. Profiles and Settings remain usable when InputPlumber is unavailable.",
-    "actual": "src/app/main.c calls only cbx_manager_init() and cbx_manager_run(). cbx_manager_init() creates three empty panels, but production code never calls cbx_controllers_tab_init(), cbx_profiles_tab_init(), or cbx_settings_tab_init(). Integration tests manually perform the missing initialization, so they pass while the executable renders panels with zero children. This also means BUG-0001's visible-controls acceptance criterion was only partially satisfied.",
-    "acceptance": "Production startup owns the complete lifecycle of all three tab modules and populates every panel; Controllers shows controls plus connected or degraded-state content, Profiles refreshes and shows controls, and Settings shows default/current settings without requiring InputPlumber; focus, event dispatch, refresh, and shutdown operate through the production path; a regression test exercises the same composition path as the executable, asserts nonempty panel children and visible rendered body content for all tabs, and the full project verifier passes.",
-    "resolution": "",
-    "verification": "",
-    "closed": null
   }
 ]
 ```
