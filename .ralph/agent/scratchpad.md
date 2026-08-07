@@ -219,3 +219,36 @@
 - Task 10 (Backend smoke coverage) — unblocked (depends on Task 1, complete)
 - Task 8 (Golden images) — depends on Tasks 5+7 (Task 5 complete, Task 7 still pending)
 - Task 11 (Final audit) — depends on all others
+## Iteration: Task 7 — Manager deterministic framebuffer visual tests
+
+### What was done
+- Created `tests/test_manager_visual.c` with 9 cmocka sub-tests covering all SPEC §5.6 states:
+  1. `test_controllers_tab_degraded` — content in device list + 3 button regions + body
+  2. `test_controllers_tab_connected` — mock DBus with GetManagedObjects fixture, content in all regions
+  3. `test_controllers_connected_vs_degraded` — `fb_frames_differ` between connected and degraded
+  4. `test_profiles_tab` — content in profile list + create/edit/delete button regions
+  5. `test_settings_tab` — content in settings list + save button + text-colored pixels (if font)
+  6. `test_tab_switch_differs` — `fb_frames_differ` between all 3 tabs
+  7. `test_profile_editor_list_mode` — content in diagram + binding list + title regions
+  8. `test_profile_editor_sequential_mode` — prompt + progress bar content, partial progress differs from empty/complete via `region_differs` + `fb_region_has_color`
+  9. `test_profile_editor_validation_error` — `region_differs` between clean/error, red text in status region (skips if no font)
+- Fixed layout bug in `src/manager/manager.c`: `cbx_manager_layout()` was called AFTER tab module init, causing widgets to read panel rect {0,0,0,0} and get wrong positions (list width=-32, buttons at y=432 instead of y=480). Moved layout call before tab module init.
+- Registered `test_manager_visual` in `tests/CMakeLists.txt` with `CBX_SOURCE_DIR` and `SDL_VIDEODRIVER=dummy`
+
+### Verification
+- `ctest --test-dir build-check -R test_manager_visual --output-on-failure` → 1/1 PASS (9 sub-tests)
+- Full suite: 71/71 tests pass (70 existing + 1 new)
+
+### Key decisions
+- Tolerance 10 (not 25) because `panel_bg` {30,30,42} vs `bg` {18,18,28} = diff 12/12/14, barely exceeds 10
+- `region_differs()` helper for small-region comparison (progress bar 580×24 = 13,920 pixels = 1.5% of frame, below `fb_frames_differ` 1% threshold)
+- Connected mode uses `ip_dbus_mock` with CONNECTED_FIXTURE (1 composite + 1 target device)
+- Profile editor tests create separate `cbx_profile_editor` with own panel, using manager's renderer
+- Validation error test skips if no font (error indicator is red text, requires font rendering)
+- Layout bug fix: moved `cbx_manager_layout()` before tab module init so panel rect is correct when widgets read it
+
+### Next task
+- Task 8 (Golden images) — depends on Tasks 5+7 (both complete)
+- Task 9 (Installed smoke test) — unblocked (depends on Task 4, complete)
+- Task 10 (Backend smoke coverage) — unblocked (depends on Task 1, complete)
+- Task 11 (Final audit) — depends on all others
