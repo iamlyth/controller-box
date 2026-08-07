@@ -89,6 +89,13 @@ if(CMOCKA_FOUND)
     add_test(NAME test_sample    COMMAND test_sample)
     add_test(NAME test_sdl_dummy  COMMAND test_sdl_dummy)
     add_test(NAME test_config_paths COMMAND test_config_paths)
+
+    # Runtime font discovery test (BUG-0001, Task 1): cbx_font_path()
+    # searches system font directories at runtime for DejaVuSans.ttf.
+    # Headless-safe (SDL_VIDEODRIVER=dummy not required — no SDL calls).
+    add_executable(test_font_path tests/test_font_path.c)
+    target_link_libraries(test_font_path PRIVATE controllerbox PkgConfig::CMOCKA)
+    add_test(NAME test_font_path COMMAND test_font_path)
     add_test(NAME test_settings     COMMAND test_settings)
     add_test(NAME test_assignments   COMMAND test_assignments)
 

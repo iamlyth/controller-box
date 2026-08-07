@@ -24,8 +24,10 @@ endif()
 include(GNUInstallDirs)
 set(CBX_DATA_DIR "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/controller-box")
 set(CBX_ICON_DIR "${CBX_DATA_DIR}/icons")
+set(CBX_FONT_DIR "${CBX_DATA_DIR}/fonts")
 set(CBX_DATA_INSTALL_DIR "${CMAKE_INSTALL_DATADIR}/controller-box")
 set(CBX_ICON_INSTALL_DIR "${CBX_DATA_INSTALL_DIR}/icons")
+set(CBX_FONT_INSTALL_DIR "${CBX_DATA_INSTALL_DIR}/fonts")
 
 # Warn early on missing build dependencies rather than failing deep in the build.
 find_package(PkgConfig REQUIRED)
@@ -180,6 +182,13 @@ install(FILES data/icons/svg/LICENSE.controllercons
     DESTINATION "${CBX_ICON_INSTALL_DIR}/svg")
 install(FILES data/controller-icons.yaml
     DESTINATION "${CBX_DATA_INSTALL_DIR}")
+
+# Bundled font directory (Task 1, maintenance BUG-0001).  Created empty with
+# a .gitkeep so future bundled fonts are installed automatically.
+install(DIRECTORY data/fonts/ DESTINATION "${CBX_FONT_INSTALL_DIR}"
+    FILES_MATCHING PATTERN "*")
+install(FILES data/fonts/.gitkeep
+    DESTINATION "${CBX_FONT_INSTALL_DIR}")
 
 # --- Packaging files (Task 41) ----------------------------------------------
 # Systemd user service file (SPEC §2.4, §9.2).  Installed to the data

@@ -89,6 +89,32 @@ const char *cbx_data_dir(void);
 /* Controller-Box icon directory: /usr/share/controller-box/icons. */
 const char *cbx_icon_dir(void);
 
+/* Controller-Box bundled font directory: ${DATA_DIR}/fonts (read-only).
+ * Intended for future bundled fonts; runtime discovery also checks
+ * system font directories via cbx_font_path(). */
+const char *cbx_font_dir(void);
+
+/*
+ * Discover a usable TTF font at runtime by searching common system font
+ * directories in priority order.  DejaVuSans.ttf is preferred; the first
+ * readable candidate found is returned.
+ *
+ * Search order (first match wins):
+ *   $XDG_DATA_HOME/fonts/DejaVuSans.ttf
+ *   $HOME/.local/share/fonts/DejaVuSans.ttf
+ *   $HOME/.fonts/DejaVuSans.ttf
+ *   /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
+ *   /usr/share/fonts/dejavu/DejaVuSans.ttf
+ *   /usr/share/fonts/TTF/DejaVuSans.ttf
+ *   /run/current-system/sw/share/X11/fonts/DejaVuSans.ttf   (NixOS)
+ *   /nix/var/nix/profiles/default/share/X11/fonts/DejaVuSans.ttf
+ *
+ * @return Pointer to a static buffer holding the NUL-terminated font path,
+ *         or NULL if no readable DejaVuSans.ttf was found.  The returned
+ *         pointer is valid until the next call to cbx_font_path().
+ */
+const char *cbx_font_path(void);
+
 #ifdef __cplusplus
 }
 #endif

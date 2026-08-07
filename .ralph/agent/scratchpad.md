@@ -1,30 +1,26 @@
+# Maintenance BUG-0001 — Scratchpad
 
-## Maintenance Planning — BUG-0001 (2026-08-06)
+## Iteration 1: Task 1 complete
 
-**Selected bug:** BUG-0001 — Manager launches with an effectively blank interface (critical, triaged)
+- Transitioned BUG-0001 from `planned` to `in_progress` via `bug-ledger.py`.
+- Created runtime tasks for all 4 maintenance plan tasks.
+- Implemented Task 1: Add runtime font discovery to config_paths.
+  - Added `cbx_font_path()` and `cbx_font_dir()` to `src/config/config_paths.{c,h}`.
+  - `cbx_font_path()` searches XDG_DATA_HOME, $HOME/.local/share/fonts, $HOME/.fonts,
+    and system font dirs (including NixOS paths) for DejaVuSans.ttf. Returns const char*
+    to static buffer or NULL.
+  - Added `FONT_DIR` to `config.h.in` and `CBX_FONT_DIR` to `CMakeLists.txt`.
+  - Added install rule for `data/fonts/` with `.gitkeep`.
+  - Added `test_font_path.c` unit test (5 test cases). All pass.
+  - Build succeeds in Debug mode with no warnings.
+  - Full suite: 64/64 tests pass (was 63, +1 new test).
 
-**Root cause:** `src/app/main.c:77` passes `NULL` as font_path to `cbx_manager_init()`. No font is loaded (`font_id = -1`). All `cbx_text_render()` calls silently return NULL. UI shows structural rectangles but no text.
+### Format-truncation lesson (reinforces existing memory)
+GCC Debug `-Werror=format-truncation` flags `snprintf` into a buffer when the source
+variable has the same or larger declared size. Fix: make destination buffers
+progressively larger than source buffers by at least the suffix length. Used
+PATH_MAX+16, PATH_MAX+32, PATH_MAX+64, PATH_MAX+128 in the chain.
 
-**Key findings from read-only subagents:**
-- No font files bundled in repo; no font install rule in CMakeLists.txt
-- No font path constant in config.h.in (DATA_DIR and ICON_DIR exist, but no FONT_DIR)
-- Tests have compile-time font discovery (CBX_FONT_PATH) but production binary has none
-- manager.c treats missing font as "non-fatal" — silent degradation, blank UI
-- Alpha-blending is NOT the bug — properly initialized and verified
-- contract_change: false confirmed — spec mentions text rendering as concept but doesn't specify font paths
-
-**Front matter values:**
-- bug_fingerprint: f54e2df5cbb1e2fac06b74e3c607f458b19321a705ccbd9c7e0686136df4c191
-- spec_commit: 12f82db38f999986de4216dfc50a6e13452db4c9
-- spec_blob: 0522f7f1aa79d70b343ed6022956683a7c11695f
-- base_commit: 2a8fc0ae27b49e557fcd06e198e2c1de3326918e
-
-**Plan structure:** 4 tasks
-1. Runtime font discovery (config_paths.c/h, config.h.in, CMakeLists.txt)
-2. Wire font discovery into main.c + actionable failure handling
-3. Automated regression test (test_font_init.c)
-4. Maintenance verification and documentation audit
-
-**Status:** MAINTENANCE_PLAN.md written. Parser validation passed. Ready for completion.
-
-**Iteration 3 update:** Fixed parser error — removed stray `## Tasks` heading (line 75) that matched `## Task` prefix but failed the full task-header regex. Committed as 4d2ff57. `validate-maintenance-plan.py planning` now passes: "valid (4 tasks, status=active)". Emitted `factory.maintenance.plan` completion event.
+### Next iteration
+- Task 2: Wire font discovery into manager launch (main.c, manager.c).
+  Depends on Task 1 (now complete). Runtime task task-1786062044-7006 is open.

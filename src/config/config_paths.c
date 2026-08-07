@@ -17,6 +17,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 #ifndef PATH_MAX
 #define PATH_MAX 4096
@@ -199,4 +200,77 @@ const char *cbx_data_dir(void)
 const char *cbx_icon_dir(void)
 {
     return ICON_DIR;
+}
+
+const char *cbx_font_dir(void)
+{
+    return FONT_DIR;
+}
+
+/* --- Runtime font discovery ---------------------------------------------- */
+
+/*
+ * Build a candidate font path in the static buffer and test readability.
+ * Returns the static buffer pointer on success, NULL on failure.
+ */
+static const char *try_font_path(const char *dir)
+{
+    static char font_buf[PATH_MAX];
+    int n = snprintf(font_buf, sizeof(font_buf), "%s/DejaVuSans.ttf", dir);
+    if (n < 0 || (size_t)n >= sizeof(font_buf))
+        return NULL;
+    if (access(font_buf, R_OK) == 0)
+        return font_buf;
+    return NULL;
+}
+
+const char *cbx_font_path(void)
+{
+    const char *result;
+    char dir[PATH_MAX];
+
+    /* 1. $XDG_DATA_HOME/fonts */
+    const char *xdg_data = getenv("XDG_DATA_HOME");
+    if (xdg_data && xdg_data[0] != '\0' && is_absolute(xdg_data)) {
+        if (join_path(dir, sizeof(dir), xdg_data, "fonts") == 0) {
+            result = try_font_path(dir);
+            if (result)
+                return result;
+        }
+    }
+
+    /* 2. $HOME/.local/share/fonts */
+    const char *home = getenv("HOME");
+    if (home && home[0] != '\0') {
+        char base[PATH_MAX];
+        if (join_path(base, sizeof(base), home, XDG_DATA_FALLBACK) == 0) {
+            if (join_path(dir, sizeof(dir), base, "fonts") == 0) {
+                result = try_font_path(dir);
+                if (result)
+                    return result;
+            }
+        }
+        /* 3. $HOME/.fonts */
+        if (join_path(dir, sizeof(dir), home, ".fonts") == 0) {
+            result = try_font_path(dir);
+            if (result)
+                return result;
+        }
+    }
+
+    /* 4–8. System font directories (static paths). */
+    static const char *const system_dirs[] = {
+        "/usr/share/fonts/truetype/dejavu",
+        "/usr/share/fonts/dejavu",
+        "/usr/share/fonts/TTF",
+        "/run/current-system/sw/share/X11/fonts",   /* NixOS */
+        "/nix/var/nix/profiles/default/share/X11/fonts",
+    };
+    for (size_t i = 0; i < sizeof(system_dirs) / sizeof(system_dirs[0]); i++) {
+        result = try_font_path(system_dirs[i]);
+        if (result)
+            return result;
+    }
+
+    return NULL;
 }

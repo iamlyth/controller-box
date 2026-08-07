@@ -9,7 +9,7 @@ Schema: `ralph-bug-ledger/v1`
   {
     "id": "BUG-0001",
     "title": "Manager launches with an effectively blank interface",
-    "status": "planned",
+    "status": "in_progress",
     "severity": "critical",
     "reported": "2026-08-06",
     "external": [],

@@ -73,7 +73,7 @@ path to verify that a font is actually loaded.
    rebuild, making that candidate unreliable.
 
 ## Task 1: Add runtime font discovery to config_paths
-- Status: pending
+- Status: done
 - Dependencies: none
 - Scope: `src/config/config_paths.c`, `src/config/config_paths.h`, `config.h.in`, `CMakeLists.txt`. Add a `cbx_font_path()` function that searches common system font directories at runtime for a usable TTF font (DejaVuSans.ttf prioritized). Candidate search order: `$XDG_DATA_HOME/fonts/`, `$HOME/.local/share/fonts/`, `$HOME/.fonts/`, `/usr/share/fonts/truetype/dejavu/`, `/usr/share/fonts/dejavu/`, `/usr/share/fonts/TTF/`, `/run/current-system/sw/share/X11/fonts/` (NixOS), `/nix/var/nix/profiles/default/share/X11/fonts/`. Return a `const char *` pointing to a static buffer (or `NULL` if no font is found). Add a `FONT_DIR` compile-time constant to `config.h.in` (parallel to `DATA_DIR`/`ICON_DIR`) set to `${CBX_DATA_DIR}/fonts` in CMakeLists.txt, and add a CMake install rule for a `data/fonts/` directory (created empty with a `.gitkeep` so future bundled fonts are installed automatically). Do not bundle a font binary in this task.
 - Acceptance criteria: `cbx_font_path()` is declared in `config_paths.h`, defined in `config_paths.c`, returns a readable `.ttf` path on systems with DejaVuSans installed, and returns `NULL` when no font is found. `FONT_DIR` is defined in generated `config.h`. CMake configure and build succeed with no warnings.
