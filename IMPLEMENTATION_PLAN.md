@@ -1,9 +1,9 @@
 ---
 spec_path: docs/SPEC.md
-spec_commit: 2f2903d10094980d206e4dc4cd570dc54e209fbc
-spec_blob: f56978746e13aef4b6bec8f801dcce9e64a1c7ad
+spec_commit: 2b2e1d578bb6f82fa69a0ee54260c01d40fff169
+spec_blob: d88ab583f6d4d580065037f1daded9fffdc66239
 base_commit: 15b9ea4d1528204ab0f2d03e9a24a687c04c42a2
-status: active
+status: complete
 ---
 
 # Implementation Plan — Framebuffer-Backed Visual Acceptance
