@@ -33,3 +33,12 @@
 - Added partial progress state testing to Task 7
 - Added build-check configuration note
 - Clarified installed smoke test region checks with ImageMagick commands
+
+## Review iteration (post-commit)
+- Launched 3 parallel read-only subagents (reviewer, researcher, Explore)
+- Reviewer found 3 issues: Task 3 verification command broken ($? captures grep not binary), Task 4 verification incomplete (only dry-run), Task 3 borderline sizing (left as-is)
+- Researcher confirmed all spec sections (§4.10, §5.6, §11.1) exist and match plan; poll interval correction correctly deferred to Task 11
+- Explorer found 1 hard mismatch: ip_objectmanager_get_managed_objects → cbx_objectmanager_enumerate (src/dbus/ip_objectmanager.h:33)
+- All other 14 function names verified against codebase
+- Applied 3 fixes, committed as 8d4ec15
+- Plan is complete, internally consistent, executable one task at a time, tied to committed spec
