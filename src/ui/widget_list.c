@@ -153,14 +153,16 @@ list_handle_event(cbx_widget *w, const SDL_Event *ev)
             if (lst->selected > 0) {
                 lst->selected--;
                 ensure_scroll_visible(lst);
+                return true;
             }
-            return true;
+            return false;  /* at top boundary: let focus chain navigate */
         case SDLK_DOWN:
             if (lst->selected < lst->item_count - 1) {
                 lst->selected++;
                 ensure_scroll_visible(lst);
+                return true;
             }
-            return true;
+            return false;  /* at bottom boundary: let focus chain navigate */
         case SDLK_RETURN:
         case SDLK_SPACE:
             if (lst->on_select && lst->selected >= 0) {

@@ -235,6 +235,65 @@ test_manager_up_down_focus_navigation(void **state)
     cbx_manager_shutdown(&mgr);
 }
 
+/* Full focus-chain traversal: tabbar → list → buttons → tabbar.
+ * Verifies that the list widget does NOT trap focus at boundaries
+ * (Task 1). */
+static void
+test_manager_focus_traversal_no_trap(void **state)
+{
+    (void)state;
+    ensure_dummy_driver();
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+
+    const cbx_focus_chain *fc = cbx_manager_focus(&mgr);
+    assert_non_null(fc);
+    assert_true(fc->count > 1);
+
+    /* Start at tabbar (index 0). */
+    assert_int_equal(fc->focused, 0);
+
+    /* DOWN: tabbar → first panel child (list). */
+    assert_true(send_key(&mgr, SDLK_DOWN));
+    assert_true(fc->focused > 0);
+    int list_idx = fc->focused;
+
+    /* UP at list top boundary: returns false from list → manager
+     * navigates focus back to tabbar. */
+    assert_true(send_key(&mgr, SDLK_UP));
+    assert_int_equal(fc->focused, 0);  /* back to tabbar */
+
+    /* DOWN again: back to list. */
+    assert_true(send_key(&mgr, SDLK_DOWN));
+    assert_int_equal(fc->focused, list_idx);
+
+    /* DOWN from list: list returns false at boundary → manager
+     * navigates to the next widget (button). */
+    assert_true(send_key(&mgr, SDLK_DOWN));
+    assert_true(fc->focused > list_idx);  /* moved past list */
+
+    /* UP from button: button returns false for UP → manager
+     * navigates back to list. */
+    assert_true(send_key(&mgr, SDLK_UP));
+    assert_int_equal(fc->focused, list_idx);
+
+    /* Switch to Settings tab (which also has a list + button). */
+    send_key(&mgr, SDLK_RIGHT);  /* → Profiles */
+    send_key(&mgr, SDLK_RIGHT);  /* → Settings */
+    assert_int_equal(cbx_manager_active_tab(&mgr), CBX_MGR_TAB_SETTINGS);
+    assert_int_equal(fc->focused, 0);  /* tabbar re-focused on tab change */
+
+    /* DOWN: tabbar → settings list. */
+    assert_true(send_key(&mgr, SDLK_DOWN));
+    assert_true(fc->focused > 0);
+
+    /* UP at settings list top: returns to tabbar. */
+    assert_true(send_key(&mgr, SDLK_UP));
+    assert_int_equal(fc->focused, 0);
+
+    cbx_manager_shutdown(&mgr);
+}
+
 static void
 test_manager_render_does_not_crash(void **state)
 {
@@ -441,6 +500,7 @@ main(void)
         cmocka_unit_test(test_manager_left_right_switches_tabs),
         cmocka_unit_test(test_manager_tab_change_updates_visible_panel),
         cmocka_unit_test(test_manager_up_down_focus_navigation),
+        cmocka_unit_test(test_manager_focus_traversal_no_trap),
         cmocka_unit_test(test_manager_render_does_not_crash),
         cmocka_unit_test(test_manager_render_with_font),
         cmocka_unit_test(test_manager_stop),

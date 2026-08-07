@@ -260,8 +260,8 @@ test_list_navigation(void **state)
     assert_true(cbx_widget_handle_event(&lst.base, &ev));
     assert_int_equal(cbx_list_get_selected(&lst), 2);
 
-    /* Down at end — stays. */
-    assert_true(cbx_widget_handle_event(&lst.base, &ev));
+    /* Down at end — returns false so focus chain can proceed, selected stays. */
+    assert_false(cbx_widget_handle_event(&lst.base, &ev));
     assert_int_equal(cbx_list_get_selected(&lst), 2);
 
     /* Up. */
@@ -273,9 +273,123 @@ test_list_navigation(void **state)
     assert_true(cbx_widget_handle_event(&lst.base, &ev));
     assert_int_equal(cbx_list_get_selected(&lst), 0);
 
-    /* Up at start — stays. */
+    /* Up at start — returns false so focus chain can proceed, selected stays. */
+    assert_false(cbx_widget_handle_event(&lst.base, &ev));
+    assert_int_equal(cbx_list_get_selected(&lst), 0);
+
+    cbx_widget_destroy(&lst.base);
+    cbx_text_cache_cleanup(&cache);
+    test_teardown(&ctx);
+}
+
+/* Boundary navigation: list returns false at edges so the manager
+ * focus chain can move to adjacent widgets (Task 1). */
+static void
+test_list_boundary_returns_false(void **state)
+{
+    (void)state;
+    TestCtx ctx = {0};
+    assert_int_equal(test_setup(&ctx), 0);
+    cbx_theme theme;
+    cbx_theme_default(&theme);
+    cbx_text_cache cache;
+    assert_int_equal(cbx_text_cache_init(&cache, ctx.renderer), 0);
+
+    cbx_list lst;
+    assert_int_equal(cbx_list_init(&lst, 0, &cache, &theme), 0);
+    cbx_list_add_item(&lst, "A", NULL, NULL);
+    cbx_list_add_item(&lst, "B", NULL, NULL);
+    cbx_list_add_item(&lst, "C", NULL, NULL);
+
+    SDL_Event ev = {0};
+    ev.type = SDL_KEYDOWN;
+
+    /* At top (selected=0): UP returns false. */
+    ev.key.keysym.sym = SDLK_UP;
+    assert_false(cbx_widget_handle_event(&lst.base, &ev));
+    assert_int_equal(cbx_list_get_selected(&lst), 0);
+
+    /* At bottom (selected=2): DOWN returns false. */
+    ev.key.keysym.sym = SDLK_DOWN;
+    cbx_list_set_selected(&lst, 2);
+    assert_false(cbx_widget_handle_event(&lst.base, &ev));
+    assert_int_equal(cbx_list_get_selected(&lst), 2);
+
+    /* Mid-list (selected=1): UP returns true. */
+    cbx_list_set_selected(&lst, 1);
+    ev.key.keysym.sym = SDLK_UP;
     assert_true(cbx_widget_handle_event(&lst.base, &ev));
     assert_int_equal(cbx_list_get_selected(&lst), 0);
+
+    /* Mid-list (selected=1): DOWN returns true. */
+    cbx_list_set_selected(&lst, 1);
+    ev.key.keysym.sym = SDLK_DOWN;
+    assert_true(cbx_widget_handle_event(&lst.base, &ev));
+    assert_int_equal(cbx_list_get_selected(&lst), 2);
+
+    cbx_widget_destroy(&lst.base);
+    cbx_text_cache_cleanup(&cache);
+    test_teardown(&ctx);
+}
+
+/* Single-item list: both UP and DOWN return false so focus can escape. */
+static void
+test_list_single_item_boundary(void **state)
+{
+    (void)state;
+    TestCtx ctx = {0};
+    assert_int_equal(test_setup(&ctx), 0);
+    cbx_theme theme;
+    cbx_theme_default(&theme);
+    cbx_text_cache cache;
+    assert_int_equal(cbx_text_cache_init(&cache, ctx.renderer), 0);
+
+    cbx_list lst;
+    assert_int_equal(cbx_list_init(&lst, 0, &cache, &theme), 0);
+    cbx_list_add_item(&lst, "only", NULL, NULL);
+    assert_int_equal(cbx_list_get_selected(&lst), 0);
+
+    SDL_Event ev = {0};
+    ev.type = SDL_KEYDOWN;
+
+    /* UP at only item — false (at top). */
+    ev.key.keysym.sym = SDLK_UP;
+    assert_false(cbx_widget_handle_event(&lst.base, &ev));
+    assert_int_equal(cbx_list_get_selected(&lst), 0);
+
+    /* DOWN at only item — false (at bottom). */
+    ev.key.keysym.sym = SDLK_DOWN;
+    assert_false(cbx_widget_handle_event(&lst.base, &ev));
+    assert_int_equal(cbx_list_get_selected(&lst), 0);
+
+    cbx_widget_destroy(&lst.base);
+    cbx_text_cache_cleanup(&cache);
+    test_teardown(&ctx);
+}
+
+/* Empty list: UP and DOWN both return false (no items to trap focus). */
+static void
+test_list_empty_boundary(void **state)
+{
+    (void)state;
+    TestCtx ctx = {0};
+    assert_int_equal(test_setup(&ctx), 0);
+    cbx_theme theme;
+    cbx_theme_default(&theme);
+    cbx_text_cache cache;
+    assert_int_equal(cbx_text_cache_init(&cache, ctx.renderer), 0);
+
+    cbx_list lst;
+    assert_int_equal(cbx_list_init(&lst, 0, &cache, &theme), 0);
+
+    SDL_Event ev = {0};
+    ev.type = SDL_KEYDOWN;
+
+    ev.key.keysym.sym = SDLK_UP;
+    assert_false(cbx_widget_handle_event(&lst.base, &ev));
+
+    ev.key.keysym.sym = SDLK_DOWN;
+    assert_false(cbx_widget_handle_event(&lst.base, &ev));
 
     cbx_widget_destroy(&lst.base);
     cbx_text_cache_cleanup(&cache);
@@ -697,6 +811,9 @@ main(void)
         cmocka_unit_test(test_list_add_overflow),
         cmocka_unit_test(test_list_clear),
         cmocka_unit_test(test_list_navigation),
+        cmocka_unit_test(test_list_boundary_returns_false),
+        cmocka_unit_test(test_list_single_item_boundary),
+        cmocka_unit_test(test_list_empty_boundary),
         cmocka_unit_test(test_list_set_selected),
         cmocka_unit_test(test_list_select_callback),
         cmocka_unit_test(test_list_scroll),

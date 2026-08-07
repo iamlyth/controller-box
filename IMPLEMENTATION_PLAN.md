@@ -185,7 +185,7 @@ dispatch path, and the task that provides executable evidence.
 ## Task list
 
 ## Task 1: Fix list widget focus trapping and manager focus navigation
-- Status: pending
+- Status: complete
 - Dependencies: none
 - Scope: `src/ui/widget_list.c`, `tests/test_widget_list.c`
 - Acceptance criteria:
@@ -195,6 +195,7 @@ dispatch path, and the task that provides executable evidence.
   - Controller navigation from tabbar → list → buttons → tabbar works in all three manager tabs through `cbx_manager_handle_event`.
   - Existing list selection behavior (click, scroll, keyboard selection within bounds) is unchanged.
 - Verification: `nix-shell --run "ctest --test-dir build-check -R 'test_widget_list|test_manager_tabs|test_manager_production' --output-on-failure"` — all pass. New sub-tests in `test_widget_list.c` assert boundary return values.
+  - **Verified**: `nix-shell --run "ctest --test-dir build-check --output-on-failure"` — 74/74 pass (1 skip). New sub-tests: `test_list_boundary_returns_false`, `test_list_single_item_boundary`, `test_list_empty_boundary` (widget_list); `test_manager_focus_traversal_no_trap` (manager_tabs). Production path: `list_handle_event` returns `false` at `selected==0` (SDLK_UP) and `selected==item_count-1` (SDLK_DOWN), letting `cbx_focus_chain_navigate` move focus to adjacent widgets in `cbx_manager_handle_event`.
 - Documentation impact: none
 
 ## Task 2: Add manager pointer event routing, mouse hit-testing, and visibility filtering
