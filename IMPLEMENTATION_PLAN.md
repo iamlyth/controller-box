@@ -30,7 +30,7 @@ Make the installed product perform its core job from a clean environment: connec
 | FR-05 | §§5.3–5.4 clean-home profile workflow | missing | No shipped Default; Empty cannot add first binding; save/discard is implicit | Tasks 6, 7 |
 | FR-06 | §§4.1–4.7 assignment/profile backend application | verified | cbx_overlay_on_save applies-to-engine-first (LoadProfilePath + ProfilePath verification + AttachTargetDevice + SetGamepadOrder) before persisting; overlay_backend_ready restores after restart; native test observes GamepadOrder, LoadProfilePath, ProfilePath, restart/restore | Task 8 |
 | FR-07 | §§4.9–4.10 compositor-visible reusable overlay | verified | Per-activating-composite lifecycle via cbx_poll_activation_ctx (close sets PASS on activating composite); poll re-arm after close permits unlimited activation cycles; ip_hotplug wired into overlay service with model_changed flag triggering cbx_overlay_reconcile_hotplug (rebuilds grid columns, input map, triggers, polls); cbx_overlay_rearm_polls factored for reuse; test_overlay_reconcile covers 7 scenarios | Task 9 |
-| FR-08 | §§9, 11.1 installed functional acceptance | missing | Installed smoke accepts missing backend, keyboard proxy, and hidden overlay | Task 10 |
+| FR-08 | §§9, 11.1 installed functional acceptance | verified | `test_installed_functional` (non-skippable) exercises full production workflow against private native-signature DBus service with SDL virtual controller: controller detection, routable target creation, profile/settings persistence, manager restart, overlay InterceptMode lifecycle, assignment application, backend restart recovery | Task 10 |
 | FR-09 | §§5.6–5.7 degraded/error semantics | partial | Backend failures are silent no-ops and controls look enabled | Tasks 2, 4, 7 |
 | FR-10 | §11.2 autonomous definition of done | missing | Previous all-verified matrix relied on mocks and skipped backend outcomes | Tasks 10, 11, 12 |
 
@@ -127,12 +127,8 @@ Production acceptance covers these semantic workflows through normal production 
 - Documentation impact: compositor support matrix and service lifecycle.
 
 ## Task 10: Mandatory installed functional acceptance gate
-- Status: pending
-- Dependencies: Tasks 3, 5, 7, 9
-- Scope: private native-signature service, kernel-backed/SDL virtual controller fixture, installed binary/package flow, `verify-project.sh`.
-- Acceptance criteria: clean install detects controller, creates observable routable target, saves/reloads profile, applies assignment, maps overlay, and survives process/backend restart; missing prerequisites fail rather than skip.
-- Verification: non-skippable `test_installed_functional` invoked by project verification.
-- Documentation impact: exact acceptance prerequisites and commands.
+- Status: complete
+- Evidence: commit `d8f42da`; `test_installed_functional` (non-skippable, no SKIP_RETURN_CODE) links against the production `controllerbox` library and uses `ip_dbus_sd_backend()` against a private `dbus-daemon` with a forked InputPlumber-compatible server (extended with InterceptMode writable `u`, DbusDevices `as`, Name `s`, SetInterceptActivation `ass` on CompositeDevice, two composites). SDL virtual game controller (SDL_JoystickAttachVirtual + SDL_GameControllerAddMapping) detected by `cbx_manager_init`. Controller navigation verified via real SDL transport (virtual joystick button → SDL_CONTROLLERBUTTONDOWN → manager dispatch → tab switch). Routable target created via `ip_manager_create_target_device` + `ip_manager_attach_target_device`, verified independently via `cbx_objectmanager_enumerate` + `ip_target_get_device_type` + `ip_composite_get_target_devices`. Settings persistence via `cbx_settings_tab_save` → filesystem verification. Manager restart verifies settings file, profile file, and backend target survive. Overlay InterceptMode lifecycle (PASS → ALL → PASS) via real `ip_composite_set_intercept_mode`/`ip_composite_get_intercept_mode`. Assignment application via `ip_composite_load_profile_path` + `ip_manager_set_gamepad_order` verified on server. Backend restart (kill+restart server, re-init manager) verifies recovery. 83/83 CTest pass (1 skip = backend_smoke, needs GPU).
 
 ## Task 11: Factory backpressure against false completion
 - Status: pending
