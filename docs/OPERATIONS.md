@@ -626,10 +626,19 @@ keyboard input, and produces a non-blank framebuffer capture.
 4. Sets up a temporary HOME with DejaVuSans.ttf so the manager can
    render text.
 5. **Manager mode**: launches `controller-box --manager`, sends Tab
-   and Arrow key presses via `xdotool`, captures the root window via
+   and Arrow key presses via `xdotool` (keyboard tab switching and
+   controller-proxy navigation), captures the root window via
    `import -window root` (ImageMagick), and verifies pixel variance
    (mean > 5.0 on 0–255 scale) in both the tab-bar region (top 48px)
    and the body region (below 48px).
+   Then exercises **coordinate-based mouse clicks** on manager body
+   controls at known pixel positions: the Profiles tab control
+   (639, 24), the Settings tab control (1065, 24), the first settings
+   list item (100, 90), and the Save button (116, 522).  Each click is
+   verified by comparing body-region screenshots before and after
+   (ImageMagick difference mean) for visible state change, or by
+   checking that `$HOME/.config/controller-box/settings.yaml` was
+   created or mutated (file mutation from the Save button).
 6. **Overlay service mode**: launches `controller-box --overlay-service`.
    If InputPlumber is available on the system DBus, the service runs
    and is terminated via SIGTERM.  If InputPlumber is unavailable
@@ -668,6 +677,11 @@ PASS: keyboard input sent (Tab, Arrow keys)
 PASS: screenshot captured: ...
 PASS: tab bar region is non-blank (mean=...)
 PASS: body region is non-blank (mean=...)
+PASS: profiles tab click produced visible state change (diff=...)
+PASS: settings tab click produced visible state change (diff=...)
+PASS: settings list item click produced visible state change (diff=...)
+PASS: Save button click mutated settings file (mtime increased, size=...)
+PASS: coordinate-based mouse clicks completed
 PASS: manager terminated cleanly
 PASS: overlay service exited cleanly (code 1: InputPlumber not found)
 PASS: all installed smoke test checks passed
