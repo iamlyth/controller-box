@@ -97,7 +97,8 @@ Production acceptance covers these semantic workflows through normal production 
 - Documentation impact: Profiles and packaging docs.
 
 ## Task 7: Reachable explicit profile creation, save, discard, and errors
-- Status: pending
+- Status: complete
+- Evidence: commits `16f1ec1` and `853f05f`; Empty activation enters sequential capture, visible Save/Discard controls traverse pointer and controller production dispatch, persistence/reload succeeds, and validation/filesystem failures remain recoverable.
 - Dependencies: Tasks 3, 6
 - Scope: zero-row add/sequential entry, visible Save/Discard controls, dirty/close handling, error reporting, repeat-open visibility, installed profile workflow tests.
 - Acceptance criteria: Empty can capture first and NES-minimum bindings; explicit save persists/reloads; discard/window-close behavior is explicit; production event ordering cannot consume the confirmation release; failures stay recoverable.
