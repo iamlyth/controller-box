@@ -251,9 +251,14 @@ static void test_add_controller(void **state)
     mi_fixture *f = FIX(state);
 
     /* Expect the CreateTargetDevice call to return a path. */
+    const char *target_path =
+        "/org/shadowblip/InputPlumber/devices/target/gamepad0";
     ip_dbus_mock_expect_ok(&f->mock,
-        IP_IFACE_MANAGER, "CreateTargetDevice",
-        "/org/shadowblip/InputPlumber/TargetDevice0");
+        IP_IFACE_MANAGER, "CreateTargetDevice", target_path);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_OBJECT_MANAGER,
+        "GetManagedObjects",
+        "/org/shadowblip/InputPlumber/devices/target/gamepad0\t"
+        "org.shadowblip.Input.Target,org.shadowblip.Input.Gamepad\n");
 
     /* Also need SupportedTargetDeviceIds for refresh. */
     ip_dbus_mock_expect_ok(&f->mock,

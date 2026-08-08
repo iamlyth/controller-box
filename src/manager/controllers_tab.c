@@ -366,16 +366,29 @@ cbx_controllers_tab_add(cbx_controllers_tab *tab, const char *type)
     if (!tab || !tab->backend || !type)
         return -EINVAL;
 
+    int previous_count = tab->model.target_count;
     char *out_path = NULL;
     int rc = ip_manager_create_target_device(tab->backend, tab->bus,
-                                                type, &out_path);
+                                               type, &out_path);
     if (rc != 0)
         return rc;
 
+    rc = cbx_controllers_tab_refresh(tab);
+    if (rc == 0 && tab->model.target_count != previous_count + 1)
+        rc = -EIO;
+    bool found = false;
+    if (rc == 0 && out_path) {
+        for (int i = 0; i < tab->model.target_count; i++) {
+            if (strcmp(tab->model.targets[i].path, out_path) == 0) {
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+            rc = -EIO;
+    }
     free(out_path);
-
-    /* Method success is not UI success: require ObjectManager refresh. */
-    return cbx_controllers_tab_refresh(tab);
+    return rc;
 }
 
 int
