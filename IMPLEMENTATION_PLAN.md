@@ -339,17 +339,17 @@ dispatch path, and the task that provides executable evidence.
 - Documentation impact: none
 
 ## Task 10: Extract overlay service step function for testability
-- Status: pending
+- Status: complete
 - Dependencies: Task 6
 - Scope: `src/app/overlay_service.c`, `src/app/overlay_service.h`, `tests/test_overlay_service.c`
 - Acceptance criteria:
-  - The overlay service poll loop is refactored to extract a single-iteration step function (`cbx_overlay_service_step()` or equivalent) that processes pending SDL events, ticks InterceptMode polls, advances lifecycle, and re-renders dirty surfaces — enabling test-driven event injection without running the infinite loop.
-  - A comprehensive context struct holds all loop state (renderer, connection, device model, settings, assignments, text cache, theme, icon map, icon cache, grid, surface, render_ctx, lifecycle, overlay_ctx, polls, poll_count, poll_event_type, g_running) so the step function is self-contained.
+  - The overlay service poll loop is refactored to extract a single-iteration step function (`cbx_overlay_service_step()`) that processes pending SDL events, ticks InterceptMode polls, advances lifecycle, and re-renders dirty surfaces — enabling test-driven event injection without running the infinite loop.
+  - A comprehensive context struct (`cbx_overlay_service_ctx`) holds all loop state (renderer, connection, device model, settings, assignments, text cache, font_id, theme, icon map, icon cache, composites, comp_count, grid, surface, render_ctx, lifecycle, pm, hm, conflicts, input_ctx, input_events, expected_sender, input_events_ready, polls, poll_count, poll_event_type, initialized) so the step function is self-contained. Allocated on the heap in production (struct is ~200 KB+).
   - `run_overlay_service()` is refactored to initialize the context struct, then loop calling the step function.
-  - A basic regression test runs one iteration of the step function and verifies: (a) it processes a queued SDL_QUIT event and sets the shutdown flag, (b) it processes a queued SDL_KEYDOWN event and updates grid state, (c) it does not crash on empty event queue.
-  - Existing `test_overlay_service.c` tests (init failure, dry-run, signal handlers) still pass.
+  - A basic regression test runs one iteration of the step function and verifies: (a) it processes a queued SDL_QUIT event and sets the shutdown flag, (b) it processes a queued SDL_KEYDOWN event and updates grid state (row 0 moves from col 0 to col 1), (c) it does not crash on empty event queue.
+  - Existing `test_overlay_service.c` tests (init failure, dry-run, signal handlers, multi-controller, unknown device, wrong sender, process no-op) still pass — 11/11 tests pass (was 8, added 3).
   - The installed binary (`controller-box --overlay-service`) still works unchanged.
-- Verification: `nix-shell --run "ctest --test-dir build-check -R 'test_overlay_service' --output-on-failure"` — all pass. `./build-check/controller-box --overlay-service --dry-run` → exit 0.
+- Verification: `nix-shell --run "ctest --test-dir build-check -R 'test_overlay_service' --output-on-failure"` — all pass (11 tests, 0.01s). `./build-check/controller-box --overlay-service --dry-run` → exit 0. Full suite: 77/77 pass (1 skip: backend_smoke).
 - Documentation impact: none
 
 ## Task 11: Overlay production-dispatch interaction tests

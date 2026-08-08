@@ -11,53 +11,26 @@
 #define CBX_OVERLAY_SERVICE_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "dbus_mock.h"          /* ip_dbus_backend, ip_bus_handle */
-#include "dbus/ip_input_signal.h" /* ip_input_id, ip_input_category */
+#include "dbus/ip_connection.h"
+#include "dbus/ip_device_model.h"
+#include "dbus/ip_input_signal.h" /* ip_input_id, ip_input_category, ip_input_events */
+#include "dbus/ip_intercept_poll.h"
+#include "config/config_settings.h"
+#include "config/config_assignments.h"
+#include "ui/renderer.h"
+#include "ui/theme.h"
+#include "ui/text.h"
+#include "icons/icon_cache.h"
+#include "icons/icon_map.h"
 #include "overlay/player_mode.h"
 #include "overlay/host_mode.h"
 #include "overlay/lifecycle.h"
 #include "overlay/grid_render.h"
-
-/*
- * Run the overlay service.
- *
- * When dry_run is non-zero, prints a mode banner and returns 0 without
- * performing any initialization — headless-safe for acceptance checks.
- *
- * When dry_run is zero:
- *   1. Initialises SDL video and creates a hidden renderer.
- *   2. Connects to the system DBus; if InputPlumber is unavailable,
- *      logs an error to stderr and returns non-zero (SPEC §2.4).
- *   3. Enumerates composite devices via GetManagedObjects.
- *   4. Builds and pre-renders the overlay grid surface.
- *   5. Registers the overlay trigger on all composite devices.
- *   6. Initialises the overlay lifecycle state machine.
- *   7. Enters the poll loop: polls InterceptMode at 50 ms (DEC-002),
- *      processes SDL events for grid navigation, handles SIGTERM/SIGINT
- *      for clean shutdown.
- *
- * Returns 0 on clean shutdown, non-zero on init failure.
- */
-int run_overlay_service(int dry_run);
-
-/* --- Signal handling (exposed for testing — Task 4) ------------------- */
-
-/*
- * Install SIGTERM/SIGINT handlers that request clean shutdown.
- * Returns 0 on success, -1 on sigaction failure.
- */
-int cbx_overlay_service_install_signal_handlers(void);
-
-/*
- * Returns true if a shutdown signal (SIGTERM/SIGINT) has been received.
- */
-bool cbx_overlay_service_shutdown_requested(void);
-
-/*
- * Reset the shutdown flag to false (for testing).
- */
-void cbx_overlay_service_reset_shutdown(void);
+#include "overlay/surface_build.h"
+#include "overlay/conflict.h"
 
 /* --- Overlay input event handling (Task 6) ---------------------------- */
 
@@ -132,5 +105,115 @@ void cbx_overlay_input_cb(ip_input_id input,
                             const char *raw_event,
                             const char *device_path,
                             void *userdata);
+
+/* --- Overlay service context (Task 10) ------------------------------- */
+
+/*
+ * Comprehensive context struct holding all overlay-service loop state.
+ * Enables cbx_overlay_service_step() to be self-contained and testable
+ * without running the infinite poll loop.
+ */
+typedef struct cbx_overlay_service_ctx {
+    /* --- Core handles --- */
+    cbx_renderer           rend;          /* SDL window + renderer            */
+    ip_connection          conn;          /* DBus connection                   */
+    cbx_device_model       model;         /* enumerated devices                */
+    cbx_settings           settings;      /* loaded config                     */
+    cbx_assignments        assignments;   /* slot assignments                  */
+
+    /* --- Rendering resources --- */
+    cbx_text_cache         text_cache;
+    int                    font_id;
+    cbx_theme              theme;
+    cbx_icon_map           icon_map;
+    cbx_icon_cache         icon_cache;
+
+    /* --- Grid + composites --- */
+    cbx_grid_composite_info composites[CBX_MAX_COMPOSITES];
+    int                    comp_count;
+    cbx_select_grid        grid;
+
+    /* --- Overlay surface --- */
+    cbx_overlay_surface    surface;
+    cbx_grid_render_ctx    render_ctx;
+
+    /* --- Lifecycle --- */
+    cbx_overlay_lifecycle  lifecycle;
+
+    /* --- Mode state --- */
+    cbx_player_mode        pm;
+    cbx_host_mode          hm;
+    cbx_conflict_list      conflicts;
+
+    /* --- Input event handling --- */
+    cbx_overlay_input_ctx  input_ctx;
+    ip_input_events        input_events;
+    char                   expected_sender[128];
+    bool                   input_events_ready;
+
+    /* --- InterceptMode polling --- */
+    ip_intercept_poll      polls[CBX_MAX_COMPOSITES];
+    int                    poll_count;
+    uint32_t               poll_event_type;
+
+    /* --- Status --- */
+    bool                   initialized;   /* true after full init              */
+} cbx_overlay_service_ctx;
+
+/*
+ * Process one iteration of the overlay-service poll loop.
+ *
+ * Handles pending SDL events (poll-timer ticks, SDL_QUIT, keyboard
+ * navigation), processes pending DBus InputEvent signals, advances
+ * the lifecycle state machine, and re-renders dirty surfaces.
+ *
+ * This function is extracted from the poll loop in run_overlay_service()
+ * so that tests can inject events and verify outcomes without running
+ * the infinite loop.  In production, run_overlay_service() calls this
+ * repeatedly inside a while (g_running) loop with SDL_Delay(10).
+ */
+void cbx_overlay_service_step(cbx_overlay_service_ctx *svc);
+
+/* --- Overlay service entry point ------------------------------------- */
+
+/*
+ * Run the overlay service.
+ *
+ * When dry_run is non-zero, prints a mode banner and returns 0 without
+ * performing any initialization — headless-safe for acceptance checks.
+ *
+ * When dry_run is zero:
+ *   1. Initialises SDL video and creates a hidden renderer.
+ *   2. Connects to the system DBus; if InputPlumber is unavailable,
+ *      logs an error to stderr and returns non-zero (SPEC §2.4).
+ *   3. Enumerates composite devices via GetManagedObjects.
+ *   4. Builds and pre-renders the overlay grid surface.
+ *   5. Registers the overlay trigger on all composite devices.
+ *   6. Initialises the overlay lifecycle state machine.
+ *   7. Enters the poll loop: polls InterceptMode at 50 ms (DEC-002),
+ *      processes SDL events for grid navigation, handles SIGTERM/SIGINT
+ *      for clean shutdown.
+ *
+ * Returns 0 on clean shutdown, non-zero on init failure.
+ */
+int run_overlay_service(int dry_run);
+
+/* --- Signal handling (exposed for testing — Task 4) ------------------- */
+
+/*
+ * Install SIGTERM/SIGINT handlers that request clean shutdown.
+ * Returns 0 on success, -1 on sigaction failure.
+ */
+int cbx_overlay_service_install_signal_handlers(void);
+
+/*
+ * Returns true if a shutdown signal (SIGTERM/SIGINT) has been received.
+ */
+bool cbx_overlay_service_shutdown_requested(void);
+
+/*
+ * Reset the shutdown flag to false (for testing).
+ */
+void cbx_overlay_service_reset_shutdown(void);
 
 #endif /* CBX_OVERLAY_SERVICE_H */

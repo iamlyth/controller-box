@@ -29,6 +29,8 @@
 #include "dbus/ip_input_signal.h"
 #include "config/config_settings.h"
 #include "config/config_assignments.h"
+#include "ui/renderer.h"
+#include "overlay/surface_build.h"
 
 /* ------------------------------------------------------------------ */
 /*  Test (a): SDL init failure returns non-zero                       */
@@ -323,6 +325,185 @@ static void test_ip_input_events_process_mock_noop(void **state)
     assert_int_equal(rc, 0);
 }
 
+/* ================================================================== */
+/*  Step function regression tests (Task 10)                            */
+/* ================================================================== */
+
+/* Fixture: minimal service context for step-function tests.
+ * Allocates a cbx_overlay_service_ctx and initializes just enough
+ * state to exercise the step function: SDL with dummy driver,
+ * a 1-row grid, player mode, host mode, and a VISIBLE lifecycle. */
+typedef struct {
+    cbx_overlay_service_ctx *svc;
+    ip_dbus_mock             mock;
+    const ip_dbus_backend   *backend;
+} step_fixture;
+
+static int
+step_setup(void **state)
+{
+    step_fixture *f = malloc(sizeof(*f));
+    memset(f, 0, sizeof(*f));
+
+    /* Ensure SDL is initialized with the dummy driver. */
+    SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
+    SDL_VideoInit("dummy");
+
+    /* Allocate and zero the service context. */
+    f->svc = calloc(1, sizeof(cbx_overlay_service_ctx));
+    assert_non_null(f->svc);
+
+    /* Create a dummy renderer so surface operations don't crash. */
+    int rc = cbx_renderer_init(&f->svc->rend, "test",
+                               CBX_RENDERER_DEFAULT_W,
+                               CBX_RENDERER_DEFAULT_H, false);
+    assert_int_equal(rc, 0);
+
+    /* Initialize a 1-composite grid. */
+    cbx_grid_composite_info comps[1];
+    memset(comps, 0, sizeof(comps));
+    snprintf(comps[0].id, sizeof(comps[0].id), "TEST:0");
+    snprintf(comps[0].model_name, sizeof(comps[0].model_name), "TestPad");
+    snprintf(comps[0].composite_path, sizeof(comps[0].composite_path),
+             "/org/shadowblip/InputPlumber/CompositeDevice0");
+    f->svc->comp_count = 1;
+    memcpy(f->svc->composites, comps, sizeof(comps));
+
+    cbx_settings s;
+    memset(&s, 0, sizeof(s));
+    s.virtual_controllers.count = 4;
+    for (int i = 0; i < 4; i++)
+        snprintf(s.virtual_controllers.types[i], CBX_MAX_TYPE_LEN, "xb360");
+
+    cbx_assignments a;
+    cbx_assignments_init(&a);
+
+    cbx_select_grid_init(&f->svc->grid);
+    cbx_select_grid_build(&f->svc->grid, comps, 1, &s, &a);
+
+    /* Initialize render context (minimal — no icons/text for tests). */
+    f->svc->render_ctx = (cbx_grid_render_ctx){
+        .grid       = &f->svc->grid,
+        .icon_cache = NULL,
+        .icon_map   = NULL,
+        .theme      = NULL,
+        .text_cache = NULL,
+        .font_id    = -1,
+    };
+
+    /* Initialize overlay surface (needs renderer). */
+    rc = cbx_overlay_surface_init(&f->svc->surface, f->svc->rend.renderer,
+                                    CBX_RENDERER_DEFAULT_W,
+                                    CBX_RENDERER_DEFAULT_H,
+                                    1.0);
+    assert_int_equal(rc, 0);
+
+    /* Initialize player mode and host mode. */
+    cbx_player_mode_init(&f->svc->pm, &f->svc->grid);
+    cbx_host_mode_init(&f->svc->hm);
+
+    /* Initialize lifecycle — set to VISIBLE so keydown events are processed. */
+    cbx_overlay_lifecycle_init(&f->svc->lifecycle, NULL, NULL,
+                                "", &f->svc->surface, f->svc->rend.renderer);
+    f->svc->lifecycle.state = CBX_OVERLAY_VISIBLE;
+
+    /* Wire input_ctx pointers. */
+    f->svc->input_ctx.pm       = &f->svc->pm;
+    f->svc->input_ctx.hm       = &f->svc->hm;
+    f->svc->input_ctx.grid     = &f->svc->grid;
+    f->svc->input_ctx.lifecycle = &f->svc->lifecycle;
+    f->svc->input_ctx.path_count = 0;
+
+    /* No polls, no input events for basic tests. */
+    f->svc->poll_count = 0;
+    f->svc->poll_event_type = (uint32_t)-1;
+    f->svc->input_events_ready = false;
+    f->svc->initialized = true;
+
+    /* Reset shutdown flag. */
+    cbx_overlay_service_reset_shutdown();
+
+    *state = f;
+    return 0;
+}
+
+static int
+step_teardown(void **state)
+{
+    step_fixture *f = *state;
+    if (f) {
+        if (f->svc) {
+            cbx_overlay_surface_destroy(&f->svc->surface);
+            cbx_renderer_shutdown(&f->svc->rend);
+            free(f->svc);
+        }
+        free(f);
+    }
+    /* Flush any remaining SDL events. */
+    SDL_Event ev;
+    while (SDL_PollEvent(&ev))
+        ;
+    return 0;
+}
+
+/* Test (i): SDL_QUIT event sets shutdown flag. */
+static void test_step_quit_sets_shutdown(void **state)
+{
+    step_fixture *f = *state;
+
+    /* Queue a SDL_QUIT event. */
+    SDL_Event quit_event = { .type = SDL_QUIT };
+    SDL_PushEvent(&quit_event);
+
+    /* Before step: not shutting down. */
+    assert_false(cbx_overlay_service_shutdown_requested());
+
+    /* Run one step. */
+    cbx_overlay_service_step(f->svc);
+
+    /* After step: shutdown requested. */
+    assert_true(cbx_overlay_service_shutdown_requested());
+}
+
+/* Test (j): SDL_KEYDOWN event updates grid state. */
+static void test_step_keydown_updates_grid(void **state)
+{
+    step_fixture *f = *state;
+
+    /* Row 0 starts at col 0 (Unassigned). */
+    assert_int_equal(cbx_select_grid_get_cur_col(&f->svc->grid, 0), 0);
+
+    /* Queue a RIGHT keydown event. */
+    SDL_Event key_event = { .type = SDL_KEYDOWN };
+    key_event.key.keysym.sym = SDLK_RIGHT;
+    SDL_PushEvent(&key_event);
+
+    /* Run one step. */
+    cbx_overlay_service_step(f->svc);
+
+    /* Row 0 should have moved to col 1 (P1). */
+    assert_int_equal(cbx_select_grid_get_cur_col(&f->svc->grid, 0), 1);
+}
+
+/* Test (k): Empty event queue does not crash. */
+static void test_step_empty_queue_no_crash(void **state)
+{
+    step_fixture *f = *state;
+
+    /* Flush any pending events. */
+    SDL_Event ev;
+    while (SDL_PollEvent(&ev))
+        ;
+
+    /* Run one step — should be a no-op, no crash. */
+    cbx_overlay_service_step(f->svc);
+
+    /* Grid state unchanged. */
+    assert_int_equal(cbx_select_grid_get_cur_col(&f->svc->grid, 0), 0);
+    /* No shutdown requested. */
+    assert_false(cbx_overlay_service_shutdown_requested());
+}
+
 /* ------------------------------------------------------------------ */
 /*  Test runner                                                        */
 /* ------------------------------------------------------------------ */
@@ -343,6 +524,13 @@ static const struct CMUnitTest tests[] = {
     cmocka_unit_test_setup_teardown(test_ip_input_events_process_mock_noop,
                                      overlay_input_setup,
                                      overlay_input_teardown),
+    /* Step function regression tests (Task 10) */
+    cmocka_unit_test_setup_teardown(test_step_quit_sets_shutdown,
+                                     step_setup, step_teardown),
+    cmocka_unit_test_setup_teardown(test_step_keydown_updates_grid,
+                                     step_setup, step_teardown),
+    cmocka_unit_test_setup_teardown(test_step_empty_queue_no_crash,
+                                     step_setup, step_teardown),
 };
 
 int main(void)
