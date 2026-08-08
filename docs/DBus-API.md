@@ -15,6 +15,18 @@ the client layer is fully unit-testable with a mock backend.
 | Well-known name | `org.shadowblip.InputPlumber` |
 | Root path | `/org/shadowblip/InputPlumber` |
 | Manager interface | `org.shadowblip.InputManager` |
+| Manager path | `/org/shadowblip/InputPlumber/Manager` |
+
+### Native property signatures
+
+The production backend decodes InputPlumber values by their native variant
+signature rather than coercing mocks to strings: ordinary names and paths use
+`s`; list properties such as `GamepadOrder`, `TargetDevices`, capabilities,
+and device-path lists use `as`; `InterceptMode` uses `u`; and flags such as
+`Enabled` and `ManageAllDevices` use `b`. The vtable retains comma-separated
+text only as its internal compatibility representation after native decoding.
+`test_dbus_signatures` protects this classification; the installed functional
+fixture remains the release authority for wire compatibility.
 
 ### Connection lifecycle
 

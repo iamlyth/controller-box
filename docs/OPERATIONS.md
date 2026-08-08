@@ -8,29 +8,31 @@ and troubleshooting.
 ## Service architecture
 
 ```
-inputplumber.service  (system service — input engine)
-    ↑ Requires= / After=
-controller-box.service  (user service — overlay + control surface)
+InputPlumber (system DBus service — input engine)
+    ↕ native DBus readiness and owner-change recovery
+controller-box.service (graphical-session user service)
 ```
 
 - **InputPlumber** (`inputplumber.service`, system): owns evdev grab, virtual
   devices, event translation, profiles, intercept mode, and player ordering.
   Controller-Box never touches input routing directly — every state change goes
   through InputPlumber's DBus API.
-- **Controller-Box** (`controller-box.service`, user): always-resident overlay
-  service with `Restart=always`. The service unit hard-depends on InputPlumber
-  via `After=inputplumber.service` and `Requires=inputplumber.service`. If
-  InputPlumber is not running, the overlay service will not start until it is.
+- **Controller-Box** (`controller-box.service`, user): graphical-session
+  overlay service with bounded `Restart=on-failure` backoff. A user unit must
+  not order against or require a differently managed system unit. Instead,
+  Controller-Box validates InputPlumber's Manager Version and native DBus
+  contract, enters degraded mode when unavailable, and recovers on owner
+  acquisition without restarting.
 
 **Install order:** (1) InputPlumber, (2) Controller-Box, (3) enable the overlay
 service.
 
-If InputPlumber is not running, the **manager** enters **degraded mode** —
-the DBus connection stays open, the device list is empty, but all buttons
-remain functional. The **overlay service** requires InputPlumber to be
-running (the systemd unit has `Requires=inputplumber.service`); if launched
-without InputPlumber, it logs `InputPlumber not found on system DBus` to
-stderr and exits.
+If InputPlumber is not running, both applications retain the system-bus
+connection in **degraded mode**. Backend-changing Manager controls are
+unavailable, and the overlay remains hidden. `NameOwnerChanged` for the
+InputPlumber name triggers Version validation, re-enumeration, target/profile
+reconciliation, signal subscription, and poll re-arming without process
+restart.
 
 ## Manager input methods
 
@@ -60,13 +62,16 @@ In the editor (list mode):
 
 - **Up/Down** scrolls the binding list; the diagram highlights the
   corresponding button.
-- **A** opens a binding edit sub-menu with three options:
+- On an Empty profile, **A** starts sequential capture so the first binding
+  is reachable without an existing list row. Otherwise, **A** opens a binding
+  edit sub-menu with three options:
   1. **Pick Target** — choose a target event from the device's capabilities.
   2. **Capture** — wait for a physical button press (via DBus InputEvent).
   3. **Sequential (All Buttons)** — prompt for each button in order.
-- **B** saves the profile (with NES minimum validation) and closes the editor.
-  If validation fails, the error is shown and the editor stays open.
-- **Start (Tab key)** discards changes and closes the editor.
+- Activate the visible **Save** button (or press **B** in list mode) to
+  validate, persist, and close. Validation and filesystem failures stay
+  visible and recoverable in the editor.
+- Activate **Discard** (or press **Start**) to close without writing changes.
 
 In sequential mode:
 
@@ -112,15 +117,16 @@ by the manager. It contains:
 ```ini
 [Unit]
 Description=Controller-Box Overlay Service
-After=inputplumber.service
-Requires=inputplumber.service
+After=graphical-session.target
+PartOf=graphical-session.target
 
 [Service]
 ExecStart=/usr/bin/controller-box --overlay-service
-Restart=always
+Restart=on-failure
+RestartSec=2s
 
 [Install]
-WantedBy=default.target
+WantedBy=graphical-session.target
 ```
 
 Under Flatpak, `ExecStart` uses `flatpak run org.shadowblip.ControllerBox

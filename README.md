@@ -169,6 +169,12 @@ cd build && ctest --output-on-failure && cd ..
 ./build/controller-box --manager --dry-run
 ```
 
+A build configured with a custom `CMAKE_INSTALL_PREFIX` is useful for an
+isolated installation or X11 UI test. Its default-prefix packaging assertion
+is intentionally not authoritative, because the generated paths differ.
+Run the complete packaging/release gate from a separate default-prefix
+`build-check` directory with `./scripts/verify-project.sh`.
+
 ## Verification suite
 
 The project includes a multi-layer visual acceptance suite (SPEC §11.1)

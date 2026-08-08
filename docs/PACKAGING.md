@@ -101,20 +101,21 @@ The systemd user service unit declares (per SPEC §2.4):
 ```ini
 [Unit]
 Description=Controller-Box Overlay Service
-After=inputplumber.service
-Requires=inputplumber.service
+After=graphical-session.target
+PartOf=graphical-session.target
 
 [Service]
 ExecStart=/usr/bin/controller-box --overlay-service
-Restart=always
+Restart=on-failure
+RestartSec=2s
 
 [Install]
-WantedBy=default.target
+WantedBy=graphical-session.target
 ```
 
-The `After=` / `Requires=` directives create a hard dependency on
-InputPlumber's system service. If InputPlumber is not running, the overlay
-service will not start until it is.
+The user unit follows the graphical user session and deliberately has no
+cross-manager dependency on InputPlumber's system service. Runtime DBus
+readiness and owner-change recovery handle either startup order.
 
 ## Flatpak
 
@@ -177,14 +178,13 @@ service on first run:
 4. Manager calls `flatpak-spawn --host systemctl --user enable --now
    controller-box`.
 
-The unit has `Restart=always` and survives reboots.
+The unit uses `Restart=on-failure` with a two-second backoff and follows the graphical session.
 
 ### InputPlumber dependency
 
-InputPlumber is a documented prerequisite. Install it first from its own
-Flatpak or system package. The overlay service unit declares
-`After=inputplumber.service` / `Requires=inputplumber.service` so it will
-not start until InputPlumber is available.
+InputPlumber is a documented runtime prerequisite. Install it from its own
+Flatpak or system package. Controller-Box can start first in degraded mode
+and reconciles state when the InputPlumber DBus owner becomes ready.
 
 ## Version
 
