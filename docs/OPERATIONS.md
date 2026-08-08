@@ -25,9 +25,12 @@ controller-box.service  (user service — overlay + control surface)
 **Install order:** (1) InputPlumber, (2) Controller-Box, (3) enable the overlay
 service.
 
-If InputPlumber is not installed, Controller-Box enters **degraded mode** —
-the DBus connection stays open, and `NameOwnerChanged` signals notify when
-InputPlumber starts.
+If InputPlumber is not running, the **manager** enters **degraded mode** —
+the DBus connection stays open, the device list is empty, but all buttons
+remain functional. The **overlay service** requires InputPlumber to be
+running (the systemd unit has `Requires=inputplumber.service`); if launched
+without InputPlumber, it logs `InputPlumber not found on system DBus` to
+stderr and exits.
 
 ## Manager input methods
 
@@ -423,14 +426,17 @@ Recovery modes are `maintenance-planning` and `maintenance`. See
 
 ### InputPlumber not detected
 
-Controller-Box enters degraded mode if InputPlumber is not running. Check:
+The **manager** enters degraded mode if InputPlumber is not running (empty
+device list, functional buttons). The **overlay service** exits with code 1.
+Check:
 
 ```bash
 systemctl status inputplumber    # system service
 ```
 
-If InputPlumber is not installed, install it first. Controller-Box will
+If InputPlumber is not installed, install it first. The manager will
 auto-connect when InputPlumber starts (via `NameOwnerChanged` signal).
+Restart the overlay service after InputPlumber is running:
 
 ### Overlay service won't start
 

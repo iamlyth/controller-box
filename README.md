@@ -47,6 +47,7 @@ On first launch, the manager prompts to enable the overlay service. It writes
 sudo apt install build-essential cmake pkg-config \
     libsdl2-dev libsdl2-ttf-dev libsdl2-image-dev \
     libsystemd-dev libyaml-dev
+# For running tests, also install: libcmocka-dev
 
 # Build and install:
 cmake -B build -DCMAKE_BUILD_TYPE=Release
@@ -180,7 +181,7 @@ geometry correctness:
 | 2. Region-level assertions | `test_fb_assert` | `fb_assert.c` library: `fb_region_has_content`, `fb_region_has_color`, `fb_frames_differ`, `fb_golden_compare` |
 | 3. Golden images | `test_golden` | Compares 11 baseline PNGs (4 overlay + 7 manager states) with ±3 per-channel and <2% image tolerance |
 | 4. Failure artifacts | `test_golden` (on mismatch) | Saves actual/expected/diff PNGs to `tests/golden-fail/` for diagnosis |
-| 5. Installed production smoke | `test_installed_smoke` | Launches installed binary under Xvfb, sends input via xdotool, captures screenshots, verifies non-blank output |
+| 5. Installed production smoke | `test_installed_smoke` | Launches installed binary under Xvfb, sends keyboard + coordinate-based mouse clicks on body controls via xdotool, captures screenshots, verifies non-blank output and semantic outcomes (state change, file mutation) |
 | 6. Backend smoke | `test_backend_smoke` | Exercises accelerated renderer (OpenGL/ES) with same invariants; skips (exit 77) in headless environments |
 | 7. Human release acceptance | (documented process) | Human reviews captures on target hardware for legibility, clipping, contrast, controller-only usability |
 
@@ -199,7 +200,7 @@ nix-shell --run "ctest --test-dir build-check -R 'test_overlay_visual|test_manag
 # Golden image comparison:
 nix-shell --run "ctest --test-dir build-check -R test_golden --output-on-failure"
 
-# Installed smoke test (requires Xvfb, xdotool, ImageMagick):
+# Installed smoke test (requires Xvfb, xdotool, ImageMagick, bc):
 nix-shell --run "ctest --test-dir build-check -R test_installed_smoke --output-on-failure"
 
 # Backend smoke test (requires real GPU/display):
@@ -216,6 +217,27 @@ reviewed change — never automatic):
 See [docs/OPERATIONS.md](docs/OPERATIONS.md) for the golden image workflow,
 tolerance values, failure artifact diagnosis, and the human release acceptance
 checklist.
+
+### Interaction acceptance tests
+
+The project includes a full §5.7 interaction acceptance suite that exercises
+every manager control and overlay action through normal SDL event dispatch
+(`cbx_manager_handle_event` for the manager, `cbx_overlay_service_step` for
+the overlay — not direct callback invocation):
+
+| Test | Coverage |
+|------|----------|
+| `test_manager_interaction_ctrl` | M01–M09 (Controllers tab), M21–M27 (Settings tab) — controller + pointer paths |
+| `test_manager_interaction_prof` | M10–M20 (Profiles tab), M28–M38 (Profile editor) — controller + pointer paths |
+| `test_overlay_interaction` | O01–O12 (overlay open, move, profile cycle, host mode, conflict, close) — controller + DBus InputEvent paths |
+| `test_interaction_inventory` | M01–M38, O01–O12, D01–D08 inventory validation |
+
+Disabled-control scenarios (D01–D08) verify that disabled controls reject both
+activation paths and produce no backend or filesystem side effect.
+
+```bash
+nix-shell --run "ctest --test-dir build-check -R 'test_manager_interaction|test_overlay_interaction|test_interaction_inventory' --output-on-failure"
+```
 
 ## Bug maintenance
 

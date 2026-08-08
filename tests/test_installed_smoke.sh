@@ -67,7 +67,7 @@ trap cleanup EXIT
 echo "=== Task 9: Installed production smoke test ==="
 echo ""
 
-for tool in Xvfb xdotool import convert; do
+for tool in Xvfb xdotool import convert bc; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         echo "SKIP: required tool '$tool' is not installed"
         echo "      Install xorg.xorgserver (Xvfb), xdotool, and imagemagick"
