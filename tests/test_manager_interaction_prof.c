@@ -1189,6 +1189,19 @@ test_editor_save_close(void **state)
     assert_int_equal(access(path, F_OK), 0);
 }
 
+static void
+test_editor_save_button_pointer(void **state)
+{
+    mip_fixture *f = *state;
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&f->mgr);
+    open_editor(&f->mgr, 2);
+    assert_true(cbx_widget_is_visible(&pt->save_btn.base));
+    int x, y;
+    widget_center(&pt->save_btn.base, &x, &y);
+    send_mouse_click(&f->mgr, x, y);
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_LIST);
+}
+
 /* ------------------------------------------------------------------ */
 /*  Profile editor — Cancel editor / discard (M38)                   */
 /* ------------------------------------------------------------------ */
@@ -1219,6 +1232,19 @@ test_editor_cancel_discard(void **state)
     struct stat st_after;
     assert_int_equal(stat(path, &st_after), 0);
     assert_int_equal(st_before.st_mtime, st_after.st_mtime);
+}
+
+static void
+test_editor_discard_button_pointer(void **state)
+{
+    mip_fixture *f = *state;
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&f->mgr);
+    open_editor(&f->mgr, 2);
+    assert_true(cbx_widget_is_visible(&pt->discard_btn.base));
+    int x, y;
+    widget_center(&pt->discard_btn.base, &x, &y);
+    send_mouse_click(&f->mgr, x, y);
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_LIST);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1457,10 +1483,14 @@ main(void)
         /* Profile editor — save and close (M37) */
         cmocka_unit_test_setup_teardown(
             test_editor_save_close, mip_setup, mip_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_editor_save_button_pointer, mip_setup, mip_teardown),
 
         /* Profile editor — cancel / discard (M38) */
         cmocka_unit_test_setup_teardown(
             test_editor_cancel_discard, mip_setup, mip_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_editor_discard_button_pointer, mip_setup, mip_teardown),
 
         /* Disabled / degraded scenarios */
         cmocka_unit_test_setup_teardown(
