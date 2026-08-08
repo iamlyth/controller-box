@@ -18,6 +18,7 @@
 #include "dbus/ip_connection.h"
 #include "dbus/ip_manager.h"
 #include "dbus/ip_target.h"
+#include "dbus/ip_composite.h"
 #include "dbus/ip_objectmanager.h"
 #include "dbus/ip_device_model.h"
 #include "dbus_mock.h"             /* IP_DBUS_PATH, IP_IFACE_* */
@@ -74,6 +75,13 @@ static char g_target_paths[NATIVE_MAX_TARGETS][256];
 static char g_target_types[NATIVE_MAX_TARGETS][32];
 static int  g_target_count = 0;
 
+/* Attachment tracking: for each composite index, list of attached target paths. */
+#define NATIVE_MAX_COMPOSITES 16
+#define NATIVE_MAX_ATTACHED_PER_COMP 16
+static char g_attached_targets[NATIVE_MAX_COMPOSITES][NATIVE_MAX_ATTACHED_PER_COMP][256];
+static int  g_attached_counts[NATIVE_MAX_COMPOSITES];
+static int  g_attached_count = 0;
+
 /* Property getter for target DeviceType (called from fallback vtable). */
 static int
 target_property_get(sd_bus *bus, const char *path, const char *interface,
@@ -94,6 +102,39 @@ target_property_get(sd_bus *bus, const char *path, const char *interface,
 static const sd_bus_vtable target_vtable[] = {
     SD_BUS_VTABLE_START(0),
     SD_BUS_PROPERTY("DeviceType", "s", target_property_get, 0,
+                    SD_BUS_VTABLE_PROPERTY_CONST),
+    SD_BUS_VTABLE_END
+};
+
+/* Composite property getter for TargetDevices (returns attached target paths). */
+static int
+composite_property_get(sd_bus *bus, const char *path, const char *interface,
+                        const char *property, sd_bus_message *reply,
+                        void *userdata, sd_bus_error *error)
+{
+    (void)bus; (void)interface; (void)userdata; (void)error;
+    if (strcmp(property, "TargetDevices") != 0)
+        return -ENOENT;
+    /* Extract composite index. */
+    int comp_idx = -1;
+    const char *p = strstr(path, "CompositeDevice");
+    if (p)
+        comp_idx = atoi(p + strlen("CompositeDevice"));
+    int rc = sd_bus_message_open_container(reply, 'a', "s");
+    if (rc < 0) return rc;
+    if (comp_idx >= 0 && comp_idx < NATIVE_MAX_COMPOSITES) {
+        for (int j = 0; j < g_attached_counts[comp_idx]; j++) {
+            rc = sd_bus_message_append(reply, "s", g_attached_targets[comp_idx][j]);
+            if (rc < 0) break;
+        }
+    }
+    if (rc >= 0) rc = sd_bus_message_close_container(reply);
+    return rc;
+}
+
+static const sd_bus_vtable composite_vtable[] = {
+    SD_BUS_VTABLE_START(0),
+    SD_BUS_PROPERTY("TargetDevices", "as", composite_property_get, 0,
                     SD_BUS_VTABLE_PROPERTY_CONST),
     SD_BUS_VTABLE_END
 };
@@ -160,6 +201,47 @@ method_stop_target(sd_bus_message *m, void *userdata, sd_bus_error *error)
             break;
         }
     }
+    return sd_bus_reply_method_return(m, "");
+}
+
+/* Method handler: Manager.AttachTargetDevice(target:s, composite:s) */
+static int
+method_attach_target(sd_bus_message *m, void *userdata, sd_bus_error *error)
+{
+    (void)userdata; (void)error;
+    const char *target_path = NULL;
+    const char *composite_path = NULL;
+    int rc = sd_bus_message_read(m, "ss", &target_path, &composite_path);
+    if (rc < 0)
+        return rc;
+    /* Validate target exists. */
+    bool found = false;
+    for (int i = 0; i < g_target_count; i++) {
+        if (strcmp(g_target_paths[i], target_path) == 0) {
+            found = true;
+            break;
+        }
+    }
+    if (!found)
+        return sd_bus_error_set(error, "org.freedesktop.DBus.Error.UnknownObject",
+                                "target not found");
+    /* Extract composite index from path (CompositeDevice0 → 0). */
+    int comp_idx = -1;
+    const char *p = strstr(composite_path, "CompositeDevice");
+    if (p)
+        comp_idx = atoi(p + strlen("CompositeDevice"));
+    if (comp_idx < 0 || comp_idx >= NATIVE_MAX_COMPOSITES)
+        return sd_bus_error_set(error, "org.freedesktop.DBus.Error.UnknownObject",
+                                "composite not found");
+    /* Record attachment (append to list for this composite). */
+    if (g_attached_counts[comp_idx] < NATIVE_MAX_ATTACHED_PER_COMP) {
+        snprintf(g_attached_targets[comp_idx][g_attached_counts[comp_idx]],
+                 sizeof(g_attached_targets[comp_idx][g_attached_counts[comp_idx]]),
+                 "%s", target_path);
+        g_attached_counts[comp_idx]++;
+    }
+    if (comp_idx + 1 > g_attached_count)
+        g_attached_count = comp_idx + 1;
     return sd_bus_reply_method_return(m, "");
 }
 
@@ -268,6 +350,7 @@ static const sd_bus_vtable manager_vtable[] = {
                     SD_BUS_VTABLE_PROPERTY_CONST),
     SD_BUS_METHOD("CreateTargetDevice", "s", "s", method_create_target, 0),
     SD_BUS_METHOD("StopTargetDevice", "s", "", method_stop_target, 0),
+    SD_BUS_METHOD("AttachTargetDevice", "ss", "", method_attach_target, 0),
     SD_BUS_VTABLE_END
 };
 
@@ -330,6 +413,10 @@ static int run_service_full(const char *address)
               "/org/shadowblip/InputPlumber/devices/target",
               "org.shadowblip.Input.Target",
               target_vtable, target_find, NULL)) < 0 ||
+        (rc = sd_bus_add_object_vtable(bus, NULL,
+              "/org/shadowblip/InputPlumber/CompositeDevice0",
+              "org.shadowblip.Input.CompositeDevice",
+              composite_vtable, NULL)) < 0 ||
         (rc = sd_bus_request_name(bus, "org.shadowblip.InputPlumber", 0)) < 0) {
         sd_bus_unref(bus);
         return 21;
@@ -673,6 +760,186 @@ test_native_target_operations(void **state)
     unsetenv("DBUS_SYSTEM_BUS_ADDRESS");
 }
 
+
+/* --- Native fixture: topology reconciliation via real sd-bus ------- */
+
+static void
+test_native_topology_reconciliation(void **state)
+{
+    (void)state;
+    char address[512];
+    pid_t daemon_pid = 0;
+    assert_int_equal(start_private_bus(address, sizeof(address),
+                                        &daemon_pid), 0);
+    private_daemon_pid = daemon_pid;
+    setenv("DBUS_SYSTEM_BUS_ADDRESS", address, 1);
+
+    /* Reset server state and start it. */
+    g_target_count = 0;
+    g_attached_count = 0;
+    memset(g_attached_targets, 0, sizeof(g_attached_targets));
+    memset(g_attached_counts, 0, sizeof(g_attached_counts));
+    service_running = 1;
+    pid_t server_pid = fork();
+    assert_true(server_pid >= 0);
+    if (server_pid == 0)
+        _exit(run_service_full(address));
+    private_server_pid = server_pid;
+
+    /* Wait for the server to come up. */
+    const ip_dbus_backend *backend = ip_dbus_sd_backend();
+    ip_bus_handle bus = NULL;
+    assert_int_equal(backend->connect(&bus), 0);
+
+    /* Poll for Version. */
+    char *version = NULL;
+    int rc = -1;
+    for (int i = 0; i < 100 && rc != 0; i++) {
+        free(version); version = NULL;
+        rc = backend->get_property(bus, IP_DBUS_NAME,
+            IP_DBUS_MANAGER_PATH, IP_IFACE_MANAGER, "Version", &version);
+        if (rc != 0) usleep(10000);
+    }
+    assert_int_equal(rc, 0);
+    free(version);
+
+    /* --- Scenario 1: Clean startup creates ordered topology ---
+     * Desired: 3 targets -- xb360, ds5, gamepad.
+     * Start from empty, create them in order, verify count/types/attach. */
+    cbx_device_model model;
+    cbx_device_model_init(&model);
+    assert_int_equal(cbx_objectmanager_enumerate(backend, bus, &model), 0);
+    assert_int_equal(model.target_count, 0);
+    assert_int_equal(model.composite_count, 1);
+
+    /* Create 3 targets in order. */
+    char *path0 = NULL, *path1 = NULL, *path2 = NULL;
+    assert_int_equal(ip_manager_create_target_device(
+        backend, bus, "xb360", &path0), 0);
+    assert_non_null(path0);
+    assert_int_equal(ip_manager_create_target_device(
+        backend, bus, "ds5", &path1), 0);
+    assert_non_null(path1);
+    assert_int_equal(ip_manager_create_target_device(
+        backend, bus, "gamepad", &path2), 0);
+    assert_non_null(path2);
+
+    /* Verify via ObjectManager. */
+    cbx_device_model_init(&model);
+    assert_int_equal(cbx_objectmanager_enumerate(backend, bus, &model), 0);
+    assert_int_equal(model.target_count, 3);
+
+    /* Verify DeviceType per slot. */
+    char *dtype0 = NULL, *dtype1 = NULL, *dtype2 = NULL;
+    assert_int_equal(ip_target_get_device_type(backend, bus,
+        model.targets[0].path, &dtype0), 0);
+    assert_string_equal(dtype0, "xb360"); free(dtype0);
+    assert_int_equal(ip_target_get_device_type(backend, bus,
+        model.targets[1].path, &dtype1), 0);
+    assert_string_equal(dtype1, "ds5"); free(dtype1);
+    assert_int_equal(ip_target_get_device_type(backend, bus,
+        model.targets[2].path, &dtype2), 0);
+    assert_string_equal(dtype2, "gamepad"); free(dtype2);
+
+    /* Attach each target to its composite and verify routability
+     * via the CompositeDevice TargetDevices property. */
+    const char *comp0 = "/org/shadowblip/InputPlumber/CompositeDevice0";
+    assert_int_equal(ip_manager_attach_target_device(
+        backend, bus, model.targets[0].path, comp0), 0);
+    assert_int_equal(ip_manager_attach_target_device(
+        backend, bus, model.targets[1].path, comp0), 0);
+    assert_int_equal(ip_manager_attach_target_device(
+        backend, bus, model.targets[2].path, comp0), 0);
+
+    /* Verify routability: TargetDevices on CompositeDevice0 lists all 3. */
+    char *td = NULL;
+    assert_int_equal(ip_composite_get_target_devices(
+        backend, bus, comp0, &td), 0);
+    assert_non_null(td);
+    assert_true(strstr(td, model.targets[0].path) != NULL);
+    assert_true(strstr(td, model.targets[1].path) != NULL);
+    assert_true(strstr(td, model.targets[2].path) != NULL);
+    free(td);
+
+    /* --- Scenario 2: Remove one slot, verify others preserved ---
+     * Stop target at slot 1 (ds5), verify count=2 and remaining are
+     * slot 0 (xb360) and slot 1 (gamepad). */
+    char slot1_path[256];
+    snprintf(slot1_path, sizeof(slot1_path), "%s", model.targets[1].path);
+    assert_int_equal(ip_manager_stop_target_device(backend, bus, slot1_path), 0);
+
+    cbx_device_model model2;
+    cbx_device_model_init(&model2);
+    assert_int_equal(cbx_objectmanager_enumerate(backend, bus, &model2), 0);
+    assert_int_equal(model2.target_count, 2);
+    /* Slot 0 should still be xb360. */
+    char *dt0 = NULL;
+    assert_int_equal(ip_target_get_device_type(backend, bus,
+        model2.targets[0].path, &dt0), 0);
+    assert_string_equal(dt0, "xb360"); free(dt0);
+    /* Slot 1 should now be gamepad (was slot 2 before remove). */
+    char *dt1 = NULL;
+    assert_int_equal(ip_target_get_device_type(backend, bus,
+        model2.targets[1].path, &dt1), 0);
+    assert_string_equal(dt1, "gamepad"); free(dt1);
+
+    /* --- Scenario 3: Type correction (stop+create in reverse) ---
+     * Current: [xb360, gamepad]. Change slot 1 to ds5.
+     * Stop slot 1 (gamepad, last in array), create new ds5. */
+    char old_path[256];
+    snprintf(old_path, sizeof(old_path), "%s", model2.targets[1].path);
+    assert_int_equal(ip_manager_stop_target_device(backend, bus, old_path), 0);
+    char *new_path = NULL;
+    assert_int_equal(ip_manager_create_target_device(
+        backend, bus, "ds5", &new_path), 0);
+    assert_non_null(new_path);
+    free(new_path);
+
+    cbx_device_model model3;
+    cbx_device_model_init(&model3);
+    assert_int_equal(cbx_objectmanager_enumerate(backend, bus, &model3), 0);
+    assert_int_equal(model3.target_count, 2);
+    /* Slot 0 should still be xb360 (preserved). */
+    char *s3_dt0 = NULL;
+    assert_int_equal(ip_target_get_device_type(backend, bus,
+        model3.targets[0].path, &s3_dt0), 0);
+    assert_string_equal(s3_dt0, "xb360"); free(s3_dt0);
+    /* Slot 1 should now be ds5 (corrected). */
+    char *s3_dt1 = NULL;
+    assert_int_equal(ip_target_get_device_type(backend, bus,
+        model3.targets[1].path, &s3_dt1), 0);
+    assert_string_equal(s3_dt1, "ds5"); free(s3_dt1);
+
+    /* --- Scenario 4: Attach after type correction verifies routability --- */
+    assert_int_equal(ip_manager_attach_target_device(
+        backend, bus, model3.targets[0].path, comp0), 0);
+    assert_int_equal(ip_manager_attach_target_device(
+        backend, bus, model3.targets[1].path, comp0), 0);
+    char *td2 = NULL;
+    assert_int_equal(ip_composite_get_target_devices(
+        backend, bus, comp0, &td2), 0);
+    assert_non_null(td2);
+    assert_true(strstr(td2, model3.targets[0].path) != NULL);
+    assert_true(strstr(td2, model3.targets[1].path) != NULL);
+    free(td2);
+
+    /* Clean up all targets. */
+    for (int i = model3.target_count - 1; i >= 0; i--) {
+        ip_manager_stop_target_device(backend, bus, model3.targets[i].path);
+    }
+
+    /* Clean up. */
+    free(path0); free(path1); free(path2);
+    backend->disconnect(bus);
+    kill(server_pid, SIGTERM);
+    waitpid(server_pid, NULL, 0);
+    private_server_pid = 0;
+    kill(daemon_pid, SIGTERM);
+    waitpid(daemon_pid, NULL, 0);
+    private_daemon_pid = 0;
+    unsetenv("DBUS_SYSTEM_BUS_ADDRESS");
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -681,6 +948,8 @@ int main(void)
         cmocka_unit_test_teardown(test_native_owner_loss_and_reacquisition,
                                   cleanup_processes),
         cmocka_unit_test_teardown(test_native_target_operations,
+                                  cleanup_processes),
+        cmocka_unit_test_teardown(test_native_topology_reconciliation,
                                   cleanup_processes),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);

@@ -26,6 +26,10 @@
 
 #include "app/overlay_service.h"
 #include "dbus_mock.h"
+#include "dbus/ip_objectmanager.h"
+#include "dbus/ip_manager.h"
+#include "dbus/ip_target.h"
+#include "dbus/ip_device_model.h"
 #include "dbus/ip_input_signal.h"
 #include "config/config_settings.h"
 #include "config/config_assignments.h"
@@ -680,6 +684,182 @@ test_step_degraded_noop(void **state)
     assert_int_equal(f->reenumerate_called, 0);
 }
 
+
+/* ------------------------------------------------------------------ */
+/*  Task 5: cbx_reconcile_startup_targets tests                       */
+/* ------------------------------------------------------------------ */
+
+/* Fixture with 1 composite and 1 target (for reconcile tests). */
+static const char *FIXTURE_1C1T_RECON =
+    "/org/shadowblip/InputPlumber/Manager\t"
+        "org.shadowblip.InputManager\n"
+    "/org/shadowblip/InputPlumber/CompositeDevice0\t"
+        "org.shadowblip.Input.CompositeDevice\n"
+    "/org/shadowblip/InputPlumber/devices/target/xb3600\t"
+        "org.shadowblip.Input.Target,org.shadowblip.Input.Gamepad\n";
+
+/* Empty fixture (no targets). */
+static const char *FIXTURE_EMPTY_RECON = "";
+
+static int
+reconcile_setup(void **state)
+{
+    conn_step_fixture *f = malloc(sizeof(*f));
+    memset(f, 0, sizeof(*f));
+
+    SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
+    SDL_VideoInit("dummy");
+
+    f->svc = calloc(1, sizeof(cbx_overlay_service_ctx));
+    assert_non_null(f->svc);
+
+    int rc = cbx_renderer_init(&f->svc->rend, "test",
+                               CBX_RENDERER_DEFAULT_W,
+                               CBX_RENDERER_DEFAULT_H, false);
+    assert_int_equal(rc, 0);
+
+    /* Mock DBus — connected. */
+    ip_dbus_mock_init(&f->mock);
+    f->backend = ip_dbus_mock_backend(&f->mock);
+    ip_connection_init(&f->svc->conn, f->backend);
+    ip_connection_set_bus(&f->svc->conn, f->mock.bus);
+
+    /* Settings: 1 target, type xb360. */
+    cbx_settings_defaults(&f->svc->settings);
+    f->svc->settings.virtual_controllers.count = 1;
+    snprintf(f->svc->settings.virtual_controllers.types[0],
+             CBX_MAX_TYPE_LEN, "xb360");
+
+    /* Device model with 1 composite. */
+    cbx_device_model_init(&f->svc->model);
+    cbx_device_model_set_manager(&f->svc->model,
+        "/org/shadowblip/InputPlumber/Manager");
+    cbx_device_model_add_composite(&f->svc->model,
+        "/org/shadowblip/InputPlumber/CompositeDevice0");
+
+    *state = f;
+    return 0;
+}
+
+static int
+reconcile_teardown(void **state)
+{
+    conn_step_fixture *f = *state;
+    if (f) {
+        if (f->svc) {
+            ip_connection_disconnect(&f->svc->conn);
+            cbx_renderer_shutdown(&f->svc->rend);
+            free(f->svc);
+        }
+        free(f);
+    }
+    SDL_Event ev;
+    while (SDL_PollEvent(&ev))
+        ;
+    return 0;
+}
+
+/* Test: reconcile grows from 0 to 1 target, attaches it to composite.
+ * Mock returns CreateTargetDevice path + GetManagedObjects with 1 target. */
+static void
+test_reconcile_grow_and_attach(void **state)
+{
+    conn_step_fixture *f = *state;
+
+    /* Start with 0 targets. */
+    f->svc->model.target_count = 0;
+
+    /* Expect CreateTargetDevice to return a path. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+        "CreateTargetDevice",
+        "/org/shadowblip/InputPlumber/devices/target/xb3600");
+    /* Expect GetManagedObjects with 1 target. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_OBJECT_MANAGER,
+        "GetManagedObjects", FIXTURE_1C1T_RECON);
+    /* Expect AttachTargetDevice to succeed (returns NULL = void). */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+        "AttachTargetDevice", NULL);
+    /* Expect DeviceType query to return "xb360" (matches settings). */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_TARGET, "DeviceType", "xb360");
+
+    int rc = cbx_reconcile_startup_targets(f->svc);
+    assert_int_equal(rc, 0);
+    assert_int_equal(f->svc->model.target_count, 1);
+}
+
+/* Test: reconcile returns error when CreateTargetDevice fails. */
+static void
+test_reconcile_create_fails(void **state)
+{
+    conn_step_fixture *f = *state;
+
+    f->svc->model.target_count = 0;
+
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_MANAGER,
+        "CreateTargetDevice", IP_ERR_INVALID_ARGS);
+
+    int rc = cbx_reconcile_startup_targets(f->svc);
+    assert_true(rc < 0);
+    assert_int_equal(f->svc->model.target_count, 0);
+}
+
+/* Test: reconcile returns error when GetManagedObjects fails after create. */
+static void
+test_reconcile_enumerate_fails(void **state)
+{
+    conn_step_fixture *f = *state;
+
+    f->svc->model.target_count = 0;
+
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+        "CreateTargetDevice",
+        "/org/shadowblip/InputPlumber/devices/target/xb3600");
+    /* GetManagedObjects returns empty (no target visible = unconfirmed). */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_OBJECT_MANAGER,
+        "GetManagedObjects", FIXTURE_EMPTY_RECON);
+    /* For rollback: StopTargetDevice + GetManagedObjects. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+        "StopTargetDevice", NULL);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_OBJECT_MANAGER,
+        "GetManagedObjects", FIXTURE_EMPTY_RECON);
+
+    int rc = cbx_reconcile_startup_targets(f->svc);
+    assert_true(rc < 0);
+    /* Rollback should leave 0 targets. */
+    assert_int_equal(f->svc->model.target_count, 0);
+}
+
+/* Test: reconcile shrinks from 2 to 1 target. */
+static void
+test_reconcile_shrink(void **state)
+{
+    conn_step_fixture *f = *state;
+
+    /* Start with 2 targets (model has 2, desired is 1). */
+    f->svc->model.target_count = 2;
+    snprintf(f->svc->model.targets[0].path, CBX_MAX_PATH_LEN,
+             "/org/shadowblip/InputPlumber/devices/target/xb3600");
+    snprintf(f->svc->model.targets[1].path, CBX_MAX_PATH_LEN,
+             "/org/shadowblip/InputPlumber/devices/target/xb3601");
+
+    /* Expect StopTargetDevice to succeed. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+        "StopTargetDevice", NULL);
+    /* GetManagedObjects returns 1 target. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_OBJECT_MANAGER,
+        "GetManagedObjects", FIXTURE_1C1T_RECON);
+    /* DeviceType for the remaining target. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_TARGET, "DeviceType", "xb360");
+    /* AttachTargetDevice for the remaining target. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+        "AttachTargetDevice", NULL);
+
+    int rc = cbx_reconcile_startup_targets(f->svc);
+    assert_int_equal(rc, 0);
+    assert_int_equal(f->svc->model.target_count, 1);
+}
+
+
 /* ------------------------------------------------------------------ */
 /*  Test runner                                                        */
 /* ------------------------------------------------------------------ */
@@ -712,6 +892,15 @@ static const struct CMUnitTest tests[] = {
                                      conn_step_setup, conn_step_teardown),
     cmocka_unit_test_setup_teardown(test_step_degraded_noop,
                                      conn_step_setup, conn_step_teardown),
+    /* Task 5: reconcile startup targets */
+    cmocka_unit_test_setup_teardown(test_reconcile_grow_and_attach,
+                                     reconcile_setup, reconcile_teardown),
+    cmocka_unit_test_setup_teardown(test_reconcile_create_fails,
+                                     reconcile_setup, reconcile_teardown),
+    cmocka_unit_test_setup_teardown(test_reconcile_enumerate_fails,
+                                     reconcile_setup, reconcile_teardown),
+    cmocka_unit_test_setup_teardown(test_reconcile_shrink,
+                                     reconcile_setup, reconcile_teardown),
 };
 
 int main(void)

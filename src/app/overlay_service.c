@@ -27,6 +27,7 @@
 #include "dbus/ip_device_model.h"
 #include "dbus/ip_composite.h"
 #include "dbus/ip_manager.h"
+#include "dbus/ip_target.h"
 #include "dbus/ip_input_signal.h"
 #include "dbus/ip_intercept_poll.h"
 #include "overlay/surface_build.h"
@@ -315,48 +316,158 @@ static void set_all_pass(const ip_dbus_backend *backend, ip_bus_handle bus,
                                          composites[i].path, "1");
 }
 
-static int
-reconcile_startup_targets(cbx_overlay_service_ctx *svc)
+int
+cbx_reconcile_startup_targets(cbx_overlay_service_ctx *svc)
 {
     int desired = svc->settings.virtual_controllers.count;
     if (desired < 0 || desired > CBX_MAX_CONTROLLERS)
         return -EINVAL;
 
+    /* --- Record original target paths for rollback ------------------ */
+    char orig_paths[CBX_MAX_DEVICES][CBX_MAX_PATH_LEN];
+    int orig_count = svc->model.target_count;
+    for (int i = 0; i < orig_count; i++)
+        snprintf(orig_paths[i], sizeof(orig_paths[i]), "%s",
+                 svc->model.targets[i].path);
+
+    int rc = 0;
+
+    /* --- Phase 1: Grow — create targets until count matches -------- */
     while (svc->model.target_count < desired) {
         int index = svc->model.target_count;
         const char *kind = svc->settings.virtual_controllers.types[index];
         if (!kind[0])
             kind = "xb360";
         char *created_path = NULL;
-        int rc = ip_manager_create_target_device(svc->conn.backend,
-                                                   svc->conn.bus, kind,
-                                                   &created_path);
+        rc = ip_manager_create_target_device(svc->conn.backend,
+                                               svc->conn.bus, kind,
+                                               &created_path);
         free(created_path);
         if (rc != 0)
-            return rc;
+            goto rollback;
         /* Re-enumerate after every transaction; method success without an
          * ObjectManager-visible target is not a confirmed outcome. */
         rc = cbx_objectmanager_enumerate(svc->conn.backend, svc->conn.bus,
                                           &svc->model);
-        if (rc != 0 || svc->model.target_count <= index)
-            return rc != 0 ? rc : -EIO;
+        if (rc != 0 || svc->model.target_count <= index) {
+            rc = rc != 0 ? rc : -EIO;
+            goto rollback;
+        }
     }
 
+    /* --- Phase 2: Shrink — stop excess targets -------------------- */
     while (svc->model.target_count > desired) {
         char path[CBX_MAX_PATH_LEN];
         snprintf(path, sizeof(path), "%s",
                  svc->model.targets[svc->model.target_count - 1].path);
         int previous = svc->model.target_count;
-        int rc = ip_manager_stop_target_device(svc->conn.backend,
-                                                 svc->conn.bus, path);
+        rc = ip_manager_stop_target_device(svc->conn.backend,
+                                             svc->conn.bus, path);
         if (rc != 0)
-            return rc;
+            goto rollback;
         rc = cbx_objectmanager_enumerate(svc->conn.backend, svc->conn.bus,
                                           &svc->model);
-        if (rc != 0 || svc->model.target_count >= previous)
-            return rc != 0 ? rc : -EIO;
+        if (rc != 0 || svc->model.target_count >= previous) {
+            rc = rc != 0 ? rc : -EIO;
+            goto rollback;
+        }
     }
+
+    /* --- Phase 3: Per-slot type correction (SPEC §5.2) -------------
+     * Walk slots in reverse order. For each slot whose actual DeviceType
+     * does not match the desired type from settings, stop the old target
+     * and create a new one.  Reverse order preserves the array ordering:
+     * stopping the last target causes no shift, and the new target is
+     * appended to the end — so slot i stays at position i for all i. */
+    for (int slot = svc->model.target_count - 1; slot >= 0; slot--) {
+        const char *desired_type =
+            svc->settings.virtual_controllers.types[slot];
+        if (!desired_type[0])
+            desired_type = "xb360";
+
+        char *actual_type = NULL;
+        rc = ip_target_get_device_type(svc->conn.backend, svc->conn.bus,
+                                         svc->model.targets[slot].path,
+                                         &actual_type);
+        if (rc != 0) {
+            free(actual_type);
+            goto rollback;
+        }
+        if (strcmp(actual_type, desired_type) == 0) {
+            free(actual_type);
+            continue;
+        }
+        free(actual_type);
+
+        /* Stop old target and create a new one with the correct type. */
+        char old_path[CBX_MAX_PATH_LEN];
+        snprintf(old_path, sizeof(old_path), "%s",
+                 svc->model.targets[slot].path);
+        rc = ip_manager_stop_target_device(svc->conn.backend,
+                                              svc->conn.bus, old_path);
+        if (rc != 0)
+            goto rollback;
+
+        char *new_path = NULL;
+        rc = ip_manager_create_target_device(svc->conn.backend,
+                                                svc->conn.bus, desired_type,
+                                                &new_path);
+        if (rc != 0) {
+            free(new_path);
+            /* Re-enumerate to get the current confirmed state. */
+            cbx_objectmanager_enumerate(svc->conn.backend, svc->conn.bus,
+                                          &svc->model);
+            goto rollback;
+        }
+        free(new_path);
+
+        rc = cbx_objectmanager_enumerate(svc->conn.backend, svc->conn.bus,
+                                          &svc->model);
+        if (rc != 0 || svc->model.target_count != desired) {
+            rc = rc != 0 ? rc : -EIO;
+            goto rollback;
+        }
+    }
+
+    /* --- Phase 4: Attach targets to composites (SPEC §5.2) ---------
+     * Each target must be attached to its corresponding composite to be
+     * routable under the slot model.  Target[i] → Composite[i]. */
+    for (int slot = 0; slot < svc->model.target_count; slot++) {
+        if (slot >= svc->model.composite_count)
+            break;
+        rc = ip_manager_attach_target_device(svc->conn.backend,
+                                                svc->conn.bus,
+                                                svc->model.targets[slot].path,
+                                                svc->model.composites[slot].path);
+        if (rc != 0)
+            goto rollback;
+    }
+
     return 0;
+
+rollback:
+    /* Stop any targets that were created during this reconcile but were
+     * not in the original set (SPEC §5.2: failures retain last confirmed
+     * topology).  Re-enumerate to restore the confirmed state. */
+    cbx_objectmanager_enumerate(svc->conn.backend, svc->conn.bus,
+                                  &svc->model);
+    for (int i = svc->model.target_count - 1; i >= 0; i--) {
+        bool was_original = false;
+        for (int j = 0; j < orig_count; j++) {
+            if (strcmp(svc->model.targets[i].path, orig_paths[j]) == 0) {
+                was_original = true;
+                break;
+            }
+        }
+        if (!was_original) {
+            ip_manager_stop_target_device(svc->conn.backend,
+                                            svc->conn.bus,
+                                            svc->model.targets[i].path);
+        }
+    }
+    cbx_objectmanager_enumerate(svc->conn.backend, svc->conn.bus,
+                                  &svc->model);
+    return rc;
 }
 
 static void
@@ -386,7 +497,7 @@ overlay_backend_ready(void *userdata)
 
     if (cbx_objectmanager_enumerate(svc->conn.backend, svc->conn.bus,
                                      &svc->model) != 0 ||
-        reconcile_startup_targets(svc) != 0) {
+        cbx_reconcile_startup_targets(svc) != 0) {
         overlay_backend_degraded("InputPlumber enumeration failed", svc);
         return;
     }
@@ -802,7 +913,7 @@ int run_overlay_service(int dry_run)
     cbx_assignments_init(&svc->assignments);
     cbx_assignments_load(&svc->assignments);  /* best-effort */
 
-    rc = svc->backend_ready ? reconcile_startup_targets(svc) : 0;
+    rc = svc->backend_ready ? cbx_reconcile_startup_targets(svc) : 0;
     if (rc != 0) {
         fprintf(stderr,
                 "controller-box: failed to reconcile virtual controllers: %d\n",

@@ -179,6 +179,31 @@ typedef struct cbx_overlay_service_ctx {
  */
 void cbx_overlay_service_step(cbx_overlay_service_ctx *svc);
 
+/* --- Topology reconciliation (exposed for testing — Task 5) ------------- */
+
+/*
+ * Reconcile InputPlumber's live target topology to match the configured
+ * desired topology from settings.yaml (SPEC §5.2).
+ *
+ * Phases:
+ *   1. Grow: create targets until count matches settings.virtual_controllers.count
+ *   2. Shrink: stop excess targets
+ *   3. Type correction: for each slot whose DeviceType doesn't match
+ *      settings, stop old target and create new one (reverse order to
+ *      preserve array ordering)
+ *   4. Attach: attach each target to its corresponding composite
+ *      (target[i] → composite[i]) for routability
+ *
+ * On any failure, rolls back by stopping all targets created during this
+ * call that were not in the original set (SPEC §5.2: failures retain
+ * last confirmed topology).
+ *
+ * Every create/stop is confirmed via ObjectManager re-enumeration.
+ *
+ * Returns 0 on success, negative errno on failure.
+ */
+int cbx_reconcile_startup_targets(cbx_overlay_service_ctx *svc);
+
 /* --- Overlay service entry point ------------------------------------- */
 
 /*

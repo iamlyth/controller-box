@@ -26,7 +26,7 @@ Make the installed product perform its core job from a clean environment: connec
 | FR-01 | §§2.2, 10 native DBus signatures | missing | Production reads every property as `s`; required `as`, `u`, and `b` fail | Task 1 |
 | FR-02 | §§2.4, 10.1 readiness/recovery/hotplug | verified | Manager and overlay drain DBus unconditionally; distinct degraded reasons; version compat check; owner loss/reacquisition via native sd-bus | Tasks 2, 9 |
 | FR-03 | §§5.1, 5.7 real controller Manager input | missing | Manager initializes video only and tests inject keyboard events | Task 3 |
-| FR-04 | §§5.2, 5.5 authoritative virtual topology | missing | Add picker fails on `as`; startup settings do not create targets; Add does not confirm routing | Tasks 4, 5 |
+| FR-04 | §§5.2, 5.5 authoritative virtual topology | verified | Add picker uses native arrays (Task 4); startup reconcile creates/attaches/confirms ordered topology with per-slot type correction and rollback (Task 5); Add confirms type via ObjectManager + DeviceType (Task 4); AttachTargetDevice makes targets routable (Task 5) | Tasks 4, 5 |
 | FR-05 | §§5.3–5.4 clean-home profile workflow | missing | No shipped Default; Empty cannot add first binding; save/discard is implicit | Tasks 6, 7 |
 | FR-06 | §§4.1–4.7 assignment/profile backend application | partial | Overlay changes grid/config without confirming InputPlumber state; profiles not loaded | Task 8 |
 | FR-07 | §§4.9–4.10 compositor-visible reusable overlay | missing | Production overlay window remains hidden and lifecycle is one-shot | Task 9 |
@@ -82,7 +82,8 @@ Production acceptance covers these semantic workflows through normal production 
 - Documentation impact: Controllers workflow.
 
 ## Task 5: Authoritative startup target topology and routability
-- Status: pending
+- Status: complete
+- Evidence: cbx_reconcile_startup_targets now has 4 phases (grow, shrink, per-slot type correction via reverse-order stop+create, attach targets to composites for routability) with rollback on partial failure (stops targets created during this reconcile that were not in the original set); test_native_topology_reconciliation exercises full topology lifecycle through real sd-bus (create ordered topology, verify DeviceType per slot, attach and verify routability via CompositeDevice TargetDevices property, remove preserving others, type correction via reverse-order stop+create, re-attach after correction); test_reconcile_grow_and_attach, test_reconcile_create_fails, test_reconcile_enumerate_fails, test_reconcile_shrink cover mock-based paths; native test server extended with AttachTargetDevice method + TargetDevices property; 81/81 CTest pass.
 - Dependencies: Task 4
 - Scope: topology reconciliation service, settings integration, create/attach/stop/type transactions, assignment unapply/rollback.
 - Acceptance criteria: clean startup reaches configured ordered target topology; created targets are attached/routable; removing/type-changing one slot preserves others; failures retain last confirmed topology.
