@@ -80,7 +80,7 @@ specification. Adding post-v1 features (§§12–13).
 | REQ-028 | §10 DBus integration | verified | All `ip_*.c` wrappers tested: `test_manager_calls.c`, `test_composite_calls.c`, `test_connection.c`, `test_objectmanager_parse.c`, `test_properties_changed.c`, `test_hotplug.c`, `test_input_signal.c`, `test_source_props.c`, `test_target_props.c`, `test_intercept_poll.c`, `test_gamepad_order.c`, `test_order_restore.c`, `test_create_composite.c` | — |
 | REQ-029 | §11.1 Rendering verification (7 layers) | partial | Layers 1–4 and 6 verified (framebuffer tests, golden images, backend smoke, failure artifacts); layer 5 (installed smoke) verified for keyboard input but **lacks coordinate-based mouse clicks on body controls** (§5.7 requirement); layer 7 (human release acceptance) is a pre-promotion gate documented in OPERATIONS.md, not an autonomous-cycle verification | Task 12 |
 | REQ-030 | §11.2 Autonomous definition of done | missing | Items 1 (conformance matrix — multiple partial/missing entries), 2 (production-path behavior — event dispatch broken: mouse not routed, tab activation not wired, editor not wired, overlay InputEvent not wired), 3 (interaction traversal — no tests exist), 6 (known-defect accounting — BUG-0002 open) not met | Task 1; Task 2; Task 3; Task 4; Task 5; Task 6; Task 7; Task 8; Task 9; Task 10; Task 11; Task 12; Task 13; Task 14 |
-| REQ-031 | BUG-0002 | missing | Open bug: `test_create_composite` XDG runtime test asserts global `/tmp/controller-box-*` count is zero instead of comparing before/after; leaks temp dir on assertion failure | Task 13 |
+| REQ-031 | BUG-0002 | verified | Fixed: `test_create_composite_xdg_runtime_dir_preferred` now compares `/tmp/controller-box-*` before/after instead of asserting global count == 0; XDG temp dir stored in fixture struct and cleaned in teardown via `rm -rf` (handles longjmp). BUG-0002 moved to `closed-bugs.md`. Verified with seeded unrelated file + full suite (78/78 pass) + `verify-project.sh` | Task 13 |
 | REQ-032 | §11 Performance targets | verified | Five targets are architectural guarantees: overlay <10 ms (pre-built surface, REQ-015), gameplay ~1–2 ms (no inline DBus, REQ-001), close <1 ms (single `InterceptMode` set, REQ-005), footprint (SDL2 minimal, DEC-001), atomic reorder (`GamepadOrder` setter, REQ-012). No runtime benchmark test needed — the design enforces these; verified by production-path composition tests (REQ-016, REQ-029) and DBus wrapper tests (REQ-028) | — |
 
 ## Interaction acceptance inventory
@@ -385,7 +385,7 @@ dispatch path, and the task that provides executable evidence.
 - Documentation impact: `docs/OPERATIONS.md` — update installed smoke test description to include coordinate-based click interactions.
 
 ## Task 13: Fix BUG-0002 — CreateComposite XDG runtime test order-dependence
-- Status: pending
+- Status: complete
 - Dependencies: none
 - Scope: `tests/test_create_composite.c`
 - Acceptance criteria:
@@ -394,7 +394,7 @@ dispatch path, and the task that provides executable evidence.
   - The test's own XDG temporary directory (`/tmp/cbx-xdg-*`) is cleaned up on both success and failure paths (use cleanup fixture or `assert_*` wrapper that runs cleanup unconditionally).
   - Repeated standalone and full CTest runs pass deterministically.
   - `open-bugs.md` BUG-0002 is updated with resolution and verification; entry moved to `closed-bugs.md`.
-- Verification: `nix-shell --run "touch /tmp/controller-box-unrelated-test-file && ctest --test-dir build-check -R test_create_composite --output-on-failure && rm /tmp/controller-box-unrelated-test-file"` — passes. Full suite: `nix-shell --run "ctest --test-dir build-check --output-on-failure"` — no regressions.
+- Verification: `nix-shell --run "touch /tmp/controller-box-unrelated-test-file && ctest --test-dir build-check -R test_create_composite --output-on-failure && rm /tmp/controller-box-unrelated-test-file"` — passes (1/1, 0.03s). Full suite: `nix-shell --run "ctest --test-dir build-check --output-on-failure"` — 78/78 pass (1 skip: backend_smoke), no regressions. `nix-shell --run "./scripts/verify-project.sh"` — all checks green. **Production changes**: (1) replaced `assert_int_equal(tmp_count, 0)` with before/after comparison (`tmp_before` measured before the operation, `tmp_after` after, `assert_int_equal(tmp_after, tmp_before)`); (2) moved `xdg_dir` from local stack variable into `create_fixture` struct so `teardown()` cleans it up via `rm -rf` even when cmocka `longjmp` bypasses the test body; (3) initialized `f->xdg_dir[0] = '\0'` in setup, added `rm -rf` cleanup block in teardown. BUG-0002 moved from `open-bugs.md` (now empty `[]`) to `closed-bugs.md` with resolution and verification text.
 - Documentation impact: `open-bugs.md` → `closed-bugs.md` (BUG-0002 moved).
 
 ## Task 14: Final documentation and specification audit

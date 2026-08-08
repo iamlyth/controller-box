@@ -35,6 +35,7 @@ typedef struct {
     cbx_device_model       model;
     char                   *saved_xdg;  /* saved XDG_RUNTIME_DIR */
     char                   temp_home[512];
+    char                   xdg_dir[512]; /* test-owned XDG temp dir (cleaned in teardown) */
 } create_fixture;
 
 static int
@@ -63,6 +64,8 @@ setup(void **state)
     f->saved_xdg = xdg ? strdup(xdg) : NULL;
     unsetenv("XDG_RUNTIME_DIR");
 
+    f->xdg_dir[0] = '\0';  /* no XDG temp dir created yet */
+
     *state = f;
     return 0;
 }
@@ -83,6 +86,12 @@ teardown(void **state)
         if (f->temp_home[0]) {
             char cmd[600];
             snprintf(cmd, sizeof(cmd), "rm -rf %s", f->temp_home);
+            /* Ignore errors — best effort cleanup. */
+            int __r = system(cmd); (void)__r;
+        }
+        if (f->xdg_dir[0]) {
+            char cmd[600];
+            snprintf(cmd, sizeof(cmd), "rm -rf %s", f->xdg_dir);
             /* Ignore errors — best effort cleanup. */
             int __r = system(cmd); (void)__r;
         }
@@ -240,18 +249,21 @@ test_create_composite_xdg_runtime_dir_preferred(void **state)
 {
     create_fixture *f = FIX(state);
 
-    /* Create a temp dir for XDG_RUNTIME_DIR. */
-    char xdg_dir[512];
-    snprintf(xdg_dir, sizeof(xdg_dir), "/tmp/cbx-xdg-XXXXXX");
-    if (!mkdtemp(xdg_dir))
+    /* Create a temp dir for XDG_RUNTIME_DIR. Store in fixture so teardown
+     * cleans it up even if an assertion fails (longjmp bypasses rmdir). */
+    snprintf(f->xdg_dir, sizeof(f->xdg_dir), "/tmp/cbx-xdg-XXXXXX");
+    if (!mkdtemp(f->xdg_dir))
         skip();
 
-    setenv("XDG_RUNTIME_DIR", xdg_dir, 1);
+    setenv("XDG_RUNTIME_DIR", f->xdg_dir, 1);
 
     const char *yaml = "version: 1\n";
     const char *result_path = "/org/shadowblip/InputPlumber/CompositeDevice0";
 
-    int before = count_temp_files(xdg_dir, "controller-box-*");
+    int tmp_before = count_temp_files("/tmp", "controller-box-*");
+    assert_true(tmp_before >= 0);
+
+    int before = count_temp_files(f->xdg_dir, "controller-box-*");
     assert_true(before >= 0);
 
     ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
@@ -264,15 +276,15 @@ test_create_composite_xdg_runtime_dir_preferred(void **state)
     free(out_path);
 
     /* Temp file should be cleaned up (unlinked). */
-    int after = count_temp_files(xdg_dir, "controller-box-*");
+    int after = count_temp_files(f->xdg_dir, "controller-box-*");
     assert_int_equal(after, before);
 
-    /* Also verify /tmp was NOT used. */
-    int tmp_count = count_temp_files("/tmp", "controller-box-*");
-    assert_int_equal(tmp_count, 0);
+    /* Also verify /tmp was NOT used: compare before/after so unrelated
+     * pre-existing /tmp/controller-box-* files do not cause false failures. */
+    int tmp_after = count_temp_files("/tmp", "controller-box-*");
+    assert_int_equal(tmp_after, tmp_before);
 
-    /* Cleanup. */
-    rmdir(xdg_dir);
+    /* Cleanup is handled by teardown via f->xdg_dir. */
 }
 
 static void

@@ -7,6 +7,22 @@ Schema: `ralph-bug-ledger/v1`
 ```json
 [
   {
+    "id": "BUG-0002",
+    "title": "CreateComposite XDG runtime test is order-dependent and leaks temp directories",
+    "status": "closed",
+    "severity": "medium",
+    "reported": "2026-08-06",
+    "external": [],
+    "contract_change": false,
+    "reproduction": "Inside nix-shell, configure and build the project, then run ctest --test-dir build-manual -E '^test_packaging$' --output-on-failure while one or more unrelated files matching /tmp/controller-box-* exist. test_create_composite_xdg_runtime_dir_preferred may fail at tests/test_create_composite.c:272 with a nonzero count such as '3 != 0'; the same test may pass when rerun alone.",
+    "expected": "The XDG runtime directory test proves that its CreateCompositeDevice call does not create a fallback file in /tmp without depending on or deleting unrelated pre-existing /tmp/controller-box-* files, and it always removes its own /tmp/cbx-xdg-* directory.",
+    "actual": "The test asserts that the global count of /tmp/controller-box-* is exactly zero instead of comparing before and after. Pre-existing or concurrent files make the test fail nondeterministically, and an assertion failure bypasses rmdir(), leaving its cbx-xdg temporary directory behind.",
+    "acceptance": "Seed an unrelated /tmp/controller-box-* file and verify test_create_composite still passes without modifying that file; compare relevant /tmp state before and after or otherwise identify only files created by the operation; guarantee cleanup of the test-owned XDG directory on success and failure; repeated standalone and full CTest runs pass.",
+    "resolution": "Fixed test_create_composite_xdg_runtime_dir_preferred in tests/test_create_composite.c: (1) replaced the assertion that global /tmp/controller-box-* count equals zero with a before/after comparison (tmp_before vs tmp_after), so unrelated pre-existing files no longer cause false failures; (2) moved the XDG temp directory path from a local stack variable into the create_fixture struct (xdg_dir field) so teardown() cleans it up with rm -rf even when an assertion failure longjmps past the test body; (3) removed the bare rmdir(xdg_dir) at end of test since teardown now owns cleanup.",
+    "verification": "Seeded an unrelated /tmp/controller-box-unrelated-test-file before running ctest --test-dir build-check -R test_create_composite --output-on-failure — all tests pass with the unrelated file present. Full ctest suite (78/78, 1 skip) passes with no regressions. XDG temp dir cleanup verified: teardown rm -rf handles f->xdg_dir on both success and assertion-failure paths. Repeated standalone and full CTest runs pass deterministically.",
+    "closed": "2026-08-08"
+  },
+  {
     "id": "BUG-0001",
     "title": "Manager launches with an effectively blank interface",
     "status": "closed",
