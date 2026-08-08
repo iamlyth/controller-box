@@ -399,14 +399,23 @@ cbx_controllers_tab_remove(cbx_controllers_tab *tab, int device_index)
     if (device_index < 0 || device_index >= tab->model.target_count)
         return -EINVAL;
 
-    const char *path = tab->model.targets[device_index].path;
+    int previous_count = tab->model.target_count;
+    char path[CBX_MAX_PATH_LEN];
+    snprintf(path, sizeof(path), "%s", tab->model.targets[device_index].path);
     int rc = ip_manager_stop_target_device(tab->backend, tab->bus, path);
     if (rc != 0)
         return rc;
 
-    /* SPEC §5.2: physical controller in that slot auto-moves to
-     * Unassigned; InputPlumber stops the target device. */
-    return cbx_controllers_tab_refresh(tab);
+    rc = cbx_controllers_tab_refresh(tab);
+    if (rc != 0)
+        return rc;
+    if (tab->model.target_count != previous_count - 1)
+        return -EIO;
+    for (int i = 0; i < tab->model.target_count; i++) {
+        if (strcmp(tab->model.targets[i].path, path) == 0)
+            return -EIO;
+    }
+    return 0;
 }
 
 int
@@ -466,8 +475,13 @@ cbx_controllers_tab_change_type(cbx_controllers_tab *tab,
     if (rc != 0)
         return rc;
 
-    /* Refresh to show the updated type; stale UI is an operation error. */
-    return cbx_controllers_tab_refresh(tab);
+    rc = cbx_controllers_tab_refresh(tab);
+    if (rc != 0)
+        return rc;
+    if (device_index >= tab->device_type_count ||
+        strcmp(tab->device_types[device_index], new_type) != 0)
+        return -EIO;
+    return 0;
 }
 
 int

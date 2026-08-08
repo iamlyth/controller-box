@@ -64,6 +64,15 @@ static const char *FIXTURE_1C1T =
     "/org/shadowblip/InputPlumber/devices/target/gamepad0\t"
         "org.shadowblip.Input.Target,org.shadowblip.Input.Gamepad\n";
 
+/* Remaining objects after gamepad0 is confirmed removed. */
+static const char *FIXTURE_AFTER_REMOVE_0 =
+    "/org/shadowblip/InputPlumber/Manager\t"
+        "org.shadowblip.InputManager\n"
+    "/org/shadowblip/InputPlumber/CompositeDevice1\t"
+        "org.shadowblip.Input.CompositeDevice\n"
+    "/org/shadowblip/InputPlumber/devices/target/gamepad1\t"
+        "org.shadowblip.Input.Target,org.shadowblip.Input.Gamepad\n";
+
 /* ObjectManager reply with 0 devices. */
 static const char *FIXTURE_EMPTY = "";
 
@@ -388,6 +397,19 @@ test_add_success(void **state)
 }
 
 static void
+test_add_rejects_unconfirmed_model(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "CreateTargetDevice",
+                            "/org/shadowblip/InputPlumber/devices/target/gamepad1");
+    expect_refresh(&f->mock, FIXTURE_1C1T, "xb360", NULL);
+    assert_int_equal(cbx_controllers_tab_add(&f->tab, "ds5"), -EIO);
+}
+
+static void
 test_add_error(void **state)
 {
     ct_fixture *f = FIX(state);
@@ -422,12 +444,24 @@ test_remove_success(void **state)
     ip_dbus_mock_reset(&f->mock);
     ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
                             "StopTargetDevice", NULL);
-    /* Refresh after remove. */
-    expect_refresh(&f->mock, FIXTURE_1C1T, "xb360", NULL);
+    /* Refresh after remove must omit the exact stopped object. */
+    expect_refresh(&f->mock, FIXTURE_AFTER_REMOVE_0, "ds5", NULL);
 
     int rc = cbx_controllers_tab_remove(&f->tab, 0);
     assert_int_equal(rc, 0);
     assert_int_equal(cbx_controllers_tab_device_count(&f->tab), 1);
+}
+
+static void
+test_remove_rejects_unconfirmed_model(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "StopTargetDevice", NULL);
+    expect_refresh(&f->mock, FIXTURE_1C1T, "xb360", NULL);
+    assert_int_equal(cbx_controllers_tab_remove(&f->tab, 0), -EIO);
 }
 
 static void
@@ -496,6 +530,19 @@ test_change_type_mixed(void **state)
      * verifies the change_type call succeeded with mixed types allowed
      * — the SetTargetDevices CSV includes both types. */
     assert_int_equal(cbx_controllers_tab_device_count(&f->tab), 2);
+}
+
+static void
+test_change_type_rejects_unconfirmed_model(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                            "SetTargetDevices", NULL);
+    expect_refresh(&f->mock, FIXTURE_1C1T, "xb360", NULL);
+    assert_int_equal(cbx_controllers_tab_change_type(&f->tab, 0, "ds5"),
+                     -EIO);
 }
 
 static void
@@ -938,11 +985,15 @@ main(void)
 
         /* Add. */
         cmocka_unit_test_setup_teardown(test_add_success, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_add_rejects_unconfirmed_model,
+                                         setup, teardown),
         cmocka_unit_test_setup_teardown(test_add_error, setup, teardown),
         cmocka_unit_test(test_add_null_args),
 
         /* Remove. */
         cmocka_unit_test_setup_teardown(test_remove_success, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_remove_rejects_unconfirmed_model,
+                                         setup, teardown),
         cmocka_unit_test_setup_teardown(test_remove_error, setup, teardown),
         cmocka_unit_test_setup_teardown(test_remove_bad_index,
                                          setup, teardown),
@@ -952,6 +1003,8 @@ main(void)
                                          setup, teardown),
         cmocka_unit_test_setup_teardown(test_change_type_mixed,
                                          setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            test_change_type_rejects_unconfirmed_model, setup, teardown),
         cmocka_unit_test_setup_teardown(test_change_type_error,
                                          setup, teardown),
         cmocka_unit_test_setup_teardown(test_change_type_bad_index,
