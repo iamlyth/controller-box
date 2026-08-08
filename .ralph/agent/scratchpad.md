@@ -1,50 +1,80 @@
-# Task 7 Complete — Create interaction acceptance inventory
+# Task 8 Complete — Manager interaction tests: Controllers and Settings tabs
 
 ## What was done
 
+### Production fix: Focus chain button reachability
+
+Side-by-side buttons (Add/Remove/ChangeType, Create/Edit/Delete) were
+unreachable via the controller focus chain because spatial DOWN from
+the list went to the horizontally-closest button, and there was no way
+to navigate between same-y-level buttons (LEFT/RIGHT always switched
+tabs). Fixed in 3 files:
+
+1. **`src/manager/manager.c` — `cbx_manager_rebuild_focus`**: Panel
+   children are now grouped by y proximity (within 10px center-to-center)
+   into the same row, instead of each child getting a unique sequential
+   row. Side-by-side buttons at the same y share a row.
+
+2. **`src/ui/focus.c` — `find_neighbor`**: In HOST mode, LEFT/RIGHT
+   navigation is restricted to same-row widgets. UP/DOWN remains
+   unrestricted (can cross rows). PLAYER mode unchanged.
+
+3. **`src/manager/manager.c` — `cbx_manager_handle_event`**: For
+   SDLK_LEFT/RIGHT, if the focused widget is NOT the tabbar, try focus
+   chain horizontal navigation first. If no same-row neighbor exists,
+   fall back to tab switching. On the tabbar, LEFT/RIGHT always switches
+   tabs (existing behavior preserved).
+
 ### Source changes
 
-1. **`tests/interaction_inventory.h`** — New header defining:
-   - `cbx_inv_category` enum (manager tabbar/ctrl/prof/settings/editor, overlay, disabled)
-   - `cbx_inv_widget_type` enum (tab, list, button, picker, name_input, confirm_delete, edit_mode, binding, capture, sequential, editor, overlay_action, scenario)
-   - `cbx_inv_verify_status` enum (unverified, verified, not_applicable, deferred)
-   - `cbx_inv_path_availability` enum (na, available)
-   - `cbx_interaction_entry` struct with: id, category, context, widget_type, controller_path, pointer_path_avail, pointer_path, semantic_outcome, dispatch_path, verify_status, evidence_task
-   - API: `cbx_interaction_inventory_get()`, `cbx_interaction_inventory_count()`, `cbx_interaction_inventory_find(id)`
+- **`tests/test_manager_interaction_ctrl.c`** — 28 sub-tests:
+  - M01–M03: Tab switching (controller LEFT/RIGHT + pointer click)
+  - M04: Device list selection (controller DOWN/UP + pointer click)
+  - M05+M08: Add flow — open type picker, confirm → CreateTargetDevice (both paths)
+  - M06: Remove → StopTargetDevice, device count decreases (both paths)
+  - M07+M08: Change Type — open picker, confirm → SetTargetDevices (both paths)
+  - M09: Type picker cancel via B (controller only, pointer NA)
+  - M21: Settings list selection (both paths)
+  - M22: Toggle launch_at_boot (both paths)
+  - M23+M24+M25: Edit flow — enter, cycle, confirm (controller); enter via click (pointer)
+  - M26/D05: Cancel edit — value reverts (controller + pointer entry)
+  - M27: Save — settings.yaml written (both paths)
+  - D01: InputPlumber unavailable — Add rejected (both paths)
+  - D02: Remove no device — no side effect (both paths)
+  - D06: DBus failure — mode returns to LIST, no corruption (both paths)
 
-2. **`tests/interaction_inventory.c`** — Static array with 58 entries:
-   - M01–M03: Tab bar (Controllers/Profiles/Settings tabs)
-   - M04–M09: Controllers tab (device list, add, remove, change type, picker confirm/cancel)
-   - M10–M20: Profiles tab (list, create, source picker, name input chars/backspace/confirm/cancel, edit, delete confirm/cancel)
-   - M21–M27: Settings tab (list, toggle, edit enter/up-down/confirm/cancel, save)
-   - M28–M38: Profile editor (binding list, edit, target picker, capture begin/capture, sequential begin/capture/skip/cancel, save+close, cancel editor)
-   - O01–O12: Overlay actions (open, move left/right, cycle up/down, host mode enter/navigate/move/exit, close, multi-controller independence, host profile cycle deferred)
-   - D01–D08: Disabled/degraded scenarios (InputPlumber unavailable, remove no device, delete no profile, save missing NES, settings cancel, DBus failure, filesystem failure, empty profile)
-   - NULL terminator entry
-   - Implementation of get/count/find functions
+- **`tests/CMakeLists.txt`** — Added `test_manager_interaction_ctrl` executable
+  and ctest registration with `SDL_VIDEODRIVER=dummy` env.
 
-3. **`tests/test_interaction_inventory.c`** — 11 sub-tests:
-   - `test_inventory_count`: 58 entries
-   - `test_inventory_all_fields_populated`: all required strings non-NULL
-   - `test_inventory_has_all_manager_controls`: M01–M38 all found
-   - `test_inventory_has_all_overlay_actions`: O01–O12 all found
-   - `test_inventory_has_all_disabled_scenarios`: D01–D08 all found
-   - `test_inventory_find_returns_null_for_unknown`: M99, X01, "", NULL → NULL
-   - `test_inventory_pointer_path_availability`: n/a entries have "n/a" prefix; available entries don't
-   - `test_inventory_categories`: M→manager cat, O→overlay cat, D→disabled cat
-   - `test_inventory_specific_entries`: spot-checks M05, M16, M37, O12, O01, D01, D08
-   - `test_inventory_all_ids_unique`: no duplicate IDs
-   - `test_inventory_covers_required_scenarios`: create source picker, name input cancel, capture mode, sequential mode, save+close, cancel editor all present
+- **`IMPLEMENTATION_PLAN.md`** — Task 8 status → complete. REQ-017, REQ-018,
+  REQ-021 → verified. REQ-023 → partial (Controllers+Settings done, Profiles+Editor
+  pending Task 9).
 
-4. **`tests/CMakeLists.txt`** — Added `tests/interaction_inventory.c` to `cbx_test_support` static library. Added `test_interaction_inventory` executable and ctest registration.
+### Test results
+76/76 pass (1 skip: backend_smoke). No regressions. 28 new sub-tests in
+test_manager_interaction_ctrl.
 
-5. **`IMPLEMENTATION_PLAN.md`** — Task 7 status → complete. REQ-023 → partial (inventory exists, interaction tests pending in Tasks 8/9). Verification command updated with full results.
+### Key implementation insights
 
-## Test results
-75/75 pass (1 skip: backend_smoke). No regressions. 11 new sub-tests in test_interaction_inventory.
+- `cbx_settings_tab_selected(st)` (st->selected) is only updated by
+  `on_setting_selected` callback (fires on A key/click). For UP/DOWN
+  list navigation, use `cbx_list_get_selected(&st->settings_list)`.
+- Settings list pointer clicks must use `rect.y + index * item_h + item_h/2`
+  for y-coordinate, not the list center y.
+- After `nav_to_buttons` (2 DOWNs), focus lands on the spatially closest
+  button (change_type_btn, rightmost). Use LEFT to navigate to the
+  desired button (2-index LEFTs).
+- `cbx_settings_tab_settings(st)->theme` returns a pointer to the internal
+  buffer — copy it before modifying to avoid aliasing.
+- Mock DBus: `ip_dbus_mock_reset` clears expectations but preserves the
+  bus handle. Reset between init and action to set fresh expectations
+  for post-action refresh calls.
 
-## Commit
-`c5d5db7` on `develop`
+### Commits
+- `649b59c` on `develop` — Test file + production fix
+- `7a18bea` on `develop` — Plan conformance matrix update
 
 ## Next task
-Task 8: Manager interaction tests — Controllers and Settings tabs through production dispatch. Dependencies: Task 1, 2, 3, 7 (all complete). Ready to start.
+Task 9: Manager interaction tests — Profiles tab and profile editor through
+production dispatch. Dependencies: Task 1, 2, 3, 4, 5, 7 (all complete).
+Ready to start.
