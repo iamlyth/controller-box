@@ -1,80 +1,65 @@
-# Task 8 Complete — Manager interaction tests: Controllers and Settings tabs
+# Task 9 Complete — Manager interaction tests: Profiles tab and profile editor
 
 ## What was done
 
-### Production fix: Focus chain button reachability
+### Production fixes
 
-Side-by-side buttons (Add/Remove/ChangeType, Create/Edit/Delete) were
-unreachable via the controller focus chain because spatial DOWN from
-the list went to the horizontally-closest button, and there was no way
-to navigate between same-y-level buttons (LEFT/RIGHT always switched
-tabs). Fixed in 3 files:
+Three production fixes in `src/manager/profile_editor_list.c` to enable
+pointer-path activation and fix controller navigation in editor sub-modes:
 
-1. **`src/manager/manager.c` — `cbx_manager_rebuild_focus`**: Panel
-   children are now grouped by y proximity (within 10px center-to-center)
-   into the same row, instead of each child getting a unique sequential
-   row. Side-by-side buttons at the same y share a row.
+1. **on_select callbacks on editor lists**: `binding_list` and `target_list`
+   now have `on_select` callbacks wired to `cbx_profile_editor_activate`.
+   Before, clicking on editor list items only selected them visually but
+   did not trigger activation — M29, M30, M31, M33 pointer paths were broken.
 
-2. **`src/ui/focus.c` — `find_neighbor`**: In HOST mode, LEFT/RIGHT
-   navigation is restricted to same-row widgets. UP/DOWN remains
-   unrestricted (can cross rows). PLAYER mode unchanged.
+2. **move_up/move_down selection fix**: In BINDING_EDIT and TARGET_PICK
+   modes, `move_up`/`move_down` now change the selected index via
+   `cbx_list_set_selected` instead of calling `cbx_list_scroll_up/down`
+   (which only changed scroll_offset, not selection). Without this fix,
+   the binding edit sub-menu and target picker were unnavigable via
+   controller (UP/DOWN did nothing visible).
 
-3. **`src/manager/manager.c` — `cbx_manager_handle_event`**: For
-   SDLK_LEFT/RIGHT, if the focused widget is NOT the tabbar, try focus
-   chain horizontal navigation first. If no same-row neighbor exists,
-   fall back to tab switching. On the tabbar, LEFT/RIGHT always switches
-   tabs (existing behavior preserved).
+3. **binding_list item user_data**: Changed from `(void *)(intptr_t)(i+1)`
+   to `ed` so the on_select callback can safely call
+   `cbx_profile_editor_activate(ed)`.
 
-### Source changes
+### Test file: `tests/test_manager_interaction_prof.c` — 35 sub-tests
 
-- **`tests/test_manager_interaction_ctrl.c`** — 28 sub-tests:
-  - M01–M03: Tab switching (controller LEFT/RIGHT + pointer click)
-  - M04: Device list selection (controller DOWN/UP + pointer click)
-  - M05+M08: Add flow — open type picker, confirm → CreateTargetDevice (both paths)
-  - M06: Remove → StopTargetDevice, device count decreases (both paths)
-  - M07+M08: Change Type — open picker, confirm → SetTargetDevices (both paths)
-  - M09: Type picker cancel via B (controller only, pointer NA)
-  - M21: Settings list selection (both paths)
-  - M22: Toggle launch_at_boot (both paths)
-  - M23+M24+M25: Edit flow — enter, cycle, confirm (controller); enter via click (pointer)
-  - M26/D05: Cancel edit — value reverts (controller + pointer entry)
-  - M27: Save — settings.yaml written (both paths)
-  - D01: InputPlumber unavailable — Add rejected (both paths)
-  - D02: Remove no device — no side effect (both paths)
-  - D06: DBus failure — mode returns to LIST, no corruption (both paths)
-
-- **`tests/CMakeLists.txt`** — Added `test_manager_interaction_ctrl` executable
-  and ctest registration with `SDL_VIDEODRIVER=dummy` env.
-
-- **`IMPLEMENTATION_PLAN.md`** — Task 8 status → complete. REQ-017, REQ-018,
-  REQ-021 → verified. REQ-023 → partial (Controllers+Settings done, Profiles+Editor
-  pending Task 9).
-
-### Test results
-76/76 pass (1 skip: backend_smoke). No regressions. 28 new sub-tests in
-test_manager_interaction_ctrl.
+- **M10–M20 (Profiles tab)**: list select, create button, create source
+  picker, name input (chars/backspace/confirm/cancel), edit button, delete
+  (open/confirm/cancel) — both controller and pointer paths
+- **M28–M38 (Profile editor)**: binding list nav, activate binding,
+  target pick confirm, capture begin/event, sequential begin/capture/
+  skip/cancel, save and close, cancel/discard — both paths where applicable
+- **D03**: Delete with no profile — no file deletion (both paths)
+- **D04**: Save with missing NES bindings — error, no file, editor stays open
+- **D07**: Filesystem failure — chmod user_dir 0555, save fails, editor stays
+- **D08**: Empty profile creation — editor opens, save blocked by NES validation
 
 ### Key implementation insights
 
-- `cbx_settings_tab_selected(st)` (st->selected) is only updated by
-  `on_setting_selected` callback (fires on A key/click). For UP/DOWN
-  list navigation, use `cbx_list_get_selected(&st->settings_list)`.
-- Settings list pointer clicks must use `rect.y + index * item_h + item_h/2`
-  for y-coordinate, not the list center y.
-- After `nav_to_buttons` (2 DOWNs), focus lands on the spatially closest
-  button (change_type_btn, rightmost). Use LEFT to navigate to the
-  desired button (2-index LEFTs).
-- `cbx_settings_tab_settings(st)->theme` returns a pointer to the internal
-  buffer — copy it before modifying to avoid aliasing.
-- Mock DBus: `ip_dbus_mock_reset` clears expectations but preserves the
-  bus handle. Reset between init and action to set fresh expectations
-  for post-action refresh calls.
+- In NAME_INPUT mode, `SDLK_a` triggers confirm and `SDLK_b` triggers
+  cancel (intercepted by `cbx_profiles_tab_handle_key` on KEYDOWN before
+  the letter range check). Use letters c–z for name input tests.
+- Name input confirm happens on KEYDOWN, not KEYUP. Use `send_key_dn`
+  (not `send_key_press`) to avoid the KEYUP activating the editor binding.
+- Editor save (B in LIST mode) happens on KEYUP via `cbx_profiles_tab_cancel`
+  → `cbx_profiles_tab_save_editor`. Use `send_key_press` (not `send_key_dn`).
+- Sequential skip (B) also happens on KEYUP via tab_cancel → seq_skip.
+- Editor cancel (Tab/Start) happens on KEYDOWN via `cbx_profiles_tab_handle_key`.
+- `cbx_profile_save_to_dir` uses atomic write (mkstemp + rename), so making
+  the file read-only doesn't prevent save. Make the directory read-only
+  (chmod 0555) to prevent temp file creation.
+- `open_editor_pointer` must select the user profile via pointer click
+  before clicking Edit, so `on_edit_pressed` loads the correct profile.
+
+### Test results
+76/76 pass (1 skip: backend_smoke). No regressions. 35 new sub-tests.
 
 ### Commits
-- `649b59c` on `develop` — Test file + production fix
-- `7a18bea` on `develop` — Plan conformance matrix update
+- `56dcf13` on `develop` — Test file + production fixes
+- `5dd62b8` on `develop` — Plan conformance matrix update
 
 ## Next task
-Task 9: Manager interaction tests — Profiles tab and profile editor through
-production dispatch. Dependencies: Task 1, 2, 3, 4, 5, 7 (all complete).
-Ready to start.
+Task 10: Extract overlay service step function for testability.
+Dependencies: Task 6 (complete). Ready to start.
