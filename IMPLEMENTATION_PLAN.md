@@ -46,7 +46,8 @@ Production acceptance covers these semantic workflows through normal production 
 - **Recovery:** backend name loss disables operations without exiting; reacquisition and ObjectManager hotplug reconcile production state within specified bounds.
 
 ## Task 1: Native typed DBus transport and compatibility fixture
-- Status: pending
+- Status: complete
+- Evidence: commits `16f1ec1` and `8fdd4ac`; `test_native_dbus` round-trips native `s`, `as`, `u`, and `b` through the production sd-bus backend, and wrapper/path/signature tests pass.
 - Dependencies: none
 - Scope: production-owned DBus contract header, `src/dbus/dbus_client.c`, property/method wrappers, mock fidelity, private sd-bus fixture tests.
 - Acceptance criteria: native `s`, `as`, `u`, and `b` properties round-trip against a private service; Manager Version uses `/Manager`; wrong signatures fail tests; production no longer depends on a string-only property contract.
@@ -62,7 +63,8 @@ Production acceptance covers these semantic workflows through normal production 
 - Documentation impact: README and `docs/OPERATIONS.md` diagnostics.
 
 ## Task 3: Real SDL game-controller input and hotplug
-- Status: pending
+- Status: complete
+- Evidence: commits `16f1ec1` and `e8fe463`; Manager owns existing/hotplugged SDL controller handles and `test_manager_production` drives production dispatch from an SDL virtual game controller.
 - Dependencies: none
 - Scope: SDL initialization, controller handle lifecycle, button-to-semantic mapping, Manager dispatch, controller transport tests.
 - Acceptance criteria: existing and hotplugged controllers navigate/activate/cancel through `SDL_CONTROLLER*`; removal is safe; keyboard remains supplemental.
