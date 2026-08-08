@@ -40,12 +40,18 @@
  * If the target file doesn't exist yet, canonicalizes its parent directory
  * and appends the filename.
  *
- * @param base_dir   The expected containing directory.
- * @param target_path The full path to the target file.
+ * @param base_dir     The expected containing directory.
+ * @param target_path   The full path to the target file.
+ * @param canonical_out Buffer to receive the canonicalized target path
+ *                      (the path to use for the actual write). May be NULL
+ *                      if the caller doesn't need the canonical path.
+ * @param canonical_len Size of canonical_out buffer.
  * @return 0 if within base_dir; -EACCES if outside; negative errno on error.
  */
 static int verify_path_within_dir(const char *base_dir,
-                                   const char *target_path)
+                                   const char *target_path,
+                                   char *canonical_out,
+                                   size_t canonical_len)
 {
     char real_base[PATH_MAX];
     char real_parent[PATH_MAX];
@@ -93,6 +99,16 @@ static int verify_path_within_dir(const char *base_dir,
     /* Ensure boundary: real_parent[base_len] must be '/' or '\0'. */
     if (real_parent[base_len] != '\0' && real_parent[base_len] != '/')
         return -EACCES;
+
+    /* Return the canonicalized path so the caller can use it for the
+     * actual write — eliminating the TOCTOU race between the realpath()
+     * check and the file write. */
+    if (canonical_out && canonical_len > 0) {
+        if (strlen(real_parent) >= canonical_len)
+            return -ENAMETOOLONG;
+        strncpy(canonical_out, real_parent, canonical_len - 1);
+        canonical_out[canonical_len - 1] = '\0';
+    }
 
     return 0;
 }
@@ -143,14 +159,19 @@ int cbx_profile_save_to_dir(const cbx_profile *profile, const char *name,
     if (rc < 0 || (size_t)rc >= sizeof(path))
         return -ENAMETOOLONG;
 
-    /* 6. Canonicalize and verify path is within profiles dir. */
-    rc = verify_path_within_dir(dir, path);
+    /* 6. Canonicalize and verify path is within profiles dir.
+     *    The canonical path is used for the actual write to eliminate
+     *    the TOCTOU race between the realpath() check and the write. */
+    char canonical[PATH_MAX + 128];
+    rc = verify_path_within_dir(dir, path, canonical, sizeof(canonical));
     if (rc < 0)
         return rc;
 
     /* 7. Write the profile YAML atomically (delegates to cbx_profile_save
-     *    which uses mkstemp + rename, mode 0644). */
-    rc = cbx_profile_save(profile, path);
+     *    which uses mkstemp + rename, mode 0644).  Use the canonicalized
+     *    path — not the original uncanonicalized `path` — to eliminate
+     *    the TOCTOU race. */
+    rc = cbx_profile_save(profile, canonical);
     if (rc < 0)
         return rc;
 

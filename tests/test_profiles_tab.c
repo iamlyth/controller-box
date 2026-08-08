@@ -136,6 +136,35 @@ write_profile_yaml(const char *path, const char *name, int mappings)
     fclose(f);
 }
 
+/* Write a profile YAML with all 6 NES minimum button bindings (A, B,
+ * Up, Down, Left, Right).  Used for the default profile in tests that
+ * exercise the production save path (which enforces NES minimum). */
+static void
+write_nes_profile_yaml(const char *path, const char *name)
+{
+    static const char *btns[] = {"A", "B", "Up", "Down", "Left", "Right"};
+    static const char *keys[] = {"KeyA", "KeyB", "KeyUp", "KeyDown",
+                                  "KeyLeft", "KeyRight"};
+    FILE *f = fopen(path, "w");
+    if (!f)
+        return;
+    fprintf(f, "version: 1\n");
+    fprintf(f, "kind: DeviceProfile\n");
+    fprintf(f, "name: %s\n", name);
+    fprintf(f, "description: NES test profile\n");
+    fprintf(f, "mapping:\n");
+    for (int i = 0; i < 6; i++)
+        fprintf(f,
+            "  - name: btn_%s\n"
+            "    source_event:\n"
+            "      gamepad:\n"
+            "        button: %s\n"
+            "    target_events:\n"
+            "      - keyboard: %s\n",
+            btns[i], btns[i], keys[i]);
+    fclose(f);
+}
+
 /* Check if a file exists. */
 static bool
 file_exists(const char *path)
@@ -165,10 +194,11 @@ pt_setup(void **state)
 
     env_setup(&f->env);
 
-    /* Create system default profile. */
+    /* Create system default profile with NES minimum bindings so that
+     * the production save path (which validates NES minimum) accepts it. */
     char def_path[PATH_MAX + 128];
     snprintf(def_path, sizeof(def_path), "%s/default.yaml", f->env.system_dir);
-    write_profile_yaml(def_path, "Default", 3);
+    write_nes_profile_yaml(def_path, "Default");
 
     /* Create system profile "fps". */
     char fps_path[PATH_MAX + 128];
@@ -348,19 +378,47 @@ test_create_empty(void **state)
     pt_fixture *f = FIX(state);
     init_tab(f);
 
+    /* An empty profile has no NES minimum bindings, so the production
+     * save path (cbx_profile_save_to_dir) must reject it. */
     int rc = cbx_profiles_tab_create(&f->tab, "empty1",
                                         CBX_PT_CREATE_EMPTY);
-    assert_int_equal(rc, 0);
+    assert_int_equal(rc, -EINVAL);
 
+    /* No file should be written. */
     char path[PATH_MAX + 128];
     snprintf(path, sizeof(path), "%s/empty1.yaml", f->env.user_dir);
-    assert_true(file_exists(path));
+    assert_false(file_exists(path));
+}
 
-    /* Verify the profile has 0 mappings. */
-    cbx_profile p;
-    cbx_profile_init(&p);
-    cbx_profile_load(&p, path);
-    assert_int_equal(p.mapping_count, 0);
+/* A profile missing NES minimum bindings must be rejected when saved
+ * through the production path (cbx_profile_save_to_dir).  Verify that
+ * cloning a non-NES source (fps profile with 2 generic mappings) fails. */
+static void
+test_create_reject_missing_nes(void **state)
+{
+    pt_fixture *f = FIX(state);
+    init_tab(f);
+
+    /* The fps profile has 2 generic mappings (no NES button names). */
+    /* Find fps and select it for cloning. */
+    int fps_idx = -1;
+    for (int i = 0; i < f->tab.profiles.count; i++) {
+        if (strcmp(f->tab.profiles.entries[i].filename, "fps") == 0) {
+            fps_idx = i;
+            break;
+        }
+    }
+    assert_int_not_equal(fps_idx, -1);
+    f->tab.selected_profile = fps_idx;
+
+    int rc = cbx_profiles_tab_create(&f->tab, "noNes",
+                                        CBX_PT_CREATE_CLONE);
+    assert_int_equal(rc, -EINVAL);
+
+    /* No file should be written. */
+    char path[PATH_MAX + 128];
+    snprintf(path, sizeof(path), "%s/noNes.yaml", f->env.user_dir);
+    assert_false(file_exists(path));
 }
 
 /* --- Create: clone ------------------------------------------------- */
@@ -386,7 +444,7 @@ test_create_clone(void **state)
     cbx_profile p;
     cbx_profile_init(&p);
     cbx_profile_load(&p, path);
-    assert_int_equal(p.mapping_count, 3);
+    assert_int_equal(p.mapping_count, 6);
 }
 
 static void
@@ -449,7 +507,7 @@ test_delete_user_profile(void **state)
     init_tab(f);
 
     /* Create a user profile first. */
-    cbx_profiles_tab_create(&f->tab, "todelete", CBX_PT_CREATE_EMPTY);
+    cbx_profiles_tab_create(&f->tab, "todelete", CBX_PT_CREATE_DEFAULT_COPY);
     assert_int_equal(cbx_profiles_tab_profile_count(&f->tab), 3);
 
     /* Find and delete it. */
@@ -481,7 +539,7 @@ test_delete_with_sidecar(void **state)
     init_tab(f);
 
     /* Create a user profile + sidecar. */
-    cbx_profiles_tab_create(&f->tab, "withmeta", CBX_PT_CREATE_EMPTY);
+    cbx_profiles_tab_create(&f->tab, "withmeta", CBX_PT_CREATE_DEFAULT_COPY);
 
     cbx_profile_meta meta;
     cbx_profile_meta_init(&meta);
@@ -640,7 +698,7 @@ test_name_input_confirm(void **state)
     pt_fixture *f = FIX(state);
     init_tab(f);
 
-    cbx_profiles_tab_begin_create(&f->tab, CBX_PT_CREATE_EMPTY);
+    cbx_profiles_tab_begin_create(&f->tab, CBX_PT_CREATE_DEFAULT_COPY);
     cbx_profiles_tab_name_input_char(&f->tab, 'n');
     cbx_profiles_tab_name_input_char(&f->tab, 'e');
     cbx_profiles_tab_name_input_char(&f->tab, 'w');
@@ -703,7 +761,7 @@ test_delete_confirm_basic(void **state)
     init_tab(f);
 
     /* Create a user profile. */
-    cbx_profiles_tab_create(&f->tab, "willdel", CBX_PT_CREATE_EMPTY);
+    cbx_profiles_tab_create(&f->tab, "willdel", CBX_PT_CREATE_DEFAULT_COPY);
 
     /* Find it. */
     int idx = -1;
@@ -756,7 +814,7 @@ test_delete_confirm_cancel(void **state)
     init_tab(f);
 
     /* Create a user profile. */
-    cbx_profiles_tab_create(&f->tab, "keep", CBX_PT_CREATE_EMPTY);
+    cbx_profiles_tab_create(&f->tab, "keep", CBX_PT_CREATE_DEFAULT_COPY);
 
     int idx = -1;
     for (int i = 0; i < f->tab.profiles.count; i++) {
@@ -861,7 +919,7 @@ test_full_workflow(void **state)
     assert_int_equal(cbx_profiles_tab_profile_count(&f->tab), 3);
 
     /* Create another via direct create. */
-    rc = cbx_profiles_tab_create(&f->tab, "empty2", CBX_PT_CREATE_EMPTY);
+    rc = cbx_profiles_tab_create(&f->tab, "empty2", CBX_PT_CREATE_DEFAULT_COPY);
     assert_int_equal(rc, 0);
     assert_int_equal(cbx_profiles_tab_profile_count(&f->tab), 4);
 
@@ -913,7 +971,7 @@ test_create_clone_copies_mappings(void **state)
     cbx_profile p;
     cbx_profile_init(&p);
     cbx_profile_load(&p, path);
-    assert_int_equal(p.mapping_count, 3);
+    assert_int_equal(p.mapping_count, 6);
     /* Name should be the new name, not the source. */
     assert_string_equal(p.name, "copy3");
 }
@@ -946,7 +1004,7 @@ test_create_picker_via_dispatch(void **state)
     env_setup(&env);
     char def_path[PATH_MAX + 128];
     snprintf(def_path, sizeof(def_path), "%s/default.yaml", env.system_dir);
-    write_profile_yaml(def_path, "Default", 3);
+    write_nes_profile_yaml(def_path, "Default");
 
     ensure_dummy_driver();
     cbx_manager mgr;
@@ -999,7 +1057,7 @@ test_name_input_via_dispatch(void **state)
     env_setup(&env);
     char def_path[PATH_MAX + 128];
     snprintf(def_path, sizeof(def_path), "%s/default.yaml", env.system_dir);
-    write_profile_yaml(def_path, "Default", 3);
+    write_nes_profile_yaml(def_path, "Default");
 
     ensure_dummy_driver();
     cbx_manager mgr;
@@ -1024,8 +1082,7 @@ test_name_input_via_dispatch(void **state)
     mev.type = SDL_MOUSEBUTTONUP;
     cbx_manager_handle_event(&mgr, &mev);
     assert_int_equal(pt->mode, CBX_PT_MODE_CREATE_PICK);
-    assert_int_equal(pt->mode, CBX_PT_MODE_CREATE_PICK);
-    pt_send_key_dn(&mgr, SDLK_DOWN);  /* Empty */
+    /* Select Default Copy (index 0 — already selected). */
     pt_send_key_dn(&mgr, SDLK_a);
     pt_send_key_up(&mgr, SDLK_a);
     assert_int_equal(pt->mode, CBX_PT_MODE_NAME_INPUT);
@@ -1064,7 +1121,7 @@ test_confirm_delete_via_dispatch(void **state)
     env_setup(&env);
     char def_path[PATH_MAX + 128];
     snprintf(def_path, sizeof(def_path), "%s/default.yaml", env.system_dir);
-    write_profile_yaml(def_path, "Default", 3);
+    write_nes_profile_yaml(def_path, "Default");
     char usr_path[PATH_MAX + 128];
     snprintf(usr_path, sizeof(usr_path), "%s/todelete.yaml", env.user_dir);
     write_profile_yaml(usr_path, "ToDelete", 1);
@@ -1128,6 +1185,7 @@ static const struct CMUnitTest tests[] = {
 
     /* Create: empty */
     cmocka_unit_test_setup_teardown(test_create_empty, pt_setup, pt_teardown),
+    cmocka_unit_test_setup_teardown(test_create_reject_missing_nes, pt_setup, pt_teardown),
 
     /* Create: clone */
     cmocka_unit_test_setup_teardown(test_create_clone, pt_setup, pt_teardown),

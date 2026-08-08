@@ -453,6 +453,50 @@ static void test_empty_profile_fails(void **state)
 
 /* --- main ---------------------------------------------------------------- */
 
+/* TOCTOU fix: verify that saving through a symlinked profiles directory
+ * writes to the canonical (resolved) path, not the symlink path.  This
+ * confirms that cbx_profile_save_to_dir uses the canonicalized path
+ * from verify_path_within_dir for the actual write, eliminating the
+ * TOCTOU race between the realpath() check and the file write. */
+static void test_save_through_symlink_uses_canonical(void **state)
+{
+    (void)state;
+    /* Create a real directory. */
+    char real_dir[PATH_MAX];
+    snprintf(real_dir, sizeof(real_dir), "%s/real_profiles", test_home);
+    mkdir(real_dir, 0700);
+
+    /* Create a symlink pointing to the real directory. */
+    char link_dir[PATH_MAX];
+    snprintf(link_dir, sizeof(link_dir), "%s/link_profiles", test_home);
+    unlink(link_dir);  /* remove if exists from a prior run */
+    assert_int_equal(symlink(real_dir, link_dir), 0);
+
+    /* Save through the symlink — the canonical path should be used. */
+    cbx_profile p = make_valid_profile();
+    int rc = cbx_profile_save_to_dir(&p, "cannon", NULL, link_dir,
+                                      NULL, 0);
+    assert_int_equal(rc, 0);
+
+    /* File must exist in the real (canonical) directory. */
+    char real_path[PATH_MAX + 128];
+    snprintf(real_path, sizeof(real_path), "%s/cannon.yaml", real_dir);
+    struct stat st;
+    assert_int_equal(stat(real_path, &st), 0);
+    assert_true(S_ISREG(st.st_mode));
+
+    /* Round-trip: load the file from the canonical path. */
+    cbx_profile loaded;
+    rc = cbx_profile_load(&loaded, real_path);
+    assert_int_equal(rc, 0);
+    assert_int_equal(loaded.mapping_count, 6);
+
+    /* Clean up. */
+    unlink(real_path);
+    unlink(link_dir);
+    rmdir(real_dir);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -481,6 +525,8 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_meta_to_dir_invalid_name,
             setup_home, teardown_home),
         cmocka_unit_test_setup_teardown(test_empty_profile_fails,
+            setup_home, teardown_home),
+        cmocka_unit_test_setup_teardown(test_save_through_symlink_uses_canonical,
             setup_home, teardown_home),
     };
 

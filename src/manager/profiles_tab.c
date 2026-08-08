@@ -8,6 +8,7 @@
  * Task 36 — Profiles tab.
  */
 #include "manager/profiles_tab.h"
+#include "manager/profile_save.h"
 
 #include <SDL2/SDL.h>
 #include <errno.h>
@@ -49,22 +50,6 @@ format_profile_label(char *buf, size_t buflen, const cbx_profile_entry *e)
         snprintf(buf, buflen, "%s", name);
 }
 
-/* Build the full path for a new profile in the user profiles dir. */
-static int
-build_profile_path(cbx_profiles_tab *tab, char *buf, size_t buflen,
-                     const char *name)
-{
-    if (tab && tab->test_user_dir) {
-        snprintf(buf, buflen, "%s/%s.yaml", tab->test_user_dir, name);
-        return 0;
-    }
-    char dir[PATH_MAX];
-    int rc = cbx_user_profiles_dir(dir, sizeof(dir));
-    if (rc != 0)
-        return rc;
-    snprintf(buf, buflen, "%s/%s.yaml", dir, name);
-    return 0;
-}
 
 /* Build the sidecar path for a profile name. */
 static int
@@ -359,16 +344,11 @@ cbx_profiles_tab_create(cbx_profiles_tab *tab,
             return -EEXIST;
     }
 
-    /* Build the output path. */
-    char path[PATH_MAX + 128];
-    int rc = build_profile_path(tab, path, sizeof(path), name);
-    if (rc != 0)
-        return rc;
-
     /* Build the profile content based on the source. */
     cbx_profile prof;
     cbx_profile_init(&prof);
     snprintf(prof.name, sizeof(prof.name), "%s", name);
+    int rc = 0;
 
     if (source == CBX_PT_CREATE_DEFAULT_COPY || source == CBX_PT_CREATE_CLONE) {
         /* Find the source profile to clone from. */
@@ -409,10 +389,23 @@ cbx_profiles_tab_create(cbx_profiles_tab *tab,
     }
     /* CBX_PT_CREATE_EMPTY: leave mappings empty. */
 
-    /* Save the profile. */
-    rc = cbx_profile_save(&prof, path);
-    if (rc != 0)
+    /* Save the profile via the manager-level save path, which enforces
+     * filename validation, NES minimum binding validation, and path
+     * canonicalization (TOCTOU-safe) before writing. */
+    char missing_buf[CBX_PT_LABEL_LEN];
+    rc = cbx_profile_save_to_dir(&prof, name, NULL,
+                                  tab->test_user_dir,
+                                  missing_buf, sizeof(missing_buf));
+    if (rc != 0) {
+        if (rc == -EINVAL && missing_buf[0] != '\0') {
+            /* NES minimum validation failed — show the missing buttons. */
+            char msg[CBX_PT_LABEL_LEN + 16];
+            snprintf(msg, sizeof(msg), "Missing: %s", missing_buf);
+            cbx_label_set_text(&tab->status_lbl, msg);
+            cbx_widget_set_visible(&tab->status_lbl.base, true);
+        }
         return rc;
+    }
 
     /* Refresh to show the new profile. */
     cbx_profiles_tab_refresh(tab);

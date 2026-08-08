@@ -71,12 +71,38 @@ static const char *const nes_buttons[] = {
 };
 #define NES_MIN_COUNT 6
 
+/* Write a profile YAML with all 6 NES minimum button bindings. */
+static void write_nes_default(const char *path)
+{
+    static const char *btns[] = {"A", "B", "Up", "Down", "Left", "Right"};
+    static const char *keys[] = {"KeyA", "KeyB", "KeyUp", "KeyDown",
+                                 "KeyLeft", "KeyRight"};
+    FILE *f = fopen(path, "w");
+    assert_non_null(f);
+    fprintf(f, "version: 1\n");
+    fprintf(f, "kind: DeviceProfile\n");
+    fprintf(f, "name: Default\n");
+    fprintf(f, "description: NES test profile\n");
+    fprintf(f, "mapping:\n");
+    for (int i = 0; i < 6; i++)
+        fprintf(f,
+            "  - name: btn_%s\n"
+            "    source_event:\n"
+            "      gamepad:\n"
+            "        button: %s\n"
+            "    target_events:\n"
+            "      - keyboard: %s\n",
+            btns[i], btns[i], keys[i]);
+    fclose(f);
+}
+
 /* ------------------------------------------------------------------ */
 /*  Fixture                                                            */
 /* ------------------------------------------------------------------ */
 
 typedef struct {
     char tmp[256];               /* isolated HOME */
+    char profiles_dir[PATH_MAX + 64]; /* user profiles dir path */
     cbx_manager mgr;
 
     ip_dbus_mock mock;
@@ -110,10 +136,15 @@ static int setup(void **state)
     unsetenv("FLATPAK_ID");
 
     /* Create a profiles directory so profile operations work. */
-    char profiles_dir[PATH_MAX + 64];
-    snprintf(profiles_dir, sizeof(profiles_dir),
+    snprintf(f->profiles_dir, sizeof(f->profiles_dir),
              "%s/.local/share/inputplumber/profiles", f->tmp);
-    cbx_ensure_dir(profiles_dir, 0700);
+    cbx_ensure_dir(f->profiles_dir, 0700);
+
+    /* Write a default profile with NES minimum bindings so the production
+     * save path (which validates NES minimum) accepts default-copy creates. */
+    char def_path[PATH_MAX + 128];
+    snprintf(def_path, sizeof(def_path), "%s/default.yaml", f->profiles_dir);
+    write_nes_default(def_path);
 
     /* Mock systemctl script with state file for is-active. */
     snprintf(f->mock_systemctl_path, sizeof(f->mock_systemctl_path),
@@ -165,7 +196,7 @@ static int setup(void **state)
     cbx_controllers_tab_refresh(f->ct);
 
     /* Override profiles tab dirs to use our test home and re-refresh. */
-    cbx_profiles_tab_set_test_dirs(f->pt, profiles_dir,
+    cbx_profiles_tab_set_test_dirs(f->pt, f->profiles_dir,
                                     cbx_system_profiles_dir(), NULL);
     cbx_profiles_tab_refresh(f->pt);
 
@@ -247,7 +278,7 @@ static void test_create_profile(void **state)
     mi_fixture *f = FIX(state);
 
     int rc = cbx_profiles_tab_create(f->pt, "testprof",
-                                     CBX_PT_CREATE_EMPTY);
+                                     CBX_PT_CREATE_DEFAULT_COPY);
     assert_int_equal(rc, 0);
 
     /* Refresh and verify. */
@@ -271,7 +302,7 @@ static void test_full_profile_workflow(void **state)
 
     /* Create an empty profile. */
     int rc = cbx_profiles_tab_create(f->pt, "workflow",
-                                      CBX_PT_CREATE_EMPTY);
+                                      CBX_PT_CREATE_DEFAULT_COPY);
     assert_int_equal(rc, 0);
 
     /* Create a profile editor panel for testing.  We need a separate
@@ -443,7 +474,7 @@ static void test_full_integration(void **state)
 
     /* Step 1: Create a profile. */
     int rc = cbx_profiles_tab_create(f->pt, "integration",
-                                      CBX_PT_CREATE_EMPTY);
+                                      CBX_PT_CREATE_DEFAULT_COPY);
     assert_int_equal(rc, 0);
 
     /* Step 2: Build a valid NES minimum profile. */
