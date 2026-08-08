@@ -174,6 +174,36 @@ parse_capabilities_csv(const char *csv, cbx_pe_target *targets,
 }
 
 /* ------------------------------------------------------------------ */
+/*  Pointer-path callbacks for editor lists                          */
+/* ------------------------------------------------------------------ */
+
+/* Fires when the binding list is activated via mouse click or A-KEYUP.
+ * Calls the same activate function the controller path reaches via
+ * cbx_profiles_tab_activate, so both paths produce the same outcome. */
+static void
+on_binding_selected(cbx_widget *w, int index, void *user_data)
+{
+    (void)w;
+    (void)index;
+    cbx_profile_editor *ed = (cbx_profile_editor *)user_data;
+    if (ed)
+        cbx_profile_editor_activate(ed);
+}
+
+/* Fires when the target list is activated via mouse click or A-KEYUP.
+ * Works in both BINDING_EDIT mode (selecting Pick Target / Capture /
+ * Sequential) and TARGET_PICK mode (confirming a target event). */
+static void
+on_target_selected(cbx_widget *w, int index, void *user_data)
+{
+    (void)w;
+    (void)index;
+    cbx_profile_editor *ed = (cbx_profile_editor *)user_data;
+    if (ed)
+        cbx_profile_editor_activate(ed);
+}
+
+/* ------------------------------------------------------------------ */
 /*  Lifecycle                                                         */
 /* ------------------------------------------------------------------ */
 
@@ -247,6 +277,14 @@ cbx_profile_editor_init(cbx_profile_editor *ed,
     }
     cbx_widget_set_visible(&ed->target_list.base, false);
     cbx_widget_set_rect(&ed->target_list.base, &list_rect);
+
+    /* Wire on_select callbacks so pointer (mouse) activation works.
+     * For the controller path, A-KEYUP falls through to
+     * cbx_profiles_tab_activate -> cbx_profile_editor_activate.
+     * For the pointer path, MOUSEUP fires on_select which calls
+     * the same activate function. */
+    cbx_list_set_select_cb(&ed->binding_list, on_binding_selected);
+    cbx_list_set_select_cb(&ed->target_list, on_target_selected);
 
     /* --- Status label --------------------------------------------- */
     rc = cbx_label_init(&ed->status_lbl, "", font_id, cache, theme);
@@ -478,9 +516,7 @@ cbx_profile_editor_refresh(cbx_profile_editor *ed)
         char label[CBX_PE_LABEL_LEN];
         format_binding_label(label, sizeof(label),
                                &ed->profile.mappings[i]);
-        /* user_data = mapping index as pointer */
-        cbx_list_add_item(&ed->binding_list, label, NULL,
-                           (void *)(intptr_t)(i + 1));
+        cbx_list_add_item(&ed->binding_list, label, NULL, ed);
     }
 
     /* Set selection */
@@ -511,7 +547,9 @@ cbx_profile_editor_move_up(cbx_profile_editor *ed)
 
     if (ed->mode == CBX_EDITOR_MODE_TARGET_PICK ||
         ed->mode == CBX_EDITOR_MODE_BINDING_EDIT) {
-        cbx_list_scroll_up(&ed->target_list);
+        int sel = cbx_list_get_selected(&ed->target_list);
+        if (sel > 0)
+            cbx_list_set_selected(&ed->target_list, sel - 1);
         return cbx_list_get_selected(&ed->target_list);
     }
 
@@ -533,7 +571,10 @@ cbx_profile_editor_move_down(cbx_profile_editor *ed)
 
     if (ed->mode == CBX_EDITOR_MODE_TARGET_PICK ||
         ed->mode == CBX_EDITOR_MODE_BINDING_EDIT) {
-        cbx_list_scroll_down(&ed->target_list);
+        int sel = cbx_list_get_selected(&ed->target_list);
+        int cnt = cbx_list_item_count(&ed->target_list);
+        if (sel < cnt - 1)
+            cbx_list_set_selected(&ed->target_list, sel + 1);
         return cbx_list_get_selected(&ed->target_list);
     }
 
@@ -600,9 +641,9 @@ cbx_profile_editor_activate(cbx_profile_editor *ed)
 
     /* Populate target list with the three edit options. */
     cbx_list_clear(&ed->target_list);
-    cbx_list_add_item(&ed->target_list, "Pick Target", NULL, NULL);
-    cbx_list_add_item(&ed->target_list, "Capture", NULL, NULL);
-    cbx_list_add_item(&ed->target_list, "Sequential (All Buttons)", NULL, NULL);
+    cbx_list_add_item(&ed->target_list, "Pick Target", NULL, ed);
+    cbx_list_add_item(&ed->target_list, "Capture", NULL, ed);
+    cbx_list_add_item(&ed->target_list, "Sequential (All Buttons)", NULL, ed);
     cbx_list_set_selected(&ed->target_list, 0);
 
     /* Show target list, hide binding list. */
@@ -673,7 +714,7 @@ cbx_profile_editor_begin_target_pick(cbx_profile_editor *ed)
     cbx_list_clear(&ed->target_list);
     for (int i = 0; i < ed->target_count; i++) {
         cbx_list_add_item(&ed->target_list, ed->targets[i].label,
-                           NULL, (void *)(intptr_t)(i + 1));
+                           NULL, ed);
     }
     cbx_list_set_selected(&ed->target_list, 0);
 
