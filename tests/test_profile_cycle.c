@@ -260,6 +260,10 @@ test_apply_success(void **state)
     /* Expect LoadProfilePath call on the composite interface. */
     ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
                             "LoadProfilePath", NULL);
+    /* Expect ProfilePath read-back for engine state verification. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                            "ProfilePath",
+                            "/home/user/.local/share/inputplumber/profiles/fighting.yaml");
 
     int rc = cbx_profile_cycle_apply(&f->pc, &f->grid, 0, "fighting",
         "/org/shadowblip/InputPlumber/CompositeDevice0");
@@ -368,6 +372,10 @@ test_apply_no_assignments(void **state)
     ip_dbus_mock_expect_ok(&mock, IP_IFACE_COMPOSITE,
                             "LoadProfilePath", NULL);
 
+    /* Expect ProfilePath read-back for engine state verification. */
+    ip_dbus_mock_expect_ok(&mock, IP_IFACE_COMPOSITE,
+                            "ProfilePath",
+                            "/home/user/.local/share/inputplumber/profiles/fighting.yaml");
     cbx_profile_cycle pc;
     cbx_profile_cycle_init(&pc, backend, mock.bus, NULL, &list);
 
@@ -399,9 +407,12 @@ test_apply_updates_assignment_existing(void **state)
     cbx_assign_make_default("ORDER:0", 1, &a);
     cbx_assignments_init(&f->assignments);
     f->assignments.assignments[f->assignments.assignment_count++] = a;
-
     ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
                             "LoadProfilePath", NULL);
+    /* Expect ProfilePath read-back for engine state verification. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                            "ProfilePath",
+                            "/home/user/.local/share/inputplumber/profiles/racing.yaml");
 
     int rc = cbx_profile_cycle_apply(&f->pc, &f->grid, 0, "racing",
         "/org/shadowblip/InputPlumber/CompositeDevice0");
@@ -422,6 +433,9 @@ test_apply_different_controllers(void **state)
     /* Controller 0 changes to "fighting". */
     ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
                             "LoadProfilePath", NULL);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                            "ProfilePath",
+                            "/home/user/.local/share/inputplumber/profiles/fighting.yaml");
     int rc = cbx_profile_cycle_apply(&f->pc, &f->grid, 0, "fighting",
         "/org/shadowblip/InputPlumber/CompositeDevice0");
     assert_int_equal(rc, 0);
@@ -429,11 +443,12 @@ test_apply_different_controllers(void **state)
     /* Controller 1 changes to "racing". */
     ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
                             "LoadProfilePath", NULL);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                            "ProfilePath",
+                            "/home/user/.local/share/inputplumber/profiles/racing.yaml");
     rc = cbx_profile_cycle_apply(&f->pc, &f->grid, 1, "racing",
         "/org/shadowblip/InputPlumber/CompositeDevice1");
     assert_int_equal(rc, 0);
-
-    /* Verify each controller has its own profile. */
     cbx_assignment found0, found1;
     cbx_assign_lookup(&f->assignments, "ORDER:0", &found0);
     cbx_assign_lookup(&f->assignments, "ORDER:1", &found1);
@@ -571,6 +586,9 @@ test_full_workflow(void **state)
     assert_string_equal(cbx_select_grid_get_profile(&f->grid, 0), "racing");
 
     /* 3. Apply the profile change via the callback handler. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                            "ProfilePath",
+                            "/home/user/.local/share/inputplumber/profiles/racing.yaml");
     ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
                             "LoadProfilePath", NULL);
     rc = cbx_profile_cycle_apply(&f->pc, &f->grid, 0, "racing",

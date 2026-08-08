@@ -187,6 +187,16 @@ interaction_setup(void **state)
     snprintf(f->svc->grid.rows[0].profile,
              CBX_GRID_PROFILE_LEN, "Default");
 
+    /* Device model: 1 target + 1 composite (for on_save backend calls). */
+    f->svc->model.target_count = 1;
+    snprintf(f->svc->model.targets[0].path,
+             sizeof(f->svc->model.targets[0].path),
+             "/org/shadowblip/InputPlumber/devices/target/gamepad0");
+    f->svc->model.composite_count = 1;
+    snprintf(f->svc->model.composites[0].path,
+             sizeof(f->svc->model.composites[0].path),
+             "%s", comps[0].composite_path);
+
     /* Render context (minimal). */
     f->svc->render_ctx = (cbx_grid_render_ctx){
         .grid       = &f->svc->grid,
@@ -261,12 +271,17 @@ interaction_setup(void **state)
         f->svc->poll_count = 0;
     }
 
-    /* Mock expectations: InterceptMode (for poll get + close set)
-     * and LoadProfilePath (for profile change). */
+    /* Mock expectations: InterceptMode (for poll get + close set),
+     * LoadProfilePath (for profile change), AttachTargetDevice + GamepadOrder
+     * (for on_save backend apply). */
     ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
                             "InterceptMode", "2");
     ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
                             "LoadProfilePath", "");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "AttachTargetDevice", NULL);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "GamepadOrder", NULL);
 
     f->svc->initialized = true;
     cbx_overlay_service_reset_shutdown();

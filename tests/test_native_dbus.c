@@ -45,9 +45,19 @@ static int cleanup_processes(void **state)
     return 0;
 }
 
-static int property_get(sd_bus *bus, const char *path, const char *interface,
-                        const char *property, sd_bus_message *reply,
-                        void *userdata, sd_bus_error *error)
+/* --- Profile / GamepadOrder state for assignment test --- */
+
+#define NATIVE_MAX_COMPOSITES 16
+
+static char g_profile_path[NATIVE_MAX_COMPOSITES][256];
+static char g_profile_name[NATIVE_MAX_COMPOSITES][64];
+static char g_gamepad_order[NATIVE_MAX_COMPOSITES][256];
+static int  g_gamepad_order_count = 0;
+
+static int
+property_get(sd_bus *bus, const char *path, const char *interface,
+             const char *property, sd_bus_message *reply,
+             void *userdata, sd_bus_error *error)
 {
     (void)bus; (void)path; (void)interface; (void)userdata; (void)error;
     if (strcmp(property, "Version") == 0)
@@ -65,6 +75,45 @@ static int property_get(sd_bus *bus, const char *path, const char *interface,
         return sd_bus_message_append(reply, "u", (uint32_t)2);
     if (strcmp(property, "Enabled") == 0)
         return sd_bus_message_append(reply, "b", 1);
+    if (strcmp(property, "GamepadOrder") == 0) {
+        int rc = sd_bus_message_open_container(reply, 'a', "s");
+        if (rc < 0) return rc;
+        for (int i = 0; i < g_gamepad_order_count; i++) {
+            rc = sd_bus_message_append(reply, "s", g_gamepad_order[i]);
+            if (rc < 0) return rc;
+        }
+        return sd_bus_message_close_container(reply);
+    }
+    return -ENOENT;
+}
+
+/* Property setter for Manager.GamepadOrder (writable `as`). */
+static int
+manager_property_set(sd_bus *bus, const char *path, const char *interface,
+                     const char *property, sd_bus_message *value,
+                     void *userdata, sd_bus_error *error)
+{
+    (void)bus; (void)path; (void)interface; (void)userdata; (void)error;
+    if (strcmp(property, "GamepadOrder") == 0) {
+        /* The variant has already been entered by sd-bus; we read
+         * the `as` array contents directly. */
+        int rc = sd_bus_message_enter_container(value, 'a', "s");
+        if (rc < 0)
+            return rc;
+        g_gamepad_order_count = 0;
+        const char *p = NULL;
+        while ((rc = sd_bus_message_read_basic(value, 's', &p)) > 0) {
+            if (g_gamepad_order_count < NATIVE_MAX_COMPOSITES) {
+                snprintf(g_gamepad_order[g_gamepad_order_count],
+                         sizeof(g_gamepad_order[g_gamepad_order_count]),
+                         "%s", p);
+                g_gamepad_order_count++;
+            }
+        }
+        if (rc < 0)
+            return rc;
+        return sd_bus_message_exit_container(value);
+    }
     return -ENOENT;
 }
 
@@ -76,11 +125,11 @@ static char g_target_types[NATIVE_MAX_TARGETS][32];
 static int  g_target_count = 0;
 
 /* Attachment tracking: for each composite index, list of attached target paths. */
-#define NATIVE_MAX_COMPOSITES 16
 #define NATIVE_MAX_ATTACHED_PER_COMP 16
 static char g_attached_targets[NATIVE_MAX_COMPOSITES][NATIVE_MAX_ATTACHED_PER_COMP][256];
 static int  g_attached_counts[NATIVE_MAX_COMPOSITES];
 static int  g_attached_count = 0;
+
 
 /* Property getter for target DeviceType (called from fallback vtable). */
 static int
@@ -106,36 +155,98 @@ static const sd_bus_vtable target_vtable[] = {
     SD_BUS_VTABLE_END
 };
 
-/* Composite property getter for TargetDevices (returns attached target paths). */
+/* Composite property getter for TargetDevices, ProfileName, ProfilePath,
+ * PersistentId (returns attached target paths or profile state). */
 static int
 composite_property_get(sd_bus *bus, const char *path, const char *interface,
                         const char *property, sd_bus_message *reply,
                         void *userdata, sd_bus_error *error)
 {
     (void)bus; (void)interface; (void)userdata; (void)error;
-    if (strcmp(property, "TargetDevices") != 0)
-        return -ENOENT;
-    /* Extract composite index. */
+
+    /* Extract composite index from path (CompositeDevice0 → 0). */
     int comp_idx = -1;
     const char *p = strstr(path, "CompositeDevice");
     if (p)
         comp_idx = atoi(p + strlen("CompositeDevice"));
-    int rc = sd_bus_message_open_container(reply, 'a', "s");
-    if (rc < 0) return rc;
-    if (comp_idx >= 0 && comp_idx < NATIVE_MAX_COMPOSITES) {
-        for (int j = 0; j < g_attached_counts[comp_idx]; j++) {
-            rc = sd_bus_message_append(reply, "s", g_attached_targets[comp_idx][j]);
-            if (rc < 0) break;
+
+    if (strcmp(property, "TargetDevices") == 0) {
+        int rc = sd_bus_message_open_container(reply, 'a', "s");
+        if (rc < 0) return rc;
+        if (comp_idx >= 0 && comp_idx < NATIVE_MAX_COMPOSITES) {
+            for (int j = 0; j < g_attached_counts[comp_idx]; j++) {
+                rc = sd_bus_message_append(reply, "s", g_attached_targets[comp_idx][j]);
+                if (rc < 0) break;
+            }
         }
+        if (rc >= 0) rc = sd_bus_message_close_container(reply);
+        return rc;
     }
-    if (rc >= 0) rc = sd_bus_message_close_container(reply);
-    return rc;
+    if (strcmp(property, "ProfileName") == 0) {
+        if (comp_idx < 0 || comp_idx >= NATIVE_MAX_COMPOSITES)
+            return -ENOENT;
+        return sd_bus_message_append(reply, "s", g_profile_name[comp_idx]);
+    }
+    if (strcmp(property, "ProfilePath") == 0) {
+        if (comp_idx < 0 || comp_idx >= NATIVE_MAX_COMPOSITES)
+            return -ENOENT;
+        return sd_bus_message_append(reply, "s", g_profile_path[comp_idx]);
+    }
+    if (strcmp(property, "PersistentId") == 0) {
+        if (comp_idx < 0 || comp_idx >= NATIVE_MAX_COMPOSITES)
+            return -ENOENT;
+        char id[32];
+        snprintf(id, sizeof(id), "comp-%d", comp_idx);
+        return sd_bus_message_append(reply, "s", id);
+    }
+    return -ENOENT;
+}
+
+/* Method handler: CompositeDevice.LoadProfilePath(path: s) */
+static int
+method_load_profile_path(sd_bus_message *m, void *userdata, sd_bus_error *error)
+{
+    (void)userdata; (void)error;
+    const char *profile_path = NULL;
+    int rc = sd_bus_message_read(m, "s", &profile_path);
+    if (rc < 0)
+        return rc;
+    /* Extract composite index from the object path. */
+    const char *obj_path = sd_bus_message_get_path(m);
+    int comp_idx = -1;
+    if (obj_path) {
+        const char *p = strstr(obj_path, "CompositeDevice");
+        if (p)
+            comp_idx = atoi(p + strlen("CompositeDevice"));
+    }
+    if (comp_idx < 0 || comp_idx >= NATIVE_MAX_COMPOSITES)
+        return sd_bus_error_set(error, "org.freedesktop.DBus.Error.UnknownObject",
+                                "composite not found");
+    /* Store the profile path and derive a name from the filename. */
+    snprintf(g_profile_path[comp_idx], sizeof(g_profile_path[comp_idx]),
+             "%s", profile_path);
+    /* Derive a simple profile name from the path (strip directory + .yaml). */
+    const char *base = strrchr(profile_path, '/');
+    base = base ? base + 1 : profile_path;
+    snprintf(g_profile_name[comp_idx], sizeof(g_profile_name[comp_idx]),
+             "%s", base);
+    char *dot = strstr(g_profile_name[comp_idx], ".yaml");
+    if (dot)
+        *dot = '\0';
+    return sd_bus_reply_method_return(m, "");
 }
 
 static const sd_bus_vtable composite_vtable[] = {
     SD_BUS_VTABLE_START(0),
     SD_BUS_PROPERTY("TargetDevices", "as", composite_property_get, 0,
                     SD_BUS_VTABLE_PROPERTY_CONST),
+    SD_BUS_PROPERTY("ProfileName", "s", composite_property_get, 0,
+                    SD_BUS_VTABLE_PROPERTY_CONST),
+    SD_BUS_PROPERTY("ProfilePath", "s", composite_property_get, 0,
+                    SD_BUS_VTABLE_PROPERTY_CONST),
+    SD_BUS_PROPERTY("PersistentId", "s", composite_property_get, 0,
+                    SD_BUS_VTABLE_PROPERTY_CONST),
+    SD_BUS_METHOD("LoadProfilePath", "s", "", method_load_profile_path, 0),
     SD_BUS_VTABLE_END
 };
 
@@ -348,6 +459,8 @@ static const sd_bus_vtable manager_vtable[] = {
                     SD_BUS_VTABLE_PROPERTY_CONST),
     SD_BUS_PROPERTY("Enabled", "b", property_get, 0,
                     SD_BUS_VTABLE_PROPERTY_CONST),
+    SD_BUS_WRITABLE_PROPERTY("GamepadOrder", "as", property_get,
+                              manager_property_set, 0, 0),
     SD_BUS_METHOD("CreateTargetDevice", "s", "s", method_create_target, 0),
     SD_BUS_METHOD("StopTargetDevice", "s", "", method_stop_target, 0),
     SD_BUS_METHOD("AttachTargetDevice", "ss", "", method_attach_target, 0),
@@ -940,6 +1053,185 @@ test_native_topology_reconciliation(void **state)
     unsetenv("DBUS_SYSTEM_BUS_ADDRESS");
 }
 
+/* --- Native fixture: assignment/profile application via real sd-bus -- */
+
+static void
+test_native_assignment_application(void **state)
+{
+    (void)state;
+    char address[512];
+    pid_t daemon_pid = 0;
+    assert_int_equal(start_private_bus(address, sizeof(address),
+                                        &daemon_pid), 0);
+    private_daemon_pid = daemon_pid;
+    setenv("DBUS_SYSTEM_BUS_ADDRESS", address, 1);
+
+    /* Reset server state. */
+    g_target_count = 0;
+    g_attached_count = 0;
+    memset(g_attached_targets, 0, sizeof(g_attached_targets));
+    memset(g_attached_counts, 0, sizeof(g_attached_counts));
+    memset(g_profile_path, 0, sizeof(g_profile_path));
+    memset(g_profile_name, 0, sizeof(g_profile_name));
+    g_gamepad_order_count = 0;
+    memset(g_gamepad_order, 0, sizeof(g_gamepad_order));
+    service_running = 1;
+    pid_t server_pid = fork();
+    assert_true(server_pid >= 0);
+    if (server_pid == 0)
+        _exit(run_service_full(address));
+    private_server_pid = server_pid;
+
+    /* Wait for the server to come up. */
+    const ip_dbus_backend *backend = ip_dbus_sd_backend();
+    ip_bus_handle bus = NULL;
+    assert_int_equal(backend->connect(&bus), 0);
+
+    char *version = NULL;
+    int rc = -1;
+    for (int i = 0; i < 100 && rc != 0; i++) {
+        free(version); version = NULL;
+        rc = backend->get_property(bus, IP_DBUS_NAME,
+            IP_DBUS_MANAGER_PATH, IP_IFACE_MANAGER, "Version", &version);
+        if (rc != 0) usleep(10000);
+    }
+    assert_int_equal(rc, 0);
+    free(version);
+
+    const char *comp0 = "/org/shadowblip/InputPlumber/CompositeDevice0";
+
+    /* --- Step 1: Create 2 targets --- */
+    char *t0 = NULL, *t1 = NULL;
+    assert_int_equal(ip_manager_create_target_device(
+        backend, bus, "xb360", &t0), 0);
+    assert_non_null(t0);
+    assert_int_equal(ip_manager_create_target_device(
+        backend, bus, "ds5", &t1), 0);
+    assert_non_null(t1);
+
+    /* --- Step 2: Attach targets to composite (routability) --- */
+    assert_int_equal(ip_manager_attach_target_device(
+        backend, bus, t0, comp0), 0);
+    assert_int_equal(ip_manager_attach_target_device(
+        backend, bus, t1, comp0), 0);
+
+    /* Verify TargetDevices lists both. */
+    char *td = NULL;
+    assert_int_equal(ip_composite_get_target_devices(
+        backend, bus, comp0, &td), 0);
+    assert_non_null(td);
+    assert_true(strstr(td, t0) != NULL);
+    assert_true(strstr(td, t1) != NULL);
+    free(td);
+
+    /* --- Step 3: LoadProfilePath on composite --- */
+    const char *test_profile = "/usr/share/inputplumber/profiles/default.yaml";
+    assert_int_equal(ip_composite_load_profile_path(
+        backend, bus, comp0, test_profile), 0);
+
+    /* --- Step 4: Verify ProfilePath matches (engine state verified) --- */
+    char *pp = NULL;
+    assert_int_equal(ip_composite_get_profile_path(
+        backend, bus, comp0, &pp), 0);
+    assert_non_null(pp);
+    assert_string_equal(pp, test_profile);
+    free(pp);
+
+    /* --- Step 5: Verify ProfileName is derived correctly --- */
+    char *pn = NULL;
+    assert_int_equal(ip_composite_get_profile_name(
+        backend, bus, comp0, &pn), 0);
+    assert_non_null(pn);
+    assert_string_equal(pn, "default");
+    free(pn);
+
+    /* --- Step 6: Set GamepadOrder --- */
+    char order_csv[512];
+    snprintf(order_csv, sizeof(order_csv), "%s", comp0);
+
+    /* Build a device model for validation. */
+    cbx_device_model model;
+    cbx_device_model_init(&model);
+    assert_int_equal(cbx_objectmanager_enumerate(backend, bus, &model), 0);
+
+    /* Set GamepadOrder with proper model validation. */
+    assert_int_equal(ip_manager_set_gamepad_order(
+        backend, bus, order_csv, &model), 0);
+
+    /* --- Step 7: Read back GamepadOrder --- */
+    char *go = NULL;
+    assert_int_equal(ip_manager_get_gamepad_order(
+        backend, bus, &go), 0);
+    assert_non_null(go);
+    assert_true(strstr(go, comp0) != NULL);
+    free(go);
+
+    /* --- Step 8: Simulate restart (clear in-memory GamepadOrder) ---
+     * InputPlumber does not persist GamepadOrder (gap #2).  After a
+     * daemon restart, GamepadOrder resets to empty.  The GUI restores
+     * it from assignments.yaml.  We simulate this by setting it to
+     * empty, then restoring. */
+    assert_int_equal(ip_manager_set_gamepad_order(
+        backend, bus, "", &model), 0);
+    char *go_empty = NULL;
+    assert_int_equal(ip_manager_get_gamepad_order(
+        backend, bus, &go_empty), 0);
+    assert_non_null(go_empty);
+    /* GamepadOrder should be empty (or not contain comp0). */
+    assert_true(go_empty[0] == '\0' || strstr(go_empty, comp0) == NULL);
+    free(go_empty);
+
+    /* --- Step 9: Restore GamepadOrder --- */
+    assert_int_equal(ip_manager_set_gamepad_order(
+        backend, bus, order_csv, &model), 0);
+    char *go_restored = NULL;
+    assert_int_equal(ip_manager_get_gamepad_order(
+        backend, bus, &go_restored), 0);
+    assert_non_null(go_restored);
+    assert_true(strstr(go_restored, comp0) != NULL);
+    free(go_restored);
+
+    /* --- Step 10: PersistentId is stable per composite --- */
+    char *pid0 = NULL;
+    assert_int_equal(ip_composite_get_persistent_id(
+        backend, bus, comp0, &pid0), 0);
+    assert_non_null(pid0);
+    assert_string_equal(pid0, "comp-0");
+    free(pid0);
+
+    /* --- Step 11: LoadProfilePath with different profile verifies
+     * engine state changes before persistence. */
+    const char *fighting_profile = "/usr/share/inputplumber/profiles/fighting.yaml";
+    assert_int_equal(ip_composite_load_profile_path(
+        backend, bus, comp0, fighting_profile), 0);
+    char *pp2 = NULL;
+    assert_int_equal(ip_composite_get_profile_path(
+        backend, bus, comp0, &pp2), 0);
+    assert_non_null(pp2);
+    assert_string_equal(pp2, fighting_profile);
+    free(pp2);
+    char *pn2 = NULL;
+    assert_int_equal(ip_composite_get_profile_name(
+        backend, bus, comp0, &pn2), 0);
+    assert_non_null(pn2);
+    assert_string_equal(pn2, "fighting");
+    free(pn2);
+
+    /* Clean up all targets. */
+    for (int i = model.target_count - 1; i >= 0; i--)
+        ip_manager_stop_target_device(backend, bus, model.targets[i].path);
+
+    free(t0); free(t1);
+    backend->disconnect(bus);
+    kill(server_pid, SIGTERM);
+    waitpid(server_pid, NULL, 0);
+    private_server_pid = 0;
+    kill(daemon_pid, SIGTERM);
+    waitpid(daemon_pid, NULL, 0);
+    private_daemon_pid = 0;
+    unsetenv("DBUS_SYSTEM_BUS_ADDRESS");
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -950,6 +1242,8 @@ int main(void)
         cmocka_unit_test_teardown(test_native_target_operations,
                                   cleanup_processes),
         cmocka_unit_test_teardown(test_native_topology_reconciliation,
+                                  cleanup_processes),
+        cmocka_unit_test_teardown(test_native_assignment_application,
                                   cleanup_processes),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);

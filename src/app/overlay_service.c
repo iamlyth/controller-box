@@ -127,7 +127,65 @@ cbx_overlay_on_save(void *userdata)
     cbx_conflict_detect(&svc->grid, &svc->conflicts);
     cbx_conflict_resolve(&svc->grid, &svc->conflicts);
 
-    /* Sync grid state back to assignments and save. */
+    /* Build GamepadOrder from the grid state (needed for engine apply). */
+    char order[CBX_MAX_COMPOSITES * (CBX_MAX_PATH_LEN + 1)];
+    order[0] = '\0';
+    for (int slot = 0; slot < CBX_MAX_CONTROLLERS; slot++) {
+        for (int i = 0; i < svc->grid.row_count; i++) {
+            const cbx_grid_row *row = &svc->grid.rows[i];
+            if (cbx_select_grid_col_to_slot(row->cur_col) != slot)
+                continue;
+            if (order[0])
+                strncat(order, ",", sizeof(order) - strlen(order) - 1);
+            strncat(order, row->composite_path,
+                    sizeof(order) - strlen(order) - 1);
+        }
+    }
+
+    /* --- Phase 1: Apply to engine and verify (SPEC §§4.1-4.7) ---
+     * For each assigned row: LoadProfilePath + verify ProfilePath +
+     * AttachTargetDevice.  Engine state is verified before in-memory
+     * state or disk persistence is touched.  If any step fails, the
+     * in-memory assignments and disk retain the last confirmed state. */
+    for (int i = 0; i < svc->grid.row_count; i++) {
+        const cbx_grid_row *row = &svc->grid.rows[i];
+        int slot = cbx_select_grid_col_to_slot(row->cur_col);
+        if (slot < 0)
+            continue;
+        if (slot >= svc->model.target_count)
+            return -ENODEV;
+
+        /* Load profile and verify engine state.  Skip if no profile list
+         * is available (e.g. degraded/test mode) — slot assignment and
+         * GamepadOrder are still applied. */
+        if (row->profile[0] && svc->profile_cycle.profiles) {
+            int profile_rc = cbx_profile_cycle_apply(&svc->profile_cycle,
+                                                       &svc->grid, i,
+                                                       row->profile,
+                                                       row->composite_path);
+            if (profile_rc != 0)
+                return profile_rc;
+        }
+
+        /* Attach target to composite for routability. */
+        int attach_rc = ip_manager_attach_target_device(
+            svc->conn.backend, svc->conn.bus,
+            svc->model.targets[slot].path, row->composite_path);
+        if (attach_rc != 0)
+            return attach_rc;
+    }
+
+    /* --- Phase 2: Set GamepadOrder on the engine --- */
+    int rc = ip_manager_set_gamepad_order(svc->conn.backend, svc->conn.bus,
+                                           order, &svc->model);
+    if (rc != 0)
+        return rc;
+
+    /* --- Phase 3: All engine state verified — sync in-memory and persist ---
+     * Only after every LoadProfilePath, AttachTargetDevice, and
+     * SetGamepadOrder succeeded do we update the in-memory assignments
+     * and save to disk.  This guarantees that LoadProfile failures do
+     * not appear saved (Task 8 acceptance criterion). */
     for (int i = 0; i < svc->grid.row_count; i++) {
         const cbx_grid_row *row = &svc->grid.rows[i];
         int slot = cbx_select_grid_col_to_slot(row->cur_col);
@@ -169,18 +227,13 @@ cbx_overlay_on_save(void *userdata)
         }
     }
 
-    char order[CBX_MAX_COMPOSITES * (CBX_MAX_PATH_LEN + 1)];
-    order[0] = '\0';
+    /* Save gamepad_order identity IDs for restart restoration. */
     svc->assignments.gamepad_order_count = 0;
     for (int slot = 0; slot < CBX_MAX_CONTROLLERS; slot++) {
         for (int i = 0; i < svc->grid.row_count; i++) {
             const cbx_grid_row *row = &svc->grid.rows[i];
             if (cbx_select_grid_col_to_slot(row->cur_col) != slot)
                 continue;
-            if (order[0])
-                strncat(order, ",", sizeof(order) - strlen(order) - 1);
-            strncat(order, row->composite_path,
-                    sizeof(order) - strlen(order) - 1);
             if (svc->assignments.gamepad_order_count < CBX_MAX_GAMEPAD_ORDER) {
                 snprintf(svc->assignments.gamepad_order[
                              svc->assignments.gamepad_order_count++],
@@ -189,32 +242,6 @@ cbx_overlay_on_save(void *userdata)
         }
     }
 
-    for (int i = 0; i < svc->grid.row_count; i++) {
-        const cbx_grid_row *row = &svc->grid.rows[i];
-        int slot = cbx_select_grid_col_to_slot(row->cur_col);
-        if (slot < 0)
-            continue;
-        if (slot >= svc->model.target_count)
-            return -ENODEV;
-        if (row->profile[0]) {
-            int profile_rc = cbx_profile_cycle_apply(&svc->profile_cycle,
-                                                       &svc->grid, i,
-                                                       row->profile,
-                                                       row->composite_path);
-            if (profile_rc != 0)
-                return profile_rc;
-        }
-        int attach_rc = ip_manager_attach_target_device(
-            svc->conn.backend, svc->conn.bus,
-            svc->model.targets[slot].path, row->composite_path);
-        if (attach_rc != 0)
-            return attach_rc;
-    }
-
-    int rc = ip_manager_set_gamepad_order(svc->conn.backend, svc->conn.bus,
-                                           order, &svc->model);
-    if (rc != 0)
-        return rc;
     rc = cbx_assignments_save(&svc->assignments);
     if (rc != 0)
         return rc;
@@ -511,6 +538,19 @@ overlay_backend_ready(void *userdata)
     cbx_select_grid_build(&svc->grid, svc->composites, svc->comp_count,
                            &svc->settings, &svc->assignments);
     cbx_profile_cycle_load_profiles(&svc->grid, &svc->profiles);
+
+    /* Re-initialise profile_cycle with current backend/bus pointers
+     * so LoadProfilePath uses the live connection. */
+    cbx_profile_cycle_init(&svc->profile_cycle, svc->conn.backend,
+                            svc->conn.bus, &svc->assignments, &svc->profiles);
+
+    /* Restore persisted slot/profile topology to the live engine before
+     * advertising the overlay as ready (SPEC §§4.1-4.7: startup/restart
+     * restores order/profile).  This re-applies LoadProfilePath,
+     * AttachTargetDevice, and SetGamepadOrder from the saved state. */
+    if (cbx_overlay_on_save(svc) != 0)
+        fprintf(stderr, "controller-box: failed to restore assignments after recovery\n");
+
     cbx_overlay_input_build_map(svc->conn.backend, svc->conn.bus,
                                  svc->composites, svc->comp_count,
                                  &svc->input_ctx);

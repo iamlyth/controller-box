@@ -163,6 +163,31 @@ int ip_composite_get_persistent_id(const ip_dbus_backend *backend,
                                      char **out_value);
 
 /*
+ * Get the ProfileName property (SPEC §10.2).
+ * Returns the display name of the currently loaded profile.
+ * On success, *out_value is heap-allocated.  Caller must free.
+ * Returns 0 on success, categorized error code on failure.
+ */
+int ip_composite_get_profile_name(const ip_dbus_backend *backend,
+                                     ip_bus_handle bus,
+                                     const char *composite_path,
+                                     char **out_value);
+
+/*
+ * Get the ProfilePath property (SPEC §10.2).
+ * Returns the filesystem path of the currently loaded profile.
+ * Used to verify that LoadProfilePath actually loaded the expected
+ * profile (SPEC §4.1-4.7: slot/profile changes update verified engine
+ * state before persistence).
+ * On success, *out_value is heap-allocated.  Caller must free.
+ * Returns 0 on success, categorized error code on failure.
+ */
+int ip_composite_get_profile_path(const ip_dbus_backend *backend,
+                                     ip_bus_handle bus,
+                                     const char *composite_path,
+                                     char **out_value);
+
+/*
  * Get the Name property.
  * On success, *out_value is heap-allocated.  Caller must free.
  * Returns 0 on success, categorized error code on failure.

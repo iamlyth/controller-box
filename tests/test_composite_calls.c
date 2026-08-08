@@ -585,6 +585,64 @@ test_get_name_null_args(void **state)
       f->backend, f->mock.bus, COMP_PATH, NULL), -EINVAL);
 }
 
+/* --- ProfileName / ProfilePath property getters --- */
+
+static void
+test_get_profile_name_success(void **state)
+{
+    composite_fixture *f = FIX(state);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                           "ProfileName", "default");
+
+    char *out = NULL;
+    int rc = ip_composite_get_profile_name(f->backend, f->mock.bus,
+                                              COMP_PATH, &out);
+    assert_int_equal(rc, 0);
+    assert_string_equal(out, "default");
+    free(out);
+}
+
+static void
+test_get_profile_name_null_args(void **state)
+{
+    composite_fixture *f = FIX(state);
+    char *out = NULL;
+    assert_int_equal(ip_composite_get_profile_name(
+      NULL, f->mock.bus, COMP_PATH, &out), -EINVAL);
+    assert_int_equal(ip_composite_get_profile_name(
+      f->backend, f->mock.bus, NULL, &out), -EINVAL);
+    assert_int_equal(ip_composite_get_profile_name(
+      f->backend, f->mock.bus, COMP_PATH, NULL), -EINVAL);
+}
+
+static void
+test_get_profile_path_success(void **state)
+{
+    composite_fixture *f = FIX(state);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                           "ProfilePath", "/usr/share/inputplumber/profiles/default.yaml");
+
+    char *out = NULL;
+    int rc = ip_composite_get_profile_path(f->backend, f->mock.bus,
+                                              COMP_PATH, &out);
+    assert_int_equal(rc, 0);
+    assert_string_equal(out, "/usr/share/inputplumber/profiles/default.yaml");
+    free(out);
+}
+
+static void
+test_get_profile_path_null_args(void **state)
+{
+    composite_fixture *f = FIX(state);
+    char *out = NULL;
+    assert_int_equal(ip_composite_get_profile_path(
+      NULL, f->mock.bus, COMP_PATH, &out), -EINVAL);
+    assert_int_equal(ip_composite_get_profile_path(
+      f->backend, f->mock.bus, NULL, &out), -EINVAL);
+    assert_int_equal(ip_composite_get_profile_path(
+      f->backend, f->mock.bus, COMP_PATH, NULL), -EINVAL);
+}
+
 /* --- Property getters (capability arrays) -------------------------------- */
 
 static void
@@ -814,6 +872,16 @@ main(void)
         cmocka_unit_test_setup_teardown(test_get_name_success,
                                           setup, teardown),
         cmocka_unit_test_setup_teardown(test_get_name_null_args,
+                                          setup, teardown),
+
+        /* ProfileName / ProfilePath get. */
+        cmocka_unit_test_setup_teardown(test_get_profile_name_success,
+                                          setup, teardown),
+        cmocka_unit_test_setup_teardown(test_get_profile_name_null_args,
+                                          setup, teardown),
+        cmocka_unit_test_setup_teardown(test_get_profile_path_success,
+                                          setup, teardown),
+        cmocka_unit_test_setup_teardown(test_get_profile_path_null_args,
                                           setup, teardown),
 
         /* Capabilities get. */

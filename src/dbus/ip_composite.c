@@ -205,6 +205,40 @@ ip_composite_get_persistent_id(const ip_dbus_backend *backend,
 }
 
 int
+ip_composite_get_profile_name(const ip_dbus_backend *backend,
+                                 ip_bus_handle bus,
+                                 const char *composite_path,
+                                 char **out_value)
+{
+    if (!backend || !composite_path || !out_value)
+        return -EINVAL;
+
+    *out_value = NULL;
+
+    return backend->get_property(bus, IP_DBUS_NAME,
+                                   composite_path,
+                                   IP_IFACE_COMPOSITE,
+                                   "ProfileName", out_value);
+}
+
+int
+ip_composite_get_profile_path(const ip_dbus_backend *backend,
+                                 ip_bus_handle bus,
+                                 const char *composite_path,
+                                 char **out_value)
+{
+    if (!backend || !composite_path || !out_value)
+        return -EINVAL;
+
+    *out_value = NULL;
+
+    return backend->get_property(bus, IP_DBUS_NAME,
+                                   composite_path,
+                                   IP_IFACE_COMPOSITE,
+                                   "ProfilePath", out_value);
+}
+
+int
 ip_composite_get_name(const ip_dbus_backend *backend,
                         ip_bus_handle bus,
                         const char *composite_path,

@@ -452,6 +452,10 @@ test_profile_change_applied(void **state)
     /* Expect LoadProfilePath call on the composite. */
     ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
                            "LoadProfilePath", NULL);
+    /* Expect ProfilePath read-back for engine state verification. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                           "ProfilePath",
+                           "/usr/share/inputplumber/profiles/fighting.yaml");
 
     /* Apply profile change: "fighting" for controller 0. */
     int rc = cbx_profile_cycle_apply(&f->pc, &f->grid, 0, "fighting",
@@ -468,6 +472,65 @@ test_profile_change_applied(void **state)
         }
     }
     assert_true(found);
+}
+
+/* ======================================================================== */
+/*  Test 4b: LoadProfilePath failure does not update assignment.            */
+/* ======================================================================== */
+
+static void
+test_profile_change_load_failure(void **state)
+{
+    integ_fixture *f = *state;
+
+    /* Move controller 0 to P1. */
+    move_to_col(&f->grid, 0, 1);
+
+    /* LoadProfilePath returns error — engine state not updated. */
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_COMPOSITE,
+                              "LoadProfilePath", IP_ERR_NO_REPLY);
+
+    /* Apply should fail. */
+    int rc = cbx_profile_cycle_apply(&f->pc, &f->grid, 0, "fighting",
+                                      COMP_PATH_0);
+    assert_true(rc < 0);
+
+    /* Assignment must NOT be updated — no entry with profile "fighting". */
+    for (int i = 0; i < f->assignments.assignment_count; i++) {
+        assert_string_not_equal(f->assignments.assignments[i].profile,
+                                 "fighting");
+    }
+}
+
+/* ======================================================================== */
+/*  Test 4c: ProfilePath verification mismatch fails apply.                 */
+/* ======================================================================== */
+
+static void
+test_profile_change_verify_mismatch(void **state)
+{
+    integ_fixture *f = *state;
+
+    /* Move controller 0 to P1. */
+    move_to_col(&f->grid, 0, 1);
+
+    /* LoadProfilePath succeeds, but ProfilePath read-back returns a
+     * different path — engine did not load the requested profile. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                           "LoadProfilePath", NULL);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                           "ProfilePath",
+                           "/some/other/profile.yaml");
+
+    int rc = cbx_profile_cycle_apply(&f->pc, &f->grid, 0, "fighting",
+                                      COMP_PATH_0);
+    assert_true(rc < 0);
+
+    /* Assignment must NOT be updated. */
+    for (int i = 0; i < f->assignments.assignment_count; i++) {
+        assert_string_not_equal(f->assignments.assignments[i].profile,
+                                 "fighting");
+    }
 }
 
 /* ======================================================================== */
@@ -867,6 +930,14 @@ main(void)
 
         /* Profile change applied via LoadProfilePath (needs fixture). */
         cmocka_unit_test_setup_teardown(test_profile_change_applied,
+                                         setup_integ, teardown_integ),
+
+        /* LoadProfilePath failure does not update assignment. */
+        cmocka_unit_test_setup_teardown(test_profile_change_load_failure,
+                                         setup_integ, teardown_integ),
+
+        /* ProfilePath verification mismatch fails apply. */
+        cmocka_unit_test_setup_teardown(test_profile_change_verify_mismatch,
                                          setup_integ, teardown_integ),
 
         /* Profile follows controller across column moves. */

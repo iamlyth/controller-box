@@ -139,6 +139,22 @@ cbx_profile_cycle_apply(cbx_profile_cycle *pc,
                                              composite_path, profile_path);
         if (rc != 0)
             return rc;
+
+        /* Verify engine state: read back ProfilePath to confirm the
+         * profile was actually loaded (SPEC §§4.1-4.7: slot/profile
+         * changes update verified engine state before persistence).
+         * LoadProfile failures must not appear saved (Task 8). */
+        char *engine_path = NULL;
+        rc = ip_composite_get_profile_path(pc->backend, pc->bus,
+                                              composite_path, &engine_path);
+        if (rc != 0 || !engine_path) {
+            free(engine_path);
+            return rc != 0 ? rc : -EIO;
+        }
+        bool verified = (strcmp(engine_path, profile_path) == 0);
+        free(engine_path);
+        if (!verified)
+            return -EIO;  /* Engine did not load the requested profile. */
     }
 
     /* Update the assignment with the new profile. */
