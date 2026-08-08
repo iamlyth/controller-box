@@ -15,6 +15,7 @@
 #include <systemd/sd-bus.h>
 
 #include "dbus/dbus_client.h"
+#include "dbus/ip_connection.h"
 
 static volatile sig_atomic_t service_running = 1;
 static pid_t private_daemon_pid;
@@ -186,10 +187,134 @@ static void test_production_backend_native_roundtrip(void **state)
     unsetenv("DBUS_SYSTEM_BUS_ADDRESS");
 }
 
+/* --- Native fixture: owner loss / reacquisition via real sd-bus ----- */
+
+static int s_native_reenum_called = 0;
+static int s_native_degraded_called = 0;
+static char s_native_degraded_reason[256] = {0};
+
+static void
+native_reenumerate_cb(void *ud)
+{
+    (void)ud;
+    s_native_reenum_called++;
+}
+
+static void
+native_degraded_cb(const char *reason, void *ud)
+{
+    (void)ud;
+    s_native_degraded_called++;
+    if (reason)
+        snprintf(s_native_degraded_reason,
+                 sizeof(s_native_degraded_reason), "%s", reason);
+}
+
+/* Helper: drain pending sd-bus messages for up to ~2 seconds. */
+static void
+drain_bus(const ip_dbus_backend *backend, ip_bus_handle bus, int ms)
+{
+    for (int i = 0; i < ms / 10; i++) {
+        int processed = backend->process(bus);
+        if (processed <= 0)
+            usleep(10000);
+    }
+}
+
+static void
+test_native_owner_loss_and_reacquisition(void **state)
+{
+    (void)state;
+    char address[512];
+    pid_t daemon_pid = 0;
+    assert_int_equal(start_private_bus(address, sizeof(address),
+                                        &daemon_pid), 0);
+    private_daemon_pid = daemon_pid;
+    setenv("DBUS_SYSTEM_BUS_ADDRESS", address, 1);
+
+    /* Start the InputPlumber server. */
+    service_running = 1;
+    pid_t server_pid = fork();
+    assert_true(server_pid >= 0);
+    if (server_pid == 0)
+        _exit(run_service(address));
+    private_server_pid = server_pid;
+
+    /* Wait for server to come up by polling for the name. */
+    usleep(100000);
+
+    const ip_dbus_backend *backend = ip_dbus_sd_backend();
+
+    /* Connect via ip_connection — should succeed (CONNECTED). */
+    ip_connection conn;
+    ip_connection_init(&conn, backend);
+    s_native_reenum_called = 0;
+    s_native_degraded_called = 0;
+
+    int rc = ip_connection_connect(&conn);
+    /* If connect failed because the server wasn't up yet, retry. */
+    for (int i = 0; i < 50 && rc < 0 && rc != IP_ERR_ACCESS_DENIED; i++) {
+        if (conn.bus) {
+            ip_connection_disconnect(&conn);
+            ip_connection_init(&conn, backend);
+        }
+        usleep(20000);
+        rc = ip_connection_connect(&conn);
+    }
+    assert_int_equal(rc, 0);
+    assert_true(ip_connection_is_connected(&conn));
+    assert_non_null(conn.bus);
+
+    ip_connection_set_reenumerate_cb(&conn, native_reenumerate_cb, NULL);
+    ip_connection_set_degraded_cb(&conn, native_degraded_cb, NULL);
+
+    /* --- Phase 1: Stop the server (name loss) --- */
+    kill(server_pid, SIGTERM);
+    int wstatus = 0;
+    waitpid(server_pid, &wstatus, 0);
+    assert_true(WIFEXITED(wstatus));
+    private_server_pid = 0;
+
+    /* Drain the bus — NameOwnerChanged should fire degraded callback. */
+    drain_bus(backend, conn.bus, 2000);
+
+    assert_true(ip_connection_is_degraded(&conn));
+    assert_int_equal(s_native_degraded_called, 1);
+    assert_string_equal(s_native_degraded_reason, "InputPlumber stopped");
+
+    /* --- Phase 2: Restart the server (name acquisition) --- */
+    service_running = 1;
+    server_pid = fork();
+    assert_true(server_pid >= 0);
+    if (server_pid == 0)
+        _exit(run_service(address));
+    private_server_pid = server_pid;
+
+    /* Drain the bus — NameOwnerChanged should fire reenumerate callback. */
+    drain_bus(backend, conn.bus, 2000);
+
+    assert_true(ip_connection_is_connected(&conn));
+    assert_int_equal(s_native_reenum_called, 1);
+
+    /* Clean up. */
+    ip_connection_disconnect(&conn);
+
+    kill(server_pid, SIGTERM);
+    waitpid(server_pid, NULL, 0);
+    private_server_pid = 0;
+
+    kill(daemon_pid, SIGTERM);
+    waitpid(daemon_pid, NULL, 0);
+    private_daemon_pid = 0;
+    unsetenv("DBUS_SYSTEM_BUS_ADDRESS");
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test_teardown(test_production_backend_native_roundtrip,
+                                  cleanup_processes),
+        cmocka_unit_test_teardown(test_native_owner_loss_and_reacquisition,
                                   cleanup_processes),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);

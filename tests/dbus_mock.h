@@ -188,6 +188,22 @@ typedef struct {
  */
 #define IP_MOCK_MAX_SUBSCRIPTIONS 8
 
+/* --- Signal queue (for process()-based dispatch) -------------------- */
+/* When a test needs to verify that a run-loop drains DBus signals via
+ * process() rather than inject_signal, it can queue a signal here.
+ * mock_process() dispatches queued signals to registered callbacks. */
+#define IP_MOCK_MAX_QUEUED_SIGNALS 8
+
+typedef struct {
+    char iface[64];
+    char member[64];
+    /* NameOwnerChanged payload (deep-copied strings). */
+    char noc_name[128];
+    char noc_old[128];
+    char noc_new[128];
+    ip_owner_changed_payload noc_payload;
+} ip_mock_queued_signal;
+
 typedef struct {
     const char   *iface;
     const char   *member;
@@ -202,6 +218,8 @@ typedef struct {
     ip_mock_subscription subscriptions[IP_MOCK_MAX_SUBSCRIPTIONS];
     int                  sub_count;
     int                  subscribe_fail_rc;  /* 0 = normal, <0 = fail subscribe */
+    ip_mock_queued_signal queued_signals[IP_MOCK_MAX_QUEUED_SIGNALS];
+    int                  queued_signal_count;
 } ip_dbus_mock;
 
 /* --- Mock lifecycle -------------------------------------------------------- */
@@ -244,5 +262,14 @@ const ip_mock_expectation *ip_dbus_mock_find(ip_dbus_mock *mock,
 
 /* Reset the mock to its initial (empty) state, freeing canned values. */
 void ip_dbus_mock_reset(ip_dbus_mock *mock);
+
+/* Queue a NameOwnerChanged signal for dispatch by mock_process().
+ * This allows tests to verify that a run-loop's process() call drains
+ * NameOwnerChanged and fires connection callbacks (as opposed to
+ * inject_signal which dispatches synchronously). */
+int ip_dbus_mock_queue_noc(ip_dbus_mock *mock,
+                            const char *name,
+                            const char *old_owner,
+                            const char *new_owner);
 
 #endif /* CBX_DBUS_MOCK_H */

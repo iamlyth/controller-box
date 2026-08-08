@@ -505,6 +505,182 @@ static void test_step_empty_queue_no_crash(void **state)
 }
 
 /* ------------------------------------------------------------------ */
+/*  Task 2: Step drains DBus unconditionally (degraded recovery fix)    */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    cbx_overlay_service_ctx *svc;
+    ip_dbus_mock             mock;
+    const ip_dbus_backend   *backend;
+    int                      reenumerate_called;
+    int                      degraded_called;
+    char                     degraded_reason[256];
+} conn_step_fixture;
+
+static void conn_step_reenumerate_cb(void *ud)
+{
+    conn_step_fixture *f = ud;
+    f->reenumerate_called++;
+}
+
+static void conn_step_degraded_cb(const char *reason, void *ud)
+{
+    conn_step_fixture *f = ud;
+    f->degraded_called++;
+    if (reason)
+        snprintf(f->degraded_reason, sizeof(f->degraded_reason), "%s", reason);
+}
+
+static int
+conn_step_setup(void **state)
+{
+    conn_step_fixture *f = malloc(sizeof(*f));
+    memset(f, 0, sizeof(*f));
+
+    SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
+    SDL_VideoInit("dummy");
+
+    f->svc = calloc(1, sizeof(cbx_overlay_service_ctx));
+    assert_non_null(f->svc);
+
+    int rc = cbx_renderer_init(&f->svc->rend, "test",
+                               CBX_RENDERER_DEFAULT_W,
+                               CBX_RENDERER_DEFAULT_H, false);
+    assert_int_equal(rc, 0);
+
+    /* Set up mock DBus — InputPlumber unavailable (ServiceUnknown). */
+    ip_dbus_mock_init(&f->mock);
+    f->backend = ip_dbus_mock_backend(&f->mock);
+
+    ip_connection_init(&f->svc->conn, f->backend);
+    ip_connection_set_bus(&f->svc->conn, f->mock.bus);
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_MANAGER, "Version",
+                              IP_ERR_SERVICE_UNKNOWN);
+    int crc = ip_connection_connect(&f->svc->conn);
+    assert_int_equal(crc, IP_ERR_SERVICE_UNKNOWN);
+    assert_true(ip_connection_is_degraded(&f->svc->conn));
+    assert_non_null(f->svc->conn.bus);
+
+    /* Register callbacks. */
+    ip_connection_set_reenumerate_cb(&f->svc->conn, conn_step_reenumerate_cb, f);
+    ip_connection_set_degraded_cb(&f->svc->conn, conn_step_degraded_cb, f);
+
+    /* Set up minimal grid + surface for rendering. */
+    cbx_grid_composite_info comps[1];
+    memset(comps, 0, sizeof(comps));
+    snprintf(comps[0].id, sizeof(comps[0].id), "TEST:0");
+    snprintf(comps[0].model_name, sizeof(comps[0].model_name), "TestPad");
+    snprintf(comps[0].composite_path, sizeof(comps[0].composite_path),
+             "/org/shadowblip/InputPlumber/CompositeDevice0");
+    f->svc->comp_count = 1;
+    memcpy(f->svc->composites, comps, sizeof(comps));
+
+    cbx_settings s;
+    memset(&s, 0, sizeof(s));
+    s.virtual_controllers.count = 4;
+    for (int i = 0; i < 4; i++)
+        snprintf(s.virtual_controllers.types[i], CBX_MAX_TYPE_LEN, "xb360");
+    cbx_assignments a;
+    cbx_assignments_init(&a);
+    cbx_select_grid_init(&f->svc->grid);
+    cbx_select_grid_build(&f->svc->grid, comps, 1, &s, &a);
+
+    f->svc->render_ctx = (cbx_grid_render_ctx){
+        .grid       = &f->svc->grid,
+        .icon_cache = NULL,
+        .icon_map   = NULL,
+        .theme      = NULL,
+        .text_cache = NULL,
+        .font_id    = -1,
+    };
+
+    rc = cbx_overlay_surface_init(&f->svc->surface, f->svc->rend.renderer,
+                                    CBX_RENDERER_DEFAULT_W,
+                                    CBX_RENDERER_DEFAULT_H, 1.0);
+    assert_int_equal(rc, 0);
+
+    cbx_player_mode_init(&f->svc->pm, &f->svc->grid);
+    cbx_host_mode_init(&f->svc->hm);
+    cbx_overlay_lifecycle_init(&f->svc->lifecycle, NULL, NULL,
+                                "", &f->svc->surface, f->svc->rend.renderer);
+
+    f->svc->input_ctx.pm       = &f->svc->pm;
+    f->svc->input_ctx.hm       = &f->svc->hm;
+    f->svc->input_ctx.grid     = &f->svc->grid;
+    f->svc->input_ctx.lifecycle = &f->svc->lifecycle;
+    f->svc->input_ctx.path_count = 0;
+
+    f->svc->poll_count = 0;
+    f->svc->poll_event_type = (uint32_t)-1;
+    f->svc->input_events_ready = false;
+    f->svc->initialized = true;
+    f->svc->backend_ready = false;
+
+    cbx_overlay_service_reset_shutdown();
+    *state = f;
+    return 0;
+}
+
+static int
+conn_step_teardown(void **state)
+{
+    conn_step_fixture *f = *state;
+    if (f) {
+        if (f->svc) {
+            cbx_overlay_surface_destroy(&f->svc->surface);
+            ip_connection_disconnect(&f->svc->conn);
+            cbx_renderer_shutdown(&f->svc->rend);
+            free(f->svc);
+        }
+        free(f);
+    }
+    SDL_Event ev;
+    while (SDL_PollEvent(&ev))
+        ;
+    return 0;
+}
+
+/* Test: step drains DBus even when input_events_ready is false.
+ * This is the core fix for degraded-mode recovery — without unconditional
+ * process(), NameOwnerChanged is never dispatched and the service is
+ * stuck in degraded mode forever. */
+static void
+test_step_drains_dbus_when_not_ready(void **state)
+{
+    conn_step_fixture *f = *state;
+
+    assert_false(f->svc->input_events_ready);
+    assert_false(f->svc->backend_ready);
+
+    /* Queue a NameOwnerChanged (acquired) signal for process() to drain. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER, "Version", "2.0.0");
+    ip_dbus_mock_queue_noc(&f->mock, IP_DBUS_NAME, "", ":1.42");
+
+    /* Call step — it should process the bus and dispatch the signal. */
+    cbx_overlay_service_step(f->svc);
+
+    /* The connection should now be connected (recovery worked). */
+    assert_true(ip_connection_is_connected(&f->svc->conn));
+    assert_int_equal(f->reenumerate_called, 1);
+}
+
+/* Test: step in degraded mode with no queued signals is a safe no-op. */
+static void
+test_step_degraded_noop(void **state)
+{
+    conn_step_fixture *f = *state;
+
+    assert_true(ip_connection_is_degraded(&f->svc->conn));
+    assert_false(f->svc->backend_ready);
+
+    cbx_overlay_service_step(f->svc);
+
+    /* Still degraded, no crash. */
+    assert_true(ip_connection_is_degraded(&f->svc->conn));
+    assert_int_equal(f->reenumerate_called, 0);
+}
+
+/* ------------------------------------------------------------------ */
 /*  Test runner                                                        */
 /* ------------------------------------------------------------------ */
 static const struct CMUnitTest tests[] = {
@@ -531,6 +707,11 @@ static const struct CMUnitTest tests[] = {
                                      step_setup, step_teardown),
     cmocka_unit_test_setup_teardown(test_step_empty_queue_no_crash,
                                      step_setup, step_teardown),
+    /* Task 2: unconditional DBus process + degraded recovery via step */
+    cmocka_unit_test_setup_teardown(test_step_drains_dbus_when_not_ready,
+                                     conn_step_setup, conn_step_teardown),
+    cmocka_unit_test_setup_teardown(test_step_degraded_noop,
+                                     conn_step_setup, conn_step_teardown),
 };
 
 int main(void)

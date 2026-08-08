@@ -32,6 +32,12 @@
 #define IP_ERR_INVALID_ARGS     (-EINVAL)    /* org.freedesktop.DBus.Error.InvalidArgs     */
 #define IP_ERR_NOT_CONNECTED    (-ENOTCONN)  /* no bus connection                          */
 #define IP_ERR_INTERNAL         (-EIO)       /* other / unexpected sd-bus failure          */
+#define IP_ERR_INCOMPATIBLE      (-ENOSYS)    /* version too old / incompatible              */
+
+/* Minimum compatible InputPlumber version (§2.4, plan compat ref 0.78.0). */
+#define IP_COMPAT_MIN_MAJOR  0
+#define IP_COMPAT_MIN_MINOR  78
+#define IP_COMPAT_MIN_PATCH  0
 
 /* --- Connection state ----------------------------------------------------- */
 
@@ -113,5 +119,14 @@ void ip_connection_set_degraded_cb(ip_connection *conn,
 void ip_connection_handle_name_changed(ip_connection *conn,
                                         const char *old_owner,
                                         const char *new_owner);
+
+/* Map a negative errno return code to a human-readable, actionable reason
+ * string suitable for display in the degraded UI (SPEC §2.4).
+ * Returns a static string — no allocation. */
+const char *ip_connection_reason_for_error(int rc);
+
+/* Check whether a version string satisfies the minimum compatibility.
+ * Returns true if compatible, false otherwise. */
+bool ip_version_is_compatible(const char *version);
 
 #endif /* CBX_IP_CONNECTION_H */

@@ -688,7 +688,21 @@ cbx_overlay_service_step(cbx_overlay_service_ctx *svc)
         }
     }
 
-    /* 2. Process pending DBus InputEvent signals (Task 6). */
+    /* 2. Process pending DBus messages unconditionally so NameOwnerChanged
+     *    signals are drained even in degraded mode (when input_events_ready
+     *    is false).  This is the recovery path: without this drain,
+     *    NameOwnerChanged for InputPlumber's bus name would never be
+     *    dispatched and the service could not recover from degraded mode. */
+    if (svc->conn.backend && svc->conn.bus &&
+        svc->conn.backend->process) {
+        for (int i = 0; i < 64; i++) {
+            int processed = svc->conn.backend->process(svc->conn.bus);
+            if (processed <= 0)
+                break;
+        }
+    }
+
+    /* 3. Process pending DBus InputEvent signals (only if subscribed). */
     if (svc->input_events_ready)
         ip_input_events_process(&svc->input_events);
 
@@ -758,6 +772,7 @@ int run_overlay_service(int dry_run)
     /* --- 2. Connect to InputPlumber via system DBus ------------------ */
     ip_connection_init(&svc->conn, ip_dbus_sd_backend());
     rc = ip_connection_connect(&svc->conn);
+    int conn_rc = rc;  /* save for degraded reason at end of init */
     if (!svc->conn.bus) {
         fprintf(stderr, "controller-box: system DBus unavailable: %d\n", rc);
         ip_connection_disconnect(&svc->conn);
@@ -964,7 +979,7 @@ int run_overlay_service(int dry_run)
     ip_connection_set_reenumerate_cb(&svc->conn, overlay_backend_ready, svc);
     ip_connection_set_degraded_cb(&svc->conn, overlay_backend_degraded, svc);
     if (!svc->backend_ready)
-        overlay_backend_degraded("InputPlumber unavailable", svc);
+        overlay_backend_degraded(ip_connection_reason_for_error(conn_rc), svc);
 
     /* --- 12. Poll loop (Task 4) -------------------------------------- */
     while (g_running) {

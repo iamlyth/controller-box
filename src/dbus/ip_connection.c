@@ -38,6 +38,46 @@ noc_signal_callback(const char *iface, const char *member,
     ip_connection_handle_name_changed(conn, noc->old_owner, noc->new_owner);
 }
 
+/* --- Error reason mapping (SPEC §2.4) ----------------------------------- */
+
+const char *
+ip_connection_reason_for_error(int rc)
+{
+    switch (rc) {
+    case IP_ERR_SERVICE_UNKNOWN:
+        return "InputPlumber unavailable \xe2\x80\x94 waiting for service";
+    case IP_ERR_ACCESS_DENIED:
+        return "InputPlumber access denied \xe2\x80\x94 check polkit rules";
+    case IP_ERR_NO_REPLY:
+        return "InputPlumber not responding \xe2\x80\x94 check daemon status";
+    case IP_ERR_INVALID_ARGS:
+        return "InputPlumber version incompatible \xe2\x80\x94 update required";
+    case IP_ERR_INCOMPATIBLE:
+        return "InputPlumber version incompatible \xe2\x80\x94 update required";
+    case IP_ERR_NOT_CONNECTED:
+        return "System DBus not connected";
+    default:
+        return "InputPlumber internal error";
+    }
+}
+
+/* --- Version compatibility check (SPEC §2.4) --------------------------- */
+
+bool
+ip_version_is_compatible(const char *version)
+{
+    if (!version || !version[0])
+        return false;
+    int major = 0, minor = 0, patch = 0;
+    if (sscanf(version, "%d.%d.%d", &major, &minor, &patch) < 1)
+        return false;
+    if (major != IP_COMPAT_MIN_MAJOR)
+        return major > IP_COMPAT_MIN_MAJOR;
+    if (minor != IP_COMPAT_MIN_MINOR)
+        return minor > IP_COMPAT_MIN_MINOR;
+    return patch >= IP_COMPAT_MIN_PATCH;
+}
+
 /* --- Public API ---------------------------------------------------------- */
 
 void
@@ -91,7 +131,12 @@ ip_connection_connect(ip_connection *conn)
         IP_IFACE_MANAGER, "Version", &version);
 
     if (rc == 0) {
-        /* InputPlumber is running. */
+        /* InputPlumber is running — check version compatibility. */
+        if (!ip_version_is_compatible(version)) {
+            free(version);
+            conn->state = IP_CONN_DEGRADED;
+            return IP_ERR_INCOMPATIBLE;
+        }
         conn->version = version;
 
         /* Get InputPlumber's unique bus name for sender verification. */
@@ -224,17 +269,24 @@ ip_connection_handle_name_changed(ip_connection *conn,
         int rc = conn->backend->get_property(
             conn->bus, IP_DBUS_NAME, IP_DBUS_MANAGER_PATH,
             IP_IFACE_MANAGER, "Version", &version);
-        if (rc == 0) {
+        if (rc == 0 && ip_version_is_compatible(version)) {
             free(conn->version);
             conn->version = version;
             conn->state = IP_CONN_CONNECTED;
             if (conn->reenumerate_cb)
                 conn->reenumerate_cb(conn->reenumerate_ud);
+        } else if (rc == 0) {
+            /* Version read succeeded but is incompatible. */
+            free(version);
+            conn->state = IP_CONN_DEGRADED;
+            if (conn->degraded_cb)
+                conn->degraded_cb("InputPlumber version incompatible \xe2\x80\x94 update required",
+                                  conn->degraded_ud);
         } else {
             free(version);
             conn->state = IP_CONN_DEGRADED;
             if (conn->degraded_cb)
-                conn->degraded_cb("InputPlumber incompatible or unavailable",
+                conn->degraded_cb(ip_connection_reason_for_error(rc),
                                   conn->degraded_ud);
         }
     } else if (lost) {

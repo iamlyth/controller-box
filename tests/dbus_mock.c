@@ -35,6 +35,28 @@ void ip_dbus_mock_reset(ip_dbus_mock *mock) {
     mock->count = 0;
     mock->sub_count = 0;
     mock->subscribe_fail_rc = 0;
+    mock->queued_signal_count = 0;
+}
+
+/* --- Queued signal helper ----------------------------------------------- */
+
+int ip_dbus_mock_queue_noc(ip_dbus_mock *mock,
+                            const char *name,
+                            const char *old_owner,
+                            const char *new_owner)
+{
+    if (!mock || mock->queued_signal_count >= IP_MOCK_MAX_QUEUED_SIGNALS)
+        return -1;
+    ip_mock_queued_signal *qs = &mock->queued_signals[mock->queued_signal_count++];
+    snprintf(qs->iface, sizeof(qs->iface), "%s", "org.freedesktop.DBus");
+    snprintf(qs->member, sizeof(qs->member), "%s", "NameOwnerChanged");
+    snprintf(qs->noc_name, sizeof(qs->noc_name), "%s", name ? name : "");
+    snprintf(qs->noc_old,  sizeof(qs->noc_old),  "%s", old_owner ? old_owner : "");
+    snprintf(qs->noc_new,  sizeof(qs->noc_new),  "%s", new_owner ? new_owner : "");
+    qs->noc_payload.name      = qs->noc_name;
+    qs->noc_payload.old_owner = qs->noc_old;
+    qs->noc_payload.new_owner = qs->noc_new;
+    return 0;
 }
 
 int ip_dbus_mock_expect(ip_dbus_mock *mock, const char *iface,
@@ -232,11 +254,29 @@ static int mock_inject_signal(ip_bus_handle bus, const char *iface,
     return 0;
 }
 
-/* --- Mock process (no-op: signals injected via inject_signal) -------- */
+/* --- Mock process (dispatches queued signals) -------------------------- */
 
 static int mock_process(ip_bus_handle bus) {
-    (void)bus;
-    return 0;
+    ip_dbus_mock *mock = (ip_dbus_mock *)bus;
+    if (!mock || mock->queued_signal_count <= 0)
+        return 0;
+
+    int dispatched = 0;
+    for (int q = 0; q < mock->queued_signal_count; q++) {
+        ip_mock_queued_signal *qs = &mock->queued_signals[q];
+        for (int i = 0; i < mock->sub_count; i++) {
+            if (strcmp(mock->subscriptions[i].iface, qs->iface) == 0 &&
+                strcmp(mock->subscriptions[i].member, qs->member) == 0) {
+                if (mock->subscriptions[i].cb)
+                    mock->subscriptions[i].cb(
+                        qs->iface, qs->member, &qs->noc_payload,
+                        mock->subscriptions[i].userdata);
+                dispatched++;
+            }
+        }
+    }
+    mock->queued_signal_count = 0;
+    return dispatched;
 }
 
 /* --- Backend accessor ------------------------------------------------------ */

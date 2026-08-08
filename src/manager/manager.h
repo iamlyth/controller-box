@@ -80,6 +80,7 @@ typedef struct {
     ip_bus_handle          dbus_bus;      /* NULL if not connected      */
     bool                   dbus_connected;
     bool                   owns_dbus_connection;
+    int                    dbus_init_rc;  /* saved connect rc for degraded reason */
     ip_connection          connection;
 
     /* Real SDL game-controller transport (keyboard is supplemental only). */
@@ -174,5 +175,15 @@ const cbx_focus_chain *cbx_manager_focus(const cbx_manager *mgr);
 cbx_controllers_tab *cbx_manager_controllers_tab(cbx_manager *mgr);
 cbx_profiles_tab    *cbx_manager_profiles_tab(cbx_manager *mgr);
 cbx_settings_tab    *cbx_manager_settings_tab(cbx_manager *mgr);
+
+/* --- Backend lifecycle callbacks (exposed for testing) ----------------- */
+
+/* Called when InputPlumber's bus name is (re-)acquired — re-enumerates
+ * devices and enables the controllers tab. */
+void cbx_manager_backend_ready(void *userdata);
+
+/* Called when InputPlumber's bus name is lost — disables controls and
+ * shows a degraded reason in the controllers tab. */
+void cbx_manager_backend_degraded(const char *reason, void *userdata);
 
 #endif /* CBX_MANAGER_H */

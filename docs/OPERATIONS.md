@@ -433,8 +433,19 @@ Recovery modes are `maintenance-planning` and `maintenance`. See
 ### InputPlumber not detected
 
 The **manager** enters degraded mode if InputPlumber is not running (empty
-device list, functional buttons). The **overlay service** exits with code 1.
-Check:
+device list, buttons disabled, status label shows the specific reason). The
+**overlay service** remains alive in degraded mode (hidden window) and
+recovers automatically when InputPlumber starts. The degraded reason string
+identifies the failure:
+
+| Reason string | Cause | Action |
+|---|---|---|
+| `InputPlumber unavailable — waiting for service` | InputPlumber not running | Start `inputplumber.service` |
+| `InputPlumber access denied — check polkit rules` | DBus permission denied | Add user to `inputplumber` group or install polkit rules |
+| `InputPlumber not responding — check daemon status` | Version read timed out | Check daemon health, `journalctl -u inputplumber` |
+| `InputPlumber version incompatible — update required` | Running version < 0.78.0 | Update InputPlumber to 0.78.0 or later |
+| `InputPlumber enumeration failed` | Version OK but GetManagedObjects failed | Check InputPlumber logs; restart the daemon |
+| `InputPlumber stopped` | Daemon was running but stopped | Check for crash or manual stop |
 
 ```bash
 systemctl status inputplumber    # system service

@@ -24,7 +24,7 @@ Make the installed product perform its core job from a clean environment: connec
 | ID | Requirement | Classification | Evidence/gap | Task |
 |---|---|---|---|---|
 | FR-01 | §§2.2, 10 native DBus signatures | missing | Production reads every property as `s`; required `as`, `u`, and `b` fail | Task 1 |
-| FR-02 | §§2.4, 10.1 readiness/recovery/hotplug | missing | Manager treats system-bus connection as readiness and does not process DBus | Tasks 2, 9 |
+| FR-02 | §§2.4, 10.1 readiness/recovery/hotplug | verified | Manager and overlay drain DBus unconditionally; distinct degraded reasons; version compat check; owner loss/reacquisition via native sd-bus | Tasks 2, 9 |
 | FR-03 | §§5.1, 5.7 real controller Manager input | missing | Manager initializes video only and tests inject keyboard events | Task 3 |
 | FR-04 | §§5.2, 5.5 authoritative virtual topology | missing | Add picker fails on `as`; startup settings do not create targets; Add does not confirm routing | Tasks 4, 5 |
 | FR-05 | §§5.3–5.4 clean-home profile workflow | missing | No shipped Default; Empty cannot add first binding; save/discard is implicit | Tasks 6, 7 |
@@ -55,11 +55,12 @@ Production acceptance covers these semantic workflows through normal production 
 - Documentation impact: `docs/DBus-API.md` compatibility reference.
 
 ## Task 2: InputPlumber readiness, degraded UI, and owner recovery
-- Status: pending
+- Status: complete
+- Evidence: overlay `cbx_overlay_service_step` drains DBus unconditionally via `conn.backend->process`; `ip_connection_handle_name_changed` produces distinct degraded reasons per error code (ServiceUnknown/AccessDenied/NoReply/InvalidArgs) and checks version compatibility (>= 0.78.0); `test_native_dbus` exercises real sd-bus owner loss/reacquisition; `test_connection` covers distinct reason strings, version compat, and mock `process()` draining queued NOC; `test_overlay_service` proves step drains DBus when `input_events_ready=false`; `test_manager_dbus_inject` proves the manager loop drains NOC and fires `cbx_manager_backend_ready`.
 - Dependencies: Task 1
 - Scope: `ip_connection`, Manager/overlay startup and event loops, visible status/disabled controls, owner-change recovery.
 - Acceptance criteria: raw bus connection is not readiness; unavailable, denied, incompatible, and enumeration failures are distinct; both loops process DBus; owner acquisition/loss recovers without restart.
-- Verification: native fixture scenarios plus connection, Manager production, overlay service, framebuffer degraded/recovery tests.
+- Verification: `ctest -R 'test_native_dbus|test_connection|test_overlay_service|test_manager_dbus_inject'` \u2014 all pass.
 - Documentation impact: README and `docs/OPERATIONS.md` diagnostics.
 
 ## Task 3: Real SDL game-controller input and hotplug

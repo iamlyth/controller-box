@@ -61,8 +61,8 @@ static void cbx_manager_close_gamecontroller(cbx_manager *mgr,
                                                SDL_JoystickID instance_id);
 static bool cbx_manager_controller_to_key(const SDL_Event *ev,
                                             SDL_Event *key_event);
-static void cbx_manager_backend_ready(void *userdata);
-static void cbx_manager_backend_degraded(const char *reason, void *userdata);
+void cbx_manager_backend_ready(void *userdata);
+void cbx_manager_backend_degraded(const char *reason, void *userdata);
 
 static void
 cbx_manager_open_gamecontroller(cbx_manager *mgr, int device_index)
@@ -95,7 +95,7 @@ cbx_manager_close_gamecontroller(cbx_manager *mgr,
     }
 }
 
-static void
+void
 cbx_manager_backend_ready(void *userdata)
 {
     cbx_manager *mgr = userdata;
@@ -113,7 +113,7 @@ cbx_manager_backend_ready(void *userdata)
                                   mgr->dbus_backend, mgr->dbus_bus);
 }
 
-static void
+void
 cbx_manager_backend_degraded(const char *reason, void *userdata)
 {
     cbx_manager *mgr = userdata;
@@ -284,6 +284,7 @@ cbx_manager_init_with_dbus(cbx_manager *mgr, const char *font_path,
                               ip_connection_is_connected(&mgr->connection);
         if (!mgr->dbus_bus)
             mgr->dbus_backend = NULL;
+        mgr->dbus_init_rc = dbrc;  /* saved for degraded reason */
     }
 
     /* A live bus is retained in degraded mode for NameOwnerChanged, but
@@ -306,6 +307,12 @@ cbx_manager_init_with_dbus(cbx_manager *mgr, const char *font_path,
         cbx_renderer_shutdown(&mgr->rend);
         return rc;
     }
+
+    /* Override the generic degraded reason with a specific actionable
+     * message when the connection failed (SPEC §2.4). */
+    if (!mgr->dbus_connected && !backend)
+        cbx_controllers_tab_set_available(&mgr->ct, false,
+            ip_connection_reason_for_error(mgr->dbus_init_rc));
 
     /* Profiles tab (filesystem-backed; does not auto-refresh). */
     rc = cbx_profiles_tab_init(&mgr->pt, &mgr->panels[1],

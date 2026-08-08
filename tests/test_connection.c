@@ -484,6 +484,189 @@ test_subscribe_once(void **state)
                         "NameOwnerChanged");
 }
 
+/* Test: distinct degraded reason for AccessDenied on reacquisition. */
+static void
+test_name_acquired_access_denied_reason(void **state)
+{
+    struct test_ctx *ctx = *state;
+
+    /* Start in degraded mode. */
+    ip_dbus_mock_expect_error(&ctx->mock, IP_IFACE_MANAGER, "Version",
+                              IP_ERR_SERVICE_UNKNOWN);
+    ip_connection_connect(&ctx->conn);
+    assert_true(ip_connection_is_degraded(&ctx->conn));
+
+    ip_connection_set_degraded_cb(&ctx->conn, test_degraded_cb, NULL);
+
+    /* Reacquisition fails with AccessDenied. */
+    ip_dbus_mock_expect_error(&ctx->mock, IP_IFACE_MANAGER, "Version",
+                              IP_ERR_ACCESS_DENIED);
+    inject_noc(ctx, "", ":1.99");
+
+    assert_true(ip_connection_is_degraded(&ctx->conn));
+    assert_int_equal(s_degraded_called, 1);
+    assert_string_equal(s_degraded_reason,
+                        "InputPlumber access denied \xe2\x80\x94 check polkit rules");
+}
+
+/* Test: distinct degraded reason for NoReply on reacquisition. */
+static void
+test_name_acquired_no_reply_reason(void **state)
+{
+    struct test_ctx *ctx = *state;
+
+    ip_dbus_mock_expect_error(&ctx->mock, IP_IFACE_MANAGER, "Version",
+                              IP_ERR_SERVICE_UNKNOWN);
+    ip_connection_connect(&ctx->conn);
+
+    ip_connection_set_degraded_cb(&ctx->conn, test_degraded_cb, NULL);
+
+    ip_dbus_mock_expect_error(&ctx->mock, IP_IFACE_MANAGER, "Version",
+                              IP_ERR_NO_REPLY);
+    inject_noc(ctx, "", ":1.99");
+
+    assert_true(ip_connection_is_degraded(&ctx->conn));
+    assert_int_equal(s_degraded_called, 1);
+    assert_string_equal(s_degraded_reason,
+                        "InputPlumber not responding \xe2\x80\x94 check daemon status");
+}
+
+/* Test: distinct degraded reason for ServiceUnknown on reacquisition. */
+static void
+test_name_acquired_service_unknown_reason(void **state)
+{
+    struct test_ctx *ctx = *state;
+
+    ip_dbus_mock_expect_error(&ctx->mock, IP_IFACE_MANAGER, "Version",
+                              IP_ERR_SERVICE_UNKNOWN);
+    ip_connection_connect(&ctx->conn);
+
+    ip_connection_set_degraded_cb(&ctx->conn, test_degraded_cb, NULL);
+
+    ip_dbus_mock_expect_error(&ctx->mock, IP_IFACE_MANAGER, "Version",
+                              IP_ERR_SERVICE_UNKNOWN);
+    inject_noc(ctx, "", ":1.99");
+
+    assert_true(ip_connection_is_degraded(&ctx->conn));
+    assert_int_equal(s_degraded_called, 1);
+    assert_string_equal(s_degraded_reason,
+                        "InputPlumber unavailable \xe2\x80\x94 waiting for service");
+}
+
+/* Test: incompatible version on connect enters degraded, not connected. */
+static void
+test_connect_incompatible_version(void **state)
+{
+    struct test_ctx *ctx = *state;
+
+    /* Version 0.1.0 is below minimum 0.78.0. */
+    ip_dbus_mock_expect_ok(&ctx->mock, IP_IFACE_MANAGER, "Version", "0.1.0");
+
+    int rc = ip_connection_connect(&ctx->conn);
+    assert_int_equal(rc, IP_ERR_INCOMPATIBLE);
+    assert_int_equal(ip_connection_get_state(&ctx->conn), IP_CONN_DEGRADED);
+    assert_true(ip_connection_is_degraded(&ctx->conn));
+    assert_null(ip_connection_get_version(&ctx->conn));
+    /* Bus should still be alive for NameOwnerChanged recovery. */
+    assert_non_null(ctx->conn.bus);
+}
+
+/* Test: compatible version on connect succeeds. */
+static void
+test_connect_compatible_version(void **state)
+{
+    struct test_ctx *ctx = *state;
+
+    /* Version 1.0.0 is above minimum 0.78.0. */
+    ip_dbus_mock_expect_ok(&ctx->mock, IP_IFACE_MANAGER, "Version", "1.0.0");
+
+    int rc = ip_connection_connect(&ctx->conn);
+    assert_int_equal(rc, 0);
+    assert_true(ip_connection_is_connected(&ctx->conn));
+}
+
+/* Test: incompatible version on reacquisition fires specific degraded cb. */
+static void
+test_name_acquired_incompatible_reason(void **state)
+{
+    struct test_ctx *ctx = *state;
+
+    ip_dbus_mock_expect_error(&ctx->mock, IP_IFACE_MANAGER, "Version",
+                              IP_ERR_SERVICE_UNKNOWN);
+    ip_connection_connect(&ctx->conn);
+
+    ip_connection_set_degraded_cb(&ctx->conn, test_degraded_cb, NULL);
+
+    /* Reacquisition: Version read succeeds but version is too old. */
+    ip_dbus_mock_expect_ok(&ctx->mock, IP_IFACE_MANAGER, "Version", "0.1.0");
+    inject_noc(ctx, "", ":1.99");
+
+    assert_true(ip_connection_is_degraded(&ctx->conn));
+    assert_int_equal(s_degraded_called, 1);
+    assert_string_equal(s_degraded_reason,
+                        "InputPlumber version incompatible \xe2\x80\x94 update required");
+}
+
+/* Test: ip_connection_reason_for_error maps codes to distinct strings. */
+static void
+test_reason_for_error_mapping(void **state)
+{
+    (void)state;
+    assert_string_equal(ip_connection_reason_for_error(IP_ERR_SERVICE_UNKNOWN),
+                        "InputPlumber unavailable \xe2\x80\x94 waiting for service");
+    assert_string_equal(ip_connection_reason_for_error(IP_ERR_ACCESS_DENIED),
+                        "InputPlumber access denied \xe2\x80\x94 check polkit rules");
+    assert_string_equal(ip_connection_reason_for_error(IP_ERR_NO_REPLY),
+                        "InputPlumber not responding \xe2\x80\x94 check daemon status");
+    assert_string_equal(ip_connection_reason_for_error(IP_ERR_INVALID_ARGS),
+                        "InputPlumber version incompatible \xe2\x80\x94 update required");
+    assert_string_equal(ip_connection_reason_for_error(IP_ERR_INCOMPATIBLE),
+                        "InputPlumber version incompatible \xe2\x80\x94 update required");
+    assert_non_null(ip_connection_reason_for_error(-999));
+}
+
+/* Test: ip_version_is_compatible boundary checks. */
+static void
+test_version_compatibility(void **state)
+{
+    (void)state;
+    assert_true(ip_version_is_compatible("0.78.0"));
+    assert_true(ip_version_is_compatible("0.79.0"));
+    assert_true(ip_version_is_compatible("1.0.0"));
+    assert_true(ip_version_is_compatible("2.0.0"));
+    assert_false(ip_version_is_compatible("0.1.0"));
+    assert_false(ip_version_is_compatible("0.77.0"));
+    assert_false(ip_version_is_compatible(NULL));
+    assert_false(ip_version_is_compatible(""));
+}
+
+/* Test: mock process() drains queued NameOwnerChanged signals. */
+static void
+test_process_drains_queued_noc(void **state)
+{
+    struct test_ctx *ctx = *state;
+
+    ip_dbus_mock_expect_error(&ctx->mock, IP_IFACE_MANAGER, "Version",
+                              IP_ERR_SERVICE_UNKNOWN);
+    ip_connection_connect(&ctx->conn);
+    assert_true(ip_connection_is_degraded(&ctx->conn));
+
+    ip_connection_set_reenumerate_cb(&ctx->conn, test_reenumerate_cb, NULL);
+
+    /* Queue a NameOwnerChanged (acquired) instead of injecting directly. */
+    ip_dbus_mock_expect_ok(&ctx->mock, IP_IFACE_MANAGER, "Version", "2.0.0");
+    ip_dbus_mock_queue_noc(&ctx->mock, IP_DBUS_NAME, "", ":1.99");
+
+    /* Process must dispatch the queued signal to the subscription callback,
+     * which calls ip_connection_handle_name_changed, leading to CONNECTED. */
+    int processed = ctx->backend->process(ctx->mock.bus);
+    assert_true(processed > 0);
+
+    assert_true(ip_connection_is_connected(&ctx->conn));
+    assert_int_equal(s_reenumerate_called, 1);
+    assert_string_equal(ip_connection_get_version(&ctx->conn), "2.0.0");
+}
+
 /* --- Main ---------------------------------------------------------------- */
 
 int
@@ -532,6 +715,23 @@ main(void)
         cmocka_unit_test_setup_teardown(test_connect_unique_name_fail,
                                         setup_basic, teardown_basic),
         cmocka_unit_test_setup_teardown(test_subscribe_once,
+                                        setup_basic, teardown_basic),
+        /* Task 2: distinct degraded reasons on reacquisition. */
+        cmocka_unit_test_setup_teardown(test_name_acquired_access_denied_reason,
+                                        setup_basic, teardown_basic),
+        cmocka_unit_test_setup_teardown(test_name_acquired_no_reply_reason,
+                                        setup_basic, teardown_basic),
+        cmocka_unit_test_setup_teardown(test_name_acquired_service_unknown_reason,
+                                        setup_basic, teardown_basic),
+        cmocka_unit_test_setup_teardown(test_connect_incompatible_version,
+                                        setup_basic, teardown_basic),
+        cmocka_unit_test_setup_teardown(test_connect_compatible_version,
+                                        setup_basic, teardown_basic),
+        cmocka_unit_test_setup_teardown(test_name_acquired_incompatible_reason,
+                                        setup_basic, teardown_basic),
+        cmocka_unit_test(test_reason_for_error_mapping),
+        cmocka_unit_test(test_version_compatibility),
+        cmocka_unit_test_setup_teardown(test_process_drains_queued_noc,
                                         setup_basic, teardown_basic),
     };
 
