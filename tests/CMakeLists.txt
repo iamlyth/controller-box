@@ -623,6 +623,19 @@ if(CMOCKA_FOUND)
     target_link_libraries(test_dbus_signatures PRIVATE controllerbox PkgConfig::CMOCKA)
     add_test(NAME test_dbus_signatures COMMAND test_dbus_signatures)
 
+    # Task 10 — Mandatory installed functional acceptance gate (SPEC §11.1.5).
+    # Non-skippable: exercises the full production workflow against a private
+    # native-signature InputPlumber-compatible DBus service with an SDL
+    # virtual game controller.  Links against the production controllerbox
+    # library and uses the real sd-bus backend.  No SKIP_RETURN_CODE.
+    add_executable(test_installed_functional tests/test_installed_functional.c)
+    target_compile_definitions(test_installed_functional PRIVATE
+        DBUS_SESSION_CONFIG="${DBUS_PREFIX}/share/dbus-1/session.conf")
+    target_link_libraries(test_installed_functional PRIVATE controllerbox PkgConfig::CMOCKA)
+    add_test(NAME test_installed_functional COMMAND test_installed_functional)
+    set_tests_properties(test_installed_functional PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+
     # Task 8 — Manager interaction tests: Controllers + Settings tabs
     # through production dispatch (SPEC §5.7).
     add_executable(test_manager_interaction_ctrl tests/test_manager_interaction_ctrl.c)
