@@ -59,6 +59,10 @@ if(BASH_EXECUTABLE)
             ${CMAKE_CURRENT_BINARY_DIR})
     set_tests_properties(test_installed_smoke PROPERTIES
         SKIP_RETURN_CODE 77)
+    add_test(NAME test_installed_functional_evidence
+        COMMAND ${BASH_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test-installed-functional-evidence.sh
+            ${CMAKE_CURRENT_SOURCE_DIR})
 else()
     message(STATUS "bash not found — test_installed_smoke skipped")
 endif()

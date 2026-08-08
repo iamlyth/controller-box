@@ -38,7 +38,7 @@ The final audit task may run only after every implementation and appended remedi
 
 - update the plan's specification conformance matrix so every normative requirement is `verified` with source and executable evidence; no `partial`, `missing`, or `ambiguous` classification may remain;
 - execute the complete §5.7 control inventory through normal production event dispatch, proving controller and pointer semantic outcomes rather than only pixels, focus, handler return values, or no-crash behavior;
-- run installed end-to-end workflows, visual/degraded-state acceptance, clean-build regression, packaging, and project verification—not only tests changed by the cycle;
+- run installed end-to-end workflows, visual/degraded-state acceptance, clean-build regression, packaging, and project verification—not only tests changed by the cycle; `test_installed_functional` must pass with zero skips and generate commit-bound evidence accepted by `check-installed-functional-evidence.sh`;
 - validate bug ledgers and resolve every open defect that contradicts v1; only an explicit human-approved specification/release decision can defer one;
 - launch parallel read-only correctness, security, test-quality, and documentation reviews designed to find false-positive tests and production-path gaps;
 - update `README.md` and `docs/` so commands, configuration, recovery, limitations, and behavior are accurate;
