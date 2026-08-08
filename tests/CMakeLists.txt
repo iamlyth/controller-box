@@ -73,7 +73,8 @@ if(CMOCKA_FOUND)
     add_library(cbx_test_support STATIC
         tests/test_harness.c
         tests/dbus_mock.c
-        tests/fb_assert.c)
+        tests/fb_assert.c
+        tests/interaction_inventory.c)
     target_include_directories(cbx_test_support PUBLIC tests)
     target_link_libraries(cbx_test_support
         PUBLIC
@@ -580,6 +581,15 @@ if(CMOCKA_FOUND)
     add_test(NAME test_backend_smoke COMMAND test_backend_smoke)
     set_tests_properties(test_backend_smoke PROPERTIES
         SKIP_RETURN_CODE 77)
+
+    # --- Task 7: Interaction acceptance inventory (SPEC §5.7) ----------
+    # Machine-readable inventory of every interactive control (M01–M38),
+    # overlay action (O01–O12), and disabled/degraded scenario (D01–D08).
+    # Verifies enumeration completeness, field population, uniqueness,
+    # and lookup.  Links cbx_test_support for interaction_inventory.
+    add_executable(test_interaction_inventory tests/test_interaction_inventory.c)
+    target_link_libraries(test_interaction_inventory PRIVATE cbx_test_support PkgConfig::CMOCKA)
+    add_test(NAME test_interaction_inventory COMMAND test_interaction_inventory)
 
 else()
     message(STATUS "cmocka not found — unit tests skipped (smoke tests still built)")
