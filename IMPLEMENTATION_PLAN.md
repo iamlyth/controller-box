@@ -73,7 +73,8 @@ Production acceptance covers these semantic workflows through normal production 
 - Documentation impact: controller support and troubleshooting.
 
 ## Task 4: Functional Controllers tab with confirmed backend outcomes
-- Status: pending
+- Status: complete
+- Evidence: commit `0df65d3`; `cbx_controllers_tab_add` now verifies the new target's `DeviceType` matches the selected type after ObjectManager refresh (SPEC §5.2); failed Add/Remove/Change-type operations show the failed DBus operation in the status label; `test_native_target_operations` exercises `CreateTargetDevice`, `StopTargetDevice`, `GetManagedObjects`, and `DeviceType` through the real sd-bus backend with a private dbus-daemon and forked server; `test_add_rejects_type_mismatch`, `test_error_display_on_failed_add`, `test_error_display_on_unconfirmed_add`, and `test_error_clear_on_new_operation` cover the new production paths; 81/81 CTest pass.
 - Dependencies: Tasks 1, 2
 - Scope: supported type loading, actionable errors, operation state, target confirmation, Controllers interaction tests.
 - Acceptance criteria: Add picker uses native arrays; Add/Remove/Type do not silently fail; UI updates only after ObjectManager confirms exact target type/count; controls disable when unavailable.
