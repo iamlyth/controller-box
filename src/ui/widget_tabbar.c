@@ -200,6 +200,7 @@ cbx_tabbar_init(cbx_tabbar *tb, int font_id,
     memset(tb, 0, sizeof(*tb));
     tb->base.vt = &tabbar_vt;
     tb->base.visible = true;
+    tb->base.interactive = true;
     tb->base.focused = false;
     tb->base.rect = (SDL_Rect){0, 0, 0, 0};
     tb->text_cache = cache;

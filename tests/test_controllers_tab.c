@@ -761,6 +761,148 @@ test_full_workflow(void **state)
 }
 
 /* ================================================================== */
+/*  Production-dispatch tests (through cbx_manager_handle_event)        */
+/* ================================================================== */
+
+static bool ct_send_key_dn(cbx_manager *mgr, SDL_Keycode sym)
+{
+    SDL_Event ev = {0};
+    ev.type = SDL_KEYDOWN;
+    ev.key.keysym.sym = sym;
+    return cbx_manager_handle_event(mgr, &ev);
+}
+
+static bool ct_send_key_up(cbx_manager *mgr, SDL_Keycode sym)
+{
+    SDL_Event ev = {0};
+    ev.type = SDL_KEYUP;
+    ev.key.keysym.sym = sym;
+    return cbx_manager_handle_event(mgr, &ev);
+}
+
+static void
+test_type_pick_via_dispatch(void **state)
+{
+    (void)state;
+    /* Set up mock DBus with supported types and 2 devices. */
+    ip_dbus_mock mock;
+    ip_dbus_mock_init(&mock);
+    const ip_dbus_backend *backend = ip_dbus_mock_backend(&mock);
+
+    /* Expectations for cbx_controllers_tab_init: */
+    ip_dbus_mock_expect_ok(&mock, IP_IFACE_MANAGER,
+                            "SupportedTargetDeviceIds", SUPPORTED_TYPES);
+    ip_dbus_mock_expect_ok(&mock, IP_IFACE_OBJECT_MANAGER,
+                            "GetManagedObjects", FIXTURE_2C2T);
+    ip_dbus_mock_expect_ok(&mock, IP_IFACE_TARGET,
+                            "DeviceType", "xb360");
+    ip_dbus_mock_expect_ok(&mock, IP_IFACE_TARGET,
+                            "DeviceType", "ds5");
+
+    ensure_dummy_driver();
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init_with_dbus(&mgr, NULL, backend,
+                                                     mock.bus), 0);
+
+    cbx_controllers_tab *ct = cbx_manager_controllers_tab(&mgr);
+    assert_non_null(ct);
+    assert_int_equal(cbx_controllers_tab_supported_type_count(ct), 6);
+    assert_int_equal(cbx_controllers_tab_device_count(ct), 2);
+
+    /* Click on the Add button to open the type picker. */
+    SDL_Rect btn_rect;
+    cbx_widget_get_rect(&ct->add_btn.base, &btn_rect);
+    int cx = btn_rect.x + btn_rect.w / 2;
+    int cy = btn_rect.y + btn_rect.h / 2;
+    SDL_Event mev = {0};
+    mev.type = SDL_MOUSEBUTTONDOWN;
+    mev.button.button = SDL_BUTTON_LEFT;
+    mev.button.x = cx; mev.button.y = cy;
+    cbx_manager_handle_event(&mgr, &mev);
+    mev.type = SDL_MOUSEBUTTONUP;
+    cbx_manager_handle_event(&mgr, &mev);
+    assert_int_equal(cbx_controllers_tab_mode(ct), CBX_CT_MODE_TYPE_PICK);
+    assert_true(ct->type_picker.base.visible);
+
+    /* Navigate down in the type picker. */
+    ct_send_key_dn(&mgr, SDLK_DOWN);
+    assert_int_equal(cbx_list_get_selected(&ct->type_picker), 1);
+
+    /* B to cancel the type picker. */
+    ct_send_key_dn(&mgr, SDLK_b);
+    assert_int_equal(cbx_controllers_tab_mode(ct), CBX_CT_MODE_LIST);
+    assert_false(ct->type_picker.base.visible);
+    assert_true(ct->device_list.base.visible);
+
+    cbx_manager_shutdown(&mgr);
+    ip_dbus_mock_free(&mock);
+}
+
+static void
+test_type_pick_confirm_via_dispatch(void **state)
+{
+    (void)state;
+    ip_dbus_mock mock;
+    ip_dbus_mock_init(&mock);
+    const ip_dbus_backend *backend = ip_dbus_mock_backend(&mock);
+
+    /* Init expectations. */
+    ip_dbus_mock_expect_ok(&mock, IP_IFACE_MANAGER,
+                            "SupportedTargetDeviceIds", SUPPORTED_TYPES);
+    ip_dbus_mock_expect_ok(&mock, IP_IFACE_OBJECT_MANAGER,
+                            "GetManagedObjects", FIXTURE_2C2T);
+    ip_dbus_mock_expect_ok(&mock, IP_IFACE_TARGET,
+                            "DeviceType", "xb360");
+    ip_dbus_mock_expect_ok(&mock, IP_IFACE_TARGET,
+                            "DeviceType", "ds5");
+
+    /* Expect CreateTargetDevice when confirming. */
+    ip_dbus_mock_expect_ok(&mock, IP_IFACE_MANAGER,
+                            "CreateTargetDevice",
+                            "/org/shadowblip/InputPlumber/devices/target/new0");
+    /* Expect refresh after add. */
+    ip_dbus_mock_expect_ok(&mock, IP_IFACE_OBJECT_MANAGER,
+                            "GetManagedObjects", FIXTURE_2C2T);
+    ip_dbus_mock_expect_ok(&mock, IP_IFACE_TARGET,
+                            "DeviceType", "xb360");
+    ip_dbus_mock_expect_ok(&mock, IP_IFACE_TARGET,
+                            "DeviceType", "ds5");
+
+    ensure_dummy_driver();
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init_with_dbus(&mgr, NULL, backend,
+                                                     mock.bus), 0);
+
+    cbx_controllers_tab *ct = cbx_manager_controllers_tab(&mgr);
+
+    /* Click on the Add button to open the type picker. */
+    SDL_Rect btn_rect;
+    cbx_widget_get_rect(&ct->add_btn.base, &btn_rect);
+    int cx = btn_rect.x + btn_rect.w / 2;
+    int cy = btn_rect.y + btn_rect.h / 2;
+    SDL_Event mev = {0};
+    mev.type = SDL_MOUSEBUTTONDOWN;
+    mev.button.button = SDL_BUTTON_LEFT;
+    mev.button.x = cx; mev.button.y = cy;
+    cbx_manager_handle_event(&mgr, &mev);
+    mev.type = SDL_MOUSEBUTTONUP;
+    cbx_manager_handle_event(&mgr, &mev);
+    assert_int_equal(cbx_controllers_tab_mode(ct), CBX_CT_MODE_TYPE_PICK);
+
+    /* Navigate to second type (ds5) and confirm with A. */
+    ct_send_key_dn(&mgr, SDLK_DOWN);
+    assert_int_equal(cbx_list_get_selected(&ct->type_picker), 1);
+
+    ct_send_key_dn(&mgr, SDLK_a);
+    assert_true(ct_send_key_up(&mgr, SDLK_a));
+    /* on_select fires → confirm_type_pick → CreateTargetDevice → back to list. */
+    assert_int_equal(cbx_controllers_tab_mode(ct), CBX_CT_MODE_LIST);
+
+    cbx_manager_shutdown(&mgr);
+    ip_dbus_mock_free(&mock);
+}
+
+/* ================================================================== */
 /*  Main                                                               */
 /* ================================================================== */
 
@@ -843,6 +985,10 @@ main(void)
 
         /* Full workflow. */
         cmocka_unit_test_setup_teardown(test_full_workflow, setup, teardown),
+
+        /* Production-dispatch tests. */
+        cmocka_unit_test(test_type_pick_via_dispatch),
+        cmocka_unit_test(test_type_pick_confirm_via_dispatch),
     };
 
     return cmocka_run_group_tests(tests, NULL, NULL);

@@ -110,6 +110,7 @@ cbx_progress_init(cbx_progress *prog, const cbx_theme *theme)
     memset(prog, 0, sizeof(*prog));
     prog->base.vt = &progress_vt;
     prog->base.visible = true;
+    prog->base.interactive = false;
     prog->base.focused = false;
     prog->base.rect = (SDL_Rect){0, 0, 0, 0};
     prog->theme = theme;

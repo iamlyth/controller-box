@@ -432,6 +432,17 @@ test_button_key_press(void **state)
     assert_true(cbx_widget_handle_event(&btn.base, &ev));
     assert_int_equal(counter, 2);
 
+    /* KeyDown/KeyUp A (controller A button) — same semantics. */
+    ev.type = SDL_KEYDOWN;
+    ev.key.keysym.sym = SDLK_a;
+    assert_true(cbx_widget_handle_event(&btn.base, &ev));
+    assert_true(btn.pressed);
+    ev.type = SDL_KEYUP;
+    ev.key.keysym.sym = SDLK_a;
+    assert_true(cbx_widget_handle_event(&btn.base, &ev));
+    assert_false(btn.pressed);
+    assert_int_equal(counter, 3);
+
     cbx_widget_destroy(&btn.base);
     cbx_text_cache_cleanup(&cache);
     test_teardown(&ctx);
@@ -547,7 +558,7 @@ test_button_unrelated_event(void **state)
     /* Unrelated key should not be consumed. */
     SDL_Event ev;
     ev.type = SDL_KEYDOWN;
-    ev.key.keysym.sym = SDLK_a;
+    ev.key.keysym.sym = SDLK_x;
     assert_false(cbx_widget_handle_event(&btn.base, &ev));
 
     /* Right mouse button should not be consumed. */

@@ -121,6 +121,7 @@ cbx_label_init(cbx_label *lbl, const char *text, int font_id,
     memset(lbl, 0, sizeof(*lbl));
     lbl->base.vt = &label_vt;
     lbl->base.visible = true;
+    lbl->base.interactive = false;
     lbl->base.focused = false;
     lbl->base.rect = (SDL_Rect){0, 0, 0, 0};
     lbl->text_cache = cache;

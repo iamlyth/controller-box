@@ -163,6 +163,13 @@ int cbx_settings_tab_confirm_edit(cbx_settings_tab *tab);
  */
 void cbx_settings_tab_cancel_edit(cbx_settings_tab *tab);
 
+/*
+ * Tab-level key handler (called by manager before dispatching to the
+ * focused widget).  In edit mode, intercepts Up/Down for value adjustment
+ * and B for cancel.  Returns true if handled.
+ */
+bool cbx_settings_tab_handle_key(cbx_settings_tab *tab, const SDL_Event *ev);
+
 /* ------------------------------------------------------------------ */
 /*  Accessors (for testing)                                            */
 /* ------------------------------------------------------------------ */

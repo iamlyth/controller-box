@@ -185,6 +185,27 @@ int cbx_controllers_tab_confirm_type_pick(cbx_controllers_tab *tab);
  */
 void cbx_controllers_tab_cancel_type_pick(cbx_controllers_tab *tab);
 
+/*
+ * Tab-level activation (called by manager when A-key KEYUP is not
+ * consumed by the focused widget).  Checks the tab's mode and dispatches
+ * appropriately (e.g. type picker confirm).
+ * Returns 0 on success, negative errno on error.
+ */
+int cbx_controllers_tab_activate(cbx_controllers_tab *tab);
+
+/*
+ * Tab-level cancel (called by manager when B-key is pressed in a modal mode).
+ * Returns true if the cancel was handled (mode was modal), false otherwise.
+ */
+bool cbx_controllers_tab_cancel(cbx_controllers_tab *tab);
+
+/*
+ * Tab-level key handler (called by manager before dispatching to the
+ * focused widget).  Handles mode-specific keys (e.g. B cancel in type
+ * pick mode).  Returns true if handled.
+ */
+bool cbx_controllers_tab_handle_key(cbx_controllers_tab *tab, const SDL_Event *ev);
+
 /* ------------------------------------------------------------------ */
 /*  Accessors (for testing)                                            */
 /* ------------------------------------------------------------------ */

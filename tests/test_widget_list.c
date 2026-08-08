@@ -463,18 +463,38 @@ test_list_select_callback(void **state)
     select_called = 0;
     select_index = -1;
 
-    /* Return key triggers select. */
+    /* Return KEYDOWN sets pressed state (no callback yet). */
     SDL_Event ev = {0};
     ev.type = SDL_KEYDOWN;
     ev.key.keysym.sym = SDLK_RETURN;
     assert_true(cbx_widget_handle_event(&lst.base, &ev));
+    assert_int_equal(select_called, 0);
+
+    /* Return KEYUP fires on_select. */
+    ev.type = SDL_KEYUP;
+    assert_true(cbx_widget_handle_event(&lst.base, &ev));
     assert_int_equal(select_called, 1);
     assert_int_equal(select_index, 0);
 
-    /* Space also triggers. */
+    /* Space KEYDOWN then KEYUP also triggers. */
+    ev.type = SDL_KEYDOWN;
+    ev.key.keysym.sym = SDLK_SPACE;
+    assert_true(cbx_widget_handle_event(&lst.base, &ev));
+    assert_int_equal(select_called, 1);
+    ev.type = SDL_KEYUP;
     ev.key.keysym.sym = SDLK_SPACE;
     assert_true(cbx_widget_handle_event(&lst.base, &ev));
     assert_int_equal(select_called, 2);
+
+    /* A key (controller A button) KEYDOWN then KEYUP. */
+    ev.type = SDL_KEYDOWN;
+    ev.key.keysym.sym = SDLK_a;
+    assert_true(cbx_widget_handle_event(&lst.base, &ev));
+    assert_int_equal(select_called, 2);
+    ev.type = SDL_KEYUP;
+    ev.key.keysym.sym = SDLK_a;
+    assert_true(cbx_widget_handle_event(&lst.base, &ev));
+    assert_int_equal(select_called, 3);
 
     cbx_widget_destroy(&lst.base);
     cbx_text_cache_cleanup(&cache);
@@ -620,6 +640,11 @@ test_list_mouse_click(void **state)
     cbx_list_add_item(&lst, "B", NULL, NULL);
     cbx_list_add_item(&lst, "C", NULL, NULL);
 
+    /* Wire on_select to verify it fires on MOUSEUP. */
+    select_called = 0;
+    select_index = -1;
+    cbx_list_set_select_cb(&lst, on_select_cb);
+
     SDL_Rect r = {0, 0, 200, 96};
     cbx_widget_set_rect(&lst.base, &r);
     /* item_h = 32, so clicking at y=64 selects item 2. */
@@ -630,6 +655,13 @@ test_list_mouse_click(void **state)
     ev.button.y = 64;
     assert_true(cbx_widget_handle_event(&lst.base, &ev));
     assert_int_equal(cbx_list_get_selected(&lst), 2);
+    assert_int_equal(select_called, 0);  /* on_select fires on MOUSEUP */
+
+    /* MOUSEUP inside rect fires on_select. */
+    ev.type = SDL_MOUSEBUTTONUP;
+    assert_true(cbx_widget_handle_event(&lst.base, &ev));
+    assert_int_equal(select_called, 1);
+    assert_int_equal(select_index, 2);
 
     cbx_widget_destroy(&lst.base);
     cbx_text_cache_cleanup(&cache);
@@ -764,7 +796,7 @@ test_list_unrelated_event(void **state)
     assert_false(cbx_widget_handle_event(&lst.base, &ev));
 
     ev.type = SDL_KEYDOWN;
-    ev.key.keysym.sym = SDLK_a;
+    ev.key.keysym.sym = SDLK_x;
     assert_false(cbx_widget_handle_event(&lst.base, &ev));
 
     cbx_widget_destroy(&lst.base);
@@ -792,6 +824,38 @@ test_list_user_data(void **state)
 
     assert_ptr_equal(lst.items[0].user_data, &data1);
     assert_ptr_equal(lst.items[1].user_data, &data2);
+
+    cbx_widget_destroy(&lst.base);
+    cbx_text_cache_cleanup(&cache);
+    test_teardown(&ctx);
+}
+
+static void
+test_list_no_select_returns_false_on_keyup(void **state)
+{
+    (void)state;
+    TestCtx ctx = {0};
+    assert_int_equal(test_setup(&ctx), 0);
+    cbx_theme theme;
+    cbx_theme_default(&theme);
+    cbx_text_cache cache;
+    assert_int_equal(cbx_text_cache_init(&cache, ctx.renderer), 0);
+
+    cbx_list lst;
+    assert_int_equal(cbx_list_init(&lst, 0, &cache, &theme), 0);
+    cbx_list_add_item(&lst, "A", NULL, NULL);
+    /* on_select is NULL (no callback set). */
+
+    /* KEYDOWN sets pressed, returns true. */
+    SDL_Event ev = {0};
+    ev.type = SDL_KEYDOWN;
+    ev.key.keysym.sym = SDLK_a;
+    assert_true(cbx_widget_handle_event(&lst.base, &ev));
+
+    /* KEYUP with no on_select returns false (lets manager handle A). */
+    ev.type = SDL_KEYUP;
+    ev.key.keysym.sym = SDLK_a;
+    assert_false(cbx_widget_handle_event(&lst.base, &ev));
 
     cbx_widget_destroy(&lst.base);
     cbx_text_cache_cleanup(&cache);
@@ -827,6 +891,7 @@ main(void)
         cmocka_unit_test(test_list_draw_null),
         cmocka_unit_test(test_list_unrelated_event),
         cmocka_unit_test(test_list_user_data),
+        cmocka_unit_test(test_list_no_select_returns_false_on_keyup),
     };
 
     return cmocka_run_group_tests(tests, NULL, NULL);

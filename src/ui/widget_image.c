@@ -115,6 +115,7 @@ cbx_image_init(cbx_image *img, SDL_Texture *texture, bool owns_texture)
     memset(img, 0, sizeof(*img));
     img->base.vt = &image_vt;
     img->base.visible = true;
+    img->base.interactive = false;
     img->base.focused = false;
     img->base.rect = (SDL_Rect){0, 0, 0, 0};
     img->texture = texture;

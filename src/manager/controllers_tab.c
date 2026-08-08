@@ -89,6 +89,13 @@ format_device_label(char *buf, size_t buflen, const char *name,
 }
 
 /* ------------------------------------------------------------------ */
+/*  Forward declarations for on_select callbacks                       */
+/* ------------------------------------------------------------------ */
+
+static void on_type_pick_selected(cbx_widget *w, int index,
+                                    void *user_data);
+
+/* ------------------------------------------------------------------ */
 /*  Button callbacks                                                   */
 /* ------------------------------------------------------------------ */
 
@@ -169,6 +176,7 @@ cbx_controllers_tab_init(cbx_controllers_tab *tab,
         return rc;
     }
     cbx_widget_set_visible(&tab->type_picker.base, false);
+    cbx_list_set_select_cb(&tab->type_picker, on_type_pick_selected);
 
     /* --- Buttons --------------------------------------------------- */
     rc = cbx_button_init(&tab->add_btn, "Add Controller", font_id,
@@ -465,7 +473,7 @@ cbx_controllers_tab_begin_type_pick(cbx_controllers_tab *tab,
     cbx_list_clear(&tab->type_picker);
     for (int i = 0; i < tab->supported_type_count; i++)
         cbx_list_add_item(&tab->type_picker, tab->supported_types[i],
-                           NULL, (void *)(intptr_t)(long)i);
+                           NULL, tab);  /* user_data = tab pointer for on_select */
 
     tab->selected_type = 0;
     cbx_list_set_selected(&tab->type_picker, 0);
@@ -524,6 +532,73 @@ cbx_controllers_tab_cancel_type_pick(cbx_controllers_tab *tab)
     tab->mode = CBX_CT_MODE_LIST;
     tab->pending_action = CBX_CT_ACTION_NONE;
     tab->selected_type = -1;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Tab-level activation / cancel (for manager event forwarding)        */
+/* ------------------------------------------------------------------ */
+
+/* on_select callback for the type picker list.
+ * Called when the user presses A (KEYUP) or clicks (MOUSEUP) on a type item.
+ * Syncs the selected type index and confirms the pick. */
+static void
+on_type_pick_selected(cbx_widget *w, int index, void *user_data)
+{
+    (void)w;
+    cbx_controllers_tab *tab = (cbx_controllers_tab *)user_data;
+    if (!tab || tab->mode != CBX_CT_MODE_TYPE_PICK)
+        return;
+    tab->selected_type = index;
+    cbx_controllers_tab_confirm_type_pick(tab);
+}
+
+int
+cbx_controllers_tab_activate(cbx_controllers_tab *tab)
+{
+    if (!tab)
+        return -EINVAL;
+
+    switch (tab->mode) {
+    case CBX_CT_MODE_TYPE_PICK:
+        /* Sync selected_type from the picker list, then confirm. */
+        tab->selected_type = cbx_list_get_selected(&tab->type_picker);
+        return cbx_controllers_tab_confirm_type_pick(tab);
+    case CBX_CT_MODE_LIST:
+    default:
+        /* No tab-level activation in list mode. */
+        return 0;
+    }
+}
+
+bool
+cbx_controllers_tab_cancel(cbx_controllers_tab *tab)
+{
+    if (!tab)
+        return false;
+
+    if (tab->mode == CBX_CT_MODE_TYPE_PICK) {
+        cbx_controllers_tab_cancel_type_pick(tab);
+        return true;
+    }
+    return false;
+}
+
+bool
+cbx_controllers_tab_handle_key(cbx_controllers_tab *tab, const SDL_Event *ev)
+{
+    if (!tab || !ev || ev->type != SDL_KEYDOWN)
+        return false;
+
+    SDL_Keycode key = ev->key.keysym.sym;
+
+    if (tab->mode == CBX_CT_MODE_TYPE_PICK) {
+        if (key == SDLK_b || key == SDLK_ESCAPE) {
+            cbx_controllers_tab_cancel_type_pick(tab);
+            return true;
+        }
+    }
+
+    return false;
 }
 
 /* ------------------------------------------------------------------ */

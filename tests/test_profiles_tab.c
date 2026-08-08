@@ -919,6 +919,195 @@ test_create_clone_copies_mappings(void **state)
 }
 
 /* ================================================================== */
+/*  Production-dispatch tests (through cbx_manager_handle_event)        */
+/* ================================================================== */
+
+static bool pt_send_key_dn(cbx_manager *mgr, SDL_Keycode sym)
+{
+    SDL_Event ev = {0};
+    ev.type = SDL_KEYDOWN;
+    ev.key.keysym.sym = sym;
+    return cbx_manager_handle_event(mgr, &ev);
+}
+
+static bool pt_send_key_up(cbx_manager *mgr, SDL_Keycode sym)
+{
+    SDL_Event ev = {0};
+    ev.type = SDL_KEYUP;
+    ev.key.keysym.sym = sym;
+    return cbx_manager_handle_event(mgr, &ev);
+}
+
+static void
+test_create_picker_via_dispatch(void **state)
+{
+    (void)state;
+    pt_env env;
+    env_setup(&env);
+    char def_path[PATH_MAX + 128];
+    snprintf(def_path, sizeof(def_path), "%s/default.yaml", env.system_dir);
+    write_profile_yaml(def_path, "Default", 3);
+
+    ensure_dummy_driver();
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+    assert_non_null(pt);
+    cbx_profiles_tab_set_test_dirs(pt, env.user_dir, env.system_dir, env.meta_dir);
+    cbx_profiles_tab_refresh(pt);
+
+    /* Switch to Profiles tab. */
+    pt_send_key_dn(&mgr, SDLK_RIGHT);
+    assert_int_equal(cbx_manager_active_tab(&mgr), CBX_MGR_TAB_PROFILES);
+
+    /* Click on the Create button to open the create source picker. */
+    SDL_Rect btn_rect;
+    cbx_widget_get_rect(&pt->create_btn.base, &btn_rect);
+    int cx = btn_rect.x + btn_rect.w / 2;
+    int cy = btn_rect.y + btn_rect.h / 2;
+    SDL_Event mev = {0};
+    mev.type = SDL_MOUSEBUTTONDOWN;
+    mev.button.button = SDL_BUTTON_LEFT;
+    mev.button.x = cx; mev.button.y = cy;
+    cbx_manager_handle_event(&mgr, &mev);
+    mev.type = SDL_MOUSEBUTTONUP;
+    cbx_manager_handle_event(&mgr, &mev);
+    assert_int_equal(pt->mode, CBX_PT_MODE_CREATE_PICK);
+    assert_true(pt->create_picker.base.visible);
+
+    /* Navigate to second option (Empty) and confirm with A. */
+    pt_send_key_dn(&mgr, SDLK_DOWN);
+    assert_int_equal(cbx_list_get_selected(&pt->create_picker), 1);
+    pt_send_key_dn(&mgr, SDLK_a);
+    assert_true(pt_send_key_up(&mgr, SDLK_a));
+    assert_int_equal(pt->mode, CBX_PT_MODE_NAME_INPUT);
+
+    /* Cancel name input with B. */
+    pt_send_key_dn(&mgr, SDLK_b);
+    assert_int_equal(pt->mode, CBX_PT_MODE_LIST);
+
+    cbx_manager_shutdown(&mgr);
+    env_teardown(&env);
+}
+
+static void
+test_name_input_via_dispatch(void **state)
+{
+    (void)state;
+    pt_env env;
+    env_setup(&env);
+    char def_path[PATH_MAX + 128];
+    snprintf(def_path, sizeof(def_path), "%s/default.yaml", env.system_dir);
+    write_profile_yaml(def_path, "Default", 3);
+
+    ensure_dummy_driver();
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+    cbx_profiles_tab_set_test_dirs(pt, env.user_dir, env.system_dir, env.meta_dir);
+    cbx_profiles_tab_refresh(pt);
+
+    pt_send_key_dn(&mgr, SDLK_RIGHT);
+
+    /* Click on the Create button to open the create source picker. */
+    SDL_Rect btn_rect;
+    cbx_widget_get_rect(&pt->create_btn.base, &btn_rect);
+    int cx = btn_rect.x + btn_rect.w / 2;
+    int cy = btn_rect.y + btn_rect.h / 2;
+    SDL_Event mev = {0};
+    mev.type = SDL_MOUSEBUTTONDOWN;
+    mev.button.button = SDL_BUTTON_LEFT;
+    mev.button.x = cx; mev.button.y = cy;
+    cbx_manager_handle_event(&mgr, &mev);
+    mev.type = SDL_MOUSEBUTTONUP;
+    cbx_manager_handle_event(&mgr, &mev);
+    assert_int_equal(pt->mode, CBX_PT_MODE_CREATE_PICK);
+    assert_int_equal(pt->mode, CBX_PT_MODE_CREATE_PICK);
+    pt_send_key_dn(&mgr, SDLK_DOWN);  /* Empty */
+    pt_send_key_dn(&mgr, SDLK_a);
+    pt_send_key_up(&mgr, SDLK_a);
+    assert_int_equal(pt->mode, CBX_PT_MODE_NAME_INPUT);
+
+    /* Type a name. */
+    pt_send_key_dn(&mgr, SDLK_n);
+    pt_send_key_dn(&mgr, SDLK_e);
+    pt_send_key_dn(&mgr, SDLK_w);
+    assert_string_equal(cbx_profiles_tab_name_buffer(pt), "new");
+
+    /* Backspace. */
+    pt_send_key_dn(&mgr, SDLK_BACKSPACE);
+    assert_string_equal(cbx_profiles_tab_name_buffer(pt), "ne");
+    pt_send_key_dn(&mgr, SDLK_w);
+    assert_string_equal(cbx_profiles_tab_name_buffer(pt), "new");
+
+    /* Confirm with A. */
+    pt_send_key_dn(&mgr, SDLK_a);
+    assert_int_equal(pt->mode, CBX_PT_MODE_LIST);
+
+    /* Verify the profile was created. */
+    char path[PATH_MAX + 128];
+    snprintf(path, sizeof(path), "%s/new.yaml", env.user_dir);
+    struct stat stbuf;
+    assert_int_equal(stat(path, &stbuf), 0);
+
+    cbx_manager_shutdown(&mgr);
+    env_teardown(&env);
+}
+
+static void
+test_confirm_delete_via_dispatch(void **state)
+{
+    (void)state;
+    pt_env env;
+    env_setup(&env);
+    char def_path[PATH_MAX + 128];
+    snprintf(def_path, sizeof(def_path), "%s/default.yaml", env.system_dir);
+    write_profile_yaml(def_path, "Default", 3);
+    char usr_path[PATH_MAX + 128];
+    snprintf(usr_path, sizeof(usr_path), "%s/todelete.yaml", env.user_dir);
+    write_profile_yaml(usr_path, "ToDelete", 1);
+
+    ensure_dummy_driver();
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+    cbx_profiles_tab_set_test_dirs(pt, env.user_dir, env.system_dir, env.meta_dir);
+    cbx_profiles_tab_refresh(pt);
+
+    pt_send_key_dn(&mgr, SDLK_RIGHT);
+    pt_send_key_dn(&mgr, SDLK_DOWN);  /* tabbar → profile list (selected=0=default) */
+    pt_send_key_dn(&mgr, SDLK_DOWN);  /* list 0→1 (todelete) */
+
+    /* Click on the Delete button to begin delete. */
+    SDL_Rect btn_rect;
+    cbx_widget_get_rect(&pt->delete_btn.base, &btn_rect);
+    int cx = btn_rect.x + btn_rect.w / 2;
+    int cy = btn_rect.y + btn_rect.h / 2;
+    SDL_Event mev = {0};
+    mev.type = SDL_MOUSEBUTTONDOWN;
+    mev.button.button = SDL_BUTTON_LEFT;
+    mev.button.x = cx; mev.button.y = cy;
+    cbx_manager_handle_event(&mgr, &mev);
+    mev.type = SDL_MOUSEBUTTONUP;
+    cbx_manager_handle_event(&mgr, &mev);
+    assert_int_equal(pt->mode, CBX_PT_MODE_CONFIRM_DELETE);
+
+    /* A to confirm delete. */
+    pt_send_key_dn(&mgr, SDLK_a);
+    assert_int_equal(pt->mode, CBX_PT_MODE_LIST);
+
+    /* Verify the file is gone. */
+    struct stat stbuf;
+    assert_true(stat(usr_path, &stbuf) != 0);
+
+    cbx_manager_shutdown(&mgr);
+    env_teardown(&env);
+}
+
+/* ================================================================== */
 /*  Test runner                                                        */
 /* ================================================================== */
 
@@ -983,6 +1172,11 @@ static const struct CMUnitTest tests[] = {
     /* Full workflow */
     cmocka_unit_test_setup_teardown(test_full_workflow, pt_setup, pt_teardown),
     cmocka_unit_test_setup_teardown(test_create_clone_copies_mappings, pt_setup, pt_teardown),
+
+    /* Production-dispatch tests */
+    cmocka_unit_test(test_create_picker_via_dispatch),
+    cmocka_unit_test(test_name_input_via_dispatch),
+    cmocka_unit_test(test_confirm_delete_via_dispatch),
 };
 
 int

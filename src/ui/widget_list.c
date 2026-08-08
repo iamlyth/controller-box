@@ -165,11 +165,30 @@ list_handle_event(cbx_widget *w, const SDL_Event *ev)
             return false;  /* at bottom boundary: let focus chain navigate */
         case SDLK_RETURN:
         case SDLK_SPACE:
-            if (lst->on_select && lst->selected >= 0) {
-                lst->on_select(&lst->base, lst->selected,
-                              lst->items[lst->selected].user_data);
-            }
+        case SDLK_a:
+            /* KEYDOWN sets pressed visual state; KEYUP fires on_select. */
+            lst->pressed = true;
             return true;
+        default:
+            break;
+        }
+        break;
+    case SDL_KEYUP:
+        switch (ev->key.keysym.sym) {
+        case SDLK_RETURN:
+        case SDLK_SPACE:
+        case SDLK_a:
+            if (lst->pressed) {
+                lst->pressed = false;
+                if (lst->on_select && lst->selected >= 0) {
+                    lst->on_select(&lst->base, lst->selected,
+                                  lst->items[lst->selected].user_data);
+                    return true;
+                }
+                /* No on_select — let the caller (manager) handle A. */
+                return false;
+            }
+            break;
         default:
             break;
         }
@@ -190,12 +209,28 @@ list_handle_event(cbx_widget *w, const SDL_Event *ev)
                 int idx = lst->scroll_offset + rel_y / lst->item_h;
                 if (idx >= 0 && idx < lst->item_count) {
                     lst->selected = idx;
-                    if (lst->on_select)
-                        lst->on_select(&lst->base, idx,
-                                        lst->items[idx].user_data);
+                    lst->pressed = true;
                 }
                 return true;
             }
+        }
+        break;
+    case SDL_MOUSEBUTTONUP:
+        if (ev->button.button == SDL_BUTTON_LEFT && lst->pressed) {
+            SDL_Point p = { ev->button.x, ev->button.y };
+            bool in_rect = SDL_PointInRect(&p, &lst->base.rect);
+            lst->pressed = false;
+            if (in_rect) {
+                int rel_y = p.y - lst->base.rect.y;
+                int idx = lst->scroll_offset + rel_y / lst->item_h;
+                if (idx >= 0 && idx < lst->item_count &&
+                    lst->on_select) {
+                    lst->selected = idx;
+                    lst->on_select(&lst->base, idx,
+                                    lst->items[idx].user_data);
+                }
+            }
+            return true;
         }
         break;
     default:
@@ -218,6 +253,7 @@ list_blur(cbx_widget *w)
 {
     cbx_list *lst = (cbx_list *)w;
     lst->base.focused = false;
+    lst->pressed = false;  /* cancel in-progress press on blur */
 }
 
 static void
@@ -263,6 +299,7 @@ cbx_list_init(cbx_list *lst, int font_id,
     memset(lst, 0, sizeof(*lst));
     lst->base.vt = &list_vt;
     lst->base.visible = true;
+    lst->base.interactive = true;
     lst->base.focused = false;
     lst->base.rect = (SDL_Rect){0, 0, 0, 0};
     lst->text_cache = cache;
@@ -274,6 +311,7 @@ cbx_list_init(cbx_list *lst, int font_id,
     lst->visible_count = 0;
     lst->item_h = DEFAULT_ITEM_H;
     lst->icon_size = DEFAULT_ICON_SIZE;
+    lst->pressed = false;
     lst->on_select = NULL;
     return 0;
 }

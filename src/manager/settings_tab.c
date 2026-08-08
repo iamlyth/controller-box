@@ -128,6 +128,12 @@ static void format_setting_label(cbx_settings_tab *tab, char *buf,
 }
 
 /* ------------------------------------------------------------------ */
+/*  Forward declarations for on_select callbacks                       */
+/* ------------------------------------------------------------------ */
+
+static void on_setting_selected(cbx_widget *w, int index, void *user_data);
+
+/* ------------------------------------------------------------------ */
 /*  Button callbacks                                                   */
 /* ------------------------------------------------------------------ */
 
@@ -173,6 +179,7 @@ int cbx_settings_tab_init(cbx_settings_tab *tab,
     rc = cbx_list_init(&tab->settings_list, font_id, cache, theme);
     if (rc != 0)
         return rc;
+    cbx_list_set_select_cb(&tab->settings_list, on_setting_selected);
 
     /* --- Save button ---------------------------------------------- */
     rc = cbx_button_init(&tab->save_btn, "Save Settings", font_id,
@@ -231,7 +238,7 @@ int cbx_settings_tab_refresh(cbx_settings_tab *tab)
     for (int i = 0; i < CBX_ST_SET_COUNT; i++) {
         format_setting_label(tab, label, sizeof(label),
                                (cbx_st_setting)i);
-        cbx_list_add_item(&tab->settings_list, label, NULL, NULL);
+        cbx_list_add_item(&tab->settings_list, label, NULL, tab);
     }
 
     /* Clamp selection. */
@@ -498,6 +505,53 @@ void cbx_settings_tab_cancel_edit(cbx_settings_tab *tab)
     tab->mode = CBX_ST_MODE_LIST;
     cbx_label_set_text(&tab->status_lbl, "");
     cbx_settings_tab_refresh(tab);
+}
+
+/* on_select wrapper for the settings list: calls cbx_settings_tab_activate.
+ * Used so both keyboard A (KEYUP) and mouse click (MOUSEUP) activate
+ * the selected setting through the list's on_select callback. */
+static void
+on_setting_selected(cbx_widget *w, int index, void *user_data)
+{
+    (void)w;
+    cbx_settings_tab *tab = (cbx_settings_tab *)user_data;
+    if (!tab)
+        return;
+    /* Sync the list selection to the tab's selected index. */
+    tab->selected = index;
+    cbx_settings_tab_activate(tab);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Tab-level key handling                                             */
+/* ------------------------------------------------------------------ */
+
+bool
+cbx_settings_tab_handle_key(cbx_settings_tab *tab, const SDL_Event *ev)
+{
+    if (!tab || !ev || ev->type != SDL_KEYDOWN)
+        return false;
+
+    SDL_Keycode key = ev->key.keysym.sym;
+
+    if (tab->mode == CBX_ST_MODE_EDIT) {
+        /* In edit mode, Up/Down adjust the value (intercept before the
+         * list can consume them for navigation). */
+        if (key == SDLK_UP) {
+            cbx_settings_tab_edit_up(tab);
+            return true;
+        }
+        if (key == SDLK_DOWN) {
+            cbx_settings_tab_edit_down(tab);
+            return true;
+        }
+        if (key == SDLK_b || key == SDLK_ESCAPE) {
+            cbx_settings_tab_cancel_edit(tab);
+            return true;
+        }
+    }
+
+    return false;
 }
 
 /* ------------------------------------------------------------------ */

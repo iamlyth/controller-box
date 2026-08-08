@@ -111,14 +111,16 @@ button_handle_event(cbx_widget *w, const SDL_Event *ev)
         break;
     case SDL_KEYDOWN:
         if (ev->key.keysym.sym == SDLK_RETURN ||
-            ev->key.keysym.sym == SDLK_SPACE) {
+            ev->key.keysym.sym == SDLK_SPACE ||
+            ev->key.keysym.sym == SDLK_a) {
             btn->pressed = true;
             return true;
         }
         break;
     case SDL_KEYUP:
         if (ev->key.keysym.sym == SDLK_RETURN ||
-            ev->key.keysym.sym == SDLK_SPACE) {
+            ev->key.keysym.sym == SDLK_SPACE ||
+            ev->key.keysym.sym == SDLK_a) {
             if (btn->pressed) {
                 btn->pressed = false;
                 if (btn->on_press)
@@ -193,6 +195,7 @@ cbx_button_init(cbx_button *btn, const char *label, int font_id,
     memset(btn, 0, sizeof(*btn));
     btn->base.vt = &button_vt;
     btn->base.visible = true;
+    btn->base.interactive = true;
     btn->base.focused = false;
     btn->base.rect = (SDL_Rect){0, 0, 0, 0};
     btn->text_cache = cache;

@@ -605,6 +605,172 @@ static void test_validate_rejects_empty_icon_override(void **state)
     assert_int_equal(cbx_settings_validate(&s), -EINVAL);
 }
 
+/* ------------------------------------------------------------------ */
+/*  Production-dispatch tests (through cbx_manager_handle_event)        */
+/* ------------------------------------------------------------------ */
+
+static bool send_key_dn(cbx_manager *mgr, SDL_Keycode sym)
+{
+    SDL_Event ev = {0};
+    ev.type = SDL_KEYDOWN;
+    ev.key.keysym.sym = sym;
+    return cbx_manager_handle_event(mgr, &ev);
+}
+
+static bool send_key_up(cbx_manager *mgr, SDL_Keycode sym)
+{
+    SDL_Event ev = {0};
+    ev.type = SDL_KEYUP;
+    ev.key.keysym.sym = sym;
+    return cbx_manager_handle_event(mgr, &ev);
+}
+
+static void
+test_settings_activate_via_dispatch(void **state)
+{
+    (void)state;
+    /* Use a temp HOME so settings load/write are isolated. */
+    char tmp[256];
+    snprintf(tmp, sizeof(tmp), "/tmp/cbx_st_disp_%d", (int)getpid());
+    setenv("HOME", tmp, 1);
+    unsetenv("XDG_CONFIG_HOME");
+    unsetenv("XDG_DATA_HOME");
+
+    ensure_dummy_driver();
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+
+    /* Switch to Settings tab (tab 2). */
+    send_key_dn(&mgr, SDLK_RIGHT);
+    send_key_dn(&mgr, SDLK_RIGHT);
+    assert_int_equal(cbx_manager_active_tab(&mgr), CBX_MGR_TAB_SETTINGS);
+
+    cbx_settings_tab *st = cbx_manager_settings_tab(&mgr);
+    assert_non_null(st);
+
+    /* Navigate down from tabbar to the settings list. */
+    send_key_dn(&mgr, SDLK_DOWN);
+    assert_true(st->settings_list.base.focused);
+
+    /* The first setting is launch_at_boot. Toggle it with A. */
+    bool initial = st->settings.launch_at_boot;
+    assert_true(send_key_dn(&mgr, SDLK_a));
+    assert_true(send_key_up(&mgr, SDLK_a));
+    assert_int_equal(st->settings.launch_at_boot, !initial);
+
+    /* Toggle again to restore. */
+    assert_true(send_key_dn(&mgr, SDLK_a));
+    assert_true(send_key_up(&mgr, SDLK_a));
+    assert_int_equal(st->settings.launch_at_boot, initial);
+
+    cbx_manager_shutdown(&mgr);
+
+    /* Clean up. */
+    char cmd[300];
+    snprintf(cmd, sizeof(cmd), "rm -rf %s", tmp);
+    (void)!system(cmd);
+}
+
+static void
+test_settings_edit_via_dispatch(void **state)
+{
+    (void)state;
+    char tmp[256];
+    snprintf(tmp, sizeof(tmp), "/tmp/cbx_st_edit_%d", (int)getpid());
+    setenv("HOME", tmp, 1);
+    unsetenv("XDG_CONFIG_HOME");
+    unsetenv("XDG_DATA_HOME");
+
+    ensure_dummy_driver();
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+
+    send_key_dn(&mgr, SDLK_RIGHT);
+    send_key_dn(&mgr, SDLK_RIGHT);
+    cbx_settings_tab *st = cbx_manager_settings_tab(&mgr);
+    assert_non_null(st);
+
+    /* Down to settings list. */
+    send_key_dn(&mgr, SDLK_DOWN);
+
+    /* Navigate to Theme (index 1). */
+    send_key_dn(&mgr, SDLK_DOWN);
+    assert_int_equal(cbx_list_get_selected(&st->settings_list), CBX_ST_SET_THEME);
+
+    /* A to enter edit mode. */
+    send_key_dn(&mgr, SDLK_a);
+    assert_true(send_key_up(&mgr, SDLK_a));
+    assert_int_equal(st->mode, CBX_ST_MODE_EDIT);
+
+    /* Up cycles theme forward. */
+    char orig_theme[64];
+    strncpy(orig_theme, st->settings.theme, sizeof(orig_theme) - 1);
+    orig_theme[sizeof(orig_theme) - 1] = '\0';
+    send_key_dn(&mgr, SDLK_UP);
+    assert_string_not_equal(st->settings.theme, orig_theme);
+
+    /* Down cycles back. */
+    send_key_dn(&mgr, SDLK_DOWN);
+    assert_string_equal(st->settings.theme, orig_theme);
+
+    /* A confirms edit. */
+    send_key_dn(&mgr, SDLK_a);
+    assert_true(send_key_up(&mgr, SDLK_a));
+    assert_int_equal(st->mode, CBX_ST_MODE_LIST);
+
+    cbx_manager_shutdown(&mgr);
+
+    char cmd[300];
+    snprintf(cmd, sizeof(cmd), "rm -rf %s", tmp);
+    (void)!system(cmd);
+}
+
+static void
+test_settings_edit_cancel_via_dispatch(void **state)
+{
+    (void)state;
+    char tmp[256];
+    snprintf(tmp, sizeof(tmp), "/tmp/cbx_st_cancel_%d", (int)getpid());
+    setenv("HOME", tmp, 1);
+    unsetenv("XDG_CONFIG_HOME");
+    unsetenv("XDG_DATA_HOME");
+
+    ensure_dummy_driver();
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+
+    send_key_dn(&mgr, SDLK_RIGHT);
+    send_key_dn(&mgr, SDLK_RIGHT);
+    cbx_settings_tab *st = cbx_manager_settings_tab(&mgr);
+
+    send_key_dn(&mgr, SDLK_DOWN);
+    send_key_dn(&mgr, SDLK_DOWN);  /* Theme */
+
+    /* Enter edit mode. */
+    send_key_dn(&mgr, SDLK_a);
+    send_key_up(&mgr, SDLK_a);
+    assert_int_equal(st->mode, CBX_ST_MODE_EDIT);
+
+    char orig_theme[64];
+    strncpy(orig_theme, st->settings.theme, sizeof(orig_theme) - 1);
+    orig_theme[sizeof(orig_theme) - 1] = '\0';
+
+    /* Adjust theme. */
+    send_key_dn(&mgr, SDLK_UP);
+    assert_string_not_equal(st->settings.theme, orig_theme);
+
+    /* B cancels edit — reverts from disk. */
+    send_key_dn(&mgr, SDLK_b);
+    assert_int_equal(st->mode, CBX_ST_MODE_LIST);
+    assert_string_equal(st->settings.theme, orig_theme);
+
+    cbx_manager_shutdown(&mgr);
+
+    char cmd[300];
+    snprintf(cmd, sizeof(cmd), "rm -rf %s", tmp);
+    (void)!system(cmd);
+}
+
 /* --- main ---------------------------------------------------------------- */
 
 int main(void)
@@ -645,6 +811,9 @@ int main(void)
         cmocka_unit_test(test_icon_overrides_round_trip),
         cmocka_unit_test(test_icon_overrides_full),
         cmocka_unit_test(test_validate_rejects_empty_icon_override),
+        cmocka_unit_test(test_settings_activate_via_dispatch),
+        cmocka_unit_test(test_settings_edit_via_dispatch),
+        cmocka_unit_test(test_settings_edit_cancel_via_dispatch),
     };
 
     return cmocka_run_group_tests(tests, NULL, NULL);

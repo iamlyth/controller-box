@@ -48,6 +48,12 @@ static void cbx_manager_update_hover(cbx_manager *mgr,
                                       cbx_widget *hovered);
 static bool cbx_manager_handle_mouse_event(cbx_manager *mgr,
                                              const SDL_Event *ev);
+static bool cbx_manager_tab_handle_key(cbx_manager *mgr,
+                                          const SDL_Event *ev);
+static bool cbx_manager_tab_activate(cbx_manager *mgr);
+static bool cbx_manager_tab_cancel(cbx_manager *mgr);
+static void cbx_manager_check_mode_change(cbx_manager *mgr,
+                                            int prev_mode);
 
 /* ------------------------------------------------------------------ */
 /*  Lifecycle                                                         */
@@ -316,13 +322,46 @@ cbx_manager_handle_event(cbx_manager *mgr, const SDL_Event *ev)
     if (ev->type == SDL_MOUSEMOTION ||
         ev->type == SDL_MOUSEBUTTONDOWN ||
         ev->type == SDL_MOUSEBUTTONUP) {
-        return cbx_manager_handle_mouse_event(mgr, ev);
+        /* Track mode changes from mouse events (button clicks can
+         * trigger tab mode changes — e.g. Add button opens type picker). */
+        int prev_mode = 0;
+        switch (mgr->active_tab) {
+        case CBX_MGR_TAB_CONTROLLERS: prev_mode = (int)mgr->ct.mode; break;
+        case CBX_MGR_TAB_PROFILES:    prev_mode = (int)mgr->pt.mode; break;
+        case CBX_MGR_TAB_SETTINGS:    prev_mode = (int)mgr->st.mode; break;
+        default: break;
+        }
+        bool result = cbx_manager_handle_mouse_event(mgr, ev);
+        cbx_manager_check_mode_change(mgr, prev_mode);
+        return result;
+    }
+
+    /* Record the active tab’s mode before processing — used to detect
+     * mode changes and trigger focus-chain rebuilds. */
+    int prev_mode = 0;
+    switch (mgr->active_tab) {
+    case CBX_MGR_TAB_CONTROLLERS: prev_mode = (int)mgr->ct.mode; break;
+    case CBX_MGR_TAB_PROFILES:    prev_mode = (int)mgr->pt.mode; break;
+    case CBX_MGR_TAB_SETTINGS:    prev_mode = (int)mgr->st.mode; break;
+    default: break;
+    }
+
+    /* 0. If the active tab is in a modal mode, let the tab handle the
+     *    key first (before the focused widget gets a chance to consume
+     *    it for navigation/activation).  This intercepts Up/Down in
+     *    settings edit mode, letter keys in name input mode, and B
+     *    for canceling modal sub-modes. */
+    if (cbx_manager_tab_handle_key(mgr, ev)) {
+        cbx_manager_check_mode_change(mgr, prev_mode);
+        return true;
     }
 
     /* 1. Try the focused widget first. */
     cbx_widget *focused = cbx_focus_chain_get_focused_widget(&mgr->focus);
-    if (focused && cbx_widget_handle_event(focused, ev))
+    if (focused && cbx_widget_handle_event(focused, ev)) {
+        cbx_manager_check_mode_change(mgr, prev_mode);
         return true;
+    }
 
     /* 2. Handle key events for tab/focus navigation. */
     if (ev->type == SDL_KEYDOWN) {
@@ -343,13 +382,49 @@ cbx_manager_handle_event(cbx_manager *mgr, const SDL_Event *ev)
         case SDLK_RETURN:
         case SDLK_SPACE:
         case SDLK_a:
-            /* A/Enter: activate the focused widget if it has a callback. */
+            /* A/Enter KEYDOWN is swallowed (visual pressed state is
+             * handled by the focused widget in step 1).  Activation
+             * fires on KEYUP — see below. */
             return true;
 
         case SDLK_ESCAPE:
         case SDLK_b:
-            /* B/Escape: does nothing special in the manager. */
+            /* B/Escape: handled by tab_handle_key in modal modes.
+             * In list mode, B is a no-op. */
             return false;
+
+        default:
+            return false;
+        }
+    }
+
+    if (ev->type == SDL_KEYUP) {
+        SDL_Keycode key = ev->key.keysym.sym;
+
+        switch (key) {
+        case SDLK_a:
+        case SDLK_RETURN:
+        case SDLK_SPACE:
+            /* A/Enter KEYUP: forward to the active tab’s activate
+             * function (only reached if the focused widget didn’t
+             * consume the KEYUP — e.g. focus is on the tabbar or a
+             * list with no on_select).  The activate function checks
+             * the tab’s mode and dispatches (type picker confirm,
+             * name input confirm, delete confirm, settings activate). */
+            {
+                bool handled = cbx_manager_tab_activate(mgr);
+                cbx_manager_check_mode_change(mgr, prev_mode);
+                return handled;
+            }
+
+        case SDLK_b:
+        case SDLK_ESCAPE:
+            /* B KEYUP: try tab cancel (modal modes). */
+            {
+                bool handled = cbx_manager_tab_cancel(mgr);
+                cbx_manager_check_mode_change(mgr, prev_mode);
+                return handled;
+            }
 
         default:
             return false;
@@ -440,6 +515,104 @@ cbx_manager_handle_mouse_event(cbx_manager *mgr, const SDL_Event *ev)
 }
 
 /* ------------------------------------------------------------------ */
+/*  Tab-level key handling, activation, and mode-change tracking       */
+/* ------------------------------------------------------------------ */
+
+static bool
+cbx_manager_tab_handle_key(cbx_manager *mgr, const SDL_Event *ev)
+{
+    if (!mgr || !ev)
+        return false;
+
+    switch (mgr->active_tab) {
+    case CBX_MGR_TAB_CONTROLLERS:
+        return cbx_controllers_tab_handle_key(&mgr->ct, ev);
+    case CBX_MGR_TAB_PROFILES:
+        return cbx_profiles_tab_handle_key(&mgr->pt, ev);
+    case CBX_MGR_TAB_SETTINGS:
+        return cbx_settings_tab_handle_key(&mgr->st, ev);
+    default:
+        return false;
+    }
+}
+
+static bool
+cbx_manager_tab_activate(cbx_manager *mgr)
+{
+    if (!mgr)
+        return false;
+
+    switch (mgr->active_tab) {
+    case CBX_MGR_TAB_CONTROLLERS:
+        return cbx_controllers_tab_activate(&mgr->ct) == 0;
+    case CBX_MGR_TAB_PROFILES:
+        return cbx_profiles_tab_activate(&mgr->pt) == 0;
+    case CBX_MGR_TAB_SETTINGS:
+        return cbx_settings_tab_activate(&mgr->st) == 0;
+    default:
+        return false;
+    }
+}
+
+static bool
+cbx_manager_tab_cancel(cbx_manager *mgr)
+{
+    if (!mgr)
+        return false;
+
+    switch (mgr->active_tab) {
+    case CBX_MGR_TAB_CONTROLLERS:
+        return cbx_controllers_tab_cancel(&mgr->ct);
+    case CBX_MGR_TAB_PROFILES:
+        return cbx_profiles_tab_cancel(&mgr->pt);
+    case CBX_MGR_TAB_SETTINGS:
+        return mgr->st.mode == CBX_ST_MODE_EDIT
+            ? (cbx_settings_tab_cancel_edit(&mgr->st), true)
+            : false;
+    default:
+        return false;
+    }
+}
+
+static void
+cbx_manager_check_mode_change(cbx_manager *mgr, int prev_mode)
+{
+    if (!mgr)
+        return;
+
+    int cur_mode = 0;
+    switch (mgr->active_tab) {
+    case CBX_MGR_TAB_CONTROLLERS: cur_mode = (int)mgr->ct.mode; break;
+    case CBX_MGR_TAB_PROFILES:    cur_mode = (int)mgr->pt.mode; break;
+    case CBX_MGR_TAB_SETTINGS:    cur_mode = (int)mgr->st.mode; break;
+    default: return;
+    }
+
+    if (cur_mode == prev_mode)
+        return;
+
+    /* Mode changed — rebuild the focus chain (only visible widgets)
+     * and focus the first visible panel child, or the tabbar. */
+    cbx_manager_rebuild_focus(mgr);
+
+    /* Find the first visible panel child to focus. */
+    cbx_panel *panel = &mgr->panels[mgr->active_tab];
+    cbx_widget *first_visible = NULL;
+    for (int i = 0; i < panel->child_count; i++) {
+        if (panel->children[i] && panel->children[i]->visible &&
+            panel->children[i]->interactive) {
+            first_visible = panel->children[i];
+            break;
+        }
+    }
+
+    if (first_visible)
+        cbx_focus_chain_focus_widget(&mgr->focus, first_visible);
+    else
+        cbx_focus_chain_focus_widget(&mgr->focus, &mgr->tabbar.base);
+}
+
+/* ------------------------------------------------------------------ */
 /*  Rendering                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -516,11 +689,13 @@ cbx_manager_rebuild_focus(cbx_manager *mgr)
     cbx_widget_get_rect(&mgr->tabbar.base, &tabbar_rect);
     cbx_focus_chain_add(&mgr->focus, &mgr->tabbar.base, &tabbar_rect, 0);
 
-    /* Add the active panel's focusable children (if any). */
+    /* Add the active panel’s focusable children (if any).  Skip invisible
+     * widgets so that hidden type pickers, create pickers, etc. don’t
+     * appear in the focus chain. */
     cbx_panel *panel = &mgr->panels[mgr->active_tab];
     for (int i = 0; i < panel->child_count; i++) {
         cbx_widget *child = panel->children[i];
-        if (!child)
+        if (!child || !child->visible || !child->interactive)
             continue;
         SDL_Rect child_rect;
         cbx_widget_get_rect(child, &child_rect);

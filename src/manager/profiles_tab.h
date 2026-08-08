@@ -225,6 +225,38 @@ void cbx_profiles_tab_cancel_delete(cbx_profiles_tab *tab);
 const cbx_profile_entry *
 cbx_profiles_tab_entry(const cbx_profiles_tab *tab, int index);
 
+/*
+ * Open the create source picker (Default copy / Empty / Clone).
+ * Populates the create_picker list and switches to CBX_PT_MODE_CREATE_PICK.
+ */
+int cbx_profiles_tab_begin_create_pick(cbx_profiles_tab *tab);
+
+/*
+ * Cancel the create source picker and return to list mode.
+ */
+void cbx_profiles_tab_cancel_create_pick(cbx_profiles_tab *tab);
+
+/*
+ * Tab-level activation (called by manager when A-key KEYUP is not
+ * consumed by the focused widget).  Checks the tab’s mode and dispatches
+ * (name input confirm, delete confirm, create source confirm).
+ * Returns 0 on success, negative errno on error.
+ */
+int cbx_profiles_tab_activate(cbx_profiles_tab *tab);
+
+/*
+ * Tab-level cancel (called by manager when B-key is pressed in a modal mode).
+ * Returns true if the cancel was handled (mode was modal), false otherwise.
+ */
+bool cbx_profiles_tab_cancel(cbx_profiles_tab *tab);
+
+/*
+ * Tab-level key handler (called by manager before dispatching to the
+ * focused widget).  Handles mode-specific keys (letter keys in name
+ * input, A/B in confirm delete, B in create pick).  Returns true if handled.
+ */
+bool cbx_profiles_tab_handle_key(cbx_profiles_tab *tab, const SDL_Event *ev);
+
 /* ------------------------------------------------------------------ */
 /*  Accessors (for testing)                                            */
 /* ------------------------------------------------------------------ */

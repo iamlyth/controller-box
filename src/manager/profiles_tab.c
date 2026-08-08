@@ -93,6 +93,13 @@ delete_sidecar(cbx_profiles_tab *tab, const char *profile_name)
 }
 
 /* ------------------------------------------------------------------ */
+/*  Forward declarations for on_select callbacks                       */
+/* ------------------------------------------------------------------ */
+
+static void on_create_source_selected(cbx_widget *w, int index,
+                                         void *user_data);
+
+/* ------------------------------------------------------------------ */
 /*  Button callbacks                                                   */
 /* ------------------------------------------------------------------ */
 
@@ -103,8 +110,8 @@ on_create_pressed(cbx_widget *w, void *user_data)
     cbx_profiles_tab *tab = (cbx_profiles_tab *)user_data;
     if (!tab)
         return;
-    /* Default to copying the default profile. */
-    cbx_profiles_tab_begin_create(tab, CBX_PT_CREATE_DEFAULT_COPY);
+    /* Open the create source picker (Default copy / Empty / Clone). */
+    cbx_profiles_tab_begin_create_pick(tab);
 }
 
 static void
@@ -114,6 +121,8 @@ on_delete_pressed(cbx_widget *w, void *user_data)
     cbx_profiles_tab *tab = (cbx_profiles_tab *)user_data;
     if (!tab)
         return;
+    /* Sync the list selection to the tab's selected_profile. */
+    tab->selected_profile = cbx_list_get_selected(&tab->profile_list_w);
     int idx = tab->selected_profile;
     if (idx >= 0 && idx < tab->profiles.count)
         cbx_profiles_tab_begin_delete(tab, idx);
@@ -165,6 +174,7 @@ cbx_profiles_tab_init(cbx_profiles_tab *tab,
         return rc;
     }
     cbx_widget_set_visible(&tab->create_picker.base, false);
+    cbx_list_set_select_cb(&tab->create_picker, on_create_source_selected);
 
     /* --- Buttons --------------------------------------------------- */
     rc = cbx_button_init(&tab->create_btn, "Create Profile", font_id,
@@ -620,8 +630,202 @@ cbx_profiles_tab_cancel_delete(cbx_profiles_tab *tab)
 }
 
 /* ------------------------------------------------------------------ */
-/*  Test directory overrides                                           */
+/*  Create source picker mode                                         */
 /* ------------------------------------------------------------------ */
+
+int
+cbx_profiles_tab_begin_create_pick(cbx_profiles_tab *tab)
+{
+    if (!tab)
+        return -EINVAL;
+
+    /* Populate the create picker with the three source options. */
+    cbx_list_clear(&tab->create_picker);
+    cbx_list_add_item(&tab->create_picker, "Default copy", NULL, tab);
+    cbx_list_add_item(&tab->create_picker, "Empty", NULL, tab);
+    cbx_list_add_item(&tab->create_picker, "Clone current", NULL, tab);
+    cbx_list_set_selected(&tab->create_picker, 0);
+
+    /* Show the picker, hide the profile list and buttons. */
+    cbx_widget_set_visible(&tab->profile_list_w.base, false);
+    cbx_widget_set_visible(&tab->create_btn.base, false);
+    cbx_widget_set_visible(&tab->edit_btn.base, false);
+    cbx_widget_set_visible(&tab->delete_btn.base, false);
+    cbx_widget_set_visible(&tab->create_picker.base, true);
+
+    tab->mode = CBX_PT_MODE_CREATE_PICK;
+
+    cbx_label_set_text(&tab->status_lbl,
+                       "Create from: Up/Down to select, A=confirm, B=cancel");
+    cbx_widget_set_visible(&tab->status_lbl.base, true);
+
+    return 0;
+}
+
+void
+cbx_profiles_tab_cancel_create_pick(cbx_profiles_tab *tab)
+{
+    if (!tab)
+        return;
+
+    /* Restore list view. */
+    cbx_widget_set_visible(&tab->profile_list_w.base, true);
+    cbx_widget_set_visible(&tab->create_btn.base, true);
+    cbx_widget_set_visible(&tab->edit_btn.base, true);
+    cbx_widget_set_visible(&tab->delete_btn.base, true);
+    cbx_widget_set_visible(&tab->create_picker.base, false);
+
+    tab->mode = CBX_PT_MODE_LIST;
+    cbx_widget_set_visible(&tab->status_lbl.base, false);
+    cbx_label_set_text(&tab->status_lbl, "");
+}
+
+/* on_select callback for the create source picker.
+ * Called when the user presses A (KEYUP) or clicks (MOUSEUP) on a source.
+ * Maps the index to a create_source and enters name input mode. */
+static void
+on_create_source_selected(cbx_widget *w, int index, void *user_data)
+{
+    (void)w;
+    cbx_profiles_tab *tab = (cbx_profiles_tab *)user_data;
+    if (!tab || tab->mode != CBX_PT_MODE_CREATE_PICK)
+        return;
+    if (index < 0 || index > 2)
+        return;
+
+    cbx_pt_create_source source = (cbx_pt_create_source)index;
+
+    /* Restore list view before entering name input. */
+    cbx_widget_set_visible(&tab->profile_list_w.base, true);
+    cbx_widget_set_visible(&tab->create_btn.base, true);
+    cbx_widget_set_visible(&tab->edit_btn.base, true);
+    cbx_widget_set_visible(&tab->delete_btn.base, true);
+    cbx_widget_set_visible(&tab->create_picker.base, false);
+
+    cbx_profiles_tab_begin_create(tab, source);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Tab-level activation / cancel / key handling                       */
+/* ------------------------------------------------------------------ */
+
+int
+cbx_profiles_tab_activate(cbx_profiles_tab *tab)
+{
+    if (!tab)
+        return -EINVAL;
+
+    switch (tab->mode) {
+    case CBX_PT_MODE_NAME_INPUT:
+        return cbx_profiles_tab_name_input_confirm(tab);
+    case CBX_PT_MODE_CONFIRM_DELETE:
+        return cbx_profiles_tab_confirm_delete(tab);
+    case CBX_PT_MODE_CREATE_PICK:
+        /* Sync from picker selection and enter name input. */
+        {
+            int idx = cbx_list_get_selected(&tab->create_picker);
+            if (idx < 0 || idx > 2)
+                return -EINVAL;
+            cbx_pt_create_source source = (cbx_pt_create_source)idx;
+            /* Restore list view. */
+            cbx_widget_set_visible(&tab->profile_list_w.base, true);
+            cbx_widget_set_visible(&tab->create_btn.base, true);
+            cbx_widget_set_visible(&tab->edit_btn.base, true);
+            cbx_widget_set_visible(&tab->delete_btn.base, true);
+            cbx_widget_set_visible(&tab->create_picker.base, false);
+            return cbx_profiles_tab_begin_create(tab, source);
+        }
+    case CBX_PT_MODE_LIST:
+    default:
+        /* No tab-level activation in list mode. */
+        return 0;
+    }
+}
+
+bool
+cbx_profiles_tab_cancel(cbx_profiles_tab *tab)
+{
+    if (!tab)
+        return false;
+
+    switch (tab->mode) {
+    case CBX_PT_MODE_NAME_INPUT:
+        cbx_profiles_tab_name_input_cancel(tab);
+        return true;
+    case CBX_PT_MODE_CONFIRM_DELETE:
+        cbx_profiles_tab_cancel_delete(tab);
+        return true;
+    case CBX_PT_MODE_CREATE_PICK:
+        cbx_profiles_tab_cancel_create_pick(tab);
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool
+cbx_profiles_tab_handle_key(cbx_profiles_tab *tab, const SDL_Event *ev)
+{
+    if (!tab || !ev || ev->type != SDL_KEYDOWN)
+        return false;
+
+    SDL_Keycode key = ev->key.keysym.sym;
+
+    switch (tab->mode) {
+    case CBX_PT_MODE_NAME_INPUT:
+        if (key == SDLK_b || key == SDLK_ESCAPE) {
+            cbx_profiles_tab_name_input_cancel(tab);
+            return true;
+        }
+        if (key == SDLK_BACKSPACE) {
+            cbx_profiles_tab_name_input_backspace(tab);
+            return true;
+        }
+        if (key == SDLK_a || key == SDLK_RETURN) {
+            cbx_profiles_tab_name_input_confirm(tab);
+            return true;
+        }
+        /* Letter keys: add character to name buffer. */
+        if (key >= SDLK_a && key <= SDLK_z) {
+            cbx_profiles_tab_name_input_char(tab, (char)key);
+            return true;
+        }
+        if (key >= SDLK_0 && key <= SDLK_9) {
+            cbx_profiles_tab_name_input_char(tab, (char)key);
+            return true;
+        }
+        if (key == SDLK_MINUS) {
+            cbx_profiles_tab_name_input_char(tab, '-');
+            return true;
+        }
+        if (key == SDLK_UNDERSCORE) {
+            cbx_profiles_tab_name_input_char(tab, '_');
+            return true;
+        }
+        return false;
+
+    case CBX_PT_MODE_CONFIRM_DELETE:
+        if (key == SDLK_a || key == SDLK_RETURN) {
+            cbx_profiles_tab_confirm_delete(tab);
+            return true;
+        }
+        if (key == SDLK_b || key == SDLK_ESCAPE) {
+            cbx_profiles_tab_cancel_delete(tab);
+            return true;
+        }
+        return false;
+
+    case CBX_PT_MODE_CREATE_PICK:
+        if (key == SDLK_b || key == SDLK_ESCAPE) {
+            cbx_profiles_tab_cancel_create_pick(tab);
+            return true;
+        }
+        return false;
+
+    default:
+        return false;
+    }
+}
 
 void
 cbx_profiles_tab_set_test_dirs(cbx_profiles_tab *tab,

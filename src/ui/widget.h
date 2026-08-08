@@ -40,6 +40,7 @@ struct cbx_widget {
     bool  focused;
     bool  visible;
     bool  hover;          /* mouse pointer is over this widget */
+    bool  interactive;    /* false for non-interactive widgets (labels) */
     SDL_Rect rect;
 };
 
@@ -231,6 +232,7 @@ typedef struct {
     int   visible_count;     /* computed from rect height / item_h */
     int   item_h;            /* pixel height per item */
     int   icon_size;         /* icon dimension (square) */
+    bool  pressed;           /* KEYDOWN sets pressed, KEYUP fires on_select */
     cbx_list_select_cb on_select;
 } cbx_list;
 

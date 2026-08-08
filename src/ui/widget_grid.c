@@ -185,6 +185,7 @@ cbx_grid_init(cbx_grid *grid, const cbx_theme *theme)
     memset(grid, 0, sizeof(*grid));
     grid->base.vt = &grid_vt;
     grid->base.visible = true;
+    grid->base.interactive = true;
     grid->base.focused = false;
     grid->base.rect = (SDL_Rect){0, 0, 0, 0};
     grid->theme = theme;

@@ -128,6 +128,7 @@ cbx_panel_init(cbx_panel *panel, const cbx_theme *theme)
     memset(panel, 0, sizeof(*panel));
     panel->base.vt = &panel_vt;
     panel->base.visible = true;
+    panel->base.interactive = true;
     panel->base.focused = false;
     panel->base.rect = (SDL_Rect){0, 0, 0, 0};
     panel->theme = theme;
