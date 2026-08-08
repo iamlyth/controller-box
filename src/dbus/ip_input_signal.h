@@ -155,6 +155,15 @@ int ip_input_events_subscribe(ip_input_events *ie);
 void ip_input_events_handle(ip_input_events *ie,
                               const ip_input_event_payload *payload);
 
+/*
+ * Process pending DBus messages by calling the backend's process function.
+ * In production, this calls sd_bus_process() to dispatch pending signals,
+ * which triggers ip_input_events_handle for each InputEvent signal.
+ * In tests, this is a no-op (signals are injected via inject_signal).
+ * Returns the number of messages processed, or negative errno on error.
+ */
+int ip_input_events_process(ip_input_events *ie);
+
 /* --- Parsing helpers (exposed for unit testing) ------------------------- */
 
 /*

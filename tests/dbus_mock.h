@@ -154,6 +154,13 @@ typedef struct ip_dbus_backend {
      * implementations set this to NULL. */
     int  (*inject_signal)(ip_bus_handle bus, const char *iface,
                           const char *member, const void *payload);
+
+    /* Process pending DBus messages (signals, method replies).
+     * In production, calls sd_bus_process() to dispatch one message.
+     * Returns >0 if a message was processed, 0 if no messages pending,
+     * negative errno on error.  Mock implementations return 0 (no-op:
+     * signals are injected directly via inject_signal). */
+    int  (*process)(ip_bus_handle bus);
 } ip_dbus_backend;
 
 /*

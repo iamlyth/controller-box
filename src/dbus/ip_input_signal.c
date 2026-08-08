@@ -283,3 +283,16 @@ ip_input_events_handle(ip_input_events *ie,
     ie->cb(input, cat, payload->value, payload->event,
             payload->path, ie->cb_userdata);
 }
+
+int
+ip_input_events_process(ip_input_events *ie)
+{
+    if (!ie || !ie->backend || !ie->backend->process)
+        return 0;
+
+    int total = 0;
+    int rc;
+    while ((rc = ie->backend->process(ie->bus)) > 0)
+        total += rc;
+    return total;
+}

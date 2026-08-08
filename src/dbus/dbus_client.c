@@ -1042,6 +1042,21 @@ sd_inject_signal(ip_bus_handle bus, const char *iface,
     return -ENOSYS;  /* Production does not inject signals */
 }
 
+static int
+sd_process(ip_bus_handle bus)
+{
+    sd_bus_wrapper *w = (sd_bus_wrapper *)bus;
+    if (!w || !w->bus)
+        return -EINVAL;
+
+    /* Process one pending DBus message (non-blocking).
+     * Returns 0 if no messages pending, >0 if a message was processed. */
+    int r = sd_bus_process(w->bus, NULL);
+    if (r < 0)
+        return -errno;
+    return r;
+}
+
 /* --- Backend accessor ---------------------------------------------------- */
 
 static const ip_dbus_backend s_sd_backend = {
@@ -1054,6 +1069,7 @@ static const ip_dbus_backend s_sd_backend = {
     .get_managed_objects  = sd_get_managed_objects,
     .subscribe_signal     = sd_subscribe_signal,
     .inject_signal        = sd_inject_signal,
+    .process              = sd_process,
 };
 
 const ip_dbus_backend *

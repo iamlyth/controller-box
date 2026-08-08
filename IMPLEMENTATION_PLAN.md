@@ -58,8 +58,8 @@ specification. Adding post-v1 features (§§12–13).
 | REQ-006 | §3 System requirements | verified | SDL2/SDL2_ttf/SDL2_image/sd-bus/nanosvg in CMakeLists; x86_64+aarch64 in CI; InputPlumber Requires= in service unit; `test_packaging.sh` verifies install layout | — |
 | REQ-007 | §4.1 Select-screen model | partial | Grid render (`grid_render.c`) and layout match spec; multi-controller input not wired in production (see REQ-009) | Task 6 |
 | REQ-008 | §4.2 Trigger (Select+A, configurable) | verified | `trigger.c` parse/register; `test_trigger.c` verifies DBus calls; settings tab exposes trigger combo editor | — |
-| REQ-009 | §4.3 Player Mode (each controller own row) | partial | `player_mode.c` supports per-row control via direct calls; `overlay_service.c` hardcodes row 0 for all keyboard input; `ip_input_events` infrastructure exists in `ip_input_signal.c` but is not wired into the overlay service poll loop | Task 6 |
-| REQ-010 | §4.4 Host Mode (R3, exclusive) | partial | `host_mode.c` implements enter/exit/navigate/freeze via direct calls; overlay service dispatches keyboard events to it but only for row 0; not tested through production poll loop. Note: host-mode profile cycling (spec says host can "edit slot/profile") is not implemented — `cbx_hm_input` has no profile-cycle input. §13 defers "interface details" but the capability is specified; this is tracked as a known partial that the final audit evaluates. | Task 6, Task 11 |
+| REQ-009 | §4.3 Player Mode (each controller own row) | verified | `player_mode.c` supports per-row control via direct calls; `overlay_service.c` wires `ip_input_events` into the poll loop with device_path→row mapping via `cbx_overlay_input_build_map`; `cbx_overlay_input_cb` dispatches to `cbx_player_mode_handle` with correct row index; keyboard fallback remains for row 0; multi-controller independence verified in `test_overlay_service.c::test_multi_controller_independent_rows` (8 sub-tests pass) | Task 6, Task 11 |
+| REQ-010 | §4.4 Host Mode (R3, exclusive) | partial | `host_mode.c` implements enter/exit/navigate/freeze via direct calls; overlay service dispatches both keyboard and DBus InputEvent signals to host mode via `cbx_overlay_input_cb` with the host_row (not hardcoded row 0 for DBus input); not tested through production poll loop. Note: host-mode profile cycling (spec says host can "edit slot/profile") is not implemented — `cbx_hm_input` has no profile-cycle input. §13 defers "interface details" but the capability is specified; this is tracked as a known partial that the final audit evaluates. | Task 6, Task 11 |
 | REQ-011 | §4.5 Conflict resolution | verified | `conflict.c` detect/resolve; `test_conflict.c` 31 sub-tests including spec example; visual test confirms red {220,40,40} rendering | — |
 | REQ-012 | §4.6 Profiles per-controller | verified | `profile_cycle.c`; `test_profile_cycle.c` 26 sub-tests; assignments persist profile with controller | — |
 | REQ-013 | §4.7 Dynamic columns | verified | `dynamic_columns.c`; `test_dynamic_columns.c` | — |
@@ -280,7 +280,7 @@ dispatch path, and the task that provides executable evidence.
 - Documentation impact: `docs/OPERATIONS.md` — documented the profile editor access flow (Edit button, create-to-editor flow, list mode, sequential mode, validation, save, expected_sender verification).
 
 ## Task 6: Wire overlay DBus InputEvent signal handling for multi-controller input
-- Status: pending
+- Status: complete
 - Dependencies: none
 - Scope: `src/app/overlay_service.c`, `src/app/overlay_service.h`, `src/dbus/ip_input_signal.c`, `src/dbus/ip_input_signal.h`, `src/dbus/ip_composite.c`, `src/dbus/ip_composite.h`, `tests/test_overlay_service.c`
 - Acceptance criteria:

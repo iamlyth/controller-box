@@ -26,6 +26,7 @@
 #include "dbus/ip_objectmanager.h"
 #include "dbus/ip_device_model.h"
 #include "dbus/ip_composite.h"
+#include "dbus/ip_input_signal.h"
 #include "dbus/ip_intercept_poll.h"
 #include "overlay/surface_build.h"
 #include "overlay/lifecycle.h"
@@ -99,6 +100,11 @@ typedef struct {
     cbx_host_mode          hm;
     cbx_conflict_list      conflicts;
     int                    comp_count;
+    /* Overlay input event handling (Task 6). */
+    cbx_overlay_input_ctx  input_ctx;
+    ip_input_events        input_events;
+    char                   expected_sender[128];
+    bool                   input_events_ready;
 } overlay_ctx;
 
 /* ================================================================== */
@@ -320,6 +326,166 @@ sdl_key_to_hm_input(SDL_Keycode key, cbx_hm_input *out)
 }
 
 /* ================================================================== */
+/*  Overlay input event handling (Task 6)                              */
+/*  Maps DBus InputEvent signals to grid rows and dispatches to        */
+/*  player_mode or host_mode with the correct row index.               */
+/* ================================================================== */
+
+void
+cbx_overlay_input_add_mapping(cbx_overlay_input_ctx *ctx,
+                                const char *device_path,
+                                int row_idx)
+{
+    if (!ctx || !device_path || ctx->path_count >= CBX_MAX_DBUS_DEVICES)
+        return;
+    snprintf(ctx->device_paths[ctx->path_count],
+             sizeof(ctx->device_paths[ctx->path_count]),
+             "%s", device_path);
+    ctx->row_indices[ctx->path_count] = row_idx;
+    ctx->path_count++;
+}
+
+int
+cbx_overlay_input_find_row(const char *device_path,
+                              char paths[][256],
+                              const int *rows, int count)
+{
+    if (!device_path || !paths || !rows)
+        return -1;
+    for (int i = 0; i < count; i++) {
+        if (strcmp(paths[i], device_path) == 0)
+            return rows[i];
+    }
+    return -1;
+}
+
+int
+cbx_overlay_input_build_map(const ip_dbus_backend *backend,
+                              ip_bus_handle bus,
+                              cbx_grid_composite_info *composites,
+                              int comp_count,
+                              cbx_overlay_input_ctx *ctx)
+{
+    if (!backend || !composites || !ctx)
+        return -EINVAL;
+
+    ctx->path_count = 0;
+
+    for (int i = 0; i < comp_count; i++) {
+        char *dbus_devices = NULL;
+        int rc = ip_composite_get_dbus_devices(backend, bus,
+                                                composites[i].composite_path,
+                                                &dbus_devices);
+        if (rc != 0 || !dbus_devices)
+            continue;  /* best-effort */
+
+        /* Parse comma-separated DBusDevice paths. */
+        char *saveptr = NULL;
+        char *token = strtok_r(dbus_devices, ",", &saveptr);
+        while (token) {
+            /* Trim leading whitespace. */
+            while (*token == ' ')
+                token++;
+            if (*token)
+                cbx_overlay_input_add_mapping(ctx, token, i);
+            token = strtok_r(NULL, ",", &saveptr);
+        }
+
+        free(dbus_devices);
+    }
+
+    return 0;
+}
+
+int
+cbx_ip_input_to_pm(ip_input_id input, cbx_pm_input *out)
+{
+    switch (input) {
+    case IP_INPUT_LEFT:  *out = CBX_PM_LEFT;  return 1;
+    case IP_INPUT_RIGHT: *out = CBX_PM_RIGHT; return 1;
+    case IP_INPUT_UP:    *out = CBX_PM_UP;    return 1;
+    case IP_INPUT_DOWN:  *out = CBX_PM_DOWN;  return 1;
+    case IP_INPUT_B:     *out = CBX_PM_B;     return 1;
+    case IP_INPUT_R3:    *out = CBX_PM_R3;    return 1;
+    default:             return 0;
+    }
+}
+
+int
+cbx_ip_input_to_hm(ip_input_id input, cbx_hm_input *out)
+{
+    switch (input) {
+    case IP_INPUT_LEFT:  *out = CBX_HM_LEFT;  return 1;
+    case IP_INPUT_RIGHT: *out = CBX_HM_RIGHT; return 1;
+    case IP_INPUT_UP:    *out = CBX_HM_UP;    return 1;
+    case IP_INPUT_DOWN:  *out = CBX_HM_DOWN;  return 1;
+    case IP_INPUT_B:     *out = CBX_HM_B;     return 1;
+    case IP_INPUT_R3:    *out = CBX_HM_R3;    return 1;
+    default:             return 0;
+    }
+}
+
+void
+cbx_overlay_input_cb(ip_input_id input,
+                       ip_input_category category,
+                       double value,
+                       const char *raw_event,
+                       const char *device_path,
+                       void *userdata)
+{
+    (void)raw_event;
+    cbx_overlay_input_ctx *ctx = (cbx_overlay_input_ctx *)userdata;
+    if (!ctx || !ctx->pm || !ctx->hm || !ctx->grid || !ctx->lifecycle)
+        return;
+
+    /* Only process button press events (value == 1.0).
+     * Button releases (0.0) and axis events are ignored — the overlay
+     * only needs directional navigation. */
+    if (category != IP_INPUT_CAT_BUTTON || value != 1.0)
+        return;
+
+    /* Map device_path→row.  Unknown device paths are dropped. */
+    int row_idx = cbx_overlay_input_find_row(device_path,
+                                               ctx->device_paths,
+                                               ctx->row_indices,
+                                               ctx->path_count);
+    if (row_idx < 0 || row_idx >= ctx->grid->row_count)
+        return;  /* unknown device path or out of bounds */
+
+    if (cbx_host_mode_is_active(ctx->hm)) {
+        /* Host Mode: host navigates rows + slots. */
+        cbx_hm_input hm_in;
+        if (!cbx_ip_input_to_hm(input, &hm_in))
+            return;
+
+        int host_row = cbx_host_mode_get_host_row(ctx->hm);
+        int result = cbx_host_mode_handle(ctx->hm, host_row, hm_in,
+                                            ctx->grid);
+        if (result == CBX_HM_RESULT_EXIT) {
+            cbx_host_mode_exit(ctx->hm);
+        } else if (result == CBX_HM_RESULT_CLOSE) {
+            cbx_overlay_lifecycle_close(ctx->lifecycle);
+        } else if (result == CBX_HM_RESULT_MOVED ||
+                   result == CBX_HM_RESULT_SLOT) {
+            cbx_overlay_surface_mark_dirty_all(ctx->lifecycle->surface);
+        }
+    } else {
+        /* Player Mode: each controller edits its own row. */
+        cbx_pm_input pm_in;
+        if (!cbx_ip_input_to_pm(input, &pm_in))
+            return;
+
+        int result = cbx_player_mode_handle(ctx->pm, row_idx, pm_in);
+        if (result == CBX_PM_RESULT_CLOSE) {
+            cbx_overlay_lifecycle_close(ctx->lifecycle);
+        } else if (result == CBX_PM_RESULT_HOST) {
+            cbx_host_mode_toggle(ctx->hm, row_idx);
+        }
+        /* Surface dirty flag is set by callbacks. */
+    }
+}
+
+/* ================================================================== */
 /*  Main entry                                                         */
 /* ================================================================== */
 int run_overlay_service(int dry_run)
@@ -494,6 +660,29 @@ int run_overlay_service(int dry_run)
     lifecycle.on_save       = on_overlay_save;
     lifecycle.on_save_data  = &ctx;
 
+    /* --- 10b. Set up DBus InputEvent signal handling (Task 6) ------- */
+    /* Build the device_path→row mapping from composite DbusDevices. */
+    ctx.input_ctx.pm        = &ctx.pm;
+    ctx.input_ctx.hm        = &ctx.hm;
+    ctx.input_ctx.grid      = &grid;
+    ctx.input_ctx.lifecycle  = &lifecycle;
+    ctx.input_ctx.path_count = 0;
+    cbx_overlay_input_build_map(conn.backend, conn.bus,
+                                  composites, comp_count, &ctx.input_ctx);
+
+    /* Initialise ip_input_events with InputPlumber's unique bus name
+     * as expected_sender (fail-closed: if unique name is unavailable,
+     * expected_sender is empty and all signals are rejected). */
+    const char *uniq = ip_connection_get_unique_name(&conn);
+    snprintf(ctx.expected_sender, sizeof(ctx.expected_sender),
+             "%s", uniq ? uniq : "");
+    ip_input_events_init(&ctx.input_events, conn.backend, conn.bus,
+                          ctx.expected_sender,
+                          cbx_overlay_input_cb, &ctx.input_ctx);
+    ctx.input_events_ready = false;
+    if (ip_input_events_subscribe(&ctx.input_events) == 0)
+        ctx.input_events_ready = true;
+
     /* --- 11. Set up InterceptMode polling --------------------------- */
     /* Register a custom SDL event type for the poll timer. */
     uint32_t poll_event_type = SDL_RegisterEvents(1);
@@ -523,9 +712,10 @@ int run_overlay_service(int dry_run)
      *      - Custom poll timer events → ip_intercept_poll_tick
      *      - SDL_KEYDOWN → grid navigation (player/host mode)
      *      - SDL_QUIT → shutdown
-     *   2. cbx_overlay_lifecycle_tick advances fade animation / timeout.
-     *   3. If surface is dirty, re-render + re-show (when visible).
-     *   4. Check g_running flag (set by SIGTERM/SIGINT handler).
+     *   2. Process pending DBus InputEvent signals (Task 6).
+     *   3. cbx_overlay_lifecycle_tick advances fade animation / timeout.
+     *   4. If surface is dirty, re-render + re-show (when visible).
+     *   5. Check g_running flag (set by SIGTERM/SIGINT handler).
      */
     SDL_Event ev;
     while (g_running) {
@@ -579,6 +769,16 @@ int run_overlay_service(int dry_run)
                 }
             }
         }
+
+        /* Process pending DBus InputEvent signals (Task 6).
+         * In production, this calls sd_bus_process() to dispatch signals
+         * registered via ip_input_events_subscribe.  The signal callback
+         * validates the sender, parses the event, and fires
+         * cbx_overlay_input_cb which maps device_path→row and dispatches
+         * to player_mode or host_mode.
+         * In tests, this is a no-op (signals injected via inject_signal). */
+        if (ctx.input_events_ready)
+            ip_input_events_process(&ctx.input_events);
 
         /* Advance lifecycle (fade animation, timeout). */
         cbx_overlay_lifecycle_tick(&lifecycle);

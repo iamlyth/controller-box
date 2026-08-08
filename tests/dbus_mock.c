@@ -232,6 +232,13 @@ static int mock_inject_signal(ip_bus_handle bus, const char *iface,
     return 0;
 }
 
+/* --- Mock process (no-op: signals injected via inject_signal) -------- */
+
+static int mock_process(ip_bus_handle bus) {
+    (void)bus;
+    return 0;
+}
+
 /* --- Backend accessor ------------------------------------------------------ */
 
 static ip_dbus_backend s_mock_backend;
@@ -247,5 +254,6 @@ const ip_dbus_backend *ip_dbus_mock_backend(ip_dbus_mock *mock) {
     s_mock_backend.get_managed_objects  = mock_get_managed_objects;
     s_mock_backend.subscribe_signal      = mock_subscribe_signal;
     s_mock_backend.inject_signal         = mock_inject_signal;
+    s_mock_backend.process               = mock_process;
     return &s_mock_backend;
 }
