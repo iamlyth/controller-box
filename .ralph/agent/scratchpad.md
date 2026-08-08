@@ -1,49 +1,50 @@
-# Task 6 Complete — Overlay DBus InputEvent signal handling for multi-controller input
+# Task 7 Complete — Create interaction acceptance inventory
 
 ## What was done
 
 ### Source changes
 
-1. **`tests/dbus_mock.h`** — Added `int (*process)(ip_bus_handle bus)` to `ip_dbus_backend` vtable. Production calls `sd_bus_process()` to dispatch pending signals; mock returns 0 (no-op since signals are injected via `inject_signal`).
+1. **`tests/interaction_inventory.h`** — New header defining:
+   - `cbx_inv_category` enum (manager tabbar/ctrl/prof/settings/editor, overlay, disabled)
+   - `cbx_inv_widget_type` enum (tab, list, button, picker, name_input, confirm_delete, edit_mode, binding, capture, sequential, editor, overlay_action, scenario)
+   - `cbx_inv_verify_status` enum (unverified, verified, not_applicable, deferred)
+   - `cbx_inv_path_availability` enum (na, available)
+   - `cbx_interaction_entry` struct with: id, category, context, widget_type, controller_path, pointer_path_avail, pointer_path, semantic_outcome, dispatch_path, verify_status, evidence_task
+   - API: `cbx_interaction_inventory_get()`, `cbx_interaction_inventory_count()`, `cbx_interaction_inventory_find(id)`
 
-2. **`tests/dbus_mock.c`** — Added `mock_process()` (no-op returning 0) and wired it into the mock backend vtable.
+2. **`tests/interaction_inventory.c`** — Static array with 58 entries:
+   - M01–M03: Tab bar (Controllers/Profiles/Settings tabs)
+   - M04–M09: Controllers tab (device list, add, remove, change type, picker confirm/cancel)
+   - M10–M20: Profiles tab (list, create, source picker, name input chars/backspace/confirm/cancel, edit, delete confirm/cancel)
+   - M21–M27: Settings tab (list, toggle, edit enter/up-down/confirm/cancel, save)
+   - M28–M38: Profile editor (binding list, edit, target picker, capture begin/capture, sequential begin/capture/skip/cancel, save+close, cancel editor)
+   - O01–O12: Overlay actions (open, move left/right, cycle up/down, host mode enter/navigate/move/exit, close, multi-controller independence, host profile cycle deferred)
+   - D01–D08: Disabled/degraded scenarios (InputPlumber unavailable, remove no device, delete no profile, save missing NES, settings cancel, DBus failure, filesystem failure, empty profile)
+   - NULL terminator entry
+   - Implementation of get/count/find functions
 
-3. **`src/dbus/dbus_client.c`** — Added `sd_process()` that calls `sd_bus_process(w->bus, NULL)` (process one pending message, non-blocking). Returns >0 if message processed, 0 if none pending. Wired into production vtable.
+3. **`tests/test_interaction_inventory.c`** — 11 sub-tests:
+   - `test_inventory_count`: 58 entries
+   - `test_inventory_all_fields_populated`: all required strings non-NULL
+   - `test_inventory_has_all_manager_controls`: M01–M38 all found
+   - `test_inventory_has_all_overlay_actions`: O01–O12 all found
+   - `test_inventory_has_all_disabled_scenarios`: D01–D08 all found
+   - `test_inventory_find_returns_null_for_unknown`: M99, X01, "", NULL → NULL
+   - `test_inventory_pointer_path_availability`: n/a entries have "n/a" prefix; available entries don't
+   - `test_inventory_categories`: M→manager cat, O→overlay cat, D→disabled cat
+   - `test_inventory_specific_entries`: spot-checks M05, M16, M37, O12, O01, D01, D08
+   - `test_inventory_all_ids_unique`: no duplicate IDs
+   - `test_inventory_covers_required_scenarios`: create source picker, name input cancel, capture mode, sequential mode, save+close, cancel editor all present
 
-4. **`src/dbus/ip_input_signal.h`** — Added `int ip_input_events_process(ip_input_events *ie)` declaration. Drains pending DBus messages via backend's `process` function, which triggers `ip_input_events_handle` for each InputEvent signal.
+4. **`tests/CMakeLists.txt`** — Added `tests/interaction_inventory.c` to `cbx_test_support` static library. Added `test_interaction_inventory` executable and ctest registration.
 
-5. **`src/dbus/ip_input_signal.c`** — Implemented `ip_input_events_process()`: loops calling `ie->backend->process(ie->bus)` until no more messages.
-
-6. **`src/app/overlay_service.h`** — Added:
-   - `CBX_MAX_DBUS_DEVICES` constant (64)
-   - `cbx_overlay_input_ctx` struct (pm, hm, grid, lifecycle, device_paths array, row_indices, path_count)
-   - `cbx_overlay_input_add_mapping()` — adds a single device_path→row entry
-   - `cbx_overlay_input_build_map()` — queries each composite's DbusDevices property, parses CSV, adds mappings
-   - `cbx_overlay_input_find_row()` — linear scan for device path
-   - `cbx_ip_input_to_pm()` / `cbx_ip_input_to_hm()` — maps ip_input_id to cbx_pm_input/cbx_hm_input
-   - `cbx_overlay_input_cb()` — the ip_input_event_cb callback
-
-7. **`src/app/overlay_service.c`** — Added to `overlay_ctx`: `input_ctx`, `input_events`, `expected_sender[128]`, `input_events_ready`. Implemented all overlay input functions. In `run_overlay_service()`:
-   - Step 10b: Build device_path→row mapping via `cbx_overlay_input_build_map()`, initialize `ip_input_events` with `ip_connection_get_unique_name()` as expected_sender (fail-closed if unavailable), subscribe to InputEvent signals
-   - Poll loop: call `ip_input_events_process()` after SDL event processing to drain pending DBus signals
-   - `cbx_overlay_input_cb` callback: maps device_path→row (unknown paths dropped), only processes button press events (value==1.0), dispatches to `cbx_player_mode_handle` or `cbx_host_mode_handle` with correct row index (not hardcoded row 0). Host mode uses `host_row` (the host's row), player mode uses the mapped row.
-
-### Test changes
-
-- **`tests/test_overlay_service.c`** — Added `overlay_input_fixture` with mock DBus, 2-composite grid, player/host mode, lifecycle, and overlay_input_ctx. Added 4 new sub-tests:
-  - `test_multi_controller_independent_rows`: Injects "Right" from DEV_PATH_0 → row 0 moves, row 1 unchanged. Injects "Right" from DEV_PATH_1 → row 1 moves, row 0 unchanged. Injects "Left" from DEV_PATH_0 → row 0 moves back. Verifies slot_change callback fires for correct row.
-  - `test_unknown_device_path_dropped`: Signal from unknown device path → no row movement.
-  - `test_wrong_sender_dropped`: Signal from spoofed sender ":1.99" → rejected (fail-closed security).
-  - `test_ip_input_events_process_mock_noop`: `ip_input_events_process()` returns 0 on mock backend.
-
-### Plan update
-- `IMPLEMENTATION_PLAN.md`: Task 6 status → complete. Conformance matrix: REQ-009 → verified, REQ-010 updated (DBus input now dispatched to host mode with host_row, not row 0).
+5. **`IMPLEMENTATION_PLAN.md`** — Task 7 status → complete. REQ-023 → partial (inventory exists, interaction tests pending in Tasks 8/9). Verification command updated with full results.
 
 ## Test results
-74/74 pass (1 skip: backend_smoke). No regressions. 8 sub-tests in test_overlay_service (4 original + 4 new).
+75/75 pass (1 skip: backend_smoke). No regressions. 11 new sub-tests in test_interaction_inventory.
 
 ## Commit
-`0f8bf0d` on `develop`
+`c5d5db7` on `develop`
 
 ## Next task
-Task 7: Create interaction acceptance inventory. Dependencies: Task 1, 2, 3 (all complete). Ready to start.
+Task 8: Manager interaction tests — Controllers and Settings tabs through production dispatch. Dependencies: Task 1, 2, 3, 7 (all complete). Ready to start.
