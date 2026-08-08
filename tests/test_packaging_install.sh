@@ -71,9 +71,10 @@ check_file "desktop entry"   "${PREFIX}/usr/share/applications/controller-box-ma
 # --- Service file content (SPEC §2.4) --------------------------------------
 SVC="${PREFIX}/usr/share/controller-box/controller-box.service"
 if [ -f "$SVC" ]; then
-    check_contains "service: After=inputplumber"   "$SVC" "After=inputplumber.service"
-    check_contains "service: Requires=inputplumber" "$SVC" "Requires=inputplumber.service"
-    check_contains "service: Restart=always"       "$SVC" "Restart=always"
+    check_contains "service: graphical ordering"  "$SVC" "After=graphical-session.target"
+    check_contains "service: graphical lifecycle" "$SVC" "PartOf=graphical-session.target"
+    check_contains "service: bounded restart"      "$SVC" "Restart=on-failure"
+    check_contains "service: restart backoff"      "$SVC" "RestartSec=2s"
     check_contains "service: ExecStart overlay"     "$SVC" "--overlay-service"
 else
     echo "SKIP: service file content checks (file missing)" >&2

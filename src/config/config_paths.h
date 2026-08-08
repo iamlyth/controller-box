@@ -77,6 +77,9 @@ const char *cbx_system_inputplumber_dir(void);
 /* System InputPlumber profiles directory (read-only). */
 const char *cbx_system_profiles_dir(void);
 
+/* Immutable profiles shipped with Controller-Box (always read-only). */
+const char *cbx_builtin_profiles_dir(void);
+
 /* System InputPlumber devices directory (read-only). */
 const char *cbx_system_devices_dir(void);
 

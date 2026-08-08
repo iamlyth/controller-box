@@ -155,14 +155,16 @@ static void test_unit_content_basic(void **state)
     /* Check key lines are present. */
     assert_non_null(strstr(buf, "[Unit]"));
     assert_non_null(strstr(buf, "Description=Controller-Box Overlay Service"));
-    assert_non_null(strstr(buf, "After=inputplumber.service"));
-    assert_non_null(strstr(buf, "Requires=inputplumber.service"));
+    assert_non_null(strstr(buf, "After=graphical-session.target"));
+    assert_non_null(strstr(buf, "PartOf=graphical-session.target"));
+    assert_null(strstr(buf, "Requires=inputplumber.service"));
     assert_non_null(strstr(buf, "[Service]"));
     assert_non_null(strstr(buf, "ExecStart="));
     assert_non_null(strstr(buf, "--overlay-service"));
-    assert_non_null(strstr(buf, "Restart=always"));
+    assert_non_null(strstr(buf, "Restart=on-failure"));
+    assert_non_null(strstr(buf, "RestartSec=2s"));
     assert_non_null(strstr(buf, "[Install]"));
-    assert_non_null(strstr(buf, "WantedBy=default.target"));
+    assert_non_null(strstr(buf, "WantedBy=graphical-session.target"));
 }
 
 static void test_unit_content_flatpak(void **state)
@@ -227,8 +229,8 @@ static void test_write_unit_creates_file(void **state)
     fclose(file);
 
     assert_non_null(strstr(content, "[Unit]"));
-    assert_non_null(strstr(content, "After=inputplumber.service"));
-    assert_non_null(strstr(content, "Restart=always"));
+    assert_non_null(strstr(content, "After=graphical-session.target"));
+    assert_non_null(strstr(content, "Restart=on-failure"));
 }
 
 static void test_write_unit_custom_content(void **state)

@@ -26,6 +26,7 @@
 
 #include <SDL2/SDL.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "dbus/ip_input_signal.h"  /* ip_input_id, ip_input_category */
 
@@ -35,6 +36,10 @@
  * |value| <= threshold generates a directional keyup.
  */
 #define CBX_INPUT_AXIS_THRESHOLD 0.5
+
+/* Marks SDL key events translated from a real controller/InputPlumber event,
+ * allowing text-entry modes to distinguish face-button A/B from letters. */
+#define CBX_CONTROLLER_EVENT_WINDOW_ID UINT32_MAX
 
 /*
  * Convert a normalized input event to a synthetic SDL_Event.

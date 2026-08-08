@@ -68,6 +68,8 @@ typedef struct {
     cbx_button create_btn;        /* "Create Profile"                  */
     cbx_button delete_btn;        /* "Delete Profile"                  */
     cbx_button edit_btn;          /* "Edit Profile" (opens editor)      */
+    cbx_button save_btn;          /* explicit editor Save action          */
+    cbx_button discard_btn;       /* explicit editor Discard action       */
     cbx_label  status_lbl;        /* status / prompt text                */
 
     /* --- Panel (borrowed) ------------------------------------------ */

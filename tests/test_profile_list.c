@@ -848,6 +848,7 @@ static void test_enumerate_real_paths(void **state)
     assert_true(list.count >= 2);
 
     bool found_custom = false;
+    bool found_builtin_default = false;
     for (int i = 0; i < list.count; i++) {
         if (strcmp(list.entries[i].filename, "custom") == 0) {
             assert_string_equal(list.entries[i].display_name,
@@ -859,11 +860,17 @@ static void test_enumerate_real_paths(void **state)
             found_custom = true;
         }
         if (strcmp(list.entries[i].filename, "default") == 0) {
+            char expected[PATH_MAX];
+            snprintf(expected, sizeof(expected), "%s/default.yaml",
+                     cbx_builtin_profiles_dir());
             assert_true(list.entries[i].is_default);
             assert_true(list.entries[i].read_only);
+            assert_string_equal(list.entries[i].path, expected);
+            found_builtin_default = true;
         }
     }
     assert_true(found_custom);
+    assert_true(found_builtin_default);
 
     setenv("HOME", old_home, 1);
 }

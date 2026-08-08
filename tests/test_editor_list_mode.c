@@ -393,7 +393,7 @@ static void test_activate_enters_target_pick(void **state)
                        CBX_EDITOR_MODE_TARGET_PICK);
 }
 
-static void test_activate_no_selection(void **state)
+static void test_activate_empty_starts_sequential(void **state)
 {
     pe_fixture *f = *state;
 
@@ -402,7 +402,10 @@ static void test_activate_no_selection(void **state)
     cbx_profile_editor_load_profile(&f->ed, &p);
 
     int rc = cbx_profile_editor_activate(&f->ed);
-    assert_int_equal(rc, -EINVAL);
+    assert_int_equal(rc, 0);
+    assert_int_equal(cbx_profile_editor_get_mode(&f->ed),
+                     CBX_EDITOR_MODE_SEQUENTIAL);
+    assert_true(cbx_widget_is_visible(&f->ed.progress_bar.base));
 }
 
 static void test_target_pick_has_targets(void **state)
@@ -915,7 +918,7 @@ int main(void)
 
         /* Target pick */
         cmocka_unit_test_setup_teardown(test_activate_enters_target_pick, setup, teardown),
-        cmocka_unit_test_setup_teardown(test_activate_no_selection, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_activate_empty_starts_sequential, setup, teardown),
         cmocka_unit_test_setup_teardown(test_target_pick_has_targets, setup, teardown),
         cmocka_unit_test_setup_teardown(test_target_pick_confirm, setup, teardown),
         cmocka_unit_test_setup_teardown(test_target_pick_cancel, setup, teardown),

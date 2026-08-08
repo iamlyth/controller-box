@@ -188,7 +188,7 @@ test_name_lost(void **state)
     assert_null(ip_connection_get_version(&ctx->conn));
 }
 
-/* Test: NameOwnerChanged — name acquired from degraded → connected. */
+/* Name acquisition alone is not readiness when Version still fails. */
 static void
 test_name_acquired_from_degraded(void **state)
 {
@@ -203,12 +203,9 @@ test_name_acquired_from_degraded(void **state)
     /* InputPlumber starts → name acquired. */
     inject_noc(ctx, "", ":1.99");
 
-    assert_int_equal(ip_connection_get_state(&ctx->conn), IP_CONN_CONNECTED);
-    assert_true(ip_connection_is_connected(&ctx->conn));
+    assert_int_equal(ip_connection_get_state(&ctx->conn), IP_CONN_DEGRADED);
+    assert_true(ip_connection_is_degraded(&ctx->conn));
     assert_string_equal(ip_connection_get_unique_name(&ctx->conn), ":1.99");
-    /* Version was re-read from mock (expectation still returns "ServiceUnknown"
-     * since mock_get_property looks up by (iface, prop) — but we set it to
-     * ServiceUnknown. Let's update it to return a version now. */
 }
 
 /* Test: NameOwnerChanged — name acquired from degraded with version re-read. */
@@ -262,6 +259,7 @@ test_reenumerate_callback(void **state)
     ip_connection_set_reenumerate_cb(&ctx->conn, test_reenumerate_cb, NULL);
 
     assert_int_equal(s_reenumerate_called, 0);
+    ip_dbus_mock_expect_ok(&ctx->mock, IP_IFACE_MANAGER, "Version", "2.0.0");
 
     inject_noc(ctx, "", ":1.99");  /* name acquired */
 

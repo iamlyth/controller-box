@@ -598,6 +598,11 @@ if(CMOCKA_FOUND)
     target_link_libraries(test_interaction_inventory PRIVATE cbx_test_support PkgConfig::CMOCKA)
     add_test(NAME test_interaction_inventory COMMAND test_interaction_inventory)
 
+    # Native InputPlumber DBus signatures must not regress to string mocks.
+    add_executable(test_dbus_signatures tests/test_dbus_signatures.c)
+    target_link_libraries(test_dbus_signatures PRIVATE controllerbox PkgConfig::CMOCKA)
+    add_test(NAME test_dbus_signatures COMMAND test_dbus_signatures)
+
     # Task 8 — Manager interaction tests: Controllers + Settings tabs
     # through production dispatch (SPEC §5.7).
     add_executable(test_manager_interaction_ctrl tests/test_manager_interaction_ctrl.c)

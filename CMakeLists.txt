@@ -25,6 +25,7 @@ include(GNUInstallDirs)
 set(CBX_DATA_DIR "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/controller-box")
 set(CBX_ICON_DIR "${CBX_DATA_DIR}/icons")
 set(CBX_FONT_DIR "${CBX_DATA_DIR}/fonts")
+set(CBX_PROFILE_DIR "${CBX_DATA_DIR}/profiles")
 set(CBX_DATA_INSTALL_DIR "${CMAKE_INSTALL_DATADIR}/controller-box")
 set(CBX_ICON_INSTALL_DIR "${CBX_DATA_INSTALL_DIR}/icons")
 set(CBX_FONT_INSTALL_DIR "${CBX_DATA_INSTALL_DIR}/fonts")
@@ -190,6 +191,8 @@ install(DIRECTORY data/fonts/ DESTINATION "${CBX_FONT_INSTALL_DIR}"
     FILES_MATCHING PATTERN "*")
 install(FILES data/fonts/.gitkeep
     DESTINATION "${CBX_FONT_INSTALL_DIR}")
+install(DIRECTORY data/profiles/ DESTINATION "${CBX_DATA_INSTALL_DIR}/profiles"
+    FILES_MATCHING PATTERN "*.yaml")
 
 # --- Packaging files (Task 41) ----------------------------------------------
 # Systemd user service file (SPEC §2.4, §9.2).  Installed to the data

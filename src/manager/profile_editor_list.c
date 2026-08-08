@@ -632,7 +632,11 @@ cbx_profile_editor_activate(cbx_profile_editor *ed)
         return 0;
     }
 
-    /* LIST mode: open the binding edit sub-menu. */
+    /* LIST mode: an Empty profile has no row from which to open the edit
+     * menu.  A is therefore the explicit add-first-binding action and starts
+     * sequential capture, which creates mappings as input arrives. */
+    if (ed->profile.mapping_count == 0)
+        return cbx_profile_editor_begin_sequential(ed);
     if (ed->selected_index < 0 || ed->selected_index >= ed->profile.mapping_count)
         return -EINVAL;
 

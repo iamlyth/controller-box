@@ -20,6 +20,7 @@
 #include "dbus/ip_intercept_poll.h"
 #include "config/config_settings.h"
 #include "config/config_assignments.h"
+#include "config/config_profile_list.h"
 #include "ui/renderer.h"
 #include "ui/theme.h"
 #include "ui/text.h"
@@ -31,6 +32,7 @@
 #include "overlay/grid_render.h"
 #include "overlay/surface_build.h"
 #include "overlay/conflict.h"
+#include "overlay/profile_cycle.h"
 
 /* --- Overlay input event handling (Task 6) ---------------------------- */
 
@@ -120,6 +122,8 @@ typedef struct cbx_overlay_service_ctx {
     cbx_device_model       model;         /* enumerated devices                */
     cbx_settings           settings;      /* loaded config                     */
     cbx_assignments        assignments;   /* slot assignments                  */
+    cbx_profile_list       profiles;      /* built-in, user, and system profiles */
+    cbx_profile_cycle      profile_cycle; /* live backend profile application    */
 
     /* --- Rendering resources --- */
     cbx_text_cache         text_cache;
@@ -158,6 +162,7 @@ typedef struct cbx_overlay_service_ctx {
 
     /* --- Status --- */
     bool                   initialized;   /* true after full init              */
+    bool                   backend_ready; /* Version + enumeration succeeded   */
 } cbx_overlay_service_ctx;
 
 /*

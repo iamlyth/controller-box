@@ -26,6 +26,7 @@
 #include "dbus/ip_objectmanager.h"
 #include "dbus/ip_device_model.h"
 #include "dbus/ip_composite.h"
+#include "dbus/ip_manager.h"
 #include "dbus/ip_input_signal.h"
 #include "dbus/ip_intercept_poll.h"
 #include "overlay/surface_build.h"
@@ -167,9 +168,56 @@ cbx_overlay_on_save(void *userdata)
         }
     }
 
-    cbx_assignments_save(&svc->assignments);  /* best-effort */
+    char order[CBX_MAX_COMPOSITES * (CBX_MAX_PATH_LEN + 1)];
+    order[0] = '\0';
+    svc->assignments.gamepad_order_count = 0;
+    for (int slot = 0; slot < CBX_MAX_CONTROLLERS; slot++) {
+        for (int i = 0; i < svc->grid.row_count; i++) {
+            const cbx_grid_row *row = &svc->grid.rows[i];
+            if (cbx_select_grid_col_to_slot(row->cur_col) != slot)
+                continue;
+            if (order[0])
+                strncat(order, ",", sizeof(order) - strlen(order) - 1);
+            strncat(order, row->composite_path,
+                    sizeof(order) - strlen(order) - 1);
+            if (svc->assignments.gamepad_order_count < CBX_MAX_GAMEPAD_ORDER) {
+                snprintf(svc->assignments.gamepad_order[
+                             svc->assignments.gamepad_order_count++],
+                         CBX_MAX_ID_LEN, "%s", row->id);
+            }
+        }
+    }
 
-    /* Mark surface dirty so it's re-rendered before next activation. */
+    for (int i = 0; i < svc->grid.row_count; i++) {
+        const cbx_grid_row *row = &svc->grid.rows[i];
+        int slot = cbx_select_grid_col_to_slot(row->cur_col);
+        if (slot < 0)
+            continue;
+        if (slot >= svc->model.target_count)
+            return -ENODEV;
+        if (row->profile[0]) {
+            int profile_rc = cbx_profile_cycle_apply(&svc->profile_cycle,
+                                                       &svc->grid, i,
+                                                       row->profile,
+                                                       row->composite_path);
+            if (profile_rc != 0)
+                return profile_rc;
+        }
+        int attach_rc = ip_manager_attach_target_device(
+            svc->conn.backend, svc->conn.bus,
+            svc->model.targets[slot].path, row->composite_path);
+        if (attach_rc != 0)
+            return attach_rc;
+    }
+
+    int rc = ip_manager_set_gamepad_order(svc->conn.backend, svc->conn.bus,
+                                           order, &svc->model);
+    if (rc != 0)
+        return rc;
+    rc = cbx_assignments_save(&svc->assignments);
+    if (rc != 0)
+        return rc;
+
     cbx_overlay_surface_mark_dirty_all(&svc->surface);
     return 0;
 }
@@ -197,21 +245,17 @@ cbx_overlay_on_profile_change(int row_idx, const char *profile,
     cbx_overlay_service_ctx *svc = (cbx_overlay_service_ctx *)userdata;
     (void)row_idx;
 
-    /* Load the profile on InputPlumber via DBus (best-effort). */
-    if (svc->conn.backend && composite_path && profile && profile[0]) {
-        char profiles_dir[512];
-        char profile_path[576];
+    if (!svc->conn.backend || !composite_path || !profile || !profile[0])
+        return -EINVAL;
 
-        if (cbx_resolve_user_profiles_dir(profiles_dir,
-                                           sizeof(profiles_dir)) == 0) {
-            snprintf(profile_path, sizeof(profile_path),
-                     "%s/%s.yaml", profiles_dir, profile);
-            ip_composite_load_profile_path(svc->conn.backend, svc->conn.bus,
-                                            composite_path, profile_path);
-        }
-    }
+    int rc = cbx_profile_cycle_apply(&svc->profile_cycle, &svc->grid,
+                                      row_idx, profile, composite_path);
+    if (rc != 0)
+        return rc;
+    rc = cbx_assignments_save(&svc->assignments);
+    if (rc != 0)
+        return rc;
 
-    /* Mark surface dirty for re-render. */
     cbx_overlay_surface_mark_dirty_all(&svc->surface);
     return 0;
 }
@@ -269,6 +313,128 @@ static void set_all_pass(const ip_dbus_backend *backend, ip_bus_handle bus,
     for (int i = 0; i < count; i++)
         ip_composite_set_intercept_mode(backend, bus,
                                          composites[i].path, "1");
+}
+
+static int
+reconcile_startup_targets(cbx_overlay_service_ctx *svc)
+{
+    int desired = svc->settings.virtual_controllers.count;
+    if (desired < 0 || desired > CBX_MAX_CONTROLLERS)
+        return -EINVAL;
+
+    while (svc->model.target_count < desired) {
+        int index = svc->model.target_count;
+        const char *kind = svc->settings.virtual_controllers.types[index];
+        if (!kind[0])
+            kind = "xb360";
+        char *created_path = NULL;
+        int rc = ip_manager_create_target_device(svc->conn.backend,
+                                                   svc->conn.bus, kind,
+                                                   &created_path);
+        free(created_path);
+        if (rc != 0)
+            return rc;
+        /* Re-enumerate after every transaction; method success without an
+         * ObjectManager-visible target is not a confirmed outcome. */
+        rc = cbx_objectmanager_enumerate(svc->conn.backend, svc->conn.bus,
+                                          &svc->model);
+        if (rc != 0 || svc->model.target_count <= index)
+            return rc != 0 ? rc : -EIO;
+    }
+
+    while (svc->model.target_count > desired) {
+        char path[CBX_MAX_PATH_LEN];
+        snprintf(path, sizeof(path), "%s",
+                 svc->model.targets[svc->model.target_count - 1].path);
+        int previous = svc->model.target_count;
+        int rc = ip_manager_stop_target_device(svc->conn.backend,
+                                                 svc->conn.bus, path);
+        if (rc != 0)
+            return rc;
+        rc = cbx_objectmanager_enumerate(svc->conn.backend, svc->conn.bus,
+                                          &svc->model);
+        if (rc != 0 || svc->model.target_count >= previous)
+            return rc != 0 ? rc : -EIO;
+    }
+    return 0;
+}
+
+static void
+overlay_backend_degraded(const char *reason, void *userdata)
+{
+    cbx_overlay_service_ctx *svc = userdata;
+    if (!svc)
+        return;
+    fprintf(stderr, "controller-box: %s; waiting for recovery\n",
+            reason ? reason : "InputPlumber unavailable");
+    svc->backend_ready = false;
+    if (svc->initialized)
+        cbx_overlay_lifecycle_force_close(&svc->lifecycle);
+    SDL_HideWindow(svc->rend.window);
+}
+
+static void
+overlay_backend_ready(void *userdata)
+{
+    cbx_overlay_service_ctx *svc = userdata;
+    if (!svc || !svc->initialized)
+        return;
+
+    for (int i = 0; i < svc->poll_count; i++)
+        ip_intercept_poll_stop(&svc->polls[i]);
+    svc->poll_count = 0;
+
+    if (cbx_objectmanager_enumerate(svc->conn.backend, svc->conn.bus,
+                                     &svc->model) != 0 ||
+        reconcile_startup_targets(svc) != 0) {
+        overlay_backend_degraded("InputPlumber enumeration failed", svc);
+        return;
+    }
+
+    svc->comp_count = svc->model.composite_count;
+    if (svc->comp_count > CBX_MAX_COMPOSITES)
+        svc->comp_count = CBX_MAX_COMPOSITES;
+    for (int i = 0; i < svc->comp_count; i++)
+        fill_composite_info(&svc->composites[i], &svc->model.composites[i],
+                             svc->conn.backend, svc->conn.bus);
+    cbx_select_grid_build(&svc->grid, svc->composites, svc->comp_count,
+                           &svc->settings, &svc->assignments);
+    cbx_profile_cycle_load_profiles(&svc->grid, &svc->profiles);
+    cbx_overlay_input_build_map(svc->conn.backend, svc->conn.bus,
+                                 svc->composites, svc->comp_count,
+                                 &svc->input_ctx);
+
+    const char *uniq = ip_connection_get_unique_name(&svc->conn);
+    snprintf(svc->expected_sender, sizeof(svc->expected_sender), "%s",
+             uniq ? uniq : "");
+    ip_input_events_init(&svc->input_events, svc->conn.backend, svc->conn.bus,
+                          svc->expected_sender, cbx_overlay_input_cb,
+                          &svc->input_ctx);
+    svc->input_events_ready = ip_input_events_subscribe(&svc->input_events) == 0;
+
+    set_all_pass(svc->conn.backend, svc->conn.bus,
+                  svc->model.composites, svc->comp_count);
+    for (int i = 0; i < svc->comp_count; i++)
+        cbx_trigger_register(svc->conn.backend, svc->conn.bus,
+                              svc->composites[i].composite_path,
+                              svc->settings.overlay_trigger);
+
+    if (svc->poll_event_type != (uint32_t)-1) {
+        for (int i = 0; i < svc->comp_count; i++) {
+            ip_intercept_poll_init(&svc->polls[i], svc->conn.backend,
+                                    svc->conn.bus,
+                                    svc->composites[i].composite_path,
+                                    on_intercept_activating, &svc->lifecycle,
+                                    on_intercept_deactivating, &svc->lifecycle,
+                                    on_intercept_error, NULL);
+            if (ip_intercept_poll_start(&svc->polls[i],
+                                         IP_INTERCEPT_POLL_INTERVAL_MS,
+                                         svc->poll_event_type) == 0)
+                svc->poll_count++;
+        }
+    }
+    svc->backend_ready = true;
+    cbx_overlay_surface_mark_dirty_all(&svc->surface);
 }
 
 /* ================================================================== */
@@ -529,6 +695,14 @@ cbx_overlay_service_step(cbx_overlay_service_ctx *svc)
     /* 3. Advance lifecycle (fade animation, timeout). */
     cbx_overlay_lifecycle_tick(&svc->lifecycle);
 
+    /* The production overlay window is created hidden.  Mapping is a
+     * lifecycle outcome, not a framebuffer side effect: presenting to a
+     * hidden window is invisible even though off-screen tests are green. */
+    if (cbx_overlay_lifecycle_is_active(&svc->lifecycle))
+        cbx_renderer_show(&svc->rend);
+    else
+        cbx_renderer_hide(&svc->rend);
+
     /* 4. Re-render dirty surface (when overlay is active). */
     if (cbx_overlay_lifecycle_is_active(&svc->lifecycle) &&
         cbx_overlay_surface_is_dirty(&svc->surface)) {
@@ -584,26 +758,26 @@ int run_overlay_service(int dry_run)
     /* --- 2. Connect to InputPlumber via system DBus ------------------ */
     ip_connection_init(&svc->conn, ip_dbus_sd_backend());
     rc = ip_connection_connect(&svc->conn);
-    if (!ip_connection_is_connected(&svc->conn)) {
-        fprintf(stderr,
-                "controller-box: InputPlumber not found on system DBus\n");
+    if (!svc->conn.bus) {
+        fprintf(stderr, "controller-box: system DBus unavailable: %d\n", rc);
         ip_connection_disconnect(&svc->conn);
         cbx_renderer_shutdown(&svc->rend);
         free(svc);
         return 1;
     }
+    svc->backend_ready = ip_connection_is_connected(&svc->conn);
 
-    /* --- 3. Enumerate composite devices ------------------------------ */
+    /* Keep the service alive in degraded mode so NameOwnerChanged can
+     * recover it without depending on a system/user unit relationship. */
     cbx_device_model_init(&svc->model);
-    rc = cbx_objectmanager_enumerate(svc->conn.backend, svc->conn.bus,
-                                      &svc->model);
-    if (rc != 0) {
-        fprintf(stderr,
-                "controller-box: failed to enumerate devices: %d\n", rc);
-        ip_connection_disconnect(&svc->conn);
-        cbx_renderer_shutdown(&svc->rend);
-        free(svc);
-        return 1;
+    if (svc->backend_ready) {
+        rc = cbx_objectmanager_enumerate(svc->conn.backend, svc->conn.bus,
+                                          &svc->model);
+        if (rc != 0) {
+            fprintf(stderr,
+                    "controller-box: failed to enumerate devices: %d\n", rc);
+            svc->backend_ready = false;
+        }
     }
 
     /* --- 4. Load settings + assignments (best-effort) ---------------- */
@@ -612,6 +786,17 @@ int run_overlay_service(int dry_run)
 
     cbx_assignments_init(&svc->assignments);
     cbx_assignments_load(&svc->assignments);  /* best-effort */
+
+    rc = svc->backend_ready ? reconcile_startup_targets(svc) : 0;
+    if (rc != 0) {
+        fprintf(stderr,
+                "controller-box: failed to reconcile virtual controllers: %d\n",
+                rc);
+        ip_connection_disconnect(&svc->conn);
+        cbx_renderer_shutdown(&svc->rend);
+        free(svc);
+        return 1;
+    }
 
     /* --- 5. Text cache, theme, icon cache ---------------------------- */
     cbx_text_cache_init(&svc->text_cache, svc->rend.renderer);
@@ -642,6 +827,17 @@ int run_overlay_service(int dry_run)
     cbx_select_grid_init(&svc->grid);
     cbx_select_grid_build(&svc->grid, svc->composites, svc->comp_count,
                            &svc->settings, &svc->assignments);
+    rc = cbx_profile_list_enumerate(&svc->profiles);
+    if (rc != 0 || svc->profiles.count == 0) {
+        fprintf(stderr, "controller-box: no usable profiles available: %d\n", rc);
+        ip_connection_disconnect(&svc->conn);
+        cbx_renderer_shutdown(&svc->rend);
+        free(svc);
+        return 1;
+    }
+    cbx_profile_cycle_load_profiles(&svc->grid, &svc->profiles);
+    cbx_profile_cycle_init(&svc->profile_cycle, svc->conn.backend,
+                            svc->conn.bus, &svc->assignments, &svc->profiles);
 
     /* --- 7. Initialise and pre-render the overlay surface ------------ */
     rc = cbx_overlay_surface_init(&svc->surface, svc->rend.renderer,
@@ -671,6 +867,23 @@ int run_overlay_service(int dry_run)
     cbx_overlay_surface_mark_dirty_all(&svc->surface);
     cbx_overlay_surface_render(&svc->surface, svc->rend.renderer,
                                 cbx_select_grid_render_cb, &svc->render_ctx);
+
+    /* Restore persisted slot/profile topology to the live engine before
+     * advertising the overlay as ready. */
+    if (svc->backend_ready) {
+        rc = cbx_overlay_on_save(svc);
+        if (rc != 0) {
+            fprintf(stderr, "controller-box: failed to restore assignments: %d\n",
+                    rc);
+            cbx_overlay_surface_destroy(&svc->surface);
+            cbx_icon_cache_cleanup(&svc->icon_cache);
+            cbx_text_cache_cleanup(&svc->text_cache);
+            ip_connection_disconnect(&svc->conn);
+            cbx_renderer_shutdown(&svc->rend);
+            free(svc);
+            return 1;
+        }
+    }
 
     /* --- 8. Register overlay triggers + set PASS --------------------- */
     if (svc->comp_count > 0) {
@@ -748,6 +961,10 @@ int run_overlay_service(int dry_run)
     }
 
     svc->initialized = true;
+    ip_connection_set_reenumerate_cb(&svc->conn, overlay_backend_ready, svc);
+    ip_connection_set_degraded_cb(&svc->conn, overlay_backend_degraded, svc);
+    if (!svc->backend_ready)
+        overlay_backend_degraded("InputPlumber unavailable", svc);
 
     /* --- 12. Poll loop (Task 4) -------------------------------------- */
     while (g_running) {

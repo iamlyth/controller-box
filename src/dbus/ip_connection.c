@@ -8,6 +8,7 @@
  * SPEC §10.1 — Connection model.
  */
 #include "ip_connection.h"
+#include "ip_manager.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,7 +32,8 @@ noc_signal_callback(const char *iface, const char *member,
     ip_connection *conn = (ip_connection *)userdata;
     const ip_owner_changed_payload *noc =
         (const ip_owner_changed_payload *)payload;
-    if (!conn || !noc)
+    if (!conn || !noc || !noc->name ||
+        strcmp(noc->name, IP_DBUS_NAME) != 0)
         return;
     ip_connection_handle_name_changed(conn, noc->old_owner, noc->new_owner);
 }
@@ -85,7 +87,7 @@ ip_connection_connect(ip_connection *conn)
     /* 3. Try to read the Version property from the Manager interface. */
     char *version = NULL;
     rc = conn->backend->get_property(
-        conn->bus, IP_DBUS_NAME, IP_DBUS_PATH,
+        conn->bus, IP_DBUS_NAME, IP_DBUS_MANAGER_PATH,
         IP_IFACE_MANAGER, "Version", &version);
 
     if (rc == 0) {
@@ -220,20 +222,21 @@ ip_connection_handle_name_changed(ip_connection *conn,
         /* Re-read the Version property. */
         char *version = NULL;
         int rc = conn->backend->get_property(
-            conn->bus, IP_DBUS_NAME, IP_DBUS_PATH,
+            conn->bus, IP_DBUS_NAME, IP_DBUS_MANAGER_PATH,
             IP_IFACE_MANAGER, "Version", &version);
         if (rc == 0) {
             free(conn->version);
             conn->version = version;
+            conn->state = IP_CONN_CONNECTED;
+            if (conn->reenumerate_cb)
+                conn->reenumerate_cb(conn->reenumerate_ud);
         } else {
             free(version);
+            conn->state = IP_CONN_DEGRADED;
+            if (conn->degraded_cb)
+                conn->degraded_cb("InputPlumber incompatible or unavailable",
+                                  conn->degraded_ud);
         }
-
-        conn->state = IP_CONN_CONNECTED;
-
-        /* Trigger re-enumeration callback. */
-        if (conn->reenumerate_cb)
-            conn->reenumerate_cb(conn->reenumerate_ud);
     } else if (lost) {
         /* InputPlumber's bus name was lost — daemon stopped. */
         free(conn->unique_name);

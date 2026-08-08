@@ -27,6 +27,7 @@
  *   - Focus the tabbar (or first panel child if any)
  */
 #include "manager/manager.h"
+#include "ui/input_map.h"
 
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
@@ -54,6 +55,105 @@ static bool cbx_manager_tab_activate(cbx_manager *mgr);
 static bool cbx_manager_tab_cancel(cbx_manager *mgr);
 static void cbx_manager_check_mode_change(cbx_manager *mgr,
                                             int prev_mode);
+static void cbx_manager_open_gamecontroller(cbx_manager *mgr,
+                                              int device_index);
+static void cbx_manager_close_gamecontroller(cbx_manager *mgr,
+                                               SDL_JoystickID instance_id);
+static bool cbx_manager_controller_to_key(const SDL_Event *ev,
+                                            SDL_Event *key_event);
+static void cbx_manager_backend_ready(void *userdata);
+static void cbx_manager_backend_degraded(const char *reason, void *userdata);
+
+static void
+cbx_manager_open_gamecontroller(cbx_manager *mgr, int device_index)
+{
+    if (!mgr || mgr->gamecontroller_count >= CBX_MGR_MAX_GAMECONTROLLERS ||
+        !SDL_IsGameController(device_index))
+        return;
+    SDL_GameController *controller = SDL_GameControllerOpen(device_index);
+    if (!controller)
+        return;
+    mgr->gamecontrollers[mgr->gamecontroller_count++] = controller;
+}
+
+static void
+cbx_manager_close_gamecontroller(cbx_manager *mgr,
+                                  SDL_JoystickID instance_id)
+{
+    if (!mgr)
+        return;
+    for (int i = 0; i < mgr->gamecontroller_count; i++) {
+        SDL_Joystick *joystick =
+            SDL_GameControllerGetJoystick(mgr->gamecontrollers[i]);
+        if (joystick && SDL_JoystickInstanceID(joystick) == instance_id) {
+            SDL_GameControllerClose(mgr->gamecontrollers[i]);
+            for (int j = i; j + 1 < mgr->gamecontroller_count; j++)
+                mgr->gamecontrollers[j] = mgr->gamecontrollers[j + 1];
+            mgr->gamecontrollers[--mgr->gamecontroller_count] = NULL;
+            return;
+        }
+    }
+}
+
+static void
+cbx_manager_backend_ready(void *userdata)
+{
+    cbx_manager *mgr = userdata;
+    if (!mgr)
+        return;
+    mgr->dbus_connected = true;
+    mgr->ct.backend = mgr->dbus_backend;
+    mgr->ct.bus = mgr->dbus_bus;
+    cbx_controllers_tab_refresh(&mgr->ct);
+    cbx_profiles_tab_set_context(&mgr->pt, mgr->rend.renderer,
+                                  mgr->dbus_backend, mgr->dbus_bus);
+}
+
+static void
+cbx_manager_backend_degraded(const char *reason, void *userdata)
+{
+    cbx_manager *mgr = userdata;
+    if (!mgr)
+        return;
+    fprintf(stderr, "controller-box: %s\n",
+            reason ? reason : "InputPlumber unavailable");
+    mgr->dbus_connected = false;
+    mgr->ct.backend = NULL;
+    cbx_device_model_init(&mgr->ct.model);
+    cbx_profiles_tab_set_context(&mgr->pt, mgr->rend.renderer, NULL, NULL);
+}
+
+static bool
+cbx_manager_controller_to_key(const SDL_Event *ev, SDL_Event *key_event)
+{
+    if (!ev || !key_event ||
+        (ev->type != SDL_CONTROLLERBUTTONDOWN &&
+         ev->type != SDL_CONTROLLERBUTTONUP))
+        return false;
+
+    SDL_Keycode key;
+    switch (ev->cbutton.button) {
+    case SDL_CONTROLLER_BUTTON_DPAD_UP:    key = SDLK_UP; break;
+    case SDL_CONTROLLER_BUTTON_DPAD_DOWN:  key = SDLK_DOWN; break;
+    case SDL_CONTROLLER_BUTTON_DPAD_LEFT:  key = SDLK_LEFT; break;
+    case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: key = SDLK_RIGHT; break;
+    case SDL_CONTROLLER_BUTTON_A:          key = SDLK_a; break;
+    case SDL_CONTROLLER_BUTTON_B:          key = SDLK_b; break;
+    case SDL_CONTROLLER_BUTTON_START:      key = SDLK_TAB; break;
+    default: return false;
+    }
+
+    memset(key_event, 0, sizeof(*key_event));
+    key_event->type = ev->type == SDL_CONTROLLERBUTTONDOWN
+                        ? SDL_KEYDOWN : SDL_KEYUP;
+    key_event->key.type = key_event->type;
+    key_event->key.windowID = CBX_CONTROLLER_EVENT_WINDOW_ID;
+    key_event->key.state = ev->type == SDL_CONTROLLERBUTTONDOWN
+                             ? SDL_PRESSED : SDL_RELEASED;
+    key_event->key.repeat = 0;
+    key_event->key.keysym.sym = key;
+    return true;
+}
 
 /* ------------------------------------------------------------------ */
 /*  Lifecycle                                                         */
@@ -83,6 +183,17 @@ cbx_manager_init_with_dbus(cbx_manager *mgr, const char *font_path,
                                 CBX_MGR_WINDOW_W, CBX_MGR_WINDOW_H, false);
     if (rc != 0)
         return rc;
+
+    /* Real controller input is mandatory for Manager operation. */
+    if (SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) != 0) {
+        fprintf(stderr, "controller-box: SDL game-controller init failed: %s\n",
+                SDL_GetError());
+        cbx_renderer_shutdown(&mgr->rend);
+        return -EIO;
+    }
+    SDL_GameControllerEventState(SDL_ENABLE);
+    for (int i = 0; i < SDL_NumJoysticks(); i++)
+        cbx_manager_open_gamecontroller(mgr, i);
 
     /* --- Text cache + font ----------------------------------------- */
     rc = cbx_text_cache_init(&mgr->text_cache, mgr->rend.renderer);
@@ -154,32 +265,28 @@ cbx_manager_init_with_dbus(cbx_manager *mgr, const char *font_path,
      * controllers tab will still initialise with an empty device list
      * and functional buttons — the degraded state. */
     if (backend) {
-        /* Caller-provided (mock) backend — use directly, no connect. */
+        /* Caller-provided fixture is already connected and ready. */
         mgr->dbus_backend = backend;
         mgr->dbus_bus = bus;
         mgr->dbus_connected = true;
     } else {
-        /* Production path: get sd-bus backend and connect. */
         mgr->dbus_backend = ip_dbus_sd_backend();
-        mgr->dbus_bus = NULL;
-        mgr->dbus_connected = false;
-        if (mgr->dbus_backend && mgr->dbus_backend->connect) {
-            int dbrc = mgr->dbus_backend->connect(&mgr->dbus_bus);
-            if (dbrc == 0 && mgr->dbus_bus) {
-                mgr->dbus_connected = true;
-            } else {
-                /* DBus connect failed — proceed in degraded mode. */
-                mgr->dbus_backend = NULL;
-                mgr->dbus_bus = NULL;
-            }
-        } else {
+        mgr->owns_dbus_connection = true;
+        ip_connection_init(&mgr->connection, mgr->dbus_backend);
+        int dbrc = ip_connection_connect(&mgr->connection);
+        mgr->dbus_bus = mgr->connection.bus;
+        mgr->dbus_connected = dbrc == 0 &&
+                              ip_connection_is_connected(&mgr->connection);
+        if (!mgr->dbus_bus)
             mgr->dbus_backend = NULL;
-        }
     }
 
-    /* Controllers tab (DBus-backed; works in degraded mode with NULL). */
+    /* A live bus is retained in degraded mode for NameOwnerChanged, but
+     * backend-changing controls are exposed only after Version readiness. */
+    const ip_dbus_backend *ready_backend =
+        mgr->dbus_connected ? mgr->dbus_backend : NULL;
     rc = cbx_controllers_tab_init(&mgr->ct, &mgr->panels[0],
-                                   mgr->dbus_backend, mgr->dbus_bus,
+                                   ready_backend, mgr->dbus_bus,
                                    &mgr->text_cache, &mgr->theme,
                                    mgr->font_id);
     if (rc != 0) {
@@ -212,8 +319,14 @@ cbx_manager_init_with_dbus(cbx_manager *mgr, const char *font_path,
         return rc;
     }
     cbx_profiles_tab_set_context(&mgr->pt, mgr->rend.renderer,
-                                   mgr->dbus_backend, mgr->dbus_bus);
+                                   ready_backend, mgr->dbus_bus);
     cbx_profiles_tab_refresh(&mgr->pt);
+    if (mgr->owns_dbus_connection) {
+        ip_connection_set_reenumerate_cb(&mgr->connection,
+                                          cbx_manager_backend_ready, mgr);
+        ip_connection_set_degraded_cb(&mgr->connection,
+                                       cbx_manager_backend_degraded, mgr);
+    }
 
     /* Settings tab (auto-refreshes on init). */
     rc = cbx_settings_tab_init(&mgr->st, &mgr->panels[2],
@@ -264,6 +377,17 @@ cbx_manager_run(cbx_manager *mgr)
             }
             cbx_manager_handle_event(mgr, &ev);
         }
+        /* Dispatch InputPlumber signals used by capture/sequential editing
+         * and connection/hotplug recovery.  Unit tests that inject signals
+         * synchronously keep process() as a no-op. */
+        if (mgr->dbus_backend && mgr->dbus_bus &&
+            mgr->dbus_backend->process) {
+            for (int i = 0; i < 64; i++) {
+                int processed = mgr->dbus_backend->process(mgr->dbus_bus);
+                if (processed <= 0)
+                    break;
+            }
+        }
         cbx_manager_render(mgr);
         cbx_renderer_present(&mgr->rend);
     }
@@ -284,14 +408,20 @@ cbx_manager_shutdown(cbx_manager *mgr)
     if (!mgr)
         return;
 
+    for (int i = 0; i < mgr->gamecontroller_count; i++)
+        SDL_GameControllerClose(mgr->gamecontrollers[i]);
+    mgr->gamecontroller_count = 0;
+    SDL_QuitSubSystem(SDL_INIT_GAMECONTROLLER);
+
     /* Tear down tab modules first (they remove widgets from panels). */
     cbx_controllers_tab_shutdown(&mgr->ct);
     cbx_profiles_tab_shutdown(&mgr->pt);
     cbx_settings_tab_shutdown(&mgr->st);
 
-    /* Disconnect DBus if connected. */
-    if (mgr->dbus_connected && mgr->dbus_backend &&
-        mgr->dbus_backend->disconnect)
+    if (mgr->owns_dbus_connection)
+        ip_connection_disconnect(&mgr->connection);
+    else if (mgr->dbus_bus && mgr->dbus_backend &&
+             mgr->dbus_backend->disconnect)
         mgr->dbus_backend->disconnect(mgr->dbus_bus);
 
     /* Destroy widgets. */
@@ -317,6 +447,22 @@ cbx_manager_handle_event(cbx_manager *mgr, const SDL_Event *ev)
 {
     if (!mgr || !ev)
         return false;
+
+    if (ev->type == SDL_CONTROLLERDEVICEADDED) {
+        cbx_manager_open_gamecontroller(mgr, ev->cdevice.which);
+        return true;
+    }
+    if (ev->type == SDL_CONTROLLERDEVICEREMOVED) {
+        cbx_manager_close_gamecontroller(mgr, ev->cdevice.which);
+        return true;
+    }
+    if (ev->type == SDL_CONTROLLERBUTTONDOWN ||
+        ev->type == SDL_CONTROLLERBUTTONUP) {
+        SDL_Event key_event;
+        if (!cbx_manager_controller_to_key(ev, &key_event))
+            return false;
+        return cbx_manager_handle_event(mgr, &key_event);
+    }
 
     /* Route mouse events via hit-testing of visible widgets (SPEC §5.1:
      * pointer is the secondary input path — every visible enabled

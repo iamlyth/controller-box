@@ -9,7 +9,7 @@
  * subscribe_signal, inject_signal (stub).  Later tasks extend with
  * call_method, set_property, get_managed_objects.
  */
-#include "dbus_mock.h"      /* vtable interface + constants */
+#include "dbus/dbus_client.h"
 #include "ip_connection.h"  /* ip_owner_changed_payload */
 #include "ip_properties.h"  /* ip_prop_type */
 #include "ip_input_signal.h" /* ip_input_event_payload */
@@ -18,6 +18,7 @@
 
 #include <errno.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,8 +35,11 @@ typedef struct {
     int          slot_count;
 } sd_bus_wrapper;
 
-/* Forward declaration — defined after the vtable stubs section. */
+/* Forward declarations — defined with the property setter below. */
 static int translate_sd_error(int rc, const sd_bus_error *error);
+static bool sd_is_array_property(const char *prop);
+static bool sd_is_uint_property(const char *prop);
+static bool sd_is_bool_property(const char *prop);
 
 /* Callback data for signal subscriptions. */
 typedef struct {
@@ -484,50 +488,104 @@ sd_get_unique_name(ip_bus_handle bus, const char *well_known,
 /* --- Vtable: get_property ------------------------------------------------ */
 
 static int
+sd_read_string_array_csv(sd_bus_message *reply, char **out_value)
+{
+    int r = sd_bus_message_enter_container(reply, 'a', "s");
+    if (r < 0)
+        return r;
+
+    char *value = calloc(1, 1);
+    if (!value)
+        return -ENOMEM;
+    size_t used = 0;
+
+    const char *item = NULL;
+    while ((r = sd_bus_message_read_basic(reply, 's', &item)) > 0) {
+        size_t item_len = strlen(item);
+        size_t needed = used + (used ? 1 : 0) + item_len + 1;
+        char *grown = realloc(value, needed);
+        if (!grown) {
+            free(value);
+            return -ENOMEM;
+        }
+        value = grown;
+        if (used)
+            value[used++] = ',';
+        memcpy(value + used, item, item_len + 1);
+        used += item_len;
+    }
+    if (r < 0) {
+        free(value);
+        return r;
+    }
+    r = sd_bus_message_exit_container(reply);
+    if (r < 0) {
+        free(value);
+        return r;
+    }
+    *out_value = value;
+    return 0;
+}
+
+static int
 sd_get_property(ip_bus_handle bus, const char *dest,
                 const char *path, const char *iface,
                 const char *prop, char **out_value)
 {
     sd_bus_wrapper *w = (sd_bus_wrapper *)bus;
-    if (!w || !dest || !path || !iface || !prop)
+    if (!w || !dest || !path || !iface || !prop || !out_value)
         return -EINVAL;
 
     sd_bus_error error = SD_BUS_ERROR_NULL;
-    char        *value = NULL;
-
-    int r = sd_bus_get_property_string(w->bus, dest, path, iface, prop,
-                                        &error, &value);
-
+    sd_bus_message *reply = NULL;
+    const char *signature = ip_dbus_property_signature(prop);
+    int r = sd_bus_get_property(w->bus, dest, path, iface, prop,
+                                &error, &reply, signature);
     if (r < 0) {
-        /* Translate known DBus error names to categorized errno codes. */
-        if (sd_bus_error_has_name(&error,
-                "org.freedesktop.DBus.Error.ServiceUnknown"))
-            r = IP_ERR_SERVICE_UNKNOWN;
-        else if (sd_bus_error_has_name(&error,
-                "org.freedesktop.DBus.Error.NameHasNoOwner"))
-            r = IP_ERR_SERVICE_UNKNOWN;
-        else if (sd_bus_error_has_name(&error,
-                "org.freedesktop.DBus.Error.AccessDenied"))
-            r = IP_ERR_ACCESS_DENIED;
-        else if (sd_bus_error_has_name(&error,
-                "org.freedesktop.DBus.Error.NoReply"))
-            r = IP_ERR_NO_REPLY;
-        else if (sd_bus_error_has_name(&error,
-                "org.freedesktop.DBus.Error.InvalidArgs"))
-            r = IP_ERR_INVALID_ARGS;
-        /* Otherwise r is already the negative errno from sd-bus. */
-
+        r = translate_sd_error(r, &error);
+        sd_bus_message_unref(reply);
         sd_bus_error_free(&error);
-        free(value);
         return r;
     }
 
-    if (out_value)
-        *out_value = value;   /* value is heap-allocated by sd-bus */
-    else
-        free(value);
+    char *value = NULL;
+    if (signature[0] == 'a') {
+        r = sd_read_string_array_csv(reply, &value);
+    } else if (signature[0] == 'u') {
+        uint32_t number = 0;
+        char number_text[16];
+        r = sd_bus_message_read(reply, "u", &number);
+        if (r >= 0) {
+            snprintf(number_text, sizeof(number_text), "%u", number);
+            value = strdup(number_text);
+            if (!value)
+                r = -ENOMEM;
+        }
+    } else if (signature[0] == 'b') {
+        int boolean = 0;
+        r = sd_bus_message_read(reply, "b", &boolean);
+        if (r >= 0) {
+            value = strdup(boolean ? "1" : "0");
+            if (!value)
+                r = -ENOMEM;
+        }
+    } else {
+        const char *string = NULL;
+        r = sd_bus_message_read(reply, "s", &string);
+        if (r >= 0) {
+            value = strdup(string ? string : "");
+            if (!value)
+                r = -ENOMEM;
+        }
+    }
 
+    sd_bus_message_unref(reply);
     sd_bus_error_free(&error);
+    if (r < 0) {
+        free(value);
+        return r;
+    }
+    *out_value = value;
     return 0;
 }
 
@@ -756,6 +814,20 @@ fail:
  * value string.  For string properties, the variant contains an 's'.
  */
 
+const char *
+ip_dbus_property_signature(const char *prop)
+{
+    if (!prop)
+        return NULL;
+    if (sd_is_array_property(prop))
+        return "as";
+    if (sd_is_uint_property(prop))
+        return "u";
+    if (sd_is_bool_property(prop))
+        return "b";
+    return "s";
+}
+
 /* Properties that are string arrays (as) — need variant "as". */
 static bool
 sd_is_array_property(const char *prop)
@@ -776,6 +848,14 @@ static bool
 sd_is_uint_property(const char *prop)
 {
     return strcmp(prop, "InterceptMode") == 0;
+}
+
+/* Properties represented as DBus booleans. */
+static bool
+sd_is_bool_property(const char *prop)
+{
+    return strcmp(prop, "ManageAllDevices") == 0 ||
+           strcmp(prop, "Enabled") == 0;
 }
 
 static int

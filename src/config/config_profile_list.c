@@ -360,5 +360,24 @@ int cbx_profile_list_enumerate(cbx_profile_list *list)
             meta = meta_dir;
     }
 
-    return cbx_profile_list_enumerate_dirs(list, user, system, meta);
+    memset(list, 0, sizeof(*list));
+
+    /* The shipped Default is scanned first so neither user nor host-system
+     * files can shadow its immutable semantics. */
+    rc = scan_profiles(list, cbx_builtin_profiles_dir(), true, NULL);
+    if (rc < 0)
+        return rc;
+    if (user) {
+        rc = scan_profiles(list, user, false, meta);
+        if (rc < 0)
+            return rc;
+    }
+    if (system) {
+        rc = scan_profiles(list, system, true, meta);
+        if (rc < 0)
+            return rc;
+    }
+    qsort(list->entries, list->count, sizeof(cbx_profile_entry),
+          cmp_profile_entry);
+    return 0;
 }

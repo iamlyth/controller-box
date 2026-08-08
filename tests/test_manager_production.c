@@ -65,6 +65,18 @@ send_key(cbx_manager *mgr, SDL_Keycode sym)
     return cbx_manager_handle_event(mgr, &ev);
 }
 
+static bool
+send_controller_button(cbx_manager *mgr, Uint8 button, Uint32 type)
+{
+    SDL_Event ev = {0};
+    ev.type = type;
+    ev.cbutton.type = type;
+    ev.cbutton.button = button;
+    ev.cbutton.state = type == SDL_CONTROLLERBUTTONDOWN
+                         ? SDL_PRESSED : SDL_RELEASED;
+    return cbx_manager_handle_event(mgr, &ev);
+}
+
 /* ------------------------------------------------------------------ */
 /*  Fixture — isolated HOME with profiles directory                    */
 /* ------------------------------------------------------------------ */
@@ -246,6 +258,29 @@ static void test_tab_switching(void **state)
     cbx_manager_shutdown(&mgr);
 }
 
+/* Real controller events, not keyboard proxies, traverse Manager dispatch. */
+static void test_controller_event_tab_switching(void **state)
+{
+    (void)state;
+    ensure_dummy_driver();
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+
+    assert_true(send_controller_button(&mgr, SDL_CONTROLLER_BUTTON_DPAD_RIGHT,
+                                       SDL_CONTROLLERBUTTONDOWN));
+    send_controller_button(&mgr, SDL_CONTROLLER_BUTTON_DPAD_RIGHT,
+                           SDL_CONTROLLERBUTTONUP);
+    assert_int_equal(cbx_manager_active_tab(&mgr), CBX_MGR_TAB_PROFILES);
+
+    assert_true(send_controller_button(&mgr, SDL_CONTROLLER_BUTTON_DPAD_LEFT,
+                                       SDL_CONTROLLERBUTTONDOWN));
+    send_controller_button(&mgr, SDL_CONTROLLER_BUTTON_DPAD_LEFT,
+                           SDL_CONTROLLERBUTTONUP);
+    assert_int_equal(cbx_manager_active_tab(&mgr), CBX_MGR_TAB_CONTROLLERS);
+
+    cbx_manager_shutdown(&mgr);
+}
+
 /* (e) Shutdown clean: cbx_manager_shutdown() does not crash; struct is
  *     zeroed; can re-init. */
 static void test_shutdown_clean(void **state)
@@ -370,6 +405,7 @@ static const struct CMUnitTest tests[] = {
     cmocka_unit_test_setup_teardown(test_visible_rendered_content, setup, teardown),
     cmocka_unit_test_setup_teardown(test_focus_chain_populated, setup, teardown),
     cmocka_unit_test_setup_teardown(test_tab_switching, setup, teardown),
+    cmocka_unit_test_setup_teardown(test_controller_event_tab_switching, setup, teardown),
     cmocka_unit_test_setup_teardown(test_shutdown_clean, setup, teardown),
     cmocka_unit_test_setup_teardown(test_render_with_font, setup, teardown),
     cmocka_unit_test_setup_teardown(test_editor_opens_via_dispatch, setup, teardown),

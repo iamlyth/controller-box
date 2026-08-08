@@ -150,6 +150,7 @@ cbx_input_map_to_sdl_event(ip_input_id input,
 
         memset(out, 0, sizeof(*out));
         out->type = press ? SDL_KEYDOWN : SDL_KEYUP;
+        out->key.windowID = CBX_CONTROLLER_EVENT_WINDOW_ID;
         out->key.keysym.sym = key;
         out->key.keysym.scancode = SDL_GetScancodeFromKey(key);
         out->key.state = press ? SDL_PRESSED : SDL_RELEASED;
@@ -168,6 +169,7 @@ cbx_input_map_to_sdl_event(ip_input_id input,
 
         memset(out, 0, sizeof(*out));
         out->type = SDL_KEYDOWN;
+        out->key.windowID = CBX_CONTROLLER_EVENT_WINDOW_ID;
         out->key.keysym.sym = key;
         out->key.keysym.scancode = SDL_GetScancodeFromKey(key);
         out->key.state = SDL_PRESSED;

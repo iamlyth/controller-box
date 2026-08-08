@@ -30,6 +30,7 @@
 #include "manager/profiles_tab.h"
 #include "manager/settings_tab.h"
 #include "dbus_mock.h"  /* ip_dbus_backend, ip_bus_handle, ip_dbus_sd_backend */
+#include "dbus/ip_connection.h"
 
 /* ------------------------------------------------------------------ */
 /*  Tab identifiers                                                   */
@@ -47,6 +48,7 @@ typedef enum {
 #define CBX_MGR_WINDOW_H  720
 #define CBX_MGR_TABBAR_H  48
 #define CBX_MGR_FONT_SIZE 18
+#define CBX_MGR_MAX_GAMECONTROLLERS 16
 
 /* ------------------------------------------------------------------ */
 /*  Manager                                                           */
@@ -77,6 +79,12 @@ typedef struct {
     const ip_dbus_backend *dbus_backend;  /* NULL if no bus available  */
     ip_bus_handle          dbus_bus;      /* NULL if not connected      */
     bool                   dbus_connected;
+    bool                   owns_dbus_connection;
+    ip_connection          connection;
+
+    /* Real SDL game-controller transport (keyboard is supplemental only). */
+    SDL_GameController    *gamecontrollers[CBX_MGR_MAX_GAMECONTROLLERS];
+    int                    gamecontroller_count;
 
     /* Running flag. */
     bool          running;

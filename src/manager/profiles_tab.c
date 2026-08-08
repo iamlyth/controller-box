@@ -11,6 +11,7 @@
 #include "manager/profile_save.h"
 #include "manager/profile_editor_list.h"
 #include "manager/profile_editor_seq.h"
+#include "ui/input_map.h"
 
 #include <SDL2/SDL.h>
 #include <errno.h>
@@ -91,6 +92,24 @@ static int  cbx_profiles_tab_open_editor(cbx_profiles_tab *tab,
                                             bool is_new);
 static void cbx_profiles_tab_close_editor(cbx_profiles_tab *tab);
 static int  cbx_profiles_tab_save_editor(cbx_profiles_tab *tab);
+
+static void
+on_save_editor_pressed(cbx_widget *w, void *user_data)
+{
+    (void)w;
+    cbx_profiles_tab *tab = user_data;
+    if (tab && tab->mode == CBX_PT_MODE_EDITOR)
+        cbx_profiles_tab_save_editor(tab);
+}
+
+static void
+on_discard_editor_pressed(cbx_widget *w, void *user_data)
+{
+    (void)w;
+    cbx_profiles_tab *tab = user_data;
+    if (tab && tab->mode == CBX_PT_MODE_EDITOR)
+        cbx_profiles_tab_close_editor(tab);
+}
 
 /* ------------------------------------------------------------------ */
 /*  Button callbacks                                                   */
@@ -225,6 +244,19 @@ cbx_profiles_tab_init(cbx_profiles_tab *tab,
     }
     cbx_widget_set_visible(&tab->status_lbl.base, false);
 
+    rc = cbx_button_init(&tab->save_btn, "Save", font_id, cache, theme,
+                          on_save_editor_pressed, tab);
+    if (rc != 0)
+        goto editor_button_fail;
+    rc = cbx_button_init(&tab->discard_btn, "Discard", font_id, cache, theme,
+                          on_discard_editor_pressed, tab);
+    if (rc != 0) {
+        cbx_widget_destroy(&tab->save_btn.base);
+        goto editor_button_fail;
+    }
+    cbx_widget_set_visible(&tab->save_btn.base, false);
+    cbx_widget_set_visible(&tab->discard_btn.base, false);
+
     /* --- Add widgets to panel ------------------------------------- */
     cbx_panel_add_child(panel, &tab->profile_list_w.base);
     cbx_panel_add_child(panel, &tab->create_btn.base);
@@ -232,6 +264,8 @@ cbx_profiles_tab_init(cbx_profiles_tab *tab,
     cbx_panel_add_child(panel, &tab->delete_btn.base);
     cbx_panel_add_child(panel, &tab->status_lbl.base);
     cbx_panel_add_child(panel, &tab->create_picker.base);
+    cbx_panel_add_child(panel, &tab->save_btn.base);
+    cbx_panel_add_child(panel, &tab->discard_btn.base);
 
     /* --- Layout --------------------------------------------------- */
     SDL_Rect pr;
@@ -273,11 +307,29 @@ cbx_profiles_tab_init(cbx_profiles_tab *tab,
         .h = CBX_PT_BTN_H,
     };
     cbx_widget_set_rect(&tab->status_lbl.base, &s_rect);
+    SDL_Rect save_rect = { .x = pr.x + pr.w - (2 * CBX_PT_BTN_W) -
+                                  (2 * CBX_PT_BTN_GAP),
+                           .y = btn_y, .w = CBX_PT_BTN_W,
+                           .h = CBX_PT_BTN_H };
+    SDL_Rect discard_rect = { .x = save_rect.x + CBX_PT_BTN_W + CBX_PT_BTN_GAP,
+                              .y = btn_y, .w = CBX_PT_BTN_W,
+                              .h = CBX_PT_BTN_H };
+    cbx_widget_set_rect(&tab->save_btn.base, &save_rect);
+    cbx_widget_set_rect(&tab->discard_btn.base, &discard_rect);
 
     /* NOTE: caller must call cbx_profiles_tab_refresh() after init.
      * For testing, call cbx_profiles_tab_set_test_dirs() first. */
 
     return 0;
+
+editor_button_fail:
+    cbx_widget_destroy(&tab->profile_list_w.base);
+    cbx_widget_destroy(&tab->create_picker.base);
+    cbx_widget_destroy(&tab->create_btn.base);
+    cbx_widget_destroy(&tab->edit_btn.base);
+    cbx_widget_destroy(&tab->delete_btn.base);
+    cbx_widget_destroy(&tab->status_lbl.base);
+    return rc;
 }
 
 void
@@ -299,6 +351,8 @@ cbx_profiles_tab_shutdown(cbx_profiles_tab *tab)
         cbx_panel_remove_child(tab->panel, &tab->delete_btn.base);
         cbx_panel_remove_child(tab->panel, &tab->status_lbl.base);
         cbx_panel_remove_child(tab->panel, &tab->create_picker.base);
+        cbx_panel_remove_child(tab->panel, &tab->save_btn.base);
+        cbx_panel_remove_child(tab->panel, &tab->discard_btn.base);
     }
 
     cbx_widget_destroy(&tab->profile_list_w.base);
@@ -307,6 +361,8 @@ cbx_profiles_tab_shutdown(cbx_profiles_tab *tab)
     cbx_widget_destroy(&tab->edit_btn.base);
     cbx_widget_destroy(&tab->delete_btn.base);
     cbx_widget_destroy(&tab->status_lbl.base);
+    cbx_widget_destroy(&tab->save_btn.base);
+    cbx_widget_destroy(&tab->discard_btn.base);
 
     memset(tab, 0, sizeof(*tab));
 }
@@ -864,7 +920,10 @@ cbx_profiles_tab_handle_key(cbx_profiles_tab *tab, const SDL_Event *ev)
 
     switch (tab->mode) {
     case CBX_PT_MODE_NAME_INPUT:
-        if (key == SDLK_b || key == SDLK_ESCAPE) {
+        {
+        bool controller_event =
+            ev->key.windowID == CBX_CONTROLLER_EVENT_WINDOW_ID;
+        if ((controller_event && key == SDLK_b) || key == SDLK_ESCAPE) {
             cbx_profiles_tab_name_input_cancel(tab);
             return true;
         }
@@ -872,7 +931,7 @@ cbx_profiles_tab_handle_key(cbx_profiles_tab *tab, const SDL_Event *ev)
             cbx_profiles_tab_name_input_backspace(tab);
             return true;
         }
-        if (key == SDLK_a || key == SDLK_RETURN) {
+        if ((controller_event && key == SDLK_a) || key == SDLK_RETURN) {
             cbx_profiles_tab_name_input_confirm(tab);
             return true;
         }
@@ -894,6 +953,7 @@ cbx_profiles_tab_handle_key(cbx_profiles_tab *tab, const SDL_Event *ev)
             return true;
         }
         return false;
+        }
 
     case CBX_PT_MODE_CONFIRM_DELETE:
         if (key == SDLK_a || key == SDLK_RETURN) {
@@ -1046,6 +1106,8 @@ cbx_profiles_tab_open_editor(cbx_profiles_tab *tab,
 
     /* Hide tab widgets, editor widgets are shown by editor init/refresh. */
     hide_tab_widgets(tab);
+    cbx_widget_set_visible(&tab->save_btn.base, true);
+    cbx_widget_set_visible(&tab->discard_btn.base, true);
 
     tab->mode = CBX_PT_MODE_EDITOR;
 
@@ -1068,6 +1130,9 @@ cbx_profiles_tab_close_editor(cbx_profiles_tab *tab)
         cbx_widget_set_visible(&tab->editor.status_lbl.base, false);
         cbx_widget_set_visible(&tab->editor.progress_bar.base, false);
     }
+
+    cbx_widget_set_visible(&tab->save_btn.base, false);
+    cbx_widget_set_visible(&tab->discard_btn.base, false);
 
     /* Show tab widgets. */
     show_tab_widgets(tab);

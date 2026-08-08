@@ -25,6 +25,7 @@
 #include <sys/stat.h>
 
 #include "manager/manager.h"
+#include "ui/input_map.h"
 #include "manager/profiles_tab.h"
 #include "manager/profile_editor_list.h"
 #include "manager/profile_editor_seq.h"
@@ -58,6 +59,7 @@ send_key_dn(cbx_manager *mgr, SDL_Keycode sym)
 {
     SDL_Event ev = {0};
     ev.type = SDL_KEYDOWN;
+    ev.key.windowID = CBX_CONTROLLER_EVENT_WINDOW_ID;
     ev.key.keysym.sym = sym;
     return cbx_manager_handle_event(mgr, &ev);
 }
@@ -67,6 +69,7 @@ send_key_up(cbx_manager *mgr, SDL_Keycode sym)
 {
     SDL_Event ev = {0};
     ev.type = SDL_KEYUP;
+    ev.key.windowID = CBX_CONTROLLER_EVENT_WINDOW_ID;
     ev.key.keysym.sym = sym;
     return cbx_manager_handle_event(mgr, &ev);
 }

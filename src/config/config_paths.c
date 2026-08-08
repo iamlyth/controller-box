@@ -182,6 +182,15 @@ const char *cbx_system_profiles_dir(void)
     return INPUTPLUMBER_SYSTEM_DATA_DIR "/profiles";
 }
 
+const char *cbx_builtin_profiles_dir(void)
+{
+    /* Installed assets are authoritative.  The source-tree fallback keeps
+     * development builds functional before `cmake --install`. */
+    if (access(BUILTIN_PROFILE_DIR "/default.yaml", R_OK) == 0)
+        return BUILTIN_PROFILE_DIR;
+    return SOURCE_PROFILE_DIR;
+}
+
 const char *cbx_system_devices_dir(void)
 {
     return INPUTPLUMBER_SYSTEM_DATA_DIR "/devices";

@@ -374,9 +374,8 @@ cbx_controllers_tab_add(cbx_controllers_tab *tab, const char *type)
 
     free(out_path);
 
-    /* Refresh to show the new device. */
-    cbx_controllers_tab_refresh(tab);
-    return 0;
+    /* Method success is not UI success: require ObjectManager refresh. */
+    return cbx_controllers_tab_refresh(tab);
 }
 
 int
@@ -394,8 +393,7 @@ cbx_controllers_tab_remove(cbx_controllers_tab *tab, int device_index)
 
     /* SPEC §5.2: physical controller in that slot auto-moves to
      * Unassigned; InputPlumber stops the target device. */
-    cbx_controllers_tab_refresh(tab);
-    return 0;
+    return cbx_controllers_tab_refresh(tab);
 }
 
 int
@@ -455,9 +453,8 @@ cbx_controllers_tab_change_type(cbx_controllers_tab *tab,
     if (rc != 0)
         return rc;
 
-    /* Refresh to show the updated type. */
-    cbx_controllers_tab_refresh(tab);
-    return 0;
+    /* Refresh to show the updated type; stale UI is an operation error. */
+    return cbx_controllers_tab_refresh(tab);
 }
 
 int

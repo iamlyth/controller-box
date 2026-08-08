@@ -43,15 +43,16 @@
  *
  *   [Unit]
  *   Description=Controller-Box Overlay Service
- *   After=inputplumber.service
- *   Requires=inputplumber.service
+ *   After=graphical-session.target
+ *   PartOf=graphical-session.target
  *
  *   [Service]
  *   ExecStart=<binary> --overlay-service
- *   Restart=always
+ *   Restart=on-failure
+ *   RestartSec=2s
  *
  *   [Install]
- *   WantedBy=default.target
+ *   WantedBy=graphical-session.target
  */
 
 /* ------------------------------------------------------------------ */
@@ -165,15 +166,16 @@ cbx_service_unit_content(char *buf, size_t buflen)
     const char *template =
         "[Unit]\n"
         "Description=Controller-Box Overlay Service\n"
-        "After=inputplumber.service\n"
-        "Requires=inputplumber.service\n"
+        "After=graphical-session.target\n"
+        "PartOf=graphical-session.target\n"
         "\n"
         "[Service]\n"
         "ExecStart=%s\n"
-        "Restart=always\n"
+        "Restart=on-failure\n"
+        "RestartSec=2s\n"
         "\n"
         "[Install]\n"
-        "WantedBy=default.target\n";
+        "WantedBy=graphical-session.target\n";
 
     int len = snprintf(buf, buflen, template, exec_start);
     if (len < 0 || (size_t)len >= buflen)

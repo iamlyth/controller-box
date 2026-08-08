@@ -261,9 +261,9 @@ test_init_populates_panel(void **state)
 {
     pt_fixture *f = FIX(state);
     init_tab(f);
-    /* Panel should have 6 children: list, 3 buttons, status label, create picker. */
+    /* List controls plus explicit editor Save/Discard actions. */
     cbx_panel *panel = &f->mgr.panels[CBX_MGR_TAB_PROFILES];
-    assert_int_equal(cbx_panel_child_count(panel), 6);
+    assert_int_equal(cbx_panel_child_count(panel), 8);
 }
 
 static void
@@ -713,6 +713,8 @@ test_name_input_confirm(void **state)
     assert_true(f->tab.editor_initialized);
     assert_true(f->tab.editor_is_new);
     assert_string_equal(f->tab.editor_profile_name, "new");
+    assert_true(cbx_widget_is_visible(&f->tab.save_btn.base));
+    assert_true(cbx_widget_is_visible(&f->tab.discard_btn.base));
 
     /* Save from editor via cancel (B in LIST = save+close). */
     bool handled = cbx_profiles_tab_cancel(&f->tab);
@@ -902,7 +904,7 @@ test_shutdown_removes_children(void **state)
     pt_fixture *f = FIX(state);
     init_tab(f);
     cbx_panel *panel = &f->mgr.panels[CBX_MGR_TAB_PROFILES];
-    assert_int_equal(cbx_panel_child_count(panel), 6);
+    assert_int_equal(cbx_panel_child_count(panel), 8);
 
     cbx_profiles_tab_shutdown(&f->tab);
     assert_int_equal(cbx_panel_child_count(panel), 0);
@@ -1058,8 +1060,8 @@ test_create_picker_via_dispatch(void **state)
     assert_true(pt_send_key_up(&mgr, SDLK_a));
     assert_int_equal(pt->mode, CBX_PT_MODE_NAME_INPUT);
 
-    /* Cancel name input with B. */
-    pt_send_key_dn(&mgr, SDLK_b);
+    /* Keyboard text entry uses Escape to cancel; letter B remains typeable. */
+    pt_send_key_dn(&mgr, SDLK_ESCAPE);
     assert_int_equal(pt->mode, CBX_PT_MODE_LIST);
 
     cbx_manager_shutdown(&mgr);
@@ -1116,8 +1118,8 @@ test_name_input_via_dispatch(void **state)
     pt_send_key_dn(&mgr, SDLK_w);
     assert_string_equal(cbx_profiles_tab_name_buffer(pt), "new");
 
-    /* Confirm with A — opens editor (create-to-editor flow). */
-    pt_send_key_dn(&mgr, SDLK_a);
+    /* Keyboard text entry uses Return to confirm; letter A remains typeable. */
+    pt_send_key_dn(&mgr, SDLK_RETURN);
     assert_int_equal(pt->mode, CBX_PT_MODE_EDITOR);
 
     /* Save from editor with B (KEYDOWN swallowed, KEYUP saves). */
