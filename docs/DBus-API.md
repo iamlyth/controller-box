@@ -340,6 +340,8 @@ wrappers go through the `ip_dbus_backend` vtable for testability.
 | `ip_composite_get_source_device_paths` | `SourceDevicePaths` | `as` | read |
 | `ip_composite_get_persistent_id` | `PersistentId` | `s` | read |
 | `ip_composite_get_name` | `Name` | `s` | read |
+| `ip_composite_get_profile_name` | `ProfileName` | `s` | read |
+| `ip_composite_get_profile_path` | `ProfilePath` | `s` | read |
 | `ip_composite_get_capabilities` | `Capabilities` | `as` | read |
 | `ip_composite_get_output_capabilities` | `OutputCapabilities` | `as` | read |
 | `ip_composite_get_target_capabilities` | `TargetCapabilities` | `as` | read |

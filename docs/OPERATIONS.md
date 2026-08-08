@@ -149,8 +149,11 @@ proceeds regardless — the group check is advisory.
 ## InputPlumber dependency
 
 InputPlumber is a separate package and a hard prerequisite. Install it first
-from its own Flatpak or system package. Controller-Box's service unit will not
-start until InputPlumber is available.
+from its own Flatpak or system package. Controller-Box's service unit starts
+without InputPlumber and enters degraded mode (SPEC §2.4); it recovers
+automatically via `NameOwnerChanged` when InputPlumber appears. The service
+unit deliberately does not declare `After=` or `Requires=` for
+`inputplumber.service`.
 
 Controller-Box communicates with InputPlumber via:
 
@@ -170,12 +173,14 @@ initialization sequence on startup:
 1. **SDL video init** — creates a hidden SDL2 window and renderer
    (1280×720). If SDL cannot initialize (e.g., no display driver
    available), the service logs an error to stderr and exits non-zero.
-2. **DBus connection** — connects to the system bus and verifies that
-   InputPlumber is running. If InputPlumber is not found, the service
-   logs `InputPlumber not found on system DBus` to stderr and exits
-   non-zero.
-3. **Device enumeration** — calls `GetManagedObjects` to discover all
-   composite devices, source devices, and target devices.
+2. **DBus connection** — connects to the system bus. If the system bus
+   itself is unavailable, the service logs `system DBus unavailable` to
+   stderr and exits non-zero. If InputPlumber is absent but the bus
+   connects, the service enters degraded mode and waits for
+   `NameOwnerChanged`.
+3. **Device enumeration** — when InputPlumber is connected, calls
+   `GetManagedObjects` to discover all composite devices, source devices,
+   and target devices. In degraded mode this step is skipped.
 4. **Settings + assignments** — loads `settings.yaml` and
    `assignments.yaml` from `~/.config/controller-box/` (best-effort;
    defaults are used if files are absent).
@@ -188,10 +193,10 @@ initialization sequence on startup:
    `SetInterceptActivation`, then sets `InterceptMode = PASS`.
 7. **Lifecycle init** — initializes the overlay state machine
    (`IDLE → ACTIVATING → VISIBLE → CLOSING → IDLE`).
-8. **Poll loop** — enters the main event loop (50 ms interval, DEC-002).
-   The loop polls `InterceptMode` via `ip_intercept_poll` (one per
-   composite device), processes SDL events for grid navigation, and
-   handles `SIGTERM`/`SIGINT` for clean shutdown.
+8. **Poll loop** — enters the main event loop (10 ms interval). The loop
+   polls `InterceptMode` via `ip_intercept_poll` (50 ms SDL timer per
+   composite device, DEC-002), processes SDL events for grid navigation,
+   and handles `SIGTERM`/`SIGINT` for clean shutdown.
 
 **Poll loop behavior (Task 4):**
 
@@ -462,8 +467,9 @@ systemctl --user status controller-box
 journalctl --user -u controller-box --no-pager -n 50
 ```
 
-Common causes: InputPlumber not running (the `Requires=` directive blocks
-start), or the user is not in the `inputplumber` group (DBus access denied).
+Common causes: the user is not in the `inputplumber` group (DBus access
+denied). InputPlumber not running does not block the service from starting;
+it enters degraded mode and recovers automatically when InputPlumber appears.
 
 ### DBus access denied
 
