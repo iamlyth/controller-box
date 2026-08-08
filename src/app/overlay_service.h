@@ -33,6 +33,20 @@
 #include "overlay/surface_build.h"
 #include "overlay/conflict.h"
 #include "overlay/profile_cycle.h"
+#include "overlay/dynamic_columns.h"
+#include "dbus/ip_hotplug.h"
+
+/* --- Per-composite activation context (Task 9) ----------------------- */
+
+/*
+ * Per-poll activation context: tracks which composite triggered the
+ * activation so close sets InterceptMode=PASS on the correct device
+ * (SPEC §2.5: close restores PASS on the activating composite).
+ */
+typedef struct {
+    cbx_overlay_lifecycle *lifecycle;
+    char composite_path[CBX_MAX_PATH_LEN];
+} cbx_poll_activation_ctx;
 
 /* --- Overlay input event handling (Task 6) ---------------------------- */
 
@@ -157,8 +171,12 @@ typedef struct cbx_overlay_service_ctx {
 
     /* --- InterceptMode polling --- */
     ip_intercept_poll      polls[CBX_MAX_COMPOSITES];
+    cbx_poll_activation_ctx poll_acts[CBX_MAX_COMPOSITES];
     int                    poll_count;
     uint32_t               poll_event_type;
+
+    /* --- Hotplug --- */
+    ip_hotplug             hp;             /* ObjectManager signal handler       */
 
     /* --- Status --- */
     bool                   initialized;   /* true after full init              */
@@ -180,6 +198,14 @@ typedef struct cbx_overlay_service_ctx {
 void cbx_overlay_service_step(cbx_overlay_service_ctx *svc);
 
 /* --- Topology reconciliation (exposed for testing — Task 5) ------------- */
+
+/*
+ * (Re)initialize all intercept polls for the current composites.
+ * Stops any existing polls first, then creates one per composite with
+ * per-composite activation context so close sets PASS on the correct
+ * composite (SPEC §2.5).  Exposed for test setup.
+ */
+void cbx_overlay_rearm_polls(cbx_overlay_service_ctx *svc);
 
 /*
  * Reconcile InputPlumber's live target topology to match the configured

@@ -38,6 +38,8 @@
 #include "overlay/host_mode.h"
 #include "overlay/conflict.h"
 #include "overlay/profile_cycle.h"
+#include "overlay/dynamic_columns.h"
+#include "dbus/ip_hotplug.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -90,11 +92,27 @@ cbx_overlay_service_reset_shutdown(void)
 /*  InterceptMode poll callbacks                                       */
 /* ================================================================== */
 
+/*
+ * Per-composite activating callback: updates the lifecycle's composite_path
+ * to the composite that triggered the activation, then activates the
+ * overlay.  This ensures that close sets InterceptMode=PASS on the
+ * activating composite, not just the primary one (SPEC §2.5).
+ */
 static void
 on_intercept_activating(void *userdata)
 {
-    cbx_overlay_lifecycle *lc = (cbx_overlay_lifecycle *)userdata;
-    cbx_overlay_lifecycle_activate(lc);
+    cbx_poll_activation_ctx *act = (cbx_poll_activation_ctx *)userdata;
+    if (!act || !act->lifecycle)
+        return;
+    /* Update lifecycle's composite_path to the activating composite. */
+    if (act->composite_path[0]) {
+        size_t len = strlen(act->composite_path);
+        if (len >= sizeof(act->lifecycle->composite_path))
+            len = sizeof(act->lifecycle->composite_path) - 1;
+        memcpy(act->lifecycle->composite_path, act->composite_path, len);
+        act->lifecycle->composite_path[len] = '\0';
+    }
+    cbx_overlay_lifecycle_activate(act->lifecycle);
 }
 
 static void
@@ -497,6 +515,135 @@ rollback:
     return rc;
 }
 
+/* ================================================================== */
+/*  Hotplug reconciliation (Task 9)                                     */
+/* ================================================================== */
+
+/*
+ * Helper: (re)initialize all intercept polls for the current composites.
+ * Stops any existing polls first, then creates one per composite with
+ * per-composite activation context so close sets PASS on the correct
+ * composite (SPEC §2.5).
+ */
+void
+cbx_overlay_rearm_polls(cbx_overlay_service_ctx *svc)
+{
+    for (int i = 0; i < svc->poll_count; i++)
+        ip_intercept_poll_stop(&svc->polls[i]);
+    svc->poll_count = 0;
+
+    if (svc->poll_event_type == (uint32_t)-1)
+        return;
+
+    for (int i = 0; i < svc->comp_count && i < CBX_MAX_COMPOSITES; i++) {
+        svc->poll_acts[i].lifecycle = &svc->lifecycle;
+        snprintf(svc->poll_acts[i].composite_path,
+                 sizeof(svc->poll_acts[i].composite_path),
+                 "%s", svc->composites[i].composite_path);
+        ip_intercept_poll_init(&svc->polls[i],
+                                svc->conn.backend, svc->conn.bus,
+                                svc->composites[i].composite_path,
+                                on_intercept_activating, &svc->poll_acts[i],
+                                on_intercept_deactivating, &svc->lifecycle,
+                                on_intercept_error, NULL);
+        if (ip_intercept_poll_start(&svc->polls[i],
+                                     IP_INTERCEPT_POLL_INTERVAL_MS,
+                                     svc->poll_event_type) == 0)
+            svc->poll_count++;
+    }
+}
+
+/*
+ * Reconcile the overlay state after a hotplug event modifies the device
+ * model (SPEC §10.1: InterfacesAdded/InterfacesRemoved).  Re-enumerates,
+ * rebuilds grid rows/columns, input mappings, triggers, and polls.
+ *
+ * If the overlay is visible, the grid is rebuilt with dynamic columns
+ * preserving profiles.  If idle, a full rebuild from assignments is safe.
+ */
+static void
+cbx_overlay_reconcile_hotplug(cbx_overlay_service_ctx *svc)
+{
+    if (!svc || !svc->conn.backend || !svc->conn.bus)
+        return;
+
+    /* The device model was already updated incrementally by ip_hotplug
+     * (SPEC §10.1: InterfacesAdded/InterfacesRemoved).  No full
+     * re-enumeration needed — use the current model state directly. */
+
+    /* Update composite info from the device model. */
+    int new_comp_count = svc->model.composite_count;
+    if (new_comp_count > CBX_MAX_COMPOSITES)
+        new_comp_count = CBX_MAX_COMPOSITES;
+
+    /* Save current profiles before grid rebuild. */
+    char saved_profiles[CBX_GRID_MAX_PROFILES][CBX_GRID_PROFILE_LEN];
+    int saved_profile_count = svc->grid.profile_count;
+    if (saved_profile_count > CBX_GRID_MAX_PROFILES)
+        saved_profile_count = CBX_GRID_MAX_PROFILES;
+    for (int i = 0; i < saved_profile_count; i++)
+        snprintf(saved_profiles[i], sizeof(saved_profiles[i]),
+                 "%s", svc->grid.profiles[i]);
+
+    /* Update composite info. */
+    svc->comp_count = new_comp_count;
+    for (int i = 0; i < new_comp_count; i++)
+        fill_composite_info(&svc->composites[i], &svc->model.composites[i],
+                             svc->conn.backend, svc->conn.bus);
+
+    /* Check if target count changed → rebuild with dynamic columns
+     * (SPEC §4.7).  Otherwise just rebuild the grid rows. */
+    if (cbx_dynamic_columns_needs_rebuild(&svc->grid,
+                                             svc->model.target_count)) {
+        char target_types[CBX_MAX_CONTROLLERS][CBX_MAX_TYPE_LEN];
+        int target_count = svc->model.target_count;
+        if (target_count > CBX_MAX_CONTROLLERS)
+            target_count = CBX_MAX_CONTROLLERS;
+        for (int i = 0; i < target_count; i++) {
+            char *dtype = NULL;
+            if (ip_target_get_device_type(svc->conn.backend,
+                                            svc->conn.bus,
+                                            svc->model.targets[i].path,
+                                            &dtype) == 0 && dtype) {
+                snprintf(target_types[i], CBX_MAX_TYPE_LEN, "%s", dtype);
+                free(dtype);
+            } else {
+                snprintf(target_types[i], CBX_MAX_TYPE_LEN, "xb360");
+            }
+        }
+        cbx_dynamic_columns_rebuild(&svc->grid,
+                                      (const char (*)[CBX_MAX_TYPE_LEN])target_types,
+                                      target_count, svc->composites,
+                                      new_comp_count, &svc->assignments);
+    } else {
+        cbx_select_grid_build(&svc->grid, svc->composites,
+                               new_comp_count, &svc->settings,
+                               &svc->assignments);
+    }
+
+    /* Restore profiles onto the rebuilt grid. */
+    cbx_profile_cycle_load_profiles(&svc->grid, &svc->profiles);
+
+    /* Rebuild input map. */
+    cbx_overlay_input_build_map(svc->conn.backend, svc->conn.bus,
+                                 svc->composites, svc->comp_count,
+                                 &svc->input_ctx);
+
+    /* Re-register triggers on all composites and set PASS (SPEC §2.5). */
+    set_all_pass(svc->conn.backend, svc->conn.bus,
+                  svc->model.composites, svc->comp_count);
+    for (int i = 0; i < svc->comp_count; i++)
+        cbx_trigger_register(svc->conn.backend, svc->conn.bus,
+                              svc->composites[i].composite_path,
+                              svc->settings.overlay_trigger);
+
+    /* Re-arm polls for current composites (SPEC §2.5, §10.1). */
+    cbx_overlay_rearm_polls(svc);
+
+    /* Mark surface dirty for re-render. */
+    cbx_overlay_surface_mark_dirty_all(&svc->surface);
+}
+
 static void
 overlay_backend_degraded(const char *reason, void *userdata)
 {
@@ -570,20 +717,14 @@ overlay_backend_ready(void *userdata)
                               svc->composites[i].composite_path,
                               svc->settings.overlay_trigger);
 
-    if (svc->poll_event_type != (uint32_t)-1) {
-        for (int i = 0; i < svc->comp_count; i++) {
-            ip_intercept_poll_init(&svc->polls[i], svc->conn.backend,
-                                    svc->conn.bus,
-                                    svc->composites[i].composite_path,
-                                    on_intercept_activating, &svc->lifecycle,
-                                    on_intercept_deactivating, &svc->lifecycle,
-                                    on_intercept_error, NULL);
-            if (ip_intercept_poll_start(&svc->polls[i],
-                                         IP_INTERCEPT_POLL_INTERVAL_MS,
-                                         svc->poll_event_type) == 0)
-                svc->poll_count++;
-        }
-    }
+    cbx_overlay_rearm_polls(svc);
+
+    /* Re-subscribe to hotplug signals for incremental device updates
+     * (SPEC §10.1: InterfacesAdded/InterfacesRemoved). */
+    ip_hotplug_init(&svc->hp, svc->conn.backend, svc->conn.bus,
+                     svc->expected_sender, &svc->model);
+    ip_hotplug_subscribe(&svc->hp);
+
     svc->backend_ready = true;
     cbx_overlay_surface_mark_dirty_all(&svc->surface);
 }
@@ -857,7 +998,15 @@ cbx_overlay_service_step(cbx_overlay_service_ctx *svc)
     if (svc->input_events_ready)
         ip_input_events_process(&svc->input_events);
 
-    /* 3. Advance lifecycle (fade animation, timeout). */
+    /* 4. Check if hotplug signals modified the device model and reconcile
+     *    grid rows, columns, input mappings, triggers, and polls
+     *    (SPEC §10.1: InterfacesAdded/InterfacesRemoved). */
+    if (svc->hp.model_changed) {
+        svc->hp.model_changed = false;
+        cbx_overlay_reconcile_hotplug(svc);
+    }
+
+    /* 5. Advance lifecycle (fade animation, timeout). */
     cbx_overlay_lifecycle_tick(&svc->lifecycle);
 
     /* The production overlay window is created hidden.  Mapping is a
@@ -868,7 +1017,21 @@ cbx_overlay_service_step(cbx_overlay_service_ctx *svc)
     else
         cbx_renderer_hide(&svc->rend);
 
-    /* 4. Re-render dirty surface (when overlay is active). */
+    /* 6. Re-arm IDLE polls when the overlay is idle so the next
+     *    activation can be detected (SPEC §2.5: close permits later
+     *    activations).  After close, the activating composite's poll
+     *    transitions to IDLE; without re-arming it the overlay can
+     *    only be activated once. */
+    if (svc->backend_ready && !cbx_overlay_lifecycle_is_active(&svc->lifecycle)) {
+        for (int i = 0; i < svc->poll_count; i++) {
+            if (svc->polls[i].state == IP_POLL_IDLE)
+                ip_intercept_poll_start(&svc->polls[i],
+                                         IP_INTERCEPT_POLL_INTERVAL_MS,
+                                         svc->poll_event_type);
+        }
+    }
+
+    /* 7. Re-render dirty surface (when overlay is active). */
     if (cbx_overlay_lifecycle_is_active(&svc->lifecycle) &&
         cbx_overlay_surface_is_dirty(&svc->surface)) {
         cbx_overlay_surface_render(&svc->surface, svc->rend.renderer,
@@ -1110,21 +1273,14 @@ int run_overlay_service(int dry_run)
     svc->poll_event_type = SDL_RegisterEvents(1);
     svc->poll_count = 0;
 
-    if (svc->poll_event_type != (uint32_t)-1) {
-        for (int i = 0; i < svc->comp_count && i < CBX_MAX_COMPOSITES; i++) {
-            ip_intercept_poll_init(&svc->polls[i],
-                                    svc->conn.backend, svc->conn.bus,
-                                    svc->composites[i].composite_path,
-                                    on_intercept_activating, &svc->lifecycle,
-                                    on_intercept_deactivating, &svc->lifecycle,
-                                    on_intercept_error, NULL);
-            if (ip_intercept_poll_start(&svc->polls[i],
-                                         IP_INTERCEPT_POLL_INTERVAL_MS,
-                                         svc->poll_event_type) == 0) {
-                svc->poll_count++;
-            }
-        }
-    }
+    cbx_overlay_rearm_polls(svc);
+
+    /* Subscribe to ObjectManager hotplug signals for incremental
+     * device updates (SPEC §10.1: InterfacesAdded/InterfacesRemoved). */
+    ip_hotplug_init(&svc->hp, svc->conn.backend, svc->conn.bus,
+                     svc->expected_sender, &svc->model);
+    if (svc->backend_ready)
+        ip_hotplug_subscribe(&svc->hp);
 
     svc->initialized = true;
     ip_connection_set_reenumerate_cb(&svc->conn, overlay_backend_ready, svc);

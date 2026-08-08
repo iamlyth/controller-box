@@ -570,6 +570,13 @@ if(CMOCKA_FOUND)
     set_tests_properties(test_overlay_interaction PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
 
+    # --- Task 9: Visible reusable overlay and runtime reconciliation ----
+    add_executable(test_overlay_reconcile tests/test_overlay_reconcile.c)
+    target_link_libraries(test_overlay_reconcile PRIVATE controllerbox cbx_test_support PkgConfig::CMOCKA)
+    add_test(NAME test_overlay_reconcile COMMAND test_overlay_reconcile)
+    set_tests_properties(test_overlay_reconcile PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+
     # --- Task 8: Golden image baselines and comparison -----------------
     # Compares live framebuffer captures against reviewed baseline PNGs.
     # Set CBX_GENERATE_GOLDEN=1 to regenerate baselines instead of comparing.

@@ -133,16 +133,21 @@ ip_hotplug_handle_added(ip_hotplug *hp,
     const char *ifaces = payload->interfaces ? payload->interfaces : "";
 
     /* Classify and add. */
+    bool changed = false;
+
     if (iface_list_contains(ifaces, IP_IFACE_MANAGER))
-        cbx_device_model_set_manager(model, path);
+        changed |= cbx_device_model_set_manager(model, path);
 
     if (iface_list_contains(ifaces, IP_IFACE_COMPOSITE))
-        cbx_device_model_add_composite(model, path);
+        changed |= cbx_device_model_add_composite(model, path);
 
     if (strstr(path, "/devices/source/"))
-        cbx_device_model_add_source(model, path);
+        changed |= cbx_device_model_add_source(model, path);
     else if (strstr(path, "/devices/target/"))
-        cbx_device_model_add_target(model, path);
+        changed |= cbx_device_model_add_target(model, path);
+
+    if (changed)
+        hp->model_changed = true;
 }
 
 void
@@ -165,14 +170,19 @@ ip_hotplug_handle_removed(ip_hotplug *hp,
     const char *ifaces = payload->interfaces ? payload->interfaces : "";
 
     /* Remove based on classification. */
+    bool changed = false;
+
     if (iface_list_contains(ifaces, IP_IFACE_MANAGER))
-        cbx_device_model_remove_manager(model);
+        changed |= cbx_device_model_remove_manager(model);
 
     if (iface_list_contains(ifaces, IP_IFACE_COMPOSITE))
-        cbx_device_model_remove_composite(model, path);
+        changed |= cbx_device_model_remove_composite(model, path);
 
     if (strstr(path, "/devices/source/"))
-        cbx_device_model_remove_source(model, path);
+        changed |= cbx_device_model_remove_source(model, path);
     else if (strstr(path, "/devices/target/"))
-        cbx_device_model_remove_target(model, path);
+        changed |= cbx_device_model_remove_target(model, path);
+
+    if (changed)
+        hp->model_changed = true;
 }

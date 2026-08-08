@@ -29,7 +29,7 @@ Make the installed product perform its core job from a clean environment: connec
 | FR-04 | §§5.2, 5.5 authoritative virtual topology | verified | Add picker uses native arrays (Task 4); startup reconcile creates/attaches/confirms ordered topology with per-slot type correction and rollback (Task 5); Add confirms type via ObjectManager + DeviceType (Task 4); AttachTargetDevice makes targets routable (Task 5) | Tasks 4, 5 |
 | FR-05 | §§5.3–5.4 clean-home profile workflow | missing | No shipped Default; Empty cannot add first binding; save/discard is implicit | Tasks 6, 7 |
 | FR-06 | §§4.1–4.7 assignment/profile backend application | verified | cbx_overlay_on_save applies-to-engine-first (LoadProfilePath + ProfilePath verification + AttachTargetDevice + SetGamepadOrder) before persisting; overlay_backend_ready restores after restart; native test observes GamepadOrder, LoadProfilePath, ProfilePath, restart/restore | Task 8 |
-| FR-07 | §§4.9–4.10 compositor-visible reusable overlay | missing | Production overlay window remains hidden and lifecycle is one-shot | Task 9 |
+| FR-07 | §§4.9–4.10 compositor-visible reusable overlay | verified | Per-activating-composite lifecycle via cbx_poll_activation_ctx (close sets PASS on activating composite); poll re-arm after close permits unlimited activation cycles; ip_hotplug wired into overlay service with model_changed flag triggering cbx_overlay_reconcile_hotplug (rebuilds grid columns, input map, triggers, polls); cbx_overlay_rearm_polls factored for reuse; test_overlay_reconcile covers 7 scenarios | Task 9 |
 | FR-08 | §§9, 11.1 installed functional acceptance | missing | Installed smoke accepts missing backend, keyboard proxy, and hidden overlay | Task 10 |
 | FR-09 | §§5.6–5.7 degraded/error semantics | partial | Backend failures are silent no-ops and controls look enabled | Tasks 2, 4, 7 |
 | FR-10 | §11.2 autonomous definition of done | missing | Previous all-verified matrix relied on mocks and skipped backend outcomes | Tasks 10, 11, 12 |
@@ -118,7 +118,8 @@ Production acceptance covers these semantic workflows through normal production 
 - Documentation impact: assignment/profile recovery.
 
 ## Task 9: Visible reusable overlay and runtime reconciliation
-- Status: pending
+- Status: complete
+- Evidence: per-activating-composite lifecycle via `cbx_poll_activation_ctx` updates `lifecycle.composite_path` on activation so close sets InterceptMode=PASS on the activating composite (SPEC §2.5); poll re-arm in `cbx_overlay_service_step` re-arms IDLE polls when lifecycle is IDLE and backend ready, permitting unlimited activation cycles (SPEC §2.5); `ip_hotplug` wired into overlay service with `model_changed` flag triggering `cbx_overlay_reconcile_hotplug` which rebuilds grid rows/columns via `cbx_dynamic_columns_rebuild`, input mappings, triggers, and polls (SPEC §10.1); `cbx_overlay_rearm_polls` factored out for reuse in startup, recovery, and hotplug; `test_overlay_reconcile` covers per-composite activation (comp 0 and comp 1), poll re-arm across close→reopen, surface reuse across cycles, hotplug target add (3→4 columns) and remove (3→2, position clamping), and window visibility tracking lifecycle; 82/82 CTest pass.
 - Dependencies: Tasks 1, 2, 8
 - Scope: show/hide/map window, per-activating-composite lifecycle, poll re-arm, hotplug reconciliation, dynamic columns, production visuals.
 - Acceptance criteria: activation maps a compositor-visible frame; close restores PASS on the activating composite and permits later activations; hotplug/restart rebuilds rows, mappings, triggers, polls, and confirmed target columns.

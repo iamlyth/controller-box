@@ -26,6 +26,7 @@ typedef struct {
     ip_bus_handle          bus;
     const char            *expected_sender;  /* InputPlumber's unique bus name */
     cbx_device_model      *model;            /* device model to update */
+    bool                   model_changed;    /* set when a signal modified the model */
 } ip_hotplug;
 
 /* Initialise the hotplug handler.  Does not subscribe yet. */
