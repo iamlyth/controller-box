@@ -19,6 +19,7 @@
 #include "dbus/ip_target.h"
 #include "dbus/ip_composite.h"
 #include "dbus/ip_objectmanager.h"
+#include "dbus/ip_connection.h"   /* ip_connection_reason_for_error */
 
 /* ------------------------------------------------------------------ */
 /*  Layout constants                                                  */
@@ -96,6 +97,40 @@ static void on_type_pick_selected(cbx_widget *w, int index,
                                     void *user_data);
 
 /* ------------------------------------------------------------------ */
+/*  Error display helpers (SPEC §5.2: show the failed DBus operation)   */
+/* ------------------------------------------------------------------ */
+
+/* Show an operation error in the status label without disabling buttons. */
+static void
+show_action_error(cbx_controllers_tab *tab, const char *action, int rc)
+{
+    if (!tab || !action)
+        return;
+    const char *reason;
+    if (rc == -EIO)
+        reason = "InputPlumber did not confirm the operation";
+    else if (rc == -EINVAL)
+        reason = "invalid request";
+    else
+        reason = ip_connection_reason_for_error(rc);
+
+    char msg[CBX_LABEL_TEXT_LEN];
+    snprintf(msg, sizeof(msg), "%s failed: %s", action, reason);
+    cbx_label_set_text(&tab->status_lbl, msg);
+    cbx_widget_set_visible(&tab->status_lbl.base, true);
+}
+
+/* Clear any operation error message (safe when backend is available). */
+static void
+clear_action_error(cbx_controllers_tab *tab)
+{
+    if (!tab || !tab->backend)
+        return;
+    cbx_label_set_text(&tab->status_lbl, "");
+    cbx_widget_set_visible(&tab->status_lbl.base, false);
+}
+
+/* ------------------------------------------------------------------ */
 /*  Button callbacks                                                   */
 /* ------------------------------------------------------------------ */
 
@@ -117,8 +152,13 @@ on_remove_pressed(cbx_widget *w, void *user_data)
     if (!tab)
         return;
     int idx = tab->selected_device;
-    if (idx >= 0 && idx < cbx_controllers_tab_device_count(tab))
-        cbx_controllers_tab_remove(tab, idx);
+    if (idx < 0 || idx >= cbx_controllers_tab_device_count(tab))
+        return;
+    int rc = cbx_controllers_tab_remove(tab, idx);
+    if (rc != 0)
+        show_action_error(tab, "Remove", rc);
+    else
+        clear_action_error(tab);
 }
 
 static void
@@ -420,16 +460,24 @@ cbx_controllers_tab_add(cbx_controllers_tab *tab, const char *type)
     if (rc == 0 && tab->model.target_count != previous_count + 1)
         rc = -EIO;
     bool found = false;
+    int found_index = -1;
     if (rc == 0 && out_path) {
         for (int i = 0; i < tab->model.target_count; i++) {
             if (strcmp(tab->model.targets[i].path, out_path) == 0) {
                 found = true;
+                found_index = i;
                 break;
             }
         }
         if (!found)
             rc = -EIO;
     }
+    /* SPEC §5.2: Add succeeds only after ObjectManager exposes one
+     * additional target of the selected type. */
+    if (rc == 0 && found_index >= 0 &&
+        found_index < tab->device_type_count &&
+        strcmp(tab->device_types[found_index], type) != 0)
+        rc = -EIO;
     free(out_path);
     return rc;
 }
@@ -536,6 +584,9 @@ cbx_controllers_tab_begin_type_pick(cbx_controllers_tab *tab,
     if (tab->supported_type_count == 0)
         return -ENOENT;
 
+    /* Clear any previous operation error. */
+    clear_action_error(tab);
+
     /* Populate the type picker list. */
     cbx_list_clear(&tab->type_picker);
     for (int i = 0; i < tab->supported_type_count; i++)
@@ -575,12 +626,22 @@ cbx_controllers_tab_confirm_type_pick(cbx_controllers_tab *tab)
     cbx_controllers_tab_cancel_type_pick(tab);
 
     /* Execute the pending action. */
+    int rc;
     if (action == CBX_CT_ACTION_ADD)
-        return cbx_controllers_tab_add(tab, type);
-    if (action == CBX_CT_ACTION_CHANGE)
-        return cbx_controllers_tab_change_type(tab, device_index, type);
+        rc = cbx_controllers_tab_add(tab, type);
+    else if (action == CBX_CT_ACTION_CHANGE)
+        rc = cbx_controllers_tab_change_type(tab, device_index, type);
+    else
+        return -EINVAL;
 
-    return -EINVAL;
+    /* Show error on failure, clear on success (SPEC §5.2). */
+    if (rc != 0)
+        show_action_error(tab,
+                          action == CBX_CT_ACTION_ADD ? "Add" : "Change type",
+                          rc);
+    else
+        clear_action_error(tab);
+    return rc;
 }
 
 void

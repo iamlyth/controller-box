@@ -435,6 +435,91 @@ test_add_null_args(void **state)
     assert_int_equal(cbx_controllers_tab_add(&tab, "xb360"), -EINVAL);
 }
 
+/* SPEC §5.2: Add succeeds only after ObjectManager exposes one
+ * additional target of the selected type. */
+static void
+test_add_rejects_type_mismatch(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "CreateTargetDevice",
+                            "/org/shadowblip/InputPlumber/devices/target/gamepad1");
+    /* Refresh shows 2 targets but DeviceType returns "xb360" (wrong type). */
+    expect_refresh(&f->mock, FIXTURE_2C2T, "xb360", "xb360");
+
+    int rc = cbx_controllers_tab_add(&f->tab, "ds5");
+    assert_int_equal(rc, -EIO);
+}
+
+/* SPEC §5.2: Failures show the failed DBus operation. */
+static void
+test_error_display_on_failed_add(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+
+    cbx_controllers_tab_begin_type_pick(&f->tab, CBX_CT_ACTION_ADD);
+    f->tab.selected_type = 1; /* ds5 */
+
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_MANAGER,
+                               "CreateTargetDevice", IP_ERR_SERVICE_UNKNOWN);
+
+    int rc = cbx_controllers_tab_confirm_type_pick(&f->tab);
+    assert_int_equal(rc, IP_ERR_SERVICE_UNKNOWN);
+    /* Status label should show the error. */
+    assert_true(cbx_widget_is_visible(&f->tab.status_lbl.base));
+    assert_true(strstr(f->tab.status_lbl.text, "Add failed:") != NULL);
+}
+
+static void
+test_error_display_on_unconfirmed_add(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+
+    cbx_controllers_tab_begin_type_pick(&f->tab, CBX_CT_ACTION_ADD);
+    f->tab.selected_type = 1; /* ds5 */
+
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "CreateTargetDevice",
+                            "/org/shadowblip/InputPlumber/devices/target/gamepad1");
+    /* Refresh shows the same 1 target (unconfirmed). */
+    expect_refresh(&f->mock, FIXTURE_1C1T, "xb360", NULL);
+
+    int rc = cbx_controllers_tab_confirm_type_pick(&f->tab);
+    assert_int_equal(rc, -EIO);
+    assert_true(cbx_widget_is_visible(&f->tab.status_lbl.base));
+    assert_true(strstr(f->tab.status_lbl.text, "Add failed:") != NULL);
+}
+
+static void
+test_error_clear_on_new_operation(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+
+    /* Trigger an error first. */
+    cbx_controllers_tab_begin_type_pick(&f->tab, CBX_CT_ACTION_ADD);
+    f->tab.selected_type = 1;
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_MANAGER,
+                               "CreateTargetDevice", IP_ERR_SERVICE_UNKNOWN);
+    cbx_controllers_tab_confirm_type_pick(&f->tab);
+    assert_true(cbx_widget_is_visible(&f->tab.status_lbl.base));
+
+    /* Starting a new operation should clear the error. */
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "SupportedTargetDeviceIds", "xb360,ds5");
+    cbx_controllers_tab_begin_type_pick(&f->tab, CBX_CT_ACTION_ADD);
+    assert_false(cbx_widget_is_visible(&f->tab.status_lbl.base));
+}
+
 /* --- Remove -------------------------------------------------------- */
 
 static void
@@ -991,6 +1076,14 @@ main(void)
                                          setup, teardown),
         cmocka_unit_test_setup_teardown(test_add_error, setup, teardown),
         cmocka_unit_test(test_add_null_args),
+        cmocka_unit_test_setup_teardown(test_add_rejects_type_mismatch,
+                                         setup, teardown),
+        cmocka_unit_test_setup_teardown(test_error_display_on_failed_add,
+                                         setup, teardown),
+        cmocka_unit_test_setup_teardown(test_error_display_on_unconfirmed_add,
+                                         setup, teardown),
+        cmocka_unit_test_setup_teardown(test_error_clear_on_new_operation,
+                                         setup, teardown),
 
         /* Remove. */
         cmocka_unit_test_setup_teardown(test_remove_success, setup, teardown),

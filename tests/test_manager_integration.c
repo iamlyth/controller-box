@@ -260,6 +260,10 @@ static void test_add_controller(void **state)
         "/org/shadowblip/InputPlumber/devices/target/gamepad0\t"
         "org.shadowblip.Input.Target,org.shadowblip.Input.Gamepad\n");
 
+    /* DeviceType must match the requested type for confirmation. */
+    ip_dbus_mock_expect_ok(&f->mock,
+        IP_IFACE_TARGET, "DeviceType", "evdev-gamepad");
+
     /* Also need SupportedTargetDeviceIds for refresh. */
     ip_dbus_mock_expect_ok(&f->mock,
         IP_IFACE_MANAGER, "SupportedTargetDeviceIds",
