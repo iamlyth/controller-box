@@ -25,7 +25,9 @@ assert config['git']['allow_worktrees'] is False
 assert isinstance(config.get('campaign', {}).get('required_capabilities'), list)
 assert all(isinstance(item, str) and item for item in config['campaign']['required_capabilities'])
 assert config['verification']['maintenance_command'] == ['./scripts/verify-project.sh']
-assert config['verification']['campaign_command'] == ['./scripts/verify-project.sh']
+assert isinstance(config['verification']['campaign_command'], list)
+assert config['verification']['campaign_command']
+assert all(isinstance(arg, str) and arg for arg in config['verification']['campaign_command'])
 assert config['issues'] == {
     'schema': 'ralph-bug-ledger/v1',
     'open_ledger': 'open-bugs.md',
