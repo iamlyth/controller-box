@@ -298,18 +298,18 @@ test_manager_focus_traversal_no_trap(void **state)
     assert_true(send_key(&mgr, SDLK_DOWN));
     assert_int_equal(fc->focused, list_idx);
 
-    /* DOWN from list: list returns false at boundary → manager
-     * navigates to the next widget (button). */
+    /* Degraded backend actions are deliberately absent. Switch to Profiles
+     * to prove list-to-button traversal without a hidden-control trap. */
+    send_key(&mgr, SDLK_RIGHT);  /* → Profiles */
+    assert_int_equal(fc->focused, 0);
     assert_true(send_key(&mgr, SDLK_DOWN));
-    assert_true(fc->focused > list_idx);  /* moved past list */
-
-    /* UP from button: button returns false for UP → manager
-     * navigates back to list. */
+    int profile_list_idx = fc->focused;
+    assert_true(send_key(&mgr, SDLK_DOWN));
+    assert_true(fc->focused > profile_list_idx);
     assert_true(send_key(&mgr, SDLK_UP));
-    assert_int_equal(fc->focused, list_idx);
+    assert_int_equal(fc->focused, profile_list_idx);
 
     /* Switch to Settings tab (which also has a list + button). */
-    send_key(&mgr, SDLK_RIGHT);  /* → Profiles */
     send_key(&mgr, SDLK_RIGHT);  /* → Settings */
     assert_int_equal(cbx_manager_active_tab(&mgr), CBX_MGR_TAB_SETTINGS);
     assert_int_equal(fc->focused, 0);  /* tabbar re-focused on tab change */
@@ -547,17 +547,16 @@ test_mouse_click_unfocused_button(void **state)
     const cbx_focus_chain *fc = cbx_manager_focus(&mgr);
     assert_int_equal(fc->focused, 0);  /* tabbar */
 
-    /* Get the controllers tab add button. */
-    cbx_controllers_tab *ct = cbx_manager_controllers_tab(&mgr);
-    assert_non_null(ct);
-
-    /* Install a test callback so we can verify the click fires it. */
+    /* Use an available filesystem-backed action; backend-changing controls
+     * are intentionally hidden while InputPlumber is degraded. */
+    assert_true(send_key(&mgr, SDLK_RIGHT));
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+    assert_non_null(pt);
     mouse_press_count = 0;
-    cbx_button_set_press_cb(&ct->add_btn, on_mouse_press_test, NULL);
+    cbx_button_set_press_cb(&pt->create_btn, on_mouse_press_test, NULL);
 
-    /* Compute the center of the add button. */
     SDL_Rect btn_rect;
-    cbx_widget_get_rect(&ct->add_btn.base, &btn_rect);
+    cbx_widget_get_rect(&pt->create_btn.base, &btn_rect);
     int cx = btn_rect.x + btn_rect.w / 2;
     int cy = btn_rect.y + btn_rect.h / 2;
 
@@ -568,7 +567,7 @@ test_mouse_click_unfocused_button(void **state)
     assert_int_equal(mouse_press_count, 1);
 
     /* The button is now focused (focus follows pointer). */
-    assert_true(ct->add_btn.base.focused);
+    assert_true(pt->create_btn.base.focused);
 
     cbx_manager_shutdown(&mgr);
 }
@@ -717,16 +716,17 @@ test_mouse_motion_updates_hover(void **state)
     /* The tabbar is no longer hovered. */
     assert_false(mgr.tabbar.base.hover);
 
-    /* Move the mouse over the add button. */
-    cbx_controllers_tab *ct = cbx_manager_controllers_tab(&mgr);
+    /* Move the mouse over an available Profiles action. */
+    send_key(&mgr, SDLK_RIGHT);
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
     SDL_Rect btn_rect;
-    cbx_widget_get_rect(&ct->add_btn.base, &btn_rect);
+    cbx_widget_get_rect(&pt->create_btn.base, &btn_rect);
     int btn_cx = btn_rect.x + btn_rect.w / 2;
     int btn_cy = btn_rect.y + btn_rect.h / 2;
     send_mouse_motion(&mgr, btn_cx, btn_cy);
 
-    /* The add button is now hovered. */
-    assert_true(ct->add_btn.base.hover);
+    /* The create button is now hovered. */
+    assert_true(pt->create_btn.base.hover);
     /* The tabbar is not. */
     assert_false(mgr.tabbar.base.hover);
 
