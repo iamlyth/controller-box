@@ -444,7 +444,7 @@ GUI writes ~/.config/systemd/user/controller-box.service →
 systemctl --user enable --now controller-box → done
 ```
 
-The unit runs `flatpak run <app-id> --overlay-service`, has `Restart=always`, and survives reboots.
+The unit runs `flatpak run <app-id> --overlay-service`, uses bounded `Restart=on-failure` backoff, and follows the graphical user session.
 
 ### 9.2 Tarball — fallback (v1)
 
