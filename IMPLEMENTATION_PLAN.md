@@ -250,7 +250,7 @@ dispatch path, and the task that provides executable evidence.
 - Documentation impact: none
 
 ## Task 5: Wire profile editor, create-to-editor flow, and editor UI entry points into manager production path
-- Status: pending
+- Status: complete
 - Dependencies: Task 3, Task 4
 - Scope: `src/manager/profiles_tab.c`, `src/manager/profiles_tab.h`, `src/manager/manager.c`, `src/manager/manager.h`, `src/manager/profile_editor_list.c`, `src/manager/profile_editor_list.h`, `src/manager/profile_editor_seq.c`, `src/manager/profile_editor_seq.h`, `tests/test_profiles_tab.c`, `tests/test_manager_production.c`, `tests/test_manager_visual.c`, `tests/test_golden.c`
 - Acceptance criteria:
@@ -267,8 +267,17 @@ dispatch path, and the task that provides executable evidence.
   - **Update prior visual tests**: `test_manager_visual.c` profile editor tests (tests 7–9) and `test_golden.c` editor baselines (tests 9–11) are updated to verify the editor through the production Edit-button path instead of manually initializing it (fixes §5.6 production-path violation). Golden images may need regeneration — use `CBX_GENERATE_GOLDEN=1` with explicit review.
   - **test_manager_production**: Verifies the editor opens via production dispatch (send SDL events to focus + activate Edit button) and that editor widgets appear in the panel.
   - Existing `test_editor_list_mode.c` and `test_editor_seq_mode.c` still pass (they test the editor in isolation).
-- Verification: `nix-shell --run "ctest --test-dir build-check -R 'test_profiles_tab|test_editor|test_manager_production|test_manager_visual|test_golden' --output-on-failure"` — all pass.
-- Documentation impact: `docs/OPERATIONS.md` — document the profile editor access flow (Edit button, create-to-editor flow, list mode, sequential mode, validation, save).
+:- Verification: `nix-shell --run "ctest --test-dir build-check -R 'test_profiles_tab|test_editor|test_manager_production|test_manager_visual|test_golden' --output-on-failure"` — all pass.
+  - **Verified**: `nix-shell --run "ctest --test-dir build-check --output-on-failure"` — 74/74 pass (1 skip: backend_smoke). No regressions.
+  - **Edit button**: `on_edit_pressed` in profiles_tab.c loads the selected profile from disk and opens the editor via `cbx_profiles_tab_open_editor()`. Production dispatch path verified by `test_editor_opens_via_dispatch` in test_manager_production.c.
+  - **Create-to-editor flow**: `cbx_profiles_tab_name_input_confirm()` now builds an in-memory profile and opens the editor instead of writing a file. File is written on save from the editor via `cbx_profile_save_to_dir()`. Verified by `test_name_input_confirm` and `test_name_input_via_dispatch` in test_profiles_tab.c.
+  - **Editor in panel/focus chain**: Editor widgets are added to the profiles panel; visibility toggled on open/close. Mode tracking uses `pt.mode * 100 + editor.mode` so manager detects editor internal mode changes and rebuilds focus chain.
+  - **Binding edit sub-menu**: New `CBX_EDITOR_MODE_BINDING_EDIT` mode offers Pick Target / Capture / Sequential options. Verified by updated `test_activate_enters_target_pick` in test_editor_list_mode.c.
+  - **expected_sender security fix**: `cbx_profile_editor_set_dbus()` now resolves the unique bus name via `backend->get_unique_name()` and stores it in `ed->expected_sender[128]`. `begin_capture` and `begin_sequential` pass `ed->expected_sender` instead of `IP_DBUS_NAME`. Verified by `test_expected_sender_resolved`, `test_expected_sender_accepts_match`, `test_expected_sender_rejects_mismatch` in test_editor_list_mode.c — a signal from `:1.42` is accepted while `:1.99` is rejected.
+  - **Save and close**: B in editor LIST mode calls `cbx_profiles_tab_save_editor()` which uses `cbx_profile_save_to_dir()` with NES validation. Verified by `test_name_input_confirm` and `test_name_input_via_dispatch`.
+  - **Cancel editor**: Start (Tab key) discards changes and closes editor. Verified in `cbx_profiles_tab_handle_key()`.
+  - **Visual/golden tests updated**: test_manager_visual.c tests 7–9 and test_golden.c tests 9–11 now use the production Edit-button path via `vis_open_editor()`/`g_open_editor()` helpers. Golden images regenerated with `CBX_GENERATE_GOLDEN=1`.
+- Documentation impact: `docs/OPERATIONS.md` — documented the profile editor access flow (Edit button, create-to-editor flow, list mode, sequential mode, validation, save, expected_sender verification).
 
 ## Task 6: Wire overlay DBus InputEvent signal handling for multi-controller input
 - Status: pending

@@ -154,10 +154,12 @@ cbx_profile_editor_begin_sequential(cbx_profile_editor *ed)
     cbx_widget_set_visible(&ed->binding_list.base, false);
     cbx_widget_set_visible(&ed->target_list.base, false);
 
-    /* Initialize input event handler for capture */
+    /* Initialize input event handler — use the unique bus name
+     * (expected_sender) resolved in set_dbus(), NOT the well-known
+     * name (IP_DBUS_NAME).  See profile_editor_list.c for rationale. */
     if (ed->backend && ed->bus) {
         ip_input_events_init(&ed->input_events, ed->backend, ed->bus,
-                              IP_DBUS_NAME,
+                              ed->expected_sender[0] ? ed->expected_sender : NULL,
                               cbx_profile_editor_on_input_event, ed);
         ip_input_events_subscribe(&ed->input_events);
     }

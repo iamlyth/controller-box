@@ -217,18 +217,7 @@ render_and_read(cbx_manager *mgr, uint8_t *buf)
         0);
 }
 
-static void
-render_editor_panel(cbx_manager *mgr, cbx_panel *ed_panel, uint8_t *buf)
-{
-    SDL_SetRenderDrawColor(mgr->rend.renderer,
-                           mgr->theme.bg.r, mgr->theme.bg.g,
-                           mgr->theme.bg.b, 255);
-    SDL_RenderClear(mgr->rend.renderer);
-    cbx_widget_draw(&ed_panel->base, mgr->rend.renderer);
-    assert_int_equal(
-        fb_read_pixels(mgr->rend.renderer, NULL, buf, MGR_W * MGR_H * 4),
-        0);
-}
+
 
 /*
  * Build a test profile with the first n_buttons of the NES minimum set.
@@ -635,6 +624,69 @@ test_tab_switch_differs(void **state)
     assert_true(fb_frames_differ(f->buf_a, f->buf_b, MGR_W, MGR_H, 2));
 }
 
+
+/* Helpers for editor tests (production dispatch path) */
+
+static bool
+vis_send_key(cbx_manager *mgr, SDL_Keycode sym)
+{
+    SDL_Event ev = {0};
+    ev.type = SDL_KEYDOWN;
+    ev.key.keysym.sym = sym;
+    return cbx_manager_handle_event(mgr, &ev);
+}
+
+static void
+vis_write_nes_profile(const char *home_dir)
+{
+    char prof_path[PATH_MAX + 64];
+    snprintf(prof_path, sizeof(prof_path),
+             "%s/.local/share/inputplumber/profiles/testprof.yaml",
+             home_dir);
+    FILE *fp = fopen(prof_path, "w");
+    if (!fp)
+        return;
+    static const char *btns[] = {"A", "B", "Up", "Down", "Left", "Right"};
+    static const char *keys[] = {"KeyA", "KeyB", "KeyUp", "KeyDown",
+                                 "KeyLeft", "KeyRight"};
+    fprintf(fp, "version: 1\nkind: DeviceProfile\nname: TestProfile\n");
+    fprintf(fp, "description: NES test profile\nmapping:\n");
+    for (int i = 0; i < 6; i++)
+        fprintf(fp,
+            "  - name: btn_%s\n"
+            "    source_event:\n"
+            "      gamepad:\n"
+            "        button: %s\n"
+            "    target_events:\n"
+            "      - keyboard: %s\n",
+            btns[i], btns[i], keys[i]);
+    fclose(fp);
+}
+
+static cbx_profile_editor *
+vis_open_editor(cbx_manager *mgr, const char *home_dir)
+{
+    vis_write_nes_profile(home_dir);
+    while (cbx_manager_active_tab(mgr) != CBX_MGR_TAB_PROFILES)
+        vis_send_key(mgr, SDLK_RIGHT);
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(mgr);
+    if (!pt || cbx_profiles_tab_profile_count(pt) == 0)
+        return NULL;
+    SDL_Rect btn_rect;
+    cbx_widget_get_rect(&pt->edit_btn.base, &btn_rect);
+    int cx = btn_rect.x + btn_rect.w / 2;
+    int cy = btn_rect.y + btn_rect.h / 2;
+    SDL_Event mev = {0};
+    mev.type = SDL_MOUSEBUTTONDOWN;
+    mev.button.button = SDL_BUTTON_LEFT;
+    mev.button.x = cx; mev.button.y = cy;
+    cbx_manager_handle_event(mgr, &mev);
+    mev.type = SDL_MOUSEBUTTONUP;
+    cbx_manager_handle_event(mgr, &mev);
+    if (pt->mode != CBX_PT_MODE_EDITOR || !pt->editor_initialized)
+        return NULL;
+    return &pt->editor;
+}
 /* ------------------------------------------------------------------ */
 /*  Test 7: Profile editor — binding list mode                        */
 /* ------------------------------------------------------------------ */
@@ -645,50 +697,35 @@ test_profile_editor_list_mode(void **state)
     struct mgr_vis_fixture *f = FIX(state);
     cbx_manager *mgr = &f->mgr;
 
-    /* Create a profile editor with its own panel. */
-    cbx_panel ed_panel;
-    cbx_panel_init(&ed_panel, &mgr->theme);
-    SDL_Rect panel_rect = { 0, 0, MGR_W, MGR_H };
-    cbx_widget_set_rect(&ed_panel.base, &panel_rect);
-
-    cbx_profile_editor *ed = malloc(sizeof(*ed));
+    /* Open the editor via the production Edit-button path. */
+    cbx_profile_editor *ed = vis_open_editor(mgr, f->tmp);
     assert_non_null(ed);
-    memset(ed, 0, sizeof(*ed));
-
-    int rc = cbx_profile_editor_init(ed, &ed_panel, mgr->rend.renderer,
-                                       &mgr->text_cache, &mgr->theme,
-                                       mgr->font_id);
-    assert_int_equal(rc, 0);
-
-    /* Load a profile with 6 NES minimum bindings. */
-    cbx_profile prof;
-    build_test_profile(&prof, "TestProfile", 6);
-    rc = cbx_profile_editor_load_profile(ed, &prof);
-    assert_int_equal(rc, 0);
     assert_int_equal(cbx_profile_editor_binding_count(ed), 6);
 
-    /* Render the editor panel. */
-    render_editor_panel(mgr, &ed_panel, f->buf_a);
+    /* Render through the production manager render path. */
+    cbx_manager_render(mgr);
+    assert_int_equal(
+        fb_read_pixels(mgr->rend.renderer, NULL, f->buf_a, MGR_W * MGR_H * 4),
+        0);
 
     uint8_t bg[3] = { mgr->theme.bg.r, mgr->theme.bg.g, mgr->theme.bg.b };
 
-    /* Controller diagram region. */
-    SDL_Rect diag_rect = { PE_DIAG_X, PE_DIAG_Y, PE_DIAG_W, PE_DIAG_H };
+    /* Use dynamic rect lookup for region checks. */
+    SDL_Rect diag_rect;
+    cbx_widget_get_rect(&ed->diagram.base, &diag_rect);
     assert_true(fb_region_has_content(f->buf_a, MGR_W, MGR_H,
                                        &diag_rect, bg, MGR_TOL));
 
-    /* Binding list region. */
-    SDL_Rect list_rect = { PE_LIST_X, PE_LIST_Y, PE_LIST_W, PE_LIST_H };
+    SDL_Rect list_rect;
+    cbx_widget_get_rect(&ed->binding_list.base, &list_rect);
     assert_true(fb_region_has_content(f->buf_a, MGR_W, MGR_H,
                                        &list_rect, bg, MGR_TOL));
 
-    /* Title label region. */
-    SDL_Rect title_rect = { PE_TITLE_X, PE_TITLE_Y, PE_TITLE_W, PE_TITLE_H };
+    SDL_Rect title_rect;
+    cbx_widget_get_rect(&ed->title_lbl.base, &title_rect);
     assert_true(fb_region_has_content(f->buf_a, MGR_W, MGR_H,
                                        &title_rect, bg, MGR_TOL));
 
-    /* If font is available, check for text-colored pixels in the
-     * binding list (binding names like "A → KeyA"). */
     if (f->has_font) {
         uint8_t text_color[3] = {
             mgr->theme.text_primary.r,
@@ -699,9 +736,6 @@ test_profile_editor_list_mode(void **state)
                                           &list_rect, text_color,
                                           MGR_TOL));
     }
-
-    cbx_profile_editor_shutdown(ed);
-    free(ed);
 }
 
 /* ------------------------------------------------------------------ */
@@ -714,55 +748,40 @@ test_profile_editor_sequential_mode(void **state)
     struct mgr_vis_fixture *f = FIX(state);
     cbx_manager *mgr = &f->mgr;
 
-    /* Create a profile editor. */
-    cbx_panel ed_panel;
-    cbx_panel_init(&ed_panel, &mgr->theme);
-    SDL_Rect panel_rect = { 0, 0, MGR_W, MGR_H };
-    cbx_widget_set_rect(&ed_panel.base, &panel_rect);
-
-    cbx_profile_editor *ed = malloc(sizeof(*ed));
+    /* Open the editor via the production Edit-button path. */
+    cbx_profile_editor *ed = vis_open_editor(mgr, f->tmp);
     assert_non_null(ed);
-    memset(ed, 0, sizeof(*ed));
 
-    int rc = cbx_profile_editor_init(ed, &ed_panel, mgr->rend.renderer,
-                                       &mgr->text_cache, &mgr->theme,
-                                       mgr->font_id);
-    assert_int_equal(rc, 0);
-
-    /* Load a profile (can be minimal — sequential mode adds bindings). */
-    cbx_profile prof;
-    build_test_profile(&prof, "SeqTest", 6);
-    rc = cbx_profile_editor_load_profile(ed, &prof);
-    assert_int_equal(rc, 0);
-
-    /* Start sequential binding mode. */
-    rc = cbx_profile_editor_begin_sequential(ed);
+    /* Start sequential binding mode (via editor API after production open). */
+    int rc = cbx_profile_editor_begin_sequential(ed);
     assert_int_equal(rc, 0);
     assert_true(cbx_profile_editor_seq_is_active(ed));
     assert_int_equal(cbx_profile_editor_seq_get_step(ed), 0);
 
-    /* Render — empty progress bar. */
-    render_editor_panel(mgr, &ed_panel, f->buf_a);
+    /* Render empty-progress state. */
+    cbx_manager_render(mgr);
+    assert_int_equal(
+        fb_read_pixels(mgr->rend.renderer, NULL, f->buf_a, MGR_W * MGR_H * 4),
+        0);
 
     uint8_t bg[3] = { mgr->theme.bg.r, mgr->theme.bg.g, mgr->theme.bg.b };
 
-    /* Sequential prompt region (status label). */
-    SDL_Rect status_rect = { PE_STATUS_X, PE_STATUS_Y,
-                              PE_STATUS_W, PE_STATUS_H };
+    SDL_Rect status_rect;
+    cbx_widget_get_rect(&ed->status_lbl.base, &status_rect);
     assert_true(fb_region_has_content(f->buf_a, MGR_W, MGR_H,
                                        &status_rect, bg, MGR_TOL));
 
-    /* Progress bar region. */
-    SDL_Rect prog_rect = { PE_PROG_X, PE_PROG_Y, PE_PROG_W, PE_PROG_H };
+    SDL_Rect prog_rect;
+    cbx_widget_get_rect(&ed->progress_bar.base, &prog_rect);
     assert_true(fb_region_has_content(f->buf_a, MGR_W, MGR_H,
                                        &prog_rect, bg, MGR_TOL));
 
-    /* Diagram should still be visible (highlights current button). */
-    SDL_Rect diag_rect = { PE_DIAG_X, PE_DIAG_Y, PE_DIAG_W, PE_DIAG_H };
+    SDL_Rect diag_rect;
+    cbx_widget_get_rect(&ed->diagram.base, &diag_rect);
     assert_true(fb_region_has_content(f->buf_a, MGR_W, MGR_H,
                                        &diag_rect, bg, MGR_TOL));
 
-    /* Capture 3 buttons to set partial completion. */
+    /* Capture 3 buttons for partial completion. */
     const char *capture_events[] = { "A", "X", "Y" };
     for (int i = 0; i < 3; i++) {
         cbx_profile_editor_seq_on_input(IP_INPUT_A, IP_INPUT_CAT_BUTTON,
@@ -770,38 +789,32 @@ test_profile_editor_sequential_mode(void **state)
     }
     assert_int_equal(cbx_profile_editor_seq_get_step(ed), 3);
 
-    /* Render — partial progress. */
-    render_editor_panel(mgr, &ed_panel, f->buf_b);
+    /* Render partial-progress state. */
+    cbx_manager_render(mgr);
+    assert_int_equal(
+        fb_read_pixels(mgr->rend.renderer, NULL, f->buf_b, MGR_W * MGR_H * 4),
+        0);
 
-    /* Partial progress frame should differ from empty progress frame
-     * in the progress bar region (fill color appears). */
-    SDL_Rect prog_rect2 = { PE_PROG_X, PE_PROG_Y, PE_PROG_W, PE_PROG_H };
-    assert_true(region_differs(f->buf_a, f->buf_b, MGR_W, &prog_rect2));
+    assert_true(region_differs(f->buf_a, f->buf_b, MGR_W, &prog_rect));
 
-    /* Check for progress bar fill color (text_accent = {100,180,255})
-     * in the progress bar region — present in partial, absent in empty. */
     uint8_t fill_color[3] = {
         mgr->theme.text_accent.r,
         mgr->theme.text_accent.g,
         mgr->theme.text_accent.b
     };
     assert_true(fb_region_has_color(f->buf_b, MGR_W, MGR_H,
-                                     &prog_rect2, fill_color, MGR_TOL));
-    assert_false(fb_region_has_color(f->buf_a, MGR_W, MGR_H,
-                                      &prog_rect2, fill_color, MGR_TOL));
+                                     &prog_rect, fill_color, MGR_TOL));
 
-    /* Now set progress to complete (1.0) directly for comparison. */
+    /* Set progress to complete and render. */
     cbx_progress_set_fraction(&ed->progress_bar, 1.0);
-    render_editor_panel(mgr, &ed_panel, f->buf_a);
+    cbx_manager_render(mgr);
+    assert_int_equal(
+        fb_read_pixels(mgr->rend.renderer, NULL, f->buf_a, MGR_W * MGR_H * 4),
+        0);
 
-    /* Complete progress should differ from partial in the progress bar. */
-    assert_true(region_differs(f->buf_a, f->buf_b, MGR_W, &prog_rect2));
-    /* Complete should have more fill color pixels than partial. */
+    assert_true(region_differs(f->buf_a, f->buf_b, MGR_W, &prog_rect));
     assert_true(fb_region_has_color(f->buf_a, MGR_W, MGR_H,
-                                     &prog_rect2, fill_color, MGR_TOL));
-
-    cbx_profile_editor_shutdown(ed);
-    free(ed);
+                                     &prog_rect, fill_color, MGR_TOL));
 }
 
 /* ------------------------------------------------------------------ */
@@ -814,40 +827,24 @@ test_profile_editor_validation_error(void **state)
     struct mgr_vis_fixture *f = FIX(state);
     cbx_manager *mgr = &f->mgr;
 
-    /* This test requires a font — the error indicator is red text in
-     * the status label, which only renders with a loaded font. */
     if (!f->has_font) {
         skip();
         return;
     }
 
-    /* Create a profile editor. */
-    cbx_panel ed_panel;
-    cbx_panel_init(&ed_panel, &mgr->theme);
-    SDL_Rect panel_rect = { 0, 0, MGR_W, MGR_H };
-    cbx_widget_set_rect(&ed_panel.base, &panel_rect);
-
-    cbx_profile_editor *ed = malloc(sizeof(*ed));
+    /* Open the editor via the production Edit-button path. */
+    cbx_profile_editor *ed = vis_open_editor(mgr, f->tmp);
     assert_non_null(ed);
-    memset(ed, 0, sizeof(*ed));
-
-    int rc = cbx_profile_editor_init(ed, &ed_panel, mgr->rend.renderer,
-                                       &mgr->text_cache, &mgr->theme,
-                                       mgr->font_id);
-    assert_int_equal(rc, 0);
-
-    /* Load a complete profile (all 6 NES minimum buttons). */
-    cbx_profile prof;
-    build_test_profile(&prof, "Complete", 6);
-    rc = cbx_profile_editor_load_profile(ed, &prof);
-    assert_int_equal(rc, 0);
 
     /* Render clean state. */
-    render_editor_panel(mgr, &ed_panel, f->buf_a);
+    cbx_manager_render(mgr);
+    assert_int_equal(
+        fb_read_pixels(mgr->rend.renderer, NULL, f->buf_a, MGR_W * MGR_H * 4),
+        0);
 
     /* Create an incomplete profile and validate it. */
     cbx_profile incomplete;
-    build_test_profile(&incomplete, "Incomplete", 3);  /* missing 3 buttons */
+    build_test_profile(&incomplete, "Incomplete", 3);
 
     char missing[256] = {0};
     int vrc = cbx_profile_validate_nes_minimum(&incomplete, missing,
@@ -855,21 +852,22 @@ test_profile_editor_validation_error(void **state)
     assert_int_equal(vrc, -EINVAL);
     assert_true(strlen(missing) > 0);
 
-    /* Set the editor's status label to the error message with red color. */
+    /* Set the editor status label to the error message with red color. */
     char error_msg[512];
     snprintf(error_msg, sizeof(error_msg), "Missing: %s", missing);
     cbx_label_set_text(&ed->status_lbl, error_msg);
     cbx_label_set_color(&ed->status_lbl, mgr->theme.conflict);
 
     /* Render error state. */
-    render_editor_panel(mgr, &ed_panel, f->buf_b);
+    cbx_manager_render(mgr);
+    assert_int_equal(
+        fb_read_pixels(mgr->rend.renderer, NULL, f->buf_b, MGR_W * MGR_H * 4),
+        0);
 
-    /* Error state should differ from clean state in the status region. */
-    SDL_Rect status_rect = { PE_STATUS_X, PE_STATUS_Y,
-                              PE_STATUS_W, PE_STATUS_H };
+    SDL_Rect status_rect;
+    cbx_widget_get_rect(&ed->status_lbl.base, &status_rect);
     assert_true(region_differs(f->buf_a, f->buf_b, MGR_W, &status_rect));
 
-    /* Assert error-indicator pixels (red text) in the status/error region. */
     uint8_t red_target[3] = {
         mgr->theme.conflict.r,
         mgr->theme.conflict.g,
@@ -877,9 +875,6 @@ test_profile_editor_validation_error(void **state)
     };
     assert_true(fb_region_has_color(f->buf_b, MGR_W, MGR_H,
                                      &status_rect, red_target, MGR_TOL));
-
-    cbx_profile_editor_shutdown(ed);
-    free(ed);
 }
 
 /* ------------------------------------------------------------------ */

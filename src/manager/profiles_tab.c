@@ -9,6 +9,8 @@
  */
 #include "manager/profiles_tab.h"
 #include "manager/profile_save.h"
+#include "manager/profile_editor_list.h"
+#include "manager/profile_editor_seq.h"
 
 #include <SDL2/SDL.h>
 #include <errno.h>
@@ -83,6 +85,12 @@ delete_sidecar(cbx_profiles_tab *tab, const char *profile_name)
 
 static void on_create_source_selected(cbx_widget *w, int index,
                                          void *user_data);
+static int  cbx_profiles_tab_open_editor(cbx_profiles_tab *tab,
+                                            const cbx_profile *profile,
+                                            const char *name,
+                                            bool is_new);
+static void cbx_profiles_tab_close_editor(cbx_profiles_tab *tab);
+static int  cbx_profiles_tab_save_editor(cbx_profiles_tab *tab);
 
 /* ------------------------------------------------------------------ */
 /*  Button callbacks                                                   */
@@ -117,11 +125,27 @@ static void
 on_edit_pressed(cbx_widget *w, void *user_data)
 {
     (void)w;
-    /* Editing is handled by Task 37/38 — this is a placeholder. */
     cbx_profiles_tab *tab = (cbx_profiles_tab *)user_data;
     if (!tab || !tab->panel)
         return;
-    /* No-op for now; the editor is a separate task. */
+
+    /* Sync the list selection to the tab's selected_profile. */
+    tab->selected_profile = cbx_list_get_selected(&tab->profile_list_w);
+    int idx = tab->selected_profile;
+    if (idx < 0 || idx >= tab->profiles.count)
+        return;
+
+    const cbx_profile_entry *e = &tab->profiles.entries[idx];
+
+    /* Load the profile from disk. */
+    cbx_profile prof;
+    cbx_profile_init(&prof);
+    int rc = cbx_profile_load(&prof, e->path);
+    if (rc != 0)
+        return;
+
+    /* Open the editor with the loaded profile. */
+    cbx_profiles_tab_open_editor(tab, &prof, e->filename, false);
 }
 
 /* ------------------------------------------------------------------ */
@@ -261,6 +285,12 @@ cbx_profiles_tab_shutdown(cbx_profiles_tab *tab)
 {
     if (!tab)
         return;
+
+    /* Shut down the editor if it was initialised. */
+    if (tab->editor_initialized) {
+        cbx_profile_editor_shutdown(&tab->editor);
+        tab->editor_initialized = false;
+    }
 
     if (tab->panel) {
         cbx_panel_remove_child(tab->panel, &tab->profile_list_w.base);
@@ -543,15 +573,63 @@ cbx_profiles_tab_name_input_confirm(cbx_profiles_tab *tab)
     if (tab->name_len == 0)
         return -EINVAL;
 
-    /* Return to list mode first. */
     cbx_pt_create_source src = tab->create_source;
     char name[CBX_PT_NAME_LEN];
     snprintf(name, sizeof(name), "%s", tab->name_buf);
 
+    /* Cancel name input (resets mode to LIST, clears buffer). */
     cbx_profiles_tab_name_input_cancel(tab);
 
-    /* Create the profile. */
-    return cbx_profiles_tab_create(tab, name, src);
+    /* Validate the name. */
+    if (!cbx_validate_filename(name))
+        return -EINVAL;
+
+    /* Check if a profile with this name already exists. */
+    for (int i = 0; i < tab->profiles.count; i++) {
+        if (strcmp(tab->profiles.entries[i].filename, name) == 0)
+            return -EEXIST;
+    }
+
+    /* Build the in-memory profile based on the source. */
+    cbx_profile prof;
+    cbx_profile_init(&prof);
+    snprintf(prof.name, sizeof(prof.name), "%s", name);
+
+    if (src == CBX_PT_CREATE_DEFAULT_COPY || src == CBX_PT_CREATE_CLONE) {
+        const cbx_profile_entry *src_entry = NULL;
+
+        if (src == CBX_PT_CREATE_DEFAULT_COPY) {
+            for (int i = 0; i <tab->profiles.count; i++) {
+                if (tab->profiles.entries[i].is_default) {
+                    src_entry = &tab->profiles.entries[i];
+                    break;
+                }
+            }
+            if (!src_entry)
+                return -ENOENT;
+        } else {
+            int idx = tab->selected_profile;
+            if (idx < 0 || idx >= tab->profiles.count)
+                return -EINVAL;
+            src_entry = &tab->profiles.entries[idx];
+        }
+
+        cbx_profile src_prof;
+        cbx_profile_init(&src_prof);
+        int rc = cbx_profile_load(&src_prof, src_entry->path);
+        if (rc != 0)
+            return rc;
+
+        prof.mapping_count = src_prof.mapping_count;
+        for (int i = 0; i < src_prof.mapping_count; i++)
+            prof.mappings[i] = src_prof.mappings[i];
+    }
+    /* CBX_PT_CREATE_EMPTY: leave mappings empty. */
+
+    /* Open the editor with the in-memory profile.  No file is
+     * written until the user saves from the editor (which
+     * validates NES minimum bindings via cbx_profile_save_to_dir). */
+    return cbx_profiles_tab_open_editor(tab, &prof, name, true);
 }
 
 void
@@ -728,6 +806,8 @@ cbx_profiles_tab_activate(cbx_profiles_tab *tab)
             cbx_widget_set_visible(&tab->create_picker.base, false);
             return cbx_profiles_tab_begin_create(tab, source);
         }
+    case CBX_PT_MODE_EDITOR:
+        return cbx_profile_editor_activate(&tab->editor);
     case CBX_PT_MODE_LIST:
     default:
         /* No tab-level activation in list mode. */
@@ -751,6 +831,24 @@ cbx_profiles_tab_cancel(cbx_profiles_tab *tab)
     case CBX_PT_MODE_CREATE_PICK:
         cbx_profiles_tab_cancel_create_pick(tab);
         return true;
+    case CBX_PT_MODE_EDITOR:
+        {
+            cbx_editor_mode em = cbx_profile_editor_get_mode(&tab->editor);
+            if (em == CBX_EDITOR_MODE_LIST) {
+                /* B in LIST mode: save and close. */
+                cbx_profiles_tab_save_editor(tab);
+                return true;
+            } else if (em == CBX_EDITOR_MODE_SEQUENTIAL) {
+                /* B in SEQUENTIAL: skip current binding. */
+                cbx_profile_editor_seq_skip(&tab->editor);
+                return true;
+            } else {
+                /* B in TARGET_PICK / CAPTURE / BINDING_EDIT:
+                 * cancel the sub-mode, return to editor LIST. */
+                cbx_profile_editor_cancel(&tab->editor);
+                return true;
+            }
+        }
     default:
         return false;
     }
@@ -815,6 +913,34 @@ cbx_profiles_tab_handle_key(cbx_profiles_tab *tab, const SDL_Event *ev)
         }
         return false;
 
+    case CBX_PT_MODE_EDITOR:
+        /* Start (TAB) key: cancel editor (discard) or cancel sequential. */
+        if (key == SDLK_TAB) {
+            cbx_editor_mode em = cbx_profile_editor_get_mode(&tab->editor);
+            if (em == CBX_EDITOR_MODE_SEQUENTIAL)
+                cbx_profile_editor_cancel_sequential(&tab->editor);
+            else if (em == CBX_EDITOR_MODE_LIST)
+                cbx_profiles_tab_close_editor(tab);
+            return true;
+        }
+        /* Up/Down: editor navigation (intercept before the list widget
+         * so the editor can sync the diagram highlight). */
+        if (key == SDLK_UP) {
+            cbx_profile_editor_move_up(&tab->editor);
+            return true;
+        }
+        if (key == SDLK_DOWN) {
+            cbx_profile_editor_move_down(&tab->editor);
+            return true;
+        }
+        /* A/B/Return/Escape KEYDOWN: swallow so the focused widget
+         * gets the KEYUP for activation/cancel via the manager. */
+        if (key == SDLK_a || key == SDLK_RETURN || key == SDLK_SPACE)
+            return true;
+        if (key == SDLK_b || key == SDLK_ESCAPE)
+            return true;
+        return false;
+
     default:
         return false;
     }
@@ -831,6 +957,172 @@ cbx_profiles_tab_set_test_dirs(cbx_profiles_tab *tab,
     tab->test_user_dir   = user_dir;
     tab->test_system_dir = system_dir;
     tab->test_meta_dir   = meta_dir;
+}
+
+void
+cbx_profiles_tab_set_context(cbx_profiles_tab *tab,
+                                SDL_Renderer *renderer,
+                                const ip_dbus_backend *backend,
+                                ip_bus_handle bus)
+{
+    if (!tab)
+        return;
+    tab->renderer     = renderer;
+    tab->dbus_backend = backend;
+    tab->dbus_bus     = bus;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Profile editor open / close / save (Task 5)                       */
+/* ------------------------------------------------------------------ */
+
+static void
+hide_tab_widgets(cbx_profiles_tab *tab)
+{
+    cbx_widget_set_visible(&tab->profile_list_w.base, false);
+    cbx_widget_set_visible(&tab->create_btn.base, false);
+    cbx_widget_set_visible(&tab->edit_btn.base, false);
+    cbx_widget_set_visible(&tab->delete_btn.base, false);
+    cbx_widget_set_visible(&tab->status_lbl.base, false);
+    cbx_widget_set_visible(&tab->create_picker.base, false);
+}
+
+static void
+show_tab_widgets(cbx_profiles_tab *tab)
+{
+    cbx_widget_set_visible(&tab->profile_list_w.base, true);
+    cbx_widget_set_visible(&tab->create_btn.base, true);
+    cbx_widget_set_visible(&tab->edit_btn.base, true);
+    cbx_widget_set_visible(&tab->delete_btn.base, true);
+    /* status_lbl and create_picker stay hidden in list mode */
+}
+
+/* Open the profile editor with the given profile.  If is_new is true,
+ * no file exists yet — the profile is in-memory and will be saved
+ * on editor close.  If is_new is false, the profile is an existing
+ * file being edited. */
+static int
+cbx_profiles_tab_open_editor(cbx_profiles_tab *tab,
+                              const cbx_profile *profile,
+                              const char *name,
+                              bool is_new)
+{
+    if (!tab || !tab->panel || !profile || !name)
+        return -EINVAL;
+
+    /* Lazy-initialise the editor on first use. */
+    if (!tab->editor_initialized) {
+        if (!tab->renderer)
+            return -EINVAL;
+        int rc = cbx_profile_editor_init(&tab->editor,
+                                            tab->panel,
+                                            tab->renderer,
+                                            tab->text_cache,
+                                            tab->theme,
+                                            tab->font_id);
+        if (rc != 0)
+            return rc;
+        tab->editor_initialized = true;
+    }
+
+    /* Load the profile into the editor. */
+    int rc = cbx_profile_editor_load_profile(&tab->editor, profile);
+    if (rc != 0)
+        return rc;
+
+    /* Set DBus info (for capture mode and capabilities). */
+    if (tab->dbus_backend && tab->dbus_bus)
+        cbx_profile_editor_set_dbus(&tab->editor,
+                                      tab->dbus_backend,
+                                      tab->dbus_bus, NULL);
+
+    /* Refresh to populate the binding list. */
+    cbx_profile_editor_refresh(&tab->editor);
+
+    /* Store the profile name for saving. */
+    snprintf(tab->editor_profile_name, sizeof(tab->editor_profile_name),
+              "%s", name);
+    tab->editor_is_new = is_new;
+
+    /* Hide tab widgets, editor widgets are shown by editor init/refresh. */
+    hide_tab_widgets(tab);
+
+    tab->mode = CBX_PT_MODE_EDITOR;
+
+    return 0;
+}
+
+/* Close the editor and return to the profiles list. */
+static void
+cbx_profiles_tab_close_editor(cbx_profiles_tab *tab)
+{
+    if (!tab)
+        return;
+
+    /* Hide editor widgets. */
+    if (tab->editor_initialized) {
+        cbx_widget_set_visible(&tab->editor.title_lbl.base, false);
+        cbx_widget_set_visible(&tab->editor.diagram.base, false);
+        cbx_widget_set_visible(&tab->editor.binding_list.base, false);
+        cbx_widget_set_visible(&tab->editor.target_list.base, false);
+        cbx_widget_set_visible(&tab->editor.status_lbl.base, false);
+        cbx_widget_set_visible(&tab->editor.progress_bar.base, false);
+    }
+
+    /* Show tab widgets. */
+    show_tab_widgets(tab);
+
+    tab->mode = CBX_PT_MODE_LIST;
+}
+
+/* Save the editor's profile to disk via the security-hardened save
+ * path (cbx_profile_save_to_dir).  Returns 0 on success, negative
+ * errno on failure (e.g. NES validation error).  On failure, the
+ * editor stays open with an error message. */
+static int
+cbx_profiles_tab_save_editor(cbx_profiles_tab *tab)
+{
+    if (!tab || !tab->editor_initialized)
+        return -EINVAL;
+
+    const cbx_profile *prof = cbx_profile_editor_get_profile(&tab->editor);
+    if (!prof)
+        return -EINVAL;
+
+    char missing_buf[CBX_PT_LABEL_LEN];
+    int rc = cbx_profile_save_to_dir(prof,
+                                       tab->editor_profile_name,
+                                       NULL,
+                                       tab->test_user_dir,
+                                       missing_buf, sizeof(missing_buf));
+    if (rc != 0) {
+        if (rc == -EINVAL && missing_buf[0] != '\0') {
+            /* NES minimum validation failed — show missing buttons. */
+            char msg[CBX_PT_LABEL_LEN + 16];
+            snprintf(msg, sizeof(msg), "Missing: %s", missing_buf);
+            cbx_label_set_text(&tab->editor.status_lbl, msg);
+        } else {
+            cbx_label_set_text(&tab->editor.status_lbl,
+                                 "Save failed.");
+        }
+        return rc;
+    }
+
+    /* Save succeeded — close editor and refresh list. */
+    cbx_profiles_tab_close_editor(tab);
+    cbx_profiles_tab_refresh(tab);
+
+    /* Select the saved profile. */
+    for (int i = 0; i < tab->profiles.count; i++) {
+        if (strcmp(tab->profiles.entries[i].filename,
+                    tab->editor_profile_name) == 0) {
+            tab->selected_profile = i;
+            cbx_list_set_selected(&tab->profile_list_w, i);
+            break;
+        }
+    }
+
+    return 0;
 }
 
 /* ------------------------------------------------------------------ */

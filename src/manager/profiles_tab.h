@@ -22,6 +22,8 @@
 #include "ui/text.h"               /* cbx_text_cache */
 #include "ui/theme.h"             /* cbx_theme */
 #include "config/config_profile_list.h" /* cbx_profile_list, cbx_profile_entry */
+#include "manager/profile_editor_list.h" /* cbx_profile_editor */
+#include "dbus_mock.h"            /* ip_dbus_backend, ip_bus_handle */
 
 /* ------------------------------------------------------------------ */
 /*  Limits                                                            */
@@ -49,6 +51,7 @@ typedef enum {
     CBX_PT_MODE_CONFIRM_DELETE,    /* "Delete <name>?  A=Yes B=No"       */
     CBX_PT_MODE_NAME_INPUT,       /* entering a new profile name         */
     CBX_PT_MODE_CREATE_PICK,      /* pick create source (default/empty/clone) */
+    CBX_PT_MODE_EDITOR,           /* profile editor is active             */
 } cbx_pt_mode;
 
 /* ------------------------------------------------------------------ */
@@ -91,6 +94,17 @@ typedef struct {
     const char *test_user_dir;      /* override user profiles dir       */
     const char *test_system_dir;    /* override system profiles dir     */
     const char *test_meta_dir;      /* override sidecar metadata dir     */
+
+    /* --- Profile editor (lazy-initialised, Task 5) ----------------- */
+    cbx_profile_editor editor;      /* editor instance (owned)           */
+    bool editor_initialized;        /* editor has been initialised        */
+    bool editor_is_new;             /* creating new profile (vs editing) */
+    char editor_profile_name[CBX_PT_NAME_LEN]; /* name for saving       */
+
+    /* --- Context for editor init (borrowed, set via set_context) --- */
+    SDL_Renderer        *renderer;
+    const ip_dbus_backend *dbus_backend;
+    ip_bus_handle          dbus_bus;
 } cbx_profiles_tab;
 
 /* ------------------------------------------------------------------ */
@@ -129,6 +143,18 @@ void cbx_profiles_tab_set_test_dirs(cbx_profiles_tab *tab,
                                        const char *user_dir,
                                        const char *system_dir,
                                        const char *meta_dir);
+
+/*
+ * Set rendering and DBus context for the profile editor.
+ * Must be called after init and before the editor is opened.
+ * The renderer is needed for editor widget creation (diagram texture).
+ * The DBus backend/bus are needed for capture mode and capability
+ * loading (optional — editor works without them in degraded mode).
+ */
+void cbx_profiles_tab_set_context(cbx_profiles_tab *tab,
+                                    SDL_Renderer *renderer,
+                                    const ip_dbus_backend *backend,
+                                    ip_bus_handle bus);
 
 /*
  * Refresh the profile list: re-enumerate from filesystem and rebuild

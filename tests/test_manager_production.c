@@ -18,6 +18,8 @@
 #include <SDL2/SDL_ttf.h>
 
 #include "manager/manager.h"
+#include "manager/profiles_tab.h"
+#include "manager/profile_editor_list.h"
 #include "ui/widget.h"
 #include "ui/focus.h"
 #include "config/config_paths.h"
@@ -295,6 +297,70 @@ static void test_render_with_font(void **state)
     cbx_manager_shutdown(&mgr);
 }
 
+/* (g) Profile editor opens via production dispatch: write a NES profile,
+ *     switch to Profiles tab, click the Edit button, verify editor is open. */
+static void test_editor_opens_via_dispatch(void **state)
+{
+    mp_fixture *f = FIX(state);
+    ensure_dummy_driver();
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+
+    /* Write a user profile with NES bindings to the profiles directory. */
+    char prof_path[PATH_MAX + 64];
+    snprintf(prof_path, sizeof(prof_path),
+             "%s/.local/share/inputplumber/profiles/testprof.yaml", f->tmp);
+    FILE *fp = fopen(prof_path, "w");
+    assert_non_null(fp);
+    fprintf(fp, "version: 1\nkind: DeviceProfile\nname: TestProf\n");
+    fprintf(fp, "description: NES test profile\nmapping:\n");
+    const char *btns[] = {"A", "B", "Up", "Down", "Left", "Right"};
+    const char *keys[] = {"KeyA", "KeyB", "KeyUp", "KeyDown",
+                         "KeyLeft", "KeyRight"};
+    for (int i = 0; i < 6; i++)
+        fprintf(fp,
+            "  - name: btn_%s\n"
+            "    source_event:\n"
+            "      gamepad:\n"
+            "        button: %s\n"
+            "    target_events:\n"
+            "      - keyboard: %s\n",
+            btns[i], btns[i], keys[i]);
+    fclose(fp);
+
+    /* Switch to Profiles tab (triggers refresh). */
+    while (cbx_manager_active_tab(&mgr) != CBX_MGR_TAB_PROFILES)
+        send_key(&mgr, SDLK_RIGHT);
+
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+    assert_non_null(pt);
+    assert_true(cbx_profiles_tab_profile_count(pt) > 0);
+
+    /* Click on the Edit button to open the editor. */
+    SDL_Rect btn_rect;
+    cbx_widget_get_rect(&pt->edit_btn.base, &btn_rect);
+    int cx = btn_rect.x + btn_rect.w / 2;
+    int cy = btn_rect.y + btn_rect.h / 2;
+    SDL_Event mev = {0};
+    mev.type = SDL_MOUSEBUTTONDOWN;
+    mev.button.button = SDL_BUTTON_LEFT;
+    mev.button.x = cx; mev.button.y = cy;
+    cbx_manager_handle_event(&mgr, &mev);
+    mev.type = SDL_MOUSEBUTTONUP;
+    cbx_manager_handle_event(&mgr, &mev);
+
+    /* Verify the editor is open via production dispatch. */
+    assert_int_equal(pt->mode, CBX_PT_MODE_EDITOR);
+    assert_true(pt->editor_initialized);
+    assert_true(cbx_widget_is_visible(&pt->editor.binding_list.base));
+    assert_true(cbx_widget_is_visible(&pt->editor.diagram.base));
+
+    /* Verify the profile was loaded into the editor. */
+    assert_int_equal(cbx_profile_editor_binding_count(&pt->editor), 6);
+
+    cbx_manager_shutdown(&mgr);
+}
+
 /* ------------------------------------------------------------------ */
 /*  Test runner                                                        */
 /* ------------------------------------------------------------------ */
@@ -306,6 +372,7 @@ static const struct CMUnitTest tests[] = {
     cmocka_unit_test_setup_teardown(test_tab_switching, setup, teardown),
     cmocka_unit_test_setup_teardown(test_shutdown_clean, setup, teardown),
     cmocka_unit_test_setup_teardown(test_render_with_font, setup, teardown),
+    cmocka_unit_test_setup_teardown(test_editor_opens_via_dispatch, setup, teardown),
 };
 
 int main(void)

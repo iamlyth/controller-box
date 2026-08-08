@@ -245,6 +245,8 @@ init_tab(pt_fixture *f)
                             f->mgr.font_id);
     cbx_profiles_tab_set_test_dirs(&f->tab, f->env.user_dir,
                                      f->env.system_dir, f->env.meta_dir);
+    cbx_profiles_tab_set_context(&f->tab, f->mgr.rend.renderer,
+                                    NULL, NULL);
     cbx_profiles_tab_refresh(&f->tab);
 }
 
@@ -706,7 +708,17 @@ test_name_input_confirm(void **state)
     int rc = cbx_profiles_tab_name_input_confirm(&f->tab);
     assert_int_equal(rc, 0);
 
-    /* Should be back in list mode and profile should exist. */
+    /* Create-to-editor flow: editor should now be open, no file yet. */
+    assert_int_equal(cbx_profiles_tab_mode(&f->tab), CBX_PT_MODE_EDITOR);
+    assert_true(f->tab.editor_initialized);
+    assert_true(f->tab.editor_is_new);
+    assert_string_equal(f->tab.editor_profile_name, "new");
+
+    /* Save from editor via cancel (B in LIST = save+close). */
+    bool handled = cbx_profiles_tab_cancel(&f->tab);
+    assert_true(handled);
+
+    /* Now back in list mode and profile should exist. */
     assert_int_equal(cbx_profiles_tab_mode(&f->tab), CBX_PT_MODE_LIST);
 
     char path[PATH_MAX + 128];
@@ -907,13 +919,18 @@ test_full_workflow(void **state)
     /* Start: 2 profiles (default + fps). */
     assert_int_equal(cbx_profiles_tab_profile_count(&f->tab), 2);
 
-    /* Create via name input. */
+    /* Create via name input — opens editor (create-to-editor flow). */
     cbx_profiles_tab_begin_create(&f->tab, CBX_PT_CREATE_DEFAULT_COPY);
     cbx_profiles_tab_name_input_char(&f->tab, 'w');
     cbx_profiles_tab_name_input_char(&f->tab, 'f');
     cbx_profiles_tab_name_input_char(&f->tab, '1');
     int rc = cbx_profiles_tab_name_input_confirm(&f->tab);
     assert_int_equal(rc, 0);
+    assert_int_equal(cbx_profiles_tab_mode(&f->tab), CBX_PT_MODE_EDITOR);
+
+    /* Save from editor. */
+    cbx_profiles_tab_cancel(&f->tab);
+    assert_int_equal(cbx_profiles_tab_mode(&f->tab), CBX_PT_MODE_LIST);
 
     /* Now 3 profiles. */
     assert_int_equal(cbx_profiles_tab_profile_count(&f->tab), 3);
@@ -1099,8 +1116,13 @@ test_name_input_via_dispatch(void **state)
     pt_send_key_dn(&mgr, SDLK_w);
     assert_string_equal(cbx_profiles_tab_name_buffer(pt), "new");
 
-    /* Confirm with A. */
+    /* Confirm with A — opens editor (create-to-editor flow). */
     pt_send_key_dn(&mgr, SDLK_a);
+    assert_int_equal(pt->mode, CBX_PT_MODE_EDITOR);
+
+    /* Save from editor with B (KEYDOWN swallowed, KEYUP saves). */
+    pt_send_key_dn(&mgr, SDLK_b);
+    pt_send_key_up(&mgr, SDLK_b);
     assert_int_equal(pt->mode, CBX_PT_MODE_LIST);
 
     /* Verify the profile was created. */

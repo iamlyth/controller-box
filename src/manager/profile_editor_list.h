@@ -53,6 +53,7 @@ typedef enum {
     CBX_EDITOR_MODE_TARGET_PICK,  /* choosing target event */
     CBX_EDITOR_MODE_CAPTURE,      /* waiting for physical button press */
     CBX_EDITOR_MODE_SEQUENTIAL,   /* sequential binding mode (Task 38) */
+    CBX_EDITOR_MODE_BINDING_EDIT, /* choosing action: target-pick / capture / sequential */
 } cbx_editor_mode;
 
 /* ------------------------------------------------------------------ */
@@ -116,6 +117,9 @@ typedef struct {
     cbx_progress progress_bar;     /* completion progress bar */
     int           seq_step;        /* current button index in sequence */
     bool          seq_active;      /* sequential mode in progress */
+
+    /* --- Expected sender for InputEvent verification (Task 5) ----- */
+    char          expected_sender[128]; /* unique bus name (e.g. ":1.42"), not well-known */
 } cbx_profile_editor;
 
 /* ------------------------------------------------------------------ */

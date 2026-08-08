@@ -211,6 +211,8 @@ cbx_manager_init_with_dbus(cbx_manager *mgr, const char *font_path,
         cbx_renderer_shutdown(&mgr->rend);
         return rc;
     }
+    cbx_profiles_tab_set_context(&mgr->pt, mgr->rend.renderer,
+                                   mgr->dbus_backend, mgr->dbus_bus);
     cbx_profiles_tab_refresh(&mgr->pt);
 
     /* Settings tab (auto-refreshes on init). */
@@ -327,7 +329,10 @@ cbx_manager_handle_event(cbx_manager *mgr, const SDL_Event *ev)
         int prev_mode = 0;
         switch (mgr->active_tab) {
         case CBX_MGR_TAB_CONTROLLERS: prev_mode = (int)mgr->ct.mode; break;
-        case CBX_MGR_TAB_PROFILES:    prev_mode = (int)mgr->pt.mode; break;
+        case CBX_MGR_TAB_PROFILES:    prev_mode = (int)mgr->pt.mode * 100
+                                         + (mgr->pt.editor_initialized
+                                                ? (int)mgr->pt.editor.mode : 0);
+                                      break;
         case CBX_MGR_TAB_SETTINGS:    prev_mode = (int)mgr->st.mode; break;
         default: break;
         }
@@ -341,7 +346,10 @@ cbx_manager_handle_event(cbx_manager *mgr, const SDL_Event *ev)
     int prev_mode = 0;
     switch (mgr->active_tab) {
     case CBX_MGR_TAB_CONTROLLERS: prev_mode = (int)mgr->ct.mode; break;
-    case CBX_MGR_TAB_PROFILES:    prev_mode = (int)mgr->pt.mode; break;
+    case CBX_MGR_TAB_PROFILES:    prev_mode = (int)mgr->pt.mode * 100
+                                     + (mgr->pt.editor_initialized
+                                            ? (int)mgr->pt.editor.mode : 0);
+                                  break;
     case CBX_MGR_TAB_SETTINGS:    prev_mode = (int)mgr->st.mode; break;
     default: break;
     }
@@ -583,7 +591,10 @@ cbx_manager_check_mode_change(cbx_manager *mgr, int prev_mode)
     int cur_mode = 0;
     switch (mgr->active_tab) {
     case CBX_MGR_TAB_CONTROLLERS: cur_mode = (int)mgr->ct.mode; break;
-    case CBX_MGR_TAB_PROFILES:    cur_mode = (int)mgr->pt.mode; break;
+    case CBX_MGR_TAB_PROFILES:    cur_mode = (int)mgr->pt.mode * 100
+                                     + (mgr->pt.editor_initialized
+                                            ? (int)mgr->pt.editor.mode : 0);
+                                  break;
     case CBX_MGR_TAB_SETTINGS:    cur_mode = (int)mgr->st.mode; break;
     default: return;
     }

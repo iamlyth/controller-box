@@ -43,6 +43,40 @@ The manager supports two input paths:
 Both paths invoke the same widget handlers and validation. Invisible widgets
 (e.g., hidden type pickers) do not intercept pointer events.
 
+## Profile editor
+
+The profile editor (§5.4) is opened from the Profiles tab:
+
+- **Edit existing:** Select a profile in the list and click Edit (or navigate
+  to the Edit button with Up/Down and press A).
+- **Create new:** Click Create, choose a source (Default copy / Empty /
+  Clone), type a name, and press A — the editor opens with the new
+  in-memory profile. No file is written until you save from the editor.
+
+In the editor (list mode):
+
+- **Up/Down** scrolls the binding list; the diagram highlights the
+  corresponding button.
+- **A** opens a binding edit sub-menu with three options:
+  1. **Pick Target** — choose a target event from the device's capabilities.
+  2. **Capture** — wait for a physical button press (via DBus InputEvent).
+  3. **Sequential (All Buttons)** — prompt for each button in order.
+- **B** saves the profile (with NES minimum validation) and closes the editor.
+  If validation fails, the error is shown and the editor stays open.
+- **Start (Tab key)** discards changes and closes the editor.
+
+In sequential mode:
+
+- The diagram lights up the current button; press a physical button to
+  capture it and auto-advance.
+- **B** skips the current button.
+- **Start** cancels sequential mode.
+
+Capture and sequential mode subscribe to DBus InputEvent signals. The
+subscription verifies the signal sender against InputPlumber's unique bus
+name (e.g. `:1.42`), not the well-known name — signals from other processes
+are rejected.
+
 ## Systemd management
 
 The overlay service runs as a **user service** (not system-wide). The manager

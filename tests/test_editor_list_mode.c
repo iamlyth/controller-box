@@ -380,7 +380,14 @@ static void test_activate_enters_target_pick(void **state)
     cbx_profile p = make_test_profile(3);
     cbx_profile_editor_load_profile(&f->ed, &p);
 
+    /* A on a binding opens the binding edit sub-menu. */
     int rc = cbx_profile_editor_activate(&f->ed);
+    assert_int_equal(rc, 0);
+    assert_int_equal(cbx_profile_editor_get_mode(&f->ed),
+                       CBX_EDITOR_MODE_BINDING_EDIT);
+
+    /* A on "Pick Target" (index 0) enters target pick mode. */
+    rc = cbx_profile_editor_activate(&f->ed);
     assert_int_equal(rc, 0);
     assert_int_equal(cbx_profile_editor_get_mode(&f->ed),
                        CBX_EDITOR_MODE_TARGET_PICK);
@@ -409,6 +416,10 @@ static void test_target_pick_has_targets(void **state)
     cbx_profile_editor_load_capabilities(&f->ed);
     assert_true(cbx_profile_editor_get_target_count(&f->ed) > 0);
 
+    /* Enter binding edit sub-menu, then target pick. */
+    cbx_profile_editor_activate(&f->ed);
+    assert_int_equal(cbx_profile_editor_get_mode(&f->ed),
+                       CBX_EDITOR_MODE_BINDING_EDIT);
     cbx_profile_editor_activate(&f->ed);
     assert_int_equal(cbx_profile_editor_get_mode(&f->ed),
                        CBX_EDITOR_MODE_TARGET_PICK);
@@ -425,7 +436,10 @@ static void test_target_pick_confirm(void **state)
     cbx_profile_editor_move_down(&f->ed);
     assert_int_equal(cbx_profile_editor_get_selected(&f->ed), 1);
 
-    /* Enter target pick */
+    /* Enter binding edit sub-menu, then target pick. */
+    cbx_profile_editor_activate(&f->ed);
+    assert_int_equal(cbx_profile_editor_get_mode(&f->ed),
+                       CBX_EDITOR_MODE_BINDING_EDIT);
     cbx_profile_editor_activate(&f->ed);
     assert_int_equal(cbx_profile_editor_get_mode(&f->ed),
                        CBX_EDITOR_MODE_TARGET_PICK);
@@ -452,6 +466,10 @@ static void test_target_pick_cancel(void **state)
     cbx_profile p = make_test_profile(1);
     cbx_profile_editor_load_profile(&f->ed, &p);
 
+    /* Enter binding edit sub-menu, then target pick. */
+    cbx_profile_editor_activate(&f->ed);
+    assert_int_equal(cbx_profile_editor_get_mode(&f->ed),
+                       CBX_EDITOR_MODE_BINDING_EDIT);
     cbx_profile_editor_activate(&f->ed);
     assert_int_equal(cbx_profile_editor_get_mode(&f->ed),
                        CBX_EDITOR_MODE_TARGET_PICK);
@@ -688,6 +706,8 @@ static void test_render_target_pick(void **state)
     cbx_profile p = make_test_profile(2);
     cbx_profile_editor_load_profile(&f->ed, &p);
 
+    /* Enter binding edit sub-menu, then target pick. */
+    cbx_profile_editor_activate(&f->ed);
     cbx_profile_editor_activate(&f->ed);
     assert_int_equal(cbx_profile_editor_get_mode(&f->ed),
                        CBX_EDITOR_MODE_TARGET_PICK);
@@ -695,6 +715,120 @@ static void test_render_target_pick(void **state)
     cbx_widget_draw(&f->panel.base, f->sdl.renderer);
     /* should not crash */
     assert_true(1);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Tests: expected_sender security (Task 5)                           */
+/* ------------------------------------------------------------------ */
+
+static void test_expected_sender_resolved(void **state)
+{
+    pe_fixture *f = *state;
+
+    /* set_dbus should resolve the unique bus name via the backend. */
+    cbx_profile_editor_set_dbus(&f->ed, f->backend, &f->mock, NULL);
+    /* mock_get_unique_name returns ":1.42". */
+    assert_string_equal(f->ed.expected_sender, ":1.42");
+}
+
+static void test_expected_sender_accepts_match(void **state)
+{
+    pe_fixture *f = *state;
+
+    cbx_profile p = make_test_profile(1);
+    cbx_profile_editor_load_profile(&f->ed, &p);
+
+    /* Set DBus — resolves expected_sender to ":1.42". */
+    cbx_profile_editor_set_dbus(&f->ed, f->backend, &f->mock, NULL);
+
+    /* Begin capture for binding 0. */
+    int rc = cbx_profile_editor_begin_capture(&f->ed);
+    assert_int_equal(rc, 0);
+    assert_true(cbx_profile_editor_is_capture_active(&f->ed));
+
+    /* Inject a signal from the expected unique name ":1.42". */
+    ip_input_event_payload payload = {
+        .sender = ":1.42",
+        .path   = "/org/shadowblip/InputPlumber/CompositeDevice0/dbus0",
+        .event  = "X",
+        .value  = 1.0,
+    };
+    f->backend->inject_signal(&f->mock,
+        IP_IFACE_DBUS_DEVICE, "InputEvent", &payload);
+
+    /* Capture should have succeeded — binding updated, back in LIST mode. */
+    assert_false(cbx_profile_editor_is_capture_active(&f->ed));
+    assert_int_equal(cbx_profile_editor_get_mode(&f->ed),
+                       CBX_EDITOR_MODE_LIST);
+
+    /* Verify the binding source was updated to "X". */
+    const cbx_profile *prof = cbx_profile_editor_get_profile(&f->ed);
+    assert_non_null(prof);
+    bool found = false;
+    for (int i = 0; i < prof->mappings[0].source_event.prop_count; i++) {
+        if (strcmp(prof->mappings[0].source_event.props[i].key, "button") == 0) {
+            assert_string_equal(prof->mappings[0].source_event.props[i].value, "X");
+            found = true;
+            break;
+        }
+    }
+    assert_true(found);
+}
+
+static void test_expected_sender_rejects_mismatch(void **state)
+{
+    pe_fixture *f = *state;
+
+    cbx_profile p = make_test_profile(1);
+    cbx_profile_editor_load_profile(&f->ed, &p);
+
+    /* Set DBus — resolves expected_sender to ":1.42". */
+    cbx_profile_editor_set_dbus(&f->ed, f->backend, &f->mock, NULL);
+
+    /* Begin capture for binding 0. */
+    int rc = cbx_profile_editor_begin_capture(&f->ed);
+    assert_int_equal(rc, 0);
+    assert_true(cbx_profile_editor_is_capture_active(&f->ed));
+
+    /* Save the original source button value. */
+    const cbx_profile *prof = cbx_profile_editor_get_profile(&f->ed);
+    char original_val[64] = {0};
+    for (int i = 0; i < prof->mappings[0].source_event.prop_count; i++) {
+        if (strcmp(prof->mappings[0].source_event.props[i].key, "button") == 0) {
+            strncpy(original_val, prof->mappings[0].source_event.props[i].value,
+                     sizeof(original_val) - 1);
+            break;
+        }
+    }
+
+    /* Inject a signal from a mismatched sender ":1.99". */
+    ip_input_event_payload payload = {
+        .sender = ":1.99",
+        .path   = "/org/shadowblip/InputPlumber/CompositeDevice0/dbus0",
+        .event  = "Y",
+        .value  = 1.0,
+    };
+    f->backend->inject_signal(&f->mock,
+        IP_IFACE_DBUS_DEVICE, "InputEvent", &payload);
+
+    /* Capture should still be active — signal was rejected. */
+    assert_true(cbx_profile_editor_is_capture_active(&f->ed));
+    assert_int_equal(cbx_profile_editor_get_mode(&f->ed),
+                       CBX_EDITOR_MODE_CAPTURE);
+
+    /* Verify the binding source was NOT changed. */
+    prof = cbx_profile_editor_get_profile(&f->ed);
+    assert_non_null(prof);
+    bool found = false;
+    for (int i = 0; i < prof->mappings[0].source_event.prop_count; i++) {
+        if (strcmp(prof->mappings[0].source_event.props[i].key, "button") == 0) {
+            assert_string_equal(prof->mappings[0].source_event.props[i].value,
+                                  original_val);
+            found = true;
+            break;
+        }
+    }
+    assert_true(found);
 }
 
 /* ------------------------------------------------------------------ */
@@ -716,7 +850,10 @@ static void test_full_workflow(void **state)
     assert_int_equal(cbx_profile_editor_get_diagram_highlight(&f->ed),
                        CBX_DIAG_BTN_B);
 
-    /* Edit binding via target pick */
+    /* Edit binding via binding edit sub-menu → target pick */
+    cbx_profile_editor_activate(&f->ed);
+    assert_int_equal(cbx_profile_editor_get_mode(&f->ed),
+                       CBX_EDITOR_MODE_BINDING_EDIT);
     cbx_profile_editor_activate(&f->ed);
     assert_int_equal(cbx_profile_editor_get_mode(&f->ed),
                        CBX_EDITOR_MODE_TARGET_PICK);
@@ -796,6 +933,11 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_capture_input_event, setup, teardown),
         cmocka_unit_test_setup_teardown(test_capture_ignores_release, setup, teardown),
         cmocka_unit_test(test_capture_null_safe),
+
+        /* Expected sender security (Task 5) */
+        cmocka_unit_test_setup_teardown(test_expected_sender_resolved, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_expected_sender_accepts_match, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_expected_sender_rejects_mismatch, setup, teardown),
 
         /* Accessors */
         cmocka_unit_test(test_accessors_null_safe),

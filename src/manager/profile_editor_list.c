@@ -202,11 +202,17 @@ cbx_profile_editor_init(cbx_profile_editor *ed,
 
     cbx_profile_init(&ed->profile);
 
+    /* Get panel origin for relative widget positioning. */
+    SDL_Rect pr = {0, 0, 0, 0};
+    cbx_widget_get_rect(&panel->base, &pr);
+    const int px = pr.x;
+    const int py = pr.y;
+
     /* --- Diagram (left panel) ------------------------------------- */
     int rc = cbx_profile_diagram_init(&ed->diagram, renderer, NULL, theme);
     if (rc != 0)
         return rc;
-    SDL_Rect diag_rect = { 16, CBX_PE_TITLE_H, CBX_PE_DIAGRAM_W,
+    SDL_Rect diag_rect = { px + 16, py + CBX_PE_TITLE_H, CBX_PE_DIAGRAM_W,
                             CBX_PE_DIAGRAM_H };
     cbx_widget_set_rect(&ed->diagram.base, &diag_rect);
 
@@ -217,7 +223,7 @@ cbx_profile_editor_init(cbx_profile_editor *ed,
         cbx_widget_destroy(&ed->diagram.base);
         return rc;
     }
-    SDL_Rect title_rect = { 16, 8, CBX_PE_DIAGRAM_W, CBX_PE_TITLE_H };
+    SDL_Rect title_rect = { px + 16, py + 8, CBX_PE_DIAGRAM_W, CBX_PE_TITLE_H };
     cbx_widget_set_rect(&ed->title_lbl.base, &title_rect);
 
     /* --- Binding list (right panel) ------------------------------- */
@@ -227,7 +233,7 @@ cbx_profile_editor_init(cbx_profile_editor *ed,
         cbx_widget_destroy(&ed->title_lbl.base);
         return rc;
     }
-    SDL_Rect list_rect = { CBX_PE_LIST_X, CBX_PE_LIST_Y,
+    SDL_Rect list_rect = { px + CBX_PE_LIST_X, py + CBX_PE_LIST_Y,
                             CBX_PE_LIST_W, CBX_PE_LIST_H };
     cbx_widget_set_rect(&ed->binding_list.base, &list_rect);
 
@@ -251,8 +257,8 @@ cbx_profile_editor_init(cbx_profile_editor *ed,
         cbx_widget_destroy(&ed->target_list.base);
         return rc;
     }
-    SDL_Rect status_rect = { 16,
-        CBX_PE_TITLE_H + CBX_PE_DIAGRAM_H + 8,
+    SDL_Rect status_rect = { px + 16,
+        py + CBX_PE_TITLE_H + CBX_PE_DIAGRAM_H + 8,
         CBX_PE_LIST_X + CBX_PE_LIST_W - 16,
         CBX_PE_STATUS_H };
     cbx_widget_set_rect(&ed->status_lbl.base, &status_rect);
@@ -267,7 +273,7 @@ cbx_profile_editor_init(cbx_profile_editor *ed,
         cbx_widget_destroy(&ed->status_lbl.base);
         return rc;
     }
-    SDL_Rect prog_rect = { CBX_PE_LIST_X, CBX_PE_PROGRESS_Y,
+    SDL_Rect prog_rect = { px + CBX_PE_LIST_X, py + CBX_PE_PROGRESS_Y,
                              CBX_PE_PROGRESS_W, CBX_PE_PROGRESS_H };
     cbx_widget_set_rect(&ed->progress_bar.base, &prog_rect);
     cbx_widget_set_visible(&ed->progress_bar.base, false);
@@ -360,6 +366,23 @@ cbx_profile_editor_set_dbus(cbx_profile_editor *ed,
         ed->composite_path[sizeof(ed->composite_path) - 1] = '\0';
     } else {
         ed->composite_path[0] = '\0';
+    }
+
+    /* Resolve InputPlumber's unique bus name for InputEvent sender
+     * verification.  DBus message sender fields contain unique
+     * connection names (e.g. ":1.42"), not well-known names — using
+     * the well-known name (IP_DBUS_NAME) means strcmp always fails
+     * and all legitimate InputEvent signals are silently dropped. */
+    ed->expected_sender[0] = '\0';
+    if (backend && bus && backend->get_unique_name) {
+        char *unique = NULL;
+        if (backend->get_unique_name(bus, IP_DBUS_NAME, &unique) == 0
+            && unique) {
+            strncpy(ed->expected_sender, unique,
+                     sizeof(ed->expected_sender) - 1);
+            ed->expected_sender[sizeof(ed->expected_sender) - 1] = '\0';
+            free(unique);
+        }
     }
 }
 
@@ -486,7 +509,8 @@ cbx_profile_editor_move_up(cbx_profile_editor *ed)
     if (!ed || ed->profile.mapping_count <= 0)
         return -1;
 
-    if (ed->mode == CBX_EDITOR_MODE_TARGET_PICK) {
+    if (ed->mode == CBX_EDITOR_MODE_TARGET_PICK ||
+        ed->mode == CBX_EDITOR_MODE_BINDING_EDIT) {
         cbx_list_scroll_up(&ed->target_list);
         return cbx_list_get_selected(&ed->target_list);
     }
@@ -507,7 +531,8 @@ cbx_profile_editor_move_down(cbx_profile_editor *ed)
     if (!ed || ed->profile.mapping_count <= 0)
         return -1;
 
-    if (ed->mode == CBX_EDITOR_MODE_TARGET_PICK) {
+    if (ed->mode == CBX_EDITOR_MODE_TARGET_PICK ||
+        ed->mode == CBX_EDITOR_MODE_BINDING_EDIT) {
         cbx_list_scroll_down(&ed->target_list);
         return cbx_list_get_selected(&ed->target_list);
     }
@@ -536,10 +561,57 @@ cbx_profile_editor_activate(cbx_profile_editor *ed)
         return 0;
     }
 
+    if (ed->mode == CBX_EDITOR_MODE_BINDING_EDIT) {
+        /* Confirm the selected action in the binding edit sub-menu. */
+        int idx = cbx_list_get_selected(&ed->target_list);
+        if (idx < 0)
+            return -EINVAL;
+
+        /* Restore binding list visibility before dispatching. */
+        cbx_widget_set_visible(&ed->target_list.base, false);
+        cbx_widget_set_visible(&ed->binding_list.base, true);
+
+        switch (idx) {
+        case 0:  /* Pick Target */
+            return cbx_profile_editor_begin_target_pick(ed);
+        case 1:  /* Capture */
+            return cbx_profile_editor_begin_capture(ed);
+        case 2:  /* Sequential (All Buttons) */
+            return cbx_profile_editor_begin_sequential(ed);
+        default:
+            ed->mode = CBX_EDITOR_MODE_LIST;
+            ed->editing_index = -1;
+            cbx_label_set_text(&ed->status_lbl, "");
+            return -EINVAL;
+        }
+    }
+
+    if (ed->mode == CBX_EDITOR_MODE_SEQUENTIAL) {
+        /* A in sequential mode does nothing (wait for physical press) */
+        return 0;
+    }
+
+    /* LIST mode: open the binding edit sub-menu. */
     if (ed->selected_index < 0 || ed->selected_index >= ed->profile.mapping_count)
         return -EINVAL;
 
-    return cbx_profile_editor_begin_target_pick(ed);
+    ed->editing_index = ed->selected_index;
+    ed->mode = CBX_EDITOR_MODE_BINDING_EDIT;
+
+    /* Populate target list with the three edit options. */
+    cbx_list_clear(&ed->target_list);
+    cbx_list_add_item(&ed->target_list, "Pick Target", NULL, NULL);
+    cbx_list_add_item(&ed->target_list, "Capture", NULL, NULL);
+    cbx_list_add_item(&ed->target_list, "Sequential (All Buttons)", NULL, NULL);
+    cbx_list_set_selected(&ed->target_list, 0);
+
+    /* Show target list, hide binding list. */
+    cbx_widget_set_visible(&ed->binding_list.base, false);
+    cbx_widget_set_visible(&ed->target_list.base, true);
+    cbx_label_set_text(&ed->status_lbl,
+                         "Edit binding: A=select  B=back");
+
+    return 0;
 }
 
 int
@@ -560,6 +632,16 @@ cbx_profile_editor_cancel(cbx_profile_editor *ed)
 
     if (ed->mode == CBX_EDITOR_MODE_SEQUENTIAL) {
         cbx_profile_editor_cancel_sequential(ed);
+        return 0;
+    }
+
+    if (ed->mode == CBX_EDITOR_MODE_BINDING_EDIT) {
+        /* Cancel binding edit sub-menu, return to list mode. */
+        cbx_widget_set_visible(&ed->target_list.base, false);
+        cbx_widget_set_visible(&ed->binding_list.base, true);
+        ed->mode = CBX_EDITOR_MODE_LIST;
+        ed->editing_index = -1;
+        cbx_label_set_text(&ed->status_lbl, "");
         return 0;
     }
 
@@ -677,10 +759,14 @@ cbx_profile_editor_begin_capture(cbx_profile_editor *ed)
     cbx_label_set_text(&ed->status_lbl,
                          "Press a button to capture...  B=Cancel");
 
-    /* Initialize input event handler */
+    /* Initialize input event handler — use the unique bus name
+     * (expected_sender) resolved in set_dbus(), NOT the well-known
+     * name (IP_DBUS_NAME).  DBus message sender fields contain unique
+     * connection names, so using the well-known name means strcmp
+     * always fails and legitimate InputEvent signals are dropped. */
     if (ed->backend && ed->bus) {
         ip_input_events_init(&ed->input_events, ed->backend, ed->bus,
-                              IP_DBUS_NAME,
+                              ed->expected_sender[0] ? ed->expected_sender : NULL,
                               cbx_profile_editor_on_input_event, ed);
         ip_input_events_subscribe(&ed->input_events);
     }

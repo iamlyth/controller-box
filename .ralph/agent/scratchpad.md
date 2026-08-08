@@ -1,33 +1,59 @@
-# Task 4 Complete — Security-hardened profile save in production path
+# Task 5: Wire profile editor into manager production path
 
-## What was done
+## Understanding
 
-### Source changes
+Task 5 wires the profile editor (list mode + sequential mode) into the production manager path. Currently:
+- The Edit button in profiles_tab.c is a **no-op placeholder**
+- The create flow writes a file to disk instead of opening the editor
+- The editor is only tested in isolation (test_editor_list_mode.c, test_editor_seq_mode.c)
+- Visual/golden tests manually initialize the editor (bypassing production path)
+- `expected_sender` in capture/sequential mode uses `IP_DBUS_NAME` (well-known name) instead of unique bus name — making capture completely broken in production
 
-1. **`src/manager/profile_save.c` — TOCTOU fix**: Modified `verify_path_within_dir()` to return the canonicalized target path via an out-parameter (`canonical_out`, `canonical_len`). `cbx_profile_save_to_dir()` now passes the canonicalized path to `cbx_profile_save()` instead of the original uncanonicalized path — eliminating the TOCTOU race between the `realpath()` check and the file write.
+## Implementation Plan
 
-2. **`src/manager/profiles_tab.c` — Direct-save bypass fix**: Replaced the direct `cbx_profile_save()` call in `cbx_profiles_tab_create()` with `cbx_profile_save_to_dir()`, which enforces:
-   - Filename validation (`^[a-zA-Z0-9_-]+$`)
-   - Profile structure validation (version=1, kind="DeviceProfile")
-   - NES minimum binding validation (A, B, Up, Down, Left, Right)
-   - Path canonicalization and containment check (TOCTOU-safe)
-   Added `#include "manager/profile_save.h"`. Removed unused `build_profile_path()` function. Added error status label display for missing NES bindings.
+### A. Profile editor changes
 
-3. **Verification**: `grep -rn 'cbx_profile_save(' src/ --include='*.c' | grep -v 'profile_save.c' | grep -v 'config_profile.c'` returns zero matches — confirming all production save paths go through `cbx_profile_save_to_dir`.
+1. **profile_editor_list.h**: Add `CBX_EDITOR_MODE_BINDING_EDIT` enum value. Add `char expected_sender[128]` field to struct.
 
-### Test changes
+2. **profile_editor_list.c**: 
+   - `cbx_profile_editor_set_dbus`: Resolve unique bus name via `backend->get_unique_name(bus, IP_DBUS_NAME, &unique)` and store in `ed->expected_sender`
+   - `cbx_profile_editor_begin_capture`: Replace `IP_DBUS_NAME` with `ed->expected_sender`
+   - `cbx_profile_editor_activate`: In LIST mode, open a binding edit sub-menu (mode=BINDING_EDIT) with "Pick Target", "Capture", "Sequential (All Buttons)" options using target_list widget
+   - Handle BINDING_EDIT mode in `activate` (dispatch to target-pick/capture/sequential), `cancel` (back to LIST), `move_up/down` (scroll target_list)
 
-1. **`tests/test_profiles_tab.c`**: Added `write_nes_profile_yaml()` helper that writes profiles with all 6 NES button bindings. Updated fixture default profile to use NES bindings. Updated tests that created empty profiles for other purposes (delete tests, name input confirm, production dispatch) to use `CREATE_DEFAULT_COPY`. `test_create_empty` now expects `-EINVAL`. Added `test_create_reject_missing_nes` to verify NES rejection when cloning a profile without NES bindings. Updated mapping count expectations from 3 to 6. Changed `test_name_input_via_dispatch` to select Default Copy (index 0) instead of Empty (index 1).
+3. **profile_editor_seq.c**: Replace `IP_DBUS_NAME` with `ed->expected_sender` in `begin_sequential`
 
-2. **`tests/test_profile_save.c`**: Added `test_save_through_symlink_uses_canonical` — saves through a symlinked profiles directory and verifies the file is written to the canonical (resolved) path, confirming the TOCTOU fix.
+### B. Profiles tab changes
 
-3. **`tests/test_manager_integration.c`**: Added `write_nes_default()` helper. Added `profiles_dir` field to fixture struct to fix a dangling pointer issue (the old `profiles_dir` local variable was stored as `test_user_dir` in the profiles tab, but became dangling after setup returned — `realpath()` on the dangling pointer caused `-ENOENT`). Changed `CBX_PT_CREATE_EMPTY` to `CBX_PT_CREATE_DEFAULT_COPY` in 3 tests that create profiles.
+4. **profiles_tab.h**: Add `CBX_PT_MODE_EDITOR` mode. Add fields: `cbx_profile_editor editor`, `bool editor_initialized`, `bool editor_active`, `char editor_profile_name[CBX_PT_NAME_LEN]`, `bool editor_is_new`, `SDL_Renderer *renderer`, `const ip_dbus_backend *dbus_backend`, `ip_bus_handle dbus_bus`. Add `cbx_profiles_tab_set_context()` declaration.
 
-## Test results
-74/74 pass (1 skip: backend_smoke). No regressions.
+5. **profiles_tab.c**:
+   - `cbx_profiles_tab_set_context()`: Store renderer and DBus backend/bus
+   - `on_edit_pressed`: Load selected profile, lazy-init editor, set DBus info, show editor widgets, hide tab widgets, set mode=EDITOR
+   - `cbx_profiles_tab_name_input_confirm`: Instead of `cbx_profiles_tab_create` (writes file), build in-memory profile and open editor with it
+   - New `cbx_profiles_tab_open_editor()`: Common code for opening editor (both edit and create paths)
+   - New `cbx_profiles_tab_close_editor()`: Hide editor widgets, show tab widgets, set mode=LIST, refresh
+   - New `cbx_profiles_tab_save_editor()`: Get profile from editor, save via `cbx_profile_save_to_dir`, on success close+refresh, on failure show error in editor status
+   - `cbx_profiles_tab_handle_key`: Handle CBX_PT_MODE_EDITOR — Up/Down → editor move, A/B KEYDOWN → swallow, Start (TAB) → cancel editor
+   - `cbx_profiles_tab_activate`: Handle CBX_PT_MODE_EDITOR → editor activate
+   - `cbx_profiles_tab_cancel`: Handle CBX_PT_MODE_EDITOR — B in LIST → save, B in sub-modes → editor cancel, B in SEQUENTIAL → skip
+   - `cbx_profiles_tab_shutdown`: Shutdown editor if initialized
 
-## Commit
-`8e767a1` on `develop`
+6. **manager.c**: Update mode tracking to include editor mode: `prev_mode = pt.mode * 100 + editor.mode`
 
-## Next task
-Task 5: Wire profile editor, create-to-editor flow, and editor UI entry points into manager production path. Dependencies: Task 3, Task 4 (both complete). Ready to start.
+### C. Test changes
+
+7. **test_profiles_tab.c**: Add editor dispatch tests — open editor via Edit button, verify editor widgets visible, test save/close, test cancel
+8. **test_manager_production.c**: Add test that opens editor via production dispatch
+9. **test_manager_visual.c**: Update tests 7-9 to use production Edit-button path
+10. **test_golden.c**: Update tests 9-11 to use production Edit-button path, regenerate goldens
+11. **test_editor_list_mode.c**: Add expected_sender security test
+
+## Key design decisions
+
+- **Lazy editor init**: Editor initialized on first open (avoids needing renderer at tab init time)
+- **Binding edit sub-menu**: New `CBX_EDITOR_MODE_BINDING_EDIT` mode shows a 3-item picker (Pick Target / Capture / Sequential) using existing target_list widget
+- **Start key = SDLK_TAB**: Used for cancel-editor and cancel-sequential (not used elsewhere in manager)
+- **B in editor LIST mode = save+close**: Per spec M37. B in sub-modes = cancel sub-mode. B in SEQUENTIAL = skip.
+- **Mode tracking**: Combined `pt.mode * 100 + editor.mode` so manager detects editor internal mode changes for focus chain rebuilds
+- **Editor widgets added to profiles panel**: They're hidden when editor inactive, shown when active. Focus chain automatically skips invisible widgets.

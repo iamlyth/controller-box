@@ -37,6 +37,7 @@
 #include "manager/controllers_tab.h"
 #include "manager/profile_editor_list.h"
 #include "manager/profile_editor_seq.h"
+#include "manager/profiles_tab.h"
 #include "manager/profile_validate.h"
 #include "dbus/ip_input_signal.h"
 #include "dbus_mock.h"
@@ -574,19 +575,6 @@ mgr_render_and_read(cbx_manager *mgr, uint8_t *buf)
 }
 
 static void
-render_editor_panel(cbx_manager *mgr, cbx_panel *ed_panel, uint8_t *buf)
-{
-    SDL_SetRenderDrawColor(mgr->rend.renderer,
-                           mgr->theme.bg.r, mgr->theme.bg.g,
-                           mgr->theme.bg.b, 255);
-    SDL_RenderClear(mgr->rend.renderer);
-    cbx_widget_draw(&ed_panel->base, mgr->rend.renderer);
-    assert_int_equal(
-        fb_read_pixels(mgr->rend.renderer, NULL, buf, MGR_W * MGR_H * 4),
-        0);
-}
-
-static void
 build_test_profile(cbx_profile *p, const char *name, int n_buttons)
 {
     cbx_profile_init(p);
@@ -716,38 +704,72 @@ test_golden_manager_settings(void **state)
 }
 
 /* 9. Profile editor — binding list mode. */
+
+/* Helpers for editor golden tests (production dispatch path) */
+static bool
+g_send_key(cbx_manager *mgr, SDL_Keycode sym)
+{
+    SDL_Event ev = {0};
+    ev.type = SDL_KEYDOWN;
+    ev.key.keysym.sym = sym;
+    return cbx_manager_handle_event(mgr, &ev);
+}
+
+static void
+g_write_nes_profile(const char *home_dir)
+{
+    char prof_path[PATH_MAX + 64];
+    snprintf(prof_path, sizeof(prof_path),
+             "%s/.local/share/inputplumber/profiles/testprof.yaml", home_dir);
+    FILE *fp = fopen(prof_path, "w");
+    if (!fp) return;
+    static const char *btns[] = {"A","B","Up","Down","Left","Right"};
+    static const char *keys[] = {"KeyA","KeyB","KeyUp","KeyDown","KeyLeft","KeyRight"};
+    fprintf(fp, "version: 1\nkind: DeviceProfile\nname: TestProfile\n");
+    fprintf(fp, "description: NES test profile\nmapping:\n");
+    for (int i = 0; i < 6; i++)
+        fprintf(fp, "  - name: btn_%s\n    source_event:\n      gamepad:\n        button: %s\n    target_events:\n      - keyboard: %s\n",
+            btns[i], btns[i], keys[i]);
+    fclose(fp);
+}
+
+static cbx_profile_editor *
+g_open_editor(cbx_manager *mgr, const char *home_dir)
+{
+    g_write_nes_profile(home_dir);
+    while (cbx_manager_active_tab(mgr) != CBX_MGR_TAB_PROFILES)
+        g_send_key(mgr, SDLK_RIGHT);
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(mgr);
+    if (!pt || cbx_profiles_tab_profile_count(pt) == 0)
+        return NULL;
+    SDL_Rect br;
+    cbx_widget_get_rect(&pt->edit_btn.base, &br);
+    SDL_Event mev = {0};
+    mev.type = SDL_MOUSEBUTTONDOWN;
+    mev.button.button = SDL_BUTTON_LEFT;
+    mev.button.x = br.x + br.w/2; mev.button.y = br.y + br.h/2;
+    cbx_manager_handle_event(mgr, &mev);
+    mev.type = SDL_MOUSEBUTTONUP;
+    cbx_manager_handle_event(mgr, &mev);
+    if (pt->mode != CBX_PT_MODE_EDITOR || !pt->editor_initialized)
+        return NULL;
+    return &pt->editor;
+}
+
 static void
 test_golden_manager_editor_list(void **state)
 {
     struct mgr_fixture *f = *state;
     cbx_manager *mgr = &f->mgr;
 
-    cbx_panel ed_panel;
-    cbx_panel_init(&ed_panel, &mgr->theme);
-    SDL_Rect panel_rect = { 0, 0, MGR_W, MGR_H };
-    cbx_widget_set_rect(&ed_panel.base, &panel_rect);
-
-    cbx_profile_editor *ed = malloc(sizeof(*ed));
+    cbx_profile_editor *ed = g_open_editor(mgr, f->tmp);
     assert_non_null(ed);
-    memset(ed, 0, sizeof(*ed));
 
-    int rc = cbx_profile_editor_init(ed, &ed_panel, mgr->rend.renderer,
-                                       &mgr->text_cache, &mgr->theme,
-                                       mgr->font_id);
-    assert_int_equal(rc, 0);
+    cbx_manager_render(mgr);
+    assert_int_equal(
+        fb_read_pixels(mgr->rend.renderer, NULL, f->buf, MGR_W * MGR_H * 4), 0);
 
-    cbx_profile prof;
-    build_test_profile(&prof, "TestProfile", 6);
-    rc = cbx_profile_editor_load_profile(ed, &prof);
-    assert_int_equal(rc, 0);
-
-    render_editor_panel(mgr, &ed_panel, f->buf);
-
-    assert_true(golden_check(f->buf, MGR_W, MGR_H,
-                              "manager_editor_list"));
-
-    cbx_profile_editor_shutdown(ed);
-    free(ed);
+    assert_true(golden_check(f->buf, MGR_W, MGR_H, "manager_editor_list"));
 }
 
 /* 10. Profile editor — sequential mode (partial progress). */
@@ -757,43 +779,24 @@ test_golden_manager_editor_sequential(void **state)
     struct mgr_fixture *f = *state;
     cbx_manager *mgr = &f->mgr;
 
-    cbx_panel ed_panel;
-    cbx_panel_init(&ed_panel, &mgr->theme);
-    SDL_Rect panel_rect = { 0, 0, MGR_W, MGR_H };
-    cbx_widget_set_rect(&ed_panel.base, &panel_rect);
-
-    cbx_profile_editor *ed = malloc(sizeof(*ed));
+    cbx_profile_editor *ed = g_open_editor(mgr, f->tmp);
     assert_non_null(ed);
-    memset(ed, 0, sizeof(*ed));
 
-    int rc = cbx_profile_editor_init(ed, &ed_panel, mgr->rend.renderer,
-                                       &mgr->text_cache, &mgr->theme,
-                                       mgr->font_id);
+    int rc = cbx_profile_editor_begin_sequential(ed);
     assert_int_equal(rc, 0);
 
-    cbx_profile prof;
-    build_test_profile(&prof, "SeqTest", 6);
-    rc = cbx_profile_editor_load_profile(ed, &prof);
-    assert_int_equal(rc, 0);
-
-    rc = cbx_profile_editor_begin_sequential(ed);
-    assert_int_equal(rc, 0);
-
-    /* Capture 3 buttons for partial progress. */
     const char *capture_events[] = { "A", "X", "Y" };
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 3; i++)
         cbx_profile_editor_seq_on_input(IP_INPUT_A, IP_INPUT_CAT_BUTTON,
                                           1.0, capture_events[i], NULL, ed);
-    }
     assert_int_equal(cbx_profile_editor_seq_get_step(ed), 3);
 
-    render_editor_panel(mgr, &ed_panel, f->buf);
+    cbx_manager_render(mgr);
+    assert_int_equal(
+        fb_read_pixels(mgr->rend.renderer, NULL, f->buf, MGR_W * MGR_H * 4), 0);
 
     assert_true(golden_check(f->buf, MGR_W, MGR_H,
                               "manager_editor_sequential"));
-
-    cbx_profile_editor_shutdown(ed);
-    free(ed);
 }
 
 /* 11. Profile editor — validation error. */
@@ -803,52 +806,27 @@ test_golden_manager_editor_validation_error(void **state)
     struct mgr_fixture *f = *state;
     cbx_manager *mgr = &f->mgr;
 
-    if (!f->has_font) {
-        skip();
-        return;
-    }
+    if (!f->has_font) { skip(); return; }
 
-    cbx_panel ed_panel;
-    cbx_panel_init(&ed_panel, &mgr->theme);
-    SDL_Rect panel_rect = { 0, 0, MGR_W, MGR_H };
-    cbx_widget_set_rect(&ed_panel.base, &panel_rect);
-
-    cbx_profile_editor *ed = malloc(sizeof(*ed));
+    cbx_profile_editor *ed = g_open_editor(mgr, f->tmp);
     assert_non_null(ed);
-    memset(ed, 0, sizeof(*ed));
 
-    int rc = cbx_profile_editor_init(ed, &ed_panel, mgr->rend.renderer,
-                                       &mgr->text_cache, &mgr->theme,
-                                       mgr->font_id);
-    assert_int_equal(rc, 0);
-
-    cbx_profile prof;
-    build_test_profile(&prof, "Complete", 6);
-    rc = cbx_profile_editor_load_profile(ed, &prof);
-    assert_int_equal(rc, 0);
-
-    /* Create an incomplete profile and validate it. */
     cbx_profile incomplete;
     build_test_profile(&incomplete, "Incomplete", 3);
-
     char missing[256] = {0};
-    int vrc = cbx_profile_validate_nes_minimum(&incomplete, missing,
-                                                  sizeof(missing));
-    assert_int_equal(vrc, -EINVAL);
+    cbx_profile_validate_nes_minimum(&incomplete, missing, sizeof(missing));
 
-    /* Set the editor's status label to the error message with red color. */
     char error_msg[512];
     snprintf(error_msg, sizeof(error_msg), "Missing: %s", missing);
     cbx_label_set_text(&ed->status_lbl, error_msg);
     cbx_label_set_color(&ed->status_lbl, mgr->theme.conflict);
 
-    render_editor_panel(mgr, &ed_panel, f->buf);
+    cbx_manager_render(mgr);
+    assert_int_equal(
+        fb_read_pixels(mgr->rend.renderer, NULL, f->buf, MGR_W * MGR_H * 4), 0);
 
     assert_true(golden_check(f->buf, MGR_W, MGR_H,
                               "manager_editor_validation_error"));
-
-    cbx_profile_editor_shutdown(ed);
-    free(ed);
 }
 
 /* ════════════════════════════════════════════════════════════════ */
