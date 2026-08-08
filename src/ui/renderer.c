@@ -160,29 +160,25 @@ int cbx_renderer_verify_blending(SDL_Renderer *renderer)
     SDL_Rect rect = {0, 0, 4, 4};
     SDL_RenderFillRect(renderer, &rect);
 
-    /* Read back pixels. */
-    void *pixels = NULL;
-    int pitch = 0;
-    if (SDL_LockTexture(target, NULL, &pixels, &pitch) != 0) {
+    /* Target textures are generally not lockable.  Read through the active
+     * render target instead and decode the requested format with SDL rather
+     * than assuming host byte order. */
+    Uint32 pixels[16] = {0};
+    if (SDL_RenderReadPixels(renderer, NULL, SDL_PIXELFORMAT_RGBA8888,
+                             pixels, 4 * (int)sizeof(Uint32)) != 0) {
         rc = -ENOTSUP;
         goto restore;
     }
-
-    /*
-     * RGBA8888 stores bytes as [A,B,G,R] on little-endian (the Uint32
-     * 0xRRGGBBAA is stored LSB-first).  So the alpha byte is at offset 0.
-     * With SDL_BLENDMODE_BLEND on a transparent target, alpha 128 over
-     * alpha 0 produces alpha = 128 (src alpha replaces dst alpha 0).
-     * Check byte 0 (alpha) and byte 3 (red) — at least one should be
-     * non-zero if blending occurred.
-     */
-    Uint8 *p = (Uint8 *)pixels;
-    if (p[0] == 0 && p[3] == 0) {
-        /* No visible output — blending not supported. */
-        rc = -ENOTSUP;
+    SDL_PixelFormat *format = SDL_AllocFormat(SDL_PIXELFORMAT_RGBA8888);
+    if (!format) {
+        rc = -ENOMEM;
+        goto restore;
     }
-
-    SDL_UnlockTexture(target);
+    Uint8 red = 0, green = 0, blue = 0, alpha = 0;
+    SDL_GetRGBA(pixels[0], format, &red, &green, &blue, &alpha);
+    SDL_FreeFormat(format);
+    if (red == 0 || alpha == 0)
+        rc = -ENOTSUP;
 
 restore:
     SDL_SetRenderTarget(renderer, old_target);
