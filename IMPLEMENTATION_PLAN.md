@@ -216,7 +216,7 @@ dispatch path, and the task that provides executable evidence.
 - Documentation impact: `docs/OPERATIONS.md` — note that manager supports mouse as secondary input path.
 
 ## Task 3: Wire tab-specific activation, widget A-key handling, and focus-chain rebuild through manager event dispatch
-- Status: pending
+- Status: complete
 - Dependencies: Task 1, Task 2
 - Scope: `src/manager/manager.c`, `src/manager/manager.h`, `src/manager/controllers_tab.c`, `src/manager/controllers_tab.h`, `src/manager/profiles_tab.c`, `src/manager/profiles_tab.h`, `src/manager/settings_tab.c`, `src/manager/settings_tab.h`, `src/ui/widget_button.c`, `src/ui/widget_list.c`, `tests/test_controllers_tab.c`, `tests/test_profiles_tab.c`, `tests/test_settings_tab.c`
 - Acceptance criteria:
@@ -230,11 +230,11 @@ dispatch path, and the task that provides executable evidence.
   - **Settings tab**: The settings list `on_select` callback is set to `cbx_settings_tab_activate()` so both keyboard A (KEYUP) and mouse click (MOUSEUP) activate the selected setting; Up/Down while in edit mode call `cbx_settings_tab_edit_up()`/`cbx_settings_tab_edit_down()`; A while in edit mode calls `cbx_settings_tab_confirm_edit()`; B while in edit mode calls `cbx_settings_tab_cancel_edit()`.
   - **Focus-chain rebuild on mode change**: When a tab's internal mode changes (type picker open/close, name input open/close, confirm delete open/close, settings edit open/close, create picker open/close), the manager rebuilds the focus chain to exclude hidden widgets and focus the appropriate widget (e.g. focus the type picker when it opens, refocus the list when it closes). Each tab exposes a `cbx_<tab>_is_mode_change_needed()` or the manager queries the tab's mode after each event and rebuilds if it changed.
   - Existing direct-call unit tests still pass without signature changes.
-- Verification: `nix-shell --run "ctest --test-dir build-check -R 'test_controllers_tab|test_profiles_tab|test_settings_tab|test_manager_production|test_widget' --output-on-failure"` — all pass. New sub-tests in each tab test file push `SDL_KEYDOWN`/`SDL_KEYUP` events through the manager's dispatch and verify the semantic outcome (mode change, DBus mock expectation, file creation).
+- Verification: `nix-shell --run "ctest --test-dir build-check -R 'test_controllers_tab|test_profiles_tab|test_settings_tab|test_manager_production|test_widget' --output-on-failure"` — all pass. New sub-tests in each tab test file push `SDL_KEYDOWN`/`SDL_KEYUP` events through the manager's dispatch and verify the semantic outcome (mode change, DBus mock expectation, file creation). **Verified in commit `bc8c7b3`**: full suite 84/84 passed (1 environment skip); production manager dispatch, A-key KEYUP semantics, tab-specific activation, picker callbacks, cancellation paths, and focus-chain rebuild were covered by the added tab/widget tests.
 - Documentation impact: none
 
 ## Task 4: Security-hardened profile save in production path
-- Status: pending
+- Status: complete
 - Dependencies: Task 3
 - Scope: `src/manager/profiles_tab.c`, `src/manager/profile_save.c`, `src/manager/profile_save.h`, `tests/test_profile_save.c`, `tests/test_profiles_tab.c`
 - Acceptance criteria:
@@ -246,7 +246,7 @@ dispatch path, and the task that provides executable evidence.
   - Path traversal is prevented by `realpath()` canonicalization (writing outside the profile directory fails).
   - All production save paths use `cbx_profile_save_to_dir()`: profiles tab create, profile editor save.
   - Existing `test_profile_save.c` and `test_profile_validate.c` still pass.
-- Verification: `nix-shell --run "ctest --test-dir build-check -R 'test_profile_save|test_profile_validate|test_profiles_tab' --output-on-failure"` — all pass. New sub-test verifies that a profile missing NES bindings is rejected when saved through the production path.
+- Verification: `nix-shell --run "ctest --test-dir build-check -R 'test_profile_save|test_profile_validate|test_profiles_tab' --output-on-failure"` — all pass. New sub-test verifies that a profile missing NES bindings is rejected when saved through the production path. **Verified in commit `8e767a1`**: full suite 74/74 passed (1 environment skip); canonical target-path writes, production `cbx_profile_save_to_dir()` routing, NES minimum rejection, and valid profile persistence were covered by profile-save and profiles-tab tests.
 - Documentation impact: none
 
 ## Task 5: Wire profile editor, create-to-editor flow, and editor UI entry points into manager production path
