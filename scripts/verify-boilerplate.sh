@@ -73,9 +73,17 @@ grep -q '^## Build' AGENTS.md
 grep -q '^## Immediate validation' AGENTS.md
 (( $(wc -l < AGENTS.md) <= 100 )) || { echo 'verify: AGENTS.md must remain concise (100 lines maximum)' >&2; exit 1; }
 grep -q 'Do not assume functionality is missing or complete' PROMPT.md
+grep -q 'Keyboard prox' PROMPT.md
+grep -q 'string-only mock' PROMPT.md
+grep -q 'fixture assembly' PROMPT.md
+grep -q 'missing-backend' PROMPT.md
 grep -q 'Final documentation and specification audit' prompts/PLAN.md
 grep -q 'Specification conformance matrix' prompts/PLAN.md
 grep -q 'Interaction acceptance inventory' prompts/PLAN.md
+grep -q 'Keyboard prox' prompts/PLAN.md
+grep -q 'string-only mock' prompts/PLAN.md
+grep -q 'fixture assembly' prompts/PLAN.md
+grep -q 'missing-backend' prompts/PLAN.md
 grep -q '§11.2' PROMPT.md
 grep -q 'Maintenance verification and documentation audit' prompts/MAINTENANCE_PLAN.md
 grep -q 'PLAN_COMPLETE.*final non-empty line outside every event tag' prompts/PLAN.md
