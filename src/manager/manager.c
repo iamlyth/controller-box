@@ -378,8 +378,23 @@ cbx_manager_handle_event(cbx_manager *mgr, const SDL_Event *ev)
         switch (key) {
         case SDLK_LEFT:
         case SDLK_RIGHT:
-            /* Left/Right switches tabs (SPEC §5.1). */
+        {
+            /* On the tab bar: Left/Right switches tabs (SPEC §5.1).
+             * On a panel child: try horizontal focus navigation first
+             * (side-by-side buttons share a row), then fall back to
+             * tab switching so the user can always change tabs. */
+            cbx_widget *cur =
+                cbx_focus_chain_get_focused_widget(&mgr->focus);
+            if (cur != &mgr->tabbar.base) {
+                cbx_nav_direction dir =
+                    (key == SDLK_LEFT) ? CBX_NAV_LEFT : CBX_NAV_RIGHT;
+                if (cbx_focus_chain_navigate(&mgr->focus, dir) >= 0) {
+                    cbx_manager_check_mode_change(mgr, prev_mode);
+                    return true;
+                }
+            }
             return cbx_widget_handle_event(&mgr->tabbar.base, ev);
+        }
 
         case SDLK_UP:
             return cbx_focus_chain_navigate(&mgr->focus, CBX_NAV_UP) >= 0;
@@ -704,15 +719,27 @@ cbx_manager_rebuild_focus(cbx_manager *mgr)
      * widgets so that hidden type pickers, create pickers, etc. don’t
      * appear in the focus chain. */
     cbx_panel *panel = &mgr->panels[mgr->active_tab];
+    int row = 1;
+    int prev_cy = -1;
     for (int i = 0; i < panel->child_count; i++) {
         cbx_widget *child = panel->children[i];
         if (!child || !child->visible || !child->interactive)
             continue;
         SDL_Rect child_rect;
         cbx_widget_get_rect(child, &child_rect);
-        /* Panel children are at row 1+.  Each child gets its own row
-         * so UP/DOWN navigates between them. */
-        cbx_focus_chain_add(&mgr->focus, child, &child_rect, 1 + i);
+        /* Group children by vertical proximity: widgets at the same
+         * y level (within 10 px) share a row so LEFT/RIGHT navigates
+         * between them (e.g. side-by-side buttons).  Widgets at
+         * different y levels get separate rows for UP/DOWN. */
+        int cy = child_rect.y + child_rect.h / 2;
+        if (prev_cy >= 0) {
+            int diff = cy - prev_cy;
+            if (diff < 0) diff = -diff;
+            if (diff > 10)
+                row++;
+        }
+        cbx_focus_chain_add(&mgr->focus, child, &child_rect, row);
+        prev_cy = cy;
     }
 }
 

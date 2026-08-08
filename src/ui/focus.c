@@ -93,6 +93,14 @@ find_neighbor(const cbx_focus_chain *chain, cbx_nav_direction dir)
             cand->row != cur->row)
             continue;
 
+        /* Host Mode: restrict left/right to the same row so
+         * horizontal navigation stays within a button group;
+         * vertical navigation can still cross rows. */
+        if (chain->mode == CBX_FOCUS_MODE_HOST &&
+            (dir == CBX_NAV_LEFT || dir == CBX_NAV_RIGHT) &&
+            cand->row != cur->row)
+            continue;
+
         int cand_cx, cand_cy;
         entry_center(cand, &cand_cx, &cand_cy);
 
