@@ -409,6 +409,38 @@ The `InterceptMode` poll interval is 50 ms (DEC-002), yielding ~51 ms worst-case
 detection. Detection latency is bounded by the poll interval; the render path
 itself is <1 ms.
 
+## Factory campaign operation
+
+A finite autonomous campaign repeatedly creates a new plan base instead of
+asking an operator to alternate planning and implementation manually:
+
+```bash
+./scripts/ralph-campaign.sh --rounds 3
+```
+
+Every round performs fresh planning, strict implementation, the configured
+project verification command, installed-evidence validation, and a separate
+adversarial audit. Runtime state is persisted atomically in the ignored
+`.factory-state/ralph-campaign.json`. After interruption, confirm no child
+Ralph process is alive and resume the exact phase with:
+
+```bash
+./scripts/ralph-campaign.sh --rounds 3 --resume
+```
+
+Do not change the round count or TUI mode during resume. Corrupt state, a dirty
+phase boundary, stale/rewritten Git bindings, or final-round findings stop the
+campaign rather than skipping work. Leaf planning, implementation, and audit
+recovery retain their normal quota and completion-rejection behavior.
+
+`factory-environment.toml` declares available tools and runners. It initially
+declares none, so the product-specific required capabilities in `factory.toml`
+mechanically prevent a clean final campaign audit until a real acceptance
+environment is declared. Never add credentials or endpoints directly: future SSH runners
+must use an alias configured outside the repository. Validate changes with
+`scripts/check-factory-environment.py`; runner execution and evidence acceptance
+must be explicitly implemented and tested before hardware claims become valid.
+
 ## Bug maintenance
 
 GitHub and Forgejo issues are optional external references. The portable,

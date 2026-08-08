@@ -63,6 +63,15 @@ if(BASH_EXECUTABLE)
         COMMAND ${BASH_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test-installed-functional-evidence.sh
             ${CMAKE_CURRENT_SOURCE_DIR})
+    add_test(NAME test_factory_environment
+        COMMAND ${BASH_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test-factory-environment.sh)
+    add_test(NAME test_campaign_audit
+        COMMAND ${BASH_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test-campaign-audit.sh)
+    add_test(NAME test_ralph_campaign
+        COMMAND ${BASH_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test-ralph-campaign.sh)
 else()
     message(STATUS "bash not found — test_installed_smoke skipped")
 endif()

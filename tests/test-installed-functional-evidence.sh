@@ -56,7 +56,27 @@ if ./scripts/check-installed-functional-evidence.sh >/dev/null 2>&1; then
     echo 'evidence guard accepted wrong schema' >&2
     exit 1
 fi
-# Reject missing evidence file entirely
+# Evidence is parsed as data, never sourced as shell code.
+cat > .factory-state/installed-functional-evidence.env <<EOF
+schema=factory-installed-functional/v1
+commit=$commit
+test=test_installed_functional
+result=PASS
+skipped=0
+touch /tmp/controller-box-evidence-injection
+EOF
+rm -f /tmp/controller-box-evidence-injection
+if ./scripts/check-installed-functional-evidence.sh >/dev/null 2>&1 || [[ -e /tmp/controller-box-evidence-injection ]]; then
+    echo 'evidence guard accepted or executed injected shell content' >&2
+    exit 1
+fi
+# Reject symlinked and missing evidence files entirely.
+rm .factory-state/installed-functional-evidence.env
+ln -s /dev/null .factory-state/installed-functional-evidence.env
+if ./scripts/check-installed-functional-evidence.sh >/dev/null 2>&1; then
+    echo 'evidence guard accepted symlinked evidence file' >&2
+    exit 1
+fi
 rm .factory-state/installed-functional-evidence.env
 if ./scripts/check-installed-functional-evidence.sh >/dev/null 2>&1; then
     echo 'evidence guard accepted missing evidence file' >&2

@@ -170,6 +170,65 @@ Before every checkpoint, planning revalidates the launcher's immutable specifica
 
 A `pre.loop.complete` gate runs through `scripts/ralph-completion-gate.sh`. When that strict gate rejects a premature completion request, it writes an atomic, one-shot marker bound to the current launcher nonce, lifecycle mode, loop ID, and canonical workspace. The supervisor consumes only a matching marker, repairs Ralph's volatile markers, and continues the same cycle with `--continue`, preserving the selected TUI mode. Stale, malformed, mismatched, or symlink markers cannot authorize continuation, and arbitrary non-quota failures remain terminal. Quota exhaustion continues through its independent verified wait path. A failed or stale Ralph process can be accepted as complete only when the normal final gate passes; otherwise its artifacts remain recoverable but explicitly incomplete.
 
+## Run a finite multi-round campaign
+
+A campaign removes the human-operated outer loop while retaining objective
+stopping boundaries:
+
+```bash
+./scripts/ralph-campaign.sh --rounds 3
+# Headless:
+./scripts/ralph-campaign.sh --rounds 3 --no-tui
+```
+
+Each mandatory round records the current clean `HEAD` as a new base, runs a
+fresh `ralph-plan.sh` cycle, runs the resulting plan through `ralph-run.sh`,
+executes `verification.campaign_command`, validates installed-functional
+evidence when the checker exists, and launches an independent adversarial audit
+through `ralph-audit.sh`. A prior completion claim never shortens the requested
+round count. The next round's fresh planner consumes the preceding
+`CAMPAIGN_AUDIT.md`; prior plans and audit reports remain in Git history.
+
+Ignored state in `.factory-state/ralph-campaign.json` records the requested
+rounds, selected TUI mode, current phase, each round base, phase-start markers,
+commits, and audit results. Start a new campaign only from a clean `develop`.
+Resume an interrupted active campaign with exactly matching options:
+
+```bash
+./scripts/ralph-campaign.sh --rounds 3 --resume
+./scripts/ralph-campaign.sh --rounds 3 --resume --no-tui
+```
+
+The campaign and its children share the inherited factory lock, so planning,
+implementation, verification, audit checkpointing, and recovery retain one
+repository writer. Quota waits and rejected completion requests remain handled
+inside each leaf lifecycle. Invalid/corrupt state, rewritten bases, dirty phase
+boundaries, conflicting options, and non-quota child failures stop without
+skipping a phase. Intermediate audit findings become mandatory input to the
+next round. Findings in the final configured round leave the campaign blocked
+and return nonzero rather than claiming completion; begin another reviewed
+campaign to remediate them.
+
+### Declared tools and runners
+
+`factory-environment.toml` is the tracked, credential-free declaration of what
+the factory can actually execute. The initial template contains no `[[tools]]`
+or `[[runners]]`, so agents must not invent hardware, SSH access, GPU/controller
+coverage, or external evidence. Future SSH runners use an SSH config alias and
+argv arrays; hostnames, usernames, ports, private-key paths, passwords, tokens,
+and secrets remain outside Git. Validate it with:
+
+```bash
+./scripts/check-factory-environment.py
+```
+
+Planning, implementation, and independent audit prompts treat the declaration
+as exhaustive. `factory.toml` lists product-specific capabilities required for
+a clean audit; while the template is empty, a final audit must report findings
+and the campaign cannot claim completion. Declaring a runner makes it
+discoverable to planning; executable integration with a future runner must still
+be planned, tested, and gated before its evidence can satisfy product acceptance.
+
 ## Maintain one bug
 
 Ordinary defects stay out of `docs/SPEC.md`. Canonical state is tracked in
@@ -283,6 +342,7 @@ Planning and maintenance recovery use:
 
 ```bash
 ./scripts/ralph-recover.sh --mode planning
+./scripts/ralph-recover.sh --mode campaign-audit
 ./scripts/ralph-recover.sh --mode maintenance-planning
 ./scripts/ralph-recover.sh --mode maintenance
 ```

@@ -245,6 +245,22 @@ activation paths and produce no backend or filesystem side effect.
 nix-shell --run "ctest --test-dir build-check -R 'test_manager_interaction|test_overlay_interaction|test_interaction_inventory' --output-on-failure"
 ```
 
+## Multi-round Ralph campaign
+
+For a predetermined sequence of fresh adversarial plans, implementations,
+verification passes, and independent gap audits, run:
+
+```bash
+./scripts/ralph-campaign.sh --rounds 3
+```
+
+Every round receives a new Git base and replaces the active plan; completed
+plans and audits remain in Git history. Interrupted campaigns resume with the
+same round count and phase using `--resume`. Available local tools and external
+runners are declared without credentials in `factory-environment.toml`; the
+initial template intentionally declares none, so required hardware capabilities
+remain findings rather than fabricated completion evidence until it is populated.
+
 ## Bug maintenance
 
 Portable bug state is tracked in `open-bugs.md` and `closed-bugs.md`. A bug may

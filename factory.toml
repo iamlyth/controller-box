@@ -15,6 +15,17 @@ integration_workers = 1
 min_model_requests = 1
 max_model_requests = 8
 
+[campaign]
+required_capabilities = [
+  "physical-controller",
+  "kernel-uinput",
+  "inputplumber-system-dbus",
+  "gpu-compositor",
+  "systemd-user",
+  "installed-package",
+  "target-consumer",
+]
+
 [quota]
 threshold_percent = 80
 poll_interval_seconds = 300
@@ -30,6 +41,7 @@ final_task_title = "Final documentation and specification audit"
 
 [verification]
 maintenance_command = ["./scripts/verify-project.sh"]
+campaign_command = ["./scripts/verify-project.sh"]
 
 [issues]
 schema = "ralph-bug-ledger/v1"
