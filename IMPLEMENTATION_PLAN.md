@@ -1,8 +1,8 @@
 ---
 spec_path: docs/SPEC.md
-spec_commit: 05b866f957c02e4c89b31b3f96e82ed5c214bd34
-spec_blob: b403cb933239698d4ddaedc9a438bdcf9d36a059
-base_commit: 05b866f957c02e4c89b31b3f96e82ed5c214bd34
+spec_commit: 3a10f6b7d04a615b2b9d06eef6c91e431fa9c079
+spec_blob: 58f5d3cb72bc6b3e5f573fa09a63c11a653ed577
+base_commit: 3a10f6b7d04a615b2b9d06eef6c91e431fa9c079
 status: active
 ---
 
@@ -86,7 +86,8 @@ Production acceptance covers these semantic workflows through normal production 
 - Documentation impact: startup topology semantics.
 
 ## Task 6: Shipped immutable Default profile
-- Status: pending
+- Status: complete
+- Evidence: commit `16f1ec1`; clean-XDG enumeration, copy/create, parse, and packaging tests pass with the bundled read-only asset.
 - Dependencies: none
 - Scope: bundled InputPlumber YAML, path/enumeration fallback, packaging, clean-home tests.
 - Acceptance criteria: Default is always present/read-only from Controller-Box assets; Default copy succeeds without host profiles; packages install the asset.
