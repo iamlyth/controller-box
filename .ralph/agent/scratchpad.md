@@ -1,24 +1,24 @@
-# Task 2: InputPlumber Readiness, Degraded UI, and Owner Recovery — COMPLETE
+# Task 4: Functional Controllers tab with confirmed backend outcomes — COMPLETE
 
 ## Outcome
-- All 6 gaps fixed and verified. Commit `c2415e4` on `develop`.
+- All acceptance criteria met. Commits `0df65d3` (impl) and `601830d` (plan) on `develop`.
 
 ## Verification
-- `ctest -R 'test_native_dbus|test_connection|test_overlay_service|test_manager_dbus_inject'` — all pass.
-- Full CTest: 81/81 pass (1 skip = backend_smoke, needs GPU).
+- `ctest` — 81/81 pass (1 skip = backend_smoke, needs GPU).
+- `test_native_target_operations` — real sd-bus: CreateTargetDevice, StopTargetDevice, GetManagedObjects, DeviceType through private dbus-daemon + forked server.
+- `test_controllers_tab` — 42 tests pass including 4 new tests for type verification + error display.
 
 ## Changes
-1. **Overlay unconditional DBus process** (`overlay_service.c`): `cbx_overlay_service_step` now drains `conn.backend->process(bus)` unconditionally, independent of `input_events_ready`. Degraded-mode NameOwnerChanged recovery now works.
-2. **Distinct degraded reasons** (`ip_connection.c/h`): `ip_connection_reason_for_error()` maps each `IP_ERR_*` to a specific actionable string. Threaded through `handle_name_changed`, overlay init, manager init → controllers_tab status label.
-3. **Version compatibility check** (`ip_connection.c/h`): `ip_version_is_compatible()` verifies >= 0.78.0 on connect and reacquisition. Incompatible → DEGRADED with specific reason.
-4. **Native fixture recovery test** (`test_native_dbus.c`): stops/restarts server child, exercises real sd-bus owner loss/reacquisition.
-5. **Manager loop integration test** (`test_manager_dbus_inject.c`): proves loop drains queued NOC via `process()` and fires `cbx_manager_backend_ready`.
-6. **Overlay step recovery test** (`test_overlay_service.c`): proves step drains DBus when `input_events_ready=false`.
+1. **Type verification in `cbx_controllers_tab_add`** (`controllers_tab.c`): After CreateTargetDevice + ObjectManager refresh, verifies the new target's DeviceType matches the selected type. Returns `-EIO` if type mismatch.
+2. **Error display** (`controllers_tab.c`): `show_action_error`/`clear_action_error` helpers; `confirm_type_pick` and `on_remove_pressed` now show operation errors in the status label. `begin_type_pick` clears previous errors.
+3. **Native fixture test** (`test_native_dbus.c`): Extended server with `CreateTargetDevice`, `StopTargetDevice`, `GetManagedObjects` (via `sd_bus_add_object`), and target `DeviceType` (via `sd_bus_add_fallback_vtable` with find callback). New `test_native_target_operations` test.
+4. **Mock tests** (`test_controllers_tab.c`): `test_add_rejects_type_mismatch`, `test_error_display_on_failed_add`, `test_error_display_on_unconfirmed_add`, `test_error_clear_on_new_operation`.
+5. **Integration test fix** (`test_manager_integration.c`): `test_add_controller` now includes DeviceType expectation.
 
 ## Key design decisions
-- Mock backend enhanced with `ip_dbus_mock_queue_noc()` so `process()` dispatches queued signals (simulating real sd-bus behavior).
-- Manager `cbx_manager_backend_ready`/`_degraded` exposed as non-static for testability.
-- `IP_ERR_INCOMPATIBLE` (-ENOSYS) added for version-check failures.
+- ObjectManager vtable with complex `a{oa{sa{sv}}}` signature fails `sd_bus_add_object_vtable` with EINVAL; used `sd_bus_add_object` with a root handler filtering for GetManagedObjects instead.
+- `sd_bus_add_fallback_vtable` requires non-NULL find callback and at least one property entry.
+- `ip_connection_reason_for_error` reused for DBus error messages in `show_action_error`.
 
 ## Next Task
-Task 4 (Functional Controllers tab with confirmed backend outcomes) — depends on Tasks 1, 2 (both complete).
+Task 5 (Authoritative startup target topology and routability) — depends on Task 4 (now complete).
