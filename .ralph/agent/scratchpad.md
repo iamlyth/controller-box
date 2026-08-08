@@ -1,70 +1,84 @@
-# Task 10 Complete — Extract overlay service step function for testability
+# Task 11 Complete — Overlay production-dispatch interaction tests
 
 ## What was done
 
-### Production refactoring
+### Production changes
 
-1. **Created `cbx_overlay_service_ctx` struct** in `overlay_service.h` — a
-   comprehensive context holding all overlay-service loop state: renderer,
-   connection, device model, settings, assignments, text cache, font_id,
-   theme, icon map, icon cache, composites array, comp_count, grid,
-   surface, render_ctx, lifecycle, player_mode, host_mode, conflicts,
-   input_ctx, input_events, expected_sender, input_events_ready, polls
-   array, poll_count, poll_event_type, and initialized flag. The struct
-   is ~200 KB+ so it's heap-allocated (`calloc`) in production.
+1. **Exposed three static callbacks** in `overlay_service.h` by removing
+   `static` and renaming with `cbx_overlay_` prefix:
+   - `on_overlay_save` → `cbx_overlay_on_save` — lifecycle on_save:
+     conflict detection → resolution → assignment sync → save
+   - `on_slot_change` → `cbx_overlay_on_slot_change` — player/host mode
+     slot change: marks surface dirty
+   - `on_profile_change` → `cbx_overlay_on_profile_change` — player mode
+     profile change: calls `ip_composite_load_profile_path` via DBus,
+     marks surface dirty
 
-2. **Extracted `cbx_overlay_service_step()`** — the single-iteration poll
-   loop body. Processes SDL events (poll-timer ticks, SDL_QUIT, keyboard
-   navigation via player/host mode), DBus InputEvent signals, lifecycle
-   ticks, and dirty-surface re-renders. Takes `cbx_overlay_service_ctx *`
-   and is fully self-contained.
+2. **Updated all references** in `overlay_service.c`:
+   - `on_host_slot_change` now calls `cbx_overlay_on_slot_change`
+   - `run_overlay_service()` wires `cbx_overlay_on_slot_change`,
+     `cbx_overlay_on_profile_change`, `cbx_overlay_on_save`
 
-3. **Refactored `run_overlay_service()`** — initializes the context struct,
-   then loops `while (g_running) { cbx_overlay_service_step(svc); SDL_Delay(10); }`,
-   then cleans up. All stack-local variables replaced by struct members.
+### Test file: `tests/test_overlay_interaction.c` — 19 sub-tests
 
-4. **Updated all callbacks** (`on_overlay_save`, `on_slot_change`,
-   `on_profile_change`, `on_host_slot_change`) to use
-   `cbx_overlay_service_ctx *` instead of the old `overlay_ctx *`.
-   The `overlay_ctx` typedef was removed.
+Fixture (`interaction_fixture`): 2-composite grid with mock DBus,
+`ip_input_events` subscribed with device path mappings, `ip_intercept_poll`
+initialized, production callbacks wired, instant lifecycle transitions
+(fade=0). Lifecycle starts in IDLE; `make_visible()` helper for most tests.
 
-5. **Restructured `overlay_service.h`** — moved `cbx_overlay_input_ctx`
-   definition before `cbx_overlay_service_ctx` (dependency order).
-
-### Test file: `tests/test_overlay_service.c` — 3 new tests (11 total)
-
-- **test_step_quit_sets_shutdown**: Queue SDL_QUIT, run one step, verify
-  `cbx_overlay_service_shutdown_requested()` returns true.
-- **test_step_keydown_updates_grid**: Queue SDLK_RIGHT, run one step, verify
-  row 0's cur_col changes from 0 (Unassigned) to 1 (P1).
-- **test_step_empty_queue_no_crash**: Flush events, run one step, verify no
-  crash, grid unchanged, no shutdown.
-
-Step fixture (`step_fixture`) allocates a `cbx_overlay_service_ctx` on the
-heap, initializes SDL with dummy driver, creates a 1-composite grid with
-player/host mode, sets lifecycle to VISIBLE so keydown events are processed,
-and tears down cleanly.
+Tests by overlay action:
+- **O01** (2 tests): Activate via InterceptMode poll (push poll event →
+  mock returns "2" → lifecycle IDLE→VISIBLE); deactivate via poll (mock
+  returns "1" → lifecycle VISIBLE→IDLE)
+- **O02** (1 test): Move left — right first then left, verify col 1→0
+- **O03** (1 test): Move right — verify col 0→1
+- **O04** (1 test): Cycle profile up — verify profile changed from "Default"
+- **O05** (1 test): Cycle profile down — verify profile changed
+- **O06** (2 tests): Enter host mode via R3; verify host_row=0; verify
+  non-host controller frozen (DBus input → no movement, CBX_ROW_FROZEN)
+- **O07** (1 test): Host navigate rows — DOWN→row 1, UP→row 0
+- **O08** (1 test): Host move slot — RIGHT→col 1, LEFT→col 0
+- **O09** (1 test): Exit host mode via R3 — verify inactive
+- **O10** (3 tests): Close via keyboard B — on_save fires, assignments
+  synced (slot 0, id "TEST:0"); close via DBus B — same verification;
+  conflict resolution — row 0→P1, row 1→P1 creates conflict, on_save
+  auto-resolves to row 0→P1, row 1→P2
+- **O11** (4 tests): Multi-controller independence via DBus InputEvent
+  (row 0 and row 1 move independently); host mode via DBus (R3 enter,
+  frozen controller, navigate, move slot, R3 exit); unknown device
+  path dropped; wrong sender rejected
+- **O12** (1 test): Host profile cycle deferred per §13 — verified
+  current behavior: UP/DOWN navigates rows, not cycles profiles
 
 ### Key implementation insights
 
-- The `cbx_overlay_service_ctx` struct must be heap-allocated (not stack)
-  because it contains large arrays (device_model ~53KB, text_cache ~145KB,
-  icon_cache ~37KB) totaling ~200KB+.
-- The step function uses the file-scope `g_running` flag for SDL_QUIT.
-  Tests use `cbx_overlay_service_reset_shutdown()` /
-  `cbx_overlay_service_shutdown_requested()` to control and check it.
-- The `cbx_overlay_input_ctx` typedef must be defined BEFORE
-  `cbx_overlay_service_ctx` in the header since the latter contains it.
-- The step function does NOT call `SDL_Delay()` — that stays in the
-  `run_overlay_service()` loop wrapper so tests can run the step without
-  delays.
+- `cbx_overlay_on_profile_change` uses `svc->conn.backend` and
+  `svc->conn.bus` for the `ip_composite_load_profile_path` DBus call.
+  The fixture sets up `svc->conn` via `ip_connection_init` +
+  `ip_connection_set_bus` with the mock backend/bus.
+- The mock's `get_property` and `set_property` share the same
+  expectation lookup by `(iface, prop)`. Value is used by get, ignored
+  by set. One expectation `("InterceptMode", "2")` serves both O01
+  (get returns "2" = ALL) and O10 (set returns rc=0 = success).
+- `ip_input_events_process()` is a no-op on the mock backend.
+  `inject_signal()` directly calls the subscription callback
+  (`cbx_overlay_input_cb`) synchronously, which is the production
+  dispatch path for InputEvent signals.
+- `cbx_resolve_user_profiles_dir` just constructs the path (doesn't
+  check existence); works in test env with HOME set.
+- Lifecycle `fade_in_ms=0` and `fade_out_ms=0` give instant transitions
+  for deterministic testing.
+- REQ-010/O12: host-mode profile cycling is NOT a blocking gap. It's
+  deferred per §13 (interface details). The final audit (Task 14) will
+  make the final determination.
 
 ### Test results
-77/77 pass (1 skip: backend_smoke). No regressions. 3 new sub-tests.
+78/78 pass (1 skip: backend_smoke). No regressions. 19 new sub-tests.
 
 ### Commits
-- `e172c01` on `develop`
+- `0a2f6e9` on `develop` (production + test changes)
+- `d7f8e7b` on `develop` (plan update)
 
 ## Next task
-Task 11: Overlay production-dispatch interaction tests.
-Dependencies: Task 6, Task 7, Task 10. Ready to start.
+Task 12: Enhance installed smoke test with coordinate-based mouse clicks.
+Dependencies: Task 1, Task 2, Task 3 (all complete). Ready to start.
