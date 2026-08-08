@@ -1,59 +1,54 @@
-# Task 5: Wire profile editor into manager production path
+# Task 5 Complete — Profile editor wired into manager production path
 
-## Understanding
+## What was done
 
-Task 5 wires the profile editor (list mode + sequential mode) into the production manager path. Currently:
-- The Edit button in profiles_tab.c is a **no-op placeholder**
-- The create flow writes a file to disk instead of opening the editor
-- The editor is only tested in isolation (test_editor_list_mode.c, test_editor_seq_mode.c)
-- Visual/golden tests manually initialize the editor (bypassing production path)
-- `expected_sender` in capture/sequential mode uses `IP_DBUS_NAME` (well-known name) instead of unique bus name — making capture completely broken in production
+### Source changes
 
-## Implementation Plan
+1. **`src/manager/profile_editor_list.h`** — Added `CBX_EDITOR_MODE_BINDING_EDIT` enum and `char expected_sender[128]` field to `cbx_profile_editor` struct.
 
-### A. Profile editor changes
+2. **`src/manager/profile_editor_list.c`** — 
+   - `cbx_profile_editor_set_dbus()`: Resolves unique bus name via `backend->get_unique_name(bus, IP_DBUS_NAME, &unique)` and stores in `ed->expected_sender`. Fixes the expected_sender security bug (was using well-known name `IP_DBUS_NAME` instead of unique name like `:1.42`).
+   - `cbx_profile_editor_begin_capture()`: Uses `ed->expected_sender` instead of `IP_DBUS_NAME`.
+   - `cbx_profile_editor_activate()`: In LIST mode, opens a binding edit sub-menu (`CBX_EDITOR_MODE_BINDING_EDIT`) with "Pick Target", "Capture", "Sequential (All Buttons)" options. In BINDING_EDIT mode, dispatches to the selected action.
+   - `cbx_profile_editor_cancel()`: Handles BINDING_EDIT mode (returns to LIST).
+   - `cbx_profile_editor_move_up/down()`: Handle BINDING_EDIT mode (scroll target_list).
+   - `cbx_profile_editor_init()`: Widget positions now offset by panel rect origin (`px + x`, `py + y`) so editor works correctly within the manager's panel (which starts below the tabbar).
 
-1. **profile_editor_list.h**: Add `CBX_EDITOR_MODE_BINDING_EDIT` enum value. Add `char expected_sender[128]` field to struct.
+3. **`src/manager/profile_editor_seq.c`** — `cbx_profile_editor_begin_sequential()` uses `ed->expected_sender` instead of `IP_DBUS_NAME`.
 
-2. **profile_editor_list.c**: 
-   - `cbx_profile_editor_set_dbus`: Resolve unique bus name via `backend->get_unique_name(bus, IP_DBUS_NAME, &unique)` and store in `ed->expected_sender`
-   - `cbx_profile_editor_begin_capture`: Replace `IP_DBUS_NAME` with `ed->expected_sender`
-   - `cbx_profile_editor_activate`: In LIST mode, open a binding edit sub-menu (mode=BINDING_EDIT) with "Pick Target", "Capture", "Sequential (All Buttons)" options using target_list widget
-   - Handle BINDING_EDIT mode in `activate` (dispatch to target-pick/capture/sequential), `cancel` (back to LIST), `move_up/down` (scroll target_list)
+4. **`src/manager/profiles_tab.h`** — Added `CBX_PT_MODE_EDITOR` mode, `cbx_profile_editor editor` field, `editor_initialized`, `editor_is_new`, `editor_profile_name`, `renderer`, `dbus_backend`, `dbus_bus` fields. Added `cbx_profiles_tab_set_context()` declaration.
 
-3. **profile_editor_seq.c**: Replace `IP_DBUS_NAME` with `ed->expected_sender` in `begin_sequential`
+5. **`src/manager/profiles_tab.c`** —
+   - `cbx_profiles_tab_set_context()`: Stores renderer and DBus backend/bus for editor init.
+   - `on_edit_pressed()`: Loads selected profile from disk, opens editor via `cbx_profiles_tab_open_editor()`.
+   - `cbx_profiles_tab_name_input_confirm()`: Now builds in-memory profile and opens editor instead of writing a file. File is written on save from the editor.
+   - `cbx_profiles_tab_open_editor()`: Lazy-inits editor, loads profile, sets DBus info, hides tab widgets, sets mode to EDITOR.
+   - `cbx_profiles_tab_close_editor()`: Hides editor widgets, shows tab widgets, sets mode to LIST.
+   - `cbx_profiles_tab_save_editor()`: Saves via `cbx_profile_save_to_dir()` with NES validation; on success closes editor + refreshes list; on failure shows error in editor status label.
+   - `cbx_profiles_tab_handle_key()`: Handles EDITOR mode — Up/Down → editor navigation, A/B → swallow KEYDOWN, Start (TAB) → cancel editor/sequential.
+   - `cbx_profiles_tab_activate()`: Handles EDITOR mode → `cbx_profile_editor_activate()`.
+   - `cbx_profiles_tab_cancel()`: Handles EDITOR mode — B in LIST → save+close, B in SEQUENTIAL → skip, B in sub-modes → cancel sub-mode.
+   - `cbx_profiles_tab_shutdown()`: Shuts down editor if initialized.
 
-### B. Profiles tab changes
+6. **`src/manager/manager.c`** — Calls `cbx_profiles_tab_set_context()` after init. Mode tracking updated to `pt.mode * 100 + editor.mode` so manager detects editor internal mode changes and rebuilds focus chain.
 
-4. **profiles_tab.h**: Add `CBX_PT_MODE_EDITOR` mode. Add fields: `cbx_profile_editor editor`, `bool editor_initialized`, `bool editor_active`, `char editor_profile_name[CBX_PT_NAME_LEN]`, `bool editor_is_new`, `SDL_Renderer *renderer`, `const ip_dbus_backend *dbus_backend`, `ip_bus_handle dbus_bus`. Add `cbx_profiles_tab_set_context()` declaration.
+### Test changes
 
-5. **profiles_tab.c**:
-   - `cbx_profiles_tab_set_context()`: Store renderer and DBus backend/bus
-   - `on_edit_pressed`: Load selected profile, lazy-init editor, set DBus info, show editor widgets, hide tab widgets, set mode=EDITOR
-   - `cbx_profiles_tab_name_input_confirm`: Instead of `cbx_profiles_tab_create` (writes file), build in-memory profile and open editor with it
-   - New `cbx_profiles_tab_open_editor()`: Common code for opening editor (both edit and create paths)
-   - New `cbx_profiles_tab_close_editor()`: Hide editor widgets, show tab widgets, set mode=LIST, refresh
-   - New `cbx_profiles_tab_save_editor()`: Get profile from editor, save via `cbx_profile_save_to_dir`, on success close+refresh, on failure show error in editor status
-   - `cbx_profiles_tab_handle_key`: Handle CBX_PT_MODE_EDITOR — Up/Down → editor move, A/B KEYDOWN → swallow, Start (TAB) → cancel editor
-   - `cbx_profiles_tab_activate`: Handle CBX_PT_MODE_EDITOR → editor activate
-   - `cbx_profiles_tab_cancel`: Handle CBX_PT_MODE_EDITOR — B in LIST → save, B in sub-modes → editor cancel, B in SEQUENTIAL → skip
-   - `cbx_profiles_tab_shutdown`: Shutdown editor if initialized
+- **test_profiles_tab.c**: `init_tab` now calls `set_context` with renderer. `test_name_input_confirm` verifies editor opens then saves via cancel. `test_name_input_via_dispatch` updated for create-to-editor flow.
+- **test_editor_list_mode.c**: Updated 6 tests for binding edit sub-menu (two `activate` calls to reach target pick). Added 3 expected_sender security tests: `test_expected_sender_resolved`, `test_expected_sender_accepts_match`, `test_expected_sender_rejects_mismatch`.
+- **test_manager_production.c**: Added `test_editor_opens_via_dispatch` — writes NES profile, switches to Profiles tab, clicks Edit button, verifies editor is open with 6 bindings.
+- **test_manager_visual.c**: Tests 7-9 use production Edit-button path via `vis_open_editor()` helper; render via `cbx_manager_render`; dynamic rect lookup for region checks. Removed unused `render_editor_panel`.
+- **test_golden.c**: Tests 9-11 use production Edit-button path via `g_open_editor()` helper. Golden images regenerated.
+- **Golden images**: `manager_editor_list.png`, `manager_editor_sequential.png`, `manager_editor_validation_error.png` regenerated.
 
-6. **manager.c**: Update mode tracking to include editor mode: `prev_mode = pt.mode * 100 + editor.mode`
+### Docs
+- `docs/OPERATIONS.md`: Added "Profile editor" section documenting access flow (Edit button, create-to-editor, list mode, sequential mode, capture, validation, save, expected_sender).
 
-### C. Test changes
+## Test results
+74/74 pass (1 skip: backend_smoke). No regressions.
 
-7. **test_profiles_tab.c**: Add editor dispatch tests — open editor via Edit button, verify editor widgets visible, test save/close, test cancel
-8. **test_manager_production.c**: Add test that opens editor via production dispatch
-9. **test_manager_visual.c**: Update tests 7-9 to use production Edit-button path
-10. **test_golden.c**: Update tests 9-11 to use production Edit-button path, regenerate goldens
-11. **test_editor_list_mode.c**: Add expected_sender security test
+## Commit
+`163f33e` on `develop`
 
-## Key design decisions
-
-- **Lazy editor init**: Editor initialized on first open (avoids needing renderer at tab init time)
-- **Binding edit sub-menu**: New `CBX_EDITOR_MODE_BINDING_EDIT` mode shows a 3-item picker (Pick Target / Capture / Sequential) using existing target_list widget
-- **Start key = SDLK_TAB**: Used for cancel-editor and cancel-sequential (not used elsewhere in manager)
-- **B in editor LIST mode = save+close**: Per spec M37. B in sub-modes = cancel sub-mode. B in SEQUENTIAL = skip.
-- **Mode tracking**: Combined `pt.mode * 100 + editor.mode` so manager detects editor internal mode changes for focus chain rebuilds
-- **Editor widgets added to profiles panel**: They're hidden when editor inactive, shown when active. Focus chain automatically skips invisible widgets.
+## Next task
+Task 6: Wire overlay DBus InputEvent signal handling for multi-controller input. No dependencies. Ready to start.
