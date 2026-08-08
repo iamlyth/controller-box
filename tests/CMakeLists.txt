@@ -599,6 +599,15 @@ if(CMOCKA_FOUND)
     add_test(NAME test_interaction_inventory COMMAND test_interaction_inventory)
 
     # Native InputPlumber DBus signatures must not regress to string mocks.
+    find_program(DBUS_DAEMON_EXECUTABLE dbus-daemon REQUIRED)
+    get_filename_component(DBUS_BIN_DIR "${DBUS_DAEMON_EXECUTABLE}" DIRECTORY)
+    get_filename_component(DBUS_PREFIX "${DBUS_BIN_DIR}" DIRECTORY)
+    add_executable(test_native_dbus tests/test_native_dbus.c)
+    target_compile_definitions(test_native_dbus PRIVATE
+        DBUS_SESSION_CONFIG="${DBUS_PREFIX}/share/dbus-1/session.conf")
+    target_link_libraries(test_native_dbus PRIVATE controllerbox PkgConfig::CMOCKA)
+    add_test(NAME test_native_dbus COMMAND test_native_dbus)
+
     add_executable(test_dbus_signatures tests/test_dbus_signatures.c)
     target_link_libraries(test_dbus_signatures PRIVATE controllerbox PkgConfig::CMOCKA)
     add_test(NAME test_dbus_signatures COMMAND test_dbus_signatures)
