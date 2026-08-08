@@ -28,7 +28,7 @@ Make the installed product perform its core job from a clean environment: connec
 | FR-03 | §§5.1, 5.7 real controller Manager input | missing | Manager initializes video only and tests inject keyboard events | Task 3 |
 | FR-04 | §§5.2, 5.5 authoritative virtual topology | verified | Add picker uses native arrays (Task 4); startup reconcile creates/attaches/confirms ordered topology with per-slot type correction and rollback (Task 5); Add confirms type via ObjectManager + DeviceType (Task 4); AttachTargetDevice makes targets routable (Task 5) | Tasks 4, 5 |
 | FR-05 | §§5.3–5.4 clean-home profile workflow | missing | No shipped Default; Empty cannot add first binding; save/discard is implicit | Tasks 6, 7 |
-| FR-06 | §§4.1–4.7 assignment/profile backend application | partial | Overlay changes grid/config without confirming InputPlumber state; profiles not loaded | Task 8 |
+| FR-06 | §§4.1–4.7 assignment/profile backend application | verified | cbx_overlay_on_save applies-to-engine-first (LoadProfilePath + ProfilePath verification + AttachTargetDevice + SetGamepadOrder) before persisting; overlay_backend_ready restores after restart; native test observes GamepadOrder, LoadProfilePath, ProfilePath, restart/restore | Task 8 |
 | FR-07 | §§4.9–4.10 compositor-visible reusable overlay | missing | Production overlay window remains hidden and lifecycle is one-shot | Task 9 |
 | FR-08 | §§9, 11.1 installed functional acceptance | missing | Installed smoke accepts missing backend, keyboard proxy, and hidden overlay | Task 10 |
 | FR-09 | §§5.6–5.7 degraded/error semantics | partial | Backend failures are silent no-ops and controls look enabled | Tasks 2, 4, 7 |
@@ -109,7 +109,8 @@ Production acceptance covers these semantic workflows through normal production 
 - Documentation impact: editor controls and XDG locations.
 
 ## Task 8: Apply assignments and profiles to live InputPlumber
-- Status: pending
+- Status: complete
+- Evidence: commit `259b280`; `cbx_overlay_on_save` refactored to apply-to-engine-first (LoadProfilePath + verify ProfilePath read-back + AttachTargetDevice + SetGamepadOrder) before syncing in-memory assignments and persisting to disk; `cbx_profile_cycle_apply` verifies ProfilePath after LoadProfilePath; `overlay_backend_ready` restores profiles/GamepadOrder after InputPlumber restart via `cbx_overlay_on_save`; new `ip_composite_get_profile_name` / `ip_composite_get_profile_path` wrappers; `test_native_assignment_application` exercises full lifecycle (create targets, attach, LoadProfilePath, verify ProfilePath/ProfileName, SetGamepadOrder, read back, simulate restart, restore, verify) through real sd-bus; mock tests for LoadProfile failure and ProfilePath mismatch; 81/81 CTest pass.
 - Dependencies: Tasks 1, 5, 6
 - Scope: overlay profile enumeration/cycling, stable identity application, target/order updates, confirmed persistence and rollback.
 - Acceptance criteria: slot/profile changes update verified engine state before persistence; startup/restart restores order/profile; LoadProfile failures do not appear saved.
