@@ -1,65 +1,70 @@
-# Task 9 Complete — Manager interaction tests: Profiles tab and profile editor
+# Task 10 Complete — Extract overlay service step function for testability
 
 ## What was done
 
-### Production fixes
+### Production refactoring
 
-Three production fixes in `src/manager/profile_editor_list.c` to enable
-pointer-path activation and fix controller navigation in editor sub-modes:
+1. **Created `cbx_overlay_service_ctx` struct** in `overlay_service.h` — a
+   comprehensive context holding all overlay-service loop state: renderer,
+   connection, device model, settings, assignments, text cache, font_id,
+   theme, icon map, icon cache, composites array, comp_count, grid,
+   surface, render_ctx, lifecycle, player_mode, host_mode, conflicts,
+   input_ctx, input_events, expected_sender, input_events_ready, polls
+   array, poll_count, poll_event_type, and initialized flag. The struct
+   is ~200 KB+ so it's heap-allocated (`calloc`) in production.
 
-1. **on_select callbacks on editor lists**: `binding_list` and `target_list`
-   now have `on_select` callbacks wired to `cbx_profile_editor_activate`.
-   Before, clicking on editor list items only selected them visually but
-   did not trigger activation — M29, M30, M31, M33 pointer paths were broken.
+2. **Extracted `cbx_overlay_service_step()`** — the single-iteration poll
+   loop body. Processes SDL events (poll-timer ticks, SDL_QUIT, keyboard
+   navigation via player/host mode), DBus InputEvent signals, lifecycle
+   ticks, and dirty-surface re-renders. Takes `cbx_overlay_service_ctx *`
+   and is fully self-contained.
 
-2. **move_up/move_down selection fix**: In BINDING_EDIT and TARGET_PICK
-   modes, `move_up`/`move_down` now change the selected index via
-   `cbx_list_set_selected` instead of calling `cbx_list_scroll_up/down`
-   (which only changed scroll_offset, not selection). Without this fix,
-   the binding edit sub-menu and target picker were unnavigable via
-   controller (UP/DOWN did nothing visible).
+3. **Refactored `run_overlay_service()`** — initializes the context struct,
+   then loops `while (g_running) { cbx_overlay_service_step(svc); SDL_Delay(10); }`,
+   then cleans up. All stack-local variables replaced by struct members.
 
-3. **binding_list item user_data**: Changed from `(void *)(intptr_t)(i+1)`
-   to `ed` so the on_select callback can safely call
-   `cbx_profile_editor_activate(ed)`.
+4. **Updated all callbacks** (`on_overlay_save`, `on_slot_change`,
+   `on_profile_change`, `on_host_slot_change`) to use
+   `cbx_overlay_service_ctx *` instead of the old `overlay_ctx *`.
+   The `overlay_ctx` typedef was removed.
 
-### Test file: `tests/test_manager_interaction_prof.c` — 35 sub-tests
+5. **Restructured `overlay_service.h`** — moved `cbx_overlay_input_ctx`
+   definition before `cbx_overlay_service_ctx` (dependency order).
 
-- **M10–M20 (Profiles tab)**: list select, create button, create source
-  picker, name input (chars/backspace/confirm/cancel), edit button, delete
-  (open/confirm/cancel) — both controller and pointer paths
-- **M28–M38 (Profile editor)**: binding list nav, activate binding,
-  target pick confirm, capture begin/event, sequential begin/capture/
-  skip/cancel, save and close, cancel/discard — both paths where applicable
-- **D03**: Delete with no profile — no file deletion (both paths)
-- **D04**: Save with missing NES bindings — error, no file, editor stays open
-- **D07**: Filesystem failure — chmod user_dir 0555, save fails, editor stays
-- **D08**: Empty profile creation — editor opens, save blocked by NES validation
+### Test file: `tests/test_overlay_service.c` — 3 new tests (11 total)
+
+- **test_step_quit_sets_shutdown**: Queue SDL_QUIT, run one step, verify
+  `cbx_overlay_service_shutdown_requested()` returns true.
+- **test_step_keydown_updates_grid**: Queue SDLK_RIGHT, run one step, verify
+  row 0's cur_col changes from 0 (Unassigned) to 1 (P1).
+- **test_step_empty_queue_no_crash**: Flush events, run one step, verify no
+  crash, grid unchanged, no shutdown.
+
+Step fixture (`step_fixture`) allocates a `cbx_overlay_service_ctx` on the
+heap, initializes SDL with dummy driver, creates a 1-composite grid with
+player/host mode, sets lifecycle to VISIBLE so keydown events are processed,
+and tears down cleanly.
 
 ### Key implementation insights
 
-- In NAME_INPUT mode, `SDLK_a` triggers confirm and `SDLK_b` triggers
-  cancel (intercepted by `cbx_profiles_tab_handle_key` on KEYDOWN before
-  the letter range check). Use letters c–z for name input tests.
-- Name input confirm happens on KEYDOWN, not KEYUP. Use `send_key_dn`
-  (not `send_key_press`) to avoid the KEYUP activating the editor binding.
-- Editor save (B in LIST mode) happens on KEYUP via `cbx_profiles_tab_cancel`
-  → `cbx_profiles_tab_save_editor`. Use `send_key_press` (not `send_key_dn`).
-- Sequential skip (B) also happens on KEYUP via tab_cancel → seq_skip.
-- Editor cancel (Tab/Start) happens on KEYDOWN via `cbx_profiles_tab_handle_key`.
-- `cbx_profile_save_to_dir` uses atomic write (mkstemp + rename), so making
-  the file read-only doesn't prevent save. Make the directory read-only
-  (chmod 0555) to prevent temp file creation.
-- `open_editor_pointer` must select the user profile via pointer click
-  before clicking Edit, so `on_edit_pressed` loads the correct profile.
+- The `cbx_overlay_service_ctx` struct must be heap-allocated (not stack)
+  because it contains large arrays (device_model ~53KB, text_cache ~145KB,
+  icon_cache ~37KB) totaling ~200KB+.
+- The step function uses the file-scope `g_running` flag for SDL_QUIT.
+  Tests use `cbx_overlay_service_reset_shutdown()` /
+  `cbx_overlay_service_shutdown_requested()` to control and check it.
+- The `cbx_overlay_input_ctx` typedef must be defined BEFORE
+  `cbx_overlay_service_ctx` in the header since the latter contains it.
+- The step function does NOT call `SDL_Delay()` — that stays in the
+  `run_overlay_service()` loop wrapper so tests can run the step without
+  delays.
 
 ### Test results
-76/76 pass (1 skip: backend_smoke). No regressions. 35 new sub-tests.
+77/77 pass (1 skip: backend_smoke). No regressions. 3 new sub-tests.
 
 ### Commits
-- `56dcf13` on `develop` — Test file + production fixes
-- `5dd62b8` on `develop` — Plan conformance matrix update
+- `e172c01` on `develop`
 
 ## Next task
-Task 10: Extract overlay service step function for testability.
-Dependencies: Task 6 (complete). Ready to start.
+Task 11: Overlay production-dispatch interaction tests.
+Dependencies: Task 6, Task 7, Task 10. Ready to start.
