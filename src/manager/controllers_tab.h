@@ -73,6 +73,7 @@ typedef struct {
     cbx_button add_btn;             /* "Add Controller"               */
     cbx_button remove_btn;          /* "Remove"                       */
     cbx_button change_type_btn;      /* "Change Type"                  */
+    cbx_label  status_lbl;           /* backend/operation status         */
 
     /* --- Panel (borrowed) ------------------------------------------ */
     cbx_panel *panel;
@@ -122,6 +123,11 @@ int cbx_controllers_tab_init(cbx_controllers_tab *tab,
  * Returns 0 on success, negative errno on error (partial success is OK).
  */
 int cbx_controllers_tab_refresh(cbx_controllers_tab *tab);
+
+/* Enable/disable backend actions and expose a user-visible reason. */
+void cbx_controllers_tab_set_available(cbx_controllers_tab *tab,
+                                        bool available,
+                                        const char *reason);
 
 /*
  * Shut down and free all widget resources.  Safe on a zeroed struct.

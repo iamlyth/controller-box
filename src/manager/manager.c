@@ -104,7 +104,11 @@ cbx_manager_backend_ready(void *userdata)
     mgr->dbus_connected = true;
     mgr->ct.backend = mgr->dbus_backend;
     mgr->ct.bus = mgr->dbus_bus;
-    cbx_controllers_tab_refresh(&mgr->ct);
+    if (cbx_controllers_tab_refresh(&mgr->ct) == 0)
+        cbx_controllers_tab_set_available(&mgr->ct, true, NULL);
+    else
+        cbx_controllers_tab_set_available(&mgr->ct, false,
+                                           "InputPlumber enumeration failed");
     cbx_profiles_tab_set_context(&mgr->pt, mgr->rend.renderer,
                                   mgr->dbus_backend, mgr->dbus_bus);
 }
@@ -120,6 +124,7 @@ cbx_manager_backend_degraded(const char *reason, void *userdata)
     mgr->dbus_connected = false;
     mgr->ct.backend = NULL;
     cbx_device_model_init(&mgr->ct.model);
+    cbx_controllers_tab_set_available(&mgr->ct, false, reason);
     cbx_profiles_tab_set_context(&mgr->pt, mgr->rend.renderer, NULL, NULL);
 }
 

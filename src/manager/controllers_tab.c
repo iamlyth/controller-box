@@ -206,12 +206,24 @@ cbx_controllers_tab_init(cbx_controllers_tab *tab,
         return rc;
     }
 
+    rc = cbx_label_init(&tab->status_lbl, "", font_id, cache, theme);
+    if (rc != 0) {
+        cbx_widget_destroy(&tab->device_list.base);
+        cbx_widget_destroy(&tab->type_picker.base);
+        cbx_widget_destroy(&tab->add_btn.base);
+        cbx_widget_destroy(&tab->remove_btn.base);
+        cbx_widget_destroy(&tab->change_type_btn.base);
+        return rc;
+    }
+    cbx_widget_set_visible(&tab->status_lbl.base, false);
+
     /* --- Add widgets to panel ------------------------------------- */
     cbx_panel_add_child(panel, &tab->device_list.base);
     cbx_panel_add_child(panel, &tab->add_btn.base);
     cbx_panel_add_child(panel, &tab->remove_btn.base);
     cbx_panel_add_child(panel, &tab->change_type_btn.base);
     cbx_panel_add_child(panel, &tab->type_picker.base);
+    cbx_panel_add_child(panel, &tab->status_lbl.base);
 
     /* --- Layout --------------------------------------------------- */
     SDL_Rect panel_rect;
@@ -246,11 +258,22 @@ cbx_controllers_tab_init(cbx_controllers_tab *tab,
     SDL_Rect ct_rect = { .x = btn_x, .y = btn_y,
                           .w = CBX_CT_BTN_W, .h = CBX_CT_BTN_H };
     cbx_widget_set_rect(&tab->change_type_btn.base, &ct_rect);
+    SDL_Rect status_rect = {
+        .x = panel_rect.x + CBX_CT_LIST_Y,
+        .y = btn_y + CBX_CT_BTN_H + CBX_CT_BTN_GAP,
+        .w = panel_rect.w - CBX_CT_LIST_Y * 2,
+        .h = CBX_CT_BTN_H,
+    };
+    cbx_widget_set_rect(&tab->status_lbl.base, &status_rect);
 
     /* --- Load supported types + refresh --------------------------- */
     if (backend && bus) {
         cbx_controllers_tab_load_supported_types(tab);
         cbx_controllers_tab_refresh(tab);
+        cbx_controllers_tab_set_available(tab, true, NULL);
+    } else {
+        cbx_controllers_tab_set_available(tab, false,
+                                           "InputPlumber unavailable — waiting for recovery");
     }
 
     return 0;
@@ -269,6 +292,7 @@ cbx_controllers_tab_shutdown(cbx_controllers_tab *tab)
         cbx_panel_remove_child(tab->panel, &tab->remove_btn.base);
         cbx_panel_remove_child(tab->panel, &tab->change_type_btn.base);
         cbx_panel_remove_child(tab->panel, &tab->type_picker.base);
+        cbx_panel_remove_child(tab->panel, &tab->status_lbl.base);
     }
 
     cbx_widget_destroy(&tab->device_list.base);
@@ -276,6 +300,7 @@ cbx_controllers_tab_shutdown(cbx_controllers_tab *tab)
     cbx_widget_destroy(&tab->add_btn.base);
     cbx_widget_destroy(&tab->remove_btn.base);
     cbx_widget_destroy(&tab->change_type_btn.base);
+    cbx_widget_destroy(&tab->status_lbl.base);
 
     memset(tab, 0, sizeof(*tab));
 }
@@ -283,6 +308,24 @@ cbx_controllers_tab_shutdown(cbx_controllers_tab *tab)
 /* ------------------------------------------------------------------ */
 /*  Refresh                                                            */
 /* ------------------------------------------------------------------ */
+
+void
+cbx_controllers_tab_set_available(cbx_controllers_tab *tab,
+                                   bool available, const char *reason)
+{
+    if (!tab)
+        return;
+    tab->add_btn.base.interactive = available;
+    tab->remove_btn.base.interactive = available;
+    tab->change_type_btn.base.interactive = available;
+    cbx_widget_set_visible(&tab->add_btn.base, available);
+    cbx_widget_set_visible(&tab->remove_btn.base, available);
+    cbx_widget_set_visible(&tab->change_type_btn.base, available);
+    cbx_widget_set_visible(&tab->status_lbl.base, !available ||
+                            (reason && reason[0]));
+    cbx_label_set_text(&tab->status_lbl,
+                       reason && reason[0] ? reason : "");
+}
 
 int
 cbx_controllers_tab_refresh(cbx_controllers_tab *tab)

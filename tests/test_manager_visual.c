@@ -361,22 +361,16 @@ test_controllers_tab_degraded(void **state)
     assert_true(fb_region_has_content(f->buf_a, MGR_W, MGR_H,
                                        &body_rect, bg, MGR_TOL));
 
-    /* Add button region. */
-    SDL_Rect add_rect = { CT_LIST_X, CT_BTN_Y, CT_BTN_W, CT_BTN_H };
+    /* Backend-changing controls are absent and an actionable degraded
+     * status is rendered instead. */
+    SDL_Rect actions_rect = { CT_LIST_X, CT_BTN_Y,
+                              3 * CT_BTN_W + 2 * CT_BTN_GAP, CT_BTN_H };
+    assert_false(fb_region_has_content(f->buf_a, MGR_W, MGR_H,
+                                        &actions_rect, bg, MGR_TOL));
+    SDL_Rect status_rect = { CT_LIST_X, CT_BTN_Y + CT_BTN_H + CT_BTN_GAP,
+                             CT_LIST_W, CT_BTN_H };
     assert_true(fb_region_has_content(f->buf_a, MGR_W, MGR_H,
-                                       &add_rect, bg, MGR_TOL));
-
-    /* Remove button region. */
-    SDL_Rect rm_rect = { CT_LIST_X + CT_BTN_W + CT_BTN_GAP,
-                          CT_BTN_Y, CT_BTN_W, CT_BTN_H };
-    assert_true(fb_region_has_content(f->buf_a, MGR_W, MGR_H,
-                                       &rm_rect, bg, MGR_TOL));
-
-    /* Change Type button region. */
-    SDL_Rect ct_rect = { CT_LIST_X + 2 * (CT_BTN_W + CT_BTN_GAP),
-                          CT_BTN_Y, CT_BTN_W, CT_BTN_H };
-    assert_true(fb_region_has_content(f->buf_a, MGR_W, MGR_H,
-                                       &ct_rect, bg, MGR_TOL));
+                                       &status_rect, bg, MGR_TOL));
 }
 
 /* ------------------------------------------------------------------ */

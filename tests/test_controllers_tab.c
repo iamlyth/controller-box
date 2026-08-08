@@ -194,9 +194,8 @@ test_init_populates_panel(void **state)
                                         &f->mgr.theme, f->mgr.font_id);
     assert_int_equal(rc, 0);
 
-    /* Panel should have 5 children: device_list, add_btn, remove_btn,
-     * change_type_btn, type_picker. */
-    assert_int_equal(cbx_panel_child_count(panel), 5);
+    /* Device controls plus visible backend/operation status. */
+    assert_int_equal(cbx_panel_child_count(panel), 6);
 
     /* Mode is list. */
     assert_int_equal(cbx_controllers_tab_mode(&f->tab), CBX_CT_MODE_LIST);
@@ -222,6 +221,9 @@ test_init_without_dbus(void **state)
     assert_int_equal(rc, 0);
     assert_int_equal(cbx_controllers_tab_device_count(&f->tab), 0);
     assert_int_equal(cbx_controllers_tab_supported_type_count(&f->tab), 0);
+    assert_true(cbx_widget_is_visible(&f->tab.status_lbl.base));
+    assert_false(cbx_widget_is_visible(&f->tab.add_btn.base));
+    assert_false(f->tab.add_btn.base.interactive);
 }
 
 static void
@@ -718,7 +720,7 @@ test_shutdown_removes_panel_children(void **state)
     init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
 
     cbx_panel *panel = &f->mgr.panels[CBX_MGR_TAB_CONTROLLERS];
-    assert_int_equal(cbx_panel_child_count(panel), 5);
+    assert_int_equal(cbx_panel_child_count(panel), 6);
 
     cbx_controllers_tab_shutdown(&f->tab);
     assert_int_equal(cbx_panel_child_count(panel), 0);
