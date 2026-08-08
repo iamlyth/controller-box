@@ -39,6 +39,7 @@ struct cbx_widget {
     const cbx_widget_vtable *vt;
     bool  focused;
     bool  visible;
+    bool  hover;          /* mouse pointer is over this widget */
     SDL_Rect rect;
 };
 

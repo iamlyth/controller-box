@@ -20,7 +20,7 @@ cbx_widget_draw(cbx_widget *w, SDL_Renderer *r)
 bool
 cbx_widget_handle_event(cbx_widget *w, const SDL_Event *ev)
 {
-    if (!w || !w->vt || !w->vt->handle_event)
+    if (!w || !w->vt || !w->vt->handle_event || !w->visible)
         return false;
     return w->vt->handle_event(w, ev);
 }

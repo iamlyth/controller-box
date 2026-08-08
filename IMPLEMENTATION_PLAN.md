@@ -199,7 +199,7 @@ dispatch path, and the task that provides executable evidence.
 - Documentation impact: none
 
 ## Task 2: Add manager pointer event routing, mouse hit-testing, and visibility filtering
-- Status: pending
+- Status: complete
 - Dependencies: Task 1
 - Scope: `src/manager/manager.c`, `src/manager/manager.h`, `src/ui/widget.c`, `src/ui/widget.h`, `src/ui/widget_button.c`, `src/ui/widget_list.c`, `src/ui/widget_tabbar.c`, `src/ui/widget_panel.c`, `tests/test_manager_tabs.c`
 - Acceptance criteria:
@@ -212,6 +212,7 @@ dispatch path, and the task that provides executable evidence.
   - A mouse click on empty space (no widget) is consumed and produces no side effect.
   - Keyboard event handling is unchanged.
 - Verification: `nix-shell --run "ctest --test-dir build-check -R 'test_manager_tabs|test_widgets|test_widget' --output-on-failure"` — all pass. New sub-tests in `test_manager_tabs.c` push `SDL_MOUSEMOTION` + `SDL_MOUSEBUTTONDOWN` + `SDL_MOUSEBUTTONUP` through `cbx_manager_handle_event` and assert: (a) button callback fires when clicking an unfocused button, (b) tab switches when clicking a tab, (c) list item selects when clicking a list item, (d) invisible widget does not consume click.
+  - **Verified**: `nix-shell --run "ctest --test-dir build-check --output-on-failure"` — 74/74 pass (1 skip: backend_smoke). New sub-tests: `test_mouse_click_unfocused_button`, `test_mouse_click_tab_switches`, `test_mouse_click_list_item`, `test_invisible_widget_no_click`, `test_mouse_motion_updates_hover`, `test_mouse_click_empty_space`. Production path: `cbx_manager_handle_event` routes `SDL_MOUSEMOTION`/`SDL_MOUSEBUTTONDOWN`/`SDL_MOUSEBUTTONUP` via `cbx_manager_hit_test()` which iterates visible widgets (tabbar + active panel children) and dispatches to the widget under the cursor. `cbx_widget_handle_event` now skips invisible widgets. Hover state tracked via new `hover` field on `cbx_widget`. Focus follows pointer on `MOUSEBUTTONDOWN`. `test_manager_unrelated_event` updated to send `MOUSEMOTION` at empty-space coordinates.
 - Documentation impact: `docs/OPERATIONS.md` — note that manager supports mouse as secondary input path.
 
 ## Task 3: Wire tab-specific activation, widget A-key handling, and focus-chain rebuild through manager event dispatch

@@ -42,6 +42,12 @@ static void cbx_manager_on_tab_change(cbx_widget *w, int new_tab,
                                         void *user_data);
 static void cbx_manager_rebuild_focus(cbx_manager *mgr);
 static void cbx_manager_layout(cbx_manager *mgr);
+static cbx_widget *cbx_manager_hit_test(cbx_manager *mgr,
+                                          const SDL_Point *p);
+static void cbx_manager_update_hover(cbx_manager *mgr,
+                                      cbx_widget *hovered);
+static bool cbx_manager_handle_mouse_event(cbx_manager *mgr,
+                                             const SDL_Event *ev);
 
 /* ------------------------------------------------------------------ */
 /*  Lifecycle                                                         */
@@ -304,6 +310,15 @@ cbx_manager_handle_event(cbx_manager *mgr, const SDL_Event *ev)
     if (!mgr || !ev)
         return false;
 
+    /* Route mouse events via hit-testing of visible widgets (SPEC §5.1:
+     * pointer is the secondary input path — every visible enabled
+     * control must respond to clicks inside its rendered bounds). */
+    if (ev->type == SDL_MOUSEMOTION ||
+        ev->type == SDL_MOUSEBUTTONDOWN ||
+        ev->type == SDL_MOUSEBUTTONUP) {
+        return cbx_manager_handle_mouse_event(mgr, ev);
+    }
+
     /* 1. Try the focused widget first. */
     cbx_widget *focused = cbx_focus_chain_get_focused_widget(&mgr->focus);
     if (focused && cbx_widget_handle_event(focused, ev))
@@ -341,6 +356,86 @@ cbx_manager_handle_event(cbx_manager *mgr, const SDL_Event *ev)
         }
     }
 
+    return false;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Pointer event routing (SPEC §5.1: mouse as secondary path)       */
+/* ------------------------------------------------------------------ */
+
+static cbx_widget *
+cbx_manager_hit_test(cbx_manager *mgr, const SDL_Point *p)
+{
+    /* Check the tab bar first (always visible). */
+    if (mgr->tabbar.base.visible &&
+        SDL_PointInRect(p, &mgr->tabbar.base.rect))
+        return &mgr->tabbar.base;
+
+    /* Check the active panel's visible children. */
+    cbx_panel *panel = &mgr->panels[mgr->active_tab];
+    for (int i = 0; i < panel->child_count; i++) {
+        cbx_widget *child = panel->children[i];
+        if (!child || !child->visible)
+            continue;
+        if (SDL_PointInRect(p, &child->rect))
+            return child;
+    }
+
+    return NULL;
+}
+
+static void
+cbx_manager_update_hover(cbx_manager *mgr, cbx_widget *hovered)
+{
+    /* Clear hover on the tabbar. */
+    mgr->tabbar.base.hover = false;
+
+    /* Clear hover on all active panel children. */
+    cbx_panel *panel = &mgr->panels[mgr->active_tab];
+    for (int i = 0; i < panel->child_count; i++) {
+        cbx_widget *child = panel->children[i];
+        if (child)
+            child->hover = false;
+    }
+
+    /* Set hover on the widget under the cursor. */
+    if (hovered)
+        hovered->hover = true;
+}
+
+static bool
+cbx_manager_handle_mouse_event(cbx_manager *mgr, const SDL_Event *ev)
+{
+    SDL_Point p;
+
+    if (ev->type == SDL_MOUSEMOTION) {
+        p.x = ev->motion.x;
+        p.y = ev->motion.y;
+    } else {
+        p.x = ev->button.x;
+        p.y = ev->button.y;
+    }
+
+    /* Find the visible widget under the cursor. */
+    cbx_widget *hit = cbx_manager_hit_test(mgr, &p);
+
+    /* Update hover state on mouse motion. */
+    if (ev->type == SDL_MOUSEMOTION)
+        cbx_manager_update_hover(mgr, hit);
+
+    /* Focus the widget on left-button down so keyboard focus
+     * follows the pointer (SPEC §5.7: controller and pointer
+     * activation invoke the same behavior). */
+    if (ev->type == SDL_MOUSEBUTTONDOWN &&
+        ev->button.button == SDL_BUTTON_LEFT && hit) {
+        cbx_focus_chain_focus_widget(&mgr->focus, hit);
+    }
+
+    /* Dispatch the event to the hit widget. */
+    if (hit)
+        return cbx_widget_handle_event(hit, ev);
+
+    /* Click on empty space — no side effect. */
     return false;
 }
 

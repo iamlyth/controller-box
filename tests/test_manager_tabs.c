@@ -58,6 +58,37 @@ send_key(cbx_manager *mgr, SDL_Keycode sym)
     return cbx_manager_handle_event(mgr, &ev);
 }
 
+/* Helper: send a mouse motion event at (x, y). */
+static bool
+send_mouse_motion(cbx_manager *mgr, int x, int y)
+{
+    SDL_Event ev = {0};
+    ev.type = SDL_MOUSEMOTION;
+    ev.motion.x = x;
+    ev.motion.y = y;
+    return cbx_manager_handle_event(mgr, &ev);
+}
+
+/* Helper: send a full mouse click (down + up) at (x, y).
+ * Returns the result of the MOUSEBUTTONDOWN dispatch. */
+static bool
+send_mouse_click(cbx_manager *mgr, int x, int y)
+{
+    SDL_Event ev = {0};
+    ev.type = SDL_MOUSEBUTTONDOWN;
+    ev.button.button = SDL_BUTTON_LEFT;
+    ev.button.x = x;
+    ev.button.y = y;
+    bool down = cbx_manager_handle_event(mgr, &ev);
+
+    ev.type = SDL_MOUSEBUTTONUP;
+    ev.button.x = x;
+    ev.button.y = y;
+    cbx_manager_handle_event(mgr, &ev);
+
+    return down;
+}
+
 /* --- Tests --------------------------------------------------------- */
 
 static void
@@ -390,9 +421,11 @@ test_manager_unrelated_event(void **state)
     cbx_manager mgr;
     assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
 
-    /* Mouse motion — not consumed. */
+    /* Mouse motion in empty space — not consumed, no side effect. */
     SDL_Event ev = {0};
     ev.type = SDL_MOUSEMOTION;
+    ev.motion.x = 640;
+    ev.motion.y = 600;
     assert_false(cbx_manager_handle_event(&mgr, &ev));
 
     /* Unrelated key — not consumed. */
@@ -489,6 +522,244 @@ test_manager_full_tab_cycle(void **state)
     cbx_manager_shutdown(&mgr);
 }
 
+/* --- Pointer (mouse) event tests (Task 2) ---------------------- */
+
+static int mouse_press_count = 0;
+static void
+on_mouse_press_test(cbx_widget *w, void *user_data)
+{
+    (void)w;
+    (void)user_data;
+    mouse_press_count++;
+}
+
+/* A mouse click on an unfocused button activates it (fires on_press)
+ * even when a different widget is focused. */
+static void
+test_mouse_click_unfocused_button(void **state)
+{
+    (void)state;
+    ensure_dummy_driver();
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+
+    /* Focus is on the tabbar initially — the button is NOT focused. */
+    const cbx_focus_chain *fc = cbx_manager_focus(&mgr);
+    assert_int_equal(fc->focused, 0);  /* tabbar */
+
+    /* Get the controllers tab add button. */
+    cbx_controllers_tab *ct = cbx_manager_controllers_tab(&mgr);
+    assert_non_null(ct);
+
+    /* Install a test callback so we can verify the click fires it. */
+    mouse_press_count = 0;
+    cbx_button_set_press_cb(&ct->add_btn, on_mouse_press_test, NULL);
+
+    /* Compute the center of the add button. */
+    SDL_Rect btn_rect;
+    cbx_widget_get_rect(&ct->add_btn.base, &btn_rect);
+    int cx = btn_rect.x + btn_rect.w / 2;
+    int cy = btn_rect.y + btn_rect.h / 2;
+
+    /* Mouse down + up on the unfocused button. */
+    assert_true(send_mouse_click(&mgr, cx, cy));
+
+    /* The callback fired exactly once. */
+    assert_int_equal(mouse_press_count, 1);
+
+    /* The button is now focused (focus follows pointer). */
+    assert_true(ct->add_btn.base.focused);
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* A mouse click on a tabbar tab switches tabs. */
+static void
+test_mouse_click_tab_switches(void **state)
+{
+    (void)state;
+    ensure_dummy_driver();
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+
+    /* Active tab is Controllers (0). */
+    assert_int_equal(cbx_manager_active_tab(&mgr), 0);
+
+    /* Compute the centre of the Profiles tab (second tab). */
+    const cbx_tabbar *tb = cbx_manager_tabbar(&mgr);
+    assert_non_null(tb);
+    SDL_Rect tb_rect = tb->base.rect;
+    int tab_w = tb_rect.w / tb->tab_count;
+    int profiles_x = tb_rect.x + tab_w + tab_w / 2;
+    int tab_y = tb_rect.y + tb_rect.h / 2;
+
+    /* Click on the Profiles tab. */
+    assert_true(send_mouse_click(&mgr, profiles_x, tab_y));
+
+    /* Tab switched to Profiles (1). */
+    assert_int_equal(cbx_manager_active_tab(&mgr), 1);
+
+    /* Click on the Settings tab (third). */
+    int settings_x = tb_rect.x + tab_w * 2 + tab_w / 2;
+    assert_true(send_mouse_click(&mgr, settings_x, tab_y));
+    assert_int_equal(cbx_manager_active_tab(&mgr), 2);
+
+    /* Click on the Controllers tab (first) to go back. */
+    int controllers_x = tb_rect.x + tab_w / 2;
+    assert_true(send_mouse_click(&mgr, controllers_x, tab_y));
+    assert_int_equal(cbx_manager_active_tab(&mgr), 0);
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* A mouse click on a list item selects it. */
+static void
+test_mouse_click_list_item(void **state)
+{
+    (void)state;
+    ensure_dummy_driver();
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+
+    /* Use the settings tab list (already populated by init). */
+    send_key(&mgr, SDLK_RIGHT);  /* Controllers → Profiles */
+    send_key(&mgr, SDLK_RIGHT);  /* Profiles → Settings */
+    assert_int_equal(cbx_manager_active_tab(&mgr), 2);
+
+    cbx_settings_tab *st = cbx_manager_settings_tab(&mgr);
+    assert_non_null(st);
+    assert_true(cbx_list_item_count(&st->settings_list) > 0);
+
+    /* Get the settings list rect and item height. */
+    SDL_Rect list_rect;
+    cbx_widget_get_rect(&st->settings_list.base, &list_rect);
+    int item_h = st->settings_list.item_h;
+    assert_true(item_h > 0);
+
+    /* Click on the third item. */
+    int click_x = list_rect.x + 10;
+    int click_y = list_rect.y + item_h * 2 + item_h / 2;
+    assert_true(send_mouse_click(&mgr, click_x, click_y));
+
+    /* The third item is selected. */
+    assert_int_equal(cbx_list_get_selected(&st->settings_list), 2);
+
+    /* Click on the first item. */
+    click_y = list_rect.y + item_h / 2;
+    assert_true(send_mouse_click(&mgr, click_x, click_y));
+    assert_int_equal(cbx_list_get_selected(&st->settings_list), 0);
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* An invisible widget does not consume clicks (no side effect). */
+static void
+test_invisible_widget_no_click(void **state)
+{
+    (void)state;
+    ensure_dummy_driver();
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+
+    cbx_controllers_tab *ct = cbx_manager_controllers_tab(&mgr);
+    assert_non_null(ct);
+
+    /* Install a test callback on the add button. */
+    mouse_press_count = 0;
+    cbx_button_set_press_cb(&ct->add_btn, on_mouse_press_test, NULL);
+
+    /* Make the add button invisible. */
+    cbx_widget_set_visible(&ct->add_btn.base, false);
+
+    /* Compute the centre of where the (now invisible) button is. */
+    SDL_Rect btn_rect;
+    cbx_widget_get_rect(&ct->add_btn.base, &btn_rect);
+    int cx = btn_rect.x + btn_rect.w / 2;
+    int cy = btn_rect.y + btn_rect.h / 2;
+
+    /* Click on the invisible button. */
+    send_mouse_click(&mgr, cx, cy);
+
+    /* The callback did NOT fire. */
+    assert_int_equal(mouse_press_count, 0);
+
+    /* The button is NOT focused. */
+    assert_false(ct->add_btn.base.focused);
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* SDL_MOUSEMOTION updates hover state on the widget under the cursor. */
+static void
+test_mouse_motion_updates_hover(void **state)
+{
+    (void)state;
+    ensure_dummy_driver();
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+
+    /* Hover is initially false on all widgets. */
+    assert_false(mgr.tabbar.base.hover);
+
+    /* Move the mouse over the tabbar centre. */
+    const cbx_tabbar *tb = cbx_manager_tabbar(&mgr);
+    SDL_Rect tb_rect = tb->base.rect;
+    int tb_cx = tb_rect.x + tb_rect.w / 2;
+    int tb_cy = tb_rect.y + tb_rect.h / 2;
+    send_mouse_motion(&mgr, tb_cx, tb_cy);
+
+    /* The tabbar is now hovered. */
+    assert_true(mgr.tabbar.base.hover);
+
+    /* Move the mouse to empty space (below all widgets). */
+    send_mouse_motion(&mgr, 640, 600);
+
+    /* The tabbar is no longer hovered. */
+    assert_false(mgr.tabbar.base.hover);
+
+    /* Move the mouse over the add button. */
+    cbx_controllers_tab *ct = cbx_manager_controllers_tab(&mgr);
+    SDL_Rect btn_rect;
+    cbx_widget_get_rect(&ct->add_btn.base, &btn_rect);
+    int btn_cx = btn_rect.x + btn_rect.w / 2;
+    int btn_cy = btn_rect.y + btn_rect.h / 2;
+    send_mouse_motion(&mgr, btn_cx, btn_cy);
+
+    /* The add button is now hovered. */
+    assert_true(ct->add_btn.base.hover);
+    /* The tabbar is not. */
+    assert_false(mgr.tabbar.base.hover);
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* A mouse click on empty space (no widget) produces no side effect. */
+static void
+test_mouse_click_empty_space(void **state)
+{
+    (void)state;
+    ensure_dummy_driver();
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+
+    /* Record current tab and focused widget. */
+    int tab_before = cbx_manager_active_tab(&mgr);
+    const cbx_focus_chain *fc = cbx_manager_focus(&mgr);
+    int focus_before = fc->focused;
+
+    /* Click on empty space (below all widgets in the controllers tab). */
+    bool consumed = send_mouse_click(&mgr, 640, 600);
+
+    /* The click was not consumed (no widget found). */
+    assert_false(consumed);
+
+    /* No side effects: tab unchanged, focus unchanged. */
+    assert_int_equal(cbx_manager_active_tab(&mgr), tab_before);
+    assert_int_equal(fc->focused, focus_before);
+
+    cbx_manager_shutdown(&mgr);
+}
+
 /* --- main ---------------------------------------------------------- */
 
 int
@@ -510,6 +781,12 @@ main(void)
         cmocka_unit_test(test_manager_shutdown_cleans_up),
         cmocka_unit_test(test_manager_a_key_consumed),
         cmocka_unit_test(test_manager_full_tab_cycle),
+        cmocka_unit_test(test_mouse_click_unfocused_button),
+        cmocka_unit_test(test_mouse_click_tab_switches),
+        cmocka_unit_test(test_mouse_click_list_item),
+        cmocka_unit_test(test_invisible_widget_no_click),
+        cmocka_unit_test(test_mouse_motion_updates_hover),
+        cmocka_unit_test(test_mouse_click_empty_space),
     };
 
     return cmocka_run_group_tests(tests, NULL, NULL);

@@ -29,6 +29,20 @@ If InputPlumber is not installed, Controller-Box enters **degraded mode** —
 the DBus connection stays open, and `NameOwnerChanged` signals notify when
 InputPlumber starts.
 
+## Manager input methods
+
+The manager supports two input paths:
+
+- **Controller (primary):** Left/Right switches tabs, Up/Down navigates
+  within a panel, A activates the focused control, B cancels.
+- **Mouse (secondary):** Move the mouse over any visible control to hover it,
+  left-click to activate. Click on a tab to switch tabs, on a list item to
+  select it, or on a button to press it. Focus follows the pointer, so
+  keyboard navigation resumes from the last-clicked widget.
+
+Both paths invoke the same widget handlers and validation. Invisible widgets
+(e.g., hidden type pickers) do not intercept pointer events.
+
 ## Systemd management
 
 The overlay service runs as a **user service** (not system-wide). The manager
