@@ -281,6 +281,54 @@ static void test_controller_event_tab_switching(void **state)
     cbx_manager_shutdown(&mgr);
 }
 
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+static void test_sdl_virtual_controller_transport(void **state)
+{
+    (void)state;
+    ensure_dummy_driver();
+    assert_int_equal(SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER), 0);
+    int device_index = SDL_JoystickAttachVirtual(
+        SDL_JOYSTICK_TYPE_GAMECONTROLLER, 6, 15, 0);
+    assert_true(device_index >= 0);
+    SDL_Joystick *joystick = SDL_JoystickOpen(device_index);
+    assert_non_null(joystick);
+
+    char guid[33];
+    SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(joystick), guid,
+                              sizeof(guid));
+    char mapping[512];
+    snprintf(mapping, sizeof(mapping),
+             "%s,Controller-Box Virtual,a:b0,b:b1,start:b6,"
+             "dpup:b11,dpdown:b12,dpleft:b13,dpright:b14,platform:Linux,",
+             guid);
+    assert_true(SDL_GameControllerAddMapping(mapping) >= 0);
+
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+    SDL_FlushEvents(SDL_FIRSTEVENT, SDL_LASTEVENT);
+    assert_int_equal(SDL_JoystickSetVirtualButton(joystick, 14, 1), 0);
+    SDL_PumpEvents();
+
+    bool dispatched = false;
+    SDL_Event event;
+    while (SDL_PollEvent(&event)) {
+        if (event.type == SDL_CONTROLLERBUTTONDOWN) {
+            dispatched = cbx_manager_handle_event(&mgr, &event) || dispatched;
+        }
+    }
+    assert_true(dispatched);
+    assert_int_equal(cbx_manager_active_tab(&mgr), CBX_MGR_TAB_PROFILES);
+
+    SDL_JoystickSetVirtualButton(joystick, 14, 0);
+    SDL_PumpEvents();
+    while (SDL_PollEvent(&event))
+        cbx_manager_handle_event(&mgr, &event);
+    cbx_manager_shutdown(&mgr);
+    SDL_JoystickClose(joystick);
+    assert_int_equal(SDL_JoystickDetachVirtual(device_index), 0);
+}
+#endif
+
 /* (e) Shutdown clean: cbx_manager_shutdown() does not crash; struct is
  *     zeroed; can re-init. */
 static void test_shutdown_clean(void **state)
@@ -406,6 +454,9 @@ static const struct CMUnitTest tests[] = {
     cmocka_unit_test_setup_teardown(test_focus_chain_populated, setup, teardown),
     cmocka_unit_test_setup_teardown(test_tab_switching, setup, teardown),
     cmocka_unit_test_setup_teardown(test_controller_event_tab_switching, setup, teardown),
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+    cmocka_unit_test_setup_teardown(test_sdl_virtual_controller_transport, setup, teardown),
+#endif
     cmocka_unit_test_setup_teardown(test_shutdown_clean, setup, teardown),
     cmocka_unit_test_setup_teardown(test_render_with_font, setup, teardown),
     cmocka_unit_test_setup_teardown(test_editor_opens_via_dispatch, setup, teardown),
