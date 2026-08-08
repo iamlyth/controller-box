@@ -115,8 +115,8 @@ on_intercept_error(int error_code, void *userdata)
 /*  Lifecycle on_save callback: conflict resolution + assignment save */
 /* ================================================================== */
 
-static int
-on_overlay_save(void *userdata)
+int
+cbx_overlay_on_save(void *userdata)
 {
     cbx_overlay_service_ctx *svc = (cbx_overlay_service_ctx *)userdata;
 
@@ -178,8 +178,8 @@ on_overlay_save(void *userdata)
 /*  Player Mode callbacks (slot/profile change side effects)          */
 /* ================================================================== */
 
-static int
-on_slot_change(int row_idx, int new_slot, void *userdata)
+int
+cbx_overlay_on_slot_change(int row_idx, int new_slot, void *userdata)
 {
     cbx_overlay_service_ctx *svc = (cbx_overlay_service_ctx *)userdata;
     (void)row_idx;
@@ -190,8 +190,8 @@ on_slot_change(int row_idx, int new_slot, void *userdata)
     return 0;
 }
 
-static int
-on_profile_change(int row_idx, const char *profile,
+int
+cbx_overlay_on_profile_change(int row_idx, const char *profile,
                    const char *composite_path, void *userdata)
 {
     cbx_overlay_service_ctx *svc = (cbx_overlay_service_ctx *)userdata;
@@ -223,7 +223,7 @@ on_profile_change(int row_idx, const char *profile,
 static int
 on_host_slot_change(int row_idx, int new_slot, void *userdata)
 {
-    return on_slot_change(row_idx, new_slot, userdata);
+    return cbx_overlay_on_slot_change(row_idx, new_slot, userdata);
 }
 
 /* ================================================================== */
@@ -693,9 +693,9 @@ int run_overlay_service(int dry_run)
     /* --- 10. Set up mode state + callbacks ---------------------------- */
     /* Player Mode (SPEC §4.3). */
     cbx_player_mode_init(&svc->pm, &svc->grid);
-    svc->pm.on_slot_change     = on_slot_change;
+    svc->pm.on_slot_change     = cbx_overlay_on_slot_change;
     svc->pm.slot_change_data   = svc;
-    svc->pm.on_profile_change  = on_profile_change;
+    svc->pm.on_profile_change  = cbx_overlay_on_profile_change;
     svc->pm.profile_change_data = svc;
 
     /* Host Mode (SPEC §4.4). */
@@ -704,7 +704,7 @@ int run_overlay_service(int dry_run)
     svc->hm.slot_change_data  = svc;
 
     /* Lifecycle on_save callback: conflict resolution + assignment save. */
-    svc->lifecycle.on_save       = on_overlay_save;
+    svc->lifecycle.on_save       = cbx_overlay_on_save;
     svc->lifecycle.on_save_data  = svc;
 
     /* --- 10b. Set up DBus InputEvent signal handling (Task 6) ------- */

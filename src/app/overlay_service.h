@@ -216,4 +216,27 @@ bool cbx_overlay_service_shutdown_requested(void);
  */
 void cbx_overlay_service_reset_shutdown(void);
 
+/* --- Production callbacks (exposed for testing — Task 11) ------------- */
+
+/*
+ * Lifecycle on_save callback: conflict detection → resolution →
+ * assignment sync → cbx_assignments_save.  Fired by cbx_overlay_lifecycle_close().
+ */
+int cbx_overlay_on_save(void *userdata);
+
+/*
+ * Player-mode slot-change callback: marks the overlay surface dirty
+ * so the next step re-renders.  Fired by cbx_player_mode_handle().
+ */
+int cbx_overlay_on_slot_change(int row_idx, int new_slot, void *userdata);
+
+/*
+ * Player-mode profile-change callback: loads the new profile on
+ * InputPlumber via LoadProfilePath DBus call and marks the surface dirty.
+ * Fired by cbx_player_mode_handle().
+ */
+int cbx_overlay_on_profile_change(int row_idx, const char *profile,
+                                     const char *composite_path,
+                                     void *userdata);
+
 #endif /* CBX_OVERLAY_SERVICE_H */

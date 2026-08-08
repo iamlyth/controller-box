@@ -559,6 +559,13 @@ if(CMOCKA_FOUND)
     set_tests_properties(test_overlay_service PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
 
+    # --- Task 11: Overlay production-dispatch interaction tests ---------
+    add_executable(test_overlay_interaction tests/test_overlay_interaction.c)
+    target_link_libraries(test_overlay_interaction PRIVATE controllerbox cbx_test_support PkgConfig::CMOCKA)
+    add_test(NAME test_overlay_interaction COMMAND test_overlay_interaction)
+    set_tests_properties(test_overlay_interaction PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+
     # --- Task 8: Golden image baselines and comparison -----------------
     # Compares live framebuffer captures against reviewed baseline PNGs.
     # Set CBX_GENERATE_GOLDEN=1 to regenerate baselines instead of comparing.
