@@ -1,21 +1,33 @@
-# Task 13 — Complete
+# Task 14 — Complete (Final Audit)
 
 ## Outcome
-- Fixed `test_create_composite_xdg_runtime_dir_preferred` in `tests/test_create_composite.c`
-- Replaced `assert_int_equal(tmp_count, 0)` (global /tmp count == 0) with before/after comparison: `tmp_before` measured before the operation, `tmp_after` after, `assert_int_equal(tmp_after, tmp_before)` — unrelated pre-existing `/tmp/controller-box-*` files no longer cause false failures
-- Moved `xdg_dir` from local stack variable into `create_fixture` struct with `rm -rf` cleanup in `teardown()` — handles cmocka `longjmp` on assertion failure (cleanup runs regardless)
-- Initialized `f->xdg_dir[0] = '\0'` in setup; added `rm -rf` block in teardown guarded by `if (f->xdg_dir[0])`
-- Moved BUG-0002 from `open-bugs.md` (now empty `[]`) to `closed-bugs.md` with resolution and verification text, closed date 2026-08-08
-- Updated IMPLEMENTATION_PLAN.md: Task 13 status → complete, REQ-031 → verified
+- Final audit complete. All §11.2 definition-of-done items satisfied.
+- Marked Task 12 complete in plan (was implemented in commit 06a62ff but never marked complete)
+- Updated conformance matrix: REQ-007 → verified, REQ-010 → verified (host-mode profile cycling deferred per §13), REQ-023 → verified, REQ-029 → verified, REQ-030 → verified
+- Fixed closed-bugs.md record ordering (BUG-0001, BUG-0002, BUG-0003 sorted by numeric id — verify-boilerplate.sh now passes)
+- Fixed OPERATIONS.md: clarified manager enters degraded mode vs overlay service exits when InputPlumber unavailable
+- Added `bc` to installed smoke test tool check loop
+- README.md: added interaction acceptance tests section, updated installed smoke test prerequisites, noted libcmocka-dev for tests
+- Set plan front-matter status: complete
+
+## Parallel Reviews (all no blocking issues)
+- **Correctness/test-quality**: All acceptance tests use production dispatch (cbx_manager_handle_event / cbx_overlay_service_step). M32/M34 have non-blocking quality observations (binding-content assertions could be stronger). No blocking issues.
+- **Security**: Profile save path hardened (filename validation, realpath canonicalization, TOCTOU-safe, atomic writes). YAML parsers bounded (1MB, depth 50, no custom tags). DBus sender verification. No blocking issues. Non-blocking: FLATPAK_ID unsanitized in unit file (defense-in-depth).
+- **Documentation**: README, OPERATIONS.md, AGENTS.md all accurate. Stale conformance matrix entries were the main finding (now fixed). No blocking issues.
 
 ## Verification
-- `nix-shell --run "touch /tmp/controller-box-unrelated-test-file && ctest --test-dir build-check -R test_create_composite --output-on-failure && rm /tmp/controller-box-unrelated-test-file"`: PASS (1/1, 0.03s)
-- Full suite: `nix-shell --run "ctest --test-dir build-check --output-on-failure"`: 78/78 PASS (1 skip: backend_smoke)
+- `nix-shell --run "ctest --test-dir build-check --output-on-failure"`: 78/78 PASS (1 skip: backend_smoke)
 - `nix-shell --run "./scripts/verify-project.sh"`: PASS — all checks green
+- `nix-shell --run "./scripts/verify-boilerplate.sh"`: PASS — all checks green
+- `git diff --exit-code`: clean tree
 
 ## Commit
-- `d3783fe` on develop: "fix: BUG-0002 CreateComposite XDG runtime test order-dependence"
+- `acb3370` on develop: "final audit: mark plan complete — conformance matrix all verified, docs updated, reviews passed"
 
-## Next
-- Task 14 (final audit) — all dependencies now satisfied (Tasks 1–13 complete)
-- Final audit must: update conformance matrix (all REQ-001–REQ-032 to verified), run full §5.7 control inventory, run installed end-to-end workflows, validate bug ledgers (BUG-0002 now closed), launch parallel reviews, update README/docs, run verify-project.sh + verify-boilerplate.sh, set plan status: complete
+## Plan Status
+- IMPLEMENTATION_PLAN.md status: complete
+- All Tasks 1–14: complete
+- All REQ-001–REQ-032: verified
+- Open bugs: none (open-bugs.md = `[]`)
+- Closed bugs: BUG-0001, BUG-0002, BUG-0003 (all with resolution + verification)
+- Human visual acceptance on target hardware remains a pre-promotion gate (§11.1 layer 7)
