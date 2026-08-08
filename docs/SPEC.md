@@ -70,18 +70,9 @@ inputplumber.service        (system service — separate package, prerequisite)
 controller-box.service    (user service — installed by the manager on first run)
 ```
 
-The GUI service unit declares:
+The overlay is a systemd user service, while InputPlumber is a system service. A user unit **must not** declare `After=` or `Requires=` for `inputplumber.service`: system and user managers have separate dependency graphs, so such directives incorrectly search for a user unit and can prevent startup. The overlay instead orders with the graphical user session, starts with bounded restart backoff, checks ownership of `org.shadowblip.InputPlumber`, and remains alive in a degraded state while the system service is absent.
 
-```ini
-[Unit]
-After=inputplumber.service
-Requires=inputplumber.service
-
-[Service]
-Restart=always
-```
-
-If InputPlumber is not installed, the GUI shows a clear error ("InputPlumber not found") rather than failing silently. Install order: (1) InputPlumber, (2) GUI, (3) enable GUI service.
+If InputPlumber is unavailable, unauthorized, incompatible, or fails enumeration, Manager and overlay show/report a specific actionable error rather than treating a system-bus connection as readiness. Backend-dependent controls are visibly disabled. Both modes watch `NameOwnerChanged`; after the service appears or restarts they re-enumerate and become operational within two seconds without restarting Controller-Box. Install order remains: (1) InputPlumber, (2) GUI, (3) enable GUI service.
 
 ### 2.5 Hotkey architecture (Decisions 6, 4-resolution)
 
@@ -171,7 +162,7 @@ Controllers are shown by **model name + slot position** (plus the virtual-type i
 
 ### 4.9 Rendering & performance
 
-The overlay surface is **pre-built in memory** at daemon startup — icons rasterized, textures cached, layout computed from current state and dirtied only on device/slot/profile change events. Nothing is constructed on demand. Target: **visible in <10 ms from button press** (see §11).
+The overlay surface is **pre-built in memory** at daemon startup — icons rasterized, textures cached, layout computed from current state and dirtied only on device/slot/profile change events. Nothing is constructed on demand. With the required ~50 ms polling workaround, button-to-first-visible-frame latency is ≤75 ms at p99 and ≤100 ms maximum on minimum supported hardware. Time from detecting `InterceptMode = ALL` to mapping/presenting the first compositor-visible frame remains <10 ms at p99 (see §11).
 
 ### 4.10 Visual acceptance
 
@@ -198,6 +189,8 @@ Configures the virtual controllers the games see:
 - **Mixed types allowed** — P1 = xb360, P2 = ds5, no warnings. Each virtual device exposes its full capability set to the game; the mix is the user's choice.
 - **Removing a slot** mid-session: the physical controller in that slot auto-moves to Unassigned; the overlay's column count adjusts dynamically; InputPlumber stops the target device so the game sees one fewer controller; no input is lost — the physical controller still works in the overlay.
 
+The configured startup count/type list is authoritative desired topology. Overlay/service startup reconciles InputPlumber to exactly that ordered topology before assignment is enabled; displaying columns without corresponding InputPlumber targets is an error, not success. Add succeeds only after ObjectManager exposes one additional target of the selected type and it is attached/routable under the slot model. Remove succeeds only after the target disappears and affected physical controllers are confirmed Unassigned. Type change replaces only the selected slot and preserves all other topology. Failures retain the last confirmed topology and show the failed DBus operation.
+
 Action matrix (ticket #8):
 
 | Action | Where | Mechanism |
@@ -215,6 +208,8 @@ Browse, create, edit, delete profiles.
 - The **Default profile is built-in, always present, read-only, always the fallback.** Controllers work out of the box; profiles exist only for modifications from default.
 - **New profile flow:** pick a starting point — Default copy / Empty / Clone existing → opens the editor.
 - User-created profiles are stored as new InputPlumber YAML files in the same user profile directory (§7).
+- Controller-Box ships an immutable, InputPlumber-compatible Default profile so a clean installation works even when host profile directories are empty. "Default copy" must not depend on an unverified external file.
+- Empty profile creation includes a reachable sequential/add-first-binding action when the mapping list has zero rows. A clean-home user can capture the NES minimum, save through normal production events, restart Manager, and see the profile. Save and discard are explicit visible controls; window close with unsaved changes prompts instead of silently discarding.
 
 ### 5.4 Profile editor (Decision 11)
 
@@ -254,7 +249,7 @@ An event-handler return value is not outcome evidence. Depending on the control,
 
 End-to-end scenarios must cover at least: Controllers add/remove/type-change; Profiles create from each starting point, select, edit, validate, save, and delete; Settings change and persistence; profile-editor list and sequential modes including cancel/error paths; tab switching; and recovery from InputPlumber-unavailable and operation-failure states. Overlay interaction remains controller-driven and must similarly be exercised through its production event path for open, movement, profile cycling, Host Mode, conflict resolution, and close.
 
-The installed-production smoke test must perform representative coordinate-based manager clicks in body controls as well as tab clicks and controller/keyboard-proxy navigation. A visual change without the specified semantic outcome, or a semantic unit test that bypasses production event routing, does not satisfy interaction acceptance.
+The installed-production smoke test must perform representative coordinate-based manager clicks in body controls as well as tab clicks. Controller acceptance uses the production controller transport with a physical or kernel-backed synthetic gamepad while InputPlumber is running; keyboard-generated SDL events are supplemental accessibility evidence and must never be labeled controller acceptance. Backend acceptance uses a real or private DBus service exporting InputPlumber's native signatures and ObjectManager behavior; the string-only mock is supplemental. A visual change without the specified semantic outcome, or a semantic unit test that bypasses production event routing, does not satisfy interaction acceptance.
 
 ---
 
@@ -430,7 +425,7 @@ icon: "/path/to/custom.png"    # absolute path to custom image
 
 ### 9.1 Flatpak — primary (Decision 15, ticket #9)
 
-Covers Steam Deck (Valve's recommended third-party app method), desktop Linux, Bazzite, Nobara, ChimeraOS, and any Flatpak-capable distro. Published on Flathub.
+Targets Steam Deck, desktop Linux, Bazzite, Nobara, ChimeraOS, and other Flatpak-capable distributions. The manifest is **experimental until** a clean Flatpak build passes the installed functional gate, host profile paths are proven visible, host InputPlumber DBus access is verified, and the application is actually published. Documentation must not advertise a Flathub install command before publication.
 
 **Manifest permissions:**
 
@@ -467,7 +462,7 @@ Covers any distro, x86_64 + aarch64 (Pi 4). CMake build against system SDL2 dev 
 
 ### 9.4 InputPlumber as a dependency
 
-Flatpak: documented prerequisite (or declared dependency if InputPlumber ships its own Flatpak). Tarball: user installs InputPlumber first from its own package. The GUI's service unit hard-depends on it (`After=` / `Requires=`, §2.4).
+Flatpak: documented host-system prerequisite. Tarball: user installs InputPlumber first from its own package. The GUI user service performs runtime bus-name/readiness checks and recovery as specified in §2.4; it does not declare an invalid cross-manager systemd dependency.
 
 ### 9.5 Later (post-v1)
 
@@ -483,6 +478,8 @@ Flatpak: documented prerequisite (or declared dependency if InputPlumber ships i
 - **Enumeration:** `org.freedesktop.DBus.ObjectManager.GetManagedObjects()` at the root path returns all composite devices, source devices, and target devices in one call.
 - **Hotplug:** subscribe to ObjectManager `InterfacesAdded` / `InterfacesRemoved` — source, composite, and target devices all register/unregister through the object server. **No polling for device presence.**
 - **Property changes:** `org.freedesktop.DBus.Properties.PropertiesChanged` is emitted for `GamepadOrder`, `ProfileName`, `ProfilePath`, `TargetDevices`, `SourceDevicePaths` — but **not** for `InterceptMode` (gap #1).
+- **Native type fidelity:** production reads and writes each member using its declared DBus signature, including `u` for `InterceptMode`, `b` for booleans, and `as` for string arrays. Converting every property through a string getter is prohibited. Release tests run against a real/private sd-bus service with these signatures.
+- **Operational readiness:** a raw system-bus connection is not readiness. Controller-Box verifies the InputPlumber owner, reads `Version` from `/org/shadowblip/InputPlumber/Manager`, completes ObjectManager enumeration, and validates required typed properties. It processes DBus traffic continuously, subscribes hotplug and owner changes, and reconciles current composites, targets, triggers, polls, and input mappings after startup and service/device changes.
 
 Object tree:
 
@@ -563,7 +560,7 @@ Object tree:
 
 | Requirement | Target | Mechanism |
 |---|---|---|
-| Overlay appearance | **<10 ms** from button press to visible | Pre-built overlay surface held in memory by the always-resident daemon (Decision 6). Icons pre-rasterized at startup (§8.3). Nothing is constructed on demand — state changes dirty the surface incrementally. |
+| Overlay appearance | **≤75 ms p99, ≤100 ms max** from button press; **<10 ms p99** from `ALL` detection to compositor-visible present | The ~50 ms poll dominates button-to-detection latency; the pre-built surface bounds detection-to-present work. Both intervals are measured separately. |
 | Gameplay input latency | **~1–2 ms** (InputPlumber's own intercept overhead only) | InputPlumber does **not** route gameplay input over DBus — the DBus channel is a side branch, never inline. During gameplay, intercept mode is PASS (kernel-level watch only). During overlay use, input goes over DBus — but the game is not receiving input then anyway. |
 | Overlay close | Input flowing to game in **<1 ms** | Single DBus property set: `InterceptMode` back to PASS. Overlay hidden, not destroyed. |
 | Daemon footprint | Always resident without measurable impact | SDL2's minimal memory profile was the deciding factor in the toolkit choice (Decision 1); the daemon idles waiting on DBus signals and a ~50 ms property poll (DEC-002). |
@@ -577,7 +574,7 @@ Visual requirements in §§4–5 are release gates. The automated suite must inc
 2. **Region-level assertions.** Assert meaningful non-background and foreground/text-colored pixels inside required controls, labels, icons, lists, diagrams, and status regions. Assert important state changes alter the appropriate regions. These invariants are mandatory and must tolerate harmless rasterization differences.
 3. **Golden images.** Keep reviewed baseline images for each major state listed in §§4.10 and 5.6. Compare deterministic software-renderer captures with a documented per-pixel/per-image tolerance rather than an unrestricted exact hash. A baseline update is an explicit reviewed change, never an automatic test side effect.
 4. **Failure artifacts.** On mismatch, save actual, expected, and visual-diff images with the test name and renderer metadata so a human can diagnose the frame without rerunning interactively.
-5. **Installed production smoke test.** Launch the installed binary under a real or headless X11/Wayland compositor, navigate representative manager and overlay states through normal input events, capture the application window, and verify it is nonblank and consistent with deterministic expectations. Test-only setup must not bypass production initialization.
+5. **Installed functional smoke test.** Install the packaged artifact into a clean environment containing only declared runtime dependencies. Start a real or private native-signature InputPlumber-compatible DBus service, hotplug a physical or kernel-backed synthetic controller, navigate Manager with real controller events, create and observe a routable virtual target, create/save/reload a profile, activate a mapped compositor-visible overlay, and verify persistence after process/backend restart. Capture required windows and independently inspect DBus/ObjectManager and filesystem outcomes. Missing backend, skipped package build, expected early exit, keyboard-only interaction, or a merely nonblank window is failure, not a skip.
 6. **Backend smoke coverage.** Exercise the deployment renderer backend (OpenGL/OpenGL ES where available) with broad framebuffer invariants. Deterministic golden comparison may remain on the software renderer, but successful object creation or draw calls alone are insufficient for hardware-backend acceptance.
 7. **Human release acceptance.** Before promotion to `main`, a human reviews representative manager and overlay captures on target hardware for legibility, clipping, focus indication, contrast, and controller-only usability. Automation catches missing or divergent output; it does not approve aesthetics.
 
@@ -588,7 +585,7 @@ The verification suite must explicitly fail when a required screen is blank or i
 Iteration count, task count, compilation, and a green unit-test subset are not definitions of done. The autonomous implementation loop may claim completion only when all of the following are objectively true:
 
 1. **Complete conformance matrix.** Every normative requirement in this specification is classified `verified` with specific source evidence and an executable test or acceptance command. No requirement remains `partial`, `missing`, `ambiguous`, assumed, or verified only by prose.
-2. **Production-path behavior.** All v1 workflows run through the same initialization, event dispatch, rendering, backend, persistence, and shutdown paths as the installed binaries. Test-only assembly or direct callback invocation may supplement but never replace production-path acceptance.
+2. **Production-path behavior.** All v1 workflows run through the same initialization, event dispatch, rendering, backend, persistence, and shutdown paths as the installed binaries. Test-only assembly or direct callback invocation may supplement but never replace production-path acceptance. Test doubles must preserve external type/signature semantics; a mock that accepts behavior rejected by the real dependency cannot verify conformance.
 3. **Complete interaction traversal.** Every enabled control in the §5.7 inventory has passing controller and pointer activation evidence, and every overlay action has passing controller-event evidence. Tests verify semantic outcomes, not merely event consumption, focus movement, pixels, or lack of a crash.
 4. **Visual and degraded-state acceptance.** §§4.10, 5.6, and 11.1 pass for normal, empty, loading, unavailable, validation-error, backend-error, and recovery states required by the affected workflow. No required screen or region is blank, clipped, unreachable, or misleadingly enabled.
 5. **Regression and quality gates.** The full clean-build, unit, integration, end-to-end, installed-package, and project verification suites pass. There are no unexplained skips, flaky rerun dependencies, weakened assertions, leaked processes/files, compiler warnings introduced by the cycle, or sanitizer/static-analysis defects in changed code where those checks are supported.
