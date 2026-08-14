@@ -38,11 +38,28 @@ every interactive control.
 Requirements are grouped by spec section. `verified` = production-path
 evidence confirmed. Non-verified rows map to a Task.
 
+**Note on manager interaction evidence:** Manager interaction tests
+(`test_manager_interaction_ctrl.c`, `test_manager_interaction_prof.c`)
+send SDL keyboard events through production `cbx_manager_handle_event`
+dispatch. Per §5.7, keyboard events are supplemental, not controller
+acceptance. INT-002 (partial → Task 8) tracks the controller-transport
+gap. Structural/functional MGR requirements (tabs exist, focus chain
+works, profiles save, etc.) are `verified` via production dispatch;
+interaction-path-specific requirements (controller transport, pointer
+motion) are `partial` per INT-002/INT-003 → Tasks 7, 8.
+
+### §2.1–2.3 Architecture constraints
+
+| ID | Req | Class | Evidence | Task |
+|----|-----|-------|----------|------|
+| ARC-001 | Never touches input routing directly — all state changes via InputPlumber DBus API | verified | No evdev/udev/libinput calls in `src/`; all input mutations via `src/dbus/ip_*.c` method wrappers | — |
+| BIN-001 | Single executable `controller-box` with two modes (`--overlay-service`, `--manager`) | verified | `CMakeLists.txt` builds one binary; `src/app/main.c` mode dispatch; `packaging/controller-box.service` uses `--overlay-service` | — |
+
 ### §3 System requirements
 
 | ID | Req | Class | Evidence | Task |
 |----|-----|-------|----------|------|
-| SYS-001 | x86_64 + aarch64 build targets | verified | `CMakeLists.txt` — portable C11, no arch-specific code; Nix builds x86_64; aarch64 is same codebase | — |
+| SYS-001 | x86_64 + aarch64 build targets | verified | `CMakeLists.txt` — portable C11 (`CMAKE_C_EXTENSIONS OFF`), no arch-specific code; Nix builds x86_64; aarch64 is same portable codebase, SDL2/sd-bus/libyaml all support aarch64 | — |
 | SYS-002 | Runtime deps: SDL2, SDL2_ttf, SDL2_image, sd-bus, nanosvg | verified | `CMakeLists.txt:18-29` — pkg_check_modules for all; `third_party/nanosvg/` vendored | — |
 | SYS-003 | Widget system fully navigable by controller | verified | `src/ui/widget*.c`, `focus.c`; interaction tests traverse via focus chain + A | — |
 | SYS-004 | Polkit authorization for InputPlumber DBus methods | verified | Documented prerequisite (§9.4); runtime checks ownership + degrades on auth failure (`ip_connection.c:47-63`) | — |
@@ -59,7 +76,7 @@ evidence confirmed. Non-verified rows map to a Task.
 | SVC-005 | Degraded state while service absent | verified | `src/app/overlay_service.c:310,1168-1175` | — |
 | SVC-006 | Watches NameOwnerChanged, re-enumerates | verified | `src/dbus/ip_connection.c:31-44,196-224` | — |
 | SVC-007 | Operational within 2 seconds | partial | Event-driven recovery (likely <2s) but no timing test | Task 9 |
-| SVC-008 | Specific actionable error for unavailable | verified | `src/dbus/ip_connection.c:47-63` | — |
+| SVC-008 | Specific actionable error for unavailable (manager + overlay) | partial | Manager shows error (`ip_connection.c:47-63`); overlay hides window instead of showing error (`overlay_service.c:648-658`) | Task 9 |
 | SVC-009 | Backend-dependent controls visibly disabled | partial | Manager disables controls; overlay hides instead of showing error | Task 9 |
 | SVC-010 | Continuous DBus traffic processing | verified | `src/app/overlay_service.c:1045-1052` | — |
 
@@ -73,7 +90,7 @@ evidence confirmed. Non-verified rows map to a Task.
 
 | ID | Req | Class | Evidence | Task |
 |----|-----|-------|----------|------|
-| OVL-001–022 | Grid layout, icons, L/R move, U/D profile cycle, R3 host, B close, player mode, host mode, conflict red+resolve, per-controller profiles, dynamic columns, no nicknames | partial | Production code verified; O02–O10 tested via keyboard SDL events (supplemental), not DBus InputEvent production path | Task 13 |
+| OVL-001–022 | Grid layout, icons, L/R move, U/D profile cycle, R3 host, B close, player mode, host mode, conflict red+resolve, per-controller profiles, dynamic columns, no nicknames | partial | Production code verified; O02–O10 + O10b tested via keyboard SDL events (supplemental), not DBus InputEvent production path | Task 13 |
 
 ### §4.9–4.10 Rendering & visual acceptance
 
@@ -94,11 +111,11 @@ evidence confirmed. Non-verified rows map to a Task.
 |----|-----|-------|----------|------|
 | MGR-001–008 | 3 tabs, tabbar, focus chain, A activates, pointer secondary, same behavior, production init | verified | `src/manager/manager.c:147-260,435-548`; `tests/test_manager_interaction_ctrl.c`, `test_manager_interaction_prof.c` | — |
 | MGR-009–017 | Controllers add/remove/type-change, confirmed backend outcomes, topology reconciliation, mixed types, failure rollback | verified | `src/manager/controllers_tab.c:197-352`; `src/app/overlay_service.c:365-510`; `tests/test_manager_interaction_ctrl.c:226-545` | — |
-| MGR-018 | Remove slot → physical controller auto-Unassigned | verified | `src/overlay/dynamic_columns.c:85-90` clamps positions to Unassigned; `tests/test_overlay_interaction.c` O10b verifies row moved | — |
+| MGR-018 | Remove slot → physical controller auto-Unassigned | partial | `src/overlay/dynamic_columns.c:85-90` clamps positions; O10b test uses keyboard (supplemental, `✓*`) | Task 13 |
 | MGR-019–022 | Profiles browse/create/delete, Default built-in read-only | verified | `src/manager/profiles_tab.c:207-541`; `data/profiles/default.yaml` | — |
 | MGR-023 | Immutable Default profile works on clean install | verified | `data/profiles/default.yaml` installed by CMake to system dir; `config_profile_list.c` enumerates builtin Default first | — |
 | MGR-024 | Empty profile add-first-binding reachable | verified | `src/manager/profile_editor_list.c:395-398`; `tests/test_manager_interaction_prof.c:765-784` | — |
-| MGR-025–026 | Save/discard explicit visible controls, production events | verified | `src/manager/profiles_tab.c:170-176,580-694`; `tests/test_manager_interaction_prof.c:629-695` | — |
+| MGR-025–026 | Save/discard explicit visible controls, production events | partial | `profiles_tab.c:170-176,580-694` has controls; INT-001 says save_btn/discard_btn missing from inventory; interaction tests use keyboard (supplemental) | Task 5 |
 | MGR-027 | Window close with unsaved changes prompts | missing | `src/manager/manager.c:386` — SDL_QUIT sets running=false, no prompt | Task 3 |
 | MGR-028 | Profiles stored as InputPlumber YAML | verified | `src/manager/profile_save.c:104-132` | — |
 | MGR-029–035 | Editor binding list, sequential mode, NES validation, diagram sync, capability scope | verified | `src/manager/profile_editor_list.c`, `profile_editor_seq.c`, `profile_validate.c`; `tests/test_manager_interaction_prof.c:537-784` | — |
@@ -125,7 +142,7 @@ evidence confirmed. Non-verified rows map to a Task.
 | INT-004 | Visible focus/hover/press indication | missing | Tests check `widget->focused` bool, not visible pixel evidence | Task 7 |
 | INT-005 | Disabled controls reject both paths | partial | D01/D02/D06 test both paths; D04/D07/D08 test controller only | Task 5 |
 | INT-006 | Hit testing after resize | missing | No resize-then-hit-test test | Task 7 |
-| INT-007 | E2E scenarios all covered | verified | `tests/test_manager_interaction_ctrl.c`, `test_manager_interaction_prof.c` | — |
+| INT-007 | E2E scenarios all covered | partial | Scenarios covered via keyboard-supplemental tests; controller transport (INT-002) and pointer motion (INT-003) and overlay DBus path (INT-010) are partial | Tasks 7, 8, 13 |
 | INT-008 | Backend uses real/private DBus, mock supplemental | partial | Manager tests use string-only mock; `test_installed_functional.c` uses real sd-bus | Task 8 |
 | INT-009 | Controller transport (not keyboard) for acceptance | partial | `test_manager_production.c:293-328` uses SDL_JoystickAttachVirtual for 1 test; installed smoke uses xdotool key | Task 8 |
 | INT-010 | Overlay interaction through production event path | partial | `tests/test_overlay_interaction.c` O02–O10 use `push_keydown` (SDL keyboard); only O11/O11b/O10c use DBus InputEvent. In production, overlay input arrives via DBus InputEvent, not keyboard | Task 13 |
@@ -180,7 +197,7 @@ evidence confirmed. Non-verified rows map to a Task.
 
 | ID | Req | Class | Evidence | Task |
 |----|-----|-------|----------|------|
-| DOD-001 | All requirements verified | partial | 7 missing, 15 partial rows above | Tasks 1–10 |
+| DOD-001 | All requirements verified | partial | 6 missing, 19 partial rows above (SVC-003/004a/007/008/009, MGR-018/025-026/027/041/041a, OVL, VIS-002/003, INT-001-006/007/008/009/010, PRF-001-003, VER-006, PKG-007, DOD-002-004/006/008) | Tasks 1–10 |
 | DOD-002 | Production-path behavior | partial | Validation error + sequential visual tests bypass dispatch | Task 6 |
 | DOD-003 | Complete interaction traversal | partial | Inventory gaps, missing pointer paths, overlay O02–O10 on keyboard not DBus InputEvent, no controller transport | Tasks 5, 7, 8, 13 |
 | DOD-004 | Visual + degraded-state acceptance | partial | Degraded overlay shows nothing; font-dependent skips | Task 9 |
@@ -193,9 +210,22 @@ evidence confirmed. Non-verified rows map to a Task.
 ## Interaction acceptance inventory
 
 Every interactive manager control and overlay action required by §§4, 5.7,
-and 11.2. `C` = controller path, `P` = pointer path, `✓` = tested via production
-dispatch, `✓*` = tested via supplemental keyboard path only (production
-DBus InputEvent path pending), `✗` = untested, `N/A` = not applicable.
+and 11.2. `C` = controller path, `P` = pointer path, `✓` = tested via
+production dispatch, `✓*` = tested via supplemental keyboard path only
+(production DBus InputEvent path pending), `✗` = untested, `N/A` = not
+applicable.
+
+**Note on manager C-path evidence:** Manager controller-path tests
+(`test_manager_interaction_ctrl.c`, `test_manager_interaction_prof.c`)
+send SDL keyboard events through the production `cbx_manager_handle_event`
+dispatch. Per §5.7, keyboard-generated SDL events are supplemental
+accessibility evidence, not controller acceptance. INT-002 (partial →
+Task 8) tracks the gap: Task 8 adds `SDL_JoystickAttachVirtual`-
+based controller transport evidence for representative installed
+functional flows. The keyboard tests exercise the same post-translation
+code path (manager.c:135-156 translates `SDL_CONTROLLERBUTTONDOWN` →
+`SDL_KEYDOWN`), so they verify semantic outcomes through production
+dispatch but do not satisfy the controller-transport requirement alone.
 
 ### Manager controls
 
@@ -236,6 +266,11 @@ DBus InputEvent path pending), `✗` = untested, `N/A` = not applicable.
 | M38 | Editor discard (Tab / discard_btn) | ✓ | ✓ | Tab in LIST / click discard_btn | mtime unchanged | Task 5 (C for btn) |
 | M39 | Create picker cancel (B) | ✗ | ✗ | key handler → cancel | mode→LIST | Task 5 |
 | M40 | Binding edit cancel (B) | ✗ | ✗ | key handler → cancel | mode→LIST | Task 5 |
+| M41 | Unsaved-changes prompt: Save | ✗ | ✗ | SDL_QUIT → prompt → A/click | file written, window closes | Task 3 |
+| M42 | Unsaved-changes prompt: Discard | ✗ | ✗ | prompt → A/click | window closes, no save | Task 3 |
+| M43 | Unsaved-changes prompt: Cancel | ✗ | ✗ | prompt → A/click | returns to editor | Task 3 |
+| M44 | First-run prompt: Yes (enable service) | ✗ | ✗ | prompt → A/click | service installed, launch_at_boot=true | Task 12 |
+| M45 | First-run prompt: No (skip) | ✗ | ✗ | prompt → A/click | launch_at_boot=false, no install | Task 12 |
 
 ### Overlay actions
 
@@ -252,7 +287,7 @@ DBus InputEvent path pending), `✗` = untested, `N/A` = not applicable.
 | O08 | Host move slot | ✓* | step → host_mode | column changes | Task 13 |
 | O09 | Exit Host Mode (R3) | ✓* | step → host_mode_exit | host inactive | Task 13 |
 | O10 | Close (save + PASS) | ✓* | step → lifecycle_close | state→IDLE, synced | Task 13 |
-| O10b | Close conflict resolution | ✓ | step → conflict_resolve | row moved to free slot | — |
+| O10b | Close conflict resolution | ✓* | step → conflict_resolve | row moved to free slot | Task 13 |
 | O11 | Multi-controller independent | ✓ | step → per-row dispatch | each row moves | — |
 | O12 | Host profile cycle | deferred (§13) | — | — | — |
 
@@ -294,9 +329,10 @@ DBus InputEvent path pending), `✗` = untested, `N/A` = not applicable.
   - Controller-path test: navigate to setting via focus chain, activate with A, verify `icon_overrides` array in loaded settings
   - Pointer-path test: click setting row, verify same outcome
   - Visual test: Settings tab pixel assertion covers the new setting row region
+  - Overlay icon override test: set an icon override for a virtual type, activate the overlay, verify the overridden icon renders (not the default) via framebuffer pixel assertion in the icon region
   - `nix-shell --run 'ctest --test-dir build-check -R "settings" --output-on-failure'` passes
 - Verification: `ctest --test-dir build-check -R 'settings' --output-on-failure`; `nix-shell --run './scripts/verify-project.sh'`
-- Documentation impact: docs/PROFILES.md §icon-override
+- Documentation impact: docs/PROFILES.md §File layout (profile metadata sidecar), README §Manager usage (Settings tab), docs/OPERATIONS.md §Configuration
 
 ## Task 3: Implement unsaved-changes prompt on manager window close
 - Status: pending
@@ -324,7 +360,7 @@ DBus InputEvent path pending), `✗` = untested, `N/A` = not applicable.
   - Tests fail if latency exceeds bounds
   - `nix-shell --run 'ctest --test-dir build-check -R "overlay_performance" --output-on-failure'` passes
 - Verification: `ctest --test-dir build-check -R 'overlay_perf' --output-on-failure`; full verify-project.sh
-- Documentation impact: docs/OPERATIONS.md §performance-verification
+- Documentation impact: docs/OPERATIONS.md §Performance expectations
 
 ## Task 5: Complete interaction inventory and fix control coverage gaps
 - Status: pending
@@ -356,7 +392,7 @@ DBus InputEvent path pending), `✗` = untested, `N/A` = not applicable.
 
 ## Task 7: Add mouse motion, visible focus/hover, and resize hit-test to interaction tests
 - Status: pending
-- Dependencies: none
+- Dependencies: 5
 - Scope: `tests/test_manager_interaction_ctrl.c`, `tests/test_manager_interaction_prof.c`, `tests/test_harness.c`, `tests/test_harness.h`
 - Acceptance criteria:
   - All pointer-path tests send `SDL_MOUSEMOTION` to the control's center before `SDL_MOUSEBUTTONDOWN`/`UP`, satisfying §5.7 "mouse motion plus left-button down/up"
@@ -377,6 +413,9 @@ DBus InputEvent path pending), `✗` = untested, `N/A` = not applicable.
   - Test creates and saves a profile through the Manager UI: navigate Profiles tab → Create → source picker → name input → editor → add bindings → save, verify profile YAML file exists on disk
   - Test activates the overlay through the poll mechanism: set InterceptMode=ALL on the composite, run `cbx_overlay_service_step` until the overlay becomes visible (not direct lifecycle state injection), verify compositor-visible output
   - Test uses `SDL_JoystickAttachVirtual` (kernel-backed synthetic gamepad) for at least one Manager navigation flow and at least one overlay interaction, producing controller-transport evidence labeled as controller acceptance (not keyboard)
+  - Test verifies persistence after process/backend restart: after creating target + saving profile + activating overlay, restart the service process and verify the target, profile, and assignment persist (reload from disk)
+  - Test captures a screenshot/window framebuffer of the manager and overlay states as evidence artifacts
+  - Test must not be a skip: missing backend, skipped package build, expected early exit, keyboard-only interaction, or a merely nonblank window is failure, not a skip
   - Existing DBus ObjectManager and filesystem inspection assertions preserved
   - `nix-shell --run 'ctest --test-dir build-check -R "installed_functional" --output-on-failure'` passes
 - Verification: `ctest --test-dir build-check -R 'installed_functional' --output-on-failure`; full verify-project.sh
@@ -385,7 +424,7 @@ DBus InputEvent path pending), `✗` = untested, `N/A` = not applicable.
 ## Task 9: Add degraded overlay error rendering and service hardening
 - Status: pending
 - Dependencies: none
-- Scope: `src/app/overlay_service.c`, `src/overlay/surface_build.c`, `packaging/controller-box.service`, `tests/test_overlay_visual.c`
+- Scope: `src/app/overlay_service.c`, `src/overlay/surface_build.c`, `packaging/controller-box.service`, `tests/test_overlay_visual.c`, `tests/test_connection_timing.c`
 - Acceptance criteria:
   - When the overlay service is in degraded mode (InputPlumber unavailable), it renders a visible error message on the overlay surface (not just hidden), per §2.4 "show/report a specific actionable error"
   - Visual test renders the degraded overlay state and asserts non-background content in the error message region
@@ -394,7 +433,7 @@ DBus InputEvent path pending), `✗` = untested, `N/A` = not applicable.
   - `nix-shell --run 'ctest --test-dir build-check -R "overlay" --output-on-failure'` passes
   - `nix-shell --run './scripts/verify-project.sh'` passes
 - Verification: `ctest --test-dir build-check -R 'overlay' --output-on-failure`; full verify-project.sh
-- Documentation impact: docs/OPERATIONS.md §service-restart
+- Documentation impact: docs/OPERATIONS.md §Systemd management, docs/PACKAGING.md §Tarball install (service unit example)
 
 ## Task 10: Collect runner evidence and close BUG-0004
 - Status: pending
@@ -424,14 +463,14 @@ DBus InputEvent path pending), `✗` = untested, `N/A` = not applicable.
   - Visual test: first-run prompt dialog renders with non-background content in Yes/No button regions
   - `nix-shell --run 'ctest --test-dir build-check -R "settings\|service" --output-on-failure'` passes
 - Verification: `ctest --test-dir build-check -R 'settings' --output-on-failure`; `ctest --test-dir build-check -R 'service_install' --output-on-failure`; full verify-project.sh
-- Documentation impact: docs/OPERATIONS.md §first-run-setup
+- Documentation impact: docs/OPERATIONS.md §Systemd management, docs/PACKAGING.md §Flatpak (systemd service under Flatpak), README §Install
 
 ## Task 13: Add overlay DBus InputEvent interaction tests for O02–O10
 - Status: pending
 - Dependencies: none
 - Scope: `tests/test_overlay_interaction.c`
 - Acceptance criteria:
-  - Tests for O02 (move left), O03 (move right), O04 (cycle profile up), O05 (cycle profile down), O06 (enter Host Mode), O07 (host navigate rows), O08 (host move slot), O09 (exit Host Mode), O10 (close) use `backend->inject_signal` with `InputEvent` payloads (the production DBus InputEvent path), not `push_keydown`
+  - Tests for O02 (move left), O03 (move right), O04 (cycle profile up), O05 (cycle profile down), O06 (enter Host Mode), O07 (host navigate rows), O08 (host move slot), O09 (exit Host Mode), O10 (close), and O10b (close with conflict resolution) use `backend->inject_signal` with `InputEvent` payloads (the production DBus InputEvent path), not `push_keydown`
   - Each test injects a DBus InputEvent signal (e.g., `{event="DPadRight", value=1.0}` for move right, `{event="R3", value=1.0}` for Host Mode) and calls `cbx_overlay_service_step` to process it through `ip_input_events` → `cbx_overlay_input_cb` → player/host mode handlers
   - Each test verifies the same semantic outcome as the existing keyboard-based test (column change, profile change, host mode state, close state)
   - Existing keyboard-based tests are retained as supplemental accessibility evidence
@@ -454,12 +493,13 @@ DBus InputEvent path pending), `✗` = untested, `N/A` = not applicable.
   - Git tree is clean on `develop`
   - Front-matter `status` changed from `active` to `complete`
 - Verification: full `verify-project.sh`; `verify-boilerplate.sh`; `check-factory-runner-evidence.py`; conformance matrix audit
-- Documentation impact: final README/OPERATIONS/PACKAGING sync
+- Documentation impact: final README/OPERATIONS/PACKAGING/PROFILES sync
 
 ## Remediation rule
 
 When the final audit (Task 11) finds a gap, preserve the task ledger, append
-a uniquely numbered pending task (Task 12, 13, …), add it to Task 11's
+a uniquely numbered pending task (Task 14, 15, … — the next available
+number), add it to Task 11's
 dependencies, return Task 11 to pending, and continue. Reaching an
 iteration, runtime, quota, or session ceiling leaves the cycle incomplete
 and the front-matter `status` as `active`; it never satisfies the plan.
