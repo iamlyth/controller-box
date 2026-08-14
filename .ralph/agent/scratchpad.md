@@ -1,25 +1,25 @@
 # Implementation Handoff
 
 ## Outcome
-Task 2 (Controllers tab topology reconciliation and auto-Unassign) complete. Tasks 1-2 closed; 8 plan tasks remain.
+Task 3 (Editor unsaved-close prompt, sequential production capture, clone, determinism) complete. Tasks 1-3 closed; 7 plan tasks remain.
 
 ## What was done
-- **CT-02 (auto-Unassign):** `controllers_tab.c:cbx_controllers_tab_remove` now loads `assignments.yaml`, removes the entry whose slot matches the removed device, and shifts higher slots down. Tests: `test_remove_auto_unassign`, `test_remove_shifts_higher_slots`, `test_ctrl_remove_auto_unassign_controller_path` (prod dispatch).
-- **CT-03 (orphan columns):** Added `expected_target_count` field + `cbx_controllers_tab_set_expected_count()`. `check_orphan_columns()` shows "Topology incomplete: N of M" error when actual < expected. Manager wires it from `settings.virtual_controllers.count`. Tests: `test_orphan_columns_shows_error`, `test_ctrl_orphan_columns_visible_controller_path`.
-- **CT-04 (startup reconciliation):** Added `test_native_startup_reconciliation_prod_path` in `test_native_dbus.c` — uses real sd-bus + `cbx_reconcile_startup_targets` to verify grow (0→3), shrink (3→1), type correction, and routability via `TargetDevices`.
-- **CT-05 (add routability):** `cbx_controllers_tab_add` now checks `TargetDevices` on the composite; calls `AttachTargetDevice` if not attached; fails if attach fails. Tests: `test_add_attaches_target_if_not_routable`, `test_add_skips_attach_when_already_routable`, `test_add_fails_when_attach_fails`.
-- Updated existing add tests to mock `TargetDevices` + `AttachTargetDevice`.
-- Updated `docs/OPERATIONS.md` with topology reconciliation step, auto-Unassign, and orphan-columns docs.
-- Updated conformance matrix: CT-02–CT-05 all `verified`.
+- **PR-07 (unsaved-close prompt):** Added `dirty` flag to `cbx_profile_editor` (set on target_pick/capture/seq_on_input, cleared on load_profile). SDL_QUIT moved from `cbx_manager_run` to `cbx_manager_handle_event` — checks dirty flag, enters `CBX_PT_MODE_CONFIRM_QUIT` if dirty (A=save&quit, B=discard&quit via `quit_after_action` flag). Tests: `test_quit_unsaved_prompt_appears`, `test_quit_unsaved_save_and_quit`, `test_quit_unsaved_discard_and_quit`, `test_quit_no_changes_immediate`.
+- **PE-04 (sequential capture via DBus signal):** `test_editor_seq_capture_dbus_signal` uses `backend->inject_signal` → `input_event_signal_cb` → `ip_input_events_handle` → editor callback → `seq_on_input` → auto-advance (production DBus signal path, not direct callback).
+- **PR-02/M15/IA-10 (clone existing):** `test_prof_create_clone_controller` + `_pointer` — navigate create picker to "Clone current", type name, confirm, editor opens with 6 cloned bindings (prod dispatch, both paths).
+- **PE-06 (capability-scoped binding):** `test_capability_scoped_binding` — target-pick mode via prod dispatch, target list populated from keyboard/mouse capabilities (virtual device, not physical).
+- **PE-07 (determinism/portability):** `test_profile_determinism_load_twice` (load twice→identical mapping state) + `test_profile_portability_same_result` (NES+Start round-trip→same state).
+- Updated conformance matrix: PR-02, PR-07, PE-04, PE-06, PE-07, IA-10, M15, M22, M25, M31, M32 all `verified`.
+- Updated `docs/OPERATIONS.md` with unsaved prompt, clone, sequential capture, determinism docs.
 
 ## Verification
-- `ctest -R 'test_controllers_tab|test_native_dbus|test_manager_interaction_ctrl'` → all passed.
+- `ctest -R 'test_manager_interaction_prof|test_profile_save'` → all passed (45 + 16 tests).
 - Full suite: 90/90 passed, 1 pre-existing skip (test_backend_smoke).
 - No regressions.
 
 ## Commit
-- dbe8f5c on `develop`.
+- af2de81 on `develop`.
 
 ## Next task
-Task 3: Editor unsaved-close prompt, sequential production capture, clone, determinism (pending, no deps).
-Tasks 4, 7, 8 also pending with no deps. Task 5 depends on 4. Task 6 depends on 2,3,4,5. Task 9 depends on 7. Task 10 (final audit) depends on all.
+Task 4: Settings icon override and interaction/visual coverage (pending, no deps).
+Tasks 7, 8 also pending with no deps. Task 5 depends on 4. Task 6 depends on 2,3,4,5. Task 9 depends on 7. Task 10 (final audit) depends on all.
