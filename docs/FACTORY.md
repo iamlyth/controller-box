@@ -14,7 +14,7 @@ A reusable, single-writer implementation of Geoffrey Huntley's Ralph Wiggum
 development technique using Ralph Orchestrator, jailed Pi, Ollama, adaptive
 read-only subagents, Git checkpoints, quota waiting, and crash recovery.
 
-`docs/SPEC.md` is the source of truth for the product. `IMPLEMENTATION_PLAN.md`
+`docs/SPEC.md` is the source of truth for the product. `.factory/artifacts/implementation-plan.md`
 tracks task status and verification evidence.
 
 ## Operating model
@@ -22,7 +22,7 @@ tracks task status and verification evidence.
 - `main` is the human-controlled release branch.
 - `develop` is the autonomous implementation branch.
 - One committed `docs/SPEC.md` is the source of truth; Git versions it.
-- A planning-only Ralph loop creates `IMPLEMENTATION_PLAN.md` for the exact spec commit.
+- A planning-only Ralph loop creates `.factory/artifacts/implementation-plan.md` for the exact spec commit.
 - Each implementation iteration selects one bounded task and starts with fresh model context.
 - Pi subagents perform parallel read-only planning, research, review, security, and documentation analysis.
 - Exactly one primary worker may edit, stage, or commit repository files.
@@ -51,12 +51,12 @@ Durable, tracked state:
 
 - `docs/SPEC.md`: approved requirements
 - `AGENTS.md`: concise build/run/validation commands and durable operational patterns
-- `IMPLEMENTATION_PLAN.md`: feature task status and verification evidence
-- `open-bugs.md` / `closed-bugs.md`: portable canonical defect state
-- `MAINTENANCE_PLAN.md`: one selected bug, fingerprint, tasks, and evidence
+- `.factory/artifacts/implementation-plan.md`: feature task status and verification evidence
+- `.factory/bugs/open.md` / `.factory/bugs/closed.md`: portable canonical defect state
+- `.factory/artifacts/maintenance-plan.md`: one selected bug, fingerprint, tasks, and evidence
 - `.ralph/agent/scratchpad.md`: concise crash handoff
 - source, tests, README, and operational documentation
-- `factory.toml`, Ralph configs, prompts, and project subagent definitions
+- `.factory/config.toml`, Ralph configs, prompts, and project subagent definitions
 
 Volatile, ignored state:
 
@@ -120,7 +120,7 @@ Run the planning-only fresh-context loop:
 ./scripts/ralph-plan.sh
 ```
 
-The planner may only modify `IMPLEMENTATION_PLAN.md` and the recovery scratchpad. A fresh invocation atomically replaces both with minimal cycle state before Ralph starts, so completed tasks are not carried into future prompts. Previous plans remain available through Git history; `--resume` preserves the active draft. The generated plan records:
+The planner may only modify `.factory/artifacts/implementation-plan.md` and the recovery scratchpad. A fresh invocation atomically replaces both with minimal cycle state before Ralph starts, so completed tasks are not carried into future prompts. Previous plans remain available through Git history; `--resume` preserves the active draft. The generated plan records:
 
 - the spec path;
 - the latest commit that changed the spec;
@@ -160,7 +160,7 @@ Each iteration:
 
 Only the final documentation and specification audit may produce `LOOP_COMPLETE`. It must satisfy `docs/SPEC.md` §11.2: all conformance rows verified, every control exercised through production event dispatch with semantic outcomes, full visual/degraded/installed verification, no contradictory open bugs, adversarial reviews, current documentation, and a clean tree.
 
-There is no minimum iteration count: high quality is determined by evidence, not loop volume. Conversely, completing the originally planned tasks is not enough when acceptance discovers another gap. The worker preserves the ledger, appends a new uniquely numbered remediation task, adds it to the final audit dependencies, returns the audit to pending, and continues. `ralph.yml` permits up to 1000 iterations and a one-year runtime as safety ceilings. If those or an external session ceiling are reached, the plan remains active/blocked with a recovery handoff; a ceiling never constitutes completion.
+There is no minimum iteration count: high quality is determined by evidence, not loop volume. Conversely, completing the originally planned tasks is not enough when acceptance discovers another gap. The worker preserves the ledger, appends a new uniquely numbered remediation task, adds it to the final audit dependencies, returns the audit to pending, and continues. `.factory/ralph/implementation.yml` permits up to 1000 iterations and a one-year runtime as safety ceilings. If those or an external session ceiling are reached, the plan remains active/blocked with a recovery handoff; a ceiling never constitutes completion.
 
 ### Completion protocol and checkpoint guards
 
@@ -184,10 +184,11 @@ stopping boundaries:
 Each mandatory round records the current clean `HEAD` as a new base, runs a
 fresh `ralph-plan.sh` cycle, runs the resulting plan through `ralph-run.sh`,
 executes `verification.campaign_command`, validates installed-functional
-evidence when the checker exists, and launches an independent adversarial audit
+evidence, transfers the exact clean Git tree to every declared runner, validates
+commit-bound runner receipts, and launches an independent adversarial audit
 through `ralph-audit.sh`. A prior completion claim never shortens the requested
 round count. The next round's fresh planner consumes the preceding
-`CAMPAIGN_AUDIT.md`; prior plans and audit reports remain in Git history.
+`.factory/artifacts/campaign-audit.md`; prior plans and audit reports remain in Git history.
 
 Ignored state in `.factory-state/ralph-campaign.json` records the requested
 rounds, selected TUI mode, current phase, each round base, phase-start markers,
@@ -211,28 +212,35 @@ campaign to remediate them.
 
 ### Declared tools and runners
 
-`factory-environment.toml` is the tracked, credential-free declaration of what
-the factory can actually execute. The initial template contains no `[[tools]]`
-or `[[runners]]`, so agents must not invent hardware, SSH access, GPU/controller
-coverage, or external evidence. Future SSH runners use an SSH config alias and
-argv arrays; hostnames, usernames, ports, private-key paths, passwords, tokens,
-and secrets remain outside Git. Validate it with:
+`.factory/environment.toml` is the tracked, credential-free declaration of what
+the factory can actually execute. Agents must not invent undeclared hardware,
+GPU/controller coverage, or external evidence. Hostnames, usernames, ports,
+private-key paths, passwords, tokens, and secrets remain outside Git. Validate
+it with:
 
 ```bash
 ./scripts/check-factory-environment.py
 ```
 
 Planning, implementation, and independent audit prompts treat the declaration
-as exhaustive. `factory.toml` lists product-specific capabilities required for
-a clean audit; while the template is empty, a final audit must report findings
-and the campaign cannot claim completion. Declaring a runner makes it
-discoverable to planning; executable integration with a future runner must still
-be planned, tested, and gated before its evidence can satisfy product acceptance.
+as exhaustive. During verification, `scripts/run-factory-runners.py` creates a
+history-free `git archive` of the exact clean commit, rejects tracked symlinks,
+gitlinks, or special modes that this protocol cannot reproduce safely, sends the
+archive through the pinned SSH alias, verifies the extracted Git tree remotely, runs the fixed argv without
+reusing a checkout or HOME, and cleans the remote workspace. Local receipts and
+bounded logs are written beneath `.factory-state/runner-evidence/` and validated
+by `scripts/check-factory-runner-evidence.py`. A failed transport, tree binding,
+probe, verifier, cleanup receipt, or evidence digest stops the campaign.
+
+`.factory/config.toml` lists product-specific capabilities required for a clean audit.
+Only capabilities covered by accepted exact-commit evidence count; all others
+remain findings until their production probes and artifacts are implemented.
+Runner provisioning and credentials are maintained outside this repository.
 
 ## Maintain one bug
 
 Ordinary defects stay out of `docs/SPEC.md`. Canonical state is tracked in
-`open-bugs.md` and `closed-bugs.md`, with optional manual references to GitHub,
+`.factory/bugs/open.md` and `.factory/bugs/closed.md`, with optional manual references to GitHub,
 Forgejo, or both. After human triage, run:
 
 ```bash
@@ -249,7 +257,7 @@ blocked and returned to the specification workflow. See
 
 ## Adaptive concurrency
 
-Configured ceilings live in `factory.toml`:
+Configured ceilings live in `.factory/config.toml`:
 
 ```toml
 [concurrency]

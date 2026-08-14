@@ -419,8 +419,9 @@ asking an operator to alternate planning and implementation manually:
 ```
 
 Every round performs fresh planning, strict implementation, the configured
-project verification command, installed-evidence validation, and a separate
-adversarial audit. Runtime state is persisted atomically in the ignored
+project verification command, installed-evidence validation, exact-tree
+verification on every declared factory runner, and a separate adversarial audit.
+Runtime state is persisted atomically in the ignored
 `.factory-state/ralph-campaign.json`. After interruption, confirm no child
 Ralph process is alive and resume the exact phase with:
 
@@ -433,18 +434,28 @@ phase boundary, stale/rewritten Git bindings, or final-round findings stop the
 campaign rather than skipping work. Leaf planning, implementation, and audit
 recovery retain their normal quota and completion-rejection behavior.
 
-`factory-environment.toml` declares available tools and runners. It initially
-declares none, so the product-specific required capabilities in `factory.toml`
-mechanically prevent a clean final campaign audit until a real acceptance
-environment is declared. Never add credentials or endpoints directly: future SSH runners
-must use an alias configured outside the repository. Validate changes with
-`scripts/check-factory-environment.py`; runner execution and evidence acceptance
-must be explicitly implemented and tested before hardware claims become valid.
+`.factory/environment.toml` declares available tools and runners without
+publishing credentials or endpoints. Validate and exercise declarations with:
+
+```bash
+./scripts/check-factory-environment.py
+./scripts/run-factory-runners.py
+./scripts/check-factory-runner-evidence.py
+```
+
+The run requires a clean committed `develop` tree containing only regular
+tracked files/directories with ordinary executable modes; symlinks, gitlinks,
+and special Git modes fail closed. Evidence and bounded logs are stored under
+`.factory-state/runner-evidence/`; they bind the commit, tree, environment
+declaration, verifier argv, archive, runner, nonce, capabilities, exit status,
+and cleanup result. Runner provisioning, SSH policy, credentials, endpoints,
+and host-specific setup remain outside the repository. Synthetic local tests
+cannot satisfy undeclared production hardware capabilities.
 
 ## Bug maintenance
 
 GitHub and Forgejo issues are optional external references. The portable,
-canonical workflow state is `open-bugs.md` and `closed-bugs.md`; never put PATs
+canonical workflow state is `.factory/bugs/open.md` and `.factory/bugs/closed.md`; never put PATs
 or credential-bearing URLs in either ledger. Use `scripts/bug-ledger.py` for
 validated intake, links, transitions, closure evidence, and interrupted-close
 recovery.

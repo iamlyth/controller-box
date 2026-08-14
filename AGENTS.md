@@ -1,13 +1,13 @@
 # Controller-Box Operational Guide
 
-Keep this file brief and operational. Progress, task status, and verification evidence belong in `IMPLEMENTATION_PLAN.md`; the latest recovery handoff belongs in `.ralph/agent/scratchpad.md`.
+Keep this file brief and operational. Progress, task status, and verification evidence belong in `.factory/artifacts/implementation-plan.md`; the latest recovery handoff belongs in `.ralph/agent/scratchpad.md`.
 
 ## Sources of truth
 
 - Product contract: `docs/SPEC.md`
-- Declared factory capabilities: `factory-environment.toml` (never invent undeclared runners)
-- Active work and evidence: `IMPLEMENTATION_PLAN.md`
-- Ordinary defects: `open-bugs.md` and `closed-bugs.md`
+- Declared factory capabilities: `.factory/environment.toml` (never invent undeclared runners)
+- Active work and evidence: `.factory/artifacts/implementation-plan.md`
+- Ordinary defects: `.factory/bugs/open.md` and `.factory/bugs/closed.md`
 - Work only on `develop`; the human promotes to `main`.
 - Do not use Git worktrees or change the committed specification during implementation.
 
@@ -32,6 +32,10 @@ nix-shell --run './scripts/verify-project.sh'
 
 # Ralph/factory policy and orchestration
 ./scripts/verify-boilerplate.sh
+
+# Exact-commit declared runner gate and evidence check
+./scripts/run-factory-runners.py
+./scripts/check-factory-runner-evidence.py
 
 # Finite fresh-plan/implementation/audit campaign
 ./scripts/ralph-campaign.sh --rounds 3
@@ -58,4 +62,5 @@ A custom `CMAKE_INSTALL_PREFIX` build is for isolated install/UI testing and sho
 - Route InputPlumber operations through the DBus backend abstraction so tests can observe exact requests.
 - Scope temporary-file assertions to files owned by the test; never assert global `/tmp/controller-box-*` emptiness.
 - Do not leave placeholders, stubs, weakened assertions, unexplained skips, or test-only production bypasses.
+- A runner declaration is not evidence; accept only exact-commit receipts validated by the runner evidence checker.
 - Documentation records why a constraint or test matters, not iteration history.

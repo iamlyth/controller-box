@@ -257,13 +257,13 @@ verification passes, and independent gap audits, run:
 Every round receives a new Git base and replaces the active plan; completed
 plans and audits remain in Git history. Interrupted campaigns resume with the
 same round count and phase using `--resume`. Available local tools and external
-runners are declared without credentials in `factory-environment.toml`; the
-initial template intentionally declares none, so required hardware capabilities
-remain findings rather than fabricated completion evidence until it is populated.
+runners are declared without credentials in `.factory/environment.toml`.
+Verification validates exact-commit runner receipts; required capabilities without
+accepted production evidence remain findings rather than fabricated completion.
 
 ## Bug maintenance
 
-Portable bug state is tracked in `open-bugs.md` and `closed-bugs.md`. A bug may
+Portable bug state is tracked in `.factory/bugs/open.md` and `.factory/bugs/closed.md`. A bug may
 reference a GitHub issue, a Forgejo issue, both, or neither; external tickets do
 not replace the local ledger. Ordinary defects use the dedicated maintenance
 cycle and do not modify `docs/SPEC.md`:

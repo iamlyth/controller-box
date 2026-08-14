@@ -1,6 +1,6 @@
 [project]
 spec = "docs/SPEC.md"
-plan = "IMPLEMENTATION_PLAN.md"
+plan = ".factory/artifacts/implementation-plan.md"
 development_branch = "develop"
 release_branch = "main"
 
@@ -45,9 +45,9 @@ campaign_command = ["./scripts/verify-project.sh"]
 
 [issues]
 schema = "ralph-bug-ledger/v1"
-open_ledger = "open-bugs.md"
-closed_ledger = "closed-bugs.md"
-maintenance_plan = "MAINTENANCE_PLAN.md"
+open_ledger = ".factory/bugs/open.md"
+closed_ledger = ".factory/bugs/closed.md"
+maintenance_plan = ".factory/artifacts/maintenance-plan.md"
 final_task_title = "Maintenance verification and documentation audit"
 providers = ["github", "forgejo"]
 external_sync = "manual"
