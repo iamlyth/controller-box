@@ -1,18 +1,31 @@
-# Planning Scratchpad
+# Planning Scratchpad — Controller-Box implementation plan
 
-## State
-- Planning complete. Plan committed at `dfec5d5` (iteration 7).
-- 13 tasks, all pending. Conformance matrix covers full spec (§2.1–§11.2).
-- Three review subagents (reviewer, security-reviewer, docs-reviewer) ran
-  and all critical findings were applied across iterations 2–3.
+## State: planning complete
+- Spec committed (3a10f6b), not dirty. Skeleton metadata preserved byte-for-byte.
+- Codebase mature: 89/89 ctest pass (1 env-gated skip). Three planner-scout
+  subagents mapped §§4-11 conformance; most requirements verified.
+- 9 implementation tasks + 1 final audit written to implementation-plan.md.
+- `./scripts/final-gate.sh --planning` accepted. validate-implementation-plan
+  planning passed. security/docs review: no blocking issues (path containment
+  already verified; Flathub defect tasked; boilerplate gate covered).
 
-## Completion criteria check
-- ✅ Matrix covers whole specification
-- ✅ Every non-verified row maps to a Task
-- ✅ Interaction inventory exhaustive (M01–M45, O01–O12, D01–D08)
-- ✅ BUG-0004 accounted for (Task 10)
-- ✅ Final audit (Task 11) depends on all other tasks (1–10, 12, 13)
-- ✅ Plan internally consistent and executable one task at a time
-- ✅ All 13 tasks start as `pending`
-- ✅ Remediation rule present
-- ✅ Spec not dirty, clean git tree
+## Gaps tasked
+- Task 1: overlay latency timing (§4.9/§11) — no timing test existed.
+- Task 2: controllers topology reconcile + auto-Unassign (§5.2).
+- Task 3: editor unsaved-close prompt, sequential prod capture, clone, determinism.
+- Task 4: settings icon override + interaction/visual coverage (§5.5/§5.6).
+- Task 5: inventory driven traversal + hover/resize/decorative (§5.7).
+- Task 6: controller-transport acceptance + manager-UI recovery (§5.7).
+- Task 7: overlay dynamic columns hotplug + visual skip hardening (§4.7/§4.10).
+- Task 8: Flatpak experimental + Flathub doc defect + clean-install default (§9.1).
+- Task 9: backend smoke CI coverage + BUG-0004 verify/close (§11.1.6/bug).
+- Task 10: final audit (§11.2), depends on 1-9.
+
+## Environment honesty
+- Declared runner has only remote-project-gate + systemd-user. gpu-compositor,
+  physical-controller, target-consumer NOT declared. GPU backend smoke +
+  Pi-4 latency + target-hardware visual = human-release-gated (VS-03); plan
+  produces strongest deterministic evidence and documents the human remainder.
+
+## Next action
+Emit the completion token.
