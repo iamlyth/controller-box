@@ -98,6 +98,7 @@ typedef struct {
     cbx_text_cache    *text_cache;     /* optional — NULL skips text */
     int                font_id;        /* font ID for text cache */
     const struct cbx_conflict_list *conflicts; /* optional — NULL skips red */
+    const cbx_settings *settings;      /* optional — NULL skips icon overrides */
 } cbx_grid_render_ctx;
 
 /* --- Lifecycle ---------------------------------------------------------- */

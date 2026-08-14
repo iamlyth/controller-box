@@ -208,6 +208,22 @@ send_key(cbx_manager *mgr, SDL_Keycode sym)
     return cbx_manager_handle_event(mgr, &ev);
 }
 
+static bool
+send_key_up(cbx_manager *mgr, SDL_Keycode sym)
+{
+    SDL_Event ev = {0};
+    ev.type = SDL_KEYUP;
+    ev.key.keysym.sym = sym;
+    return cbx_manager_handle_event(mgr, &ev);
+}
+
+static void
+send_key_press(cbx_manager *mgr, SDL_Keycode sym)
+{
+    send_key(mgr, sym);
+    send_key_up(mgr, sym);
+}
+
 static void
 render_and_read(cbx_manager *mgr, uint8_t *buf)
 {
@@ -582,6 +598,84 @@ test_settings_tab(void **state)
                                           MGR_TOL));
     }
 }
+/* ------------------------------------------------------------------ */
+/*  Test 5b: Per-setting visual regions (MV-04)                      */
+/* ------------------------------------------------------------------ */
+
+static void
+test_settings_per_setting_visual(void **state)
+{
+    struct mgr_vis_fixture *f = FIX(state);
+    cbx_manager *mgr = &f->mgr;
+    cbx_settings_tab *st = cbx_manager_settings_tab(mgr);
+
+    /* Switch to Settings tab. */
+    while (cbx_manager_active_tab(mgr) != CBX_MGR_TAB_SETTINGS)
+        send_key(mgr, SDLK_RIGHT);
+
+    uint8_t bg[3] = { mgr->theme.bg.r, mgr->theme.bg.g, mgr->theme.bg.b };
+
+    /* Render initial frame. */
+    render_and_read(mgr, f->buf_a);
+
+    /* Each setting row should have meaningful non-background content. */
+    int item_h = st->settings_list.item_h;
+    assert_true(item_h > 0);
+    int list_x = st->settings_list.base.rect.x;
+    int list_w = st->settings_list.base.rect.w;
+    int list_y = st->settings_list.base.rect.y;
+
+    for (int i = 0; i < CBX_ST_SET_COUNT; i++) {
+        SDL_Rect row_rect = { list_x, list_y + i * item_h,
+                               list_w, item_h };
+        assert_true(fb_region_has_content(f->buf_a, MGR_W, MGR_H,
+                                           &row_rect, bg, MGR_TOL));
+    }
+
+    /* Save button region should also have content. */
+    SDL_Rect btn_rect = st->save_btn.base.rect;
+    assert_true(fb_region_has_content(f->buf_a, MGR_W, MGR_H,
+                                       &btn_rect, bg, MGR_TOL));
+}
+
+/* Test 5c: Editing a setting changes its row region (MV-04). */
+static void
+test_settings_edit_changes_region(void **state)
+{
+    struct mgr_vis_fixture *f = FIX(state);
+    cbx_manager *mgr = &f->mgr;
+    cbx_settings_tab *st = cbx_manager_settings_tab(mgr);
+
+    /* Switch to Settings tab. */
+    while (cbx_manager_active_tab(mgr) != CBX_MGR_TAB_SETTINGS)
+        send_key(mgr, SDLK_RIGHT);
+
+    /* Navigate to theme row (index 1) and enter edit mode. */
+    send_key(mgr, SDLK_DOWN);  /* tabbar -> list */
+    send_key(mgr, SDLK_DOWN);  /* item 1 = theme */
+    render_and_read(mgr, f->buf_a);
+
+    /* Record the theme row region before editing. */
+    int item_h = st->settings_list.item_h;
+    int list_x = st->settings_list.base.rect.x;
+    int list_w = st->settings_list.base.rect.w;
+    int list_y = st->settings_list.base.rect.y;
+    SDL_Rect theme_rect = { list_x, list_y + 1 * item_h, list_w, item_h };
+
+    /* Enter edit mode (KEYDOWN + KEYUP to fire on_select -> activate). */
+    send_key_press(mgr, SDLK_a);
+    assert_int_equal(cbx_settings_tab_mode(st), CBX_ST_MODE_EDIT);
+
+    /* Cycle the theme value. */
+    send_key(mgr, SDLK_UP);  /* default -> dark */
+
+    /* Render after edit and compare. */
+    render_and_read(mgr, f->buf_b);
+
+    /* The theme row region should differ (value label changed). */
+    assert_true(region_differs(f->buf_a, f->buf_b, MGR_W,
+                                    &theme_rect));
+}
 
 /* ------------------------------------------------------------------ */
 /*  Test 6: Tab switching produces materially different frames         */
@@ -890,6 +984,10 @@ main(void)
             test_profiles_tab, mgr_vis_setup, mgr_vis_teardown),
         cmocka_unit_test_setup_teardown(
             test_settings_tab, mgr_vis_setup, mgr_vis_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_settings_per_setting_visual, mgr_vis_setup, mgr_vis_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_settings_edit_changes_region, mgr_vis_setup, mgr_vis_teardown),
         cmocka_unit_test_setup_teardown(
             test_tab_switch_differs, mgr_vis_setup, mgr_vis_teardown),
         cmocka_unit_test_setup_teardown(

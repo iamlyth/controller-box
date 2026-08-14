@@ -36,6 +36,23 @@ static const char *const st_known_types[] = {
     "xb360", "ds5", "deck", "gamepad", "mouse", "keyboard", "touchscreen", NULL,
 };
 
+/* Icon override presets for the settings tab cycle UI (SPEC §8.4/§5.5).
+ * Each preset is either "None" (clear overrides) or a single type-to-icon
+ * override.  The data model supports multiple overrides; this UI provides
+ * a simple cycle to set one at a time. */
+static const struct {
+    const char *type;  /* NULL = no override (clear all) */
+    const char *icon;  /* icon name (built-in or absolute path) */
+    const char *label; /* display label for the cycle entry */
+} st_icon_presets[] = {
+    { NULL,       NULL,           "None" },
+    { "ds5",      "cc-xbox-360", "ds5 -> cc-xbox-360" },
+    { "xb360",    "cc-ps5",      "xb360 -> cc-ps5" },
+    { "deck",     "cc-xbox-360", "deck -> cc-xbox-360" },
+    { "gamepad",  "cc-ps5",      "gamepad -> cc-ps5" },
+};
+#define ST_ICON_PRESET_COUNT ((int)(sizeof(st_icon_presets) / sizeof(st_icon_presets[0])))
+
 /* Find the index of a string in a NULL-terminated array.
  * Returns the index, or -1 if not found. */
 static int str_index(const char *const *arr, const char *val)
@@ -117,6 +134,15 @@ static void format_setting_label(cbx_settings_tab *tab, char *buf,
     case CBX_ST_SET_TRIGGER:
         snprintf(buf, buflen, "Overlay Trigger: %s", s->overlay_trigger);
         break;
+    case CBX_ST_SET_ICON_OVERRIDE: {
+        if (s->icon_override_count > 0) {
+            snprintf(buf, buflen, "Icon Override: %s -> %s",
+                     s->icon_overrides[0].type, s->icon_overrides[0].icon);
+        } else {
+            snprintf(buf, buflen, "Icon Override: None");
+        }
+        break;
+    }
     case CBX_ST_SET_SAVE:
         snprintf(buf, buflen, "Save Settings");
         break;
@@ -166,6 +192,7 @@ int cbx_settings_tab_init(cbx_settings_tab *tab,
     tab->font_id    = font_id;
     tab->mode       = CBX_ST_MODE_LIST;
     tab->selected   = 0;
+    tab->icon_preset_idx = 0;
 
     /* Load settings from disk (or defaults if no file). */
     int rc = cbx_settings_load(&tab->settings);
@@ -349,8 +376,25 @@ int cbx_settings_tab_activate(cbx_settings_tab *tab)
     case CBX_ST_SET_VC_TYPE_2:
     case CBX_ST_SET_VC_TYPE_3:
     case CBX_ST_SET_TRIGGER:
+    case CBX_ST_SET_ICON_OVERRIDE:
         /* Enter edit mode for adjustable settings. */
         tab->mode = CBX_ST_MODE_EDIT;
+        /* For icon override, initialize preset index from current state. */
+        if (sel == CBX_ST_SET_ICON_OVERRIDE) {
+            tab->icon_preset_idx = 0;  /* default to "None" */
+            if (tab->settings.icon_override_count > 0) {
+                /* Find matching preset for the first override. */
+                for (int i = 1; i < ST_ICON_PRESET_COUNT; i++) {
+                    if (strcmp(tab->settings.icon_overrides[0].type,
+                               st_icon_presets[i].type) == 0 &&
+                        strcmp(tab->settings.icon_overrides[0].icon,
+                               st_icon_presets[i].icon) == 0) {
+                        tab->icon_preset_idx = i;
+                        break;
+                    }
+                }
+            }
+        }
         cbx_label_set_text(&tab->status_lbl,
                            "Editing: Up/Down to adjust, A=confirm, B=cancel");
         break;
@@ -360,6 +404,26 @@ int cbx_settings_tab_activate(cbx_settings_tab *tab)
     }
 
     return 0;
+}
+
+/* Apply the currently selected icon override preset to the settings struct.
+ * Called during edit_up/edit_down cycling so the label preview is live. */
+static void apply_icon_preset(cbx_settings_tab *tab)
+{
+    if (!tab || tab->icon_preset_idx < 0 ||
+        tab->icon_preset_idx >= ST_ICON_PRESET_COUNT)
+        return;
+
+    /* Clear all existing overrides. */
+    tab->settings.icon_override_count = 0;
+
+    const char *type = st_icon_presets[tab->icon_preset_idx].type;
+    const char *icon = st_icon_presets[tab->icon_preset_idx].icon;
+    if (type && icon) {
+        cbx_settings_set_icon_override(&tab->settings, type, icon);
+    }
+
+    cbx_settings_tab_refresh(tab);
 }
 
 int cbx_settings_tab_edit_up(cbx_settings_tab *tab)
@@ -413,6 +477,13 @@ int cbx_settings_tab_edit_up(cbx_settings_tab *tab)
         tab->settings.overlay_trigger[sizeof(tab->settings.overlay_trigger) - 1] = '\0';
         break;
     }
+    case CBX_ST_SET_ICON_OVERRIDE:
+        tab->icon_preset_idx++;
+        if (tab->icon_preset_idx >= ST_ICON_PRESET_COUNT)
+            tab->icon_preset_idx = 0;
+        /* Apply preset preview to settings struct. */
+        apply_icon_preset(tab);
+        break;
     default:
         break;
     }
@@ -466,6 +537,12 @@ int cbx_settings_tab_edit_down(cbx_settings_tab *tab)
         tab->settings.overlay_trigger[sizeof(tab->settings.overlay_trigger) - 1] = '\0';
         break;
     }
+    case CBX_ST_SET_ICON_OVERRIDE:
+        tab->icon_preset_idx--;
+        if (tab->icon_preset_idx < 0)
+            tab->icon_preset_idx = ST_ICON_PRESET_COUNT - 1;
+        apply_icon_preset(tab);
+        break;
     default:
         break;
     }

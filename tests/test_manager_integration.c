@@ -401,7 +401,7 @@ static void test_settings_save(void **state)
     const cbx_settings *s = cbx_settings_tab_settings(f->st);
     assert_false(s->launch_at_boot);  /* was true by default → now false */
 
-    /* Navigate to save (index 9 = CBX_ST_SET_SAVE). */
+    /* Navigate to save (index 10 = CBX_ST_SET_SAVE). */
     for (int i = 0; i < CBX_ST_SET_COUNT - 1; i++)
         cbx_settings_tab_move_down(f->st);
 

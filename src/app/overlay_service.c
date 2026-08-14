@@ -1192,6 +1192,7 @@ int run_overlay_service(int dry_run)
         .theme      = &svc->theme,
         .text_cache = svc->font_id >= 0 ? &svc->text_cache : NULL,
         .font_id    = svc->font_id,
+        .settings   = &svc->settings,
     };
     cbx_overlay_surface_mark_dirty_all(&svc->surface);
     cbx_overlay_surface_render(&svc->surface, svc->rend.renderer,

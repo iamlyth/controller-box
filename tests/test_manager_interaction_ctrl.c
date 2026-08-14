@@ -990,9 +990,9 @@ test_settings_save_controller_path(void **state)
                      !initial);
 
     /* Navigate to Save button (below the list).  First navigate to
-     * the bottom of the list (9 DOWNs to item 9 = Save row), then
+     * the bottom of the list (10 DOWNs to item 10 = Save row), then
      * one more DOWN to fall through to the save_btn. */
-    for (int i = 0; i < 9; i++)
+    for (int i = 0; i < 10; i++)
         send_key_dn(mgr, SDLK_DOWN);
     send_key_dn(mgr, SDLK_DOWN);  /* list bottom → focus to save_btn */
     assert_true(st->save_btn.base.focused);
@@ -1037,6 +1037,438 @@ test_settings_save_pointer_path(void **state)
     settings_yaml_path(f, path, sizeof(path));
     assert_int_equal(access(path, F_OK), 0);
     assert_string_equal(cbx_settings_tab_status(st), "Settings saved.");
+
+}
+/* ------------------------------------------------------------------
+ *  Task 4: Settings interaction tests for opacity, VC count, VC type,
+ *  trigger combo, and icon override (ST-02/ST-03/ST-04/ST-05).
+ *  Each test: navigate to the setting via controller or pointer, enter
+ *  edit mode, adjust the value, confirm, then save and verify the
+ *  value is persisted to settings.yaml.
+ * ------------------------------------------------------------------ */
+
+/* ST-02 controller path: edit overlay opacity, confirm, save, verify persisted. */
+static void
+test_settings_opacity_controller_path(void **state)
+{
+    mi_fixture *f = *state;
+    cbx_manager *mgr = &f->mgr;
+    cbx_settings_tab *st = cbx_manager_settings_tab(mgr);
+
+    switch_to_settings(mgr);
+    send_key_dn(mgr, SDLK_DOWN);  /* tabbar -> list, item 0 */
+
+    /* Navigate to opacity (index 2). */
+    send_key_dn(mgr, SDLK_DOWN);  /* item 1 */
+    send_key_dn(mgr, SDLK_DOWN);  /* item 2 = opacity */
+    assert_int_equal(cbx_list_get_selected(&st->settings_list), CBX_ST_SET_OPACITY);
+
+    double initial = cbx_settings_tab_settings(st)->overlay_opacity;
+
+    /* Enter edit mode. */
+    send_key_press(mgr, SDLK_a);
+    assert_int_equal(cbx_settings_tab_mode(st), CBX_ST_MODE_EDIT);
+
+    /* Adjust up. */
+    send_key_dn(mgr, SDLK_UP);
+    assert_float_equal(cbx_settings_tab_settings(st)->overlay_opacity,
+                       initial + 0.05, 0.001);
+
+    /* Confirm. */
+    send_key_press(mgr, SDLK_a);
+    assert_int_equal(cbx_settings_tab_mode(st), CBX_ST_MODE_LIST);
+
+    /* Save and verify persisted. */
+    for (int i = 0; i < 10; i++)
+        send_key_dn(mgr, SDLK_DOWN);
+    send_key_dn(mgr, SDLK_DOWN);  /* -> save_btn */
+    send_key_press(mgr, SDLK_a);
+
+    char path[4096 + 128];
+    settings_yaml_path(f, path, sizeof(path));
+    assert_int_equal(access(path, F_OK), 0);
+
+    /* Reload and verify the value. */
+    cbx_settings loaded;
+    cbx_settings_load(&loaded);
+    assert_float_equal(loaded.overlay_opacity, initial + 0.05, 0.001);
+}
+
+/* ST-02 pointer path: edit overlay opacity via mouse. */
+static void
+test_settings_opacity_pointer_path(void **state)
+{
+    mi_fixture *f = *state;
+    cbx_manager *mgr = &f->mgr;
+    cbx_settings_tab *st = cbx_manager_settings_tab(mgr);
+
+    switch_to_settings(mgr);
+
+    /* Click on opacity row (item 2) to enter edit mode. */
+    int px = list_center_x(&st->settings_list);
+    int py = list_item_y(&st->settings_list, 2);
+    send_mouse_click(mgr, px, py);
+    assert_int_equal(cbx_settings_tab_selected(st), CBX_ST_SET_OPACITY);
+    assert_int_equal(cbx_settings_tab_mode(st), CBX_ST_MODE_EDIT);
+
+    double initial = cbx_settings_tab_settings(st)->overlay_opacity;
+
+    /* Adjust down. */
+    send_key_dn(mgr, SDLK_DOWN);
+    assert_float_equal(cbx_settings_tab_settings(st)->overlay_opacity,
+                       initial - 0.05, 0.001);
+
+    /* Confirm. */
+    send_key_press(mgr, SDLK_a);
+
+    /* Save via pointer. */
+    int cx, cy;
+    widget_center(&st->save_btn.base, &cx, &cy);
+    send_mouse_click(mgr, cx, cy);
+
+    char path[4096 + 128];
+    settings_yaml_path(f, path, sizeof(path));
+    assert_int_equal(access(path, F_OK), 0);
+
+    cbx_settings loaded;
+    cbx_settings_load(&loaded);
+    assert_float_equal(loaded.overlay_opacity, initial - 0.05, 0.001);
+}
+
+/* ST-03 controller path: edit VC count, confirm, save, verify persisted. */
+static void
+test_settings_vc_count_controller_path(void **state)
+{
+    mi_fixture *f = *state;
+    cbx_manager *mgr = &f->mgr;
+    cbx_settings_tab *st = cbx_manager_settings_tab(mgr);
+
+    switch_to_settings(mgr);
+    send_key_dn(mgr, SDLK_DOWN);  /* -> list */
+
+    /* Navigate to VC count (index 3). */
+    for (int i = 0; i < 3; i++)
+        send_key_dn(mgr, SDLK_DOWN);
+    assert_int_equal(cbx_list_get_selected(&st->settings_list), CBX_ST_SET_VC_COUNT);
+
+    int initial = cbx_settings_tab_settings(st)->virtual_controllers.count;
+
+    send_key_press(mgr, SDLK_a);  /* enter edit */
+    send_key_dn(mgr, SDLK_UP);    /* count+1 */
+    assert_int_equal(cbx_settings_tab_settings(st)->virtual_controllers.count,
+                     initial + 1);
+    send_key_press(mgr, SDLK_a);  /* confirm */
+
+    /* Save. */
+    for (int i = 0; i < 10; i++)
+        send_key_dn(mgr, SDLK_DOWN);
+    send_key_dn(mgr, SDLK_DOWN);
+    send_key_press(mgr, SDLK_a);
+
+    char path[4096 + 128];
+    settings_yaml_path(f, path, sizeof(path));
+    assert_int_equal(access(path, F_OK), 0);
+
+    cbx_settings loaded;
+    cbx_settings_load(&loaded);
+    assert_int_equal(loaded.virtual_controllers.count, initial + 1);
+}
+
+/* ST-03 pointer path: edit VC count via mouse. */
+static void
+test_settings_vc_count_pointer_path(void **state)
+{
+    mi_fixture *f = *state;
+    cbx_manager *mgr = &f->mgr;
+    cbx_settings_tab *st = cbx_manager_settings_tab(mgr);
+
+    switch_to_settings(mgr);
+
+    int px = list_center_x(&st->settings_list);
+    int py = list_item_y(&st->settings_list, 3);
+    send_mouse_click(mgr, px, py);
+    assert_int_equal(cbx_settings_tab_selected(st), CBX_ST_SET_VC_COUNT);
+    assert_int_equal(cbx_settings_tab_mode(st), CBX_ST_MODE_EDIT);
+
+    int initial = cbx_settings_tab_settings(st)->virtual_controllers.count;
+
+    send_key_dn(mgr, SDLK_DOWN);  /* count-1 */
+    assert_int_equal(cbx_settings_tab_settings(st)->virtual_controllers.count,
+                     initial - 1);
+    send_key_press(mgr, SDLK_a);  /* confirm */
+
+    int cx, cy;
+    widget_center(&st->save_btn.base, &cx, &cy);
+    send_mouse_click(mgr, cx, cy);
+
+    char path[4096 + 128];
+    settings_yaml_path(f, path, sizeof(path));
+    assert_int_equal(access(path, F_OK), 0);
+
+    cbx_settings loaded;
+    cbx_settings_load(&loaded);
+    assert_int_equal(loaded.virtual_controllers.count, initial - 1);
+}
+
+/* ST-03 controller path: edit VC type slot 0, confirm, save, verify. */
+static void
+test_settings_vc_type_controller_path(void **state)
+{
+    mi_fixture *f = *state;
+    cbx_manager *mgr = &f->mgr;
+    cbx_settings_tab *st = cbx_manager_settings_tab(mgr);
+
+    switch_to_settings(mgr);
+    send_key_dn(mgr, SDLK_DOWN);
+
+    /* Navigate to VC type 0 (index 4). */
+    for (int i = 0; i < 4; i++)
+        send_key_dn(mgr, SDLK_DOWN);
+    assert_int_equal(cbx_list_get_selected(&st->settings_list), CBX_ST_SET_VC_TYPE_0);
+
+    char initial[CBX_MAX_TYPE_LEN];
+    strncpy(initial, cbx_settings_tab_settings(st)->virtual_controllers.types[0],
+            sizeof(initial) - 1);
+    initial[sizeof(initial) - 1] = '\0';
+
+    send_key_press(mgr, SDLK_a);  /* enter edit */
+    send_key_dn(mgr, SDLK_UP);    /* cycle type */
+    assert_string_not_equal(cbx_settings_tab_settings(st)->
+        virtual_controllers.types[0], initial);
+    send_key_press(mgr, SDLK_a);  /* confirm */
+
+    /* Save. */
+    for (int i = 0; i < 10; i++)
+        send_key_dn(mgr, SDLK_DOWN);
+    send_key_dn(mgr, SDLK_DOWN);
+    send_key_press(mgr, SDLK_a);
+
+    char path[4096 + 128];
+    settings_yaml_path(f, path, sizeof(path));
+    assert_int_equal(access(path, F_OK), 0);
+
+    cbx_settings loaded;
+    cbx_settings_load(&loaded);
+    assert_string_not_equal(loaded.virtual_controllers.types[0], initial);
+}
+
+/* ST-03 pointer path: edit VC type slot 0 via mouse. */
+static void
+test_settings_vc_type_pointer_path(void **state)
+{
+    mi_fixture *f = *state;
+    cbx_manager *mgr = &f->mgr;
+    cbx_settings_tab *st = cbx_manager_settings_tab(mgr);
+
+    switch_to_settings(mgr);
+
+    int px = list_center_x(&st->settings_list);
+    int py = list_item_y(&st->settings_list, 4);
+    send_mouse_click(mgr, px, py);
+    assert_int_equal(cbx_settings_tab_selected(st), CBX_ST_SET_VC_TYPE_0);
+    assert_int_equal(cbx_settings_tab_mode(st), CBX_ST_MODE_EDIT);
+
+    char initial[CBX_MAX_TYPE_LEN];
+    strncpy(initial, cbx_settings_tab_settings(st)->virtual_controllers.types[0],
+            sizeof(initial) - 1);
+    initial[sizeof(initial) - 1] = '\0';
+
+    send_key_dn(mgr, SDLK_DOWN);  /* cycle type backward */
+    assert_string_not_equal(cbx_settings_tab_settings(st)->
+        virtual_controllers.types[0], initial);
+    send_key_press(mgr, SDLK_a);  /* confirm */
+
+    int cx, cy;
+    widget_center(&st->save_btn.base, &cx, &cy);
+    send_mouse_click(mgr, cx, cy);
+
+    char path[4096 + 128];
+    settings_yaml_path(f, path, sizeof(path));
+    assert_int_equal(access(path, F_OK), 0);
+
+    cbx_settings loaded;
+    cbx_settings_load(&loaded);
+    assert_string_not_equal(loaded.virtual_controllers.types[0], initial);
+}
+
+/* ST-04 controller path: edit trigger combo, confirm, save, verify. */
+static void
+test_settings_trigger_controller_path(void **state)
+{
+    mi_fixture *f = *state;
+    cbx_manager *mgr = &f->mgr;
+    cbx_settings_tab *st = cbx_manager_settings_tab(mgr);
+
+    switch_to_settings(mgr);
+    send_key_dn(mgr, SDLK_DOWN);
+
+    /* Navigate to trigger (index 8). */
+    for (int i = 0; i < 8; i++)
+        send_key_dn(mgr, SDLK_DOWN);
+    assert_int_equal(cbx_list_get_selected(&st->settings_list), CBX_ST_SET_TRIGGER);
+
+    char initial[CBX_MAX_STR_LEN];
+    strncpy(initial, cbx_settings_tab_settings(st)->overlay_trigger,
+            sizeof(initial) - 1);
+    initial[sizeof(initial) - 1] = '\0';
+
+    send_key_press(mgr, SDLK_a);  /* enter edit */
+    send_key_dn(mgr, SDLK_UP);    /* cycle trigger */
+    assert_string_not_equal(cbx_settings_tab_settings(st)->overlay_trigger,
+                            initial);
+    send_key_press(mgr, SDLK_a);  /* confirm */
+
+    /* Save. */
+    for (int i = 0; i < 10; i++)
+        send_key_dn(mgr, SDLK_DOWN);
+    send_key_dn(mgr, SDLK_DOWN);
+    send_key_press(mgr, SDLK_a);
+
+    char path[4096 + 128];
+    settings_yaml_path(f, path, sizeof(path));
+    assert_int_equal(access(path, F_OK), 0);
+
+    cbx_settings loaded;
+    cbx_settings_load(&loaded);
+    assert_string_not_equal(loaded.overlay_trigger, initial);
+}
+
+/* ST-04 pointer path: edit trigger combo via mouse. */
+static void
+test_settings_trigger_pointer_path(void **state)
+{
+    mi_fixture *f = *state;
+    cbx_manager *mgr = &f->mgr;
+    cbx_settings_tab *st = cbx_manager_settings_tab(mgr);
+
+    switch_to_settings(mgr);
+
+    int px = list_center_x(&st->settings_list);
+    int py = list_item_y(&st->settings_list, 8);
+    send_mouse_click(mgr, px, py);
+    assert_int_equal(cbx_settings_tab_selected(st), CBX_ST_SET_TRIGGER);
+    assert_int_equal(cbx_settings_tab_mode(st), CBX_ST_MODE_EDIT);
+
+    char initial[CBX_MAX_STR_LEN];
+    strncpy(initial, cbx_settings_tab_settings(st)->overlay_trigger,
+            sizeof(initial) - 1);
+    initial[sizeof(initial) - 1] = '\0';
+
+    send_key_dn(mgr, SDLK_DOWN);  /* cycle backward */
+    assert_string_not_equal(cbx_settings_tab_settings(st)->overlay_trigger,
+                            initial);
+    send_key_press(mgr, SDLK_a);  /* confirm */
+
+    int cx, cy;
+    widget_center(&st->save_btn.base, &cx, &cy);
+    send_mouse_click(mgr, cx, cy);
+
+    char path[4096 + 128];
+    settings_yaml_path(f, path, sizeof(path));
+    assert_int_equal(access(path, F_OK), 0);
+
+    cbx_settings loaded;
+    cbx_settings_load(&loaded);
+    assert_string_not_equal(loaded.overlay_trigger, initial);
+}
+
+/* ST-05 controller path: edit icon override, confirm, save, verify
+ * override is persisted and applied through icon lookup path. */
+static void
+test_settings_icon_override_controller_path(void **state)
+{
+    mi_fixture *f = *state;
+    cbx_manager *mgr = &f->mgr;
+    cbx_settings_tab *st = cbx_manager_settings_tab(mgr);
+
+    switch_to_settings(mgr);
+    send_key_dn(mgr, SDLK_DOWN);
+
+    /* Navigate to icon override (index 9). */
+    for (int i = 0; i < 9; i++)
+        send_key_dn(mgr, SDLK_DOWN);
+    assert_int_equal(cbx_list_get_selected(&st->settings_list), CBX_ST_SET_ICON_OVERRIDE);
+
+    /* Initially no overrides. */
+    assert_int_equal(cbx_settings_tab_settings(st)->icon_override_count, 0);
+
+    send_key_press(mgr, SDLK_a);  /* enter edit */
+    assert_int_equal(cbx_settings_tab_mode(st), CBX_ST_MODE_EDIT);
+
+    /* Cycle to first preset override (ds5 -> cc-xbox-360). */
+    send_key_dn(mgr, SDLK_UP);
+    assert_int_equal(cbx_settings_tab_settings(st)->icon_override_count, 1);
+    assert_string_equal(cbx_settings_icon_override(
+        cbx_settings_tab_settings(st), "ds5"), "cc-xbox-360");
+
+    /* Confirm. */
+    send_key_press(mgr, SDLK_a);
+    assert_int_equal(cbx_settings_tab_mode(st), CBX_ST_MODE_LIST);
+
+    /* Save. */
+    for (int i = 0; i < 10; i++)
+        send_key_dn(mgr, SDLK_DOWN);
+    send_key_dn(mgr, SDLK_DOWN);
+    send_key_press(mgr, SDLK_a);
+
+    char path[4096 + 128];
+    settings_yaml_path(f, path, sizeof(path));
+    assert_int_equal(access(path, F_OK), 0);
+
+    /* Verify override persisted and applied through icon lookup path. */
+    cbx_settings loaded;
+    cbx_settings_load(&loaded);
+    assert_int_equal(loaded.icon_override_count, 1);
+    assert_string_equal(cbx_settings_icon_override(&loaded, "ds5"),
+                         "cc-xbox-360");
+
+    /* The override is resolved through cbx_settings_icon_override,
+     * which the grid render path passes to cbx_icon_lookup. */
+    const char *ovr = cbx_settings_icon_override(&loaded, "ds5");
+    assert_non_null(ovr);
+    assert_string_equal(ovr, "cc-xbox-360");
+}
+
+/* ST-05 pointer path: edit icon override via mouse. */
+static void
+test_settings_icon_override_pointer_path(void **state)
+{
+    mi_fixture *f = *state;
+    cbx_manager *mgr = &f->mgr;
+    cbx_settings_tab *st = cbx_manager_settings_tab(mgr);
+
+    switch_to_settings(mgr);
+
+    int px = list_center_x(&st->settings_list);
+    int py = list_item_y(&st->settings_list, 9);
+    send_mouse_click(mgr, px, py);
+    assert_int_equal(cbx_settings_tab_selected(st), CBX_ST_SET_ICON_OVERRIDE);
+    assert_int_equal(cbx_settings_tab_mode(st), CBX_ST_MODE_EDIT);
+
+    /* Cycle to second preset (xb360 -> cc-ps5). */
+    send_key_dn(mgr, SDLK_UP);
+    send_key_dn(mgr, SDLK_UP);
+    assert_int_equal(cbx_settings_tab_settings(st)->icon_override_count, 1);
+    assert_string_equal(cbx_settings_icon_override(
+        cbx_settings_tab_settings(st), "xb360"), "cc-ps5");
+
+    /* Confirm. */
+    send_key_press(mgr, SDLK_a);
+
+    /* Save. */
+    int cx, cy;
+    widget_center(&st->save_btn.base, &cx, &cy);
+    send_mouse_click(mgr, cx, cy);
+
+    char path[4096 + 128];
+    settings_yaml_path(f, path, sizeof(path));
+    assert_int_equal(access(path, F_OK), 0);
+
+    cbx_settings loaded;
+    cbx_settings_load(&loaded);
+    assert_int_equal(loaded.icon_override_count, 1);
+    assert_string_equal(cbx_settings_icon_override(&loaded, "xb360"),
+                         "cc-ps5");
 }
 
 /* ------------------------------------------------------------------ */
@@ -1273,6 +1705,36 @@ main(void)
         cmocka_unit_test_setup_teardown(
             test_settings_save_pointer_path,
             mi_setup, mi_teardown),
+
+        /* Task 4: ST-02 — Overlay opacity interaction (controller + pointer) */
+        cmocka_unit_test_setup_teardown(
+            test_settings_opacity_controller_path, mi_setup, mi_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_settings_opacity_pointer_path, mi_setup, mi_teardown),
+
+        /* Task 4: ST-03 — VC count interaction (controller + pointer) */
+        cmocka_unit_test_setup_teardown(
+            test_settings_vc_count_controller_path, mi_setup, mi_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_settings_vc_count_pointer_path, mi_setup, mi_teardown),
+
+        /* Task 4: ST-03 — VC type interaction (controller + pointer) */
+        cmocka_unit_test_setup_teardown(
+            test_settings_vc_type_controller_path, mi_setup, mi_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_settings_vc_type_pointer_path, mi_setup, mi_teardown),
+
+        /* Task 4: ST-04 — Trigger combo interaction (controller + pointer) */
+        cmocka_unit_test_setup_teardown(
+            test_settings_trigger_controller_path, mi_setup, mi_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_settings_trigger_pointer_path, mi_setup, mi_teardown),
+
+        /* Task 4: ST-05 — Icon override interaction (controller + pointer) */
+        cmocka_unit_test_setup_teardown(
+            test_settings_icon_override_controller_path, mi_setup, mi_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_settings_icon_override_pointer_path, mi_setup, mi_teardown),
 
         /* Disabled / degraded scenarios */
         cmocka_unit_test(test_d01_inputplumber_unavailable),

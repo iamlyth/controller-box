@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "icons/icon_lookup.h"
+#include "config/config_settings.h"  /* cbx_settings_icon_override */
 #include "identify/assign.h"  /* CBX_DEFAULT_PROFILE, cbx_assign_lookup */
 #include "overlay/conflict.h"  /* cbx_conflict_is_row_conflicted */
 
@@ -478,9 +479,15 @@ cbx_select_grid_render(SDL_Renderer *r,
                 if (dev_type[0] != '\0') {
                     cbx_icon_result icon_res;
                     memset(&icon_res, 0, sizeof(icon_res));
+                    /* Check for settings-level icon override (§8.4/§5.5)
+                     * before falling back to the system mapping. */
+                    const char *icon_ovr = NULL;
+                    if (ctx->settings)
+                        icon_ovr = cbx_settings_icon_override(ctx->settings,
+                                                              dev_type);
                     int rc = cbx_icon_lookup(ctx->icon_cache,
                                              ctx->icon_map, dev_type,
-                                             NULL, &icon_res);
+                                             icon_ovr, &icon_res);
                     if (rc == 0 && icon_res.texture) {
                         SDL_Rect dst = {
                             .x = x + CELL_MARGIN + (w - icon_res.width) / 2,

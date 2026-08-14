@@ -121,14 +121,14 @@ Task that closes them. §13-deferred and §10.2-optional members are excluded
 | PE-06 | Profile scope = virtual device capabilities | §5.4 | verified | profile_editor_list.c load_capabilities + begin_target_pick; test_capability_scoped_binding (prod dispatch, target list scoped to keyboard/mouse caps) | — |
 | PE-07 | Deterministic/portable profiles | §5.4 | verified | config_profile.c cbx_profile_load (event-based parser, deterministic); test_profile_save.c test_profile_determinism_load_twice + test_profile_portability_same_result (load twice=identical, round-trip=same state) | — |
 | ST-01 | Launch-at-boot, theme settings (controller+pointer) | §5.5 | verified | `test_settings_toggle_*`, `test_settings_edit_flow_*` | — |
-| ST-02 | Overlay opacity setting | §5.5 | partial | `settings_tab.c` edit_up/down present; no interaction test | Task 4 |
-| ST-03 | Startup virtual controller count + types | §5.5 | partial | VC_COUNT/VC_TYPE_0-3 present; no interaction test | Task 4 |
-| ST-04 | Overlay trigger combo setting | §5.5 | partial | TRIGGER cycle present; no interaction test | Task 4 |
-| ST-05 | Controller icon overrides (§8.4) | §5.5 | missing | only a comment in `settings_tab.c:6`; no enum entry/impl | Task 4 |
+| ST-02 | Overlay opacity setting | §5.5 | verified | `settings_tab.c` edit_up/down; `test_settings_opacity_controller_path` + `_pointer_path` (value changed + persisted) | — |
+| ST-03 | Startup virtual controller count + types | §5.5 | verified | `settings_tab.c` edit_up/down for VC_COUNT + VC_TYPE_0-3; `test_settings_vc_count_*` + `test_settings_vc_type_*` (controller+pointer, value changed + persisted) | — |
+| ST-04 | Overlay trigger combo setting | §5.5 | verified | `settings_tab.c` edit_up/down for TRIGGER; `test_settings_trigger_controller_path` + `_pointer_path` (value changed + persisted) | — |
+| ST-05 | Controller icon overrides (§8.4) | §5.5 | verified | `settings_tab.c` CBX_ST_SET_ICON_OVERRIDE enum + preset cycle + `apply_icon_preset`; `grid_render.c` settings icon override via `cbx_settings_icon_override` -> `cbx_icon_lookup`; `test_settings_icon_override_controller_path` + `_pointer_path` (override set + persisted + applied); `test_edit_icon_override` (unit) | — |
 | MV-01 | Visual: render+read all 3 tabs via same prod init path | §5.6 | verified | `test_manager_visual.c` via `cbx_manager_init*` + `fb_read_pixels` | — |
 | MV-02 | Visual: Controllers connected + degraded states, frames differ | §5.6 | verified | `test_controllers_tab_degraded/connected/connected_vs_degraded` | — |
 | MV-03 | Visual: Profiles Default + create/edit/delete controls | §5.6 | verified | `test_profiles_tab` (list/create/edit/delete regions) | — |
-| MV-04 | Visual: Settings every setting + current/default value (per-row) | §5.6 | partial | `test_settings_tab` checks list region content, not each setting row | Task 4 |
+| MV-04 | Visual: Settings every setting + current/default value (per-row) | §5.6 | verified | `test_settings_per_setting_visual` (each row non-background) + `test_settings_edit_changes_region` (editing changes region) | — |
 | MV-05 | Visual: editor diagram+list+sequential+validation error+progress | §5.6 | verified | `test_profile_editor_list_mode/sequential_mode/validation_error` | — |
 | MV-06 | Visual: tab/mode switch changes frame | §5.6 | verified | `test_tab_switch_differs` | — |
 | IA-01 | Machine-readable inventory of every interactive control + semantic outcome | §5.7 | partial | `interaction_inventory.c` (58 entries) exists; `test_interaction_inventory.c` validates structure only; not driven as traversal | Task 5 |
@@ -249,14 +249,14 @@ coverage is cited; gaps are assigned to Tasks 5-6.
 |----|---------|-----------------|--------------|------------------|---------------|----------------|
 | M35 | Launch-at-boot toggle | A on row | click row | value toggles | dispatch | verified `test_settings_toggle_*` |
 | M36 | Theme cycle | A→edit→D/A | click | theme value changes | dispatch | verified `test_settings_edit_flow_*` |
-| M37 | Overlay opacity adjust | A→edit→U/D | click | opacity ±0.05 | dispatch | partial (ST-02) → Task 4 |
-| M38 | VC count adjust | A→edit→U/D | click | count changes | dispatch | partial (ST-03) → Task 4 |
-| M39 | VC type per slot cycle | A→edit→D/A | click | type changes | dispatch | partial (ST-03) → Task 4 |
-| M40 | Trigger combo cycle | A→edit→D/A | click | combo changes | dispatch | partial (ST-04) → Task 4 |
-| M41 | Icon override setting | A→edit | click | override applied | dispatch | missing (ST-05) → Task 4 |
+| M37 | Overlay opacity adjust | A→edit→U/D | click | opacity ±0.05 | dispatch | verified `test_settings_opacity_controller_path` + `_pointer_path` |
+| M38 | VC count adjust | A→edit→U/D | click | count changes | dispatch | verified `test_settings_vc_count_controller_path` + `_pointer_path` |
+| M39 | VC type per slot cycle | A→edit→D/A | click | type changes | dispatch | verified `test_settings_vc_type_controller_path` + `_pointer_path` |
+| M40 | Trigger combo cycle | A→edit→D/A | click | combo changes | dispatch | verified `test_settings_trigger_controller_path` + `_pointer_path` |
+| M41 | Icon override setting | A→edit | click | override applied | dispatch | verified `test_settings_icon_override_controller_path` + `_pointer_path` |
 | M42 | Save button | A | click | settings.yaml persisted | dispatch→`settings_save` | verified `test_settings_save_*` |
 | M43 | Settings list navigation | U/D | — | row focus | focus chain | verified |
-| M44 | Per-setting visual region | — | — | each row meaningful non-background | render readback | partial (MV-04) → Task 4 |
+| M44 | Per-setting visual region | — | — | each row meaningful non-background | render readback | verified `test_settings_per_setting_visual` + `test_settings_edit_changes_region` |
 
 ### Manager — cross-cutting (M45-M50)
 
@@ -399,7 +399,7 @@ coverage is cited; gaps are assigned to Tasks 5-6.
   - `src/manager/manager.c` -- SDL_QUIT handled in `handle_event` (not run loop), checks dirty flag, enters CONFIRM_QUIT or exits; checks `quit_after_action` after tab key handling.
 
 ## Task 4: Settings icon override and interaction/visual coverage
-- Status: pending
+- Status: complete
 - Dependencies: none
 - Scope: `src/manager/settings_tab.c`/`settings_tab.h` (icon override setting), `src/icons/icon_lookup.c` (override application), `tests/test_settings.c`, `tests/test_manager_interaction_ctrl.c` (extend), `tests/test_manager_visual.c` (extend).
 - Acceptance criteria:
@@ -413,8 +413,17 @@ coverage is cited; gaps are assigned to Tasks 5-6.
   - Per-setting visual region assertions (§5.6): `test_manager_visual.c`
     asserts meaningful non-background content in each Settings row region
     individually, and that editing a setting changes its region.
-- Verification: `nix-shell --run "ctest --test-dir build-check -R 'test_settings|test_manager_interaction_ctrl|test_manager_visual' --output-on-failure"`; full gate.
+- Verification: `nix-shell --run "ctest --test-dir build-check -R 'test_settings|test_manager_interaction_ctrl|test_manager_visual' --output-on-failure"` -> all passed (17 settings + 40 interaction_ctrl + 11 visual). Full suite: 90/90 passed, 1 pre-existing skip (test_backend_smoke).
 - Documentation impact: README/OPERATIONS Settings tab (icon override, all settings).
+- Evidence:
+  - `src/manager/settings_tab.h` -- added `CBX_ST_SET_ICON_OVERRIDE` enum entry, `icon_preset_idx` field, `CBX_ST_SETTING_COUNT` updated to 10.
+  - `src/manager/settings_tab.c` -- `st_icon_presets[]` array (5 presets: None, ds5->cc-xbox-360, xb360->cc-ps5, deck->cc-xbox-360, gamepad->cc-ps5); `apply_icon_preset()` helper (clears+sets override); `format_setting_label` for icon override; `activate()` enters edit mode and initializes preset idx from current state; `edit_up/edit_down` cycle presets; `confirm_edit` applies.
+  - `src/overlay/grid_render.h` -- added `const cbx_settings *settings` to `cbx_grid_render_ctx`.
+  - `src/overlay/grid_render.c` -- icon lookup checks `cbx_settings_icon_override()` before falling back to system mapping.
+  - `src/app/overlay_service.c` -- render ctx initialized with `.settings = &svc->settings`.
+  - `tests/test_manager_interaction_ctrl.c` -- 10 new tests: `test_settings_opacity_controller_path` + `_pointer_path`, `test_settings_vc_count_*`, `test_settings_vc_type_*`, `test_settings_trigger_*`, `test_settings_icon_override_*` (all through prod dispatch, value changed + persisted + icon override applied through lookup path).
+  - `tests/test_manager_visual.c` -- 2 new tests: `test_settings_per_setting_visual` (each row non-background), `test_settings_edit_changes_region` (editing changes region).
+  - `tests/test_settings_tab.c` -- `test_edit_icon_override` (unit: preset cycle up/down, override set/clear).
 
 ## Task 5: Interaction inventory driven traversal, hover, resize, decorative exclusion
 - Status: pending

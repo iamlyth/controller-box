@@ -27,7 +27,7 @@
 /* ------------------------------------------------------------------ */
 
 #define CBX_ST_LABEL_LEN   256
-#define CBX_ST_SETTING_COUNT 9  /* number of editable setting rows */
+#define CBX_ST_SETTING_COUNT 10 /* number of editable setting rows */
 
 /* ------------------------------------------------------------------ */
 /*  Setting identifiers                                               */
@@ -43,6 +43,7 @@ typedef enum {
     CBX_ST_SET_VC_TYPE_2,        /* slot 2                             */
     CBX_ST_SET_VC_TYPE_3,        /* slot 3                             */
     CBX_ST_SET_TRIGGER,         /* cycle: Select+A, Start+B, L3+R3    */
+    CBX_ST_SET_ICON_OVERRIDE,   /* cycle: preset icon overrides (§8.4) */
     CBX_ST_SET_SAVE,            /* Save button                        */
     CBX_ST_SET_COUNT,
 } cbx_st_setting;
@@ -81,6 +82,7 @@ typedef struct {
     /* --- UI state -------------------------------------------------- */
     cbx_st_mode    mode;
     int            selected;       /* index in settings_list, 0-based */
+    int            icon_preset_idx; /* current preset index for icon override edit */
 } cbx_settings_tab;
 
 /* ------------------------------------------------------------------ */

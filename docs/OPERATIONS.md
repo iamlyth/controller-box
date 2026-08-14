@@ -290,6 +290,14 @@ icon_overrides: []
 | `virtual_controllers.types` | list[string] | `[xb360, xb360, xb360, xb360]` | Per-slot virtual types |
 | `icon_overrides` | list | `[]` | Per-type icon overrides (max 16 entries) |
 
+**Icon overrides (§8.4):** Users can override the system icon mapping for
+specific DeviceTypes via Settings → Icon Override. The settings tab provides
+a cycle UI with preset overrides (e.g., ds5 → cc-xbox-360). The override is
+resolved at render time: `grid_render.c` calls `cbx_settings_icon_override()`
+and passes the result to `cbx_icon_lookup()` as the `icon_override` parameter,
+taking precedence over the system `controller-icons.yaml` mapping. Per-profile
+icon overrides (§8.5 sidecar) take further precedence over settings overrides.
+
 Known controller types: `xb360`, `ds5`, `deck`, `gamepad`, `mouse`, `keyboard`,
 `touchscreen`. The full list is dynamic — the manager populates the type picker
 from InputPlumber's `SupportedTargetDeviceIds` DBus property.
@@ -877,7 +885,7 @@ Renders 9 manager states through `cbx_manager_init()` →
 2. **Controllers tab (connected)** — mock DBus devices, content in all regions
 3. **Connected vs degraded differ** — `fb_frames_differ`
 4. **Profiles tab** — content in profile list + create/edit/delete buttons
-5. **Settings tab** — content in settings list + save button + text pixels
+5. **Settings tab** — content in settings list + save button + text pixels; per-setting row content (MV-04); edit changes region
 6. **Tab switch differs** — `fb_frames_differ` between all 3 tabs
 7. **Profile editor (list mode)** — content in diagram + binding list + title
 8. **Profile editor (sequential mode)** — prompt + progress bar content
@@ -998,7 +1006,7 @@ test or documented process:
 | No manually attached modules | `test_manager_visual` relies on production init path only |
 | Controllers: connected + degraded modes | `test_manager_visual::test_controllers_tab_degraded` + `test_controllers_tab_connected` |
 | Profiles: Default profile + create/edit/delete | `test_manager_visual::test_profiles_tab` |
-| Settings: every setting + current/default value | `test_manager_visual::test_settings_tab` |
+| Settings: every setting + current/default value | `test_manager_visual::test_settings_per_setting_visual` + `test_settings_edit_changes_region` |
 | Profile editor: diagram, binding list, sequential, validation, progress | `test_manager_visual::test_profile_editor_list_mode` + `test_profile_editor_sequential_mode` + `test_profile_editor_validation_error` |
 | Meaningful non-background output in every region | All `test_manager_visual` sub-tests assert `fb_region_has_content` |
 | Tab/mode switching changes captured frame | `test_manager_visual::test_tab_switch_differs` |

@@ -384,6 +384,47 @@ static void test_edit_trigger(void **state)
     cbx_settings_tab_confirm_edit(&f->tab);
 }
 
+/* Edit icon override: cycle through presets. */
+static void test_edit_icon_override(void **state)
+{
+    st_fixture *f = FIX(state);
+    cbx_panel *panel = &f->mgr.panels[CBX_MGR_TAB_SETTINGS];
+    cbx_settings_tab_init(&f->tab, panel, &f->mgr.text_cache,
+                            &f->mgr.theme, f->mgr.font_id);
+
+    /* Initially no overrides. */
+    assert_int_equal(f->tab.settings.icon_override_count, 0);
+
+    f->tab.selected = CBX_ST_SET_ICON_OVERRIDE;
+    cbx_settings_tab_activate(&f->tab);
+    assert_int_equal(cbx_settings_tab_mode(&f->tab), CBX_ST_MODE_EDIT);
+
+    /* Cycle up: None -> ds5 -> cc-xbox-360. */
+    cbx_settings_tab_edit_up(&f->tab);
+    assert_int_equal(f->tab.settings.icon_override_count, 1);
+    assert_string_equal(cbx_settings_icon_override(&f->tab.settings, "ds5"),
+                         "cc-xbox-360");
+
+    /* Cycle up: ds5 -> xb360 -> cc-ps5. */
+    cbx_settings_tab_edit_up(&f->tab);
+    assert_int_equal(f->tab.settings.icon_override_count, 1);
+    assert_string_equal(cbx_settings_icon_override(&f->tab.settings, "xb360"),
+                         "cc-ps5");
+
+    /* Cycle down: back to ds5 -> cc-xbox-360. */
+    cbx_settings_tab_edit_down(&f->tab);
+    assert_string_equal(cbx_settings_icon_override(&f->tab.settings, "ds5"),
+                         "cc-xbox-360");
+
+    /* Cycle down to None: clears overrides. */
+    cbx_settings_tab_edit_down(&f->tab);
+    assert_int_equal(f->tab.settings.icon_override_count, 0);
+
+    /* Confirm edit. */
+    cbx_settings_tab_confirm_edit(&f->tab);
+    assert_int_equal(cbx_settings_tab_mode(&f->tab), CBX_ST_MODE_LIST);
+}
+
 /* --- Cancel edit test --------------------------------------------------- */
 
 /* Cancel edit reverts changes. */
@@ -799,6 +840,8 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_edit_vc_type,
             st_setup, st_teardown),
         cmocka_unit_test_setup_teardown(test_edit_trigger,
+            st_setup, st_teardown),
+        cmocka_unit_test_setup_teardown(test_edit_icon_override,
             st_setup, st_teardown),
         cmocka_unit_test_setup_teardown(test_cancel_edit_reverts,
             st_setup, st_teardown),
