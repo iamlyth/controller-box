@@ -26,7 +26,7 @@
 #include "ui/widget.h"           /* cbx_panel, cbx_list, cbx_button */
 #include "ui/text.h"             /* cbx_text_cache */
 #include "ui/theme.h"            /* cbx_theme */
-#include "config/config_settings.h" /* CBX_MAX_TYPE_LEN */
+#include "config/config_settings.h" /* CBX_MAX_TYPE_LEN, CBX_MAX_CONTROLLERS */
 
 /* ------------------------------------------------------------------ */
 /*  Limits                                                            */
@@ -83,6 +83,9 @@ typedef struct {
     const cbx_theme *theme;
     int             font_id;
 
+    /* --- Topology validation --------------------------------------- */
+    int            expected_target_count;  /* from settings.virtual_controllers.count, 0 = unset */
+
     /* --- UI state --------------------------------------------------- */
     cbx_ct_mode    mode;
     cbx_ct_action  pending_action;
@@ -128,6 +131,15 @@ int cbx_controllers_tab_refresh(cbx_controllers_tab *tab);
 void cbx_controllers_tab_set_available(cbx_controllers_tab *tab,
                                         bool available,
                                         const char *reason);
+
+/*
+ * Set the expected target device count from settings (SPEC §5.2).
+ * Used by refresh to detect orphan-columns: when the actual target
+ * count is less than expected, an error is shown (not silent success).
+ * Pass 0 to disable the check.
+ */
+void cbx_controllers_tab_set_expected_count(cbx_controllers_tab *tab,
+                                              int count);
 
 /*
  * Shut down and free all widget resources.  Safe on a zeroed struct.

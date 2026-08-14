@@ -22,6 +22,8 @@
 #include "dbus/ip_objectmanager.h"
 #include "dbus/ip_device_model.h"
 #include "dbus_mock.h"             /* IP_DBUS_PATH, IP_IFACE_* */
+#include "config/config_settings.h"
+#include "app/overlay_service.h"   /* cbx_reconcile_startup_targets */
 
 static volatile sig_atomic_t service_running = 1;
 static pid_t private_daemon_pid;
@@ -1232,6 +1234,147 @@ test_native_assignment_application(void **state)
     unsetenv("DBUS_SYSTEM_BUS_ADDRESS");
 }
 
+/* --- Task 2 / CT-04: Production-path startup reconciliation via
+ *     cbx_reconcile_startup_targets with a real sd-bus backend. --- */
+
+static void
+test_native_startup_reconciliation_prod_path(void **state)
+{
+    (void)state;
+    char address[512];
+    pid_t daemon_pid = 0;
+    assert_int_equal(start_private_bus(address, sizeof(address),
+                                        &daemon_pid), 0);
+    private_daemon_pid = daemon_pid;
+    setenv("DBUS_SYSTEM_BUS_ADDRESS", address, 1);
+
+    /* Reset server state and start full server. */
+    g_target_count = 0;
+    g_attached_count = 0;
+    memset(g_attached_targets, 0, sizeof(g_attached_targets));
+    memset(g_attached_counts, 0, sizeof(g_attached_counts));
+    service_running = 1;
+    pid_t server_pid = fork();
+    assert_true(server_pid >= 0);
+    if (server_pid == 0)
+        _exit(run_service_full(address));
+    private_server_pid = server_pid;
+
+    /* Connect via the production sd-bus backend. */
+    const ip_dbus_backend *backend = ip_dbus_sd_backend();
+    ip_bus_handle bus = NULL;
+    assert_int_equal(backend->connect(&bus), 0);
+
+    /* Wait for the server to come up. */
+    char *version = NULL;
+    int rc = -1;
+    for (int i = 0; i < 100 && rc != 0; i++) {
+        free(version); version = NULL;
+        rc = backend->get_property(bus, IP_DBUS_NAME,
+            IP_DBUS_MANAGER_PATH, IP_IFACE_MANAGER, "Version", &version);
+        if (rc != 0) usleep(10000);
+    }
+    assert_int_equal(rc, 0);
+    free(version);
+
+    /* --- Scenario 1: Reconcile from empty to 3 targets (grow + attach) ---
+     * Build a minimal overlay service context with settings for 3 VCs:
+     *   xb360, ds5, gamepad.
+     * Call cbx_reconcile_startup_targets and verify it creates 3 targets
+     * of the correct types, all attached to the composite. */
+    cbx_overlay_service_ctx svc;
+    memset(&svc, 0, sizeof(svc));
+    svc.conn.backend = backend;
+    svc.conn.bus = bus;
+    cbx_device_model_init(&svc.model);
+    cbx_settings_defaults(&svc.settings);
+    svc.settings.virtual_controllers.count = 3;
+    snprintf(svc.settings.virtual_controllers.types[0],
+             sizeof(svc.settings.virtual_controllers.types[0]), "xb360");
+    snprintf(svc.settings.virtual_controllers.types[1],
+             sizeof(svc.settings.virtual_controllers.types[1]), "ds5");
+    snprintf(svc.settings.virtual_controllers.types[2],
+             sizeof(svc.settings.virtual_controllers.types[2]), "gamepad");
+
+    /* Enumerate initial state (0 targets, 1 composite). */
+    assert_int_equal(cbx_objectmanager_enumerate(backend, bus,
+                                                   &svc.model), 0);
+    assert_int_equal(svc.model.target_count, 0);
+    assert_int_equal(svc.model.composite_count, 1);
+
+    /* Run reconciliation. */
+    rc = cbx_reconcile_startup_targets(&svc);
+    assert_int_equal(rc, 0);
+
+    /* Verify 3 targets created with correct types. */
+    assert_int_equal(svc.model.target_count, 3);
+    char *dt0 = NULL, *dt1 = NULL, *dt2 = NULL;
+    assert_int_equal(ip_target_get_device_type(backend, bus,
+        svc.model.targets[0].path, &dt0), 0);
+    assert_string_equal(dt0, "xb360"); free(dt0);
+    assert_int_equal(ip_target_get_device_type(backend, bus,
+        svc.model.targets[1].path, &dt1), 0);
+    assert_string_equal(dt1, "ds5"); free(dt1);
+    assert_int_equal(ip_target_get_device_type(backend, bus,
+        svc.model.targets[2].path, &dt2), 0);
+    assert_string_equal(dt2, "gamepad"); free(dt2);
+
+    /* Verify target[0] is attached to CompositeDevice0 (routable).
+     * The reconcile attaches target[i] → composite[i]; with only 1
+     * composite, only the first target is attached. */
+    const char *comp0 = "/org/shadowblip/InputPlumber/CompositeDevice0";
+    char *td = NULL;
+    assert_int_equal(ip_composite_get_target_devices(
+        backend, bus, comp0, &td), 0);
+    assert_non_null(td);
+    assert_true(strstr(td, svc.model.targets[0].path) != NULL);
+    free(td);
+
+    /* --- Scenario 2: Shrink — change settings to 1 VC, reconcile --- */
+    svc.settings.virtual_controllers.count = 1;
+    rc = cbx_reconcile_startup_targets(&svc);
+    assert_int_equal(rc, 0);
+    assert_int_equal(svc.model.target_count, 1);
+    char *dt_remain = NULL;
+    assert_int_equal(ip_target_get_device_type(backend, bus,
+        svc.model.targets[0].path, &dt_remain), 0);
+    assert_string_equal(dt_remain, "xb360"); free(dt_remain);
+
+    /* --- Scenario 3: Type correction — change slot 0 to ds5, reconcile --- */
+    svc.settings.virtual_controllers.count = 1;
+    snprintf(svc.settings.virtual_controllers.types[0],
+             sizeof(svc.settings.virtual_controllers.types[0]), "ds5");
+    rc = cbx_reconcile_startup_targets(&svc);
+    assert_int_equal(rc, 0);
+    assert_int_equal(svc.model.target_count, 1);
+    char *dt_corrected = NULL;
+    assert_int_equal(ip_target_get_device_type(backend, bus,
+        svc.model.targets[0].path, &dt_corrected), 0);
+    assert_string_equal(dt_corrected, "ds5"); free(dt_corrected);
+
+    /* Verify routability after type correction. */
+    char *td2 = NULL;
+    assert_int_equal(ip_composite_get_target_devices(
+        backend, bus, comp0, &td2), 0);
+    assert_non_null(td2);
+    assert_true(strstr(td2, svc.model.targets[0].path) != NULL);
+    free(td2);
+
+    /* Clean up remaining targets. */
+    for (int i = svc.model.target_count - 1; i >= 0; i--)
+        ip_manager_stop_target_device(backend, bus,
+            svc.model.targets[i].path);
+
+    backend->disconnect(bus);
+    kill(server_pid, SIGTERM);
+    waitpid(server_pid, NULL, 0);
+    private_server_pid = 0;
+    kill(daemon_pid, SIGTERM);
+    waitpid(daemon_pid, NULL, 0);
+    private_daemon_pid = 0;
+    unsetenv("DBUS_SYSTEM_BUS_ADDRESS");
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -1245,6 +1388,9 @@ int main(void)
                                   cleanup_processes),
         cmocka_unit_test_teardown(test_native_assignment_application,
                                   cleanup_processes),
+        cmocka_unit_test_teardown(
+            test_native_startup_reconciliation_prod_path,
+            cleanup_processes),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

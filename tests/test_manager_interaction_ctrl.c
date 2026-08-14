@@ -23,6 +23,7 @@
 #include "manager/controllers_tab.h"
 #include "manager/settings_tab.h"
 #include "config/config_settings.h"
+#include "config/config_assignments.h"
 #include "ui/widget.h"
 #include "dbus_mock.h"
 #include "interaction_inventory.h"
@@ -400,6 +401,11 @@ test_ctrl_add_confirm_controller_path(void **state)
                            "DeviceType", "xb360");
     ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_TARGET,
                            "DeviceType", "ds5");
+    /* CT-05: TargetDevices check + AttachTargetDevice. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                           "TargetDevices", "");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                           "AttachTargetDevice", NULL);
 
     int before = cbx_controllers_tab_device_count(ct);
 
@@ -438,6 +444,11 @@ test_ctrl_add_confirm_pointer_path(void **state)
                            "DeviceType", "xb360");
     ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_TARGET,
                            "DeviceType", "ds5");
+    /* CT-05: TargetDevices check + AttachTargetDevice. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                           "TargetDevices", "");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                           "AttachTargetDevice", NULL);
 
     int before = cbx_controllers_tab_device_count(ct);
 
@@ -508,6 +519,104 @@ test_ctrl_remove_pointer_path(void **state)
     send_mouse_click(mgr, cx, cy);
 
     assert_int_equal(cbx_controllers_tab_device_count(ct), 0);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Task 2: CT-02 — Auto-Unassign via production dispatch (M03)      */
+/* ------------------------------------------------------------------ */
+
+/* Helper: write an assignments.yaml with a controller assigned to slot 0. */
+static void
+mi_write_assignment(const char *home, int slot)
+{
+    char config_dir[8192];
+    snprintf(config_dir, sizeof(config_dir), "%s/.config", home);
+    mkdir(config_dir, 0700);
+    snprintf(config_dir, sizeof(config_dir), "%s/.config/controller-box",
+             home);
+    mkdir(config_dir, 0700);
+    char path[16384];
+    snprintf(path, sizeof(path), "%s/assignments.yaml", config_dir);
+    FILE *fp = fopen(path, "w");
+    assert_non_null(fp);
+    fprintf(fp, "assignments:\n");
+    fprintf(fp, "  - id: \"USB:testctrl01\"\n    slot: %d\n    profile: \"test\"\n", slot);
+    fprintf(fp, "gamepad_order:\n  - \"USB:testctrl01\"\n");
+    fclose(fp);
+}
+
+/* Helper: check if an assignment exists for the given id.
+ * Returns the slot, or -1 if not found (unassigned). */
+static int
+mi_find_assignment(const char *id)
+{
+    cbx_assignments a;
+    cbx_assignments_init(&a);
+    if (cbx_assignments_load(&a) != 0)
+        return -2;
+    for (int i = 0; i < a.assignment_count; i++) {
+        if (strcmp(a.assignments[i].id, id) == 0)
+            return a.assignments[i].slot;
+    }
+    return -1;
+}
+
+/* CT-02: Removing a slot via production dispatch (manager path) auto-
+ * unassigns the physical controller in that slot.  The assignment
+ * entry is removed from assignments.yaml. */
+static void
+test_ctrl_remove_auto_unassign_controller_path(void **state)
+{
+    mi_fixture *f = *state;
+    cbx_manager *mgr = &f->mgr;
+    cbx_controllers_tab *ct = cbx_manager_controllers_tab(mgr);
+
+    /* Write an assignment mapping a controller to slot 0. */
+    mi_write_assignment(f->tmp_home, 0);
+    assert_int_equal(mi_find_assignment("USB:testctrl01"), 0);
+
+    /* Expect StopTargetDevice + refresh (empty). */
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                           "StopTargetDevice", NULL);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_OBJECT_MANAGER,
+                           "GetManagedObjects", FIXTURE_EMPTY);
+
+    /* Navigate to Remove and press A via production dispatch. */
+    nav_to_buttons(mgr);
+    nav_to_button(mgr, 1);  /* Remove */
+    send_key_press(mgr, SDLK_a);
+
+    /* Verify target disappeared. */
+    assert_int_equal(cbx_controllers_tab_device_count(ct), 0);
+
+    /* Verify physical controller auto-Unassigned. */
+    assert_int_equal(mi_find_assignment("USB:testctrl01"), -1);
+}
+
+/* CT-03: Orphan columns error visible through production dispatch.
+ * When expected_target_count is set by the manager (from settings) and
+ * actual targets are fewer, the status label shows the error. */
+static void
+test_ctrl_orphan_columns_visible_controller_path(void **state)
+{
+    mi_fixture *f = *state;
+    cbx_manager *mgr = &f->mgr;
+    cbx_controllers_tab *ct = cbx_manager_controllers_tab(mgr);
+
+    /* The manager sets expected_target_count from settings during init.
+     * Default settings have VC count=4, but only 1 target exists. */
+    assert_int_equal(ct->expected_target_count, 4);
+    assert_int_equal(cbx_controllers_tab_device_count(ct), 1);
+
+    /* The status label should show the orphan-columns error because
+     * the manager wired expected_target_count from settings during init
+     * and the refresh after init detected the mismatch. */
+    assert_true(cbx_widget_is_visible(&ct->status_lbl.base));
+    const char *text = ct->status_lbl.text;
+    assert_non_null(text);
+    assert_true(strstr(text, "Topology incomplete") != NULL);
+    assert_true(strstr(text, "1 of 4") != NULL);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1097,6 +1206,16 @@ main(void)
             test_ctrl_remove_controller_path, mi_setup, mi_teardown),
         cmocka_unit_test_setup_teardown(
             test_ctrl_remove_pointer_path, mi_setup, mi_teardown),
+
+        /* Task 2: CT-02 — Auto-Unassign via production dispatch. */
+        cmocka_unit_test_setup_teardown(
+            test_ctrl_remove_auto_unassign_controller_path,
+            mi_setup, mi_teardown),
+
+        /* Task 2: CT-03 — Orphan columns visible via production dispatch. */
+        cmocka_unit_test_setup_teardown(
+            test_ctrl_orphan_columns_visible_controller_path,
+            mi_setup, mi_teardown),
 
         /* Controllers tab — Change Type (M07) + confirm (M08) */
         cmocka_unit_test_setup_teardown(

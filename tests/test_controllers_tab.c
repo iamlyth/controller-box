@@ -23,6 +23,9 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
 #include <errno.h>
+#include <stdio.h>
+#include <sys/stat.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -34,6 +37,7 @@
 #include "dbus/ip_target.h"
 #include "dbus/ip_composite.h"
 #include "dbus/ip_connection.h"
+#include "config/config_assignments.h"
 #include "ui/widget.h"
 
 #ifndef CBX_FONT_PATH
@@ -392,6 +396,11 @@ test_add_success(void **state)
                             "/org/shadowblip/InputPlumber/devices/target/gamepad1");
     /* Refresh after add: enumerate + type queries. */
     expect_refresh(&f->mock, FIXTURE_2C2T, "xb360", "ds5");
+    /* CT-05: TargetDevices check for routability + AttachTargetDevice. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                            "TargetDevices", "");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "AttachTargetDevice", NULL);
 
     int rc = cbx_controllers_tab_add(&f->tab, "ds5");
     assert_int_equal(rc, 0);
@@ -725,6 +734,11 @@ test_type_picker_confirm_add(void **state)
                             "CreateTargetDevice",
                             "/org/shadowblip/InputPlumber/devices/target/gamepad1");
     expect_refresh(&f->mock, FIXTURE_2C2T, "xb360", "ds5");
+    /* CT-05: TargetDevices check + AttachTargetDevice. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                            "TargetDevices", "");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "AttachTargetDevice", NULL);
 
     int rc = cbx_controllers_tab_confirm_type_pick(&f->tab);
     assert_int_equal(rc, 0);
@@ -865,6 +879,11 @@ test_full_workflow(void **state)
                             "CreateTargetDevice",
                             "/org/shadowblip/InputPlumber/devices/target/gamepad0");
     expect_refresh(&f->mock, FIXTURE_1C1T, "xb360", NULL);
+    /* CT-05: TargetDevices check + AttachTargetDevice. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                            "TargetDevices", "");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "AttachTargetDevice", NULL);
 
     int rc = cbx_controllers_tab_add(&f->tab, "xb360");
     assert_int_equal(rc, 0);
@@ -1037,6 +1056,356 @@ test_type_pick_confirm_via_dispatch(void **state)
 }
 
 /* ================================================================== */
+/*  Task 2: CT-02 — Auto-Unassign on remove                            */
+/* ================================================================== */
+
+/* Fixture for auto-Unassign tests: sets up an isolated HOME with a
+ * pre-written assignments.yaml so we can verify the remove path
+ * updates the assignment file. */
+typedef struct {
+    ip_dbus_mock          mock;
+    const ip_dbus_backend *backend;
+    cbx_manager           mgr;
+    cbx_controllers_tab  tab;
+    char                  tmp_home[4096];
+} ct_unassign_fixture;
+
+static int
+unassign_setup(void **state)
+{
+    ct_unassign_fixture *f = malloc(sizeof(*f));
+    if (!f)
+        return -1;
+    memset(f, 0, sizeof(*f));
+    ensure_dummy_driver();
+
+    /* Isolated HOME. */
+    snprintf(f->tmp_home, sizeof(f->tmp_home),
+             "/tmp/cbx_ct_unassign_%d", (int)getpid());
+    char cmd[8192];
+    snprintf(cmd, sizeof(cmd), "rm -rf '%s'", f->tmp_home);
+    int r0 = system(cmd); (void)r0;
+    mkdir(f->tmp_home, 0700);
+    setenv("HOME", f->tmp_home, 1);
+    unsetenv("XDG_CONFIG_HOME");
+    unsetenv("XDG_DATA_HOME");
+
+    ip_dbus_mock_init(&f->mock);
+    f->backend = ip_dbus_mock_backend(&f->mock);
+
+    int rc = cbx_manager_init(&f->mgr, NULL);
+    if (rc != 0) {
+        ip_dbus_mock_free(&f->mock);
+        free(f);
+        return -1;
+    }
+    cbx_controllers_tab_shutdown(cbx_manager_controllers_tab(&f->mgr));
+    *state = f;
+    return 0;
+}
+
+static int
+unassign_teardown(void **state)
+{
+    ct_unassign_fixture *f = *state;
+    if (f) {
+        cbx_controllers_tab_shutdown(&f->tab);
+        cbx_manager_shutdown(&f->mgr);
+        ip_dbus_mock_free(&f->mock);
+        char cmd[8192];
+        snprintf(cmd, sizeof(cmd), "rm -rf '%s'", f->tmp_home);
+        int r = system(cmd); (void)r;
+        unsetenv("HOME");
+        unsetenv("XDG_CONFIG_HOME");
+        unsetenv("XDG_DATA_HOME");
+        free(f);
+    }
+    return 0;
+}
+
+/* Helper: write assignments.yaml with one controller assigned to slot 0. */
+static void
+write_test_assignments(int slot, const char *profile)
+{
+    char path[8192];
+    /* Use the same resolution as the production code. */
+    const char *home = getenv("HOME");
+    snprintf(path, sizeof(path), "%s/.config/controller-box/assignments.yaml",
+             home ? home : "/tmp");
+    /* Ensure parent directories exist. */
+    char dir[8192];
+    snprintf(dir, sizeof(dir), "%s/.config", home ? home : "/tmp");
+    mkdir(dir, 0700);
+    snprintf(dir, sizeof(dir), "%s/.config/controller-box",
+             home ? home : "/tmp");
+    mkdir(dir, 0700);
+    FILE *fp = fopen(path, "w");
+    assert_non_null(fp);
+    fprintf(fp, "assignments:\n");
+    fprintf(fp, "  - id: \"USB:testserial01\"\n");
+    fprintf(fp, "    slot: %d\n", slot);
+    if (profile && profile[0])
+        fprintf(fp, "    profile: \"%s\"\n", profile);
+    fprintf(fp, "gamepad_order:\n");
+    fprintf(fp, "  - \"USB:testserial01\"\n");
+    fclose(fp);
+}
+
+/* Helper: load assignments and find the slot for a given id.
+ * Returns the slot, or -1 if not found. */
+static int
+find_assignment_slot(const char *id)
+{
+    cbx_assignments a;
+    cbx_assignments_init(&a);
+    if (cbx_assignments_load(&a) != 0)
+        return -2;
+    for (int i = 0; i < a.assignment_count; i++) {
+        if (strcmp(a.assignments[i].id, id) == 0)
+            return a.assignments[i].slot;
+    }
+    return -1; /* not found = unassigned */
+}
+
+/* CT-02: Removing a slot mid-session moves the physical controller in
+ * that slot to Unassigned (assignment entry removed). */
+static void
+test_remove_auto_unassign(void **state)
+{
+    ct_unassign_fixture *f = *state;
+
+    /* Write an assignment mapping a controller to slot 0. */
+    write_test_assignments(0, "test-profile");
+    assert_int_equal(find_assignment_slot("USB:testserial01"), 0);
+
+    /* Init controllers tab with 2 targets. */
+    init_tab_with_devices((ct_fixture *)f, FIXTURE_2C2T, "xb360", "ds5");
+
+    /* Remove slot 0. */
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "StopTargetDevice", NULL);
+    expect_refresh(&f->mock, FIXTURE_AFTER_REMOVE_0, "ds5", NULL);
+
+    int rc = cbx_controllers_tab_remove(&f->tab, 0);
+    assert_int_equal(rc, 0);
+    assert_int_equal(cbx_controllers_tab_device_count(&f->tab), 1);
+
+    /* Verify the physical controller was auto-Unassigned:
+     * the assignment entry for USB:testserial01 should be gone. */
+    int slot = find_assignment_slot("USB:testserial01");
+    assert_int_equal(slot, -1); /* -1 = not found = Unassigned */
+}
+
+/* CT-02: Removing a slot shifts higher-slot assignments down. */
+static void
+test_remove_shifts_higher_slots(void **state)
+{
+    ct_unassign_fixture *f = *state;
+
+    /* Write two assignments: slot 0 and slot 1. */
+    {
+        const char *home = getenv("HOME");
+        char dir[8192];
+        snprintf(dir, sizeof(dir), "%s/.config", home ? home : "/tmp");
+        mkdir(dir, 0700);
+        snprintf(dir, sizeof(dir), "%s/.config/controller-box",
+                 home ? home : "/tmp");
+        mkdir(dir, 0700);
+        char path[16384];
+        snprintf(path, sizeof(path), "%s/assignments.yaml", dir);
+        FILE *fp = fopen(path, "w");
+        assert_non_null(fp);
+        fprintf(fp, "assignments:\n");
+        fprintf(fp, "  - id: \"USB:ctrlA\"\n    slot: 0\n    profile: \"pa\"\n");
+        fprintf(fp, "  - id: \"USB:ctrlB\"\n    slot: 1\n    profile: \"pb\"\n");
+        fprintf(fp, "gamepad_order:\n  - \"USB:ctrlA\"\n  - \"USB:ctrlB\"\n");
+        fclose(fp);
+    }
+
+    init_tab_with_devices((ct_fixture *)f, FIXTURE_2C2T, "xb360", "ds5");
+
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "StopTargetDevice", NULL);
+    expect_refresh(&f->mock, FIXTURE_AFTER_REMOVE_0, "ds5", NULL);
+
+    int rc = cbx_controllers_tab_remove(&f->tab, 0);
+    assert_int_equal(rc, 0);
+
+    /* ctrlA (was slot 0) should be unassigned (removed). */
+    assert_int_equal(find_assignment_slot("USB:ctrlA"), -1);
+    /* ctrlB (was slot 1) should be shifted to slot 0. */
+    assert_int_equal(find_assignment_slot("USB:ctrlB"), 0);
+}
+
+/* CT-02: Remove with no assignments file should not fail. */
+static void
+test_remove_no_assignments_file(void **state)
+{
+    ct_unassign_fixture *f = *state;
+    init_tab_with_devices((ct_fixture *)f, FIXTURE_1C1T, "xb360", NULL);
+
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "StopTargetDevice", NULL);
+    expect_refresh(&f->mock, FIXTURE_EMPTY, NULL, NULL);
+
+    int rc = cbx_controllers_tab_remove(&f->tab, 0);
+    assert_int_equal(rc, 0);
+}
+
+/* ================================================================== */
+/*  Task 2: CT-03 — Orphan columns error                               */
+/* ================================================================== */
+
+/* CT-03: When expected_target_count is set and actual count is lower,
+ * refresh shows an error in the status label (not silent success). */
+static void
+test_orphan_columns_shows_error(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_2C2T, "xb360", "ds5");
+
+    /* Set expected count to 4 — only 2 targets exist. */
+    cbx_controllers_tab_set_expected_count(&f->tab, 4);
+
+    /* Refresh to trigger the orphan check. */
+    ip_dbus_mock_reset(&f->mock);
+    expect_refresh(&f->mock, FIXTURE_2C2T, "xb360", "ds5");
+
+    int rc = cbx_controllers_tab_refresh(&f->tab);
+    assert_int_equal(rc, 0);
+
+    /* The status label should show the orphan-columns error. */
+    assert_true(cbx_widget_is_visible(&f->tab.status_lbl.base));
+    const char *text = f->tab.status_lbl.text;
+    assert_non_null(text);
+    assert_true(strstr(text, "Topology incomplete") != NULL);
+    assert_true(strstr(text, "2 of 4") != NULL);
+}
+
+/* CT-03: When expected matches actual, no error is shown. */
+static void
+test_orphan_columns_match_no_error(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_2C2T, "xb360", "ds5");
+
+    /* Set expected count to 2 — matches actual. */
+    cbx_controllers_tab_set_expected_count(&f->tab, 2);
+
+    ip_dbus_mock_reset(&f->mock);
+    expect_refresh(&f->mock, FIXTURE_2C2T, "xb360", "ds5");
+
+    int rc = cbx_controllers_tab_refresh(&f->tab);
+    assert_int_equal(rc, 0);
+
+    /* No error should be visible (label text should be empty or hidden). */
+    const char *text = f->tab.status_lbl.text;
+    assert_true(text == NULL || text[0] == '\0' ||
+                !cbx_widget_is_visible(&f->tab.status_lbl.base) ||
+                strstr(text, "Topology incomplete") == NULL);
+}
+
+/* CT-03: When expected_target_count is 0 (unset), no orphan check. */
+static void
+test_orphan_columns_unset_no_error(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+
+    /* expected_target_count defaults to 0 (unset). */
+    assert_int_equal(f->tab.expected_target_count, 0);
+
+    ip_dbus_mock_reset(&f->mock);
+    expect_refresh(&f->mock, FIXTURE_1C1T, "xb360", NULL);
+
+    int rc = cbx_controllers_tab_refresh(&f->tab);
+    assert_int_equal(rc, 0);
+
+    /* No error should be shown. */
+    const char *text = f->tab.status_lbl.text;
+    assert_true(text == NULL || text[0] == '\0' ||
+                strstr(text, "Topology incomplete") == NULL);
+}
+
+/* ================================================================== */
+/*  Task 2: CT-05 — Add routability check                              */
+/* ================================================================== */
+
+/* CT-05: Add verifies the new target is attached/routable to its
+ * composite.  When not yet attached, AttachTargetDevice is called. */
+static void
+test_add_attaches_target_if_not_routable(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "CreateTargetDevice",
+                            "/org/shadowblip/InputPlumber/devices/target/gamepad1");
+    expect_refresh(&f->mock, FIXTURE_2C2T, "xb360", "ds5");
+    /* TargetDevices returns empty (target not attached yet). */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                            "TargetDevices", "");
+    /* AttachTargetDevice should be called. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "AttachTargetDevice", NULL);
+
+    int rc = cbx_controllers_tab_add(&f->tab, "ds5");
+    assert_int_equal(rc, 0);
+    assert_int_equal(cbx_controllers_tab_device_count(&f->tab), 2);
+}
+
+/* CT-05: Add succeeds without calling AttachTargetDevice when target
+ * is already routable (listed in TargetDevices). */
+static void
+test_add_skips_attach_when_already_routable(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "CreateTargetDevice",
+                            "/org/shadowblip/InputPlumber/devices/target/gamepad1");
+    expect_refresh(&f->mock, FIXTURE_2C2T, "xb360", "ds5");
+    /* TargetDevices already includes the new target path. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                            "TargetDevices",
+                            "/org/shadowblip/InputPlumber/devices/target/gamepad1");
+
+    int rc = cbx_controllers_tab_add(&f->tab, "ds5");
+    assert_int_equal(rc, 0);
+    assert_int_equal(cbx_controllers_tab_device_count(&f->tab), 2);
+}
+
+/* CT-05: Add fails when AttachTargetDevice fails. */
+static void
+test_add_fails_when_attach_fails(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "CreateTargetDevice",
+                            "/org/shadowblip/InputPlumber/devices/target/gamepad1");
+    expect_refresh(&f->mock, FIXTURE_2C2T, "xb360", "ds5");
+    /* TargetDevices returns empty (not attached). */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                            "TargetDevices", "");
+    /* AttachTargetDevice fails. */
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_MANAGER,
+                                "AttachTargetDevice", IP_ERR_NO_REPLY);
+
+    int rc = cbx_controllers_tab_add(&f->tab, "ds5");
+    assert_int_equal(rc, IP_ERR_NO_REPLY);
+}
+
+/* ================================================================== */
 /*  Main                                                               */
 /* ================================================================== */
 
@@ -1091,6 +1460,30 @@ main(void)
                                          setup, teardown),
         cmocka_unit_test_setup_teardown(test_remove_error, setup, teardown),
         cmocka_unit_test_setup_teardown(test_remove_bad_index,
+                                         setup, teardown),
+
+        /* Task 2: CT-02 — Auto-Unassign on remove. */
+        cmocka_unit_test_setup_teardown(test_remove_auto_unassign,
+                                         unassign_setup, unassign_teardown),
+        cmocka_unit_test_setup_teardown(test_remove_shifts_higher_slots,
+                                         unassign_setup, unassign_teardown),
+        cmocka_unit_test_setup_teardown(test_remove_no_assignments_file,
+                                         unassign_setup, unassign_teardown),
+
+        /* Task 2: CT-03 — Orphan columns error. */
+        cmocka_unit_test_setup_teardown(test_orphan_columns_shows_error,
+                                         setup, teardown),
+        cmocka_unit_test_setup_teardown(test_orphan_columns_match_no_error,
+                                         setup, teardown),
+        cmocka_unit_test_setup_teardown(test_orphan_columns_unset_no_error,
+                                         setup, teardown),
+
+        /* Task 2: CT-05 — Add routability check. */
+        cmocka_unit_test_setup_teardown(test_add_attaches_target_if_not_routable,
+                                         setup, teardown),
+        cmocka_unit_test_setup_teardown(test_add_skips_attach_when_already_routable,
+                                         setup, teardown),
+        cmocka_unit_test_setup_teardown(test_add_fails_when_attach_fails,
                                          setup, teardown),
 
         /* Change type. */

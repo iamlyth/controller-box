@@ -184,16 +184,26 @@ initialization sequence on startup:
 4. **Settings + assignments** — loads `settings.yaml` and
    `assignments.yaml` from `~/.config/controller-box/` (best-effort;
    defaults are used if files are absent).
-5. **Surface pre-build** — creates a target-texture overlay surface at
+5. **Topology reconciliation** — brings InputPlumber's live target
+   topology in line with `settings.yaml` `virtual_controllers` before
+   assignment is enabled.  Creates, stops, or type-corrects target
+   devices so that the target count and per-slot DeviceType match the
+   configured values.  Each target is then attached to its corresponding
+   composite (`target[i] → composite[i]`) for routability.  On failure,
+   rolls back to the last confirmed topology.  If the target count is
+   lower than configured after reconciliation (e.g., creation failed),
+   the Controllers tab shows a **topology-incomplete** error rather than
+   silent success.
+6. **Surface pre-build** — creates a target-texture overlay surface at
    the configured opacity, builds the selection grid from composites +
    settings + assignments, and pre-renders it. This ensures the overlay
    appears in <10 ms when activated.
-6. **Trigger registration** — registers the overlay trigger combo
+7. **Trigger registration** — registers the overlay trigger combo
    (default `Select+A`) on every composite device via
    `SetInterceptActivation`, then sets `InterceptMode = PASS`.
-7. **Lifecycle init** — initializes the overlay state machine
+8. **Lifecycle init** — initializes the overlay state machine
    (`IDLE → ACTIVATING → VISIBLE → CLOSING → IDLE`).
-8. **Poll loop** — enters the main event loop (10 ms interval). The loop
+9. **Poll loop** — enters the main event loop (10 ms interval). The loop
    polls `InterceptMode` via `ip_intercept_poll` (50 ms SDL timer per
    composite device, DEC-002), processes SDL events for grid navigation,
    and handles `SIGTERM`/`SIGINT` for clean shutdown.
@@ -291,6 +301,20 @@ The `gamepad_order` field is a workaround for DBus gap #2: InputPlumber's
 `Manager.GamepadOrder` property is in-memory only and resets on daemon restart.
 Controller-Box saves the order keyed by `PersistentId` and re-applies it after
 restart.
+
+**Auto-Unassign on slot removal (SPEC §5.2):** When a virtual controller slot
+is removed mid-session via the Manager Controllers tab, the physical controller
+assigned to that slot is automatically Unassigned — its entry is removed from
+`assignments.yaml` and higher-slot assignments shift down to match the new
+target indexing.  This ensures the assignment table never references a slot
+that no longer exists.
+
+**Orphan-columns detection (SPEC §5.2):** If the actual InputPlumber target
+count is lower than the configured `virtual_controllers.count` (e.g., target
+creation failed during reconciliation), the Controllers tab displays a
+**topology-incomplete** error in the status label rather than presenting the
+reduced topology as success.  This alerts the user that some virtual
+controllers are missing.
 
 **Identity ID prefixes:**
 

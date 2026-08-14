@@ -20,6 +20,7 @@
 #include "dbus/ip_composite.h"
 #include "dbus/ip_objectmanager.h"
 #include "dbus/ip_connection.h"   /* ip_connection_reason_for_error */
+#include "config/config_assignments.h"  /* cbx_assignments_load/save for auto-Unassign */
 
 /* ------------------------------------------------------------------ */
 /*  Layout constants                                                  */
@@ -367,6 +368,36 @@ cbx_controllers_tab_set_available(cbx_controllers_tab *tab,
                        reason && reason[0] ? reason : "");
 }
 
+/* Check for orphan columns: when expected_target_count is set and the
+ * actual target count is lower, show an error in the status label. */
+static void
+check_orphan_columns(cbx_controllers_tab *tab)
+{
+    if (!tab || tab->expected_target_count <= 0)
+        return;
+    if (tab->model.target_count < tab->expected_target_count) {
+        char msg[CBX_LABEL_TEXT_LEN];
+        snprintf(msg, sizeof(msg),
+                 "Topology incomplete: %d of %d virtual controllers active",
+                 tab->model.target_count,
+                 tab->expected_target_count);
+        cbx_label_set_text(&tab->status_lbl, msg);
+        cbx_widget_set_visible(&tab->status_lbl.base, true);
+    }
+}
+
+void
+cbx_controllers_tab_set_expected_count(cbx_controllers_tab *tab,
+                                         int count)
+{
+    if (!tab)
+        return;
+    tab->expected_target_count = count;
+    /* Re-check topology immediately in case the tab was already
+     * refreshed during init (before expected count was set). */
+    check_orphan_columns(tab);
+}
+
 int
 cbx_controllers_tab_refresh(cbx_controllers_tab *tab)
 {
@@ -413,6 +444,10 @@ cbx_controllers_tab_refresh(cbx_controllers_tab *tab)
     if (tab->selected_device < 0 && tab->model.target_count > 0)
         tab->selected_device = 0;
     cbx_list_set_selected(&tab->device_list, tab->selected_device);
+
+    /* SPEC §5.2: Columns without InputPlumber targets = error, not
+     * success.  Check after every refresh. */
+    check_orphan_columns(tab);
 
     return 0;
 }
@@ -478,6 +513,30 @@ cbx_controllers_tab_add(cbx_controllers_tab *tab, const char *type)
         found_index < tab->device_type_count &&
         strcmp(tab->device_types[found_index], type) != 0)
         rc = -EIO;
+
+    /* SPEC §5.2 / CT-05: Add succeeds only after the target is confirmed
+     * attached/routable to its corresponding composite.  Check the
+     * composite's TargetDevices property; if the new target is not yet
+     * listed, attach it.  If attachment fails, the add is not confirmed. */
+    if (rc == 0 && found_index >= 0 && out_path &&
+        found_index < tab->model.composite_count) {
+        const char *comp_path = tab->model.composites[found_index].path;
+        char *td_csv = NULL;
+        int td_rc = ip_composite_get_target_devices(tab->backend,
+                                                       tab->bus,
+                                                       comp_path, &td_csv);
+        bool is_attached = false;
+        if (td_rc == 0 && td_csv) {
+            is_attached = (strstr(td_csv, out_path) != NULL);
+            free(td_csv);
+        }
+        if (!is_attached) {
+            int attach_rc = ip_manager_attach_target_device(
+                tab->backend, tab->bus, out_path, comp_path);
+            if (attach_rc != 0)
+                rc = attach_rc;
+        }
+    }
     free(out_path);
     return rc;
 }
@@ -506,6 +565,28 @@ cbx_controllers_tab_remove(cbx_controllers_tab *tab, int device_index)
         if (strcmp(tab->model.targets[i].path, path) == 0)
             return -EIO;
     }
+
+    /* SPEC §5.2 / CT-02: physical controller auto-Unassigned.
+     * Load the persisted assignments, remove any assignment whose slot
+     * matches the removed device (the physical controller in that slot
+     * becomes Unassigned), and shift higher slots down by one to match
+     * the new target indexing.  Save the updated assignments. */
+    cbx_assignments asgn;
+    cbx_assignments_init(&asgn);
+    if (cbx_assignments_load(&asgn) == 0) {
+        for (int i = asgn.assignment_count - 1; i >= 0; i--) {
+            if (asgn.assignments[i].slot == device_index) {
+                /* Remove: physical controller is now Unassigned. */
+                asgn.assignments[i] =
+                    asgn.assignments[--asgn.assignment_count];
+            } else if (asgn.assignments[i].slot > device_index) {
+                /* Shift down to match new target indexing. */
+                asgn.assignments[i].slot--;
+            }
+        }
+        cbx_assignments_save(&asgn);
+    }
+
     return 0;
 }
 

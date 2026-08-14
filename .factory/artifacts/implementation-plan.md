@@ -100,10 +100,10 @@ Task that closes them. §13-deferred and §10.2-optional members are excluded
 | MG-02 | Secondary pointer path on every visible enabled control; same behavior; no mouse-only | §5.1 | verified | paired `_controller_path`/`_pointer_path` in `test_manager_interaction_ctrl.c`+`_prof.c` | — |
 | MG-03 | Decorative labels/diagrams not masquerading as interactive | §5.1 | partial | diagram `interactive` unset, excluded from focus (`manager.c:rebuild_focus`); no negative test | Task 5 |
 | CT-01 | Add via CreateTargetDevice; type via SetTargetDevices; mixed types; failures retain topology + show DBus op | §5.2 | verified | `controllers_tab.c`; `test_manager_interaction_ctrl.c` (add/remove/type-change/failure) | — |
-| CT-02 | Remove mid-session: physical controller auto-Unassigned | §5.2 | missing | no code/test in `controllers_tab.c` | Task 2 |
-| CT-03 | Columns without InputPlumber targets = error, not success | §5.2 | missing | no test for orphan-columns error state | Task 2 |
-| CT-04 | Startup reconciles InputPlumber to configured topology before assignment | §5.2 | partial | `test_native_dbus.c` DBus-level only; no manager prod-path reconciliation | Task 2 |
-| CT-05 | Add succeeds only after ObjectManager exposes attached/routable target | §5.2 | partial | `controllers_tab.c:add()` checks count+type, not routability | Task 2 |
+| CT-02 | Remove mid-session: physical controller auto-Unassigned | §5.2 | verified | `controllers_tab.c:cbx_controllers_tab_remove` loads assignments, removes slot-matching entry, shifts higher slots; `test_controllers_tab.c:test_remove_auto_unassign` + `test_manager_interaction_ctrl.c:test_ctrl_remove_auto_unassign_controller_path` (prod dispatch) | — |
+| CT-03 | Columns without InputPlumber targets = error, not success | §5.2 | verified | `controllers_tab.c:check_orphan_columns` shows error when target_count < expected; `test_controllers_tab.c:test_orphan_columns_shows_error` + `test_manager_interaction_ctrl.c:test_ctrl_orphan_columns_visible_controller_path` (prod dispatch) | — |
+| CT-04 | Startup reconciles InputPlumber to configured topology before assignment | §5.2 | verified | `overlay_service.c:cbx_reconcile_startup_targets` (4-phase: grow/shrink/correct/attach); `test_native_dbus.c:test_native_startup_reconciliation_prod_path` uses real sd-bus + `cbx_reconcile_startup_targets` | — |
+| CT-05 | Add succeeds only after ObjectManager exposes attached/routable target | §5.2 | verified | `controllers_tab.c:cbx_controllers_tab_add` checks TargetDevices on composite, calls AttachTargetDevice if not routable; `test_controllers_tab.c:test_add_attaches_target_if_not_routable` + `test_add_fails_when_attach_fails` | — |
 | CT-06 | Type change replaces only selected slot | §5.2 | verified | `controllers_tab.c:change_type()`; interaction test | — |
 | CT-07 | Controllers native DBus signatures | §5.2,§10.1 | verified | `test_native_dbus.c:test_native_target_operations` (private sd-bus) | — |
 | PR-01 | Default profile built-in, read-only, always-present fallback | §5.3 | verified | `test_manager_interaction_prof.c:mip_setup`; delete blocked for read_only | — |
@@ -322,7 +322,7 @@ coverage is cited; gaps are assigned to Tasks 5-6.
   - `tests/test_overlay_latency.c:331-380` — `test_idle_production_step_no_busy_loop`: `cbx_overlay_service_step` idle p99=0 ms.
 
 ## Task 2: Controllers tab topology reconciliation and auto-Unassign
-- Status: pending
+- Status: complete
 - Dependencies: none
 - Scope: `src/manager/controllers_tab.c`, `src/overlay/dynamic_columns.c` (reconcile hook), `src/app/overlay_service.c` (startup reconcile), `tests/test_controllers_tab.c`, `tests/test_native_dbus.c` (extend), `tests/test_manager_interaction_ctrl.c` (extend).
 - Acceptance criteria:
@@ -343,6 +343,17 @@ coverage is cited; gaps are assigned to Tasks 5-6.
     topology (already verified — keep green).
 - Verification: `nix-shell --run "ctest --test-dir build-check -R 'test_controllers_tab|test_native_dbus|test_manager_interaction_ctrl' --output-on-failure"`; full gate.
 - Documentation impact: `docs/OPERATIONS.md` topology reconciliation; README Controllers tab behavior.
+- Evidence:
+  - `tests/test_controllers_tab.c:test_remove_auto_unassign` — removes slot 0, verifies assignment entry removed (auto-Unassign).
+  - `tests/test_controllers_tab.c:test_remove_shifts_higher_slots` — removes slot 0, verifies slot 1 shifted to slot 0.
+  - `tests/test_controllers_tab.c:test_orphan_columns_shows_error` — expected=4, actual=2, verifies error label visible.
+  - `tests/test_controllers_tab.c:test_add_attaches_target_if_not_routable` — verifies TargetDevices check + AttachTargetDevice called.
+  - `tests/test_controllers_tab.c:test_add_skips_attach_when_already_routable` — verifies no AttachTargetDevice when already attached.
+  - `tests/test_controllers_tab.c:test_add_fails_when_attach_fails` — verifies add fails when AttachTargetDevice fails.
+  - `tests/test_manager_interaction_ctrl.c:test_ctrl_remove_auto_unassign_controller_path` — prod dispatch remove → auto-Unassign verified.
+  - `tests/test_manager_interaction_ctrl.c:test_ctrl_orphan_columns_visible_controller_path` — prod dispatch orphan error visible.
+  - `tests/test_native_dbus.c:test_native_startup_reconciliation_prod_path` — real sd-bus + `cbx_reconcile_startup_targets`: grow (0→3), shrink (3→1), type correction, routability via TargetDevices.
+- Verification: `nix-shell --run "ctest --test-dir build-check -R 'test_controllers_tab|test_native_dbus|test_manager_interaction_ctrl' --output-on-failure"` → all passed. Full suite: 90/90 passed, 1 pre-existing skip (test_backend_smoke).
 
 ## Task 3: Editor unsaved-close prompt, sequential production capture, clone, determinism
 - Status: pending

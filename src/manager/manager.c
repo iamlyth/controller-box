@@ -314,6 +314,12 @@ cbx_manager_init_with_dbus(cbx_manager *mgr, const char *font_path,
         cbx_controllers_tab_set_available(&mgr->ct, false,
             ip_connection_reason_for_error(mgr->dbus_init_rc));
 
+    /* SPEC §5.2: wire expected target count from settings so the
+     * controllers tab can detect orphan-columns (fewer targets than
+     * configured) and show an error state. */
+    cbx_controllers_tab_set_expected_count(&mgr->ct,
+        mgr->settings.virtual_controllers.count);
+
     /* Profiles tab (filesystem-backed; does not auto-refresh). */
     rc = cbx_profiles_tab_init(&mgr->pt, &mgr->panels[1],
                                 &mgr->text_cache, &mgr->theme,
