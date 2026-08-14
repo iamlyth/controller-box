@@ -6,6 +6,8 @@
  * (iface, member) pairs return -ENXIO (no such entry), which tests can
  * assert against.
  */
+#define _POSIX_C_SOURCE 200809L
+
 #include "dbus_mock.h"
 
 #include <errno.h>
