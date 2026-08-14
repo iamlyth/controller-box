@@ -1,25 +1,26 @@
 # Implementation Handoff
 
 ## Outcome
-Task 3 (Editor unsaved-close prompt, sequential production capture, clone, determinism) complete. Tasks 1-3 closed; 7 plan tasks remain.
+Task 4 (Settings icon override and interaction/visual coverage) complete. Tasks 1-4 closed; 6 plan tasks remain.
 
 ## What was done
-- **PR-07 (unsaved-close prompt):** Added `dirty` flag to `cbx_profile_editor` (set on target_pick/capture/seq_on_input, cleared on load_profile). SDL_QUIT moved from `cbx_manager_run` to `cbx_manager_handle_event` — checks dirty flag, enters `CBX_PT_MODE_CONFIRM_QUIT` if dirty (A=save&quit, B=discard&quit via `quit_after_action` flag). Tests: `test_quit_unsaved_prompt_appears`, `test_quit_unsaved_save_and_quit`, `test_quit_unsaved_discard_and_quit`, `test_quit_no_changes_immediate`.
-- **PE-04 (sequential capture via DBus signal):** `test_editor_seq_capture_dbus_signal` uses `backend->inject_signal` → `input_event_signal_cb` → `ip_input_events_handle` → editor callback → `seq_on_input` → auto-advance (production DBus signal path, not direct callback).
-- **PR-02/M15/IA-10 (clone existing):** `test_prof_create_clone_controller` + `_pointer` — navigate create picker to "Clone current", type name, confirm, editor opens with 6 cloned bindings (prod dispatch, both paths).
-- **PE-06 (capability-scoped binding):** `test_capability_scoped_binding` — target-pick mode via prod dispatch, target list populated from keyboard/mouse capabilities (virtual device, not physical).
-- **PE-07 (determinism/portability):** `test_profile_determinism_load_twice` (load twice→identical mapping state) + `test_profile_portability_same_result` (NES+Start round-trip→same state).
-- Updated conformance matrix: PR-02, PR-07, PE-04, PE-06, PE-07, IA-10, M15, M22, M25, M31, M32 all `verified`.
-- Updated `docs/OPERATIONS.md` with unsaved prompt, clone, sequential capture, determinism docs.
+- **ST-05 (icon override setting):** Added `CBX_ST_SET_ICON_OVERRIDE` to settings enum (index 9, before SAVE). `st_icon_presets[]` array with 5 presets (None, ds5→cc-xbox-360, xb360→cc-ps5, deck→cc-xbox-360, gamepad→cc-ps5). `apply_icon_preset()` clears all overrides then sets the selected one. `activate()` initializes preset idx from current state. `edit_up/down` cycle presets. Wired into grid render: `grid_render.c` calls `cbx_settings_icon_override()` before `cbx_icon_lookup()`, passing result as `icon_override` param. `overlay_service.c` sets `.settings = &svc->settings` in render ctx.
+- **ST-02 (opacity):** `test_settings_opacity_controller_path` + `_pointer_path` — enter edit, adjust ±0.05, confirm, save, reload and verify persisted.
+- **ST-03 (VC count+type):** `test_settings_vc_count_*` + `test_settings_vc_type_*` — same pattern, verify count/type changed + persisted.
+- **ST-04 (trigger):** `test_settings_trigger_*` — cycle trigger combo, verify changed + persisted.
+- **MV-04 (per-setting visual):** `test_settings_per_setting_visual` (each of 11 rows has non-background content) + `test_settings_edit_changes_region` (editing theme changes its row region pixels).
+- Updated conformance matrix: ST-02, ST-03, ST-04, ST-05, MV-04, M37-M41, M44 all `verified`.
+- Updated `docs/OPERATIONS.md` with icon override docs and visual test descriptions.
+- Updated existing tests: save test navigation (9→10 DOWNs), integration test comment (index 9→10).
 
 ## Verification
-- `ctest -R 'test_manager_interaction_prof|test_profile_save'` → all passed (45 + 16 tests).
+- `ctest -R 'test_settings|test_manager_interaction_ctrl|test_manager_visual'` → all passed (17 + 40 + 11 tests).
 - Full suite: 90/90 passed, 1 pre-existing skip (test_backend_smoke).
 - No regressions.
 
 ## Commit
-- af2de81 on `develop`.
+- e1633b1 on `develop`.
 
 ## Next task
-Task 4: Settings icon override and interaction/visual coverage (pending, no deps).
-Tasks 7, 8 also pending with no deps. Task 5 depends on 4. Task 6 depends on 2,3,4,5. Task 9 depends on 7. Task 10 (final audit) depends on all.
+Task 5: Interaction inventory driven traversal, hover, resize, decorative exclusion (pending, depends on Task 4 — now unblocked).
+Tasks 7, 8 also pending with no deps. Task 6 depends on 2,3,4,5. Task 9 depends on 7. Task 10 (final audit) depends on all.
