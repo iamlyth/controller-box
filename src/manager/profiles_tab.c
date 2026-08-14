@@ -756,6 +756,26 @@ cbx_profiles_tab_cancel_delete(cbx_profiles_tab *tab)
     cbx_label_set_text(&tab->status_lbl, "");
 }
 
+/*
+ * Enter confirm-quit mode: shows a prompt asking the user whether to
+ * save unsaved editor changes before quitting or discard them.
+ * The manager calls this when SDL_QUIT arrives while the editor has
+ * unsaved edits (dirty flag set).
+ */
+void
+cbx_profiles_tab_begin_confirm_quit(cbx_profiles_tab *tab)
+{
+    if (!tab)
+        return;
+
+    tab->mode = CBX_PT_MODE_CONFIRM_QUIT;
+    tab->quit_after_action = false;
+
+    cbx_label_set_text(&tab->status_lbl,
+                         "Unsaved changes.  A=Save & Quit  B=Discard & Quit");
+    cbx_widget_set_visible(&tab->status_lbl.base, true);
+}
+
 /* ------------------------------------------------------------------ */
 /*  Create source picker mode                                         */
 /* ------------------------------------------------------------------ */
@@ -969,6 +989,20 @@ cbx_profiles_tab_handle_key(cbx_profiles_tab *tab, const SDL_Event *ev)
     case CBX_PT_MODE_CREATE_PICK:
         if (key == SDLK_b || key == SDLK_ESCAPE) {
             cbx_profiles_tab_cancel_create_pick(tab);
+            return true;
+        }
+        return false;
+
+    case CBX_PT_MODE_CONFIRM_QUIT:
+        /* A = save & quit; B = discard & quit */
+        if (key == SDLK_a || key == SDLK_RETURN) {
+            cbx_profiles_tab_save_editor(tab);
+            tab->quit_after_action = true;
+            return true;
+        }
+        if (key == SDLK_b || key == SDLK_ESCAPE) {
+            cbx_profiles_tab_close_editor(tab);
+            tab->quit_after_action = true;
             return true;
         }
         return false;

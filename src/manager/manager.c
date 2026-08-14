@@ -389,10 +389,6 @@ cbx_manager_run(cbx_manager *mgr)
 
     while (mgr->running) {
         while (SDL_PollEvent(&ev)) {
-            if (ev.type == SDL_QUIT) {
-                mgr->running = false;
-                break;
-            }
             cbx_manager_handle_event(mgr, &ev);
         }
         /* Dispatch InputPlumber signals used by capture/sequential editing
@@ -466,6 +462,26 @@ cbx_manager_handle_event(cbx_manager *mgr, const SDL_Event *ev)
     if (!mgr || !ev)
         return false;
 
+    /* SDL_QUIT (window close): if the profile editor has unsaved
+     * changes, prompt before quitting instead of silently discarding
+     * (SPEC section 5.3).  Otherwise quit immediately. */
+    if (ev->type == SDL_QUIT) {
+        if (mgr->pt.mode == CBX_PT_MODE_EDITOR &&
+            mgr->pt.editor_initialized &&
+            cbx_profile_editor_is_dirty(&mgr->pt.editor)) {
+            /* Enter confirm-quit mode — user must choose save or discard */
+            cbx_profiles_tab_begin_confirm_quit(&mgr->pt);
+            return true;
+        }
+        if (mgr->pt.mode == CBX_PT_MODE_CONFIRM_QUIT) {
+            /* Second SDL_QUIT while already prompting: force quit */
+            mgr->running = false;
+            return true;
+        }
+        mgr->running = false;
+        return true;
+    }
+
     if (ev->type == SDL_CONTROLLERDEVICEADDED) {
         cbx_manager_open_gamecontroller(mgr, ev->cdevice.which);
         return true;
@@ -525,6 +541,11 @@ cbx_manager_handle_event(cbx_manager *mgr, const SDL_Event *ev)
      *    for canceling modal sub-modes. */
     if (cbx_manager_tab_handle_key(mgr, ev)) {
         cbx_manager_check_mode_change(mgr, prev_mode);
+        /* If a confirm-quit action completed, stop the manager. */
+        if (mgr->pt.quit_after_action) {
+            mgr->running = false;
+            mgr->pt.quit_after_action = false;
+        }
         return true;
     }
 

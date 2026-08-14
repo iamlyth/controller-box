@@ -52,6 +52,7 @@ typedef enum {
     CBX_PT_MODE_NAME_INPUT,       /* entering a new profile name         */
     CBX_PT_MODE_CREATE_PICK,      /* pick create source (default/empty/clone) */
     CBX_PT_MODE_EDITOR,           /* profile editor is active             */
+    CBX_PT_MODE_CONFIRM_QUIT,     /* "Unsaved changes. A=Save B=Discard"  */
 } cbx_pt_mode;
 
 /* ------------------------------------------------------------------ */
@@ -102,6 +103,7 @@ typedef struct {
     bool editor_initialized;        /* editor has been initialised        */
     bool editor_is_new;             /* creating new profile (vs editing) */
     char editor_profile_name[CBX_PT_NAME_LEN]; /* name for saving       */
+    bool quit_after_action;         /* set by CONFIRM_QUIT to request manager exit */
 
     /* --- Context for editor init (borrowed, set via set_context) --- */
     SDL_Renderer        *renderer;
@@ -263,6 +265,12 @@ int cbx_profiles_tab_begin_create_pick(cbx_profiles_tab *tab);
  * Cancel the create source picker and return to list mode.
  */
 void cbx_profiles_tab_cancel_create_pick(cbx_profiles_tab *tab);
+
+/*
+ * Enter confirm-quit mode (unsaved editor changes prompt).
+ * Called by the manager when SDL_QUIT arrives while the editor is dirty.
+ */
+void cbx_profiles_tab_begin_confirm_quit(cbx_profiles_tab *tab);
 
 /*
  * Tab-level activation (called by manager when A-key KEYUP is not

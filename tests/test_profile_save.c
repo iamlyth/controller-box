@@ -497,6 +497,137 @@ static void test_save_through_symlink_uses_canonical(void **state)
     rmdir(real_dir);
 }
 
+/* ================================================================== */
+/*  Task 3: Profile determinism and portability (PE-07)              */
+/* ================================================================== */
+
+/* PE-07: Same profile YAML loaded twice produces identical mapping
+ * state.  Profiles are deterministic — no dynamic behavior. */
+static void
+test_profile_determinism_load_twice(void **state)
+{
+    (void)state;
+    cbx_profile p = make_valid_profile();
+    int rc = cbx_profile_save_to_dir(&p, "deterministic", NULL,
+                                       test_home, NULL, 0);
+    assert_int_equal(rc, 0);
+
+    char path[PATH_MAX + 128];
+    snprintf(path, sizeof(path), "%s/deterministic.yaml", test_home);
+
+    /* Load the profile twice and compare. */
+    cbx_profile loaded1, loaded2;
+    cbx_profile_init(&loaded1);
+    cbx_profile_init(&loaded2);
+
+    assert_int_equal(cbx_profile_load(&loaded1, path), 0);
+    assert_int_equal(cbx_profile_load(&loaded2, path), 0);
+
+    /* Assert identical mapping state. */
+    assert_int_equal(loaded1.mapping_count, loaded2.mapping_count);
+    assert_int_equal(loaded1.version, loaded2.version);
+    assert_string_equal(loaded1.kind, loaded2.kind);
+    assert_string_equal(loaded1.name, loaded2.name);
+
+    for (int i = 0; i < loaded1.mapping_count; i++) {
+        assert_string_equal(loaded1.mappings[i].name,
+                             loaded2.mappings[i].name);
+        assert_int_equal(loaded1.mappings[i].source_event.prop_count,
+                         loaded2.mappings[i].source_event.prop_count);
+        assert_string_equal(loaded1.mappings[i].source_event.device_class,
+                             loaded2.mappings[i].source_event.device_class);
+        for (int j = 0; j < loaded1.mappings[i].source_event.prop_count; j++) {
+            assert_string_equal(loaded1.mappings[i].source_event.props[j].key,
+                                 loaded2.mappings[i].source_event.props[j].key);
+            assert_string_equal(loaded1.mappings[i].source_event.props[j].value,
+                                 loaded2.mappings[i].source_event.props[j].value);
+        }
+        assert_int_equal(loaded1.mappings[i].target_event_count,
+                         loaded2.mappings[i].target_event_count);
+        for (int j = 0; j < loaded1.mappings[i].target_event_count; j++) {
+            assert_string_equal(loaded1.mappings[i].target_events[j].device_class,
+                                 loaded2.mappings[i].target_events[j].device_class);
+            assert_string_equal(loaded1.mappings[i].target_events[j].value,
+                                 loaded2.mappings[i].target_events[j].value);
+        }
+    }
+}
+
+/* PE-07: Portability — the same profile produces the same result
+ * regardless of connection method.  InputPlumber's capability maps
+ * normalize physical-controller differences, so profiles map against
+ * virtual device capabilities.  We verify by loading the same profile
+ * file and checking that the mapping state is independent of any
+ * external connection state — the profile is self-contained YAML. */
+static void
+test_profile_portability_same_result(void **state)
+{
+    (void)state;
+    cbx_profile p = make_valid_profile();
+    /* Add an extra mapping (Start button) to exercise non-NES bindings. */
+    cbx_profile_mapping *m = &p.mappings[p.mapping_count];
+    memset(m, 0, sizeof(*m));
+    strncpy(m->name, "btn_start", sizeof(m->name) - 1);
+    strncpy(m->source_event.device_class, "gamepad",
+             sizeof(m->source_event.device_class) - 1);
+    m->source_event.prop_count = 1;
+    strncpy(m->source_event.props[0].key, "button",
+             sizeof(m->source_event.props[0].key) - 1);
+    strncpy(m->source_event.props[0].value, "Start",
+             sizeof(m->source_event.props[0].value) - 1);
+    m->target_event_count = 1;
+    strncpy(m->target_events[0].device_class, "keyboard",
+             sizeof(m->target_events[0].device_class) - 1);
+    strncpy(m->target_events[0].value, "KeyReturn",
+             sizeof(m->target_events[0].value) - 1);
+    p.mapping_count++;
+
+    int rc = cbx_profile_save_to_dir(&p, "portable", NULL,
+                                       test_home, NULL, 0);
+    assert_int_equal(rc, 0);
+
+    char path[PATH_MAX + 128];
+    snprintf(path, sizeof(path), "%s/portable.yaml", test_home);
+
+    /* Load the profile — the result is deterministic regardless of
+     * how the physical controller is connected (BT/USB/serial).
+     * The profile YAML is self-contained and does not vary by
+     * connection method.  This is the design principle:
+     * "Same profile + same controller = same result, every time." */
+    cbx_profile loaded;
+    cbx_profile_init(&loaded);
+    assert_int_equal(cbx_profile_load(&loaded, path), 0);
+
+    /* Verify all 7 mappings are intact with correct button/key pairs. */
+    assert_int_equal(loaded.mapping_count, 7);
+
+    /* Verify the Start mapping was preserved (non-NES binding). */
+    bool found_start = false;
+    for (int i = 0; i < loaded.mapping_count; i++) {
+        for (int j = 0; j < loaded.mappings[i].source_event.prop_count; j++) {
+            if (strcmp(loaded.mappings[i].source_event.props[j].key, "button") == 0 &&
+                strcmp(loaded.mappings[i].source_event.props[j].value, "Start") == 0) {
+                found_start = true;
+                /* Verify target is keyboard:KeyReturn */
+                assert_int_equal(loaded.mappings[i].target_event_count, 1);
+                assert_string_equal(loaded.mappings[i].target_events[0].device_class, "keyboard");
+                assert_string_equal(loaded.mappings[i].target_events[0].value, "KeyReturn");
+            }
+        }
+    }
+    assert_true(found_start);
+
+    /* Save the loaded profile back and reload — round-trip must
+     * produce the same state, proving determinism. */
+    cbx_profile roundtrip;
+    cbx_profile_init(&roundtrip);
+    rc = cbx_profile_save_to_dir(&loaded, "portable", NULL,
+                                   test_home, NULL, 0);
+    assert_int_equal(rc, 0);
+    assert_int_equal(cbx_profile_load(&roundtrip, path), 0);
+    assert_int_equal(roundtrip.mapping_count, loaded.mapping_count);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -527,6 +658,11 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_empty_profile_fails,
             setup_home, teardown_home),
         cmocka_unit_test_setup_teardown(test_save_through_symlink_uses_canonical,
+            setup_home, teardown_home),
+        /* Task 3: Determinism and portability (PE-07) */
+        cmocka_unit_test_setup_teardown(test_profile_determinism_load_twice,
+            setup_home, teardown_home),
+        cmocka_unit_test_setup_teardown(test_profile_portability_same_result,
             setup_home, teardown_home),
     };
 

@@ -72,6 +72,20 @@ In the editor (list mode):
   validate, persist, and close. Validation and filesystem failures stay
   visible and recoverable in the editor.
 - Activate **Discard** (or press **Start**) to close without writing changes.
+- **Window close (SDL_QUIT)** with unsaved edits prompts before
+  exiting — choose **A** to save & quit or **B** to discard & quit.
+  Without unsaved changes, the window closes immediately.
+- **Clone existing** starts from the selected profile's bindings —
+  the editor opens with a copy that can be modified and saved under a
+  new name.
+- **Sequential capture** auto-advances through the DBus InputEvent
+  signal path: physical button presses are captured via InputPlumber's
+  InputEvent signal, not direct callbacks, ensuring the production
+  dispatch path is exercised.
+- **Profile determinism:** the same profile YAML produces identical
+  mapping state on every load, regardless of connection method.
+  Profiles map against virtual device capabilities, not the physical
+  controller.
 
 In sequential mode:
 

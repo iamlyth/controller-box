@@ -366,6 +366,7 @@ cbx_profile_editor_load_profile(cbx_profile_editor *ed,
 
     ed->profile = *profile;
     ed->profile_loaded = true;
+    ed->dirty = false;             /* fresh load: no unsaved edits */
 
     /* Update title */
     if (ed->profile.name[0])
@@ -766,6 +767,9 @@ cbx_profile_editor_confirm_target_pick(cbx_profile_editor *ed)
     /* Return to list mode */
     cbx_profile_editor_cancel_target_pick(ed);
 
+    /* Mark profile as having unsaved edits */
+    ed->dirty = true;
+
     /* Refresh binding list to show updated label */
     cbx_profile_editor_refresh(ed);
 
@@ -903,6 +907,7 @@ cbx_profile_editor_on_input_event(ip_input_id input,
     ed->capture_active = false;
     ed->mode = CBX_EDITOR_MODE_LIST;
     ed->editing_index = -1;
+    ed->dirty = true;           /* capture modified the profile */
     cbx_label_set_text(&ed->status_lbl, "Captured!");
 
     /* Refresh binding list */
@@ -975,4 +980,12 @@ cbx_profile_editor_is_capture_active(const cbx_profile_editor *ed)
     if (!ed)
         return false;
     return ed->capture_active;
+}
+
+bool
+cbx_profile_editor_is_dirty(const cbx_profile_editor *ed)
+{
+    if (!ed)
+        return false;
+    return ed->dirty;
 }

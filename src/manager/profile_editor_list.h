@@ -120,6 +120,9 @@ typedef struct {
 
     /* --- Expected sender for InputEvent verification (Task 5) ----- */
     char          expected_sender[128]; /* unique bus name (e.g. ":1.42"), not well-known */
+
+    /* --- Dirty flag: true when the profile has unsaved edits ------- */
+    bool          dirty;
 } cbx_profile_editor;
 
 /* ------------------------------------------------------------------ */
@@ -289,6 +292,9 @@ int             cbx_profile_editor_get_editing_index(
     const cbx_profile_editor *ed);
 bool            cbx_profile_editor_is_capture_active(
     const cbx_profile_editor *ed);
+
+/* Check if the profile has unsaved edits (dirty flag). */
+bool            cbx_profile_editor_is_dirty(const cbx_profile_editor *ed);
 
 /* ------------------------------------------------------------------ */
 /*  Sequential binding mode (Task 38)                                */

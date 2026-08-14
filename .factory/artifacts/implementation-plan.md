@@ -107,19 +107,19 @@ Task that closes them. §13-deferred and §10.2-optional members are excluded
 | CT-06 | Type change replaces only selected slot | §5.2 | verified | `controllers_tab.c:change_type()`; interaction test | — |
 | CT-07 | Controllers native DBus signatures | §5.2,§10.1 | verified | `test_native_dbus.c:test_native_target_operations` (private sd-bus) | — |
 | PR-01 | Default profile built-in, read-only, always-present fallback | §5.3 | verified | `test_manager_interaction_prof.c:mip_setup`; delete blocked for read_only | — |
-| PR-02 | New profile flow: Default copy / Empty / Clone → editor | §5.3 | partial | Default copy + Empty tested; Clone not explicitly tested | Task 3 |
+| PR-02 | New profile flow: Default copy / Empty / Clone → editor | §5.3 | verified | profiles_tab.c clone path in name_input_confirm; test_prof_create_clone_controller + _pointer (prod dispatch, 6 cloned bindings verified) | — |
 | PR-03 | User profiles as InputPlumber YAML in user dir; device_profile_v1 schema | §5.3,§7.6 | verified | `profile_save.c`; `config_profile.c:40-50`; `test_profile_yaml.c` | — |
 | PR-04 | Ships immutable Default so clean install works with empty host dirs | §5.3 | partial | system profile read_only flag set; no clean-install-empty-dirs test | Task 8 |
 | PR-05 | Empty profile: reachable add-first-binding action at zero rows | §5.3 | verified | `profile_editor_list.c:activate()` mapping_count==0→sequential; `test_d08_empty_profile_create` | — |
 | PR-06 | Save/Discard explicit visible controls | §5.3 | verified | `test_editor_save_close`, `test_editor_save_button_pointer`, `test_editor_discard_button_pointer` | — |
-| PR-07 | Window close with unsaved changes prompts (not silent discard) | §5.3 | missing | `manager.c:386` SDL_QUIT just exits; no unsaved-state prompt | Task 3 |
+| PR-07 | Window close with unsaved changes prompts (not silent discard) | §5.3 | verified | manager.c handle_event SDL_QUIT checks dirty flag, enters CONFIRM_QUIT; profile_editor_list.c dirty flag set on target_pick/capture/seq; test_quit_unsaved_prompt_appears + save_and_quit + discard_and_quit + no_changes_immediate | — |
 | PE-01 | Two editor modes sharing one synchronized diagram | §5.4 | verified | `profile_editor_list.c:init`; `profile_editor_seq.c`; `test_manager_visual.c` | — |
 | PE-02 | Binding list U/D scrolls, A edits (target list or capture) | §5.4 | verified | `test_editor_list_nav`, `test_editor_activate_binding_controller`+`_pointer` | — |
 | PE-03 | Sequential: prompt each button, diagram lights current, B skip, Start cancel, progress | §5.4 | verified | `profile_editor_seq.c:update_seq_ui`; `test_editor_seq_*` | — |
-| PE-04 | Physical button capture auto-advance via production dispatch | §5.4 | partial | `test_editor_seq_capture` calls `cbx_profile_editor_on_input_event` directly (not DBus InputEvent→prod dispatch) | Task 3 |
+| PE-04 | Physical button capture auto-advance via production dispatch | §5.4 | verified | profile_editor_seq.c seq_on_input via inject_signal to input_event_signal_cb to ip_input_events_handle to editor callback; test_editor_seq_capture_dbus_signal (DBus signal path, not direct callback) | — |
 | PE-05 | NES minimum validation (A,B,Dpad U/D/L/R); save blocked + error shown | §5.4 | verified | `profile_validate.c:25-120`; `test_d04_save_missing_nes`; `test_profile_editor_validation_error` (red pixels) | — |
-| PE-06 | Profile scope = virtual device capabilities | §5.4 | partial | `profile_editor_list.c:load_capabilities()` reads caps; no prod-dispatch capability-scoped test | Task 3 |
-| PE-07 | Deterministic/portable profiles | §5.4 | missing | no determinism/portability test | Task 3 |
+| PE-06 | Profile scope = virtual device capabilities | §5.4 | verified | profile_editor_list.c load_capabilities + begin_target_pick; test_capability_scoped_binding (prod dispatch, target list scoped to keyboard/mouse caps) | — |
+| PE-07 | Deterministic/portable profiles | §5.4 | verified | config_profile.c cbx_profile_load (event-based parser, deterministic); test_profile_save.c test_profile_determinism_load_twice + test_profile_portability_same_result (load twice=identical, round-trip=same state) | — |
 | ST-01 | Launch-at-boot, theme settings (controller+pointer) | §5.5 | verified | `test_settings_toggle_*`, `test_settings_edit_flow_*` | — |
 | ST-02 | Overlay opacity setting | §5.5 | partial | `settings_tab.c` edit_up/down present; no interaction test | Task 4 |
 | ST-03 | Startup virtual controller count + types | §5.5 | partial | VC_COUNT/VC_TYPE_0-3 present; no interaction test | Task 4 |
@@ -132,7 +132,7 @@ Task that closes them. §13-deferred and §10.2-optional members are excluded
 | MV-05 | Visual: editor diagram+list+sequential+validation error+progress | §5.6 | verified | `test_profile_editor_list_mode/sequential_mode/validation_error` | — |
 | MV-06 | Visual: tab/mode switch changes frame | §5.6 | verified | `test_tab_switch_differs` | — |
 | IA-01 | Machine-readable inventory of every interactive control + semantic outcome | §5.7 | partial | `interaction_inventory.c` (58 entries) exists; `test_interaction_inventory.c` validates structure only; not driven as traversal | Task 5 |
-| IA-02 | Traverse inventory via normal SDL events + prod dispatch (not direct callbacks) | §5.7 | verified | `test_manager_interaction_ctrl.c`+`_prof.c` use `cbx_manager_handle_event`; exception: capture (PE-04) | — |
+| IA-02 | Traverse inventory via normal SDL events + prod dispatch (not direct callbacks) | §5.7 | verified | test_manager_interaction_ctrl.c + _prof.c use cbx_manager_handle_event; capture via DBus inject_signal (PE-04 verified) | — |
 | IA-03 | Controller path: focus chain + A event (production gamepad transport) | §5.7 | partial | interaction tests use keyboard SDL (supplemental); `test_installed_functional.c` gamepad covers tab nav only; full inventory not gamepad-traversed | Task 6 |
 | IA-04 | Pointer path: rendered bounds + mouse motion + left down/up | §5.7 | verified | all `_pointer_path` use `widget_center()` from rendered rect | — |
 | IA-05 | Hover/press visual indication asserted in framebuffer | §5.7 | partial | `manager.c:update_hover` sets hover; no framebuffer hover/press assertion | Task 5 |
@@ -140,7 +140,7 @@ Task that closes them. §13-deferred and §10.2-optional members are excluded
 | IA-07 | Disabled controls reject both paths + no side effect | §5.7 | verified | `test_d01_inputplumber_unavailable`, `test_d02/d03` | — |
 | IA-08 | Hit testing after resize; no stale pre-layout rects | §5.7 | missing | no resize test anywhere | Task 5 |
 | IA-09 | E2E: Controllers add/remove/type-change | §5.7 | verified | `test_ctrl_add_confirm_*`/`remove_*`/`change_type_*` | — |
-| IA-10 | E2E: Profiles create-from-each-starting-point + select+edit+validate+save+delete | §5.7 | partial | Default copy + Empty tested; Clone missing (PR-02) | Task 3 |
+| IA-10 | E2E: Profiles create-from-each-starting-point + select+edit+validate+save+delete | §5.7 | verified | + (Default+Empty); + (Clone); all three starting points tested via prod dispatch | — |
 | IA-11 | E2E: Settings change + persistence | §5.7 | verified | `test_settings_save_controller_path`+`_pointer_path` (settings.yaml) | — |
 | IA-12 | E2E: editor list+sequential incl cancel/error | §5.7 | verified | `test_editor_seq_skip/cancel`, `test_d04`, `test_d07` | — |
 | IA-13 | E2E: tab switching | §5.7 | verified | `test_tab_switch_*` | — |
@@ -216,17 +216,17 @@ coverage is cited; gaps are assigned to Tasks 5-6.
 | ID | Control | Controller path | Pointer path | Semantic outcome | Prod dispatch | Evidence / gap |
 |----|---------|-----------------|--------------|------------------|---------------|----------------|
 | M11 | Profile list | DOWN/UP | — | row focus + select | focus chain | verified `test_prof_list_select_*` |
-| M12 | Create button | A | click | source picker (Default/Empty/Clone) | dispatch→`profiles_tab_create` | verified; Clone (PR-02) → Task 3 |
+| M12 | Create button | A | click | source picker (Default/Empty/Clone) | dispatch→`profiles_tab_create` | verified test_prof_create_open_controller + _pointer |
 | M13 | Create: Default copy | A | click | editor opens with 6 bindings | dispatch | verified `test_prof_create_source_pointer` |
 | M14 | Create: Empty | A | click | editor opens with 0 bindings + add-first reachable | dispatch | verified `test_prof_create_source_controller` |
-| M15 | Create: Clone existing | A | click | editor opens with cloned bindings | dispatch | missing (PR-02) → Task 3 |
+| M15 | Create: Clone existing | A | click | editor opens with cloned bindings | dispatch | verified test_prof_create_clone_controller + _pointer |
 | M16 | Edit button | A | click | editor opens for selected profile | dispatch→`profiles_tab_edit` | verified `test_prof_edit_open_*` |
 | M17 | Delete button + confirm | A,A | click,click | profile file removed | dispatch→`profiles_tab_delete` | verified `test_prof_delete_confirm` |
 | M18 | Editor: Save button | B (LIST) | click Save | profile written to user dir, validated | dispatch→`profile_save` | verified `test_editor_save_*` |
 | M19 | Editor: Discard button | — | click Discard | editor exits, no write | dispatch | verified `test_editor_discard_button_pointer` |
 | M20 | Editor: binding list nav | U/D | — | row scroll + diagram highlight | dispatch | verified `test_editor_list_nav` |
 | M21 | Editor: A edits binding | A on row | click row | BINDING_EDIT mode | dispatch→`activate_binding` | verified `test_editor_activate_binding_*` |
-| M22 | Editor: unsaved-changes close prompt | window close | window close | prompt, not silent discard | SDL_QUIT handler | missing (PR-07) → Task 3 |
+| M22 | Editor: unsaved-changes close prompt | window close | window close | prompt, not silent discard | SDL_QUIT handler | verified test_quit_unsaved_prompt_appears + save_and_quit + discard_and_quit + no_changes_immediate |
 
 ### Manager — Profile editor (M23-M34)
 
@@ -234,14 +234,14 @@ coverage is cited; gaps are assigned to Tasks 5-6.
 |----|---------|-----------------|--------------|------------------|---------------|----------------|
 | M23 | Binding list mode (default) | — | — | diagram + list shown | init | verified `test_profile_editor_list_mode` |
 | M24 | Sequential mode begin | A (zero rows) / menu | — | sequential prompt, step=0, diagram lights | dispatch→`begin_sequential` | verified `test_editor_seq_begin_*` |
-| M25 | Sequential: capture physical button | physical button | — | capture→auto-advance | DBus InputEvent→prod dispatch | partial (PE-04, direct callback) → Task 3 |
+| M25 | Sequential: capture physical button | physical button | — | capture→auto-advance | DBus InputEvent→prod dispatch | verified test_editor_seq_capture_dbus_signal (inject_signal path) |
 | M26 | Sequential: B skip | B | — | advance to next | dispatch | verified `test_editor_seq_skip` |
 | M27 | Sequential: Start cancel | Start(TAB) | — | return to LIST | dispatch | verified `test_editor_seq_cancel` |
 | M28 | Sequential: progress bar | — | — | fill grows, partial≠complete | render | verified `test_profile_editor_sequential_mode` |
 | M29 | NES validation error | save w/ missing | — | save blocked, red error | dispatch→`validate` | verified `test_d04`, `test_profile_editor_validation_error` |
 | M30 | Diagram widget (decorative) | — | click | NOT interactive (no focus/hit) | exclusion | partial (MG-03) → Task 5 |
-| M31 | Capability-scoped binding | A edit | — | target list scoped to virtual caps | dispatch | partial (PE-06) → Task 3 |
-| M32 | Profile determinism/portability | — | — | same profile+controller=same result | load/save | missing (PE-07) → Task 3 |
+| M31 | Capability-scoped binding | A edit | — | target list scoped to virtual caps | dispatch | verified test_capability_scoped_binding |
+| M32 | Profile determinism/portability | — | — | same profile+controller=same result | load/save | verified test_profile_determinism_load_twice + test_profile_portability_same_result |
 
 ### Manager — Settings tab (M35-M44)
 
@@ -356,7 +356,7 @@ coverage is cited; gaps are assigned to Tasks 5-6.
 - Verification: `nix-shell --run "ctest --test-dir build-check -R 'test_controllers_tab|test_native_dbus|test_manager_interaction_ctrl' --output-on-failure"` → all passed. Full suite: 90/90 passed, 1 pre-existing skip (test_backend_smoke).
 
 ## Task 3: Editor unsaved-close prompt, sequential production capture, clone, determinism
-- Status: pending
+- Status: complete
 - Dependencies: none
 - Scope: `src/manager/manager.c` (SDL_QUIT), `src/manager/profile_editor_seq.c`/`profile_editor_list.c` (capture routing), `src/manager/profiles_tab.c` (clone), `tests/test_manager_interaction_prof.c` (extend), `tests/test_profile_save.c` (extend).
 - Acceptance criteria:
@@ -377,6 +377,26 @@ coverage is cited; gaps are assigned to Tasks 5-6.
   - Capability-scoped binding (PE-06) is exercised through production dispatch.
 - Verification: `nix-shell --run "ctest --test-dir build-check -R 'test_manager_interaction_prof|test_profile_save' --output-on-failure"`; full gate.
 - Documentation impact: README/OPERATIONS editor flows (unsaved prompt, capture, clone).
+
+- Verification: `nix-shell --run "ctest --test-dir build-check -R 'test_manager_interaction_prof|test_profile_save' --output-on-failure"` -> all passed (45 tests in test_manager_interaction_prof, 16 in test_profile_save). Full suite: 90/90 passed, 1 pre-existing skip (test_backend_smoke).
+- Documentation impact: README/OPERATIONS editor flows (unsaved prompt, capture, clone).
+- Evidence:
+  - `tests/test_manager_interaction_prof.c:test_prof_create_clone_controller` -- navigate create picker to "Clone current", type name, confirm, editor opens with 6 cloned bindings (controller path, prod dispatch).
+  - `tests/test_manager_interaction_prof.c:test_prof_create_clone_pointer` -- same via pointer path (click Create, click "Clone current", type name, confirm).
+  - `tests/test_manager_interaction_prof.c:test_editor_seq_capture_dbus_signal` -- sequential capture via DBus InputEvent signal path (inject_signal -> input_event_signal_cb -> ip_input_events_handle -> editor callback -> seq_on_input -> auto-advance), not direct callback.
+  - `tests/test_manager_interaction_prof.c:test_quit_unsaved_prompt_appears` -- SDL_QUIT with dirty editor enters CONFIRM_QUIT mode, does not exit.
+  - `tests/test_manager_interaction_prof.c:test_quit_unsaved_save_and_quit` -- SDL_QUIT -> A -> save & quit (running=false, mode=LIST).
+  - `tests/test_manager_interaction_prof.c:test_quit_unsaved_discard_and_quit` -- SDL_QUIT -> B -> discard & quit (running=false, file mtime unchanged).
+  - `tests/test_manager_interaction_prof.c:test_quit_no_changes_immediate` -- SDL_QUIT with clean editor -> immediate quit (no prompt).
+  - `tests/test_manager_interaction_prof.c:test_capability_scoped_binding` -- target-pick mode via prod dispatch, target list populated from virtual device capabilities (keyboard/mouse), not physical controller.
+  - `tests/test_profile_save.c:test_profile_determinism_load_twice` -- load same profile YAML twice, assert identical mapping state.
+  - `tests/test_profile_save.c:test_profile_portability_same_result` -- profile with NES+Start bindings, save/load round-trip, assert same state (determinism + portability).
+  - `src/manager/profile_editor_list.h` -- added `dirty` field to `cbx_profile_editor`, `cbx_profile_editor_is_dirty()` accessor.
+  - `src/manager/profile_editor_list.c` -- dirty=true on confirm_target_pick and capture; dirty=false on load_profile.
+  - `src/manager/profile_editor_seq.c` -- dirty=true on seq_on_input capture.
+  - `src/manager/profiles_tab.h` -- added `CBX_PT_MODE_CONFIRM_QUIT` mode, `quit_after_action` flag, `cbx_profiles_tab_begin_confirm_quit()`.
+  - `src/manager/profiles_tab.c` -- confirm-quit mode: A=save&quit, B=discard&quit; `begin_confirm_quit` shows prompt.
+  - `src/manager/manager.c` -- SDL_QUIT handled in `handle_event` (not run loop), checks dirty flag, enters CONFIRM_QUIT or exits; checks `quit_after_action` after tab key handling.
 
 ## Task 4: Settings icon override and interaction/visual coverage
 - Status: pending

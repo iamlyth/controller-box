@@ -290,6 +290,7 @@ cbx_profile_editor_seq_on_input(ip_input_id input,
         [sizeof(m->source_event.props[prop_idx].value) - 1] = '\0';
 
     /* Auto-advance to next step */
+    ed->dirty = true;           /* sequential capture modified the profile */
     ed->seq_step++;
     if (ed->seq_step >= CBX_DIAG_BTN_COUNT) {
         /* Finished all buttons */
