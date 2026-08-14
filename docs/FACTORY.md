@@ -166,7 +166,7 @@ There is no minimum iteration count: high quality is determined by evidence, not
 
 Ralph recognizes a completion promise only when the reserved token is the exact final non-empty output line outside all `<event>` tags. A token inside any event payload is deliberately ignored. Each prompt therefore forbids its token in events, summaries, plans, and scratchpads and requires the standalone final line after the normal event is closed.
 
-Before every checkpoint, planning revalidates the launcher's immutable specification metadata and cycle `base_commit`; maintenance planning performs its equivalent freshness check. `scripts/check-scratchpad.sh` requires one level-one handoff document, permits concise subsections within it, and rejects appended documents or completion tokens. Iteration-boundary hooks use `--allow-missing` because Ralph intentionally removes the previous scratchpad before the first iteration of a fresh, non-resumed loop. They also use `--allow-oversize` so a worker that slightly exceeds the 80-line or 8-KiB handoff target receives a warning without deadlocking the next iteration; structural and protocol violations still block. Final gates remain strict and reject missing, malformed, or oversized scratchpads.
+Before every checkpoint, planning revalidates the launcher's immutable specification metadata and cycle `base_commit`; maintenance planning performs its equivalent freshness check. `scripts/check-scratchpad.sh` requires one level-one handoff document and permits concise subsections within it. Iteration-boundary hooks use `--allow-missing` because Ralph intentionally removes the previous scratchpad before the first iteration of a fresh, non-resumed loop. They also use `--allow-oversize` so a worker that slightly exceeds the 80-line or 8-KiB handoff target receives a warning without deadlocking the next iteration. Checkpoint hooks validate structure but defer reserved-token rejection to the strict completion gate; this routes token contamination through the attempt-bound automatic completion-rejection path instead of terminating an otherwise recoverable child iteration. Final gates remain strict and reject missing, malformed, oversized, or token-contaminated scratchpads.
 
 A `pre.loop.complete` gate runs through `scripts/ralph-completion-gate.sh`. When that strict gate rejects a premature completion request, it writes an atomic, one-shot marker bound to the current launcher nonce, lifecycle mode, loop ID, and canonical workspace. The supervisor consumes only a matching marker, repairs Ralph's volatile markers, and continues the same cycle with `--continue`, preserving the selected TUI mode. Stale, malformed, mismatched, or symlink markers cannot authorize continuation, and arbitrary non-quota failures remain terminal. Quota exhaustion continues through its independent verified wait path. A failed or stale Ralph process can be accepted as complete only when the normal final gate passes; otherwise its artifacts remain recoverable but explicitly incomplete.
 
@@ -176,9 +176,10 @@ A campaign removes the human-operated outer loop while retaining objective
 stopping boundaries:
 
 ```bash
+# Unattended by default:
 ./scripts/ralph-campaign.sh --rounds 3
-# Headless:
-./scripts/ralph-campaign.sh --rounds 3 --no-tui
+# Optional attended diagnostic display:
+./scripts/ralph-campaign.sh --rounds 3 --tui
 ```
 
 Each mandatory round records the current clean `HEAD` as a new base, runs a
@@ -197,7 +198,8 @@ Resume an interrupted active campaign with exactly matching options:
 
 ```bash
 ./scripts/ralph-campaign.sh --rounds 3 --resume
-./scripts/ralph-campaign.sh --rounds 3 --resume --no-tui
+# Only when the saved campaign was explicitly attended:
+./scripts/ralph-campaign.sh --rounds 3 --resume --tui
 ```
 
 The campaign and its children share the inherited factory lock, so planning,

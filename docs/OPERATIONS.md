@@ -412,7 +412,8 @@ itself is <1 ms.
 ## Factory campaign operation
 
 A finite autonomous campaign repeatedly creates a new plan base instead of
-asking an operator to alternate planning and implementation manually:
+asking an operator to alternate planning and implementation manually. Campaigns
+are headless by default; `--tui` is an attended diagnostic mode:
 
 ```bash
 ./scripts/ralph-campaign.sh --rounds 3
@@ -429,9 +430,11 @@ Ralph process is alive and resume the exact phase with:
 ./scripts/ralph-campaign.sh --rounds 3 --resume
 ```
 
-Do not change the round count or TUI mode during resume. Corrupt state, a dirty
-phase boundary, stale/rewritten Git bindings, or final-round findings stop the
-campaign rather than skipping work. Leaf planning, implementation, and audit
+Do not change the round count or TUI mode during resume. Reserved-token mistakes
+in a checkpoint handoff are rejected by the strict completion gate and resumed
+automatically rather than terminating the leaf process. Corrupt state, a dirty
+phase boundary, stale/rewritten Git bindings, or final-round findings still stop
+the campaign rather than skipping work. Leaf planning, implementation, and audit
 recovery retain their normal quota and completion-rejection behavior.
 
 `.factory/environment.toml` declares available tools and runners without

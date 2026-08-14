@@ -247,15 +247,16 @@ nix-shell --run "ctest --test-dir build-check -R 'test_manager_interaction|test_
 
 ## Multi-round Ralph campaign
 
-For a predetermined sequence of fresh adversarial plans, implementations,
-verification passes, and independent gap audits, run:
+For a predetermined unattended sequence of fresh adversarial plans,
+implementations, verification passes, and independent gap audits, run:
 
 ```bash
 ./scripts/ralph-campaign.sh --rounds 3
 ```
 
-Every round receives a new Git base and replaces the active plan; completed
-plans and audits remain in Git history. Interrupted campaigns resume with the
+Campaigns are headless by default so phase completion does not wait for a TUI
+to close; use `--tui` only for attended diagnostics. Every round receives a new
+Git base and replaces the active plan; completed plans and audits remain in Git history. Interrupted campaigns resume with the
 same round count and phase using `--resume`. Available local tools and external
 runners are declared without credentials in `.factory/environment.toml`.
 Verification validates exact-commit runner receipts; required capabilities without
