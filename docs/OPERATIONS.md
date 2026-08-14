@@ -432,9 +432,13 @@ Ralph process is alive and resume the exact phase with:
 
 Do not change the round count or TUI mode during resume. Reserved-token mistakes
 in a checkpoint handoff are rejected by the strict completion gate and resumed
-automatically rather than terminating the leaf process. Corrupt state, a dirty
-phase boundary, stale/rewritten Git bindings, or final-round findings still stop
-the campaign rather than skipping work. Leaf planning, implementation, and audit
+automatically rather than terminating the leaf process. A Ralph `loop_stale`
+result is accepted for recovery only when it was appended during the current
+attempt; the supervisor records a fixed strict-gate command in the handoff and
+retries at most twice by default. The resumed agent runs that command to inspect
+and repair exact failures; raw diagnostics are not injected into its prompt. Corrupt history, exhausted stale retries, corrupt state,
+a dirty phase boundary, stale/rewritten Git bindings, or final-round findings
+still stop the campaign rather than skipping work. Leaf planning, implementation, and audit
 recovery retain their normal quota and completion-rejection behavior.
 
 `.factory/environment.toml` declares available tools and runners without

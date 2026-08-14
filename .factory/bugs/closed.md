@@ -1,6 +1,6 @@
 # Closed Bugs
 
-Canonical record of resolved defects.
+Completed defects and their verification evidence.
 
 Schema: `ralph-bug-ledger/v1`
 
@@ -53,6 +53,22 @@ Schema: `ralph-bug-ledger/v1`
     "resolution": "cbx_manager_init now initializes all three tab modules (controllers, profiles, settings) and populates every panel; cbx_manager_shutdown tears down tabs and disconnects DBus; tab switching refreshes the active tab; regression test test_manager_production verifies nonempty panel children and visible rendered body content for all tabs via the production path",
     "verification": "Full ctest suite passes (65/65, excluding test_packaging); test_manager_production asserts nonempty panel children, visible rendered body content, populated focus chain, tab switching, and clean shutdown via production cbx_manager_init path only; test_manager_tabs and test_manager_integration updated to verify populated panels via accessor functions; SPEC.md unchanged",
     "closed": "2026-08-06"
+  },
+  {
+    "id": "BUG-0005",
+    "title": "Ralph stale-loop termination requires manual campaign recovery",
+    "status": "closed",
+    "severity": "high",
+    "reported": "2026-08-14",
+    "external": [],
+    "contract_change": false,
+    "reproduction": "Run a headless multi-round campaign whose planner repeatedly emits factory.plan without an exact completion token while the strict planning gate still has a validation failure; Ralph terminates with loop_stale and the campaign exits in active planning state.",
+    "expected": "A current-attempt stale loop with incomplete artifacts receives bounded automatic recovery context and continues without operator phase intervention, while malformed history, infrastructure failures, signals, quota errors, and retry exhaustion fail closed.",
+    "actual": "Leaf launchers classified loop_stale as an arbitrary non-quota failure. No attempt-bound completion marker existed, strict-gate diagnostics were not available to the next model context, and an abandoned Ralph lock remained for manual resume.",
+    "acceptance": "All five leaf lifecycles classify only strict current-attempt Ralph history, require a read-only strict-gate rejection before stale recovery, provide fixed command-only feedback, preserve exact finalization status, bound stale and completion retries, harden recovery paths, and pass end-to-end stale recovery plus full project verification.",
+    "resolution": "Added strict attempt-snapshot Ralph history classification, fixed command-only scratchpad feedback through no-follow directory-descriptor writes, two-attempt stale retry ceilings, eight-attempt completion-rejection ceilings, explicit strict-gate execution in every prompt, separated gate validation from finalization, exact signal/quota/infrastructure propagation, hardened completion/recovery marker paths, and unattended recovery in all five leaf launchers.",
+    "verification": "test-ralph-completion-recovery, test-ralph-stale-recovery, and test-ralph-recover-safety pass; verify-boilerplate passes; full verify-project passes with 89/89 CTest tests, mandatory installed-functional acceptance, installed smoke, and packaging; only the expected optional headless backend smoke is skipped.",
+    "closed": "2026-08-14"
   }
 ]
 ```
