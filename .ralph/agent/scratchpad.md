@@ -1,20 +1,30 @@
-# Implementation Cycle — COMPLETE
+# Planning Scratchpad
 
-## Outcome
-All 12 implementation tasks complete. Plan status is `complete`. All §11.2 definition-of-done criteria satisfied.
+## Status
+Plan written to `.factory/artifacts/implementation-plan.md`, reviewed by read-only reviewer, and updated with findings.
 
-## Final Verification (commit 392da8f, verified this iteration)
-- **Conformance matrix**: 10/10 FR rows (FR-01–FR-10) classified `verified`; no `missing`, `partial`, or `ambiguous` remaining.
-- **Clean Debug build**: 83/83 CTest pass (1 skip = backend_smoke, needs GPU).
-- **Clean Release build**: 83/83 CTest pass (1 skip = backend_smoke, needs GPU).
-- **verify-project.sh**: passes (build, CTest, installed functional with zero skips, packaging, installed smoke).
-- **verify-boilerplate.sh**: passes (bug-ledger valid, scratchpad guard, evidence rejection, boilerplate integration).
-- **check-installed-functional-evidence.sh**: PASS with zero skips.
-- **test_interaction_inventory**: 58-entry §5.7 inventory (M01–M38, O01–O12, D01–D08) verified.
-- **Bug ledger**: valid, 0 open, 3 closed.
-- **SPEC.md**: unchanged (git diff --exit-code = 0).
-- **Git tree**: clean on `develop`.
-- **Parallel reviews**: correctness, security, documentation — no blockers; 6 doc inaccuracies fixed in commit 392da8f.
+## Plan summary
+12 tasks + final audit covering all spec gaps identified by 5 parallel subagent audits:
+1. BUG-0004 (POSIX declarations, Nix gate, close bug)
+2. sd_set_property boolean variant + ManageAllDevices wrapper
+3. Operational readiness property validation
+4. Settings tab icon overrides
+5. Unsaved-changes prompt on window close
+6. Host Mode visual state rendering
+7. Fix interaction tests to use SDL_CONTROLLERBUTTONDOWN
+8. Performance/latency tests
+9. Installed functional test: run overlay service
+10. Font/icon visual tests + weakened assertion fixes
+11. Interaction inventory verification status
+12. Final documentation and specification audit
 
-## Completion
-Human visual acceptance on target hardware remains required before promotion from `develop` to `main` (§11.1).
+## Review findings addressed
+- Added §3, §11 gameplay/footprint/reorder, §5.4 profile-scope, §9.1 Flathub rows to matrix
+- Downgraded R-4.3/R-4.5/R-4.6/R-5.1/R-5.2 to `partial` (keyboard not controller events)
+- Fixed M06/M07 swapped outcomes
+- Added Task 5→7, Task 11→5,6 dependencies
+- Strengthened BUG-0004 remote-runner acceptance
+- Added pointer-path NA review to Task 11
+
+## Next action
+Publish `factory.plan` summary and emit `PLAN_COMPLETE`.
