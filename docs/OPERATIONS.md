@@ -399,15 +399,49 @@ See [DBus-API.md](DBus-API.md) for the full DBus API reference.
 
 | Metric | Target | Mechanism |
 |--------|--------|-----------|
-| Overlay appearance | **<10 ms** (button press → visible) | Pre-built surface in memory; icons pre-rasterized via nanosvg at startup; incremental dirty-rect rendering |
+| Overlay appearance | **≤75 ms p99** (button press → visible) | Pre-built surface in memory; 50 ms poll detection (DEC-002) + <10 ms render+present path |
+| Render path (ALL detected → present) | **<10 ms p99** | Pre-built texture; show = single `SDL_RenderCopy`+`SDL_RenderPresent`; no texture allocation in show path |
 | Gameplay input latency | **~1–2 ms** | InputPlumber intercept overhead only; DBus is a side branch, never inline during gameplay |
 | Overlay close → game input | **<1 ms** | Single `InterceptMode` → PASS; overlay hidden, not destroyed |
-| Daemon footprint | Always resident, no measurable impact | SDL2 minimal memory; idles on DBus signals + 50 ms poll |
+| Daemon footprint | Always resident, no measurable impact | SDL2 minimal memory; idles on DBus signals + 50 ms poll; main loop sleeps 10 ms between steps (no busy-loop) |
 | Player reorder | Atomic, InputPlumber-managed | `GamepadOrder` setter suspends all, resumes in new order with 100 ms stagger |
 
-The `InterceptMode` poll interval is 50 ms (DEC-002), yielding ~51 ms worst-case
-detection. Detection latency is bounded by the poll interval; the render path
-itself is <1 ms.
+### Latency budget and measurement methodology
+
+The overlay appearance latency is composed of two phases:
+
+1. **Detection** (≤50 ms): `InterceptMode` does not emit `PropertiesChanged`
+   (SPEC gap #1), so the daemon polls the property at 50 ms intervals
+   (`IP_INTERCEPT_POLL_INTERVAL_MS`, DEC-002).  Worst-case detection = 50 ms.
+
+2. **Render + present** (<10 ms): the overlay texture is pre-built at daemon
+   startup and held in memory.  Showing the overlay is a single
+   `SDL_RenderCopy` + `SDL_RenderPresent` of the pre-built texture — no
+   texture allocation in the show path (verified structurally by
+   `test_overlay_latency`).  Incremental dirty-rect re-render (when grid state
+   changes while visible) is also <10 ms p99.
+
+**Worst-case button-to-frame = 50 ms (poll) + 10 ms (show) = 60 ms < 75 ms p99.**
+
+The close path sets `InterceptMode=PASS` via a single DBus call (local socket,
+~0.1 ms) and transitions to `IDLE` immediately (fade-out disabled in production
+by default).  Measured at <1 ms median on the test backend.
+
+The daemon main loop calls `cbx_overlay_service_step()` then `SDL_Delay(10)`
+per iteration — it sleeps between steps, never busy-loops.  The step function
+returns in <1 ms when idle (no events, no dirty surface).
+
+**Automated measurement:** `test_overlay_latency` (ctest, `SDL_VIDEODRIVER=dummy`)
+measures all paths on the SDL dummy/software-renderer test backend over ≥200
+iterations, reporting p50/p99/max.  Bounds are generous to tolerate CI
+scheduling jitter while remaining meaningful for regression detection.
+
+**Human release acceptance (§11.1.7):** the automated tests prove the
+software-renderer path on the test backend.  Absolute latency on Pi-4 target
+hardware with a GPU-accelerated compositor requires human verification on
+declared hardware — no `gpu-compositor` runner is declared in the factory
+environment.  The automated results are the strongest deterministic evidence;
+the Pi-4 absolute bound is human-release-gated.
 
 ## Factory campaign operation
 

@@ -588,6 +588,13 @@ if(CMOCKA_FOUND)
     set_tests_properties(test_overlay_interaction PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
 
+    # --- Task 1: Overlay latency timing harness (SPEC §4.9, §11) -------
+    add_executable(test_overlay_latency tests/test_overlay_latency.c)
+    target_link_libraries(test_overlay_latency PRIVATE controllerbox cbx_test_support PkgConfig::CMOCKA)
+    add_test(NAME test_overlay_latency COMMAND test_overlay_latency)
+    set_tests_properties(test_overlay_latency PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+
     # --- Task 9: Visible reusable overlay and runtime reconciliation ----
     add_executable(test_overlay_reconcile tests/test_overlay_reconcile.c)
     target_link_libraries(test_overlay_reconcile PRIVATE controllerbox cbx_test_support PkgConfig::CMOCKA)
