@@ -33,6 +33,7 @@ uint32_t g_nip_intercept_mode[NIP_MAX_COMPOSITES];
 char   g_nip_dbus_devices[NIP_MAX_COMPOSITES][256];
 char   g_nip_comp_names[NIP_MAX_COMPOSITES][64];
 char   g_nip_persistent_ids[NIP_MAX_COMPOSITES][32];
+volatile sig_atomic_t g_nip_fail_next_create = 0;
 
 /* Server configuration (set by parent before fork, read by child) */
 static int      s_num_composites = 1;
@@ -347,6 +348,11 @@ method_create_target(sd_bus_message *m, void *userdata, sd_bus_error *error)
     const char *kind = NULL;
     int rc = sd_bus_message_read(m, "s", &kind);
     if (rc < 0) return rc;
+    if (g_nip_fail_next_create) {
+        g_nip_fail_next_create = 0;
+        return sd_bus_error_set(error, "org.freedesktop.DBus.Error.Failed",
+                                "simulated CreateTargetDevice failure");
+    }
     if (g_nip_target_count >= NIP_MAX_TARGETS)
         return sd_bus_error_set(error, "org.freedesktop.DBus.Error.LimitsExceeded",
                                 "too many targets");
@@ -633,6 +639,7 @@ void nip_reset_server_state(int num_composites)
     memset(g_nip_dbus_devices, 0, sizeof(g_nip_dbus_devices));
     memset(g_nip_comp_names, 0, sizeof(g_nip_comp_names));
     memset(g_nip_persistent_ids, 0, sizeof(g_nip_persistent_ids));
+    g_nip_fail_next_create = 0;
 
     /* Initialize composite names and persistent IDs. */
     int n = num_composites > 0 ? num_composites : 1;

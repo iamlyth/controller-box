@@ -708,6 +708,18 @@ if(CMOCKA_FOUND)
     set_tests_properties(test_manager_interaction_prof PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
 
+    # Task 4 — Manager Controllers + Settings interaction with native DBus.
+    # Uses real sd-bus against a private native-signature InputPlumber-
+    # compatible server with SDL virtual gamepad + mouse pointer paths.
+    # No ip_dbus_mock. Covers M04, M09, M21, M23–M26, MG-04, MG-15, D06.
+    add_executable(test_manager_native tests/test_manager_native.c tests/native_ip_server.c)
+    target_compile_definitions(test_manager_native PRIVATE
+        DBUS_SESSION_CONFIG="${DBUS_PREFIX}/share/dbus-1/session.conf")
+    target_link_libraries(test_manager_native PRIVATE controllerbox PkgConfig::CMOCKA)
+    add_test(NAME test_manager_native COMMAND test_manager_native)
+    set_tests_properties(test_manager_native PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+
 else()
     message(STATUS "cmocka not found — unit tests skipped (smoke tests still built)")
 endif()
