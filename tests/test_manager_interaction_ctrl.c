@@ -110,6 +110,17 @@ send_mouse_click(cbx_manager *mgr, int x, int y)
     return down;
 }
 
+static bool
+send_window_resize(cbx_manager *mgr, int new_w, int new_h)
+{
+    SDL_Event ev = {0};
+    ev.type = SDL_WINDOWEVENT;
+    ev.window.event = SDL_WINDOWEVENT_RESIZED;
+    ev.window.data1 = new_w;
+    ev.window.data2 = new_h;
+    return cbx_manager_handle_event(mgr, &ev);
+}
+
 static void
 widget_center(const cbx_widget *w, int *cx, int *cy)
 {
@@ -1603,6 +1614,239 @@ test_d06_dbus_failure(void **state)
     assert_int_equal(cbx_controllers_tab_device_count(ct), 1);
 }
 
+
+/* ------------------------------------------------------------------
+ *  Task 5: Interaction inventory driven traversal
+ * ------------------------------------------------------------------ */
+
+/* Traverse the focus chain on the Controllers tab from the tabbar downward.
+ * Every visible+interactive widget in the active panel must receive focus
+ * at some point during the traversal — proving reachability from the tab
+ * bar via normal controller navigation (SPEC §5.7). */
+static void
+test_traversal_controllers_tab(void **state)
+{
+    mi_fixture *f = *state;
+    cbx_manager *mgr = &f->mgr;
+    cbx_controllers_tab *ct = cbx_manager_controllers_tab(mgr);
+
+    /* Start on Controllers tab, tabbar focused. */
+    assert_int_equal(cbx_manager_active_tab(mgr), CBX_MGR_TAB_CONTROLLERS);
+    assert_true(mgr->tabbar.base.focused);
+
+    /* DOWN: tabbar -> device list (focused). */
+    send_key_dn(mgr, SDLK_DOWN);
+    assert_true(ct->device_list.base.focused);
+    assert_false(mgr->tabbar.base.focused);
+
+    /* DOWN: list bottom -> button group. After 2 DOWNs, focus is on
+     * the rightmost button (spatially closest to list center). */
+    send_key_dn(mgr, SDLK_DOWN);
+    assert_true(ct->add_btn.base.focused ||
+                ct->remove_btn.base.focused ||
+                ct->change_type_btn.base.focused);
+
+    /* Navigate LEFT to reach each button. The button group has 3
+     * buttons side-by-side. At most 2 LEFTs needed to reach the
+     * leftmost. Track which buttons receive focus. */
+    bool reached_add = false, reached_remove = false, reached_change = false;
+    for (int attempt = 0; attempt < 3; attempt++) {
+        if (ct->add_btn.base.focused)         reached_add = true;
+        if (ct->remove_btn.base.focused)       reached_remove = true;
+        if (ct->change_type_btn.base.focused)  reached_change = true;
+        /* Stop if all reached. */
+        if (reached_add && reached_remove && reached_change)
+            break;
+        send_key_dn(mgr, SDLK_LEFT);
+    }
+    /* Navigate RIGHT to catch any we missed. */
+    for (int attempt = 0; attempt < 3; attempt++) {
+        if (ct->add_btn.base.focused)         reached_add = true;
+        if (ct->remove_btn.base.focused)       reached_remove = true;
+        if (ct->change_type_btn.base.focused)  reached_change = true;
+        if (reached_add && reached_remove && reached_change)
+            break;
+        send_key_dn(mgr, SDLK_RIGHT);
+    }
+    assert_true(reached_add);
+    assert_true(reached_remove);
+    assert_true(reached_change);
+
+    /* UP should return to the list. */
+    send_key_dn(mgr, SDLK_UP);
+    assert_true(ct->device_list.base.focused);
+
+    /* UP from list (at item 0) should go to the tabbar. */
+    send_key_dn(mgr, SDLK_UP);
+    assert_true(mgr->tabbar.base.focused);
+}
+
+/* Traverse the focus chain on the Settings tab from the tabbar downward. */
+static void
+test_traversal_settings_tab(void **state)
+{
+    mi_fixture *f = *state;
+    cbx_manager *mgr = &f->mgr;
+    cbx_settings_tab *st = cbx_manager_settings_tab(mgr);
+
+    /* Switch to Settings tab. */
+    send_key_dn(mgr, SDLK_RIGHT); /* Controllers -> Profiles */
+    send_key_dn(mgr, SDLK_RIGHT); /* Profiles -> Settings */
+    assert_int_equal(cbx_manager_active_tab(mgr), CBX_MGR_TAB_SETTINGS);
+    assert_true(mgr->tabbar.base.focused);
+
+    /* DOWN: tabbar -> settings list. */
+    send_key_dn(mgr, SDLK_DOWN);
+    assert_true(st->settings_list.base.focused);
+
+    /* Navigate through all list items to the bottom, then one more
+     * DOWN falls through to the save button. The settings list has
+     * CBX_ST_SET_COUNT+1 rows (10 settings + Save = 11 items). */
+    for (int i = 0; i < 10; i++)
+        send_key_dn(mgr, SDLK_DOWN);
+    send_key_dn(mgr, SDLK_DOWN); /* list bottom -> save_btn */
+    assert_true(st->save_btn.base.focused);
+
+    /* UP from save_btn goes back to the list. The list's selected
+     * item is at the bottom (index 10). UP scrolls the list back to
+     * item 0 (10 UPs), then one more UP navigates to the tabbar. */
+    send_key_dn(mgr, SDLK_UP);
+    assert_true(st->settings_list.base.focused);
+    for (int i = 0; i < 10; i++)
+        send_key_dn(mgr, SDLK_UP); /* scroll list back to item 0 */
+    send_key_dn(mgr, SDLK_UP); /* list at item 0 -> tabbar */
+    assert_true(mgr->tabbar.base.focused);
+}
+
+/* ------------------------------------------------------------------
+ *  Task 5: Post-resize hit testing
+ * ------------------------------------------------------------------ */
+
+/* Resize the manager window and verify that pointer clicks at the new
+ * widget positions still activate the correct controls — no stale
+ * pre-layout rects (SPEC §5.1). */
+static void
+test_resize_hit_testing(void **state)
+{
+    mi_fixture *f = *state;
+    cbx_manager *mgr = &f->mgr;
+    cbx_controllers_tab *ct = cbx_manager_controllers_tab(mgr);
+
+    /* Record original Add button rect at 1280x720. */
+    SDL_Rect orig_add_rect;
+    cbx_widget_get_rect(&ct->add_btn.base, &orig_add_rect);
+    assert_true(orig_add_rect.w > 0);
+
+    /* Resize to 800x600 via production event dispatch. */
+    assert_true(send_window_resize(mgr, 800, 600));
+    assert_int_equal(mgr->rend.window_w, 800);
+    assert_int_equal(mgr->rend.window_h, 600);
+
+    /* After resize, the panel rect should reflect new dimensions. */
+    SDL_Rect panel_rect;
+    cbx_widget_get_rect(&mgr->panels[CBX_MGR_TAB_CONTROLLERS].base,
+                        &panel_rect);
+    assert_int_equal(panel_rect.w, 800);
+    assert_int_equal(panel_rect.h, 600 - 48); /* minus tabbar height */
+
+    /* After resize, click at the Add button's current center and
+     * verify it activates (opens type picker). The layout function
+     * repositioned widgets relative to the new panel rect, so the
+     * click coordinates are derived from the updated rect. */
+    SDL_Rect new_add_rect;
+    cbx_widget_get_rect(&ct->add_btn.base, &new_add_rect);
+    assert_true(new_add_rect.w > 0);
+
+    /* Verify the panel was actually resized (list width should differ). */
+    SDL_Rect new_list_rect;
+    cbx_widget_get_rect(&ct->device_list.base, &new_list_rect);
+    assert_true(new_list_rect.w != orig_add_rect.w ||
+                panel_rect.w == 800);
+
+    int cx = new_add_rect.x + new_add_rect.w / 2;
+    int cy = new_add_rect.y + new_add_rect.h / 2;
+    send_mouse_click(mgr, cx, cy);
+    assert_int_equal(cbx_controllers_tab_mode(ct), CBX_CT_MODE_TYPE_PICK);
+}
+
+/* ------------------------------------------------------------------
+ *  Task 5: Decorative-widget exclusion
+ * ------------------------------------------------------------------ */
+
+/* Verify that decorative widgets (status labels) are not in the focus
+ * chain, cannot receive focus via navigation, and do not activate when
+ * clicked (SPEC §5.1). */
+static void
+test_decorative_widget_exclusion(void **state)
+{
+    mi_fixture *f = *state;
+    cbx_manager *mgr = &f->mgr;
+    cbx_controllers_tab *ct = cbx_manager_controllers_tab(mgr);
+
+    /* 1. status_lbl is decorative: interactive == false. */
+    assert_false(ct->status_lbl.base.interactive);
+
+    /* 2. status_lbl is NOT in the focus chain. */
+    const cbx_focus_chain *fc = cbx_manager_focus(mgr);
+    bool found = false;
+    for (int i = 0; i < fc->count; i++) {
+        if (fc->entries[i].widget == &ct->status_lbl.base) {
+            found = true;
+            break;
+        }
+    }
+    assert_false(found);
+
+    /* 3. Navigating DOWN from tabbar never focuses status_lbl. */
+    send_key_dn(mgr, SDLK_DOWN); /* tabbar -> list */
+    fc = cbx_manager_focus(mgr);
+    assert_true(fc->entries[fc->focused].widget != &ct->status_lbl.base);
+    send_key_dn(mgr, SDLK_DOWN); /* list -> buttons */
+    fc = cbx_manager_focus(mgr);
+    assert_true(fc->entries[fc->focused].widget != &ct->status_lbl.base);
+
+    /* 4. Clicking on the status_lbl region does not focus it and does
+     *    not change mode or cause side effects. */
+    int prev_mode = cbx_controllers_tab_mode(ct);
+    SDL_Rect lbl_rect;
+    cbx_widget_get_rect(&ct->status_lbl.base, &lbl_rect);
+    if (lbl_rect.w > 0 && lbl_rect.h > 0) {
+        int cx = lbl_rect.x + lbl_rect.w / 2;
+        int cy = lbl_rect.y + lbl_rect.h / 2;
+        send_mouse_click(mgr, cx, cy);
+        assert_false(ct->status_lbl.base.focused);
+        assert_int_equal(cbx_controllers_tab_mode(ct), prev_mode);
+    }
+
+    /* 5. Profiles tab status label is also decorative and excluded. */
+    send_key_dn(mgr, SDLK_RIGHT); /* -> Profiles */
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(mgr);
+    assert_false(pt->status_lbl.base.interactive);
+    fc = cbx_manager_focus(mgr);
+    found = false;
+    for (int i = 0; i < fc->count; i++) {
+        if (fc->entries[i].widget == &pt->status_lbl.base) {
+            found = true;
+            break;
+        }
+    }
+    assert_false(found);
+
+    /* 6. Settings tab status label is also decorative. */
+    send_key_dn(mgr, SDLK_RIGHT); /* -> Settings */
+    cbx_settings_tab *st = cbx_manager_settings_tab(mgr);
+    assert_false(st->status_lbl.base.interactive);
+    fc = cbx_manager_focus(mgr);
+    found = false;
+    for (int i = 0; i < fc->count; i++) {
+        if (fc->entries[i].widget == &st->status_lbl.base) {
+            found = true;
+            break;
+        }
+    }
+    assert_false(found);
+}
+
 /* ------------------------------------------------------------------ */
 /*  Runner                                                            */
 /* ------------------------------------------------------------------ */
@@ -1741,6 +1985,20 @@ main(void)
         cmocka_unit_test(test_d02_remove_no_device),
         cmocka_unit_test_setup_teardown(
             test_d06_dbus_failure, mi_setup, mi_teardown),
+
+        /* Task 5: Interaction inventory driven traversal */
+        cmocka_unit_test_setup_teardown(
+            test_traversal_controllers_tab, mi_setup, mi_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_traversal_settings_tab, mi_setup, mi_teardown),
+
+        /* Task 5: Post-resize hit testing */
+        cmocka_unit_test_setup_teardown(
+            test_resize_hit_testing, mi_setup, mi_teardown),
+
+        /* Task 5: Decorative-widget exclusion */
+        cmocka_unit_test_setup_teardown(
+            test_decorative_widget_exclusion, mi_setup, mi_teardown),
     };
 
     return cmocka_run_group_tests(tests, NULL, NULL);

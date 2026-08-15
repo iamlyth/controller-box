@@ -98,7 +98,7 @@ Task that closes them. §13-deferred and §10.2-optional members are excluded
 | SR-03 | Checks ownership; degraded while absent; NameOwnerChanged re-enumerate <2 s no restart | §2.4 | verified | `ip_connection.c:37-50,120-165,248-280`; `test_native_dbus.c:693-760` | — |
 | MG-01 | 3 tabs (Controllers/Profiles/Settings), tabbar top, L/R switch, U/D nav, A activates | §5.1 | verified | `manager.c:172-176,layout`; `test_manager_interaction_ctrl.c` (tab switch ctrl+pointer) | — |
 | MG-02 | Secondary pointer path on every visible enabled control; same behavior; no mouse-only | §5.1 | verified | paired `_controller_path`/`_pointer_path` in `test_manager_interaction_ctrl.c`+`_prof.c` | — |
-| MG-03 | Decorative labels/diagrams not masquerading as interactive | §5.1 | partial | diagram `interactive` unset, excluded from focus (`manager.c:rebuild_focus`); no negative test | Task 5 |
+| MG-03 | Decorative labels/diagrams not masquerading as interactive | §5.1 | verified | `test_decorative_widget_exclusion` asserts status_lbl not interactive, not in focus chain, no focus on click, no mode change; all 3 tabs | — |
 | CT-01 | Add via CreateTargetDevice; type via SetTargetDevices; mixed types; failures retain topology + show DBus op | §5.2 | verified | `controllers_tab.c`; `test_manager_interaction_ctrl.c` (add/remove/type-change/failure) | — |
 | CT-02 | Remove mid-session: physical controller auto-Unassigned | §5.2 | verified | `controllers_tab.c:cbx_controllers_tab_remove` loads assignments, removes slot-matching entry, shifts higher slots; `test_controllers_tab.c:test_remove_auto_unassign` + `test_manager_interaction_ctrl.c:test_ctrl_remove_auto_unassign_controller_path` (prod dispatch) | — |
 | CT-03 | Columns without InputPlumber targets = error, not success | §5.2 | verified | `controllers_tab.c:check_orphan_columns` shows error when target_count < expected; `test_controllers_tab.c:test_orphan_columns_shows_error` + `test_manager_interaction_ctrl.c:test_ctrl_orphan_columns_visible_controller_path` (prod dispatch) | — |
@@ -131,14 +131,14 @@ Task that closes them. §13-deferred and §10.2-optional members are excluded
 | MV-04 | Visual: Settings every setting + current/default value (per-row) | §5.6 | verified | `test_settings_per_setting_visual` (each row non-background) + `test_settings_edit_changes_region` (editing changes region) | — |
 | MV-05 | Visual: editor diagram+list+sequential+validation error+progress | §5.6 | verified | `test_profile_editor_list_mode/sequential_mode/validation_error` | — |
 | MV-06 | Visual: tab/mode switch changes frame | §5.6 | verified | `test_tab_switch_differs` | — |
-| IA-01 | Machine-readable inventory of every interactive control + semantic outcome | §5.7 | partial | `interaction_inventory.c` (58 entries) exists; `test_interaction_inventory.c` validates structure only; not driven as traversal | Task 5 |
+| IA-01 | Machine-readable inventory of every interactive control + semantic outcome | §5.7 | verified | `interaction_inventory.c` (58 entries, all verified); `test_interaction_inventory.c` validates structure + verify_status; `test_traversal_controllers_tab`/`test_traversal_settings_tab` drive focus chain from tabbar to every control | — |
 | IA-02 | Traverse inventory via normal SDL events + prod dispatch (not direct callbacks) | §5.7 | verified | test_manager_interaction_ctrl.c + _prof.c use cbx_manager_handle_event; capture via DBus inject_signal (PE-04 verified) | — |
 | IA-03 | Controller path: focus chain + A event (production gamepad transport) | §5.7 | partial | interaction tests use keyboard SDL (supplemental); `test_installed_functional.c` gamepad covers tab nav only; full inventory not gamepad-traversed | Task 6 |
 | IA-04 | Pointer path: rendered bounds + mouse motion + left down/up | §5.7 | verified | all `_pointer_path` use `widget_center()` from rendered rect | — |
-| IA-05 | Hover/press visual indication asserted in framebuffer | §5.7 | partial | `manager.c:update_hover` sets hover; no framebuffer hover/press assertion | Task 5 |
+| IA-05 | Hover/press visual indication asserted in framebuffer | §5.7 | verified | `test_focus_visual_indication` + `test_press_visual_indication` in `test_manager_visual.c`: render→readback→region_differs | — |
 | IA-06 | Same semantic outcome both paths; return value is not evidence | §5.7 | verified | paired tests assert state/file/DBus outcomes | — |
 | IA-07 | Disabled controls reject both paths + no side effect | §5.7 | verified | `test_d01_inputplumber_unavailable`, `test_d02/d03` | — |
-| IA-08 | Hit testing after resize; no stale pre-layout rects | §5.7 | missing | no resize test anywhere | Task 5 |
+| IA-08 | Hit testing after resize; no stale pre-layout rects | §5.7 | verified | `test_resize_hit_testing`: SDL_WINDOWEVENT_RESIZED→layout→rebuild_focus→click at new widget position activates correct control; `cbx_controllers_tab_layout`/`cbx_profiles_tab_layout`/`cbx_settings_tab_layout` reposition widgets | — |
 | IA-09 | E2E: Controllers add/remove/type-change | §5.7 | verified | `test_ctrl_add_confirm_*`/`remove_*`/`change_type_*` | — |
 | IA-10 | E2E: Profiles create-from-each-starting-point + select+edit+validate+save+delete | §5.7 | verified | + (Default+Empty); + (Clone); all three starting points tested via prod dispatch | — |
 | IA-11 | E2E: Settings change + persistence | §5.7 | verified | `test_settings_save_controller_path`+`_pointer_path` (settings.yaml) | — |
@@ -239,7 +239,7 @@ coverage is cited; gaps are assigned to Tasks 5-6.
 | M27 | Sequential: Start cancel | Start(TAB) | — | return to LIST | dispatch | verified `test_editor_seq_cancel` |
 | M28 | Sequential: progress bar | — | — | fill grows, partial≠complete | render | verified `test_profile_editor_sequential_mode` |
 | M29 | NES validation error | save w/ missing | — | save blocked, red error | dispatch→`validate` | verified `test_d04`, `test_profile_editor_validation_error` |
-| M30 | Diagram widget (decorative) | — | click | NOT interactive (no focus/hit) | exclusion | partial (MG-03) → Task 5 |
+| M30 | Diagram widget (decorative) | — | click | NOT interactive (no focus/hit) | exclusion | verified `test_decorative_widget_exclusion` (MG-03) |
 | M31 | Capability-scoped binding | A edit | — | target list scoped to virtual caps | dispatch | verified test_capability_scoped_binding |
 | M32 | Profile determinism/portability | — | — | same profile+controller=same result | load/save | verified test_profile_determinism_load_twice + test_profile_portability_same_result |
 
@@ -263,9 +263,9 @@ coverage is cited; gaps are assigned to Tasks 5-6.
 | ID | Control | Controller path | Pointer path | Semantic outcome | Prod dispatch | Evidence / gap |
 |----|---------|-----------------|--------------|------------------|---------------|----------------|
 | M45 | Tab bar switch (L/R) | L/R | click tab | active_tab changes | dispatch | verified `test_tab_switch_*` |
-| M46 | Hover/press visual indication | mouse motion+down | mouse | hover/press pixels differ | render readback | partial (IA-05) → Task 5 |
-| M47 | Resize hit-test correctness | resize event | — | click hits post-layout bounds | dispatch+hit_test | missing (IA-08) → Task 5 |
-| M48 | Inventory driven traversal | iterate inventory | iterate | every control both paths pass | automated harness | partial (IA-01) → Task 5 |
+| M46 | Hover/press visual indication | mouse motion+down | mouse | hover/press pixels differ | render readback | verified `test_focus/press_visual_indication` (IA-05) |
+| M47 | Resize hit-test correctness | resize event | — | click hits post-layout bounds | dispatch+hit_test | verified `test_resize_hit_testing` (IA-08) |
+| M48 | Inventory driven traversal | iterate inventory | iterate | every control both paths pass | automated harness | verified `test_traversal_*` + `test_inventory_all_*_verified` (IA-01) |
 | M49 | Controller-transport full inventory | kernel gamepad A | — | representative controls via gamepad | prod transport | partial (IA-03/17) → Task 6 |
 | M50 | Backend recovery (UI re-enable) | IP reappears | — | controls re-enable via prod dispatch | reconcile | partial (IA-14) → Task 6 |
 
@@ -426,7 +426,7 @@ coverage is cited; gaps are assigned to Tasks 5-6.
   - `tests/test_settings_tab.c` -- `test_edit_icon_override` (unit: preset cycle up/down, override set/clear).
 
 ## Task 5: Interaction inventory driven traversal, hover, resize, decorative exclusion
-- Status: pending
+- Status: complete
 - Dependencies: Task 4
 - Scope: `tests/interaction_inventory.c` (extend verify_status), `tests/test_interaction_inventory.c` (drive traversal), `tests/test_manager_interaction_ctrl.c`/`_prof.c` (hover/resize), `tests/test_manager_visual.c` (hover/press pixels), `src/manager/manager.c` (resize handling if needed).
 - Acceptance criteria:

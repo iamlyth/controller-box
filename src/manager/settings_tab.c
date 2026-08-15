@@ -229,9 +229,20 @@ int cbx_settings_tab_init(cbx_settings_tab *tab,
     cbx_panel_add_child(panel, &tab->save_btn.base);
     cbx_panel_add_child(panel, &tab->status_lbl.base);
 
-    /* --- Layout --------------------------------------------------- */
+/* --- Layout --------------------------------------------------- */    cbx_settings_tab_layout(tab);
+    /* Populate the settings list. */
+    cbx_settings_tab_refresh(tab);
+
+    return 0;
+}
+void
+cbx_settings_tab_layout(cbx_settings_tab *tab)
+{
+    if (!tab || !tab->panel)
+        return;
+
     SDL_Rect rect;
-    cbx_widget_get_rect(&panel->base, &rect);
+    cbx_widget_get_rect(&tab->panel->base, &rect);
 
     /* Settings list: top area. */
     SDL_Rect list_rect = { rect.x + 16, rect.y + CBX_ST_LIST_Y,
@@ -247,12 +258,8 @@ int cbx_settings_tab_init(cbx_settings_tab *tab,
     SDL_Rect status_rect = { rect.x + 16, btn_y + CBX_ST_BTN_H + 16,
                               rect.w - 32, 32 };
     cbx_widget_set_rect(&tab->status_lbl.base, &status_rect);
-
-    /* Populate the settings list. */
-    cbx_settings_tab_refresh(tab);
-
-    return 0;
 }
+
 
 int cbx_settings_tab_refresh(cbx_settings_tab *tab)
 {

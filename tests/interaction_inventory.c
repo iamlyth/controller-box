@@ -38,7 +38,7 @@ static const cbx_interaction_entry inventory[] = {
       AVAIL, "Mouse move + click on tab rect",
       "Active tab switches to Controllers; panel children visible",
       "cbx_manager_handle_event → tabbar handle_event",
-      CBX_VERIFY_UNVERIFIED, "Task 8" },
+      CBX_VERIFY_VERIFIED, "Task 8" },
 
     { "M02", CBX_CAT_MANAGER_TABBAR, "Tab bar",
       CBX_WIDGET_TAB,
@@ -46,7 +46,7 @@ static const cbx_interaction_entry inventory[] = {
       AVAIL, "Mouse click on tab rect",
       "Active tab switches to Profiles",
       "cbx_manager_handle_event → tabbar handle_event",
-      CBX_VERIFY_UNVERIFIED, "Task 8" },
+      CBX_VERIFY_VERIFIED, "Task 8" },
 
     { "M03", CBX_CAT_MANAGER_TABBAR, "Tab bar",
       CBX_WIDGET_TAB,
@@ -54,7 +54,7 @@ static const cbx_interaction_entry inventory[] = {
       AVAIL, "Mouse click on tab rect",
       "Active tab switches to Settings",
       "cbx_manager_handle_event → tabbar handle_event",
-      CBX_VERIFY_UNVERIFIED, "Task 8" },
+      CBX_VERIFY_VERIFIED, "Task 8" },
 
     /* ---- Manager — Controllers tab (M04–M09) ---- */
     { "M04", CBX_CAT_MANAGER_CTRL, "Controllers tab",
@@ -63,7 +63,7 @@ static const cbx_interaction_entry inventory[] = {
       AVAIL, "Mouse click on list item",
       "Item selected (visual focus)",
       "cbx_manager_handle_event → panel → list handle_event",
-      CBX_VERIFY_UNVERIFIED, "Task 8" },
+      CBX_VERIFY_VERIFIED, "Task 8" },
 
     { "M05", CBX_CAT_MANAGER_CTRL, "Controllers tab",
       CBX_WIDGET_BUTTON,
@@ -71,7 +71,7 @@ static const cbx_interaction_entry inventory[] = {
       AVAIL, "Mouse click on button rect",
       "Type picker opens (mode change)",
       "cbx_manager_handle_event → panel → button handle_event → cbx_controllers_tab_begin_type_pick",
-      CBX_VERIFY_UNVERIFIED, "Task 8" },
+      CBX_VERIFY_VERIFIED, "Task 8" },
 
     { "M06", CBX_CAT_MANAGER_CTRL, "Controllers tab",
       CBX_WIDGET_BUTTON,
@@ -79,7 +79,7 @@ static const cbx_interaction_entry inventory[] = {
       AVAIL, "Mouse click on button rect",
       "StopTargetDevice DBus call; device count decreases",
       "cbx_manager_handle_event → panel → button → cbx_controllers_tab_remove",
-      CBX_VERIFY_UNVERIFIED, "Task 8" },
+      CBX_VERIFY_VERIFIED, "Task 8" },
 
     { "M07", CBX_CAT_MANAGER_CTRL, "Controllers tab",
       CBX_WIDGET_BUTTON,
@@ -87,7 +87,7 @@ static const cbx_interaction_entry inventory[] = {
       AVAIL, "Mouse click on button rect",
       "Type picker opens (change mode)",
       "cbx_manager_handle_event → panel → button → cbx_controllers_tab_begin_type_pick",
-      CBX_VERIFY_UNVERIFIED, "Task 8" },
+      CBX_VERIFY_VERIFIED, "Task 8" },
 
     { "M08", CBX_CAT_MANAGER_CTRL, "Controllers tab",
       CBX_WIDGET_PICKER,
@@ -95,7 +95,7 @@ static const cbx_interaction_entry inventory[] = {
       AVAIL, "Mouse click on type item",
       "CreateTargetDevice or SetTargetDevices DBus call; device type changes; picker closes",
       "cbx_manager_handle_event → panel → list on_select → cbx_controllers_tab_confirm_type_pick",
-      CBX_VERIFY_UNVERIFIED, "Task 8" },
+      CBX_VERIFY_VERIFIED, "Task 8" },
 
     { "M09", CBX_CAT_MANAGER_CTRL, "Controllers tab",
       CBX_WIDGET_PICKER,
@@ -112,7 +112,7 @@ static const cbx_interaction_entry inventory[] = {
       AVAIL, "Mouse click on item",
       "Profile selected (visual focus)",
       "cbx_manager_handle_event → panel → list",
-      CBX_VERIFY_UNVERIFIED, "Task 9" },
+      CBX_VERIFY_VERIFIED, "Task 9" },
 
     { "M11", CBX_CAT_MANAGER_PROF, "Profiles tab",
       CBX_WIDGET_BUTTON,
@@ -120,7 +120,7 @@ static const cbx_interaction_entry inventory[] = {
       AVAIL, "Mouse click on button rect",
       "Create source picker opens (Default copy / Empty / Clone)",
       "cbx_manager_handle_event → panel → button → cbx_profiles_tab_begin_create",
-      CBX_VERIFY_UNVERIFIED, "Task 9" },
+      CBX_VERIFY_VERIFIED, "Task 9" },
 
     { "M12", CBX_CAT_MANAGER_PROF, "Profiles tab",
       CBX_WIDGET_PICKER,
@@ -128,7 +128,7 @@ static const cbx_interaction_entry inventory[] = {
       AVAIL, "Mouse click on source item",
       "Source selected; name-input mode opens",
       "cbx_manager_handle_event → panel → list on_select → cbx_profiles_tab_begin_name_input",
-      CBX_VERIFY_UNVERIFIED, "Task 9" },
+      CBX_VERIFY_VERIFIED, "Task 9" },
 
     { "M13", CBX_CAT_MANAGER_PROF, "Profiles tab",
       CBX_WIDGET_NAME_INPUT,
@@ -168,7 +168,7 @@ static const cbx_interaction_entry inventory[] = {
       AVAIL, "Mouse click on button rect",
       "Profile editor opens with selected profile",
       "cbx_manager_handle_event → panel → button → profile editor init",
-      CBX_VERIFY_UNVERIFIED, "Task 9" },
+      CBX_VERIFY_VERIFIED, "Task 9" },
 
     { "M18", CBX_CAT_MANAGER_PROF, "Profiles tab",
       CBX_WIDGET_BUTTON,
@@ -176,7 +176,7 @@ static const cbx_interaction_entry inventory[] = {
       AVAIL, "Mouse click on button rect",
       "Confirm-delete mode opens",
       "cbx_manager_handle_event → panel → button → cbx_profiles_tab_begin_delete",
-      CBX_VERIFY_UNVERIFIED, "Task 9" },
+      CBX_VERIFY_VERIFIED, "Task 9" },
 
     { "M19", CBX_CAT_MANAGER_PROF, "Profiles tab",
       CBX_WIDGET_CONFIRM_DELETE,
@@ -201,7 +201,7 @@ static const cbx_interaction_entry inventory[] = {
       AVAIL, "Mouse click on item",
       "Setting selected (visual focus)",
       "cbx_manager_handle_event → panel → list",
-      CBX_VERIFY_UNVERIFIED, "Task 8" },
+      CBX_VERIFY_VERIFIED, "Task 8" },
 
     { "M22", CBX_CAT_MANAGER_SETTINGS, "Settings tab",
       CBX_WIDGET_EDIT_MODE,
@@ -209,7 +209,7 @@ static const cbx_interaction_entry inventory[] = {
       AVAIL, "Mouse click on item",
       "Value toggles (e.g. launch_at_boot)",
       "cbx_manager_handle_event → cbx_settings_tab_activate",
-      CBX_VERIFY_UNVERIFIED, "Task 8" },
+      CBX_VERIFY_VERIFIED, "Task 8" },
 
     { "M23", CBX_CAT_MANAGER_SETTINGS, "Settings tab",
       CBX_WIDGET_EDIT_MODE,
@@ -217,7 +217,7 @@ static const cbx_interaction_entry inventory[] = {
       AVAIL, "Mouse click on item",
       "Edit mode entered for that setting",
       "cbx_manager_handle_event → cbx_settings_tab_activate",
-      CBX_VERIFY_UNVERIFIED, "Task 8" },
+      CBX_VERIFY_VERIFIED, "Task 8" },
 
     { "M24", CBX_CAT_MANAGER_SETTINGS, "Settings tab",
       CBX_WIDGET_EDIT_MODE,
@@ -249,7 +249,7 @@ static const cbx_interaction_entry inventory[] = {
       AVAIL, "Mouse click on button rect",
       "settings.yaml written to disk",
       "cbx_manager_handle_event → panel → button → cbx_settings_tab_save → cbx_settings_save",
-      CBX_VERIFY_UNVERIFIED, "Task 8" },
+      CBX_VERIFY_VERIFIED, "Task 8" },
 
     /* ---- Manager — Profile editor (M28–M38) ---- */
     { "M28", CBX_CAT_MANAGER_EDITOR, "Profile editor",
@@ -258,7 +258,7 @@ static const cbx_interaction_entry inventory[] = {
       AVAIL, "Mouse click on item",
       "Binding highlighted; diagram lights corresponding button",
       "cbx_manager_handle_event → editor panel → list → cbx_profile_editor_move_down/activate",
-      CBX_VERIFY_UNVERIFIED, "Task 9" },
+      CBX_VERIFY_VERIFIED, "Task 9" },
 
     { "M29", CBX_CAT_MANAGER_EDITOR, "Profile editor",
       CBX_WIDGET_BINDING,
@@ -266,7 +266,7 @@ static const cbx_interaction_entry inventory[] = {
       AVAIL, "Mouse click on item",
       "Binding edit sub-menu opens (target-pick or capture)",
       "cbx_manager_handle_event → cbx_profile_editor_activate",
-      CBX_VERIFY_UNVERIFIED, "Task 9" },
+      CBX_VERIFY_VERIFIED, "Task 9" },
 
     { "M30", CBX_CAT_MANAGER_EDITOR, "Profile editor",
       CBX_WIDGET_PICKER,
@@ -274,7 +274,7 @@ static const cbx_interaction_entry inventory[] = {
       AVAIL, "Mouse click on target item",
       "Binding target updated; picker closes",
       "cbx_manager_handle_event → list on_select → cbx_profile_editor_confirm_target_pick",
-      CBX_VERIFY_UNVERIFIED, "Task 9" },
+      CBX_VERIFY_VERIFIED, "Task 9" },
 
     { "M31", CBX_CAT_MANAGER_EDITOR, "Profile editor",
       CBX_WIDGET_CAPTURE,
@@ -282,7 +282,7 @@ static const cbx_interaction_entry inventory[] = {
       AVAIL, "Mouse click on 'capture' option",
       "Capture mode begins; waiting for physical button press",
       "cbx_manager_handle_event → cbx_profile_editor_begin_capture",
-      CBX_VERIFY_UNVERIFIED, "Task 9" },
+      CBX_VERIFY_VERIFIED, "Task 9" },
 
     { "M32", CBX_CAT_MANAGER_EDITOR, "Profile editor",
       CBX_WIDGET_CAPTURE,
@@ -298,7 +298,7 @@ static const cbx_interaction_entry inventory[] = {
       AVAIL, "Mouse click on 'sequential' option",
       "Sequential mode begins; first button prompted",
       "cbx_manager_handle_event → cbx_profile_editor_begin_sequential",
-      CBX_VERIFY_UNVERIFIED, "Task 9" },
+      CBX_VERIFY_VERIFIED, "Task 9" },
 
     { "M34", CBX_CAT_MANAGER_EDITOR, "Profile editor",
       CBX_WIDGET_SEQUENTIAL,
@@ -347,7 +347,7 @@ static const cbx_interaction_entry inventory[] = {
       NA, "n/a",
       "Surface shown; lifecycle ACTIVATING→VISIBLE",
       "run_overlay_service poll loop → ip_intercept_poll_tick → cbx_overlay_lifecycle_activate",
-      CBX_VERIFY_UNVERIFIED, "Task 11" },
+      CBX_VERIFY_VERIFIED, "Task 11" },
 
     { "O02", CBX_CAT_OVERLAY, "Overlay",
       CBX_WIDGET_OVERLAY_ACTION,
@@ -355,7 +355,7 @@ static const cbx_interaction_entry inventory[] = {
       NA, "n/a",
       "Controller's grid column decreases; on_slot_change callback fires",
       "poll loop → sdl_key_to_pm_input or ip_input_events → cbx_player_mode_handle",
-      CBX_VERIFY_UNVERIFIED, "Task 11" },
+      CBX_VERIFY_VERIFIED, "Task 11" },
 
     { "O03", CBX_CAT_OVERLAY, "Overlay",
       CBX_WIDGET_OVERLAY_ACTION,
@@ -363,7 +363,7 @@ static const cbx_interaction_entry inventory[] = {
       NA, "n/a",
       "Column increases; callback fires",
       "poll loop → sdl_key_to_pm_input or ip_input_events → cbx_player_mode_handle",
-      CBX_VERIFY_UNVERIFIED, "Task 11" },
+      CBX_VERIFY_VERIFIED, "Task 11" },
 
     { "O04", CBX_CAT_OVERLAY, "Overlay",
       CBX_WIDGET_OVERLAY_ACTION,
@@ -371,7 +371,7 @@ static const cbx_interaction_entry inventory[] = {
       NA, "n/a",
       "Profile name changes; LoadProfilePath DBus call; assignment updated",
       "poll loop → cbx_player_mode_handle → cbx_profile_cycle_apply",
-      CBX_VERIFY_UNVERIFIED, "Task 11" },
+      CBX_VERIFY_VERIFIED, "Task 11" },
 
     { "O05", CBX_CAT_OVERLAY, "Overlay",
       CBX_WIDGET_OVERLAY_ACTION,
@@ -379,7 +379,7 @@ static const cbx_interaction_entry inventory[] = {
       NA, "n/a",
       "Profile name changes (reverse)",
       "poll loop → cbx_player_mode_handle → cbx_profile_cycle_apply",
-      CBX_VERIFY_UNVERIFIED, "Task 11" },
+      CBX_VERIFY_VERIFIED, "Task 11" },
 
     { "O06", CBX_CAT_OVERLAY, "Overlay",
       CBX_WIDGET_OVERLAY_ACTION,
@@ -387,7 +387,7 @@ static const cbx_interaction_entry inventory[] = {
       NA, "n/a",
       "Host mode entered; other controllers freeze",
       "poll loop → cbx_player_mode_handle → cbx_host_mode_toggle",
-      CBX_VERIFY_UNVERIFIED, "Task 11" },
+      CBX_VERIFY_VERIFIED, "Task 11" },
 
     { "O07", CBX_CAT_OVERLAY, "Overlay",
       CBX_WIDGET_OVERLAY_ACTION,
@@ -395,7 +395,7 @@ static const cbx_interaction_entry inventory[] = {
       NA, "n/a",
       "Host selected row changes",
       "poll loop → cbx_host_mode_handle",
-      CBX_VERIFY_UNVERIFIED, "Task 11" },
+      CBX_VERIFY_VERIFIED, "Task 11" },
 
     { "O08", CBX_CAT_OVERLAY, "Overlay",
       CBX_WIDGET_OVERLAY_ACTION,
@@ -403,7 +403,7 @@ static const cbx_interaction_entry inventory[] = {
       NA, "n/a",
       "Host changes a row's slot; conflict may arise",
       "poll loop → cbx_host_mode_handle",
-      CBX_VERIFY_UNVERIFIED, "Task 11" },
+      CBX_VERIFY_VERIFIED, "Task 11" },
 
     { "O09", CBX_CAT_OVERLAY, "Overlay",
       CBX_WIDGET_OVERLAY_ACTION,
@@ -411,7 +411,7 @@ static const cbx_interaction_entry inventory[] = {
       NA, "n/a",
       "Host mode exits; controllers unfreeze",
       "poll loop → cbx_host_mode_handle → cbx_host_mode_exit",
-      CBX_VERIFY_UNVERIFIED, "Task 11" },
+      CBX_VERIFY_VERIFIED, "Task 11" },
 
     { "O10", CBX_CAT_OVERLAY, "Overlay",
       CBX_WIDGET_OVERLAY_ACTION,
@@ -419,7 +419,7 @@ static const cbx_interaction_entry inventory[] = {
       NA, "n/a",
       "Assignments saved; conflicts auto-resolved; InterceptMode set to PASS; surface hidden",
       "poll loop → cbx_player_mode_handle/cbx_host_mode_handle → cbx_overlay_lifecycle_close → cbx_close_on_save",
-      CBX_VERIFY_UNVERIFIED, "Task 11" },
+      CBX_VERIFY_VERIFIED, "Task 11" },
 
     { "O11", CBX_CAT_OVERLAY, "Overlay",
       CBX_WIDGET_OVERLAY_ACTION,
@@ -427,7 +427,7 @@ static const cbx_interaction_entry inventory[] = {
       NA, "n/a",
       "Each controller moves its own row independently",
       "poll loop → ip_input_events → device_path→row mapping → cbx_player_mode_handle",
-      CBX_VERIFY_UNVERIFIED, "Task 11" },
+      CBX_VERIFY_VERIFIED, "Task 11" },
 
     { "O12", CBX_CAT_OVERLAY, "Overlay",
       CBX_WIDGET_OVERLAY_ACTION,
@@ -444,7 +444,7 @@ static const cbx_interaction_entry inventory[] = {
       NA, "n/a (degraded state; controls disabled)",
       "Degraded content shown; Add/Remove/ChangeType disabled; activation rejected, no DBus call",
       "cbx_manager_handle_event → disabled widget rejection",
-      CBX_VERIFY_UNVERIFIED, "Task 8" },
+      CBX_VERIFY_VERIFIED, "Task 8" },
 
     { "D02", CBX_CAT_DISABLED, "Controllers tab — no device selected",
       CBX_WIDGET_SCENARIO,
@@ -452,7 +452,7 @@ static const cbx_interaction_entry inventory[] = {
       NA, "n/a (disabled state)",
       "Disabled; activation produces no DBus side effect",
       "cbx_manager_handle_event → disabled widget rejection",
-      CBX_VERIFY_UNVERIFIED, "Task 8" },
+      CBX_VERIFY_VERIFIED, "Task 8" },
 
     { "D03", CBX_CAT_DISABLED, "Profiles tab — no profile selected",
       CBX_WIDGET_SCENARIO,
@@ -460,7 +460,7 @@ static const cbx_interaction_entry inventory[] = {
       NA, "n/a (disabled state)",
       "Disabled; activation produces no file deletion",
       "cbx_manager_handle_event → disabled widget rejection",
-      CBX_VERIFY_UNVERIFIED, "Task 9" },
+      CBX_VERIFY_VERIFIED, "Task 9" },
 
     { "D04", CBX_CAT_DISABLED, "Profile editor — save with missing NES bindings",
       CBX_WIDGET_SCENARIO,
@@ -468,7 +468,7 @@ static const cbx_interaction_entry inventory[] = {
       NA, "n/a (validation failure)",
       "Error shown; profile not saved; cbx_profile_validate_nes_minimum returns error; editor stays open",
       "cbx_profile_save_to_dir → cbx_profile_validate_nes_minimum → error",
-      CBX_VERIFY_UNVERIFIED, "Task 9" },
+      CBX_VERIFY_VERIFIED, "Task 9" },
 
     { "D05", CBX_CAT_DISABLED, "Settings tab — edit cancel",
       CBX_WIDGET_SCENARIO,
@@ -476,7 +476,7 @@ static const cbx_interaction_entry inventory[] = {
       NA, "n/a (controller-only cancel)",
       "Value reverts from disk; no settings.yaml write",
       "cbx_manager_handle_event → cbx_settings_tab_cancel_edit",
-      CBX_VERIFY_UNVERIFIED, "Task 8" },
+      CBX_VERIFY_VERIFIED, "Task 8" },
 
     { "D06", CBX_CAT_DISABLED, "Controllers tab — DBus operation failure",
       CBX_WIDGET_SCENARIO,
@@ -484,7 +484,7 @@ static const cbx_interaction_entry inventory[] = {
       NA, "n/a (backend failure)",
       "Error shown to user; UI remains responsive; no state corruption",
       "cbx_controllers_tab_confirm_type_pick → DBus error → error display",
-      CBX_VERIFY_UNVERIFIED, "Task 8" },
+      CBX_VERIFY_VERIFIED, "Task 8" },
 
     { "D07", CBX_CAT_DISABLED, "Profile editor — filesystem failure",
       CBX_WIDGET_SCENARIO,
@@ -492,7 +492,7 @@ static const cbx_interaction_entry inventory[] = {
       NA, "n/a (filesystem failure)",
       "Error shown; profile not written; editor stays open",
       "cbx_profile_save_to_dir → write failure → error display",
-      CBX_VERIFY_UNVERIFIED, "Task 9" },
+      CBX_VERIFY_VERIFIED, "Task 9" },
 
     { "D08", CBX_CAT_DISABLED, "Profile editor — empty profile creation",
       CBX_WIDGET_SCENARIO,
@@ -500,7 +500,7 @@ static const cbx_interaction_entry inventory[] = {
       NA, "n/a (validation failure)",
       "Editor opens with no bindings; save is blocked by NES validation until minimum bindings added",
       "cbx_profile_save_to_dir → cbx_profile_validate_nes_minimum → error",
-      CBX_VERIFY_UNVERIFIED, "Task 9" },
+      CBX_VERIFY_VERIFIED, "Task 9" },
 
     /* Terminator */
     { NULL, (cbx_inv_category)0, NULL, (cbx_inv_widget_type)0,

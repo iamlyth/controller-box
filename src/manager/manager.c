@@ -482,6 +482,20 @@ cbx_manager_handle_event(cbx_manager *mgr, const SDL_Event *ev)
         return true;
     }
 
+    /* SDL_WINDOWEVENT: handle resize to keep widget rects and focus
+     * chain in sync with the new window dimensions (SPEC §5.1). */
+    if (ev->type == SDL_WINDOWEVENT) {
+        if (ev->window.event == SDL_WINDOWEVENT_RESIZED ||
+            ev->window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
+            mgr->rend.window_w = ev->window.data1;
+            mgr->rend.window_h = ev->window.data2;
+            cbx_manager_layout(mgr);
+            cbx_manager_rebuild_focus(mgr);
+            return true;
+        }
+        return false;
+    }
+
     if (ev->type == SDL_CONTROLLERDEVICEADDED) {
         cbx_manager_open_gamecontroller(mgr, ev->cdevice.which);
         return true;
@@ -953,6 +967,11 @@ cbx_manager_layout(cbx_manager *mgr)
     };
     for (int i = 0; i < CBX_MGR_TAB_COUNT; i++)
         cbx_widget_set_rect(&mgr->panels[i].base, &panel_rect);
+
+    /* Reposition tab widgets relative to the new panel rect. */
+    cbx_controllers_tab_layout(&mgr->ct);
+    cbx_profiles_tab_layout(&mgr->pt);
+    cbx_settings_tab_layout(&mgr->st);
 }
 
 /* ------------------------------------------------------------------ */

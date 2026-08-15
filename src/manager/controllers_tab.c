@@ -267,45 +267,9 @@ cbx_controllers_tab_init(cbx_controllers_tab *tab,
     cbx_panel_add_child(panel, &tab->status_lbl.base);
 
     /* --- Layout --------------------------------------------------- */
-    SDL_Rect panel_rect;
-    cbx_widget_get_rect(&panel->base, &panel_rect);
+    cbx_controllers_tab_layout(tab);
 
-    /* Device list: top-left, fills most of the panel. */
-    SDL_Rect list_rect = {
-        .x = panel_rect.x + CBX_CT_LIST_Y,
-        .y = panel_rect.y + CBX_CT_LIST_Y,
-        .w = panel_rect.w - CBX_CT_LIST_Y * 2,
-        .h = CBX_CT_LIST_H,
-    };
-    cbx_widget_set_rect(&tab->device_list.base, &list_rect);
-
-    /* Type picker: same position, hidden. */
-    cbx_widget_set_rect(&tab->type_picker.base, &list_rect);
-
-    /* Buttons: below the list, left to right. */
-    int btn_y = panel_rect.y + CBX_CT_LIST_Y + CBX_CT_LIST_H + CBX_CT_BTN_GAP;
-    int btn_x = panel_rect.x + CBX_CT_LIST_Y;
-
-    SDL_Rect add_rect = { .x = btn_x, .y = btn_y,
-                          .w = CBX_CT_BTN_W, .h = CBX_CT_BTN_H };
-    cbx_widget_set_rect(&tab->add_btn.base, &add_rect);
-
-    btn_x += CBX_CT_BTN_W + CBX_CT_BTN_GAP;
-    SDL_Rect rm_rect = { .x = btn_x, .y = btn_y,
-                          .w = CBX_CT_BTN_W, .h = CBX_CT_BTN_H };
-    cbx_widget_set_rect(&tab->remove_btn.base, &rm_rect);
-
-    btn_x += CBX_CT_BTN_W + CBX_CT_BTN_GAP;
-    SDL_Rect ct_rect = { .x = btn_x, .y = btn_y,
-                          .w = CBX_CT_BTN_W, .h = CBX_CT_BTN_H };
-    cbx_widget_set_rect(&tab->change_type_btn.base, &ct_rect);
-    SDL_Rect status_rect = {
-        .x = panel_rect.x + CBX_CT_LIST_Y,
-        .y = btn_y + CBX_CT_BTN_H + CBX_CT_BTN_GAP,
-        .w = panel_rect.w - CBX_CT_LIST_Y * 2,
-        .h = CBX_CT_BTN_H,
-    };
-    cbx_widget_set_rect(&tab->status_lbl.base, &status_rect);
+    /* --- Load supported types + refresh --------------------------- */
 
     /* --- Load supported types + refresh --------------------------- */
     if (backend && bus) {
@@ -396,6 +360,52 @@ cbx_controllers_tab_set_expected_count(cbx_controllers_tab *tab,
     /* Re-check topology immediately in case the tab was already
      * refreshed during init (before expected count was set). */
     check_orphan_columns(tab);
+}
+
+void
+cbx_controllers_tab_layout(cbx_controllers_tab *tab)
+{
+    if (!tab || !tab->panel)
+        return;
+
+    SDL_Rect panel_rect;
+    cbx_widget_get_rect(&tab->panel->base, &panel_rect);
+
+    /* Device list: top-left, fills most of the panel. */
+    SDL_Rect list_rect = {
+        .x = panel_rect.x + CBX_CT_LIST_Y,
+        .y = panel_rect.y + CBX_CT_LIST_Y,
+        .w = panel_rect.w - CBX_CT_LIST_Y * 2,
+        .h = CBX_CT_LIST_H,
+    };
+    cbx_widget_set_rect(&tab->device_list.base, &list_rect);
+    cbx_widget_set_rect(&tab->type_picker.base, &list_rect);
+
+    /* Buttons: below the list, left to right. */
+    int btn_y = panel_rect.y + CBX_CT_LIST_Y + CBX_CT_LIST_H + CBX_CT_BTN_GAP;
+    int btn_x = panel_rect.x + CBX_CT_LIST_Y;
+
+    SDL_Rect add_rect = { .x = btn_x, .y = btn_y,
+                          .w = CBX_CT_BTN_W, .h = CBX_CT_BTN_H };
+    cbx_widget_set_rect(&tab->add_btn.base, &add_rect);
+
+    btn_x += CBX_CT_BTN_W + CBX_CT_BTN_GAP;
+    SDL_Rect rm_rect = { .x = btn_x, .y = btn_y,
+                          .w = CBX_CT_BTN_W, .h = CBX_CT_BTN_H };
+    cbx_widget_set_rect(&tab->remove_btn.base, &rm_rect);
+
+    btn_x += CBX_CT_BTN_W + CBX_CT_BTN_GAP;
+    SDL_Rect ct_rect = { .x = btn_x, .y = btn_y,
+                          .w = CBX_CT_BTN_W, .h = CBX_CT_BTN_H };
+    cbx_widget_set_rect(&tab->change_type_btn.base, &ct_rect);
+
+    SDL_Rect status_rect = {
+        .x = panel_rect.x + CBX_CT_LIST_Y,
+        .y = btn_y + CBX_CT_BTN_H + CBX_CT_BTN_GAP,
+        .w = panel_rect.w - CBX_CT_LIST_Y * 2,
+        .h = CBX_CT_BTN_H,
+    };
+    cbx_widget_set_rect(&tab->status_lbl.base, &status_rect);
 }
 
 int

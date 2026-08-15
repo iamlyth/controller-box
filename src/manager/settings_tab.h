@@ -110,6 +110,12 @@ int cbx_settings_tab_init(cbx_settings_tab *tab,
  * Refresh the settings list: rebuild list items from the settings struct.
  * Returns 0 on success, negative errno on error.
  */
+/*
+ * Reposition all tab widgets relative to the current panel rect.
+ * Called during init and on window resize (SPEC §5.1).
+ */
+void cbx_settings_tab_layout(cbx_settings_tab *tab);
+
 int cbx_settings_tab_refresh(cbx_settings_tab *tab);
 
 /*

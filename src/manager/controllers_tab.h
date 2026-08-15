@@ -125,6 +125,13 @@ int cbx_controllers_tab_init(cbx_controllers_tab *tab,
  * each target's DeviceType, and rebuild the list widget.
  * Returns 0 on success, negative errno on error (partial success is OK).
  */
+/*
+ * Reposition all tab widgets relative to the current panel rect.
+ * Called during init and on window resize so widget rects stay in
+ * sync with the panel dimensions (SPEC §5.1).
+ */
+void cbx_controllers_tab_layout(cbx_controllers_tab *tab);
+
 int cbx_controllers_tab_refresh(cbx_controllers_tab *tab);
 
 /* Enable/disable backend actions and expose a user-visible reason. */

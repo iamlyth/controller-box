@@ -165,6 +165,12 @@ void cbx_profiles_tab_set_context(cbx_profiles_tab *tab,
  * the list widget.  Preserves selection if possible.
  * Returns 0 on success, negative errno on error.
  */
+/*
+ * Reposition all tab widgets relative to the current panel rect.
+ * Called during init and on window resize (SPEC §5.1).
+ */
+void cbx_profiles_tab_layout(cbx_profiles_tab *tab);
+
 int cbx_profiles_tab_refresh(cbx_profiles_tab *tab);
 
 /*

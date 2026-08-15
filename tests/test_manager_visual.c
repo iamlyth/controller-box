@@ -233,6 +233,27 @@ render_and_read(cbx_manager *mgr, uint8_t *buf)
         0);
 }
 
+static bool
+send_mouse_motion(cbx_manager *mgr, int x, int y)
+{
+    SDL_Event ev = {0};
+    ev.type = SDL_MOUSEMOTION;
+    ev.motion.x = x;
+    ev.motion.y = y;
+    return cbx_manager_handle_event(mgr, &ev);
+}
+
+static bool
+send_mouse_btn_down(cbx_manager *mgr, int x, int y)
+{
+    SDL_Event ev = {0};
+    ev.type = SDL_MOUSEBUTTONDOWN;
+    ev.button.button = SDL_BUTTON_LEFT;
+    ev.button.x = x;
+    ev.button.y = y;
+    return cbx_manager_handle_event(mgr, &ev);
+}
+
 
 
 /*
@@ -965,6 +986,98 @@ test_profile_editor_validation_error(void **state)
                                      &status_rect, red_target, MGR_TOL));
 }
 
+/* ------------------------------------------------------------------
+ *  Task 5: Hover/press visual indication (framebuffer readback)
+ * ------------------------------------------------------------------ */
+
+/* Assert that focusing a control produces a visible change in the
+ * framebuffer — the focus highlight (brighter background + focus
+ * border) must be rendered, not just stored in the widget struct
+ * (SPEC §5.6).  Uses mouse click to focus (focus-follows-pointer). */
+static void
+test_focus_visual_indication(void **state)
+{
+    struct mgr_vis_fixture *f = FIX(state);
+    cbx_manager *mgr = &f->mgr;
+
+    /* Switch to Profiles tab (buttons are always interactive there). */
+    send_key(mgr, SDLK_RIGHT); /* Controllers -> Profiles */
+    assert_int_equal(cbx_manager_active_tab(mgr), CBX_MGR_TAB_PROFILES);
+
+    /* Baseline: tabbar focused. */
+    render_and_read(mgr, f->buf_a);
+
+    /* Switch to Settings tab and use the Save button (clicking it
+     * saves settings, which is harmless in an empty test HOME). */
+    send_key(mgr, SDLK_RIGHT); /* Profiles -> Settings */
+    assert_int_equal(cbx_manager_active_tab(mgr), CBX_MGR_TAB_SETTINGS);
+    cbx_settings_tab *st = cbx_manager_settings_tab(mgr);
+
+    /* Baseline: Save button not focused. */
+    render_and_read(mgr, f->buf_a);
+
+    /* Mouse motion + click on Save button to focus it. */
+    SDL_Rect btn_rect;
+    cbx_widget_get_rect(&st->save_btn.base, &btn_rect);
+    int cx = btn_rect.x + btn_rect.w / 2;
+    int cy = btn_rect.y + btn_rect.h / 2;
+
+    /* Just send MOUSEMOTION to hover, then MOUSEBUTTONDOWN to focus.
+     * Don't send MOUSEBUTTONUP to avoid triggering the save action. */
+    send_mouse_motion(mgr, cx, cy);
+    send_mouse_btn_down(mgr, cx, cy);
+    assert_true(st->save_btn.base.focused);
+    assert_true(st->save_btn.pressed);
+
+    /* Render with button focused + pressed. */
+    render_and_read(mgr, f->buf_b);
+
+    /* The Save button region should differ — focused+pressed button
+     * has text_accent background instead of panel_bg. */
+    assert_true(region_differs(f->buf_a, f->buf_b, MGR_W, &btn_rect));
+}
+
+/* Assert that pressing a button (mouse button down) produces a visible
+ * change in the framebuffer — the pressed state (accent-tinted
+ * background) must be rendered (SPEC §5.6). */
+static void
+test_press_visual_indication(void **state)
+{
+    struct mgr_vis_fixture *f = FIX(state);
+    cbx_manager *mgr = &f->mgr;
+
+    /* Switch to Profiles tab. */
+    send_key(mgr, SDLK_RIGHT); /* Controllers -> Profiles */
+    assert_int_equal(cbx_manager_active_tab(mgr), CBX_MGR_TAB_PROFILES);
+
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(mgr);
+
+    /* Baseline: render the tab normally. */
+    render_and_read(mgr, f->buf_a);
+
+    /* Send mouse motion + button down on the Create button (without
+     * releasing) — this sets focused=true and pressed=true. */
+    SDL_Rect btn_rect;
+    cbx_widget_get_rect(&pt->create_btn.base, &btn_rect);
+    int cx = btn_rect.x + btn_rect.w / 2;
+    int cy = btn_rect.y + btn_rect.h / 2;
+
+    /* Hover (mouse motion) over the button. */
+    send_mouse_motion(mgr, cx, cy);
+    assert_true(pt->create_btn.base.hover);
+
+    /* Press (mouse button down) without release. */
+    send_mouse_btn_down(mgr, cx, cy);
+    assert_true(pt->create_btn.pressed);
+
+    /* Render with button pressed. */
+    render_and_read(mgr, f->buf_b);
+
+    /* The button region should differ — pressed button uses
+     * text_accent background instead of panel_bg. */
+    assert_true(region_differs(f->buf_a, f->buf_b, MGR_W, &btn_rect));
+}
+
 /* ------------------------------------------------------------------ */
 /*  Test runner                                                        */
 /* ------------------------------------------------------------------ */
@@ -998,6 +1111,12 @@ main(void)
         cmocka_unit_test_setup_teardown(
             test_profile_editor_validation_error,
             mgr_vis_setup, mgr_vis_teardown),
+
+        /* Task 5: Hover/press visual indication */
+        cmocka_unit_test_setup_teardown(
+            test_focus_visual_indication, mgr_vis_setup, mgr_vis_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_press_visual_indication, mgr_vis_setup, mgr_vis_teardown),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

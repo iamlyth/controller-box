@@ -255,6 +255,53 @@ static void test_inventory_covers_required_scenarios(void **state)
     assert_true(has_cancel_editor);
 }
 
+/* Task 5: Verify that every manager control entry (M01–M38) has been
+ * exercised through production dispatch and carries verification evidence.
+ * No M entry may remain CBX_VERIFY_UNVERIFIED — the interaction inventory
+ * is the authoritative ledger for §5.7 acceptance. */
+static void test_inventory_all_manager_entries_verified(void **state)
+{
+    (void)state;
+    const cbx_interaction_entry *inv = cbx_interaction_inventory_get();
+    for (size_t i = 0; inv[i].id != NULL; i++) {
+        if (inv[i].id[0] != 'M')
+            continue;
+        if (inv[i].verify_status == CBX_VERIFY_UNVERIFIED) {
+            fail_msg("Manager entry %s is still UNVERIFIED", inv[i].id);
+        }
+    }
+}
+
+/* Task 5: Verify that every disabled/degraded scenario (D01–D08) has
+ * passing production-path evidence. */
+static void test_inventory_all_disabled_entries_verified(void **state)
+{
+    (void)state;
+    const cbx_interaction_entry *inv = cbx_interaction_inventory_get();
+    for (size_t i = 0; inv[i].id != NULL; i++) {
+        if (inv[i].id[0] != 'D')
+            continue;
+        if (inv[i].verify_status == CBX_VERIFY_UNVERIFIED) {
+            fail_msg("Disabled scenario %s is still UNVERIFIED", inv[i].id);
+        }
+    }
+}
+
+/* Task 5: Verify that overlay actions (O01–O12) are either verified or
+ * explicitly deferred (§13). None may be unverified. */
+static void test_inventory_all_overlay_entries_verified(void **state)
+{
+    (void)state;
+    const cbx_interaction_entry *inv = cbx_interaction_inventory_get();
+    for (size_t i = 0; inv[i].id != NULL; i++) {
+        if (inv[i].id[0] != 'O')
+            continue;
+        if (inv[i].verify_status == CBX_VERIFY_UNVERIFIED) {
+            fail_msg("Overlay action %s is still UNVERIFIED", inv[i].id);
+        }
+    }
+}
+
 /* ---- Test runner ---- */
 int main(void)
 {
@@ -270,6 +317,10 @@ int main(void)
         cmocka_unit_test(test_inventory_specific_entries),
         cmocka_unit_test(test_inventory_all_ids_unique),
         cmocka_unit_test(test_inventory_covers_required_scenarios),
+        /* Task 5: verify_status ledger checks */
+        cmocka_unit_test(test_inventory_all_manager_entries_verified),
+        cmocka_unit_test(test_inventory_all_disabled_entries_verified),
+        cmocka_unit_test(test_inventory_all_overlay_entries_verified),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

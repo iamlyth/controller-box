@@ -267,56 +267,7 @@ cbx_profiles_tab_init(cbx_profiles_tab *tab,
     cbx_panel_add_child(panel, &tab->save_btn.base);
     cbx_panel_add_child(panel, &tab->discard_btn.base);
 
-    /* --- Layout --------------------------------------------------- */
-    SDL_Rect pr;
-    cbx_widget_get_rect(&panel->base, &pr);
-
-    /* Profile list: fills most of the panel. */
-    SDL_Rect list_rect = {
-        .x = pr.x + CBX_PT_LIST_Y,
-        .y = pr.y + CBX_PT_LIST_Y,
-        .w = pr.w - CBX_PT_LIST_Y * 2,
-        .h = CBX_PT_LIST_H,
-    };
-    cbx_widget_set_rect(&tab->profile_list_w.base, &list_rect);
-    cbx_widget_set_rect(&tab->create_picker.base, &list_rect);
-
-    /* Buttons: below the list, left to right. */
-    int btn_y = pr.y + CBX_PT_LIST_Y + CBX_PT_LIST_H + CBX_PT_BTN_GAP;
-    int btn_x = pr.x + CBX_PT_LIST_Y;
-
-    SDL_Rect c_rect = { .x = btn_x, .y = btn_y,
-                         .w = CBX_PT_BTN_W, .h = CBX_PT_BTN_H };
-    cbx_widget_set_rect(&tab->create_btn.base, &c_rect);
-
-    btn_x += CBX_PT_BTN_W + CBX_PT_BTN_GAP;
-    SDL_Rect e_rect = { .x = btn_x, .y = btn_y,
-                         .w = CBX_PT_BTN_W, .h = CBX_PT_BTN_H };
-    cbx_widget_set_rect(&tab->edit_btn.base, &e_rect);
-
-    btn_x += CBX_PT_BTN_W + CBX_PT_BTN_GAP;
-    SDL_Rect d_rect = { .x = btn_x, .y = btn_y,
-                         .w = CBX_PT_BTN_W, .h = CBX_PT_BTN_H };
-    cbx_widget_set_rect(&tab->delete_btn.base, &d_rect);
-
-    /* Status label: below the buttons. */
-    SDL_Rect s_rect = {
-        .x = pr.x + CBX_PT_LIST_Y,
-        .y = btn_y + CBX_PT_BTN_H + CBX_PT_BTN_GAP,
-        .w = pr.w - CBX_PT_LIST_Y * 2,
-        .h = CBX_PT_BTN_H,
-    };
-    cbx_widget_set_rect(&tab->status_lbl.base, &s_rect);
-    SDL_Rect save_rect = { .x = pr.x + pr.w - (2 * CBX_PT_BTN_W) -
-                                  (2 * CBX_PT_BTN_GAP),
-                           .y = btn_y, .w = CBX_PT_BTN_W,
-                           .h = CBX_PT_BTN_H };
-    SDL_Rect discard_rect = { .x = save_rect.x + CBX_PT_BTN_W + CBX_PT_BTN_GAP,
-                              .y = btn_y, .w = CBX_PT_BTN_W,
-                              .h = CBX_PT_BTN_H };
-    cbx_widget_set_rect(&tab->save_btn.base, &save_rect);
-    cbx_widget_set_rect(&tab->discard_btn.base, &discard_rect);
-
+/* --- Layout --------------------------------------------------- */    cbx_profiles_tab_layout(tab);
     /* NOTE: caller must call cbx_profiles_tab_refresh() after init.
      * For testing, call cbx_profiles_tab_set_test_dirs() first. */
 
@@ -370,6 +321,64 @@ cbx_profiles_tab_shutdown(cbx_profiles_tab *tab)
 /* ------------------------------------------------------------------ */
 /*  Refresh                                                            */
 /* ------------------------------------------------------------------ */
+
+void
+cbx_profiles_tab_layout(cbx_profiles_tab *tab)
+{
+    if (!tab || !tab->panel)
+        return;
+
+    SDL_Rect pr;
+    cbx_widget_get_rect(&tab->panel->base, &pr);
+
+    /* Profile list: fills most of the panel. */
+    SDL_Rect list_rect = {
+        .x = pr.x + CBX_PT_LIST_Y,
+        .y = pr.y + CBX_PT_LIST_Y,
+        .w = pr.w - CBX_PT_LIST_Y * 2,
+        .h = CBX_PT_LIST_H,
+    };
+    cbx_widget_set_rect(&tab->profile_list_w.base, &list_rect);
+    cbx_widget_set_rect(&tab->create_picker.base, &list_rect);
+
+    /* Buttons: below the list, left to right. */
+    int btn_y = pr.y + CBX_PT_LIST_Y + CBX_PT_LIST_H + CBX_PT_BTN_GAP;
+    int btn_x = pr.x + CBX_PT_LIST_Y;
+
+    SDL_Rect c_rect = { .x = btn_x, .y = btn_y,
+                         .w = CBX_PT_BTN_W, .h = CBX_PT_BTN_H };
+    cbx_widget_set_rect(&tab->create_btn.base, &c_rect);
+
+    btn_x += CBX_PT_BTN_W + CBX_PT_BTN_GAP;
+    SDL_Rect e_rect = { .x = btn_x, .y = btn_y,
+                         .w = CBX_PT_BTN_W, .h = CBX_PT_BTN_H };
+    cbx_widget_set_rect(&tab->edit_btn.base, &e_rect);
+
+    btn_x += CBX_PT_BTN_W + CBX_PT_BTN_GAP;
+    SDL_Rect d_rect = { .x = btn_x, .y = btn_y,
+                         .w = CBX_PT_BTN_W, .h = CBX_PT_BTN_H };
+    cbx_widget_set_rect(&tab->delete_btn.base, &d_rect);
+
+    /* Status label: below the buttons. */
+    SDL_Rect s_rect = {
+        .x = pr.x + CBX_PT_LIST_Y,
+        .y = btn_y + CBX_PT_BTN_H + CBX_PT_BTN_GAP,
+        .w = pr.w - CBX_PT_LIST_Y * 2,
+        .h = CBX_PT_BTN_H,
+    };
+    cbx_widget_set_rect(&tab->status_lbl.base, &s_rect);
+
+    SDL_Rect save_rect = { .x = pr.x + pr.w - (2 * CBX_PT_BTN_W) -
+                                  (2 * CBX_PT_BTN_GAP),
+                           .y = btn_y, .w = CBX_PT_BTN_W,
+                           .h = CBX_PT_BTN_H };
+    SDL_Rect discard_rect = { .x = save_rect.x + CBX_PT_BTN_W + CBX_PT_BTN_GAP,
+                              .y = btn_y, .w = CBX_PT_BTN_W,
+                              .h = CBX_PT_BTN_H };
+    cbx_widget_set_rect(&tab->save_btn.base, &save_rect);
+    cbx_widget_set_rect(&tab->discard_btn.base, &discard_rect);
+
+}
 
 int
 cbx_profiles_tab_refresh(cbx_profiles_tab *tab)
