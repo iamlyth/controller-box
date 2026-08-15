@@ -654,7 +654,7 @@ if(CMOCKA_FOUND)
     find_program(DBUS_DAEMON_EXECUTABLE dbus-daemon REQUIRED)
     get_filename_component(DBUS_BIN_DIR "${DBUS_DAEMON_EXECUTABLE}" DIRECTORY)
     get_filename_component(DBUS_PREFIX "${DBUS_BIN_DIR}" DIRECTORY)
-    add_executable(test_native_dbus tests/test_native_dbus.c)
+    add_executable(test_native_dbus tests/test_native_dbus.c tests/native_ip_server.c)
     target_compile_definitions(test_native_dbus PRIVATE
         DBUS_SESSION_CONFIG="${DBUS_PREFIX}/share/dbus-1/session.conf")
     target_link_libraries(test_native_dbus PRIVATE controllerbox PkgConfig::CMOCKA)
@@ -669,7 +669,7 @@ if(CMOCKA_FOUND)
     # native-signature InputPlumber-compatible DBus service with an SDL
     # virtual game controller.  Links against the production controllerbox
     # library and uses the real sd-bus backend.  No SKIP_RETURN_CODE.
-    add_executable(test_installed_functional tests/test_installed_functional.c)
+    add_executable(test_installed_functional tests/test_installed_functional.c tests/native_ip_server.c)
     target_compile_definitions(test_installed_functional PRIVATE
         DBUS_SESSION_CONFIG="${DBUS_PREFIX}/share/dbus-1/session.conf")
     target_link_libraries(test_installed_functional PRIVATE controllerbox PkgConfig::CMOCKA)

@@ -71,561 +71,14 @@
 #endif
 
 /* ================================================================== */
-/*  Global server state (shared with forked server)                    */
+/*  Native IP server (shared implementation)                           */
 /* ================================================================== */
 
-static volatile sig_atomic_t service_running = 1;
-static pid_t private_daemon_pid;
-static pid_t private_server_pid;
+#include "native_ip_server.h"
 
-#define MAX_TARGETS 16
-#define MAX_COMPOSITES 16
-#define MAX_ATTACHED 16
+/* The server implementation is in native_ip_server.c.
+ * Global state is accessible via g_nip_* symbols declared in native_ip_server.h. */
 
-static char g_target_paths[MAX_TARGETS][256];
-static char g_target_types[MAX_TARGETS][32];
-static int  g_target_count = 0;
-
-static char g_attached[MAX_COMPOSITES][MAX_ATTACHED][256];
-static int  g_attached_counts[MAX_COMPOSITES];
-
-static char g_profile_path[MAX_COMPOSITES][256];
-static char g_profile_name[MAX_COMPOSITES][64];
-static char g_gamepad_order[MAX_COMPOSITES][256];
-static int  g_gamepad_order_count = 0;
-
-static uint32_t g_intercept_mode[MAX_COMPOSITES];
-static char g_dbus_devices[MAX_COMPOSITES][256];
-static char g_comp_names[MAX_COMPOSITES][64];
-static char g_persistent_ids[MAX_COMPOSITES][32];
-
-static void stop_service(int signo) { (void)signo; service_running = 0; }
-
-/* ================================================================== */
-/*  Server property getters/setters                                    */
-/* ================================================================== */
-
-static int
-property_get(sd_bus *bus, const char *path, const char *interface,
-             const char *property, sd_bus_message *reply,
-             void *userdata, sd_bus_error *error)
-{
-    (void)bus; (void)path; (void)interface; (void)userdata; (void)error;
-
-    if (strcmp(property, "Version") == 0)
-        return sd_bus_message_append(reply, "s", "0.78.0");
-    if (strcmp(property, "SupportedTargetDeviceIds") == 0) {
-        int rc = sd_bus_message_open_container(reply, 'a', "s");
-        if (rc < 0) return rc;
-        rc = sd_bus_message_append(reply, "s", "xb360");
-        if (rc >= 0) rc = sd_bus_message_append(reply, "s", "ds5");
-        if (rc >= 0) rc = sd_bus_message_append(reply, "s", "gamepad");
-        if (rc >= 0) rc = sd_bus_message_close_container(reply);
-        return rc;
-    }
-    if (strcmp(property, "InterceptMode") == 0)
-        return sd_bus_message_append(reply, "u", (uint32_t)2);
-    if (strcmp(property, "Enabled") == 0)
-        return sd_bus_message_append(reply, "b", 1);
-    if (strcmp(property, "GamepadOrder") == 0) {
-        int rc = sd_bus_message_open_container(reply, 'a', "s");
-        if (rc < 0) return rc;
-        for (int i = 0; i < g_gamepad_order_count; i++) {
-            rc = sd_bus_message_append(reply, "s", g_gamepad_order[i]);
-            if (rc < 0) return rc;
-        }
-        return sd_bus_message_close_container(reply);
-    }
-    return -ENOENT;
-}
-
-static int
-manager_property_set(sd_bus *bus, const char *path, const char *interface,
-                     const char *property, sd_bus_message *value,
-                     void *userdata, sd_bus_error *error)
-{
-    (void)bus; (void)path; (void)interface; (void)userdata; (void)error;
-    if (strcmp(property, "GamepadOrder") == 0) {
-        int rc = sd_bus_message_enter_container(value, 'a', "s");
-        if (rc < 0) return rc;
-        g_gamepad_order_count = 0;
-        const char *p = NULL;
-        while ((rc = sd_bus_message_read_basic(value, 's', &p)) > 0) {
-            if (g_gamepad_order_count < MAX_COMPOSITES) {
-                snprintf(g_gamepad_order[g_gamepad_order_count],
-                         sizeof(g_gamepad_order[g_gamepad_order_count]),
-                         "%s", p);
-                g_gamepad_order_count++;
-            }
-        }
-        if (rc < 0) return rc;
-        return sd_bus_message_exit_container(value);
-    }
-    return -ENOENT;
-}
-
-/* --- Target property --- */
-
-static int
-target_property_get(sd_bus *bus, const char *path, const char *interface,
-                     const char *property, sd_bus_message *reply,
-                     void *userdata, sd_bus_error *error)
-{
-    (void)bus; (void)interface; (void)userdata; (void)error;
-    if (strcmp(property, "DeviceType") != 0)
-        return -ENOENT;
-    for (int i = 0; i < g_target_count; i++) {
-        if (strcmp(g_target_paths[i], path) == 0)
-            return sd_bus_message_append(reply, "s", g_target_types[i]);
-    }
-    return -ENOENT;
-}
-
-static const sd_bus_vtable target_vtable[] = {
-    SD_BUS_VTABLE_START(0),
-    SD_BUS_PROPERTY("DeviceType", "s", target_property_get, 0,
-                    SD_BUS_VTABLE_PROPERTY_CONST),
-    SD_BUS_VTABLE_END
-};
-
-/* --- Composite property getter/setter --- */
-
-static int
-composite_idx_from_path(const char *path)
-{
-    const char *p = strstr(path, "CompositeDevice");
-    if (p) return atoi(p + strlen("CompositeDevice"));
-    return -1;
-}
-
-static int
-composite_property_get(sd_bus *bus, const char *path, const char *interface,
-                        const char *property, sd_bus_message *reply,
-                        void *userdata, sd_bus_error *error)
-{
-    (void)bus; (void)interface; (void)userdata; (void)error;
-    int ci = composite_idx_from_path(path);
-    if (ci < 0 || ci >= MAX_COMPOSITES) return -ENOENT;
-
-    if (strcmp(property, "TargetDevices") == 0) {
-        int rc = sd_bus_message_open_container(reply, 'a', "s");
-        if (rc < 0) return rc;
-        for (int j = 0; j < g_attached_counts[ci]; j++) {
-            rc = sd_bus_message_append(reply, "s", g_attached[ci][j]);
-            if (rc < 0) break;
-        }
-        if (rc >= 0) rc = sd_bus_message_close_container(reply);
-        return rc;
-    }
-    if (strcmp(property, "ProfileName") == 0)
-        return sd_bus_message_append(reply, "s", g_profile_name[ci]);
-    if (strcmp(property, "ProfilePath") == 0)
-        return sd_bus_message_append(reply, "s", g_profile_path[ci]);
-    if (strcmp(property, "PersistentId") == 0)
-        return sd_bus_message_append(reply, "s", g_persistent_ids[ci]);
-    if (strcmp(property, "InterceptMode") == 0)
-        return sd_bus_message_append(reply, "u", g_intercept_mode[ci]);
-    if (strcmp(property, "DbusDevices") == 0) {
-        int rc = sd_bus_message_open_container(reply, 'a', "s");
-        if (rc < 0) return rc;
-        /* Return the comma-separated DbusDevices as an array of strings. */
-        if (g_dbus_devices[ci][0]) {
-            /* Parse comma-separated and append each. */
-            char buf[256];
-            snprintf(buf, sizeof(buf), "%s", g_dbus_devices[ci]);
-            char *tok = strtok(buf, ",");
-            while (tok) {
-                rc = sd_bus_message_append(reply, "s", tok);
-                if (rc < 0) break;
-                tok = strtok(NULL, ",");
-            }
-        }
-        if (rc >= 0) rc = sd_bus_message_close_container(reply);
-        return rc;
-    }
-    if (strcmp(property, "Name") == 0)
-        return sd_bus_message_append(reply, "s", g_comp_names[ci]);
-    return -ENOENT;
-}
-
-static int
-composite_property_set(sd_bus *bus, const char *path, const char *interface,
-                        const char *property, sd_bus_message *value,
-                        void *userdata, sd_bus_error *error)
-{
-    (void)bus; (void)interface; (void)userdata; (void)error;
-    int ci = composite_idx_from_path(path);
-    if (ci < 0 || ci >= MAX_COMPOSITES) return -ENOENT;
-
-    if (strcmp(property, "InterceptMode") == 0) {
-        /* The variant has been entered by sd-bus; read the 'u' value. */
-        uint32_t mode;
-        int rc = sd_bus_message_read(value, "u", &mode);
-        if (rc < 0) return rc;
-        g_intercept_mode[ci] = mode;
-        return 0;
-    }
-    return -ENOENT;
-}
-
-/* --- Composite method handlers --- */
-
-static int
-method_load_profile_path(sd_bus_message *m, void *userdata, sd_bus_error *error)
-{
-    (void)userdata; (void)error;
-    const char *profile_path = NULL;
-    int rc = sd_bus_message_read(m, "s", &profile_path);
-    if (rc < 0) return rc;
-    const char *obj_path = sd_bus_message_get_path(m);
-    int ci = composite_idx_from_path(obj_path);
-    if (ci < 0 || ci >= MAX_COMPOSITES)
-        return sd_bus_error_set(error, "org.freedesktop.DBus.Error.UnknownObject",
-                                "composite not found");
-    snprintf(g_profile_path[ci], sizeof(g_profile_path[ci]), "%s", profile_path);
-    const char *base = strrchr(profile_path, '/');
-    base = base ? base + 1 : profile_path;
-    snprintf(g_profile_name[ci], sizeof(g_profile_name[ci]), "%s", base);
-    char *dot = strstr(g_profile_name[ci], ".yaml");
-    if (dot) *dot = '\0';
-    return sd_bus_reply_method_return(m, "");
-}
-
-static int
-method_set_intercept_activation(sd_bus_message *m, void *userdata, sd_bus_error *error)
-{
-    (void)userdata; (void)error;
-    /* Read (as events, s target) — just consume and reply OK. */
-    int rc = sd_bus_message_enter_container(m, 'a', "s");
-    if (rc < 0) return rc;
-    const char *s = NULL;
-    while ((rc = sd_bus_message_read_basic(m, 's', &s)) > 0)
-        ;
-    if (rc < 0) return rc;
-    rc = sd_bus_message_exit_container(m);
-    if (rc < 0) return rc;
-    rc = sd_bus_message_read(m, "s", &s);
-    if (rc < 0) return rc;
-    return sd_bus_reply_method_return(m, "");
-}
-
-static const sd_bus_vtable composite_vtable[] = {
-    SD_BUS_VTABLE_START(0),
-    SD_BUS_PROPERTY("TargetDevices", "as", composite_property_get, 0,
-                    SD_BUS_VTABLE_PROPERTY_CONST),
-    SD_BUS_PROPERTY("ProfileName", "s", composite_property_get, 0,
-                    SD_BUS_VTABLE_PROPERTY_CONST),
-    SD_BUS_PROPERTY("ProfilePath", "s", composite_property_get, 0,
-                    SD_BUS_VTABLE_PROPERTY_CONST),
-    SD_BUS_PROPERTY("PersistentId", "s", composite_property_get, 0,
-                    SD_BUS_VTABLE_PROPERTY_CONST),
-    SD_BUS_PROPERTY("DbusDevices", "as", composite_property_get, 0,
-                    SD_BUS_VTABLE_PROPERTY_CONST),
-    SD_BUS_PROPERTY("Name", "s", composite_property_get, 0,
-                    SD_BUS_VTABLE_PROPERTY_CONST),
-    SD_BUS_WRITABLE_PROPERTY("InterceptMode", "u", composite_property_get,
-                              composite_property_set, 0, 0),
-    SD_BUS_METHOD("LoadProfilePath", "s", "", method_load_profile_path, 0),
-    SD_BUS_METHOD("SetInterceptActivation", "ass", "",
-                  method_set_intercept_activation, 0),
-    SD_BUS_VTABLE_END
-};
-
-/* --- Manager method handlers --- */
-
-static int
-method_create_target(sd_bus_message *m, void *userdata, sd_bus_error *error)
-{
-    (void)userdata; (void)error;
-    const char *kind = NULL;
-    int rc = sd_bus_message_read(m, "s", &kind);
-    if (rc < 0) return rc;
-    if (g_target_count >= MAX_TARGETS)
-        return sd_bus_error_set(error, "org.freedesktop.DBus.Error.LimitsExceeded",
-                                "too many targets");
-    int idx = g_target_count;
-    snprintf(g_target_paths[idx], sizeof(g_target_paths[idx]),
-             "/org/shadowblip/InputPlumber/devices/target/%s%d", kind, idx);
-    snprintf(g_target_types[idx], sizeof(g_target_types[idx]), "%s", kind);
-    g_target_count++;
-    return sd_bus_reply_method_return(m, "s", g_target_paths[idx]);
-}
-
-static int
-method_stop_target(sd_bus_message *m, void *userdata, sd_bus_error *error)
-{
-    (void)userdata; (void)error;
-    const char *path = NULL;
-    int rc = sd_bus_message_read(m, "s", &path);
-    if (rc < 0) return rc;
-    for (int i = 0; i < g_target_count; i++) {
-        if (strcmp(g_target_paths[i], path) == 0) {
-            for (int j = i; j < g_target_count - 1; j++) {
-                memmove(g_target_paths[j], g_target_paths[j + 1],
-                        sizeof(g_target_paths[j]));
-                memmove(g_target_types[j], g_target_types[j + 1],
-                        sizeof(g_target_types[j]));
-            }
-            g_target_count--;
-            break;
-        }
-    }
-    return sd_bus_reply_method_return(m, "");
-}
-
-static int
-method_attach_target(sd_bus_message *m, void *userdata, sd_bus_error *error)
-{
-    (void)userdata; (void)error;
-    const char *target_path = NULL;
-    const char *composite_path = NULL;
-    int rc = sd_bus_message_read(m, "ss", &target_path, &composite_path);
-    if (rc < 0) return rc;
-    bool found = false;
-    for (int i = 0; i < g_target_count; i++) {
-        if (strcmp(g_target_paths[i], target_path) == 0) {
-            found = true;
-            break;
-        }
-    }
-    if (!found)
-        return sd_bus_error_set(error, "org.freedesktop.DBus.Error.UnknownObject",
-                                "target not found");
-    int ci = composite_idx_from_path(composite_path);
-    if (ci < 0 || ci >= MAX_COMPOSITES)
-        return sd_bus_error_set(error, "org.freedesktop.DBus.Error.UnknownObject",
-                                "composite not found");
-    if (g_attached_counts[ci] < MAX_ATTACHED) {
-        snprintf(g_attached[ci][g_attached_counts[ci]],
-                 sizeof(g_attached[ci][g_attached_counts[ci]]),
-                 "%s", target_path);
-        g_attached_counts[ci]++;
-    }
-    return sd_bus_reply_method_return(m, "");
-}
-
-static const sd_bus_vtable manager_vtable[] = {
-    SD_BUS_VTABLE_START(0),
-    SD_BUS_PROPERTY("Version", "s", property_get, 0,
-                    SD_BUS_VTABLE_PROPERTY_CONST),
-    SD_BUS_PROPERTY("SupportedTargetDeviceIds", "as", property_get, 0,
-                    SD_BUS_VTABLE_PROPERTY_CONST),
-    SD_BUS_PROPERTY("InterceptMode", "u", property_get, 0,
-                    SD_BUS_VTABLE_PROPERTY_CONST),
-    SD_BUS_PROPERTY("Enabled", "b", property_get, 0,
-                    SD_BUS_VTABLE_PROPERTY_CONST),
-    SD_BUS_WRITABLE_PROPERTY("GamepadOrder", "as", property_get,
-                              manager_property_set, 0, 0),
-    SD_BUS_METHOD("CreateTargetDevice", "s", "s", method_create_target, 0),
-    SD_BUS_METHOD("StopTargetDevice", "s", "", method_stop_target, 0),
-    SD_BUS_METHOD("AttachTargetDevice", "ss", "", method_attach_target, 0),
-    SD_BUS_VTABLE_END
-};
-
-/* --- ObjectManager --- */
-
-static int
-method_get_managed_objects(sd_bus_message *m, void *userdata, sd_bus_error *error)
-{
-    (void)userdata; (void)error;
-    sd_bus_message *reply = NULL;
-    int rc = sd_bus_message_new_method_return(m, &reply);
-    if (rc < 0) return rc;
-
-    rc = sd_bus_message_open_container(reply, 'a', "{oa{sa{sv}}}");
-    if (rc < 0) goto fail;
-
-    /* Manager object. */
-    {
-        rc = sd_bus_message_open_container(reply, 'e', "oa{sa{sv}}");
-        if (rc < 0) goto fail;
-        rc = sd_bus_message_append(reply, "o",
-                "/org/shadowblip/InputPlumber/Manager");
-        if (rc < 0) goto fail;
-        rc = sd_bus_message_open_container(reply, 'a', "{sa{sv}}");
-        if (rc < 0) goto fail;
-        rc = sd_bus_message_open_container(reply, 'e', "sa{sv}");
-        if (rc < 0) goto fail;
-        rc = sd_bus_message_append(reply, "s", "org.shadowblip.InputManager");
-        if (rc < 0) goto fail;
-        rc = sd_bus_message_open_container(reply, 'a', "{sv}");
-        if (rc < 0) goto fail;
-        rc = sd_bus_message_close_container(reply);
-        if (rc < 0) goto fail;
-        rc = sd_bus_message_close_container(reply);
-        if (rc < 0) goto fail;
-        rc = sd_bus_message_close_container(reply);
-        if (rc < 0) goto fail;
-        rc = sd_bus_message_close_container(reply);
-        if (rc < 0) goto fail;
-    }
-
-    /* CompositeDevice0 and CompositeDevice1. */
-    for (int c = 0; c < 2; c++) {
-        char comp_path[128];
-        snprintf(comp_path, sizeof(comp_path),
-                 "/org/shadowblip/InputPlumber/CompositeDevice%d", c);
-        rc = sd_bus_message_open_container(reply, 'e', "oa{sa{sv}}");
-        if (rc < 0) goto fail;
-        rc = sd_bus_message_append(reply, "o", comp_path);
-        if (rc < 0) goto fail;
-        rc = sd_bus_message_open_container(reply, 'a', "{sa{sv}}");
-        if (rc < 0) goto fail;
-        rc = sd_bus_message_open_container(reply, 'e', "sa{sv}");
-        if (rc < 0) goto fail;
-        rc = sd_bus_message_append(reply, "s", "org.shadowblip.Input.CompositeDevice");
-        if (rc < 0) goto fail;
-        rc = sd_bus_message_open_container(reply, 'a', "{sv}");
-        if (rc < 0) goto fail;
-        rc = sd_bus_message_close_container(reply);
-        if (rc < 0) goto fail;
-        rc = sd_bus_message_close_container(reply);
-        if (rc < 0) goto fail;
-        rc = sd_bus_message_close_container(reply);
-        if (rc < 0) goto fail;
-        rc = sd_bus_message_close_container(reply);
-        if (rc < 0) goto fail;
-    }
-
-    /* Target objects. */
-    for (int i = 0; i < g_target_count; i++) {
-        rc = sd_bus_message_open_container(reply, 'e', "oa{sa{sv}}");
-        if (rc < 0) goto fail;
-        rc = sd_bus_message_append(reply, "o", g_target_paths[i]);
-        if (rc < 0) goto fail;
-        rc = sd_bus_message_open_container(reply, 'a', "{sa{sv}}");
-        if (rc < 0) goto fail;
-        rc = sd_bus_message_open_container(reply, 'e', "sa{sv}");
-        if (rc < 0) goto fail;
-        rc = sd_bus_message_append(reply, "s", "org.shadowblip.Input.Target");
-        if (rc < 0) goto fail;
-        rc = sd_bus_message_open_container(reply, 'a', "{sv}");
-        if (rc < 0) goto fail;
-        rc = sd_bus_message_close_container(reply);
-        if (rc < 0) goto fail;
-        rc = sd_bus_message_close_container(reply);
-        if (rc < 0) goto fail;
-        rc = sd_bus_message_close_container(reply);
-        if (rc < 0) goto fail;
-        rc = sd_bus_message_close_container(reply);
-        if (rc < 0) goto fail;
-    }
-
-    rc = sd_bus_message_close_container(reply);
-    if (rc < 0) goto fail;
-    return sd_bus_message_send(reply);
-
-fail:
-    sd_bus_message_unref(reply);
-    return rc;
-}
-
-static int
-root_object_handler(sd_bus_message *m, void *userdata, sd_bus_error *error)
-{
-    const char *iface = sd_bus_message_get_interface(m);
-    const char *member = sd_bus_message_get_member(m);
-    if (iface && member &&
-        strcmp(iface, "org.freedesktop.DBus.ObjectManager") == 0 &&
-        strcmp(member, "GetManagedObjects") == 0)
-        return method_get_managed_objects(m, userdata, error);
-    return 0;
-}
-
-static int
-target_find(sd_bus *bus, const char *path, const char *interface,
-             void *userdata, void **ret_found, sd_bus_error *error)
-{
-    (void)bus; (void)interface; (void)userdata; (void)error;
-    for (int i = 0; i < g_target_count; i++) {
-        if (strcmp(g_target_paths[i], path) == 0) {
-            *ret_found = (void *)(intptr_t)(i + 1);
-            return 1;
-        }
-    }
-    return 0;
-}
-
-/* --- Full server with Manager + 2 Composites + Target + ObjectManager --- */
-
-static int
-run_server(const char *address)
-{
-    signal(SIGTERM, stop_service);
-    sd_bus *bus = NULL;
-    int rc = sd_bus_new(&bus);
-    if (rc < 0) return 20;
-
-    char comp0_path[] = "/org/shadowblip/InputPlumber/CompositeDevice0";
-    char comp1_path[] = "/org/shadowblip/InputPlumber/CompositeDevice1";
-
-    if ((rc = sd_bus_set_address(bus, address)) < 0 ||
-        (rc = sd_bus_set_bus_client(bus, 1)) < 0 ||
-        (rc = sd_bus_start(bus)) < 0 ||
-        (rc = sd_bus_add_object_vtable(bus, NULL,
-              "/org/shadowblip/InputPlumber/Manager",
-              "org.shadowblip.InputManager", manager_vtable, NULL)) < 0 ||
-        (rc = sd_bus_add_object(bus, NULL,
-              "/org/shadowblip/InputPlumber",
-              root_object_handler, NULL)) < 0 ||
-        (rc = sd_bus_add_fallback_vtable(bus, NULL,
-              "/org/shadowblip/InputPlumber/devices/target",
-              "org.shadowblip.Input.Target",
-              target_vtable, target_find, NULL)) < 0 ||
-        (rc = sd_bus_add_object_vtable(bus, NULL,
-              comp0_path,
-              "org.shadowblip.Input.CompositeDevice",
-              composite_vtable, NULL)) < 0 ||
-        (rc = sd_bus_add_object_vtable(bus, NULL,
-              comp1_path,
-              "org.shadowblip.Input.CompositeDevice",
-              composite_vtable, NULL)) < 0 ||
-        (rc = sd_bus_request_name(bus, "org.shadowblip.InputPlumber", 0)) < 0) {
-        sd_bus_unref(bus);
-        return 21;
-    }
-    while (service_running) {
-        while ((rc = sd_bus_process(bus, NULL)) > 0) {}
-        if (rc < 0) break;
-        sd_bus_wait(bus, 100000);
-    }
-    sd_bus_flush_close_unref(bus);
-    return rc < 0 ? 22 : 0;
-}
-
-/* --- Private bus startup --- */
-
-static int
-start_private_bus(char *address, size_t address_len, pid_t *bus_pid)
-{
-    int pipefd[2];
-    if (pipe(pipefd) != 0)
-        return -errno;
-    pid_t pid = fork();
-    if (pid < 0)
-        return -errno;
-    if (pid == 0) {
-        dup2(pipefd[1], STDOUT_FILENO);
-        close(pipefd[0]); close(pipefd[1]);
-        execlp("dbus-daemon", "dbus-daemon", "--config-file",
-               DBUS_SESSION_CONFIG,
-               "--nofork", "--print-address=1", (char *)NULL);
-        _exit(127);
-    }
-    close(pipefd[1]);
-    FILE *fp = fdopen(pipefd[0], "r");
-    if (!fp || !fgets(address, (int)address_len, fp)) {
-        if (fp) fclose(fp); else close(pipefd[0]);
-        kill(pid, SIGTERM); waitpid(pid, NULL, 0);
-        return -EIO;
-    }
-    fclose(fp);
-    address[strcspn(address, "\r\n")] = '\0';
-    *bus_pid = pid;
-    return address[0] ? 0 : -EIO;
-}
-
-/* ================================================================== */
 /*  Test fixture                                                       */
 /* ================================================================== */
 
@@ -705,38 +158,23 @@ f_setup(void **state)
     fclose(fp);
 
     /* --- Start private bus --- */
-    assert_int_equal(start_private_bus(f->bus_address,
+    assert_int_equal(nip_start_private_bus(f->bus_address,
                                         sizeof(f->bus_address),
                                         &f->daemon_pid), 0);
-    private_daemon_pid = f->daemon_pid;
     setenv("DBUS_SYSTEM_BUS_ADDRESS", f->bus_address, 1);
 
     /* --- Reset server state and fork server --- */
-    g_target_count = 0;
-    memset(g_attached_counts, 0, sizeof(g_attached_counts));
-    memset(g_intercept_mode, 0, sizeof(g_intercept_mode));
-    memset(g_profile_path, 0, sizeof(g_profile_path));
-    memset(g_profile_name, 0, sizeof(g_profile_name));
-    g_gamepad_order_count = 0;
-
-    /* Initialize composite metadata. */
+    nip_reset_server_state(2);
     for (int i = 0; i < 2; i++) {
-        g_intercept_mode[i] = 0;  /* NONE */
-        snprintf(g_comp_names[i], sizeof(g_comp_names[i]),
+        snprintf(g_nip_comp_names[i], sizeof(g_nip_comp_names[i]),
                  "TestController%d", i);
-        snprintf(g_persistent_ids[i], sizeof(g_persistent_ids[i]),
-                 "comp-%d", i);
-        snprintf(g_dbus_devices[i], sizeof(g_dbus_devices[i]),
+        snprintf(g_nip_dbus_devices[i], sizeof(g_nip_dbus_devices[i]),
                  "/org/shadowblip/InputPlumber/CompositeDevice%d", i);
     }
 
-    service_running = 1;
-    pid_t server_pid = fork();
-    assert_true(server_pid >= 0);
-    if (server_pid == 0)
-        _exit(run_server(f->bus_address));
-    f->server_pid = server_pid;
-    private_server_pid = server_pid;
+    const nip_server_config cfg = { .num_composites = 2, .version = "0.78.0" };
+    f->server_pid = nip_fork_server(f->bus_address, &cfg);
+    assert_true(f->server_pid > 0);
 
     /* --- Wait for server to be ready (poll Version) --- */
     f->backend = ip_dbus_sd_backend();
@@ -808,14 +246,12 @@ f_teardown(void **state)
         kill(f->server_pid, SIGTERM);
         waitpid(f->server_pid, NULL, 0);
     }
-    private_server_pid = 0;
 
     /* Kill daemon. */
     if (f->daemon_pid > 1) {
         kill(f->daemon_pid, SIGTERM);
         waitpid(f->daemon_pid, NULL, 0);
     }
-    private_daemon_pid = 0;
     unsetenv("DBUS_SYSTEM_BUS_ADDRESS");
 
     /* Clean up temp HOME. */
@@ -1158,30 +594,20 @@ test_installed_functional(void **state)
     kill(f->server_pid, SIGTERM);
     waitpid(f->server_pid, NULL, 0);
     f->server_pid = 0;
-    private_server_pid = 0;
 
     /* Reset server state for the new instance. */
-    g_target_count = 0;
-    memset(g_attached_counts, 0, sizeof(g_attached_counts));
-    memset(g_intercept_mode, 0, sizeof(g_intercept_mode));
+    nip_reset_server_state(2);
     for (int i = 0; i < 2; i++) {
-        g_intercept_mode[i] = 0;
-        snprintf(g_comp_names[i], sizeof(g_comp_names[i]),
+        snprintf(g_nip_comp_names[i], sizeof(g_nip_comp_names[i]),
                  "TestController%d", i);
-        snprintf(g_persistent_ids[i], sizeof(g_persistent_ids[i]),
-                 "comp-%d", i);
-        snprintf(g_dbus_devices[i], sizeof(g_dbus_devices[i]),
+        snprintf(g_nip_dbus_devices[i], sizeof(g_nip_dbus_devices[i]),
                  "/org/shadowblip/InputPlumber/CompositeDevice%d", i);
     }
 
     /* Restart the server. */
-    service_running = 1;
-    pid_t new_server = fork();
-    assert_true(new_server >= 0);
-    if (new_server == 0)
-        _exit(run_server(f->bus_address));
-    f->server_pid = new_server;
-    private_server_pid = new_server;
+    const nip_server_config cfg = { .num_composites = 2, .version = "0.78.0" };
+    f->server_pid = nip_fork_server(f->bus_address, &cfg);
+    assert_true(f->server_pid > 0);
 
     /* Wait for the new server to be ready. */
     char *version = NULL;
@@ -1537,7 +963,6 @@ test_installed_backend_recovery(void **state)
     kill(f->server_pid, SIGTERM);
     waitpid(f->server_pid, NULL, 0);
     f->server_pid = 0;
-    private_server_pid = 0;
 
     /* Drain the manager's own DBus connection to process the
      * NameOwnerChanged signal → noc_signal_callback →
@@ -1557,30 +982,18 @@ test_installed_backend_recovery(void **state)
 
     /* --- Phase 3: Simulate InputPlumber owner reacquisition --- */
     /* Reset server state for the new instance. */
-    g_target_count = 0;
-    memset(g_attached_counts, 0, sizeof(g_attached_counts));
-    memset(g_intercept_mode, 0, sizeof(g_intercept_mode));
-    memset(g_profile_path, 0, sizeof(g_profile_path));
-    memset(g_profile_name, 0, sizeof(g_profile_name));
-    g_gamepad_order_count = 0;
+    nip_reset_server_state(2);
     for (int i = 0; i < 2; i++) {
-        g_intercept_mode[i] = 0;
-        snprintf(g_comp_names[i], sizeof(g_comp_names[i]),
+        snprintf(g_nip_comp_names[i], sizeof(g_nip_comp_names[i]),
                  "TestController%d", i);
-        snprintf(g_persistent_ids[i], sizeof(g_persistent_ids[i]),
-                 "comp-%d", i);
-        snprintf(g_dbus_devices[i], sizeof(g_dbus_devices[i]),
+        snprintf(g_nip_dbus_devices[i], sizeof(g_nip_dbus_devices[i]),
                  "/org/shadowblip/InputPlumber/CompositeDevice%d", i);
     }
 
     /* Restart the InputPlumber server. */
-    service_running = 1;
-    pid_t new_server = fork();
-    assert_true(new_server >= 0);
-    if (new_server == 0)
-        _exit(run_server(f->bus_address));
-    f->server_pid = new_server;
-    private_server_pid = new_server;
+    const nip_server_config cfg = { .num_composites = 2, .version = "0.78.0" };
+    f->server_pid = nip_fork_server(f->bus_address, &cfg);
+    assert_true(f->server_pid > 0);
 
     /* Wait for the new server to be ready (poll Version via
      * the fixture's independent connection). */
