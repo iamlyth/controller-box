@@ -39,3 +39,11 @@ Factory Worker should:
 5. Mark Task 9 complete
 6. Complete remediation task
 7. Then proceed to Task 10 (final audit)
+
+<!-- factory-stale-recovery:start -->
+## Supervisor recovery feedback
+
+- The previous `implementation` Ralph attempt terminated as a stale loop.
+- Run `./scripts/final-gate.sh --implementation` yourself and fix every reported failure.
+- Do not repeat a completion summary until that command passes. Replace this section in the next scratchpad handoff before requesting completion.
+<!-- factory-stale-recovery:end -->
