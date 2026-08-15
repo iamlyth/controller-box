@@ -84,6 +84,18 @@ if(BASH_EXECUTABLE)
     add_test(NAME test_pi2_ollama_wrapper
         COMMAND ${BASH_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test-pi2-ollama-wrapper.sh)
+
+    # Task 7 — Installed binary functional acceptance test (§11.1.5).
+    # Executes the installed `controller-box` binary as a subprocess
+    # against a private native-signature DBus server.  Does NOT link
+    # against libcontrollerbox.  Skips (exit 77) when Xvfb, xdotool,
+    # dbus-send, or test_ip_server are unavailable.
+    add_test(NAME test_installed_binary
+        COMMAND ${BASH_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_installed_binary.sh
+            ${CMAKE_CURRENT_BINARY_DIR})
+    set_tests_properties(test_installed_binary PROPERTIES
+        SKIP_RETURN_CODE 77)
 else()
     message(STATUS "bash not found — test_installed_smoke skipped")
 endif()
@@ -727,6 +739,18 @@ if(CMOCKA_FOUND)
     add_test(NAME test_manager_native_prof COMMAND test_manager_native_prof)
     set_tests_properties(test_manager_native_prof PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+
+    # Task 7 — Standalone InputPlumber-compatible DBus server binary.
+    # Used by test_installed_binary.sh to provide a native-signature DBus
+    # service on a private bus.  Does NOT link libcontrollerbox — only
+    # uses native_ip_server.c (sd-bus) + dbus_mock.h constants.
+    add_executable(test_ip_server tests/test_ip_server_main.c tests/native_ip_server.c)
+    target_include_directories(test_ip_server PRIVATE tests)
+    target_compile_definitions(test_ip_server PRIVATE
+        _GNU_SOURCE=1
+        DBUS_SESSION_CONFIG="${DBUS_PREFIX}/share/dbus-1/session.conf")
+    target_link_libraries(test_ip_server PRIVATE PkgConfig::SYSTEMD)
+    # NOT linking controllerbox — this is a standalone test helper.
 
 else()
     message(STATUS "cmocka not found — unit tests skipped (smoke tests still built)")
