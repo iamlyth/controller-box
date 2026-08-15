@@ -1,32 +1,29 @@
-# Task 6: Controller-transport acceptance and manager-UI backend recovery
+# Task 7: Overlay dynamic columns hotplug + visual skip hardening
 
 ## Outcome
-Task 6 complete (commit a43ccad). All 3 deliverables implemented.
+Task 7 complete (commit fb62cc6). All acceptance criteria met.
 
 ## Deliverables
 
-### 1. Controller acceptance via production gamepad transport (IA-03, IA-17, M49)
-`test_installed_controller_acceptance` in `test_installed_functional.c`:
-- Controllers tab: A (b0) opens type picker, B (b1) cancels, A confirms type (creates target via DBus), A opens Change Type picker, B cancels, A removes device — all via `SDL_JoystickSetVirtualButton→SDL_CONTROLLERBUTTONDOWN→cbx_manager_controller_to_key→cbx_manager_handle_event`
-- Settings tab: A toggles launch_at_boot, D-pad down ×10 to Save item, A saves to disk
-- Profiles tab: A opens Create picker, A confirms "Default copy", keyboard types name, A confirms → opens editor, B cancels BINDING_EDIT→LIST, B saves+closes editor (file written), A opens Edit, D-pad+A navigates binding, B cancels, B saves+closes, A opens Delete confirm, A confirms delete (file removed)
-- Asserts: mode transitions, device count changes, file creation/removal
+### 1. Production-dispatch hotplug test (OV-14)
+`test_hotplug_target_add_remove_through_dispatch` in `test_overlay_interaction.c`:
+- Full signal injection path: `inject_signal(IP_IFACE_OBJECT_MANAGER, "InterfacesAdded/Removed")` → `hotplug_signal_cb` subscription callback → `ip_hotplug_handle_added/removed` (with sender verification + path validation) → `model_changed` → `cbx_overlay_service_step` Phase 4 → `cbx_overlay_reconcile_hotplug`
+- Phase 1 (ADD): target_count 4→5, grid col_count 5→6 (rebuild via `cbx_dynamic_columns_rebuild`)
+- Phase 2 (REMOVE): target_count 5→4, grid col_count 6→5, row 0 clamped from col 5 to col 0 (Unassigned) via `cbx_dynamic_columns_clamp_positions`
+- `ip_hotplug_init` + `ip_hotplug_subscribe` in test; `SDL_INIT_TIMER` added to interaction fixture for poll re-arm during reconcile
 
-### 2. Keyboard tests relabeled as supplemental (§5.7)
-File header comment and runner comment in `test_manager_interaction_ctrl.c` clearly state that `*_controller_path` tests are supplemental accessibility evidence per §5.7, and genuine controller-transport evidence comes from `test_installed_controller_acceptance`.
-
-### 3. Manager-UI backend recovery through production dispatch (IA-14, M50)
-`test_installed_backend_recovery` in `test_installed_functional.c`:
-- Init manager with production path (`cbx_manager_init(NULL)`) — owns DBus connection, wires `cbx_manager_backend_ready/degraded` callbacks
-- Kill InputPlumber server → `drain_manager_dbus` processes NameOwnerChanged → `cbx_manager_backend_degraded` → asserts: `dbus_connected==false`, `ct.backend==NULL`, buttons `interactive==false`, status label visible
-- Restart server → `drain_manager_dbus` processes NameOwnerChanged → `cbx_manager_backend_ready` → asserts: `dbus_connected==true`, `ct.backend!=NULL`, buttons `interactive==true`, status label hidden, `composite_count>=2`
+### 2. Visual skip hardening (OV-21, OV-22, §11.2.5)
+`test_overlay_visual.c`: silent `skip()` replaced with `fail_msg()` in:
+- `test_model_profile_text`: documents DejaVuSans.ttf font requirement
+- `test_virtual_device_icons`: documents controller-icons.yaml + SVG asset requirement
+- In declared nix-shell environment, both tests pass (font/icons available); outside it, they fail with clear message (no unexplained skip)
 
 ## Key discovery
-When gamepad A confirms a name in NAME_INPUT mode, the A KEYUP also triggers `cbx_manager_tab_activate→cbx_profile_editor_activate` which enters BINDING_EDIT mode. Fixed by adding B to cancel BINDING_EDIT before B to save+close.
+`ip_dbus_mock_reset` clears ALL subscriptions (`sub_count = 0`), not just expectations. After calling `expect_reconcile` (which resets the mock), hotplug signal subscriptions are gone. Fix: `expect_reconcile` re-subscribes via `ip_hotplug_subscribe(hp)` after reset.
 
 ## Verification
-`ctest --test-dir build-check -R 'test_installed_functional|test_manager_production|test_native_dbus|test_manager_interaction_ctrl' --output-on-failure` → 5/5 pass.
-Full gate: 90/91 pass (1 pre-existing failure: `test_pi2_ollama_wrapper` needs ollama not in nix-shell).
+- `ctest -R 'test_overlay_interaction|test_overlay_integration|test_overlay_visual|test_overlay_reconcile'` → 4/4 pass
+- Full gate: 90/91 pass (1 pre-existing `test_pi2_ollama_wrapper` failure, needs ollama)
 
 ## Next task
-Task 7 (overlay dynamic columns hotplug + visual skip hardening) — no deps.
+Task 8 (Flatpak experimental status, documentation defects, clean-install default) — no deps.
