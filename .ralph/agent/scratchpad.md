@@ -1,22 +1,19 @@
-# Planning Cycle — Complete
+# Task 1 Complete — Interaction Inventory Corrected
 
-## Summary
-- Analyzed 213 source files, 92 tests against docs/SPEC.md
-- Campaign audit round 1 found 2 gaps: installed functional links library not binary; interaction inventory uses string-only mock DBus
-- Pre-existing test failure: test_editor_seq_capture_dbus_signal (seq step doesn't advance)
-- Launched 4 parallel subagents (overlay, manager, DBus/packaging, test evidence quality)
-- Reviewer found 13 blocking issues in initial draft; all addressed in final plan
+## Outcome
+- **Part (a) test_editor_seq_capture_dbus_signal**: Already passing (fixed in prior implementation cycle, commit af2de81). No action needed.
+- **Part (b) interaction inventory correction**: Complete. All four defects addressed:
 
-## Plan: 8 tasks
-1. Fix test failure + correct interaction inventory file (stale refs, verify_status, pointer-path, missing O13)
-2. Extend native DBus server for overlay (SetInterceptActivation, writable InterceptMode, InputEvent signal)
-3. Overlay interaction O01–O13 with native DBus through cbx_overlay_service_step
-4. Manager Controllers + Settings interaction with native DBus (M04, M21, M23–M26, topology failure, resize hit test)
-5. Manager Profiles + Editor interaction with native DBus (M10, M12–M14, M16, M18, M20, M30–M36, NES validation, unsaved prompt)
-6. Disabled/degraded scenarios D01–D08 with native DBus (controller + pointer paths)
-7. Installed binary functional acceptance test (exec installed controller-box, not in-process library)
-8. Final documentation and specification audit (re-audit all verified rows, full verification, clean Git)
+## Changes (commit 522e16e on develop)
+1. **Stale task refs**: Updated all 58 `evidence_task` fields from "Task 7/8/9/11" to current plan numbering. Verified entries → "—", mock-only → "Task 4/5/3/6" by category.
+2. **verify_status downgrades**: 33 mock-only entries downgraded from VERIFIED to UNVERIFIED (M04/M10/M12/M18/M21/M23/M30/M31/M33, O01–O11, D02–D08). 8 dialog entries changed from NOT_APPLICABLE to UNVERIFIED (M09/M15/M16/M19/M20/M24/M25/M26).
+3. **pointer_path_avail**: Changed NA → AVAILABLE for 8 dialog entries (M09/M15/M16/M19/M20/M24/M25/M26) and all 8 disabled scenarios (D01–D08) per §5.1/§5.7. Updated pointer_path strings to not start with "n/a".
+4. **O13 added**: Player Mode conflict detection entry. Total entries: 59 (was 58).
+5. **Test file updated**: Count 59, overlay loop 1..13, replaced 3 "all verified" tests with consistency + specific-status + dialog-availability checks.
 
-## Conformance matrix
-- 62 rows; 47 verified, 15 partial (all mapped to tasks 1–8)
-- Final gate passes: `./scripts/final-gate.sh --planning` accepted
+## Verification
+- `nix-shell -c "ctest --test-dir build-check -R 'test_interaction_inventory|test_manager_interaction_prof' --output-on-failure"` → 2/2 passed
+- Full suite: `nix-shell -c "ctest --test-dir build-check -j$(nproc)"` → 91/91 passed, 1 skipped (test_backend_smoke, §11.1.6 human-release-gated)
+
+## Next task
+Task 2: Extend native DBus test server for overlay (SetInterceptActivation, writable InterceptMode, InputEvent signal). Dependencies: none. Ready to start.
