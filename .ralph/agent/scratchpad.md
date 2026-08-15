@@ -1,27 +1,42 @@
-# Implementation Handoff
+# Task 6: Controller-transport acceptance and manager-UI backend recovery
 
 ## Outcome
-Task 5 (Interaction inventory traversal, hover/press visual, resize hit-testing, decorative exclusion) complete. Tasks 1-5 closed; 5 plan tasks remain.
+Tasks 1-5 complete (commits through d405b7d). Task 6 in_progress.
 
-## What was done
-- **Inventory verify_status:** All 58 entries in `interaction_inventory.c` updated from `CBX_VERIFY_UNVERIFIED` to `CBX_VERIFY_VERIFIED` (41 verified, 16 N/A, 1 deferred). No unverified entries remain.
-- **Inventory ledger tests:** `test_inventory_all_manager/disabled/overlay_entries_verified` in `test_interaction_inventory.c` — assert no M/D/O entry is UNVERIFIED.
-- **Focus chain traversal:** `test_traversal_controllers_tab` (tabbar→device_list→all 3 buttons via LEFT/RIGHT→list→tabbar) + `test_traversal_settings_tab` (tabbar→list→save_btn→list→tabbar with proper scroll-through).
-- **Hover/press visual:** `test_focus_visual_indication` (mouse down on Save button→focused+pressed→render→region_differs) + `test_press_visual_indication` (hover+press→render→region_differs) in `test_manager_visual.c`.
-- **Resize hit-testing:** `test_resize_hit_testing` — sends `SDL_WINDOWEVENT_RESIZED` (800×600), verifies panel rect updates, clicks at new widget position, asserts correct control activates (type picker opens).
-- **Decorative exclusion:** `test_decorative_widget_exclusion` — status labels on all 3 tabs: `interactive==false`, not in focus chain, no focus on navigation, no activation on click, no mode change.
-- **Production code:** Added `SDL_WINDOWEVENT_RESIZED` handler to `manager.c` (updates `window_w/h`, calls `cbx_manager_layout` + `cbx_manager_rebuild_focus`). Extracted layout functions from each tab's init: `cbx_controllers_tab_layout`, `cbx_profiles_tab_layout`, `cbx_settings_tab_layout` — reposition widgets relative to current panel rect. `cbx_manager_layout` now calls all three tab layout functions.
-- **Conformance matrix:** MG-03, IA-01, IA-05, IA-08, M30, M46, M47, M48 all → `verified`.
-- **OPERATIONS.md:** Added §5.7 Interaction Acceptance Methodology section.
+## What Task 6 requires (3 deliverables)
+
+### 1. Controller acceptance via production gamepad transport (IA-03, IA-17, M49)
+Extend `test_installed_functional.c` to drive representative controls across all 3 tabs using `SDL_JoystickSetVirtualButton`→`SDL_PollEvent`→`cbx_manager_handle_event`:
+- **Controllers tab**: A button (b0) to open Add, confirm type, Remove, Change Type
+- **Profiles tab**: A button to Create (Default copy), Edit, Save, Delete
+- **Settings tab**: A button to toggle a setting, navigate to Save, save
+- **Editor**: D-pad + A to navigate bindings, B to cancel/back
+- Assert semantic outcomes (device count changes, DBus calls observed, files written, mode transitions)
+- Currently only D-pad (buttons 13/14) is used for tab navigation. Need A (b0) and B (b1).
+
+### 2. Keyboard tests relabeled as supplemental (§5.7)
+In `test_manager_interaction_ctrl.c`, add clear comments/test-name annotations that keyboard-dispatched `*_controller_path` tests are "supplemental accessibility evidence" per §5.7, not controller acceptance. The genuine controller-transport evidence comes from `test_installed_functional.c`.
+
+### 3. Manager-UI backend recovery through production dispatch (IA-14, M50)
+New test that:
+- Initializes manager with real private sd-bus backend (reuse `test_installed_functional.c` infrastructure or `test_native_dbus.c` patterns)
+- Simulates IP owner loss (kill server) → NameOwnerChanged → `cbx_manager_backend_degraded` callback
+- Verifies controls are disabled: `ct.add_btn.base.interactive == false`, status label visible with reason, `ct.backend == NULL`
+- Simulates IP owner reacquisition (restart server) → NameOwnerChanged → `cbx_manager_backend_ready` callback
+- Verifies controls re-enable: `ct.add_btn.base.interactive == true`, `ct.backend != NULL`, device model re-enumerated, no restart needed
+- **Key**: must use the manager's own callbacks wired in `cbx_manager_init_with_dbus()`, not standalone test callbacks
+
+## Key infrastructure facts
+- `test_installed_functional.c` already has: private dbus-daemon fork, InputPlumber server fork, SDL virtual gamepad (6 axes, 15 buttons, mapping a:b0,b:b1,start:b6,dpup:b11..dpright:b14), `ctrl_press()` helper, `pump_manager()` helper
+- Manager's `cbx_manager_controller_to_key` maps: A→SDLK_a, B→SDLK_b, START→SDLK_TAB, D-pad→arrows
+- Recovery path: `ip_connection_handle_name_changed` → `reenumerate_cb`/`degraded_cb` → `cbx_manager_backend_ready`/`cbx_manager_backend_degraded`
+- `cbx_controllers_tab_set_available(false, reason)` sets `add_btn/remove_btn/change_type_btn.base.interactive = false`, hides buttons, shows status_lbl
+- `cbx_controllers_tab_set_available(true, NULL)` re-enables buttons, hides status_lbl
+- Manager main loop drains DBus via `backend->process(bus)` up to 64x per frame
+- `test_native_dbus.c` has `test_native_owner_loss_and_reacquisition` but at ip_connection layer only — no manager UI
 
 ## Verification
-- `ctest -R 'test_interaction_inventory|test_manager_interaction_ctrl|test_manager_visual'` → all 3 suites passed (14 + 44 + 13 tests).
-- Full suite: 90/90 passed, 1 pre-existing skip (test_backend_smoke).
-- No regressions.
-
-## Commit
-- d405b7d on `develop`.
+`nix-shell --run "ctest --test-dir build-check -R 'test_installed_functional|test_manager_production|test_native_dbus|test_manager_interaction_ctrl' --output-on-failure"`; full gate.
 
 ## Next task
-Task 6: Controller-transport acceptance and manager-UI backend recovery (pending, depends on Tasks 2,3,4,5 — now all unblocked).
-Tasks 7, 8 also pending with no deps. Task 9 depends on 7. Task 10 (final audit) depends on all.
+Task 7 (overlay dynamic columns hotplug + visual skip hardening) — no deps, can start after Task 6.
