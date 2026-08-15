@@ -189,13 +189,20 @@ else
 fi
 
 # --- Step 9: (Optional) Flatpak build ---------------------------------------
+# flatpak-builder is an optional dependency. When unavailable, this step is
+# a documented optional gate, not a silent skip. See docs/PACKAGING.md for
+# installation instructions.
 echo ""
 echo "--- Flatpak build (optional) ---"
+echo "flatpak-builder is an optional dependency (see docs/PACKAGING.md)."
+echo "When available, a clean Flatpak build gate is performed below."
+echo "When unavailable, this step is a documented optional gate, not a failure."
 if command -v flatpak-builder >/dev/null 2>&1; then
     FLATPAK_MANIFEST="$PROJECT_ROOT/packaging/org.shadowblip.ControllerBox.yaml"
     FLATPAK_BUILD="$TMPDIR/flatpak-build"
 
-    echo "flatpak-builder found; attempting build..."
+    echo ""
+    echo "flatpak-builder found; attempting clean build gate..."
     if flatpak-builder --user --install --force "$FLATPAK_BUILD" "$FLATPAK_MANIFEST" 2>&1; then
         # Verify the Flatpak binary runs --version
         FLATPAK_OUT=$(flatpak run org.shadowblip.ControllerBox --version 2>&1) || true
@@ -205,10 +212,14 @@ if command -v flatpak-builder >/dev/null 2>&1; then
             fail "flatpak --version unexpected: '$FLATPAK_OUT'"
         fi
     else
-        echo "SKIP: flatpak-builder build failed (network or SDK unavailable)"
+        echo "OPTIONAL: flatpak-builder build failed (network or SDK unavailable)."
+        echo "This is a documented optional gate — see docs/PACKAGING.md for setup."
     fi
 else
-    echo "SKIP: flatpak-builder not installed"
+    echo "OPTIONAL: flatpak-builder not installed."
+    echo "To enable the Flatpak build gate, install flatpak-builder and the"
+    echo "freedesktop SDK (see docs/PACKAGING.md for instructions)."
+    echo "This step is documented as optional and does not affect the gate."
 fi
 
 # --- Summary ---------------------------------------------------------------

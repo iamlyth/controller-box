@@ -875,6 +875,115 @@ static void test_enumerate_real_paths(void **state)
     setenv("HOME", old_home, 1);
 }
 
+/* --- Clean-install: builtin Default with empty host dirs (PR-04) -------- */
+
+/* Verify that a clean install (no user profiles, no system profiles in the
+ * test tree) still finds the immutable built-in Default profile via the real
+ * cbx_profile_list_enumerate() path, and that a "Default copy" produces a
+ * profile with the same 6 NES bindings as the shipped default.yaml.
+ */
+static void
+test_clean_install_builtin_default(void **state)
+{
+    test_env *e = *state;
+    char old_home[PATH_MAX + 256];
+    if (!getcwd(old_home, sizeof(old_home))) old_home[0] = '\0';
+
+    /* Simulate clean install: fresh HOME with empty user dirs. */
+    setenv("HOME", e->base, 1);
+    unsetenv("XDG_CONFIG_HOME");
+    unsetenv("XDG_DATA_HOME");
+
+    /* Create the user profile directory tree (empty — no profiles written). */
+    char local_dir[PATH_MAX + 256], share_dir[PATH_MAX + 256],
+         ip_dir[PATH_MAX + 256], profiles_dir[PATH_MAX + 256];
+    snprintf(local_dir, sizeof(local_dir), "%s/.local", e->base);
+    snprintf(share_dir, sizeof(share_dir), "%s/.local/share", e->base);
+    snprintf(ip_dir, sizeof(ip_dir), "%s/.local/share/inputplumber", e->base);
+    snprintf(profiles_dir, sizeof(profiles_dir),
+             "%s/.local/share/inputplumber/profiles", e->base);
+    make_dir(local_dir);
+    make_dir(share_dir);
+    make_dir(ip_dir);
+    make_dir(profiles_dir);
+
+    /* Use the real enumeration path (scans builtin + user + system). */
+    cbx_profile_list list;
+    int rc = cbx_profile_list_enumerate(&list);
+    assert_int_equal(rc, 0);
+
+    /* The builtin Default must be present. */
+    bool found_default = false;
+    const cbx_profile_entry *default_entry = NULL;
+    for (int i = 0; i < list.count; i++) {
+        if (list.entries[i].is_default) {
+            default_entry = &list.entries[i];
+            found_default = true;
+        }
+    }
+    assert_true(found_default);
+    assert_non_null(default_entry);
+
+    /* Default must be read-only and come from the builtin profiles dir. */
+    assert_true(default_entry->read_only);
+    char expected_path[PATH_MAX];
+    snprintf(expected_path, sizeof(expected_path), "%s/default.yaml",
+             cbx_builtin_profiles_dir());
+    assert_string_equal(default_entry->path, expected_path);
+
+    /* Load the shipped Default and verify it has 6 NES bindings. */
+    cbx_profile prof;
+    rc = cbx_profile_load(&prof, default_entry->path);
+    assert_int_equal(rc, 0);
+    assert_int_equal(prof.mapping_count, 6);
+
+    /* Verify the 6 NES binding names. */
+    const char *expected_names[] = {"A", "B", "D-Pad Up",
+                                     "D-Pad Down", "D-Pad Left",
+                                     "D-Pad Right"};
+    for (int i = 0; i < 6; i++) {
+        bool found = false;
+        for (int j = 0; j < prof.mapping_count; j++) {
+            if (strcmp(prof.mappings[j].name, expected_names[i]) == 0) {
+                found = true;
+                break;
+            }
+        }
+        assert_true(found);
+    }
+
+    /* Simulate "Default copy": save the loaded profile to the user dir
+     * and reload — the copy must have the same 6 bindings. */
+    char copy_path[PATH_MAX + 512];
+    snprintf(copy_path, sizeof(copy_path), "%s/mycopy.yaml",
+             profiles_dir);
+    rc = cbx_profile_save(&prof, copy_path);
+    assert_int_equal(rc, 0);
+
+    cbx_profile copy_prof;
+    rc = cbx_profile_load(&copy_prof, copy_path);
+    assert_int_equal(rc, 0);
+    assert_int_equal(copy_prof.mapping_count, 6);
+
+    /* Verify the copy has the same binding names as the original. */
+    for (int i = 0; i < 6; i++) {
+        bool found = false;
+        for (int j = 0; j < copy_prof.mapping_count; j++) {
+            if (strcmp(copy_prof.mappings[j].name,
+                       prof.mappings[j].name) == 0) {
+                found = true;
+                break;
+            }
+        }
+        assert_true(found);
+    }
+
+    /* Clean up the copy. */
+    unlink(copy_path);
+
+    setenv("HOME", old_home, 1);
+}
+
 /* ======================================================================== */
 /* Test runner                                                              */
 /* ======================================================================== */
@@ -942,6 +1051,8 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_file_list_nonexistent_dir,
                                          setup_env, teardown_env),
         cmocka_unit_test_setup_teardown(test_enumerate_real_paths,
+                                         setup_env, teardown_env),
+        cmocka_unit_test_setup_teardown(test_clean_install_builtin_default,
                                          setup_env, teardown_env),
     };
 

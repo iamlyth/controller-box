@@ -250,9 +250,78 @@ init_tab(pt_fixture *f)
     cbx_profiles_tab_refresh(&f->tab);
 }
 
+/* Helper: init the profiles tab with real (non-test) dirs so that
+ * cbx_profile_list_enumerate() scans the builtin profiles dir. */
+static void
+init_tab_real(pt_fixture *f)
+{
+    cbx_panel *panel = &f->mgr.panels[CBX_MGR_TAB_PROFILES];
+    cbx_profiles_tab_init(&f->tab, panel,
+                            &f->mgr.text_cache, &f->mgr.theme,
+                            f->mgr.font_id);
+    /* Do NOT call set_test_dirs — let the tab use the real enumerate path
+     * which scans cbx_builtin_profiles_dir() first. */
+    cbx_profiles_tab_set_context(&f->tab, f->mgr.rend.renderer,
+                                    NULL, NULL);
+    cbx_profiles_tab_refresh(&f->tab);
+}
+
 /* ================================================================== */
 /*  Tests                                                              */
 /* ================================================================== */
+
+/* --- Clean-install: Default copy uses shipped default (PR-04) --- */
+
+/* Verify that on a clean install (empty user dirs, using the real
+ * enumerate path), the immutable built-in Default is found and a
+ * "Default copy" produces a profile with the same 6 NES bindings as
+ * the shipped data/profiles/default.yaml. */
+static void
+test_clean_install_default_copy_uses_shipped(void **state)
+{
+    pt_fixture *f = FIX(state);
+
+    /* Use the real enumerate path (scans builtin profiles dir). */
+    init_tab_real(f);
+
+    /* The builtin Default must be present. */
+    int count = cbx_profiles_tab_profile_count(&f->tab);
+    assert_int_in_range(count, 1, 100);
+
+    bool found_default = false;
+    for (int i = 0; i < count; i++) {
+        const cbx_profile_entry *e = cbx_profiles_tab_entry(&f->tab, i);
+        if (e && e->is_default) {
+            assert_true(e->read_only);
+            found_default = true;
+        }
+    }
+    assert_true(found_default);
+
+    /* "Default copy" must succeed and use the shipped default. */
+    int rc = cbx_profiles_tab_create(&f->tab, "cleaninstall",
+                                        CBX_PT_CREATE_DEFAULT_COPY);
+    assert_int_equal(rc, 0);
+
+    /* The copy should exist in the real user dir (XDG_DATA_HOME/inputplumber/
+     * profiles). env_setup sets XDG_DATA_HOME to e->tmp. */
+    char user_profiles_dir[PATH_MAX + 256];
+    snprintf(user_profiles_dir, sizeof(user_profiles_dir),
+             "%s/inputplumber/profiles", f->env.tmp);
+    char copy_path[PATH_MAX + 1024];
+    snprintf(copy_path, sizeof(copy_path), "%s/cleaninstall.yaml",
+             user_profiles_dir);
+    assert_true(file_exists(copy_path));
+
+    /* Load the copy and verify it has 6 NES bindings (shipped default). */
+    cbx_profile prof;
+    rc = cbx_profile_load(&prof, copy_path);
+    assert_int_equal(rc, 0);
+    assert_int_equal(prof.mapping_count, 6);
+
+    /* Clean up the copy. */
+    unlink(copy_path);
+}
 
 /* --- Init ---------------------------------------------------------- */
 
@@ -1202,6 +1271,9 @@ static const struct CMUnitTest tests[] = {
     cmocka_unit_test_setup_teardown(test_refresh_updates_list, pt_setup, pt_teardown),
     cmocka_unit_test(test_refresh_null),
     cmocka_unit_test_setup_teardown(test_refresh_empty_dirs, pt_setup, pt_teardown),
+
+    /* Clean-install: Default copy uses shipped default */
+    cmocka_unit_test_setup_teardown(test_clean_install_default_copy_uses_shipped, pt_setup, pt_teardown),
 
     /* Create: default copy */
     cmocka_unit_test_setup_teardown(test_create_default_copy, pt_setup, pt_teardown),

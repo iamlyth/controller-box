@@ -121,7 +121,12 @@ readiness and owner-change recovery handle either startup order.
 
 Flatpak is the primary install method (SPEC §9.1), targeting Steam Deck,
 desktop Linux, Bazzite, Nobara, ChimeraOS, and any Flatpak-capable distro.
-Published on Flathub.
+
+**Experimental status:** The Flatpak manifest is provided for development and
+testing but is **not yet published on Flathub**. It has not undergone a
+verified clean build against a published Flathub runtime, nor has it been
+submitted for Flathub review. Do not advertise a `flatpak install flathub`
+command until the publication marker in the manifest is set to true.
 
 ### Manifest
 

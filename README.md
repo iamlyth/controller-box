@@ -30,10 +30,16 @@ See [docs/OPERATIONS.md](docs/OPERATIONS.md) for service architecture and
 
 ## Install
 
-### Flatpak (primary)
+### Flatpak (experimental)
+
+The Flatpak manifest is provided for development and testing but is **not
+yet published on Flathub**.  Build and install it locally:
 
 ```bash
-flatpak install flathub org.shadowblip.ControllerBox
+flatpak install flathub org.freedesktop.Sdk//24.08
+flatpak install flathub org.freedesktop.Platform//24.08
+flatpak-builder --user --install --force build-dir \
+    packaging/org.shadowblip.ControllerBox.yaml
 ```
 
 On first launch, the manager prompts to enable the overlay service. It writes

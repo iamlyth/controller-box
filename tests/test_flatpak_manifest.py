@@ -51,6 +51,62 @@ except yaml.YAMLError as e:
     sys.exit(1)
 ok("manifest is valid YAML")
 
+# --- Check experimental marker (SPEC §9.1, PK-02) ---
+# The manifest must be explicitly marked experimental until it has undergone
+# a verified clean build and Flathub publication.  We look for a comment
+# containing "EXPERIMENTAL" and a publication marker set to false.
+if re.search(r'#.*EXPERIMENTAL', raw_content, re.IGNORECASE):
+    ok("manifest marked EXPERIMENTAL")
+else:
+    err("manifest is not marked experimental (missing EXPERIMENTAL comment)")
+
+# Publication marker must be false (not yet published)
+marker_match = re.search(r'Publication marker:\s*(\w+)', raw_content, re.IGNORECASE)
+if marker_match:
+    marker_val = marker_match.group(1).lower()
+    if marker_val == "false":
+        ok(f"publication marker is false ({marker_val})")
+    else:
+        err(f"publication marker is {marker_val!r}, expected 'false' (not yet published)")
+else:
+    err("publication marker not found in manifest")
+
+# --- Check no Flathub install command in user-facing docs (PK-02) ---
+# Until the publication marker is true, user-facing documentation must not
+# advertise `flatpak install flathub org.shadowblip.ControllerBox`.
+user_facing_docs = [
+    os.path.join(PROJECT_ROOT, "README.md"),
+    os.path.join(PROJECT_ROOT, "docs", "PACKAGING.md"),
+]
+flathub_app_pattern = re.compile(
+    r'flatpak\s+install\s+flathub\s+org\.shadowblip\.ControllerBox',
+    re.IGNORECASE
+)
+for doc_path in user_facing_docs:
+    doc_name = os.path.relpath(doc_path, PROJECT_ROOT)
+    if os.path.isfile(doc_path):
+        with open(doc_path) as df:
+            doc_content = df.read()
+        if flathub_app_pattern.search(doc_content):
+            err(f"{doc_name} advertises `flatpak install flathub org.shadowblip.ControllerBox` "
+                "— remove until publication marker is true")
+        else:
+            ok(f"{doc_name} does not advertise Flathub app install")
+    else:
+        err(f"{doc_name} not found")
+
+# Check that docs/PACKAGING.md does not claim "Published on Flathub"
+pkg_doc = os.path.join(PROJECT_ROOT, "docs", "PACKAGING.md")
+if os.path.isfile(pkg_doc):
+    with open(pkg_doc) as df:
+        pkg_content = df.read()
+    # Match "Published on Flathub" as a standalone assertion, not a
+    # negated form like "not yet published on Flathub".
+    if re.search(r'(?<!not yet )(?<!not )Published on Flathub', pkg_content, re.IGNORECASE):
+        err("docs/PACKAGING.md claims 'Published on Flathub' — remove until published")
+    else:
+        ok("docs/PACKAGING.md does not claim 'Published on Flathub'")
+
 # --- Check app-id ---
 app_id = data.get("app-id", "")
 if app_id == "org.shadowblip.ControllerBox":

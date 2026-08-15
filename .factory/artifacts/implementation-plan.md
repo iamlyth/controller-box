@@ -109,7 +109,7 @@ Task that closes them. §13-deferred and §10.2-optional members are excluded
 | PR-01 | Default profile built-in, read-only, always-present fallback | §5.3 | verified | `test_manager_interaction_prof.c:mip_setup`; delete blocked for read_only | — |
 | PR-02 | New profile flow: Default copy / Empty / Clone → editor | §5.3 | verified | profiles_tab.c clone path in name_input_confirm; test_prof_create_clone_controller + _pointer (prod dispatch, 6 cloned bindings verified) | — |
 | PR-03 | User profiles as InputPlumber YAML in user dir; device_profile_v1 schema | §5.3,§7.6 | verified | `profile_save.c`; `config_profile.c:40-50`; `test_profile_yaml.c` | — |
-| PR-04 | Ships immutable Default so clean install works with empty host dirs | §5.3 | partial | system profile read_only flag set; no clean-install-empty-dirs test | Task 8 |
+| PR-04 | Ships immutable Default so clean install works with empty host dirs | §5.3 | verified | `cbx_builtin_profiles_dir()` always scanned first; `test_clean_install_builtin_default` (test_profile_list.c) + `test_clean_install_default_copy_uses_shipped` (test_profiles_tab.c) verify shipped Default found with empty host dirs + Default copy has 6 NES bindings | — |
 | PR-05 | Empty profile: reachable add-first-binding action at zero rows | §5.3 | verified | `profile_editor_list.c:activate()` mapping_count==0→sequential; `test_d08_empty_profile_create` | — |
 | PR-06 | Save/Discard explicit visible controls | §5.3 | verified | `test_editor_save_close`, `test_editor_save_button_pointer`, `test_editor_discard_button_pointer` | — |
 | PR-07 | Window close with unsaved changes prompts (not silent discard) | §5.3 | verified | manager.c handle_event SDL_QUIT checks dirty flag, enters CONFIRM_QUIT; profile_editor_list.c dirty flag set on target_pick/capture/seq; test_quit_unsaved_prompt_appears + save_and_quit + discard_and_quit + no_changes_immediate | — |
@@ -165,7 +165,7 @@ Task that closes them. §13-deferred and §10.2-optional members are excluded
 | IC-01 | Icons show virtual type; Controllercons + custom gaps; nanosvg vendored cached+recolorable | §8.1-3 | verified | `icon_cache.c`; `icon_lookup.c`; `data/controller-icons.yaml`; `test_icon_cache.c` | — |
 | IC-02 | controller-icons.yaml mapping table; unknown→generic+label; profile override | §8.4-8.5 | verified | `icon_lookup.c`; `test_icon_lookup.c` | — |
 | PK-01 | Flatpak manifest permissions (talk-name + filesystems) | §9.1 | verified | `packaging/org.shadowblip.ControllerBox.yaml`; `test_flatpak_manifest.py` | — |
-| PK-02 | Flatpak manifest experimental until clean build+published; no Flathub advertise pre-publication | §9.1 | missing | manifest not marked experimental; README.md:36 + docs/PACKAGING.md:124 advertise Flathub install | Task 8 |
+| PK-02 | Flatpak manifest experimental until clean build+published; no Flathub advertise pre-publication | §9.1 | verified | manifest has EXPERIMENTAL comment + publication marker:false; README.md + docs/PACKAGING.md no longer advertise `flatpak install flathub`; `test_flatpak_manifest.py` enforces experimental marker + no Flathub app install in docs | — |
 | PK-03 | Manager installs service on first run (flatpak-spawn/host systemctl); flatpak run --overlay-service | §9.1 | verified | `service_install.c:120-320`; `test_service_install.c` | — |
 | PK-04 | Tarball: CMake + make install (binary, service, desktop, icons, yaml) | §9.2-9.3 | verified | `test_packaging.sh` (real install); `test_packaging_install.sh` (layout) | — |
 | PK-05 | InputPlumber documented prerequisite; no invalid cross-manager dep | §9.4 | verified | manifest comments; runtime bus-name checks; no After=/Requires= | — |
@@ -493,7 +493,7 @@ coverage is cited; gaps are assigned to Tasks 5-6.
 - Documentation impact: OPERATIONS dynamic columns + visual test environment.
 
 ## Task 8: Flatpak experimental status, documentation defects, clean-install default
-- Status: pending
+- Status: complete
 - Dependencies: none
 - Scope: `packaging/org.shadowblip.ControllerBox.yaml` (experimental marker), `README.md`, `docs/PACKAGING.md`, `tests/test_flatpak_manifest.py` (extend), `tests/test_packaging.sh` (extend), `tests/test_profile_list.c`/`test_profiles_tab.c` (clean-install), `data/profiles/default.yaml` (verify immutable default).
 - Acceptance criteria:

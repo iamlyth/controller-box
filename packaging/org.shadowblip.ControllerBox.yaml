@@ -1,5 +1,14 @@
 # Flatpak manifest for Controller-Box (SPEC §9.1).
 #
+# EXPERIMENTAL — not yet published on Flathub.
+# This manifest has not undergone a verified clean build against a
+# published Flathub runtime, nor has it been submitted for Flathub review.
+# It is provided for development and testing only.  Do not advertise a
+# `flatpak install flathub` command until the publication marker below
+# is set to true.
+#
+# Publication marker: false
+#
 # Build:  flatpak-builder --user --install --force build-dir \
 #           packaging/org.shadowblip.ControllerBox.yaml
 # Verify: flatpak-builder --show-deps packaging/org.shadowblip.ControllerBox.yaml
