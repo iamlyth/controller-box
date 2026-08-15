@@ -23,7 +23,7 @@ if ! pkg-config --exists "${required[@]}"; then
 fi
 
 cmake -S . -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Debug
-cmake --build "$BUILD_DIR" --parallel
+cmake --build "$BUILD_DIR" --parallel ${CMAKE_BUILD_PARALLEL_LEVEL:-2}
 ctest --test-dir "$BUILD_DIR" --output-on-failure
 functional_log=$(mktemp)
 trap 'rm -f "$functional_log"' EXIT

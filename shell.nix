@@ -14,6 +14,7 @@ pkgs.mkShell {
     SDL2_ttf
     SDL2_image
     harfbuzz          # transitive dep of SDL2_ttf (silences pkg-config)
+    glib              # transitive dep of harfbuzz (pkg-config propagation)
     libtiff           # transitive dep of SDL2_image
     freetype          # transitive dep of harfbuzz
     systemd      # provides sd-bus (libsystemd)
