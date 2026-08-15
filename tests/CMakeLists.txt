@@ -628,6 +628,19 @@ if(CMOCKA_FOUND)
     set_tests_properties(test_backend_smoke PROPERTIES
         SKIP_RETURN_CODE 77)
 
+    # --- Task 9: Software-renderer backend smoke (SPEC §11.1.6) --------
+    # Broad-invariant backend smoke that runs in headless CI through a
+    # real software SDL2 renderer.  Always runs (software renderer is
+    # always available); does NOT skip.  Uses dummy video driver for
+    # headless safety.
+    add_executable(test_backend_smoke_sw tests/test_backend_smoke_sw.c)
+    target_link_libraries(test_backend_smoke_sw PRIVATE controllerbox cbx_test_support)
+    target_compile_definitions(test_backend_smoke_sw PRIVATE
+        CBX_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME test_backend_smoke_sw COMMAND test_backend_smoke_sw)
+    set_tests_properties(test_backend_smoke_sw PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+
     # --- Task 7: Interaction acceptance inventory (SPEC §5.7) ----------
     # Machine-readable inventory of every interactive control (M01–M38),
     # overlay action (O01–O12), and disabled/degraded scenario (D01–D08).

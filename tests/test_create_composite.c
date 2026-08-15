@@ -13,6 +13,8 @@
  *   - Empty YAML content (valid edge case).
  *   - Large YAML content.
  */
+#define _POSIX_C_SOURCE 200809L
+
 #include "dbus_mock.h"
 #include "dbus/ip_create_composite.h"
 #include "dbus/ip_device_model.h"
