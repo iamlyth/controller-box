@@ -78,7 +78,7 @@ capabilities beyond those declared in `.factory/environment.toml`.
 | MG-01 | §5.1 | Tab structure 3 tabs + tabbar nav | verified | manager.c; test_installed_functional.c (real gamepad + native DBus) | — |
 | MG-02 | §5.1,§5.7 | Pointer/mouse secondary path every control | partial | test_manager_interaction_ctrl/prof.c (mock DBus); test_installed_smoke.sh (installed binary, no DBus); test_manager_interaction_ctrl.c:1760 (resize hit test, mock) | Task 5 |
 | MG-03 | §5.2 | Controllers add/remove/type mixed types | verified | controllers_tab.c; test_installed_functional.c (real gamepad + native DBus); test_native_dbus.c topology reconciliation | — |
-| MG-04 | §5.2 | Topology reconciliation success/failure criteria | partial | test_native_dbus.c:882 (Scenarios 1–4: create/remove/type-change with native DBus); failure-retains-topology not tested | Task 4 |
+| MG-04 | §5.2 | Topology reconciliation success/failure criteria | verified | test_native_dbus.c:882 (Scenarios 1–4); test_manager_native.c (topology failure: expected 4, actual 0, error shown) | — |
 | MG-05 | §5.3 | Profiles browse/create/edit/delete + all starting points | partial | profiles_tab.c; test_installed_functional.c (Default copy via gamepad); test_manager_interaction_prof.c (mock for Empty/Clone) | Task 5 |
 | MG-06 | §5.3 | Empty profile add-first-binding + save/discard explicit | partial | profiles_tab.c; test_manager_interaction_prof.c (mock); test_installed_functional.c (basic save) | Task 5 |
 | MG-07 | §5.3 | Built-in immutable Default profile (clean install) | verified | test_profiles_tab.c:280 `test_clean_install_default_copy_uses_shipped`; is_default + read_only asserted | — |
@@ -86,10 +86,10 @@ capabilities beyond those declared in `.factory/environment.toml`.
 | MG-09 | §5.4 | Profile editor sequential mode + progress | partial | profile_editor_seq.c; test_manager_interaction_prof.c (mock; test failure) | Tasks 1, 5 |
 | MG-10 | §5.4 | NES minimum validation + error | partial | profile_validate.c; test_manager_interaction_prof.c (mock); test_profile_validate.c (unit) | Task 5 |
 | MG-11 | §5.3 | Unsaved changes prompt on close | partial | profile_save.c; test_manager_interaction_prof.c (mock) | Task 5 |
-| MG-12 | §5.5 | Settings tab all settings + persistence | partial | settings_tab.c; test_installed_functional.c (toggle/save); test_manager_interaction_ctrl.c (mock detailed) | Task 4 |
+| MG-12 | §5.5 | Settings tab all settings + persistence | verified | settings_tab.c; test_installed_functional.c (toggle/save); test_manager_native.c (opacity, VC count, VC type, trigger combo edit flow, cancel/revert, native DBus) | — |
 | MG-13 | §5.6 | Manager visual acceptance all 3 tabs + editor | verified | manager.c; test_manager_visual.c, test_golden.c | — |
 | MG-14 | §5.7 | Manager interaction acceptance full inventory | partial | test_manager_interaction_ctrl/prof.c (mock, full coverage); test_installed_functional.c (subset, native DBus) | Task 5 |
-| MG-15 | §5.7 | Post-resize hit testing (no stale rects) | partial | test_manager_interaction_ctrl.c:1760 `test_resize_hit_testing` (mock DBus); no native-DBus evidence | Task 4 |
+| MG-15 | §5.7 | Post-resize hit testing (no stale rects) | verified | test_manager_interaction_ctrl.c:1760 (mock); test_manager_native.c (native DBus, resize 800×600, click at new widget center) | — |
 | CF-01 | §7.3 | settings.yaml schema + persistence | verified | config_settings.c; test_settings | — |
 | CF-02 | §7.4 | assignments.yaml + gamepad order persist | verified | config_assignments.c; test_assignments, test_order_restore | — |
 | CF-03 | §7.5 | profile-metadata sidecar optional | verified | config_profile_meta.c; test_profile_list | — |
@@ -106,7 +106,7 @@ capabilities beyond those declared in `.factory/environment.toml`.
 | DB-03 | §10.1 | Operational readiness + Version + typed props | verified | ip_connection.c; test_native_dbus, test_installed_functional | — |
 | DB-04 | §10.1 | Hotplug InterfacesAdded/Removed | verified | ip_hotplug.c; test_hotplug (mock signal); test_installed_functional (native enumeration after target create/remove) | — |
 | DB-05 | §2.4 | NameOwnerChanged + re-enumerate <2s | verified | ip_connection.c; test_installed_backend_recovery (native DBus) | — |
-| DB-06 | §2.5,§10.3 | InterceptMode poll ~50ms gap #1 | partial | ip_intercept_poll.c; test_intercept_poll (mock); test_overlay_latency (mock); no native-DBus poll path | Task 3 |
+| DB-06 | §2.5,§10.3 | InterceptMode poll ~50ms gap #1 | verified | ip_intercept_poll.c; test_intercept_poll (mock); test_overlay_native.c (native DBus poll path, InterceptMode verified as `u` on wire) | — |
 | DB-07 | §10.3,§7.4 | GamepadOrder persistence gap #2 | verified | gamepad_order_restore.c; test_gamepad_order, test_order_restore | — |
 | DB-08 | §10.3 | CreateCompositeDevice temp YAML gap #3 | verified | ip_create_composite.c; test_create_composite | — |
 | DB-09 | §10.3 | Filesystem enumeration gap #4 | verified | config_profile_list.c; test_profile_list | — |
@@ -205,8 +205,9 @@ semantic outcomes against a real private DBus service.
 - Documentation impact: none
 
 ## Task 4: Manager Controllers + Settings interaction with native DBus
-- Status: pending
-- Dependencies: Task 1
+- Status: complete
+- Dependencies: Task 1 (complete)
+- Evidence: `tests/test_manager_native.c` (17 tests, commit 6578044). Controller path via `SDL_JoystickSetVirtualButton` → `cbx_manager_handle_event`; pointer path via `SDL_MOUSEBUTTONDOWN/UP` → `cbx_manager_handle_mouse_event`. Covers M04 (device list select), M09 (type picker cancel), M21 (settings list select), M23–M26 (opacity, VC count, VC type, trigger combo edit flow), MG-04 (topology failure — expected 4 targets, 0 actual, error shown), MG-15 (post-resize hit testing — resize to 800×600, click at new widget center, correct widget activates), D06 (CreateTargetDevice failure via `g_nip_fail_next_create` flag, error shown, topology retained). Added `g_nip_fail_next_create` to `native_ip_server.h/.c` for D06 testing. Verification: 17/17 passed, full suite 94/94 (93 passed + 1 skipped `test_backend_smoke` §11.1.6). `grep -c 'ip_dbus_mock' tests/test_manager_native.c` → 1 (comment only).
 - Scope: Extend native-DBus + real gamepad coverage for Controllers and Settings tab controls not covered by `test_installed_functional.c`. Add test phases or a companion test using the existing private DBus server + `SDL_JoystickSetVirtualButton` transport: (a) M04 (device list select via gamepad); (b) M21 (settings list select), M23–M26 (opacity, VC count, VC type, trigger combo — all settings controls); (c) M15 (settings edit — pointer path for edit flow); (d) MG-04 topology failure scenario — attempt CreateTargetDevice when server returns error, verify last confirmed topology retained and error shown; (e) MG-15 post-resize hit testing with native DBus — resize window, verify click at new control center activates correct control through `cbx_manager_handle_event`; (f) Pointer path (SDL_MOUSEMOTION + MOUSEBUTTONDOWN/UP through `cbx_manager_handle_event`) for all above controls. Verify semantic outcomes (state transitions, DBus calls with native signatures, settings file mutations).
 - Acceptance criteria: M04, M21, M23–M26, D06 (DBus failure) have passing controller + pointer evidence through production dispatch with native DBus; topology failure retains last topology; post-resize hit testing uses final layout; no `ip_dbus_mock` in new test code.
 - Verification: `nix-shell --run "ctest --test-dir build-check --output-on-failure"` (full suite passes); new test file contains no `ip_dbus_mock`

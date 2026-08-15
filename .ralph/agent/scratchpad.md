@@ -1,24 +1,24 @@
-# Task 3 Complete — Overlay Interaction Acceptance with Native DBus
+# Task 4 Complete — Manager Controllers + Settings Interaction with Native DBus
 
 ## Outcome
-Created `tests/test_overlay_native.c` exercising O01–O13 through `cbx_overlay_service_step` with a real sd-bus backend connected to a private InputPlumber-compatible native-signature DBus server. No `ip_dbus_mock` backend used — only shared DBus constants from `dbus_mock.h`.
+Created `tests/test_manager_native.c` with 17 tests covering M04, M09, M21, M23–M26, MG-04, MG-15, D06 through `cbx_manager_handle_event` with real sd-bus backend connected to a private native-signature InputPlumber-compatible DBus server. Controller path via `SDL_JoystickSetVirtualButton`; pointer path via `SDL_MOUSEBUTTONDOWN/UP`. No `ip_dbus_mock` backend used.
 
-## Changes (commit 6c659c4 on develop)
-1. **`tests/test_overlay_native.c`**: New 18-test file covering O01–O11, O11b, O11c, O12, O13. Uses `ip_dbus_sd_backend()` + `nip_start_server` for real DBus. InputEvent signals triggered via `EmitInputEvent(ss)` method on native server. InterceptMode verified as `u` type on the wire via set/get round-trip through production sd-bus. Real SDL events via `SDL_PushEvent KEYDOWN`. Real DBus signal dispatch through `ip_input_events_subscribe` + `cbx_overlay_service_step`.
-2. **`tests/CMakeLists.txt`**: Added `test_overlay_native` target linking `native_ip_server.c` with `DBUS_SESSION_CONFIG` define.
+## Changes (commit 6578044 on develop)
+1. **`tests/test_manager_native.c`**: New 17-test file. Controller path uses virtual gamepad (`SDL_JoystickSetVirtualButton` → `SDL_CONTROLLERBUTTONDOWN` → `cbx_manager_controller_to_key`). Pointer path uses mouse events (`SDL_MOUSEBUTTONDOWN/UP` → `cbx_manager_handle_mouse_event`). Tests: M04 (list select controller+pointer), M09 (type picker cancel), M21 (settings list select controller+pointer), M23+M24+M25 (opacity, VC count, VC type, trigger combo edit flow — controller+pointer), M26 (cancel edit with revert — controller+pointer), MG-04 (topology failure: expected 4, actual 0, error visible), MG-15 (post-resize hit testing: resize 800×600, click at new widget center), D06 (CreateTargetDevice failure — controller+pointer).
+2. **`tests/native_ip_server.h/.c`**: Added `g_nip_fail_next_create` flag. When set, server returns DBus error on next `CreateTargetDevice` and auto-resets. Reset in `nip_reset_server_state`.
+3. **`tests/CMakeLists.txt`**: Added `test_manager_native` target linking `native_ip_server.c` with `DBUS_SESSION_CONFIG` define.
 
 ## Key implementation insights
-- PersistentId must use `ORDER:n` format (not arbitrary strings) because `cbx_validate_id` only accepts `BT:`, `USB:`, `ORDER:` prefixed IDs.
-- Profile cycling modifies `grid.rows[].profile` in place — tests must copy the string before dispatch to compare before/after.
-- `cbx_profile_cycle_apply` verifies LoadProfilePath via GetProfilePath read-back — native server already stores profile path on LoadProfilePath call (Task 2).
-- `cbx_overlay_input_build_map` queries `DbusDevices` property (as array) — native server returns composite paths as DbusDevices, InputEvent signal emitted on same path.
-- `EmitInputEvent` on non-existent paths correctly fails (sd-bus returns error) — O11c test expects non-zero return.
-- Test-local poll wrappers replicate production `on_intercept_activating` (updates lifecycle.composite_path) since production functions are static.
+- List widget KEYDOWN DOWN changes `lst->selected` but does NOT call `on_select` or sync `tab->selected`. Sync happens on KEYUP A via `on_setting_selected` callback. Controller-path tests must check `cbx_list_get_selected` after navigation, not `cbx_settings_tab_selected`.
+- `pump_manager` after `cbx_manager_init` processes SDL_WINDOWEVENT (RESIZED/SHOWN) which may change focus from tabbar to panel child. Controller-path navigation must use `ctrl_press` (virtual gamepad through SDL event queue) not `send_key_dn` (synthetic keyboard event directly to `cbx_manager_handle_event`), because focus state after init's window events differs between mock and native DBus setups.
+- D06 testing: `g_nip_fail_next_create` set before `nip_fork_server` causes first `CreateTargetDevice` to fail. Server auto-resets flag after one failure. D06 tests use `mn_setup_fail` setup function.
+- MG-04 topology failure: default settings expect 4 VCs, server starts with 0 targets → `check_orphan_columns` shows "Topology incomplete: 0 of 4".
+- MG-15 resize hit testing: `send_window_resize` dispatches SDL_WINDOWEVENT_RESIZED through `cbx_manager_handle_event` → `cbx_manager_layout` + `cbx_manager_rebuild_focus`. Clicking at new widget center activates correct widget.
 
 ## Verification
-- `test_overlay_native`: 18/18 passed
-- Full suite: 93/93 passed, 1 skipped (test_backend_smoke, §11.1.6 human-release-gated)
-- `grep -c 'ip_dbus_mock' tests/test_overlay_native.c` → 1 (comment only, no mock backend usage)
+- `test_manager_native`: 17/17 passed
+- Full suite: 94/94 (93 passed + 1 skipped `test_backend_smoke` §11.1.6 human-release-gated)
+- `grep -c 'ip_dbus_mock' tests/test_manager_native.c` → 1 (comment only, no mock backend usage)
 
 ## Next task
-Task 4: Manager Controllers + Settings interaction with native DBus (M04, M21, M23–M26, D06, MG-04, MG-15). Dependencies: Task 1 (complete). Ready to start.
+Task 5: Manager Profiles + Editor interaction with native DBus (M10, M12–M14, M16, M18, M20, M30–M36, D02–D05, D07–D08). Dependencies: Task 1 (complete). Ready to start.
