@@ -184,8 +184,10 @@ else
     echo "WARN: no DejaVuSans.ttf found; manager may fail to render text"
 fi
 
-# Launch manager in background with the temporary HOME
-HOME="$FONT_HOME" "$INSTALLED_BIN" --manager &
+# Launch manager in background with the temporary HOME and XDG dirs
+# (override any inherited XDG_CONFIG_HOME/XDG_DATA_HOME from the runner env)
+HOME="$FONT_HOME" XDG_CONFIG_HOME="$FONT_HOME/.config" XDG_DATA_HOME="$FONT_HOME/.local/share" \
+    "$INSTALLED_BIN" --manager &
 MANAGER_PID=$!
 sleep 2.0
 
