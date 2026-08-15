@@ -142,6 +142,7 @@ pass "Xvfb running (PID $XVFB_PID)"
 
 export DISPLAY="$XVFB_DISPLAY"
 export SDL_VIDEODRIVER="x11"
+export SDL_RENDER_DRIVER="software"    # force software rendering under Xvfb
 
 # ---------------------------------------------------------------------------
 # Step 3: Manager mode smoke test

@@ -169,21 +169,26 @@ static int load_png(cbx_icon_cache *cache, const char *abs_path,
     if (rc != 0)
         return rc;
 
-    /* Use SDL2_image to load the texture. */
-    SDL_Texture *tex = IMG_LoadTexture(cache->renderer, resolved);
-    if (!tex) {
-        fprintf(stderr, "icon_lookup: IMG_LoadTexture failed for %s: %s\n",
+    /* Use SDL2_image to load the image as a surface first, then create a
+     * texture from it.  We store the *surface* dimensions (the original
+     * image dimensions) rather than the *texture* dimensions, because some
+     * SDL renderers create power-of-two textures that differ from the
+     * source image size (e.g. an 8x8 PNG becomes a 128x128 texture). */
+    SDL_Surface *surface = IMG_Load(resolved);
+    if (!surface) {
+        fprintf(stderr, "icon_lookup: IMG_Load failed for %s: %s\n",
                 resolved, IMG_GetError());
         return -ENOENT;
     }
+    int w = surface->w;
+    int h = surface->h;
 
-    /* Query texture dimensions. */
-    int w, h;
-    if (SDL_QueryTexture(tex, NULL, NULL, &w, &h) != 0) {
-        fprintf(stderr, "icon_lookup: SDL_QueryTexture failed: %s\n",
+    SDL_Texture *tex = SDL_CreateTextureFromSurface(cache->renderer, surface);
+    SDL_FreeSurface(surface);
+    if (!tex) {
+        fprintf(stderr, "icon_lookup: SDL_CreateTextureFromSurface failed: %s\n",
                 SDL_GetError());
-        SDL_DestroyTexture(tex);
-        return -EINVAL;
+        return -ENOENT;
     }
 
     /* Enable alpha blending. */
