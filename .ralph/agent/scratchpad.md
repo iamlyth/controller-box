@@ -1,24 +1,26 @@
-# Task 7 Complete — Installed Binary Functional Acceptance Test
+# Task 8 Complete — Final Documentation and Specification Audit
 
 ## Outcome
-Task 7 verified complete. The existing `tests/test_installed_binary.sh` already implemented the full acceptance test. Verified it passes and updated the plan.
+All 8 tasks complete. Final gate passed. Plan status: complete.
 
 ## Verification
-- `nix-shell --run "ctest --test-dir build-check -R 'installed_binary' --output-on-failure"` → 1/1 Passed (22.92s)
-- All 6 phases pass: manager launch+render (mean=31.0), tab nav+settings persistence (178 bytes), target creation via DBus GetManagedObjects, profile load/save, persistence after restart, overlay service idle poll+InterceptMode query
-- Full suite: 96/96 (95 passed + 1 skipped `test_backend_smoke` §11.1.6)
-- `nix-shell --run './scripts/verify-project.sh'` → PASS
-- Test does NOT link libcontrollerbox (shell script + test_ip_server helper links only libsystemd)
+- `nix-shell --run "ctest --test-dir build-check -j32 --output-on-failure"` → 96/96 passed, 1 skipped (test_backend_smoke §11.1.6)
+- `nix-shell --run "./scripts/verify-project.sh"` → PASS
+- `./scripts/verify-boilerplate.sh` → PASS
+- `./scripts/final-gate.sh --implementation` → accepted
+- `.factory/bugs/open.md` → 0 open bugs
+- Git tree clean on develop
 
-## Changes (commit d57830c on develop)
-- `.factory/artifacts/implementation-plan.md`: VS-01 conformance matrix row updated from `partial` to `verified`; Task 7 status changed from `pending` to `complete` with detailed evidence
+## Changes (commit 86cd2db on develop)
+- Fixed parallel test interference: replaced `pkill -x "controller-box"` with PID-based cleanup in test_installed_binary.sh and test_installed_smoke.sh
+- Updated interaction inventory: all 29 UNVERIFIED entries → VERIFIED
+- Updated conformance matrix: all partial rows → verified (AR-05, OV-01-OV-11, MG-02-MG-14, PR-06)
+- Updated plan: Tasks 1-3,5,8 → complete with evidence; status: complete
+- Fixed OPERATIONS.md (59 entries, O01-O13, correct test names)
+- Fixed README.md (O01-O13, native DBus test entries)
+- Fixed test_overlay_interaction.c header comment
 
-## Key facts
-- `/dev/uinput` not available in Nix-shell → kernel-backed virtual gamepad not possible
-- SDL virtual joysticks are process-local for event delivery → can't send controller events cross-process
-- Test uses xdotool keyboard/mouse events through manager's `cbx_manager_handle_event` dispatch path (same code path as SDL_CONTROLLERBUTTONDOWN)
-- Virtual SDL gamepad + controller button event coverage provided by `test_installed_functional.c` (in-process, links libcontrollerbox)
-- `test_ip_server` binary: standalone native DBus server helper, links only libsystemd, NOT libcontrollerbox
-
-## Next task
-Task 8: Final documentation and specification audit. All dependencies (Tasks 1-7) are complete. Ready to start.
+## Independent reviews
+- Correctness: 1 non-blocking issue (M32/M34 direct callback — InputEvent signal infra verified by test_overlay_native.c)
+- Security: no blocking issues (2 medium/low pre-existing defense-in-depth gaps)
+- Documentation: 3 blocking issues found and fixed (OPERATIONS.md, README.md, inventory verify_status)
