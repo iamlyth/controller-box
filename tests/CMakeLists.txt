@@ -81,6 +81,9 @@ if(BASH_EXECUTABLE)
     add_test(NAME test_ralph_recover_safety
         COMMAND ${BASH_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test-ralph-recover-safety.sh)
+    add_test(NAME test_pi2_ollama_wrapper
+        COMMAND ${BASH_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test-pi2-ollama-wrapper.sh)
 else()
     message(STATUS "bash not found — test_installed_smoke skipped")
 endif()

@@ -510,6 +510,19 @@ Ralph process is alive and resume the exact phase with:
 ./scripts/ralph-campaign.sh --rounds 3 --resume
 ```
 
+Ralph 2.10.1 has a backend edge case in which the successful `ralph emit`
+acknowledgement starts a five-second post-event deadline and its resulting
+SIGTERM is counted as a failed iteration. The Pi2 wrapper loads an explicit Pi
+extension that rewrites only a direct final `ralph emit` bash tool call to a
+repository shim. The shim invokes the real binary from the jail's trusted PATH
+and changes only that trusted `emit` command's exact acknowledgement while preserving its stderr and status.
+Arbitrary identical model/backend output remains visible to Ralph. The wrapper
+and secure bounded prompt launcher use `exec`, so real backend failures and
+signals propagate normally. This permits Pi's short final post-tool turn, with
+Ralph's normal five-minute inactivity timeout still bounding a silent backend.
+Remove the compatibility behavior only after the pinned Ralph version no longer
+reproduces the regression and the integration probe passes without it.
+
 Do not change the round count or TUI mode during resume. Reserved-token mistakes
 in a checkpoint handoff are rejected by the strict completion gate and resumed
 automatically rather than terminating the leaf process. A Ralph `loop_stale`

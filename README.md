@@ -264,6 +264,18 @@ runners are declared without credentials in `.factory/environment.toml`.
 Verification validates exact-commit runner receipts; required capabilities without
 accepted production evidence remain findings rather than fabricated completion.
 
+Ralph 2.10.1 starts a five-second deadline when Pi returns the successful
+`ralph emit` acknowledgement, then misclassifies its own timeout signal as a
+failed iteration. `scripts/pi2-ollama.sh` loads an explicit Pi extension that
+rewrites only a direct final `ralph emit` tool command to a repository shim. The
+shim invokes the real Ralph binary from the jail's trusted PATH and changes only
+that command's acknowledgement after Ralph writes the authoritative event;
+arbitrary identical model/backend text is left untouched. The wrapper and secure prompt launcher retain `exec` semantics,
+so backend errors and signals propagate normally. Pi can therefore finish its
+short post-tool turn under Ralph's normal five-minute inactivity timeout. This
+may add a brief model follow-up after publication but avoids false
+consecutive-failure termination.
+
 ## Bug maintenance
 
 Portable bug state is tracked in `.factory/bugs/open.md` and `.factory/bugs/closed.md`. A bug may

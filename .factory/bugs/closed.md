@@ -69,6 +69,22 @@ Schema: `ralph-bug-ledger/v1`
     "resolution": "Added strict attempt-snapshot Ralph history classification, fixed command-only scratchpad feedback through no-follow directory-descriptor writes, two-attempt stale retry ceilings, eight-attempt completion-rejection ceilings, explicit strict-gate execution in every prompt, separated gate validation from finalization, exact signal/quota/infrastructure propagation, hardened completion/recovery marker paths, and unattended recovery in all five leaf launchers.",
     "verification": "test-ralph-completion-recovery, test-ralph-stale-recovery, and test-ralph-recover-safety pass; verify-boilerplate passes; full verify-project passes with 89/89 CTest tests, mandatory installed-functional acceptance, installed smoke, and packaging; only the expected optional headless backend smoke is skipped.",
     "closed": "2026-08-14"
+  },
+  {
+    "id": "BUG-0006",
+    "title": "Ralph counts successful Pi event turns as consecutive failures",
+    "status": "closed",
+    "severity": "high",
+    "reported": "2026-08-15",
+    "external": [],
+    "contract_change": false,
+    "reproduction": "Run the headless implementation lifecycle on Ralph 2.10.1 with Pi JSON backend. Each worker commits a task and runs a direct ralph emit command. The raw Event emitted acknowledgement starts Ralph CLI executor post-event deadline; five seconds later Ralph sends SIGTERM while Pi finishes its tool turn, records success=false, and exits after the default five consecutive failures although all five tasks passed.",
+    "expected": "A successful direct ralph emit handoff remains authoritative in JSONL and Pi exits naturally with status zero; genuine emit failures, backend failures, arbitrary matching output, unsafe compound emit commands, and signals remain fail-closed.",
+    "actual": "Tasks 1 through 5 committed and emitted valid events, but every iteration was terminated five seconds later and counted as failed; the active round-1 implementation stopped with reason consecutive_failures.",
+    "acceptance": "The jailed Pi tool-call path rewrites only a strict direct final ralph emit command to a trusted shim, the real Ralph command writes the same event and retains stderr/status, arbitrary matching text remains unmodified, wrapper/process signal identity is preserved through exec, host prompt bridging is bounded and no-follow, a pinned Ralph 2.10.1 probe runs beyond five seconds and reaches max_iterations rather than consecutive_failures, full boilerplate and project gates pass, and template parity is maintained.",
+    "resolution": "Added an explicitly loaded jailed-Pi tool-call extension that rewrites only strict direct final ralph emit bash commands to a repository shim. The shim invokes the real Ralph binary from the jail trusted PATH, preserves stderr and exact status, and changes only the command acknowledgement so Pi can finish naturally. Compound/substitution emits are blocked, arbitrary identical output remains fail-closed, wrapper and bounded immutable prompt bridge retain exec signal semantics, and the generic template is kept in parity.",
+    "verification": "test-pi2-ollama-wrapper passes hermetic command, spoof, compound-command, prompt safety, status, and signal checks plus a pinned Ralph 2.10.1 two-iteration probe that runs beyond the five-second threshold and terminates for max_iterations rather than consecutive_failures. verify-boilerplate passes. Full verify-project passes with 91/91 CTest tests, mandatory installed-functional acceptance, installed smoke, and packaging; only the expected optional headless backend smoke is skipped.",
+    "closed": "2026-08-15"
   }
 ]
 ```

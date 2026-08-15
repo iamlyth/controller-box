@@ -158,6 +158,19 @@ Each iteration:
 7. creates a Git checkpoint;
 8. exits so the next task receives fresh context.
 
+Ralph 2.10.1 otherwise interprets the real `ralph emit` acknowledgement as
+a five-second deadline, kills Pi while it finishes the tool turn, and counts
+that kill as an iteration failure. `scripts/pi2-ollama.sh` explicitly loads a
+Pi tool-call extension that rewrites only a direct final `ralph emit` command to
+`scripts/pi-cli-shims/ralph`. The shim resolves the real Ralph binary from the
+jail's trusted PATH, preserves its status and stderr, and changes only the
+successful command's exact acknowledgement; every other Ralph command is directly executed. Arbitrary
+identical model/backend output remains visible to Ralph's fail-safe detector.
+The wrapper and `scripts/pi2-secure-exec.py` retain exec-style process semantics,
+so backend signals propagate without an orphaning relay process. The tradeoff is
+that Pi may use a short final model turn after publication; a genuine silent hang
+remains bounded by Ralph's normal five-minute inactivity timeout.
+
 Only the final documentation and specification audit may produce `LOOP_COMPLETE`. It must satisfy `docs/SPEC.md` §11.2: all conformance rows verified, every control exercised through production event dispatch with semantic outcomes, full visual/degraded/installed verification, no contradictory open bugs, adversarial reviews, current documentation, and a clean tree.
 
 There is no minimum iteration count: high quality is determined by evidence, not loop volume. Conversely, completing the originally planned tasks is not enough when acceptance discovers another gap. The worker preserves the ledger, appends a new uniquely numbered remediation task, adds it to the final audit dependencies, returns the audit to pending, and continues. `.factory/ralph/implementation.yml` permits up to 1000 iterations and a one-year runtime as safety ceilings. If those or an external session ceiling are reached, the plan remains active/blocked with a recovery handoff; a ceiling never constitutes completion.
