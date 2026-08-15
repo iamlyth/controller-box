@@ -166,10 +166,8 @@ static int load_png(cbx_icon_cache *cache, const char *abs_path,
 {
     char resolved[PATH_MAX];
     int rc = cbx_icon_validate_path(abs_path, resolved, sizeof(resolved));
-    if (rc != 0) {
-        fprintf(stderr, "icon_lookup: validate_path failed for %s (rc=%d)\n", abs_path, rc);
+    if (rc != 0)
         return rc;
-    }
 
     /* Use SDL2_image to load the image as a surface first, then create a
      * texture from it.  We store the *surface* dimensions (the original
@@ -184,7 +182,6 @@ static int load_png(cbx_icon_cache *cache, const char *abs_path,
     }
     int w = surface->w;
     int h = surface->h;
-    fprintf(stderr, "icon_lookup: IMG_Load %s -> surface %dx%d\n", resolved, w, h);
 
     SDL_Texture *tex = SDL_CreateTextureFromSurface(cache->renderer, surface);
     SDL_FreeSurface(surface);

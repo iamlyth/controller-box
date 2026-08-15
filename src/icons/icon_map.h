@@ -23,7 +23,7 @@ extern "C" {
 /* Maximum field lengths for icon mapping entries. */
 #define CBX_ICON_TYPE_LEN 64
 #define CBX_ICON_NAME_LEN 128
-#define CBX_ICON_ICON_LEN 128
+#define CBX_ICON_ICON_LEN 256
 
 /* Maximum number of virtual type entries in the mapping. */
 #define CBX_ICON_MAP_MAX_ENTRIES 64
