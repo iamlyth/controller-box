@@ -1,26 +1,27 @@
 # Implementation Handoff
 
 ## Outcome
-Task 4 (Settings icon override and interaction/visual coverage) complete. Tasks 1-4 closed; 6 plan tasks remain.
+Task 5 (Interaction inventory traversal, hover/press visual, resize hit-testing, decorative exclusion) complete. Tasks 1-5 closed; 5 plan tasks remain.
 
 ## What was done
-- **ST-05 (icon override setting):** Added `CBX_ST_SET_ICON_OVERRIDE` to settings enum (index 9, before SAVE). `st_icon_presets[]` array with 5 presets (None, ds5→cc-xbox-360, xb360→cc-ps5, deck→cc-xbox-360, gamepad→cc-ps5). `apply_icon_preset()` clears all overrides then sets the selected one. `activate()` initializes preset idx from current state. `edit_up/down` cycle presets. Wired into grid render: `grid_render.c` calls `cbx_settings_icon_override()` before `cbx_icon_lookup()`, passing result as `icon_override` param. `overlay_service.c` sets `.settings = &svc->settings` in render ctx.
-- **ST-02 (opacity):** `test_settings_opacity_controller_path` + `_pointer_path` — enter edit, adjust ±0.05, confirm, save, reload and verify persisted.
-- **ST-03 (VC count+type):** `test_settings_vc_count_*` + `test_settings_vc_type_*` — same pattern, verify count/type changed + persisted.
-- **ST-04 (trigger):** `test_settings_trigger_*` — cycle trigger combo, verify changed + persisted.
-- **MV-04 (per-setting visual):** `test_settings_per_setting_visual` (each of 11 rows has non-background content) + `test_settings_edit_changes_region` (editing theme changes its row region pixels).
-- Updated conformance matrix: ST-02, ST-03, ST-04, ST-05, MV-04, M37-M41, M44 all `verified`.
-- Updated `docs/OPERATIONS.md` with icon override docs and visual test descriptions.
-- Updated existing tests: save test navigation (9→10 DOWNs), integration test comment (index 9→10).
+- **Inventory verify_status:** All 58 entries in `interaction_inventory.c` updated from `CBX_VERIFY_UNVERIFIED` to `CBX_VERIFY_VERIFIED` (41 verified, 16 N/A, 1 deferred). No unverified entries remain.
+- **Inventory ledger tests:** `test_inventory_all_manager/disabled/overlay_entries_verified` in `test_interaction_inventory.c` — assert no M/D/O entry is UNVERIFIED.
+- **Focus chain traversal:** `test_traversal_controllers_tab` (tabbar→device_list→all 3 buttons via LEFT/RIGHT→list→tabbar) + `test_traversal_settings_tab` (tabbar→list→save_btn→list→tabbar with proper scroll-through).
+- **Hover/press visual:** `test_focus_visual_indication` (mouse down on Save button→focused+pressed→render→region_differs) + `test_press_visual_indication` (hover+press→render→region_differs) in `test_manager_visual.c`.
+- **Resize hit-testing:** `test_resize_hit_testing` — sends `SDL_WINDOWEVENT_RESIZED` (800×600), verifies panel rect updates, clicks at new widget position, asserts correct control activates (type picker opens).
+- **Decorative exclusion:** `test_decorative_widget_exclusion` — status labels on all 3 tabs: `interactive==false`, not in focus chain, no focus on navigation, no activation on click, no mode change.
+- **Production code:** Added `SDL_WINDOWEVENT_RESIZED` handler to `manager.c` (updates `window_w/h`, calls `cbx_manager_layout` + `cbx_manager_rebuild_focus`). Extracted layout functions from each tab's init: `cbx_controllers_tab_layout`, `cbx_profiles_tab_layout`, `cbx_settings_tab_layout` — reposition widgets relative to current panel rect. `cbx_manager_layout` now calls all three tab layout functions.
+- **Conformance matrix:** MG-03, IA-01, IA-05, IA-08, M30, M46, M47, M48 all → `verified`.
+- **OPERATIONS.md:** Added §5.7 Interaction Acceptance Methodology section.
 
 ## Verification
-- `ctest -R 'test_settings|test_manager_interaction_ctrl|test_manager_visual'` → all passed (17 + 40 + 11 tests).
+- `ctest -R 'test_interaction_inventory|test_manager_interaction_ctrl|test_manager_visual'` → all 3 suites passed (14 + 44 + 13 tests).
 - Full suite: 90/90 passed, 1 pre-existing skip (test_backend_smoke).
 - No regressions.
 
 ## Commit
-- e1633b1 on `develop`.
+- d405b7d on `develop`.
 
 ## Next task
-Task 5: Interaction inventory driven traversal, hover, resize, decorative exclusion (pending, depends on Task 4 — now unblocked).
-Tasks 7, 8 also pending with no deps. Task 6 depends on 2,3,4,5. Task 9 depends on 7. Task 10 (final audit) depends on all.
+Task 6: Controller-transport acceptance and manager-UI backend recovery (pending, depends on Tasks 2,3,4,5 — now all unblocked).
+Tasks 7, 8 also pending with no deps. Task 9 depends on 7. Task 10 (final audit) depends on all.
