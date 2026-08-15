@@ -720,6 +720,14 @@ if(CMOCKA_FOUND)
     set_tests_properties(test_manager_native PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
 
+    add_executable(test_manager_native_prof tests/test_manager_native_prof.c tests/native_ip_server.c)
+    target_compile_definitions(test_manager_native_prof PRIVATE
+        DBUS_SESSION_CONFIG="${DBUS_PREFIX}/share/dbus-1/session.conf")
+    target_link_libraries(test_manager_native_prof PRIVATE controllerbox PkgConfig::CMOCKA)
+    add_test(NAME test_manager_native_prof COMMAND test_manager_native_prof)
+    set_tests_properties(test_manager_native_prof PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+
 else()
     message(STATUS "cmocka not found — unit tests skipped (smoke tests still built)")
 endif()
