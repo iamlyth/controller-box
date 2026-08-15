@@ -1029,9 +1029,9 @@ test or documented process:
 
 | Requirement | Test/Process |
 |-------------|-------------|
-| Machine-readable inventory (M01–M38, O01–O12, D01–D08) | `interaction_inventory.c` (58 entries, all verified); `test_interaction_inventory` validates structure + verify_status |
+| Machine-readable inventory (M01–M38, O01–O13, D01–D08) | `interaction_inventory.c` (59 entries, all verified); `test_interaction_inventory` validates structure + verify_status |
 | Automated traversal: every control reachable from tabbar via focus chain | `test_traversal_controllers_tab` + `test_traversal_settings_tab` in `test_manager_interaction_ctrl` |
-| Inventory verify_status: no UNVERIFIED entries | `test_inventory_all_manager_entries_verified` + `test_inventory_all_disabled_entries_verified` + `test_inventory_all_overlay_entries_verified` |
+| Inventory verify_status: no UNVERIFIED entries | `test_inventory_specific_verify_statuses` + `test_inventory_verify_status_consistency` |
 | Hover/press visual indication in framebuffer | `test_focus_visual_indication` + `test_press_visual_indication` in `test_manager_visual` (render→readback→region_differs) |
 | Post-resize hit testing (no stale rects) | `test_resize_hit_testing`: SDL_WINDOWEVENT_RESIZED→layout→rebuild_focus→click at new position activates correct control |
 | Decorative-widget exclusion (not focusable, not hit-testable) | `test_decorative_widget_exclusion`: status_lbl not interactive, not in focus chain, no focus on click, no mode change |

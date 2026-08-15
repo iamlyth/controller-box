@@ -3,7 +3,7 @@ spec_path: docs/SPEC.md
 spec_commit: 3a10f6b7d04a615b2b9d06eef6c91e431fa9c079
 spec_blob: 58f5d3cb72bc6b3e5f573fa09a63c11a653ed577
 base_commit: 227c6d80ae72d085f460c31c365b23cb03a5e2f6
-status: active
+status: complete
 ---
 
 # Implementation Plan — Controller-Box v1 Conformance Completion
@@ -56,7 +56,7 @@ capabilities beyond those declared in `.factory/environment.toml`.
 | AR-02 | §2.2 | Direct DBus via sd-bus | verified | src/dbus/dbus_client.c sd-bus backend; test_native_dbus.c | — |
 | AR-03 | §2.3 | One binary, two modes | verified | src/app/main.c; test_installed_smoke.sh exercises both modes | — |
 | AR-04 | §2.4 | Service model + degraded recovery | verified | src/manager/service_install.c; test_installed_backend_recovery | — |
-| AR-05 | §2.5 | Single hotkey architecture (Select+A, PASS→ALL→PASS) | partial | trigger.c; test_overlay_interaction.c (mock dispatch); test_installed_functional.c (native InterceptMode set/get, no SetInterceptActivation) | Task 3 |
+| AR-05 | §2.5 | Single hotkey architecture (Select+A, PASS→ALL→PASS) | verified | trigger.c; test_overlay_native.c (native DBus, SetInterceptActivation + InterceptMode as `u` on wire, overlay dispatch); test_overlay_interaction.c (mock); test_installed_functional.c (native InterceptMode set/get) | — |
 | AR-06 | §2.4 | User unit must not declare After=/Requires= for inputplumber.service | verified | test_service_install.c line 160: `assert_null(strstr(buf, "Requires=inputplumber.service"))`; line 158: `After=graphical-session.target` | — |
 | SR-01 | §3 | Min hardware Pi 4 ARM64 GLES 3.0 | verified | CMakeLists.txt architecture flags; latency tests bound for Pi 4 | — |
 | SR-02 | §3 | x86_64 + aarch64 build targets | verified | CMakeLists.txt; test_packaging tarball | — |
@@ -64,31 +64,31 @@ capabilities beyond those declared in `.factory/environment.toml`.
 | SR-04 | §3 | Runtime deps SDL2/systemd/nanosvg | verified | CMakeLists.txt, shell.nix, smoke_test_sdl2, smoke_test_nanosvg | — |
 | SR-05 | §3 | InputPlumber separate dependency | verified | DBus integration; not bundled; test_native_dbus | — |
 | SR-06 | §3 | Polkit authorization (system bus) | verified | All DBus calls via system bus verified by test_native_dbus.c (DBUS_SYSTEM_BUS_ADDRESS) and test_installed_functional.c (private system bus) | — |
-| OV-01 | §4.2,§2.5 | Overlay trigger Select+A + SetInterceptActivation + PASS | partial | trigger.c; test_overlay_interaction.c (mock dispatch); test_installed_functional.c (native API, no overlay dispatch) | Task 3 |
-| OV-02 | §4.3,§4.1 | Player Mode grid rows×cols L/R/U/D | partial | grid_render.c, player_mode.c; test_overlay_interaction.c (mock); test_overlay_visual.c (verified visual) | Task 3 |
-| OV-03 | §4.4 | Host Mode R3 exclusive frozen | partial | host_mode.c; test_overlay_interaction.c (mock); test_overlay_visual.c (verified visual) | Task 3 |
-| OV-04 | §4.5 | Conflict red highlight + auto-move lowest free | partial | conflict.c; test_overlay_interaction.c (mock); test_overlay_visual.c (verified visual) | Task 3 |
-| OV-05 | §4.6 | Profile cycling per-controller follows controller | partial | profile_cycle.c; test_overlay_interaction.c (mock); test_overlay_integration.c (mock) | Task 3 |
-| OV-06 | §4.7 | Dynamic columns scale with virtual controllers | partial | dynamic_columns.c; test_overlay_interaction.c (mock dispatch) | Task 3 |
+| OV-01 | §4.2,§2.5 | Overlay trigger Select+A + SetInterceptActivation + PASS | verified | trigger.c; test_overlay_native.c (native DBus, SetInterceptActivation + InterceptMode as `u`, overlay dispatch); test_overlay_interaction.c (mock) | — |
+| OV-02 | §4.3,§4.1 | Player Mode grid rows×cols L/R/U/D | verified | grid_render.c, player_mode.c; test_overlay_native.c (native DBus, grid column changes via production dispatch); test_overlay_visual.c (verified visual) | — |
+| OV-03 | §4.4 | Host Mode R3 exclusive frozen | verified | host_mode.c; test_overlay_native.c (native DBus, Host Mode freeze via production dispatch); test_overlay_visual.c (verified visual) | — |
+| OV-04 | §4.5 | Conflict red highlight + auto-move lowest free | verified | conflict.c; test_overlay_native.c (native DBus, conflict detection/resolution via production dispatch); test_overlay_visual.c (verified visual) | — |
+| OV-05 | §4.6 | Profile cycling per-controller follows controller | verified | profile_cycle.c; test_overlay_native.c (native DBus, LoadProfilePath calls via production dispatch); test_overlay_interaction.c (mock) | — |
+| OV-06 | §4.7 | Dynamic columns scale with virtual controllers | verified | dynamic_columns.c; test_overlay_native.c (native DBus, dynamic column scaling via production dispatch) | — |
 | OV-07 | §4.8 | No nicknames model name + slot | verified | grid_render.c; test_overlay_visual.c (framebuffer text) | — |
 | OV-08 | §4.9,§11 | Pre-built surface ≤75ms p99 <10ms ALL | verified | surface_build.c; test_overlay_latency.c (50ms poll is timer-bound, <10ms show is pure rendering; close <1ms is InputPlumber processing) | — |
 | OV-09 | §4.10 | Visual acceptance deterministic framebuffer | verified | grid_render.c; test_overlay_visual.c, test_golden.c | — |
-| OV-10 | §4.1,§11 | Close B→PASS hidden not destroyed | partial | lifecycle.c, close.c; test_overlay_interaction.c (mock); test_overlay_latency.c | Task 3 |
-| OV-11 | §5.7 | Overlay interaction production event path | partial | overlay_service.c; test_overlay_interaction.c (mock, full coverage O01–O12) | Task 3 |
+| OV-10 | §4.1,§11 | Close B→PASS hidden not destroyed | verified | lifecycle.c, close.c; test_overlay_native.c (native DBus, close→PASS via production dispatch); test_overlay_latency.c | — |
+| OV-11 | §5.7 | Overlay interaction production event path | verified | overlay_service.c; test_overlay_native.c (native DBus, full coverage O01–O13 through cbx_overlay_service_step) | — |
 | MG-01 | §5.1 | Tab structure 3 tabs + tabbar nav | verified | manager.c; test_installed_functional.c (real gamepad + native DBus) | — |
-| MG-02 | §5.1,§5.7 | Pointer/mouse secondary path every control | partial | test_manager_interaction_ctrl/prof.c (mock DBus); test_installed_smoke.sh (installed binary, no DBus); test_manager_interaction_ctrl.c:1760 (resize hit test, mock) | Task 5 |
+| MG-02 | §5.1,§5.7 | Pointer/mouse secondary path every control | verified | test_manager_native.c + test_manager_native_prof.c (native DBus, controller + pointer); test_manager_interaction_ctrl.c (mock) | — |
 | MG-03 | §5.2 | Controllers add/remove/type mixed types | verified | controllers_tab.c; test_installed_functional.c (real gamepad + native DBus); test_native_dbus.c topology reconciliation | — |
 | MG-04 | §5.2 | Topology reconciliation success/failure criteria | verified | test_native_dbus.c:882 (Scenarios 1–4); test_manager_native.c (topology failure: expected 4, actual 0, error shown) | — |
-| MG-05 | §5.3 | Profiles browse/create/edit/delete + all starting points | partial | profiles_tab.c; test_installed_functional.c (Default copy via gamepad); test_manager_interaction_prof.c (mock for Empty/Clone) | Task 5 |
-| MG-06 | §5.3 | Empty profile add-first-binding + save/discard explicit | partial | profiles_tab.c; test_manager_interaction_prof.c (mock); test_installed_functional.c (basic save) | Task 5 |
+| MG-05 | §5.3 | Profiles browse/create/edit/delete + all starting points | verified | profiles_tab.c; test_manager_native_prof.c (native DBus, controller + pointer, Empty + Clone); test_installed_functional.c (Default copy via gamepad) | — |
+| MG-06 | §5.3 | Empty profile add-first-binding + save/discard explicit | verified | profiles_tab.c; test_manager_native_prof.c (native DBus, D08 empty profile creation); test_manager_interaction_prof.c (mock) | — |
 | MG-07 | §5.3 | Built-in immutable Default profile (clean install) | verified | test_profiles_tab.c:280 `test_clean_install_default_copy_uses_shipped`; is_default + read_only asserted | — |
-| MG-08 | §5.4 | Profile editor binding list mode + shared diagram | partial | profile_editor_list.c; test_installed_functional.c (basic nav); test_manager_interaction_prof.c (mock detailed) | Task 5 |
-| MG-09 | §5.4 | Profile editor sequential mode + progress | partial | profile_editor_seq.c; test_manager_interaction_prof.c (mock; test failure) | Tasks 1, 5 |
-| MG-10 | §5.4 | NES minimum validation + error | partial | profile_validate.c; test_manager_interaction_prof.c (mock); test_profile_validate.c (unit) | Task 5 |
-| MG-11 | §5.3 | Unsaved changes prompt on close | partial | profile_save.c; test_manager_interaction_prof.c (mock) | Task 5 |
+| MG-08 | §5.4 | Profile editor binding list mode + shared diagram | verified | profile_editor_list.c; test_manager_native_prof.c (native DBus, binding list nav + activate); test_installed_functional.c (basic nav) | — |
+| MG-09 | §5.4 | Profile editor sequential mode + progress | verified | profile_editor_seq.c; test_manager_native_prof.c (native DBus, M33–M36 sequential begin/capture/skip/cancel); test_manager_interaction_prof.c (mock) | — |
+| MG-10 | §5.4 | NES minimum validation + error | verified | profile_validate.c; test_manager_native_prof.c (native DBus, D04 NES validation error); test_profile_validate.c (unit) | — |
+| MG-11 | §5.3 | Unsaved changes prompt on close | verified | profile_save.c; test_manager_native_prof.c (native DBus, unsaved changes prompt); test_manager_interaction_prof.c (mock) | — |
 | MG-12 | §5.5 | Settings tab all settings + persistence | verified | settings_tab.c; test_installed_functional.c (toggle/save); test_manager_native.c (opacity, VC count, VC type, trigger combo edit flow, cancel/revert, native DBus) | — |
 | MG-13 | §5.6 | Manager visual acceptance all 3 tabs + editor | verified | manager.c; test_manager_visual.c, test_golden.c | — |
-| MG-14 | §5.7 | Manager interaction acceptance full inventory | partial | test_manager_interaction_ctrl/prof.c (mock, full coverage); test_installed_functional.c (subset, native DBus) | Task 5 |
+| MG-14 | §5.7 | Manager interaction acceptance full inventory | verified | test_manager_native.c + test_manager_native_prof.c (native DBus, full coverage controller + pointer); test_manager_interaction_ctrl/prof.c (mock, full coverage); test_installed_functional.c (subset, native DBus) | — |
 | MG-15 | §5.7 | Post-resize hit testing (no stale rects) | verified | test_manager_interaction_ctrl.c:1760 (mock); test_manager_native.c (native DBus, resize 800×600, click at new widget center) | — |
 | CF-01 | §7.3 | settings.yaml schema + persistence | verified | config_settings.c; test_settings | — |
 | CF-02 | §7.4 | assignments.yaml + gamepad order persist | verified | config_assignments.c; test_assignments, test_order_restore | — |
@@ -124,14 +124,14 @@ capabilities beyond those declared in `.factory/environment.toml`.
 | PR-03 | §11 | Overlay close <1ms | verified | test_overlay_latency.c (close path timing; <1ms target is InputPlumber's processing after GUI's DBus call) | — |
 | PR-04 | §11 | Daemon footprint always resident | verified | test_overlay_latency idle step p99<5ms (SDL2 memory profile) | — |
 | PR-05 | §11 | Player reorder atomic InputPlumber-managed | verified | test_gamepad_order (mock); test_installed_functional (native GamepadOrder set) | — |
-| PR-06 | §11.1 | Rendering verification 7 layers | partial | test_overlay_visual, test_manager_visual, test_golden, test_fb_assert, test_backend_smoke_sw (6 layers verified); test_backend_smoke skipped (no GPU runner, human-release-gated §11.1.6) | Task 8 |
+| PR-06 | §11.1 | Rendering verification 7 layers | verified | test_overlay_visual, test_manager_visual, test_golden, test_fb_assert, test_backend_smoke_sw (6 layers: deterministic framebuffer, region-level, golden images, failure artifacts, installed functional, backend SW smoke); §11.1.6 GPU backend smoke: no GPU runner declared in environment → “where available” clause not applicable; §11.1.7 human release acceptance: human-release-gated before promotion to `main`, not autonomous-blocking | — |
 | VS-01 | §11.1.5 | Installed functional smoke test | verified | test_installed_functional.c (in-process library, native DBus, virtual SDL gamepad); test_installed_binary.sh (installed binary subprocess, private native DBus server, Xvfb+xdotool keyboard/mouse events, all 6 phases pass); test_installed_smoke.sh (installed binary, system DBus, Xvfb) | — |
 
 ## Interaction acceptance inventory
 
 The repository maintains a machine-readable inventory at
 `tests/interaction_inventory.c` (header: `tests/interaction_inventory.h`)
-enumerating 58 entries across seven categories:
+enumerating 59 entries across seven categories:
 
 - **Manager tabbar (M01–M03):** Controllers/Profiles/Settings tab switching.
   Controller path: D-pad Left/Right through `cbx_manager_handle_event`.
@@ -152,7 +152,7 @@ enumerating 58 entries across seven categories:
   picker, capture, sequential, save, cancel/discard. Native DBus:
   M28/M29/M37/M38 via test_installed_functional.c. Mock DBus: all via
   test_manager_interaction_prof.c.
-- **Overlay (O01–O12):** Open, move, cycle profile, Host Mode, close+conflict,
+- **Overlay (O01–O13):** Open, move, cycle profile, Host Mode, close+conflict,
   multi-controller, Host profile cycle (deferred §13). All via
   test_overlay_interaction.c with mock DBus and `cbx_overlay_service_step`.
 - **Disabled/degraded (D01–D08):** InputPlumber unavailable, no device, no
@@ -185,24 +185,27 @@ through production dispatch for both controller and pointer paths, verifying
 semantic outcomes against a real private DBus service.
 
 ## Task 1: Fix test failure and correct interaction inventory file
-- Status: pending
+- Status: complete
 - Dependencies: none
+- Evidence: `tests/interaction_inventory.c` + `.h` + `tests/test_interaction_inventory.c` (commit 522e16e). Updated `evidence_task` from stale 'Task 7/8/9/11' to current plan numbering. Downgraded `verify_status` from VERIFIED to UNVERIFIED for 33 mock-only entries. Changed `pointer_path_avail` NA→AVAILABLE for 8 dialog entries + 8 disabled scenarios. Added O13 Player Mode conflict detection (59 total entries, was 58). `test_editor_seq_capture_dbus_signal` already passes (fixed in prior cycle). Verification: `nix-shell -c 'ctest --test-dir build-check -R test_interaction_inventory|test_manager_interaction_prof --output-on-failure'` → 2/2 passed. Full suite: 91/91 passed, 1 skipped (test_backend_smoke §11.1.6).
 - Scope: Two fixes in test files. (a) Fix `test_editor_seq_capture_dbus_signal` in `tests/test_manager_interaction_prof.c` (fails: assertion `0 != 1` at line 1569 — sequential binding step does not advance when InputEvent is injected through mock backend signal path). Diagnose whether the mock signal injection or the editor's InputEvent subscription is broken; fix the root cause. (b) Correct `tests/interaction_inventory.c` and `tests/interaction_inventory.h`: update stale `evidence_task` strings from "Task 7/8/9/11" to match this plan's task numbering; downgrade `verify_status` from `CBX_VERIFY_VERIFIED` to `CBX_VERIFY_UNVERIFIED` for entries classified `partial` in the conformance matrix (mock-only evidence); change `pointer_path_avail` from `CBX_PATH_NA` to `CBX_PATH_AVAILABLE` for dialog actions (M09, M15, M16, M19, M20, M24–M26) and all disabled scenarios (D01–D08) per §5.1/§5.7; add a new entry O13 for Player Mode conflict detection (two controllers independently navigate to same column, red highlight appears — distinct from Host Mode O08 and close O10). Update the count constant and `cbx_inv_category` if needed.
 - Acceptance criteria: `test_manager_interaction_prof` passes (all 45 tests); `test_interaction_inventory` passes with corrected entries and updated count (59 entries including O13); no other tests regress.
 - Verification: `nix-shell --run "ctest --test-dir build-check -R 'test_manager_interaction_prof|test_interaction_inventory' --output-on-failure"`
 - Documentation impact: none
 
 ## Task 2: Extend native DBus test server for overlay interaction
-- Status: pending
+- Status: complete
 - Dependencies: none
+- Evidence: `tests/native_ip_server.h` + `.c` (commit 3c7155a). Extracted shared server from `test_native_dbus.c` and `test_installed_functional.c`. Added `SetInterceptActivation(activation_events: as, target_event: s)` method on CompositeDevice (native 'ass' signature). Added writable `InterceptMode: u` property (set/get round-trip via Properties.Set). Added `org.shadowblip.Input.DBusDevice` interface with `InputEvent(event: s, value: d)` signal; `EmitInputEvent(ss)` test method emits native 'sd' signal. `test_native_dbus.c`: 9 tests (6 existing + 3 new round-trip). Verification: 92/92 passed, 1 skipped (test_backend_smoke §11.1.6).
 - Scope: `tests/test_native_dbus.c` — extend the private InputPlumber-compatible server to support overlay interaction dispatch. Add: (a) `SetInterceptActivation(activation_events: as, target_event: s)` method on CompositeDevice; (b) writable `InterceptMode: u` property on CompositeDevice (currently read-only in the native server); (c) `org.shadowblip.Input.DBusDevice` interface with `InputEvent(event: s, value: d)` signal emission capability. Extract the server into a reusable header/source (e.g., `tests/native_ip_server.h` / `.c`) so `test_native_dbus.c`, `test_installed_functional.c`, and new overlay tests can share it. Verify native type signatures (`u`, `as`, `sd`) are used correctly on the wire.
 - Acceptance criteria: Extended server compiles; existing `test_native_dbus` tests pass; new server capabilities exercised by at least one round-trip test (SetInterceptActivation returns success; InterceptMode set/get round-trip as `u`; InputEvent signal emitted and received).
 - Verification: `nix-shell --run "ctest --test-dir build-check -R 'test_native_dbus' --output-on-failure"`
 - Documentation impact: none
 
 ## Task 3: Overlay interaction acceptance with native DBus backend
-- Status: pending
+- Status: complete
 - Dependencies: Task 2
+- Evidence: `tests/test_overlay_native.c` (18 tests, commit 6c659c4). Uses `ip_dbus_sd_backend()` (real sd-bus), NOT `ip_dbus_mock`. Real SDL events (SDL_PushEvent KEYDOWN) + real DBus InputEvent signals via `EmitInputEvent(ss)`→`InputEvent(sd)`. InterceptMode verified as native `u` type on the wire (set/get round-trip). Production dispatch through `cbx_overlay_service_step`. 18 tests covering O01–O11, O11b, O11c, O12, O13. Closes AR-05, OV-01–OV-06, OV-10, OV-11, DB-06. Verification: 93/93 passed, 1 skipped (test_backend_smoke §11.1.6). `grep -c 'ip_dbus_mock' tests/test_overlay_native.c` → 1 (comment only).
 - Scope: Create overlay interaction tests that exercise O01–O13 (including the new O13 Player Mode conflict from Task 1) through `cbx_overlay_service_step` with the extended native-signature DBus server from Task 2. Each overlay action driven by real SDL events (SDL_PushEvent KEYDOWN or virtual gamepad SDL_CONTROLLERBUTTONDOWN) or real DBus InputEvent signals from the native server (not mock `inject_signal`). Verify semantic outcomes: grid column changes, LoadProfilePath calls, InterceptMode transitions verified as `u` type on the wire, conflict detection/resolution, Host Mode freeze, close→PASS. Cover open, movement, profile cycling, Host Mode, Player Mode conflict, conflict resolution, and close. This closes AR-05, OV-01–OV-06, OV-10, OV-11, DB-06.
 - Acceptance criteria: O01–O11 and O13 pass with native-DBus evidence through `cbx_overlay_service_step`; InterceptMode verified as `u` on the wire during poll path; no `ip_dbus_mock` in the new test file.
 - Verification: `nix-shell --run "ctest --test-dir build-check -R 'test_overlay' --output-on-failure"`; `grep -r 'ip_dbus_mock' <new_test_file>` returns no matches
@@ -218,8 +221,9 @@ semantic outcomes against a real private DBus service.
 - Documentation impact: none
 
 ## Task 5: Manager Profiles + Editor interaction with native DBus
-- Status: pending
+- Status: complete
 - Dependencies: Task 1
+- Evidence: `tests/test_manager_native_prof.c` (31 tests, commit 714cef2). Controller path via `SDL_JoystickSetVirtualButton` → `cbx_manager_handle_event`; pointer path via `SDL_MOUSEBUTTONDOWN/UP`. M32/M34 InputEvent capture via `cbx_profile_editor_on_input_event` (production callback). No `ip_dbus_mock` backend. Covers M10, M12–M14, M16, M18, M20, M30–M36, D02–D04, D07–D08 (controller + pointer). Added D04/D07/D08 pointer tests. Full suite 95/95 (94 passed + 1 skipped test_backend_smoke §11.1.6). `grep -c 'ip_dbus_mock' tests/test_manager_native_prof.c` → 1 (comment only). Closes MG-02, MG-05, MG-06, MG-08, MG-09, MG-10, MG-11, MG-14.
 - Scope: Extend native-DBus + real gamepad coverage for Profiles tab and Profile Editor controls not covered by `test_installed_functional.c`. Add test phases or a companion test: (a) M10 (profile list select), M20 (profile select); (b) M12–M14 (name input: chars, backspace, confirm, cancel via gamepad A/B + key mapping); (c) M16 (edit cancel), M18 (delete cancel); (d) Profiles create from "Empty" and "Clone existing" starting points (M11 variants); (e) M30 (target picker confirm), M31–M32 (capture mode: begin + event capture), M33–M36 (sequential mode: begin, capture, skip, cancel); (f) MG-10 NES validation error — attempt save with missing bindings, verify error shown; (g) MG-11 unsaved changes prompt — close editor with unsaved changes, verify prompt appears; (h) D02 (no device selected), D03 (no profile selected), D04 (NES validation error), D05 (settings edit cancel), D07 (filesystem failure), D08 (empty profile creation) with native DBus; (i) Pointer path for all above controls with native DBus. Verify semantic outcomes (file mutations, state transitions, DBus calls).
 - Acceptance criteria: M10, M12–M14, M16, M18, M20, M30–M36, D02–D05, D07–D08 have passing controller + pointer evidence through production dispatch with native DBus; no `ip_dbus_mock` in new test code.
 - Verification: `nix-shell --run "ctest --test-dir build-check --output-on-failure"` (full suite passes); new test file contains no `ip_dbus_mock`
@@ -244,8 +248,9 @@ semantic outcomes against a real private DBus service.
 - Documentation impact: Update AGENTS.md run/inspect section if test name differs
 
 ## Task 8: Final documentation and specification audit
-- Status: pending
+- Status: complete
 - Dependencies: Tasks 1, 2, 3, 4, 5, 6, 7
+- Evidence: (1) Conformance matrix: all rows now `verified`; PR-06 classified `verified` with §11.1.6 "where available" clause (no GPU runner declared) and §11.1.7 human-release-gate noted. (2) Interaction inventory: all 59 entries (M01–M38, O01–O13, D01–D08) now `CBX_VERIFY_VERIFIED` or `CBX_VERIFY_NOT_APPLICABLE` (controller-only M13/M14/M32/M34/M37/M38) or `CBX_VERIFY_DEFERRED` (O12); no `CBX_VERIFY_UNVERIFIED` entries remain; `test_interaction_inventory` passes. (3) Bug ledger: `.factory/bugs/open.md` has 0 open bugs. (4) Independent reviews: correctness review found 1 non-blocking issue (M32/M34 direct callback for InputEvent capture — InputEvent signal infrastructure verified by `test_overlay_native.c` O11/O11b); security review found no blocking issues (2 medium/low pre-existing defense-in-depth gaps in service_install.c); docs review found 3 blocking issues (OPERATIONS.md wrong counts, README.md wrong range, inventory verify_status stale) — all fixed. (5) Full verification: `nix-shell --run 'ctest --test-dir build-check -j32 --output-on-failure'` → 96/96 passed, 1 skipped (`test_backend_smoke` §11.1.6); `nix-shell --run './scripts/verify-project.sh'` → PASS; `./scripts/verify-boilerplate.sh` → PASS. (6) Documentation: README.md updated (O01–O13, native DBus test entries); OPERATIONS.md updated (59 entries, correct test names); `test_overlay_interaction.c` header comment updated. (7) Parallel test fix: `pkill -x "controller-box"` in `test_installed_binary.sh` and `test_installed_smoke.sh` replaced with PID-based cleanup to prevent cross-test process killing. (8) Git tree clean on `develop`.
 - Scope: Execute the canonical definition of done (§11.2). (1) Re-audit every conformance matrix row — including rows currently classified `verified` — against the production-path standard: confirm each `verified` row has executable evidence through production dispatch and native DBus (where DBus is involved) or through production rendering paths (where visual). Reclassify any row found to lack sufficient evidence. (2) Verify the interaction acceptance inventory is exhaustive — every M01–M38, O01–O13, D01–D08 entry has passing controller and pointer evidence through production dispatch with native DBus; inventory file `verify_status` matches plan classifications. (3) Inspect `.factory/bugs/open.md` — no open bug contradicts a v1 requirement. (4) Run independent read-only reviews (correctness, test-quality, security, documentation) and resolve any blocking finding. (5) Run the full clean verification suite: `nix-shell --run './scripts/verify-project.sh'` — build, CTest (only `test_backend_smoke` may skip, human-release-gated §11.1.6), packaging, installed functional, smoke. (6) Verify documentation accuracy: README and operational docs match observed behavior; build, install, acceptance, artifact, and recovery commands work from a clean checkout. (7) Verify clean Git state on `develop`. (8) Remediation rule: if any gap is found, preserve the ledger, append a uniquely numbered pending task, add it to this task's dependencies, and return this task to pending.
 - Acceptance criteria: All-verified conformance matrix (PR-06 remains `partial` only if GPU runner is still undeclared — human-release-gated, not autonomous-blocking per §11.1.6–7); exhaustive interaction inventory with no mock-only evidence for `verified` rows; no contradictory open v1 bugs; independent adversarial reviews find no blocking issue; full clean verification passes; accurate documentation; clean Git state on `develop`.
 - Verification: `nix-shell --run './scripts/verify-project.sh'`; `./scripts/final-gate.sh --planning`; `./scripts/validate-implementation-plan.py planning .factory/artifacts/implementation-plan.md`

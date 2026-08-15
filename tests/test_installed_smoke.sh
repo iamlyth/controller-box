@@ -36,6 +36,8 @@ BUILD_DIR="${1:-${BUILD_DIR:-build-check}}"
 STAGING_DIR="$PROJECT_ROOT/.test-install"
 XVFB_DISPLAY=":99"
 XVFB_PID=""
+MANAGER_PID=""
+OVERLAY_PID=""
 FAILURES=0
 TMPDIR=""
 
@@ -44,8 +46,15 @@ fail() { echo "FAIL: $*" >&2; FAILURES=$((FAILURES + 1)); }
 
 # shellcheck disable=SC2329
 cleanup() {
-    # Kill any lingering controller-box binary processes (not the test script)
-    pkill -x "controller-box" 2>/dev/null || true
+    # Kill only the controller-box processes we started (by PID), not all
+    # system-wide instances — parallel test runs may have their own.
+    for pid in "$MANAGER_PID" "$OVERLAY_PID"; do
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            kill -TERM "$pid" 2>/dev/null || true
+            sleep 0.3
+            kill -KILL "$pid" 2>/dev/null || true
+        fi
+    done
     # Kill Xvfb if we started it (SIGTERM then SIGKILL)
     if [ -n "$XVFB_PID" ] && kill -0 "$XVFB_PID" 2>/dev/null; then
         kill -TERM "$XVFB_PID" 2>/dev/null || true

@@ -196,11 +196,11 @@ static void test_inventory_specific_entries(void **state)
     assert_non_null(o01);
     assert_int_equal(o01->pointer_path_avail, CBX_PATH_NA);
 
-    /* O13 — Player Mode conflict: new entry, unverified pending Task 3 */
+    /* O13 — Player Mode conflict: new entry, verified by Task 3 (test_overlay_native.c) */
     const cbx_interaction_entry *o13 = cbx_interaction_inventory_find("O13");
     assert_non_null(o13);
     assert_int_equal(o13->category, CBX_CAT_OVERLAY);
-    assert_int_equal(o13->verify_status, CBX_VERIFY_UNVERIFIED);
+    assert_int_equal(o13->verify_status, CBX_VERIFY_VERIFIED);
 
     /* D01 — InputPlumber unavailable */
     const cbx_interaction_entry *d01 = cbx_interaction_inventory_find("D01");
@@ -302,11 +302,16 @@ static void test_inventory_verify_status_consistency(void **state)
 static void test_inventory_specific_verify_statuses(void **state)
 {
     (void)state;
-    /* Entries with native-DBus evidence (from test_installed_functional.c
-     * or test_installed_backend_recovery) must be VERIFIED */
+    /* Entries with native-DBus evidence (from test_installed_functional.c,
+     * test_installed_backend_recovery, test_overlay_native.c,
+     * test_manager_native.c, or test_manager_native_prof.c) must be VERIFIED */
     const char *verified_ids[] = {
-        "M01", "M02", "M03", "M05", "M06", "M07", "M08",
-        "M11", "M17", "M22", "M27", "M28", "M29",
+        "M01", "M02", "M03", "M04", "M05", "M06", "M07", "M08",
+        "M09", "M10", "M11", "M12", "M15", "M16", "M17", "M18",
+        "M19", "M20", "M21", "M22", "M23", "M24", "M25", "M26",
+        "M27", "M28", "M29", "M30", "M31", "M33",
+        "O01", "O02", "O03", "O04", "O05", "O06", "O07", "O08",
+        "O09", "O10", "O11", "O13",
         "D01", "D02", "D03", "D04", "D05", "D06", "D07", "D08"
     };
     for (size_t i = 0; i < sizeof(verified_ids)/sizeof(verified_ids[0]); i++) {
@@ -315,16 +320,7 @@ static void test_inventory_specific_verify_statuses(void **state)
         assert_int_equal(e->verify_status, CBX_VERIFY_VERIFIED);
     }
 
-    /* Mock-only entries must be UNVERIFIED (sample check) */
-    const char *unverified_ids[] = {
-        "M04", "M10", "M21", "M30", "M33",
-        "O01", "O02", "O10", "O11", "O13"
-    };
-    for (size_t i = 0; i < sizeof(unverified_ids)/sizeof(unverified_ids[0]); i++) {
-        const cbx_interaction_entry *e = cbx_interaction_inventory_find(unverified_ids[i]);
-        assert_non_null(e);
-        assert_int_equal(e->verify_status, CBX_VERIFY_UNVERIFIED);
-    }
+    /* All previously mock-only entries are now VERIFIED with native-DBus evidence */
 
     /* O12 is DEFERRED */
     const cbx_interaction_entry *o12 = cbx_interaction_inventory_find("O12");

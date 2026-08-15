@@ -37,6 +37,8 @@ STAGING_DIR="$PROJECT_ROOT/.test-install-bin"
 XVFB_DISPLAY=":98"
 XVFB_PID=""
 IP_SERVER_PID=""
+MANAGER_PID=""
+OVERLAY_PID=""
 FAILURES=0
 TMPDIR=""
 ADDR_FILE=""
@@ -44,9 +46,17 @@ ADDR_FILE=""
 pass() { echo "PASS: $*"; }
 fail() { echo "FAIL: $*" >&2; FAILURES=$((FAILURES + 1)); }
 
+# shellcheck disable=SC2329
 cleanup() {
-    # Kill controller-box processes
-    pkill -x "controller-box" 2>/dev/null || true
+    # Kill only the controller-box processes we started (by PID), not all
+    # system-wide instances — parallel test runs may have their own.
+    for pid in "$MANAGER_PID" "$OVERLAY_PID"; do
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            kill -TERM "$pid" 2>/dev/null || true
+            sleep 0.3
+            kill -KILL "$pid" 2>/dev/null || true
+        fi
+    done
     # Kill IP server
     if [ -n "$IP_SERVER_PID" ] && kill -0 "$IP_SERVER_PID" 2>/dev/null; then
         kill -TERM "$IP_SERVER_PID" 2>/dev/null || true

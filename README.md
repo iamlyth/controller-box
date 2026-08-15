@@ -239,10 +239,13 @@ the overlay — not direct callback invocation):
 
 | Test | Coverage |
 |------|----------|
-| `test_manager_interaction_ctrl` | M01–M09 (Controllers tab), M21–M27 (Settings tab) — controller + pointer paths |
-| `test_manager_interaction_prof` | M10–M20 (Profiles tab), M28–M38 (Profile editor) — controller + pointer paths |
-| `test_overlay_interaction` | O01–O12 (overlay open, move, profile cycle, host mode, conflict, close) — controller + DBus InputEvent paths |
-| `test_interaction_inventory` | M01–M38, O01–O12, D01–D08 inventory validation |
+| `test_manager_interaction_ctrl` | M01–M09 (Controllers tab), M21–M27 (Settings tab) — controller + pointer paths (mock DBus) |
+| `test_manager_interaction_prof` | M10–M20 (Profiles tab), M28–M38 (Profile editor) — controller + pointer paths (mock DBus) |
+| `test_manager_native` | M04, M09, M21, M23–M26 — controller + pointer paths (native DBus) |
+| `test_manager_native_prof` | M10, M12–M14, M16, M18, M20, M30–M36, D02–D04, D07–D08 — controller + pointer paths (native DBus) |
+| `test_overlay_interaction` | O01–O12 (overlay open, move, profile cycle, host mode, conflict, close) — controller + DBus InputEvent paths (mock DBus) |
+| `test_overlay_native` | O01–O13 (overlay open, move, profile cycle, host mode, Player Mode conflict, close) — native DBus backend via `cbx_overlay_service_step` |
+| `test_interaction_inventory` | M01–M38, O01–O13, D01–D08 inventory validation |
 
 Disabled-control scenarios (D01–D08) verify that disabled controls reject both
 activation paths and produce no backend or filesystem side effect.

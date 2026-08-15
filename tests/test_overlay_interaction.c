@@ -1,10 +1,11 @@
 /*
  * test_overlay_interaction.c — Overlay production-dispatch interaction tests.
  *
- * Exercises every overlay action O01–O12 from the interaction acceptance
+ * Exercises overlay actions O01–O12 from the interaction acceptance
  * inventory through the production dispatch path (cbx_overlay_service_step),
  * verifying semantic outcomes: grid state, profile changes, assignment
- * sync, lifecycle transitions, and DBus mock expectations.
+ * sync, lifecycle transitions, and DBus mock expectations.  O13 (Player
+ * Mode conflict) is covered by test_overlay_native.c with native DBus.
  *
  * SPEC §5.7, §4.3–4.5, §11.2 item 3.
  */
