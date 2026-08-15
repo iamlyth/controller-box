@@ -1234,6 +1234,394 @@ test_installed_functional(void **state)
 }
 
 /* ================================================================== */
+/*  Helper: send a keyboard KEYDOWN event through the SDL queue.      */
+/*  Used for typing letters in NAME_INPUT mode (gamepad A/B are        */
+/*  mapped to confirm/cancel, not letters, so name typing requires     */
+/*  keyboard events).  windowID=0 ensures these are treated as         */
+/*  regular keyboard events, not controller-derived.                   */
+/* ================================================================== */
+
+static void
+send_key_down(cbx_manager *mgr, SDL_Keycode key)
+{
+    SDL_Event ev;
+    memset(&ev, 0, sizeof(ev));
+    ev.type = SDL_KEYDOWN;
+    ev.key.type = SDL_KEYDOWN;
+    ev.key.keysym.sym = key;
+    ev.key.state = SDL_PRESSED;
+    ev.key.repeat = 0;
+    /* windowID = 0 → not CBX_CONTROLLER_EVENT_WINDOW_ID → keyboard */
+    SDL_PushEvent(&ev);
+    pump_manager(mgr);
+}
+
+/* ================================================================== */
+/*  Helper: drain the manager's own DBus connection to process         */
+/*  pending signals (e.g. NameOwnerChanged for backend recovery).      */
+/* ================================================================== */
+
+static void
+drain_manager_dbus(cbx_manager *mgr, int timeout_ms)
+{
+    if (!mgr || !mgr->dbus_backend || !mgr->dbus_bus ||
+        !mgr->dbus_backend->process)
+        return;
+    for (int i = 0; i < timeout_ms / 10; i++) {
+        int processed = mgr->dbus_backend->process(mgr->dbus_bus);
+        if (processed <= 0)
+            usleep(10000);
+    }
+}
+
+/* ================================================================== */
+/*  Test 2: Controller acceptance via production gamepad transport     */
+/*                                                                   */
+/*  Exercises A (b0) and B (b1) buttons through the virtual gamepad   */
+/*  → SDL_CONTROLLERBUTTONDOWN/UP → cbx_manager_controller_to_key →    */
+/*  cbx_manager_handle_event production dispatch path across all 3    */
+/*  tabs and the profile editor.                                      */
+/* ================================================================== */
+
+static void
+test_installed_controller_acceptance(void **state)
+{
+    functional_fixture *f = *state;
+    cbx_manager mgr;
+    int rc;
+
+    /* --- Phase 1: Manager init with production DBus + gamepad --- */
+    rc = cbx_manager_init(&mgr, NULL);
+    assert_int_equal(rc, 0);
+    assert_true(mgr.dbus_connected);
+
+    pump_manager(&mgr);
+    assert_true(mgr.gamecontroller_count >= 1);
+
+    /* --- Phase 2: Controllers tab — Add type picker open (A) + cancel (B) */
+    assert_int_equal(cbx_manager_active_tab(&mgr), CBX_MGR_TAB_CONTROLLERS);
+
+    /* Navigate tabbar → device list → button row (rightmost = Change Type) */
+    ctrl_press(&mgr, f->joystick, 12);  /* D-pad Down → device list */
+    ctrl_press(&mgr, f->joystick, 12);  /* D-pad Down → button row */
+    /* Navigate to Add button (leftmost): D-pad Left × 2 */
+    ctrl_press(&mgr, f->joystick, 13);  /* Left → Remove */
+    ctrl_press(&mgr, f->joystick, 13);  /* Left → Add */
+
+    /* A (b0) → open type picker */
+    ctrl_press(&mgr, f->joystick, 0);
+    assert_int_equal(cbx_controllers_tab_mode(&mgr.ct), CBX_CT_MODE_TYPE_PICK);
+
+    /* B (b1) → cancel type picker */
+    ctrl_press(&mgr, f->joystick, 1);
+    assert_int_equal(cbx_controllers_tab_mode(&mgr.ct), CBX_CT_MODE_LIST);
+
+    /* --- Phase 3: Controllers tab — Add confirm (A) → device count +1 --- */
+    /* After B cancel, focus went to device list (first visible child). */
+    /* Re-navigate to Add button: down to button row, left × 2 to Add. */
+    ctrl_press(&mgr, f->joystick, 12);  /* D-pad Down → button row */
+    ctrl_press(&mgr, f->joystick, 13);  /* Left → Remove */
+    ctrl_press(&mgr, f->joystick, 13);  /* Left → Add */
+
+    /* A (b0) → re-open type picker */
+    ctrl_press(&mgr, f->joystick, 0);
+    assert_int_equal(cbx_controllers_tab_mode(&mgr.ct), CBX_CT_MODE_TYPE_PICK);
+
+    /* D-pad down → select second type (ds5, index 1) */
+    ctrl_press(&mgr, f->joystick, 12);
+
+    /* A (b0) → confirm type → CreateTargetDevice via DBus */
+    ctrl_press(&mgr, f->joystick, 0);
+    assert_int_equal(cbx_controllers_tab_mode(&mgr.ct), CBX_CT_MODE_LIST);
+    assert_int_equal(mgr.ct.model.target_count, 1);
+
+    /* --- Phase 4: Controllers tab — Change Type open (A) + cancel (B) --- */
+    /* After Add confirm, focus went to device list (first visible child). */
+    /* Navigate down to button row (1 DOWN: list has 1 item, at bottom → focus chain) */
+    ctrl_press(&mgr, f->joystick, 12);  /* D-pad Down → button row (rightmost = Change Type) */
+
+    /* A (b0) → open change type picker */
+    ctrl_press(&mgr, f->joystick, 0);
+    assert_int_equal(cbx_controllers_tab_mode(&mgr.ct), CBX_CT_MODE_TYPE_PICK);
+    assert_int_equal(mgr.ct.pending_action, CBX_CT_ACTION_CHANGE);
+
+    /* B (b1) → cancel */
+    ctrl_press(&mgr, f->joystick, 1);
+    assert_int_equal(cbx_controllers_tab_mode(&mgr.ct), CBX_CT_MODE_LIST);
+
+    /* --- Phase 5: Controllers tab — Remove (A) → device count 0 --- */
+    /* After B cancel, focus went to device list (first visible child). */
+    /* Navigate down to button row, then left to Remove. */
+    ctrl_press(&mgr, f->joystick, 12);  /* D-pad Down → button row (Change Type) */
+    ctrl_press(&mgr, f->joystick, 13);  /* Left → Remove */
+
+    /* A (b0) → remove device via StopTargetDevice + refresh */
+    ctrl_press(&mgr, f->joystick, 0);
+    assert_int_equal(mgr.ct.model.target_count, 0);
+
+    /* --- Phase 6: Settings tab — toggle setting (A) + save (A) --- */
+    /* Navigate to Settings tab: D-pad Right × 3 (first Right moves from
+     * Remove → Change Type in the button row, second Right switches to
+     * Profiles, third Right switches to Settings). */
+    ctrl_press(&mgr, f->joystick, 14);  /* Right → Change Type (focus chain) */
+    ctrl_press(&mgr, f->joystick, 14);  /* Right → Profiles tab */
+    ctrl_press(&mgr, f->joystick, 14);  /* Right → Settings tab */
+    assert_int_equal(cbx_manager_active_tab(&mgr), CBX_MGR_TAB_SETTINGS);
+
+    /* D-pad down → focus settings list (item 0 = launch_at_boot) */
+    ctrl_press(&mgr, f->joystick, 12);
+
+    /* Record initial launch_at_boot value */
+    bool initial_lab = mgr.st.settings.launch_at_boot;
+
+    /* A (b0) → toggle launch_at_boot via list on_select → activate */
+    ctrl_press(&mgr, f->joystick, 0);
+    assert_true(mgr.st.settings.launch_at_boot != initial_lab);
+
+    /* Navigate to Save item (index 10 = CBX_ST_SET_SAVE): D-pad down × 10 */
+    for (int i = 0; i < 10; i++)
+        ctrl_press(&mgr, f->joystick, 12);
+
+    /* A (b0) → save settings to disk */
+    ctrl_press(&mgr, f->joystick, 0);
+
+    /* Assert settings file written to disk */
+    char settings_path[PATH_MAX + 256];
+    snprintf(settings_path, sizeof(settings_path),
+             "%s/.config/controller-box/settings.yaml", f->tmp_home);
+    assert_int_equal(access(settings_path, F_OK), 0);
+
+    /* --- Phase 7: Profiles tab — Create (A) + name + confirm (A) + save (B) --- */
+    /* Navigate to Profiles tab: D-pad Left × 1 */
+    ctrl_press(&mgr, f->joystick, 13);  /* Left → Profiles */
+    assert_int_equal(cbx_manager_active_tab(&mgr), CBX_MGR_TAB_PROFILES);
+
+    /* Navigate to button row: need (profiles.count + 1) D-pad downs
+     * from the tabbar (1 to reach the list, then profiles.count-1
+     * within the list, then 1 more to reach the button row). */
+    {
+        int n = mgr.pt.profiles.count;
+        for (int i = 0; i < n + 1; i++)
+            ctrl_press(&mgr, f->joystick, 12);  /* D-pad Down */
+    }
+    /* Navigate to Create button: D-pad left × 2 (from rightmost Delete) */
+    ctrl_press(&mgr, f->joystick, 13);  /* Left → Edit */
+    ctrl_press(&mgr, f->joystick, 13);  /* Left → Create */
+
+    /* A (b0) → open create picker */
+    ctrl_press(&mgr, f->joystick, 0);
+    assert_int_equal(mgr.pt.mode, CBX_PT_MODE_CREATE_PICK);
+
+    /* A (b0) → confirm "Default copy" (index 0) → enters NAME_INPUT */
+    ctrl_press(&mgr, f->joystick, 0);
+    assert_int_equal(mgr.pt.mode, CBX_PT_MODE_NAME_INPUT);
+
+    /* Type a name via keyboard events (gamepad A/B map to confirm/cancel) */
+    send_key_down(&mgr, SDLK_n);
+    send_key_down(&mgr, SDLK_e);
+    send_key_down(&mgr, SDLK_w);
+
+    /* Gamepad A (b0) → confirm name → opens editor with new profile.
+     * Note: the A KEYUP also triggers cbx_manager_tab_activate which
+     * calls cbx_profile_editor_activate in LIST mode → enters
+     * BINDING_EDIT sub-mode.  This is expected: the A press that
+     * confirms the name is the same physical button whose release
+     * activates the first binding in the newly-opened editor. */
+    ctrl_press(&mgr, f->joystick, 0);
+    assert_int_equal(mgr.pt.mode, CBX_PT_MODE_EDITOR);
+
+    /* B (b1) → cancel BINDING_EDIT sub-mode → back to editor LIST */
+    ctrl_press(&mgr, f->joystick, 1);
+
+    /* B (b1) → save and close editor (B in editor LIST mode = save) */
+    ctrl_press(&mgr, f->joystick, 1);
+    assert_int_equal(mgr.pt.mode, CBX_PT_MODE_LIST);
+
+    /* Assert new profile file exists on disk */
+    char new_prof_path[PATH_MAX + 256];
+    snprintf(new_prof_path, sizeof(new_prof_path),
+             "%s/.local/share/inputplumber/profiles/new.yaml", f->tmp_home);
+    assert_int_equal(access(new_prof_path, F_OK), 0);
+
+    /* --- Phase 8: Profiles tab — Edit (A) + editor nav + B cancel/back --- */
+    /* After Create+Save, focus is on the profile list with the new
+     * profile selected (at the bottom). Navigate to button row: 1 DOWN
+     * (at bottom of list → focus chain → button row). */
+    {
+        int sel = cbx_list_get_selected(&mgr.pt.profile_list_w);
+        int n = mgr.pt.profiles.count;
+        /* Navigate to bottom of list, then 1 more to button row */
+        for (int i = 0; i < (n - 1 - sel) + 1; i++)
+            ctrl_press(&mgr, f->joystick, 12);  /* D-pad Down */
+    }
+    /* Navigate to Edit button: D-pad left × 1 (from rightmost Delete) */
+    ctrl_press(&mgr, f->joystick, 13);  /* Left → Edit */
+
+    /* A (b0) → open editor with selected profile */
+    ctrl_press(&mgr, f->joystick, 0);
+    assert_int_equal(mgr.pt.mode, CBX_PT_MODE_EDITOR);
+
+    /* Editor: D-pad down to navigate binding list */
+    ctrl_press(&mgr, f->joystick, 12);
+
+    /* A (b0) → activate binding → enters BINDING_EDIT sub-mode */
+    ctrl_press(&mgr, f->joystick, 0);
+
+    /* B (b1) → cancel sub-mode → back to editor LIST */
+    ctrl_press(&mgr, f->joystick, 1);
+
+    /* B (b1) → save and close editor */
+    ctrl_press(&mgr, f->joystick, 1);
+    assert_int_equal(mgr.pt.mode, CBX_PT_MODE_LIST);
+
+    /* --- Phase 9: Profiles tab — Delete (A) + confirm (A) --- */
+    /* After Edit+Save, focus is on the profile list. Navigate to the
+     * button row (at bottom of list → 1 more DOWN → button row). */
+    {
+        int sel = cbx_list_get_selected(&mgr.pt.profile_list_w);
+        int n = mgr.pt.profiles.count;
+        for (int i = 0; i < (n - 1 - sel) + 1; i++)
+            ctrl_press(&mgr, f->joystick, 12);  /* D-pad Down */
+    }
+    /* Delete is rightmost button — already there. */
+
+    /* A (b0) → open delete confirmation */
+    ctrl_press(&mgr, f->joystick, 0);
+    assert_int_equal(mgr.pt.mode, CBX_PT_MODE_CONFIRM_DELETE);
+
+    /* A (b0) → confirm delete → file removed */
+    ctrl_press(&mgr, f->joystick, 0);
+    assert_int_equal(mgr.pt.mode, CBX_PT_MODE_LIST);
+
+    /* Assert profile file no longer exists */
+    assert_int_not_equal(access(new_prof_path, F_OK), 0);
+
+    /* --- Cleanup --- */
+    cbx_manager_shutdown(&mgr);
+}
+
+/* ================================================================== */
+/*  Test 3: Manager-UI backend recovery through production dispatch    */
+/*                                                                   */
+/*  Verifies that when InputPlumber's DBus name is lost (server killed) */
+/*  and reacquired (server restarted), the manager's own callbacks     */
+/*  (wired in cbx_manager_init production path) fire and correctly     */
+/*  disable/re-enable the controllers tab UI.                         */
+/* ================================================================== */
+
+static void
+test_installed_backend_recovery(void **state)
+{
+    functional_fixture *f = *state;
+    cbx_manager mgr;
+    int rc;
+
+    /* --- Phase 1: Initialize manager with production DBus path --- */
+    /* cbx_manager_init(NULL) uses ip_dbus_sd_backend, connects to the
+     * private bus, subscribes to NameOwnerChanged, and wires
+     * cbx_manager_backend_ready/degraded as the ip_connection callbacks. */
+    rc = cbx_manager_init(&mgr, NULL);
+    assert_int_equal(rc, 0);
+    assert_true(mgr.dbus_connected);
+
+    pump_manager(&mgr);
+    assert_true(mgr.gamecontroller_count >= 1);
+
+    /* Verify initial healthy state: controls enabled, backend present */
+    assert_true(mgr.ct.add_btn.base.interactive);
+    assert_non_null(mgr.ct.backend);
+
+    /* --- Phase 2: Simulate InputPlumber owner loss --- */
+    /* Kill the InputPlumber server.  The DBus daemon will emit
+     * NameOwnerChanged (old=server_unique_name, new=""). */
+    kill(f->server_pid, SIGTERM);
+    waitpid(f->server_pid, NULL, 0);
+    f->server_pid = 0;
+    private_server_pid = 0;
+
+    /* Drain the manager's own DBus connection to process the
+     * NameOwnerChanged signal → noc_signal_callback →
+     * ip_connection_handle_name_changed → degraded_cb →
+     * cbx_manager_backend_degraded. */
+    drain_manager_dbus(&mgr, 3000);
+
+    /* Verify degraded state through the manager's own callback */
+    assert_false(mgr.dbus_connected);
+    assert_null(mgr.ct.backend);
+    assert_false(mgr.ct.add_btn.base.interactive);
+    assert_false(mgr.ct.remove_btn.base.interactive);
+    assert_false(mgr.ct.change_type_btn.base.interactive);
+
+    /* Status label should be visible with a reason */
+    assert_true(mgr.ct.status_lbl.base.visible);
+
+    /* --- Phase 3: Simulate InputPlumber owner reacquisition --- */
+    /* Reset server state for the new instance. */
+    g_target_count = 0;
+    memset(g_attached_counts, 0, sizeof(g_attached_counts));
+    memset(g_intercept_mode, 0, sizeof(g_intercept_mode));
+    memset(g_profile_path, 0, sizeof(g_profile_path));
+    memset(g_profile_name, 0, sizeof(g_profile_name));
+    g_gamepad_order_count = 0;
+    for (int i = 0; i < 2; i++) {
+        g_intercept_mode[i] = 0;
+        snprintf(g_comp_names[i], sizeof(g_comp_names[i]),
+                 "TestController%d", i);
+        snprintf(g_persistent_ids[i], sizeof(g_persistent_ids[i]),
+                 "comp-%d", i);
+        snprintf(g_dbus_devices[i], sizeof(g_dbus_devices[i]),
+                 "/org/shadowblip/InputPlumber/CompositeDevice%d", i);
+    }
+
+    /* Restart the InputPlumber server. */
+    service_running = 1;
+    pid_t new_server = fork();
+    assert_true(new_server >= 0);
+    if (new_server == 0)
+        _exit(run_server(f->bus_address));
+    f->server_pid = new_server;
+    private_server_pid = new_server;
+
+    /* Wait for the new server to be ready (poll Version via
+     * the fixture's independent connection). */
+    char *version = NULL;
+    rc = -1;
+    for (int i = 0; i < 200 && rc != 0; i++) {
+        free(version); version = NULL;
+        rc = f->backend->get_property(f->bus, "org.shadowblip.InputPlumber",
+            "/org/shadowblip/InputPlumber/Manager",
+            "org.shadowblip.InputManager", "Version", &version);
+        if (rc != 0) usleep(10000);
+    }
+    assert_int_equal(rc, 0);
+    free(version);
+
+    /* Drain the manager's DBus to process NameOwnerChanged (new owner) →
+     * noc_signal_callback → ip_connection_handle_name_changed →
+     * reenumerate_cb → cbx_manager_backend_ready. */
+    drain_manager_dbus(&mgr, 3000);
+
+    /* Verify recovered state through the manager's own callback */
+    assert_true(mgr.dbus_connected);
+    assert_non_null(mgr.ct.backend);
+    assert_true(mgr.ct.add_btn.base.interactive);
+    assert_true(mgr.ct.remove_btn.base.interactive);
+    assert_true(mgr.ct.change_type_btn.base.interactive);
+
+    /* Status label should be hidden (no error) */
+    assert_false(mgr.ct.status_lbl.base.visible);
+
+    /* Verify device model re-enumerated (composites visible) */
+    assert_true(mgr.ct.model.composite_count >= 2);
+
+    /* No manager restart was needed — recovery is transparent */
+    /* (The manager was never shut down; only the backend recovered.) */
+
+    /* --- Cleanup --- */
+    cbx_manager_shutdown(&mgr);
+}
+
+/* ================================================================== */
 /*  Test runner                                                        */
 /* ================================================================== */
 
@@ -1242,6 +1630,10 @@ main(void)
 {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test_setup_teardown(test_installed_functional,
+                                         f_setup, f_teardown),
+        cmocka_unit_test_setup_teardown(test_installed_controller_acceptance,
+                                         f_setup, f_teardown),
+        cmocka_unit_test_setup_teardown(test_installed_backend_recovery,
                                          f_setup, f_teardown),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);

@@ -9,6 +9,37 @@
  * pointer (mouse) input paths.  Semantic outcomes (mode transitions,
  * DBus calls, device-count changes, settings mutations, file writes)
  * are asserted — never mere handler return values.
+ *
+ * ────────────────────────────────────────────────────────────────────
+ * SPEC §5.7 — Supplemental accessibility evidence (keyboard-dispatched
+ * controller_path tests)
+ * ────────────────────────────────────────────────────────────────────
+ *
+ * Every test suffixed `_controller_path` in this file dispatches input
+ * via SDL keyboard events (SDLK_a, SDLK_b, SDLK_DOWN, etc.) through
+ * cbx_manager_handle_event.  This is the SAME key-processing code path
+ * that production gamepad events follow (SDL_CONTROLLERBUTTONDOWN →
+ * cbx_manager_controller_to_key → SDLK_a/b/etc → handle_event), so
+ * these tests prove that the manager's key→action dispatch is correct
+ * for every control.
+ *
+ * However, these tests are SUPPLEMENTAL accessibility evidence per
+ * SPEC §5.7, NOT primary controller-transport acceptance.  The genuine
+ * controller-transport evidence — proving that real SDL gamepad button
+ * events (SDL_JoystickSetVirtualButton → SDL_PollEvent →
+ * SDL_CONTROLLERBUTTONDOWN → cbx_manager_controller_to_key →
+ * cbx_manager_handle_event) drive the full UI — comes from
+ * test_installed_functional.c's `test_installed_controller_acceptance`,
+ * which uses a real virtual SDL gamepad with the production mapping
+ * (a:b0, b:b1, dpup:b11..dpright:b14) against a private DBus + forked
+ * InputPlumber server.
+ *
+ * In summary:
+ *   - `*_controller_path` tests here = keyboard-dispatched, same key
+ *     handling code, supplemental per §5.7.
+ *   - `test_installed_controller_acceptance` in
+ *     test_installed_functional.c = real gamepad transport, primary
+ *     controller acceptance evidence.
  */
 #include <cmocka.h>
 #include <SDL2/SDL.h>
@@ -1849,6 +1880,15 @@ test_decorative_widget_exclusion(void **state)
 
 /* ------------------------------------------------------------------ */
 /*  Runner                                                            */
+/*                                                                  */
+/*  NOTE: All `*_controller_path` tests below dispatch keyboard events */
+/*  (SDLK_a/b/UP/DOWN/etc.) through cbx_manager_handle_event.  These  */
+/*  are SUPPLEMENTAL accessibility evidence per SPEC §5.7 — they prove */
+/*  the key→action dispatch is correct but do NOT exercise the real   */
+/*  gamepad transport.  Primary controller-transport acceptance is    */
+/*  in test_installed_functional.c::test_installed_controller_accept- */
+/*  ance, which uses SDL_JoystickSetVirtualButton → SDL_CONTROLLER-  */
+/*  BUTTONDOWN → cbx_manager_controller_to_key → handle_event.        */
 /* ------------------------------------------------------------------ */
 
 int
