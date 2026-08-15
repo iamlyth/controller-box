@@ -25,6 +25,7 @@
 #include "dbus/ip_intercept_poll.h"
 #include "dbus/ip_composite.h"
 #include "dbus/ip_connection.h"
+#include "dbus/ip_hotplug.h"
 #include "config/config_settings.h"
 #include "config/config_assignments.h"
 #include "config/config_paths.h"
@@ -35,6 +36,7 @@
 #include "overlay/player_mode.h"
 #include "overlay/host_mode.h"
 #include "overlay/conflict.h"
+#include "overlay/dynamic_columns.h"
 
 /* --- Constants --------------------------------------------------------- */
 
@@ -128,8 +130,8 @@ interaction_setup(void **state)
     interaction_fixture *f = malloc(sizeof(*f));
     memset(f, 0, sizeof(*f));
 
-    /* SDL with dummy video driver. */
-    SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
+    /* SDL with dummy video driver + timer for poll re-arm during reconcile. */
+    SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_TIMER);
     SDL_VideoInit("dummy");
 
     /* Allocate service context. */
@@ -872,6 +874,124 @@ test_o06b_host_mode_freezes_non_host(void **state)
                      CBX_ROW_FROZEN);
 }
 
+/* ================================================================== */
+/*  Hotplug — Dynamic columns rebuild through production dispatch       */
+/*  (SPEC §4.7, §10.1; plan Task 7)                                   */
+/* ================================================================== */
+
+/* Helper: inject an InterfacesAdded/Removed signal through the mock
+ * DBus backend's subscription dispatch (the same path production code
+ * uses when sd-bus delivers the signal).
+ */
+static void
+inject_hotplug(interaction_fixture *f, const char *member,
+               const char *path, const char *interfaces)
+{
+    ip_interfaces_changed_payload p = {
+        .sender     = EXP_SENDER,
+        .path       = path,
+        .interfaces = interfaces,
+    };
+    f->backend->inject_signal(f->mock.bus,
+                               IP_IFACE_OBJECT_MANAGER, member, &p);
+}
+
+/* Stage mock expectations for cbx_overlay_reconcile_hotplug.
+ * NOTE: ip_dbus_mock_reset clears subscriptions too, so we must
+ * re-subscribe hotplug signals after resetting. */
+static void
+expect_reconcile(ip_dbus_mock *mock, ip_hotplug *hp)
+{
+    ip_dbus_mock_reset(mock);
+    ip_dbus_mock_expect_ok(mock, IP_IFACE_TARGET,
+                            "DeviceType", "xb360");
+    ip_dbus_mock_expect_ok(mock, IP_IFACE_COMPOSITE,
+                            "InterceptMode", "1");
+    ip_dbus_mock_expect_ok(mock, IP_IFACE_COMPOSITE,
+                            "SetInterceptActivation", NULL);
+    /* Re-subscribe hotplug signals (reset cleared them). */
+    ip_hotplug_subscribe(hp);
+}
+
+static void
+test_hotplug_target_add_remove_through_dispatch(void **state)
+{
+    interaction_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    /* Align device-model target_count with the grid column count.
+     * The fixture builds the grid with 4 virtual controllers (col_count=5:
+     * Unassigned + P1-P4) but sets model.target_count=1.  For hotplug
+     * reconciliation to work we need target_count to match so that
+     * cbx_dynamic_columns_needs_rebuild returns false initially. */
+    svc->model.target_count = 4;
+    snprintf(svc->model.targets[1].path,
+             sizeof(svc->model.targets[1].path),
+             "/org/shadowblip/InputPlumber/devices/target/gamepad1");
+    snprintf(svc->model.targets[2].path,
+             sizeof(svc->model.targets[2].path),
+             "/org/shadowblip/InputPlumber/devices/target/gamepad2");
+    snprintf(svc->model.targets[3].path,
+             sizeof(svc->model.targets[3].path),
+             "/org/shadowblip/InputPlumber/devices/target/gamepad3");
+
+    /* Initialize and subscribe hotplug handler (production path). */
+    ip_hotplug_init(&svc->hp, f->backend, f->mock.bus,
+                     EXP_SENDER, &svc->model);
+    assert_int_equal(ip_hotplug_subscribe(&svc->hp), 0);
+
+    /* Sanity: grid has 5 columns (Unassigned + 4 VCs), 4 targets. */
+    assert_int_equal(svc->grid.col_count, 5);
+    assert_int_equal(svc->model.target_count, 4);
+    assert_false(svc->hp.model_changed);
+
+    /* --- Phase 1: Hotplug ADD a 5th target via signal dispatch --- */
+    inject_hotplug(f, "InterfacesAdded",
+                   "/org/shadowblip/InputPlumber/devices/target/gamepad4",
+                   "org.shadowblip.Input.Target");
+
+    /* The subscription callback (hotplug_signal_cb) should have called
+     * ip_hotplug_handle_added, which increments target_count and sets
+     * model_changed.  Sender verification and path validation were
+     * exercised by the production handler. */
+    assert_true(svc->hp.model_changed);
+    assert_int_equal(svc->model.target_count, 5);
+
+    /* Stage mock expectations for the reconcile. */
+    expect_reconcile(&f->mock, &svc->hp);
+
+    flush_events();
+    cbx_overlay_service_step(svc);
+
+    /* Reconcile should have rebuilt columns: 5 targets → 6 columns. */
+    assert_false(svc->hp.model_changed);
+    assert_int_equal(svc->grid.col_count, 6);
+
+    /* --- Phase 2: Hotplug REMOVE the 5th target, clamp positions --- */
+    /* Place row 0 in column 5 (P5).  After removing target gamepad4,
+     * col_count drops to 5 and column 5 is out of range — the row must
+     * be clamped to Unassigned (col 0). */
+    svc->grid.rows[0].cur_col = 5;
+
+    inject_hotplug(f, "InterfacesRemoved",
+                   "/org/shadowblip/InputPlumber/devices/target/gamepad4",
+                   "org.shadowblip.Input.Target");
+
+    assert_true(svc->hp.model_changed);
+    assert_int_equal(svc->model.target_count, 4);
+
+    expect_reconcile(&f->mock, &svc->hp);
+
+    flush_events();
+    cbx_overlay_service_step(svc);
+
+    /* Column count back to 5; row 0 clamped from col 5 to col 0
+     * (Unassigned) by cbx_dynamic_columns_clamp_positions. */
+    assert_false(svc->hp.model_changed);
+    assert_int_equal(svc->grid.col_count, 5);
+    assert_int_equal(svc->grid.rows[0].cur_col, 0);
+}
+
 /* --- Test runner ------------------------------------------------------- */
 
 static const struct CMUnitTest tests[] = {
@@ -926,6 +1046,11 @@ static const struct CMUnitTest tests[] = {
     /* O12 — Host profile cycle (deferred per §13) */
     cmocka_unit_test_setup_teardown(test_o12_host_profile_cycle_deferred,
                                      interaction_setup, interaction_teardown),
+
+    /* Hotplug — Dynamic columns rebuild through production dispatch */
+    cmocka_unit_test_setup_teardown(
+        test_hotplug_target_add_remove_through_dispatch,
+        interaction_setup, interaction_teardown),
 };
 
 int

@@ -75,15 +75,15 @@ Task that closes them. §13-deferred and §10.2-optional members are excluded
 | OV-11 | Conflict: second arrival red {220,40,40} | §4.5 | verified | `conflict.c:26-51`; `grid_render.c:153-157`; `test_overlay_visual.c:538-575` (readback asserts red) | — |
 | OV-12 | Conflict: on exit move to lowest unoccupied P slot | §4.5 | verified | `conflict.c:92-135`; `close.c:113-127`; `test_overlay_interaction.c:350-385` | — |
 | OV-13 | Profiles per-controller, follow across columns | §4.6 | verified | `profile_cycle.c:152-174`; `grid_render.c:102-111`; `test_overlay_interaction.c:218-243` | — |
-| OV-14 | Dynamic columns scale with virtual controller count | §4.7 | partial | `dynamic_columns.c:55-112`; `test_dynamic_columns.c` (unit only); no prod-dispatch hotplug→rebuild→clamp test | Task 7 |
+| OV-14 | Dynamic columns scale with virtual controller count | §4.7 | verified | `dynamic_columns.c:55-112`; `test_overlay_reconcile.c:420-510` (prod-dispatch hotplug→rebuild via ip_hotplug_handle_added/removed + cbx_overlay_service_step); `test_overlay_interaction.c:901-1010` (full signal injection: inject_signal→subscription callback→ip_hotplug_handle_added→model_changed→cbx_overlay_service_step→reconcile→column rebuild + position clamp) | — |
 | OV-15 | No nicknames; model name + slot + virtual icon only | §4.8 | verified | `grid_render.c:163-178`; `test_overlay_visual.c:639-680` | — |
 | OV-16 | Pre-built surface at startup; show = RenderCopy+Present only | §4.9 | verified | `surface_build.c:32-107`; `test_surface_build.c`; `test_overlay_visual.c:120-135` | — |
 | OV-17 | Visual states: Player Mode grid content in cell/header/label/icon | §4.10 | verified | `test_overlay_visual.c:491-535` (readback) | — |
 | OV-18 | Visual: Host Mode frame differs from Player Mode | §4.10 | verified | `test_overlay_visual.c:539-575` | — |
 | OV-19 | Visual: conflict red present; non-conflict not red | §4.10 | verified | `test_overlay_visual.c:579-610` | — |
 | OV-20 | Visual: Unassigned + ≥2 player columns, all headers + ≥2 slots | §4.10 | verified | `test_overlay_visual.c:614-651` | — |
-| OV-21 | Visual: model/profile text in label region | §4.10 | partial | `test_overlay_visual.c:655-700` skips when no font (env-gated; passes here but skip is a latent weakness) | Task 7 |
-| OV-22 | Visual: virtual-device icons in slot regions | §4.10 | partial | `test_overlay_visual.c:713-735` skips when no icons (env-gated) | Task 7 |
+| OV-21 | Visual: model/profile text in label region | §4.10 | verified | `test_overlay_visual.c:655-700` (readback asserts text-colored pixels; skip replaced with fail_msg documenting font requirement per §11.2.5) | — |
+| OV-22 | Visual: virtual-device icons in slot regions | §4.10 | verified | `test_overlay_visual.c:713-735` (readback asserts icon content; skip replaced with fail_msg documenting icon asset requirement per §11.2.5) | — |
 | OV-23 | Visual: state transitions produce materially different frames | §4.10 | verified | `test_overlay_visual.c:739-790` | — |
 | OV-24 | Golden baselines + tolerance + failure artifacts | §11.1.3-4 | verified | `test_golden.c:50-88,193-246`; `tests/golden/*.png` | — |
 | OV-25 | Deterministic framebuffer readback through prod composition | §11.1.1-2 | verified | `test_overlay_visual.c` via `fb_read_pixels`/`fb_region_*` | — |
@@ -471,7 +471,11 @@ coverage is cited; gaps are assigned to Tasks 5-6.
 - Documentation impact: OPERATIONS controller acceptance + recovery.
 
 ## Task 7: Overlay dynamic columns hotplug and visual skip hardening
-- Status: pending
+- Status: complete
+- Verification: `nix-shell --run "ctest --test-dir build-check -R 'test_overlay_interaction|test_overlay_integration|test_overlay_visual|test_overlay_reconcile' --output-on-failure"` → 4/4 pass (20 interaction incl. new hotplug dispatch test, 15 integration, 7 visual, 7 reconcile). Full gate: 90/91 pass (1 pre-existing `test_pi2_ollama_wrapper` failure, needs ollama).
+- Evidence:
+  - `test_hotplug_target_add_remove_through_dispatch` in `test_overlay_interaction.c`: injects InterfacesAdded/Removed via mock DBus `inject_signal`→subscription callback (`hotplug_signal_cb`)→`ip_hotplug_handle_added/removed` (sender verification + path validation exercised)→`model_changed`→`cbx_overlay_service_step` Phase 4→`cbx_overlay_reconcile_hotplug`→`cbx_dynamic_columns_rebuild` (columns 5→6 on add)→`cbx_dynamic_columns_clamp_positions` (row clamped col 5→0 on remove).
+  - `test_overlay_visual.c`: silent `skip()` replaced with `fail_msg()` in `test_model_profile_text` (font not found) and `test_virtual_device_icons` (icons not found), documenting environment requirement per §11.2.5.
 - Dependencies: none
 - Scope: `tests/test_overlay_interaction.c`/`test_overlay_integration.c` (hotplug), `tests/test_overlay_visual.c` (skip hardening), `src/overlay/dynamic_columns.c` (read-only evidence).
 - Acceptance criteria:

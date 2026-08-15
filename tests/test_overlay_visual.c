@@ -652,8 +652,11 @@ test_model_profile_text(void **state)
     struct vis_fixture *f = *state;
 
     if (!f->has_text) {
-        skip();
-        return;
+        fail_msg("DejaVuSans.ttf not found — model/profile text visual "
+                 "test requires a TrueType font.  Install dejavu-fonts or "
+                 "run in the declared Nix environment (nix-shell).  "
+                 "Searched: cbx_font_path(), common nix-store font paths, "
+                 "and popen('find /nix/store -name DejaVuSans.ttf ...').");
     }
 
     cbx_select_grid g;
@@ -717,8 +720,11 @@ test_virtual_device_icons(void **state)
     struct vis_fixture *f = *state;
 
     if (!f->has_icons) {
-        skip();
-        return;
+        fail_msg("Icon assets not found — virtual-device icon visual test "
+                 "requires controller-icons.yaml and SVG icons.  Ensure "
+                 "data/controller-icons.yaml and data/icons/svg/ are "
+                 "available relative to CBX_SOURCE_DIR (project root).  "
+                 "Run in the declared Nix environment (nix-shell).");
     }
 
     cbx_select_grid g;
