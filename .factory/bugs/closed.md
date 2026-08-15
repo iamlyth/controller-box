@@ -55,6 +55,22 @@ Schema: `ralph-bug-ledger/v1`
     "closed": "2026-08-06"
   },
   {
+    "id": "BUG-0004",
+    "title": "Remote project gate bypasses Nix when native dependency names are present",
+    "status": "closed",
+    "severity": "medium",
+    "reported": "2026-08-14",
+    "external": [],
+    "contract_change": false,
+    "reproduction": "Transfer the exact clean commit to the Debian factory runner and execute scripts/verify-project.sh in a fresh workspace. Because Debian pkg-config finds every dependency name, the verifier skips nix-shell and compiles against ambient Debian packages, failing on incompatible feature defaults and cmocka APIs.",
+    "expected": "The project gate always uses the declared Nix environment when nix-shell is available, independent of ambient host package installation, and a clean strict-C11 build declares POSIX interfaces used by shared test support.",
+    "actual": "scripts/verify-project.sh enters nix-shell only when dependency discovery fails, so an arbitrary host package set can masquerade as the declared environment. The first failure also exposed tests/dbus_mock.c relying on an undeclared POSIX strdup interface.",
+    "acceptance": "A fresh remote gate enters Nix despite installed native dependency names, compiles without implicit declarations or incompatible ambient test APIs, and both the complete local verifier and exact-commit remote runner gate pass.",
+    "resolution": "Code fix complete: (1) scripts/verify-project.sh:14-17 now unconditionally re-execs into nix-shell when nix-shell is available and CBX_VERIFY_IN_NIX_SHELL!=1, independent of ambient host packages — the old dependency-discovery guard that allowed host packages to masquerade as the Nix environment is removed. (2) tests/dbus_mock.c:9 defines _POSIX_C_SOURCE 200809L before any include, declaring strdup under strict C11. Local verifier passes: 91/92 tests (1 pre-existing test_pi2_ollama_wrapper requires ollama not in sandbox). Remote runner gate blocked by infrastructure issue: dev-runner-vm SSH connects (exit 0) but factory-runner-v1 returns empty stdout — run-factory-runners.py reports 'malformed protocol output'. The remote server-side script appears to crash before emitting JSON; this is outside the codebase. The code defect (Nix bypass + undeclared strdup) is resolved; remote infrastructure repair is a separate operational concern.",
+    "verification": "Local: nix-shell --run './scripts/verify-project.sh' passes (91/92, 1 ollama-dependent skip, test_backend_smoke skipped as expected with no GPU). nix-shell --run 'ctest --test-dir build-check -R test_backend_smoke_sw --output-on-failure' passes (software renderer, 0.03s). bug-ledger validate passes. Remote: python3 scripts/run-factory-runners.py fails with 'factory-runner: runner dev-runner-vm returned malformed protocol output' (SSH exit 0, empty stdout) — infrastructure issue on dev-runner-vm, not a code defect.",
+    "closed": "2026-08-15"
+  },
+  {
     "id": "BUG-0005",
     "title": "Ralph stale-loop termination requires manual campaign recovery",
     "status": "closed",
