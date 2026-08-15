@@ -1,25 +1,15 @@
-# Implementation complete — final gate passed (verified)
+# Independent Campaign Gap Audit - Round 1
 
-## Outcome
+## Analysis
+- Performed a deep dive into the 'verified' claims of the implementation plan.
+- Analyzed `test_installed_functional.c` and found it links against the library rather than running the installed binary, violating §11.1.5.
+- Analyzed interaction tests and found they rely heavily on `ip_dbus_mock` for E2E verification, which is designated as 'synthetic' and insufficient for 'verified' status per the plan's own rules.
+- Verified that visual tests are robust (framebuffer readback).
+- Confirmed environment limits are respected (no undeclared hardware used).
 
-All 10 implementation/audit tasks closed. Plan front-matter
-`status: complete`. All 92 tests pass, 0 failures. Installed
-functional evidence PASS at 4a17dc3 with zero skips.
+## Findings
+1. **Installed Functional Smoke Gap**: `VS-01` is verified via linked library, not installed binary.
+2. **Interaction Evidence Gap**: Much of the interaction matrix relies on synthetic `ip_dbus_mock` rather than a real native DBus server.
 
-## Verification (this iteration)
-
-- `./scripts/final-gate.sh --implementation` — all sub-checks pass:
-  - 92/92 tests passed, 0 failures
-  - Manager smoke (tab nav, coordinate mouse clicks, settings save)
-  - Overlay service smoke (clean exit, IP-absent expected)
-  - `installed-functional-evidence: PASS at 4a17dc3 with zero skips`
-  - Packaging + clean build verified
-  - `final-gate: implementation, specification, tests, and documentation accepted`
-- Plan front-matter `status: complete` confirmed.
-- Git tree clean on `develop` (HEAD 4a17dc3).
-- No remaining runtime tasks.
-
-## Next action
-
-Emit `factory.implement` summary event, close the event tag, then
-emit the completion token as the final line.
+## Next Action
+Run the final gate to verify the audit report.
