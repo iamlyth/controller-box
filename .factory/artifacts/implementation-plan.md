@@ -158,7 +158,11 @@ enumerating 58 entries across seven categories:
 - **Disabled/degraded (D01–D08):** InputPlumber unavailable, no device, no
   profile, NES validation error, settings cancel, DBus failure, filesystem
   failure, empty profile creation. D01 via test_installed_backend_recovery
-  (native DBus). D02–D08 via mock DBus.
+  + test_d01_pointer_degraded_click (native DBus, controller+pointer).
+  D02–D04, D07–D08 via test_manager_native_prof.c (native DBus,
+  controller+pointer). D05 via test_manager_native.c M26 cancel tests
+  (native DBus, controller+pointer). D06 via test_manager_native.c
+  (native DBus, controller+pointer).
 
 **Semantic outcome evidence:** Each entry records the expected semantic
 outcome (state transition, DBus call, file mutation, lifecycle change) and
@@ -222,11 +226,12 @@ semantic outcomes against a real private DBus service.
 - Documentation impact: none
 
 ## Task 6: Disabled/degraded scenarios with native DBus
-- Status: pending
+- Status: complete
 - Dependencies: Task 1
 - Scope: Extend native-DBus coverage for disabled and degraded scenarios that currently only have mock evidence. Using the existing private DBus server infrastructure from `test_installed_functional.c`: (a) D01 (InputPlumber unavailable) — already verified by `test_installed_backend_recovery` with native DBus; confirm pointer path (click disabled control, verify no side effect); (b) D06 (DBus operation failure — CreateTargetDevice returns error) — verify error shown, controls remain interactive, last topology retained; (c) D02 (no device selected in Controllers tab) — verify Add/Remove/ChangeType disabled or no-op with native DBus; (d) D03 (no profile selected) — verify Edit/Delete disabled with native DBus; (e) D04 (NES validation error) — verify save rejected with error; (f) D05 (settings edit cancel) — verify cancel returns to list without mutation; (g) D07 (filesystem failure on profile save) — verify error shown; (h) D08 (empty profile creation flow) — verify add-first-binding reachable. Both controller and pointer paths must reject disabled controls and produce no backend/filesystem side effect.
 - Acceptance criteria: D01–D08 have passing controller + pointer evidence through production dispatch with native DBus; disabled controls reject both paths; no `ip_dbus_mock` in new test code.
 - Verification: `nix-shell --run "ctest --test-dir build-check --output-on-failure"`; new test code contains no `ip_dbus_mock`
+- Evidence: D01 controller via `test_installed_backend_recovery` + D01 pointer via new `test_d01_pointer_degraded_click` in `test_installed_functional.c` (4 tests total, commit on develop). D02/D03 controller+pointer via `test_manager_native_prof.c` (Task 5). D04/D07/D08 controller via Task 5 + pointer via new `test_d04_save_missing_nes_pointer`, `test_d07_filesystem_failure_pointer`, `test_d08_empty_profile_create_pointer` in `test_manager_native_prof.c` (31 tests total). D05 via `test_m26_cancel_edit_controller/pointer` in `test_manager_native.c` (Task 4). D06 controller+pointer via `test_manager_native.c` (Task 4). Interaction inventory D02–D08 updated to `CBX_VERIFY_VERIFIED` in `tests/interaction_inventory.c`; `test_inventory_specific_verify_statuses` updated to expect D01–D08 as VERIFIED. Full suite 95/95 (94 passed + 1 skipped `test_backend_smoke` §11.1.6). `grep -c 'ip_dbus_mock' tests/test_manager_native_prof.c` → 1 (comment only); `grep -c 'ip_dbus_mock' tests/test_installed_functional.c` → 0.
 - Documentation impact: none
 
 ## Task 7: Installed binary functional acceptance test

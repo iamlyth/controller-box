@@ -291,6 +291,24 @@ ctrl_press(cbx_manager *mgr, SDL_Joystick *joy, int button)
     pump_manager(mgr);
 }
 
+/* Send a mouse left-button click at (x, y) through the manager. */
+static bool
+send_mouse_click(cbx_manager *mgr, int x, int y)
+{
+    SDL_Event ev = {0};
+    ev.type = SDL_MOUSEBUTTONDOWN;
+    ev.button.button = SDL_BUTTON_LEFT;
+    ev.button.x = x;
+    ev.button.y = y;
+    bool down = cbx_manager_handle_event(mgr, &ev);
+
+    ev.type = SDL_MOUSEBUTTONUP;
+    ev.button.x = x;
+    ev.button.y = y;
+    cbx_manager_handle_event(mgr, &ev);
+    return down;
+}
+
 /* ================================================================== */
 /*  Test: Installed functional acceptance                               */
 /* ================================================================== */
@@ -1035,6 +1053,51 @@ test_installed_backend_recovery(void **state)
 }
 
 /* ================================================================== */
+/*  D01 pointer path: click disabled control in degraded state        */
+/* ================================================================== */
+
+/* D01 pointer: After InputPlumber becomes unavailable, clicking on the
+ * (now invisible) Add button area produces no side effect — mode stays
+ * LIST, no crash, no DBus call. */
+static void
+test_d01_pointer_degraded_click(void **state)
+{
+    functional_fixture *f = *state;
+    cbx_manager mgr;
+    int rc;
+
+    rc = cbx_manager_init(&mgr, NULL);
+    assert_int_equal(rc, 0);
+    assert_true(mgr.dbus_connected);
+    pump_manager(&mgr);
+
+    /* Record Add button center before degradation. */
+    int cx = mgr.ct.add_btn.base.rect.x + mgr.ct.add_btn.base.rect.w / 2;
+    int cy = mgr.ct.add_btn.base.rect.y + mgr.ct.add_btn.base.rect.h / 2;
+
+    /* Kill the InputPlumber server → degraded state. */
+    kill(f->server_pid, SIGTERM);
+    waitpid(f->server_pid, NULL, 0);
+    f->server_pid = 0;
+
+    drain_manager_dbus(&mgr, 3000);
+
+    /* Verify degraded state. */
+    assert_false(mgr.dbus_connected);
+    assert_false(mgr.ct.add_btn.base.visible);
+    assert_false(mgr.ct.add_btn.base.interactive);
+
+    /* Click on the area where Add button was — it's now invisible so
+     * hit_test won't find it.  No side effect. */
+    send_mouse_click(&mgr, cx, cy);
+
+    /* Mode stays LIST, no crash. */
+    assert_int_equal(cbx_controllers_tab_mode(&mgr.ct), CBX_CT_MODE_LIST);
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* ================================================================== */
 /*  Test runner                                                        */
 /* ================================================================== */
 
@@ -1047,6 +1110,8 @@ main(void)
         cmocka_unit_test_setup_teardown(test_installed_controller_acceptance,
                                          f_setup, f_teardown),
         cmocka_unit_test_setup_teardown(test_installed_backend_recovery,
+                                         f_setup, f_teardown),
+        cmocka_unit_test_setup_teardown(test_d01_pointer_degraded_click,
                                          f_setup, f_teardown),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);

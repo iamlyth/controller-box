@@ -471,7 +471,7 @@ static const cbx_interaction_entry inventory[] = {
       AVAIL, "Mouse click on disabled Remove button (no effect)",
       "Disabled; activation produces no DBus side effect",
       "cbx_manager_handle_event → disabled widget rejection",
-      CBX_VERIFY_UNVERIFIED, "Task 6" },
+      CBX_VERIFY_VERIFIED, "Task 6" },
 
     { "D03", CBX_CAT_DISABLED, "Profiles tab — no profile selected",
       CBX_WIDGET_SCENARIO,
@@ -479,7 +479,7 @@ static const cbx_interaction_entry inventory[] = {
       AVAIL, "Mouse click on disabled Delete button (no effect)",
       "Disabled; activation produces no file deletion",
       "cbx_manager_handle_event → disabled widget rejection",
-      CBX_VERIFY_UNVERIFIED, "Task 6" },
+      CBX_VERIFY_VERIFIED, "Task 6" },
 
     { "D04", CBX_CAT_DISABLED, "Profile editor — save with missing NES bindings",
       CBX_WIDGET_SCENARIO,
@@ -487,7 +487,7 @@ static const cbx_interaction_entry inventory[] = {
       AVAIL, "Mouse click on save button (validation fails)",
       "Error shown; profile not saved; cbx_profile_validate_nes_minimum returns error; editor stays open",
       "cbx_profile_save_to_dir → cbx_profile_validate_nes_minimum → error",
-      CBX_VERIFY_UNVERIFIED, "Task 6" },
+      CBX_VERIFY_VERIFIED, "Task 6" },
 
     { "D05", CBX_CAT_DISABLED, "Settings tab — edit cancel",
       CBX_WIDGET_SCENARIO,
@@ -495,7 +495,7 @@ static const cbx_interaction_entry inventory[] = {
       AVAIL, "Mouse click on cancel button in edit mode",
       "Value reverts from disk; no settings.yaml write",
       "cbx_manager_handle_event → cbx_settings_tab_cancel_edit",
-      CBX_VERIFY_UNVERIFIED, "Task 6" },
+      CBX_VERIFY_VERIFIED, "Task 6" },
 
     { "D06", CBX_CAT_DISABLED, "Controllers tab — DBus operation failure",
       CBX_WIDGET_SCENARIO,
@@ -503,7 +503,7 @@ static const cbx_interaction_entry inventory[] = {
       AVAIL, "Mouse click on type item (DBus fails)",
       "Error shown to user; UI remains responsive; no state corruption",
       "cbx_controllers_tab_confirm_type_pick → DBus error → error display",
-      CBX_VERIFY_UNVERIFIED, "Task 6" },
+      CBX_VERIFY_VERIFIED, "Task 6" },
 
     { "D07", CBX_CAT_DISABLED, "Profile editor — filesystem failure",
       CBX_WIDGET_SCENARIO,
@@ -511,7 +511,7 @@ static const cbx_interaction_entry inventory[] = {
       AVAIL, "Mouse click on save button (write fails)",
       "Error shown; profile not written; editor stays open",
       "cbx_profile_save_to_dir → write failure → error display",
-      CBX_VERIFY_UNVERIFIED, "Task 6" },
+      CBX_VERIFY_VERIFIED, "Task 6" },
 
     { "D08", CBX_CAT_DISABLED, "Profile editor — empty profile creation",
       CBX_WIDGET_SCENARIO,
@@ -519,7 +519,7 @@ static const cbx_interaction_entry inventory[] = {
       AVAIL, "Mouse click on save button (NES validation fails)",
       "Editor opens with no bindings; save is blocked by NES validation until minimum bindings added",
       "cbx_profile_save_to_dir → cbx_profile_validate_nes_minimum → error",
-      CBX_VERIFY_UNVERIFIED, "Task 6" },
+      CBX_VERIFY_VERIFIED, "Task 6" },
 
     /* Terminator */
     { NULL, (cbx_inv_category)0, NULL, (cbx_inv_widget_type)0,

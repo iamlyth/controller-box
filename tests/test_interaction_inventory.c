@@ -306,7 +306,8 @@ static void test_inventory_specific_verify_statuses(void **state)
      * or test_installed_backend_recovery) must be VERIFIED */
     const char *verified_ids[] = {
         "M01", "M02", "M03", "M05", "M06", "M07", "M08",
-        "M11", "M17", "M22", "M27", "M28", "M29", "D01"
+        "M11", "M17", "M22", "M27", "M28", "M29",
+        "D01", "D02", "D03", "D04", "D05", "D06", "D07", "D08"
     };
     for (size_t i = 0; i < sizeof(verified_ids)/sizeof(verified_ids[0]); i++) {
         const cbx_interaction_entry *e = cbx_interaction_inventory_find(verified_ids[i]);
@@ -317,8 +318,7 @@ static void test_inventory_specific_verify_statuses(void **state)
     /* Mock-only entries must be UNVERIFIED (sample check) */
     const char *unverified_ids[] = {
         "M04", "M10", "M21", "M30", "M33",
-        "O01", "O02", "O10", "O11", "O13",
-        "D02", "D04", "D06", "D08"
+        "O01", "O02", "O10", "O11", "O13"
     };
     for (size_t i = 0; i < sizeof(unverified_ids)/sizeof(unverified_ids[0]); i++) {
         const cbx_interaction_entry *e = cbx_interaction_inventory_find(unverified_ids[i]);

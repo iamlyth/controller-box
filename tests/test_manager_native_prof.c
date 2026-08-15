@@ -125,6 +125,22 @@ send_key_dn(cbx_manager *mgr, SDL_Keycode sym)
 }
 
 static bool
+send_key_up(cbx_manager *mgr, SDL_Keycode sym)
+{
+    SDL_Event ev = {0};
+    ev.type = SDL_KEYUP;
+    ev.key.keysym.sym = sym;
+    return cbx_manager_handle_event(mgr, &ev);
+}
+
+static void
+send_key_press(cbx_manager *mgr, SDL_Keycode sym)
+{
+    send_key_dn(mgr, sym);
+    send_key_up(mgr, sym);
+}
+
+static bool
 send_mouse_click(cbx_manager *mgr, int x, int y)
 {
     SDL_Event ev = {0};
@@ -1390,6 +1406,153 @@ test_d08_empty_profile_create(void **state)
 }
 
 /* ================================================================== */
+/*  D04 pointer path — NES validation error (pointer-initiated save)  */
+/* ================================================================== */
+
+/* D04 pointer: Create empty profile via pointer (mouse clicks), then
+ * save via B KEYUP.  NES validation blocks save; editor stays open,
+ * no file written. */
+static void
+test_d04_save_missing_nes_pointer(void **state)
+{
+    mnp_fixture *f = *state;
+    cbx_manager mgr;
+    mnp_init_manager(f, &mgr);
+
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+
+    /* Switch to Profiles tab via keyboard. */
+    nav_to_profiles_key(&mgr);
+
+    /* Click Create button. */
+    int cx, cy;
+    widget_center(&pt->create_btn.base, &cx, &cy);
+    send_mouse_click(&mgr, cx, cy);
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_CREATE_PICK);
+
+    /* Click "Empty" (index 1) in the source picker. */
+    int px = list_center_x(&pt->create_picker);
+    int py = list_item_y(&pt->create_picker, 1);
+    send_mouse_click(&mgr, px, py);
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_NAME_INPUT);
+
+    /* Type name (keyboard — no mouse text input). */
+    send_key_dn(&mgr, SDLK_t);
+    send_key_dn(&mgr, SDLK_e);
+    send_key_dn(&mgr, SDLK_s);
+    send_key_dn(&mgr, SDLK_t);
+
+    /* Confirm name with Enter (KEYDOWN triggers confirm). */
+    send_key_dn(&mgr, SDLK_RETURN);
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_EDITOR);
+    assert_int_equal(cbx_profile_editor_binding_count(&pt->editor), 0);
+
+    /* B KEYUP → save attempt → NES validation fails. */
+    send_key_press(&mgr, SDLK_b);
+
+    /* Editor stays open (save failed). */
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_EDITOR);
+
+    /* Verify no file was written. */
+    char path[PATH_MAX + 128];
+    snprintf(path, sizeof(path), "%s/test.yaml", f->user_dir);
+    assert_int_not_equal(access(path, F_OK), 0);
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* ================================================================== */
+/*  D07 pointer path — filesystem failure (pointer-initiated save)     */
+/* ================================================================== */
+
+/* D07 pointer: Open editor via pointer, make user_dir read-only, save
+ * via B KEYUP → filesystem failure.  Editor stays open, error shown. */
+static void
+test_d07_filesystem_failure_pointer(void **state)
+{
+    mnp_fixture *f = *state;
+    cbx_manager mgr;
+    mnp_init_manager(f, &mgr);
+
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+
+    /* Open editor via pointer path. */
+    open_editor_ptr(&mgr);
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_EDITOR);
+
+    /* Make the user dir read-only so save fails. */
+    chmod(f->user_dir, 0555);
+
+    /* B KEYUP → save attempt → filesystem failure. */
+    send_key_press(&mgr, SDLK_b);
+
+    /* Editor stays open (save failed). */
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_EDITOR);
+
+    /* Status should show save failure. */
+    const char *status = cbx_profile_editor_get_status(&pt->editor);
+    assert_non_null(status);
+    assert_true(strlen(status) > 0);
+
+    /* Restore permissions for cleanup. */
+    chmod(f->user_dir, 0700);
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* ================================================================== */
+/*  D08 pointer path — empty profile creation (pointer-initiated)      */
+/* ================================================================== */
+
+/* D08 pointer: Create empty profile via pointer, verify editor opens
+ * with 0 bindings, save via B KEYUP → NES validation blocks. */
+static void
+test_d08_empty_profile_create_pointer(void **state)
+{
+    mnp_fixture *f = *state;
+    cbx_manager mgr;
+    mnp_init_manager(f, &mgr);
+
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+
+    /* Switch to Profiles tab via keyboard. */
+    nav_to_profiles_key(&mgr);
+
+    /* Click Create button. */
+    int cx, cy;
+    widget_center(&pt->create_btn.base, &cx, &cy);
+    send_mouse_click(&mgr, cx, cy);
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_CREATE_PICK);
+
+    /* Click "Empty" (index 1) in the source picker. */
+    int px = list_center_x(&pt->create_picker);
+    int py = list_item_y(&pt->create_picker, 1);
+    send_mouse_click(&mgr, px, py);
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_NAME_INPUT);
+
+    /* Type name. */
+    send_key_dn(&mgr, SDLK_n);
+    send_key_dn(&mgr, SDLK_e);
+    send_key_dn(&mgr, SDLK_w);
+
+    /* Confirm name with Enter. */
+    send_key_dn(&mgr, SDLK_RETURN);
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_EDITOR);
+    assert_int_equal(cbx_profile_editor_binding_count(&pt->editor), 0);
+
+    /* B KEYUP → save attempt → NES validation blocks. */
+    send_key_press(&mgr, SDLK_b);
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_EDITOR);
+
+    /* No file written. */
+    char path[PATH_MAX + 128];
+    snprintf(path, sizeof(path), "%s/new.yaml", f->user_dir);
+    assert_int_not_equal(access(path, F_OK), 0);
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* ================================================================== */
 /*  Test registration                                                  */
 /* ================================================================== */
 
@@ -1466,11 +1629,17 @@ main(void)
         /* D04 — NES validation error */
         cmocka_unit_test_setup_teardown(test_d04_save_missing_nes,
                                         mnp_setup, mnp_teardown),
+        cmocka_unit_test_setup_teardown(test_d04_save_missing_nes_pointer,
+                                        mnp_setup, mnp_teardown),
         /* D07 — Filesystem failure */
         cmocka_unit_test_setup_teardown(test_d07_filesystem_failure,
                                         mnp_setup, mnp_teardown),
+        cmocka_unit_test_setup_teardown(test_d07_filesystem_failure_pointer,
+                                        mnp_setup, mnp_teardown),
         /* D08 — Empty profile creation */
         cmocka_unit_test_setup_teardown(test_d08_empty_profile_create,
+                                        mnp_setup, mnp_teardown),
+        cmocka_unit_test_setup_teardown(test_d08_empty_profile_create_pointer,
                                         mnp_setup, mnp_teardown),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
