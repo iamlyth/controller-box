@@ -677,6 +677,19 @@ if(CMOCKA_FOUND)
     set_tests_properties(test_installed_functional PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
 
+    # Task 3 — Overlay interaction acceptance with native DBus backend.
+    # Uses the real sd-bus backend against a private native-signature
+    # InputPlumber-compatible DBus server. No ip_dbus_mock. Exercises
+    # O01–O13 through cbx_overlay_service_step with real SDL events and
+    # real DBus InputEvent signals.
+    add_executable(test_overlay_native tests/test_overlay_native.c tests/native_ip_server.c)
+    target_compile_definitions(test_overlay_native PRIVATE
+        DBUS_SESSION_CONFIG="${DBUS_PREFIX}/share/dbus-1/session.conf")
+    target_link_libraries(test_overlay_native PRIVATE controllerbox PkgConfig::CMOCKA)
+    add_test(NAME test_overlay_native COMMAND test_overlay_native)
+    set_tests_properties(test_overlay_native PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+
     # Task 8 — Manager interaction tests: Controllers + Settings tabs
     # through production dispatch (SPEC §5.7).
     add_executable(test_manager_interaction_ctrl tests/test_manager_interaction_ctrl.c)
