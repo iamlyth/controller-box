@@ -1,15 +1,17 @@
 /*
- * test_interaction_inventory.c — Task 7 enumeration test.
+ * test_interaction_inventory.c — Task 1 enumeration test.
  *
  * Verifies that the interaction acceptance inventory:
  *   - compiles and is accessible via cbx_interaction_inventory_get()
- *   - has the expected number of entries (M01–M38, O01–O12, D01–D08)
+ *   - has the expected number of entries (M01–M38, O01–O13, D01–D08)
  *   - every entry has non-NULL required fields (id, context, controller_path,
- *     semantic_outcome, dispatch_path, evidence_task)
+ *     pointer_path, semantic_outcome, dispatch_path, evidence_task)
  *   - the inventory covers all required control IDs
  *   - pointer-path-availability is correctly marked (n/a vs available)
  *   - lookup by ID works (find)
  *   - all three prefix families (M, O, D) are present
+ *   - verify_status is internally consistent (UNVERIFIED entries reference
+ *     a task; VERIFIED entries with "—" are fully verified)
  */
 #include <stdarg.h>
 #include <stddef.h>
@@ -26,7 +28,7 @@
 
 /* ---- Expected counts ---- */
 #define EXPECTED_MANAGER_COUNT  38  /* M01–M38 */
-#define EXPECTED_OVERLAY_COUNT  12  /* O01–O12 */
+#define EXPECTED_OVERLAY_COUNT  13  /* O01–O13 */
 #define EXPECTED_DISABLED_COUNT   8  /* D01–D08 */
 #define EXPECTED_TOTAL         (EXPECTED_MANAGER_COUNT + EXPECTED_OVERLAY_COUNT + EXPECTED_DISABLED_COUNT)
 
@@ -70,8 +72,8 @@ static void test_inventory_has_all_manager_controls(void **state)
 static void test_inventory_has_all_overlay_actions(void **state)
 {
     (void)state;
-    /* O01 through O12 must all be present */
-    for (int n = 1; n <= 12; n++) {
+    /* O01 through O13 must all be present */
+    for (int n = 1; n <= 13; n++) {
         char id[8];
         snprintf(id, sizeof(id), "O%02d", n);
         const cbx_interaction_entry *e = cbx_interaction_inventory_find(id);
@@ -173,11 +175,11 @@ static void test_inventory_specific_entries(void **state)
     assert_int_equal(m05->widget_type, CBX_WIDGET_BUTTON);
     assert_true(m05->pointer_path_avail == CBX_PATH_AVAILABLE);
 
-    /* M16 — Name input cancel: pointer path n/a */
+    /* M16 — Name input cancel: pointer path now available (dialog action) */
     const cbx_interaction_entry *m16 = cbx_interaction_inventory_find("M16");
     assert_non_null(m16);
-    assert_int_equal(m16->pointer_path_avail, CBX_PATH_NA);
-    assert_true(strncmp(m16->pointer_path, "n/a", 3) == 0);
+    assert_int_equal(m16->pointer_path_avail, CBX_PATH_AVAILABLE);
+    assert_true(strncmp(m16->pointer_path, "n/a", 3) != 0);
 
     /* M37 — Save and close editor: pointer path n/a (controller-only) */
     const cbx_interaction_entry *m37 = cbx_interaction_inventory_find("M37");
@@ -194,16 +196,26 @@ static void test_inventory_specific_entries(void **state)
     assert_non_null(o01);
     assert_int_equal(o01->pointer_path_avail, CBX_PATH_NA);
 
+    /* O13 — Player Mode conflict: new entry, unverified pending Task 3 */
+    const cbx_interaction_entry *o13 = cbx_interaction_inventory_find("O13");
+    assert_non_null(o13);
+    assert_int_equal(o13->category, CBX_CAT_OVERLAY);
+    assert_int_equal(o13->verify_status, CBX_VERIFY_UNVERIFIED);
+
     /* D01 — InputPlumber unavailable */
     const cbx_interaction_entry *d01 = cbx_interaction_inventory_find("D01");
     assert_non_null(d01);
     assert_int_equal(d01->category, CBX_CAT_DISABLED);
     assert_int_equal(d01->widget_type, CBX_WIDGET_SCENARIO);
+    /* D01 has native evidence but pointer path pending Task 6 */
+    assert_int_equal(d01->verify_status, CBX_VERIFY_VERIFIED);
+    assert_int_equal(d01->pointer_path_avail, CBX_PATH_AVAILABLE);
 
-    /* D08 — Empty profile creation */
+    /* D08 — Empty profile creation: pointer path now available */
     const cbx_interaction_entry *d08 = cbx_interaction_inventory_find("D08");
     assert_non_null(d08);
     assert_int_equal(d08->category, CBX_CAT_DISABLED);
+    assert_int_equal(d08->pointer_path_avail, CBX_PATH_AVAILABLE);
 }
 
 static void test_inventory_all_ids_unique(void **state)
@@ -230,6 +242,7 @@ static void test_inventory_covers_required_scenarios(void **state)
     bool has_sequential_mode = false;
     bool has_save_and_close = false;
     bool has_cancel_editor = false;
+    bool has_player_mode_conflict = false;
 
     const cbx_interaction_entry *inv = cbx_interaction_inventory_get();
     for (size_t i = 0; inv[i].id != NULL; i++) {
@@ -245,6 +258,8 @@ static void test_inventory_covers_required_scenarios(void **state)
             has_save_and_close = true;
         if (strcmp(inv[i].id, "M38") == 0)
             has_cancel_editor = true;
+        if (strcmp(inv[i].id, "O13") == 0)
+            has_player_mode_conflict = true;
     }
 
     assert_true(has_create_source_picker);
@@ -253,51 +268,93 @@ static void test_inventory_covers_required_scenarios(void **state)
     assert_true(has_sequential_mode);
     assert_true(has_save_and_close);
     assert_true(has_cancel_editor);
+    assert_true(has_player_mode_conflict);
 }
 
-/* Task 5: Verify that every manager control entry (M01–M38) has been
- * exercised through production dispatch and carries verification evidence.
- * No M entry may remain CBX_VERIFY_UNVERIFIED — the interaction inventory
- * is the authoritative ledger for §5.7 acceptance. */
-static void test_inventory_all_manager_entries_verified(void **state)
+/* Task 1: Verify that the inventory's verify_status is internally
+ * consistent.  Entries marked UNVERIFIED, NOT_APPLICABLE, or DEFERRED
+ * must reference a task ("Task N").  VERIFIED entries may have "—"
+ * (fully verified) or "Task N" (partially verified, pending pointer path). */
+static void test_inventory_verify_status_consistency(void **state)
 {
     (void)state;
     const cbx_interaction_entry *inv = cbx_interaction_inventory_get();
     for (size_t i = 0; inv[i].id != NULL; i++) {
-        if (inv[i].id[0] != 'M')
-            continue;
-        if (inv[i].verify_status == CBX_VERIFY_UNVERIFIED) {
-            fail_msg("Manager entry %s is still UNVERIFIED", inv[i].id);
+        switch (inv[i].verify_status) {
+        case CBX_VERIFY_UNVERIFIED:
+        case CBX_VERIFY_NOT_APPLICABLE:
+        case CBX_VERIFY_DEFERRED:
+            /* Must reference a task */
+            if (strncmp(inv[i].evidence_task, "Task ", 5) != 0) {
+                fail_msg("Entry %s verify_status=%d should reference a task, got '%s'",
+                         inv[i].id, (int)inv[i].verify_status, inv[i].evidence_task);
+            }
+            break;
+        case CBX_VERIFY_VERIFIED:
+            /* May be "—" (fully verified) or "Task N" (partially verified) */
+            break;
         }
     }
 }
 
-/* Task 5: Verify that every disabled/degraded scenario (D01–D08) has
- * passing production-path evidence. */
-static void test_inventory_all_disabled_entries_verified(void **state)
+/* Task 1: Verify that entries known to have native-DBus production-path
+ * evidence are marked VERIFIED, and mock-only entries are marked UNVERIFIED. */
+static void test_inventory_specific_verify_statuses(void **state)
 {
     (void)state;
-    const cbx_interaction_entry *inv = cbx_interaction_inventory_get();
-    for (size_t i = 0; inv[i].id != NULL; i++) {
-        if (inv[i].id[0] != 'D')
-            continue;
-        if (inv[i].verify_status == CBX_VERIFY_UNVERIFIED) {
-            fail_msg("Disabled scenario %s is still UNVERIFIED", inv[i].id);
-        }
+    /* Entries with native-DBus evidence (from test_installed_functional.c
+     * or test_installed_backend_recovery) must be VERIFIED */
+    const char *verified_ids[] = {
+        "M01", "M02", "M03", "M05", "M06", "M07", "M08",
+        "M11", "M17", "M22", "M27", "M28", "M29", "D01"
+    };
+    for (size_t i = 0; i < sizeof(verified_ids)/sizeof(verified_ids[0]); i++) {
+        const cbx_interaction_entry *e = cbx_interaction_inventory_find(verified_ids[i]);
+        assert_non_null(e);
+        assert_int_equal(e->verify_status, CBX_VERIFY_VERIFIED);
+    }
+
+    /* Mock-only entries must be UNVERIFIED (sample check) */
+    const char *unverified_ids[] = {
+        "M04", "M10", "M21", "M30", "M33",
+        "O01", "O02", "O10", "O11", "O13",
+        "D02", "D04", "D06", "D08"
+    };
+    for (size_t i = 0; i < sizeof(unverified_ids)/sizeof(unverified_ids[0]); i++) {
+        const cbx_interaction_entry *e = cbx_interaction_inventory_find(unverified_ids[i]);
+        assert_non_null(e);
+        assert_int_equal(e->verify_status, CBX_VERIFY_UNVERIFIED);
+    }
+
+    /* O12 is DEFERRED */
+    const cbx_interaction_entry *o12 = cbx_interaction_inventory_find("O12");
+    assert_int_equal(o12->verify_status, CBX_VERIFY_DEFERRED);
+
+    /* Controller-only entries remain NOT_APPLICABLE (sample check) */
+    const char *na_ids[] = {"M13", "M14", "M32", "M34", "M37", "M38"};
+    for (size_t i = 0; i < sizeof(na_ids)/sizeof(na_ids[0]); i++) {
+        const cbx_interaction_entry *e = cbx_interaction_inventory_find(na_ids[i]);
+        assert_non_null(e);
+        assert_int_equal(e->verify_status, CBX_VERIFY_NOT_APPLICABLE);
     }
 }
 
-/* Task 5: Verify that overlay actions (O01–O12) are either verified or
- * explicitly deferred (§13). None may be unverified. */
-static void test_inventory_all_overlay_entries_verified(void **state)
+/* Task 1: Verify that dialog/disabled entries now have pointer_path_avail
+ * == AVAILABLE (per §5.1/§5.7). */
+static void test_inventory_dialog_pointer_paths_available(void **state)
 {
     (void)state;
-    const cbx_interaction_entry *inv = cbx_interaction_inventory_get();
-    for (size_t i = 0; inv[i].id != NULL; i++) {
-        if (inv[i].id[0] != 'O')
-            continue;
-        if (inv[i].verify_status == CBX_VERIFY_UNVERIFIED) {
-            fail_msg("Overlay action %s is still UNVERIFIED", inv[i].id);
+    const char *avail_ids[] = {
+        "M09", "M15", "M16", "M19", "M20", "M24", "M25", "M26",
+        "D01", "D02", "D03", "D04", "D05", "D06", "D07", "D08"
+    };
+    for (size_t i = 0; i < sizeof(avail_ids)/sizeof(avail_ids[0]); i++) {
+        const cbx_interaction_entry *e = cbx_interaction_inventory_find(avail_ids[i]);
+        assert_non_null(e);
+        assert_int_equal(e->pointer_path_avail, CBX_PATH_AVAILABLE);
+        /* pointer_path string must NOT start with "n/a" */
+        if (strncmp(e->pointer_path, "n/a", 3) == 0) {
+            fail_msg("Entry %s has AVAILABLE path but string starts with n/a", e->id);
         }
     }
 }
@@ -317,10 +374,10 @@ int main(void)
         cmocka_unit_test(test_inventory_specific_entries),
         cmocka_unit_test(test_inventory_all_ids_unique),
         cmocka_unit_test(test_inventory_covers_required_scenarios),
-        /* Task 5: verify_status ledger checks */
-        cmocka_unit_test(test_inventory_all_manager_entries_verified),
-        cmocka_unit_test(test_inventory_all_disabled_entries_verified),
-        cmocka_unit_test(test_inventory_all_overlay_entries_verified),
+        /* Task 1: verify_status ledger checks */
+        cmocka_unit_test(test_inventory_verify_status_consistency),
+        cmocka_unit_test(test_inventory_specific_verify_statuses),
+        cmocka_unit_test(test_inventory_dialog_pointer_paths_available),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

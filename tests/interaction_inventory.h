@@ -1,9 +1,9 @@
 /*
  * interaction_inventory.h — Machine-readable interaction acceptance inventory
- * (Task 7, SPEC §5.7).
+ * (Task 1, SPEC §5.7).
  *
  * Enumerates every interactive manager control (M01–M38), overlay action
- * (O01–O12), and disabled/degraded/operation-failure scenario (D01–D08)
+ * (O01–O13), and disabled/degraded/operation-failure scenario (D01–D08)
  * with both input paths, expected semantic outcome, and verification status.
  *
  * Tests can iterate the array to drive automated traversal through normal
@@ -21,7 +21,7 @@ typedef enum {
     CBX_CAT_MANAGER_PROF,        /* M10–M20  */
     CBX_CAT_MANAGER_SETTINGS,    /* M21–M27  */
     CBX_CAT_MANAGER_EDITOR,      /* M28–M38  */
-    CBX_CAT_OVERLAY,              /* O01–O12  */
+    CBX_CAT_OVERLAY,              /* O01–O13  */
     CBX_CAT_DISABLED              /* D01–D08  */
 } cbx_inv_category;
 
