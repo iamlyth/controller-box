@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -125,6 +126,25 @@ cbx_service_unit_path(char *buf, size_t buflen)
 /*  Unit file content                                                  */
 /* ------------------------------------------------------------------ */
 
+/* Validate that a Flatpak app ID contains only safe characters.
+ * Flatpak app IDs are reverse-DNS names (e.g. org.shadowblip.ControllerBox)
+ * and must match [a-zA-Z0-9._-]+.  Rejecting unsafe characters prevents
+ * injection of shell metacharacters into the systemd unit ExecStart line. */
+static bool
+flatpak_id_is_valid(const char *id)
+{
+    if (!id || !id[0])
+        return false;
+    for (const char *p = id; *p; p++) {
+        if (!((*p >= 'a' && *p <= 'z') ||
+              (*p >= 'A' && *p <= 'Z') ||
+              (*p >= '0' && *p <= '9') ||
+              *p == '.' || *p == '_' || *p == '-'))
+            return false;
+    }
+    return true;
+}
+
 int
 cbx_service_unit_content(char *buf, size_t buflen)
 {
@@ -136,13 +156,14 @@ cbx_service_unit_content(char *buf, size_t buflen)
      * (set by the Flatpak runtime to the app ID).  When running inside
      * Flatpak, ExecStart uses `flatpak run <app-id>` so the service
      * survives reboots without the Flatpak app being manually launched.
+     * The app ID is validated to prevent shell metacharacter injection.
      */
     const char *flatpak_id = getenv("FLATPAK_ID");
 
     const char *exec_start;
     char exec_buf[512];
 
-    if (flatpak_id && flatpak_id[0] != '\0') {
+    if (flatpak_id_is_valid(flatpak_id)) {
         snprintf(exec_buf, sizeof(exec_buf),
                  "flatpak run %s --overlay-service", flatpak_id);
         exec_start = exec_buf;
@@ -365,7 +386,7 @@ systemctl_prefix(void)
         return mock_systemctl;
 
     /* Detect Flatpak — use flatpak-spawn --host for systemctl. */
-    if (getenv("FLATPAK_ID"))
+    if (flatpak_id_is_valid(getenv("FLATPAK_ID")))
         return "flatpak-spawn --host systemctl --user";
 
     return "systemctl --user";
