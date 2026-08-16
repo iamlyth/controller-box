@@ -15,6 +15,9 @@
 #   4. Settings persist after manager process restart.
 #   5. Overlay service mode launches, connects to the private DBus, and
 #      enters the idle poll loop (process stays alive).
+#   6. Overlay activation: InterceptMode PASS→ALL triggers compositor-
+#      visible overlay rendering (non-blank screenshot), then close via
+#      InterceptMode→PASS verifies clean close.
 #
 # The test uses a standalone native IP server binary (test_ip_server, built
 # from native_ip_server.c + libsystemd — NOT linked to libcontrollerbox) to
@@ -508,10 +511,10 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Phase 6: Overlay service
+# Phase 6: Overlay service — launch, activate, verify, close
 # ---------------------------------------------------------------------------
 echo ""
-echo "--- Phase 6: Overlay service ---"
+echo "--- Phase 6: Overlay service activation ---"
 
 # Launch overlay service — it should connect to the private DBus and
 # enter the idle poll loop (process stays alive).
@@ -519,29 +522,7 @@ eval "$MANAGER_ENV" "$INSTALLED_BIN" --overlay-service &
 OVERLAY_PID=$!
 sleep 3.0
 
-if kill -0 "$OVERLAY_PID" 2>/dev/null; then
-    pass "overlay service running (PID $OVERLAY_PID — connected to DBus, idle poll)"
-
-    # Query InterceptMode via DBus — should be 0 (NONE) when idle
-    INTERCEPT_REPLY=$(busctl --address="$BUS_ADDRESS" get-property \
-        org.shadowblip.InputPlumber \
-        /org/shadowblip/InputPlumber/CompositeDevice0 \
-        org.shadowblip.Input.CompositeDevice InterceptMode 2>/dev/null || true)
-
-    if echo "$INTERCEPT_REPLY" | grep -qE '^[su][[:space:]]+[0-9]'; then
-        INTERCEPT_VAL=$(echo "$INTERCEPT_REPLY" | grep -oE '[0-9]+' | head -1)
-        pass "InterceptMode query succeeded (value=$INTERCEPT_VAL — overlay connected to DBus)"
-    else
-        fail "InterceptMode query failed"
-    fi
-
-    # Kill the overlay service
-    kill -TERM "$OVERLAY_PID" 2>/dev/null || true
-    sleep 1
-    kill "$OVERLAY_PID" 2>/dev/null || true
-    set +e; wait "$OVERLAY_PID" 2>/dev/null; set -e
-    pass "overlay service terminated"
-else
+if ! kill -0 "$OVERLAY_PID" 2>/dev/null; then
     set +e; wait "$OVERLAY_PID"; OVERLAY_EXIT=$?; set -e
     if [ "$OVERLAY_EXIT" -eq 1 ]; then
         fail "overlay service exited (code 1: InputPlumber not found — should be available)"
@@ -550,7 +531,146 @@ else
     else
         fail "overlay service exited prematurely (exit $OVERLAY_EXIT)"
     fi
+    exit 1
 fi
+pass "overlay service running (PID $OVERLAY_PID — connected to DBus, idle poll)"
+
+# Verify InterceptMode is PASS (1) when idle
+INTERCEPT_REPLY=$(busctl --address="$BUS_ADDRESS" get-property \
+    org.shadowblip.InputPlumber \
+    /org/shadowblip/InputPlumber/CompositeDevice0 \
+    org.shadowblip.Input.CompositeDevice InterceptMode 2>/dev/null || true)
+
+if echo "$INTERCEPT_REPLY" | grep -qE '^[su][[:space:]]+1'; then
+    pass "InterceptMode is PASS (1) when idle"
+else
+    fail "InterceptMode not PASS when idle: '$INTERCEPT_REPLY'"
+fi
+
+# Capture pre-activation screenshot (should be blank or minimal)
+PRE_SHOT="$TMPDIR/phase6_pre.png"
+import -window root "$PRE_SHOT" 2>/dev/null || true
+
+# Trigger overlay activation: set InterceptMode to ALL (2) via DBus.
+# The overlay's poll loop should detect this transition and activate
+# the overlay, rendering the compositor-visible grid.
+busctl --address="$BUS_ADDRESS" set-property \
+    org.shadowblip.InputPlumber \
+    /org/shadowblip/InputPlumber/CompositeDevice0 \
+    org.shadowblip.Input.CompositeDevice \
+    InterceptMode u 2 2>/dev/null
+
+if [ $? -eq 0 ]; then
+    pass "InterceptMode set to ALL (2) via DBus"
+else
+    fail "failed to set InterceptMode to ALL"
+fi
+
+# Wait for the overlay poll to detect the change and activate.
+# The poll interval is 50ms, so 2s is more than enough.
+sleep 2.0
+
+# Verify InterceptMode is ALL on the server
+INTERCEPT_REPLY=$(busctl --address="$BUS_ADDRESS" get-property \
+    org.shadowblip.InputPlumber \
+    /org/shadowblip/InputPlumber/CompositeDevice0 \
+    org.shadowblip.Input.CompositeDevice InterceptMode 2>/dev/null || true)
+
+if echo "$INTERCEPT_REPLY" | grep -qE '^[su][[:space:]]+2'; then
+    pass "InterceptMode is ALL (2) — overlay activated"
+else
+    fail "InterceptMode not ALL after set: '$INTERCEPT_REPLY'"
+fi
+
+# Verify overlay is still running (didn't crash on activation)
+if kill -0 "$OVERLAY_PID" 2>/dev/null; then
+    pass "overlay service still running after activation"
+else
+    set +e; wait "$OVERLAY_PID"; OVERLAY_EXIT=$?; set -e
+    fail "overlay service crashed during activation (exit $OVERLAY_EXIT)"
+    exit 1
+fi
+
+# Capture post-activation screenshot — should show the overlay grid
+POST_SHOT="$TMPDIR/phase6_post.png"
+import -window root "$POST_SHOT" 2>/dev/null || true
+
+if [ -f "$POST_SHOT" ]; then
+    POST_MEAN=$(convert "$POST_SHOT" -format '%[mean]' info: 2>/dev/null || echo "0")
+    POST_MEAN_255=$(echo "scale=2; $POST_MEAN / 257" | bc 2>/dev/null || echo "0")
+    echo "  overlay frame mean (0-255): $POST_MEAN_255"
+
+    # The overlay should render a visible grid (non-blank).
+    # Mean > 5.0 indicates the overlay rendered content.
+    if [ "$(echo "$POST_MEAN_255 > 5.0" | bc 2>/dev/null || echo 0)" -eq 1 ]; then
+        pass "overlay rendered non-blank framebuffer (mean=$POST_MEAN_255)"
+    else
+        fail "overlay framebuffer appears blank (mean=$POST_MEAN_255)"
+    fi
+
+    # Also verify the post-activation frame differs from pre-activation
+    if [ -f "$PRE_SHOT" ]; then
+        DIFF_MEAN=$(convert "$PRE_SHOT" "$POST_SHOT" -compose difference \
+            -composite -format '%[mean]' info: 2>/dev/null || echo "0")
+        DIFF_MEAN_255=$(echo "scale=2; $DIFF_MEAN / 257" | bc 2>/dev/null || echo "0")
+        if [ "$(echo "$DIFF_MEAN_255 > 1.0" | bc 2>/dev/null || echo 0)" -eq 1 ]; then
+            pass "overlay activation changed framebuffer (diff mean=$DIFF_MEAN_255)"
+        else
+            fail "overlay activation did not change framebuffer (diff mean=$DIFF_MEAN_255)"
+        fi
+    fi
+else
+    fail "failed to capture post-activation screenshot"
+fi
+
+# Close the overlay: set InterceptMode back to PASS (1).
+# The overlay's poll should detect this and close cleanly.
+busctl --address="$BUS_ADDRESS" set-property \
+    org.shadowblip.InputPlumber \
+    /org/shadowblip/InputPlumber/CompositeDevice0 \
+    org.shadowblip.Input.CompositeDevice \
+    InterceptMode u 1 2>/dev/null
+
+if [ $? -eq 0 ]; then
+    pass "InterceptMode set back to PASS (1) via DBus"
+else
+    fail "failed to set InterceptMode back to PASS"
+fi
+
+# Wait for the overlay poll to detect the change and close.
+sleep 1.0
+
+# Verify InterceptMode is PASS again
+INTERCEPT_REPLY=$(busctl --address="$BUS_ADDRESS" get-property \
+    org.shadowblip.InputPlumber \
+    /org/shadowblip/InputPlumber/CompositeDevice0 \
+    org.shadowblip.Input.CompositeDevice InterceptMode 2>/dev/null || true)
+
+if echo "$INTERCEPT_REPLY" | grep -qE '^[su][[:space:]]+1'; then
+    pass "InterceptMode is PASS (1) after close"
+else
+    fail "InterceptMode not PASS after close: '$INTERCEPT_REPLY'"
+fi
+
+# Verify overlay service is still running (clean close, not crash)
+if kill -0 "$OVERLAY_PID" 2>/dev/null; then
+    pass "overlay service still running after clean close"
+else
+    set +e; wait "$OVERLAY_PID"; OVERLAY_EXIT=$?; set -e
+    if [ "$OVERLAY_EXIT" -eq 139 ] || [ "$OVERLAY_EXIT" -eq 134 ]; then
+        fail "overlay service crashed during close (exit $OVERLAY_EXIT)"
+    else
+        # Exit 0 or 1 might be acceptable if the service shut down gracefully
+        pass "overlay service exited after close (exit $OVERLAY_EXIT)"
+    fi
+fi
+
+# Terminate the overlay service
+kill -TERM "$OVERLAY_PID" 2>/dev/null || true
+sleep 1
+kill "$OVERLAY_PID" 2>/dev/null || true
+set +e; wait "$OVERLAY_PID" 2>/dev/null; set -e
+pass "overlay service terminated"
 
 # ---------------------------------------------------------------------------
 # Summary

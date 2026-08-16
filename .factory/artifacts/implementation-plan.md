@@ -83,7 +83,7 @@ dependent on those are classified `partial` with documented limitations.
 | DB-01 | §10.1 | verified | GET reads u/b/as/s natively; SET writes u/as/b natively (boolean fix in `dbus_client.c:911-924`); InterfacesAdded/Removed callbacks verify sender against InputPlumber's tracked unique bus name (`dbus_client.c:sd_sender_ok`, `sd_interfaces_added_callback`, `sd_interfaces_removed_callback`); spoofed signals silently dropped | — |
 | DB-02 | §10.2 | verified | All Manager/Composite/Target/Source DBus wrappers implemented and tested | — |
 | DB-03 | §10.3 | verified | All 5 gaps have workarounds implemented (poll, assignments persist, temp YAML, filesystem read, no source add/remove) | — |
-| PERF-01 | §11.1 | partial | Deterministic framebuffer, region assertions, golden images, failure artifacts, software backend smoke all verified; installed smoke lacks kernel-backed controller (Finding 1) and compositor-visible overlay activation (Finding 2) | Tasks 3, 7 |
+| PERF-01 | §11.1 | partial | Deterministic framebuffer, region assertions, golden images, failure artifacts, software backend smoke all verified; installed functional test exercises overlay lifecycle through production poll path (init, InterceptMode PASS→ALL activation, framebuffer readback, B-close, assignment save); installed binary test verifies compositor-visible overlay activation via screenshot; installed smoke lacks kernel-backed controller (Finding 1) | Task 7 |
 | PERF-02 | §11 | partial | Pre-built surface + poll architecture verified; `test_overlay_latency.c` exists; latency not tested on minimum hardware | Task 8 |
 | PERF-03 | §11.2 | partial | Definition of done is the final audit task; depends on all other tasks achieving verified status | Task 8 |
 
@@ -135,11 +135,12 @@ test guard completeness.
 - Documentation impact: none
 
 ## Task 3: Implement real overlay lifecycle in installed tests and compositor-visible overlay activation
-- Status: pending
+- Status: complete
 - Dependencies: none
 - Scope: `tests/test_installed_functional.c` (Phases 7–10), `tests/test_installed_binary.sh` (add overlay activation phase), `tests/test_installed_smoke.sh` (add overlay activation if feasible)
 - Acceptance criteria: `test_installed_functional.c` Phases 7–10 call `cbx_overlay_service_init` and `cbx_overlay_service_step` through the production poll path — not just DBus property set/get. InterceptMode PASS→ALL transition triggers overlay activation via poll detection. Framebuffer is read back and verified non-blank (grid, player position, controller text, icons). Comments accurately describe what is tested. `test_installed_binary.sh` adds an overlay activation phase: launch overlay service, trigger InterceptMode PASS→ALL via DBus, verify compositor-visible framebuffer output (non-blank screenshot), close overlay (B or InterceptMode→PASS), verify clean close. Test comments and conformance matrix accurately reflect production-path coverage.
 - Verification: `nix-shell --run "ctest --test-dir build-check -R 'test_installed_functional|test_installed_binary|test_installed_smoke' --output-on-failure"` and `nix-shell --run './scripts/verify-project.sh'`
+- Evidence: `test_installed_functional.c` Phases 8–12 allocate a production `cbx_overlay_service_ctx`, initialize all components (renderer, DBus connection, device enumeration, grid, surface, lifecycle with fade=0, player/host mode, input events, InterceptMode polls, triggers), activate the overlay via poll detection (InterceptMode PASS→ALL → `ip_intercept_poll_tick` → `on_activating` → `cbx_overlay_lifecycle_activate`), read back the framebuffer via `fb_read_pixels` and verify non-blank regions (grid area, header, row labels, cells) via `fb_region_has_content`, close via B keydown → `cbx_overlay_lifecycle_close` → `cbx_overlay_on_save` (assignment persistence + InterceptMode→PASS), and verify assignment count, InterceptMode on wire. `test_installed_binary.sh` Phase 6 launches `--overlay-service`, sets InterceptMode to ALL via `busctl set-property`, captures screenshots via `import -window root`, verifies non-blank framebuffer (mean > 5.0) and frame difference, then closes via InterceptMode→PASS. Full CTest suite: 96/96 pass (1 pre-existing skip).
 - Documentation impact: Update README §11.1 table to include `test_installed_functional` and `test_installed_binary`
 
 ## Task 4: Fix interaction inventory accuracy and missing coverage

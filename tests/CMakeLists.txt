@@ -683,8 +683,10 @@ if(CMOCKA_FOUND)
     # library and uses the real sd-bus backend.  No SKIP_RETURN_CODE.
     add_executable(test_installed_functional tests/test_installed_functional.c tests/native_ip_server.c)
     target_compile_definitions(test_installed_functional PRIVATE
-        DBUS_SESSION_CONFIG="${DBUS_PREFIX}/share/dbus-1/session.conf")
-    target_link_libraries(test_installed_functional PRIVATE controllerbox PkgConfig::CMOCKA)
+        DBUS_SESSION_CONFIG="${DBUS_PREFIX}/share/dbus-1/session.conf"
+        CBX_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+        CBX_FONT_PATH="${CBX_FONT_PATH}")
+    target_link_libraries(test_installed_functional PRIVATE controllerbox cbx_test_support PkgConfig::CMOCKA)
     add_test(NAME test_installed_functional COMMAND test_installed_functional)
     set_tests_properties(test_installed_functional PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
