@@ -147,7 +147,7 @@ satisfy `verified`.
 | DOD-04 | 11.2.4 | verified | Golden images + visual tests cover normal, degraded, error, recovery states; `test_installed_functional.c` Phase 13 backend restart | — |
 | DOD-05 | 11.2.5 | partial | Sanitizer gate (ASan+UBSan) verified: `scripts/verify-sanitizers.sh` builds with `-fsanitize=address,undefined` and runs full CTest suite — 98/98 pass, zero ASan/UBSan errors. Fixed production bug: `cbx_trigger_parse` stack-use-after-scope (`trigger.c`). Fixed production leak: `cbx_manager_shutdown` not freeing connection strings when DBus not owned. Fixed `cbx_icon_cache_init` leaking rasterizer on re-init. GPU smoke test (`test_backend_smoke`) still requires physical GPU (Task 6). | Task 6 |
 | DOD-06 | 11.2.6 | verified | `.factory/bugs/open.md` contains empty JSON array `[]` — no open bugs | — |
-| DOD-07 | 11.2.7 | partial | No independent review artifact exists in repository. | Task 14 |
+| DOD-07 | 11.2.7 | verified | Independent review artifact committed at `docs/REVIEW.md` (2026-08-16). Three parallel read-only reviews (correctness/test-quality, security, documentation) via subagents. 17 findings (0 BLOCKING, 6 MEDIUM, 7 LOW, 2 INFO). All prior security fixes confirmed. Verdict: PASS. Final gate `--implementation` EXIT 0. | — |
 | DOD-08 | 11.2.8 | partial | Docs exist (`README.md`, `docs/OPERATIONS.md`, `docs/PACKAGING.md`, etc.); `test_flatpak_manifest.py` checks README. Full documentation audit pending. | Task 9 |
 | DOD-09 | 11.2.9 | partial | Git tree has scratchpad deletion pending; task ledger incomplete until all tasks complete. | Task 9 |
 
@@ -415,7 +415,7 @@ this gap.
   PACKAGING.md includes libcontrollerbox.a, libnanosvg.a, fonts/, profiles/.
 
 ## Task 14: Commit independent review artifact (DOD-07 remediation)
-- Status: pending
+- Status: complete
 - Dependencies: (none — software-only, no hardware required)
 - Scope: §11.2.7 requires independent read-only correctness, test-quality,
   security, and documentation reviews with no unresolved blocking issue.
