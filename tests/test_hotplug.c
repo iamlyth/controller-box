@@ -650,6 +650,56 @@ test_inject_removed_source(void **state)
     assert_int_equal(f->model.source_count, 0);
 }
 
+/* Inject InterfacesAdded with wrong sender — signal is silently dropped. */
+static void
+test_inject_added_wrong_sender(void **state)
+{
+    hotplug_fixture *f = *state;
+    ip_hotplug_subscribe(&f->hp);
+
+    ip_interfaces_changed_payload p = {
+        .sender     = ":1.999",
+        .path       = IP_ROOT "/CompositeDevice7",
+        .interfaces = IP_IFACE_COMPOSITE,
+    };
+    int rc = f->backend->inject_signal(f->mock.bus,
+        IP_IFACE_OBJECT_MANAGER, "InterfacesAdded", &p);
+    assert_int_equal(rc, 0);
+
+    /* Model must be unchanged — spoofed signal was dropped. */
+    assert_int_equal(f->model.composite_count, 0);
+}
+
+/* Inject InterfacesRemoved with wrong sender — signal is silently dropped. */
+static void
+test_inject_removed_wrong_sender(void **state)
+{
+    hotplug_fixture *f = *state;
+    ip_hotplug_subscribe(&f->hp);
+
+    /* Add a composite with the correct sender first. */
+    ip_interfaces_changed_payload add_p = {
+        .sender     = EXP_SENDER,
+        .path       = IP_ROOT "/CompositeDevice3",
+        .interfaces = IP_IFACE_COMPOSITE,
+    };
+    f->backend->inject_signal(f->mock.bus,
+        IP_IFACE_OBJECT_MANAGER, "InterfacesAdded", &add_p);
+    assert_int_equal(f->model.composite_count, 1);
+
+    /* Attempt to remove with a spoofed sender. */
+    ip_interfaces_changed_payload rem_p = {
+        .sender     = ":1.999",
+        .path       = IP_ROOT "/CompositeDevice3",
+        .interfaces = IP_IFACE_COMPOSITE,
+    };
+    f->backend->inject_signal(f->mock.bus,
+        IP_IFACE_OBJECT_MANAGER, "InterfacesRemoved", &rem_p);
+
+    /* Composite must still be present — spoofed removal was dropped. */
+    assert_int_equal(f->model.composite_count, 1);
+}
+
 /* Add then remove then add again (resurrection). */
 static void
 test_add_remove_add(void **state)
@@ -745,6 +795,10 @@ main(void)
         cmocka_unit_test_setup_teardown(test_inject_added_composite,
             setup_hotplug, teardown_hotplug),
         cmocka_unit_test_setup_teardown(test_inject_removed_source,
+            setup_hotplug, teardown_hotplug),
+        cmocka_unit_test_setup_teardown(test_inject_added_wrong_sender,
+            setup_hotplug, teardown_hotplug),
+        cmocka_unit_test_setup_teardown(test_inject_removed_wrong_sender,
             setup_hotplug, teardown_hotplug),
         cmocka_unit_test_setup_teardown(test_add_remove_add,
             setup_hotplug, teardown_hotplug),

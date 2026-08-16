@@ -80,7 +80,7 @@ dependent on those are classified `partial` with documented limitations.
 | PKG-02 | §9.2 | verified | CMake install rules; `test_packaging.sh`; `verify-project.sh` runs packaging test | — |
 | PKG-03 | §9.3 | verified | CMakeLists.txt installs binary, service, desktop, icons, YAML, profiles | — |
 | PKG-04 | §9.4 | verified | `ip_connection.c` runtime bus-name check; `service_install.c` no Requires=inputplumber.service; `test_service_install.c` 29 tests | — |
-| DB-01 | §10.1 | partial | GET reads u/b/as/s natively; SET writes u/as/b natively (boolean fix in `dbus_client.c:911-924`); InterfacesAdded/Removed callbacks lack sender verification (`dbus_client.c:82,178`) | Task 2 |
+| DB-01 | §10.1 | verified | GET reads u/b/as/s natively; SET writes u/as/b natively (boolean fix in `dbus_client.c:911-924`); InterfacesAdded/Removed callbacks verify sender against InputPlumber's tracked unique bus name (`dbus_client.c:sd_sender_ok`, `sd_interfaces_added_callback`, `sd_interfaces_removed_callback`); spoofed signals silently dropped | — |
 | DB-02 | §10.2 | verified | All Manager/Composite/Target/Source DBus wrappers implemented and tested | — |
 | DB-03 | §10.3 | verified | All 5 gaps have workarounds implemented (poll, assignments persist, temp YAML, filesystem read, no source add/remove) | — |
 | PERF-01 | §11.1 | partial | Deterministic framebuffer, region assertions, golden images, failure artifacts, software backend smoke all verified; installed smoke lacks kernel-backed controller (Finding 1) and compositor-visible overlay activation (Finding 2) | Tasks 3, 7 |
@@ -128,9 +128,8 @@ test guard completeness.
 - Documentation impact: none
 
 ## Task 2: Add sender verification for DBus InterfacesAdded/Removed signals
-- Status: pending
+- Status: complete
 - Dependencies: none
-- Scope: `src/dbus/dbus_client.c` (`sd_interfaces_added_callback`, `sd_interfaces_removed_callback`), `tests/test_hotplug.c` (add spoofed-sender rejection test)
 - Acceptance criteria: Both callbacks verify signal sender matches InputPlumber's tracked unique bus name (from `ip_connection_get_unique_name`) before processing, consistent with `ip_properties.c:sender_ok()`. Spoofed signals from a non-matching sender are silently dropped. Existing hotplug tests still pass. New test injects a signal with wrong sender and asserts it is ignored.
 - Verification: `nix-shell --run "ctest --test-dir build-check -R 'test_hotplug' --output-on-failure"`
 - Documentation impact: none

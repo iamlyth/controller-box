@@ -33,6 +33,7 @@ typedef struct {
     sd_bus_slot *slots[MAX_SD_SLOTS];
     void        *slot_data[MAX_SD_SLOTS];   /* heap-allocated callback data */
     int          slot_count;
+    char        *expected_sender;  /* InputPlumber's unique bus name for sender verification */
 } sd_bus_wrapper;
 
 /* Forward declarations — defined with the property setter below. */
@@ -43,11 +44,27 @@ static bool sd_is_bool_property(const char *prop);
 
 /* Callback data for signal subscriptions. */
 typedef struct {
-    ip_signal_cb  cb;
-    void         *userdata;
+    ip_signal_cb     cb;
+    void            *userdata;
+    sd_bus_wrapper   *wrapper;  /* bus handle for sender verification */
 } sd_signal_data;
 
 /* --- sd-bus signal callback for NameOwnerChanged ------------------------- */
+
+/* Verify that the signal sender matches InputPlumber's tracked unique
+ * bus name.  Returns true if the sender is acceptable, false if the
+ * signal should be silently dropped.  When expected_sender is NULL
+ * (InputPlumber not yet discovered), signals are allowed through — the
+ * downstream handler (ip_hotplug sender_ok) will reject them. */
+static bool
+sd_sender_ok(const sd_signal_data *data, const char *sender)
+{
+    if (!data || !data->wrapper || !data->wrapper->expected_sender)
+        return true;  /* no expected sender tracked — allow (downstream verifies) */
+    if (!sender)
+        return false;
+    return strcmp(sender, data->wrapper->expected_sender) == 0;
+}
 
 static int
 sd_noc_callback(sd_bus_message *msg, void *userdata, sd_bus_error *ret_error)
@@ -61,6 +78,14 @@ sd_noc_callback(sd_bus_message *msg, void *userdata, sd_bus_error *ret_error)
     int r = sd_bus_message_read(msg, "sss", &name, &old_owner, &new_owner);
     if (r < 0)
         return 0;  /* ignore parse errors — don't kill the bus */
+
+    /* Update the wrapper's expected sender when InputPlumber (re-)acquires
+     * its bus name, so that InterfacesAdded/Removed callbacks can verify
+     * signal senders against the current unique name. */
+    if (data->wrapper && new_owner && new_owner[0] != '\0') {
+        free(data->wrapper->expected_sender);
+        data->wrapper->expected_sender = strdup(new_owner);
+    }
 
     ip_owner_changed_payload payload = {
         .name      = name,
@@ -87,6 +112,12 @@ sd_interfaces_added_callback(sd_bus_message *msg, void *userdata,
         return 0;
 
     const char *sender = sd_bus_message_get_sender(msg);
+
+    /* Sender verification: reject spoofed signals from non-InputPlumber
+     * senders (defense-in-depth, consistent with ip_properties.c:sender_ok). */
+    if (!sd_sender_ok(data, sender))
+        return 0;
+
     const char *path   = NULL;
 
     int r = sd_bus_message_read(msg, "o", &path);
@@ -173,6 +204,12 @@ sd_interfaces_removed_callback(sd_bus_message *msg, void *userdata,
         return 0;
 
     const char *sender = sd_bus_message_get_sender(msg);
+
+    /* Sender verification: reject spoofed signals from non-InputPlumber
+     * senders (defense-in-depth, consistent with ip_properties.c:sender_ok). */
+    if (!sd_sender_ok(data, sender))
+        return 0;
+
     const char *path    = NULL;
 
     int r = sd_bus_message_read(msg, "o", &path);
@@ -436,6 +473,7 @@ sd_disconnect(ip_bus_handle bus)
         sd_bus_close(w->bus);
         w->bus = sd_bus_unref(w->bus);
     }
+    free(w->expected_sender);
     free(w);
 }
 
@@ -479,6 +517,11 @@ sd_get_unique_name(ip_bus_handle bus, const char *well_known,
     }
 
     *out_unique = strdup(unique);
+
+    /* Store the unique name for sender verification in signal callbacks. */
+    free(w->expected_sender);
+    w->expected_sender = strdup(unique);
+
     sd_bus_message_unref(reply);
     sd_bus_error_free(&error);
 
@@ -607,6 +650,7 @@ sd_subscribe_signal(ip_bus_handle bus, const char *iface,
         return -ENOMEM;
     data->cb       = cb;
     data->userdata = userdata;
+    data->wrapper  = w;
 
     sd_bus_slot *slot = NULL;
     int r;
