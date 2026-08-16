@@ -636,6 +636,7 @@ conn_step_teardown(void **state)
             cbx_renderer_shutdown(&f->svc->rend);
             free(f->svc);
         }
+        ip_dbus_mock_reset(&f->mock);
         free(f);
     }
     SDL_Event ev;
@@ -751,6 +752,7 @@ reconcile_teardown(void **state)
             cbx_renderer_shutdown(&f->svc->rend);
             free(f->svc);
         }
+        ip_dbus_mock_reset(&f->mock);
         free(f);
     }
     SDL_Event ev;

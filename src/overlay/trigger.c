@@ -62,9 +62,11 @@ cbx_trigger_parse(const char *trigger,
         const char *plus = strchr(p, '+');
         size_t tok_len;
         const char *tok_start;
+        /* tmp must outlive the if-block: tok_start may point into it
+         * after trim_token returns, and is used in the memcpy below. */
+        char tmp[128];
         if (plus) {
             /* Extract substring p..plus */
-            char tmp[128];
             size_t seg = (size_t)(plus - p);
             if (seg >= sizeof(tmp))
                 seg = sizeof(tmp) - 1;

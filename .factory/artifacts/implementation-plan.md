@@ -144,7 +144,7 @@ satisfy `verified`.
 | DOD-02 | 11.2.2 | verified | `test_installed_functional.c` uses `cbx_manager_init`, `cbx_overlay_service_step`, production sd-bus; `test_golden.c` production render | — |
 | DOD-03 | 11.2.3 | partial | Every M-control has controller+pointer evidence via SDL virtual gamepad and keyboard. SPEC requires "physical or kernel-backed" for controller path. | Task 3 |
 | DOD-04 | 11.2.4 | verified | Golden images + visual tests cover normal, degraded, error, recovery states; `test_installed_functional.c` Phase 13 backend restart | — |
-| DOD-05 | 11.2.5 | partial | `test_backend_smoke.c` and `test_kernel_controller.c` skip with exit 77 (explained but SPEC says skips are failure). No sanitizer gates in suite. | Task 6 |
+| DOD-05 | 11.2.5 | partial | Sanitizer gate (ASan+UBSan) verified: `scripts/verify-sanitizers.sh` builds with `-fsanitize=address,undefined` and runs full CTest suite — 98/98 pass, zero ASan/UBSan errors. Fixed production bug: `cbx_trigger_parse` stack-use-after-scope (`trigger.c`). Fixed production leak: `cbx_manager_shutdown` not freeing connection strings when DBus not owned. Fixed `cbx_icon_cache_init` leaking rasterizer on re-init. GPU smoke test (`test_backend_smoke`) still requires physical GPU (Task 6). | Task 6 |
 | DOD-06 | 11.2.6 | verified | `.factory/bugs/open.md` contains empty JSON array `[]` — no open bugs | — |
 | DOD-07 | 11.2.7 | partial | No independent review artifact exists in repository. | Task 9 |
 | DOD-08 | 11.2.8 | partial | Docs exist (`README.md`, `docs/OPERATIONS.md`, `docs/PACKAGING.md`, etc.); `test_flatpak_manifest.py` checks README. Full documentation audit pending. | Task 9 |
@@ -295,7 +295,7 @@ this gap.
 
 ## Task 9: Final documentation and specification audit
 - Status: pending
-- Dependencies: Tasks 1, 2, 3, 4, 5, 6, 7, 8
+- Dependencies: Tasks 1, 2, 3, 4, 5, 6, 7, 8, 10
 - Scope: Execute the canonical definition of done in `docs/SPEC.md` §11.2.
   Verify all conformance matrix rows are `verified`. Verify interaction
   inventory is exhaustive. Verify no contradictory open v1 bugs. Run independent
@@ -322,3 +322,32 @@ this gap.
   `nix-shell --run './scripts/verify-project.sh'`;
   `nix-shell --run "ctest --test-dir build-check --output-on-failure"`
 - Documentation impact: final review of all documentation sections
+
+## Task 10: Sanitizer build gate (ASan+UBSan) — remediation
+- Status: complete
+- Dependencies: (none)
+- Scope: Add CMake option `CBX_ENABLE_SANITIZERS` to build with
+  `-fsanitize=address,undefined`. Create `scripts/verify-sanitizers.sh`
+  to build and run the full CTest suite under sanitizers. Fix all
+  ASan/UBSan defects found. Addresses DOD-05 sanitizer gap.
+- Acceptance criteria:
+  1. `CBX_ENABLE_SANITIZERS` CMake option compiles and links with
+     `-fsanitize=address,undefined -fno-omit-frame-pointer`.
+  2. `scripts/verify-sanitizers.sh` exits 0 with all tests passing.
+  3. No ASan (memory errors, use-after-scope, use-after-return) or
+     UBSan (undefined behaviour) reports from production code.
+  4. LSan suppressions cover third-party library leaks (harfbuzz,
+     SDL2_ttf, SDL2) only — no production code leak suppressions.
+- Verification: `nix-shell --run './scripts/verify-sanitizers.sh'`
+  — 98/98 tests pass, 0 failures, 0 sanitizer errors.
+- Evidence: Commit on `develop`. Production fixes:
+  - `src/overlay/trigger.c`: `cbx_trigger_parse` stack-use-after-scope
+    (moved `tmp[128]` to outer loop scope so `tok_start` doesn't dangle).
+  - `src/manager/manager.c`: `cbx_manager_shutdown` freed
+    `connection.unique_name` and `connection.version` even when DBus
+    bus handle is externally owned.
+  - `src/icons/icon_cache.c`: `cbx_icon_cache_init` cleans up existing
+    rasterizer/textures before re-initialising (prevents leak on
+    repeated init calls).
+- Documentation impact: `scripts/verify-sanitizers.sh` and
+  `scripts/lsan-suppressions.txt` added to project verification suite.

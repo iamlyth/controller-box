@@ -434,9 +434,17 @@ cbx_manager_shutdown(cbx_manager *mgr)
 
     if (mgr->owns_dbus_connection)
         ip_connection_disconnect(&mgr->connection);
-    else if (mgr->dbus_bus && mgr->dbus_backend &&
+    else {
+        if (mgr->dbus_bus && mgr->dbus_backend &&
              mgr->dbus_backend->disconnect)
-        mgr->dbus_backend->disconnect(mgr->dbus_bus);
+            mgr->dbus_backend->disconnect(mgr->dbus_bus);
+        /* Still free connection-allocated strings even when the bus
+         * handle is externally owned (e.g. injected by tests). */
+        free(mgr->connection.unique_name);
+        mgr->connection.unique_name = NULL;
+        free(mgr->connection.version);
+        mgr->connection.version = NULL;
+    }
 
     /* Destroy widgets. */
     cbx_widget_destroy(&mgr->tabbar.base);

@@ -577,6 +577,8 @@ test_installed_functional(void **state)
     /* TargetDevices should contain our target path. */
     assert_true(strstr(target_devs, target_path) != NULL);
     free(target_devs);
+    free(target_path);
+    target_path = NULL;
 
     /* ================================================================ */
     /*  Phase 6: Profile persistence — save settings                     */

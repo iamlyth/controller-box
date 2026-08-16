@@ -171,6 +171,11 @@ int cbx_icon_cache_init(cbx_icon_cache *cache, SDL_Renderer *renderer,
     if (!cache || !renderer || !icon_dir || target_size <= 0)
         return -EINVAL;
 
+    /* Clean up any existing state to avoid leaking the rasterizer / textures
+     * when init is called on an already-initialised cache. */
+    if (cache->rasterizer || cache->count > 0)
+        cbx_icon_cache_cleanup(cache);
+
     memset(cache, 0, sizeof(*cache));
     cache->renderer = renderer;
     cache->rasterizer = nsvgCreateRasterizer();

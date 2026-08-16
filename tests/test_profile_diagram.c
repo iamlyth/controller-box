@@ -24,6 +24,7 @@
 typedef struct {
     TestSdlState sdl;
     cbx_profile_diagram diag;
+    cbx_theme theme;
 } pd_fixture;
 
 static int setup(void **state)
@@ -34,10 +35,9 @@ static int setup(void **state)
     int rc = test_harness_sdl_init(&f->sdl);
     assert_int_equal(rc, 0);
 
-    cbx_theme theme;
-    cbx_theme_default(&theme);
+    cbx_theme_default(&f->theme);
 
-    rc = cbx_profile_diagram_init(&f->diag, f->sdl.renderer, NULL, &theme);
+    rc = cbx_profile_diagram_init(&f->diag, f->sdl.renderer, NULL, &f->theme);
     assert_int_equal(rc, 0);
 
     *state = f;

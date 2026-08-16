@@ -73,8 +73,12 @@ fi
 #     process exit code propagates as a test failure.
 # UBSan options:
 #   print_stacktrace=1 — include backtrace for UB diagnostics.
+# LSAN_OPTIONS:
+#   Suppressions for known third-party library leaks (harfbuzz font
+#   shaping caches, SDL2_ttf/SDL2 global state) that are not our bugs.
 export ASAN_OPTIONS=detect_leaks=1:abort_on_error=1:halt_on_error=1
 export UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1
+export LSAN_OPTIONS=suppressions="$PROJECT_ROOT/scripts/lsan-suppressions.txt"
 
 ctest --test-dir "$BUILD_DIR" --output-on-failure --timeout 120
 

@@ -212,6 +212,14 @@ test_daemon_footprint_bounded(void **state)
 {
     footprint_fixture *f = *state;
 
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+    /* ASan/TSan add ~2-3x memory overhead (shadow memory, quarantine
+     * zones) that makes raw RSS limits meaningless.  The footprint
+     * bound is verified in the regular (non-sanitizer) build. */
+    skip();
+    return;
+#endif
+
     /* Allocate a service context — same wiring as the production idle
      * step test in test_overlay_latency.c. */
     cbx_overlay_service_ctx *svc = calloc(1, sizeof(*svc));
