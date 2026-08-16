@@ -29,7 +29,7 @@
 
 #include "config/config_assignments.h"
 #include "config/config_profile_list.h"
-#include "dbus_mock.h"          /* ip_dbus_backend, ip_bus_handle */
+#include "dbus/dbus_interface.h"          /* ip_dbus_backend, ip_bus_handle */
 #include "overlay/grid_render.h"
 
 #ifdef __cplusplus

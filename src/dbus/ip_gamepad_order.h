@@ -20,7 +20,7 @@
 #ifndef CBX_IP_GAMEPAD_ORDER_H
 #define CBX_IP_GAMEPAD_ORDER_H
 
-#include "dbus_mock.h"          /* ip_dbus_backend, ip_bus_handle */
+#include "dbus_interface.h"          /* ip_dbus_backend, ip_bus_handle */
 #include "dbus/ip_device_model.h"
 #include "config/config_assignments.h"
 

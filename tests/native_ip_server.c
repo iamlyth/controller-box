@@ -13,7 +13,7 @@
 #include <unistd.h>
 #include <systemd/sd-bus.h>
 
-#include "dbus_mock.h"  /* IP_DBUS_NAME, IP_IFACE_* */
+#include "dbus/dbus_interface.h"  /* IP_DBUS_NAME, IP_IFACE_* */
 
 /* --- Global state (visible to parent before fork) --- */
 

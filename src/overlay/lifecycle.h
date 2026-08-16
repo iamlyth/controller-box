@@ -34,7 +34,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "dbus_mock.h"          /* ip_dbus_backend, ip_bus_handle */
+#include "dbus/dbus_interface.h"          /* ip_dbus_backend, ip_bus_handle */
 #include "dbus/ip_device_model.h"  /* CBX_MAX_PATH_LEN */
 #include "overlay/surface_build.h"
 #include "ui/animation.h"

@@ -51,7 +51,7 @@
 #include "dbus/ip_intercept_poll.h"
 #include "dbus/ip_input_signal.h"
 #include "dbus/ip_hotplug.h"
-#include "dbus_mock.h"             /* IP_DBUS_PATH, IP_IFACE_* */
+#include "dbus/dbus_interface.h"             /* IP_DBUS_PATH, IP_IFACE_* */
 
 #include "config/config_settings.h"
 #include "config/config_assignments.h"

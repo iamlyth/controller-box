@@ -171,7 +171,6 @@ add_library(controllerbox STATIC
 target_include_directories(controllerbox
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests"
         "${CMAKE_CURRENT_BINARY_DIR}")  # for generated config.h
 target_link_libraries(controllerbox
     PUBLIC

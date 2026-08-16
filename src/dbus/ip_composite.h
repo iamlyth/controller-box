@@ -33,7 +33,7 @@
 #ifndef CBX_IP_COMPOSITE_H
 #define CBX_IP_COMPOSITE_H
 
-#include "dbus_mock.h"          /* ip_dbus_backend, ip_bus_handle, constants */
+#include "dbus_interface.h"          /* ip_dbus_backend, ip_bus_handle, constants */
 
 /* --- InterceptMode values (SPEC §10.2) ----------------------------------- */
 

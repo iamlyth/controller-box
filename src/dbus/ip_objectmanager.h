@@ -15,7 +15,7 @@
 #ifndef CBX_IP_OBJECTMANAGER_H
 #define CBX_IP_OBJECTMANAGER_H
 
-#include "dbus_mock.h"      /* ip_dbus_backend, ip_bus_handle, constants */
+#include "dbus_interface.h"      /* ip_dbus_backend, ip_bus_handle, constants */
 #include "ip_device_model.h"
 
 /*

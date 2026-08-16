@@ -13,7 +13,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "dbus_mock.h"          /* ip_dbus_backend, ip_bus_handle */
+#include "dbus/dbus_interface.h"          /* ip_dbus_backend, ip_bus_handle */
 #include "dbus/ip_connection.h"
 #include "dbus/ip_device_model.h"
 #include "dbus/ip_input_signal.h" /* ip_input_id, ip_input_category, ip_input_events */

@@ -23,7 +23,7 @@
 #include "ui/theme.h"             /* cbx_theme */
 #include "config/config_profile_list.h" /* cbx_profile_list, cbx_profile_entry */
 #include "manager/profile_editor_list.h" /* cbx_profile_editor */
-#include "dbus_mock.h"            /* ip_dbus_backend, ip_bus_handle */
+#include "dbus/dbus_interface.h"            /* ip_dbus_backend, ip_bus_handle */
 
 /* ------------------------------------------------------------------ */
 /*  Limits                                                            */

@@ -22,7 +22,7 @@
 #include "icons/icon_cache.h"
 #include "icons/icon_map.h"
 #include "dbus/ip_connection.h"
-#include "dbus_mock.h"          /* ip_dbus_backend, ip_bus_handle, ip_dbus_sd_backend */
+#include "dbus/dbus_interface.h"          /* ip_dbus_backend, ip_bus_handle, ip_dbus_sd_backend */
 #include "dbus/ip_objectmanager.h"
 #include "dbus/ip_device_model.h"
 #include "dbus/ip_composite.h"

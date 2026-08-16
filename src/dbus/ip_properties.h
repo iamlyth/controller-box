@@ -19,7 +19,7 @@
 #ifndef CBX_IP_PROPERTIES_H
 #define CBX_IP_PROPERTIES_H
 
-#include "dbus_mock.h"      /* ip_dbus_backend, ip_bus_handle, ip_prop_type */
+#include "dbus_interface.h"      /* ip_dbus_backend, ip_bus_handle, ip_prop_type */
 
 #include <stdbool.h>
 

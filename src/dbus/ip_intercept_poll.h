@@ -21,7 +21,7 @@
 #ifndef CBX_IP_INTERCEPT_POLL_H
 #define CBX_IP_INTERCEPT_POLL_H
 
-#include "dbus_mock.h"          /* ip_dbus_backend, ip_bus_handle */
+#include "dbus_interface.h"          /* ip_dbus_backend, ip_bus_handle */
 #include "ip_device_model.h"     /* CBX_MAX_PATH_LEN */
 
 #include <SDL2/SDL.h>

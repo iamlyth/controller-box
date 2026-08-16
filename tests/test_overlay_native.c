@@ -38,7 +38,7 @@
 #include "dbus/ip_device_model.h"
 #include "dbus/ip_manager.h"
 #include "dbus/ip_target.h"
-#include "dbus_mock.h"             /* IP_DBUS_NAME, IP_IFACE_*, constants only */
+#include "dbus/dbus_interface.h"             /* IP_DBUS_NAME, IP_IFACE_*, constants only */
 #include "config/config_settings.h"
 #include "config/config_assignments.h"
 #include "config/config_profile_list.h"

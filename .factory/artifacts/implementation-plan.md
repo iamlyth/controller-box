@@ -88,7 +88,7 @@ Controller-Box is a single C11 binary with two modes: `--overlay-service` (syste
 | DBUS-01 | §10.1 | verified | `dbus_client.c` sd-bus system bus, typed property get/set (u/b/as/s); `ip_connection.c` ownership + Version check; `ip_objectmanager.c` GetManagedObjects; `ip_hotplug.c` InterfacesAdded/Removed | |
 | DBUS-02 | §10.2 | verified | `ip_manager.c` (CreateTargetDevice, StopTargetDevice, AttachTargetDevice, GamepadOrder, SupportedTargetDeviceIds, Version); `ip_composite.c` (SetInterceptActivation, LoadProfilePath, LoadProfileFromYaml, SetTargetDevices, InterceptMode, ProfileName/Path, PersistentId, Capabilities); `ip_target.c` (Name, DeviceType); `ip_source.c` (UniqueId, PhysPath, SerialNumber) | |
 | DBUS-03 | §10.3 | verified | Gap 1: `ip_intercept_poll.c` 50ms poll; Gap 2: `ip_gamepad_order.c` save/restore; Gap 3: `ip_create_composite.c` temp YAML; Gap 4: `config_profile_list.c` filesystem enumeration; Gap 5: not needed | |
-| DBUS-04 | §11.2.2, §11.2.5 | missing | `ip_dbus_backend` vtable, `ip_bus_handle`, signal payload structs, DBus constants in `tests/dbus_mock.h` — 25+ `src/` files include test header as production interface | Task 2 |
+| DBUS-04 | §11.2.2, §11.2.5 | verified | Production DBus interface definitions in `src/dbus/dbus_interface.h`; all 24 `src/` files include production header; `tests/dbus_mock.h` includes it for shared definitions; `controllerbox` no longer has `tests/` in include path | |
 | PERF-01 | §11 | partial | Overlay ≤75ms p99, ≤100ms max on Pi 4: `test_overlay_latency.c` measures <10ms p99 on x86_64; no Pi 4/ARM64 measurement | Task 5 |
 | PERF-02 | §11 | verified | Detection-to-present <10ms p99: `test_overlay_latency.c` | |
 | PERF-03 | §11 | verified | Overlay close <1ms: `close.c` single property set; `test_overlay_latency.c` | |
@@ -102,7 +102,7 @@ Controller-Box is a single C11 binary with two modes: `--overlay-service` (syste
 | VRF-06 | §11.1.6 | partial | `test_backend_smoke.c` skips (exit 77) — no accelerated OpenGL/GLES backend; `test_backend_smoke_sw.c` software-only | Task 4 |
 | VRF-07 | §11.1.7 | missing | No human release acceptance artifact on target hardware | Task 6 |
 | DOD-01 | §11.2.1 | partial | 8 conformance rows non-verified (CFG-03, DBUS-04, MGR-11, MGR-13, VRF-05, VRF-06, VRF-07, PERF-01) | Tasks 1-6 |
-| DOD-02 | §11.2.2 | partial | Production-path behavior: DBUS-04 interface definitions in test header violate test-doubles semantics | Task 2 |
+| DOD-02 | §11.2.2 | verified | Production-path behavior: DBus interface definitions moved to `src/dbus/dbus_interface.h`; no `src/` file includes test header `dbus_mock.h` | |
 | DOD-03 | §11.2.3 | partial | Complete interaction traversal: MGR-11/MGR-13 kernel-backed controller evidence missing | Task 3 |
 | DOD-04 | §11.2.4 | verified | Visual and degraded-state acceptance: `test_overlay_visual.c`, `test_manager_visual.c`, `test_golden.c` cover normal/degraded/error states | |
 | DOD-05 | §11.2.5 | partial | Regression and quality gates: VRF-06 GPU backend skip is an unexplained skip | Task 4 |
@@ -200,11 +200,11 @@ The project maintains a machine-readable inventory at `tests/interaction_invento
 - Documentation impact: `docs/OPERATIONS.md` — updated settings.yaml section to note that both overlay service and manager load persisted settings at startup
 
 ## Task 2: Move DBus interface definitions to production header
-- Status: pending
+- Status: complete
 - Dependencies: none
-- Scope: Create `src/dbus/dbus_interface.h` with `ip_dbus_backend` vtable, `ip_bus_handle`, `ip_signal_cb`, signal payload structs (`ip_owner_changed_payload`, `ip_interfaces_changed_payload`, `ip_properties_changed_payload`, `ip_input_event_payload`), `ip_prop_type` enum, all `IP_DBUS_*`/`IP_IFACE_*` constants, and `ip_dbus_sd_backend()` declaration. Update all 25+ `src/` includes from `dbus_mock.h` to `dbus_interface.h`. Mock-specific code remains in `tests/dbus_mock.h` (which includes `dbus_interface.h`). Update `CMakeLists.txt` include paths.
-- Acceptance criteria: No `src/` file includes `dbus_mock.h`; `tests/dbus_mock.h` includes `dbus_interface.h` for shared definitions; production build succeeds without `tests/` in include path; all 98 tests pass; sanitizer clean
-- Verification: `grep -r 'dbus_mock.h' src/` returns no matches; `nix-shell --run 'cmake -S . -B build-verify -DCMAKE_BUILD_TYPE=Debug && cmake --build build-verify --parallel 2 && ctest --test-dir build-verify --output-on-failure'`
+- Scope: Created `src/dbus/dbus_interface.h` with all production DBus definitions (`ip_dbus_backend` vtable, `ip_bus_handle`, `ip_signal_cb`, signal payload structs, `ip_prop_type` enum, all `IP_DBUS_*`/`IP_IFACE_*` constants, `ip_dbus_sd_backend()` declaration). Updated all 24 `src/` includes from `dbus_mock.h` to `dbus_interface.h` (or `dbus/dbus_interface.h` for non-dbus dirs). Updated `tests/dbus_mock.h` to include `dbus_interface.h` and retain only mock-specific code. Updated 6 test files that only use constants to include `dbus_interface.h` directly. Removed `tests/` from `controllerbox` PUBLIC include path. Added `src/` to `cbx_test_support` and `test_ip_server` include dirs.
+- Acceptance criteria: No `src/` file includes `dbus_mock.h` ✓; `tests/dbus_mock.h` includes `dbus_interface.h` for shared definitions ✓; production build succeeds without `tests/` in include path ✓; all 98 tests pass ✓; sanitizer compiles clean ✓
+- Verification: `grep -r '#include.*"dbus_mock.h"' src/` returns no matches; `nix-shell --run 'cmake --build build-check --parallel 2 && ctest --test-dir build-check --output-on-failure'` — 98/98 pass, 2 skipped (hardware-blocked)
 - Documentation impact: None (internal refactor, no user-facing behavior change)
 
 ## Task 3: Kernel-backed controller acceptance evidence

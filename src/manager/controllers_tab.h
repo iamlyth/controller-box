@@ -21,7 +21,7 @@
 #include <SDL2/SDL.h>
 #include <stdbool.h>
 
-#include "dbus_mock.h"           /* ip_dbus_backend, ip_bus_handle */
+#include "dbus/dbus_interface.h"           /* ip_dbus_backend, ip_bus_handle */
 #include "dbus/ip_device_model.h" /* cbx_device_model */
 #include "ui/widget.h"           /* cbx_panel, cbx_list, cbx_button */
 #include "ui/text.h"             /* cbx_text_cache */

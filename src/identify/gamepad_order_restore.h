@@ -21,7 +21,7 @@
 
 #include <stddef.h>
 
-#include "dbus_mock.h"            /* ip_dbus_backend, ip_bus_handle */
+#include "dbus/dbus_interface.h"            /* ip_dbus_backend, ip_bus_handle */
 #include "dbus/ip_device_model.h" /* cbx_device_model */
 
 #ifdef __cplusplus

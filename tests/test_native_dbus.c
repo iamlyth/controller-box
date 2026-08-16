@@ -22,7 +22,7 @@
 #include "dbus/ip_objectmanager.h"
 #include "dbus/ip_device_model.h"
 #include "dbus/ip_input_signal.h"
-#include "dbus_mock.h"             /* IP_DBUS_PATH, IP_IFACE_* */
+#include "dbus/dbus_interface.h"             /* IP_DBUS_PATH, IP_IFACE_* */
 #include "config/config_settings.h"
 #include "app/overlay_service.h"   /* cbx_reconcile_startup_targets */
 #include "native_ip_server.h"

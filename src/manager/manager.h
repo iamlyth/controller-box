@@ -29,7 +29,7 @@
 #include "manager/controllers_tab.h"
 #include "manager/profiles_tab.h"
 #include "manager/settings_tab.h"
-#include "dbus_mock.h"  /* ip_dbus_backend, ip_bus_handle, ip_dbus_sd_backend */
+#include "dbus/dbus_interface.h"  /* ip_dbus_backend, ip_bus_handle, ip_dbus_sd_backend */
 #include "dbus/ip_connection.h"
 
 /* ------------------------------------------------------------------ */

@@ -23,7 +23,7 @@
 #ifndef CBX_IP_CREATE_COMPOSITE_H
 #define CBX_IP_CREATE_COMPOSITE_H
 
-#include "dbus_mock.h"          /* ip_dbus_backend, ip_bus_handle */
+#include "dbus_interface.h"          /* ip_dbus_backend, ip_bus_handle */
 
 #ifdef __cplusplus
 extern "C" {

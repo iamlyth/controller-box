@@ -7,7 +7,7 @@
  */
 #include "ip_device_model.h"
 
-#include "dbus_mock.h"  /* IP_DBUS_PATH */
+#include "dbus_interface.h"  /* IP_DBUS_PATH */
 
 #include <stdio.h>
 #include <stdlib.h>

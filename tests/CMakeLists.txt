@@ -125,7 +125,7 @@ if(CMOCKA_FOUND)
         tests/dbus_mock.c
         tests/fb_assert.c
         tests/interaction_inventory.c)
-    target_include_directories(cbx_test_support PUBLIC tests)
+    target_include_directories(cbx_test_support PUBLIC tests "${CMAKE_SOURCE_DIR}/src")
     target_link_libraries(cbx_test_support
         PUBLIC
             PkgConfig::SDL2
@@ -767,7 +767,7 @@ if(CMOCKA_FOUND)
     # service on a private bus.  Does NOT link libcontrollerbox — only
     # uses native_ip_server.c (sd-bus) + dbus_mock.h constants.
     add_executable(test_ip_server tests/test_ip_server_main.c tests/native_ip_server.c)
-    target_include_directories(test_ip_server PRIVATE tests)
+    target_include_directories(test_ip_server PRIVATE tests "${CMAKE_SOURCE_DIR}/src")
     target_compile_definitions(test_ip_server PRIVATE
         _GNU_SOURCE=1
         DBUS_SESSION_CONFIG="${DBUS_PREFIX}/share/dbus-1/session.conf")
