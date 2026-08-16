@@ -1,17 +1,26 @@
-# Implementation Complete — Final Gate Accepted
+# Campaign Round 2 Audit — Scratchpad
 
-- All implementation tasks complete. Plan status: complete.
-- Final gate accepted at f6eea2e (verified this iteration).
-- 96/96 tests passed, 0 failed; installed-functional-evidence: PASS at f6eea2e with zero skips.
-- Git tree clean on develop; no remaining tasks.
+## Status
+Audit report written to `.factory/artifacts/campaign-audit.md` with `result: findings`.
+7 findings identified from 4 parallel read-only subagent reviews + direct investigation.
 
-## Verification
-- `./scripts/final-gate.sh --implementation` → accepted
-- installed-functional-evidence: PASS at f6eea2e with zero skips
-- Packaging, smoke, clean-build regression all passed
+## Findings summary
+1. No physical/kernel-backed gamepad in installed functional test (§11.1.5, §5.7)
+2. No compositor-visible overlay activation in installed binary test (§11.1.5)
+3. Boolean DBus property SET lacks native type fidelity (§10.1)
+4. test_installed_functional.c overlay phases claim coverage not delivered (test-trust)
+5. Inventory M32/M34 dispatch path misrepresented, M38 untested (test-trust)
+6. Documentation inaccuracies in OPERATIONS.md, README.md, plan (§11.2.8)
+7. DBus InterfacesAdded/Removed lack sender verification (security)
 
-## Commit
-- f6eea2e (final gate verified, tree clean)
+## Key evidence
+- Runner evidence valid: check-factory-runner-evidence.py PASS at 9fd528a
+- Runner ran verify-project.sh — build/CTest/packaging/smoke all pass
+- Runner stdout shows overlay frame mean=0 (blank — overlay never activated)
+- test_installed_functional.c:9 claims "kernel-backed" but uses SDL_JoystickAttachVirtual
+- test_installed_functional.c Phases 7-10 never call cbx_overlay_service_init/step
+- sd_set_property (dbus_client.c:537-543) falls through to string for boolean properties
+- OPERATIONS.md:1032 says "59 entries, all verified" but 8 are NOT_APPLICABLE, 1 DEFERRED
 
-## Next
-Emit the completion token — no remaining tasks.
+## Next action
+Run final gate. If it passes, emit the completion token. If it fails, repair deficiencies.
