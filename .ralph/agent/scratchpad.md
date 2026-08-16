@@ -1,24 +1,28 @@
-# Implementation Loop — DOD-07 Review Artifact Complete (Iteration 52)
+# Implementation Loop — DOD-07 Complete (Iteration 52)
 
 ## Outcome
 - Task 14 (DOD-07) completed: independent review artifact committed
 - Three parallel read-only reviews ran (correctness/test-quality, security, documentation)
-- 17 findings: 0 BLOCKING, 6 MEDIUM, 7 LOW, 2 INFO — verdict PASS
+- 17 review findings: 0 BLOCKING, 6 MEDIUM, 7 LOW, 2 INFO — verdict PASS
 - All prior security fixes (iterations 9, 17-19) confirmed in place, no regressions
-- `docs/REVIEW.md` committed with findings, resolutions, and verdict
-- DOD-07 conformance matrix row updated from `partial` to `verified`
-- Task 14 status in plan updated from `pending` to `complete`
-- Runtime task `task-1786896770-09f0` closed
+- Two pre-existing test bugs found and fixed during final gate verification:
+  - test_set_full_table: slots exceeded CBX_MAX_CONTROLLERS (16) — used i % 16
+  - test_native_dbus: expected stale 'comp-0' — changed to 'ORDER:0'
+- Both test bugs were masked by stale build-maintenance-verify directory
 
-## Commit
-- `e49a722` on develop: "DOD-07: Commit independent review artifact"
+## Commits
+- e49a722: DOD-07 review artifact (docs/REVIEW.md + plan update)
+- e1dd0d6: Test bug fixes (test_assign_persist.c + test_native_dbus.c)
+- 8a08d7b: REVIEW.md test bug findings section
 
 ## Verification
-- Final gate `--implementation` needs to be run and verified EXIT 0
-- Plan status: `blocked` (hardware-dependent tasks 3-9 remain)
-- 98/98 CTest passing, 0 failures, 2 hardware skips (MGR-36)
+- Final gate `--implementation`: EXIT 0 ✅
+- 98/98 CTest: 100% passed, 2 hardware skips (test_kernel_controller, test_backend_smoke)
+- Plan status: `blocked` (hardware tasks 3-9 remain)
+- DOD-07 conformance matrix row: `verified`
+- Task 14 plan status: `complete`
+- Runtime task task-1786896770-09f0: closed
 
 ## Next
-- Run final-gate --implementation to verify acceptance criteria 5
 - Emit factory.implement event with summary
 - Remaining blocked tasks (3-9) require hardware access
