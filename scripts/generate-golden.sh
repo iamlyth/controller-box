@@ -13,12 +13,12 @@ SOURCE_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$SOURCE_DIR"
 
 echo "Building test_golden..."
-nix-shell --run "cmake --build build-check --target test_golden"
+nix-shell --run "cmake --build build-maintenance-verify --target test_golden"
 
 echo ""
 echo "Generating golden baselines..."
 CBX_GENERATE_GOLDEN=1 SDL_VIDEODRIVER=dummy \
-  ctest --test-dir build-check -R test_golden --output-on-failure
+  ctest --test-dir build-maintenance-verify -R test_golden --output-on-failure
 
 echo ""
 echo "Golden baselines generated in tests/golden/"

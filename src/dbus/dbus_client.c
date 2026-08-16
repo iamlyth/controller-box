@@ -84,8 +84,11 @@ sd_noc_callback(sd_bus_message *msg, void *userdata, sd_bus_error *ret_error)
      * its bus name, so that InterfacesAdded/Removed callbacks can verify
      * signal senders against the current unique name. */
     if (data->wrapper && new_owner && new_owner[0] != '\0') {
-        free(data->wrapper->expected_sender);
-        data->wrapper->expected_sender = strdup(new_owner);
+        char *new_sender = strdup(new_owner);
+        if (new_sender) {
+            free(data->wrapper->expected_sender);
+            data->wrapper->expected_sender = new_sender;
+        }
     }
 
     ip_owner_changed_payload payload = {
@@ -292,7 +295,7 @@ sd_properties_changed_callback(sd_bus_message *msg, void *userdata,
 
         /* Peek at the variant to determine the inner type. */
         const char *contents_ptr = NULL;
-        char vtype = sd_bus_message_peek_type(msg, NULL, &contents_ptr);
+        int vtype = sd_bus_message_peek_type(msg, NULL, &contents_ptr);
         if (vtype < 0)
             break;
 

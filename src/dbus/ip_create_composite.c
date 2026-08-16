@@ -35,7 +35,7 @@ static const char *
 resolve_temp_dir(void)
 {
     const char *dir = getenv("XDG_RUNTIME_DIR");
-    if (dir && dir[0] != '\0')
+    if (dir && dir[0] != '\0' && dir[0] == '/')
         return dir;
     return "/tmp";
 }

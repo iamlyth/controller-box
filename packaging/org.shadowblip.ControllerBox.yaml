@@ -17,7 +17,8 @@
 # self-contained and does not depend on SDK extension availability.
 # nanosvg is vendored in the source tree (third_party/nanosvg/) and compiled
 # by CMake — no separate module needed.
-# libsystemd (sd-bus) and libyaml are provided by the freedesktop SDK.
+# libsystemd (sd-bus) is provided by the freedesktop SDK.
+# libyaml is built from source for reliability.
 
 app-id: org.shadowblip.ControllerBox
 runtime: org.freedesktop.Platform

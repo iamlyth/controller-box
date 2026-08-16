@@ -256,7 +256,11 @@ static void process_scalar_value(cbx_settings *s, const char *key,
 {
     if (in_vc) {
         if (strcmp(key, "count") == 0) {
-            s->virtual_controllers.count = atoi(val);
+            char *endp = NULL;
+            long v = strtol(val, &endp, 10);
+            if (endp == val || *endp != '\0' || v < 0)
+                return;  /* malformed — leave default */
+            s->virtual_controllers.count = (int)v;
         }
         /* "types" is handled by sequence, not scalar */
     } else {
@@ -269,7 +273,11 @@ static void process_scalar_value(cbx_settings *s, const char *key,
             strncpy(s->theme, val, sizeof(s->theme) - 1);
             s->theme[sizeof(s->theme) - 1] = '\0';
         } else if (strcmp(key, "overlay_opacity") == 0) {
-            s->overlay_opacity = strtod(val, NULL);
+            char *endp = NULL;
+            double v = strtod(val, &endp);
+            if (endp == val || *endp != '\0')
+                return;  /* malformed — leave default */
+            s->overlay_opacity = v;
         }
     }
 }

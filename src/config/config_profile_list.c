@@ -99,7 +99,7 @@ static int scan_yaml_files(cbx_file_list *list, const char *dir)
 
         /* Verify it's a regular file (skip symlinks/dirs). */
         struct stat st;
-        if (stat(path, &st) != 0)
+        if (lstat(path, &st) != 0)
             continue;
         if (!S_ISREG(st.st_mode))
             continue;
@@ -206,7 +206,7 @@ static int scan_profiles(cbx_profile_list *list, const char *dir,
             continue;
 
         struct stat st;
-        if (stat(path, &st) != 0)
+        if (lstat(path, &st) != 0)
             continue;
         if (!S_ISREG(st.st_mode))
             continue;

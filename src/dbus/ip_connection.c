@@ -261,8 +261,11 @@ ip_connection_handle_name_changed(ip_connection *conn,
 
     if (acquired) {
         /* InputPlumber's bus name was (re-)acquired. */
-        free(conn->unique_name);
-        conn->unique_name = strdup(new_owner);
+        char *new_name = strdup(new_owner);
+        if (new_name) {
+            free(conn->unique_name);
+            conn->unique_name = new_name;
+        }
 
         /* Re-read the Version property. */
         char *version = NULL;

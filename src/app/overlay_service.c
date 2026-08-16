@@ -148,15 +148,23 @@ cbx_overlay_on_save(void *userdata)
     /* Build GamepadOrder from the grid state (needed for engine apply). */
     char order[CBX_MAX_COMPOSITES * (CBX_MAX_PATH_LEN + 1)];
     order[0] = '\0';
+    size_t order_len = 0;
     for (int slot = 0; slot < CBX_MAX_CONTROLLERS; slot++) {
         for (int i = 0; i < svc->grid.row_count; i++) {
             const cbx_grid_row *row = &svc->grid.rows[i];
             if (cbx_select_grid_col_to_slot(row->cur_col) != slot)
                 continue;
-            if (order[0])
-                strncat(order, ",", sizeof(order) - strlen(order) - 1);
-            strncat(order, row->composite_path,
-                    sizeof(order) - strlen(order) - 1);
+            size_t path_len = strlen(row->composite_path);
+            size_t need = path_len + (order_len > 0 ? 1 : 0);
+            if (order_len + need >= sizeof(order) - 1) {
+                /* Buffer would overflow — abort save to avoid truncation */
+                return -ENAMETOOLONG;
+            }
+            if (order_len > 0)
+                order[order_len++] = ',';
+            memcpy(order + order_len, row->composite_path, path_len);
+            order_len += path_len;
+            order[order_len] = '\0';
         }
     }
 
