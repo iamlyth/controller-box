@@ -322,6 +322,16 @@ mgr_vis_setup(void **state)
     unsetenv("XDG_DATA_HOME");
     unsetenv("FLATPAK_ID");
 
+    /* Redirect icon directory to source tree so the profile editor
+     * diagram SVG (generic-gamepad.svg) is found during tests.
+     * BUG-0007: the diagram SVG was never loaded in production because
+     * NULL was passed as svg_path.  The fix uses cbx_icon_dir() which
+     * checks CBX_ICON_DIR env var for a runtime override. */
+    char icon_dir[PATH_MAX];
+    snprintf(icon_dir, sizeof(icon_dir), "%s/data/icons",
+             CBX_SOURCE_DIR);
+    setenv("CBX_ICON_DIR", icon_dir, 1);
+
     char profiles_dir[PATH_MAX + 64];
     snprintf(profiles_dir, sizeof(profiles_dir),
              "%s/.local/share/inputplumber/profiles", f->tmp);
@@ -334,6 +344,7 @@ mgr_vis_setup(void **state)
     if (rc != 0) {
         if (f->saved_home_set) setenv("HOME", f->saved_home, 1);
         else unsetenv("HOME");
+        unsetenv("CBX_ICON_DIR");
         free(f);
         return -1;
     }
@@ -359,6 +370,8 @@ mgr_vis_teardown(void **state)
 
         if (f->saved_home_set) setenv("HOME", f->saved_home, 1);
         else unsetenv("HOME");
+
+        unsetenv("CBX_ICON_DIR");
 
         char cmd[PATH_MAX * 2 + 32];
         snprintf(cmd, sizeof(cmd), "rm -rf '%s'", f->tmp);
@@ -825,6 +838,25 @@ test_profile_editor_list_mode(void **state)
     assert_true(fb_region_has_content(f->buf_a, MGR_W, MGR_H,
                                        &diag_rect, bg, MGR_TOL));
 
+    /* BUG-0007: verify the controller outline SVG was loaded (base_texture
+     * non-NULL) and that the diagram region has substantial content
+     * (not just sparse label pixels from the broken state). */
+    assert_non_null(ed->diagram.base_texture);
+    /* With the SVG loaded, the diagram region should have content in
+     * multiple sub-regions (not just one sparse row).  Check the top
+     * half and bottom half separately. */
+    {
+        SDL_Rect diag_top = diag_rect;
+        diag_top.h /= 2;
+        assert_true(fb_region_has_content(f->buf_a, MGR_W, MGR_H,
+                                           &diag_top, bg, MGR_TOL));
+        SDL_Rect diag_bot = diag_rect;
+        diag_bot.y += diag_bot.h / 2;
+        diag_bot.h -= diag_bot.h / 2;
+        assert_true(fb_region_has_content(f->buf_a, MGR_W, MGR_H,
+                                           &diag_bot, bg, MGR_TOL));
+    }
+
     SDL_Rect list_rect;
     cbx_widget_get_rect(&ed->binding_list.base, &list_rect);
     assert_true(fb_region_has_content(f->buf_a, MGR_W, MGR_H,
@@ -889,6 +921,8 @@ test_profile_editor_sequential_mode(void **state)
     cbx_widget_get_rect(&ed->diagram.base, &diag_rect);
     assert_true(fb_region_has_content(f->buf_a, MGR_W, MGR_H,
                                        &diag_rect, bg, MGR_TOL));
+    /* BUG-0007: verify SVG loaded in sequential mode too. */
+    assert_non_null(ed->diagram.base_texture);
 
     /* Capture 3 buttons for partial completion. */
     const char *capture_events[] = { "A", "X", "Y" };

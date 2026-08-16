@@ -12,11 +12,13 @@
 
 #include <SDL2/SDL.h>
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "dbus/ip_composite.h"
+#include "config/config_paths.h"
 
 /* ------------------------------------------------------------------ */
 /*  Layout constants                                                  */
@@ -239,7 +241,18 @@ cbx_profile_editor_init(cbx_profile_editor *ed,
     const int py = pr.y;
 
     /* --- Diagram (left panel) ------------------------------------- */
-    int rc = cbx_profile_diagram_init(&ed->diagram, renderer, NULL, theme);
+    /* Load the generic-gamepad SVG as the controller outline base
+     * image.  BUG-0007: previously passed NULL, so the controller
+     * outline was never rendered.  Now constructs the path from
+     * cbx_icon_dir() (e.g., /usr/share/controller-box/icons/svg/
+     * generic-gamepad.svg).  If the file is not found, the diagram
+     * falls back to a flat panel_bg rectangle — still functional,
+     * just without the visual outline. */
+    char diag_svg_path[PATH_MAX];
+    snprintf(diag_svg_path, sizeof(diag_svg_path),
+             "%s/svg/generic-gamepad.svg", cbx_icon_dir());
+    int rc = cbx_profile_diagram_init(&ed->diagram, renderer,
+                                        diag_svg_path, theme);
     if (rc != 0)
         return rc;
     SDL_Rect diag_rect = { px + 16, py + CBX_PE_TITLE_H, CBX_PE_DIAGRAM_W,

@@ -212,6 +212,12 @@ const char *cbx_data_dir(void)
 
 const char *cbx_icon_dir(void)
 {
+    /* Allow runtime override for test environments (e.g., pointing
+     * to the source tree data/icons/ directory).  In production,
+     * the compile-time ICON_DIR is used. */
+    const char *env = getenv("CBX_ICON_DIR");
+    if (env && env[0] == '/')
+        return env;
     return ICON_DIR;
 }
 

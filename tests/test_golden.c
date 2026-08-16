@@ -523,6 +523,14 @@ mgr_setup(void **state)
     unsetenv("XDG_DATA_HOME");
     unsetenv("FLATPAK_ID");
 
+    /* Redirect icon directory to source tree for diagram SVG (BUG-0007). */
+    {
+        char icon_dir[PATH_MAX];
+        snprintf(icon_dir, sizeof(icon_dir), "%s/data/icons",
+                 CBX_SOURCE_DIR);
+        setenv("CBX_ICON_DIR", icon_dir, 1);
+    }
+
     char profiles_dir[PATH_MAX + 64];
     snprintf(profiles_dir, sizeof(profiles_dir),
              "%s/.local/share/inputplumber/profiles", f->tmp);
@@ -533,6 +541,7 @@ mgr_setup(void **state)
     if (rc != 0) {
         if (f->saved_home_set) setenv("HOME", f->saved_home, 1);
         else unsetenv("HOME");
+        unsetenv("CBX_ICON_DIR");
         free(f);
         return -1;
     }
@@ -555,6 +564,7 @@ mgr_teardown(void **state)
 
         if (f->saved_home_set) setenv("HOME", f->saved_home, 1);
         else unsetenv("HOME");
+        unsetenv("CBX_ICON_DIR");
 
         char cmd[PATH_MAX * 2 + 32];
         snprintf(cmd, sizeof(cmd), "rm -rf '%s'", f->tmp);

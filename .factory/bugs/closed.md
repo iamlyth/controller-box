@@ -35,7 +35,7 @@ Schema: `ralph-bug-ledger/v1`
     "actual": "The test asserts that the global count of /tmp/controller-box-* is exactly zero instead of comparing before and after. Pre-existing or concurrent files make the test fail nondeterministically, and an assertion failure bypasses rmdir(), leaving its cbx-xdg temporary directory behind.",
     "acceptance": "Seed an unrelated /tmp/controller-box-* file and verify test_create_composite still passes without modifying that file; compare relevant /tmp state before and after or otherwise identify only files created by the operation; guarantee cleanup of the test-owned XDG directory on success and failure; repeated standalone and full CTest runs pass.",
     "resolution": "Fixed test_create_composite_xdg_runtime_dir_preferred in tests/test_create_composite.c: (1) replaced the assertion that global /tmp/controller-box-* count equals zero with a before/after comparison (tmp_before vs tmp_after), so unrelated pre-existing files no longer cause false failures; (2) moved the XDG temp directory path from a local stack variable into the create_fixture struct (xdg_dir field) so teardown() cleans it up with rm -rf even when an assertion failure longjmps past the test body; (3) removed the bare rmdir(xdg_dir) at end of test since teardown now owns cleanup.",
-    "verification": "Seeded an unrelated /tmp/controller-box-unrelated-test-file before running ctest --test-dir build-check -R test_create_composite --output-on-failure \u2014 all tests pass with the unrelated file present. Full ctest suite (78/78, 1 skip) passes with no regressions. XDG temp dir cleanup verified: teardown rm -rf handles f->xdg_dir on both success and assertion-failure paths. Repeated standalone and full CTest runs pass deterministically.",
+    "verification": "Seeded an unrelated /tmp/controller-box-unrelated-test-file before running ctest --test-dir build-check -R test_create_composite --output-on-failure — all tests pass with the unrelated file present. Full ctest suite (78/78, 1 skip) passes with no regressions. XDG temp dir cleanup verified: teardown rm -rf handles f->xdg_dir on both success and assertion-failure paths. Repeated standalone and full CTest runs pass deterministically.",
     "closed": "2026-08-08"
   },
   {
@@ -67,7 +67,7 @@ Schema: `ralph-bug-ledger/v1`
     "actual": "scripts/verify-project.sh enters nix-shell only when dependency discovery fails, so an arbitrary host package set can masquerade as the declared environment. The first failure also exposed tests/dbus_mock.c relying on an undeclared POSIX strdup interface.",
     "acceptance": "A fresh remote gate enters Nix despite installed native dependency names, compiles without implicit declarations or incompatible ambient test APIs, and both the complete local verifier and exact-commit remote runner gate pass.",
     "resolution": "Code fix complete: (1) scripts/verify-project.sh:14-17 now unconditionally re-execs into nix-shell when nix-shell is available and CBX_VERIFY_IN_NIX_SHELL!=1, independent of ambient host packages. (2) tests/dbus_mock.c:9 defines _POSIX_C_SOURCE 200809L before any include, declaring strdup under strict C11. Remote runner fixes: (3) scripts/verify-project.sh caps cmake --parallel to CMAKE_BUILD_PARALLEL_LEVEL (default 2) to prevent cc1 OOM kills on the 4GB runner VM. (4) shell.nix adds glib explicitly so harfbuzz's pkg-config dependency is satisfied in the Nix environment. (5) src/icons/icon_lookup.c load_png now loads PNG as SDL_Surface first and stores surface dimensions instead of SDL_QueryTexture dimensions (which returned 128x128 power-of-two instead of 8x8 on the runner's renderer). (6) CBX_ICON_ICON_LEN increased from 128 to 256 to accommodate full PNG override paths (164 chars on the runner's deep workspace nesting) that were truncated in the icon cache name field. (7) tests/test_installed_smoke.sh sets SDL_RENDER_DRIVER=software for Xvfb and overrides XDG_CONFIG_HOME/XDG_DATA_HOME for the manager process to prevent inherited runner env from redirecting settings writes.",
-    "verification": "Local: nix-shell --run './scripts/verify-project.sh' passes (92/92 tests). Remote: python3 scripts/run-factory-runners.py passes \u2014 '1 runner(s) passed for 9cd6cb13ad4d'. check-factory-runner-evidence.py: valid (2 capabilities). Evidence: .factory-state/runner-evidence/dev-runner-vm/9cd6cb13ad4dbea2aa612072c50f7b1cae9d1d6f/ with manifest.json, stdout.log, stderr.log. Remote build: 92/92 tests pass (156s total). bug-ledger validate passes.",
+    "verification": "Local: nix-shell --run './scripts/verify-project.sh' passes (92/92 tests). Remote: python3 scripts/run-factory-runners.py passes — '1 runner(s) passed for 9cd6cb13ad4d'. check-factory-runner-evidence.py: valid (2 capabilities). Evidence: .factory-state/runner-evidence/dev-runner-vm/9cd6cb13ad4dbea2aa612072c50f7b1cae9d1d6f/ with manifest.json, stdout.log, stderr.log. Remote build: 92/92 tests pass (156s total). bug-ledger validate passes.",
     "closed": "2026-08-15"
   },
   {
@@ -101,6 +101,22 @@ Schema: `ralph-bug-ledger/v1`
     "resolution": "Added an explicitly loaded jailed-Pi tool-call extension that rewrites only strict direct final ralph emit bash commands to a repository shim. The shim invokes the real Ralph binary from the jail trusted PATH, preserves stderr and exact status, and changes only the command acknowledgement so Pi can finish naturally. Compound/substitution emits are blocked, arbitrary identical output remains fail-closed, wrapper and bounded immutable prompt bridge retain exec signal semantics, and the generic template is kept in parity.",
     "verification": "test-pi2-ollama-wrapper passes hermetic command, spoof, compound-command, prompt safety, status, and signal checks plus a pinned Ralph 2.10.1 two-iteration probe that runs beyond the five-second threshold and terminates for max_iterations rather than consecutive_failures. verify-boilerplate passes. Full verify-project passes with 91/91 CTest tests, mandatory installed-functional acceptance, installed smoke, and packaging; only the expected optional headless backend smoke is skipped.",
     "closed": "2026-08-15"
+  },
+  {
+    "id": "BUG-0007",
+    "title": "Controller diagram SVG never loaded in production — NULL svg_path passed to cbx_profile_diagram_init",
+    "status": "closed",
+    "severity": "high",
+    "reported": "2026-08-16",
+    "external": [],
+    "contract_change": false,
+    "reproduction": "Build and install controller-box. Launch manager mode. Navigate to Profiles tab, select a profile, and open the profile editor. The controller diagram area shows only button labels and highlight rectangles — the controller outline image is absent. src/manager/profile_editor_list.c passed NULL as svg_path to cbx_profile_diagram_init.",
+    "expected": "The profile editor diagram renders a controller outline image with button highlights overlaid.",
+    "actual": "The controller outline SVG was never loaded because NULL was passed as the svg_path. Golden baselines matched the broken rendering.",
+    "acceptance": "Production code passes a valid SVG file path. Golden baselines regenerated. Test asserts base_texture non-NULL. Full verifier passes.",
+    "resolution": "Fixed in profile_editor_list.c: construct SVG path from cbx_icon_dir() + /svg/generic-gamepad.svg. Added CBX_ICON_DIR env var override to cbx_icon_dir() for tests. Updated test_manager_visual.c and test_golden.c. Regenerated golden images.",
+    "verification": "96 pass, 2 skip (hardware), 0 failures. base_texture assertion confirms SVG loaded. Golden comparison passes with regenerated baselines.",
+    "closed": "2026-08-16"
   }
 ]
 ```

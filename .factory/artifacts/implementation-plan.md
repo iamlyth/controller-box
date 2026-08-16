@@ -3,7 +3,7 @@ spec_path: docs/SPEC.md
 spec_commit: 3a10f6b7d04a615b2b9d06eef6c91e431fa9c079
 spec_blob: 58f5d3cb72bc6b3e5f573fa09a63c11a653ed577
 base_commit: d61b7f5f23b52d772f2bf0893ec4e45749be5862
-status: active
+status: blocked
 ---
 
 # Implementation Plan
@@ -249,7 +249,7 @@ The project maintains a machine-readable inventory at `tests/interaction_invento
 
 ## Task 8: Final documentation and specification audit
 - Status: pending
-- Dependencies: Task 1, Task 2, Task 3, Task 4, Task 5, Task 6, Task 7, Task 9, Task 10
+- Dependencies: Task 1, Task 2, Task 3, Task 4, Task 5, Task 6, Task 7, Task 9, Task 10, Task 11
 - Scope: Execute the canonical definition of done from `docs/SPEC.md` §11.2. Verify the conformance matrix is all-verified, the interaction inventory is exhaustive with all entries verified (except DEFERRED O12 per §13), no contradictory open v1 bugs remain in `.factory/bugs/open.md`, independent adversarial reviews (correctness, test-quality, security, documentation) find no blocking issues, full clean verification passes (`./scripts/verify-project.sh`), documentation matches observed behavior, and the Git tree is clean on `develop`.
 - Acceptance criteria: (1) Every conformance matrix row classified `verified` — no `partial`, `missing`, or `ambiguous` remains. (2) Every §5.7 interaction inventory entry (M01–M38, O01–O13, D01–D08) has passing controller and pointer evidence (where applicable) through production dispatch. (3) `.factory/bugs/open.md` contains no unresolved defect contradicting a v1 requirement. (4) Independent reviews find no blocking issue. (5) `./scripts/verify-project.sh` passes: clean build, all 98+ tests, installed functional acceptance (not skipped), packaging, sanitizer clean. (6) `README.md` and `docs/OPERATIONS.md` match observed behavior. (7) Git tree clean on `develop`. (8) Remediation rule: if any gap is found, preserve the task ledger, append a uniquely numbered pending task, add it to this task's dependencies, return this task to pending, and continue.
 - Verification: `./scripts/verify-project.sh`; `./scripts/final-gate.sh --planning` (pre-completion); conformance matrix spot-check; interaction inventory completeness check; `git status --porcelain` clean
@@ -270,4 +270,12 @@ The project maintains a machine-readable inventory at `tests/interaction_invento
 - Scope: Close test quality gaps identified by test review: (1) HIGH: Add SDL_JoystickSetVirtualAxis test in test_installed_functional.c — analog sticks/triggers never exercised in any test; (2) MEDIUM: Verify GamepadOrder via independent DBus inspection after overlay save in test_installed_functional.c; (3) MEDIUM: Add renderer-is-software assertion, fb_frames_differ between render states, fb_region_has_color for theme colors in test_backend_smoke_sw.c; (4) LOW: Add target_count==0 assertion to D01 degraded click test. All software-fixable in x86_64 headless environment.
 - Acceptance criteria: Axis events (SDL_CONTROLLERAXISMOTION) exercised through production dispatch path; GamepadOrder verified via DBus after overlay close; backend_smoke_sw asserts software renderer flag, uses fb_frames_differ and fb_region_has_color; D01 test asserts no DBus side effects; all 98+ tests pass with 0 new failures
 - Verification: `nix-shell --run 'cmake --build build-check --parallel 2 && ctest --test-dir build-check --output-on-failure'` — 96 pass, 2 skip (hardware-blocked, exit 77), 0 failures. New assertions confirmed executing: axis events (6 axes: left stick X/Y, right stick X/Y, L/R triggers) sent via `SDL_JoystickSetVirtualAxis` through `pump_manager` (manager) and `cbx_overlay_service_step` (overlay) — verified no state change; GamepadOrder read back via `ip_manager_get_gamepad_order` on independent DBus connection after overlay close — verified CSV contains comp0 path; `fb_frames_differ` between different grid states and between different manager tabs; `fb_region_has_color` for theme bg={18,18,28} and panel_bg={30,30,42}; `SDL_RENDERER_SOFTWARE` flag asserted in both overlay and manager renderer paths; D01 asserts `target_count == 0` after degraded click.
+- Documentation impact: None
+
+## Task 11: Fix BUG-0007 — Controller diagram SVG never loaded in production (remediation)
+- Status: complete
+- Dependencies: none
+- Scope: Fix production bug where `cbx_profile_diagram_init` was called with NULL as `svg_path` in `src/manager/profile_editor_list.c`, so the controller outline SVG was never rendered in the profile editor. Fix: construct SVG path from `cbx_icon_dir()` + `/svg/generic-gamepad.svg` and pass it to `cbx_profile_diagram_init`. Added `CBX_ICON_DIR` env var override to `cbx_icon_dir()` in `src/config/config_paths.c` for test environments. Updated `tests/test_manager_visual.c` and `tests/test_golden.c` to set `CBX_ICON_DIR` to source tree `data/icons/` in setup and unsetenv in teardown. Added `assert_non_null(ed->diagram.base_texture)` to both list and sequential editor mode tests. Strengthened diagram region assertion to check content in both top and bottom halves. Regenerated golden baseline images.
+- Acceptance criteria: Production code passes valid SVG file path; `base_texture` non-NULL; golden baselines regenerated; test asserts `base_texture` non-NULL; `fb_region_has_content` checks full diagram region; full verifier passes.
+- Verification: `nix-shell --run 'ctest --test-dir build-check --output-on-failure'` — 96 pass, 2 skip (hardware-blocked), 0 failures. `assert_non_null(ed->diagram.base_texture)` passes in both list and sequential modes. Golden comparison passes with regenerated baselines. BUG-0007 moved from open to closed ledger.
 - Documentation impact: None
