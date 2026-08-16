@@ -2,16 +2,16 @@
 
 ## Outcome
 - All implementation tasks complete. Plan status: complete.
-- Final gate accepted at defcb8d.
+- Final gate accepted at 8087d1a (re-verified this iteration).
 
 ## Verification
 - `./scripts/final-gate.sh --implementation` → accepted
 - 96/96 tests passed (1 hardware-gated skip: test_backend_smoke)
-- installed-functional-evidence: PASS at defcb8d with zero skips
+- installed-functional-evidence: PASS at 8087d1a with zero skips
 - Git tree clean on develop
 
 ## Commit
-- defcb8d (final gate re-verified, tree clean)
+- 8087d1a (final gate re-verified, tree clean)
 
 ## Next
-Emit completion token — no remaining tasks.
+Emit the completion token — no remaining tasks.
