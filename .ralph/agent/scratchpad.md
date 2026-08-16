@@ -1,29 +1,25 @@
-# Implementation Loop — Task 2 Complete
+# Implementation Loop — Sanitizer Build Gate Verification
 
-## Outcome
-- Task 2 (Add daemon memory footprint test) is complete.
-- Created `tests/test_daemon_footprint.c` measuring RSS via `/proc/self/statm` after overlay service init and after 100 idle steps.
-- Asserts RSS < 50 MB (measured: 19.07 MB after init, 19.23 MB after 100 steps) and growth < 1 MB (measured: 164 KB).
-- Registered in `tests/CMakeLists.txt` as `test_daemon_footprint`.
-- Updated `docs/OPERATIONS.md` Performance expectations table with RSS bound.
-- PERF-04 reclassified from `partial` to `verified` in conformance matrix.
+## Current State
+- Task 1 (SupportedTargetDevices) and Task 2 (daemon footprint test) are complete.
+- Runtime task `task-1786855836-de0e` (Add sanitizer build gate) is `in_progress`.
+- Sanitizer code already committed in `b4d1a0d`: CMakeLists.txt `CBX_ENABLE_SANITIZERS` option + `scripts/verify-sanitizers.sh`.
+- The sanitizer script has NOT been verified to run successfully yet.
+- Plan DOD-05 still says "No sanitizer gates in suite" — needs updating.
+- No remediation task appended to the plan for the sanitizer gate (operating-model step 9 requires this).
+- Tasks 3–8 require undeclared runner capabilities (physical-controller, kernel-uinput, gpu-compositor, target-consumer, installed-package) — blocked.
+- Task 9 (final audit) depends on Tasks 1–8.
+
+## Work for This Iteration
+1. Run `nix-shell --run './scripts/verify-sanitizers.sh'` to verify the sanitizer build gate works.
+2. Fix any ASan/UBSan defects found during the run.
+3. Append remediation Task 10 to `.factory/artifacts/implementation-plan.md` for the sanitizer gate.
+4. Update DOD-05 evidence in conformance matrix: sanitizer gate now exists (GPU smoke still pending on Task 6).
+5. Mark runtime task `task-1786855836-de0e` complete with verification evidence.
+6. Commit to `develop`.
 
 ## Verification
-- `nix-shell --run "ctest --test-dir build-check -R 'footprint' --output-on-failure"` — 1/1 test passed (0.04s)
-- `nix-shell --run "ctest --test-dir build-check -R 'test_overlay_latency' --output-on-failure"` — no regressions
-
-## Commit
-- `0167610` on `develop`
+- `nix-shell --run './scripts/verify-sanitizers.sh'` must pass (exit 0, no ASan/UBSan errors).
 
 ## Next Task
-- Tasks 3–8 require declaring runner capabilities (physical-controller, kernel-uinput, gpu-compositor, target-consumer, installed-package) which are NOT available in the current environment. These cannot be completed without hardware/runner access.
-- Task 9 (final audit) depends on all other tasks.
-- Next actionable: check if any other task can be done without runner capabilities, or proceed to tasks that don't need hardware.
-
-<!-- factory-stale-recovery:start -->
-## Supervisor recovery feedback
-
-- The previous `implementation` Ralph attempt terminated as a stale loop.
-- Run `./scripts/final-gate.sh --implementation` yourself and fix every reported failure.
-- Do not repeat a completion summary until that command passes. Replace this section in the next scratchpad handoff before requesting completion.
-<!-- factory-stale-recovery:end -->
+- After sanitizer gate is verified: Tasks 3–8 are all blocked on undeclared runner capabilities. Task 9 (final audit) depends on all. The loop cannot complete without runner hardware. Document this as a blocked state.
