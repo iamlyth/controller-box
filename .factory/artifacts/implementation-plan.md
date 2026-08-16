@@ -298,7 +298,7 @@ this gap.
 
 ## Task 9: Final documentation and specification audit
 - Status: pending
-- Dependencies: Tasks 1, 2, 3, 4, 5, 6, 7, 8, 10
+- Dependencies: Tasks 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13
 - Scope: Execute the canonical definition of done in `docs/SPEC.md` §11.2.
   Verify all conformance matrix rows are `verified`. Verify interaction
   inventory is exhaustive. Verify no contradictory open v1 bugs. Run independent
@@ -354,3 +354,49 @@ this gap.
     repeated init calls).
 - Documentation impact: `scripts/verify-sanitizers.sh` and
   `scripts/lsan-suppressions.txt` added to project verification suite.
+## Task 11: Fix security issues from independent review
+- Status: complete
+- Dependencies: none
+- Scope: `src/icons/icon_cache.c` (path traversal validation, NaN dimension
+  check), `src/dbus/dbus_client.c` (sd_sender_ok defense-in-depth),
+  `tests/test_icon_cache.c` (3 new traversal tests)
+- Acceptance criteria:
+  1. `rasterize_svg()` rejects icon names containing `/`, `..`, or leading `.`
+     — prevents path traversal via profile-metadata sidecar icon_override.
+  2. `rasterize_svg()` rejects NaN/Infinity SVG dimensions via `isfinite()`.
+  3. `sd_input_event_callback()` calls `sd_sender_ok()` matching the other
+     three signal callbacks.
+  4. All 98 tests pass; sanitizer gate clean.
+- Verification: `nix-shell --run 'ctest --test-dir build-check --output-on-failure'`
+  — 98/98 pass. `nix-shell --run './scripts/verify-sanitizers.sh'` — clean.
+  3 new tests: `test_load_one_traversal_slash`, `test_load_one_traversal_dotdot`,
+  `test_load_one_traversal_leading_dot`.
+- Evidence: commit `d942453` on `develop`.
+
+## Task 12: Fix test quality issues from independent review
+- Status: pending
+- Dependencies: none
+- Scope: `tests/test_manager_native.c` (D06 error message text assertions),
+  `tests/interaction_inventory.c` + `tests/test_interaction_inventory.c`
+  (M37/M38 verification status: NOT_APPLICABLE → VERIFIED),
+  `tests/test_manager_native_prof.c` (M34 DBus signal path variant)
+- Acceptance criteria:
+  1. D06 tests assert status label text contains meaningful error indicator.
+  2. M37 and M38 inventory entries reflect their production-path evidence
+     (controller-path verified via ctrl_press → handle_event).
+  3. M34 sequential capture has a DBus InputEvent signal path test variant.
+- Verification: `nix-shell --run 'ctest --test-dir build-check -R "manager_native|interaction_inventory" --output-on-failure'`
+
+## Task 13: Fix documentation inaccuracies from independent review
+- Status: pending
+- Dependencies: none
+- Scope: `README.md` (verify-project.sh build dir), `docs/PACKAGING.md`
+  (install layout missing fonts/profiles/static-libs), `docs/OPERATIONS.md`
+  (visual test regex missing test_backend_smoke_sw, controller type list),
+  `tests/CMakeLists.txt` (O01-O12 → O01-O13 comment)
+- Acceptance criteria:
+  1. README accurately describes verify-project.sh build directory behavior.
+  2. PACKAGING.md install layout includes fonts/, profiles/, and library paths.
+  3. OPERATIONS.md visual acceptance test regex includes test_backend_smoke_sw.
+  4. CMakeLists.txt comment matches actual inventory count (O01-O13 = 59 entries).
+- Verification: `bash scripts/verify-boilerplate.sh`; manual doc review.
