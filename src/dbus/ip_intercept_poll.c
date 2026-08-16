@@ -123,7 +123,7 @@ ip_intercept_poll_start(ip_intercept_poll *poll,
 
     poll->timer_id = SDL_AddTimer(interval_ms, sdl_timer_cb, poll);
     if (!poll->timer_id)
-        return -errno;
+        return -EIO;  /* SDL_AddTimer doesn't set errno */
 
     return 0;
 }

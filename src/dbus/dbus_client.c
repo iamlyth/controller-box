@@ -270,6 +270,9 @@ sd_properties_changed_callback(sd_bus_message *msg, void *userdata,
         return 0;
 
     const char *sender = sd_bus_message_get_sender(msg);
+    if (!sd_sender_ok(data, sender))
+        return 0;
+
     const char *iface_name = NULL;
 
     int r = sd_bus_message_read(msg, "s", &iface_name);
@@ -1208,7 +1211,7 @@ sd_process(ip_bus_handle bus)
      * Returns 0 if no messages pending, >0 if a message was processed. */
     int r = sd_bus_process(w->bus, NULL);
     if (r < 0)
-        return -errno;
+        return r;  /* sd_bus_process returns negative errno directly */
     return r;
 }
 

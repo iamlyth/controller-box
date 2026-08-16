@@ -102,7 +102,7 @@ if(BASH_EXECUTABLE)
     # Executes the installed `controller-box` binary as a subprocess
     # against a private native-signature DBus server.  Does NOT link
     # against libcontrollerbox.  Skips (exit 77) when Xvfb, xdotool,
-    # dbus-send, or test_ip_server are unavailable.
+    # busctl, or test_ip_server are unavailable.
     add_test(NAME test_installed_binary
         COMMAND ${BASH_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_installed_binary.sh

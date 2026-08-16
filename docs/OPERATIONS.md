@@ -254,8 +254,13 @@ headless-safe for acceptance checks.
 
 **Failure modes:**
 - SDL init failure → exit 1, stderr message (no crash).
-- InputPlumber not found → exit 1, stderr message.
-- Device enumeration failure → exit 1, stderr message.
+- System DBus unavailable → exit 1, stderr message.
+- DBus access denied (polkit) → exit 1, stderr message with group guidance.
+- No usable profiles found → exit 1, stderr message.
+- Virtual controller reconciliation failure → exit 1, stderr message.
+- Assignment restore failure → exit 1, stderr message.
+- InputPlumber not found → degraded mode, service continues (recovers via NameOwnerChanged).
+- Device enumeration failure → degraded mode, service continues.
 - Missing settings/assignments → defaults used, service continues.
 
 ## Configuration
@@ -813,9 +818,10 @@ keyboard input, and produces a non-blank framebuffer capture.
    created or mutated (file mutation from the Save button).
 6. **Overlay service mode**: launches `controller-box --overlay-service`.
    If InputPlumber is available on the system DBus, the service runs
-   and is terminated via SIGTERM.  If InputPlumber is unavailable
-   (expected in test environments), the service exits cleanly with
-   code 1 (not a crash).
+   and is terminated via SIGTERM.  If InputPlumber is unavailable, the
+   service enters degraded mode and stays running (terminated via
+   SIGTERM in the test).  If the system DBus itself is unavailable, the
+   service exits cleanly with code 1 (not a crash).
 7. Cleans up Xvfb and temporary files.
 
 ### Prerequisites
@@ -874,12 +880,13 @@ actual pixel content — not struct fields, geometry, or visibility flags.
 
 ### test_overlay_visual (SPEC §4.10)
 
-Renders 7 overlay states through `cbx_select_grid_build()` →
+Renders 8 overlay states through `cbx_select_grid_build()` →
 `cbx_overlay_surface_init()` → `cbx_overlay_surface_render()` →
 `fb_read_pixels()`, then asserts:
 
 1. **Player Mode grid** — content in grid cells, text regions, icon regions
 2. **Host Mode differs** — `fb_frames_differ` between Player and Host Mode
+2b. **Host Mode row states** — distinct colors for HOST/SELECTED/FROZEN rows
 3. **Conflict highlighting** — red `{220,40,40}` in conflicted cell, not in
    non-conflicted cell
 4. **Unassigned + ≥2 columns** — content in all column headers + ≥2 player
@@ -891,7 +898,7 @@ Renders 7 overlay states through `cbx_select_grid_build()` →
 
 ### test_manager_visual (SPEC §5.6)
 
-Renders 9 manager states through `cbx_manager_init()` →
+Renders 13 manager states through `cbx_manager_init()` →
 `cbx_manager_render()` → `fb_read_pixels()`, then asserts:
 
 1. **Controllers tab (degraded)** — content in device list + 3 buttons + body
@@ -899,7 +906,11 @@ Renders 9 manager states through `cbx_manager_init()` →
 3. **Connected vs degraded differ** — `fb_frames_differ`
 4. **Profiles tab** — content in profile list + create/edit/delete buttons
 5. **Settings tab** — content in settings list + save button + text pixels; per-setting row content (MV-04); edit changes region
+5b. **Settings per-setting visual** — each setting row has distinct content
+5c. **Settings edit changes region** — editing a setting changes its region
 6. **Tab switch differs** — `fb_frames_differ` between all 3 tabs
+6b. **Focus visual indication** — focused widget has distinct visual
+6c. **Press visual indication** — pressed widget has distinct visual
 7. **Profile editor (list mode)** — content in diagram + binding list + title
 8. **Profile editor (sequential mode)** — prompt + progress bar content
 9. **Profile editor (validation error)** — red text in status region
@@ -938,8 +949,8 @@ nix-shell --run "ctest --test-dir build-maintenance-verify -R 'test_fb_assert|te
 Expected results in a headless environment (no GPU, no Xvfb):
 
 - `test_fb_assert`: PASS (9 sub-tests)
-- `test_overlay_visual`: PASS (7 sub-tests)
-- `test_manager_visual`: PASS (9 sub-tests)
+- `test_overlay_visual`: PASS (8 sub-tests)
+- `test_manager_visual`: PASS (13 sub-tests)
 - `test_golden`: PASS (11 sub-tests)
 - `test_backend_smoke`: Skipped (exit 77 — no GPU)
 - `test_backend_smoke_sw`: PASS (software renderer, headless-safe via `SDL_VIDEODRIVER=dummy`)

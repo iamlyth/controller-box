@@ -19,6 +19,7 @@
 
 #include <errno.h>
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -131,8 +132,9 @@ static long
 now_ms(void)
 {
     struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+        return 0;
+    return (long)((int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
 }
 
 /* Find or create a rate limiter entry for the given device path.
