@@ -18,12 +18,14 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pwd.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #ifndef PATH_MAX
@@ -80,6 +82,127 @@ void
 cbx_service_set_mock_username(const char *username)
 {
     mock_username = username;
+}
+
+/* ------------------------------------------------------------------ */
+/*  fork/exec helper (defense-in-depth: no shell invocation)            */
+/* ------------------------------------------------------------------ */
+
+/*
+ * run_command — execute a program without invoking a shell.
+ *
+ * Replaces popen()/system() to eliminate any possibility of shell
+ * metacharacter injection, even though all current inputs are validated
+ * or literal.  Defense-in-depth per security review.
+ *
+ * argv[0] is the program to exec via execvp (PATH-searched).
+ * If stdout_buf is non-NULL and buf_size > 0, captures stdout into it
+ * (NUL-terminated).  If suppress_stderr is true, child stderr goes to
+ * /dev/null.  If stdout is captured and suppress_stderr is false, stderr
+ * is merged into the stdout pipe (equivalent to 2>&1).
+ *
+ * Returns child exit code (0-255) on success, -1 on fork/pipe failure.
+ */
+static int
+run_command(char *const argv[], char *stdout_buf, size_t buf_size,
+            bool suppress_stderr)
+{
+    bool capture = (stdout_buf != NULL && buf_size > 0);
+    int pipefd[2] = {-1, -1};
+
+    if (capture && pipe(pipefd) < 0)
+        return -1;
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        if (capture) {
+            close(pipefd[0]);
+            close(pipefd[1]);
+        }
+        return -1;
+    }
+
+    if (pid == 0) {
+        /* Child: set up redirections, then exec. */
+        if (capture) {
+            close(pipefd[0]);
+            dup2(pipefd[1], STDOUT_FILENO);
+            if (suppress_stderr) {
+                int devnull = open("/dev/null", O_WRONLY);
+                if (devnull >= 0) {
+                    dup2(devnull, STDERR_FILENO);
+                    close(devnull);
+                }
+            } else {
+                dup2(pipefd[1], STDERR_FILENO);
+            }
+            close(pipefd[1]);
+        } else if (suppress_stderr) {
+            int devnull = open("/dev/null", O_WRONLY);
+            if (devnull >= 0) {
+                dup2(devnull, STDERR_FILENO);
+                close(devnull);
+            }
+        }
+        execvp(argv[0], argv);
+        /* execvp failed — exit with 127 (same as shell). */
+        _exit(127);
+    }
+
+    /* Parent: read captured output, wait for child. */
+    if (capture) {
+        close(pipefd[1]);
+        size_t total = 0;
+        ssize_t n;
+        while (total < buf_size - 1 &&
+               (n = read(pipefd[0], stdout_buf + total,
+                         buf_size - 1 - total)) > 0) {
+            total += (size_t)n;
+        }
+        stdout_buf[total] = '\0';
+        close(pipefd[0]);
+    }
+
+    int status;
+    waitpid(pid, &status, 0);
+    if (WIFEXITED(status))
+        return WEXITSTATUS(status);
+    return -1;
+}
+
+/*
+ * build_argv — tokenize a prefix string and append subcommand arguments.
+ *
+ * Copies prefix into buf, splits by whitespace into argv entries, then
+ * appends the variadic string arguments until a NULL sentinel.  The
+ * argv array is NUL-terminated.  Returns the number of entries (excl.
+ * NULL), or -1 if max_argv is exceeded.
+ */
+static int
+build_argv(char *buf, size_t buflen, char *argv[], int max_argv,
+           const char *prefix, ...)
+{
+    snprintf(buf, buflen, "%s", prefix);
+
+    int argc = 0;
+    char *saveptr = NULL;
+    char *tok = strtok_r(buf, " \t", &saveptr);
+    while (tok && argc < max_argv - 1) {
+        argv[argc++] = tok;
+        tok = strtok_r(NULL, " \t", &saveptr);
+    }
+
+    va_list ap;
+    va_start(ap, prefix);
+    const char *arg;
+    while ((arg = va_arg(ap, const char *)) != NULL &&
+           argc < max_argv - 1) {
+        argv[argc++] = (char *)arg;
+    }
+    va_end(ap);
+
+    argv[argc] = NULL;
+    return argc;
 }
 
 /* ------------------------------------------------------------------ */
@@ -395,30 +518,17 @@ systemctl_prefix(void)
 int
 cbx_service_systemd_available(void)
 {
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd), "%s is-system-running 2>/dev/null",
-             systemctl_prefix());
+    char prefix_buf[256];
+    char *argv[16];
+    build_argv(prefix_buf, sizeof(prefix_buf), argv, 16,
+               systemctl_prefix(), "is-system-running", NULL);
 
-    FILE *p = popen(cmd, "r");
-    if (!p)
-        return 0;
-
-    char buf[128];
-    int got = fgets(buf, sizeof(buf), p) != NULL;
-    int status = pclose(p);
-
-    (void)got;
+    int exit_code = run_command(argv, NULL, 0, true);
 
     /* is-system-running returns non-zero for degraded states, but
      * that still means systemd is available.  Only return 0 if the
-     * command itself failed to run (status == -1 or 127). */
-    if (status == -1 || WIFEXITED(status) == 0)
-        return 0;
-
-    int exit_code = WEXITSTATUS(status);
-    /* 0 = running, 1 = degraded, 2 = maintenance, etc. All mean systemd is present. */
-    /* 127 = command not found */
-    if (exit_code == 127)
+     * command itself failed to run (exit 127 = not found, or -1). */
+    if (exit_code < 0 || exit_code == 127)
         return 0;
 
     return 1;
@@ -431,21 +541,14 @@ cbx_service_systemd_available(void)
 int
 cbx_service_is_active(void)
 {
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd), "%s is-active controller-box 2>/dev/null",
-             systemctl_prefix());
-
-    FILE *p = popen(cmd, "r");
-    if (!p)
-        return -errno;
+    char prefix_buf[256];
+    char *argv[16];
+    build_argv(prefix_buf, sizeof(prefix_buf), argv, 16,
+               systemctl_prefix(), "is-active", "controller-box", NULL);
 
     char buf[128];
-    int got = (fgets(buf, sizeof(buf), p) != NULL);
-    int status = pclose(p);
-    (void)status;
-
-    if (!got)
-        return 0;
+    int exit_code = run_command(argv, buf, sizeof(buf), true);
+    (void)exit_code;
 
     /* Trim trailing whitespace. */
     char *nl = strchr(buf, '\n');
@@ -498,26 +601,20 @@ cbx_service_install(char *status_buf, size_t buflen)
     }
 
     /* 5. Enable and start the service. */
-    char cmd[512];
-    snprintf(cmd, sizeof(cmd), "%s enable --now controller-box 2>&1",
-             systemctl_prefix());
+    char prefix_buf[256];
+    char *argv[16];
+    build_argv(prefix_buf, sizeof(prefix_buf), argv, 16,
+               systemctl_prefix(), "enable", "--now", "controller-box", NULL);
 
-    FILE *p = popen(cmd, "r");
-    if (!p) {
+    char out[256];
+    int exit_code = run_command(argv, out, sizeof(out), false);
+
+    if (exit_code < 0) {
         if (status_buf && buflen > 0)
             snprintf(status_buf, buflen,
                      "Failed to run systemctl enable");
         return CBX_SVC_ENABLE_FAILED;
     }
-
-    char out[256];
-    if (fgets(out, sizeof(out), p))
-        out[sizeof(out) - 1] = '\0';
-    else
-        out[0] = '\0';
-
-    int status = pclose(p);
-    int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 
     if (exit_code != 0) {
         if (status_buf && buflen > 0)
@@ -560,10 +657,11 @@ int
 cbx_service_uninstall(void)
 {
     /* Disable the service. */
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd), "%s disable controller-box 2>/dev/null",
-             systemctl_prefix());
-    int rc = system(cmd);
+    char prefix_buf[256];
+    char *argv[16];
+    build_argv(prefix_buf, sizeof(prefix_buf), argv, 16,
+               systemctl_prefix(), "disable", "controller-box", NULL);
+    int rc = run_command(argv, NULL, 0, true);
     (void)rc;
 
     /* Remove the unit file. */

@@ -369,9 +369,17 @@ static void test_group_check_no_username(void **state)
 
 static void test_systemd_available_mock_true(void **state)
 {
-    (void)state;
-    /* Use /bin/sh -c 'exit 0' to always succeed. */
-    cbx_service_set_mock_systemctl("/bin/sh -c 'exit 0'");
+    si_fixture *f = *state;
+    /* Create a mock systemctl script that always succeeds (exit 0). */
+    char script[PATH_MAX];
+    snprintf(script, sizeof(script), "%s/mock_ok", f->tmp);
+    FILE *s = fopen(script, "w");
+    assert_non_null(s);
+    fprintf(s, "#!/bin/sh\nexit 0\n");
+    fclose(s);
+    chmod(script, 0755);
+
+    cbx_service_set_mock_systemctl(script);
     int rc = cbx_service_systemd_available();
     assert_int_equal(rc, 1);
 }
@@ -379,10 +387,10 @@ static void test_systemd_available_mock_true(void **state)
 static void test_systemd_available_mock_false(void **state)
 {
     (void)state;
-    /* Use a nonexistent command to simulate systemctl not found (exit 127). */
+    /* Use a nonexistent command path: execvp fails, child exits 127. */
     cbx_service_set_mock_systemctl("/nonexistent/command/that/does/not/exist");
     int rc = cbx_service_systemd_available();
-    /* The shell returns 127 for nonexistent commands → 0 (not available). */
+    /* exit 127 = command not found → 0 (not available). */
     assert_int_equal(rc, 0);
 }
 
@@ -392,19 +400,34 @@ static void test_systemd_available_mock_false(void **state)
 
 static void test_is_active_mock_true(void **state)
 {
-    (void)state;
-    /* We need a command that outputs "active" and exits 0.
-     * Use echo active. */
-    cbx_service_set_mock_systemctl("echo active #");
+    si_fixture *f = *state;
+    /* Create a mock systemctl that outputs "active". */
+    char script[PATH_MAX];
+    snprintf(script, sizeof(script), "%s/mock_active", f->tmp);
+    FILE *s = fopen(script, "w");
+    assert_non_null(s);
+    fprintf(s, "#!/bin/sh\necho active\n");
+    fclose(s);
+    chmod(script, 0755);
+
+    cbx_service_set_mock_systemctl(script);
     int rc = cbx_service_is_active();
     assert_int_equal(rc, 1);
 }
 
 static void test_is_active_mock_false(void **state)
 {
-    (void)state;
-    /* echo inactive → not active. */
-    cbx_service_set_mock_systemctl("echo inactive #");
+    si_fixture *f = *state;
+    /* Create a mock systemctl that outputs "inactive". */
+    char script[PATH_MAX];
+    snprintf(script, sizeof(script), "%s/mock_inactive", f->tmp);
+    FILE *s = fopen(script, "w");
+    assert_non_null(s);
+    fprintf(s, "#!/bin/sh\necho inactive\n");
+    fclose(s);
+    chmod(script, 0755);
+
+    cbx_service_set_mock_systemctl(script);
     int rc = cbx_service_is_active();
     assert_int_equal(rc, 0);
 }
@@ -426,9 +449,17 @@ static void test_install_no_systemd(void **state)
 
 static void test_install_already_active(void **state)
 {
-    (void)state;
-    /* Mock systemctl to echo "active" for is-active checks. */
-    cbx_service_set_mock_systemctl("echo active #");
+    si_fixture *f = *state;
+    /* Create a mock systemctl that outputs "active". */
+    char script[PATH_MAX];
+    snprintf(script, sizeof(script), "%s/mock_already_active", f->tmp);
+    FILE *s = fopen(script, "w");
+    assert_non_null(s);
+    fprintf(s, "#!/bin/sh\necho active\n");
+    fclose(s);
+    chmod(script, 0755);
+
+    cbx_service_set_mock_systemctl(script);
 
     char status[256];
     int rc = cbx_service_install(status, sizeof(status));
@@ -598,8 +629,15 @@ static void test_uninstall_removes_file(void **state)
     struct stat st;
     assert_int_equal(stat(path, &st), 0);
 
-    /* Uninstall. */
-    cbx_service_set_mock_systemctl("/bin/sh -c 'exit 0'");
+    /* Uninstall — use a mock script that exits 0. */
+    char script[PATH_MAX];
+    snprintf(script, sizeof(script), "%s/mock_uninstall_ok", f->tmp);
+    FILE *s = fopen(script, "w");
+    assert_non_null(s);
+    fprintf(s, "#!/bin/sh\nexit 0\n");
+    fclose(s);
+    chmod(script, 0755);
+    cbx_service_set_mock_systemctl(script);
     rc = cbx_service_uninstall();
     assert_int_equal(rc, 0);
 
@@ -609,8 +647,16 @@ static void test_uninstall_removes_file(void **state)
 
 static void test_uninstall_no_file(void **state)
 {
-    (void)state;
-    cbx_service_set_mock_systemctl("/bin/sh -c 'exit 0'");
+    si_fixture *f = *state;
+    /* Use a mock script that exits 0. */
+    char script[PATH_MAX];
+    snprintf(script, sizeof(script), "%s/mock_uninstall_nofile", f->tmp);
+    FILE *s = fopen(script, "w");
+    assert_non_null(s);
+    fprintf(s, "#!/bin/sh\nexit 0\n");
+    fclose(s);
+    chmod(script, 0755);
+    cbx_service_set_mock_systemctl(script);
     int rc = cbx_service_uninstall();
     assert_int_equal(rc, 0);  /* ENOENT is OK */
 }
@@ -622,7 +668,9 @@ static void test_uninstall_no_file(void **state)
 static void test_mock_overrides_reset(void **state)
 {
     (void)state;
-    cbx_service_set_mock_systemctl("/bin/sh -c 'exit 0'");
+    /* Mock values don't need to be valid paths here — the mock is
+     * reset before any command runs; this test only verifies reset. */
+    cbx_service_set_mock_systemctl("/bin/true");
     cbx_service_set_mock_group_file("/tmp/test");
     cbx_service_set_mock_username("tester");
 
