@@ -1,10 +1,10 @@
-# Campaign Round 2 Audit — Scratchpad
+# Campaign Round 2 Audit — Complete
 
 ## Status
-Audit report written to `.factory/artifacts/campaign-audit.md` with `result: findings`.
-7 findings identified from 4 parallel read-only subagent reviews + direct investigation.
+Audit report at `.factory/artifacts/campaign-audit.md` with `result: findings`.
+Final gate passed: `./scripts/final-gate.sh --campaign-audit` accepted round 2.
 
-## Findings summary
+## Findings (7)
 1. No physical/kernel-backed gamepad in installed functional test (§11.1.5, §5.7)
 2. No compositor-visible overlay activation in installed binary test (§11.1.5)
 3. Boolean DBus property SET lacks native type fidelity (§10.1)
@@ -22,5 +22,10 @@ Audit report written to `.factory/artifacts/campaign-audit.md` with `result: fin
 - sd_set_property (dbus_client.c:537-543) falls through to string for boolean properties
 - OPERATIONS.md:1032 says "59 entries, all verified" but 8 are NOT_APPLICABLE, 1 DEFERRED
 
+## Gate binding
+- FACTORY_CAMPAIGN_AUDIT_ROUND=2
+- FACTORY_CAMPAIGN_AUDIT_BASE=9fd528a829cde97951a36a38b8d98a98396cc3f9
+- FACTORY_CAMPAIGN_RUNNER_EVIDENCE_SHA256=a20965df7b555c2d9bec12f4192d5ac7b46c545f20b6120c681658cb713774d3
+
 ## Next action
-Run final gate. If it passes, emit the completion token. If it fails, repair deficiencies.
+Emit the completion token.
