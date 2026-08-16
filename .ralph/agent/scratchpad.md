@@ -1,19 +1,21 @@
-# Implementation Loop — Task 1 Complete
+# Implementation Loop — Task 2 Complete
 
 ## Outcome
-- Task 1 (Add SupportedTargetDevices to native test server) is complete.
-- Added `SupportedTargetDevices:as` property to `native_ip_server.c` manager vtable with human-readable names matching `SupportedTargetDeviceIds` values ("Xbox 360 Controller", "DualSense", "Generic Gamepad").
-- Added native round-trip test assertions in `test_native_dbus.c` (Test 1 via `backend->get_property`, Test 3 via `ip_manager_get_supported_target_devices` wrapper).
-- DBUS-07 reclassified from `partial` to `verified` in conformance matrix.
+- Task 2 (Add daemon memory footprint test) is complete.
+- Created `tests/test_daemon_footprint.c` measuring RSS via `/proc/self/statm` after overlay service init and after 100 idle steps.
+- Asserts RSS < 50 MB (measured: 19.07 MB after init, 19.23 MB after 100 steps) and growth < 1 MB (measured: 164 KB).
+- Registered in `tests/CMakeLists.txt` as `test_daemon_footprint`.
+- Updated `docs/OPERATIONS.md` Performance expectations table with RSS bound.
+- PERF-04 reclassified from `partial` to `verified` in conformance matrix.
 
 ## Verification
-- `nix-shell --run "ctest --test-dir build-check -R 'test_native_dbus' --output-on-failure"` — 10/10 tests passed (5.25s)
-- `test_manager_calls` (mock) also passes — no regressions
+- `nix-shell --run "ctest --test-dir build-check -R 'footprint' --output-on-failure"` — 1/1 test passed (0.04s)
+- `nix-shell --run "ctest --test-dir build-check -R 'test_overlay_latency' --output-on-failure"` — no regressions
 
 ## Commit
-- `96bc4f7` on `develop`
+- `0167610` on `develop`
 
 ## Next Task
-- Task 2: Add daemon memory footprint test (no deps, code change). Measure RSS/heap of overlay service after init and 100 idle steps. Assert <50MB. PERF-04 -> verified.
 - Tasks 3–8 require declaring runner capabilities (physical-controller, kernel-uinput, gpu-compositor, target-consumer, installed-package) which are NOT available in the current environment. These cannot be completed without hardware/runner access.
 - Task 9 (final audit) depends on all other tasks.
+- Next actionable: check if any other task can be done without runner capabilities, or proceed to tasks that don't need hardware.
