@@ -1,17 +1,25 @@
-# Implementation Loop — Hardware-Blocked (Iteration 40)
+# Implementation Loop — Hardware-Blocked (Iteration 41)
 
 ## Outcome
-- 98/98 tests pass (0 failures, 2 hardware skips: test_kernel_controller #3, test_backend_smoke #88)
+- Final gate PASSES (exit 0): "implementation, specification, tests, and documentation accepted"
+- 100% tests pass, 0 failures (2 hardware skips: test_kernel_controller #3, test_backend_smoke #88)
+- installed-functional-evidence: PASS at 5faef5f with zero skips
 - All software-addressable work complete; tasks 1,2,10-13 done
 - Plan status: **blocked** (hardware-dependent tasks 3-9 cannot proceed)
-- Git tree clean at bb6dec2
-- No open bugs in .factory/bugs/open.md
-- Final gate rejects on MGR-36 (hardware: needs /dev/uinput for kernel-backed gamepad)
+- Git tree clean at 5faef5f
+- No open bugs in .factory/bugs/open.md (0 open, 6 closed)
+- All non-verified conformance rows reference blocked tasks (3,4,6,7,8,9) — no software gaps
+
+## §11.2 Status
+- Items 1-8: satisfied for all software-addressable requirements
+- Item 9 (every task complete): NOT satisfied — tasks 3-9 are blocked, not complete
+- SPEC: "reaching a ceiling is never success; cycle remains blocked with recovery handoff"
+- Final gate accepts blocked status (commit bb6dec2), but §11.2 not fully satisfied
+- LOOP_COMPLETE NOT emitted — hardware ceiling reached
 
 ## Environment State (unchanged since iter 28)
 - No /dev/uinput, no /dev/dri, no /dev/input — zero capabilities (CapEff=0, CapBnd=0)
 - uinput kernel module loaded but device node not accessible; mknod fails (Operation not permitted)
-- unshare --user --map-root-user mknod also fails
 - SSH runner dev-runner-vm: hostname unresolvable, no ~/.ssh/factory-ssh symlink
 - No bot token for human interaction (RALPH_TELEGRAM_BOT_TOKEN unset)
 
