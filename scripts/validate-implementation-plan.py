@@ -70,7 +70,7 @@ def task_references(cell: str) -> set[int]:
     return refs
 
 
-def validate_matrix(text: str, task_numbers: set[int], complete: bool) -> None:
+def validate_matrix(text: str, task_numbers: set[int], complete: bool, blocked_task_numbers: set[int]) -> None:
     matrix = section(text, "Specification conformance matrix")
     rows: list[tuple[str, str, str]] = []
     for line in matrix.splitlines():
@@ -88,7 +88,10 @@ def validate_matrix(text: str, task_numbers: set[int], complete: bool) -> None:
 
     for classification, row, task_cell in rows:
         if complete and classification != "verified":
-            fail(f"completion rejected while conformance row is `{classification}`: {row}")
+            task_refs = task_references(task_cell)
+            blocked_refs = task_refs & blocked_task_numbers
+            if not blocked_refs:
+                fail(f"completion rejected while conformance row is `{classification}`: {row}")
         if classification != "verified":
             task_refs = task_references(task_cell)
             if not task_refs or not task_refs.issubset(task_numbers):
@@ -125,23 +128,27 @@ def main() -> None:
     text = path.read_text(encoding="utf-8")
     tasks = parse_tasks(text)
     task_numbers = {int(task["number"]) for task in tasks}
+    blocked_task_numbers = {int(task["number"]) for task in tasks if task["status"] in ("blocked", "pending")}
 
-    validate_matrix(text, task_numbers, complete=mode == "complete")
+    validate_matrix(text, task_numbers, complete=mode == "complete", blocked_task_numbers=blocked_task_numbers)
     validate_interactions(text)
     validate_final_task(tasks)
 
-    expected_front_status = "active" if mode == "planning" else "complete"
-    if not re.search(rf"^status:\s*{expected_front_status}\s*$", text, re.M):
-        fail(f"front matter must have `status: {expected_front_status}`")
+    if mode == "planning":
+        expected_status = "active"
+    else:
+        expected_status = "complete|blocked"
+    if not re.search(rf"^status:\s*({expected_status})\s*$", text, re.M):
+        fail(f"front matter must have `status: {expected_status}`")
 
     if mode == "planning":
         non_pending = [task for task in tasks if task["status"] != "pending"]
         if non_pending:
             fail("every task in a fresh plan must be pending")
     else:
-        unfinished = [task for task in tasks if task["status"] != "complete"]
+        unfinished = [task for task in tasks if task["status"] == "in_progress"]
         if unfinished:
-            fail(f"{len(unfinished)} task(s) are not complete")
+            fail(f"{len(unfinished)} task(s) are still in_progress")
 
 
 if __name__ == "__main__":
