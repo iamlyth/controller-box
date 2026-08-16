@@ -1,18 +1,17 @@
 # Implementation Scratchpad — Controller-Box v1
 
-## Task 3 complete: Real overlay lifecycle in installed tests
+## Task 4 complete: Interaction inventory accuracy and missing coverage
 
-- **Commit:** a786604 on develop
-- **What:** Replaced stub overlay DBus side-effects (Phases 7-10) in `test_installed_functional.c` with real overlay service lifecycle through production poll path. Enhanced `test_installed_binary.sh` Phase 6 with overlay activation + screenshot verification.
+- **Commit:** 284f2a8 on develop
+- **What:** Fixed M32/M34 dispatch_path descriptions in interaction_inventory.c, added M35/M36 to na_ids test guard, added DBus InputEvent signal path test for capture mode and M38 controller-path discard test in test_manager_native_prof.c.
 - **Changes:**
-  - `test_installed_functional.c`: Phases 8-12 allocate `cbx_overlay_service_ctx`, init all components (renderer, DBus, enumerate, grid, surface, lifecycle fade=0, player/host mode, input events, polls, triggers) with rendering resources (text cache, icon cache, theme). Phase 9: InterceptMode PASS→ALL + poll event → `cbx_overlay_service_step` → VISIBLE. Phase 10: `fb_read_pixels` + `fb_region_has_content` on grid/header/labels/cells. Phase 11: B keydown → `cbx_overlay_lifecycle_close` → `cbx_overlay_on_save` (assignment persistence + InterceptMode→PASS). Phase 12: cleanup.
-  - `test_installed_binary.sh`: Phase 6 enhanced — launch overlay, set InterceptMode ALL via `busctl set-property`, screenshot verification (mean > 5.0 + frame diff), close via InterceptMode→PASS, verify clean close.
-  - `CMakeLists.txt`: Added `cbx_test_support` link (fb_assert), `CBX_SOURCE_DIR` + `CBX_FONT_PATH` compile defs.
-  - `README.md`: §11.1 table updated with `test_installed_functional` and `test_installed_binary`.
-  - Conformance matrix PERF-01: Finding 2 (compositor-visible overlay activation) resolved.
-- **Key finding:** `cbx_overlay_on_save` profile apply (`cbx_profile_cycle_apply`) fails because the grid build sets row profile to "default" which resolves to system profile dir. Test clears row profile before close to isolate assignment-persistence path. Profile application is tested in `test_overlay_native.c` O10.
+  - `interaction_inventory.c`: M32 dispatch_path → "direct callback: cbx_profile_editor_on_input_event (supplemental; DBus signal path tested in test_manager_native_prof)"; M34 → "direct callback: cbx_profile_editor_on_input_event → cbx_profile_editor_seq_on_input (supplemental; DBus signal path tested in test_manager_native_prof)".
+  - `test_interaction_inventory.c`: na_ids array now includes M35 and M36 alongside M13, M14, M32, M34, M37, M38.
+  - `test_manager_native_prof.c`: Added `drain_bus` and `emit_input_event` helpers. Added `test_m32_capture_dbus_signal` — emits InputEvent via native server's EmitInputEvent method at CompositeDevice0 path, drains manager bus via sd_bus_process, verifies full signal dispatch chain (sd_input_event_callback → input_event_signal_cb → ip_input_events_handle with sender verification → cbx_profile_editor_on_input_event → capture ends). Added `test_m38_discard_ctrl` — Start button (virtual gamepad button 6) from editor LIST mode → controller event dispatch → cbx_profiles_tab_close_editor, verifies mode returns to LIST and profile file mtime unchanged. Both registered in test runner. File header updated to M30–M38.
+  - Conformance matrix MGR-07: partial → verified.
+- **Key finding:** The native server's `EmitInputEvent(ss)` method emits a real `InputEvent(sd)` signal via `sd_bus_emit_signal`. The signal is received on the manager's bus (separate connection from the fixture's bus). `drain_bus` on `mgr.dbus_backend/mgr.dbus_bus` processes it through the full chain including sender verification (expected_sender resolved via GetNameOwner during editor open).
 - **Verification:** `ctest --test-dir build-check` → 96/96 pass (1 pre-existing skip). `verify-project.sh` → pass.
 
 ## Next task
 
-Task 4: Fix interaction inventory accuracy and missing coverage (M32/M34 dispatch path, M35/M36 na_ids, M38 native test, DBus InputEvent signal path for capture mode).
+Task 5: Fix host mode visual rendering in overlay grid — `src/overlay/grid_render.c` consume `cbx_host_mode_row_state()`, render distinct visuals for SELECTED/HOST/FROZEN rows, update visual and golden tests.
