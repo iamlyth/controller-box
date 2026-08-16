@@ -1,12 +1,12 @@
-# Implementation Loop — Hardware-Blocked (Iteration 27)
+# Implementation Loop — Hardware-Blocked (Iteration 28)
 
 ## Outcome
-- Re-verified hardware absent: /dev/uinput (mknod EPERM), /dev/dri absent, /dev/uhid absent, /dev/input absent, no modprobe, no kernel modules
-- Remote runner dev-runner-vm: SSH hostname unresolvable, no ~/.ssh/config — runner not accessible from sandbox
-- 98/98 tests pass (0 failures) inside nix-shell, 2 hardware skips (test_kernel_controller #3, test_backend_smoke #88)
+- Re-verified hardware absent: /dev/uinput (mknod EPERM, uid=1000, no capabilities), /dev/dri absent, /dev/uhid absent, /dev/input absent, no modprobe, no kernel modules
+- Runner dev-runner-vm: no ~/.ssh/factory-ssh symlink, SSH unresolvable — run-factory-runners.py rejects (trusted SSH launcher not provisioned)
+- 98/98 tests pass (0 failures, 2 hardware skips: test_kernel_controller #3, test_backend_smoke #88)
 - Final gate rejects on MGR-36 (partial — needs kernel-backed gamepad via /dev/uinput)
-- All software-addressable work complete: all tasks closed
-- Git tree clean on develop at e92b864
+- All software-addressable work complete: all runtime tasks closed
+- Emitted human.interact requesting hardware provisioning (options A/B/C) — awaiting response
 
 ## Recovery Handoff (when hardware available)
 1. Expose /dev/uinput (docker --device or mknod as root) → Task 3
