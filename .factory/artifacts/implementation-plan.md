@@ -397,7 +397,7 @@ this gap.
   cbx_profile_editor_on_input_event → seq_on_input) and passes.
 
 ## Task 13: Fix documentation inaccuracies from independent review
-- Status: pending
+- Status: complete
 - Dependencies: none
 - Scope: `README.md` (verify-project.sh build dir), `docs/PACKAGING.md`
   (install layout missing fonts/profiles/static-libs), `docs/OPERATIONS.md`
@@ -408,4 +408,7 @@ this gap.
   2. PACKAGING.md install layout includes fonts/, profiles/, and library paths.
   3. OPERATIONS.md visual acceptance test regex includes test_backend_smoke_sw.
   4. CMakeLists.txt comment matches actual inventory count (O01-O13 = 59 entries).
-- Verification: `bash scripts/verify-boilerplate.sh`; manual doc review.
+- Verification: `bash scripts/verify-boilerplate.sh` — pass. All 4 fixes
+  verified in commit `730a310`: 15 `build-maintenance-verify` refs (8 README,
+  7 OPERATIONS), `test_backend_smoke_sw` in regex, `O01–O13` in CMakeLists.txt,
+  PACKAGING.md includes libcontrollerbox.a, libnanosvg.a, fonts/, profiles/.
