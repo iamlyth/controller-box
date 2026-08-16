@@ -191,6 +191,36 @@ No **BLOCKING** findings were identified. All findings are MEDIUM or below.
 | Documentation | 2 | 0 | MEDIUM |
 | **Total** | **17** | **0** | **MEDIUM** |
 
+## Test bugs found during verification
+
+During the final gate verification run, two pre-existing test bugs were
+discovered and fixed:
+
+### T-1 (MEDIUM): test_set_full_table used invalid slots beyond CBX_MAX_CONTROLLERS
+
+- **File:** `tests/test_assign_persist.c:204-215`
+- **Description:** The test created 32 assignments with slots 0-31, but
+  `cbx_assignments_validate` rejects `slot >= CBX_MAX_CONTROLLERS` (16).
+  The slot validation was added in iteration 5 but the test (Task 26)
+  wasn't updated. This was masked by stale build directory binaries.
+- **Resolution:** Fixed. Slots now use `i % CBX_MAX_CONTROLLERS` to stay
+  within the valid range while still filling CBX_MAX_ASSIGNMENTS entries.
+  Added `#include "config/config_settings.h"` for CBX_MAX_CONTROLLERS.
+
+### T-2 (MEDIUM): test_native_dbus expected stale persistent ID format
+
+- **File:** `tests/test_native_dbus.c:502`
+- **Description:** The test expected persistent ID `"comp-0"` but the
+  native IP server was changed to use `"ORDER:%d"` format in iteration 3.
+  The test wasn't updated. This was masked by stale build directory binaries.
+- **Resolution:** Fixed. Changed expected value from `"comp-0"` to
+  `"ORDER:0"` to match the server's persistent ID format.
+
+Both bugs were masked by the stale `build-maintenance-verify` directory
+(at `/workspace/controller-box/`) that contained old binaries with the
+previous behavior. After cleaning the stale directory and rebuilding,
+the bugs surfaced and were fixed.
+
 ## Evidence
 
 - Reviews conducted via parallel read-only subagents (reviewer, security-reviewer, docs-reviewer)
