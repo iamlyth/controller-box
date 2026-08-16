@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 
@@ -462,6 +463,23 @@ done:
     return rc;
 }
 
+/* --- Helpers: O_NOFOLLOW file open --------------------------------------- */
+
+static FILE *open_read_nofollow(const char *path)
+{
+    int fd = open(path, O_RDONLY | O_NOFOLLOW);
+    if (fd < 0)
+        return NULL;
+    FILE *f = fdopen(fd, "r");
+    if (!f) {
+        int e = errno;
+        close(fd);
+        errno = e;
+        return NULL;
+    }
+    return f;
+}
+
 /* --- Load ---------------------------------------------------------------- */
 
 int cbx_settings_load(cbx_settings *settings)
@@ -497,7 +515,7 @@ int cbx_settings_load(cbx_settings *settings)
         return -EFBIG;
 
     /* Open and parse. */
-    FILE *f = fopen(path, "r");
+    FILE *f = open_read_nofollow(path);
     if (!f)
         return -errno;
 

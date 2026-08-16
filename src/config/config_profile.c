@@ -29,6 +29,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 
@@ -453,6 +454,25 @@ static int parse_profile_from_string(cbx_profile *p, const char *yaml,
     return rc;
 }
 
+/* --- Helpers: O_NOFOLLOW file open --------------------------------------- */
+
+/* Open a file for reading with O_NOFOLLOW to prevent symlink attacks.
+ * Returns a FILE* on success, NULL on error (errno set). */
+static FILE *open_read_nofollow(const char *path)
+{
+    int fd = open(path, O_RDONLY | O_NOFOLLOW);
+    if (fd < 0)
+        return NULL;
+    FILE *f = fdopen(fd, "r");
+    if (!f) {
+        int e = errno;
+        close(fd);
+        errno = e;
+        return NULL;
+    }
+    return f;
+}
+
 /* --- Load ---------------------------------------------------------------- */
 
 int cbx_profile_load(cbx_profile *p, const char *path)
@@ -472,7 +492,7 @@ int cbx_profile_load(cbx_profile *p, const char *path)
     if (st.st_size > MAX_DOC_SIZE)
         return -EFBIG;
 
-    FILE *f = fopen(path, "r");
+    FILE *f = open_read_nofollow(path);
     if (!f)
         return -errno;
 
