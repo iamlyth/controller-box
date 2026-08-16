@@ -1,21 +1,17 @@
-# Campaign Round 4 Audit — Complete
+# Planning Loop — Controller-Box
 
-## Status
-Audit report at `.factory/artifacts/campaign-audit.md` with `result: findings`.
-Final gate passed: `./scripts/final-gate.sh --campaign-audit` accepted.
+## Current state (iteration 1)
+- Fresh planning cycle; skeleton plan had correct metadata
+- Spec committed at 3a10f6b, blob 58f5d3c, base_commit d61b7f5
+- Campaign Round 4 audit found 7 findings (2 software-fixable, 5 hardware-blocked)
+- Open bugs ledger is empty
+- ~120 source files, ~90 test files — substantial implementation exists, zero stubs/TODOs
 
-## Findings (7)
-1. Six of seven campaign-required capabilities undeclared/unevidenced (only `systemd-user` and `remote-project-gate` evidenced)
-2. Controller acceptance uses process-local SDL virtual gamepads, not kernel-backed per SPEC §5.7/§11.1.5
-3. GPU backend smoke test skips (exit 77) — no hardware renderer evidence
-4. No human release acceptance artifact on target hardware
-5. Pi 4 maximum overlay latency not measured on target hardware
-6. Manager init doesn't load persisted settings before computing expected controller count
-7. Production DBus interface header resides in test directory (`tests/dbus_mock.h`)
-
-## Gate
-Environment variables set from front matter: round=4, base=bf5440f, runner_evidence_sha256=56baaa...
-Final gate output: "independent campaign audit accepted"
+## Plan written
+- 8 tasks: 2 software-fixable (settings load, DBus header), 5 hardware-blocked (kernel controller, GPU smoke, Pi 4 latency, human acceptance, campaign capabilities), 1 final audit
+- Conformance matrix: 62 rows, 54 verified, 8 non-verified (all mapped to tasks)
+- Interaction inventory: 59 entries (M01-M38, O01-O13, D01-D08), exhaustive
+- Final gate: `./scripts/final-gate.sh --planning` PASSED
 
 ## Next action
-Emit the completion token.
+- Emit the completion token
