@@ -130,7 +130,7 @@ satisfy `verified`.
 | PERF-01 | 11 | verified | `test_overlay_latency.c:test_poll_interval_and_structure` 50+10=60≤75ms; `test_show_path_render_present_latency` p99<10ms | — |
 | PERF-02 | 11 | verified | `test_show_path_render_present_latency` 200 iterations p99<10ms; `test_show_path_no_texture_allocation` | — |
 | PERF-03 | 11 | verified | `test_close_path_timing` 200 iterations median<1ms; hidden not destroyed | — |
-| PERF-04 | 11 | partial | `test_idle_step_no_busy_loop` p99<5ms (CPU); no memory footprint (RSS/heap) measurement. SPEC says "without measurable impact." | Task 2 |
+| PERF-04 | 11 | verified | `test_idle_step_no_busy_loop` p99<5ms (CPU); `test_daemon_footprint_bounded` RSS<50 MB after init and after 100 idle steps, growth<1 MB (no leak). PERF-04 fully verified. | — |
 | PERF-05 | 11 | partial | ≤100ms max on Pi 4 not measured; structural bound <60ms on test machine. Requires target hardware. | Task 7 |
 | PERF-06 | 11 | verified | `ip_manager_set_gamepad_order` delegates to InputPlumber (GUI doesn't manage suspend/resume); `test_native_assignment_application` | — |
 | VRF-01 | 11.1.1 | verified | `fb_assert.c` `fb_read_pixels` via `SDL_RenderReadPixels`; `test_overlay_visual.c`, `test_manager_visual.c` production composition | — |
@@ -198,16 +198,20 @@ this gap.
 - Evidence: commit on `develop`; DBUS-07 reclassified to `verified` in conformance matrix.
 
 ## Task 2: Add daemon memory footprint test
-- Status: pending
+- Status: complete
 - Dependencies: none
-- Scope: `tests/test_overlay_latency.c` or new `tests/test_daemon_footprint.c`
-  (measure RSS or heap usage of overlay service in idle state)
+- Scope: `tests/test_daemon_footprint.c` (new file, measure RSS of overlay
+  service in idle state via `/proc/self/statm`)
 - Acceptance criteria: Test measures the overlay service context's memory
-  footprint (RSS via `/proc/self/statm` or SDL_GetSystemRAM) after init and
-  after 100 idle steps. Asserts footprint is bounded (<50 MB RSS for the
-  daemon context). Test does not skip. PERF-04 reclassified to `verified`.
+  footprint (RSS via `/proc/self/statm`) after init and after 100 idle steps.
+  Asserts footprint is bounded (<50 MB RSS for the daemon context). Test does
+  not skip. PERF-04 reclassified to `verified`.
 - Verification: `nix-shell --run "ctest --test-dir build-check -R 'footprint' --output-on-failure"`
-- Documentation impact: note memory bound in `docs/OPERATIONS.md`
+  — 1/1 test passed (0.04s). RSS after init: 19.07 MB; after 100 idle steps:
+  19.23 MB; growth: 164 KB (< 1 MB limit). All under 50 MB.
+- Documentation impact: updated `docs/OPERATIONS.md` Performance expectations
+  table with RSS bound and test reference.
+- Evidence: commit on `develop`; PERF-04 reclassified to `verified`.
 
 ## Task 3: Declare physical-controller or kernel-uinput runner capability
 - Status: pending

@@ -623,6 +623,13 @@ if(CMOCKA_FOUND)
     set_tests_properties(test_overlay_latency PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
 
+    # --- Task 2: Daemon memory footprint test (PERF-04, SPEC §4.9/§11) --
+    add_executable(test_daemon_footprint tests/test_daemon_footprint.c)
+    target_link_libraries(test_daemon_footprint PRIVATE controllerbox cbx_test_support PkgConfig::CMOCKA)
+    add_test(NAME test_daemon_footprint COMMAND test_daemon_footprint)
+    set_tests_properties(test_daemon_footprint PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+
     # --- Task 9: Visible reusable overlay and runtime reconciliation ----
     add_executable(test_overlay_reconcile tests/test_overlay_reconcile.c)
     target_link_libraries(test_overlay_reconcile PRIVATE controllerbox cbx_test_support PkgConfig::CMOCKA)

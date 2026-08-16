@@ -449,7 +449,7 @@ See [DBus-API.md](DBus-API.md) for the full DBus API reference.
 | Render path (ALL detected → present) | **<10 ms p99** | Pre-built texture; show = single `SDL_RenderCopy`+`SDL_RenderPresent`; no texture allocation in show path |
 | Gameplay input latency | **~1–2 ms** | InputPlumber intercept overhead only; DBus is a side branch, never inline during gameplay |
 | Overlay close → game input | **<1 ms** | Single `InterceptMode` → PASS; overlay hidden, not destroyed |
-| Daemon footprint | Always resident, no measurable impact | SDL2 minimal memory; idles on DBus signals + 50 ms poll; main loop sleeps 10 ms between steps (no busy-loop) |
+| Daemon footprint | Always resident, no measurable impact | SDL2 minimal memory; idles on DBus signals + 50 ms poll; main loop sleeps 10 ms between steps (no busy-loop). RSS < 50 MB after init and after 100 idle steps; < 1 MB growth across idle steps (verified by `test_daemon_footprint`) |
 | Player reorder | Atomic, InputPlumber-managed | `GamepadOrder` setter suspends all, resumes in new order with 100 ms stagger |
 
 ### Latency budget and measurement methodology
