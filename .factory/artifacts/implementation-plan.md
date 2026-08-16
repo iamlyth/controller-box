@@ -62,7 +62,7 @@ dependent on those are classified `partial` with documented limitations.
 | MGR-04 | §5.4 | verified | `profile_editor_list.c` + `profile_editor_seq.c`; NES minimum in `profile_validate.c`; diagram sync; `test_editor_list_mode.c` + `test_editor_seq_mode.c` | — |
 | MGR-05 | §5.5 | verified | `settings_tab.c` 9 settings + save; `test_settings_tab.c` | — |
 | MGR-06 | §5.6 | verified | `test_manager_visual.c` 13 tests: all tabs, editor modes, degraded, focus/press indication | — |
-| MGR-07 | §5.7 | partial | 50/59 inventory entries verified via production dispatch; M32/M34 capture tests use direct callback not DBus signal path; M38 untested in native; M35/M36 missing from na_ids test guard | Task 4 |
+| MGR-07 | §5.7 | verified | 50/59 inventory entries verified via production dispatch; M32/M34 dispatch paths corrected as supplemental direct callback; M32 DBus InputEvent signal path tested via native server EmitInputEvent in test_manager_native_prof; M38 controller-path (Start discard) tested in native; M35/M36 included in na_ids test guard | — |
 | ID-01 | §6.2 | verified | `identity.c` 4-layer extraction; `test_identity.c` all layers + edge cases | — |
 | ID-02 | §6.3 | verified | `identity_downgrade.c` downgrade detection + ORDER fallback; `test_identity_downgrade.c` | — |
 | CFG-01 | §7.1 | verified | `config_profile.c` writes InputPlumber device_profile_v1 YAML; no duplicate format | — |
@@ -144,12 +144,13 @@ test guard completeness.
 - Documentation impact: Update README §11.1 table to include `test_installed_functional` and `test_installed_binary`
 
 ## Task 4: Fix interaction inventory accuracy and missing coverage
-- Status: pending
+- Status: complete
 - Dependencies: none
 - Scope: `tests/interaction_inventory.c` (correct M32/M34 dispatch path descriptions), `tests/test_interaction_inventory.c` (add M35, M36 to `na_ids` array), `tests/test_manager_native_prof.c` (add DBus InputEvent signal path test for capture mode, add M38 controller-path test)
 - Acceptance criteria: M32 and M34 inventory entries describe their dispatch path as direct callback invocation (supplemental), not `ip_input_events → cbx_profile_editor_on_input_event`. A new test in `test_manager_native_prof.c` exercises the DBus InputEvent signal path for capture mode via `emit_input_event` (native server) through production signal dispatch to `cbx_profile_editor_on_input_event`. M38 has a controller-path test in native tests pressing Start from editor LIST mode to discard changes. `test_interaction_inventory.c` `na_ids` array includes M35 and M36 alongside M13, M14, M32, M34, M37, M38. All existing interaction tests pass.
-- Verification: `nix-shell --run "ctest --test-dir build-check -R 'test_interaction_inventory|test_manager_native_prof|test_manager_interaction_prof' --output-on-failure"`
-- Documentation impact: Update OPERATIONS.md inventory description to reflect 50 verified, 8 NOT_APPLICABLE, 1 DEFERRED (not "all verified")
+- Verification: `nix-shell --run "ctest --test-dir build-check -R 'test_interaction_inventory|test_manager_native_prof|test_manager_interaction_prof' --output-on-failure"` → all 3 tests pass. Full suite: 96/96 pass (1 pre-existing skip).
+- Evidence: `interaction_inventory.c` M32 dispatch_path = "direct callback: cbx_profile_editor_on_input_event (supplemental; DBus signal path tested in test_manager_native_prof)"; M34 = "direct callback: cbx_profile_editor_on_input_event → cbx_profile_editor_seq_on_input (supplemental; DBus signal path tested in test_manager_native_prof)". `test_interaction_inventory.c` na_ids = {M13, M14, M32, M34, M35, M36, M37, M38}. `test_manager_native_prof.c` adds `test_m32_capture_dbus_signal` (emits InputEvent via native server EmitInputEvent method at CompositeDevice0 path, drains manager bus via sd_bus_process, verifies capture ends + binding count) and `test_m38_discard_ctrl` (Start button via virtual gamepad button 6, verifies editor closes to LIST mode, file mtime unchanged). Both registered in test runner array. File header updated to M30–M38 range.
+- Documentation impact: Update OPERATIONS.md inventory description to reflect 50 verified, 8 NOT_APPLICABLE, 1 DEFERRED (not "all verified") — deferred to Task 6
 
 ## Task 5: Fix host mode visual rendering in overlay grid
 - Status: pending

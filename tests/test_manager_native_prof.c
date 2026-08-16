@@ -2,7 +2,7 @@
  * test_manager_native_prof.c — Manager Profiles + Profile Editor
  * interaction acceptance with native DBus backend (Task 5).
  *
- * Exercises M10, M12–M14, M16, M18, M20, M30–M36, D02–D04, D07–D08
+ * Exercises M10, M12–M14, M16, M18, M20, M30–M38, D02–D04, D07–D08
  * through production dispatch (cbx_manager_handle_event) with a real
  * sd-bus backend connected to a private InputPlumber-compatible
  * native-signature DBus server.  No ip_dbus_mock backend used.
@@ -15,8 +15,10 @@
  * Pointer path: SDL_MOUSEMOTION/MOUSEBUTTONDOWN/MOUSEBUTTONUP →
  * cbx_manager_handle_mouse_event → hit_test → focus + dispatch.
  *
- * M32/M34 (InputEvent capture): cbx_profile_editor_on_input_event is
- * the production callback wired to the DBus InputEvent signal handler.
+ * M32/M34 (InputEvent capture): tested via direct callback
+ * (test_m32_capture_event, test_m34_seq_capture) and via the full
+ * DBus InputEvent signal path (test_m32_capture_dbus_signal) through
+ * the native server's EmitInputEvent method.
  */
 #include <stdarg.h>
 #include <stddef.h>
@@ -163,6 +165,35 @@ widget_center(const cbx_widget *w, int *cx, int *cy)
     assert_non_null(w);
     *cx = w->rect.x + w->rect.w / 2;
     *cy = w->rect.y + w->rect.h / 2;
+}
+
+/* Drain pending DBus messages on a bus connection for ms milliseconds. */
+static void
+drain_bus(const ip_dbus_backend *backend, ip_bus_handle bus, int ms)
+{
+    for (int i = 0; i < ms / 10; i++) {
+        int processed = backend->process(bus);
+        if (processed <= 0)
+            usleep(10000);
+    }
+}
+
+/* Emit an InputEvent signal via the native server's EmitInputEvent method.
+ * The signal is emitted on the server's DBusDevice interface at the given
+ * composite device path.  After calling this, drain the receiving bus to
+ * process the signal through the production dispatch chain:
+ *   sd_bus_process → sd_input_event_callback → input_event_signal_cb
+ *   → ip_input_events_handle → cbx_profile_editor_on_input_event. */
+static void
+emit_input_event(const ip_dbus_backend *backend, ip_bus_handle bus,
+                  const char *comp_path, const char *event, double value)
+{
+    char val_str[32];
+    snprintf(val_str, sizeof(val_str), "%.1f", value);
+    int rc = backend->call_method(bus, IP_DBUS_NAME, comp_path,
+                                    IP_IFACE_DBUS_DEVICE, "EmitInputEvent",
+                                    "ss", event, val_str, NULL);
+    assert_int_equal(rc, 0);
 }
 
 static int
@@ -1000,6 +1031,59 @@ test_m32_capture_event(void **state)
     cbx_manager_shutdown(&mgr);
 }
 
+/* M32 DBus signal path: emit InputEvent via native server EmitInputEvent
+ * method → server emits InputEvent(sd) signal → sd_bus_process on
+ * manager bus → sd_input_event_callback → input_event_signal_cb →
+ * ip_input_events_handle (sender verification, event parse, value
+ * validation, rate limit) → cbx_profile_editor_on_input_event →
+ * binding captured, capture ends.
+ * This exercises the full production DBus signal dispatch chain, not
+ * just the terminal callback. */
+static void
+test_m32_capture_dbus_signal(void **state)
+{
+    mnp_fixture *f = *state;
+    cbx_manager mgr;
+    mnp_init_manager(f, &mgr);
+
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+
+    open_editor_ctrl(&mgr, f->joystick, 2);
+
+    /* Enter capture mode. */
+    ctrl_press(&mgr, f->joystick, 0);  /* binding → BINDING_EDIT */
+    ctrl_press(&mgr, f->joystick, 12);  /* → "Capture" */
+    ctrl_press(&mgr, f->joystick, 0);  /* → CAPTURE */
+    assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
+                     CBX_EDITOR_MODE_CAPTURE);
+
+    int editing_idx = cbx_profile_editor_get_editing_index(&pt->editor);
+    assert_int_equal(editing_idx, 0);
+
+    /* Emit InputEvent signal via native server.  The signal travels:
+     *   server EmitInputEvent method → sd_bus_emit_signal(InputEvent, sd)
+     *   → daemon broadcasts → manager bus sd_bus_process
+     *   → sd_input_event_callback → input_event_signal_cb
+     *   → ip_input_events_handle (sender == expected_sender)
+     *   → cbx_profile_editor_on_input_event → binding captured. */
+    emit_input_event(f->backend, f->bus,
+                     "/org/shadowblip/InputPlumber/CompositeDevice0",
+                     "A", 1.0);
+    drain_bus(mgr.dbus_backend, mgr.dbus_bus, 200);
+
+    /* Capture ends, back to LIST. */
+    assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
+                     CBX_EDITOR_MODE_LIST);
+    assert_false(cbx_profile_editor_is_capture_active(&pt->editor));
+
+    /* Verify the profile still has mappings. */
+    const cbx_profile *prof = cbx_profile_editor_get_profile(&pt->editor);
+    assert_non_null(prof);
+    assert_int_equal(prof->mapping_count, 6);
+
+    cbx_manager_shutdown(&mgr);
+}
+
 /* ================================================================== */
 /*  M33 — Sequential mode begin                                       */
 /* ================================================================== */
@@ -1167,6 +1251,48 @@ test_m36_seq_cancel(void **state)
     assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
                      CBX_EDITOR_MODE_LIST);
     assert_false(cbx_profile_editor_seq_is_active(&pt->editor));
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* ================================================================== */
+/*  M38 — Discard changes (Start from editor LIST → close, no save)  */
+/* ================================================================== */
+
+/* M38 controller path: Start (button 6) in editor LIST mode → discard
+ * changes, close editor, no file written.  Uses the virtual gamepad
+ * Start button through the production controller event dispatch path. */
+static void
+test_m38_discard_ctrl(void **state)
+{
+    mnp_fixture *f = *state;
+    cbx_manager mgr;
+    mnp_init_manager(f, &mgr);
+
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+
+    open_editor_ctrl(&mgr, f->joystick, 2);
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_EDITOR);
+    assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
+                     CBX_EDITOR_MODE_LIST);
+
+    /* Record the profile file's modification time. */
+    char path[PATH_MAX + 128];
+    snprintf(path, sizeof(path), "%s/myprof.yaml", f->user_dir);
+    struct stat st_before;
+    assert_int_equal(stat(path, &st_before), 0);
+
+    /* Start (button 6 on virtual gamepad) → discard and close.
+     * Controller path: SDL_CONTROLLERBUTTONDOWN START →
+     * cbx_manager_controller_to_key → SDLK_TAB →
+     * cbx_profiles_tab_handle_key → cbx_profiles_tab_close_editor. */
+    ctrl_press(&mgr, f->joystick, 6);
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_LIST);
+
+    /* File should be unchanged (not re-saved). */
+    struct stat st_after;
+    assert_int_equal(stat(path, &st_after), 0);
+    assert_int_equal(st_before.st_mtime, st_after.st_mtime);
 
     cbx_manager_shutdown(&mgr);
 }
@@ -1602,6 +1728,8 @@ main(void)
         /* M32 — Capture event */
         cmocka_unit_test_setup_teardown(test_m32_capture_event,
                                         mnp_setup, mnp_teardown),
+        cmocka_unit_test_setup_teardown(test_m32_capture_dbus_signal,
+                                        mnp_setup, mnp_teardown),
         /* M33 — Sequential begin */
         cmocka_unit_test_setup_teardown(test_m33_seq_begin_controller,
                                         mnp_setup, mnp_teardown),
@@ -1615,6 +1743,9 @@ main(void)
                                         mnp_setup, mnp_teardown),
         /* M36 — Sequential cancel */
         cmocka_unit_test_setup_teardown(test_m36_seq_cancel,
+                                        mnp_setup, mnp_teardown),
+        /* M38 — Discard changes (Start from editor LIST) */
+        cmocka_unit_test_setup_teardown(test_m38_discard_ctrl,
                                         mnp_setup, mnp_teardown),
         /* D02 — No device selected */
         cmocka_unit_test_setup_teardown(test_d02_no_device_controller,

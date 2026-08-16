@@ -327,7 +327,7 @@ static void test_inventory_specific_verify_statuses(void **state)
     assert_int_equal(o12->verify_status, CBX_VERIFY_DEFERRED);
 
     /* Controller-only entries remain NOT_APPLICABLE (sample check) */
-    const char *na_ids[] = {"M13", "M14", "M32", "M34", "M37", "M38"};
+    const char *na_ids[] = {"M13", "M14", "M32", "M34", "M35", "M36", "M37", "M38"};
     for (size_t i = 0; i < sizeof(na_ids)/sizeof(na_ids[0]); i++) {
         const cbx_interaction_entry *e = cbx_interaction_inventory_find(na_ids[i]);
         assert_non_null(e);

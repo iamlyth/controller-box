@@ -300,7 +300,7 @@ static const cbx_interaction_entry inventory[] = {
       "Input event via DBus InputEvent",
       NA, "n/a",
       "Binding source captured; binding updated; capture ends",
-      "ip_input_events → cbx_profile_editor_on_input_event",
+      "direct callback: cbx_profile_editor_on_input_event (supplemental; DBus signal path tested in test_manager_native_prof)",
       CBX_VERIFY_NOT_APPLICABLE, "Task 5" },
 
     { "M33", CBX_CAT_MANAGER_EDITOR, "Profile editor",
@@ -316,7 +316,7 @@ static const cbx_interaction_entry inventory[] = {
       "Physical button press (DBus InputEvent)",
       NA, "n/a",
       "Button captured; auto-advance; progress bar updates",
-      "ip_input_events → cbx_profile_editor_seq_on_input",
+      "direct callback: cbx_profile_editor_on_input_event → cbx_profile_editor_seq_on_input (supplemental; DBus signal path tested in test_manager_native_prof)",
       CBX_VERIFY_NOT_APPLICABLE, "Task 5" },
 
     { "M35", CBX_CAT_MANAGER_EDITOR, "Profile editor",
