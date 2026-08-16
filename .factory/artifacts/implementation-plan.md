@@ -214,8 +214,9 @@ this gap.
 - Evidence: commit on `develop`; PERF-04 reclassified to `verified`.
 
 ## Task 3: Declare physical-controller or kernel-uinput runner capability
-- Status: pending
+- Status: blocked
 - Dependencies: none
+- Blocker: No accessible environment has `/dev/uinput` or a physical gamepad. The local machine has no `/dev/input/event*` devices. The declared runner (`dev-runner-vm`) is unreachable — `ssh dev-runner-vm` fails with "Could not resolve hostname" and the required `~/.ssh/factory-ssh` symlink is not provisioned. The environment declaration is exhaustive; capabilities cannot be invented without proof.
 - Scope: `.factory/environment.toml` (add capability declaration to
   `dev-runner-vm` or new runner), `scripts/check-factory-runner-evidence.py`
   (validate evidence)
@@ -256,8 +257,9 @@ this gap.
 - Documentation impact: document installed acceptance procedure in `docs/OPERATIONS.md`
 
 ## Task 6: Declare gpu-compositor capability and run GPU backend smoke
-- Status: pending
+- Status: blocked
 - Dependencies: none
+- Blocker: No GPU hardware accessible. Local machine has no `/dev/dri/` directory. The declared runner (`dev-runner-vm`) is unreachable (SSH hostname unresolvable, no `~/.ssh/factory-ssh` symlink). Cannot declare `gpu-compositor` capability or run `test_backend_smoke.c` with a hardware renderer.
 - Scope: `.factory/environment.toml` (declare `gpu-compositor`),
   `tests/test_backend_smoke.c` (run to completion on GPU runner)
 - Acceptance criteria: `test_backend_smoke.c` passes (exit 0, not 77) on the
@@ -268,8 +270,9 @@ this gap.
 - Documentation impact: document GPU backend verification in `docs/OPERATIONS.md`
 
 ## Task 7: Declare target-consumer capability and measure Pi-4 performance
-- Status: pending
+- Status: blocked
 - Dependencies: none
+- Blocker: No target hardware accessible. Local machine is x86_64, not ARM64/Pi 4. The declared runner (`dev-runner-vm`) is unreachable (SSH hostname unresolvable, no `~/.ssh/factory-ssh` symlink). Cannot declare `target-consumer` capability or measure overlay appearance latency on Pi 4.
 - Scope: `.factory/environment.toml` (declare `target-consumer`),
   performance measurement on Pi 4 or equivalent target hardware
 - Acceptance criteria: Overlay appearance ≤100 ms maximum is measured on
