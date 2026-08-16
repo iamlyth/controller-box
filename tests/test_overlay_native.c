@@ -335,7 +335,7 @@ static int native_setup(void **state)
         } else {
             snprintf(f->svc->composites[i].id,
                      sizeof(f->svc->composites[i].id),
-                     "composite-%d", i);
+                     "ORDER:%d", i);
         }
         free(id);
         char *name = NULL;
@@ -693,6 +693,14 @@ static void test_o06b_host_freezes_non_host(void **state)
 
     activate_overlay(f);
 
+    /* Before entering host mode, prove the InputEvent signal path works
+     * for COMP_PATH_1 by moving row 1 to col 1.  This establishes a
+     * non-zero baseline so a frozen-row assertion is meaningful. */
+    emit_input_event(svc->conn.backend, svc->conn.bus, COMP_PATH_1, "Right", 1.0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
+    cbx_overlay_service_step(svc);
+    assert_int_equal(cbx_select_grid_get_cur_col(&svc->grid, 1), 1);
+
     /* Enter host mode via keyboard (acts as row 0). */
     push_keydown(SDLK_r);
     cbx_overlay_service_step(svc);
@@ -703,8 +711,8 @@ static void test_o06b_host_freezes_non_host(void **state)
     drain_bus(svc->conn.backend, svc->conn.bus, 100);
     cbx_overlay_service_step(svc);
 
-    /* Row 1 should be frozen — column unchanged. */
-    assert_int_equal(cbx_select_grid_get_cur_col(&svc->grid, 1), 0);
+    /* Row 1 should be frozen — column unchanged at col 1 (not col 2). */
+    assert_int_equal(cbx_select_grid_get_cur_col(&svc->grid, 1), 1);
     assert_int_equal(cbx_host_mode_row_state(&svc->hm, 1), CBX_ROW_FROZEN);
 }
 

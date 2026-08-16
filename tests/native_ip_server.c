@@ -670,7 +670,7 @@ void nip_reset_server_state(int num_composites)
         snprintf(g_nip_comp_names[i], sizeof(g_nip_comp_names[i]),
                  "Composite Device %d", i);
         snprintf(g_nip_persistent_ids[i], sizeof(g_nip_persistent_ids[i]),
-                 "comp-%d", i);
+                 "ORDER:%d", i);
     }
 }
 
