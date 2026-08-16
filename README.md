@@ -147,6 +147,7 @@ documentation.
 | `~/.config/controller-box/assignments.yaml` | Auto-assignment table + gamepad order |
 | `~/.config/controller-box/profile-metadata/` | Optional per-profile sidecar metadata |
 | `~/.config/systemd/user/controller-box.service` | Systemd user service (installed by manager) |
+| `/usr/share/controller-box/profiles/` | Built-in default + shipped profiles (read-only) |
 | `/usr/share/controller-box/icons/svg/` | Default controller icons (read-only) |
 | `/usr/share/controller-box/controller-icons.yaml` | Icon mapping table (read-only) |
 | `/usr/share/inputplumber/` | InputPlumber system profiles, devices, capability maps (read-only) |

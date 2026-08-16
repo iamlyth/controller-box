@@ -203,6 +203,10 @@ cbx_manager_init_with_dbus(cbx_manager *mgr, const char *font_path,
     /* --- Text cache + font ----------------------------------------- */
     rc = cbx_text_cache_init(&mgr->text_cache, mgr->rend.renderer);
     if (rc != 0) {
+        for (int i = 0; i < mgr->gamecontroller_count; i++)
+            SDL_GameControllerClose(mgr->gamecontrollers[i]);
+        mgr->gamecontroller_count = 0;
+        SDL_QuitSubSystem(SDL_INIT_GAMECONTROLLER);
         cbx_renderer_shutdown(&mgr->rend);
         return rc;
     }
@@ -218,6 +222,10 @@ cbx_manager_init_with_dbus(cbx_manager *mgr, const char *font_path,
                     "controller-box: failed to load font '%s' (error %d)\n",
                     font_path, mgr->font_id);
             cbx_text_cache_cleanup(&mgr->text_cache);
+            for (int i = 0; i < mgr->gamecontroller_count; i++)
+                SDL_GameControllerClose(mgr->gamecontrollers[i]);
+            mgr->gamecontroller_count = 0;
+            SDL_QuitSubSystem(SDL_INIT_GAMECONTROLLER);
             cbx_renderer_shutdown(&mgr->rend);
             return mgr->font_id;
         }
@@ -232,6 +240,10 @@ cbx_manager_init_with_dbus(cbx_manager *mgr, const char *font_path,
                           &mgr->text_cache, &mgr->theme);
     if (rc != 0) {
         cbx_text_cache_cleanup(&mgr->text_cache);
+        for (int i = 0; i < mgr->gamecontroller_count; i++)
+            SDL_GameControllerClose(mgr->gamecontrollers[i]);
+        mgr->gamecontroller_count = 0;
+        SDL_QuitSubSystem(SDL_INIT_GAMECONTROLLER);
         cbx_renderer_shutdown(&mgr->rend);
         return rc;
     }
@@ -250,6 +262,10 @@ cbx_manager_init_with_dbus(cbx_manager *mgr, const char *font_path,
             for (int j = 0; j < i; j++)
                 cbx_widget_destroy(&mgr->panels[j].base);
             cbx_text_cache_cleanup(&mgr->text_cache);
+            for (int i2 = 0; i2 < mgr->gamecontroller_count; i2++)
+                SDL_GameControllerClose(mgr->gamecontrollers[i2]);
+            mgr->gamecontroller_count = 0;
+            SDL_QuitSubSystem(SDL_INIT_GAMECONTROLLER);
             cbx_renderer_shutdown(&mgr->rend);
             return rc;
         }
@@ -297,13 +313,19 @@ cbx_manager_init_with_dbus(cbx_manager *mgr, const char *font_path,
                                    mgr->font_id);
     if (rc != 0) {
         /* Clean up DBus + already-initialised resources. */
-        if (mgr->dbus_connected && mgr->dbus_backend &&
-            mgr->dbus_backend->disconnect)
+        if (mgr->owns_dbus_connection)
+            ip_connection_disconnect(&mgr->connection);
+        else if (mgr->dbus_connected && mgr->dbus_backend &&
+                 mgr->dbus_backend->disconnect)
             mgr->dbus_backend->disconnect(mgr->dbus_bus);
         cbx_widget_destroy(&mgr->tabbar.base);
         for (int i = 0; i < CBX_MGR_TAB_COUNT; i++)
             cbx_widget_destroy(&mgr->panels[i].base);
         cbx_text_cache_cleanup(&mgr->text_cache);
+        for (int i = 0; i < mgr->gamecontroller_count; i++)
+            SDL_GameControllerClose(mgr->gamecontrollers[i]);
+        mgr->gamecontroller_count = 0;
+        SDL_QuitSubSystem(SDL_INIT_GAMECONTROLLER);
         cbx_renderer_shutdown(&mgr->rend);
         return rc;
     }
@@ -326,13 +348,19 @@ cbx_manager_init_with_dbus(cbx_manager *mgr, const char *font_path,
                                 mgr->font_id);
     if (rc != 0) {
         cbx_controllers_tab_shutdown(&mgr->ct);
-        if (mgr->dbus_connected && mgr->dbus_backend &&
-            mgr->dbus_backend->disconnect)
+        if (mgr->owns_dbus_connection)
+            ip_connection_disconnect(&mgr->connection);
+        else if (mgr->dbus_connected && mgr->dbus_backend &&
+                 mgr->dbus_backend->disconnect)
             mgr->dbus_backend->disconnect(mgr->dbus_bus);
         cbx_widget_destroy(&mgr->tabbar.base);
         for (int i = 0; i < CBX_MGR_TAB_COUNT; i++)
             cbx_widget_destroy(&mgr->panels[i].base);
         cbx_text_cache_cleanup(&mgr->text_cache);
+        for (int i = 0; i < mgr->gamecontroller_count; i++)
+            SDL_GameControllerClose(mgr->gamecontrollers[i]);
+        mgr->gamecontroller_count = 0;
+        SDL_QuitSubSystem(SDL_INIT_GAMECONTROLLER);
         cbx_renderer_shutdown(&mgr->rend);
         return rc;
     }
@@ -353,13 +381,19 @@ cbx_manager_init_with_dbus(cbx_manager *mgr, const char *font_path,
     if (rc != 0) {
         cbx_profiles_tab_shutdown(&mgr->pt);
         cbx_controllers_tab_shutdown(&mgr->ct);
-        if (mgr->dbus_connected && mgr->dbus_backend &&
-            mgr->dbus_backend->disconnect)
+        if (mgr->owns_dbus_connection)
+            ip_connection_disconnect(&mgr->connection);
+        else if (mgr->dbus_connected && mgr->dbus_backend &&
+                 mgr->dbus_backend->disconnect)
             mgr->dbus_backend->disconnect(mgr->dbus_bus);
         cbx_widget_destroy(&mgr->tabbar.base);
         for (int i = 0; i < CBX_MGR_TAB_COUNT; i++)
             cbx_widget_destroy(&mgr->panels[i].base);
         cbx_text_cache_cleanup(&mgr->text_cache);
+        for (int i = 0; i < mgr->gamecontroller_count; i++)
+            SDL_GameControllerClose(mgr->gamecontrollers[i]);
+        mgr->gamecontroller_count = 0;
+        SDL_QuitSubSystem(SDL_INIT_GAMECONTROLLER);
         cbx_renderer_shutdown(&mgr->rend);
         return rc;
     }

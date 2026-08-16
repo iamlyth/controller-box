@@ -12,15 +12,16 @@
 #include "manager/profile_diagram.h"
 
 #include <SDL2/SDL.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 /* nanosvg — vendored (Task 1), headers only (impl in nanosvg_impl.c) */
 #include <nanosvg.h>
 #include <nanosvgrast.h>
-
-#include <errno.h>
 
 /* ------------------------------------------------------------------ */
 /*  Button position table                                             */
@@ -95,9 +96,14 @@ load_svg_texture(SDL_Renderer *renderer, const char *svg_path, int size)
     if (!renderer || !svg_path)
         return NULL;
 
-    FILE *f = fopen(svg_path, "rb");
-    if (!f)
+    int fd = open(svg_path, O_RDONLY | O_NOFOLLOW);
+    if (fd < 0)
         return NULL;
+    FILE *f = fdopen(fd, "rb");
+    if (!f) {
+        close(fd);
+        return NULL;
+    }
 
     /* Read file contents */
     fseek(f, 0, SEEK_END);

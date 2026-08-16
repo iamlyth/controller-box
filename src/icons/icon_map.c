@@ -25,10 +25,12 @@
 #include "icons/icon_map.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <yaml.h>
 
@@ -281,9 +283,16 @@ int cbx_icon_map_load(cbx_icon_map *map, const char *path)
 
     cbx_icon_map_init(map);
 
-    FILE *f = fopen(path, "rb");
-    if (!f)
+    int fd = open(path, O_RDONLY | O_NOFOLLOW);
+    if (fd < 0)
         return -errno;
+    FILE *f = fdopen(fd, "rb");
+    if (!f) {
+        int e = errno;
+        close(fd);
+        errno = e;
+        return -e;
+    }
 
     /* Check file size. */
     if (fseek(f, 0, SEEK_END) != 0) {

@@ -8,6 +8,7 @@
  * and document-based emitter for writing.
  */
 #include "config_assignments.h"
+#include "config_settings.h"
 
 /* For path resolution (cbx_resolve_config_dir, cbx_config_dir). */
 #include "config_paths.h"
@@ -171,7 +172,8 @@ int cbx_assignments_validate(const cbx_assignments *a)
     for (int i = 0; i < a->assignment_count; i++) {
         if (!cbx_validate_id(a->assignments[i].id))
             return -EINVAL;
-        if (a->assignments[i].slot < 0)
+        if (a->assignments[i].slot < 0 ||
+            a->assignments[i].slot >= CBX_MAX_CONTROLLERS)
             return -EINVAL;
         if (!cbx_validate_profile(a->assignments[i].profile))
             return -EINVAL;
@@ -239,6 +241,7 @@ typedef struct {
     bool in_gamepad_order_seq;
 
     bool got_stream_end;
+    bool parse_error;
 } parse_ctx;
 
 /* Process a scalar value based on the current key and context. */
@@ -251,7 +254,14 @@ static void process_scalar(parse_ctx *ctx, const char *val)
                         sizeof(ctx->current.id) - 1);
                 ctx->current.id[sizeof(ctx->current.id) - 1] = '\0';
             } else if (strcmp(ctx->current_key, "slot") == 0) {
-                ctx->current.slot = atoi(val);
+                char *end = NULL;
+                long sl = strtol(val, &end, 10);
+                if (end == val || *end != '\0' || sl < 0 ||
+                    sl >= (long)CBX_MAX_CONTROLLERS) {
+                    ctx->parse_error = true;
+                    return;
+                }
+                ctx->current.slot = (int)sl;
             } else if (strcmp(ctx->current_key, "profile") == 0) {
                 strncpy(ctx->current.profile, val,
                         sizeof(ctx->current.profile) - 1);
@@ -365,6 +375,11 @@ static int parse_assignments_yaml(cbx_assignments *a, FILE *f)
             if (!val)
                 val = "";
             process_scalar(&ctx, val);
+            if (ctx.parse_error) {
+                rc = -EINVAL;
+                yaml_event_delete(&ev);
+                goto done;
+            }
             break;
         }
 

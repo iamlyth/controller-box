@@ -21,8 +21,9 @@ differences. Profiles are deterministic and portable.
 ## File layout
 
 ```
-~/.local/share/inputplumber/profiles/        ← InputPlumber + Controller-Box (read/write)
-    default.yaml                              ← built-in default (read-only)
+/usr/share/controller-box/profiles/             ← built-in default + shipped profiles (read-only)
+    default.yaml
+~/.local/share/inputplumber/profiles/        ← user-created profiles (read/write)
     fighting.yaml                             ← user-created profile
     ...
 /usr/share/inputplumber/profiles/             ← system profiles (read-only)
@@ -33,9 +34,14 @@ differences. Profiles are deterministic and portable.
     fighting.meta.yaml                        ← optional per-profile metadata
 ```
 
-Controller-Box reads both the user and system profile directories. System
-profiles are read-only; user profiles are read/write. The default profile is
-always present, read-only, and always the fallback.
+Controller-Box reads three profile directories in order: the built-in
+directory (`/usr/share/controller-box/profiles/`), the user directory
+(`~/.local/share/inputplumber/profiles/`), and the InputPlumber system
+directory. System profiles are read-only; user profiles are read/write.
+The built-in default profile is always present, read-only, and always the
+fallback. Any profile named `default` is automatically treated as read-only
+regardless of its directory location. A user-created `default.yaml` in the
+user directory is skipped as a duplicate of the built-in default.
 
 ### Profile metadata sidecar
 
