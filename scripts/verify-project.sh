@@ -22,6 +22,15 @@ if ! pkg-config --exists "${required[@]}"; then
     exit 2
 fi
 
+# Invalidate the CMake cache when the source directory has changed
+# (e.g. bind-mount path differs between Ralph and campaign environments).
+if [[ -f "$BUILD_DIR/CMakeCache.txt" ]]; then
+    cached_source=$(grep 'CMAKE_HOME_DIRECTORY:INTERNAL=' "$BUILD_DIR/CMakeCache.txt" 2>/dev/null | cut -d= -f2)
+    if [[ "$cached_source" != "$PROJECT_ROOT" ]]; then
+        echo "verify-project: CMake cache source mismatch ($cached_source != $PROJECT_ROOT); rebuilding" >&2
+        rm -rf "$BUILD_DIR"
+    fi
+fi
 cmake -S . -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Debug
 cmake --build "$BUILD_DIR" --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-2}"
 ctest --test-dir "$BUILD_DIR" --output-on-failure
