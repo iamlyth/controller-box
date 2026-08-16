@@ -3,7 +3,8 @@ spec_path: docs/SPEC.md
 spec_commit: 3a10f6b7d04a615b2b9d06eef6c91e431fa9c079
 spec_blob: 58f5d3cb72bc6b3e5f573fa09a63c11a653ed577
 base_commit: d110dfac9abc39ca4206986d9e7c2dcaf6b1d7c1
-status: active
+status: blocked
+blocker: Hardware-dependent tasks 3-9 cannot proceed. No /dev/uinput (kernel-uinput), no /dev/dri (gpu-compositor), no Pi-4 hardware (target-consumer). Runner dev-runner-vm unreachable (SSH hostname unresolvable, no ~/.ssh/factory-ssh symlink). All software work complete: 98/98 tests pass, 0 failures, 2 hardware skips. Recovery requires hardware access per scratchpad handoff.
 ---
 
 # Implementation Plan
