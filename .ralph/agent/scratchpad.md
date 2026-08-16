@@ -1,31 +1,30 @@
-# Implementation Loop — Docs Fixes Done, Only Hardware-Blocked Tasks Remain
+# Implementation Loop — All Software Tasks Complete, Hardware-Blocked
 
 ## Outcome
-- Task 13 (docs fixes) complete: all 4 documentation inaccuracies fixed
-- Tasks 3, 6, 7 remain blocked on hardware; Tasks 4, 5, 8 transitively blocked
-- Task 9 (final audit) depends on Tasks 1-8, 10-13
+- Task 13 (docs fixes) marked complete in plan (commit 730a310 did the work,
+  35e1ae7 updated the plan status)
+- Tasks 1, 2, 10, 11, 12, 13: all complete
+- Tasks 3, 6, 7: blocked on unavailable hardware (no /dev/uinput, no GPU,
+  no Pi 4, runner SSH unreachable)
+- Tasks 4, 5, 8: transitively blocked on Tasks 3, 6, 7
+- Task 9 (final audit): blocked on all implementation tasks completing
 
 ## Verification
 - `verify-boilerplate.sh` — pass
 - `check-plan-freshness.sh` — pass
+- `final-gate.sh --implementation` — rejects on MGR-36 (Task 3 hardware)
 
 ## Commits
-- `730a310`: fix(docs): correct build dir name, install layout, smoke_sw regex, O01-O13
-
-## Task 13 Changes
-- **build-check → build-maintenance-verify**: 8 refs in README.md, 6 refs in
-  OPERATIONS.md updated to match verify-project.sh default build dir
-- **PACKAGING.md install layout**: Added static libs (libcontrollerbox.a,
-  libnanosvg.a), fonts/, profiles/, and LICENSE.controllercons note
-- **OPERATIONS.md visual test regex**: Added `test_backend_smoke_sw` to
-  regex and expected-results list (headless-safe software renderer test)
-- **tests/CMakeLists.txt comment**: Fixed O01–O12 → O01–O13 on line 678
+- `730a310`: fix(docs): correct build dir, install layout, smoke_sw regex, O01-O13
+- `35e1ae7`: plan: mark Task 13 complete with verification evidence
 
 ## Blocked State
-- Tasks 3, 6, 7: no /dev/uinput, GPU, or Pi 4 hardware; runner unreachable
-- Runner dev-runner-vm: SSH hostname unresolvable, no ~/.ssh/factory-ssh
+- Tasks 3, 6, 7 require hardware capabilities not declared in
+  `.factory/environment.toml` (only `remote-project-gate` and
+  `systemd-user` declared; runner `dev-runner-vm` SSH unreachable)
+- No software-only tasks remain to pick up
 
 ## Next Task
-- Only hardware-blocked tasks remain (3, 6, 7) and their dependents (4, 5, 8)
-- Task 9 (final audit) blocked on all implementation tasks completing
 - Loop is blocked on hardware/runner availability
+- When hardware becomes available: Task 3 → Tasks 4, 5 → Task 6 → Task 7 →
+  Task 8 → Task 9 (final audit)
