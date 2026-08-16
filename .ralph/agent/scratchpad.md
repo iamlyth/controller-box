@@ -1,15 +1,15 @@
-# Implementation Loop — Hardware-Blocked (Iteration 39)
+# Implementation Loop — Hardware-Blocked (Iteration 40)
 
 ## Outcome
 - 98/98 tests pass (0 failures, 2 hardware skips: test_kernel_controller #3, test_backend_smoke #88)
-- All software-addressable work complete; tasks 10-13 done
-- Plan status: **blocked** (changed from active — hardware-dependent tasks 3-9 cannot proceed)
-- Git tree clean
+- All software-addressable work complete; tasks 1,2,10-13 done
+- Plan status: **blocked** (hardware-dependent tasks 3-9 cannot proceed)
+- Git tree clean at bb6dec2
 - No open bugs in .factory/bugs/open.md
 - Final gate rejects on MGR-36 (hardware: needs /dev/uinput for kernel-backed gamepad)
 
 ## Environment State (unchanged since iter 28)
-- No /dev/uinput, no /dev/dri, no /dev/input, no /sys/class/uinput — zero capabilities (CapEff=0, CapBnd=0)
+- No /dev/uinput, no /dev/dri, no /dev/input — zero capabilities (CapEff=0, CapBnd=0)
 - uinput kernel module loaded but device node not accessible; mknod fails (Operation not permitted)
 - unshare --user --map-root-user mknod also fails
 - SSH runner dev-runner-vm: hostname unresolvable, no ~/.ssh/factory-ssh symlink
