@@ -1,20 +1,18 @@
-# Implementation Loop — Hardware-Blocked (Iteration 31)
+# Implementation Loop — Hardware-Blocked (Iteration 32)
 
 ## Outcome
 - 98/98 tests pass (0 failures, 2 hardware skips: test_kernel_controller #3, test_backend_smoke #88)
 - Final gate rejects on MGR-36 (partial — needs kernel-backed gamepad via /dev/uinput)
-- All software-addressable work complete: no open tasks
+- All software-addressable work complete: tasks 1-2, 10-13 done; no open tasks
 - Plan status: active; tasks 3-9 hardware-dependent
-- Git tree clean (HEAD: 5d1d1d5 iteration 30)
+- Git tree clean (HEAD: 4dbb143 iteration 31)
+- Sent human.interact asking for hardware access options (iteration 32)
 
-## New Findings (Iteration 31)
-- uinput kernel module IS loaded on host: `uinput 28672 0 - Live`
-- evdev handler available (Minor=64), joydev handler available (Minor=0)
-- Real input devices exist on host (Keychron keyboard, Logitech G305 mouse, etc.) — NO gamepad
-- /dev is tmpfs (rw, uid=1000) but mknod fails: "Operation not permitted" (zero capabilities)
-- User namespaces enabled (unprivileged_userns_clone=1) but mknod STILL fails inside userns
-- systemd-tmpfiles available but cannot create device nodes without privileges
-- PID 1 shares same mount namespace (mnt:[4026533487]) — no alternative /dev
+## Environment State (unchanged since iter 28)
+- No /dev/uinput, no /dev/dri, no /dev/input — zero capabilities (CapEff=0)
+- uinput/evdev/joydev kernel modules loaded but device nodes not accessible
+- mknod fails even in user namespace with --map-root-user
+- devtmpfs mount fails (permission denied) even in user namespace
 - SSH runner dev-runner-vm: hostname still unresolvable
 
 ## Blocker Analysis
