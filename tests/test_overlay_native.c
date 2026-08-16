@@ -124,9 +124,21 @@ static void push_poll_event(uint32_t event_type)
     SDL_PushEvent(&ev);
 }
 
-static void make_visible(native_fixture *f)
+/* Activate the overlay through the production InterceptMode poll path,
+ * exercising the full activation lifecycle (IDLE → ACTIVATING → VISIBLE)
+ * including the on_activating callback, cbx_overlay_lifecycle_activate,
+ * surface show, and on_visible callback.  This replaces the earlier
+ * direct state mutation that bypassed the activation lifecycle. */
+static void activate_overlay(native_fixture *f)
 {
-    f->svc->lifecycle.state = CBX_OVERLAY_VISIBLE;
+    cbx_overlay_service_ctx *svc = f->svc;
+    assert_int_equal(svc->lifecycle.state, CBX_OVERLAY_IDLE);
+    svc->polls[0].state = IP_POLL_PASS_WAIT;
+    assert_int_equal(ip_composite_set_intercept_mode(
+        svc->conn.backend, svc->conn.bus, COMP_PATH_0, "2"), 0);
+    push_poll_event(svc->poll_event_type);
+    cbx_overlay_service_step(svc);
+    assert_int_equal(svc->lifecycle.state, CBX_OVERLAY_VISIBLE);
 }
 
 /* Emit an InputEvent signal on the native server by calling the
@@ -556,7 +568,7 @@ static void test_o01b_deactivation_closes(void **state)
     native_fixture *f = *state;
     cbx_overlay_service_ctx *svc = f->svc;
 
-    make_visible(f);
+    activate_overlay(f);
     svc->polls[0].state = IP_POLL_ACTIVE;
 
     /* Set InterceptMode = PASS (1) on server. */
@@ -576,7 +588,7 @@ static void test_o02_move_left(void **state)
     native_fixture *f = *state;
     cbx_overlay_service_ctx *svc = f->svc;
 
-    make_visible(f);
+    activate_overlay(f);
 
     /* Move right first so LEFT is not at boundary. */
     push_keydown(SDLK_RIGHT);
@@ -596,7 +608,7 @@ static void test_o03_move_right(void **state)
     native_fixture *f = *state;
     cbx_overlay_service_ctx *svc = f->svc;
 
-    make_visible(f);
+    activate_overlay(f);
     assert_int_equal(cbx_select_grid_get_cur_col(&svc->grid, 0), 0);
 
     push_keydown(SDLK_RIGHT);
@@ -611,7 +623,7 @@ static void test_o04_cycle_profile_up(void **state)
     native_fixture *f = *state;
     cbx_overlay_service_ctx *svc = f->svc;
 
-    make_visible(f);
+    activate_overlay(f);
 
     /* Verify we have at least 2 profiles. */
     assert_true(svc->grid.profile_count >= 2);
@@ -638,7 +650,7 @@ static void test_o05_cycle_profile_down(void **state)
     native_fixture *f = *state;
     cbx_overlay_service_ctx *svc = f->svc;
 
-    make_visible(f);
+    activate_overlay(f);
     assert_true(svc->grid.profile_count >= 2);
 
     /* Capture current profile (must copy — cycle modifies in place). */
@@ -662,7 +674,7 @@ static void test_o06_enter_host_mode(void **state)
     native_fixture *f = *state;
     cbx_overlay_service_ctx *svc = f->svc;
 
-    make_visible(f);
+    activate_overlay(f);
     assert_false(cbx_host_mode_is_active(&svc->hm));
 
     push_keydown(SDLK_r);
@@ -679,7 +691,7 @@ static void test_o06b_host_freezes_non_host(void **state)
     native_fixture *f = *state;
     cbx_overlay_service_ctx *svc = f->svc;
 
-    make_visible(f);
+    activate_overlay(f);
 
     /* Enter host mode via keyboard (acts as row 0). */
     push_keydown(SDLK_r);
@@ -703,7 +715,7 @@ static void test_o07_host_navigate_rows(void **state)
     native_fixture *f = *state;
     cbx_overlay_service_ctx *svc = f->svc;
 
-    make_visible(f);
+    activate_overlay(f);
 
     /* Enter host mode. */
     push_keydown(SDLK_r);
@@ -729,7 +741,7 @@ static void test_o08_host_move_slot(void **state)
     native_fixture *f = *state;
     cbx_overlay_service_ctx *svc = f->svc;
 
-    make_visible(f);
+    activate_overlay(f);
 
     /* Enter host mode. */
     push_keydown(SDLK_r);
@@ -755,7 +767,7 @@ static void test_o09_exit_host_mode(void **state)
     native_fixture *f = *state;
     cbx_overlay_service_ctx *svc = f->svc;
 
-    make_visible(f);
+    activate_overlay(f);
 
     /* Enter host mode. */
     push_keydown(SDLK_r);
@@ -775,7 +787,7 @@ static void test_o10_close_saves_and_sets_pass(void **state)
     native_fixture *f = *state;
     cbx_overlay_service_ctx *svc = f->svc;
 
-    make_visible(f);
+    activate_overlay(f);
     assert_int_equal(svc->assignments.assignment_count, 0);
 
     /* Move row 0 to col 1 (P1 slot). */
@@ -809,7 +821,7 @@ static void test_o10b_close_conflict_resolution(void **state)
     native_fixture *f = *state;
     cbx_overlay_service_ctx *svc = f->svc;
 
-    make_visible(f);
+    activate_overlay(f);
 
     /* Move row 0 to col 1 (P1). */
     push_keydown(SDLK_RIGHT);
@@ -853,7 +865,7 @@ static void test_o11_multi_controller_independent(void **state)
     native_fixture *f = *state;
     cbx_overlay_service_ctx *svc = f->svc;
 
-    make_visible(f);
+    activate_overlay(f);
     assert_int_equal(cbx_select_grid_get_cur_col(&svc->grid, 0), 0);
     assert_int_equal(cbx_select_grid_get_cur_col(&svc->grid, 1), 0);
 
@@ -886,7 +898,7 @@ static void test_o11b_host_mode_via_dbus(void **state)
     native_fixture *f = *state;
     cbx_overlay_service_ctx *svc = f->svc;
 
-    make_visible(f);
+    activate_overlay(f);
 
     /* Controller 0 enters host mode via R3. */
     emit_input_event(svc->conn.backend, svc->conn.bus, COMP_PATH_0, "R3", 1.0);
@@ -927,7 +939,7 @@ static void test_o11c_unknown_device_dropped(void **state)
     native_fixture *f = *state;
     cbx_overlay_service_ctx *svc = f->svc;
 
-    make_visible(f);
+    activate_overlay(f);
     int col0_before = cbx_select_grid_get_cur_col(&svc->grid, 0);
     int col1_before = cbx_select_grid_get_cur_col(&svc->grid, 1);
 
@@ -953,7 +965,7 @@ static void test_o12_host_profile_cycle_deferred(void **state)
     native_fixture *f = *state;
     cbx_overlay_service_ctx *svc = f->svc;
 
-    make_visible(f);
+    activate_overlay(f);
 
     /* Enter host mode. */
     push_keydown(SDLK_r);
@@ -979,7 +991,7 @@ static void test_o13_conflict_resolution_on_save(void **state)
     native_fixture *f = *state;
     cbx_overlay_service_ctx *svc = f->svc;
 
-    make_visible(f);
+    activate_overlay(f);
 
     /* Both controllers move to col 1 (P1) independently via DBus InputEvent. */
     emit_input_event(svc->conn.backend, svc->conn.bus, COMP_PATH_0, "Right", 1.0);
