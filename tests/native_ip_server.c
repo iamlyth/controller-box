@@ -80,6 +80,15 @@ manager_property_get(sd_bus *bus, const char *path, const char *interface,
         if (rc >= 0) rc = sd_bus_message_close_container(reply);
         return rc;
     }
+    if (strcmp(property, "SupportedTargetDevices") == 0) {
+        int rc = sd_bus_message_open_container(reply, 'a', "s");
+        if (rc < 0) return rc;
+        rc = sd_bus_message_append(reply, "s", "Xbox 360 Controller");
+        if (rc >= 0) rc = sd_bus_message_append(reply, "s", "DualSense");
+        if (rc >= 0) rc = sd_bus_message_append(reply, "s", "Generic Gamepad");
+        if (rc >= 0) rc = sd_bus_message_close_container(reply);
+        return rc;
+    }
     if (strcmp(property, "InterceptMode") == 0)
         return sd_bus_message_append(reply, "u", (uint32_t)2);
     if (strcmp(property, "Enabled") == 0)
@@ -429,6 +438,8 @@ static const sd_bus_vtable manager_vtable[] = {
     SD_BUS_PROPERTY("Version", "s", manager_property_get, 0,
                     SD_BUS_VTABLE_PROPERTY_CONST),
     SD_BUS_PROPERTY("SupportedTargetDeviceIds", "as", manager_property_get, 0,
+                    SD_BUS_VTABLE_PROPERTY_CONST),
+    SD_BUS_PROPERTY("SupportedTargetDevices", "as", manager_property_get, 0,
                     SD_BUS_VTABLE_PROPERTY_CONST),
     SD_BUS_PROPERTY("InterceptMode", "u", manager_property_get, 0,
                     SD_BUS_VTABLE_PROPERTY_CONST),

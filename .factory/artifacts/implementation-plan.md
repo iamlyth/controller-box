@@ -112,7 +112,7 @@ satisfy `verified`.
 | DBUS-04 | 10.1 | verified | `dbus_client.c:540-562` native signatures (`u`,`b`,`as`); `test_dbus_signatures.c` asserts exact types; `test_native_dbus.c` round-trip | — |
 | DBUS-05 | 10.1 | verified | `native_ip_server.c` exports real vtables: InterceptMode `u`, GamepadOrder `as`, InputEvent `sd`, SetInterceptActivation `ass` | — |
 | DBUS-06 | 10.2 | verified | `ip_intercept_poll.c` state machine; `test_intercept_poll.c` 24 tests; `test_o01_open_lifecycle_activates` | — |
-| DBUS-07 | 10.2 | partial | `SupportedTargetDevices: as` wrapper exists (`ip_manager.c:141-151`) and is mock-tested, but `native_ip_server.c` does not export this property and no native test covers it. | Task 1 |
+| DBUS-07 | 10.2 | verified | `SupportedTargetDevices: as` wrapper (`ip_manager.c:185-196`) + native server export (`native_ip_server.c` manager_property_get + vtable) + native round-trip test (`test_native_dbus.c` Test 1 + Test 3 via `ip_manager_get_supported_target_devices`) | — |
 | DBUS-08 | 10.2 | verified | All other Manager/Composite/Target/Source methods+properties verified via mock + native tests (43 of 46 DBus API surface items) | — |
 | DBUS-09 | 10.3 | verified | All 5 gaps have implemented workarounds: poll (gap 1), persist+restore (gap 2), temp file (gap 3), filesystem enum (gap 4), not needed (gap 5) | — |
 | DBUS-10 | 10.1 | verified | Sender verification on all signal types: `ip_hotplug.c:50-57`, `ip_properties.c:63-68`, `ip_input_signal.c:128-131`; wrong-sender tests | — |
@@ -185,7 +185,7 @@ but skips (exit 77) because the capability is not declared. Task 3 addresses
 this gap.
 
 ## Task 1: Add SupportedTargetDevices to native test server
-- Status: pending
+- Status: complete
 - Dependencies: none
 - Scope: `tests/native_ip_server.c` (add `SupportedTargetDevices` property to
   manager vtable), `tests/test_native_dbus.c` (add native round-trip test)
@@ -193,8 +193,9 @@ this gap.
   `native_ip_server.c` with human-readable names matching
   `SupportedTargetDeviceIds`. A native test reads and verifies the property
   value through `ip_dbus_sd_backend()`. DBUS-07 reclassified to `verified`.
-- Verification: `nix-shell --run "ctest --test-dir build-check -R 'test_native_dbus' --output-on-failure"`
+- Verification: `nix-shell --run "ctest --test-dir build-check -R 'test_native_dbus' --output-on-failure"` — 10/10 tests passed (5.25s). Native `as` property read via both `backend->get_property` (Test 1) and `ip_manager_get_supported_target_devices` wrapper (Test 3). Values: "Xbox 360 Controller,DualSense,Generic Gamepad" matching `controller-icons.yaml` names for IDs "xb360,ds5,gamepad".
 - Documentation impact: none
+- Evidence: commit on `develop`; DBUS-07 reclassified to `verified` in conformance matrix.
 
 ## Task 2: Add daemon memory footprint test
 - Status: pending

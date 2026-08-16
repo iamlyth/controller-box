@@ -88,6 +88,13 @@ static void test_production_backend_native_roundtrip(void **state)
         "SupportedTargetDeviceIds", &value), 0);
     assert_string_equal(value, "xb360,ds5,gamepad"); free(value);
 
+    /* SupportedTargetDevices (as) — human-readable names */
+    assert_int_equal(backend->get_property(bus, IP_DBUS_NAME,
+        IP_DBUS_MANAGER_PATH, IP_IFACE_MANAGER,
+        "SupportedTargetDevices", &value), 0);
+    assert_string_equal(value, "Xbox 360 Controller,DualSense,Generic Gamepad");
+    free(value);
+
     /* InterceptMode (u) — Manager-level, read-only */
     assert_int_equal(backend->get_property(bus, IP_DBUS_NAME,
         IP_DBUS_MANAGER_PATH, IP_IFACE_MANAGER, "InterceptMode", &value), 0);
@@ -210,6 +217,14 @@ static void test_native_target_operations(void **state)
         backend, bus, &types_csv), 0);
     assert_string_equal(types_csv, "xb360,ds5,gamepad");
     free(types_csv);
+
+    /* SupportedTargetDevices (native `as`) — human-readable names via wrapper. */
+    char *devices_csv = NULL;
+    assert_int_equal(ip_manager_get_supported_target_devices(
+        backend, bus, &devices_csv), 0);
+    assert_non_null(devices_csv);
+    assert_string_equal(devices_csv, "Xbox 360 Controller,DualSense,Generic Gamepad");
+    free(devices_csv);
 
     /* CreateTargetDevice. */
     char *path0 = NULL;
