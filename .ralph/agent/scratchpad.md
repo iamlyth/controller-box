@@ -1,17 +1,19 @@
 # Implementation Scratchpad — Controller-Box v1
 
-## Task 4 complete: Interaction inventory accuracy and missing coverage
+## Task 5 complete: Host mode visual rendering in overlay grid
 
-- **Commit:** 284f2a8 on develop
-- **What:** Fixed M32/M34 dispatch_path descriptions in interaction_inventory.c, added M35/M36 to na_ids test guard, added DBus InputEvent signal path test for capture mode and M38 controller-path discard test in test_manager_native_prof.c.
+- **Commit:** 7c85706 on develop
+- **What:** Wired `cbx_host_mode_row_state()` into `cbx_select_grid_render()` via new `cbx_grid_render_ctx.hm` field. HOST/SELECTED/FROZEN rows now render with distinct visuals. Also fixed conflict_red to use `theme->conflict`, wired up `render_ctx.conflicts` and `render_ctx.hm` in overlay_service.c, and added real-time conflict detection after slot changes and grid rebuilds.
 - **Changes:**
-  - `interaction_inventory.c`: M32 dispatch_path → "direct callback: cbx_profile_editor_on_input_event (supplemental; DBus signal path tested in test_manager_native_prof)"; M34 → "direct callback: cbx_profile_editor_on_input_event → cbx_profile_editor_seq_on_input (supplemental; DBus signal path tested in test_manager_native_prof)".
-  - `test_interaction_inventory.c`: na_ids array now includes M35 and M36 alongside M13, M14, M32, M34, M37, M38.
-  - `test_manager_native_prof.c`: Added `drain_bus` and `emit_input_event` helpers. Added `test_m32_capture_dbus_signal` — emits InputEvent via native server's EmitInputEvent method at CompositeDevice0 path, drains manager bus via sd_bus_process, verifies full signal dispatch chain (sd_input_event_callback → input_event_signal_cb → ip_input_events_handle with sender verification → cbx_profile_editor_on_input_event → capture ends). Added `test_m38_discard_ctrl` — Start button (virtual gamepad button 6) from editor LIST mode → controller event dispatch → cbx_profiles_tab_close_editor, verifies mode returns to LIST and profile file mtime unchanged. Both registered in test runner. File header updated to M30–M38.
-  - Conformance matrix MGR-07: partial → verified.
-- **Key finding:** The native server's `EmitInputEvent(ss)` method emits a real `InputEvent(sd)` signal via `sd_bus_emit_signal`. The signal is received on the manager's bus (separate connection from the fixture's bus). `drain_bus` on `mgr.dbus_backend/mgr.dbus_bus` processes it through the full chain including sender verification (expected_sender resolved via GetNameOwner during editor open).
+  - `host_mode.h`: Changed anonymous struct typedef to named `struct cbx_host_mode` for forward declaration.
+  - `grid_render.h`: Added `typedef struct cbx_host_mode cbx_host_mode;` forward decl and `const cbx_host_mode *hm` field to `cbx_grid_render_ctx`.
+  - `grid_render.c`: Added host mode color setup (success, text_accent, text_secondary, text_disabled, panel_bg from theme). Per-row: get `cbx_host_mode_row_state()`, apply HOST (green cell + 4px green bar), SELECTED (blue cell + 2px accent row border), FROZEN (dim bg, secondary text, disabled indicators/borders). Fixed `conflict_red` to use `theme->conflict`.
+  - `overlay_service.c`: Wired `render_ctx.conflicts = &svc->conflicts` and `render_ctx.hm = &svc->hm`. Added `cbx_conflict_detect` after initial grid build, hotplug rebuilds, and `cbx_overlay_on_slot_change` for real-time conflict display.
+  - `test_overlay_visual.c`: Added `test_host_mode_row_states` — uses actual `cbx_host_mode` state machine, verifies green in HOST cell, blue in SELECTED cell, no blue in FROZEN cell, frame differs from player mode.
+  - `test_golden.c`: Updated `test_golden_overlay_host_mode` to use actual host mode state machine. Regenerated `overlay_host_mode.png` and `overlay_conflict.png` baselines.
 - **Verification:** `ctest --test-dir build-check` → 96/96 pass (1 pre-existing skip). `verify-project.sh` → pass.
+- **Conformance:** OV-04 partial→verified, OV-10 partial→verified.
 
 ## Next task
 
-Task 5: Fix host mode visual rendering in overlay grid — `src/overlay/grid_render.c` consume `cbx_host_mode_row_state()`, render distinct visuals for SELECTED/HOST/FROZEN rows, update visual and golden tests.
+Task 6: Fix documentation inaccuracies — `docs/OPERATIONS.md` inventory description (50 verified, 8 NOT_APPLICABLE, 1 DEFERRED), `README.md` §11.1 verification table (add test_installed_functional and test_installed_binary). Run `check-docs-sync.sh` and `verify-boilerplate.sh`.
