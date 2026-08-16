@@ -5,8 +5,9 @@ Plan remains `blocked` — Tasks 3-6 require hardware capabilities not available
 
 ## Verification (this iteration)
 - `ssh -o ConnectTimeout=5 dev-runner-vm` — hostname unresolvable; runner still unreachable.
-- Non-verify-project final-gate checks: all pass (plan-freshness, scratchpad-guard, validate-plan, bug-ledger=0 open, docs-sync, verify-boilerplate).
-- `git status --porcelain` — clean tree at 41ebdeb (unchanged since last full verify-project.sh pass in iteration 5).
+- `nix-shell --run 'cmake --build build-check && ctest --test-dir build-check'` — 98/98 pass, 2 skipped (test_kernel_controller, test_backend_smoke — both hardware-blocked exit 77).
+- Non-verify-project final-gate checks: all pass (plan-freshness, scratchpad-guard, validate-plan, bug-ledger=0 open, docs-sync, verify-boilerplate, installed-functional-evidence).
+- `git status --porcelain` — clean tree at 4e8d60c.
 - Per §11.2: "reaching a ceiling is never success" — completion token must NOT be emitted while 14 conformance rows remain partial/missing (all hardware-blocked).
 
 ## Blocker
