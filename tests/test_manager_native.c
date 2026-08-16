@@ -511,7 +511,7 @@ test_m23_24_25_opacity_controller(void **state)
     float before = cbx_settings_tab_settings(st)->overlay_opacity;
     ctrl_press(&mgr, f->joystick, 12);
     float after = cbx_settings_tab_settings(st)->overlay_opacity;
-    assert_true(after != before);
+    assert_float_equal(after, before - 0.05f, 0.001f);
 
     /* M25: A → confirm edit → mode returns to LIST */
     ctrl_press(&mgr, f->joystick, 0);
@@ -542,11 +542,11 @@ test_m23_24_25_opacity_pointer(void **state)
     send_mouse_click(&mgr, px, py);
     assert_int_equal(cbx_settings_tab_mode(st), CBX_ST_MODE_EDIT);
 
-    /* M24: Down → adjust value */
+    /* M24: Down → adjust value (opacity decreases by 0.05) */
     float before = cbx_settings_tab_settings(st)->overlay_opacity;
     send_key_dn(&mgr, SDLK_DOWN);
     float after = cbx_settings_tab_settings(st)->overlay_opacity;
-    assert_true(after != before);
+    assert_float_equal(after, before - 0.05f, 0.001f);
 
     /* M25: A → confirm edit */
     send_key_press(&mgr, SDLK_a);
@@ -575,11 +575,11 @@ test_m23_24_25_vc_count_controller(void **state)
     ctrl_press(&mgr, f->joystick, 0);
     assert_int_equal(cbx_settings_tab_mode(st), CBX_ST_MODE_EDIT);
 
-    /* M24: Down → VC count decreases */
+    /* M24: Down → VC count decreases by 1 */
     int before = cbx_settings_tab_settings(st)->virtual_controllers.count;
     ctrl_press(&mgr, f->joystick, 12);
     int after = cbx_settings_tab_settings(st)->virtual_controllers.count;
-    assert_true(after != before);
+    assert_int_equal(after, before - 1);
 
     /* M25: A → confirm */
     ctrl_press(&mgr, f->joystick, 0);
@@ -608,13 +608,13 @@ test_m23_24_25_vc_type_controller(void **state)
     ctrl_press(&mgr, f->joystick, 0);
     assert_int_equal(cbx_settings_tab_mode(st), CBX_ST_MODE_EDIT);
 
-    /* M24: Down → cycle to next type */
+    /* M24: Down → cycle to prev type (wraps: xb360 → touchscreen) */
     char before[64];
     snprintf(before, sizeof(before), "%s",
              cbx_settings_tab_settings(st)->virtual_controllers.types[0]);
     ctrl_press(&mgr, f->joystick, 12);
     const char *after = cbx_settings_tab_settings(st)->virtual_controllers.types[0];
-    assert_string_not_equal(before, after);
+    assert_string_equal(after, "touchscreen");
 
     /* M25: A → confirm */
     ctrl_press(&mgr, f->joystick, 0);
@@ -643,13 +643,13 @@ test_m23_24_25_trigger_controller(void **state)
     ctrl_press(&mgr, f->joystick, 0);
     assert_int_equal(cbx_settings_tab_mode(st), CBX_ST_MODE_EDIT);
 
-    /* M24: Down → cycle trigger combo */
+    /* M24: Down → cycle trigger (wraps: Select+A → L3+R3) */
     char before[64];
     snprintf(before, sizeof(before), "%s",
              cbx_settings_tab_settings(st)->overlay_trigger);
     ctrl_press(&mgr, f->joystick, 12);
     const char *after = cbx_settings_tab_settings(st)->overlay_trigger;
-    assert_string_not_equal(before, after);
+    assert_string_equal(after, "L3+R3");
 
     /* M25: A → confirm */
     ctrl_press(&mgr, f->joystick, 0);
@@ -680,13 +680,13 @@ test_m23_24_25_trigger_pointer(void **state)
     send_mouse_click(&mgr, px, py);
     assert_int_equal(cbx_settings_tab_mode(st), CBX_ST_MODE_EDIT);
 
-    /* M24: Down → cycle trigger */
+    /* M24: Down → cycle trigger (wraps: Select+A → L3+R3) */
     char before[64];
     snprintf(before, sizeof(before), "%s",
              cbx_settings_tab_settings(st)->overlay_trigger);
     send_key_dn(&mgr, SDLK_DOWN);
     const char *after = cbx_settings_tab_settings(st)->overlay_trigger;
-    assert_string_not_equal(before, after);
+    assert_string_equal(after, "L3+R3");
 
     /* M25: A → confirm */
     send_key_press(&mgr, SDLK_a);
@@ -724,9 +724,9 @@ test_m26_cancel_edit_controller(void **state)
     ctrl_press(&mgr, f->joystick, 0);
     assert_int_equal(cbx_settings_tab_mode(st), CBX_ST_MODE_EDIT);
 
-    /* Change value */
+    /* Change value (wraps: default → light) */
     ctrl_press(&mgr, f->joystick, 12);
-    assert_string_not_equal(cbx_settings_tab_settings(st)->theme, saved);
+    assert_string_equal(cbx_settings_tab_settings(st)->theme, "light");
 
     /* B → cancel → value reverts */
     ctrl_press(&mgr, f->joystick, 1);
@@ -763,9 +763,9 @@ test_m26_cancel_edit_pointer(void **state)
     send_mouse_click(&mgr, px, py);
     assert_int_equal(cbx_settings_tab_mode(st), CBX_ST_MODE_EDIT);
 
-    /* Change value */
+    /* Change value (wraps: default → light) */
     send_key_dn(&mgr, SDLK_DOWN);
-    assert_string_not_equal(cbx_settings_tab_settings(st)->theme, saved);
+    assert_string_equal(cbx_settings_tab_settings(st)->theme, "light");
 
     /* B → cancel → value reverts */
     send_key_dn(&mgr, SDLK_b);

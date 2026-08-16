@@ -11,7 +11,9 @@
  *     (InputPlumber's tracked unique bus name).  Mismatched senders are
  *     silently dropped.
  *   - Path validation: object paths must start with IP_DBUS_PATH "/" to be
- *     accepted.
+ *     accepted.  Device paths are classified by checking the path component
+ *     at the exact position after IP_DBUS_PATH "/devices/" (not via raw
+ *     substring search), preventing path-confusion attacks.
  */
 #include "ip_hotplug.h"
 
@@ -50,6 +52,32 @@ path_is_valid(const char *path)
     static const char prefix[] = IP_DBUS_PATH "/";
     size_t plen = sizeof(prefix) - 1;
     return strncmp(path, prefix, plen) == 0;
+}
+
+/* Classify a device path as source or target by checking the path component
+ * immediately after the IP_DBUS_PATH "/devices/" prefix.  This prevents
+ * substring confusion where a crafted path containing "/devices/source/"
+ * in an unexpected position could be misclassified.
+ *
+ * Returns 's' for source, 't' for target, '\0' for neither. */
+static char
+classify_device_path(const char *path)
+{
+    if (!path)
+        return '\0';
+
+    static const char dev_prefix[] = IP_DBUS_PATH "/devices/";
+    size_t dlen = sizeof(dev_prefix) - 1;
+
+    if (strncmp(path, dev_prefix, dlen) != 0)
+        return '\0';
+
+    const char *rest = path + dlen;
+    if (strncmp(rest, "source/", 7) == 0)
+        return 's';
+    if (strncmp(rest, "target/", 7) == 0)
+        return 't';
+    return '\0';
 }
 
 /* Verify that the signal sender matches the expected InputPlumber name. */
@@ -141,9 +169,10 @@ ip_hotplug_handle_added(ip_hotplug *hp,
     if (iface_list_contains(ifaces, IP_IFACE_COMPOSITE))
         changed |= cbx_device_model_add_composite(model, path);
 
-    if (strstr(path, "/devices/source/"))
+    char dev_class = classify_device_path(path);
+    if (dev_class == 's')
         changed |= cbx_device_model_add_source(model, path);
-    else if (strstr(path, "/devices/target/"))
+    else if (dev_class == 't')
         changed |= cbx_device_model_add_target(model, path);
 
     if (changed)
@@ -178,9 +207,10 @@ ip_hotplug_handle_removed(ip_hotplug *hp,
     if (iface_list_contains(ifaces, IP_IFACE_COMPOSITE))
         changed |= cbx_device_model_remove_composite(model, path);
 
-    if (strstr(path, "/devices/source/"))
+    char dev_class = classify_device_path(path);
+    if (dev_class == 's')
         changed |= cbx_device_model_remove_source(model, path);
-    else if (strstr(path, "/devices/target/"))
+    else if (dev_class == 't')
         changed |= cbx_device_model_remove_target(model, path);
 
     if (changed)
