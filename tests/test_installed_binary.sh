@@ -99,7 +99,15 @@ pass "all required tools available (Xvfb, xdotool, busctl)"
 echo ""
 echo "--- Build and install to staging prefix ---"
 
-if [ ! -d "$BUILD_DIR" ]; then
+# Invalidate stale CMake cache when source path differs (bind-mount safe).
+if [[ -f "$BUILD_DIR/CMakeCache.txt" ]]; then
+    cached_src=$(grep 'CMAKE_HOME_DIRECTORY:INTERNAL=' "$BUILD_DIR/CMakeCache.txt" 2>/dev/null | cut -d= -f2)
+    if [[ -n "$cached_src" && "$cached_src" != "$PROJECT_ROOT" ]]; then
+        echo "test_installed_binary: CMake cache source mismatch ($cached_src != $PROJECT_ROOT); reconfiguring"
+        rm -f "$BUILD_DIR/CMakeCache.txt"
+    fi
+fi
+if [ ! -d "$BUILD_DIR" ] || [ ! -f "$BUILD_DIR/CMakeCache.txt" ]; then
     cmake -S . -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Debug
 fi
 cmake --build "$BUILD_DIR" --parallel 2>/dev/null || cmake --build "$BUILD_DIR"

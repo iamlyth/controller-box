@@ -188,7 +188,11 @@ const char *cbx_builtin_profiles_dir(void)
      * development builds functional before `cmake --install`. */
     if (access(BUILTIN_PROFILE_DIR "/default.yaml", R_OK) == 0)
         return BUILTIN_PROFILE_DIR;
-    return SOURCE_PROFILE_DIR;
+    if (access(SOURCE_PROFILE_DIR "/default.yaml", R_OK) == 0)
+        return SOURCE_PROFILE_DIR;
+    /* If both compiled-in paths are inaccessible (e.g. bind-mount path
+     * mismatch), fall back to a data directory relative to the source root. */
+    return "data/profiles";
 }
 
 const char *cbx_system_devices_dir(void)
