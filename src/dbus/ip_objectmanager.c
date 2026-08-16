@@ -11,8 +11,8 @@
  * Classification:
  *   - Interface list contains org.shadowblip.InputManager      → Manager
  *   - Interface list contains org.shadowblip.Input.CompositeDevice → Composite
- *   - Path contains "/devices/source/"                           → Source
- *   - Path contains "/devices/target/"                           → Target
+ *   - Path prefix "/devices/source/"                     → Source
+ *   - Path prefix "/devices/target/"                     → Target
  *
  * Security:
  *   - All object paths must start with "/org/shadowblip/InputPlumber/"
@@ -205,11 +205,19 @@ cbx_objectmanager_parse_reply(const char *reply, cbx_device_model *model)
             add_composite(model, path);
         }
 
-        /* Source/target classification by path pattern. */
-        if (strstr(path, "/devices/source/")) {
-            add_source(model, path);
-        } else if (strstr(path, "/devices/target/")) {
-            add_target(model, path);
+        /* Source/target classification by path prefix (hardened — same
+         * approach as ip_hotplug.c classify_device_path).  Uses exact
+         * prefix match at the correct path position to prevent
+         * misclassification via crafted DBus paths containing the
+         * substring at an unexpected position. */
+        static const char dev_prefix[] = IP_DBUS_PATH "/devices/";
+        size_t dlen = sizeof(dev_prefix) - 1;
+        if (strncmp(path, dev_prefix, dlen) == 0) {
+            const char *rest = path + dlen;
+            if (strncmp(rest, "source/", 7) == 0)
+                add_source(model, path);
+            else if (strncmp(rest, "target/", 7) == 0)
+                add_target(model, path);
         }
 
         line = strtok_r(NULL, "\n", &saveptr);
