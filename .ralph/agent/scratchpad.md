@@ -1,25 +1,22 @@
 # Implementation Loop — Current Handoff
 
 ## Outcome
-Task 2 (Move DBus interface definitions to production header) is complete. This was the last software-fixable task.
+All software-fixable tasks complete. Plan status set to `blocked` — remaining Tasks 3-6 require hardware capabilities not available in the current environment.
 
 ## What changed
-- Created `src/dbus/dbus_interface.h` — production header with all DBus constants, `ip_bus_handle`, `ip_signal_cb`, signal payload structs, `ip_prop_type` enum, `ip_dbus_backend` vtable, and `ip_dbus_sd_backend()` declaration.
-- Updated all 24 `src/` files: `#include "dbus_mock.h"` → `#include "dbus_interface.h"` (or `"dbus/dbus_interface.h"` for non-dbus dirs).
-- Updated `tests/dbus_mock.h`: includes `dbus/dbus_interface.h`, retains only mock-specific code (IP_MOCK_*, ip_mock_*, ip_dbus_mock, mock lifecycle functions).
-- Updated 6 test files that only use constants (`native_ip_server.c`, `test_native_dbus.c`, `test_manager_native.c`, `test_manager_native_prof.c`, `test_overlay_native.c`, `test_installed_functional.c`) to include `dbus_interface.h` directly.
-- Updated `src/dbus/dbus_client.h`: includes `dbus_interface.h`, removed redundant `ip_dbus_sd_backend()` declaration.
-- `CMakeLists.txt`: removed `tests/` from `controllerbox` PUBLIC include path.
-- `tests/CMakeLists.txt`: added `src/` to `cbx_test_support` PUBLIC and `test_ip_server` PRIVATE include dirs.
-- `.factory/artifacts/implementation-plan.md`: Task 2 marked complete; DBUS-04 and DOD-02 conformance rows upgraded to verified.
+- Updated DOD-01 conformance row: 8 → 6 non-verified rows (CFG-03 and DBUS-04 now verified via Tasks 1-2).
+- Set plan front-matter `status: blocked` (was `active`).
+- Commit: d5d2f04.
 
 ## Verification
-- `grep -rn '#include.*"dbus_mock.h"' src/` — no matches (acceptance criterion met)
-- `nix-shell --run 'cmake --build build-check --parallel 2 && ctest --test-dir build-check --output-on-failure'` — 98/98 pass, 2 skipped (hardware-blocked).
-- Sanitizer build compiles clean. 0 warnings.
+- `python3 ./scripts/validate-implementation-plan.py complete` — exit 0 (blocked status accepted, all non-verified rows reference pending tasks 3-6).
+- `nix-shell --run 'cmake --build build-check --parallel 2 && ctest --test-dir build-check --output-on-failure'` — 98/98 pass, 2 skipped (test_kernel_controller, test_backend_smoke — both hardware-blocked).
+- `./scripts/check-docs-sync.sh` — pass.
+- `./scripts/verify-boilerplate.sh` — pass.
+- `ssh dev-runner-vm` — hostname unresolvable; runner unreachable.
 
-## Commit
-889d9b1 — refactor: move DBus interface definitions to production header (Task 2, DBUS-04)
+## Blocker
+Tasks 3-6 require hardware capabilities (`kernel-uinput`, `gpu-compositor`, `target-consumer`) not declared in `.factory/environment.toml`. The runner `dev-runner-vm` is SSH-unreachable. No software-fixable work remains.
 
-## Next task
-Tasks 3-6 are hardware-blocked (need /dev/uinput, GPU compositor, Pi 4 target hardware). Task 7 depends on 3-6. Task 8 (final audit) depends on all. No more software-fixable tasks remain in the plan. The next iteration should verify the hardware-blocked task status and determine if any remediation or audit prep work can proceed, or if the cycle is blocked pending hardware access.
+## Recovery
+To unblock: (1) provision a runner with `/dev/uinput`, GPU compositor, and/or Pi 4 target hardware; (2) declare the corresponding capabilities in `.factory/environment.toml`; (3) record runner evidence via `scripts/check-factory-runner-evidence.py`; (4) set plan status back to `active` and resume the implementation loop.
