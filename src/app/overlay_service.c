@@ -279,7 +279,10 @@ cbx_overlay_on_slot_change(int row_idx, int new_slot, void *userdata)
     (void)row_idx;
     (void)new_slot;
     /* Grid is already updated by player_mode_handle.
-     * Mark surface dirty for re-render. */
+     * Re-detect conflicts so the re-render shows red highlights (SPEC §4.5). */
+    cbx_conflict_list_init(&svc->conflicts);
+    cbx_conflict_detect(&svc->grid, &svc->conflicts);
+    /* Mark surface dirty for re-render. */
     cbx_overlay_surface_mark_dirty_all(&svc->surface);
     return 0;
 }
@@ -624,6 +627,10 @@ cbx_overlay_reconcile_hotplug(cbx_overlay_service_ctx *svc)
     /* Restore profiles onto the rebuilt grid. */
     cbx_profile_cycle_load_profiles(&svc->grid, &svc->profiles);
 
+    /* Re-detect conflicts after grid rebuild (SPEC §4.5). */
+    cbx_conflict_list_init(&svc->conflicts);
+    cbx_conflict_detect(&svc->grid, &svc->conflicts);
+
     /* Rebuild input map. */
     cbx_overlay_input_build_map(svc->conn.backend, svc->conn.bus,
                                  svc->composites, svc->comp_count,
@@ -685,6 +692,10 @@ overlay_backend_ready(void *userdata)
     cbx_select_grid_build(&svc->grid, svc->composites, svc->comp_count,
                            &svc->settings, &svc->assignments);
     cbx_profile_cycle_load_profiles(&svc->grid, &svc->profiles);
+
+    /* Re-detect conflicts after grid rebuild (SPEC §4.5). */
+    cbx_conflict_list_init(&svc->conflicts);
+    cbx_conflict_detect(&svc->grid, &svc->conflicts);
 
     /* Re-initialise profile_cycle with current backend/bus pointers
      * so LoadProfilePath uses the live connection. */
@@ -1156,6 +1167,9 @@ int run_overlay_service(int dry_run)
     cbx_select_grid_init(&svc->grid);
     cbx_select_grid_build(&svc->grid, svc->composites, svc->comp_count,
                            &svc->settings, &svc->assignments);
+    /* Detect conflicts for initial render (SPEC §4.5). */
+    cbx_conflict_list_init(&svc->conflicts);
+    cbx_conflict_detect(&svc->grid, &svc->conflicts);
     rc = cbx_profile_list_enumerate(&svc->profiles);
     if (rc != 0 || svc->profiles.count == 0) {
         fprintf(stderr, "controller-box: no usable profiles available: %d\n", rc);
@@ -1193,6 +1207,8 @@ int run_overlay_service(int dry_run)
         .text_cache = svc->font_id >= 0 ? &svc->text_cache : NULL,
         .font_id    = svc->font_id,
         .settings   = &svc->settings,
+        .conflicts  = &svc->conflicts,
+        .hm         = &svc->hm,
     };
     cbx_overlay_surface_mark_dirty_all(&svc->surface);
     cbx_overlay_surface_render(&svc->surface, svc->rend.renderer,

@@ -49,14 +49,14 @@ typedef int (*cbx_hm_slot_change_cb)(int row_idx, int new_slot, void *userdata);
 
 /* --- Host Mode state -------------------------------------------------- */
 
-typedef struct {
+struct cbx_host_mode {
     bool active;
     int  host_row;       /* row_idx of the host controller      */
     int  selected_row;   /* row the host is currently editing    */
 
     cbx_hm_slot_change_cb on_slot_change;
     void                 *slot_change_data;
-} cbx_host_mode;
+};
 
 /* --- API -------------------------------------------------------------- */
 

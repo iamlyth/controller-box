@@ -39,6 +39,9 @@
 /* Forward declaration — conflict.h includes this header. */
 struct cbx_conflict_list;
 
+/* Forward declaration — host_mode.h includes this header. */
+typedef struct cbx_host_mode cbx_host_mode;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -99,6 +102,7 @@ typedef struct {
     int                font_id;        /* font ID for text cache */
     const struct cbx_conflict_list *conflicts; /* optional — NULL skips red */
     const cbx_settings *settings;      /* optional — NULL skips icon overrides */
+    const cbx_host_mode *hm;           /* optional — NULL skips host-mode visuals */
 } cbx_grid_render_ctx;
 
 /* --- Lifecycle ---------------------------------------------------------- */

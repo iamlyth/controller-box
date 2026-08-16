@@ -23,6 +23,7 @@
 #include "overlay/conflict.h"
 #include "overlay/grid_render.h"
 #include "overlay/surface_build.h"
+#include "overlay/host_mode.h"
 #include "identify/assign.h"
 #include "config/config_settings.h"
 #include "config/config_assignments.h"
@@ -389,7 +390,8 @@ test_golden_overlay_player_mode(void **state)
     free(buf);
 }
 
-/* 2. Host Mode — row 1 moved to P1 (conflict, different highlight). */
+/* 2. Host Mode — host (row 0) navigates to row 1; green HOST cell,
+ *    blue SELECTED cell, dimmed FROZEN row (row 2). */
 static void
 test_golden_overlay_host_mode(void **state)
 {
@@ -397,15 +399,22 @@ test_golden_overlay_host_mode(void **state)
 
     cbx_select_grid g;
     build_grid(&g, 3);
-    move_to_col(&g, 0, 1);
-    move_to_col(&g, 1, 1);  /* Same as row 0 → conflict */
-    move_to_col(&g, 2, 3);
+    move_to_col(&g, 0, 1);  /* Row 0 → P1 */
+    move_to_col(&g, 1, 2);  /* Row 1 → P2 */
+    move_to_col(&g, 2, 3);  /* Row 2 → P3 */
 
     cbx_conflict_list conflicts;
     cbx_conflict_detect(&g, &conflicts);
 
+    /* Enter host mode on row 0, navigate selected to row 1. */
+    cbx_host_mode hm;
+    cbx_host_mode_init(&hm);
+    cbx_host_mode_enter(&hm, 0);
+    cbx_host_mode_handle(&hm, 0, CBX_HM_DOWN, &g);
+
     cbx_grid_render_ctx ctx;
     setup_ctx(f, &ctx, &g, &conflicts);
+    ctx.hm = &hm;
 
     uint8_t *buf = ov_render(f, &ctx);
     assert_non_null(buf);

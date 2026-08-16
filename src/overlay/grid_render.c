@@ -15,6 +15,7 @@
 #include "config/config_settings.h"  /* cbx_settings_icon_override */
 #include "identify/assign.h"  /* CBX_DEFAULT_PROFILE, cbx_assign_lookup */
 #include "overlay/conflict.h"  /* cbx_conflict_is_row_conflicted */
+#include "overlay/host_mode.h"  /* cbx_host_mode_row_state, cbx_row_visual_state */
 
 /* --- Helpers ---------------------------------------------------------- */
 
@@ -344,12 +345,24 @@ cbx_select_grid_render(SDL_Renderer *r,
     SDL_Color dim      = {60, 60, 70, 255};
     /* Conflict indicator color (SPEC §4.5 — red for second arrivals). */
     SDL_Color conflict_red = {220, 40, 40, 255};
+    /* Host-mode visual colors (SPEC §4.4 — distinct row visuals). */
+    SDL_Color host_clr     = {80, 200, 100, 255};   /* green — host row    */
+    SDL_Color selected_clr = {100, 180, 255, 255};  /* blue — selected row */
+    SDL_Color frozen_txt   = {160, 160, 175, 255};  /* dimmed text          */
+    SDL_Color frozen_ind   = {90, 90, 100, 255};    /* disabled indicator   */
+    SDL_Color panel_bg_clr = {30, 30, 42, 255};     /* panel background     */
 
     if (ctx->theme) {
         bg        = ctx->theme->bg;
         fg        = ctx->theme->text_primary;
         highlight = ctx->theme->border_focus;
         dim       = ctx->theme->border;
+        conflict_red = ctx->theme->conflict;
+        host_clr     = ctx->theme->success;
+        selected_clr = ctx->theme->text_accent;
+        frozen_txt   = ctx->theme->text_secondary;
+        frozen_ind   = ctx->theme->text_disabled;
+        panel_bg_clr = ctx->theme->panel_bg;
     }
 
     /* Clear background. */
@@ -408,11 +421,35 @@ cbx_select_grid_render(SDL_Renderer *r,
         const cbx_grid_row *gr = &g->rows[row];
         int row_y = grid_y + row * cell_h;
 
-        /* Row label background. */
+        /* Determine host-mode visual state for this row (SPEC §4.4). */
+        cbx_row_visual_state row_state = CBX_ROW_NORMAL;
+        if (ctx->hm)
+            row_state = cbx_host_mode_row_state(ctx->hm, row);
+        bool is_host_row     = (row_state == CBX_ROW_HOST);
+        bool is_selected_row = (row_state == CBX_ROW_SELECTED);
+        bool is_frozen_row   = (row_state == CBX_ROW_FROZEN);
+
+        /* Text color: dimmed for frozen rows, normal otherwise. */
+        SDL_Color text_clr = is_frozen_row ? frozen_txt : fg;
+
+        /* Row label background — use panel_bg for host/selected to make
+         * them stand out; bg for normal/frozen. */
         SDL_Rect lbl_rect = { .x = area.x, .y = row_y,
                               .w = label_w, .h = cell_h };
-        SDL_SetRenderDrawColor(r, bg.r, bg.g, bg.b, bg.a);
+        SDL_Color lbl_bg = (is_host_row || is_selected_row)
+                           ? panel_bg_clr : bg;
+        SDL_SetRenderDrawColor(r, lbl_bg.r, lbl_bg.g, lbl_bg.b, lbl_bg.a);
         SDL_RenderFillRect(r, &lbl_rect);
+
+        /* Draw a 4px colored indicator bar on the left edge of the
+         * label area for host (green) and selected (blue) rows. */
+        if (is_host_row || is_selected_row) {
+            SDL_Color bar_clr = is_host_row ? host_clr : selected_clr;
+            SDL_Rect bar = { .x = area.x, .y = row_y, .w = 4, .h = cell_h };
+            SDL_SetRenderDrawColor(r, bar_clr.r, bar_clr.g,
+                                   bar_clr.b, bar_clr.a);
+            SDL_RenderFillRect(r, &bar);
+        }
 
         /* Draw model name + profile label. */
         if (ctx->text_cache) {
@@ -421,7 +458,7 @@ cbx_select_grid_render(SDL_Renderer *r,
                      gr->model_name[0] ? gr->model_name : "Controller",
                      gr->profile[0] ? gr->profile : CBX_DEFAULT_PROFILE);
             SDL_Texture *tex = cbx_text_render(ctx->text_cache,
-                                               ctx->font_id, label, fg);
+                                               ctx->font_id, label, text_clr);
             if (tex) {
                 int tw, th;
                 if (SDL_QueryTexture(tex, NULL, NULL, &tw, &th) == 0) {
@@ -448,15 +485,21 @@ cbx_select_grid_render(SDL_Renderer *r,
             int h = cell_h - CELL_MARGIN;
 
             /* Cell background.
-             * - Conflicted row's current column: red indicator (SPEC §4.5).
-             * - Current column (non-conflicted): highlight color.
+             * Priority: conflict > host-mode state > normal.
+             * - Conflicted row's current column: red (SPEC §4.5).
+             * - Host row's current column: green (SPEC §4.4).
+             * - Frozen row's current column: dim (no highlight — frozen).
+             * - Normal/selected current column: highlight color.
              * - Other columns: dim color. */
             SDL_Rect cell_rect = { .x = x + CELL_MARGIN, .y = y + CELL_MARGIN,
                                    .w = w, .h = h };
             if (is_conflicted && col == gr->cur_col) {
                 SDL_SetRenderDrawColor(r, conflict_red.r, conflict_red.g,
                                        conflict_red.b, conflict_red.a);
-            } else if (col == gr->cur_col) {
+            } else if (is_host_row && col == gr->cur_col) {
+                SDL_SetRenderDrawColor(r, host_clr.r, host_clr.g,
+                                       host_clr.b, host_clr.a);
+            } else if (col == gr->cur_col && !is_frozen_row) {
                 SDL_SetRenderDrawColor(r, highlight.r, highlight.g,
                                        highlight.b, highlight.a);
             } else {
@@ -464,10 +507,13 @@ cbx_select_grid_render(SDL_Renderer *r,
             }
             SDL_RenderFillRect(r, &cell_rect);
 
-            /* Draw cell border — red for conflicted row's current cell. */
+            /* Draw cell border — red for conflicted, dimmed for frozen. */
             if (is_conflicted && col == gr->cur_col) {
                 SDL_SetRenderDrawColor(r, conflict_red.r, conflict_red.g,
                                        conflict_red.b, conflict_red.a);
+            } else if (is_frozen_row) {
+                SDL_SetRenderDrawColor(r, frozen_ind.r, frozen_ind.g,
+                                       frozen_ind.b, frozen_ind.a);
             } else {
                 SDL_SetRenderDrawColor(r, fg.r, fg.g, fg.b, fg.a / 2);
             }
@@ -514,18 +560,27 @@ cbx_select_grid_render(SDL_Renderer *r,
             }
 
             /* Draw position indicator.
-             * Conflicted row's current cell uses red indicator. */
+             * Conflicted row's current cell uses red indicator.
+             * Host row's current cell uses green indicator.
+             * Frozen rows: all indicators dimmed (disabled color). */
             int cx = x + cell_w / 2;
             /* Position indicator at bottom of cell. */
             int indicator_y = y + cell_h - INDICATOR_R - 4;
-            if (col == gr->cur_col) {
+            if (col == gr->cur_col && !is_frozen_row) {
                 if (is_conflicted) {
                     SDL_SetRenderDrawColor(r, conflict_red.r, conflict_red.g,
                                            conflict_red.b, conflict_red.a);
+                } else if (is_host_row) {
+                    SDL_SetRenderDrawColor(r, host_clr.r, host_clr.g,
+                                           host_clr.b, host_clr.a);
                 } else {
                     SDL_SetRenderDrawColor(r, fg.r, fg.g, fg.b, fg.a);
                 }
                 draw_filled_circle(r, cx, indicator_y, INDICATOR_R);
+            } else if (is_frozen_row) {
+                SDL_SetRenderDrawColor(r, frozen_ind.r, frozen_ind.g,
+                                       frozen_ind.b, frozen_ind.a);
+                draw_hollow_circle(r, cx, indicator_y, INDICATOR_R);
             } else {
                 SDL_SetRenderDrawColor(r, dim.r, dim.g, dim.b, dim.a);
                 draw_hollow_circle(r, cx, indicator_y, INDICATOR_R);
@@ -541,7 +596,7 @@ cbx_select_grid_render(SDL_Renderer *r,
                          gr->profile[0] ? gr->profile : CBX_DEFAULT_PROFILE);
                 SDL_Texture *tex = cbx_text_render(ctx->text_cache,
                                                     ctx->font_id,
-                                                    plabel, fg);
+                                                    plabel, text_clr);
                 if (tex) {
                     int tw, th;
                     if (SDL_QueryTexture(tex, NULL, NULL, &tw, &th) == 0) {
@@ -558,6 +613,19 @@ cbx_select_grid_render(SDL_Renderer *r,
                     }
                 }
             }
+        }
+
+        /* Draw a 2px accent border around the full row for SELECTED
+         * rows (SPEC §4.4 — visually distinguish the row being edited). */
+        if (is_selected_row) {
+            SDL_Rect row_border = { .x = area.x, .y = row_y,
+                                    .w = area.w, .h = cell_h };
+            SDL_SetRenderDrawColor(r, selected_clr.r, selected_clr.g,
+                                   selected_clr.b, selected_clr.a);
+            SDL_RenderDrawRect(r, &row_border);
+            SDL_RenderDrawRect(r, &(SDL_Rect){
+                .x = area.x + 1, .y = row_y + 1,
+                .w = area.w - 2, .h = cell_h - 2 });
         }
     }
 

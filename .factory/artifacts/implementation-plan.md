@@ -49,13 +49,13 @@ dependent on those are classified `partial` with documented limitations.
 | OV-01 | §4.1 | verified | `grid_render.c` rows=controllers, cols=slots, Unassigned col 0; `test_grid_render.c` 31 tests | — |
 | OV-02 | §4.2 | verified | `trigger.c:39` parse "Select+A"; settings configurable; `test_trigger.c` | — |
 | OV-03 | §4.3 | verified | `player_mode.c` independent row editing; `test_player_mode.c` 23 tests | — |
-| OV-04 | §4.4 | partial | `host_mode.c` logic complete (enter/exit/freeze); `grid_render.c` does NOT consume `cbx_host_mode_row_state()` — host/selected/frozen rows not visually distinguished | Task 5 |
+| OV-04 | §4.4 | verified | `host_mode.c` logic complete (enter/exit/freeze); `grid_render.c` consumes `cbx_host_mode_row_state()` via `cbx_grid_render_ctx.hm`; HOST rows render green cell + indicator bar, SELECTED rows render blue cell + accent border, FROZEN rows render dimmed (no highlight, disabled indicators, secondary text); `test_overlay_visual.c` `test_host_mode_row_states` verifies green/blue/dimmed pixel assertions; golden baseline `overlay_host_mode.png` updated | — |
 | OV-05 | §4.5 | verified | `conflict.c` red highlight + auto-resolve to lowest free slot; `test_conflict.c` 33 tests including visual red pixel assertion | — |
 | OV-06 | §4.6 | verified | `profile_cycle.c:130` profile_follows; profile stored per-row, navigation only modifies cur_col | — |
 | OV-07 | §4.7 | verified | `dynamic_columns.c` rebuild on target count change; `test_dynamic_columns.c` 24 tests | — |
 | OV-08 | §4.8 | verified | `grid_render.c` shows model name + slot position; no nickname prompts in `src/` | — |
 | OV-09 | §4.9 | partial | Pre-built surface verified (`surface_build.c` render-to-texture); latency not measurable on minimum hardware (Pi 4 absent) | Task 8 |
-| OV-10 | §4.10 | partial | Player Mode, conflict, unassigned, icons, text verified in `test_overlay_visual.c` 7 tests + `test_golden.c` 11 baselines; Host Mode visual states not rendered distinctly | Task 5 |
+| OV-10 | §4.10 | verified | Player Mode, conflict, unassigned, icons, text, Host Mode visual states verified in `test_overlay_visual.c` 8 tests + `test_golden.c` 11 baselines; Host Mode row states (HOST/SELECTED/FROZEN) rendered distinctly with green/blue/dimmed visuals | — |
 | MGR-01 | §5.1 | verified | `manager.c` tab bar + controller + pointer dispatch; `test_manager_native.c` SDL virtual gamepad + mouse | — |
 | MGR-02 | §5.2 | verified | `controllers_tab.c` add/remove/type-change with DBus verification; `test_controllers_tab.c` + `test_manager_native.c` | — |
 | MGR-03 | §5.3 | verified | `profiles_tab.c` browse/create(3 sources)/edit/delete; empty-profile sequential entry; unsaved-changes prompt; `test_profiles_tab.c` | — |
@@ -153,7 +153,7 @@ test guard completeness.
 - Documentation impact: Update OPERATIONS.md inventory description to reflect 50 verified, 8 NOT_APPLICABLE, 1 DEFERRED (not "all verified") — deferred to Task 6
 
 ## Task 5: Fix host mode visual rendering in overlay grid
-- Status: pending
+- Status: complete
 - Dependencies: none
 - Scope: `src/overlay/grid_render.c` (consume `cbx_host_mode_row_state()`), `tests/test_overlay_visual.c` (verify host mode visual differences), `tests/test_golden.c` (update host mode golden baseline if needed)
 - Acceptance criteria: `cbx_select_grid_render` calls `cbx_host_mode_row_state()` when host mode is active and renders SELECTED rows with a distinct highlight (e.g., accent color border), HOST rows with a host indicator, and FROZEN rows with dimmed appearance — visually differentiating them from normal Player Mode rows. `test_overlay_visual.c` verifies that Host Mode rows have visually distinct coloring compared to Player Mode rows (not just frame differ). Golden baseline for host mode is updated if rendering changes. Existing overlay visual and golden tests pass. `CBX_GENERATE_GOLDEN=1` may be used to regenerate the baseline with explicit review.

@@ -12,6 +12,7 @@
  * Tests for each §4.10 visual state:
  *   1. Player Mode grid — content in grid cell, text, and icon regions
  *   2. Host Mode — frames differ from Player Mode (different highlight)
+ *  2b. Host Mode row states — distinct colors for HOST/SELECTED/FROZEN rows
  *   3. Conflict highlighting — red {220,40,40} in conflicted cell
  *   4. Unassigned + ≥2 player columns — content in all header + ≥2 slot
  *   5. Controller model/profile text — text-colored pixels in label region
@@ -552,6 +553,75 @@ test_host_mode_differs(void **state)
 }
 
 /*
+ * 2b. Host Mode row states — use the actual cbx_host_mode state machine
+ *     to verify distinct visual rendering for HOST (green cell), SELECTED
+ *     (blue cell + accent border), and FROZEN (dimmed — no highlight) rows.
+ *     SPEC §4.4 — host/selected/frozen rows must be visually distinguished.
+ */
+static void
+test_host_mode_row_states(void **state)
+{
+    struct vis_fixture *f = *state;
+
+    /* Build grid with 3 rows on P1/P2/P3. */
+    cbx_select_grid g;
+    build_grid(&g, 3);
+    move_to_col(&g, 0, 1);  /* Row 0 → P1 */
+    move_to_col(&g, 1, 2);  /* Row 1 → P2 */
+    move_to_col(&g, 2, 3);  /* Row 2 → P3 */
+
+    cbx_conflict_list conflicts;
+    cbx_conflict_detect(&g, &conflicts);
+
+    /* Enter host mode on row 0, navigate selected to row 1. */
+    cbx_host_mode hm;
+    cbx_host_mode_init(&hm);
+    cbx_host_mode_enter(&hm, 0);
+    cbx_host_mode_handle(&hm, 0, CBX_HM_DOWN, &g);
+
+    /* Verify state machine: row 0=HOST, row 1=SELECTED, row 2=FROZEN. */
+    assert_int_equal(cbx_host_mode_row_state(&hm, 0), CBX_ROW_HOST);
+    assert_int_equal(cbx_host_mode_row_state(&hm, 1), CBX_ROW_SELECTED);
+    assert_int_equal(cbx_host_mode_row_state(&hm, 2), CBX_ROW_FROZEN);
+
+    cbx_grid_render_ctx ctx;
+    setup_ctx(f, &ctx, &g, &conflicts);
+    ctx.hm = &hm;
+
+    uint8_t *buf = render_and_readback(f, &ctx);
+    assert_non_null(buf);
+
+    /* HOST row (row 0): current cell (col 1) has green background. */
+    SDL_Rect host_cell = cell_rect(0, 1, 3, g.col_count);
+    uint8_t green[3] = { f->theme.success.r, f->theme.success.g,
+                         f->theme.success.b };
+    assert_true(fb_region_has_color(buf, VIS_W, VIS_H, &host_cell,
+                                     green, 25));
+
+    /* SELECTED row (row 1): current cell (col 2) has blue highlight. */
+    SDL_Rect sel_cell = cell_rect(1, 2, 3, g.col_count);
+    uint8_t blue[3] = { f->theme.border_focus.r, f->theme.border_focus.g,
+                        f->theme.border_focus.b };
+    assert_true(fb_region_has_color(buf, VIS_W, VIS_H, &sel_cell,
+                                     blue, 25));
+
+    /* FROZEN row (row 2): current cell (col 3) does NOT have blue
+     * highlight — frozen rows show dim background instead. */
+    SDL_Rect frozen_cell = cell_rect(2, 3, 3, g.col_count);
+    assert_false(fb_region_has_color(buf, VIS_W, VIS_H, &frozen_cell,
+                                      blue, 25));
+
+    /* Host mode frame must differ from player mode frame. */
+    cbx_host_mode_exit(&hm);
+    uint8_t *buf_player = render_and_readback(f, &ctx);
+    assert_non_null(buf_player);
+    assert_true(fb_frames_differ(buf, buf_player, VIS_W, VIS_H, 5));
+
+    free(buf);
+    free(buf_player);
+}
+
+/*
  * 3. Conflict highlighting — set two controllers to the same P-slot;
  *    assert fb_region_has_color with red target {220, 40, 40} in the
  *    conflicted row's cell region.
@@ -828,6 +898,8 @@ main(void)
         cmocka_unit_test_setup_teardown(test_player_mode_grid,
                                         vis_setup, vis_teardown),
         cmocka_unit_test_setup_teardown(test_host_mode_differs,
+                                        vis_setup, vis_teardown),
+        cmocka_unit_test_setup_teardown(test_host_mode_row_states,
                                         vis_setup, vis_teardown),
         cmocka_unit_test_setup_teardown(test_conflict_highlighting,
                                         vis_setup, vis_teardown),
