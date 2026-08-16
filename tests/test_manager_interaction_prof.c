@@ -986,19 +986,40 @@ test_editor_capture_event(void **state)
     int editing_idx = cbx_profile_editor_get_editing_index(&pt->editor);
     assert_int_equal(editing_idx, 0);
 
-    /* Simulate a physical button press via InputEvent. */
-    cbx_profile_editor_on_input_event(IP_INPUT_A, IP_INPUT_CAT_BUTTON,
-                                       1.0, "A", "/dev/test", &pt->editor);
+    /* Simulate a physical button press via the production DBus
+     * InputEvent signal path: inject_signal -> input_event_signal_cb
+     * -> ip_input_events_handle (sender verification, event parsing,
+     * rate limiting) -> cbx_profile_editor_on_input_event.
+     * expected_sender is ":1.42" (from mock_get_unique_name). */
+    ip_input_event_payload p = {
+        .sender = ":1.42",
+        .path   = "/dev/input/event0",
+        .event  = "A",
+        .value  = 1.0,
+    };
+    int rc = f->backend->inject_signal(f->mock.bus,
+        IP_IFACE_DBUS_DEVICE, "InputEvent", &p);
+    assert_int_equal(rc, 0);
 
     /* Capture ends, back to LIST. */
     assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
                      CBX_EDITOR_MODE_LIST);
     assert_false(cbx_profile_editor_is_capture_active(&pt->editor));
 
-    /* Verify the binding's source button was updated. */
+    /* Verify the binding's source button was actually updated to "A". */
     const cbx_profile *prof = cbx_profile_editor_get_profile(&pt->editor);
     assert_non_null(prof);
     assert_int_equal(prof->mapping_count, 6);
+    bool found_a_button = false;
+    for (int i = 0; i < prof->mapping_count; i++) {
+        for (int j = 0; j < prof->mappings[i].source_event.prop_count; j++) {
+            if (strcmp(prof->mappings[i].source_event.props[j].key, "button") == 0 &&
+                strcmp(prof->mappings[i].source_event.props[j].value, "A") == 0) {
+                found_a_button = true;
+            }
+        }
+    }
+    assert_true(found_a_button);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1057,8 +1078,9 @@ test_editor_seq_begin_pointer(void **state)
 }
 
 /* M34: capture button in sequential mode via InputEvent → button
- * captured, auto-advance.  Dispatch path: cbx_profile_editor_on_input_event
- * → cbx_profile_editor_seq_on_input. */
+ * captured, auto-advance.  Dispatch path: inject_signal ->
+ * input_event_signal_cb -> ip_input_events_handle ->
+ * cbx_profile_editor_on_input_event -> cbx_profile_editor_seq_on_input. */
 static void
 test_editor_seq_capture(void **state)
 {
@@ -1075,9 +1097,17 @@ test_editor_seq_capture(void **state)
     send_key_press(mgr, SDLK_a);  /* → SEQUENTIAL */
     assert_int_equal(cbx_profile_editor_seq_get_step(&pt->editor), 0);
 
-    /* Simulate pressing a button for "Up" (step 0). */
-    cbx_profile_editor_on_input_event(IP_INPUT_A, IP_INPUT_CAT_BUTTON,
-                                       1.0, "A", "/dev/test", &pt->editor);
+    /* Simulate pressing a button for "Up" (step 0) via the production
+     * DBus InputEvent signal path.  expected_sender is ":1.42". */
+    ip_input_event_payload p = {
+        .sender = ":1.42",
+        .path   = "/dev/input/event0",
+        .event  = "A",
+        .value  = 1.0,
+    };
+    int rc = f->backend->inject_signal(f->mock.bus,
+        IP_IFACE_DBUS_DEVICE, "InputEvent", &p);
+    assert_int_equal(rc, 0);
 
     /* Should have advanced to step 1. */
     assert_int_equal(cbx_profile_editor_seq_get_step(&pt->editor), 1);
@@ -1200,6 +1230,11 @@ test_editor_save_button_pointer(void **state)
     widget_center(&pt->save_btn.base, &x, &y);
     send_mouse_click(&f->mgr, x, y);
     assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_LIST);
+
+    /* Verify the profile file was actually written (not just mode change). */
+    char path[PATH_MAX + 128];
+    snprintf(path, sizeof(path), "%s/myprof.yaml", f->user_dir);
+    assert_int_equal(access(path, F_OK), 0);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1239,12 +1274,24 @@ test_editor_discard_button_pointer(void **state)
 {
     mip_fixture *f = *state;
     cbx_profiles_tab *pt = cbx_manager_profiles_tab(&f->mgr);
+
+    /* Record the file's modification time before opening the editor. */
+    char path[PATH_MAX + 128];
+    snprintf(path, sizeof(path), "%s/myprof.yaml", f->user_dir);
+    struct stat st_before;
+    assert_int_equal(stat(path, &st_before), 0);
+
     open_editor(&f->mgr, 2);
     assert_true(cbx_widget_is_visible(&pt->discard_btn.base));
     int x, y;
     widget_center(&pt->discard_btn.base, &x, &y);
     send_mouse_click(&f->mgr, x, y);
     assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_LIST);
+
+    /* Verify the file was NOT re-saved (mtime unchanged). */
+    struct stat st_after;
+    assert_int_equal(stat(path, &st_after), 0);
+    assert_int_equal(st_before.st_mtime, st_after.st_mtime);
 }
 
 /* ------------------------------------------------------------------ */
