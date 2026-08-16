@@ -15,6 +15,19 @@ target_link_libraries(smoke_test_nanosvg PRIVATE nanosvg m)
 add_test(NAME smoke_test_sdl2    COMMAND smoke_test_sdl2)
 add_test(NAME smoke_test_nanosvg COMMAND smoke_test_nanosvg)
 
+# --- Kernel-backed controller integration test (Task 7, §5.7/§11.1) --------
+# Creates a synthetic evdev gamepad via /dev/uinput, launches the installed
+# Manager binary against a private InputPlumber-compatible DBus server, and
+# verifies semantic outcomes from real kernel gamepad events through the
+# production event loop.  Skips (exit 77) when /dev/uinput is unavailable
+# (no kernel-uinput runner capability declared in environment.toml).
+add_executable(test_kernel_controller tests/test_kernel_controller.c)
+add_test(NAME test_kernel_controller
+    COMMAND test_kernel_controller
+        ${CMAKE_CURRENT_BINARY_DIR})
+set_tests_properties(test_kernel_controller PROPERTIES
+    SKIP_RETURN_CODE 77)
+
 # --- Flatpak manifest validation (Task 42) --------------------------------
 # Validates packaging/org.shadowblip.ControllerBox.yaml against SPEC §9.1.
 # Requires Python3 + PyYAML (provided by nix-shell / build environment).
