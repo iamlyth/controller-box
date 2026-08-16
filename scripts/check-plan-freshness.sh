@@ -59,8 +59,8 @@ if [[ "$PHASE" == planning ]]; then
         echo "plan-freshness: planning status is '$STATUS', expected 'active'" >&2; exit 1;
     }
 else
-    [[ "$STATUS" == active || "$STATUS" == complete ]] || {
-        echo "plan-freshness: plan status is '$STATUS', expected 'active' or 'complete'" >&2; exit 1;
+    [[ "$STATUS" == active || "$STATUS" == complete || "$STATUS" == blocked ]] || {
+        echo "plan-freshness: plan status is '$STATUS', expected 'active', 'complete', or 'blocked'" >&2; exit 1;
     }
 fi
 git cat-file -e "$BASE_COMMIT^{commit}" 2>/dev/null || {
