@@ -7,9 +7,13 @@ Controller-Box can be installed two ways: Flatpak (primary) or tarball
 
 ```
 /usr/bin/controller-box                                        ← one binary, two modes
+/usr/lib/libcontrollerbox.a                                     ← static library (controllerbox)
+/usr/lib/libnanosvg.a                                           ← static library (vendored nanosvg)
 /usr/share/controller-box/controller-box.service               ← systemd user service (reference template)
-/usr/share/controller-box/icons/svg/                            ← default controller icons
+/usr/share/controller-box/icons/svg/                            ← default controller icons (with LICENSE.controllercons)
 /usr/share/controller-box/controller-icons.yaml                 ← icon mapping table
+/usr/share/controller-box/fonts/                                ← bundled fonts directory
+/usr/share/controller-box/profiles/                             ← default YAML profiles
 /usr/share/applications/controller-box-manager.desktop          ← desktop entry (launches manager)
 ```
 

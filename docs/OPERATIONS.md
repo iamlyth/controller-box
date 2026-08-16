@@ -718,9 +718,9 @@ correct.
 Alternatively, run manually:
 
 ```bash
-nix-shell --run "cmake --build build-check --target test_golden"
+nix-shell --run "cmake --build build-maintenance-verify --target test_golden"
 CBX_GENERATE_GOLDEN=1 SDL_VIDEODRIVER=dummy \
-  ctest --test-dir build-check -R test_golden --output-on-failure
+  ctest --test-dir build-maintenance-verify -R test_golden --output-on-failure
 ```
 
 ### Failure artifacts
@@ -768,8 +768,8 @@ This test requires a real display with GPU acceleration.  It does
 ### Running
 
 ```sh
-nix-shell --run "cmake --build build-check --target test_backend_smoke"
-nix-shell --run "ctest --test-dir build-check -R test_backend_smoke --output-on-failure"
+nix-shell --run "cmake --build build-maintenance-verify --target test_backend_smoke"
+nix-shell --run "ctest --test-dir build-maintenance-verify -R test_backend_smoke --output-on-failure"
 ```
 
 On a headless machine, the output will show:
@@ -832,7 +832,7 @@ If any of these tools is unavailable, the test exits with code 77
 ### Running
 
 ```sh
-nix-shell --run "ctest --test-dir build-check -R test_installed_smoke --output-on-failure"
+nix-shell --run "ctest --test-dir build-maintenance-verify -R test_installed_smoke --output-on-failure"
 ```
 
 ### Output
@@ -914,7 +914,7 @@ and `fb_frames_differ` all behave correctly.
 ### Running
 
 ```sh
-nix-shell --run "ctest --test-dir build-check -R 'test_overlay_visual|test_manager_visual|test_fb_assert' --output-on-failure"
+nix-shell --run "ctest --test-dir build-maintenance-verify -R 'test_overlay_visual|test_manager_visual|test_fb_assert' --output-on-failure"
 ```
 
 All three tests use `SDL_VIDEODRIVER=dummy` (software renderer) and run in
@@ -932,7 +932,7 @@ nix-shell --run './scripts/verify-project.sh'
 Or run just the visual layers:
 
 ```sh
-nix-shell --run "ctest --test-dir build-check -R 'test_fb_assert|test_overlay_visual|test_manager_visual|test_golden|test_backend_smoke|test_installed_smoke' --output-on-failure"
+nix-shell --run "ctest --test-dir build-maintenance-verify -R 'test_fb_assert|test_overlay_visual|test_manager_visual|test_golden|test_backend_smoke|test_backend_smoke_sw|test_installed_smoke' --output-on-failure"
 ```
 
 Expected results in a headless environment (no GPU, no Xvfb):
@@ -942,6 +942,7 @@ Expected results in a headless environment (no GPU, no Xvfb):
 - `test_manager_visual`: PASS (9 sub-tests)
 - `test_golden`: PASS (11 sub-tests)
 - `test_backend_smoke`: Skipped (exit 77 — no GPU)
+- `test_backend_smoke_sw`: PASS (software renderer, headless-safe via `SDL_VIDEODRIVER=dummy`)
 - `test_installed_smoke`: PASS (requires Xvfb/xdotool/ImageMagick in nix-shell)
 
 ## Human release acceptance checklist (SPEC §11.1.7)

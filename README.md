@@ -179,7 +179,7 @@ A build configured with a custom `CMAKE_INSTALL_PREFIX` is useful for an
 isolated installation or X11 UI test. Its default-prefix packaging assertion
 is intentionally not authoritative, because the generated paths differ.
 Run the complete packaging/release gate from a separate default-prefix
-`build-check` directory with `./scripts/verify-project.sh`.
+`build-maintenance-verify` directory with `./scripts/verify-project.sh`.
 
 ## Verification suite
 
@@ -210,22 +210,22 @@ Or run individual test groups:
 
 ```bash
 # Visual framebuffer tests:
-nix-shell --run "ctest --test-dir build-check -R 'test_overlay_visual|test_manager_visual|test_fb_assert' --output-on-failure"
+nix-shell --run "ctest --test-dir build-maintenance-verify -R 'test_overlay_visual|test_manager_visual|test_fb_assert' --output-on-failure"
 
 # Golden image comparison:
-nix-shell --run "ctest --test-dir build-check -R test_golden --output-on-failure"
+nix-shell --run "ctest --test-dir build-maintenance-verify -R test_golden --output-on-failure"
 
 # Installed smoke test (requires Xvfb, xdotool, ImageMagick, bc):
-nix-shell --run "ctest --test-dir build-check -R test_installed_smoke --output-on-failure"
+nix-shell --run "ctest --test-dir build-maintenance-verify -R test_installed_smoke --output-on-failure"
 
 # Installed functional + binary tests (requires Xvfb, xdotool, ImageMagick):
-nix-shell --run "ctest --test-dir build-check -R 'test_installed_functional|test_installed_binary' --output-on-failure"
+nix-shell --run "ctest --test-dir build-maintenance-verify -R 'test_installed_functional|test_installed_binary' --output-on-failure"
 
 # Backend smoke test (requires real GPU/display):
-nix-shell --run "ctest --test-dir build-check -R test_backend_smoke --output-on-failure"
+nix-shell --run "ctest --test-dir build-maintenance-verify -R test_backend_smoke --output-on-failure"
 
 # Kernel-backed controller test (requires /dev/uinput — skips with exit 77 if unavailable):
-nix-shell --run "ctest --test-dir build-check -R test_kernel_controller --output-on-failure"
+nix-shell --run "ctest --test-dir build-maintenance-verify -R test_kernel_controller --output-on-failure"
 ```
 
 Golden image baselines are in `tests/golden/`. To regenerate them (explicit,
@@ -260,7 +260,7 @@ Disabled-control scenarios (D01–D08) verify that disabled controls reject both
 activation paths and produce no backend or filesystem side effect.
 
 ```bash
-nix-shell --run "ctest --test-dir build-check -R 'test_manager_interaction|test_overlay_interaction|test_interaction_inventory' --output-on-failure"
+nix-shell --run "ctest --test-dir build-maintenance-verify -R 'test_manager_interaction|test_overlay_interaction|test_interaction_inventory' --output-on-failure"
 ```
 
 ### Known environment limitations

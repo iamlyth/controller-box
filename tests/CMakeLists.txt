@@ -675,7 +675,7 @@ if(CMOCKA_FOUND)
 
     # --- Task 7: Interaction acceptance inventory (SPEC §5.7) ----------
     # Machine-readable inventory of every interactive control (M01–M38),
-    # overlay action (O01–O12), and disabled/degraded scenario (D01–D08).
+    # overlay action (O01–O13), and disabled/degraded scenario (D01–D08).
     # Verifies enumeration completeness, field population, uniqueness,
     # and lookup.  Links cbx_test_support for interaction_inventory.
     add_executable(test_interaction_inventory tests/test_interaction_inventory.c)
