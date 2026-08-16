@@ -295,6 +295,11 @@ icon_overrides: []
 | `virtual_controllers.types` | list[string] | `[xb360, xb360, xb360, xb360]` | Per-slot virtual types |
 | `icon_overrides` | list | `[]` | Per-type icon overrides (max 16 entries) |
 
+Both the overlay service and the manager load `settings.yaml` at startup
+(best-effort; defaults are used if the file is absent). The manager uses
+the persisted `virtual_controllers.count` to set the expected target count
+for the controllers tab's orphan-column detection.
+
 **Icon overrides (§8.4):** Users can override the system icon mapping for
 specific DeviceTypes via Settings → Icon Override. The settings tab provides
 a cycle UI with preset overrides (e.g., ds5 → cc-xbox-360). The override is

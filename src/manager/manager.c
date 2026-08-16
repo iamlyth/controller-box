@@ -233,6 +233,9 @@ cbx_manager_init_with_dbus(cbx_manager *mgr, const char *font_path,
 
     /* --- Theme + settings ------------------------------------------ */
     cbx_settings_defaults(&mgr->settings);
+    /* Best-effort load of persisted user settings (SPEC §7.3).
+     * If settings.yaml is absent or unreadable, defaults remain. */
+    cbx_settings_load(&mgr->settings);
     cbx_theme_default(&mgr->theme);
 
     /* --- Tab bar (SPEC §5.1: 3 tabs) ------------------------------- */

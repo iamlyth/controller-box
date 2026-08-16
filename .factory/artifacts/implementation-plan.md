@@ -72,7 +72,7 @@ Controller-Box is a single C11 binary with two modes: `--overlay-service` (syste
 | ID-02 | §6.3 | verified | `identity.c` prefixed IDs (BT:/USB:/USB:phys:/ORDER:); `identity_downgrade.c` weaker-identity detection; `test_identity_downgrade.c` | |
 | CFG-01 | §7.1 | verified | `config_profile.c` InputPlumber DeviceProfile YAML; `config_profile_meta.c` optional sidecar; no duplicate format | |
 | CFG-02 | §7.2 | verified | `config_paths.c` XDG layout; `test_config_paths.c` | |
-| CFG-03 | §7.3 | partial | `config_settings.c` persistence verified; but `manager.c:233` calls `cbx_settings_defaults` without `cbx_settings_load` during init — manager starts with defaults not persisted settings | Task 1 |
+| CFG-03 | §7.3 | verified | `config_settings.c` persistence verified; `manager.c:237` calls `cbx_settings_load` after `cbx_settings_defaults` during init — manager starts with persisted settings; `test_manager_integration.c:test_persisted_settings_loaded_on_init` regression test | Task 1 |
 | CFG-04 | §7.4 | verified | `config_assignments.c` prefixed IDs + gamepad_order; `test_assignments.c` | |
 | CFG-05 | §7.5 | verified | `config_profile_meta.c` sidecar (display_name, icon, display_order, description); `test_profile_list.c` | |
 | CFG-06 | §7.6 | verified | `config_profile.c` device_profile_v1 format; `test_profile_yaml.c` round-trip | |
@@ -192,12 +192,12 @@ The project maintains a machine-readable inventory at `tests/interaction_invento
 **Verification status:** 48 entries VERIFIED via production SDL dispatch and/or native DBus; 6 entries NOT_APPLICABLE (controller-only: M13, M14, M32, M34, M35, M36 — pointer path n/a, supplemental direct-callback evidence noted); 1 entry DEFERRED (O12 — §13 post-v1). The controller and pointer paths are exercised through normal SDL events and production dispatch (`cbx_manager_handle_event` / `cbx_overlay_service_step`), not direct callback invocation. Direct callback tests exist as supplemental evidence only. Manager native-DBus tests (`test_manager_native.c`, `test_manager_native_prof.c`) and overlay native tests (`test_overlay_native.c`) provide production-path evidence through a private sd-bus service with native InputPlumber signatures.
 
 ## Task 1: Load persisted settings during manager init
-- Status: pending
+- Status: complete
 - Dependencies: none
-- Scope: `src/manager/manager.c` — call `cbx_settings_load` after `cbx_settings_defaults` and before controllers tab init; `tests/test_manager_integration.c` or new test — regression test for persisted settings on init
+- Scope: `src/manager/manager.c` — call `cbx_settings_load` after `cbx_settings_defaults` and before controllers tab init; `tests/test_manager_integration.c` — regression test for persisted settings on init
 - Acceptance criteria: Manager init reads `settings.yaml` from disk; `mgr->settings.virtual_controllers.count` matches persisted value (not default 4) when a non-default settings file exists; controllers tab `set_expected_count` receives the persisted count; regression test saves non-default count, reinitializes manager, and verifies expected count matches saved value
-- Verification: `nix-shell --run 'cmake --build build-maintenance-verify --parallel 2 && ctest --test-dir build-maintenance-verify -R test_manager_integration --output-on-failure'`
-- Documentation impact: `docs/OPERATIONS.md` — note that manager loads persisted settings at startup (already documented for overlay service)
+- Verification: `nix-shell --run 'cmake --build build-check --parallel 2 && ctest --test-dir build-check -R test_manager_integration --output-on-failure'` — 12/12 tests pass including `test_persisted_settings_loaded_on_init`; full suite 98/98 pass
+- Documentation impact: `docs/OPERATIONS.md` — updated settings.yaml section to note that both overlay service and manager load persisted settings at startup
 
 ## Task 2: Move DBus interface definitions to production header
 - Status: pending

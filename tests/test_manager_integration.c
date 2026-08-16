@@ -572,6 +572,81 @@ static void test_render_all_tabs(void **state)
 }
 
 /* ------------------------------------------------------------------ */
+/*  Standalone test: persisted settings loaded on manager init          */
+/* ------------------------------------------------------------------ */
+
+/* Regression test for CFG-03: cbx_manager_init must call cbx_settings_load
+ * after cbx_settings_defaults so the manager starts with the user's
+ * persisted settings, not hardcoded defaults.  Writes a non-default
+ * settings.yaml via cbx_settings_save (production save path), then
+ * re-initialises the manager and verifies the persisted values flow
+ * through to mgr->settings and the controllers tab expected count. */
+static void test_persisted_settings_loaded_on_init(void **state)
+{
+    (void)state;
+    ensure_dummy_driver();
+
+    /* Isolated HOME. */
+    char tmp[256];
+    snprintf(tmp, sizeof(tmp), "/tmp/cbx_mi_persist_%d", (int)getpid());
+    char cmd[PATH_MAX * 2 + 32];
+    snprintf(cmd, sizeof(cmd), "rm -rf '%s'", tmp);
+    int r0 = system(cmd);
+    (void)r0;
+    mkdir(tmp, 0700);
+    setenv("HOME", tmp, 1);
+    unsetenv("XDG_CONFIG_HOME");
+    unsetenv("XDG_DATA_HOME");
+    unsetenv("FLATPAK_ID");
+
+    /* Write a non-default settings.yaml via the production save path. */
+    cbx_settings saved;
+    cbx_settings_defaults(&saved);
+    saved.virtual_controllers.count = 2;  /* default is 4 */
+    strncpy(saved.virtual_controllers.types[0], "ds5",
+            sizeof(saved.virtual_controllers.types[0]) - 1);
+    strncpy(saved.virtual_controllers.types[1], "deck",
+            sizeof(saved.virtual_controllers.types[1]) - 1);
+    saved.overlay_opacity = 0.50;  /* default is 0.85 */
+    saved.launch_at_boot = false;  /* default is true */
+
+    int rc = cbx_settings_save(&saved);
+    assert_int_equal(rc, 0);
+
+    /* Verify the settings file exists on disk. */
+    char settings_path[PATH_MAX + 128];
+    snprintf(settings_path, sizeof(settings_path),
+             "%s/.config/controller-box/settings.yaml", tmp);
+    struct stat st;
+    assert_int_equal(stat(settings_path, &st), 0);
+
+    /* Initialise the manager — should load the persisted settings. */
+    cbx_manager mgr;
+    rc = cbx_manager_init(&mgr, NULL);
+    assert_int_equal(rc, 0);
+
+    /* Verify the manager loaded the persisted values, not defaults. */
+    assert_int_equal(mgr.settings.virtual_controllers.count, 2);
+    assert_double_equal(mgr.settings.overlay_opacity, 0.50, 0.001);
+    assert_false(mgr.settings.launch_at_boot);
+    assert_string_equal(mgr.settings.virtual_controllers.types[0], "ds5");
+    assert_string_equal(mgr.settings.virtual_controllers.types[1], "deck");
+
+    /* Verify the controllers tab received the persisted count. */
+    cbx_controllers_tab *ct = cbx_manager_controllers_tab(&mgr);
+    assert_non_null(ct);
+    assert_int_equal(ct->expected_target_count, 2);
+
+    cbx_manager_shutdown(&mgr);
+
+    /* Cleanup. */
+    snprintf(cmd, sizeof(cmd), "rm -rf '%s'", tmp);
+    int r1 = system(cmd);
+    (void)r1;
+    unsetenv("HOME");
+}
+
+/* ------------------------------------------------------------------ */
 /*  Test runner                                                        */
 /* ------------------------------------------------------------------ */
 
@@ -587,6 +662,7 @@ static const struct CMUnitTest tests[] = {
     cmocka_unit_test_setup_teardown(test_service_uninstall, setup, teardown),
     cmocka_unit_test_setup_teardown(test_full_integration, setup, teardown),
     cmocka_unit_test_setup_teardown(test_render_all_tabs, setup, teardown),
+    cmocka_unit_test(test_persisted_settings_loaded_on_init),
 };
 
 int main(void)

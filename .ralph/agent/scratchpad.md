@@ -1,17 +1,20 @@
-# Planning Loop — Controller-Box
+# Implementation Loop — Current Handoff
 
-## Current state (iteration 1)
-- Fresh planning cycle; skeleton plan had correct metadata
-- Spec committed at 3a10f6b, blob 58f5d3c, base_commit d61b7f5
-- Campaign Round 4 audit found 7 findings (2 software-fixable, 5 hardware-blocked)
-- Open bugs ledger is empty
-- ~120 source files, ~90 test files — substantial implementation exists, zero stubs/TODOs
+## Outcome
+Task 1 (Load persisted settings during manager init) is complete.
 
-## Plan written
-- 8 tasks: 2 software-fixable (settings load, DBus header), 5 hardware-blocked (kernel controller, GPU smoke, Pi 4 latency, human acceptance, campaign capabilities), 1 final audit
-- Conformance matrix: 62 rows, 54 verified, 8 non-verified (all mapped to tasks)
-- Interaction inventory: 59 entries (M01-M38, O01-O13, D01-D08), exhaustive
-- Final gate: `./scripts/final-gate.sh --planning` PASSED
+## What changed
+- `src/manager/manager.c`: Added `cbx_settings_load(&mgr->settings)` after `cbx_settings_defaults` — manager now loads persisted user settings at startup (matching overlay service behavior).
+- `tests/test_manager_integration.c`: Added `test_persisted_settings_loaded_on_init` — writes non-default settings (count=2, opacity=0.50, launch_at_boot=false, ds5+deck types) via production `cbx_settings_save`, reinits manager, verifies persisted values flow to `mgr->settings` and `ct->expected_target_count`.
+- `docs/OPERATIONS.md`: Updated settings.yaml section to note both overlay service and manager load persisted settings at startup.
+- `.factory/artifacts/implementation-plan.md`: Task 1 marked complete; CFG-03 conformance row upgraded to verified.
 
-## Next action
-- Emit the completion token
+## Verification
+- `nix-shell --run 'cmake --build build-check --parallel 2 && ctest --test-dir build-check --output-on-failure'` — 98/98 pass, 2 skipped (hardware-blocked: test_kernel_controller, test_backend_smoke).
+- Sanitizer build compiles clean; runtime fails for all SDL tests due to pre-existing "Failed loading SDL3 library" environment issue (not related to this change).
+
+## Commit
+(to be committed)
+
+## Next task
+Task 2: Move DBus interface definitions to production header — pending, no dependencies. This is the last software-fixable task. Tasks 3-6 are hardware-blocked (need /dev/uinput, GPU compositor, Pi 4 target hardware). Task 7 depends on 3-6. Task 8 (final audit) depends on all.
