@@ -1,20 +1,21 @@
-# Campaign Round 3 Audit — Complete
+# Planning Scratchpad
 
-## Status
-Audit report at `.factory/artifacts/campaign-audit.md` with `result: findings`.
-Final gate `./scripts/final-gate.sh --campaign-audit` passed.
+## Current state
+- Fresh planning cycle. Plan written to `.factory/artifacts/implementation-plan.md`.
+- 4 planner-scout subagents mapped all SPEC sections (§§4-11) against source/tests.
+- Codebase is mature: 23.5KLoC source, 62KLoC tests, 124 source files, 80+ test files.
+- No open bugs (`.factory/bugs/open.md` = empty JSON array).
+- Campaign audit round 3 identified 5 findings, all about missing runner capabilities.
 
-## Findings (5)
-1. Installed functional smoke test uses keyboard events, not controller input.
-2. Controller-path acceptance uses process-local SDL virtual gamepads.
-3. GPU backend smoke skipped — no gpu-compositor.
-4. Human release acceptance not possible — no target-consumer.
-5. Conformance matrix PERF-01/MGR-07 incorrectly classified as "verified."
-
-## Environment
-Runner evidence digest `46ccb1aa...` matches front matter.
-Only `remote-project-gate` and `systemd-user` evidenced; 6 of 7 required
-capabilities missing.
+## Key findings
+- 87 of 94 conformance requirements are `verified` with production-path evidence.
+- 7 rows are `partial`: DBUS-07 (native test gap), PERF-04 (memory footprint),
+  PERF-05 (Pi-4 max), VRF-05 (kernel-backed controller), VRF-06 (GPU backend),
+  VRF-07 (human release), and derived DOD rows.
+- 2 code-fix tasks (Task 1: SupportedTargetDevices native test, Task 2: memory
+  footprint test) + 6 runner-capability tasks + 1 final audit = 9 tasks total.
 
 ## Next action
-Emit the completion token.
+- Run `./scripts/final-gate.sh --planning` to validate the plan.
+- If it passes, emit the completion token.
+- If it fails, fix the reported deficiency.
