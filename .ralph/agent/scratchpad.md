@@ -1,11 +1,12 @@
-# Implementation Loop — Hardware-Blocked (Iteration 37)
+# Implementation Loop — Hardware-Blocked (Iteration 38)
 
 ## Outcome
 - 98/98 tests pass (0 failures, 2 hardware skips: test_kernel_controller #3, test_backend_smoke #88)
 - All software-addressable work complete; no open runtime tasks
 - Plan status: active; tasks 3-9 hardware-dependent
-- Git tree clean (HEAD: 3abcfc8 iteration 36)
+- Git tree clean (HEAD: b0405fd iteration 37)
 - No open bugs in .factory/bugs/open.md
+- Final gate rejects on MGR-36 (hardware: needs /dev/uinput for kernel-backed gamepad)
 
 ## Environment State (unchanged since iter 28)
 - No /dev/uinput, no /dev/dri, no /dev/input, no /sys/class/uinput — zero capabilities (CapEff=0, CapBnd=0)
