@@ -28,6 +28,7 @@ if [[ "$CURRENT_BRANCH" != "$EXPECTED_BRANCH" ]]; then
     fi
 fi
 
+git worktree prune --verbose 2>/dev/null || true
 WORKTREE_COUNT=$(git worktree list --porcelain | grep -c '^worktree ' || true)
 if (( WORKTREE_COUNT != 1 )); then
     echo "branch-guard: exactly one working tree is allowed; found $WORKTREE_COUNT" >&2
