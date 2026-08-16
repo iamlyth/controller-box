@@ -5,9 +5,10 @@
  * sd-bus calls.  This is linked into the production binary; unit tests
  * use the mock backend from tests/dbus_mock.c instead.
  *
- * Task 9 implements: connect, disconnect, get_unique_name, get_property,
- * subscribe_signal, inject_signal (stub).  Later tasks extend with
- * call_method, set_property, get_managed_objects.
+ * Implements: connect, disconnect, get_unique_name, get_property,
+ * subscribe_signal, call_method, set_property, get_managed_objects.
+ * inject_signal returns -ENOSYS (production code never injects signals;
+ * only the mock backend implements injection for testing).
  */
 #include "dbus/dbus_client.h"
 #include "ip_connection.h"  /* ip_owner_changed_payload */
