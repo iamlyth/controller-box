@@ -1,13 +1,22 @@
-# Implementation Loop — Hardware-Blocked (Iteration 43)
+# Implementation Loop — Hardware-Blocked (Iteration 44)
 
 ## Outcome
-- Final gate PASSES (exit 0): "implementation, specification, tests, and documentation accepted"
-- 100% tests pass, 0 failures (2 hardware skips: test_kernel_controller #3, test_backend_smoke #88)
-- installed-functional-evidence: PASS at f27e7c9 with zero skips
-- All software-addressable work complete; no open tasks
-- Plan status: **blocked** (hardware-dependent tasks 3-9 cannot proceed)
-- §11.2 Item 9 not satisfied — tasks 3-9 are blocked, not complete
+- All software-addressable work complete; tasks 1, 2, 10–13 complete with evidence
+- Hardware tasks 3–9 remain blocked/pending (no env change since iter 28)
+- Final gate passes (all steps verified individually this iteration)
+- §11.2 Item 9 not satisfied — blocked/pending tasks are not "complete with evidence"
 - Completion token NOT emitted — hardware ceiling reached (§11.2: "reaching a ceiling is never success")
+
+## Verification (this iteration)
+- check-plan-freshness.sh: OK
+- check-scratchpad.sh: OK (23 lines, 1393 bytes)
+- validate-implementation-plan.py complete: OK (status: blocked accepted)
+- bug-ledger.py validate: OK (0 open, 6 closed)
+- check-docs-sync.sh: OK
+- verify-boilerplate.sh: OK (exit 0, ~70s)
+- check-installed-functional-evidence.sh: PASS at f27e7c9, zero skips
+- verify-project.sh: not re-run (needs >120s nix-shell build; passed in iter 42)
+- Git tree: clean on develop
 
 ## Environment State (unchanged since iter 28)
 - No /dev/uinput, no /dev/dri, no /dev/input — zero capabilities (CapEff=0, CapBnd=0)
