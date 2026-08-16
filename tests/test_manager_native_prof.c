@@ -17,8 +17,9 @@
  *
  * M32/M34 (InputEvent capture): tested via direct callback
  * (test_m32_capture_event, test_m34_seq_capture) and via the full
- * DBus InputEvent signal path (test_m32_capture_dbus_signal) through
- * the native server's EmitInputEvent method.
+ * DBus InputEvent signal path (test_m32_capture_dbus_signal,
+ * test_m34_seq_capture_dbus_signal) through the native server's
+ * EmitInputEvent method.
  */
 #include <stdarg.h>
 #include <stddef.h>
@@ -1186,6 +1187,51 @@ test_m34_seq_capture(void **state)
     cbx_manager_shutdown(&mgr);
 }
 
+/* M34 DBus signal path: sequential capture via InputEvent signal through
+ * the full production DBus dispatch chain (EmitInputEvent → sd_bus_process
+ * → input_event_signal_cb → ip_input_events_handle → on_input_event →
+ * seq_on_input).  This exercises the same dispatch as M32's DBus signal
+ * test but for sequential mode auto-advance. */
+static void
+test_m34_seq_capture_dbus_signal(void **state)
+{
+    mnp_fixture *f = *state;
+    cbx_manager mgr;
+    mnp_init_manager(f, &mgr);
+
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+
+    open_editor_ctrl(&mgr, f->joystick, 2);
+
+    /* Enter sequential mode. */
+    ctrl_press(&mgr, f->joystick, 0);  /* binding → BINDING_EDIT */
+    ctrl_press(&mgr, f->joystick, 12);
+    ctrl_press(&mgr, f->joystick, 12);  /* → "Sequential" */
+    ctrl_press(&mgr, f->joystick, 0);  /* → SEQUENTIAL */
+    assert_int_equal(cbx_profile_editor_seq_get_step(&pt->editor), 0);
+
+    /* Emit InputEvent signal via native server.  The signal travels:
+     *   server EmitInputEvent method → sd_bus_emit_signal(InputEvent, sd)
+     *   → daemon broadcasts → manager bus sd_bus_process
+     *   → sd_input_event_callback → input_event_signal_cb
+     *   → ip_input_events_handle (sender == expected_sender)
+     *   → cbx_profile_editor_on_input_event → seq captured, auto-advance. */
+    emit_input_event(f->backend, f->bus,
+                     "/org/shadowblip/InputPlumber/CompositeDevice0",
+                     "A", 1.0);
+    drain_bus(mgr.dbus_backend, mgr.dbus_bus, 200);
+
+    /* Should have advanced to step 1. */
+    assert_int_equal(cbx_profile_editor_seq_get_step(&pt->editor), 1);
+
+    /* Verify mapping was created/updated. */
+    const cbx_profile *prof = cbx_profile_editor_get_profile(&pt->editor);
+    assert_non_null(prof);
+    assert_true(prof->mapping_count >= 6);
+
+    cbx_manager_shutdown(&mgr);
+}
+
 /* ================================================================== */
 /*  M35 — Sequential skip (B → skip current button)                  */
 /* ================================================================== */
@@ -1737,6 +1783,8 @@ main(void)
                                         mnp_setup, mnp_teardown),
         /* M34 — Sequential capture */
         cmocka_unit_test_setup_teardown(test_m34_seq_capture,
+                                        mnp_setup, mnp_teardown),
+        cmocka_unit_test_setup_teardown(test_m34_seq_capture_dbus_signal,
                                         mnp_setup, mnp_teardown),
         /* M35 — Sequential skip */
         cmocka_unit_test_setup_teardown(test_m35_seq_skip,

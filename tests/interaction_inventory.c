@@ -316,7 +316,7 @@ static const cbx_interaction_entry inventory[] = {
       "Physical button press (DBus InputEvent)",
       NA, "n/a",
       "Button captured; auto-advance; progress bar updates",
-      "direct callback: cbx_profile_editor_on_input_event → cbx_profile_editor_seq_on_input (supplemental; DBus signal path tested in test_manager_native_prof)",
+      "direct callback: cbx_profile_editor_on_input_event → cbx_profile_editor_seq_on_input; DBus signal path: EmitInputEvent → sd_bus_process → input_event_signal_cb → ip_input_events_handle → on_input_event (test_m34_seq_capture_dbus_signal)",
       CBX_VERIFY_NOT_APPLICABLE, "Task 5" },
 
     { "M35", CBX_CAT_MANAGER_EDITOR, "Profile editor",
@@ -338,18 +338,18 @@ static const cbx_interaction_entry inventory[] = {
     { "M37", CBX_CAT_MANAGER_EDITOR, "Profile editor",
       CBX_WIDGET_EDITOR,
       "B (or A on close) from list mode",
-      NA, "n/a (controller-only — editor save/close via B key)",
+      AVAIL, "Mouse click on Save button in editor",
       "Profile written to disk via cbx_profile_save_to_dir with NES validation; editor closes; profile list refreshes",
-      "cbx_manager_handle_event → cbx_profile_save_to_dir → editor close",
-      CBX_VERIFY_NOT_APPLICABLE, "Task 5" },
+      "cbx_manager_handle_event → cbx_profile_save_to_dir → editor close; pointer: click save_btn → cbx_profiles_tab_save_editor",
+      CBX_VERIFY_VERIFIED, "Task 5, Task 12" },
 
     { "M38", CBX_CAT_MANAGER_EDITOR, "Profile editor",
       CBX_WIDGET_EDITOR,
       "Start from list mode",
-      NA, "n/a",
+      AVAIL, "Mouse click on Discard button in editor",
       "Editor closes; changes discarded; no file written",
-      "cbx_manager_handle_event → cbx_profile_editor_cancel",
-      CBX_VERIFY_NOT_APPLICABLE, "Task 5" },
+      "cbx_manager_handle_event → cbx_profile_editor_cancel; pointer: click discard_btn → cbx_profiles_tab_discard_editor",
+      CBX_VERIFY_VERIFIED, "Task 5, Task 12" },
 
     /* ---- Overlay actions (O01–O13) ---- */
     { "O01", CBX_CAT_OVERLAY, "Overlay",

@@ -892,8 +892,10 @@ test_d06_dbus_failure_controller(void **state)
     /* Device count unchanged (failure didn't create anything). */
     assert_int_equal(cbx_controllers_tab_device_count(ct), count_before);
 
-    /* Error should be visible in status label. */
+    /* Error should be visible in status label with meaningful text. */
     assert_true(cbx_widget_is_visible(&ct->status_lbl.base));
+    assert_non_null(ct->status_lbl.text);
+    assert_true(strstr(ct->status_lbl.text, "Add failed:") != NULL);
 
     cbx_manager_shutdown(&mgr);
 }
@@ -929,8 +931,10 @@ test_d06_dbus_failure_pointer(void **state)
     /* Device count unchanged. */
     assert_int_equal(cbx_controllers_tab_device_count(ct), count_before);
 
-    /* Error should be visible. */
+    /* Error should be visible with meaningful text. */
     assert_true(cbx_widget_is_visible(&ct->status_lbl.base));
+    assert_non_null(ct->status_lbl.text);
+    assert_true(strstr(ct->status_lbl.text, "Add failed:") != NULL);
 
     cbx_manager_shutdown(&mgr);
 }

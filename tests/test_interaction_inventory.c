@@ -181,10 +181,11 @@ static void test_inventory_specific_entries(void **state)
     assert_int_equal(m16->pointer_path_avail, CBX_PATH_AVAILABLE);
     assert_true(strncmp(m16->pointer_path, "n/a", 3) != 0);
 
-    /* M37 — Save and close editor: pointer path n/a (controller-only) */
+    /* M37 — Save and close editor: pointer path available (Save button) */
     const cbx_interaction_entry *m37 = cbx_interaction_inventory_find("M37");
     assert_non_null(m37);
-    assert_int_equal(m37->pointer_path_avail, CBX_PATH_NA);
+    assert_int_equal(m37->pointer_path_avail, CBX_PATH_AVAILABLE);
+    assert_int_equal(m37->verify_status, CBX_VERIFY_VERIFIED);
 
     /* O12 — Host cycle profile: verification status deferred */
     const cbx_interaction_entry *o12 = cbx_interaction_inventory_find("O12");
@@ -327,7 +328,7 @@ static void test_inventory_specific_verify_statuses(void **state)
     assert_int_equal(o12->verify_status, CBX_VERIFY_DEFERRED);
 
     /* Controller-only entries remain NOT_APPLICABLE (sample check) */
-    const char *na_ids[] = {"M13", "M14", "M32", "M34", "M35", "M36", "M37", "M38"};
+    const char *na_ids[] = {"M13", "M14", "M32", "M34", "M35", "M36"};
     for (size_t i = 0; i < sizeof(na_ids)/sizeof(na_ids[0]); i++) {
         const cbx_interaction_entry *e = cbx_interaction_inventory_find(na_ids[i]);
         assert_non_null(e);

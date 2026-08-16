@@ -374,7 +374,7 @@ this gap.
 - Evidence: commit `d942453` on `develop`.
 
 ## Task 12: Fix test quality issues from independent review
-- Status: pending
+- Status: complete
 - Dependencies: none
 - Scope: `tests/test_manager_native.c` (D06 error message text assertions),
   `tests/interaction_inventory.c` + `tests/test_interaction_inventory.c`
@@ -386,6 +386,15 @@ this gap.
      (controller-path verified via ctrl_press → handle_event).
   3. M34 sequential capture has a DBus InputEvent signal path test variant.
 - Verification: `nix-shell --run 'ctest --test-dir build-check -R "manager_native|interaction_inventory" --output-on-failure'`
+- Evidence: 98/98 ctest pass (2 expected skips). D06 tests in
+  test_manager_native.c and test_manager_interaction_ctrl.c now assert
+  `strstr(status_lbl.text, "Add failed:") != NULL`. M37/M38 inventory
+  entries updated to CBX_VERIFY_VERIFIED with CBX_PATH_AVAILABLE (pointer
+  path: Save/Discard button click). test_interaction_inventory.c na_ids
+  array updated to remove M37/M38. New test_m34_seq_capture_dbus_signal
+  exercises full DBus InputEvent signal dispatch (EmitInputEvent →
+  sd_bus_process → input_event_signal_cb → ip_input_events_handle →
+  cbx_profile_editor_on_input_event → seq_on_input) and passes.
 
 ## Task 13: Fix documentation inaccuracies from independent review
 - Status: pending

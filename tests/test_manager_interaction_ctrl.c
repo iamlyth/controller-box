@@ -1623,6 +1623,9 @@ test_d06_dbus_failure(void **state)
     send_key_press(mgr, SDLK_a);
     assert_int_equal(cbx_controllers_tab_mode(ct), CBX_CT_MODE_LIST);
     assert_int_equal(cbx_controllers_tab_device_count(ct), 1);
+    assert_true(cbx_widget_is_visible(&ct->status_lbl.base));
+    assert_non_null(ct->status_lbl.text);
+    assert_true(strstr(ct->status_lbl.text, "Add failed:") != NULL);
 
     /* --- Pointer path --- */
 
@@ -1643,6 +1646,9 @@ test_d06_dbus_failure(void **state)
     send_mouse_click(mgr, px, py);
     assert_int_equal(cbx_controllers_tab_mode(ct), CBX_CT_MODE_LIST);
     assert_int_equal(cbx_controllers_tab_device_count(ct), 1);
+    assert_true(cbx_widget_is_visible(&ct->status_lbl.base));
+    assert_non_null(ct->status_lbl.text);
+    assert_true(strstr(ct->status_lbl.text, "Add failed:") != NULL);
 }
 
 
