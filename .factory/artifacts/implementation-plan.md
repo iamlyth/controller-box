@@ -3,7 +3,7 @@ spec_path: docs/SPEC.md
 spec_commit: 3a10f6b7d04a615b2b9d06eef6c91e431fa9c079
 spec_blob: 58f5d3cb72bc6b3e5f573fa09a63c11a653ed577
 base_commit: d61b7f5f23b52d772f2bf0893ec4e45749be5862
-status: active
+status: blocked
 ---
 
 # Implementation Plan
@@ -101,7 +101,7 @@ Controller-Box is a single C11 binary with two modes: `--overlay-service` (syste
 | VRF-05 | §11.1.5 | partial | `test_installed_functional.c` runs but uses `SDL_JoystickAttachVirtual` (process-local), not kernel-backed synthetic controller per §11.1.5 | Task 3 |
 | VRF-06 | §11.1.6 | partial | `test_backend_smoke.c` skips (exit 77) — no accelerated OpenGL/GLES backend; `test_backend_smoke_sw.c` software-only | Task 4 |
 | VRF-07 | §11.1.7 | missing | No human release acceptance artifact on target hardware | Task 6 |
-| DOD-01 | §11.2.1 | partial | 8 conformance rows non-verified (CFG-03, DBUS-04, MGR-11, MGR-13, VRF-05, VRF-06, VRF-07, PERF-01) | Tasks 1-6 |
+| DOD-01 | §11.2.1 | partial | 6 conformance rows non-verified (MGR-11, MGR-13, VRF-05, VRF-06, VRF-07, PERF-01) — all hardware-blocked | Tasks 3-6 |
 | DOD-02 | §11.2.2 | verified | Production-path behavior: DBus interface definitions moved to `src/dbus/dbus_interface.h`; no `src/` file includes test header `dbus_mock.h` | |
 | DOD-03 | §11.2.3 | partial | Complete interaction traversal: MGR-11/MGR-13 kernel-backed controller evidence missing | Task 3 |
 | DOD-04 | §11.2.4 | verified | Visual and degraded-state acceptance: `test_overlay_visual.c`, `test_manager_visual.c`, `test_golden.c` cover normal/degraded/error states | |
