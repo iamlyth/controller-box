@@ -1,19 +1,15 @@
 # Implementation Scratchpad — Controller-Box v1
 
-## Task 5 complete: Host mode visual rendering in overlay grid
+## Task 6 complete: Fix documentation inaccuracies
 
-- **Commit:** 7c85706 on develop
-- **What:** Wired `cbx_host_mode_row_state()` into `cbx_select_grid_render()` via new `cbx_grid_render_ctx.hm` field. HOST/SELECTED/FROZEN rows now render with distinct visuals. Also fixed conflict_red to use `theme->conflict`, wired up `render_ctx.conflicts` and `render_ctx.hm` in overlay_service.c, and added real-time conflict detection after slot changes and grid rebuilds.
-- **Changes:**
-  - `host_mode.h`: Changed anonymous struct typedef to named `struct cbx_host_mode` for forward declaration.
-  - `grid_render.h`: Added `typedef struct cbx_host_mode cbx_host_mode;` forward decl and `const cbx_host_mode *hm` field to `cbx_grid_render_ctx`.
-  - `grid_render.c`: Added host mode color setup (success, text_accent, text_secondary, text_disabled, panel_bg from theme). Per-row: get `cbx_host_mode_row_state()`, apply HOST (green cell + 4px green bar), SELECTED (blue cell + 2px accent row border), FROZEN (dim bg, secondary text, disabled indicators/borders). Fixed `conflict_red` to use `theme->conflict`.
-  - `overlay_service.c`: Wired `render_ctx.conflicts = &svc->conflicts` and `render_ctx.hm = &svc->hm`. Added `cbx_conflict_detect` after initial grid build, hotplug rebuilds, and `cbx_overlay_on_slot_change` for real-time conflict display.
-  - `test_overlay_visual.c`: Added `test_host_mode_row_states` — uses actual `cbx_host_mode` state machine, verifies green in HOST cell, blue in SELECTED cell, no blue in FROZEN cell, frame differs from player mode.
-  - `test_golden.c`: Updated `test_golden_overlay_host_mode` to use actual host mode state machine. Regenerated `overlay_host_mode.png` and `overlay_conflict.png` baselines.
-- **Verification:** `ctest --test-dir build-check` → 96/96 pass (1 pre-existing skip). `verify-project.sh` → pass.
-- **Conformance:** OV-04 partial→verified, OV-10 partial→verified.
+- **Commit:** 728e06f on develop
+- **What:** Fixed three documentation/boilerplate issues:
+  1. `docs/OPERATIONS.md` line 1032: inventory description corrected from "59 entries, all verified" to "59 entries: 50 verified, 8 NOT_APPLICABLE, 1 DEFERRED"
+  2. `README.md`: added individual run command for `test_installed_functional` and `test_installed_binary` in the "Or run individual test groups" section (table entries 5a/5b already present from Task 3)
+  3. `tests/test_installed_binary.sh`: fixed two SC2181 shellcheck style warnings (`if [ $? -eq 0 ]` → `if cmd; then`) at lines 563 and 634 that caused `verify-boilerplate.sh` to fail
+- **Verification:** `./scripts/check-docs-sync.sh` → pass. `nix-shell --run './scripts/verify-boilerplate.sh'` → pass ("verify: boilerplate checks passed").
+- **Plan:** Task 6 marked complete with evidence in implementation-plan.md.
 
 ## Next task
 
-Task 6: Fix documentation inaccuracies — `docs/OPERATIONS.md` inventory description (50 verified, 8 NOT_APPLICABLE, 1 DEFERRED), `README.md` §11.1 verification table (add test_installed_functional and test_installed_binary). Run `check-docs-sync.sh` and `verify-boilerplate.sh`.
+Task 7: Add kernel-backed controller test or document environment limitation. Create `tests/test_kernel_controller.c` using `uinput` for synthetic evdev controller. If `/dev/uinput` unavailable, skip with exit 77. Register in CMakeLists.txt with `SKIP_RETURN_CODE 77`. If test cannot run in declared environment, document PERF-01/MGR-07 as `partial` with explicit rationale.
