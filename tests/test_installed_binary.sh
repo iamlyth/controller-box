@@ -554,13 +554,11 @@ import -window root "$PRE_SHOT" 2>/dev/null || true
 # Trigger overlay activation: set InterceptMode to ALL (2) via DBus.
 # The overlay's poll loop should detect this transition and activate
 # the overlay, rendering the compositor-visible grid.
-busctl --address="$BUS_ADDRESS" set-property \
+if busctl --address="$BUS_ADDRESS" set-property \
     org.shadowblip.InputPlumber \
     /org/shadowblip/InputPlumber/CompositeDevice0 \
     org.shadowblip.Input.CompositeDevice \
-    InterceptMode u 2 2>/dev/null
-
-if [ $? -eq 0 ]; then
+    InterceptMode u 2 2>/dev/null; then
     pass "InterceptMode set to ALL (2) via DBus"
 else
     fail "failed to set InterceptMode to ALL"
@@ -625,13 +623,11 @@ fi
 
 # Close the overlay: set InterceptMode back to PASS (1).
 # The overlay's poll should detect this and close cleanly.
-busctl --address="$BUS_ADDRESS" set-property \
+if busctl --address="$BUS_ADDRESS" set-property \
     org.shadowblip.InputPlumber \
     /org/shadowblip/InputPlumber/CompositeDevice0 \
     org.shadowblip.Input.CompositeDevice \
-    InterceptMode u 1 2>/dev/null
-
-if [ $? -eq 0 ]; then
+    InterceptMode u 1 2>/dev/null; then
     pass "InterceptMode set back to PASS (1) via DBus"
 else
     fail "failed to set InterceptMode back to PASS"

@@ -217,6 +217,9 @@ nix-shell --run "ctest --test-dir build-check -R test_golden --output-on-failure
 # Installed smoke test (requires Xvfb, xdotool, ImageMagick, bc):
 nix-shell --run "ctest --test-dir build-check -R test_installed_smoke --output-on-failure"
 
+# Installed functional + binary tests (requires Xvfb, xdotool, ImageMagick):
+nix-shell --run "ctest --test-dir build-check -R 'test_installed_functional|test_installed_binary' --output-on-failure"
+
 # Backend smoke test (requires real GPU/display):
 nix-shell --run "ctest --test-dir build-check -R test_backend_smoke --output-on-failure"
 ```

@@ -161,12 +161,13 @@ test guard completeness.
 - Documentation impact: none
 
 ## Task 6: Fix documentation inaccuracies
-- Status: pending
+- Status: complete
 - Dependencies: none
 - Scope: `docs/OPERATIONS.md` (line ~1032 inventory description), `README.md` (§11.1 verification table)
 - Acceptance criteria: OPERATIONS.md inventory description accurately states "50 verified, 8 NOT_APPLICABLE, 1 DEFERRED" instead of "59 entries, all verified". README §11.1 verification table includes `test_installed_functional` and `test_installed_binary` alongside `test_installed_smoke`. `scripts/check-docs-sync.sh` passes. No other documentation claims are inaccurate relative to observed test behavior.
 - Verification: `./scripts/check-docs-sync.sh` and `nix-shell --run './scripts/verify-boilerplate.sh'`
 - Documentation impact: OPERATIONS.md and README.md corrected
+- Evidence: OPERATIONS.md line 1032 inventory description updated from "59 entries, all verified" to "59 entries: 50 verified, 8 NOT_APPLICABLE, 1 DEFERRED". README §11.1 verification table already included `test_installed_functional` (5a) and `test_installed_binary` (5b) from Task 3; added individual run command for functional+binary tests. Fixed two SC2181 shellcheck warnings in `tests/test_installed_binary.sh` (if [ $? -eq 0 ] → if cmd; then) that caused `verify-boilerplate.sh` to fail. `./scripts/check-docs-sync.sh` → pass. `nix-shell --run './scripts/verify-boilerplate.sh'` → pass ("verify: boilerplate checks passed").
 
 ## Task 7: Add kernel-backed controller test or document environment limitation
 - Status: pending
