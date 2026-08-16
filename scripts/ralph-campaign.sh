@@ -217,7 +217,7 @@ PY
             if [[ "$started" == true ]]; then
                 for precheck_attempt in 1 2 3; do
                     set +e
-                    ./scripts/final-gate.sh --implementation >/dev/null 2>&1
+                    ./scripts/final-gate.sh --implementation >/tmp/precheck-debug.log 2>&1
                     gate_rc=$?
                     set -e
                     if (( gate_rc == 0 )); then
