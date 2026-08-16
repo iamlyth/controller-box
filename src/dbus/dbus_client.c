@@ -951,11 +951,12 @@ sd_set_property(ip_bus_handle bus, const char *dest,
     } else if (sd_is_uint_property(prop)) {
         /* InterceptMode is uint32 — parse the string value. */
         char *end = NULL;
-        unsigned long uval = strtoul(value, &end, 10);
-        if (!end || *end != '\0') {
+        unsigned long parsed = strtoul(value, &end, 10);
+        if (!end || *end != '\0' || parsed > 0xFFFFFFFFUL) {
             r = -EINVAL;
             goto fail;
         }
+        uint32_t uval = (uint32_t)parsed;
         r = sd_bus_message_open_container(m, 'v', "u");
         if (r < 0)
             goto fail;

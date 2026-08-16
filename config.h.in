@@ -24,6 +24,9 @@
 #define BUILTIN_PROFILE_DIR "@CBX_PROFILE_DIR@"
 #define SOURCE_PROFILE_DIR "@CMAKE_CURRENT_SOURCE_DIR@/data/profiles"
 
+/* Installed binary path (used for systemd unit generation). */
+#define CBX_BINARY_PATH "@CBX_BINARY_PATH@"
+
 /* Default user config directory ($XDG_CONFIG_HOME/controller-box or
  * ~/.config/controller-box). The actual resolved path is computed at
  * runtime in config_paths.c; this is the fallback default. */
