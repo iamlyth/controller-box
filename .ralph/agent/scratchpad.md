@@ -14,7 +14,7 @@ Task 1 (Load persisted settings during manager init) is complete.
 - Sanitizer build compiles clean; runtime fails for all SDL tests due to pre-existing "Failed loading SDL3 library" environment issue (not related to this change).
 
 ## Commit
-(to be committed)
+54c9d70 — fix: load persisted settings during manager init (Task 1, CFG-03)
 
 ## Next task
 Task 2: Move DBus interface definitions to production header — pending, no dependencies. This is the last software-fixable task. Tasks 3-6 are hardware-blocked (need /dev/uinput, GPU compositor, Pi 4 target hardware). Task 7 depends on 3-6. Task 8 (final audit) depends on all.
