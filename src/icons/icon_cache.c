@@ -18,6 +18,7 @@
 #include <nanosvgrast.h>
 
 #include <errno.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -83,6 +84,18 @@ static int rasterize_svg(cbx_icon_cache *cache, const char *icon_name)
     if (strncmp(icon_name, "cc-", 3) == 0)
         file_name = icon_name + 3;
 
+    /* Reject path traversal — icon names must be simple file names without
+     * directory components or parent-directory sequences.  This prevents a
+     * malicious profile-metadata sidecar from escaping the icon directory
+     * via an icon_override like "../../etc/something". */
+    if (strchr(file_name, '/') != NULL ||
+        strstr(file_name, "..") != NULL ||
+        file_name[0] == '.') {
+        fprintf(stderr, "icon_cache: rejecting path traversal in icon name '%s'\n",
+                icon_name);
+        return -EINVAL;
+    }
+
     plen = snprintf(path, sizeof(path), "%s/%s.svg", cache->icon_dir, file_name);
     if (plen < 0 || (size_t)plen >= sizeof(path))
         return -ENAMETOOLONG;
@@ -93,7 +106,8 @@ static int rasterize_svg(cbx_icon_cache *cache, const char *icon_name)
         fprintf(stderr, "icon_cache: failed to parse %s\n", path);
         return -ENOENT;
     }
-    if (image->width <= 0.0f || image->height <= 0.0f) {
+    if (!isfinite(image->width) || !isfinite(image->height) ||
+        image->width <= 0.0f || image->height <= 0.0f) {
         fprintf(stderr, "icon_cache: invalid dimensions for %s (%.0fx%.0f)\n",
                 path, image->width, image->height);
         nsvgDelete(image);

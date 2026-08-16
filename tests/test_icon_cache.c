@@ -285,6 +285,33 @@ static void test_load_one_nonexistent(void **state)
     assert_int_equal(cbx_icon_cache_load_one(&s->cache, "does-not-exist"), -ENOENT);
 }
 
+static void test_load_one_traversal_slash(void **state)
+{
+    struct test_state *s = *state;
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, SVG_DIR, 64), 0);
+    /* Icon name containing '/' must be rejected to prevent path traversal. */
+    assert_int_equal(cbx_icon_cache_load_one(&s->cache, "../../etc/passwd"), -EINVAL);
+    assert_int_equal(cbx_icon_cache_load_one(&s->cache, "sub/dir/icon"), -EINVAL);
+}
+
+static void test_load_one_traversal_dotdot(void **state)
+{
+    struct test_state *s = *state;
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, SVG_DIR, 64), 0);
+    /* Icon name containing '..' must be rejected to prevent path traversal. */
+    assert_int_equal(cbx_icon_cache_load_one(&s->cache, ".."), -EINVAL);
+    assert_int_equal(cbx_icon_cache_load_one(&s->cache, "cc-.."), -EINVAL);
+    assert_int_equal(cbx_icon_cache_load_one(&s->cache, "icon.."), -EINVAL);
+}
+
+static void test_load_one_traversal_leading_dot(void **state)
+{
+    struct test_state *s = *state;
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, SVG_DIR, 64), 0);
+    /* Icon name starting with '.' must be rejected (hidden file access). */
+    assert_int_equal(cbx_icon_cache_load_one(&s->cache, ".hidden"), -EINVAL);
+}
+
 static void test_load_one_null_args(void **state)
 {
     struct test_state *s = *state;
@@ -466,6 +493,9 @@ int main(void)
         cmocka_unit_test(test_load_one_already_cached),
         cmocka_unit_test(test_load_one_nonexistent),
         cmocka_unit_test(test_load_one_null_args),
+        cmocka_unit_test(test_load_one_traversal_slash),
+        cmocka_unit_test(test_load_one_traversal_dotdot),
+        cmocka_unit_test(test_load_one_traversal_leading_dot),
         /* Recolour + blend mode */
         cmocka_unit_test(test_recolour),
         cmocka_unit_test(test_blend_mode),

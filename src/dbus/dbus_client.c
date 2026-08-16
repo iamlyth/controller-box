@@ -413,6 +413,13 @@ sd_input_event_callback(sd_bus_message *msg, void *userdata,
     const char *sender = sd_bus_message_get_sender(msg);
     const char *path   = sd_bus_message_get_path(msg);
 
+    /* Defense-in-depth: reject signals from unexpected senders, matching
+     * the check in the other three signal callbacks. ip_input_events_handle
+     * also validates the sender, but checking here avoids processing any
+     * message content from an untrusted source. */
+    if (!sd_sender_ok(data, sender))
+        return 0;
+
     const char *event = NULL;
     double      value  = 0.0;
 
