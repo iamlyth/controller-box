@@ -499,7 +499,7 @@ static void test_native_assignment_application(void **state)
     char *pid0 = NULL;
     assert_int_equal(ip_composite_get_persistent_id(
         backend, bus, comp0, &pid0), 0);
-    assert_string_equal(pid0, "comp-0"); free(pid0);
+    assert_string_equal(pid0, "ORDER:0"); free(pid0);
 
     /* Profile switch. */
     const char *fighting = "/usr/share/inputplumber/profiles/fighting.yaml";

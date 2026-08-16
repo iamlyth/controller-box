@@ -17,6 +17,7 @@
 #include "identify/assign_persist.h"
 #include "identify/assign.h"
 #include "config/config_assignments.h"
+#include "config/config_settings.h" /* CBX_MAX_CONTROLLERS */
 
 #include <errno.h>
 #include <limits.h>
@@ -204,11 +205,13 @@ static void test_set_preserves_gamepad_order(void **state)
 static void test_set_full_table(void **state)
 {
     (void)state;
-    /* Fill the table to max capacity */
+    /* Fill the table to max capacity.  Slots must be < CBX_MAX_CONTROLLERS
+     * (validated by cbx_assignments_validate); wrap to stay in range while
+     * exercising all CBX_MAX_ASSIGNMENTS entries. */
     for (int i = 0; i < CBX_MAX_ASSIGNMENTS; i++) {
         char id[32];
         snprintf(id, sizeof(id), "ORDER:%d", i);
-        assert_int_equal(cbx_assign_persist_set(id, i, "default"), 0);
+        assert_int_equal(cbx_assign_persist_set(id, i % CBX_MAX_CONTROLLERS, "default"), 0);
     }
 
     /* Adding one more should fail with -ENOSPC */
