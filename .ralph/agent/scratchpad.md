@@ -19,3 +19,11 @@
 - Tasks 3–8 require declaring runner capabilities (physical-controller, kernel-uinput, gpu-compositor, target-consumer, installed-package) which are NOT available in the current environment. These cannot be completed without hardware/runner access.
 - Task 9 (final audit) depends on all other tasks.
 - Next actionable: check if any other task can be done without runner capabilities, or proceed to tasks that don't need hardware.
+
+<!-- factory-stale-recovery:start -->
+## Supervisor recovery feedback
+
+- The previous `implementation` Ralph attempt terminated as a stale loop.
+- Run `./scripts/final-gate.sh --implementation` yourself and fix every reported failure.
+- Do not repeat a completion summary until that command passes. Replace this section in the next scratchpad handoff before requesting completion.
+<!-- factory-stale-recovery:end -->
