@@ -1,28 +1,27 @@
-# Implementation Loop — Hardware-Blocked, All Software Complete (Iteration 49)
+# Implementation Loop — DOD-07 Review Artifact Task Active (Iteration 50)
 
 ## Outcome
-- Previous iteration 48 fixed stale CMake cache path mismatch and transient cmake install failure
-- This iteration confirmed final gate passes: 98/98 tests, 0 failures, 2 hardware skips
-- Plan status: `blocked` — hardware tasks 3, 6, 7 blocked; 4, 5, 8, 9 pending
-- §11.2 not fully satisfied — hardware-dependent `partial` rows remain (MGR-36, PERF-05, VRF-05/06/07, DOD-01/03/05/07/08/09)
-- Completion token NOT emitted — non-final hardware tasks remain
+- Selected Task 14 (DOD-07): Commit independent review artifact
+- Task `task-1786896770-09f0` is `in_progress`, not blocked (empty blocked_by)
+- Delegated to Factory Worker via `factory.implement` event
+- This is a software-only task — no hardware required
 
-## Verification
-- `./scripts/final-gate.sh --implementation`: EXIT 0 (all checks pass)
-- 98/98 CTest: 100% passed, 2 skips (test_kernel_controller, test_backend_smoke)
-- verify-project.sh: passed (build, tests, functional acceptance, smoke, packaging)
-- check-installed-functional-evidence.sh: PASS, zero skips
-- verify-boilerplate.sh, bug-ledger, check-docs-sync.sh: all OK
-- Git tree: clean on develop at 2c2d656
+## Task 14 Scope
+- Run parallel read-only reviews (correctness/test-quality, security, documentation)
+- Resolve any BLOCKING findings with production-path fixes
+- Commit `docs/REVIEW.md` with: review date, reviewer type, scope, findings (file/line), resolution, verdict
+- Update DOD-07 conformance matrix row to `verified` with evidence
+- Verify `./scripts/final-gate.sh --implementation` still passes (exit 0)
 
-## Environment (unchanged since iter 28)
-- No /dev/uinput, /dev/dri, /dev/input — zero hardware capabilities
-- Runner dev-runner-vm: SSH unreachable, no ~/.ssh/factory-ssh symlink
+## Verification (from iter 49, still valid)
+- Final gate: EXIT 0 (all checks pass)
+- 98/98 CTest: 100% passed, 2 hardware skips
+- Plan freshness: OK
+- Git tree: clean on develop
+
+## Environment
+- No /dev/uinput, /dev/dri, /dev/input — hardware tasks remain blocked
 - Only declared capabilities: remote-project-gate, systemd-user
 
-## Recovery Handoff (when hardware available)
-1. Expose /dev/uinput → Task 3 → Task 4 → Task 5
-2. Expose /dev/dri → Task 6
-3. Provision Pi-4 → Task 7 → Task 8
-4. Run final audit → Task 9
-5. Then emit the completion token
+## Next
+- Factory Worker executes Task 14: runs reviews, writes docs/REVIEW.md, updates plan, commits
