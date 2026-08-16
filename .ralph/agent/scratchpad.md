@@ -1,21 +1,19 @@
-# Planning Scratchpad
+# Implementation Loop — Task 1 Complete
 
-## Current state
-- Fresh planning cycle. Plan written to `.factory/artifacts/implementation-plan.md`.
-- 4 planner-scout subagents mapped all SPEC sections (§§4-11) against source/tests.
-- Codebase is mature: 23.5KLoC source, 62KLoC tests, 124 source files, 80+ test files.
-- No open bugs (`.factory/bugs/open.md` = empty JSON array).
-- Campaign audit round 3 identified 5 findings, all about missing runner capabilities.
+## Outcome
+- Task 1 (Add SupportedTargetDevices to native test server) is complete.
+- Added `SupportedTargetDevices:as` property to `native_ip_server.c` manager vtable with human-readable names matching `SupportedTargetDeviceIds` values ("Xbox 360 Controller", "DualSense", "Generic Gamepad").
+- Added native round-trip test assertions in `test_native_dbus.c` (Test 1 via `backend->get_property`, Test 3 via `ip_manager_get_supported_target_devices` wrapper).
+- DBUS-07 reclassified from `partial` to `verified` in conformance matrix.
 
-## Key findings
-- 87 of 94 conformance requirements are `verified` with production-path evidence.
-- 7 rows are `partial`: DBUS-07 (native test gap), PERF-04 (memory footprint),
-  PERF-05 (Pi-4 max), VRF-05 (kernel-backed controller), VRF-06 (GPU backend),
-  VRF-07 (human release), and derived DOD rows.
-- 2 code-fix tasks (Task 1: SupportedTargetDevices native test, Task 2: memory
-  footprint test) + 6 runner-capability tasks + 1 final audit = 9 tasks total.
+## Verification
+- `nix-shell --run "ctest --test-dir build-check -R 'test_native_dbus' --output-on-failure"` — 10/10 tests passed (5.25s)
+- `test_manager_calls` (mock) also passes — no regressions
 
-## Next action
-- Run `./scripts/final-gate.sh --planning` to validate the plan.
-- If it passes, emit the completion token.
-- If it fails, fix the reported deficiency.
+## Commit
+- `96bc4f7` on `develop`
+
+## Next Task
+- Task 2: Add daemon memory footprint test (no deps, code change). Measure RSS/heap of overlay service after init and 100 idle steps. Assert <50MB. PERF-04 -> verified.
+- Tasks 3–8 require declaring runner capabilities (physical-controller, kernel-uinput, gpu-compositor, target-consumer, installed-package) which are NOT available in the current environment. These cannot be completed without hardware/runner access.
+- Task 9 (final audit) depends on all other tasks.
