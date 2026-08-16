@@ -1,14 +1,13 @@
-# Implementation Loop — Hardware-Blocked (Iteration 42)
+# Implementation Loop — Hardware-Blocked (Iteration 43)
 
 ## Outcome
-- Fixed scratchpad: removed reserved completion token that blocked the final gate
 - Final gate PASSES (exit 0): "implementation, specification, tests, and documentation accepted"
 - 100% tests pass, 0 failures (2 hardware skips: test_kernel_controller #3, test_backend_smoke #88)
-- installed-functional-evidence: PASS at 2eb76ba with zero skips
+- installed-functional-evidence: PASS at f27e7c9 with zero skips
 - All software-addressable work complete; no open tasks
 - Plan status: **blocked** (hardware-dependent tasks 3-9 cannot proceed)
 - §11.2 Item 9 not satisfied — tasks 3-9 are blocked, not complete
-- Completion token NOT emitted — hardware ceiling reached
+- Completion token NOT emitted — hardware ceiling reached (§11.2: "reaching a ceiling is never success")
 
 ## Environment State (unchanged since iter 28)
 - No /dev/uinput, no /dev/dri, no /dev/input — zero capabilities (CapEff=0, CapBnd=0)
