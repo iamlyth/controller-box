@@ -55,6 +55,7 @@
 
 #include "config/config_settings.h"
 #include "config/config_assignments.h"
+#include "config/config_profile.h"
 #include "config/config_profile_list.h"
 /* config_profile_yaml.h not needed — profile parsing is in config_profile_list.h */
 #include "config/config_paths.h"
@@ -1360,6 +1361,19 @@ test_installed_controller_acceptance(void **state)
              "%s/.config/controller-box/settings.yaml", f->tmp_home);
     assert_int_equal(access(settings_path, F_OK), 0);
 
+    /* Read back settings.yaml and verify the toggled launch_at_boot
+     * value was actually persisted — not just that the file exists.
+     * A zero-byte or stale file would pass access(F_OK) alone. */
+    {
+        cbx_settings loaded;
+        memset(&loaded, 0, sizeof(loaded));
+        cbx_settings_defaults(&loaded);
+        /* HOME is already set to tmp_home in setup; XDG_CONFIG_HOME is unset. */
+        int load_rc = cbx_settings_load(&loaded);
+        assert_int_equal(load_rc, 0);
+        assert_int_equal(loaded.launch_at_boot, mgr.st.settings.launch_at_boot);
+    }
+
     /* --- Phase 7: Profiles tab — Create (A) + name + confirm (A) + save (B) --- */
     /* Navigate to Profiles tab: D-pad Left × 1 */
     ctrl_press(&mgr, f->joystick, 13);  /* Left → Profiles */
@@ -1411,6 +1425,18 @@ test_installed_controller_acceptance(void **state)
     snprintf(new_prof_path, sizeof(new_prof_path),
              "%s/.local/share/inputplumber/profiles/new.yaml", f->tmp_home);
     assert_int_equal(access(new_prof_path, F_OK), 0);
+
+    /* Read back the profile YAML and verify it's valid content — not
+     * just that the file exists.  A zero-byte or corrupted file would
+     * pass access(F_OK) alone. */
+    {
+        cbx_profile loaded;
+        memset(&loaded, 0, sizeof(loaded));
+        int load_rc = cbx_profile_load(&loaded, new_prof_path);
+        assert_int_equal(load_rc, 0);
+        assert_int_equal(loaded.version, 1);
+        assert_true(loaded.mapping_count >  0);
+    }
 
     /* --- Phase 8: Profiles tab — Edit (A) + editor nav + B cancel/back --- */
     /* After Create+Save, focus is on the profile list with the new
@@ -1464,6 +1490,15 @@ test_installed_controller_acceptance(void **state)
 
     /* Assert profile file no longer exists */
     assert_int_not_equal(access(new_prof_path, F_OK), 0);
+
+    /* Assert the profile metadata sidecar was also deleted — the
+     * inventory semantic outcome for M19 is "Profile file unlinked;
+     * sidecar deleted; list refreshes." */
+    char new_meta_path[PATH_MAX + 256];
+    snprintf(new_meta_path, sizeof(new_meta_path),
+             "%s/.config/controller-box/profile-metadata/new.meta.yaml",
+             f->tmp_home);
+    assert_int_not_equal(access(new_meta_path, F_OK), 0);
 
     /* --- Cleanup --- */
     cbx_manager_shutdown(&mgr);

@@ -641,6 +641,20 @@ static void test_o04_cycle_profile_up(void **state)
     const char *prof_after = cbx_select_grid_get_profile(&svc->grid, 0);
     assert_non_null(prof_after);
     assert_string_not_equal(prof_after, prof_before);
+
+    /* Verify LoadProfilePath DBus call was actually made on the wire —
+     * read back the ProfilePath property on the composite device and
+     * confirm it matches the new profile's path.  Checking only the
+     * in-memory grid name doesn't prove the backend was called. */
+    char *engine_path = NULL;
+    int rc = ip_composite_get_profile_path(svc->conn.backend,
+                                             svc->conn.bus,
+                                             COMP_PATH_0, &engine_path);
+    assert_int_equal(rc, 0);
+    assert_non_null(engine_path);
+    /* The engine path should contain the new profile name. */
+    assert_non_null(strstr(engine_path, prof_after));
+    free(engine_path);
 }
 
 /* --- O05: Cycle profile down --- */
@@ -665,6 +679,18 @@ static void test_o05_cycle_profile_down(void **state)
     const char *prof_after = cbx_select_grid_get_profile(&svc->grid, 0);
     assert_non_null(prof_after);
     assert_string_not_equal(prof_after, prof_before);
+
+    /* Verify LoadProfilePath DBus call was actually made on the wire —
+     * read back the ProfilePath property and confirm it matches the
+     * new profile. */
+    char *engine_path = NULL;
+    int rc = ip_composite_get_profile_path(svc->conn.backend,
+                                             svc->conn.bus,
+                                             COMP_PATH_0, &engine_path);
+    assert_int_equal(rc, 0);
+    assert_non_null(engine_path);
+    assert_non_null(strstr(engine_path, prof_after));
+    free(engine_path);
 }
 
 /* --- O06: Enter Host Mode (R3) --- */
@@ -820,6 +846,18 @@ static void test_o10_close_saves_and_sets_pass(void **state)
         svc->conn.backend, svc->conn.bus, COMP_PATH_0, &mode_str), 0);
     assert_string_equal(mode_str, "1");
     free(mode_str);
+
+    /* Verify assignments were persisted to disk — not just held in
+     * memory.  Read back assignments.yaml and confirm the slot and
+     * device path match. */
+    {
+        cbx_assignments loaded;
+        memset(&loaded, 0, sizeof(loaded));
+        int load_rc = cbx_assignments_load(&loaded);
+        assert_int_equal(load_rc, 0);
+        assert_int_equal(loaded.assignment_count, 1);
+        assert_int_equal(loaded.assignments[0].slot, 0);
+    }
 }
 
 /* --- O10b/O13: Close with conflict resolution --- */

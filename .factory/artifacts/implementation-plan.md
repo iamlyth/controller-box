@@ -72,7 +72,7 @@ Controller-Box is a single C11 binary with two modes: `--overlay-service` (syste
 | ID-02 | §6.3 | verified | `identity.c` prefixed IDs (BT:/USB:/USB:phys:/ORDER:); `identity_downgrade.c` weaker-identity detection; `test_identity_downgrade.c` | |
 | CFG-01 | §7.1 | verified | `config_profile.c` InputPlumber DeviceProfile YAML; `config_profile_meta.c` optional sidecar; no duplicate format | |
 | CFG-02 | §7.2 | verified | `config_paths.c` XDG layout; `test_config_paths.c` | |
-| CFG-03 | §7.3 | verified | `config_settings.c` persistence verified; `manager.c:237` calls `cbx_settings_load` after `cbx_settings_defaults` during init — manager starts with persisted settings; `test_manager_integration.c:test_persisted_settings_loaded_on_init` regression test | Task 1 |
+| CFG-03 | §7.3 | verified | `config_settings.c` persistence verified; `manager.c:238` calls `cbx_settings_load` after `cbx_settings_defaults` during init — manager starts with persisted settings; `test_manager_integration.c:test_persisted_settings_loaded_on_init` regression test | Task 1 |
 | CFG-04 | §7.4 | verified | `config_assignments.c` prefixed IDs + gamepad_order; `test_assignments.c` | |
 | CFG-05 | §7.5 | verified | `config_profile_meta.c` sidecar (display_name, icon, display_order, description); `test_profile_list.c` | |
 | CFG-06 | §7.6 | verified | `config_profile.c` device_profile_v1 format; `test_profile_yaml.c` round-trip | |
@@ -107,7 +107,7 @@ Controller-Box is a single C11 binary with two modes: `--overlay-service` (syste
 | DOD-04 | §11.2.4 | verified | Visual and degraded-state acceptance: `test_overlay_visual.c`, `test_manager_visual.c`, `test_golden.c` cover normal/degraded/error states | |
 | DOD-05 | §11.2.5 | partial | Regression and quality gates: VRF-06 GPU backend skip is an unexplained skip | Task 4 |
 | DOD-06 | §11.2.6 | verified | Known-defect accounting: `.factory/bugs/open.md` is empty | |
-| DOD-07 | §11.2.7 | verified | Independent review: Campaign Round 4 audit completed with 7 findings, all mapped to tasks | |
+| DOD-07 | §11.2.7 | verified | Independent review: Campaign Round 4 audit (7 findings) + review rounds for Tasks 9–11 (7 docs issues, 14 test quality gaps, 1 production bug) + review round for Task 12 (6 test quality gaps); all findings mapped to tasks and resolved | |
 | DOD-08 | §11.2.8 | partial | Documentation and reproducibility: README/OPERATIONS.md match x86_64 behavior (accuracy fixes applied — interaction inventory counts corrected to 52/6/1, layer numbering aligned with SPEC §11.1 7-layer scheme, skip behavior documented, Xvfb contradiction resolved, coverage table completed); aarch64 build not evidenced | Task 5, Task 9 |
 | DOD-09 | §11.2.9 | verified | Repository integrity: clean tree on develop, complete task ledger | |
 
@@ -196,7 +196,7 @@ The project maintains a machine-readable inventory at `tests/interaction_invento
 - Dependencies: none
 - Scope: `src/manager/manager.c` — call `cbx_settings_load` after `cbx_settings_defaults` and before controllers tab init; `tests/test_manager_integration.c` — regression test for persisted settings on init
 - Acceptance criteria: Manager init reads `settings.yaml` from disk; `mgr->settings.virtual_controllers.count` matches persisted value (not default 4) when a non-default settings file exists; controllers tab `set_expected_count` receives the persisted count; regression test saves non-default count, reinitializes manager, and verifies expected count matches saved value
-- Verification: `nix-shell --run 'cmake --build build-check --parallel 2 && ctest --test-dir build-check -R test_manager_integration --output-on-failure'` — 12/12 tests pass including `test_persisted_settings_loaded_on_init`; full suite 98/98 pass
+- Verification: `nix-shell --run 'cmake --build build-check --parallel 2 && ctest --test-dir build-check -R test_manager_integration --output-on-failure'` — 12/12 tests pass including `test_persisted_settings_loaded_on_init`; full suite 96 pass, 2 skip (hardware-blocked, exit 77)
 - Documentation impact: `docs/OPERATIONS.md` — updated settings.yaml section to note that both overlay service and manager load persisted settings at startup
 
 ## Task 2: Move DBus interface definitions to production header
@@ -204,7 +204,7 @@ The project maintains a machine-readable inventory at `tests/interaction_invento
 - Dependencies: none
 - Scope: Created `src/dbus/dbus_interface.h` with all production DBus definitions (`ip_dbus_backend` vtable, `ip_bus_handle`, `ip_signal_cb`, signal payload structs, `ip_prop_type` enum, all `IP_DBUS_*`/`IP_IFACE_*` constants, `ip_dbus_sd_backend()` declaration). Updated all 24 `src/` includes from `dbus_mock.h` to `dbus_interface.h` (or `dbus/dbus_interface.h` for non-dbus dirs). Updated `tests/dbus_mock.h` to include `dbus_interface.h` and retain only mock-specific code. Updated 6 test files that only use constants to include `dbus_interface.h` directly. Removed `tests/` from `controllerbox` PUBLIC include path. Added `src/` to `cbx_test_support` and `test_ip_server` include dirs.
 - Acceptance criteria: No `src/` file includes `dbus_mock.h` ✓; `tests/dbus_mock.h` includes `dbus_interface.h` for shared definitions ✓; production build succeeds without `tests/` in include path ✓; all 98 tests pass ✓; sanitizer compiles clean ✓
-- Verification: `grep -r '#include.*"dbus_mock.h"' src/` returns no matches; `nix-shell --run 'cmake --build build-check --parallel 2 && ctest --test-dir build-check --output-on-failure'` — 98/98 pass, 2 skipped (hardware-blocked)
+- Verification: `grep -r '#include.*"dbus_mock.h"' src/` returns no matches; `nix-shell --run 'cmake --build build-check --parallel 2 && ctest --test-dir build-check --output-on-failure'` — 96 pass, 2 skip (hardware-blocked, exit 77)
 - Documentation impact: None (internal refactor, no user-facing behavior change)
 
 ## Task 3: Kernel-backed controller acceptance evidence
@@ -249,7 +249,7 @@ The project maintains a machine-readable inventory at `tests/interaction_invento
 
 ## Task 8: Final documentation and specification audit
 - Status: pending
-- Dependencies: Task 1, Task 2, Task 3, Task 4, Task 5, Task 6, Task 7, Task 9, Task 10, Task 11
+- Dependencies: Task 1, Task 2, Task 3, Task 4, Task 5, Task 6, Task 7, Task 9, Task 10, Task 11, Task 12
 - Scope: Execute the canonical definition of done from `docs/SPEC.md` §11.2. Verify the conformance matrix is all-verified, the interaction inventory is exhaustive with all entries verified (except DEFERRED O12 per §13), no contradictory open v1 bugs remain in `.factory/bugs/open.md`, independent adversarial reviews (correctness, test-quality, security, documentation) find no blocking issues, full clean verification passes (`./scripts/verify-project.sh`), documentation matches observed behavior, and the Git tree is clean on `develop`.
 - Acceptance criteria: (1) Every conformance matrix row classified `verified` — no `partial`, `missing`, or `ambiguous` remains. (2) Every §5.7 interaction inventory entry (M01–M38, O01–O13, D01–D08) has passing controller and pointer evidence (where applicable) through production dispatch. (3) `.factory/bugs/open.md` contains no unresolved defect contradicting a v1 requirement. (4) Independent reviews find no blocking issue. (5) `./scripts/verify-project.sh` passes: clean build, all 98+ tests, installed functional acceptance (not skipped), packaging, sanitizer clean. (6) `README.md` and `docs/OPERATIONS.md` match observed behavior. (7) Git tree clean on `develop`. (8) Remediation rule: if any gap is found, preserve the task ledger, append a uniquely numbered pending task, add it to this task's dependencies, return this task to pending, and continue.
 - Verification: `./scripts/verify-project.sh`; `./scripts/final-gate.sh --planning` (pre-completion); conformance matrix spot-check; interaction inventory completeness check; `git status --porcelain` clean
@@ -279,3 +279,11 @@ The project maintains a machine-readable inventory at `tests/interaction_invento
 - Acceptance criteria: Production code passes valid SVG file path; `base_texture` non-NULL; golden baselines regenerated; test asserts `base_texture` non-NULL; `fb_region_has_content` checks full diagram region; full verifier passes.
 - Verification: `nix-shell --run 'ctest --test-dir build-check --output-on-failure'` — 96 pass, 2 skip (hardware-blocked), 0 failures. `assert_non_null(ed->diagram.base_texture)` passes in both list and sequential modes. Golden comparison passes with regenerated baselines. BUG-0007 moved from open to closed ledger.
 - Documentation impact: None
+
+## Task 12: Strengthen test assertions for capture binding verification, error status, file content persistence, and LoadProfilePath DBus verification (remediation)
+- Status: complete
+- Dependencies: none
+- Scope: Fix test quality gaps found by review round 2: (1) M32/M34 capture tests in test_manager_native_prof.c only asserted mapping_count unchanged — added verification that the captured binding's source_event button prop value was actually updated to the captured input ("A"); (2) D07 status assertion in test_manager_native_prof.c used vacuous strlen(status)>0 — replaced with strstr check for error content ("fail"/"error"/"Missing"); (3) Settings persistence in test_installed_functional.c only checked file existence via access(F_OK) — added cbx_settings_load read-back and verified toggled launch_at_boot value matches; (4) Profile creation in test_installed_functional.c only checked file existence — added cbx_profile_load read-back verifying version=1 and mapping_count>0; (5) M19 delete-confirm in test_installed_functional.c didn't verify sidecar deletion — added access check for .meta.yaml file; (6) O04/O05 profile cycle in test_overlay_native.c only checked in-memory grid name change — added ip_composite_get_profile_path read-back to verify LoadProfilePath DBus call was made on the wire; (7) O10 close in test_overlay_native.c only checked in-memory assignments — added cbx_assignments_load read-back to verify disk persistence. Also fixed stale implementation plan evidence: Task 1/2 test counts corrected from "98/98 pass" to "96 pass, 2 skip", CFG-03 line number 237→238, DOD-07 evidence updated to include all review rounds.
+- Acceptance criteria: M32/M34 tests verify binding source event was updated with captured button name; D07 asserts status contains error content; settings/profile persistence tests read back YAML and verify content; M19 verifies sidecar deletion; O04/O05 verify LoadProfilePath via ProfilePath property read-back; O10 verifies assignments persisted to disk; all 98 tests pass
+- Verification: `nix-shell --run 'cmake --build build-check --parallel 2 && ctest --test-dir build-check --output-on-failure --timeout 120 -j4'` — 96 pass, 2 skip (hardware-blocked, exit 77), 0 failures. `verify-project.sh` passes including installed functional acceptance. `check-installed-functional-evidence.sh` PASS at current commit.
+- Documentation impact: None (test-only changes)

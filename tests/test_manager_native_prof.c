@@ -1029,6 +1029,21 @@ test_m32_capture_event(void **state)
     assert_non_null(prof);
     assert_int_equal(prof->mapping_count, 6);
 
+    /* Verify the captured binding was actually updated — the source
+     * event's button prop value should now be "A" (the physical
+     * button pressed during capture).  Asserting only mapping_count
+     * would not prove the capture modified anything. */
+    const cbx_profile_mapping *m = &prof->mappings[editing_idx];
+    bool found_btn = false;
+    for (int j = 0; j < m->source_event.prop_count; j++) {
+        if (strcmp(m->source_event.props[j].key, "button") == 0) {
+            assert_string_equal(m->source_event.props[j].value, "A");
+            found_btn = true;
+            break;
+        }
+    }
+    assert_true(found_btn);
+
     cbx_manager_shutdown(&mgr);
 }
 
@@ -1081,6 +1096,19 @@ test_m32_capture_dbus_signal(void **state)
     const cbx_profile *prof = cbx_profile_editor_get_profile(&pt->editor);
     assert_non_null(prof);
     assert_int_equal(prof->mapping_count, 6);
+
+    /* Verify the captured binding was actually updated — the source
+     * event's button prop value should now be "A". */
+    const cbx_profile_mapping *m = &prof->mappings[editing_idx];
+    bool found_btn = false;
+    for (int j = 0; j < m->source_event.prop_count; j++) {
+        if (strcmp(m->source_event.props[j].key, "button") == 0) {
+            assert_string_equal(m->source_event.props[j].value, "A");
+            found_btn = true;
+            break;
+        }
+    }
+    assert_true(found_btn);
 
     cbx_manager_shutdown(&mgr);
 }
@@ -1184,6 +1212,28 @@ test_m34_seq_capture(void **state)
     assert_non_null(prof);
     assert_true(prof->mapping_count >= 6);
 
+    /* Verify the step-0 (Up) mapping was actually updated — the
+     * existing "btn_Up" mapping (whose source event button prop was
+     * "Up") should now have button prop value "A" (the physical
+     * button pressed).  find_or_create_mapping locates the existing
+     * mapping by button prop value, then seq_on_input overwrites it.
+     * Asserting only mapping_count >= 6 would not prove the capture
+     * modified any binding — the count could be the pre-existing
+     * baseline. */
+    bool found_up = false;
+    for (int i = 0; i < prof->mapping_count; i++) {
+        if (strcmp(prof->mappings[i].name, "btn_Up") != 0)
+            continue;
+        for (int j = 0; j < prof->mappings[i].source_event.prop_count; j++) {
+            if (strcmp(prof->mappings[i].source_event.props[j].key, "button") == 0) {
+                assert_string_equal(prof->mappings[i].source_event.props[j].value, "A");
+                found_up = true;
+                break;
+            }
+        }
+    }
+    assert_true(found_up);
+
     cbx_manager_shutdown(&mgr);
 }
 
@@ -1228,6 +1278,22 @@ test_m34_seq_capture_dbus_signal(void **state)
     const cbx_profile *prof = cbx_profile_editor_get_profile(&pt->editor);
     assert_non_null(prof);
     assert_true(prof->mapping_count >= 6);
+
+    /* Verify the step-0 (Up) mapping was actually updated — the
+     * existing "btn_Up" mapping should now have button prop "A". */
+    bool found_up = false;
+    for (int i = 0; i < prof->mapping_count; i++) {
+        if (strcmp(prof->mappings[i].name, "btn_Up") != 0)
+            continue;
+        for (int j = 0; j < prof->mappings[i].source_event.prop_count; j++) {
+            if (strcmp(prof->mappings[i].source_event.props[j].key, "button") == 0) {
+                assert_string_equal(prof->mappings[i].source_event.props[j].value, "A");
+                found_up = true;
+                break;
+            }
+        }
+    }
+    assert_true(found_up);
 
     cbx_manager_shutdown(&mgr);
 }
@@ -1521,10 +1587,14 @@ test_d07_filesystem_failure(void **state)
     /* Editor stays open (save failed). */
     assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_EDITOR);
 
-    /* Status should show save failure. */
+    /* Status should show save failure — check for error content, not
+     * just non-empty (a stale "ready" message would pass the old
+     * check).  Production code sets "Save failed." on filesystem error. */
     const char *status = cbx_profile_editor_get_status(&pt->editor);
     assert_non_null(status);
-    assert_true(strlen(status) > 0);
+    assert_true(strstr(status, "fail") != NULL || strstr(status, "Fail") != NULL
+                 || strstr(status, "error") != NULL || strstr(status, "Error") != NULL
+                 || strstr(status, "Missing") != NULL);
 
     /* Restore permissions for cleanup. */
     chmod(f->user_dir, 0700);
@@ -1661,10 +1731,12 @@ test_d07_filesystem_failure_pointer(void **state)
     /* Editor stays open (save failed). */
     assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_EDITOR);
 
-    /* Status should show save failure. */
+    /* Status should show save failure — check for error content. */
     const char *status = cbx_profile_editor_get_status(&pt->editor);
     assert_non_null(status);
-    assert_true(strlen(status) > 0);
+    assert_true(strstr(status, "fail") != NULL || strstr(status, "Fail") != NULL
+                 || strstr(status, "error") != NULL || strstr(status, "Error") != NULL
+                 || strstr(status, "Missing") != NULL);
 
     /* Restore permissions for cleanup. */
     chmod(f->user_dir, 0700);
