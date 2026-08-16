@@ -33,10 +33,10 @@ if [[ -f "$BUILD_DIR/CMakeCache.txt" ]]; then
 fi
 cmake -S . -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Debug
 cmake --build "$BUILD_DIR" --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-2}"
-ctest --test-dir "$BUILD_DIR" --output-on-failure
+ctest --test-dir "$BUILD_DIR" --output-on-failure --timeout 120
 functional_log=$(mktemp)
 trap 'rm -f "$functional_log"' EXIT
-ctest --test-dir "$BUILD_DIR" --no-tests=error \
+ctest --test-dir "$BUILD_DIR" --no-tests=error --timeout 120 \
     -R '^test_installed_functional$' --output-on-failure | tee "$functional_log"
 if grep -Eq 'Skipped|Not Run|0 tests passed' "$functional_log"; then
     echo "verify-project: installed functional acceptance was skipped" >&2
