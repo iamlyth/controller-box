@@ -1,14 +1,18 @@
 # Implementation Scratchpad — Controller-Box v1
 
-## Task 1 complete: Boolean DBus property SET native type fidelity
+## Task 2 complete: Sender verification for InterfacesAdded/Removed signals
 
-- **Commit:** f21831e on develop
-- **What:** Added `sd_is_bool_property()` branch to `sd_set_property()` in `src/dbus/dbus_client.c` — writes native `v<b>` variant for `ManageAllDevices` and `Enabled` instead of falling through to string `v<s>`. Parses `"1"/"true"/"yes"` → 1, `"0"/"false"/"no"` → 0, rejects other values with `-EINVAL`.
-- **Test server:** Added `ManageAllDevices` as a writable boolean (`SD_BUS_WRITABLE_PROPERTY`) on the Manager vtable in `tests/native_ip_server.c` with GET/SET handlers and global `g_nip_manage_all_devices`. Reset in `nip_reset_server_state`.
-- **Tests:** New `test_native_boolean_property_set` in `test_native_dbus.c` — round-trip SET/get for true, false, word form, and invalid value rejection. Added `ManageAllDevices` assertion to `test_dbus_signatures.c`.
-- **Verification:** `ctest --test-dir build-check -R 'test_dbus_signatures|test_native_dbus'` → 2/2 pass. Full suite: 96/96 pass (1 pre-existing skip).
-- **Conformance:** DB-01 updated — boolean SET now native; remaining DB-01 gap is sender verification (Task 2).
+- **Commit:** 3889ec0 on develop
+- **What:** Added `sd_sender_ok()` helper to `dbus_client.c` — verifies signal sender against InputPlumber's tracked unique bus name before processing in `sd_interfaces_added_callback` and `sd_interfaces_removed_callback`. Spoofed signals are silently dropped (return 0).
+- **Mechanism:**
+  - `sd_bus_wrapper` gains `expected_sender` field, set in `sd_get_unique_name()` and updated in `sd_noc_callback()` on NameOwnerChanged (IP restart)
+  - `sd_signal_data` gains `wrapper` pointer for callback access
+  - `sd_sender_ok()`: rejects mismatched senders when `expected_sender` is non-NULL; allows through when NULL (degraded mode — downstream `ip_hotplug sender_ok()` still rejects)
+  - Freed in `sd_disconnect()`
+- **Tests:** Added `test_inject_added_wrong_sender` and `test_inject_removed_wrong_sender` to `test_hotplug.c` — inject spoofed signals through `inject_signal`, verify model unchanged.
+- **Verification:** `ctest --test-dir build-check -R test_hotplug` → pass. Full suite: 96/96 pass (1 pre-existing skip).
+- **Conformance:** DB-01 updated from partial to verified — sender verification now in both sd-bus callbacks (defense-in-depth) and downstream `ip_hotplug`/`ip_properties` handlers.
 
 ## Next task
 
-Task 2: Add sender verification for DBus InterfacesAdded/Removed signals.
+Task 3: Implement real overlay lifecycle in installed tests and compositor-visible overlay activation.
