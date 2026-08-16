@@ -3,7 +3,7 @@ spec_path: docs/SPEC.md
 spec_commit: 3a10f6b7d04a615b2b9d06eef6c91e431fa9c079
 spec_blob: 58f5d3cb72bc6b3e5f573fa09a63c11a653ed577
 base_commit: d61b7f5f23b52d772f2bf0893ec4e45749be5862
-status: blocked
+status: active
 ---
 
 # Implementation Plan
@@ -108,7 +108,7 @@ Controller-Box is a single C11 binary with two modes: `--overlay-service` (syste
 | DOD-05 | §11.2.5 | partial | Regression and quality gates: VRF-06 GPU backend skip is an unexplained skip | Task 4 |
 | DOD-06 | §11.2.6 | verified | Known-defect accounting: `.factory/bugs/open.md` is empty | |
 | DOD-07 | §11.2.7 | verified | Independent review: Campaign Round 4 audit completed with 7 findings, all mapped to tasks | |
-| DOD-08 | §11.2.8 | partial | Documentation and reproducibility: README/OPERATIONS.md match x86_64 behavior; aarch64 build not evidenced | Task 5 |
+| DOD-08 | §11.2.8 | partial | Documentation and reproducibility: README/OPERATIONS.md match x86_64 behavior (accuracy fixes applied — interaction inventory counts corrected to 52/6/1, layer numbering aligned with SPEC §11.1 7-layer scheme, skip behavior documented, Xvfb contradiction resolved, coverage table completed); aarch64 build not evidenced | Task 5, Task 9 |
 | DOD-09 | §11.2.9 | verified | Repository integrity: clean tree on develop, complete task ledger | |
 
 ## Interaction acceptance inventory
@@ -189,7 +189,7 @@ The project maintains a machine-readable inventory at `tests/interaction_invento
 | D07 | Filesystem failure | A on Save | Click Save btn | Error shown, no partial write | `test_profile_save.c` |
 | D08 | Empty profile save blocked | A on Save with no bindings | Click Save btn | NES minimum error, save blocked | `test_profile_validate.c` |
 
-**Verification status:** 48 entries VERIFIED via production SDL dispatch and/or native DBus; 6 entries NOT_APPLICABLE (controller-only: M13, M14, M32, M34, M35, M36 — pointer path n/a, supplemental direct-callback evidence noted); 1 entry DEFERRED (O12 — §13 post-v1). The controller and pointer paths are exercised through normal SDL events and production dispatch (`cbx_manager_handle_event` / `cbx_overlay_service_step`), not direct callback invocation. Direct callback tests exist as supplemental evidence only. Manager native-DBus tests (`test_manager_native.c`, `test_manager_native_prof.c`) and overlay native tests (`test_overlay_native.c`) provide production-path evidence through a private sd-bus service with native InputPlumber signatures.
+**Verification status:** 52 entries VERIFIED via production SDL dispatch and/or native DBus; 6 entries NOT_APPLICABLE (controller-only: M13, M14, M32, M34, M35, M36 — pointer path n/a, supplemental direct-callback evidence noted); 1 entry DEFERRED (O12 — §13 post-v1). The controller and pointer paths are exercised through normal SDL events and production dispatch (`cbx_manager_handle_event` / `cbx_overlay_service_step`), not direct callback invocation. Direct callback tests exist as supplemental evidence only. Manager native-DBus tests (`test_manager_native.c`, `test_manager_native_prof.c`) and overlay native tests (`test_overlay_native.c`) provide production-path evidence through a private sd-bus service with native InputPlumber signatures.
 
 ## Task 1: Load persisted settings during manager init
 - Status: complete
@@ -249,8 +249,25 @@ The project maintains a machine-readable inventory at `tests/interaction_invento
 
 ## Task 8: Final documentation and specification audit
 - Status: pending
-- Dependencies: Task 1, Task 2, Task 3, Task 4, Task 5, Task 6, Task 7
+- Dependencies: Task 1, Task 2, Task 3, Task 4, Task 5, Task 6, Task 7, Task 9, Task 10
 - Scope: Execute the canonical definition of done from `docs/SPEC.md` §11.2. Verify the conformance matrix is all-verified, the interaction inventory is exhaustive with all entries verified (except DEFERRED O12 per §13), no contradictory open v1 bugs remain in `.factory/bugs/open.md`, independent adversarial reviews (correctness, test-quality, security, documentation) find no blocking issues, full clean verification passes (`./scripts/verify-project.sh`), documentation matches observed behavior, and the Git tree is clean on `develop`.
 - Acceptance criteria: (1) Every conformance matrix row classified `verified` — no `partial`, `missing`, or `ambiguous` remains. (2) Every §5.7 interaction inventory entry (M01–M38, O01–O13, D01–D08) has passing controller and pointer evidence (where applicable) through production dispatch. (3) `.factory/bugs/open.md` contains no unresolved defect contradicting a v1 requirement. (4) Independent reviews find no blocking issue. (5) `./scripts/verify-project.sh` passes: clean build, all 98+ tests, installed functional acceptance (not skipped), packaging, sanitizer clean. (6) `README.md` and `docs/OPERATIONS.md` match observed behavior. (7) Git tree clean on `develop`. (8) Remediation rule: if any gap is found, preserve the task ledger, append a uniquely numbered pending task, add it to this task's dependencies, return this task to pending, and continue.
 - Verification: `./scripts/verify-project.sh`; `./scripts/final-gate.sh --planning` (pre-completion); conformance matrix spot-check; interaction inventory completeness check; `git status --porcelain` clean
 - Documentation impact: Final review of all documentation for accuracy and reproducibility
+
+## Task 9: Fix documentation accuracy issues in README and OPERATIONS.md (remediation)
+- Status: complete
+- Dependencies: none
+- Scope: Fix 7 factual/contradictory/misleading claims identified by docs review: (1) Interaction inventory counts 50/8/1→52/6/1 in README.md and OPERATIONS.md; (2) OPERATIONS.md "no Xvfb" header contradicts test_installed_smoke PASS; (3) SPEC §11.1.5 Layer 5 mapped to test_installed_smoke instead of test_installed_functional; (4) README verification table layer numbering inconsistent with SPEC §11.1 7-layer scheme; (5) "98 CTest targets verified" misleading — 2 skip (exit 77) in headless; (6) OPERATIONS.md §11.1 coverage table omits test_installed_functional, test_installed_binary, test_backend_smoke_sw, test_kernel_controller, interaction tests; (7) "overlay renders in under 10 ms" unqualified — add x86_64 software renderer qualifier. All required by DOD-08 (docs match observed behavior).
+- Acceptance criteria: All 7 issues fixed; README.md and docs/OPERATIONS.md contain no factual errors about current x86_64 behavior; interaction inventory counts match source code (52/6/1); layer numbering consistent with SPEC; skip behavior accurately documented
+- Verification: Manual review of changed sections; `grep -rn '50/59\|8 NOT_APPLICABLE\|no Xvfb' README.md docs/OPERATIONS.md` returns no matches; `grep -rn '52/59\|6 NOT_APPLICABLE' README.md docs/OPERATIONS.md` returns matches
+- Result: All 7 issues fixed. `grep` confirms zero stale references. README verification table aligned with SPEC §11.1 7-layer scheme (kernel-backed controller moved to sub-layer 5c, human release restored to layer 7). OPERATIONS.md §11.1 coverage table expanded with test_installed_functional, test_installed_binary, test_backend_smoke_sw, test_kernel_controller, and interaction acceptance tests. `verify-project.sh` passes: 96 pass, 2 skip (exit 77), 0 failures. DOD-08 evidence updated to note x86_64 documentation accuracy verified.
+- Documentation impact: README.md, docs/OPERATIONS.md — accuracy corrections
+
+## Task 10: Add missing test coverage for axis events, GamepadOrder E2E, and backend smoke invariants (remediation)
+- Status: pending
+- Dependencies: none
+- Scope: Close test quality gaps identified by test review: (1) HIGH: Add SDL_JoystickSetVirtualAxis test in test_installed_functional.c — analog sticks/triggers never exercised in any test; (2) MEDIUM: Verify GamepadOrder via independent DBus inspection after overlay save in test_installed_functional.c; (3) MEDIUM: Add renderer-is-software assertion, fb_frames_differ between render states, fb_region_has_color for theme colors in test_backend_smoke_sw.c; (4) LOW: Add target_count==0 assertion to D01 degraded click test. All software-fixable in x86_64 headless environment.
+- Acceptance criteria: Axis events (SDL_CONTROLLERAXISMOTION) exercised through production dispatch path; GamepadOrder verified via DBus after overlay close; backend_smoke_sw asserts software renderer flag, uses fb_frames_differ and fb_region_has_color; D01 test asserts no DBus side effects; all 98+ tests pass with 0 new failures
+- Verification: `nix-shell --run 'cmake --build build-check --parallel 2 && ctest --test-dir build-check --output-on-failure'` — all tests pass; new assertions execute (not skipped)
+- Documentation impact: None

@@ -951,7 +951,7 @@ Or run just the visual layers:
 nix-shell --run "ctest --test-dir build-maintenance-verify -R 'test_fb_assert|test_overlay_visual|test_manager_visual|test_golden|test_backend_smoke|test_backend_smoke_sw|test_installed_smoke' --output-on-failure"
 ```
 
-Expected results in a headless environment (no GPU, no Xvfb):
+Expected results in a headless environment (no GPU; Xvfb provided by nix-shell):
 
 - `test_fb_assert`: PASS (9 sub-tests)
 - `test_overlay_visual`: PASS (8 sub-tests)
@@ -1046,7 +1046,7 @@ test or documented process:
 
 | Requirement | Test/Process |
 |-------------|-------------|
-| Machine-readable inventory (M01–M38, O01–O13, D01–D08) | `interaction_inventory.c` (59 entries: 50 verified, 8 NOT_APPLICABLE, 1 DEFERRED); `test_interaction_inventory` validates structure + verify_status |
+| Machine-readable inventory (M01–M38, O01–O13, D01–D08) | `interaction_inventory.c` (59 entries: 52 verified, 6 NOT_APPLICABLE, 1 DEFERRED); `test_interaction_inventory` validates structure + verify_status |
 | Automated traversal: every control reachable from tabbar via focus chain | `test_traversal_controllers_tab` + `test_traversal_settings_tab` in `test_manager_interaction_ctrl` |
 | Inventory verify_status: no UNVERIFIED entries | `test_inventory_specific_verify_statuses` + `test_inventory_verify_status_consistency` |
 | Hover/press visual indication in framebuffer | `test_focus_visual_indication` + `test_press_visual_indication` in `test_manager_visual` (render→readback→region_differs) |
@@ -1062,7 +1062,8 @@ test or documented process:
 | 2. Region-level assertions | Non-background + text-colored pixels, state changes alter regions | `fb_assert.c` library, used by all visual tests |
 | 3. Golden images | Reviewed baselines, documented tolerance, explicit updates | `test_golden` (11 baselines, ±3/channel, <2% image) + `scripts/generate-golden.sh` |
 | 4. Failure artifacts | Actual/expected/diff PNGs on mismatch | `test_golden` writes to `tests/golden-fail/` |
-| 5. Installed production smoke | Installed binary under X11, input events, non-blank capture | `test_installed_smoke.sh` (Xvfb + xdotool + ImageMagick) |
-| 6. Backend smoke | Accelerated renderer (OpenGL/ES), broad invariants | `test_backend_smoke.c` (skips exit 77 if no GPU) |
+| 5. Installed production acceptance | Installed binary under X11, input events, non-blank capture; functional lifecycle with native DBus | `test_installed_smoke` (Xvfb + xdotool + ImageMagick); `test_installed_functional` (private native-signature DBus, SDL virtual controller, manager + overlay lifecycle, assignment persistence); `test_installed_binary` (installed binary subprocess, tab nav, settings, target creation, profile load/save, overlay activation); `test_kernel_controller` (kernel-backed evdev gamepad; skips exit 77 without `/dev/uinput`) |
+| 6. Backend smoke | Accelerated renderer (OpenGL/ES), broad invariants | `test_backend_smoke.c` (skips exit 77 if no GPU); `test_backend_smoke_sw.c` (software renderer, headless-safe) |
 | 7. Human release acceptance | Human review on target hardware | Documented checklist above (§Human release acceptance checklist) |
+| Supplemental | Interaction acceptance (§5.7) | `test_manager_interaction_ctrl`, `test_manager_interaction_prof`, `test_overlay_interaction`, `test_overlay_native`, `test_manager_native`, `test_manager_native_prof`, `test_interaction_inventory` |
 | Closing mandate | Suite fails on blank/incomplete screens | All visual tests assert `fb_region_has_content`; golden test fails on >2% pixel diff |

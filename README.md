@@ -96,8 +96,10 @@ conflicted controller is automatically moved to the lowest unoccupied slot.
 Profiles are **per-controller, not per-slot** — your profile follows your
 controller as you move between columns.
 
-The overlay renders in under 10 ms because the surface is pre-built in memory
-at daemon startup with icons pre-rasterized via nanosvg.
+The overlay renders in under 10 ms on the test backend (x86_64 software
+renderer) because the surface is pre-built in memory at daemon startup with
+icons pre-rasterized via nanosvg. Target hardware (Pi 4) latency is a human
+release gate per SPEC §11.1.7.
 
 ## Manager usage
 
@@ -197,9 +199,9 @@ geometry correctness:
 | 5. Installed production smoke | `test_installed_smoke` | Launches installed binary under Xvfb, sends keyboard + coordinate-based mouse clicks on body controls via xdotool, captures screenshots, verifies non-blank output and semantic outcomes (state change, file mutation) |
 | 5a. Installed functional acceptance | `test_installed_functional` | Links against production library; starts private native-signature DBus server, creates SDL virtual controller, exercises manager + overlay lifecycle through production poll path (InterceptMode PASS→ALL activation, framebuffer readback, B-close, assignment persistence) |
 | 5b. Installed binary acceptance | `test_installed_binary` | Launches installed binary as subprocess under Xvfb with private DBus server; verifies manager launch, tab navigation, settings persistence, target creation, profile load/save, overlay activation (InterceptMode→ALL, non-blank screenshot, clean close) |
+| 5c. Kernel-backed controller | `test_kernel_controller` | Creates a synthetic evdev gamepad via `/dev/uinput`, launches installed Manager binary with private DBus server, sends real kernel gamepad events (D-pad, A/B/Start) through production event loop, verifies semantic outcomes (manager survival, settings persistence). Skips (exit 77) when `/dev/uinput` is unavailable — no `kernel-uinput` runner capability declared in `.factory/environment.toml`. See SPEC §5.7 for controller acceptance requirements. |
 | 6. Backend smoke | `test_backend_smoke` | Exercises accelerated renderer (OpenGL/ES) with same invariants; skips (exit 77) in headless environments |
-| 7. Kernel-backed controller | `test_kernel_controller` | Creates a synthetic evdev gamepad via `/dev/uinput`, launches installed Manager binary with private DBus server, sends real kernel gamepad events (D-pad, A/B/Start) through production event loop, verifies semantic outcomes (manager survival, settings persistence). Skips (exit 77) when `/dev/uinput` is unavailable — no `kernel-uinput` runner capability declared in `.factory/environment.toml`. Interaction inventory (50/59 verified, 8 NOT_APPLICABLE, 1 DEFERRED per §13) verified through production SDL event dispatch with SDL virtual gamepads. See SPEC §5.7 for controller acceptance requirements. |
-| 8. Human release acceptance | (documented process) | Human reviews captures on target hardware for legibility, clipping, contrast, controller-only usability |
+| 7. Human release acceptance | (documented process) | Human reviews captures on target hardware for legibility, clipping, contrast, controller-only usability |
 
 Run the full suite:
 
@@ -276,8 +278,8 @@ release acceptance per SPEC §11.1.7:
 
 | Requirement | Spec § | Limitation | Verification approach |
 |-------------|--------|------------|----------------------|
-| Controller acceptance (kernel-backed) | §5.7 | No `kernel-uinput` runner capability | `test_kernel_controller.c` creates a uinput-backed evdev gamepad but skips (exit 77) when `/dev/uinput` is unavailable. 50/59 interaction inventory entries verified through production SDL event dispatch with SDL virtual gamepads; 8 NOT_APPLICABLE (controller-only paths); 1 DEFERRED per §13. |
-| aarch64 architecture | §3 | No aarch64 runner declared | Code is architecture-agnostic (no arch-specific code in `src/` or `CMakeLists.txt`); Flatpak manifest targets `org.freedesktop.Platform` 24.08 supporting both x86_64 and aarch64; x86_64 build and 98 CTest targets verified. |
+| Controller acceptance (kernel-backed) | §5.7 | No `kernel-uinput` runner capability | `test_kernel_controller.c` creates a uinput-backed evdev gamepad but skips (exit 77) when `/dev/uinput` is unavailable. 52/59 interaction inventory entries verified through production SDL event dispatch with SDL virtual gamepads; 6 NOT_APPLICABLE (controller-only paths); 1 DEFERRED per §13. |
+| aarch64 architecture | §3 | No aarch64 runner declared | Code is architecture-agnostic (no arch-specific code in `src/` or `CMakeLists.txt`); Flatpak manifest targets `org.freedesktop.Platform` 24.08 supporting both x86_64 and aarch64; x86_64 build and 98 CTest targets registered (96 pass, 2 skip with exit 77 in headless: `test_backend_smoke`, `test_kernel_controller`). |
 | Wayland/Gamescope compositor | §3 | No Wayland runner declared | All rendering through SDL2 display abstraction — zero compositor-specific API calls in `src/`. Tested with X11 (Xvfb) and dummy drivers. SDL2 supports X11, Wayland, and Gamescope. |
 | GPU backend | §11.1 | No GPU runner declared | `test_backend_smoke` skips (exit 77) in headless environments; software renderer smoke (`test_backend_smoke_sw`) passes with broad framebuffer invariants. |
 | Pi 4 latency | §11 | No Pi 4 hardware declared | Pre-built surface + 50ms poll architecture verified; `test_overlay_latency.c` exists. Actual ≤75ms p99 latency measurement on Pi 4 is a human release gate per §11.1.7. |
