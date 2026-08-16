@@ -1,30 +1,26 @@
-# Implementation Loop — Hardware-Blocked (Iteration 19)
+# Implementation Loop — Hardware-Blocked (Iteration 20)
 
 ## Outcome
-- Replaced all system()/popen() with fork()/execvp() in service_install.c (defense-in-depth)
-- Build: 100%, Tests: 98/98 pass, 0 compiler warnings, sanitizer gate clean
+- Re-verified full build + test suite: 98/98 pass, 0 warnings, sanitizer clean
 - 2 skipped (hardware: test_kernel_controller, test_backend_smoke)
-- Final gate still rejects on MGR-36 (kernel-backed gamepad requires /dev/uinput)
+- Final gate rejects on MGR-36 (kernel-backed gamepad requires /dev/uinput)
+- All software-addressable findings resolved (iterations 16-19)
 
-## Fix this iteration (1 commit on develop)
-- `cdc000d` service_install.c: replaced 3 popen() + 1 system() calls with run_command() (fork/execvp/pipe). Added build_argv() helper to tokenize prefix + append subcommand args. No shell invocation remains — eliminates theoretical injection even for future changes. Updated 8 tests to use executable mock scripts instead of shell command strings.
+## Blocked State (unchanged from iter 19)
+- MGR-36/DOD-03: SPEC §5.7 requires "physical or kernel-backed synthetic gamepad"; current tests use SDL virtual gamepad (process-local). test_kernel_controller.c skips (exit 77, no /dev/uinput)
+- Hardware env: no /dev/uinput, no /dev/input/*, no sudo, zero Linux capabilities (all Cap sets = 0), Nix sandbox
+- Runner dev-runner-vm: SSH unresolvable (hostname not found)
+- environment.toml declares only `remote-project-gate` + `systemd-user` — no `kernel-uinput` or `physical-controller`
+- PERF-05/VRF-06: blocked on Pi-4 hardware / GPU
+- VRF-07/DOD-07/08/09: blocked on human sign-off or depend on blocked tasks
 
-## All software-addressable findings now resolved
-- ✅ system()/popen() → fork/exec (this iteration)
-- ✅ strstr path confusion → classify_device_path (iter 18)
-- ✅ 8 weakened assertions → exact value checks (iter 18)
-- ✅ 7 security/test-quality issues (iter 17)
-- ✅ Sanitizer bugs: trigger.c, manager.c, icon_cache (iter 16)
-- Remaining: test_manager_interaction_ctrl.c mock doesn't verify DBus args (mitigated by native tests)
-- Remaining: test_kernel_controller.c no semantic assertions (moot while skipping)
-
-## Blocked State (unchanged)
-- Tasks 3, 6, 7 require hardware capabilities not declared in `.factory/environment.toml`
-- /dev/uinput: no device node, no sudo, Nix sandbox (zero capabilities)
-- Runner dev-runner-vm: SSH unresolvable
-- MGR-36, VRF-06, PERF-05, VRF-07, DOD-01/03/05/07/08/09 all blocked on hardware or human sign-off
+## No ready tasks
+- Tasks 3, 6, 7: blocked (hardware)
+- Tasks 4, 5: pending, blocked by Task 3
+- Task 8: pending, blocked by Tasks 4-7
+- Task 9: pending, blocked by Tasks 1-8
 
 ## Recovery Handoff
 - When hardware available: Task 3 → Tasks 4, 5 → Task 6 → Task 7 → Task 8 → Task 9
-- All software-addressable code/test/security issues now resolved
-- Next iteration: attempt final gate (will reject on MGR-36) or exit at iteration limit
+- All software-addressable code/test/security issues resolved across iterations 16-19
+- Next: attempt final gate (will reject on MGR-36) or exit at iteration limit
