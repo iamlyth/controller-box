@@ -340,6 +340,20 @@ ctrl_press(cbx_manager *mgr, SDL_Joystick *joy, int button)
     pump_manager(mgr);
 }
 
+/* Send a controller axis event through the manager (production dispatch).
+ * Exercises SDL_JoystickSetVirtualAxis → SDL_PumpEvents → pump_manager
+ * (cbx_manager_handle_event).  Axis events are expected to be safely
+ * ignored by the manager — no navigation, no state change, no crash.
+ * SDL_CONTROLLERAXISMOTION events flow through the same SDL event queue
+ * and are polled by SDL_PollEvent in pump_manager. */
+static void
+ctrl_axis(cbx_manager *mgr, SDL_Joystick *joy, int axis, Sint16 value)
+{
+    SDL_JoystickSetVirtualAxis(joy, axis, value);
+    SDL_PumpEvents();
+    pump_manager(mgr);
+}
+
 /* Send a mouse left-button click at (x, y) through the manager. */
 static bool
 send_mouse_click(cbx_manager *mgr, int x, int y)
@@ -949,6 +963,45 @@ test_installed_functional(void **state)
     free(fb);
 
     /* ================================================================ */
+    /*  Phase 10b: Axis events — safely ignored by overlay (HIGH gap)     */
+    /*                                                                   */
+    /*  SDL_JoystickSetVirtualAxis generates SDL_CONTROLLERAXISMOTION     */
+    /*  events.  cbx_overlay_service_step polls SDL events but only       */
+    /*  handles SDL_KEYDOWN — axis events are silently discarded.         */
+    /*  Verify that sending axis events does not navigate the grid        */
+    /*  or change the overlay state.                                      */
+    /* ================================================================ */
+    {
+        int col_before = cbx_select_grid_get_cur_col(&svc->grid, 0);
+        int state_before = svc->lifecycle.state;
+
+        /* Send axis events through the overlay service step path. */
+        SDL_JoystickSetVirtualAxis(f->joystick, 0, SDL_JOYSTICK_AXIS_MAX);
+        SDL_PumpEvents();
+        cbx_overlay_service_step(svc);
+        SDL_JoystickSetVirtualAxis(f->joystick, 0, 0);
+        SDL_PumpEvents();
+        cbx_overlay_service_step(svc);
+        SDL_JoystickSetVirtualAxis(f->joystick, 1, SDL_JOYSTICK_AXIS_MAX);
+        SDL_PumpEvents();
+        cbx_overlay_service_step(svc);
+        SDL_JoystickSetVirtualAxis(f->joystick, 1, 0);
+        SDL_PumpEvents();
+        cbx_overlay_service_step(svc);
+        SDL_JoystickSetVirtualAxis(f->joystick, 4, SDL_JOYSTICK_AXIS_MAX);
+        SDL_PumpEvents();
+        cbx_overlay_service_step(svc);
+        SDL_JoystickSetVirtualAxis(f->joystick, 4, 0);
+        SDL_PumpEvents();
+        cbx_overlay_service_step(svc);
+
+        /* Verify grid position and overlay state unchanged. */
+        assert_int_equal(cbx_select_grid_get_cur_col(&svc->grid, 0),
+                         col_before);
+        assert_int_equal(svc->lifecycle.state, state_before);
+    }
+
+    /* ================================================================ */
     /*  Phase 11: Overlay close — assignment application + clean close   */
     /*                                                                   */
     /*  Move row 0 to column 1 (P1 slot) via SDL keydown, then close     */
@@ -990,6 +1043,21 @@ test_installed_functional(void **state)
     assert_int_equal(rc, 0);
     assert_string_equal(mode_str, "1");
     free(mode_str);
+
+    /* Verify GamepadOrder was set on the engine via DBus (MEDIUM gap).
+     * The overlay moved row 0 to col 1 (slot 0 = P1), so on_save
+     * built a GamepadOrder CSV containing comp0's path and called
+     * ip_manager_set_gamepad_order.  Read it back through the
+     * independent DBus connection and verify. */
+    {
+        char *order_str = NULL;
+        rc = ip_manager_get_gamepad_order(f->backend, f->bus, &order_str);
+        assert_int_equal(rc, 0);
+        assert_non_null(order_str);
+        /* The order CSV must contain comp0's composite device path. */
+        assert_non_null(strstr(order_str, comp0));
+        free(order_str);
+    }
 
     /* ================================================================ */
     /*  Phase 12: Overlay service cleanup                                 */
@@ -1159,6 +1227,45 @@ test_installed_controller_acceptance(void **state)
 
     pump_manager(&mgr);
     assert_true(mgr.gamecontroller_count >= 1);
+
+    /* --- Phase 1b: Axis events — safely ignored by manager (HIGH gap) ---
+     *
+     * SDL_JoystickSetVirtualAxis generates SDL_JOYAXISMOTION and
+     * SDL_CONTROLLERAXISMOTION events.  The manager does not map axis
+     * events to key events (only button presses are mapped).  This
+     * exercises the production dispatch path (SDL_PumpEvents →
+     * SDL_PollEvent → cbx_manager_handle_event) and verifies that
+     * axis events are safely ignored: no crash, no tab change, no
+     * mode change, no device count change. */
+    {
+        int gc_count_before = mgr.gamecontroller_count;
+        int tab_before = cbx_manager_active_tab(&mgr);
+        int mode_before = cbx_controllers_tab_mode(&mgr.ct);
+
+        /* Left stick X full-deflect right then center. */
+        ctrl_axis(&mgr, f->joystick, 0, SDL_JOYSTICK_AXIS_MAX);
+        ctrl_axis(&mgr, f->joystick, 0, 0);
+        /* Left stick Y full-deflect down then center. */
+        ctrl_axis(&mgr, f->joystick, 1, SDL_JOYSTICK_AXIS_MAX);
+        ctrl_axis(&mgr, f->joystick, 1, 0);
+        /* Right stick X full-deflect left then center. */
+        ctrl_axis(&mgr, f->joystick, 2, SDL_JOYSTICK_AXIS_MIN);
+        ctrl_axis(&mgr, f->joystick, 2, 0);
+        /* Right stick Y full-deflect up then center. */
+        ctrl_axis(&mgr, f->joystick, 3, SDL_JOYSTICK_AXIS_MIN);
+        ctrl_axis(&mgr, f->joystick, 3, 0);
+        /* Left trigger full press then release. */
+        ctrl_axis(&mgr, f->joystick, 4, SDL_JOYSTICK_AXIS_MAX);
+        ctrl_axis(&mgr, f->joystick, 4, 0);
+        /* Right trigger full press then release. */
+        ctrl_axis(&mgr, f->joystick, 5, SDL_JOYSTICK_AXIS_MAX);
+        ctrl_axis(&mgr, f->joystick, 5, 0);
+
+        /* Verify no state changed — axis events are ignored. */
+        assert_int_equal(mgr.gamecontroller_count, gc_count_before);
+        assert_int_equal(cbx_manager_active_tab(&mgr), tab_before);
+        assert_int_equal(cbx_controllers_tab_mode(&mgr.ct), mode_before);
+    }
 
     /* --- Phase 2: Controllers tab — Add type picker open (A) + cancel (B) */
     assert_int_equal(cbx_manager_active_tab(&mgr), CBX_MGR_TAB_CONTROLLERS);
@@ -1511,6 +1618,10 @@ test_d01_pointer_degraded_click(void **state)
 
     /* Mode stays LIST, no crash. */
     assert_int_equal(cbx_controllers_tab_mode(&mgr.ct), CBX_CT_MODE_LIST);
+
+    /* No DBus side effects: target_count must still be 0 (no device
+     * was created by clicking a disabled button in degraded state). */
+    assert_int_equal(mgr.ct.model.target_count, 0);
 
     cbx_manager_shutdown(&mgr);
 }

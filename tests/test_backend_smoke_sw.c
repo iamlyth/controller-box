@@ -352,6 +352,68 @@ test_overlay_software(SDL_Renderer *renderer)
             goto cleanup;
     }
 
+    /* Verify specific theme colors are present in the frame (MEDIUM gap).
+     * The theme defines bg={18,18,28}, panel_bg={30,30,42},
+     * border={50,50,65}.  Check that the background color is present
+     * (large area) and that at least one non-background theme color
+     * (panel_bg or border) appears somewhere in the frame. */
+    {
+        SDL_Rect full = {0, 0, VIS_W, VIS_H};
+        uint8_t bg_color[3] = {18, 18, 28};
+        if (check(fb_region_has_color(buf, VIS_W, VIS_H, &full,
+                                      bg_color, 5),
+                  "overlay: theme bg color present") != 0)
+            goto cleanup;
+    }
+    {
+        SDL_Rect full = {0, 0, VIS_W, VIS_H};
+        uint8_t panel_bg[3] = {30, 30, 42};
+        if (check(fb_region_has_color(buf, VIS_W, VIS_H, &full,
+                                      panel_bg, 10),
+                  "overlay: theme panel_bg color present") != 0)
+            goto cleanup;
+    }
+
+    /* Verify that two different render states produce different frames
+     * (MEDIUM gap).  Render a second frame with a different grid state
+     * (all rows at Unassigned = col 0) and verify the frames differ. */
+    {
+        /* Move row 0 to col 0 (Unassigned) for a different render state. */
+        move_to_col(&g, 0, 0);
+        cbx_conflict_detect(&g, &conflicts);
+
+        cbx_overlay_surface_mark_dirty_all(&surface);
+        if (cbx_overlay_surface_render(&surface, renderer,
+                                        cbx_select_grid_render_cb, &ctx) != 0) {
+            fprintf(stderr, "  [FAIL] overlay surface render (second state)\n");
+            goto cleanup;
+        }
+
+        uint8_t *buf2 = malloc(VIS_W * VIS_H * 4);
+        if (!buf2) {
+            fprintf(stderr, "  [FAIL] pixel buffer alloc (second state)\n");
+            goto cleanup;
+        }
+
+        SDL_SetRenderTarget(renderer,
+                            cbx_overlay_surface_get_texture(&surface));
+        int rc2 = fb_read_pixels(renderer, NULL, buf2, VIS_W * VIS_H * 4);
+        SDL_SetRenderTarget(renderer, NULL);
+
+        if (rc2 != 0) {
+            fprintf(stderr, "  [FAIL] fb_read_pixels (second state)\n");
+            free(buf2);
+            goto cleanup;
+        }
+
+        if (check(fb_frames_differ(buf, buf2, VIS_W, VIS_H, 1),
+                  "overlay: frames differ between grid states") != 0) {
+            free(buf2);
+            goto cleanup;
+        }
+        free(buf2);
+    }
+
     /* Best-effort golden comparison (baselines are software-renderer output). */
     {
         char golden_path[PATH_MAX];
@@ -442,6 +504,17 @@ test_manager_software(void)
     printf("  manager renderer: %s (flags=0x%x)\n",
            info.name ? info.name : "(null)", (unsigned)info.flags);
 
+    /* Verify the renderer is software (MEDIUM gap).  cbx_manager_init
+     * tries accelerated first, falls back to software in headless CI. */
+    if (!(info.flags & SDL_RENDERER_SOFTWARE)) {
+        fprintf(stderr, "  [FAIL] manager renderer is not software "
+                "(flags=0x%x, name=%s)\n",
+                (unsigned)info.flags,
+                info.name ? info.name : "(null)");
+        goto cleanup;
+    }
+    printf("  [ OK ] manager: renderer is software\n");
+
     /* Verify target texture support (required for overlay rendering). */
     if (!(info.flags & SDL_RENDERER_TARGETTEXTURE)) {
         fprintf(stderr, "  [FAIL] manager renderer lacks TARGETTEXTURE\n");
@@ -501,6 +574,61 @@ test_manager_software(void)
                                         CONTENT_TOL),
                   "manager: status label region content") != 0)
             goto cleanup;
+    }
+
+    /* Verify specific theme colors are present (MEDIUM gap).
+     * The degraded manager frame has bg={18,18,28} and tab bar / panel
+     * colors.  Check bg is present and that the panel background color
+     * {30,30,42} also appears (tab bar or panel region). */
+    {
+        SDL_Rect full = {0, 0, MGR_W, MGR_H};
+        uint8_t bg_color[3] = {18, 18, 28};
+        if (check(fb_region_has_color(buf, MGR_W, MGR_H, &full,
+                                      bg_color, 5),
+                  "manager: theme bg color present") != 0)
+            goto cleanup;
+    }
+    {
+        SDL_Rect tabbar = {0, 0, MGR_W, TABBAR_H};
+        uint8_t panel_bg[3] = {30, 30, 42};
+        if (check(fb_region_has_color(buf, MGR_W, MGR_H, &tabbar,
+                                      panel_bg, 15),
+                  "manager: theme panel_bg color in tab bar") != 0)
+            goto cleanup;
+    }
+
+    /* Verify that two different manager render states produce different
+     * frames (MEDIUM gap).  Render a second frame after switching to the
+     * Settings tab and verify the frames differ. */
+    {
+        /* Switch to Settings tab: set active_tab + panel visibility
+         * to match cbx_manager_on_tab_change behavior. */
+        mgr.active_tab = CBX_MGR_TAB_SETTINGS;
+        for (int i = 0; i < CBX_MGR_TAB_COUNT; i++)
+            cbx_widget_set_visible(&mgr.panels[i].base,
+                                    i == CBX_MGR_TAB_SETTINGS);
+        cbx_manager_render(&mgr);
+
+        uint8_t *buf2 = malloc(MGR_W * MGR_H * 4);
+        if (!buf2) {
+            fprintf(stderr, "  [FAIL] pixel buffer alloc (second state)\n");
+            goto cleanup;
+        }
+
+        int rc2 = fb_read_pixels(mgr.rend.renderer, NULL,
+                                  buf2, MGR_W * MGR_H * 4);
+        if (rc2 != 0) {
+            fprintf(stderr, "  [FAIL] fb_read_pixels (second state)\n");
+            free(buf2);
+            goto cleanup;
+        }
+
+        if (check(fb_frames_differ(buf, buf2, MGR_W, MGR_H, 1),
+                  "manager: frames differ between tabs") != 0) {
+            free(buf2);
+            goto cleanup;
+        }
+        free(buf2);
     }
 
     /* Best-effort golden comparison (baselines are software-renderer output). */
@@ -590,6 +718,20 @@ main(void)
 
     printf("test_backend_smoke_sw: backend = %s (flags=0x%x)\n",
            info.name ? info.name : "(null)", (unsigned)info.flags);
+
+    /* Verify the renderer is software (not accelerated). */
+    if (!(info.flags & SDL_RENDERER_SOFTWARE)) {
+        fprintf(stderr, "test_backend_smoke_sw: renderer is not software "
+                "(flags=0x%x, name=%s)\n",
+                (unsigned)info.flags,
+                info.name ? info.name : "(null)");
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 1;
+    }
+    printf("test_backend_smoke_sw: software renderer confirmed "
+           "(SDL_RENDERER_SOFTWARE flag set)\n");
 
     /* Verify the renderer supports target textures (required for overlay). */
     if (!(info.flags & SDL_RENDERER_TARGETTEXTURE)) {

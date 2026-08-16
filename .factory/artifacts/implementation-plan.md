@@ -265,9 +265,9 @@ The project maintains a machine-readable inventory at `tests/interaction_invento
 - Documentation impact: README.md, docs/OPERATIONS.md — accuracy corrections
 
 ## Task 10: Add missing test coverage for axis events, GamepadOrder E2E, and backend smoke invariants (remediation)
-- Status: pending
+- Status: complete
 - Dependencies: none
 - Scope: Close test quality gaps identified by test review: (1) HIGH: Add SDL_JoystickSetVirtualAxis test in test_installed_functional.c — analog sticks/triggers never exercised in any test; (2) MEDIUM: Verify GamepadOrder via independent DBus inspection after overlay save in test_installed_functional.c; (3) MEDIUM: Add renderer-is-software assertion, fb_frames_differ between render states, fb_region_has_color for theme colors in test_backend_smoke_sw.c; (4) LOW: Add target_count==0 assertion to D01 degraded click test. All software-fixable in x86_64 headless environment.
 - Acceptance criteria: Axis events (SDL_CONTROLLERAXISMOTION) exercised through production dispatch path; GamepadOrder verified via DBus after overlay close; backend_smoke_sw asserts software renderer flag, uses fb_frames_differ and fb_region_has_color; D01 test asserts no DBus side effects; all 98+ tests pass with 0 new failures
-- Verification: `nix-shell --run 'cmake --build build-check --parallel 2 && ctest --test-dir build-check --output-on-failure'` — all tests pass; new assertions execute (not skipped)
+- Verification: `nix-shell --run 'cmake --build build-check --parallel 2 && ctest --test-dir build-check --output-on-failure'` — 96 pass, 2 skip (hardware-blocked, exit 77), 0 failures. New assertions confirmed executing: axis events (6 axes: left stick X/Y, right stick X/Y, L/R triggers) sent via `SDL_JoystickSetVirtualAxis` through `pump_manager` (manager) and `cbx_overlay_service_step` (overlay) — verified no state change; GamepadOrder read back via `ip_manager_get_gamepad_order` on independent DBus connection after overlay close — verified CSV contains comp0 path; `fb_frames_differ` between different grid states and between different manager tabs; `fb_region_has_color` for theme bg={18,18,28} and panel_bg={30,30,42}; `SDL_RENDERER_SOFTWARE` flag asserted in both overlay and manager renderer paths; D01 asserts `target_count == 0` after degraded click.
 - Documentation impact: None
