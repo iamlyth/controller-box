@@ -55,6 +55,9 @@ extern char   g_nip_dbus_devices[NIP_MAX_COMPOSITES][256];
 extern char   g_nip_comp_names[NIP_MAX_COMPOSITES][64];
 extern char   g_nip_persistent_ids[NIP_MAX_COMPOSITES][32];
 
+/* ManageAllDevices is a writable boolean on the Manager interface. */
+extern int    g_nip_manage_all_devices;
+
 /* When non-zero, the next CreateTargetDevice call returns a DBus error
  * and auto-resets to 0.  Set before nip_fork_server/nip_start_server
  * to simulate a transient backend failure. */

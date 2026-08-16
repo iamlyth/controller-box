@@ -697,7 +697,84 @@ static void test_native_intercept_mode_writable(void **state)
 }
 
 /* ================================================================== */
-/*  Test 9 (NEW): InputEvent signal emission and reception               */
+/*  Test 9 (NEW): Boolean property SET round-trip with native type       */
+/* ================================================================== */
+
+static void test_native_boolean_property_set(void **state)
+{
+    (void)state;
+    nip_server_handle sh;
+    const nip_server_config cfg = { .num_composites = 1, .version = "9.8.7" };
+    nip_reset_server_state(1);
+    g_nip_manage_all_devices = 0;
+    assert_int_equal(nip_start_server(&sh, &cfg), 0);
+
+    const ip_dbus_backend *backend = ip_dbus_sd_backend();
+    ip_bus_handle bus = NULL;
+    assert_int_equal(backend->connect(&bus), 0);
+    assert_int_equal(wait_for_server(backend, bus, NULL), 0);
+
+    char *value = NULL;
+
+    /* Read initial ManageAllDevices — should be 0 (false) after reset. */
+    assert_int_equal(backend->get_property(bus, IP_DBUS_NAME,
+        IP_DBUS_MANAGER_PATH, IP_IFACE_MANAGER,
+        "ManageAllDevices", &value), 0);
+    assert_non_null(value);
+    assert_string_equal(value, "0");
+    free(value);
+
+    /* SET ManageAllDevices = true via production path.
+     * This exercises sd_set_property's boolean branch: the variant must
+     * carry native type 'b', not 's', or the sd-bus server rejects it
+     * with InvalidArgs. */
+    assert_int_equal(backend->set_property(bus, IP_DBUS_NAME,
+        IP_DBUS_MANAGER_PATH, IP_IFACE_MANAGER,
+        "ManageAllDevices", "1"), 0);
+
+    /* Read back — should be 1 (true). */
+    assert_int_equal(backend->get_property(bus, IP_DBUS_NAME,
+        IP_DBUS_MANAGER_PATH, IP_IFACE_MANAGER,
+        "ManageAllDevices", &value), 0);
+    assert_non_null(value);
+    assert_string_equal(value, "1");
+    free(value);
+
+    /* SET ManageAllDevices = false via production path. */
+    assert_int_equal(backend->set_property(bus, IP_DBUS_NAME,
+        IP_DBUS_MANAGER_PATH, IP_IFACE_MANAGER,
+        "ManageAllDevices", "0"), 0);
+
+    /* Read back — should be 0 (false). */
+    assert_int_equal(backend->get_property(bus, IP_DBUS_NAME,
+        IP_DBUS_MANAGER_PATH, IP_IFACE_MANAGER,
+        "ManageAllDevices", &value), 0);
+    assert_non_null(value);
+    assert_string_equal(value, "0");
+    free(value);
+
+    /* Verify the word form also works. */
+    assert_int_equal(backend->set_property(bus, IP_DBUS_NAME,
+        IP_DBUS_MANAGER_PATH, IP_IFACE_MANAGER,
+        "ManageAllDevices", "true"), 0);
+    assert_int_equal(backend->get_property(bus, IP_DBUS_NAME,
+        IP_DBUS_MANAGER_PATH, IP_IFACE_MANAGER,
+        "ManageAllDevices", &value), 0);
+    assert_non_null(value);
+    assert_string_equal(value, "1");
+    free(value);
+
+    /* Invalid boolean value should be rejected. */
+    assert_int_not_equal(backend->set_property(bus, IP_DBUS_NAME,
+        IP_DBUS_MANAGER_PATH, IP_IFACE_MANAGER,
+        "ManageAllDevices", "maybe"), 0);
+
+    backend->disconnect(bus);
+    nip_stop_server(&sh);
+}
+
+/* ================================================================== */
+/*  Test 10 (NEW): InputEvent signal emission and reception               */
 /* ================================================================== */
 
 /* Test callback for InputEvent signals. */
@@ -807,6 +884,7 @@ int main(void)
         /* New round-trip tests for overlay server capabilities. */
         cmocka_unit_test(test_native_set_intercept_activation),
         cmocka_unit_test(test_native_intercept_mode_writable),
+        cmocka_unit_test(test_native_boolean_property_set),
         cmocka_unit_test(test_native_input_event_signal),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);

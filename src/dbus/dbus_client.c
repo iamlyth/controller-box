@@ -913,6 +913,28 @@ sd_set_property(ip_bus_handle bus, const char *dest,
         r = sd_bus_message_close_container(m);  /* close variant */
         if (r < 0)
             goto fail;
+    } else if (sd_is_bool_property(prop)) {
+        /* ManageAllDevices / Enabled are boolean — parse the string value. */
+        int bval = 0;
+        if (strcmp(value, "1") == 0 || strcmp(value, "true") == 0 ||
+            strcmp(value, "yes") == 0)
+            bval = 1;
+        else if (strcmp(value, "0") == 0 || strcmp(value, "false") == 0 ||
+                 strcmp(value, "no") == 0)
+            bval = 0;
+        else {
+            r = -EINVAL;
+            goto fail;
+        }
+        r = sd_bus_message_open_container(m, 'v', "b");
+        if (r < 0)
+            goto fail;
+        r = sd_bus_message_append_basic(m, 'b', &bval);
+        if (r < 0)
+            goto fail;
+        r = sd_bus_message_close_container(m);  /* close variant */
+        if (r < 0)
+            goto fail;
     } else {
         /* Default: string property. */
         r = sd_bus_message_open_container(m, 'v', "s");

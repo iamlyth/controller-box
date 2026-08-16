@@ -15,6 +15,7 @@ static void test_native_inputplumber_signatures(void **state)
     assert_string_equal(ip_dbus_property_signature("Capabilities"), "as");
     assert_string_equal(ip_dbus_property_signature("InterceptMode"), "u");
     assert_string_equal(ip_dbus_property_signature("Enabled"), "b");
+    assert_string_equal(ip_dbus_property_signature("ManageAllDevices"), "b");
     assert_string_equal(ip_dbus_property_signature("Version"), "s");
     assert_null(ip_dbus_property_signature(NULL));
 }

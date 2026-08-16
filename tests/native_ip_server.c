@@ -33,6 +33,7 @@ uint32_t g_nip_intercept_mode[NIP_MAX_COMPOSITES];
 char   g_nip_dbus_devices[NIP_MAX_COMPOSITES][256];
 char   g_nip_comp_names[NIP_MAX_COMPOSITES][64];
 char   g_nip_persistent_ids[NIP_MAX_COMPOSITES][32];
+int    g_nip_manage_all_devices = 0;
 volatile sig_atomic_t g_nip_fail_next_create = 0;
 
 /* Server configuration (set by parent before fork, read by child) */
@@ -83,6 +84,8 @@ manager_property_get(sd_bus *bus, const char *path, const char *interface,
         return sd_bus_message_append(reply, "u", (uint32_t)2);
     if (strcmp(property, "Enabled") == 0)
         return sd_bus_message_append(reply, "b", 1);
+    if (strcmp(property, "ManageAllDevices") == 0)
+        return sd_bus_message_append(reply, "b", g_nip_manage_all_devices);
     if (strcmp(property, "GamepadOrder") == 0) {
         int rc = sd_bus_message_open_container(reply, 'a', "s");
         if (rc < 0) return rc;
@@ -117,11 +120,15 @@ manager_property_set(sd_bus *bus, const char *path, const char *interface,
         if (rc < 0) return rc;
         return sd_bus_message_exit_container(value);
     }
+    if (strcmp(property, "ManageAllDevices") == 0) {
+        int bval = 0;
+        int rc = sd_bus_message_read(value, "b", &bval);
+        if (rc < 0) return rc;
+        g_nip_manage_all_devices = bval;
+        return 0;
+    }
     return -ENOENT;
 }
-
-/* ================================================================== */
-/*  Target property (fallback vtable)                                   */
 /* ================================================================== */
 
 static int
@@ -427,6 +434,8 @@ static const sd_bus_vtable manager_vtable[] = {
                     SD_BUS_VTABLE_PROPERTY_CONST),
     SD_BUS_PROPERTY("Enabled", "b", manager_property_get, 0,
                     SD_BUS_VTABLE_PROPERTY_CONST),
+    SD_BUS_WRITABLE_PROPERTY("ManageAllDevices", "b", manager_property_get,
+                              manager_property_set, 0, 0),
     SD_BUS_WRITABLE_PROPERTY("GamepadOrder", "as", manager_property_get,
                               manager_property_set, 0, 0),
     SD_BUS_METHOD("CreateTargetDevice", "s", "s", method_create_target, 0),
@@ -640,6 +649,7 @@ void nip_reset_server_state(int num_composites)
     memset(g_nip_comp_names, 0, sizeof(g_nip_comp_names));
     memset(g_nip_persistent_ids, 0, sizeof(g_nip_persistent_ids));
     g_nip_fail_next_create = 0;
+    g_nip_manage_all_devices = 0;
 
     /* Initialize composite names and persistent IDs. */
     int n = num_composites > 0 ? num_composites : 1;
