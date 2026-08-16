@@ -61,6 +61,29 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options($<$<CONFIG:Debug>:-Werror>)
 endif()
 
+# --- Sanitizer support (DOD-05, §11.2.5) ------------------------------------
+# Optional ASan + UBSan build gate.  Enable with:
+#   cmake -S . -B build-san -DCMAKE_BUILD_TYPE=Debug -DCBX_ENABLE_SANITIZERS=ON
+# The verify-sanitizers.sh script automates this.
+option(CBX_ENABLE_SANITIZERS "Enable AddressSanitizer + UndefinedBehaviorSanitizer" OFF)
+if(CBX_ENABLE_SANITIZERS)
+    if(NOT CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        message(FATAL_ERROR "Sanitizers require GCC or Clang")
+    endif()
+    # GCC 15 enables more aggressive stringop-truncation analysis under
+    # sanitizers.  All strncpy(dst, src, sizeof(dst)-1) calls in this codebase
+    # are followed by explicit null-termination, making the warning a false
+    # positive.  Suppress it in the sanitizer build only.
+    add_compile_options(-Wno-stringop-truncation)
+    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -g)
+    add_link_options(-fsanitize=address,undefined)
+    # ASan needs detect_leaks=0 for test harnesses that intentionally
+    # leave global state alive at exit (SDL_Quit is optional in tests).
+    # Leak detection is still ON by default; override per-test via
+    # ASAN_OPTIONS if needed.
+    message(STATUS "Sanitizers enabled: AddressSanitizer + UndefinedBehaviorSanitizer")
+endif()
+
 # Generated config.h with install paths.
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/config.h.in"

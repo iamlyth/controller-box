@@ -465,8 +465,7 @@ static int start_manager(const char *build_dir, const char *bus_addr)
         /* Try relative to project root. */
         char abs_path[PATH_MAX + 128];
         if (realpath(bin_path, abs_path)) {
-            strncpy(bin_path, abs_path, sizeof(bin_path) - 1);
-            bin_path[sizeof(bin_path) - 1] = '\0';
+            snprintf(bin_path, sizeof(bin_path), "%s", abs_path);
             found = 1;
             break;
         }
