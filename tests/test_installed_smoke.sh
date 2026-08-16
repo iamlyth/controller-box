@@ -103,9 +103,23 @@ if [ ! -f "$BUILD_DIR/controller-box" ]; then
     cmake --build "$BUILD_DIR" --parallel
 fi
 
-# Install to staging prefix
+# Install to staging prefix (retry to handle transient filesystem issues
+# where cmake_install.cmake or the binary may be briefly unavailable
+# during a parallel build relink)
 rm -rf "$STAGING_DIR"
-cmake --install "$BUILD_DIR" --prefix "$STAGING_DIR" 2>/dev/null
+INSTALL_OK=0
+for install_attempt in 1 2 3; do
+    if cmake --install "$BUILD_DIR" --prefix "$STAGING_DIR" 2>&1; then
+        INSTALL_OK=1
+        break
+    fi
+    echo "WARN: cmake --install attempt $install_attempt failed; retrying..."
+    sleep 1
+done
+if [ "$INSTALL_OK" -ne 1 ]; then
+    fail "cmake --install failed after 3 attempts"
+    exit 1
+fi
 
 INSTALLED_BIN="$STAGING_DIR/bin/controller-box"
 if [ ! -f "$INSTALLED_BIN" ]; then
