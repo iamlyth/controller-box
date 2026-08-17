@@ -3,7 +3,7 @@ spec_path: docs/SPEC.md
 spec_commit: 3a10f6b7d04a615b2b9d06eef6c91e431fa9c079
 spec_blob: 58f5d3cb72bc6b3e5f573fa09a63c11a653ed577
 base_commit: faa56b95dd750433cdef81813ac015045658dfc4
-status: active
+status: blocked
 ---
 
 # Implementation Plan
@@ -68,15 +68,15 @@ Controller-Box is a single C binary (`controller-box`) with two modes: overlay s
 | VRF-03 | §11.1.3 | verified | Golden images for 11 states with ±3/channel tolerance. `test_backend_smoke_sw.c` golden comparison now fails on missing baseline (no more `[SKIP]` silent pass). `test_golden.c` compares through production `cbx_icon_dir()` path. | — |
 | VRF-04 | §11.1.4 | verified | On mismatch, saves actual/expected/diff to `tests/golden-fail/`. `test_golden.c`. | — |
 | VRF-05 | §11.1.5 | partial | `test_installed_functional.c` detects `/dev/uinput` and uses a kernel-backed synthetic gamepad when present, falling back to `SDL_JoystickAttachVirtual` when absent. Misleading comment fixed. `kernel-uinput` capability declared in `environment.toml` (evidence pending Task 9). `test_kernel_controller.c` still skips (exit 77) — `/dev/uinput` not provisioned on current runner. Task 9 blocked: no `/dev/uinput`, no root, no SSH to `dev-runner-vm`. Runner setup requirements documented in OPERATIONS.md. | Task 9 |
-| VRF-06 | §11.1.6 | partial | `test_backend_smoke.c` skips (exit 77) — no accelerated GPU backend. `test_backend_smoke_sw.c` runs software renderer. | Task 8 |
+| VRF-06 | §11.1.6 | partial | `test_backend_smoke.c` skips (exit 77) — no accelerated GPU backend. `test_backend_smoke_sw.c` runs software renderer. | Task 10 |
 | VRF-07 | §11.1.7 | missing | No human release acceptance artifact (reviewer, date, hardware, captures, criteria). | Task 10 |
 | SYS-01 | §3 | partial | x86_64 build verified. No aarch64 build executed or evidenced. | Task 11 |
 | SYS-02 | §3 | partial | No Pi 4 latency measurement. x86_64 latency measured but not on minimum supported hardware. | Task 10 |
 | DOD-01 | §11.2.1 | partial | Conformance matrix covers all requirements; non-verified rows mapped to tasks. | Task 14 |
 | DOD-02 | §11.2.2 | verified | Production-path tests through `cbx_manager_handle_event`, `cbx_overlay_service_step`, native DBus. Direct callback tests are supplemental. | — |
-| DOD-03 | §11.2.3 | partial | Interaction inventory M01–M39 + O01–O13 with controller+pointer paths. O02–O09 DBus InputEvent tests verified. `test_installed_functional.c` now detects `/dev/uinput` and uses kernel-backed gamepad when available (Task 8). Remaining: runner provisioning for actual kernel-backed test execution — Task 9 blocked (no `/dev/uinput`, no SSH to runner). M09/M16/VC slots resolved. | Tasks 8, 9 |
+| DOD-03 | §11.2.3 | partial | Interaction inventory M01–M39 + O01–O13 with controller+pointer paths. O02–O09 DBus InputEvent tests verified. `test_installed_functional.c` now detects `/dev/uinput` and uses kernel-backed gamepad when available (Task 8). Remaining: runner provisioning for actual kernel-backed test execution — Task 9 blocked (no `/dev/uinput`, no SSH to runner). M09/M16/VC slots resolved. | Tasks 8–9 |
 | DOD-04 | §11.2.4 | verified | §§4.10, 5.6, 11.1 visual tests pass for normal/degraded/error states. All icon paths use production `cbx_icon_dir()` — no env-var bypasses. | — |
-| DOD-05 | §11.2.5 | partial | Clean build + 98 tests pass. `test_kernel_controller` and `test_backend_smoke` skip (hardware-blocked). Golden baseline skip in SW smoke fixed (Task 6). Task 9 blocked (no `/dev/uinput`, no SSH to runner). Task 10 blocked pending GPU runner. | Tasks 9, 10 |
+| DOD-05 | §11.2.5 | partial | Clean build + 98 tests pass. `test_kernel_controller` and `test_backend_smoke` skip (hardware-blocked). Golden baseline skip in SW smoke fixed (Task 6). Task 9 blocked (no `/dev/uinput`, no SSH to runner). Task 10 blocked pending GPU runner. | Tasks 9–10 |
 | DOD-06 | §11.2.6 | verified | All 3 icon-rendering bugs (BUG-0008, BUG-0009, BUG-0010) closed. Production icon path works in build tree and install tree without env-var injection. | — |
 | DOD-07 | §11.2.7 | verified | Read-only reviews (campaign audit round 5) found no unresolved blocking issue beyond listed tasks. | — |
 | DOD-08 | §11.2.8 | partial | README/OPERATIONS.md exist. Build/install commands work on x86_64. Flatpak not verified. aarch64 not verified. | Task 14 |
