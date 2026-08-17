@@ -16,8 +16,11 @@ transport = "ssh"
 ssh_config_alias = "dev-runner-vm"
 working_directory = "/srv/dev-runner/workspaces/controller-box"
 # These claims are intentionally limited to the general project gate and a
-# real transient user-service probe. The kernel-uinput capability is declared
-# here so test_installed_functional.c can detect and use /dev/uinput when
-# present; runner evidence for kernel-uinput is pending (Task 9).
-capabilities = ["remote-project-gate", "systemd-user", "kernel-uinput"]
+# real transient user-service probe. kernel-uinput is NOT declared because it is
+# not yet provisioned on the runner (no /dev/uinput). Declaring an unprovisioned
+# capability makes the runner server reject the claim with "unsupported
+# capability claim", which fails run-factory-runners.py and blocks the campaign
+# verification phase. Re-add kernel-uinput only after the runner is provisioned
+# with /dev/uinput and a matching runner receipt exists.
+capabilities = ["remote-project-gate", "systemd-user"]
 verify_argv = ["./scripts/verify-project.sh"]
