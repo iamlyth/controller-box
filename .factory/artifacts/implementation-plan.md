@@ -67,14 +67,14 @@ Controller-Box is a single C binary (`controller-box`) with two modes: overlay s
 | VRF-02 | §11.1.2 | verified | Region-level pixel assertions via `fb_assert.c` helpers. All visual tests. | — |
 | VRF-03 | §11.1.3 | verified | Golden images for 11 states with ±3/channel tolerance. `test_backend_smoke_sw.c` golden comparison now fails on missing baseline (no more `[SKIP]` silent pass). `test_golden.c` compares through production `cbx_icon_dir()` path. | — |
 | VRF-04 | §11.1.4 | verified | On mismatch, saves actual/expected/diff to `tests/golden-fail/`. `test_golden.c`. | — |
-| VRF-05 | §11.1.5 | partial | `test_installed_functional.c` runs with private DBus + SDL virtual gamepad. BUT uses `SDL_JoystickAttachVirtual` (process-local), not kernel-backed `/dev/uinput` synthetic gamepad. `test_kernel_controller.c` skips (exit 77) — `/dev/uinput` unavailable. | Task 7 |
+| VRF-05 | §11.1.5 | partial | `test_installed_functional.c` detects `/dev/uinput` and uses a kernel-backed synthetic gamepad when present, falling back to `SDL_JoystickAttachVirtual` when absent. Misleading comment fixed. `kernel-uinput` capability declared in `environment.toml` (evidence pending Task 9). `test_kernel_controller.c` still skips (exit 77) — `/dev/uinput` not provisioned on current runner. | Task 8 |
 | VRF-06 | §11.1.6 | partial | `test_backend_smoke.c` skips (exit 77) — no accelerated GPU backend. `test_backend_smoke_sw.c` runs software renderer. | Task 8 |
 | VRF-07 | §11.1.7 | missing | No human release acceptance artifact (reviewer, date, hardware, captures, criteria). | Task 10 |
 | SYS-01 | §3 | partial | x86_64 build verified. No aarch64 build executed or evidenced. | Task 9 |
 | SYS-02 | §3 | partial | No Pi 4 latency measurement. x86_64 latency measured but not on minimum supported hardware. | Task 10 |
 | DOD-01 | §11.2.1 | partial | Conformance matrix covers all requirements; non-verified rows mapped to tasks. | Task 14 |
 | DOD-02 | §11.2.2 | verified | Production-path tests through `cbx_manager_handle_event`, `cbx_overlay_service_step`, native DBus. Direct callback tests are supplemental. | — |
-| DOD-03 | §11.2.3 | partial | Interaction inventory M01–M39 + O01–O13 with controller+pointer paths. O02–O09 DBus InputEvent tests verified. Remaining gap: kernel-backed controller transport. M09/M16/VC slots resolved. | Tasks 8, 9 |
+| DOD-03 | §11.2.3 | partial | Interaction inventory M01–M39 + O01–O13 with controller+pointer paths. O02–O09 DBus InputEvent tests verified. `test_installed_functional.c` now detects `/dev/uinput` and uses kernel-backed gamepad when available (Task 8). Remaining: runner provisioning for actual kernel-backed test execution (Task 9). M09/M16/VC slots resolved. | Tasks 8, 9 |
 | DOD-04 | §11.2.4 | verified | §§4.10, 5.6, 11.1 visual tests pass for normal/degraded/error states. All icon paths use production `cbx_icon_dir()` — no env-var bypasses. | — |
 | DOD-05 | §11.2.5 | partial | Clean build + 98 tests pass. `test_kernel_controller` and `test_backend_smoke` skip (hardware-blocked). Golden baseline skip in SW smoke fixed (Task 6). Remaining: hardware skips (Tasks 9, 10). | Tasks 9, 10 |
 | DOD-06 | §11.2.6 | verified | All 3 icon-rendering bugs (BUG-0008, BUG-0009, BUG-0010) closed. Production icon path works in build tree and install tree without env-var injection. | — |
@@ -179,12 +179,12 @@ All overlay actions tested through `cbx_overlay_service_step` (production poll l
 - Documentation impact: Document first-run flow in README.md.
 
 ## Task 8: Prepare kernel-backed controller test code (software)
-- Status: pending
+- Status: complete
 - Dependencies: Task 2
 - Scope: `tests/test_installed_functional.c` (prefer `/dev/uinput` with SDL fallback, fix misleading comment), `.factory/environment.toml` (declare `kernel-uinput` capability)
 - Acceptance criteria: `test_installed_functional.c` detects `/dev/uinput` availability and uses a kernel-backed synthetic gamepad when present, falling back to `SDL_JoystickAttachVirtual` only when `/dev/uinput` is absent. The misleading comment at line 9 ("kernel-backed" when code uses process-local SDL API) is corrected. `kernel-uinput` capability is declared in `environment.toml` (evidence may not yet be available — that is Task 9). The test code is ready to run to exit 0 when `/dev/uinput` is provisioned.
-- Verification: `nix-shell --run "ctest --test-dir build-check -R 'installed_functional' --output-on-failure"`; test still passes on current runner (SDL fallback path). Code inspection confirms `/dev/uinput` detection logic exists.
-- Documentation impact: None beyond environment.toml update.
+- Verification: `nix-shell --run "ctest --test-dir build-check -R 'installed_functional' --output-on-failure"` → passes (9.35s, SDL fallback path). Code inspection confirms `/dev/uinput` detection logic: `uinput_create_gamepad()` opens `/dev/uinput`, registers 15 buttons + 6 axes via ioctl, creates device via `UI_DEV_CREATE`. `f_setup` tries uinput first, falls back to `SDL_JoystickAttachVirtual`. `ctrl_press`/`ctrl_axis` branch on `g_use_uinput`. 98/98 tests pass (2 HW skips).
+- Documentation impact: environment.toml updated with `kernel-uinput` capability declaration.
 
 ## Task 9: Kernel-backed controller runner provisioning (kernel-uinput, physical-controller)
 - Status: pending

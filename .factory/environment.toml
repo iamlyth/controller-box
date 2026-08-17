@@ -16,7 +16,8 @@ transport = "ssh"
 ssh_config_alias = "dev-runner-vm"
 working_directory = "/srv/dev-runner/workspaces/controller-box"
 # These claims are intentionally limited to the general project gate and a
-# real transient user-service probe. Hardware capabilities remain undeclared
-# until dedicated non-synthetic acceptance proves them on this runner.
-capabilities = ["remote-project-gate", "systemd-user"]
+# real transient user-service probe. The kernel-uinput capability is declared
+# here so test_installed_functional.c can detect and use /dev/uinput when
+# present; runner evidence for kernel-uinput is pending (Task 9).
+capabilities = ["remote-project-gate", "systemd-user", "kernel-uinput"]
 verify_argv = ["./scripts/verify-project.sh"]

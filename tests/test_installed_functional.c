@@ -6,7 +6,8 @@
  * must:
  *
  *   1. Start a private native-signature InputPlumber-compatible DBus service.
- *   2. Hotplug a kernel-backed SDL virtual game controller.
+ *   2. Hotplug a synthetic game controller (kernel-backed /dev/uinput
+ *      when available, SDL virtual joystick fallback otherwise).
  *   3. Navigate the Manager with real controller events.
  *   4. Create and observe a routable virtual target.
  *   5. Create/save/reload a profile (persistence verified via filesystem).
@@ -33,10 +34,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <linux/input.h>
+#include <linux/uinput.h>
 #include <systemd/sd-bus.h>
 
 #include <SDL.h>
@@ -96,6 +101,254 @@
 #define OVERLAY_H 720
 
 /* ================================================================== */
+/*  Kernel-backed uinput gamepad support                               */
+/* ================================================================== */
+/*
+ * When /dev/uinput is available, a kernel-backed evdev gamepad is created
+ * so SDL detects a real joystick through its evdev backend.  Button and
+ * axis events are written via ioctl/write to the uinput file descriptor.
+ * When /dev/uinput is absent (no kernel-uinput runner capability), the
+ * test falls back to SDL_JoystickAttachVirtual (process-local virtual
+ * joystick) — the original code path.
+ *
+ * The virtual-joystick button indices used throughout the test (0=A,
+ * 1=B, 6=Start, 11=DPadUp … 14=DPadRight) are translated to evdev
+ * button codes here.  A matching gamecontroller mapping string is added
+ * at runtime so SDL generates the same SDL_CONTROLLERBUTTONDOWN events
+ * regardless of which backend is active.
+ */
+
+static int  g_uinput_fd   = -1;
+static bool g_use_uinput  = false;
+
+#define UINPUT_DEV_NAME "CBX Functional Test Pad"
+
+/* Evdev button codes registered on the uinput device (sorted by code
+ * determines SDL joystick button index assignment). */
+static const int g_uinput_buttons[] = {
+    BTN_SOUTH,   /* A      (evdev 304 → joy idx 0) */
+    BTN_EAST,    /* B      (evdev 305 → joy idx 1) */
+    BTN_NORTH,   /* X      (evdev 307 → joy idx 2) */
+    BTN_WEST,    /* Y      (evdev 308 → joy idx 3) */
+    BTN_TL,      /* L1     (evdev 310 → joy idx 4) */
+    BTN_TR,      /* R1     (evdev 311 → joy idx 5) */
+    BTN_SELECT,  /* Back   (evdev 314 → joy idx 6) */
+    BTN_START,   /* Start  (evdev 315 → joy idx 7) */
+    BTN_MODE,    /* Guide  (evdev 316 → joy idx 8) */
+    BTN_THUMBL,  /* L3     (evdev 317 → joy idx 9) */
+    BTN_THUMBR,  /* R3     (evdev 318 → joy idx 10) */
+    BTN_DPAD_UP,    /* (evdev 544 → joy idx 11) */
+    BTN_DPAD_DOWN,  /* (evdev 545 → joy idx 12) */
+    BTN_DPAD_LEFT,  /* (evdev 546 → joy idx 13) */
+    BTN_DPAD_RIGHT, /* (evdev 547 → joy idx 14) */
+};
+
+/* Evdev absolute axes registered on the uinput device. */
+static const int g_uinput_axes[] = {
+    ABS_X,   /* left stick X  (evdev 0 → joy idx 0) */
+    ABS_Y,   /* left stick Y  (evdev 1 → joy idx 1) */
+    ABS_Z,   /* left trigger  (evdev 2 → joy idx 2) */
+    ABS_RX,  /* right stick X (evdev 3 → joy idx 3) */
+    ABS_RY,  /* right stick Y (evdev 4 → joy idx 4) */
+    ABS_RZ,  /* right trigger (evdev 5 → joy idx 5) */
+};
+
+/* Map the virtual joystick button index used in the test to the evdev
+ * button code that produces the same SDL gamecontroller button.
+ *
+ * Virtual mapping:  a:b0,b:b1,start:b6,dpup:b11,dpdown:b12,
+ *                   dpleft:b13,dpright:b14
+ * Uinput mapping:   a:b0,b:b1,back:b6,start:b7,dpup:b11,dpdown:b12,
+ *                   dpleft:b13,dpright:b14
+ *
+ * Both mappings yield the same SDL_CONTROLLER_BUTTON_* index because
+ * the gamecontroller API normalises across joystick button indices. */
+static int
+vbtn_to_evdev(int vbtn)
+{
+    switch (vbtn) {
+        case 0:  return BTN_SOUTH;       /* A    → gc A    */
+        case 1:  return BTN_EAST;        /* B    → gc B    */
+        case 2:  return BTN_NORTH;       /* X    → gc X    */
+        case 3:  return BTN_WEST;        /* Y    → gc Y    */
+        case 4:  return BTN_TL;          /* L1   → gc LSh  */
+        case 5:  return BTN_TR;          /* R1   → gc RSh  */
+        case 6:  return BTN_START;       /* Start→ gc Start*/
+        case 7:  return BTN_SELECT;      /* Back → gc Back */
+        case 8:  return BTN_MODE;        /* Guide→ gc Guide*/
+        case 9:  return BTN_THUMBL;      /* L3   → gc LStk */
+        case 10: return BTN_THUMBR;      /* R3   → gc RStk */
+        case 11: return BTN_DPAD_UP;
+        case 12: return BTN_DPAD_DOWN;
+        case 13: return BTN_DPAD_LEFT;
+        case 14: return BTN_DPAD_RIGHT;
+        default: return -1;
+    }
+}
+
+/* Map the virtual joystick axis index used in the test to the evdev
+ * absolute axis code that produces the same SDL gamecontroller axis.
+ *
+ * Virtual mapping:  leftx:a0,lefty:a1,rightx:a2,righty:a3,
+ *                   lefttrigger:a4,righttrigger:a5
+ * Uinput mapping:   leftx:a0,lefty:a1,lefttrigger:a2,rightx:a3,
+ *                   righty:a4,righttrigger:a5
+ *
+ * Both mappings yield the same SDL_CONTROLLER_AXIS_* index. */
+static int
+vaxis_to_evdev(int vaxis)
+{
+    switch (vaxis) {
+        case 0: return ABS_X;    /* left stick X  */
+        case 1: return ABS_Y;    /* left stick Y  */
+        case 2: return ABS_RX;   /* right stick X */
+        case 3: return ABS_RY;   /* right stick Y */
+        case 4: return ABS_Z;    /* left trigger  */
+        case 5: return ABS_RZ;   /* right trigger */
+        default: return -1;
+    }
+}
+
+/* Create a virtual gamepad via /dev/uinput.  Returns 0 on success. */
+static int
+uinput_create_gamepad(void)
+{
+    g_uinput_fd = open("/dev/uinput", O_WRONLY | O_NONBLOCK);
+    if (g_uinput_fd < 0)
+        return -1;
+
+    if (ioctl(g_uinput_fd, UI_SET_EVBIT, EV_KEY) < 0) {
+        close(g_uinput_fd); g_uinput_fd = -1; return -1;
+    }
+    if (ioctl(g_uinput_fd, UI_SET_EVBIT, EV_ABS) < 0) {
+        close(g_uinput_fd); g_uinput_fd = -1; return -1;
+    }
+
+    for (size_t i = 0; i < sizeof(g_uinput_buttons)/sizeof(g_uinput_buttons[0]); i++) {
+        if (ioctl(g_uinput_fd, UI_SET_KEYBIT, g_uinput_buttons[i]) < 0) {
+            close(g_uinput_fd); g_uinput_fd = -1; return -1;
+        }
+    }
+    for (size_t i = 0; i < sizeof(g_uinput_axes)/sizeof(g_uinput_axes[0]); i++) {
+        if (ioctl(g_uinput_fd, UI_SET_ABSBIT, g_uinput_axes[i]) < 0) {
+            close(g_uinput_fd); g_uinput_fd = -1; return -1;
+        }
+        struct uinput_abs_setup abs;
+        memset(&abs, 0, sizeof(abs));
+        abs.code       = g_uinput_axes[i];
+        abs.absinfo.minimum = -32768;
+        abs.absinfo.maximum = 32767;
+        abs.absinfo.flat = 0;
+        abs.absinfo.fuzz = 0;
+        if (ioctl(g_uinput_fd, UI_ABS_SETUP, &abs) < 0) {
+            close(g_uinput_fd); g_uinput_fd = -1; return -1;
+        }
+    }
+
+    struct uinput_setup setup;
+    memset(&setup, 0, sizeof(setup));
+    strncpy(setup.name, UINPUT_DEV_NAME, sizeof(setup.name) - 1);
+    setup.id.bustype = BUS_USB;
+    setup.id.vendor  = 0x045E;   /* Microsoft */
+    setup.id.product = 0x28E;   /* Xbox 360   */
+    setup.id.version = 0x0100;
+
+    if (ioctl(g_uinput_fd, UI_DEV_SETUP, &setup) < 0) {
+        close(g_uinput_fd); g_uinput_fd = -1; return -1;
+    }
+    if (ioctl(g_uinput_fd, UI_DEV_CREATE) < 0) {
+        close(g_uinput_fd); g_uinput_fd = -1; return -1;
+    }
+
+    /* Give the kernel and udev time to settle the device node. */
+    usleep(200000);
+    return 0;
+}
+
+/* Destroy the uinput device and close the file descriptor. */
+static void
+uinput_destroy(void)
+{
+    if (g_uinput_fd >= 0) {
+        ioctl(g_uinput_fd, UI_DEV_DESTROY);
+        close(g_uinput_fd);
+        g_uinput_fd = -1;
+    }
+}
+
+/* Write a single input event to the uinput device. */
+static int
+uinput_write_event(unsigned short type, unsigned short code, int value)
+{
+    struct input_event ev;
+    memset(&ev, 0, sizeof(ev));
+    ev.type  = type;
+    ev.code  = code;
+    ev.value = value;
+    if (write(g_uinput_fd, &ev, sizeof(ev)) < (ssize_t)sizeof(ev))
+        return -1;
+    return 0;
+}
+
+/* Send a button press via uinput (caller handles pump/events). */
+static void
+uinput_press(int vbtn, int pressed)
+{
+    int evdev_btn = vbtn_to_evdev(vbtn);
+    if (evdev_btn < 0 || g_uinput_fd < 0)
+        return;
+    uinput_write_event(EV_KEY, evdev_btn, pressed ? 1 : 0);
+    uinput_write_event(EV_SYN, SYN_REPORT, 0);
+}
+
+/* Send an axis event via uinput (caller handles pump/events). */
+static void
+uinput_axis(int vaxis, Sint16 value)
+{
+    int evdev_axis = vaxis_to_evdev(vaxis);
+    if (evdev_axis < 0 || g_uinput_fd < 0)
+        return;
+    uinput_write_event(EV_ABS, evdev_axis, value);
+    uinput_write_event(EV_SYN, SYN_REPORT, 0);
+}
+
+/* Find the SDL joystick index that matches the uinput device name.
+ * Returns the index or -1 if not found. */
+static int
+find_uinput_joystick_index(void)
+{
+    int n = SDL_NumJoysticks();
+    for (int i = 0; i < n; i++) {
+        const char *name = SDL_JoystickNameForIndex(i);
+        if (name && strcmp(name, UINPUT_DEV_NAME) == 0)
+            return i;
+    }
+    return -1;
+}
+
+/* Build and register a gamecontroller mapping for the uinput device.
+ * SDL assigns joystick button indices by sorting evdev button codes
+ * numerically.  The resulting mapping produces the same SDL_CONTROLLER
+ * button/axis indices as the virtual joystick mapping. */
+static void
+add_uinput_gamecontroller_mapping(SDL_Joystick *joy)
+{
+    char guid[33];
+    SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(joy), guid, sizeof(guid));
+
+    char mapping[512];
+    snprintf(mapping, sizeof(mapping),
+        "%s,%s,"
+        "a:b0,b:b1,x:b2,y:b3,leftshoulder:b4,rightshoulder:b5,"
+        "back:b6,start:b7,guide:b8,leftstick:b9,rightstick:b10,"
+        "dpup:b11,dpdown:b12,dpleft:b13,dpright:b14,"
+        "leftx:a0,lefty:a1,lefttrigger:a2,rightx:a3,righty:a4,righttrigger:a5,"
+        "platform:Linux,",
+        guid, UINPUT_DEV_NAME);
+    SDL_GameControllerAddMapping(mapping);
+}
+
+/* ================================================================== */
 /*  Native IP server (shared implementation)                           */
 /* ================================================================== */
 
@@ -113,9 +366,10 @@ typedef struct {
     pid_t   server_pid;
     char    tmp_home[PATH_MAX];
     char    prof_path[PATH_MAX + 1024];
-    /* SDL virtual controller */
+    /* SDL virtual controller / uinput gamepad */
     int     joy_device_index;
     SDL_Joystick *joystick;
+    bool    use_uinput;     /* true when /dev/uinput kernel-backed gamepad */
     /* DBus connection for independent inspection */
     const ip_dbus_backend *backend;
     ip_bus_handle bus;
@@ -243,28 +497,63 @@ f_setup(void **state)
     assert_string_equal(version, "0.78.0");
     free(version);
 
-    /* --- Initialize SDL for virtual controller --- */
+    /* --- Initialize SDL and create synthetic game controller ---
+     *
+     * Prefer a kernel-backed /dev/uinput gamepad when available so SDL
+     * detects a real evdev joystick through its production input backend.
+     * Fall back to SDL_JoystickAttachVirtual (process-local virtual
+     * joystick) when /dev/uinput is absent (no kernel-uinput capability).
+     */
     ensure_dummy_driver();
+
+    /* Try kernel-backed uinput first.  Must happen before SDL_Init so
+     * SDL's evdev backend detects the device during initialisation. */
+    f->use_uinput = false;
+    if (uinput_create_gamepad() == 0) {
+        f->use_uinput = true;
+        g_use_uinput  = true;
+    }
+
     SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER);
 
-    /* Create a virtual game-controller-type joystick. */
-    f->joy_device_index = SDL_JoystickAttachVirtual(
-        SDL_JOYSTICK_TYPE_GAMECONTROLLER, 6, 15, 0);
-    assert_true(f->joy_device_index >= 0);
+    if (f->use_uinput) {
+        /* SDL should have detected the uinput device during init.
+         * Scan for it by name and open a joystick handle. */
+        f->joy_device_index = find_uinput_joystick_index();
+        if (f->joy_device_index >= 0) {
+            f->joystick = SDL_JoystickOpen(f->joy_device_index);
+            if (f->joystick)
+                add_uinput_gamecontroller_mapping(f->joystick);
+        }
+        /* If SDL failed to detect the device (e.g. evdev backend not
+         * built), fall back to the virtual joystick path. */
+        if (!f->joystick) {
+            uinput_destroy();
+            f->use_uinput = false;
+            g_use_uinput  = false;
+        }
+    }
 
-    f->joystick = SDL_JoystickOpen(f->joy_device_index);
-    assert_non_null(f->joystick);
+    if (!f->use_uinput) {
+        /* SDL virtual joystick fallback (process-local). */
+        f->joy_device_index = SDL_JoystickAttachVirtual(
+            SDL_JOYSTICK_TYPE_GAMECONTROLLER, 6, 15, 0);
+        assert_true(f->joy_device_index >= 0);
 
-    /* Register a gamecontroller mapping for the virtual joystick. */
-    char guid[33];
-    SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(f->joystick),
-                                guid, sizeof(guid));
-    char mapping[512];
-    snprintf(mapping, sizeof(mapping),
-             "%s,Controller-Box Virtual,a:b0,b:b1,start:b6,"
-             "dpup:b11,dpdown:b12,dpleft:b13,dpright:b14,platform:Linux,",
-             guid);
-    assert_true(SDL_GameControllerAddMapping(mapping) >= 0);
+        f->joystick = SDL_JoystickOpen(f->joy_device_index);
+        assert_non_null(f->joystick);
+
+        /* Register a gamecontroller mapping for the virtual joystick. */
+        char guid[33];
+        SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(f->joystick),
+                                    guid, sizeof(guid));
+        char mapping[512];
+        snprintf(mapping, sizeof(mapping),
+                 "%s,Controller-Box Virtual,a:b0,b:b1,start:b6,"
+                 "dpup:b11,dpdown:b12,dpleft:b13,dpright:b14,platform:Linux,",
+                 guid);
+        assert_true(SDL_GameControllerAddMapping(mapping) >= 0);
+    }
 
     SDL_GameControllerEventState(SDL_ENABLE);
 
@@ -281,10 +570,14 @@ f_teardown(void **state)
     /* Disconnect independent DBus connection. */
     if (f->bus) f->backend->disconnect(f->bus);
 
-    /* Detach virtual joystick. */
+    /* Close joystick / destroy uinput device. */
     if (f->joystick) SDL_JoystickClose(f->joystick);
-    if (f->joy_device_index >= 0)
+    if (f->use_uinput) {
+        uinput_destroy();
+        g_use_uinput = false;
+    } else if (f->joy_device_index >= 0) {
         SDL_JoystickDetachVirtual(f->joy_device_index);
+    }
 
     SDL_QuitSubSystem(SDL_INIT_GAMECONTROLLER);
     SDL_QuitSubSystem(SDL_INIT_VIDEO);
@@ -328,30 +621,48 @@ pump_manager(cbx_manager *mgr)
         cbx_manager_handle_event(mgr, &ev);
 }
 
-/* Send a controller button press+release through the manager. */
+/* Send a controller button press+release through the manager.
+ * When g_use_uinput is true, events are written to the kernel uinput
+ * device; otherwise SDL_JoystickSetVirtualButton is used. */
 static void
 ctrl_press(cbx_manager *mgr, SDL_Joystick *joy, int button)
 {
-    SDL_JoystickSetVirtualButton(joy, button, 1);
-    SDL_PumpEvents();
-    pump_manager(mgr);
-    SDL_JoystickSetVirtualButton(joy, button, 0);
-    SDL_PumpEvents();
-    pump_manager(mgr);
+    if (g_use_uinput) {
+        uinput_press(button, 1);
+        SDL_PumpEvents();
+        pump_manager(mgr);
+        uinput_press(button, 0);
+        SDL_PumpEvents();
+        pump_manager(mgr);
+    } else {
+        SDL_JoystickSetVirtualButton(joy, button, 1);
+        SDL_PumpEvents();
+        pump_manager(mgr);
+        SDL_JoystickSetVirtualButton(joy, button, 0);
+        SDL_PumpEvents();
+        pump_manager(mgr);
+    }
 }
 
 /* Send a controller axis event through the manager (production dispatch).
- * Exercises SDL_JoystickSetVirtualAxis → SDL_PumpEvents → pump_manager
- * (cbx_manager_handle_event).  Axis events are expected to be safely
- * ignored by the manager — no navigation, no state change, no crash.
- * SDL_CONTROLLERAXISMOTION events flow through the same SDL event queue
- * and are polled by SDL_PollEvent in pump_manager. */
+ * Exercises uinput_write_event (kernel) or SDL_JoystickSetVirtualAxis
+ * (virtual) → SDL_PumpEvents → pump_manager (cbx_manager_handle_event).
+ * Axis events are expected to be safely ignored by the manager — no
+ * navigation, no state change, no crash.  SDL_CONTROLLERAXISMOTION events
+ * flow through the same SDL event queue and are polled by SDL_PollEvent
+ * in pump_manager. */
 static void
 ctrl_axis(cbx_manager *mgr, SDL_Joystick *joy, int axis, Sint16 value)
 {
-    SDL_JoystickSetVirtualAxis(joy, axis, value);
-    SDL_PumpEvents();
-    pump_manager(mgr);
+    if (g_use_uinput) {
+        uinput_axis(axis, value);
+        SDL_PumpEvents();
+        pump_manager(mgr);
+    } else {
+        SDL_JoystickSetVirtualAxis(joy, axis, value);
+        SDL_PumpEvents();
+        pump_manager(mgr);
+    }
 }
 
 /* Send a mouse left-button click at (x, y) through the manager. */
@@ -627,12 +938,18 @@ test_installed_functional(void **state)
 
     cbx_manager_shutdown(&mgr);
 
-    /* Re-create the virtual joystick for the new manager instance. */
-    int joy2_idx = SDL_JoystickAttachVirtual(
-        SDL_JOYSTICK_TYPE_GAMECONTROLLER, 6, 15, 0);
-    assert_true(joy2_idx >= 0);
-    SDL_Joystick *joy2 = SDL_JoystickOpen(joy2_idx);
-    assert_non_null(joy2);
+    /* Re-create the virtual joystick for the new manager instance.
+     * With uinput, the kernel device persists across manager restarts —
+     * no re-creation is needed, the manager will re-detect it on init. */
+    int joy2_idx = -1;
+    SDL_Joystick *joy2 = NULL;
+    if (!f->use_uinput) {
+        joy2_idx = SDL_JoystickAttachVirtual(
+            SDL_JOYSTICK_TYPE_GAMECONTROLLER, 6, 15, 0);
+        assert_true(joy2_idx >= 0);
+        joy2 = SDL_JoystickOpen(joy2_idx);
+        assert_non_null(joy2);
+    }
 
     /* The same GUID/mapping should apply. */
     SDL_GameControllerEventState(SDL_ENABLE);
@@ -965,35 +1282,31 @@ test_installed_functional(void **state)
     /* ================================================================ */
     /*  Phase 10b: Axis events — safely ignored by overlay (HIGH gap)     */
     /*                                                                   */
-    /*  SDL_JoystickSetVirtualAxis generates SDL_CONTROLLERAXISMOTION     */
-    /*  events.  cbx_overlay_service_step polls SDL events but only       */
-    /*  handles SDL_KEYDOWN — axis events are silently discarded.         */
-    /*  Verify that sending axis events does not navigate the grid        */
-    /*  or change the overlay state.                                      */
+    /*  Axis events are generated via SDL_JoystickSetVirtualAxis         */
+    /*  (virtual joystick) or uinput_write_event (kernel-backed) and       */
+    /*  appear as SDL_CONTROLLERAXISMOTION events.  cbx_overlay_service_step*/
+    /*  polls SDL events but only handles SDL_KEYDOWN — axis events are    */
+    /*  silently discarded.  Verify that sending axis events does not      */
+    /*  navigate the grid or change the overlay state.                     */
     /* ================================================================ */
     {
         int col_before = cbx_select_grid_get_cur_col(&svc->grid, 0);
         int state_before = svc->lifecycle.state;
 
         /* Send axis events through the overlay service step path. */
-        SDL_JoystickSetVirtualAxis(f->joystick, 0, SDL_JOYSTICK_AXIS_MAX);
-        SDL_PumpEvents();
-        cbx_overlay_service_step(svc);
-        SDL_JoystickSetVirtualAxis(f->joystick, 0, 0);
-        SDL_PumpEvents();
-        cbx_overlay_service_step(svc);
-        SDL_JoystickSetVirtualAxis(f->joystick, 1, SDL_JOYSTICK_AXIS_MAX);
-        SDL_PumpEvents();
-        cbx_overlay_service_step(svc);
-        SDL_JoystickSetVirtualAxis(f->joystick, 1, 0);
-        SDL_PumpEvents();
-        cbx_overlay_service_step(svc);
-        SDL_JoystickSetVirtualAxis(f->joystick, 4, SDL_JOYSTICK_AXIS_MAX);
-        SDL_PumpEvents();
-        cbx_overlay_service_step(svc);
-        SDL_JoystickSetVirtualAxis(f->joystick, 4, 0);
-        SDL_PumpEvents();
-        cbx_overlay_service_step(svc);
+#define send_axis_va(ax, val) do { \
+    if (f->use_uinput) { uinput_axis(ax, val); } \
+    else { SDL_JoystickSetVirtualAxis(f->joystick, ax, val); } \
+    SDL_PumpEvents(); cbx_overlay_service_step(svc); \
+} while(0)
+
+        send_axis_va(0, SDL_JOYSTICK_AXIS_MAX);
+        send_axis_va(0, 0);
+        send_axis_va(1, SDL_JOYSTICK_AXIS_MAX);
+        send_axis_va(1, 0);
+        send_axis_va(4, SDL_JOYSTICK_AXIS_MAX);
+        send_axis_va(4, 0);
+#undef send_axis_va
 
         /* Verify grid position and overlay state unchanged. */
         assert_int_equal(cbx_select_grid_get_cur_col(&svc->grid, 0),
@@ -1126,12 +1439,17 @@ test_installed_functional(void **state)
     assert_int_equal(rc, 0);
     free(version);
 
-    /* Re-initialize the manager — should connect to the restarted server. */
-    int joy3_idx = SDL_JoystickAttachVirtual(
-        SDL_JOYSTICK_TYPE_GAMECONTROLLER, 6, 15, 0);
-    assert_true(joy3_idx >= 0);
-    SDL_Joystick *joy3 = SDL_JoystickOpen(joy3_idx);
-    assert_non_null(joy3);
+    /* Re-initialize the manager — should connect to the restarted server.
+     * With uinput, the kernel device persists — no re-creation needed. */
+    int joy3_idx = -1;
+    SDL_Joystick *joy3 = NULL;
+    if (!f->use_uinput) {
+        joy3_idx = SDL_JoystickAttachVirtual(
+            SDL_JOYSTICK_TYPE_GAMECONTROLLER, 6, 15, 0);
+        assert_true(joy3_idx >= 0);
+        joy3 = SDL_JoystickOpen(joy3_idx);
+        assert_non_null(joy3);
+    }
     SDL_GameControllerEventState(SDL_ENABLE);
 
     rc = cbx_manager_init(&mgr, NULL);
@@ -1230,7 +1548,8 @@ test_installed_controller_acceptance(void **state)
 
     /* --- Phase 1b: Axis events — safely ignored by manager (HIGH gap) ---
      *
-     * SDL_JoystickSetVirtualAxis generates SDL_JOYAXISMOTION and
+     * Axis events are generated via SDL_JoystickSetVirtualAxis (virtual
+     * joystick) or uinput_write_event (kernel-backed) and appear as
      * SDL_CONTROLLERAXISMOTION events.  The manager does not map axis
      * events to key events (only button presses are mapped).  This
      * exercises the production dispatch path (SDL_PumpEvents →
