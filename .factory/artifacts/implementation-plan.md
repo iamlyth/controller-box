@@ -65,7 +65,7 @@ Controller-Box is a single C binary (`controller-box`) with two modes: overlay s
 | PERF-01 | §11 | partial | `test_overlay_latency.c` measures ALL-detection→present <10ms p99, close <1ms, idle <5ms, footprint <50MB. Button-to-frame ≤75ms p99 derived from poll+show, not measured end-to-end with real timer on target hardware. | Task 10 |
 | VRF-01 | §11.1.1 | verified | Deterministic framebuffer tests via `SDL_RenderReadPixels` through production composition. `test_overlay_visual.c`, `test_manager_visual.c`. | — |
 | VRF-02 | §11.1.2 | verified | Region-level pixel assertions via `fb_assert.c` helpers. All visual tests. | — |
-| VRF-03 | §11.1.3 | partial | Golden images for 12 states with ±3/channel tolerance. BUT `test_backend_smoke_sw.c:429,646` prints `[SKIP]` on missing baseline instead of failing. | Task 6 |
+| VRF-03 | §11.1.3 | verified | Golden images for 11 states with ±3/channel tolerance. `test_backend_smoke_sw.c` golden comparison now fails on missing baseline (no more `[SKIP]` silent pass). `test_golden.c` compares through production `cbx_icon_dir()` path. | — |
 | VRF-04 | §11.1.4 | verified | On mismatch, saves actual/expected/diff to `tests/golden-fail/`. `test_golden.c`. | — |
 | VRF-05 | §11.1.5 | partial | `test_installed_functional.c` runs with private DBus + SDL virtual gamepad. BUT uses `SDL_JoystickAttachVirtual` (process-local), not kernel-backed `/dev/uinput` synthetic gamepad. `test_kernel_controller.c` skips (exit 77) — `/dev/uinput` unavailable. | Task 7 |
 | VRF-06 | §11.1.6 | partial | `test_backend_smoke.c` skips (exit 77) — no accelerated GPU backend. `test_backend_smoke_sw.c` runs software renderer. | Task 8 |
@@ -76,7 +76,7 @@ Controller-Box is a single C binary (`controller-box`) with two modes: overlay s
 | DOD-02 | §11.2.2 | verified | Production-path tests through `cbx_manager_handle_event`, `cbx_overlay_service_step`, native DBus. Direct callback tests are supplemental. | — |
 | DOD-03 | §11.2.3 | partial | Interaction inventory M01–M39 + O01–O13 with controller+pointer paths. O02–O09 DBus InputEvent tests verified. Remaining gap: kernel-backed controller transport. M09/M16/VC slots resolved. | Tasks 8, 9 |
 | DOD-04 | §11.2.4 | verified | §§4.10, 5.6, 11.1 visual tests pass for normal/degraded/error states. All icon paths use production `cbx_icon_dir()` — no env-var bypasses. | — |
-| DOD-05 | §11.2.5 | partial | Clean build + 98 tests pass. `test_kernel_controller` and `test_backend_smoke` skip. Golden baseline skip in SW smoke. | Tasks 6, 9, 10 |
+| DOD-05 | §11.2.5 | partial | Clean build + 98 tests pass. `test_kernel_controller` and `test_backend_smoke` skip (hardware-blocked). Golden baseline skip in SW smoke fixed (Task 6). Remaining: hardware skips (Tasks 9, 10). | Tasks 9, 10 |
 | DOD-06 | §11.2.6 | verified | All 3 icon-rendering bugs (BUG-0008, BUG-0009, BUG-0010) closed. Production icon path works in build tree and install tree without env-var injection. | — |
 | DOD-07 | §11.2.7 | verified | Read-only reviews (campaign audit round 5) found no unresolved blocking issue beyond listed tasks. | — |
 | DOD-08 | §11.2.8 | partial | README/OPERATIONS.md exist. Build/install commands work on x86_64. Flatpak not verified. aarch64 not verified. | Task 14 |
@@ -163,7 +163,7 @@ All overlay actions tested through `cbx_overlay_service_step` (production poll l
 - Documentation impact: None.
 
 ## Task 6: Fix golden comparison silent skip in backend smoke SW
-- Status: pending
+- Status: complete
 - Dependencies: none
 - Scope: `tests/test_backend_smoke_sw.c` (lines ~429, ~646)
 - Acceptance criteria: When a golden baseline file is not found, the test fails with a clear diagnostic message instead of printing `[SKIP]` and continuing. Golden baselines exist for all required states (verified: 12 PNGs in `tests/golden/`). The `printf("[SKIP]")` pattern is replaced with `fail()` or `assert_false` with a message identifying the missing baseline.

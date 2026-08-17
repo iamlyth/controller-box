@@ -21,7 +21,7 @@
  *      b. Not all-background.
  *      c. Content present in expected regions (grid cells, label, tab bar,
  *         body, buttons).
- *   8. Best-effort golden comparison (baselines are software-renderer output).
+ *   8. Golden comparison (baselines are software-renderer output).
  *
  * This test does NOT skip — the software renderer is always available.
  * The accelerated (OpenGL/GLES) variant (test_backend_smoke.c) remains the
@@ -413,7 +413,7 @@ test_overlay_software(SDL_Renderer *renderer)
         free(buf2);
     }
 
-    /* Best-effort golden comparison (baselines are software-renderer output). */
+    /* Golden comparison (baselines are software-renderer output). */
     {
         char golden_path[PATH_MAX];
         snprintf(golden_path, sizeof(golden_path),
@@ -425,8 +425,10 @@ test_overlay_software(SDL_Renderer *renderer)
                       "overlay: software output matches golden baseline") != 0)
                 goto cleanup;
         } else {
-            printf("  [SKIP] overlay: golden baseline not found at %s\n",
-                   golden_path);
+            fprintf(stderr,
+                    "  [FAIL] overlay: golden baseline not found at %s\n",
+                    golden_path);
+            goto cleanup;
         }
     }
 
@@ -630,7 +632,7 @@ test_manager_software(void)
         free(buf2);
     }
 
-    /* Best-effort golden comparison (baselines are software-renderer output). */
+    /* Golden comparison (baselines are software-renderer output). */
     {
         char golden_path[PATH_MAX];
         snprintf(golden_path, sizeof(golden_path),
@@ -642,8 +644,10 @@ test_manager_software(void)
                       "manager: software output matches golden baseline") != 0)
                 goto cleanup;
         } else {
-            printf("  [SKIP] manager: golden baseline not found at %s\n",
-                   golden_path);
+            fprintf(stderr,
+                    "  [FAIL] manager: golden baseline not found at %s\n",
+                    golden_path);
+            goto cleanup;
         }
     }
 
