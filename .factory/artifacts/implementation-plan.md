@@ -197,39 +197,43 @@ All overlay actions tested through `cbx_overlay_service_step` (production poll l
 - Block evidence: `/dev/uinput` does not exist on current runner; `modprobe` and `sudo` are unavailable; `~/.ssh/factory-ssh` launcher symlink does not exist; SSH to `dev-runner-vm` fails (hostname unresolvable); `check-factory-runner-evidence.py` reports stale aggregate binding (aggregate commit 6465013 vs HEAD 23ef8da). The test code is ready (Task 8): `test_installed_functional.c` detects `/dev/uinput` and uses kernel-backed evdev gamepad when present; `test_kernel_controller.c` will exit 0 when provisioned. Awaiting external runner provisioning with uinput module + permissions and SSH launcher setup.
 
 ## Task 10: GPU backend smoke acceptance (gpu-compositor)
-- Status: pending
+- Status: blocked
 - Dependencies: none
 - Scope: `.factory/environment.toml` (capability declaration), `.factory-state/runner-evidence/` (runner receipt), `tests/test_backend_smoke.c` (run to completion)
 - Acceptance criteria: `gpu-compositor` capability is declared in `environment.toml` with a matching runner receipt. `test_backend_smoke` runs to exit 0 (not 77) with an accelerated OpenGL/GLES backend. Framebuffer invariants are verified on the hardware backend. Conformance rows VRF-06, DOD-05 move to verified.
 - Verification: `python3 scripts/check-factory-runner-evidence.py --print-capabilities` shows `gpu-compositor`. `nix-shell --run "ctest --test-dir build-check -R 'backend_smoke$' --output-on-failure"` exits 0.
 - Documentation impact: Update `.factory/environment.toml`. Document GPU backend requirements in `docs/OPERATIONS.md`.
 - Note: Requires a runner with an accelerated GPU backend. If unavailable, mark `blocked` with evidence.
+- Block evidence: `gpu-compositor` capability is NOT declared in `.factory/environment.toml` (only `remote-project-gate`, `systemd-user`, `kernel-uinput` declared). No accelerated GPU backend available on current runner — `test_backend_smoke.c` skips (exit 77). `test_backend_smoke_sw.c` runs software renderer as partial coverage. `check-factory-runner-evidence.py` reports stale aggregate binding. Awaiting external runner provisioning with GPU compositor (OpenGL/GLES hardware acceleration).
 
 ## Task 11: aarch64 build target (target-consumer)
-- Status: pending
+- Status: blocked
 - Dependencies: none
 - Scope: `CMakeLists.txt` (cross-compile toolchain), `cmake/aarch64-toolchain.cmake` (new), build verification
 - Acceptance criteria: An aarch64 cross-compilation CMake toolchain file exists. `cmake -S . -B build-aarch64 -DCMAKE_TOOLCHAIN_FILE=cmake/aarch64-toolchain.cmake` configures successfully. `cmake --build build-aarch64` compiles with zero warnings. If a cross-compiler is available in the nix-shell, the build is executed and evidenced. Conformance row SYS-01 moves to verified (or partial with evidence if cross-compile only, no runtime test).
 - Verification: `nix-shell --run "cmake -S . -B build-aarch64 -DCMAKE_TOOLCHAIN_FILE=cmake/aarch64-toolchain.cmake -DCMAKE_BUILD_TYPE=Debug && cmake --build build-aarch64 --parallel 2>&1 | tee /tmp/aarch64-build.log"`; zero warnings. If cross-compiler unavailable, mark `blocked` with evidence and the toolchain file as deliverable.
 - Documentation impact: Document aarch64 build instructions in README.md.
+- Block evidence: `cmake/aarch64-toolchain.cmake` exists as a partial deliverable (configures CMake for cross-compilation with `aarch64-unknown-linux-gnu-gcc`). `cross-shell.nix` exists with instructions for `pkgsCross.aarch64-multiplatform`. However, `aarch64-unknown-linux-gnu-gcc` (or `aarch64-linux-gnu-gcc`) is NOT available in the current nix-shell — `which aarch64-unknown-linux-gnu-gcc` fails both outside and inside nix-shell. The current `shell.nix` does not include cross-compilation toolchains. `target-consumer` capability is NOT declared in `.factory/environment.toml`. Awaiting external provisioning of aarch64 cross-compiler toolchain (nixpkgs `pkgsCross.aarch64-multiplatform`) or a native aarch64 runner.
 
 ## Task 12: Target hardware latency and human release acceptance (target-consumer)
-- Status: pending
+- Status: blocked
 - Dependencies: none
 - Scope: `tests/test_overlay_latency.c` (Pi 4 measurement), `docs/human-release-acceptance.md` (new template/artifact)
 - Acceptance criteria: Overlay appearance latency is measured on Pi 4 (or equivalent ARM64 with GLES 3.0) and recorded: ≤75ms p99, ≤100ms max, <10ms p99 detection-to-present. A human release acceptance artifact exists with reviewer name, date, hardware, representative captures, and criteria checklist (legibility, clipping, focus indication, contrast, controller-only usability). Conformance rows SYS-02, PERF-01, VRF-07 move to verified.
 - Verification: Latency measurement log or artifact committed. Human acceptance artifact signed and committed.
 - Documentation impact: `docs/human-release-acceptance.md` created. README.md updated with Pi 4 performance results.
 - Note: Requires Pi 4 or equivalent ARM64 hardware and a human reviewer. If unavailable, mark `blocked` with evidence. The human acceptance template can be created in software as a partial deliverable.
+- Block evidence: No Pi 4 or equivalent ARM64 hardware available on current runner. `target-consumer` capability is NOT declared in `.factory/environment.toml`. No human reviewer available for release acceptance sign-off. `test_overlay_latency.c` measures latency on x86_64 but not on minimum supported hardware (Pi 4). A human release acceptance artifact (`docs/human-release-acceptance.md`) cannot be created without a human reviewer. Awaiting external provisioning of Pi 4 (or equivalent ARM64 with GLES 3.0) hardware and a human reviewer.
 
 ## Task 13: Flatpak build and real InputPlumber system DBus acceptance (installed-package, inputplumber-system-dbus)
-- Status: pending
+- Status: blocked
 - Dependencies: none
 - Scope: `packaging/org.shadowblip.ControllerBox.yaml` (Flatpak build verification), `.factory/environment.toml` (capability declarations), end-to-end test against real InputPlumber
 - Acceptance criteria: `installed-package` and `inputplumber-system-dbus` capabilities declared with runner receipts. A clean Flatpak build passes the installed functional gate (host profile paths visible, host InputPlumber DBus access verified). An end-to-end test runs against a real InputPlumber system DBus service (not a private mock) and verifies: ObjectManager enumeration, CreateTargetDevice, InterceptMode lifecycle, profile loading, GamepadOrder. If Flatpak publication is achieved, documentation may advertise the install command; otherwise the manifest remains experimental. Conformance rows PKG-01, DBUS-02 move to verified.
 - Verification: `flatpak-builder ... build-flatpak packaging/org.shadowblip.ControllerBox.yaml` succeeds. Installed functional gate passes in Flatpak. `python3 scripts/check-factory-runner-evidence.py --print-capabilities` shows both capabilities.
 - Documentation impact: README.md updated with Flatpak install instructions only if published. `docs/OPERATIONS.md` updated with InputPlumber system DBus setup.
 - Note: Requires `flatpak-builder` + SDK runtimes and InputPlumber installed on the runner. If unavailable, mark `blocked` with evidence.
+- Block evidence: `flatpak-builder` is NOT installed — `which flatpak-builder` fails. `installed-package` and `inputplumber-system-dbus` capabilities are NOT declared in `.factory/environment.toml`. No InputPlumber system DBus service available on current runner — only private mock DBus server (`native_ip_server.c`) is used for testing. `packaging/org.shadowblip.ControllerBox.yaml` (Flatpak manifest) exists as a partial deliverable. Awaiting external provisioning of `flatpak-builder` + SDK runtimes and InputPlumber system DBus service.
 
 ## Task 14: Final documentation and specification audit
 - Status: pending
