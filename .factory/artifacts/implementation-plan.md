@@ -26,7 +26,7 @@ Controller-Box is a single C binary (`controller-box`) with two modes: overlay s
 
 | REQ ID | Spec § | Classification | Current evidence | Task |
 |--------|--------|---------------|-----------------|------|
-| ARCH-01 | §2.4 | partial | `ip_connection.c` NameOwnerChanged subscription + degraded state; `test_connection.c` mock tests. Unit file requirements (no `After=/Requires=inputplumber.service`, bounded `Restart=on-failure`) verified in `test_service_install.c:160,164`. Backend-dependent controls disabled in D01. No ≤2s re-enumeration timing assertion. | Task 3 |
+| ARCH-01 | §2.4 | verified | `ip_connection.c` NameOwnerChanged subscription + degraded state; `test_connection.c` mock tests. Unit file requirements (no `After=/Requires=inputplumber.service`, bounded `Restart=on-failure`) verified in `test_service_install.c:160,164`. Backend-dependent controls disabled in D01. ≤2s re-enumeration timing verified in `test_native_dbus.c:test_native_reenumeration_timing` — measures elapsed from server restart to `reenumerate_cb` firing through production `ip_connection.c` callback path; asserts ≤2000ms. | Task 3 |
 | ARCH-02 | §2.5 | verified | `ip_composite.c` SetInterceptActivation; `ip_intercept_poll.c` 50ms poll; `trigger.c` registration; `lifecycle.c` close→PASS. `test_intercept_poll.c`, `test_trigger.c`, `test_close.c`, `test_overlay_native.c` O01. | — |
 | ARCH-02 | §2.1 | verified | GUI never touches input routing directly — all state changes via DBus. `grep -r 'include.*dbus_mock.h' src/` confirms no mock in production. No direct evdev/uinput calls in `src/`. | — |
 | ARCH-03 | §2.3 | verified | Single binary `controller-box` with `--overlay-service` and `--manager` modes. `main.c` mode dispatch. Both modes tested via `test_overlay_*.c` and `test_manager_*.c`. | — |
@@ -138,11 +138,11 @@ All overlay actions tested through `cbx_overlay_service_step` (production poll l
 - Documentation impact: None beyond bug ledger update.
 
 ## Task 3: Add re-enumeration timing test (§2.4)
-- Status: pending
+- Status: complete
 - Dependencies: none
-- Scope: `tests/test_connection.c` or `tests/test_native_dbus.c` (new timing test)
+- Scope: `tests/test_native_dbus.c` (new timing test `test_native_reenumeration_timing`)
 - Acceptance criteria: A test verifies that after `NameOwnerChanged` (service acquisition), re-enumeration completes within 2 seconds. Test uses private native-signature DBus server, simulates service loss/acquisition, measures elapsed time from NameOwnerChanged callback to re-enumeration completion, asserts ≤2s. Test runs through production `ip_connection.c` callback path.
-- Verification: `nix-shell --run "ctest --test-dir build-check -R 'connection|native_dbus' --output-on-failure"`; new timing test passes.
+- Verification: `nix-shell --run "ctest --test-dir build-check -R 'connection|native_dbus' --output-on-failure"` — both test_connection (0.01s) and test_native_dbus (7.58s) pass. Full suite 98/98 pass (2 hardware skips).
 - Documentation impact: None.
 
 ## Task 4: Complete missing interaction test paths

@@ -11,6 +11,7 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 #include <systemd/sd-bus.h>
 
@@ -132,6 +133,18 @@ static void native_degraded_cb(const char *reason, void *ud)
                  sizeof(s_native_degraded_reason), "%s", reason);
 }
 
+/* --- Timing test globals (SPEC §2.4: re-enumeration ≤2s) --- */
+
+static int s_timing_reenum_called = 0;
+static struct timespec s_timing_reenum_ts = {0};
+
+static void timing_reenumerate_cb(void *ud)
+{
+    (void)ud;
+    clock_gettime(CLOCK_MONOTONIC, &s_timing_reenum_ts);
+    s_timing_reenum_called++;
+}
+
 static void test_native_owner_loss_and_reacquisition(void **state)
 {
     (void)state;
@@ -185,6 +198,94 @@ static void test_native_owner_loss_and_reacquisition(void **state)
 
     assert_true(ip_connection_is_connected(&conn));
     assert_int_equal(s_native_reenum_called, 1);
+
+    ip_connection_disconnect(&conn);
+    kill(server_pid, SIGTERM);
+    waitpid(server_pid, NULL, 0);
+    kill(daemon_pid, SIGTERM);
+    waitpid(daemon_pid, NULL, 0);
+    unsetenv("DBUS_SYSTEM_BUS_ADDRESS");
+}
+
+/* ================================================================== */
+/*  Test 2b: Re-enumeration timing (SPEC §2.4 — ≤2s after restart)      */
+/* ================================================================== */
+
+static void test_native_reenumeration_timing(void **state)
+{
+    (void)state;
+    char address[512];
+    pid_t daemon_pid = 0;
+    assert_int_equal(nip_start_private_bus(address, sizeof(address),
+                                             &daemon_pid), 0);
+    setenv("DBUS_SYSTEM_BUS_ADDRESS", address, 1);
+
+    const nip_server_config cfg = { .num_composites = 1, .version = "9.8.7" };
+    nip_reset_server_state(1);
+    pid_t server_pid = nip_fork_server(address, &cfg);
+    assert_true(server_pid > 0);
+    usleep(100000);
+
+    const ip_dbus_backend *backend = ip_dbus_sd_backend();
+    ip_connection conn;
+    ip_connection_init(&conn, backend);
+    s_timing_reenum_called = 0;
+
+    int rc = ip_connection_connect(&conn);
+    for (int i = 0; i < 50 && rc < 0 && rc != IP_ERR_ACCESS_DENIED; i++) {
+        if (conn.bus) {
+            ip_connection_disconnect(&conn);
+            ip_connection_init(&conn, backend);
+        }
+        usleep(20000);
+        rc = ip_connection_connect(&conn);
+    }
+    assert_int_equal(rc, 0);
+    assert_true(ip_connection_is_connected(&conn));
+
+    ip_connection_set_reenumerate_cb(&conn, timing_reenumerate_cb, NULL);
+
+    /* Phase 1: Kill server (name loss) → enter degraded state. */
+    kill(server_pid, SIGTERM);
+    waitpid(server_pid, NULL, 0);
+    drain_bus(backend, conn.bus, 2000);
+    assert_true(ip_connection_is_degraded(&conn));
+
+    /* Phase 2: Restart server and measure re-enumeration timing.
+     *
+     * Per SPEC §2.4: "after the service appears or restarts they
+     * re-enumerate and become operational within two seconds without
+     * restarting Controller-Box."
+     *
+     * The production path is: NameOwnerChanged signal → noc_signal_callback
+     * → ip_connection_handle_name_changed → get_property(Version) →
+     * ip_version_is_compatible → reenumerate_cb.
+     *
+     * We measure from server restart to reenumerate_cb firing, which
+     * captures the full latency including DBus signal propagation,
+     * Version property round-trip, and callback dispatch. */
+    nip_reset_server_state(1);
+    server_pid = nip_fork_server(address, &cfg);
+    assert_true(server_pid > 0);
+
+    struct timespec t_start;
+    clock_gettime(CLOCK_MONOTONIC, &t_start);
+
+    /* Process the bus until reenumerate_cb fires or 5s safety timeout. */
+    for (int i = 0; i < 500 && s_timing_reenum_called == 0; i++) {
+        int processed = backend->process(conn.bus);
+        if (processed <= 0)
+            usleep(10000);  /* 10ms sleep between poll iterations */
+    }
+
+    assert_int_equal(s_timing_reenum_called, 1);
+    assert_true(ip_connection_is_connected(&conn));
+
+    long elapsed_ms = (s_timing_reenum_ts.tv_sec - t_start.tv_sec) * 1000L
+                    + (s_timing_reenum_ts.tv_nsec - t_start.tv_nsec) / 1000000L;
+
+    /* SPEC §2.4: re-enumeration must complete within 2 seconds. */
+    assert_true(elapsed_ms <= 2000);
 
     ip_connection_disconnect(&conn);
     kill(server_pid, SIGTERM);
@@ -892,6 +993,7 @@ int main(void)
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_production_backend_native_roundtrip),
         cmocka_unit_test(test_native_owner_loss_and_reacquisition),
+        cmocka_unit_test(test_native_reenumeration_timing),
         cmocka_unit_test(test_native_target_operations),
         cmocka_unit_test(test_native_topology_reconciliation),
         cmocka_unit_test(test_native_assignment_application),
