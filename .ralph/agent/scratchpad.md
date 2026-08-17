@@ -22,3 +22,11 @@
 - Task 12: Target hardware latency + human release acceptance — template can be created in software
 - Task 13: Flatpak build + real InputPlumber — requires flatpak-builder + InputPlumber, likely blocked
 - Task 14: Final audit — depends on all above
+
+<!-- factory-stale-recovery:start -->
+## Supervisor recovery feedback
+
+- The previous `implementation` Ralph attempt terminated as a stale loop.
+- Run `./scripts/final-gate.sh --implementation` yourself and fix every reported failure.
+- Do not repeat a completion summary until that command passes. Replace this section in the next scratchpad handoff before requesting completion.
+<!-- factory-stale-recovery:end -->
