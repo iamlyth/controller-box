@@ -27,7 +27,7 @@
 #define CBX_SOURCE_DIR "."
 #endif
 
-#define SVG_DIR CBX_SOURCE_DIR "/data/icons/svg/"
+#define SVG_DIR CBX_SOURCE_DIR "/data/icons"
 
 /* --- Test YAML strings --------------------------------------------------- */
 
@@ -617,7 +617,7 @@ static void test_reparse_resets(void **state)
 static int verify_svg_nanosvg(const char *svg_name)
 {
     char path[PATH_MAX + 64];
-    snprintf(path, sizeof(path), "%s%s", SVG_DIR, svg_name);
+    snprintf(path, sizeof(path), "%s/svg/%s", SVG_DIR, svg_name);
 
     NSVGimage *image = nsvgParseFromFile(path, "px", 96.0f);
     if (!image)
@@ -728,7 +728,7 @@ static void test_svg_keyboard(void **state)
 static void test_svg_all_compat(void **state)
 {
     (void)state;
-    DIR *dir = opendir(SVG_DIR);
+    DIR *dir = opendir(SVG_DIR "/svg");
     if (!dir) {
         /* If the directory doesn't exist in this build environment,
          * skip the test rather than fail. */

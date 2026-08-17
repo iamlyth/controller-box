@@ -77,7 +77,8 @@ static int rasterize_svg(cbx_icon_cache *cache, const char *icon_name)
     char path[640];
     int plen;
 
-    /* Build full path: icon_dir + "/" + file_name + ".svg"
+    /* Build full path: icon_dir + "/svg/" + file_name + ".svg"
+     * The CMake install layout places SVGs in ${ICON_DIR}/svg/.
      * Strip the "cc-" prefix used by Controllercons icon names in the
      * YAML mapping — the actual SVG files on disk do not have it. */
     const char *file_name = icon_name;
@@ -96,7 +97,7 @@ static int rasterize_svg(cbx_icon_cache *cache, const char *icon_name)
         return -EINVAL;
     }
 
-    plen = snprintf(path, sizeof(path), "%s/%s.svg", cache->icon_dir, file_name);
+    plen = snprintf(path, sizeof(path), "%s/svg/%s.svg", cache->icon_dir, file_name);
     if (plen < 0 || (size_t)plen >= sizeof(path))
         return -ENAMETOOLONG;
 

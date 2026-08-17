@@ -39,7 +39,7 @@ Controller-Box is a single C binary (`controller-box`) with two modes: overlay s
 | OVL-05 | §4.7 | verified | `dynamic_columns.c` column count from targets, rebuild on hotplug. `test_dynamic_columns.c`, `test_overlay_interaction.c` hotplug test. | — |
 | OVL-06 | §4.8 | verified | Model name + slot position display; no nickname prompts. `grid_render.c` row labels. `test_grid_render.c`. | — |
 | OVL-07 | §4.9 | verified | `surface_build.c` pre-built render-to-texture, zero-alloc show. `test_surface_build.c`. | — |
-| OVL-08 | §4.10 | partial | `test_overlay_visual.c` framebuffer pixel tests for 7 states. BUT icon textures don't load through production `cbx_icon_dir()` path (BUG-0009); tests bypass with `SVG_DIR` direct to `cbx_icon_cache_init`. Virtual-device icons may be absent in production. | Task 1 |
+| OVL-08 | §4.10 | verified | `test_overlay_visual.c` framebuffer pixel tests for 7 states. Icon textures load through production `cbx_icon_dir()` path; `icon_cache.c` now appends `/svg/` matching CMake install layout. `test_production_path_icon_load` asserts at least one icon loads via `cbx_icon_dir()` → `cbx_icon_cache_init()` → `cbx_icon_cache_load()`. | — |
 | OVL-09 | §4.10 | partial | Overlay visual tests use `SVG_DIR=CBX_SOURCE_DIR"/data/icons/svg/"` directly, bypassing production `cbx_icon_dir()`. Tests pass while production renders without icons. | Task 2 |
 | MGR-01 | §5.1 | verified | `manager.c` 3 tabs, tabbar, focus chain, pointer hit-test, controller-to-key mapping. `test_manager_tabs.c`, `test_focus.c`, `test_manager_visual.c`. | — |
 | MGR-02 | §5.2 | verified | `controllers_tab.c` add/remove/type-change with DBus calls + topology reconciliation in `overlay_service.c`. `test_controllers_tab.c`, `test_manager_interaction_ctrl.c` M04–M09, `test_overlay_reconcile.c`, `test_native_dbus.c` Test 6. | — |
@@ -54,7 +54,7 @@ Controller-Box is a single C binary (`controller-box`) with two modes: overlay s
 | ID-02 | §6.2 | verified | `gamepad_order_restore.c` GamepadOrder restoration via PersistentId mapping. `test_order_restore.c`. | — |
 | CFG-01 | §7.1–7.4, §7.6 | verified | `config_settings.c` settings.yaml, `config_assignments.c` assignments.yaml with gamepad_order, `config_profile.c` InputPlumber device_profile_v1 YAML. `test_settings.c`, `test_assignments.c`, `test_profile_yaml.c`. | — |
 | CFG-02 | §7.5 | verified | `config_profile_meta.c` sidecar with display_name/icon/display_order/description, O_NOFOLLOW, atomic write. `test_profile_list.c` sidecar tests. | — |
-| ICO-01 | §8.1–8.5 | partial | `icon_cache.c` nanosvg rasterization, `icon_map.c` YAML mapping, `icon_lookup.c` runtime lookup with override. Custom SVGs exist: `arcade-stick.svg`, `hitbox.svg`, `steam-deck.svg`, `generic-gamepad.svg` in `data/icons/svg/`. BUT `icon_cache.c:99` builds `{icon_dir}/{name}.svg` without `/svg/` subdirectory — SVGs installed to `{icon_dir}/svg/`. Production icon loading fails silently. | Task 1 |
+| ICO-01 | §8.1–8.5 | verified | `icon_cache.c` nanosvg rasterization, `icon_map.c` YAML mapping, `icon_lookup.c` runtime lookup with override. Custom SVGs exist: `arcade-stick.svg`, `hitbox.svg`, `steam-deck.svg`, `generic-gamepad.svg` in `data/icons/svg/`. `icon_cache.c:99` now builds `{icon_dir}/svg/{name}.svg` matching CMake install layout. `cbx_icon_dir()` has source-tree fallback via `SOURCE_ICON_DIR`. `test_production_path_icon_load` verifies production path. | — |
 | PKG-01 | §9.1 | partial | Flatpak manifest complete and marked experimental. No Flathub install advertised. BUT no clean Flatpak build has passed installed functional gate; not published. | Task 11 |
 | PKG-02 | §9.2–9.4 | verified | CMake `make install` places binary, service, desktop entry, icons, mapping YAML. `test_packaging.sh`, `test_packaging_install.sh`, `test_service_install.c`. | — |
 | PKG-03 | §9.1, §9.3 | partial | `service_install.c` implements `cbx_service_install()` with atomic write, systemctl enable. BUT `cbx_service_install()` is never called from `manager.c` — not wired into manager UI. No first-run detection or "Enable overlay service?" dialog exists. Tests call `cbx_service_install()` directly, bypassing production dispatch. | Task 7 |
@@ -122,11 +122,11 @@ All overlay actions tested through `cbx_overlay_service_step` (production poll l
 ## Task list
 
 ## Task 1: Fix icon cache SVG path mismatch (BUG-0008, BUG-0009)
-- Status: pending
+- Status: complete
 - Dependencies: none
-- Scope: `src/icons/icon_cache.c` (path construction), `src/config/config_paths.c` (verify `cbx_icon_dir()` return value), `src/app/overlay_service.c` (verify init call)
+- Scope: `src/icons/icon_cache.c` (path construction), `src/config/config_paths.c` (`cbx_icon_dir()` source-tree fallback), `config.h.in` (`SOURCE_ICON_DIR`), test `SVG_DIR`/`OVERLAY_SVG_DIR` macros
 - Acceptance criteria: `cbx_icon_cache_load` constructs SVG paths as `{icon_dir}/svg/{name}.svg`, matching the CMake install layout (`CMakeLists.txt:204` installs to `${CBX_ICON_INSTALL_DIR}/svg`). A new test exercises the production `cbx_icon_dir()` → `cbx_icon_cache_init()` → `cbx_icon_cache_load()` path and asserts at least one icon texture loads from the installed directory structure. BUG-0008 and BUG-0009 are resolved in `.factory/bugs/open.md` (moved to closed ledger).
-- Verification: `nix-shell --run "ctest --test-dir build-check -R 'icon_cache' --output-on-failure"`; new production-path icon load test passes. Verify `cbx_icon_dir()` returns a path whose `svg/` subdirectory contains SVGs in the build tree.
+- Verification: `nix-shell --run "ctest --test-dir build-check -R 'icon_cache' --output-on-failure"` passes 30/30 including `test_production_path_icon_load`. Full suite 98/98 (2 hardware skips). `cbx_icon_dir()` returns source-tree path in build tree via `SOURCE_ICON_DIR` fallback (verified by production-path test). BUG-0008/0009 moved to `.factory/bugs/closed.md`.
 - Documentation impact: None beyond bug ledger update.
 
 ## Task 2: Remove test icon-path env-var bypasses (BUG-0010)

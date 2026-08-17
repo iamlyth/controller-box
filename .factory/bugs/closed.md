@@ -117,6 +117,38 @@ Schema: `ralph-bug-ledger/v1`
     "resolution": "Fixed in profile_editor_list.c: construct SVG path from cbx_icon_dir() + /svg/generic-gamepad.svg. Added CBX_ICON_DIR env var override to cbx_icon_dir() for tests. Updated test_manager_visual.c and test_golden.c. Regenerated golden images.",
     "verification": "96 pass, 2 skip (hardware), 0 failures. base_texture assertion confirms SVG loaded. Golden comparison passes with regenerated baselines.",
     "closed": "2026-08-16"
+  },
+  {
+    "id": "BUG-0008",
+    "title": "Controller diagram SVG not rendered when running from build tree",
+    "status": "closed",
+    "severity": "high",
+    "reported": "2026-08-16",
+    "external": [],
+    "contract_change": false,
+    "reproduction": "Run ./build-check/controller-box --manager from the build tree without setting CBX_ICON_DIR. Open the profile editor. The left-panel controller diagram shows only a flat panel_bg rectangle with sparse button highlights; no controller outline is drawn.",
+    "expected": "The profile editor diagram renders the generic-gamepad.svg controller outline (SPEC §5.4: always-visible controller diagram; §5.6: meaningful non-background framebuffer output).",
+    "actual": "cbx_icon_dir() returns the compile-time ICON_DIR (/usr/share/controller-box/icons), which does not exist in the build tree. profile_editor_list.c builds /usr/share/controller-box/icons/svg/generic-gamepad.svg, load_svg_texture() returns NULL, and the diagram falls back to a flat rectangle. The diagram only renders when CBX_ICON_DIR is set to the source tree.",
+    "acceptance": "Running the manager from the build tree (no env var) renders the controller outline. A test exercises the production cbx_icon_dir() path (no env-var injection) and asserts base_texture is non-NULL.",
+    "resolution": "Added SOURCE_ICON_DIR compile-time constant and source-tree fallback in cbx_icon_dir() (config_paths.c), matching the existing cbx_builtin_profiles_dir() pattern: checks ICON_DIR/svg/ first, falls back to SOURCE_ICON_DIR/svg/. This makes the production path work in the build tree without env-var injection. Fixed icon_cache.c path construction to append /svg/ subdirectory, consistent with the CMake install layout and profile_editor_list.c.",
+    "verification": "test_production_path_icon_load in test_icon_cache.c exercises cbx_icon_dir() (no env var) → cbx_icon_cache_init() → cbx_icon_cache_load() and asserts at least one icon texture loads. All icon_cache tests pass.",
+    "closed": "2026-08-17"
+  },
+  {
+    "id": "BUG-0009",
+    "title": "Overlay icon cache path mismatch: looks in icons/ but SVGs installed to icons/svg/",
+    "status": "closed",
+    "severity": "high",
+    "reported": "2026-08-16",
+    "external": [],
+    "contract_change": false,
+    "reproduction": "Run the overlay service. The selection grid renders without virtual-device icons. overlay_service.c passes cbx_icon_dir() (= /usr/share/controller-box/icons) to cbx_icon_cache_init(); icon_cache.c builds /usr/share/controller-box/icons/{name}.svg, but CMake installs SVGs to /usr/share/controller-box/icons/svg/{name}.svg.",
+    "expected": "The overlay renders virtual-device icons in each grid cell (SPEC §4.10, §8.1).",
+    "actual": "icon_cache.c:99 builds icon_dir/{name}.svg without the /svg/ subdirectory, so no icon textures load. The diagram call site (profile_editor_list.c) correctly appends /svg/, but the overlay icon cache does not. Tests bypass by passing data/icons/svg/ directly to cbx_icon_cache_init().",
+    "acceptance": "The overlay loads at least one icon texture through the production cbx_icon_dir() path. A test exercises cbx_icon_dir() -> cbx_icon_cache_init() -> cbx_icon_cache_load() and asserts at least one icon loads from the installed directory structure.",
+    "resolution": "Fixed icon_cache.c:99 to build {icon_dir}/svg/{name}.svg instead of {icon_dir}/{name}.svg, matching the CMake install layout (CMakeLists.txt installs SVGs to ${CBX_ICON_INSTALL_DIR}/svg). overlay_service.c continues passing cbx_icon_dir() unchanged. Updated all test SVG_DIR/OVERLAY_SVG_DIR macros from .../data/icons/svg/ to .../data/icons so icon_cache.c appends /svg/ internally. Added SOURCE_ICON_DIR fallback in cbx_icon_dir() for build-tree operation.",
+    "verification": "test_production_path_icon_load in test_icon_cache.c exercises the full production path and asserts at least one icon texture loads. All icon_cache, overlay_visual, golden, and icon_lookup tests pass with the corrected path construction.",
+    "closed": "2026-08-17"
   }
 ]
 ```

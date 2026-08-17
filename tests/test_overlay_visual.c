@@ -51,7 +51,7 @@
 #define CBX_SOURCE_DIR "."
 #endif
 
-#define SVG_DIR  CBX_SOURCE_DIR "/data/icons/svg/"
+#define SVG_DIR  CBX_SOURCE_DIR "/data/icons"
 #define YAML_DIR CBX_SOURCE_DIR "/data/"
 
 /* Visual dimensions for the overlay surface. */

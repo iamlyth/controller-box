@@ -15,6 +15,10 @@
 /* Installed SVG controller icons (read-only). */
 #define ICON_DIR "@CBX_ICON_DIR@"
 
+/* Source-tree icon directory — fallback for development builds before
+ * `cmake --install`.  SVGs are at ${SOURCE_ICON_DIR}/svg/. */
+#define SOURCE_ICON_DIR "@CMAKE_CURRENT_SOURCE_DIR@/data/icons"
+
 /* Bundled font directory: ${DATA_DIR}/fonts (read-only).  Intended for
  * future bundled fonts; runtime discovery also checks system font
  * directories via cbx_font_path() in config_paths.c. */

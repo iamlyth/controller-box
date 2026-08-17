@@ -91,7 +91,7 @@
 #error "CBX_SOURCE_DIR must be defined (project source root for data files)"
 #endif
 
-#define OVERLAY_SVG_DIR  CBX_SOURCE_DIR "/data/icons/svg/"
+#define OVERLAY_SVG_DIR  CBX_SOURCE_DIR "/data/icons"
 #define OVERLAY_YAML_DIR CBX_SOURCE_DIR "/data/"
 #define OVERLAY_W 1280
 #define OVERLAY_H 720

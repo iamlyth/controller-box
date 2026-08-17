@@ -31,7 +31,7 @@
 #define CBX_SOURCE_DIR "."
 #endif
 
-#define SVG_DIR  CBX_SOURCE_DIR "/data/icons/svg/"
+#define SVG_DIR  CBX_SOURCE_DIR "/data/icons"
 #define YAML_DIR CBX_SOURCE_DIR "/data/"
 #define PNG_FIXTURE CBX_SOURCE_DIR "/tests/fixtures/test_icon.png"
 

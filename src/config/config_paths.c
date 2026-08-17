@@ -218,6 +218,14 @@ const char *cbx_icon_dir(void)
     const char *env = getenv("CBX_ICON_DIR");
     if (env && env[0] == '/')
         return env;
+
+    /* Installed assets are authoritative.  The source-tree fallback
+     * keeps development builds functional before `cmake --install`,
+     * matching the pattern in cbx_builtin_profiles_dir(). */
+    if (access(ICON_DIR "/svg/generic-gamepad.svg", R_OK) == 0)
+        return ICON_DIR;
+    if (access(SOURCE_ICON_DIR "/svg/generic-gamepad.svg", R_OK) == 0)
+        return SOURCE_ICON_DIR;
     return ICON_DIR;
 }
 
