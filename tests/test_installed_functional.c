@@ -91,7 +91,6 @@
 #error "CBX_SOURCE_DIR must be defined (project source root for data files)"
 #endif
 
-#define OVERLAY_SVG_DIR  CBX_SOURCE_DIR "/data/icons"
 #define OVERLAY_YAML_DIR CBX_SOURCE_DIR "/data/"
 #define OVERLAY_W 1280
 #define OVERLAY_H 720
@@ -780,7 +779,7 @@ test_installed_functional(void **state)
     bool has_icons = false;
     if (cbx_icon_map_load(&svc->icon_map, icon_yaml) == 0) {
         if (cbx_icon_cache_init(&svc->icon_cache, svc->rend.renderer,
-                                OVERLAY_SVG_DIR, 64) == 0) {
+                                cbx_icon_dir(), 64) == 0) {
             cbx_icon_cache_load(&svc->icon_cache, &svc->icon_map);
             has_icons = true;
         }

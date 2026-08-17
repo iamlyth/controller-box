@@ -40,15 +40,15 @@ Controller-Box is a single C binary (`controller-box`) with two modes: overlay s
 | OVL-06 | §4.8 | verified | Model name + slot position display; no nickname prompts. `grid_render.c` row labels. `test_grid_render.c`. | — |
 | OVL-07 | §4.9 | verified | `surface_build.c` pre-built render-to-texture, zero-alloc show. `test_surface_build.c`. | — |
 | OVL-08 | §4.10 | verified | `test_overlay_visual.c` framebuffer pixel tests for 7 states. Icon textures load through production `cbx_icon_dir()` path; `icon_cache.c` now appends `/svg/` matching CMake install layout. `test_production_path_icon_load` asserts at least one icon loads via `cbx_icon_dir()` → `cbx_icon_cache_init()` → `cbx_icon_cache_load()`. | — |
-| OVL-09 | §4.10 | partial | Overlay visual tests use `SVG_DIR=CBX_SOURCE_DIR"/data/icons/svg/"` directly, bypassing production `cbx_icon_dir()`. Tests pass while production renders without icons. | Task 2 |
+| OVL-09 | §4.10 | verified | `test_overlay_visual.c` framebuffer pixel tests for 7 states. Icon textures load through production `cbx_icon_dir()` path; `icon_cache.c` appends `/svg/` matching CMake install layout. `test_production_path_icon_load` asserts icon loads via `cbx_icon_dir()` → `cbx_icon_cache_init()` → `cbx_icon_cache_load()`. No env-var injection. | — |
 | MGR-01 | §5.1 | verified | `manager.c` 3 tabs, tabbar, focus chain, pointer hit-test, controller-to-key mapping. `test_manager_tabs.c`, `test_focus.c`, `test_manager_visual.c`. | — |
 | MGR-02 | §5.2 | verified | `controllers_tab.c` add/remove/type-change with DBus calls + topology reconciliation in `overlay_service.c`. `test_controllers_tab.c`, `test_manager_interaction_ctrl.c` M04–M09, `test_overlay_reconcile.c`, `test_native_dbus.c` Test 6. | — |
 | MGR-03 | §5.3 | verified | `profiles_tab.c` browse/create (Default copy/Empty/Clone)/edit/delete, confirm-quit. `test_profiles_tab.c`, `test_manager_interaction_prof.c` M10–M20. | — |
 | MGR-04 | §5.4 | verified | `profile_editor_list.c` binding list + `profile_editor_seq.c` sequential mode. `profile_validate.c` NES minimum. `profile_save.c` save with validation. `test_editor_list_mode.c`, `test_editor_seq_mode.c`, `test_profile_validate.c`, `test_profile_save.c`, `test_manager_interaction_prof.c` M28–M38. | — |
 | MGR-05 | §5.5 | verified | `settings_tab.c` all settings (launch_at_boot, theme, opacity, VC count/types, trigger, icon overrides). `test_settings_tab.c`, `test_manager_interaction_ctrl.c` M21–M27. | — |
-| MGR-06 | §5.6 | partial | `test_manager_visual.c` framebuffer tests for all 3 tabs + editor states. BUT `test_manager_visual.c:333` sets `CBX_ICON_DIR` env var, masking production icon path failure (BUG-0010). Diagram SVG not rendered from build tree (BUG-0008). | Task 2 |
+| MGR-06 | §5.6 | verified | `test_manager_visual.c` framebuffer tests for all 3 tabs + editor states. Icons load through production `cbx_icon_dir()` path (SOURCE_ICON_DIR fallback) — no env-var injection. Diagram SVG renders from build tree. | — |
 | MGR-07 | §5.7 | partial | Interaction inventory M01–M38 + D01–D08 in `test_manager_interaction_ctrl.c`/`test_manager_interaction_prof.c` through `cbx_manager_handle_event`. Gaps: M09 type-picker cancel pointer path, M16 name-input cancel pointer path, VC types slots 1–3 not individually tested. | Task 4 |
-| MGR-08 | §5.7 | partial | `test_golden.c` golden image comparison with `setenv("CBX_ICON_DIR",...)` bypass (BUG-0010). Golden baselines may not match production output. | Task 2 |
+| MGR-08 | §5.7 | verified | `test_golden.c` golden image comparison through production `cbx_icon_dir()` path — no env-var injection. Golden baselines match production output. `test-production-path-bypass.sh` passes. | — |
 | OVL-10 | §5.7 | partial | Overlay interaction O01–O13 tested via keyboard events (supplemental). DBus InputEvent path (primary production transport) tested only for O11 (multi-controller) and O10c (close via DBus B). Basic navigation O02–O09 lack DBus InputEvent tests in native suite. | Task 5 |
 | ID-01 | §6.2–6.3 | verified | `identity.c` 4-layer extraction with BT:/USB:/USB:phys:/ORDER: prefixes. `identity_downgrade.c` downgrade detection. `assign.c`, `assign_persist.c`. `test_identity.c`, `test_identity_downgrade.c`, `test_assign.c`, `test_assign_persist.c`. | — |
 | ID-02 | §6.2 | verified | `gamepad_order_restore.c` GamepadOrder restoration via PersistentId mapping. `test_order_restore.c`. | — |
@@ -75,9 +75,9 @@ Controller-Box is a single C binary (`controller-box`) with two modes: overlay s
 | DOD-01 | §11.2.1 | partial | Conformance matrix covers all requirements; non-verified rows mapped to tasks. | Task 14 |
 | DOD-02 | §11.2.2 | verified | Production-path tests through `cbx_manager_handle_event`, `cbx_overlay_service_step`, native DBus. Direct callback tests are supplemental. | — |
 | DOD-03 | §11.2.3 | partial | Interaction inventory M01–M39 + O01–O13 with controller+pointer paths. Gaps in M09/M16 pointer, O02–O09 DBus InputEvent, kernel-backed controller transport. | Tasks 4, 5, 8, 9 |
-| DOD-04 | §11.2.4 | partial | §§4.10, 5.6, 11.1 visual tests pass for normal/degraded/error states. Icon path bugs mask missing icons in production. | Tasks 1, 2 |
+| DOD-04 | §11.2.4 | verified | §§4.10, 5.6, 11.1 visual tests pass for normal/degraded/error states. All icon paths use production `cbx_icon_dir()` — no env-var bypasses. | — |
 | DOD-05 | §11.2.5 | partial | Clean build + 98 tests pass. `test_kernel_controller` and `test_backend_smoke` skip. Golden baseline skip in SW smoke. | Tasks 6, 9, 10 |
-| DOD-06 | §11.2.6 | partial | 3 open bugs (BUG-0008, BUG-0009, BUG-0010) contradict v1 icon rendering requirements. | Tasks 1, 2 |
+| DOD-06 | §11.2.6 | verified | All 3 icon-rendering bugs (BUG-0008, BUG-0009, BUG-0010) closed. Production icon path works in build tree and install tree without env-var injection. | — |
 | DOD-07 | §11.2.7 | verified | Read-only reviews (campaign audit round 5) found no unresolved blocking issue beyond listed tasks. | — |
 | DOD-08 | §11.2.8 | partial | README/OPERATIONS.md exist. Build/install commands work on x86_64. Flatpak not verified. aarch64 not verified. | Task 14 |
 | DOD-09 | §11.2.9 | verified | Git tree clean on develop; task ledger present; spec binding fresh. | — |
@@ -130,11 +130,11 @@ All overlay actions tested through `cbx_overlay_service_step` (production poll l
 - Documentation impact: None beyond bug ledger update.
 
 ## Task 2: Remove test icon-path env-var bypasses (BUG-0010)
-- Status: pending
+- Status: complete
 - Dependencies: Task 1
-- Scope: `tests/test_manager_visual.c`, `tests/test_golden.c`, `tests/test_overlay_visual.c`, `tests/test_installed_functional.c`, `CMakeLists.txt` (test compile definitions)
-- Acceptance criteria: No test calls `setenv("CBX_ICON_DIR", ...)`. No test passes a hardcoded `SVG_DIR`/`OVERLAY_SVG_DIR` directly to `cbx_icon_cache_init` — all use `cbx_icon_dir()` (the production path). CMake configures test targets with a compile-time `CBX_ICON_DIR` pointing to the source tree `data/icons` directory (or equivalent build-tree install) so `cbx_icon_dir()` resolves correctly without runtime env var injection. `test-production-path-bypass.sh` passes. All visual, golden, and installed functional tests still pass. BUG-0010 is resolved in bug ledger.
-- Verification: `grep -r 'setenv.*CBX_ICON_DIR' tests/` returns no matches. `./scripts/test-production-path-bypass.sh` passes. `nix-shell --run "ctest --test-dir build-check -R 'golden|manager_visual|overlay_visual|installed_functional' --output-on-failure"`.
+- Scope: `src/config/config_paths.c` (remove env-var override), `tests/test_manager_visual.c`, `tests/test_golden.c`, `tests/test_overlay_visual.c`, `tests/test_installed_functional.c`, `tests/test_icon_cache.c`, `tests/test_icon_lookup.c`, `tests/test_backend_smoke_sw.c`, `tests/test_backend_smoke.c`
+- Acceptance criteria: No test calls `setenv("CBX_ICON_DIR", ...)`. No test passes a hardcoded `SVG_DIR`/`OVERLAY_SVG_DIR` directly to `cbx_icon_cache_init` — all use `cbx_icon_dir()` (the production path). `cbx_icon_dir()` resolves via ICON_DIR (install path) with SOURCE_ICON_DIR fallback (source tree) without runtime env var injection. `test-production-path-bypass.sh` passes. All visual, golden, and installed functional tests still pass. BUG-0010 is resolved in bug ledger.
+- Verification: `grep -r 'setenv.*CBX_ICON_DIR' tests/` returns no matches. `./tests/test-production-path-bypass.sh` passes (no resource-path env-var injection found). `nix-shell --run 'ctest --test-dir build-check --output-on-failure'` → 98/98 pass (2 hardware skips). BUG-0010 moved to `.factory/bugs/closed.md`.
 - Documentation impact: None beyond bug ledger update.
 
 ## Task 3: Add re-enumeration timing test (§2.4)

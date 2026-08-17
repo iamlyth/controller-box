@@ -31,7 +31,6 @@
 #define CBX_SOURCE_DIR "."
 #endif
 
-#define SVG_DIR  CBX_SOURCE_DIR "/data/icons"
 #define YAML_DIR CBX_SOURCE_DIR "/data/"
 #define PNG_FIXTURE CBX_SOURCE_DIR "/tests/fixtures/test_icon.png"
 
@@ -67,7 +66,7 @@ static int setup(void **state)
         return -1;
     }
 
-    if (cbx_icon_cache_init(&s->cache, s->sdl.renderer, SVG_DIR, 128) != 0) {
+    if (cbx_icon_cache_init(&s->cache, s->sdl.renderer, cbx_icon_dir(), 128) != 0) {
         fprintf(stderr, "SETUP: cannot init icon cache\n");
         test_harness_sdl_shutdown(&s->sdl);
         free(s);
@@ -488,7 +487,7 @@ static void test_load_on_demand(void **state)
 
     /* Use a fresh cache that hasn't been pre-loaded. */
     cbx_icon_cache fresh;
-    assert_int_equal(cbx_icon_cache_init(&fresh, s->sdl.renderer, SVG_DIR, 128), 0);
+    assert_int_equal(cbx_icon_cache_init(&fresh, s->sdl.renderer, cbx_icon_dir(), 128), 0);
 
     /* Lookup a known type — should load on demand. */
     int rc = cbx_icon_lookup(&fresh, &s->map, "xb360", NULL, &res);
@@ -505,7 +504,7 @@ static void test_override_load_on_demand(void **state)
 
     /* Use a fresh cache. */
     cbx_icon_cache fresh;
-    assert_int_equal(cbx_icon_cache_init(&fresh, s->sdl.renderer, SVG_DIR, 128), 0);
+    assert_int_equal(cbx_icon_cache_init(&fresh, s->sdl.renderer, cbx_icon_dir(), 128), 0);
 
     /* Override with a known icon not yet in the cache. */
     int rc = cbx_icon_lookup(&fresh, &s->map, "xb360", "cc-ps5", &res);

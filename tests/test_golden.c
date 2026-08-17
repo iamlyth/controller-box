@@ -61,7 +61,6 @@
 #define CBX_SOURCE_DIR "."
 #endif
 
-#define SVG_DIR  CBX_SOURCE_DIR "/data/icons"
 #define YAML_DIR CBX_SOURCE_DIR "/data/"
 #define GOLDEN_DIR CBX_SOURCE_DIR "/tests/golden/"
 #define FAIL_DIR   CBX_SOURCE_DIR "/tests/golden-fail/"
@@ -227,7 +226,7 @@ ov_setup(void **state)
              YAML_DIR);
     if (cbx_icon_map_load(&f->icon_map, yaml_path) == 0) {
         if (cbx_icon_cache_init(&f->icon_cache, f->sdl.renderer,
-                                SVG_DIR, 64) == 0) {
+                                cbx_icon_dir(), 64) == 0) {
             cbx_icon_cache_load(&f->icon_cache, &f->icon_map);
             f->has_icons = true;
         }
@@ -523,13 +522,8 @@ mgr_setup(void **state)
     unsetenv("XDG_DATA_HOME");
     unsetenv("FLATPAK_ID");
 
-    /* Redirect icon directory to source tree for diagram SVG (BUG-0007). */
-    {
-        char icon_dir[PATH_MAX];
-        snprintf(icon_dir, sizeof(icon_dir), "%s/data/icons",
-                 CBX_SOURCE_DIR);
-        setenv("CBX_ICON_DIR", icon_dir, 1);
-    }
+    /* Icon directory is resolved via the production cbx_icon_dir() path
+     * (SOURCE_ICON_DIR fallback in config_paths.c) — no env-var injection. */
 
     char profiles_dir[PATH_MAX + 64];
     snprintf(profiles_dir, sizeof(profiles_dir),
@@ -541,7 +535,6 @@ mgr_setup(void **state)
     if (rc != 0) {
         if (f->saved_home_set) setenv("HOME", f->saved_home, 1);
         else unsetenv("HOME");
-        unsetenv("CBX_ICON_DIR");
         free(f);
         return -1;
     }
@@ -564,7 +557,6 @@ mgr_teardown(void **state)
 
         if (f->saved_home_set) setenv("HOME", f->saved_home, 1);
         else unsetenv("HOME");
-        unsetenv("CBX_ICON_DIR");
 
         char cmd[PATH_MAX * 2 + 32];
         snprintf(cmd, sizeof(cmd), "rm -rf '%s'", f->tmp);

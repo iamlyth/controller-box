@@ -57,7 +57,6 @@
 #define CBX_SOURCE_DIR "."
 #endif
 
-#define SVG_DIR    CBX_SOURCE_DIR "/data/icons"
 #define YAML_DIR   CBX_SOURCE_DIR "/data/"
 #define GOLDEN_DIR CBX_SOURCE_DIR "/tests/golden/"
 
@@ -277,7 +276,7 @@ test_overlay_accelerated(SDL_Renderer *renderer)
     snprintf(yaml_path, sizeof(yaml_path), "%s/controller-icons.yaml",
              YAML_DIR);
     if (cbx_icon_map_load(&icon_map, yaml_path) == 0) {
-        if (cbx_icon_cache_init(&icon_cache, renderer, SVG_DIR, 64) == 0) {
+        if (cbx_icon_cache_init(&icon_cache, renderer, cbx_icon_dir(), 64) == 0) {
             cbx_icon_cache_load(&icon_cache, &icon_map);
             has_icons = true;
         }

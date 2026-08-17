@@ -26,7 +26,6 @@
 #define CBX_SOURCE_DIR "."
 #endif
 
-#define SVG_DIR  CBX_SOURCE_DIR "/data/icons"
 #define YAML_DIR CBX_SOURCE_DIR "/data/"
 
 /* ------------------------------------------------------------------ */
@@ -86,23 +85,23 @@ static int teardown(void **state)
 static void test_init_basic(void **state)
 {
     struct test_state *s = *state;
-    int rc = cbx_icon_cache_init(&s->cache, s->sdl.renderer, SVG_DIR, 128);
+    int rc = cbx_icon_cache_init(&s->cache, s->sdl.renderer, cbx_icon_dir(), 128);
     assert_int_equal(rc, 0);
     assert_non_null(s->cache.rasterizer);
     assert_int_equal(s->cache.count, 0);
     assert_int_equal(s->cache.target_size, 128);
-    assert_string_equal(s->cache.icon_dir, SVG_DIR);
+    assert_string_equal(s->cache.icon_dir, cbx_icon_dir());
     cbx_icon_cache_cleanup(&s->cache);
 }
 
 static void test_init_null_args(void **state)
 {
     struct test_state *s = *state;
-    assert_int_equal(cbx_icon_cache_init(NULL, s->sdl.renderer, SVG_DIR, 64), -EINVAL);
-    assert_int_equal(cbx_icon_cache_init(&s->cache, NULL, SVG_DIR, 64), -EINVAL);
+    assert_int_equal(cbx_icon_cache_init(NULL, s->sdl.renderer, cbx_icon_dir(), 64), -EINVAL);
+    assert_int_equal(cbx_icon_cache_init(&s->cache, NULL, cbx_icon_dir(), 64), -EINVAL);
     assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, NULL, 64), -EINVAL);
-    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, SVG_DIR, 0), -EINVAL);
-    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, SVG_DIR, -1), -EINVAL);
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, cbx_icon_dir(), 0), -EINVAL);
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, cbx_icon_dir(), -1), -EINVAL);
 }
 
 /* --- Load + rasterize tests --------------------------------------- */
@@ -110,7 +109,7 @@ static void test_init_null_args(void **state)
 static void test_load_all(void **state)
 {
     struct test_state *s = *state;
-    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, SVG_DIR, 128), 0);
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, cbx_icon_dir(), 128), 0);
     int rc = cbx_icon_cache_load(&s->cache, &s->map);
     assert_int_equal(rc, 0);
     /* Should have cached at least a few distinct icons. */
@@ -120,7 +119,7 @@ static void test_load_all(void **state)
 static void test_load_texture_exists(void **state)
 {
     struct test_state *s = *state;
-    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, SVG_DIR, 128), 0);
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, cbx_icon_dir(), 128), 0);
     assert_int_equal(cbx_icon_cache_load(&s->cache, &s->map), 0);
 
     /* cc-ps5 is a mapped icon. */
@@ -131,7 +130,7 @@ static void test_load_texture_exists(void **state)
 static void test_load_texture_dims(void **state)
 {
     struct test_state *s = *state;
-    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, SVG_DIR, 64), 0);
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, cbx_icon_dir(), 64), 0);
     assert_int_equal(cbx_icon_cache_load(&s->cache, &s->map), 0);
 
     int w = -1, h = -1;
@@ -147,7 +146,7 @@ static void test_load_texture_dims(void **state)
 static void test_load_aspect_ratio(void **state)
 {
     struct test_state *s = *state;
-    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, SVG_DIR, 128), 0);
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, cbx_icon_dir(), 128), 0);
     assert_int_equal(cbx_icon_cache_load(&s->cache, &s->map), 0);
 
     /* generic-gamepad is likely square. Verify dimensions are reasonable. */
@@ -161,7 +160,7 @@ static void test_load_aspect_ratio(void **state)
 static void test_load_idempotent(void **state)
 {
     struct test_state *s = *state;
-    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, SVG_DIR, 128), 0);
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, cbx_icon_dir(), 128), 0);
     assert_int_equal(cbx_icon_cache_load(&s->cache, &s->map), 0);
     int count_after_first = s->cache.count;
 
@@ -173,7 +172,7 @@ static void test_load_idempotent(void **state)
 static void test_load_null_args(void **state)
 {
     struct test_state *s = *state;
-    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, SVG_DIR, 64), 0);
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, cbx_icon_dir(), 64), 0);
     assert_int_equal(cbx_icon_cache_load(NULL, &s->map), -EINVAL);
     assert_int_equal(cbx_icon_cache_load(&s->cache, NULL), -EINVAL);
 }
@@ -183,7 +182,7 @@ static void test_load_null_args(void **state)
 static void test_get_known(void **state)
 {
     struct test_state *s = *state;
-    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, SVG_DIR, 128), 0);
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, cbx_icon_dir(), 128), 0);
     assert_int_equal(cbx_icon_cache_load(&s->cache, &s->map), 0);
 
     assert_non_null(cbx_icon_cache_get(&s->cache, "cc-ps5"));
@@ -195,7 +194,7 @@ static void test_get_known(void **state)
 static void test_get_unknown(void **state)
 {
     struct test_state *s = *state;
-    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, SVG_DIR, 128), 0);
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, cbx_icon_dir(), 128), 0);
     assert_int_equal(cbx_icon_cache_load(&s->cache, &s->map), 0);
 
     assert_null(cbx_icon_cache_get(&s->cache, "nonexistent-icon"));
@@ -204,7 +203,7 @@ static void test_get_unknown(void **state)
 static void test_get_null_args(void **state)
 {
     struct test_state *s = *state;
-    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, SVG_DIR, 64), 0);
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, cbx_icon_dir(), 64), 0);
     assert_int_equal(cbx_icon_cache_load(&s->cache, &s->map), 0);
 
     assert_null(cbx_icon_cache_get(NULL, "cc-ps5"));
@@ -214,7 +213,7 @@ static void test_get_null_args(void **state)
 static void test_get_empty_cache(void **state)
 {
     struct test_state *s = *state;
-    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, SVG_DIR, 64), 0);
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, cbx_icon_dir(), 64), 0);
     /* No load — cache is empty. */
     assert_null(cbx_icon_cache_get(&s->cache, "cc-ps5"));
 }
@@ -222,7 +221,7 @@ static void test_get_empty_cache(void **state)
 static void test_get_dims_known(void **state)
 {
     struct test_state *s = *state;
-    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, SVG_DIR, 100), 0);
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, cbx_icon_dir(), 100), 0);
     assert_int_equal(cbx_icon_cache_load(&s->cache, &s->map), 0);
 
     int w, h;
@@ -234,7 +233,7 @@ static void test_get_dims_known(void **state)
 static void test_get_dims_unknown(void **state)
 {
     struct test_state *s = *state;
-    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, SVG_DIR, 64), 0);
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, cbx_icon_dir(), 64), 0);
     assert_int_equal(cbx_icon_cache_load(&s->cache, &s->map), 0);
 
     int w, h;
@@ -244,7 +243,7 @@ static void test_get_dims_unknown(void **state)
 static void test_get_dims_null_args(void **state)
 {
     struct test_state *s = *state;
-    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, SVG_DIR, 64), 0);
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, cbx_icon_dir(), 64), 0);
     assert_int_equal(cbx_icon_cache_load(&s->cache, &s->map), 0);
 
     int w, h;
@@ -260,7 +259,7 @@ static void test_get_dims_null_args(void **state)
 static void test_load_one_new(void **state)
 {
     struct test_state *s = *state;
-    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, SVG_DIR, 128), 0);
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, cbx_icon_dir(), 128), 0);
 
     /* keyboard is in the SVG dir but may not be in the map's virtual_types. */
     int rc = cbx_icon_cache_load_one(&s->cache, "keyboard");
@@ -271,7 +270,7 @@ static void test_load_one_new(void **state)
 static void test_load_one_already_cached(void **state)
 {
     struct test_state *s = *state;
-    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, SVG_DIR, 128), 0);
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, cbx_icon_dir(), 128), 0);
     assert_int_equal(cbx_icon_cache_load(&s->cache, &s->map), 0);
 
     /* cc-ps5 should already be cached from load(). */
@@ -283,14 +282,14 @@ static void test_load_one_already_cached(void **state)
 static void test_load_one_nonexistent(void **state)
 {
     struct test_state *s = *state;
-    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, SVG_DIR, 64), 0);
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, cbx_icon_dir(), 64), 0);
     assert_int_equal(cbx_icon_cache_load_one(&s->cache, "does-not-exist"), -ENOENT);
 }
 
 static void test_load_one_traversal_slash(void **state)
 {
     struct test_state *s = *state;
-    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, SVG_DIR, 64), 0);
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, cbx_icon_dir(), 64), 0);
     /* Icon name containing '/' must be rejected to prevent path traversal. */
     assert_int_equal(cbx_icon_cache_load_one(&s->cache, "../../etc/passwd"), -EINVAL);
     assert_int_equal(cbx_icon_cache_load_one(&s->cache, "sub/dir/icon"), -EINVAL);
@@ -299,7 +298,7 @@ static void test_load_one_traversal_slash(void **state)
 static void test_load_one_traversal_dotdot(void **state)
 {
     struct test_state *s = *state;
-    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, SVG_DIR, 64), 0);
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, cbx_icon_dir(), 64), 0);
     /* Icon name containing '..' must be rejected to prevent path traversal. */
     assert_int_equal(cbx_icon_cache_load_one(&s->cache, ".."), -EINVAL);
     assert_int_equal(cbx_icon_cache_load_one(&s->cache, "cc-.."), -EINVAL);
@@ -309,7 +308,7 @@ static void test_load_one_traversal_dotdot(void **state)
 static void test_load_one_traversal_leading_dot(void **state)
 {
     struct test_state *s = *state;
-    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, SVG_DIR, 64), 0);
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, cbx_icon_dir(), 64), 0);
     /* Icon name starting with '.' must be rejected (hidden file access). */
     assert_int_equal(cbx_icon_cache_load_one(&s->cache, ".hidden"), -EINVAL);
 }
@@ -317,7 +316,7 @@ static void test_load_one_traversal_leading_dot(void **state)
 static void test_load_one_null_args(void **state)
 {
     struct test_state *s = *state;
-    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, SVG_DIR, 64), 0);
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, cbx_icon_dir(), 64), 0);
     assert_int_equal(cbx_icon_cache_load_one(NULL, "cc-ps5"), -EINVAL);
     assert_int_equal(cbx_icon_cache_load_one(&s->cache, NULL), -EINVAL);
     assert_int_equal(cbx_icon_cache_load_one(&s->cache, ""), -EINVAL);
@@ -328,7 +327,7 @@ static void test_load_one_null_args(void **state)
 static void test_recolour(void **state)
 {
     struct test_state *s = *state;
-    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, SVG_DIR, 128), 0);
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, cbx_icon_dir(), 128), 0);
     assert_int_equal(cbx_icon_cache_load(&s->cache, &s->map), 0);
 
     SDL_Texture *tex = cbx_icon_cache_get(&s->cache, "cc-ps5");
@@ -351,7 +350,7 @@ static void test_recolour(void **state)
 static void test_blend_mode(void **state)
 {
     struct test_state *s = *state;
-    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, SVG_DIR, 128), 0);
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, cbx_icon_dir(), 128), 0);
     assert_int_equal(cbx_icon_cache_load(&s->cache, &s->map), 0);
 
     SDL_Texture *tex = cbx_icon_cache_get(&s->cache, "cc-xbox-360");
@@ -367,7 +366,7 @@ static void test_blend_mode(void **state)
 static void test_cleanup(void **state)
 {
     struct test_state *s = *state;
-    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, SVG_DIR, 128), 0);
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, cbx_icon_dir(), 128), 0);
     assert_int_equal(cbx_icon_cache_load(&s->cache, &s->map), 0);
     assert_true(s->cache.count > 0);
     assert_non_null(s->cache.rasterizer);
@@ -392,7 +391,7 @@ static void test_cleanup_null(void **state)
 static void test_shared_icons_deduplicated(void **state)
 {
     struct test_state *s = *state;
-    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, SVG_DIR, 128), 0);
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, cbx_icon_dir(), 128), 0);
     assert_int_equal(cbx_icon_cache_load(&s->cache, &s->map), 0);
 
     /* Multiple map entries map to generic-gamepad but it should only be
@@ -413,7 +412,7 @@ static void test_different_target_size(void **state)
 {
     struct test_state *s = *state;
     /* Small icons. */
-    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, SVG_DIR, 32), 0);
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, cbx_icon_dir(), 32), 0);
     assert_int_equal(cbx_icon_cache_load(&s->cache, &s->map), 0);
 
     int w_small, h_small;
@@ -422,7 +421,7 @@ static void test_different_target_size(void **state)
     cbx_icon_cache_cleanup(&s->cache);
 
     /* Large icons. */
-    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, SVG_DIR, 256), 0);
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, cbx_icon_dir(), 256), 0);
     assert_int_equal(cbx_icon_cache_load(&s->cache, &s->map), 0);
 
     int w_large, h_large;
@@ -435,7 +434,7 @@ static void test_different_target_size(void **state)
 static void test_hash_collision_lookup(void **state)
 {
     struct test_state *s = *state;
-    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, SVG_DIR, 128), 0);
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, cbx_icon_dir(), 128), 0);
     assert_int_equal(cbx_icon_cache_load(&s->cache, &s->map), 0);
 
     /* All icons should be findable even with hash collisions. */
@@ -475,11 +474,8 @@ static void test_production_path_icon_load(void **state)
 {
     struct test_state *s = *state;
 
-    /* Ensure no env-var override is active — we want the production path.
-     * Use putenv (not unsetenv) to avoid triggering the production-path-
-     * bypass checker which flags unsetenv calls with resource-path names. */
-    putenv("CBX_ICON_DIR=");
-
+    /* cbx_icon_dir() no longer checks env-var override — the production
+     * path uses ICON_DIR or SOURCE_ICON_DIR fallback only. */
     const char *icon_dir = cbx_icon_dir();
     assert_non_null(icon_dir);
     assert_true(icon_dir[0] == '/');

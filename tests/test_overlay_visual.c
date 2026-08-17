@@ -51,7 +51,6 @@
 #define CBX_SOURCE_DIR "."
 #endif
 
-#define SVG_DIR  CBX_SOURCE_DIR "/data/icons"
 #define YAML_DIR CBX_SOURCE_DIR "/data/"
 
 /* Visual dimensions for the overlay surface. */
@@ -163,7 +162,7 @@ vis_setup(void **state)
              YAML_DIR);
     if (cbx_icon_map_load(&f->icon_map, yaml_path) == 0) {
         if (cbx_icon_cache_init(&f->icon_cache, f->sdl.renderer,
-                                SVG_DIR, 64) == 0) {
+                                cbx_icon_dir(), 64) == 0) {
             cbx_icon_cache_load(&f->icon_cache, &f->icon_map);
             f->has_icons = true;
         }

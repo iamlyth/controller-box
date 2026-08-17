@@ -322,15 +322,8 @@ mgr_vis_setup(void **state)
     unsetenv("XDG_DATA_HOME");
     unsetenv("FLATPAK_ID");
 
-    /* Redirect icon directory to source tree so the profile editor
-     * diagram SVG (generic-gamepad.svg) is found during tests.
-     * BUG-0007: the diagram SVG was never loaded in production because
-     * NULL was passed as svg_path.  The fix uses cbx_icon_dir() which
-     * checks CBX_ICON_DIR env var for a runtime override. */
-    char icon_dir[PATH_MAX];
-    snprintf(icon_dir, sizeof(icon_dir), "%s/data/icons",
-             CBX_SOURCE_DIR);
-    setenv("CBX_ICON_DIR", icon_dir, 1);
+    /* Icon directory is resolved via the production cbx_icon_dir() path
+     * (SOURCE_ICON_DIR fallback in config_paths.c) — no env-var injection. */
 
     char profiles_dir[PATH_MAX + 64];
     snprintf(profiles_dir, sizeof(profiles_dir),
@@ -344,7 +337,6 @@ mgr_vis_setup(void **state)
     if (rc != 0) {
         if (f->saved_home_set) setenv("HOME", f->saved_home, 1);
         else unsetenv("HOME");
-        unsetenv("CBX_ICON_DIR");
         free(f);
         return -1;
     }
@@ -370,8 +362,6 @@ mgr_vis_teardown(void **state)
 
         if (f->saved_home_set) setenv("HOME", f->saved_home, 1);
         else unsetenv("HOME");
-
-        unsetenv("CBX_ICON_DIR");
 
         char cmd[PATH_MAX * 2 + 32];
         snprintf(cmd, sizeof(cmd), "rm -rf '%s'", f->tmp);

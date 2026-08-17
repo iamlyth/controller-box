@@ -149,6 +149,22 @@ Schema: `ralph-bug-ledger/v1`
     "resolution": "Fixed icon_cache.c:99 to build {icon_dir}/svg/{name}.svg instead of {icon_dir}/{name}.svg, matching the CMake install layout (CMakeLists.txt installs SVGs to ${CBX_ICON_INSTALL_DIR}/svg). overlay_service.c continues passing cbx_icon_dir() unchanged. Updated all test SVG_DIR/OVERLAY_SVG_DIR macros from .../data/icons/svg/ to .../data/icons so icon_cache.c appends /svg/ internally. Added SOURCE_ICON_DIR fallback in cbx_icon_dir() for build-tree operation.",
     "verification": "test_production_path_icon_load in test_icon_cache.c exercises the full production path and asserts at least one icon texture loads. All icon_cache, overlay_visual, golden, and icon_lookup tests pass with the corrected path construction.",
     "closed": "2026-08-17"
+  },
+  {
+    "id": "BUG-0010",
+    "title": "Tests bypass production resource path via CBX_ICON_DIR env-var injection",
+    "status": "closed",
+    "severity": "high",
+    "reported": "2026-08-16",
+    "external": [],
+    "contract_change": false,
+    "reproduction": "test_manager_visual.c:333 and test_golden.c:531 setenv('CBX_ICON_DIR', '<source>/data/icons') in setup. This makes the SVG load in tests, so assert_non_null(base_texture) passes. But the real binary (no env var) hits /usr/share/controller-box/icons and fails. The tests never exercise the production path.",
+    "expected": "Tests exercise the production resource path (cbx_icon_dir() without env-var injection) so a production-path regression is caught.",
+    "actual": "The CBX_ICON_DIR env-var injection masks the production failure: tests pass while the real binary renders no controller outline and no overlay icons. This is the root cause of the false-positive test suite.",
+    "acceptance": "No test sets CBX_ICON_DIR (or any resource-path env var) to make a resource load. The production path works in the build tree, and tests exercise it directly.",
+    "resolution": "Removed getenv(\"CBX_ICON_DIR\") override from cbx_icon_dir() in config_paths.c — production code no longer checks env var for resource paths. Removed all setenv/unsetenv(\"CBX_ICON_DIR\") calls from test_manager_visual.c and test_golden.c. Replaced all hardcoded SVG_DIR/OVERLAY_SVG_DIR macros passed to cbx_icon_cache_init with cbx_icon_dir() in test_icon_cache.c, test_icon_lookup.c, test_overlay_visual.c, test_golden.c, test_installed_functional.c, test_backend_smoke_sw.c, and test_backend_smoke.c. Removed unused SVG_DIR/OVERLAY_SVG_DIR macro definitions. Removed putenv(\"CBX_ICON_DIR=\") from test_production_path_icon_load. cbx_icon_dir() resolves via ICON_DIR (install path) with SOURCE_ICON_DIR fallback (source tree), matching cbx_builtin_profiles_dir() pattern.",
+    "verification": "grep -r 'setenv.*CBX_ICON_DIR' tests/ returns no matches. ./tests/test-production-path-bypass.sh passes (no resource-path env-var injection found). Full ctest suite: 98/98 pass (2 hardware skips). All visual, golden, and installed functional tests pass through cbx_icon_dir() production path.",
+    "closed": "2026-08-17"
   }
 ]
 ```
