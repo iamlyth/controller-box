@@ -1,25 +1,25 @@
-# Task 7: Wire first-run service installation into manager UI (§9.1, §9.3)
+# Task 8: Prepare kernel-backed controller test code (software)
 
 ## Outcome
-- Added `cbx_manager_check_first_run()` to `manager.c` — detects first-run (no `controller-box.service` in `~/.config/systemd/user/`) and shows modal "Enable overlay service?" dialog with Yes/No buttons
-- Dialog is modal: intercepts all keyboard/mouse events via `cbx_manager_handle_first_run_event()` when `first_run_active` is true
-- Controller A/Enter/Space → `on_first_run_yes` → `cbx_service_install()` → writes unit file + `systemctl --user enable --now`
-- Controller B/Escape → `on_first_run_no` → dismiss dialog
-- Mouse click on Yes/No buttons → same outcomes via button `on_press` callbacks
-- Called from `cbx_manager_run()` (production event loop); tests call explicitly
-- SDL_QUIT, SDL_WINDOWEVENT, controller hotplug pass through normally
-- Dialog rendering: semi-transparent overlay + dialog box + label + buttons
-- Updated `test_installed_smoke.sh` and `test_installed_binary.sh` to pre-create service file (suppress dialog in installed tests)
-- Updated conformance matrix: PKG-03 partial→verified, M39 missing→verified
-- Updated README.md first-launch description
+- `test_installed_functional.c` now detects `/dev/uinput` and creates a kernel-backed evdev gamepad when available, falling back to `SDL_JoystickAttachVirtual` when absent
+- Added uinput helpers: `uinput_create_gamepad()`, `uinput_destroy()`, `uinput_press()`, `uinput_axis()`, `vbtn_to_evdev()`, `vaxis_to_evdev()`, `find_uinput_joystick_index()`, `add_uinput_gamecontroller_mapping()`
+- `f_setup` tries uinput before SDL_Init (so evdev backend detects it), falls back to virtual joystick if `/dev/uinput` unavailable or SDL fails to detect the device
+- `ctrl_press`/`ctrl_axis` branch on `g_use_uinput` global — uinput writes EV_KEY/EV_ABS through kernel, virtual uses SDL_JoystickSetVirtualButton/Axis
+- Button mapping: virtual idx → evdev code (0→BTN_SOUTH, 1→BTN_EAST, 6→BTN_START, 11-14→DPAD). Runtime gamecontroller mapping normalizes to same SDL_CONTROLLER_BUTTON_* indices
+- Axis mapping: virtual idx → evdev code (0→ABS_X, 1→ABS_Y, 2→ABS_RX, 3→ABS_RY, 4→ABS_Z, 5→ABS_RZ). Mapping string handles SDL sorted-axis-index normalization
+- Phase 7/13: uinput device persists across manager restarts — no joy2/joy3 re-creation needed
+- Phase 10b: macro `send_axis_va` branches between uinput and virtual for direct axis event calls
+- Fixed misleading comment at line 9 (was "kernel-backed SDL virtual game controller", now "kernel-backed /dev/uinput when available, SDL virtual joystick fallback otherwise")
+- Declared `kernel-uinput` capability in `.factory/environment.toml` (evidence pending Task 9)
+- Updated conformance matrix: VRF-05 evidence updated, DOD-03 progress noted
 
 ## Verification
-- `nix-shell --run 'ctest --test-dir build-check -R "service_install|interaction_ctrl" --output-on-failure'` → both pass (0.11s + 0.66s)
-- 4 new tests: `test_first_run_{confirm,cancel}_{controller,pointer}_path` — all dispatch through `cbx_manager_handle_event` with mocked systemctl
-- `nix-shell --run 'ctest --test-dir build-check --output-on-failure'` → 98/98 pass (2 hardware skips)
+- `nix-shell --run 'ctest --test-dir build-check -R "installed_functional" --output-on-failure'` → passes (9.35s, SDL fallback path)
+- `nix-shell --run 'ctest --test-dir build-check --output-on-failure'` → 98/98 pass (2 HW skips: test_kernel_controller, test_backend_smoke)
+- Code inspection confirms `/dev/uinput` detection logic: `uinput_create_gamepad()` opens `/dev/uinput`, registers 15 buttons + 6 axes via ioctl, creates device via `UI_DEV_CREATE`
 
 ## Commit
-- `7a16ff6`: Task 7: Wire first-run service installation into manager UI (§9.1, §9.3)
+- `f043e05`: Task 8: Prepare kernel-backed controller test code (software)
 
 ## Next Task
-- Task 8: Prepare kernel-backed controller test code (software)
+- Task 9: Kernel-backed controller runner provisioning (kernel-uinput, physical-controller) — requires external runner with /dev/uinput access
