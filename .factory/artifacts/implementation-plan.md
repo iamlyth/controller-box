@@ -47,7 +47,7 @@ Controller-Box is a single C binary (`controller-box`) with two modes: overlay s
 | MGR-04 | §5.4 | verified | `profile_editor_list.c` binding list + `profile_editor_seq.c` sequential mode. `profile_validate.c` NES minimum. `profile_save.c` save with validation. `test_editor_list_mode.c`, `test_editor_seq_mode.c`, `test_profile_validate.c`, `test_profile_save.c`, `test_manager_interaction_prof.c` M28–M38. | — |
 | MGR-05 | §5.5 | verified | `settings_tab.c` all settings (launch_at_boot, theme, opacity, VC count/types, trigger, icon overrides). `test_settings_tab.c`, `test_manager_interaction_ctrl.c` M21–M27. | — |
 | MGR-06 | §5.6 | verified | `test_manager_visual.c` framebuffer tests for all 3 tabs + editor states. Icons load through production `cbx_icon_dir()` path (SOURCE_ICON_DIR fallback) — no env-var injection. Diagram SVG renders from build tree. | — |
-| MGR-07 | §5.7 | partial | Interaction inventory M01–M38 + D01–D08 in `test_manager_interaction_ctrl.c`/`test_manager_interaction_prof.c` through `cbx_manager_handle_event`. Gaps: M09 type-picker cancel pointer path, M16 name-input cancel pointer path, VC types slots 1–3 not individually tested. | Task 4 |
+| MGR-07 | §5.7 | verified | Interaction inventory M01–M38 + D01–D08 in `test_manager_interaction_ctrl.c`/`test_manager_interaction_prof.c` through `cbx_manager_handle_event`. M09 pointer path: mouse click to open type picker + ESC to cancel (no cancel button widget; ESC is production dismiss path). M16 pointer: NOT_APPLICABLE — name input cancel is keyboard-only (B/ESC), no cancel button widget. VC types slots 0–3 all individually tested (controller + pointer) with persisted value verification. | Task 4 |
 | MGR-08 | §5.7 | verified | `test_golden.c` golden image comparison through production `cbx_icon_dir()` path — no env-var injection. Golden baselines match production output. `test-production-path-bypass.sh` passes. | — |
 | OVL-10 | §5.7 | partial | Overlay interaction O01–O13 tested via keyboard events (supplemental). DBus InputEvent path (primary production transport) tested only for O11 (multi-controller) and O10c (close via DBus B). Basic navigation O02–O09 lack DBus InputEvent tests in native suite. | Task 5 |
 | ID-01 | §6.2–6.3 | verified | `identity.c` 4-layer extraction with BT:/USB:/USB:phys:/ORDER: prefixes. `identity_downgrade.c` downgrade detection. `assign.c`, `assign_persist.c`. `test_identity.c`, `test_identity_downgrade.c`, `test_assign.c`, `test_assign_persist.c`. | — |
@@ -74,7 +74,7 @@ Controller-Box is a single C binary (`controller-box`) with two modes: overlay s
 | SYS-02 | §3 | partial | No Pi 4 latency measurement. x86_64 latency measured but not on minimum supported hardware. | Task 10 |
 | DOD-01 | §11.2.1 | partial | Conformance matrix covers all requirements; non-verified rows mapped to tasks. | Task 14 |
 | DOD-02 | §11.2.2 | verified | Production-path tests through `cbx_manager_handle_event`, `cbx_overlay_service_step`, native DBus. Direct callback tests are supplemental. | — |
-| DOD-03 | §11.2.3 | partial | Interaction inventory M01–M39 + O01–O13 with controller+pointer paths. Gaps in M09/M16 pointer, O02–O09 DBus InputEvent, kernel-backed controller transport. | Tasks 4, 5, 8, 9 |
+| DOD-03 | §11.2.3 | partial | Interaction inventory M01–M39 + O01–O13 with controller+pointer paths. Gaps in O02–O09 DBus InputEvent, kernel-backed controller transport. M09/M16/VC slots resolved. | Tasks 5, 8, 9 |
 | DOD-04 | §11.2.4 | verified | §§4.10, 5.6, 11.1 visual tests pass for normal/degraded/error states. All icon paths use production `cbx_icon_dir()` — no env-var bypasses. | — |
 | DOD-05 | §11.2.5 | partial | Clean build + 98 tests pass. `test_kernel_controller` and `test_backend_smoke` skip. Golden baseline skip in SW smoke. | Tasks 6, 9, 10 |
 | DOD-06 | §11.2.6 | verified | All 3 icon-rendering bugs (BUG-0008, BUG-0009, BUG-0010) closed. Production icon path works in build tree and install tree without env-var injection. | — |
@@ -90,11 +90,11 @@ Every control is tested through production dispatch (`cbx_manager_handle_event` 
 
 **Tab bar:** M01 switch→Controllers, M02 switch→Profiles, M03 switch→Settings. Both paths verified (mock + native).
 
-**Controllers tab:** M04 list select, M05 Add button, M06 Remove button, M07 Change Type button, M08 type picker confirm, M09 type picker cancel (B). M04–M08 both paths verified. **M09 pointer path missing.**
+**Controllers tab:** M04 list select, M05 Add button, M06 Remove button, M07 Change Type button, M08 type picker confirm, M09 type picker cancel (B). M04–M08 both paths verified. **M09 pointer path verified** (mouse click to open + ESC to cancel).
 
-**Profiles tab:** M10 list select, M11 Create button, M12 create source picker, M13–M16 name input (chars/backspace/confirm/cancel), M17 Edit button, M18 Delete button, M19 delete confirm, M20 delete cancel. M10–M15, M17–M20 both paths verified. **M16 pointer path missing** (controller-only, `NOT_APPLICABLE` for pointer per inventory — but inventory marks `AVAIL`).
+**Profiles tab:** M10 list select, M11 Create button, M12 create source picker, M13–M16 name input (chars/backspace/confirm/cancel), M17 Edit button, M18 Delete button, M19 delete confirm, M20 delete cancel. M10–M15, M17–M20 both paths verified. **M16 pointer NOT_APPLICABLE** — name input cancel is keyboard-only (B/ESC), no cancel button widget exists in name input mode. Updated inventory to NA with justification.
 
-**Settings tab:** M21 list select, M22 toggle (launch_at_boot), M23 enter edit, M24 adjust value (theme/opacity/VC count/VC type/trigger/icon override), M25 confirm edit, M26 cancel edit, M27 Save button. All both paths verified (mock + native). **VC types slots 1–3 not individually tested** (only slot 0).
+**Settings tab:** M21 list select, M22 toggle (launch_at_boot), M23 enter edit, M24 adjust value (theme/opacity/VC count/VC type/trigger/icon override), M25 confirm edit, M26 cancel edit, M27 Save button. All both paths verified (mock + native). **VC types slots 1–3 individually tested** (controller + pointer, persisted value verified).
 
 **Profile editor:** M28 binding list nav, M29 edit binding (A), M30 target pick confirm, M31 capture begin, M32 capture physical button (DBus InputEvent), M33 sequential begin, M34 sequential capture (DBus InputEvent), M35 sequential skip (B), M36 sequential cancel (Start), M37 save and close, M38 cancel/discard. M28–M38 verified through production dispatch. M32/M34 use `backend->inject_signal` (DBus InputEvent path). M35/M36 controller-only (`NOT_APPLICABLE` for pointer — physical button actions).
 
@@ -146,12 +146,13 @@ All overlay actions tested through `cbx_overlay_service_step` (production poll l
 - Documentation impact: None.
 
 ## Task 4: Complete missing interaction test paths
-- Status: pending
+- Status: complete
 - Dependencies: none
 - Scope: `tests/test_manager_interaction_ctrl.c` (M09 pointer), `tests/test_manager_interaction_prof.c` (M16 pointer), `tests/test_settings_tab.c` or `tests/test_manager_interaction_ctrl.c` (VC types 1–3)
 - Acceptance criteria: M09 (type picker cancel) has a pointer-path test: mouse click to open type picker, then mouse click on a cancel/dismiss area or ESC, asserts mode returns to LIST with no DBus call. M16 (name input cancel) pointer path: if the inventory marks `AVAIL`, add a pointer test or document `NOT_APPLICABLE` with justification. VC types slots 1–3 each have a test that cycles the type and verifies the persisted value. All new tests go through `cbx_manager_handle_event` / `cbx_manager_handle_mouse_event`.
 - Verification: `nix-shell --run "ctest --test-dir build-check -R 'interaction' --output-on-failure"`; all interaction tests pass.
 - Documentation impact: Update `tests/interaction_inventory.c` if any `AVAIL`/`NOT_APPLICABLE` status changes.
+- Verification: `nix-shell --run "ctest --test-dir build-check -R 'interaction' --output-on-failure"` — all 4 interaction test suites pass (overlay_interaction 0.09s, interaction_inventory 0.01s, manager_interaction_ctrl 0.63s, manager_interaction_prof 0.56s). Full suite 98/98 pass (2 hardware skips). M09 pointer path: `test_ctrl_type_pick_cancel_pointer_path` opens type picker via mouse click on Change Type button, cancels via ESC through `cbx_manager_handle_event` → `cbx_controllers_tab_handle_key` → `cbx_controllers_tab_cancel_type_pick`. M16 pointer: marked NOT_APPLICABLE in inventory with justification (keyboard-only cancel, no cancel button widget). VC type slots 1-3: 6 new tests (3 controller + 3 pointer) via macro-generated `test_settings_vc_type_slot_{1,2,3}_{controller,pointer}_path` — each navigates to slot, cycles type, confirms, saves, verifies persisted YAML value changed. Inventory tests updated: M16 moved from verified_ids to na_ids, removed from avail_ids.
 
 ## Task 5: Add overlay DBus InputEvent navigation tests
 - Status: pending

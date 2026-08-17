@@ -783,6 +783,31 @@ test_ctrl_type_pick_cancel_controller_path(void **state)
     assert_int_equal(ct->pending_action, CBX_CT_ACTION_NONE);
 }
 
+/* M09 pointer path: click Change Type to open picker, then ESC to cancel.
+ * The type picker has no dedicated cancel button widget, so the
+ * production dismiss path is ESC (handled in cbx_controllers_tab_handle_key
+ * at KEYDOWN).  Opening the picker via mouse click exercises the pointer
+ * path for M07; ESC exercises the production cancel path for M09. */
+static void
+test_ctrl_type_pick_cancel_pointer_path(void **state)
+{
+    mi_fixture *f = *state;
+    cbx_manager *mgr = &f->mgr;
+    cbx_controllers_tab *ct = cbx_manager_controllers_tab(mgr);
+
+    /* Open picker via pointer: click Change Type button. */
+    int cx, cy;
+    widget_center(&ct->change_type_btn.base, &cx, &cy);
+    send_mouse_click(mgr, cx, cy);
+    assert_int_equal(cbx_controllers_tab_mode(ct), CBX_CT_MODE_TYPE_PICK);
+    assert_int_equal(ct->pending_action, CBX_CT_ACTION_CHANGE);
+
+    /* ESC to cancel (production dismiss path). */
+    send_key_dn(mgr, SDLK_ESCAPE);
+    assert_int_equal(cbx_controllers_tab_mode(ct), CBX_CT_MODE_LIST);
+    assert_int_equal(ct->pending_action, CBX_CT_ACTION_NONE);
+}
+
 /* ------------------------------------------------------------------ */
 /*  Settings tab — list select (M21) + toggle (M22)                 */
 /* ------------------------------------------------------------------ */
@@ -1332,6 +1357,105 @@ test_settings_vc_type_pointer_path(void **state)
     cbx_settings_load(&loaded);
     assert_string_not_equal(loaded.virtual_controllers.types[0], initial);
 }
+
+/* ST-03 controller path: edit VC type slots 1-3, confirm, save, verify.
+ * Exercises the fall-through case blocks for CBX_ST_SET_VC_TYPE_1/2/3.
+ * Separate test functions ensure fresh fixtures (no stale list selection). */
+#define DEFINE_VC_TYPE_SLOT_CTRL_TEST(SLOT) \
+static void \
+test_settings_vc_type_slot_##SLOT##_controller_path(void **state) \
+{ \
+    mi_fixture *f = *state; \
+    cbx_manager *mgr = &f->mgr; \
+    cbx_settings_tab *st = cbx_manager_settings_tab(mgr); \
+    \
+    switch_to_settings(mgr); \
+    send_key_dn(mgr, SDLK_DOWN); \
+    \
+    /* Navigate to VC type SLOT (index 4 + SLOT). */ \
+    for (int i = 0; i < 4 + SLOT; i++) \
+        send_key_dn(mgr, SDLK_DOWN); \
+    assert_int_equal(cbx_list_get_selected(&st->settings_list), \
+                     CBX_ST_SET_VC_TYPE_0 + SLOT); \
+    \
+    char initial[CBX_MAX_TYPE_LEN]; \
+    strncpy(initial, cbx_settings_tab_settings(st)-> \
+        virtual_controllers.types[SLOT], sizeof(initial) - 1); \
+    initial[sizeof(initial) - 1] = '\0'; \
+    \
+    send_key_press(mgr, SDLK_a);  /* enter edit */ \
+    send_key_dn(mgr, SDLK_UP);    /* cycle type forward */ \
+    assert_string_not_equal(cbx_settings_tab_settings(st)-> \
+        virtual_controllers.types[SLOT], initial); \
+    send_key_press(mgr, SDLK_a);  /* confirm */ \
+    \
+    /* Save. */ \
+    for (int i = 0; i < 10; i++) \
+        send_key_dn(mgr, SDLK_DOWN); \
+    send_key_dn(mgr, SDLK_DOWN); \
+    send_key_press(mgr, SDLK_a); \
+    \
+    char path[4096 + 128]; \
+    settings_yaml_path(f, path, sizeof(path)); \
+    assert_int_equal(access(path, F_OK), 0); \
+    \
+    cbx_settings loaded; \
+    cbx_settings_load(&loaded); \
+    assert_string_not_equal(loaded.virtual_controllers.types[SLOT], \
+                            initial); \
+}
+
+DEFINE_VC_TYPE_SLOT_CTRL_TEST(1)
+DEFINE_VC_TYPE_SLOT_CTRL_TEST(2)
+DEFINE_VC_TYPE_SLOT_CTRL_TEST(3)
+
+/* ST-03 pointer path: edit VC type slots 1-3 via mouse.
+ * Each slot is opened via pointer click, cycled, confirmed, saved, and
+ * the persisted value is verified. */
+#define DEFINE_VC_TYPE_SLOT_PTR_TEST(SLOT) \
+static void \
+test_settings_vc_type_slot_##SLOT##_pointer_path(void **state) \
+{ \
+    mi_fixture *f = *state; \
+    cbx_manager *mgr = &f->mgr; \
+    cbx_settings_tab *st = cbx_manager_settings_tab(mgr); \
+    \
+    switch_to_settings(mgr); \
+    \
+    int px = list_center_x(&st->settings_list); \
+    int py = list_item_y(&st->settings_list, 4 + SLOT); \
+    send_mouse_click(mgr, px, py); \
+    assert_int_equal(cbx_settings_tab_selected(st), \
+                     CBX_ST_SET_VC_TYPE_0 + SLOT); \
+    assert_int_equal(cbx_settings_tab_mode(st), CBX_ST_MODE_EDIT); \
+    \
+    char initial[CBX_MAX_TYPE_LEN]; \
+    strncpy(initial, cbx_settings_tab_settings(st)-> \
+        virtual_controllers.types[SLOT], sizeof(initial) - 1); \
+    initial[sizeof(initial) - 1] = '\0'; \
+    \
+    send_key_dn(mgr, SDLK_DOWN);  /* cycle type backward */ \
+    assert_string_not_equal(cbx_settings_tab_settings(st)-> \
+        virtual_controllers.types[SLOT], initial); \
+    send_key_press(mgr, SDLK_a);  /* confirm */ \
+    \
+    int cx, cy; \
+    widget_center(&st->save_btn.base, &cx, &cy); \
+    send_mouse_click(mgr, cx, cy); \
+    \
+    char path[4096 + 128]; \
+    settings_yaml_path(f, path, sizeof(path)); \
+    assert_int_equal(access(path, F_OK), 0); \
+    \
+    cbx_settings loaded; \
+    cbx_settings_load(&loaded); \
+    assert_string_not_equal(loaded.virtual_controllers.types[SLOT], \
+                            initial); \
+}
+
+DEFINE_VC_TYPE_SLOT_PTR_TEST(1)
+DEFINE_VC_TYPE_SLOT_PTR_TEST(2)
+DEFINE_VC_TYPE_SLOT_PTR_TEST(3)
 
 /* ST-04 controller path: edit trigger combo, confirm, save, verify. */
 static void
@@ -1957,6 +2081,9 @@ main(void)
         cmocka_unit_test_setup_teardown(
             test_ctrl_type_pick_cancel_controller_path,
             mi_setup, mi_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_ctrl_type_pick_cancel_pointer_path,
+            mi_setup, mi_teardown),
 
         /* Settings tab — list (M21) + toggle (M22) */
         cmocka_unit_test_setup_teardown(
@@ -2013,6 +2140,25 @@ main(void)
             test_settings_vc_type_controller_path, mi_setup, mi_teardown),
         cmocka_unit_test_setup_teardown(
             test_settings_vc_type_pointer_path, mi_setup, mi_teardown),
+        /* Task 4: ST-03 — VC type slots 1-3 (controller + pointer) */
+        cmocka_unit_test_setup_teardown(
+            test_settings_vc_type_slot_1_controller_path,
+            mi_setup, mi_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_settings_vc_type_slot_1_pointer_path,
+            mi_setup, mi_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_settings_vc_type_slot_2_controller_path,
+            mi_setup, mi_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_settings_vc_type_slot_2_pointer_path,
+            mi_setup, mi_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_settings_vc_type_slot_3_controller_path,
+            mi_setup, mi_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_settings_vc_type_slot_3_pointer_path,
+            mi_setup, mi_teardown),
 
         /* Task 4: ST-04 — Trigger combo interaction (controller + pointer) */
         cmocka_unit_test_setup_teardown(

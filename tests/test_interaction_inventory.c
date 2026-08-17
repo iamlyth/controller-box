@@ -175,11 +175,12 @@ static void test_inventory_specific_entries(void **state)
     assert_int_equal(m05->widget_type, CBX_WIDGET_BUTTON);
     assert_true(m05->pointer_path_avail == CBX_PATH_AVAILABLE);
 
-    /* M16 — Name input cancel: pointer path now available (dialog action) */
+    /* M16 — Name input cancel: pointer path not applicable (keyboard-only
+     * action: B/ESC; no cancel button widget exists in name input mode) */
     const cbx_interaction_entry *m16 = cbx_interaction_inventory_find("M16");
     assert_non_null(m16);
-    assert_int_equal(m16->pointer_path_avail, CBX_PATH_AVAILABLE);
-    assert_true(strncmp(m16->pointer_path, "n/a", 3) != 0);
+    assert_int_equal(m16->pointer_path_avail, CBX_PATH_NA);
+    assert_int_equal(m16->verify_status, CBX_VERIFY_NOT_APPLICABLE);
 
     /* M37 — Save and close editor: pointer path available (Save button) */
     const cbx_interaction_entry *m37 = cbx_interaction_inventory_find("M37");
@@ -308,7 +309,7 @@ static void test_inventory_specific_verify_statuses(void **state)
      * test_manager_native.c, or test_manager_native_prof.c) must be VERIFIED */
     const char *verified_ids[] = {
         "M01", "M02", "M03", "M04", "M05", "M06", "M07", "M08",
-        "M09", "M10", "M11", "M12", "M15", "M16", "M17", "M18",
+        "M09", "M10", "M11", "M12", "M15", "M17", "M18",
         "M19", "M20", "M21", "M22", "M23", "M24", "M25", "M26",
         "M27", "M28", "M29", "M30", "M31", "M33",
         "O01", "O02", "O03", "O04", "O05", "O06", "O07", "O08",
@@ -328,7 +329,7 @@ static void test_inventory_specific_verify_statuses(void **state)
     assert_int_equal(o12->verify_status, CBX_VERIFY_DEFERRED);
 
     /* Controller-only entries remain NOT_APPLICABLE (sample check) */
-    const char *na_ids[] = {"M13", "M14", "M32", "M34", "M35", "M36"};
+    const char *na_ids[] = {"M13", "M14", "M16", "M32", "M34", "M35", "M36"};
     for (size_t i = 0; i < sizeof(na_ids)/sizeof(na_ids[0]); i++) {
         const cbx_interaction_entry *e = cbx_interaction_inventory_find(na_ids[i]);
         assert_non_null(e);
@@ -342,7 +343,7 @@ static void test_inventory_dialog_pointer_paths_available(void **state)
 {
     (void)state;
     const char *avail_ids[] = {
-        "M09", "M15", "M16", "M19", "M20", "M24", "M25", "M26",
+        "M09", "M15", "M19", "M20", "M24", "M25", "M26",
         "D01", "D02", "D03", "D04", "D05", "D06", "D07", "D08"
     };
     for (size_t i = 0; i < sizeof(avail_ids)/sizeof(avail_ids[0]); i++) {

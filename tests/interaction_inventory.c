@@ -111,9 +111,9 @@ static const cbx_interaction_entry inventory[] = {
     { "M09", CBX_CAT_MANAGER_CTRL, "Controllers tab",
       CBX_WIDGET_PICKER,
       "B while picker open",
-      AVAIL, "Mouse click outside picker (dismiss)",
+      AVAIL, "Mouse click to open picker, then ESC to cancel (no cancel button widget)",
       "Picker closes, no DBus call",
-      "cbx_manager_handle_event → tab cancel handling",
+      "cbx_manager_handle_event (mouse click) + cbx_manager_handle_event (ESC KEYDOWN) -> cbx_controllers_tab_cancel_type_pick",
       CBX_VERIFY_VERIFIED, "Task 4" },
 
     /* ---- Manager — Profiles tab (M10–M20) ---- */
@@ -168,10 +168,10 @@ static const cbx_interaction_entry inventory[] = {
     { "M16", CBX_CAT_MANAGER_PROF, "Profiles tab",
       CBX_WIDGET_NAME_INPUT,
       "B while in name-input mode",
-      AVAIL, "Mouse click on cancel button in name-input dialog",
+      NA, "n/a — name input cancel is keyboard-only (B/ESC); no cancel button widget",
       "Returns to profile list; no file created",
-      "cbx_manager_handle_event → cbx_profiles_tab_name_input_cancel",
-      CBX_VERIFY_VERIFIED, "Task 5" },
+      "cbx_manager_handle_event → KEYDOWN B (controller_event) or KEYUP B → cbx_profiles_tab_name_input_cancel",
+      CBX_VERIFY_NOT_APPLICABLE, "Task 4" },
 
     { "M17", CBX_CAT_MANAGER_PROF, "Profiles tab",
       CBX_WIDGET_BUTTON,
