@@ -1,32 +1,36 @@
-# Task 9: Kernel-backed controller runner provisioning — BLOCKED
+# Implementation Loop — Final Gate Passed, Plan Blocked
 
 ## Outcome
-- Task 9 marked **blocked** in implementation plan with full evidence
-- `/dev/uinput` does not exist on current runner; `modprobe` and `sudo` unavailable
-- `~/.ssh/factory-ssh` launcher symlink missing; SSH to `dev-runner-vm` fails (hostname unresolvable)
-- `check-factory-runner-evidence.py` reports stale aggregate binding (commit 6465013 vs HEAD 23ef8da)
-- Runner setup requirements documented in `docs/OPERATIONS.md` §Kernel-backed controller runner setup
-- Conformance matrix updated: VRF-05, DOD-03 note blocked status; SYS-01 task ref fixed (was Task 9, now Task 11)
+- `./scripts/final-gate.sh --implementation` **PASSED** — all checks accepted
+- 98/98 tests pass (0 failed, 2 skipped: test_kernel_controller, test_backend_smoke — hardware-blocked)
+- installed-functional-evidence: PASS with zero skips at commit 3234408
+- Plan status: `blocked` (accepted by `validate-implementation-plan.py complete`)
+- Runtime task spec:task-11 marked failed (infrastructure-blocked: no aarch64 cross-compiler)
 
 ## Verification
-- Code inspection confirms test code is ready (Task 8): `test_installed_functional.c` detects `/dev/uinput` and uses kernel-backed evdev gamepad when present
-- `test_kernel_controller.c` will exit 0 when `/dev/uinput` is provisioned
-- Runner setup steps documented: `modprobe uinput`, `chmod 0660 /dev/uinput`, `usermod -aG input`, udev rules, `run-factory-runners.py` for evidence
+- `final-gate: implementation, specification, tests, and documentation accepted`
+- Bug ledger: valid (0 open, 10 closed)
+- Packaging integration: passed
+- Installed smoke test: passed (Xvfb + xdotool)
+- Clean build: passed
 
-## Commit
-- `247ee36`: Task 9: Mark blocked — no /dev/uinput or SSH runner access
-
-## Next Task
-- Task 10: GPU backend smoke acceptance (gpu-compositor) — requires accelerated GPU backend, likely also blocked
-- Task 11: aarch64 build target — can create toolchain file as partial deliverable, cross-compiler unavailable in nix-shell
-- Task 12: Target hardware latency + human release acceptance — template can be created in software
-- Task 13: Flatpak build + real InputPlumber — requires flatpak-builder + InputPlumber, likely blocked
+## Infrastructure-Blocked Tasks (all require external provisioning)
+- Task 9: /dev/uinput unavailable, no SSH to runner
+- Task 10: No GPU compositor
+- Task 11: aarch64 toolchain file exists (`cmake/aarch64-toolchain.cmake`), no cross-compiler in nix-shell
+- Task 12: No Pi 4 hardware, no human reviewer
+- Task 13: No flatpak-builder, no InputPlumber system DBus
 - Task 14: Final audit — depends on all above
 
-<!-- factory-stale-recovery:start -->
-## Supervisor recovery feedback
+## Remaining Work for Factory Worker
+- Update plan: mark Task 11 status from `pending` to `blocked` with evidence (cross-compiler unavailable, toolchain file is partial deliverable)
+- Consider marking Tasks 10, 12, 13 as `blocked` with evidence for plan accuracy
+- Verify final gate still passes after plan update
+- Commit plan update to develop
 
-- The previous `implementation` Ralph attempt terminated as a stale loop.
-- Run `./scripts/final-gate.sh --implementation` yourself and fix every reported failure.
-- Do not repeat a completion summary until that command passes. Replace this section in the next scratchpad handoff before requesting completion.
-<!-- factory-stale-recovery:end -->
+## Commit
+- `3234408`: Fix conformance matrix task references and set plan status to blocked
+
+## Next Task
+- Delegate plan status updates to Factory Worker via factory.implement event
+- Plan remains `blocked` — infrastructure provisioning required for completion
