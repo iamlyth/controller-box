@@ -792,6 +792,64 @@ On a machine with a GPU, the test renders both overlay and manager
 frames through the accelerated backend and verifies pixel content
 against the golden baselines.
 
+## Kernel-backed controller runner setup
+
+The `test_kernel_controller` ctest (SPEC §11.1.5) and the kernel-backed
+path in `test_installed_functional` require `/dev/uinput` access to
+create a kernel-backed evdev gamepad.  When `/dev/uinput` is not
+available, both tests skip (`test_kernel_controller` exits 77;
+`test_installed_functional` falls back to `SDL_JoystickAttachVirtual`).
+
+### Provisioning `/dev/uinput`
+
+On a Linux runner with root access:
+
+```sh
+# Load the uinput kernel module
+modprobe uinput
+
+# Grant read/write access to the test user
+chmod 0660 /dev/uinput
+chgrp input /dev/uinput
+
+# Or add the test user to the input group
+usermod -aG input <test-user>
+
+# Make the change persistent across reboots
+echo 'uinput' >> /etc/modules-load.d/uinput.conf
+echo 'KERNEL=="uinput", MODE="0660", GROUP="input"' > /etc/udev/rules.d/80-uinput.rules
+```
+
+### Factory runner evidence
+
+When the runner is provisioned, generate factory runner evidence for
+the `kernel-uinput` capability:
+
+```sh
+./scripts/run-factory-runners.py
+```
+
+This SSH-deploys the current Git tree to each declared runner in
+`.factory/environment.toml`, executes `verify_argv`, and records a
+signed receipt (manifest + logs) in `.factory-state/runner-evidence/`.
+
+After evidence is generated, validate it:
+
+```sh
+python3 scripts/check-factory-runner-evidence.py --print-capabilities
+```
+
+The output should include `kernel-uinput`.  The conformance rows
+VRF-05 and DOD-03 can then move to `verified`.
+
+### Current limitation
+
+The current Ralph loop runner does not have `/dev/uinput` provisioned
+and lacks the SSH launcher (`~/.ssh/factory-ssh`) needed to reach the
+declared `dev-runner-vm` runner.  Task 9 is blocked on runner
+provisioning.  The test code is ready and will exercise the
+kernel-backed path when `/dev/uinput` becomes available.
+
 ## Installed production smoke test
 
 The `test_installed_smoke` ctest (SPEC §11.1.5) exercises the real
