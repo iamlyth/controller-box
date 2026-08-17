@@ -49,7 +49,7 @@ Controller-Box is a single C binary (`controller-box`) with two modes: overlay s
 | MGR-06 | §5.6 | verified | `test_manager_visual.c` framebuffer tests for all 3 tabs + editor states. Icons load through production `cbx_icon_dir()` path (SOURCE_ICON_DIR fallback) — no env-var injection. Diagram SVG renders from build tree. | — |
 | MGR-07 | §5.7 | verified | Interaction inventory M01–M38 + D01–D08 in `test_manager_interaction_ctrl.c`/`test_manager_interaction_prof.c` through `cbx_manager_handle_event`. M09 pointer path: mouse click to open type picker + ESC to cancel (no cancel button widget; ESC is production dismiss path). M16 pointer: NOT_APPLICABLE — name input cancel is keyboard-only (B/ESC), no cancel button widget. VC types slots 0–3 all individually tested (controller + pointer) with persisted value verification. | Task 4 |
 | MGR-08 | §5.7 | verified | `test_golden.c` golden image comparison through production `cbx_icon_dir()` path — no env-var injection. Golden baselines match production output. `test-production-path-bypass.sh` passes. | — |
-| OVL-10 | §5.7 | partial | Overlay interaction O01–O13 tested via keyboard events (supplemental). DBus InputEvent path (primary production transport) tested only for O11 (multi-controller) and O10c (close via DBus B). Basic navigation O02–O09 lack DBus InputEvent tests in native suite. | Task 5 |
+| OVL-10 | §5.7 | verified | Overlay interaction O01–O13 tested via keyboard events (supplemental) and DBus InputEvent (primary production transport). O02–O09 now have dedicated DBus InputEvent tests: `test_o0{2,3,4,5,6,7,8,9}_*_dbus` dispatch via `emit_input_event` on native DBus server, asserting same semantic outcomes as keyboard tests (grid column, profile change + LoadProfilePath on wire, host mode enter/navigate/move-slot/exit). O10c (close via DBus B), O11 (multi-controller), O11b (host via DBus), O13 (conflict) also via DBus InputEvent. | Task 5 |
 | ID-01 | §6.2–6.3 | verified | `identity.c` 4-layer extraction with BT:/USB:/USB:phys:/ORDER: prefixes. `identity_downgrade.c` downgrade detection. `assign.c`, `assign_persist.c`. `test_identity.c`, `test_identity_downgrade.c`, `test_assign.c`, `test_assign_persist.c`. | — |
 | ID-02 | §6.2 | verified | `gamepad_order_restore.c` GamepadOrder restoration via PersistentId mapping. `test_order_restore.c`. | — |
 | CFG-01 | §7.1–7.4, §7.6 | verified | `config_settings.c` settings.yaml, `config_assignments.c` assignments.yaml with gamepad_order, `config_profile.c` InputPlumber device_profile_v1 YAML. `test_settings.c`, `test_assignments.c`, `test_profile_yaml.c`. | — |
@@ -74,7 +74,7 @@ Controller-Box is a single C binary (`controller-box`) with two modes: overlay s
 | SYS-02 | §3 | partial | No Pi 4 latency measurement. x86_64 latency measured but not on minimum supported hardware. | Task 10 |
 | DOD-01 | §11.2.1 | partial | Conformance matrix covers all requirements; non-verified rows mapped to tasks. | Task 14 |
 | DOD-02 | §11.2.2 | verified | Production-path tests through `cbx_manager_handle_event`, `cbx_overlay_service_step`, native DBus. Direct callback tests are supplemental. | — |
-| DOD-03 | §11.2.3 | partial | Interaction inventory M01–M39 + O01–O13 with controller+pointer paths. Gaps in O02–O09 DBus InputEvent, kernel-backed controller transport. M09/M16/VC slots resolved. | Tasks 5, 8, 9 |
+| DOD-03 | §11.2.3 | partial | Interaction inventory M01–M39 + O01–O13 with controller+pointer paths. O02–O09 DBus InputEvent tests verified. Remaining gap: kernel-backed controller transport. M09/M16/VC slots resolved. | Tasks 8, 9 |
 | DOD-04 | §11.2.4 | verified | §§4.10, 5.6, 11.1 visual tests pass for normal/degraded/error states. All icon paths use production `cbx_icon_dir()` — no env-var bypasses. | — |
 | DOD-05 | §11.2.5 | partial | Clean build + 98 tests pass. `test_kernel_controller` and `test_backend_smoke` skip. Golden baseline skip in SW smoke. | Tasks 6, 9, 10 |
 | DOD-06 | §11.2.6 | verified | All 3 icon-rendering bugs (BUG-0008, BUG-0009, BUG-0010) closed. Production icon path works in build tree and install tree without env-var injection. | — |
@@ -110,8 +110,8 @@ All overlay actions tested through `cbx_overlay_service_step` (production poll l
 
 - O01 open (trigger activation): poll-driven, verified mock + native.
 - O01b deactivation: poll detects PASS, verified.
-- O02–O05 move left/right, cycle profile up/down: keyboard only (supplemental). **DBus InputEvent tests missing for basic navigation.**
-- O06–O09 host mode enter/navigate/move-slot/exit: keyboard only. **DBus InputEvent tests missing.**
+- O02–O05 move left/right, cycle profile up/down: keyboard (supplemental) + DBus InputEvent (primary, `test_o0{2,3,4,5}_*_dbus`). Both paths verified.
+- O06–O09 host mode enter/navigate/move-slot/exit: keyboard (supplemental) + DBus InputEvent (primary, `test_o0{6,7,8,9}_*_dbus`). Both paths verified.
 - O10 close (B): keyboard + DBus B (`inject_input`), verified.
 - O10b/O13 conflict resolution: verified mock + native.
 - O11 multi-controller independence: DBus InputEvent, verified mock + native.
@@ -155,11 +155,11 @@ All overlay actions tested through `cbx_overlay_service_step` (production poll l
 - Verification: `nix-shell --run "ctest --test-dir build-check -R 'interaction' --output-on-failure"` — all 4 interaction test suites pass (overlay_interaction 0.09s, interaction_inventory 0.01s, manager_interaction_ctrl 0.63s, manager_interaction_prof 0.56s). Full suite 98/98 pass (2 hardware skips). M09 pointer path: `test_ctrl_type_pick_cancel_pointer_path` opens type picker via mouse click on Change Type button, cancels via ESC through `cbx_manager_handle_event` → `cbx_controllers_tab_handle_key` → `cbx_controllers_tab_cancel_type_pick`. M16 pointer: marked NOT_APPLICABLE in inventory with justification (keyboard-only cancel, no cancel button widget). VC type slots 1-3: 6 new tests (3 controller + 3 pointer) via macro-generated `test_settings_vc_type_slot_{1,2,3}_{controller,pointer}_path` — each navigates to slot, cycles type, confirms, saves, verifies persisted YAML value changed. Inventory tests updated: M16 moved from verified_ids to na_ids, removed from avail_ids.
 
 ## Task 5: Add overlay DBus InputEvent navigation tests
-- Status: pending
+- Status: complete
 - Dependencies: none
 - Scope: `tests/test_overlay_native.c` (new DBus InputEvent tests for O02–O09)
 - Acceptance criteria: Tests for O02 (move left), O03 (move right), O04 (cycle profile up), O05 (cycle profile down), O06 (enter host mode), O07 (host navigate rows), O08 (host move slot), O09 (exit host mode) that dispatch input via `emit_input_event` on the native DBus server (the production InputEvent signal path), not keyboard events. Tests assert the same semantic outcomes as the existing keyboard tests. Existing keyboard tests remain as supplemental evidence.
-- Verification: `nix-shell --run "ctest --test-dir build-check -R 'overlay_native' --output-on-failure"`; new DBus InputEvent navigation tests pass.
+- Verification: `nix-shell --run "ctest --test-dir build-check -R 'overlay_native' --output-on-failure"` — test_overlay_native passes (2.86s) with 8 new DBus InputEvent tests: `test_o02_move_left_dbus`, `test_o03_move_right_dbus`, `test_o04_cycle_profile_up_dbus`, `test_o05_cycle_profile_down_dbus`, `test_o06_enter_host_mode_dbus`, `test_o07_host_navigate_rows_dbus`, `test_o08_host_move_slot_dbus`, `test_o09_exit_host_mode_dbus`. Each dispatches via `emit_input_event` → native DBus EmitInputEvent → InputEvent(sd) signal → `ip_input_events_process` → `cbx_overlay_input_cb` → production handler. O04d/O05d verify LoadProfilePath DBus call on the wire. Full suite 98/98 pass (2 hardware skips).
 - Documentation impact: None.
 
 ## Task 6: Fix golden comparison silent skip in backend smoke SW

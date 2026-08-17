@@ -814,6 +814,228 @@ static void test_o09_exit_host_mode(void **state)
     assert_false(cbx_host_mode_is_active(&svc->hm));
 }
 
+/* ================================================================== */
+/*  O02–O09 via DBus InputEvent (primary production transport)         */
+/* ================================================================== */
+
+/* --- O02d: Move left (Player Mode) via DBus InputEvent --- */
+
+static void test_o02_move_left_dbus(void **state)
+{
+    native_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    activate_overlay(f);
+
+    /* Move right first so LEFT is not at boundary. */
+    emit_input_event(svc->conn.backend, svc->conn.bus,
+                     COMP_PATH_0, "Right", 1.0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
+    cbx_overlay_service_step(svc);
+    assert_int_equal(cbx_select_grid_get_cur_col(&svc->grid, 0), 1);
+
+    /* Move left back to Unassigned via DBus InputEvent. */
+    emit_input_event(svc->conn.backend, svc->conn.bus,
+                     COMP_PATH_0, "Left", 1.0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
+    cbx_overlay_service_step(svc);
+    assert_int_equal(cbx_select_grid_get_cur_col(&svc->grid, 0), 0);
+}
+
+/* --- O03d: Move right (Player Mode) via DBus InputEvent --- */
+
+static void test_o03_move_right_dbus(void **state)
+{
+    native_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    activate_overlay(f);
+    assert_int_equal(cbx_select_grid_get_cur_col(&svc->grid, 0), 0);
+
+    emit_input_event(svc->conn.backend, svc->conn.bus,
+                     COMP_PATH_0, "Right", 1.0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
+    cbx_overlay_service_step(svc);
+    assert_int_equal(cbx_select_grid_get_cur_col(&svc->grid, 0), 1);
+}
+
+/* --- O04d: Cycle profile up via DBus InputEvent --- */
+
+static void test_o04_cycle_profile_up_dbus(void **state)
+{
+    native_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    activate_overlay(f);
+    assert_true(svc->grid.profile_count >= 2);
+
+    char prof_before[CBX_GRID_PROFILE_LEN];
+    snprintf(prof_before, sizeof(prof_before), "%s",
+             cbx_select_grid_get_profile(&svc->grid, 0));
+    assert_true(prof_before[0] != '\0');
+
+    emit_input_event(svc->conn.backend, svc->conn.bus,
+                     COMP_PATH_0, "Up", 1.0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
+    cbx_overlay_service_step(svc);
+
+    const char *prof_after = cbx_select_grid_get_profile(&svc->grid, 0);
+    assert_non_null(prof_after);
+    assert_string_not_equal(prof_after, prof_before);
+
+    /* Verify LoadProfilePath DBus call was made on the wire. */
+    char *engine_path = NULL;
+    int rc = ip_composite_get_profile_path(svc->conn.backend,
+                                             svc->conn.bus,
+                                             COMP_PATH_0, &engine_path);
+    assert_int_equal(rc, 0);
+    assert_non_null(engine_path);
+    assert_non_null(strstr(engine_path, prof_after));
+    free(engine_path);
+}
+
+/* --- O05d: Cycle profile down via DBus InputEvent --- */
+
+static void test_o05_cycle_profile_down_dbus(void **state)
+{
+    native_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    activate_overlay(f);
+    assert_true(svc->grid.profile_count >= 2);
+
+    char prof_before[CBX_GRID_PROFILE_LEN];
+    snprintf(prof_before, sizeof(prof_before), "%s",
+             cbx_select_grid_get_profile(&svc->grid, 0));
+    assert_true(prof_before[0] != '\0');
+
+    emit_input_event(svc->conn.backend, svc->conn.bus,
+                     COMP_PATH_0, "Down", 1.0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
+    cbx_overlay_service_step(svc);
+
+    const char *prof_after = cbx_select_grid_get_profile(&svc->grid, 0);
+    assert_non_null(prof_after);
+    assert_string_not_equal(prof_after, prof_before);
+
+    /* Verify LoadProfilePath DBus call was made on the wire. */
+    char *engine_path = NULL;
+    int rc = ip_composite_get_profile_path(svc->conn.backend,
+                                             svc->conn.bus,
+                                             COMP_PATH_0, &engine_path);
+    assert_int_equal(rc, 0);
+    assert_non_null(engine_path);
+    assert_non_null(strstr(engine_path, prof_after));
+    free(engine_path);
+}
+
+/* --- O06d: Enter Host Mode (R3) via DBus InputEvent --- */
+
+static void test_o06_enter_host_mode_dbus(void **state)
+{
+    native_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    activate_overlay(f);
+    assert_false(cbx_host_mode_is_active(&svc->hm));
+
+    emit_input_event(svc->conn.backend, svc->conn.bus,
+                     COMP_PATH_0, "R3", 1.0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
+    cbx_overlay_service_step(svc);
+
+    assert_true(cbx_host_mode_is_active(&svc->hm));
+    assert_int_equal(cbx_host_mode_get_host_row(&svc->hm), 0);
+}
+
+/* --- O07d: Host: navigate rows via DBus InputEvent --- */
+
+static void test_o07_host_navigate_rows_dbus(void **state)
+{
+    native_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    activate_overlay(f);
+
+    /* Enter host mode via DBus InputEvent. */
+    emit_input_event(svc->conn.backend, svc->conn.bus,
+                     COMP_PATH_0, "R3", 1.0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
+    cbx_overlay_service_step(svc);
+    assert_true(cbx_host_mode_is_active(&svc->hm));
+    assert_int_equal(cbx_host_mode_get_selected_row(&svc->hm), 0);
+
+    /* Navigate down to row 1. */
+    emit_input_event(svc->conn.backend, svc->conn.bus,
+                     COMP_PATH_0, "Down", 1.0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
+    cbx_overlay_service_step(svc);
+    assert_int_equal(cbx_host_mode_get_selected_row(&svc->hm), 1);
+
+    /* Navigate back up to row 0. */
+    emit_input_event(svc->conn.backend, svc->conn.bus,
+                     COMP_PATH_0, "Up", 1.0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
+    cbx_overlay_service_step(svc);
+    assert_int_equal(cbx_host_mode_get_selected_row(&svc->hm), 0);
+}
+
+/* --- O08d: Host: move slot via DBus InputEvent --- */
+
+static void test_o08_host_move_slot_dbus(void **state)
+{
+    native_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    activate_overlay(f);
+
+    /* Enter host mode via DBus InputEvent. */
+    emit_input_event(svc->conn.backend, svc->conn.bus,
+                     COMP_PATH_0, "R3", 1.0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
+    cbx_overlay_service_step(svc);
+    assert_int_equal(cbx_host_mode_get_selected_row(&svc->hm), 0);
+    assert_int_equal(cbx_select_grid_get_cur_col(&svc->grid, 0), 0);
+
+    /* Move selected row right. */
+    emit_input_event(svc->conn.backend, svc->conn.bus,
+                     COMP_PATH_0, "Right", 1.0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
+    cbx_overlay_service_step(svc);
+    assert_int_equal(cbx_select_grid_get_cur_col(&svc->grid, 0), 1);
+
+    /* Move back left. */
+    emit_input_event(svc->conn.backend, svc->conn.bus,
+                     COMP_PATH_0, "Left", 1.0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
+    cbx_overlay_service_step(svc);
+    assert_int_equal(cbx_select_grid_get_cur_col(&svc->grid, 0), 0);
+}
+
+/* --- O09d: Exit Host Mode (R3) via DBus InputEvent --- */
+
+static void test_o09_exit_host_mode_dbus(void **state)
+{
+    native_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    activate_overlay(f);
+
+    /* Enter host mode via DBus InputEvent. */
+    emit_input_event(svc->conn.backend, svc->conn.bus,
+                     COMP_PATH_0, "R3", 1.0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
+    cbx_overlay_service_step(svc);
+    assert_true(cbx_host_mode_is_active(&svc->hm));
+
+    /* Exit host mode via DBus InputEvent. */
+    emit_input_event(svc->conn.backend, svc->conn.bus,
+                     COMP_PATH_0, "R3", 1.0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
+    cbx_overlay_service_step(svc);
+    assert_false(cbx_host_mode_is_active(&svc->hm));
+}
+
 /* --- O10: Close (B) saves + sets PASS + hides --- */
 
 static void test_o10_close_saves_and_sets_pass(void **state)
@@ -1099,6 +1321,24 @@ static const struct CMUnitTest tests[] = {
     cmocka_unit_test_setup_teardown(test_o08_host_move_slot,
                                      native_setup, native_teardown),
     cmocka_unit_test_setup_teardown(test_o09_exit_host_mode,
+                                     native_setup, native_teardown),
+
+    /* O02–O09 via DBus InputEvent (primary production transport) */
+    cmocka_unit_test_setup_teardown(test_o02_move_left_dbus,
+                                     native_setup, native_teardown),
+    cmocka_unit_test_setup_teardown(test_o03_move_right_dbus,
+                                     native_setup, native_teardown),
+    cmocka_unit_test_setup_teardown(test_o04_cycle_profile_up_dbus,
+                                     native_setup, native_teardown),
+    cmocka_unit_test_setup_teardown(test_o05_cycle_profile_down_dbus,
+                                     native_setup, native_teardown),
+    cmocka_unit_test_setup_teardown(test_o06_enter_host_mode_dbus,
+                                     native_setup, native_teardown),
+    cmocka_unit_test_setup_teardown(test_o07_host_navigate_rows_dbus,
+                                     native_setup, native_teardown),
+    cmocka_unit_test_setup_teardown(test_o08_host_move_slot_dbus,
+                                     native_setup, native_teardown),
+    cmocka_unit_test_setup_teardown(test_o09_exit_host_mode_dbus,
                                      native_setup, native_teardown),
 
     /* O10 — Close */
