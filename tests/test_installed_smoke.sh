@@ -182,6 +182,10 @@ MANAGER_BODY_CROP="$TMPDIR/manager_body.png"
 # can find DejaVuSans.ttf at runtime via cbx_font_path().
 FONT_HOME="$TMPDIR/home"
 mkdir -p "$FONT_HOME/.local/share/fonts"
+# Pre-create the systemd user service file so the first-run dialog
+# (SPEC §9.1) does not appear and block interaction in this test.
+mkdir -p "$FONT_HOME/.config/systemd/user"
+touch "$FONT_HOME/.config/systemd/user/controller-box.service"
 
 # Search for DejaVuSans.ttf in common locations
 FONT_FOUND=""

@@ -42,9 +42,11 @@ flatpak-builder --user --install --force build-dir \
     packaging/org.shadowblip.ControllerBox.yaml
 ```
 
-On first launch, the manager prompts to enable the overlay service. It writes
-`~/.config/systemd/user/controller-box.service` and enables it via
-`flatpak-spawn --host systemctl --user`.
+On first launch, the manager detects that `~/.config/systemd/user/controller-box.service`
+does not exist and shows a modal dialog: "Enable overlay service?" Press **A** (or click
+**Yes**) to install and enable the service; press **B** (or click **No**) to skip. The
+manager writes `~/.config/systemd/user/controller-box.service` and enables it via
+`systemctl --user enable --now` (or `flatpak-spawn --host systemctl --user` under Flatpak).
 
 ### Tarball (any distro)
 
@@ -60,8 +62,8 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 sudo cmake --install build
 
-# Enable the overlay service via the manager (Settings → Install Service),
-# or manually:
+# Enable the overlay service via the manager (first-run dialog or
+# Settings), or manually:
 systemctl --user enable --now controller-box
 ```
 

@@ -29,6 +29,7 @@
 #include "manager/controllers_tab.h"
 #include "manager/profiles_tab.h"
 #include "manager/settings_tab.h"
+#include "manager/service_install.h"
 #include "dbus/dbus_interface.h"  /* ip_dbus_backend, ip_bus_handle, ip_dbus_sd_backend */
 #include "dbus/ip_connection.h"
 
@@ -86,6 +87,14 @@ typedef struct {
     /* Real SDL game-controller transport (keyboard is supplemental only). */
     SDL_GameController    *gamecontrollers[CBX_MGR_MAX_GAMECONTROLLERS];
     int                    gamecontroller_count;
+
+    /* First-run service installation dialog (SPEC §9.1). */
+    bool          first_run_active;       /* dialog is showing        */
+    bool          first_run_initialized;  /* dialog widgets created   */
+    cbx_label     first_run_label;
+    cbx_button    first_run_yes;
+    cbx_button    first_run_no;
+    char          service_status[256];
 
     /* Running flag. */
     bool          running;
@@ -153,8 +162,20 @@ bool cbx_manager_handle_event(cbx_manager *mgr, const SDL_Event *ev);
 void cbx_manager_render(cbx_manager *mgr);
 
 /*
- * Shut down and free all resources.  Safe to call on a zeroed struct.
+ * Check whether this is a first run (no systemd user service installed)
+ * and if so, show the "Enable overlay service?" dialog (SPEC §9.1).
+ * Called automatically by cbx_manager_run(); also callable directly
+ * by tests that need to exercise the first-run dialog through
+ * cbx_manager_handle_event.
  */
+void cbx_manager_check_first_run(cbx_manager *mgr);
+
+/*
+ * Returns true if the first-run service-install dialog is currently active.
+ */
+bool cbx_manager_first_run_active(const cbx_manager *mgr);
+
+/* Shut down and free all resources.  Safe to call on a zeroed struct. */
 void cbx_manager_shutdown(cbx_manager *mgr);
 
 /* --- Accessors (for testing) -------------------------------------- */

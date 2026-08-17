@@ -244,6 +244,10 @@ FONT_HOME="$TMPDIR/home"
 mkdir -p "$FONT_HOME/.local/share/fonts"
 mkdir -p "$FONT_HOME/.local/share/inputplumber/profiles"
 mkdir -p "$FONT_HOME/.config/controller-box"
+# Pre-create the systemd user service file so the first-run dialog
+# (SPEC §9.1) does not appear and block interaction in this test.
+mkdir -p "$FONT_HOME/.config/systemd/user"
+touch "$FONT_HOME/.config/systemd/user/controller-box.service"
 
 # Copy a font so the manager can render text
 FONT_FOUND=""

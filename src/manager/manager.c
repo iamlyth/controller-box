@@ -27,6 +27,7 @@
  *   - Focus the tabbar (or first panel child if any)
  */
 #include "manager/manager.h"
+#include "manager/service_install.h"
 #include "ui/input_map.h"
 
 #include <SDL2/SDL.h>
@@ -34,6 +35,8 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
+#include <sys/stat.h>
 
 /* ------------------------------------------------------------------ */
 /*  Forward declarations                                             */
@@ -61,6 +64,13 @@ static void cbx_manager_close_gamecontroller(cbx_manager *mgr,
                                                SDL_JoystickID instance_id);
 static bool cbx_manager_controller_to_key(const SDL_Event *ev,
                                             SDL_Event *key_event);
+
+/* --- First-run dialog (SPEC §9.1) ---------------------------------- */
+static void on_first_run_yes(cbx_widget *w, void *user_data);
+static void on_first_run_no(cbx_widget *w, void *user_data);
+static void cbx_manager_layout_first_run(cbx_manager *mgr);
+static bool cbx_manager_handle_first_run_event(cbx_manager *mgr,
+                                                  const SDL_Event *ev);
 void cbx_manager_backend_ready(void *userdata);
 void cbx_manager_backend_degraded(const char *reason, void *userdata);
 
@@ -158,6 +168,152 @@ cbx_manager_controller_to_key(const SDL_Event *ev, SDL_Event *key_event)
     key_event->key.repeat = 0;
     key_event->key.keysym.sym = key;
     return true;
+}
+
+/* ------------------------------------------------------------------ */
+/*  First-run service installation dialog (SPEC §9.1)                 */
+/* ------------------------------------------------------------------ */
+
+static void
+on_first_run_yes(cbx_widget *w, void *user_data)
+{
+    (void)w;
+    cbx_manager *mgr = (cbx_manager *)user_data;
+    if (!mgr)
+        return;
+    /* Install the systemd user service through the production path. */
+    cbx_service_install(mgr->service_status, sizeof(mgr->service_status));
+    mgr->first_run_active = false;
+}
+
+static void
+on_first_run_no(cbx_widget *w, void *user_data)
+{
+    (void)w;
+    cbx_manager *mgr = (cbx_manager *)user_data;
+    if (!mgr)
+        return;
+    mgr->first_run_active = false;
+}
+
+static void
+cbx_manager_layout_first_run(cbx_manager *mgr)
+{
+    if (!mgr)
+        return;
+
+    int dw = 700, dh = 250;
+    int dx = (mgr->rend.window_w - dw) / 2;
+    int dy = (mgr->rend.window_h - dh) / 2;
+    if (dx < 0) dx = 0;
+    if (dy < 0) dy = 0;
+
+    /* Label at the top of the dialog. */
+    SDL_Rect lbl_rect = { .x = dx + 20, .y = dy + 30,
+                          .w = dw - 40, .h = 80 };
+    cbx_widget_set_rect(&mgr->first_run_label.base, &lbl_rect);
+
+    /* Buttons at the bottom, centred horizontally. */
+    int btn_w = 160, btn_h = 44, btn_gap = 24;
+    int btn_y = dy + dh - btn_h - 30;
+    int total_btn_w = btn_w * 2 + btn_gap;
+    int btn_x = dx + (dw - total_btn_w) / 2;
+
+    SDL_Rect yes_rect = { .x = btn_x, .y = btn_y,
+                          .w = btn_w, .h = btn_h };
+    cbx_widget_set_rect(&mgr->first_run_yes.base, &yes_rect);
+
+    btn_x += btn_w + btn_gap;
+    SDL_Rect no_rect = { .x = btn_x, .y = btn_y,
+                         .w = btn_w, .h = btn_h };
+    cbx_widget_set_rect(&mgr->first_run_no.base, &no_rect);
+}
+
+static bool
+cbx_manager_handle_first_run_event(cbx_manager *mgr, const SDL_Event *ev)
+{
+    if (!mgr || !mgr->first_run_active || !ev)
+        return false;
+
+    /* Keyboard: A/Enter/Space confirms, B/Escape cancels.
+     * We handle key events directly (rather than routing through the
+     * button widget) because cbx_button only handles A/Enter/Space,
+     * not B/Escape.  Visual pressed state is set on the corresponding
+     * button for feedback. */
+    if (ev->type == SDL_KEYDOWN) {
+        SDL_Keycode key = ev->key.keysym.sym;
+
+        if (key == SDLK_a || key == SDLK_RETURN || key == SDLK_SPACE) {
+            mgr->first_run_yes.base.focused = true;
+            mgr->first_run_no.base.focused = false;
+            mgr->first_run_yes.pressed = true;
+            return true;
+        }
+        if (key == SDLK_b || key == SDLK_ESCAPE) {
+            mgr->first_run_yes.base.focused = false;
+            mgr->first_run_no.base.focused = true;
+            mgr->first_run_no.pressed = true;
+            return true;
+        }
+        /* Swallow all other keys — the dialog is modal. */
+        return true;
+    }
+
+    if (ev->type == SDL_KEYUP) {
+        SDL_Keycode key = ev->key.keysym.sym;
+
+        if (key == SDLK_a || key == SDLK_RETURN || key == SDLK_SPACE) {
+            if (mgr->first_run_yes.pressed) {
+                mgr->first_run_yes.pressed = false;
+                on_first_run_yes(&mgr->first_run_yes.base, mgr);
+            }
+            return true;
+        }
+        if (key == SDLK_b || key == SDLK_ESCAPE) {
+            if (mgr->first_run_no.pressed) {
+                mgr->first_run_no.pressed = false;
+                on_first_run_no(&mgr->first_run_no.base, mgr);
+            }
+            return true;
+        }
+        return true;
+    }
+
+    /* Mouse: hit-test the dialog buttons. */
+    if (ev->type == SDL_MOUSEMOTION ||
+        ev->type == SDL_MOUSEBUTTONDOWN ||
+        ev->type == SDL_MOUSEBUTTONUP) {
+        SDL_Point p;
+        if (ev->type == SDL_MOUSEMOTION) {
+            p.x = ev->motion.x;
+            p.y = ev->motion.y;
+        } else {
+            p.x = ev->button.x;
+            p.y = ev->button.y;
+        }
+
+        bool yes_hit = SDL_PointInRect(
+            &p, &mgr->first_run_yes.base.rect);
+        bool no_hit = SDL_PointInRect(
+            &p, &mgr->first_run_no.base.rect);
+
+        mgr->first_run_yes.base.hover = yes_hit;
+        mgr->first_run_no.base.hover = no_hit;
+
+        if (yes_hit)
+            return cbx_widget_handle_event(
+                &mgr->first_run_yes.base, ev);
+        if (no_hit)
+            return cbx_widget_handle_event(
+                &mgr->first_run_no.base, ev);
+
+        /* Click outside buttons — no side effect. */
+        return false;
+    }
+
+    /* Other event types (SDL_QUIT, SDL_WINDOWEVENT, controller
+     * hotplug) — pass through to the normal handler. */
+    return false;
 }
 
 /* ------------------------------------------------------------------ */
@@ -415,11 +571,82 @@ cbx_manager_init_with_dbus(cbx_manager *mgr, const char *font_path,
     return 0;
 }
 
+/* ------------------------------------------------------------------ */
+/*  First-run detection (SPEC §9.1)                                   */
+/* ------------------------------------------------------------------ */
+
+void
+cbx_manager_check_first_run(cbx_manager *mgr)
+{
+    if (!mgr || mgr->first_run_initialized)
+        return;
+
+    /* Check if the service unit file already exists. */
+    char path[4096];
+    if (cbx_service_unit_path(path, sizeof(path)) != 0)
+        return;  /* Cannot resolve path — skip first-run. */
+
+    if (access(path, F_OK) == 0)
+        return;  /* Service file exists — not a first run. */
+
+    /* Check if systemd user session is available.  If not, there is
+     * nothing to install and the dialog would be misleading. */
+    if (!cbx_service_systemd_available())
+        return;
+
+    /* Create dialog widgets. */
+    int rc = cbx_label_init(&mgr->first_run_label,
+                             "Enable overlay service?\n"
+                             "This will install a systemd user service.",
+                             mgr->font_id, &mgr->text_cache, &mgr->theme);
+    if (rc != 0)
+        return;
+    cbx_label_set_multiline(&mgr->first_run_label, true);
+    cbx_widget_set_visible(&mgr->first_run_label.base, true);
+
+    rc = cbx_button_init(&mgr->first_run_yes, "Yes", mgr->font_id,
+                         &mgr->text_cache, &mgr->theme,
+                         on_first_run_yes, mgr);
+    if (rc != 0) {
+        cbx_widget_destroy(&mgr->first_run_label.base);
+        return;
+    }
+    cbx_widget_set_visible(&mgr->first_run_yes.base, true);
+
+    rc = cbx_button_init(&mgr->first_run_no, "No", mgr->font_id,
+                         &mgr->text_cache, &mgr->theme,
+                         on_first_run_no, mgr);
+    if (rc != 0) {
+        cbx_widget_destroy(&mgr->first_run_label.base);
+        cbx_widget_destroy(&mgr->first_run_yes.base);
+        return;
+    }
+    cbx_widget_set_visible(&mgr->first_run_no.base, true);
+
+    /* Focus the Yes button by default (visual highlight). */
+    mgr->first_run_yes.base.focused = true;
+    mgr->first_run_no.base.focused = false;
+
+    mgr->first_run_initialized = true;
+    mgr->first_run_active = true;
+
+    cbx_manager_layout_first_run(mgr);
+}
+
+bool
+cbx_manager_first_run_active(const cbx_manager *mgr)
+{
+    return mgr ? mgr->first_run_active : false;
+}
+
 int
 cbx_manager_run(cbx_manager *mgr)
 {
     if (!mgr)
         return -EINVAL;
+
+    /* Check for first-run service installation (SPEC §9.1). */
+    cbx_manager_check_first_run(mgr);
 
     mgr->running = true;
     SDL_Event ev;
@@ -491,6 +718,13 @@ cbx_manager_shutdown(cbx_manager *mgr)
     /* Clean up text cache. */
     cbx_text_cache_cleanup(&mgr->text_cache);
 
+    /* Clean up first-run dialog widgets. */
+    if (mgr->first_run_initialized) {
+        cbx_widget_destroy(&mgr->first_run_label.base);
+        cbx_widget_destroy(&mgr->first_run_yes.base);
+        cbx_widget_destroy(&mgr->first_run_no.base);
+    }
+
     /* Shut down renderer (destroys window + renderer). */
     cbx_renderer_shutdown(&mgr->rend);
 
@@ -536,6 +770,8 @@ cbx_manager_handle_event(cbx_manager *mgr, const SDL_Event *ev)
             mgr->rend.window_h = ev->window.data2;
             cbx_manager_layout(mgr);
             cbx_manager_rebuild_focus(mgr);
+            if (mgr->first_run_active)
+                cbx_manager_layout_first_run(mgr);
             return true;
         }
         return false;
@@ -555,6 +791,15 @@ cbx_manager_handle_event(cbx_manager *mgr, const SDL_Event *ev)
         if (!cbx_manager_controller_to_key(ev, &key_event))
             return false;
         return cbx_manager_handle_event(mgr, &key_event);
+    }
+
+    /* First-run dialog interception (SPEC §9.1): when the first-run
+     * service-install dialog is active, it is modal — all keyboard
+     * and mouse events are routed to the dialog buttons instead of
+     * the tab/panel widgets.  SDL_QUIT, SDL_WINDOWEVENT, and controller
+     * hotplug events pass through normally. */
+    if (mgr->first_run_active) {
+        return cbx_manager_handle_first_run_event(mgr, ev);
     }
 
     /* Route mouse events via hit-testing of visible widgets (SPEC §5.1:
@@ -901,6 +1146,39 @@ cbx_manager_render(cbx_manager *mgr)
     if (mgr->active_tab >= 0 && mgr->active_tab < CBX_MGR_TAB_COUNT)
         cbx_widget_draw(&mgr->panels[mgr->active_tab].base,
                          mgr->rend.renderer);
+
+    /* First-run dialog overlay (SPEC §9.1). */
+    if (mgr->first_run_active) {
+        SDL_Renderer *r = mgr->rend.renderer;
+
+        /* Semi-transparent dimming layer over the full window. */
+        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(r, 0, 0, 0, 160);
+        SDL_Rect full = { 0, 0, mgr->rend.window_w, mgr->rend.window_h };
+        SDL_RenderFillRect(r, &full);
+
+        /* Dialog box. */
+        int dw = 700, dh = 250;
+        int dx = (mgr->rend.window_w - dw) / 2;
+        int dy = (mgr->rend.window_h - dh) / 2;
+        if (dx < 0) dx = 0;
+        if (dy < 0) dy = 0;
+        SDL_Rect drect = { dx, dy, dw, dh };
+        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+        SDL_SetRenderDrawColor(r, mgr->theme.panel_bg.r,
+                               mgr->theme.panel_bg.g,
+                               mgr->theme.panel_bg.b, 255);
+        SDL_RenderFillRect(r, &drect);
+        SDL_SetRenderDrawColor(r, mgr->theme.border.r,
+                               mgr->theme.border.g,
+                               mgr->theme.border.b, 255);
+        SDL_RenderDrawRect(r, &drect);
+
+        /* Dialog widgets. */
+        cbx_widget_draw(&mgr->first_run_label.base, r);
+        cbx_widget_draw(&mgr->first_run_yes.base, r);
+        cbx_widget_draw(&mgr->first_run_no.base, r);
+    }
 }
 
 /* ------------------------------------------------------------------ */

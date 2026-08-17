@@ -255,6 +255,11 @@ mi_setup(void **state)
     unsetenv("XDG_CONFIG_HOME");
     unsetenv("XDG_DATA_HOME");
 
+    /* Reset service-install mocks to ensure clean state. */
+    cbx_service_set_mock_systemctl(NULL);
+    cbx_service_set_mock_group_file(NULL);
+    cbx_service_set_mock_username(NULL);
+
     mi_init_ctrl(f, FIXTURE_1C1T, "xb360", NULL);
 
     *state = f;
@@ -268,6 +273,11 @@ mi_teardown(void **state)
     if (f) {
         cbx_manager_shutdown(&f->mgr);
         ip_dbus_mock_free(&f->mock);
+
+        /* Reset service-install mocks. */
+        cbx_service_set_mock_systemctl(NULL);
+        cbx_service_set_mock_group_file(NULL);
+        cbx_service_set_mock_username(NULL);
 
         char cmd[8192];
         snprintf(cmd, sizeof(cmd), "rm -rf '%s'", f->tmp_home);
@@ -2021,6 +2031,164 @@ test_decorative_widget_exclusion(void **state)
 /*  BUTTONDOWN → cbx_manager_controller_to_key → handle_event.        */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/*  Task 7: First-run service installation dialog (M39, SPEC §9.1)    */
+/* ------------------------------------------------------------------ */
+
+/* Helper: create a mock systemctl script that simulates systemd.
+ * Returns the script path in buf.  The state file tracks whether the
+ * service is "active" (created by enable, checked by is-active). */
+static void
+setup_mock_systemctl(char *script_buf, size_t script_buflen,
+                     char *state_buf, size_t state_buflen)
+{
+    snprintf(state_buf, state_buflen,
+             "/tmp/cbx_svc_state_%d", (int)getpid());
+    unlink(state_buf);  /* Start with no active service. */
+
+    snprintf(script_buf, script_buflen,
+             "/tmp/cbx_svc_mock_%d.sh", (int)getpid());
+
+    FILE *s = fopen(script_buf, "w");
+    assert_non_null(s);
+    fprintf(s, "#!/bin/sh\n");
+    fprintf(s, "case \"$1\" in\n");
+    fprintf(s, "  is-system-running) exit 0 ;;\n");
+    fprintf(s, "  is-active) if [ -f \"%s\" ]; then echo active; else echo inactive; fi ;;\n",
+            state_buf);
+    fprintf(s, "  enable) touch \"%s\"; exit 0 ;;\n", state_buf);
+    fprintf(s, "  *) exit 0 ;;\n");
+    fprintf(s, "esac\n");
+    fclose(s);
+    chmod(script_buf, 0755);
+
+    cbx_service_set_mock_systemctl(script_buf);
+}
+
+static void
+cleanup_mock_systemctl(const char *script_path, const char *state_path)
+{
+    cbx_service_set_mock_systemctl(NULL);
+    cbx_service_set_mock_group_file(NULL);
+    cbx_service_set_mock_username(NULL);
+    unlink(script_path);
+    unlink(state_path);
+}
+
+/* M39 controller path: A confirms → cbx_service_install() called →
+ * unit file written → dialog dismissed. */
+static void
+test_first_run_confirm_controller_path(void **state)
+{
+    mi_fixture *f = *state;
+
+    char script_path[256], state_path[256];
+    setup_mock_systemctl(script_path, sizeof(script_path),
+                         state_path, sizeof(state_path));
+
+    /* Trigger first-run detection — dialog should appear. */
+    cbx_manager_check_first_run(&f->mgr);
+    assert_true(cbx_manager_first_run_active(&f->mgr));
+
+    /* Confirm with A (controller primary action). */
+    send_key_press(&f->mgr, SDLK_a);
+
+    /* Dialog should be dismissed. */
+    assert_false(cbx_manager_first_run_active(&f->mgr));
+
+    /* Service unit file should exist (written by cbx_service_install). */
+    char unit_path[4096];
+    assert_int_equal(cbx_service_unit_path(unit_path, sizeof(unit_path)), 0);
+    assert_int_equal(access(unit_path, F_OK), 0);
+
+    cleanup_mock_systemctl(script_path, state_path);
+}
+
+/* M39 controller path: B cancels → dialog dismissed, no install. */
+static void
+test_first_run_cancel_controller_path(void **state)
+{
+    mi_fixture *f = *state;
+
+    char script_path[256], state_path[256];
+    setup_mock_systemctl(script_path, sizeof(script_path),
+                         state_path, sizeof(state_path));
+
+    cbx_manager_check_first_run(&f->mgr);
+    assert_true(cbx_manager_first_run_active(&f->mgr));
+
+    /* Cancel with B (controller secondary action). */
+    send_key_press(&f->mgr, SDLK_b);
+
+    /* Dialog should be dismissed. */
+    assert_false(cbx_manager_first_run_active(&f->mgr));
+
+    /* Service unit file should NOT exist (no install). */
+    char unit_path[4096];
+    assert_int_equal(cbx_service_unit_path(unit_path, sizeof(unit_path)), 0);
+    assert_int_not_equal(access(unit_path, F_OK), 0);
+
+    cleanup_mock_systemctl(script_path, state_path);
+}
+
+/* M39 pointer path: mouse click on Yes button → install. */
+static void
+test_first_run_confirm_pointer_path(void **state)
+{
+    mi_fixture *f = *state;
+
+    char script_path[256], state_path[256];
+    setup_mock_systemctl(script_path, sizeof(script_path),
+                         state_path, sizeof(state_path));
+
+    cbx_manager_check_first_run(&f->mgr);
+    assert_true(cbx_manager_first_run_active(&f->mgr));
+
+    /* Click on the Yes button. */
+    int cx, cy;
+    widget_center(&f->mgr.first_run_yes.base, &cx, &cy);
+    send_mouse_click(&f->mgr, cx, cy);
+
+    /* Dialog should be dismissed. */
+    assert_false(cbx_manager_first_run_active(&f->mgr));
+
+    /* Service unit file should exist. */
+    char unit_path[4096];
+    assert_int_equal(cbx_service_unit_path(unit_path, sizeof(unit_path)), 0);
+    assert_int_equal(access(unit_path, F_OK), 0);
+
+    cleanup_mock_systemctl(script_path, state_path);
+}
+
+/* M39 pointer path: mouse click on No button → dismiss, no install. */
+static void
+test_first_run_cancel_pointer_path(void **state)
+{
+    mi_fixture *f = *state;
+
+    char script_path[256], state_path[256];
+    setup_mock_systemctl(script_path, sizeof(script_path),
+                         state_path, sizeof(state_path));
+
+    cbx_manager_check_first_run(&f->mgr);
+    assert_true(cbx_manager_first_run_active(&f->mgr));
+
+    /* Click on the No button. */
+    int cx, cy;
+    widget_center(&f->mgr.first_run_no.base, &cx, &cy);
+    send_mouse_click(&f->mgr, cx, cy);
+
+    /* Dialog should be dismissed. */
+    assert_false(cbx_manager_first_run_active(&f->mgr));
+
+    /* Service unit file should NOT exist. */
+    char unit_path[4096];
+    assert_int_equal(cbx_service_unit_path(unit_path, sizeof(unit_path)), 0);
+    assert_int_not_equal(access(unit_path, F_OK), 0);
+
+    cleanup_mock_systemctl(script_path, state_path);
+}
+
 int
 main(void)
 {
@@ -2191,6 +2359,16 @@ main(void)
         /* Task 5: Decorative-widget exclusion */
         cmocka_unit_test_setup_teardown(
             test_decorative_widget_exclusion, mi_setup, mi_teardown),
+
+        /* Task 7: First-run service installation dialog (M39, SPEC §9.1) */
+        cmocka_unit_test_setup_teardown(
+            test_first_run_confirm_controller_path, mi_setup, mi_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_first_run_cancel_controller_path, mi_setup, mi_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_first_run_confirm_pointer_path, mi_setup, mi_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_first_run_cancel_pointer_path, mi_setup, mi_teardown),
     };
 
     return cmocka_run_group_tests(tests, NULL, NULL);
