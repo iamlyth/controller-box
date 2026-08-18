@@ -85,6 +85,19 @@ set -e
 [[ $unsupported_capability_rc -eq 1 ]]
 git -C "$tmp/repo" reset -q --hard "$base"
 
+# Device presence alone cannot produce kernel-uinput evidence: the dedicated
+# non-skipping project contract must also exist and pass in the reconstructed job.
+sed -i 's/\["remote-project-gate"\]/["remote-project-gate", "kernel-uinput"]/' \
+    "$tmp/repo/.factory/environment.toml"
+git -C "$tmp/repo" add .factory/environment.toml
+git -C "$tmp/repo" commit -qm incomplete-kernel-uinput-contract
+set +e
+(cd "$tmp/repo" && ./scripts/run-factory-runners.py >/dev/null 2>&1)
+kernel_contract_rc=$?
+set -e
+[[ $kernel_contract_rc -eq 1 ]]
+git -C "$tmp/repo" reset -q --hard "$base"
+
 # Self-consistent local hashes cannot conceal a false archive binding.
 python3 - "$tmp/repo" "$base" <<'PY'
 import hashlib, json, pathlib, sys

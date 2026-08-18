@@ -14,6 +14,7 @@ import re
 import resource
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tarfile
@@ -161,7 +162,7 @@ def main() -> int:
         or not all(isinstance(item, str) and NAME.fullmatch(item) for item in capabilities)
     ):
         fail("invalid capabilities")
-    if not set(capabilities) <= {"remote-project-gate", "systemd-user"}:
+    if not set(capabilities) <= {"remote-project-gate", "systemd-user", "kernel-uinput"}:
         fail("unsupported capability claim")
     argv_digest = hashlib.sha256(json.dumps(argv, separators=(",", ":")).encode()).hexdigest()
     if argv_digest != request["verify_argv_sha256"]:
@@ -268,10 +269,40 @@ def main() -> int:
                     env=env, capture_output=True, timeout=30,
                 )
                 probes["systemd-user"] = probe.returncode == 0 and probe.stdout == b"factory-systemd-user-ok"
+            if "kernel-uinput" in capabilities:
+                try:
+                    uinput = os.stat("/dev/uinput")
+                    probes["kernel-uinput"] = (
+                        stat.S_ISCHR(uinput.st_mode)
+                        and os.access("/dev/uinput", os.W_OK)
+                    )
+                except OSError:
+                    probes["kernel-uinput"] = False
             if any(not value for value in probes.values()):
                 fail("trusted capability probe failed")
 
             returncode, stdout, stderr = run_bounded(argv, job, env)
+            if "kernel-uinput" in capabilities and returncode == 0:
+                probe_rc, probe_stdout, probe_stderr = run_bounded(
+                    [
+                        "nix-shell", "--run",
+                        "ctest --test-dir build-check --no-tests=error "
+                        "-R '^test_kernel_controller$' --output-on-failure",
+                    ],
+                    job, env,
+                )
+                marker = b"\n--- kernel-uinput capability contract ---\n"
+                if len(stdout) + len(stderr) + len(marker) + len(probe_stdout) + len(probe_stderr) > MAX_LOG:
+                    fail("combined runner verification output exceeded limits")
+                stdout += marker + probe_stdout
+                stderr += probe_stderr
+                probes["kernel-uinput"] = (
+                    probe_rc == 0
+                    and b"100% tests passed" in probe_stdout
+                    and b"test_kernel_controller" in probe_stdout
+                    and b"Skipped" not in probe_stdout
+                    and b"Not Run" not in probe_stdout
+                )
             probes["remote-project-gate"] = returncode == 0
             evidenced = sorted(capability for capability in capabilities if probes.get(capability, False))
             result = "pass" if returncode == 0 and len(evidenced) == len(capabilities) else "fail"
