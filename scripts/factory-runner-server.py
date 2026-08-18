@@ -117,6 +117,8 @@ def remove_workspace(work: Path) -> None:
 
 
 def main() -> int:
+    if os.getuid() == 0 or os.geteuid() == 0 or os.getuid() != os.geteuid():
+        fail("server requires a dedicated unprivileged runner identity")
     if os.environ.get("SSH_ORIGINAL_COMMAND") != "factory-runner-v1":
         fail("server must be invoked by the fixed SSH protocol command")
     line = sys.stdin.buffer.readline(65_537)
@@ -159,7 +161,7 @@ def main() -> int:
         or not all(isinstance(item, str) and NAME.fullmatch(item) for item in capabilities)
     ):
         fail("invalid capabilities")
-    if not set(capabilities) <= {"remote-project-gate", "systemd-user", "physical-controller"}:
+    if not set(capabilities) <= {"remote-project-gate", "systemd-user"}:
         fail("unsupported capability claim")
     argv_digest = hashlib.sha256(json.dumps(argv, separators=(",", ":")).encode()).hexdigest()
     if argv_digest != request["verify_argv_sha256"]:
@@ -266,15 +268,6 @@ def main() -> int:
                     env=env, capture_output=True, timeout=30,
                 )
                 probes["systemd-user"] = probe.returncode == 0 and probe.stdout == b"factory-systemd-user-ok"
-            if "physical-controller" in capabilities:
-                probe = subprocess.run(
-                    [
-                        "/bin/sh", "-c",
-                        "grep -qE 'Handlers=.*js[0-9]+' /proc/bus/input/devices",
-                    ],
-                    env=env, capture_output=True, timeout=30,
-                )
-                probes["physical-controller"] = probe.returncode == 0
             if any(not value for value in probes.values()):
                 fail("trusted capability probe failed")
 
