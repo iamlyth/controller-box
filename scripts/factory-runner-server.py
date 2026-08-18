@@ -313,8 +313,9 @@ def main() -> int:
             if "installed-package" in capabilities and returncode == 0:
                 package_rc, package_stdout, package_stderr = run_bounded(
                     [
-                        "/usr/bin/env", "CBX_REQUIRE_FLATPAK=1",
-                        "./tests/test_packaging.sh", "build-maintenance-verify",
+                        "nix-shell", "--run",
+                        "CBX_REQUIRE_FLATPAK=1 ./tests/test_packaging.sh "
+                        "build-maintenance-verify",
                     ],
                     job, env,
                 )

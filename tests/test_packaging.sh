@@ -205,10 +205,13 @@ fi
 if command -v flatpak-builder >/dev/null 2>&1; then
     FLATPAK_MANIFEST="$PROJECT_ROOT/packaging/org.shadowblip.ControllerBox.yaml"
     FLATPAK_BUILD="$TMPDIR/flatpak-build"
+    FLATPAK_STATE="$TMPDIR/flatpak-state"
 
     echo ""
     echo "flatpak-builder found; attempting clean build gate..."
-    if flatpak-builder --user --install --force-clean "$FLATPAK_BUILD" "$FLATPAK_MANIFEST" 2>&1; then
+    if flatpak-builder --user --install --force-clean \
+            --state-dir="$FLATPAK_STATE" \
+            "$FLATPAK_BUILD" "$FLATPAK_MANIFEST" 2>&1; then
         # Verify the Flatpak binary runs --version
         FLATPAK_OUT=$(flatpak run org.shadowblip.ControllerBox --version 2>&1) || true
         if echo "$FLATPAK_OUT" | grep -qE '^controller-box [0-9]+\.[0-9]+\.[0-9]+'; then
