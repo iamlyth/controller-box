@@ -1,5 +1,3 @@
-#define _POSIX_C_SOURCE 200809L
-
 /*
  * config_assignments.c — assignments.yaml read/write for Controller-Box.
  *

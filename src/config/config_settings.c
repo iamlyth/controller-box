@@ -1,5 +1,3 @@
-#define _POSIX_C_SOURCE 200809L
-
 /*
  * config_settings.c — settings.yaml read/write for Controller-Box.
  *

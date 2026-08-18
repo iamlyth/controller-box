@@ -8,6 +8,11 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
+# Linux/POSIX interfaces used throughout the production sources, including
+# open_memstream(), mkstemp(), and O_NOFOLLOW, require feature-test macros
+# when compiling in strict C11 mode.
+add_compile_definitions(_GNU_SOURCE)
+
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
