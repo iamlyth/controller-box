@@ -202,11 +202,33 @@ fi
 if [[ "$REQUIRE_FLATPAK" == 0 ]]; then
     echo "OPTIONAL: Flatpak execution is deferred to the isolated installed-package runner contract."
 elif command -v flatpak-builder >/dev/null 2>&1; then
-    FLATPAK_MANIFEST="$PROJECT_ROOT/packaging/org.shadowblip.ControllerBox.yaml"
+    FLATPAK_MANIFEST="$TMPDIR/org.shadowblip.ControllerBox.exact.yaml"
     FLATPAK_BUILD="$TMPDIR/flatpak-build"
     FLATPAK_STATE="$TMPDIR/flatpak-state"
+    FLATPAK_SOURCE="$TMPDIR/exact-source"
 
-    echo "flatpak-builder found; running required clean build gate..."
+    # The published manifest follows the develop branch. Runner evidence must
+    # instead build the exact commit reconstructed by the endpoint.
+    mkdir -p "$FLATPAK_SOURCE"
+    git archive --format=tar HEAD | tar -C "$FLATPAK_SOURCE" -xf -
+    python3 - "$PROJECT_ROOT/packaging/org.shadowblip.ControllerBox.yaml" \
+            "$FLATPAK_MANIFEST" <<'PY'
+import pathlib
+import sys
+import yaml
+
+source = pathlib.Path(sys.argv[1])
+destination = pathlib.Path(sys.argv[2])
+manifest = yaml.safe_load(source.read_text(encoding="utf-8"))
+modules = manifest.get("modules", [])
+application = next((item for item in modules if item.get("name") == "controller-box"), None)
+if application is None:
+    raise SystemExit("controller-box module is missing from Flatpak manifest")
+application["sources"] = [{"type": "dir", "path": "exact-source"}]
+destination.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+PY
+
+    echo "flatpak-builder found; running required exact-commit clean build gate..."
     if flatpak-builder --user --install --force-clean \
             --state-dir="$FLATPAK_STATE" \
             "$FLATPAK_BUILD" "$FLATPAK_MANIFEST" 2>&1; then

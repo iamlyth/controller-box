@@ -113,7 +113,7 @@ modules:
     sources:
       - type: archive
         url: https://github.com/yaml/libyaml/releases/download/0.2.5/yaml-0.2.5.tar.gz
-        sha256: c642ae9c75bcce2395fce901abe213cda5de2440c809ee92c1bb08c5e9e0d76
+        sha256: c642ae9b75fee120b2d96c712538bd2cf283228d2337df2cf2988e3c02678ef4
 
   # --- Controller-Box (main application) ---
   - name: controller-box
