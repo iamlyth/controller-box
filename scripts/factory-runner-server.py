@@ -286,7 +286,7 @@ def main() -> int:
                 probe_rc, probe_stdout, probe_stderr = run_bounded(
                     [
                         "nix-shell", "--run",
-                        "ctest --test-dir build-check --no-tests=error "
+                        "ctest --test-dir build-maintenance-verify --no-tests=error "
                         "-R '^test_kernel_controller$' --output-on-failure",
                     ],
                     job, env,
