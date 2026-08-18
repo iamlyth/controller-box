@@ -19,5 +19,5 @@ working_directory = "/srv/dev-runner/workspaces/controller-box"
 # Hardware, device, GPU, package, system-bus, and target-consumer capabilities
 # must not be added until both their capability-specific acceptance contract and
 # the runner provisioning have produced a matching non-skipped receipt.
-capabilities = ["remote-project-gate", "systemd-user"]
+capabilities = ["remote-project-gate", "systemd-user", "kernel-uinput"]
 verify_argv = ["./scripts/verify-project.sh"]
