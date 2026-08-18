@@ -448,6 +448,19 @@ static int start_manager(const char *build_dir, const char *bus_addr)
 {
     char bin_path[PATH_MAX + 128];
 
+    /* The CTest wrapper stages an isolated install and passes its exact binary.
+     * Keep the legacy search below for direct/manual execution. */
+    const char *installed_override = getenv("CBX_TEST_INSTALLED_BINARY");
+    int found = 0;
+    if (installed_override && installed_override[0] == '/' &&
+        access(installed_override, X_OK) == 0) {
+        snprintf(bin_path, sizeof(bin_path), "%s", installed_override);
+        found = 1;
+    } else if (installed_override) {
+        fail("CBX_TEST_INSTALLED_BINARY is not an executable absolute path");
+        return -1;
+    }
+
     /* Try common install prefix locations. */
     const char *prefixes[] = {
         ".test-install-bin/bin/controller-box",
@@ -455,8 +468,7 @@ static int start_manager(const char *build_dir, const char *bus_addr)
         NULL,
     };
 
-    int found = 0;
-    for (int i = 0; prefixes[i]; i++) {
+    for (int i = 0; !found && prefixes[i]; i++) {
         if (build_dir[0] == '/') {
             snprintf(bin_path, sizeof(bin_path), "%s/../%s", build_dir, prefixes[i]);
         } else {

@@ -23,7 +23,8 @@ add_test(NAME smoke_test_nanosvg COMMAND smoke_test_nanosvg)
 # (no kernel-uinput runner capability declared in environment.toml).
 add_executable(test_kernel_controller tests/test_kernel_controller.c)
 add_test(NAME test_kernel_controller
-    COMMAND test_kernel_controller
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/run-kernel-controller-test.sh
+        $<TARGET_FILE:test_kernel_controller>
         ${CMAKE_CURRENT_BINARY_DIR})
 set_tests_properties(test_kernel_controller PROPERTIES
     SKIP_RETURN_CODE 77)
