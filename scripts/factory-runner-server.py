@@ -159,7 +159,7 @@ def main() -> int:
         or not all(isinstance(item, str) and NAME.fullmatch(item) for item in capabilities)
     ):
         fail("invalid capabilities")
-    if not set(capabilities) <= {"remote-project-gate", "systemd-user"}:
+    if not set(capabilities) <= {"remote-project-gate", "systemd-user", "physical-controller"}:
         fail("unsupported capability claim")
     argv_digest = hashlib.sha256(json.dumps(argv, separators=(",", ":")).encode()).hexdigest()
     if argv_digest != request["verify_argv_sha256"]:
@@ -266,6 +266,15 @@ def main() -> int:
                     env=env, capture_output=True, timeout=30,
                 )
                 probes["systemd-user"] = probe.returncode == 0 and probe.stdout == b"factory-systemd-user-ok"
+            if "physical-controller" in capabilities:
+                probe = subprocess.run(
+                    [
+                        "/bin/sh", "-c",
+                        "grep -qE 'Handlers=.*js[0-9]+' /proc/bus/input/devices",
+                    ],
+                    env=env, capture_output=True, timeout=30,
+                )
+                probes["physical-controller"] = probe.returncode == 0
             if any(not value for value in probes.values()):
                 fail("trusted capability probe failed")
 
