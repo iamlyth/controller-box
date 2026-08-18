@@ -98,6 +98,19 @@ set -e
 [[ $kernel_contract_rc -eq 1 ]]
 git -C "$tmp/repo" reset -q --hard "$base"
 
+# Packaging tools alone are not installed-package evidence: the isolated
+# Flatpak build, install, and installed-binary execution contract must pass.
+sed -i 's/\["remote-project-gate"\]/["remote-project-gate", "installed-package"]/' \
+    "$tmp/repo/.factory/environment.toml"
+git -C "$tmp/repo" add .factory/environment.toml
+git -C "$tmp/repo" commit -qm incomplete-installed-package-contract
+set +e
+(cd "$tmp/repo" && ./scripts/run-factory-runners.py >/dev/null 2>&1)
+installed_package_contract_rc=$?
+set -e
+[[ $installed_package_contract_rc -eq 1 ]]
+git -C "$tmp/repo" reset -q --hard "$base"
+
 # Self-consistent local hashes cannot conceal a false archive binding.
 python3 - "$tmp/repo" "$base" <<'PY'
 import hashlib, json, pathlib, sys

@@ -162,7 +162,9 @@ def main() -> int:
         or not all(isinstance(item, str) and NAME.fullmatch(item) for item in capabilities)
     ):
         fail("invalid capabilities")
-    if not set(capabilities) <= {"remote-project-gate", "systemd-user", "kernel-uinput"}:
+    if not set(capabilities) <= {
+        "remote-project-gate", "systemd-user", "kernel-uinput", "installed-package",
+    }:
         fail("unsupported capability claim")
     argv_digest = hashlib.sha256(json.dumps(argv, separators=(",", ":")).encode()).hexdigest()
     if argv_digest != request["verify_argv_sha256"]:
@@ -278,6 +280,11 @@ def main() -> int:
                     )
                 except OSError:
                     probes["kernel-uinput"] = False
+            if "installed-package" in capabilities:
+                probes["installed-package"] = (
+                    shutil.which("flatpak", path=env["PATH"]) is not None
+                    and shutil.which("flatpak-builder", path=env["PATH"]) is not None
+                )
             if any(not value for value in probes.values()):
                 fail("trusted capability probe failed")
 
@@ -302,6 +309,24 @@ def main() -> int:
                     and b"test_kernel_controller" in probe_stdout
                     and b"Skipped" not in probe_stdout
                     and b"Not Run" not in probe_stdout
+                )
+            if "installed-package" in capabilities and returncode == 0:
+                package_rc, package_stdout, package_stderr = run_bounded(
+                    [
+                        "/usr/bin/env", "CBX_REQUIRE_FLATPAK=1",
+                        "./tests/test_packaging.sh", "build-maintenance-verify",
+                    ],
+                    job, env,
+                )
+                marker = b"\n--- installed-package capability contract ---\n"
+                if len(stdout) + len(stderr) + len(marker) + len(package_stdout) + len(package_stderr) > MAX_LOG:
+                    fail("combined runner verification output exceeded limits")
+                stdout += marker + package_stdout
+                stderr += package_stderr
+                probes["installed-package"] = (
+                    package_rc == 0
+                    and b"PASS: flatpak --version:" in package_stdout
+                    and b"OPTIONAL: flatpak-builder build failed" not in package_stdout
                 )
             probes["remote-project-gate"] = returncode == 0
             evidenced = sorted(capability for capability in capabilities if probes.get(capability, False))
