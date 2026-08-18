@@ -22,5 +22,5 @@ working_directory = "/srv/dev-runner/workspaces/controller-box"
 # capability claim", which fails run-factory-runners.py and blocks the campaign
 # verification phase. Re-add kernel-uinput only after the runner is provisioned
 # with /dev/uinput and a matching runner receipt exists.
-capabilities = ["remote-project-gate", "systemd-user"]
+capabilities = ["remote-project-gate", "systemd-user", "physical-controller"]
 verify_argv = ["./scripts/verify-project.sh"]
