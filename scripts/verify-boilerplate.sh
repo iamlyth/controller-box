@@ -48,6 +48,9 @@ required = [
     'scripts/bug-ledger.py', 'scripts/validate-maintenance-plan.py',
     'scripts/validate-implementation-plan.py', 'scripts/check-scratchpad.sh',
     'scripts/ralph-completion-gate.sh', 'scripts/ralph-supervision.sh',
+    'scripts/factory-lock.sh', 'scripts/factory-lock-exec.py',
+    'scripts/ralph-final-state.py', 'scripts/finalize-maintenance-planning.sh',
+    'tests/test-git-checkpoint.sh',
     'scripts/check-installed-functional-evidence.sh',
     'scripts/initialize-plan-cycle.py', 'scripts/check-maintenance-freshness.sh',
     'scripts/maintenance-plan-scope-guard.sh',
@@ -95,6 +98,7 @@ for config in .factory/ralph/implementation.yml .factory/ralph/plan.yml .factory
     grep -q 'ralph-completion-gate.sh' "$config"
 done
 for launcher in scripts/ralph-run.sh scripts/ralph-plan.sh scripts/ralph-audit.sh scripts/ralph-maintenance-run.sh scripts/ralph-maintenance-plan.sh; do
+    grep -q 'factory_lock_bootstrap' "$launcher"
     grep -q 'ralph-supervision.sh' "$launcher"
     grep -q 'ralph_supervision_consume_rejection' "$launcher"
     grep -q 'ralph_supervision_recover_stale' "$launcher"
@@ -131,16 +135,19 @@ for prompt in .factory/prompts/plan.md .factory/prompts/implementation.md \
         .factory/prompts/maintenance.md; do
     grep -q 'emit the completion token' "$prompt"
 done
+grep -q 'factory_lock_bootstrap' scripts/ralph-campaign.sh
+grep -q 'factory_lock_bootstrap' scripts/ralph-recover.sh
 grep -q '^TUI=false$' scripts/ralph-campaign.sh
 grep -q -- '--tui)' scripts/ralph-campaign.sh
 for config in .factory/ralph/plan.yml .factory/ralph/implementation.yml \
         .factory/ralph/audit.yml .factory/ralph/maintenance-plan.yml \
         .factory/ralph/maintenance.yml; do
     checkpoint=$(grep 'command: \["./scripts/check-scratchpad.sh"' "$config")
-    [[ $checkpoint != *'_COMPLETE"'* ]] || {
-        echo "verify: iteration scratchpad hook must defer token rejection to the completion gate: $config" >&2
+    [[ $checkpoint == *'_COMPLETE"'* ]] || {
+        echo "verify: iteration scratchpad hook must reject its lifecycle token: $config" >&2
         exit 1
     }
+    grep -q -- '--final-handoff' "$config"
 done
 grep -q '.factory/environment.toml' .factory/prompts/plan.md
 grep -q '.factory/environment.toml' .factory/prompts/implementation.md
@@ -162,6 +169,7 @@ for name in subprocess.check_output(['git', 'remote'], text=True).split():
 PY
 
 ./tests/test-scratchpad-guard.sh
+./tests/test-git-checkpoint.sh
 ./tests/test-ralph-completion-recovery.sh
 ./tests/test-installed-functional-evidence.sh "$PROJECT_ROOT"
 ./tests/test-factory-environment.sh

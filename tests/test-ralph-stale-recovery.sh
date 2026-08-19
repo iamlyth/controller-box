@@ -7,7 +7,10 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/scripts" "$tmp/bin" "$tmp/docs" "$tmp/.factory" \
     "$tmp/.factory/artifacts" "$tmp/.ralph/agent" "$tmp/.factory-state"
-cp "$PROJECT_ROOT/scripts/ralph-plan.sh" "$PROJECT_ROOT/scripts/ralph-supervision.sh" "$tmp/scripts/"
+cp "$PROJECT_ROOT/scripts/ralph-plan.sh" "$PROJECT_ROOT/scripts/ralph-supervision.sh" \
+    "$PROJECT_ROOT/scripts/factory-lock.sh" "$PROJECT_ROOT/scripts/factory-lock-exec.py" \
+    "$PROJECT_ROOT/scripts/ralph-final-state.py" "$tmp/scripts/"
+chmod 700 "$tmp/.factory-state"
 
 cat > "$tmp/.factory/config.toml" <<'EOF'
 [project]
@@ -33,10 +36,6 @@ cat > "$tmp/scripts/check-factory-environment.py" <<'EOF'
 #!/usr/bin/env python3
 raise SystemExit(0)
 EOF
-cat > "$tmp/scripts/factory-lock.sh" <<'EOF'
-#!/usr/bin/env bash
-factory_lock_acquire() { :; }
-EOF
 cat > "$tmp/scripts/initialize-plan-cycle.py" <<'EOF'
 #!/usr/bin/env python3
 from pathlib import Path
@@ -57,7 +56,11 @@ exit 1
 EOF
 cat > "$tmp/scripts/git-commit-hook.sh" <<'EOF'
 #!/usr/bin/env bash
-exit "${FAKE_FINALIZE_RC:-0}"
+set -euo pipefail
+(( ${FAKE_FINALIZE_RC:-0} == 0 )) || exit "$FAKE_FINALIZE_RC"
+if [[ " $* " == *' --final-handoff '* ]]; then
+    ./scripts/ralph-final-state.py ensure-checkpoint planning "$(git rev-parse HEAD)" >/dev/null
+fi
 EOF
 cat > "$tmp/scripts/check-plan-freshness.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -140,7 +143,7 @@ set +e
 (
     cd "$tmp"
     PATH="$tmp/bin:$PATH" RALPH_BIN="$tmp/bin/ralph" FAKE_NOOP_SUCCESS=1 \
-        FAKE_FINALIZE_RC=42 ./scripts/ralph-plan.sh --resume --no-tui >/dev/null 2>&1
+        FAKE_FINALIZE_RC=42 ./scripts/ralph-plan.sh --no-tui >/dev/null 2>&1
 )
 finalization_rc=$?
 set -e

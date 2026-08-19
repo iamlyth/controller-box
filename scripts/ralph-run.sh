@@ -7,6 +7,7 @@ PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 RALPH_BIN=${RALPH_BIN:-ralph}
 RESUME=false
 TUI=true
+ORIGINAL_ARGS=("$@")
 
 while (( $# > 0 )); do
     case "$1" in
@@ -21,6 +22,9 @@ while (( $# > 0 )); do
 done
 
 cd -- "$PROJECT_ROOT"
+# shellcheck source=scripts/factory-lock.sh
+source "$SCRIPT_DIR/factory-lock.sh"
+factory_lock_bootstrap "$PROJECT_ROOT/.factory-lock" "$PROJECT_ROOT/scripts/ralph-run.sh" "${ORIGINAL_ARGS[@]}"
 command -v "$RALPH_BIN" >/dev/null || { echo "ralph-run: Ralph executable not found: $RALPH_BIN" >&2; exit 2; }
 command -v pi2 >/dev/null || { echo "ralph-run: pi2 is not available in this shell" >&2; exit 2; }
 ./scripts/branch-guard.sh
@@ -32,23 +36,24 @@ if [[ "$RESUME" == false ]] && [[ -n $(git status --porcelain --untracked-files=
     exit 1
 fi
 
-# shellcheck source=scripts/factory-lock.sh
-source "$SCRIPT_DIR/factory-lock.sh"
 # shellcheck source=scripts/ralph-supervision.sh
 source "$SCRIPT_DIR/ralph-supervision.sh"
 factory_lock_acquire "$PROJECT_ROOT/.factory-lock"
-mkdir -p .factory-state
+ralph_supervision_prepare_state_directory
 printf '%s\n' implementation > .factory-state/loop-mode
+ralph_supervision_initialize implementation "$RESUME"
 
 finish_implementation_cycle() {
-    if ./scripts/final-gate.sh --implementation; then :; else return $?; fi
-    local payload
+    local payload head
+    if ./scripts/ralph-final-state.py verify implementation >/dev/null 2>&1; then
+        echo "ralph-run: implementation loop completed"
+        return 0
+    fi
     payload=$(printf '{"loop":{"workspace":"%s","id":"implementation-final"},"iteration":{"current":"final"}}' "$PROJECT_ROOT")
-    if printf '%s' "$payload" | ./scripts/git-commit-hook.sh; then :; else return $?; fi
-    [[ -z $(git status --porcelain --untracked-files=normal) ]] || {
-        echo "ralph-run: completion left a dirty Git tree" >&2
-        return 1
-    }
+    if printf '%s' "$payload" | ./scripts/git-commit-hook.sh --final-handoff; then :; else return $?; fi
+    if FACTORY_FINAL_GATE_ATTEST=1 ./scripts/final-gate.sh --implementation; then :; else return $?; fi
+    head=$(git rev-parse HEAD)
+    ./scripts/ralph-final-state.py attest implementation "$head" >/dev/null
     echo "ralph-run: implementation loop completed"
 }
 
@@ -103,7 +108,7 @@ while true; do
         exit "$quota_rc"
     fi
 
-    stale_diagnostics=$(mktemp)
+    stale_diagnostics=$(ralph_supervision_diagnostics_file implementation)
     set +e
     ./scripts/final-gate.sh --implementation >"$stale_diagnostics" 2>&1
     gate_rc=$?

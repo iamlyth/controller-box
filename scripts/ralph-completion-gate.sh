@@ -42,10 +42,20 @@ PY
     echo "ralph-completion-gate: missing or invalid launch attempt ID" >&2
     exit 2
 }
-[[ -d "$PROJECT_ROOT/.factory-state" && ! -L "$PROJECT_ROOT/.factory-state" ]] || {
-    echo "ralph-completion-gate: unsafe factory state directory" >&2
+[[ ${FACTORY_RALPH_CYCLE_ID:-} =~ ^[0-9a-f]{64}$ ]] || {
+    echo "ralph-completion-gate: missing or invalid durable cycle ID" >&2
     exit 2
 }
+python3 - "$PROJECT_ROOT/.factory-state" <<'PY'
+import os, stat, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+try: info = path.lstat()
+except OSError as exc: raise SystemExit(f'ralph-completion-gate: unsafe factory state directory: {exc}')
+if (not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode)
+        or info.st_uid != os.getuid() or info.st_mode & 0o077):
+    raise SystemExit('ralph-completion-gate: unsafe factory state directory')
+PY
 payload_file=$(mktemp "$PROJECT_ROOT/.factory-state/completion-hook.XXXXXX")
 trap 'rm -f -- "$payload_file"' EXIT
 python3 -c '
@@ -92,11 +102,12 @@ if not isinstance(workspace, str) or Path(workspace).resolve() != Path(sys.argv[
 PY
 
 set +e
-"$SCRIPT_DIR/final-gate.sh" "--$MODE"
+FACTORY_FINAL_GATE_ATTEST=1 "$SCRIPT_DIR/final-gate.sh" "--$MODE"
 rc=$?
 set -e
 if (( rc == 0 )); then
     remove_marker_safely
+    "$SCRIPT_DIR/ralph-final-state.py" attest "$MODE" "$(git rev-parse HEAD)" >/dev/null
     exit 0
 fi
 if (( rc >= 128 )); then

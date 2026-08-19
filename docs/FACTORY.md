@@ -177,11 +177,13 @@ There is no minimum iteration count: high quality is determined by evidence, not
 
 ### Completion protocol and checkpoint guards
 
-Ralph recognizes a completion promise only when the reserved token is the exact final non-empty output line outside all `<event>` tags. A token inside any event payload is deliberately ignored. Each prompt therefore forbids its token in events, summaries, plans, and scratchpads and requires the standalone final line after the normal event is closed.
+Ralph recognizes a completion promise only when the reserved token is the exact final non-empty model-output line outside all `<event>` tags. A token inside an event is never completion, and the Pi extension blocks every lifecycle token as a `ralph emit` topic or payload. Each prompt therefore requires the standalone final line after the normal event is closed.
 
-Before every checkpoint, planning revalidates the launcher's immutable specification metadata and cycle `base_commit`; maintenance planning performs its equivalent freshness check. `scripts/check-scratchpad.sh` requires one level-one handoff document and permits concise subsections within it. Iteration-boundary hooks use `--allow-missing` because Ralph intentionally removes the previous scratchpad before the first iteration of a fresh, non-resumed loop. They also use `--allow-oversize` so a worker that slightly exceeds the 80-line or 8-KiB handoff target receives a warning without deadlocking the next iteration. Checkpoint hooks validate structure but defer reserved-token rejection to the strict completion gate; this routes token contamination through the attempt-bound automatic completion-rejection path instead of terminating an otherwise recoverable child iteration. Final gates remain strict and reject missing, malformed, oversized, or token-contaminated scratchpads.
+Before every checkpoint, planning revalidates the launcher's immutable specification metadata and cycle `base_commit`; maintenance planning performs its equivalent freshness check. `scripts/check-scratchpad.sh` requires one level-one handoff document, and every iteration hook passes its lifecycle token so contamination fails before checkpointing. `--allow-missing` covers only Ralph's fresh-loop scratchpad removal, while `--allow-oversize` warns without accepting an oversized final handoff. An ordinary checkpoint never commits a scratchpad-only change: it leaves the latest non-empty handoff in the worktree for `--resume` and recovery. Substantive source, test, plan-state, ledger, or documentation changes may commit with the scratchpad.
 
-A `pre.loop.complete` gate runs through `scripts/ralph-completion-gate.sh`. When that strict gate rejects a premature completion request, it writes an atomic, one-shot marker bound to the current launcher nonce, lifecycle mode, loop ID, and canonical workspace. The supervisor consumes only a matching marker, repairs Ralph's volatile markers, and continues the same cycle with `--continue`, preserving the selected TUI mode; completion-rejection continuation is capped at eight attempts by default. Stale, malformed, mismatched, or symlink markers cannot authorize continuation. Ralph's separate `loop_stale` termination is classified only from history appended after the current attempt began; when the strict final gate still fails, the supervisor writes a fixed command-only recovery instruction into the handoff and retries the same lifecycle at most twice by default; the resumed agent must run that gate to inspect its diagnostics. History replacement, malformed records, retry exhaustion, and arbitrary non-quota failures remain terminal. Quota exhaustion continues through its independent verified wait path. A failed or stale Ralph process can be accepted as complete only when the normal final gate passes.
+The tightly scoped `--final-handoff` checkpoint accepts no dirty path except the scratchpad and permits at most one metadata-only final commit per durable lifecycle cycle. It runs before `scripts/ralph-completion-gate.sh`; the gate then records at most one successful clean-HEAD attestation for that cycle and fails if HEAD or the tracked tree changes during validation. No tracked commit follows a passing attestation. In implementation completion, front matter must be exactly `complete`, every task must be `complete`, and every conformance row must be `verified`; unavailable hardware remains a finding until real evidence exists.
+
+When the strict gate rejects a valid premature completion request, it still writes an atomic, one-shot marker bound to the launcher nonce, lifecycle mode, loop ID, and canonical workspace. The supervisor consumes only a matching marker and continues the same cycle with `--continue`. Completion-rejection, stale, and combined no-progress counts are persisted under `.factory-state/`, so process or campaign resume cannot reset their ceilings (eight, two, and eight by default). Stale, malformed, mismatched, or symlink markers cannot authorize continuation. History replacement, malformed records, exhausted budgets, and arbitrary non-quota failures are terminal; quota exhaustion remains inside the leaf launcher's verified wait path.
 
 ## Run a finite multi-round campaign
 
@@ -246,10 +248,12 @@ requests fail without changing state.
 
 The campaign and its children share the inherited factory lock, so planning,
 implementation, verification, audit checkpointing, and recovery retain one
-repository writer. Quota waits and rejected completion requests remain handled
-inside each leaf lifecycle. Invalid/corrupt state, rewritten bases, dirty phase
-boundaries, conflicting options, and non-quota child failures stop without
-skipping a phase. Intermediate audit findings become mandatory input to the
+repository writer. The locked `.factory-lock` pathname is never unlinked.
+Quota waits and bounded rejection/stale recovery remain inside each leaf.
+The campaign does not retry arbitrary nonzero leaf or gate results: it returns
+nonzero with durable state still active at the same resumable phase. Invalid or
+corrupt state, rewritten bases, dirty boundaries, and conflicting options fail
+the same way. Intermediate audit findings become mandatory input to the
 next round. Findings in the final configured round leave the campaign blocked
 and return nonzero rather than claiming completion; begin another reviewed
 campaign to remediate them.

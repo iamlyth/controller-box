@@ -6,6 +6,7 @@ PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 RALPH_BIN=${RALPH_BIN:-ralph}
 RESUME=false
 TUI=true
+ORIGINAL_ARGS=("$@")
 if [[ ${1:-} == -h || ${1:-} == --help ]]; then
     echo "Usage: scripts/ralph-maintenance-plan.sh BUG-ID [--resume] [--no-tui]"
     exit 0
@@ -23,19 +24,20 @@ while (( $# > 0 )); do
 done
 
 cd -- "$PROJECT_ROOT"
+# shellcheck source=scripts/factory-lock.sh
+source "$SCRIPT_DIR/factory-lock.sh"
+factory_lock_bootstrap "$PROJECT_ROOT/.factory-lock" "$PROJECT_ROOT/scripts/ralph-maintenance-plan.sh" "${ORIGINAL_ARGS[@]}"
 command -v "$RALPH_BIN" >/dev/null || { echo "ralph-maintenance-plan: Ralph executable not found: $RALPH_BIN" >&2; exit 2; }
 command -v pi2 >/dev/null || { echo "ralph-maintenance-plan: pi2 is unavailable" >&2; exit 2; }
 ./scripts/branch-guard.sh
 
 # Select and validate the cycle only while holding the single-writer lock. This
 # closes the race between clean-tree inspection and writing volatile selection.
-# shellcheck source=scripts/factory-lock.sh
-source "$SCRIPT_DIR/factory-lock.sh"
 # shellcheck source=scripts/ralph-supervision.sh
 source "$SCRIPT_DIR/ralph-supervision.sh"
 factory_lock_acquire "$PROJECT_ROOT/.factory-lock"
 ./scripts/branch-guard.sh
-mkdir -p .factory-state
+ralph_supervision_prepare_state_directory
 BASE_MARKER=.factory-state/maintenance-base-commit
 if [[ "$RESUME" == false ]]; then
     printf '%s\n' maintenance-planning > .factory-state/loop-mode
@@ -111,25 +113,22 @@ if [[ "$RESUME" == false ]]; then
     ./scripts/initialize-plan-cycle.py maintenance \
         --base "$FACTORY_MAINTENANCE_BASE_COMMIT" --bug-id "$BUG_ID"
 fi
+ralph_supervision_initialize maintenance-planning "$RESUME"
 
 finish_maintenance_planning_cycle() {
-    if ./scripts/final-gate.sh --maintenance-planning; then :; else return $?; fi
-    local payload ledger_payload
-    payload=$(printf '{"loop":{"workspace":"%s","id":"maintenance-planning-final"},"iteration":{"current":"final"}}' "$PROJECT_ROOT")
-    if printf '%s' "$payload" | ./scripts/git-commit-hook.sh --maintenance-plan; then :; else return $?; fi
-    [[ -z $(git status --porcelain --untracked-files=normal) ]] || {
-        echo "ralph-maintenance-plan: completion left a dirty tree" >&2; return 1;
-    }
-    if ./scripts/check-maintenance-freshness.sh; then :; else return $?; fi
-    if [[ "$BUG_STATUS" == triaged ]]; then
-        if ./scripts/bug-ledger.py set-status "$BUG_ID" planned; then :; else return $?; fi
-        ledger_payload=$(printf '{"loop":{"workspace":"%s","id":"maintenance-planning-ledger"},"iteration":{"current":"planned"}}' "$PROJECT_ROOT")
-        if printf '%s' "$ledger_payload" | ./scripts/git-commit-hook.sh --maintenance-ledger; then :; else return $?; fi
+    local payload head
+    if ./scripts/ralph-final-state.py verify maintenance-planning >/dev/null 2>&1; then
+        echo "ralph-maintenance-plan: plan committed and bug marked planned for $BUG_ID"
+        return 0
     fi
-    [[ -z $(git status --porcelain --untracked-files=normal) ]] || {
-        echo "ralph-maintenance-plan: ledger checkpoint left a dirty tree" >&2; return 1;
-    }
-    if ./scripts/check-maintenance-freshness.sh; then :; else return $?; fi
+    # The ledger transition precedes the single final checkpoint. It cannot
+    # become a later metadata-only commit that authorizes another checkpoint.
+    if ./scripts/finalize-maintenance-planning.sh; then :; else return $?; fi
+    payload=$(printf '{"loop":{"workspace":"%s","id":"maintenance-planning-final"},"iteration":{"current":"final"}}' "$PROJECT_ROOT")
+    if printf '%s' "$payload" | ./scripts/git-commit-hook.sh --maintenance-plan --final-handoff; then :; else return $?; fi
+    if FACTORY_FINAL_GATE_ATTEST=1 ./scripts/final-gate.sh --maintenance-planning; then :; else return $?; fi
+    head=$(git rev-parse HEAD)
+    ./scripts/ralph-final-state.py attest maintenance-planning "$head" >/dev/null
     echo "ralph-maintenance-plan: plan committed and bug marked planned for $BUG_ID"
 }
 
@@ -178,7 +177,7 @@ while true; do
         echo "ralph-maintenance-plan: quota status check failed with status $quota_rc" >&2
         exit "$quota_rc"
     fi
-    stale_diagnostics=$(mktemp)
+    stale_diagnostics=$(ralph_supervision_diagnostics_file maintenance-planning)
     set +e
     ./scripts/final-gate.sh --maintenance-planning >"$stale_diagnostics" 2>&1
     gate_rc=$?

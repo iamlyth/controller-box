@@ -6,6 +6,7 @@ PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 RALPH_BIN=${RALPH_BIN:-ralph}
 RESUME=false
 TUI=true
+ORIGINAL_ARGS=("$@")
 
 while (( $# > 0 )); do
     case "$1" in
@@ -20,6 +21,9 @@ while (( $# > 0 )); do
 done
 
 cd -- "$PROJECT_ROOT"
+# shellcheck source=scripts/factory-lock.sh
+source "$SCRIPT_DIR/factory-lock.sh"
+factory_lock_bootstrap "$PROJECT_ROOT/.factory-lock" "$PROJECT_ROOT/scripts/ralph-plan.sh" "${ORIGINAL_ARGS[@]}"
 command -v "$RALPH_BIN" >/dev/null || { echo "ralph-plan: Ralph executable not found: $RALPH_BIN" >&2; exit 2; }
 command -v pi2 >/dev/null || { echo "ralph-plan: pi2 is not available in this shell" >&2; exit 2; }
 ./scripts/branch-guard.sh
@@ -41,13 +45,11 @@ if [[ "$RESUME" == false && -n $(git status --porcelain --untracked-files=normal
     exit 1
 fi
 
-# shellcheck source=scripts/factory-lock.sh
-source "$SCRIPT_DIR/factory-lock.sh"
 # shellcheck source=scripts/ralph-supervision.sh
 source "$SCRIPT_DIR/ralph-supervision.sh"
 factory_lock_acquire "$PROJECT_ROOT/.factory-lock"
 ./scripts/branch-guard.sh
-mkdir -p .factory-state
+ralph_supervision_prepare_state_directory
 BASE_MARKER=.factory-state/planning-base-commit
 if ! git diff --quiet -- "$SPEC" || ! git diff --cached --quiet -- "$SPEC"; then
     echo "ralph-plan: specification changed while acquiring the planning lock" >&2
@@ -70,16 +72,19 @@ else
     FACTORY_PLANNING_BASE_COMMIT=$(tr -d '[:space:]' < "$BASE_MARKER")
 fi
 export FACTORY_PLANNING_BASE_COMMIT
+ralph_supervision_initialize planning "$RESUME"
 
 finish_planning_cycle() {
-    if ./scripts/final-gate.sh --planning; then :; else return $?; fi
-    local payload
+    local payload head
+    if ./scripts/ralph-final-state.py verify planning >/dev/null 2>&1; then
+        printf 'ralph-plan: plan is committed and fresh for %s\n' "$SPEC"
+        return 0
+    fi
     payload=$(printf '{"loop":{"workspace":"%s","id":"planning-final"},"iteration":{"current":"final"}}' "$PROJECT_ROOT")
-    if printf '%s' "$payload" | ./scripts/git-commit-hook.sh --plan-only; then :; else return $?; fi
-    [[ -z $(git status --porcelain --untracked-files=normal) ]] || {
-        echo "ralph-plan: completion left a dirty Git tree" >&2; return 1;
-    }
-    if ./scripts/check-plan-freshness.sh; then :; else return $?; fi
+    if printf '%s' "$payload" | ./scripts/git-commit-hook.sh --plan-only --final-handoff; then :; else return $?; fi
+    if FACTORY_FINAL_GATE_ATTEST=1 ./scripts/final-gate.sh --planning; then :; else return $?; fi
+    head=$(git rev-parse HEAD)
+    ./scripts/ralph-final-state.py attest planning "$head" >/dev/null
     printf 'ralph-plan: plan is committed and fresh for %s\n' "$SPEC"
 }
 
@@ -132,7 +137,7 @@ while true; do
         echo "ralph-plan: quota status check failed with status $quota_rc" >&2
         exit "$quota_rc"
     fi
-    stale_diagnostics=$(mktemp)
+    stale_diagnostics=$(ralph_supervision_diagnostics_file planning)
     set +e
     ./scripts/final-gate.sh --planning >"$stale_diagnostics" 2>&1
     gate_rc=$?

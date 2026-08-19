@@ -36,8 +36,17 @@ def fail(message: str) -> None:
 
 def state_path() -> Path:
     runtime = ROOT / ".factory-state"
-    if runtime.is_symlink() or not runtime.is_dir():
-        fail(".factory-state must be a real directory")
+    try:
+        runtime_info = runtime.lstat()
+    except FileNotFoundError:
+        fail(".factory-state is missing")
+    if (
+        stat.S_ISLNK(runtime_info.st_mode)
+        or not stat.S_ISDIR(runtime_info.st_mode)
+        or runtime_info.st_uid != os.getuid()
+        or runtime_info.st_mode & 0o077
+    ):
+        fail(".factory-state must be a private real directory")
     configured = Path(os.environ.get("FACTORY_CAMPAIGN_STATE", DEFAULT_STATE))
     try:
         parent = configured.parent.resolve(strict=True)
@@ -76,7 +85,7 @@ def complete_record(record: dict) -> bool:
     )
 
 
-def validate(data: object) -> dict:
+def validate(data: object, *, allow_terminal_head_mismatch: bool = False) -> dict:
     if git("replace", "-l"):
         fail("Git replacement objects are forbidden during a campaign")
     required = {
@@ -165,46 +174,61 @@ def validate(data: object) -> dict:
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         ).returncode:
             fail(f"active {phase} history no longer contains its recorded anchor")
-    elif git("rev-parse", "HEAD") != current["audit_commit"]:
+    elif not allow_terminal_head_mismatch and git("rev-parse", "HEAD") != current["audit_commit"]:
         fail("terminal campaign HEAD does not match its audit commit")
     return data
 
 
-def load() -> dict:
-    path = state_path()
-    if path.is_symlink() or not path.is_file():
-        fail(f"missing or unsafe state file: {path}")
+def read_state_file(path: Path) -> object:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
-        return validate(json.loads(path.read_text(encoding="utf-8")))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        fail(f"missing or unsafe state file: {exc}")
+    try:
+        info = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.getuid()
+            or info.st_nlink != 1
+            or info.st_mode & 0o077
+            or info.st_size > 1024 * 1024
+        ):
+            fail(f"missing or unsafe state file: {path}")
+        raw = bytearray()
+        while True:
+            chunk = os.read(descriptor, 65536)
+            if not chunk:
+                break
+            raw.extend(chunk)
+    finally:
+        os.close(descriptor)
+    try:
+        return json.loads(bytes(raw).decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
         fail(f"invalid state: {exc}")
 
 
-def load_status_lenient() -> str:
-    """Read only the status field, skipping full validation.
-
-    Used by `start --replace-terminal`: replacing a terminal campaign must
-    work even when HEAD has moved past the terminal audit commit (which
-    would make strict `load()` fail). We only need to confirm the saved
-    campaign is not active before overwriting it.
-    """
-    path = state_path()
-    if path.is_symlink() or not path.is_file():
-        fail(f"missing or unsafe state file: {path}")
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        fail(f"invalid state: {exc}")
-    if not isinstance(data, dict) or not isinstance(data.get("status"), str):
-        fail("invalid state: missing status")
-    return data["status"]
+def load(*, allow_terminal_head_mismatch: bool = False) -> dict:
+    return validate(
+        read_state_file(state_path()),
+        allow_terminal_head_mismatch=allow_terminal_head_mismatch,
+    )
 
 
 def atomic_write(data: dict) -> None:
     validate(data)
     path = state_path()
-    if path.is_symlink() or (path.exists() and not path.is_file()):
-        fail(f"unsafe state path: {path}")
+    if path.exists() or path.is_symlink():
+        info = path.lstat()
+        if (
+            stat.S_ISLNK(info.st_mode)
+            or not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.getuid()
+            or info.st_nlink != 1
+            or info.st_mode & 0o077
+        ):
+            fail(f"unsafe state path: {path}")
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
@@ -228,35 +252,63 @@ def file_sha256(path: Path) -> str:
         fail(f"cannot digest campaign state: {exc}")
 
 
-@contextmanager
-def recovery_lock() -> Iterator[None]:
-    """Exclude campaign writers while a one-off state recovery runs."""
-    path = ROOT / ".factory-lock"
-    try:
-        info = path.lstat()
-    except FileNotFoundError:
-        info = None
-    if info is not None and (
-        stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode)
-        or info.st_uid != os.getuid()
-    ):
-        fail("unsafe factory lock path")
-    flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        descriptor = os.open(path, flags, 0o600)
-    except OSError as exc:
-        fail(f"cannot open factory lock: {exc}")
+def validate_lock_descriptor(descriptor: int, path: Path) -> os.stat_result:
     try:
         opened = os.fstat(descriptor)
-        if not stat.S_ISREG(opened.st_mode) or opened.st_uid != os.getuid():
-            fail("unsafe factory lock file")
+        named = path.lstat()
+    except OSError as exc:
+        fail(f"cannot validate factory lock: {exc}")
+    if (
+        not stat.S_ISREG(opened.st_mode)
+        or not stat.S_ISREG(named.st_mode)
+        or stat.S_ISLNK(named.st_mode)
+        or opened.st_uid != os.getuid()
+        or named.st_uid != os.getuid()
+        or opened.st_nlink != 1
+        or named.st_nlink != 1
+        or opened.st_mode & 0o022
+        or (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)
+    ):
+        fail("unsafe factory lock path")
+    return opened
+
+
+@contextmanager
+def recovery_lock() -> Iterator[None]:
+    """Acquire or verify the lock for every campaign-state mutation."""
+    path = ROOT / ".factory-lock"
+    inherited = os.environ.get("FACTORY_LOCK_HELD") == "1"
+    if inherited:
+        try:
+            descriptor = int(os.environ.get("FACTORY_LOCK_FD", ""))
+        except ValueError:
+            fail("invalid inherited factory lock descriptor")
+        if descriptor < 3:
+            fail("invalid inherited factory lock descriptor")
+        opened = validate_lock_descriptor(descriptor, path)
+        if os.environ.get("FACTORY_LOCK_ID") != f"{opened.st_dev}:{opened.st_ino}":
+            fail("inherited factory lock identity changed")
+        close_descriptor = False
+    else:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os.open(path, flags, 0o600)
+        except OSError as exc:
+            fail(f"unsafe factory lock path: {exc}")
+        close_descriptor = True
+        validate_lock_descriptor(descriptor, path)
+    try:
         try:
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             fail("another planner, worker, or recovery process is active")
+        except OSError as exc:
+            fail(f"cannot acquire factory lock: {exc}")
+        validate_lock_descriptor(descriptor, path)
         yield
     finally:
-        os.close(descriptor)
+        if close_descriptor:
+            os.close(descriptor)
 
 
 def require_rebind_head(requested_new: str) -> None:
@@ -331,6 +383,109 @@ def parse_value(text: str) -> object:
     except json.JSONDecodeError as exc: fail(f"state value must be JSON: {exc}")
 
 
+def start_campaign(args: argparse.Namespace) -> None:
+    with recovery_lock():
+        if args.rounds < 1 or not DIGEST.fullmatch(args.verification_digest) or not SHA.fullmatch(args.base):
+            fail("rounds, base, or verification digest is invalid")
+        git("cat-file", "-e", f"{args.base}^{{commit}}")
+        path = state_path()
+        if path.exists() or path.is_symlink():
+            existing = load(allow_terminal_head_mismatch=args.replace_terminal)
+            if args.replace_terminal:
+                if existing["status"] == "active":
+                    fail("saved campaign is active; cannot replace it")
+            else:
+                fail("saved campaign exists; resume it or explicitly replace a terminal campaign")
+        record = empty_round(1)
+        record["base_commit"] = args.base
+        atomic_write({
+            "schema": "ralph-campaign/v2", "status": "active",
+            "rounds_requested": args.rounds, "round": 1, "phase": "planning",
+            "tui": args.tui == "true", "verification_command_sha256": args.verification_digest,
+            "rounds": [record],
+        })
+
+
+def update_state(args: argparse.Namespace) -> None:
+    with recovery_lock():
+        data = load()
+        if data["status"] != "active" or data["phase"] != args.expect_phase:
+            fail(f"expected active phase {args.expect_phase}, found {data['status']}:{data['phase']}")
+        allowed_fields = {
+            "planning": {"base_commit", "planning_started", "plan_commit"},
+            "implementation": {"implementation_started", "implementation_commit"},
+            "verification": {"verification_commit", "runner_evidence_sha256"},
+            "audit": {"audit_started", "audit_commit", "audit_result"},
+        }[args.expect_phase]
+        record = data["rounds"][-1]
+        for assignment in args.round_field:
+            if "=" not in assignment:
+                fail("--round-field requires key=JSON")
+            key, raw = assignment.split("=", 1)
+            if key not in allowed_fields:
+                fail(f"field {key} is not writable in {args.expect_phase}")
+            value = parse_value(raw)
+            current = record[key]
+            if current not in (None, False) and current != value:
+                fail(f"field {key} is write-once")
+            if current is False and value is not True:
+                fail(f"phase marker {key} may only transition false to true")
+            if current is None and value is None:
+                fail(f"field {key} cannot be recorded as null")
+            record[key] = value
+        if args.phase:
+            expected_next = {
+                "planning": "implementation", "implementation": "verification",
+                "verification": "audit",
+            }.get(args.expect_phase)
+            if args.phase != expected_next:
+                fail(f"invalid transition {args.expect_phase} -> {args.phase}")
+            data["phase"] = args.phase
+        atomic_write(data)
+
+
+def advance_state(args: argparse.Namespace) -> None:
+    with recovery_lock():
+        data = load()
+        if data["status"] != "active" or data["phase"] != args.expect_phase or not complete_record(data["rounds"][-1]):
+            fail("cannot advance an incomplete audit phase")
+        if data["round"] >= data["rounds_requested"]:
+            fail("cannot advance beyond requested rounds")
+        if git("rev-parse", "HEAD") != data["rounds"][-1]["audit_commit"]:
+            fail("cannot advance away from the recorded audit commit")
+        data["round"] += 1
+        data["phase"] = "planning"
+        record = empty_round(data["round"])
+        record["base_commit"] = data["rounds"][-1]["audit_commit"]
+        data["rounds"].append(record)
+        atomic_write(data)
+
+
+def finish_state(args: argparse.Namespace) -> None:
+    with recovery_lock():
+        data = load()
+        record = data["rounds"][-1]
+        if data["status"] != "active" or data["phase"] != "audit" or not complete_record(record):
+            fail("campaign can finish only from a completed audit phase")
+        if record["audit_result"] != args.result or git("rev-parse", "HEAD") != record["audit_commit"]:
+            fail("finish result or HEAD does not match the recorded audit")
+        data["status"] = "complete" if args.result == "pass" else "blocked"
+        data["phase"] = "complete" if args.result == "pass" else "blocked-findings"
+        atomic_write(data)
+
+
+def audit_binding() -> dict[str, object]:
+    data = load()
+    if data["status"] != "active" or data["phase"] != "audit":
+        fail("no active campaign audit binding")
+    record = data["rounds"][-1]
+    return {
+        "round": data["round"],
+        "base": record["verification_commit"],
+        "runner_evidence_sha256": record["runner_evidence_sha256"],
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
@@ -341,6 +496,7 @@ def main() -> int:
     start.add_argument("--base", required=True)
     start.add_argument("--replace-terminal", action="store_true")
     sub.add_parser("show")
+    sub.add_parser("audit-binding")
     get = sub.add_parser("get"); get.add_argument("path")
     update = sub.add_parser("update")
     update.add_argument("--expect-phase", required=True); update.add_argument("--phase")
@@ -353,88 +509,27 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.command == "start":
-        if args.rounds < 1 or not DIGEST.fullmatch(args.verification_digest) or not SHA.fullmatch(args.base):
-            fail("rounds, base, or verification digest is invalid")
-        git("cat-file", "-e", f"{args.base}^{{commit}}")
-        path = state_path()
-        if path.exists():
-            if args.replace_terminal:
-                # Lenient: only need the status to confirm it is terminal (not active).
-                # Strict load() would fail here if HEAD moved past the terminal
-                # audit commit, which must not block replacing a finished campaign.
-                if load_status_lenient() == "active":
-                    fail("saved campaign is active; cannot replace it")
-            else:
-                existing = load()
-                if existing["status"] == "active":
-                    fail("saved campaign exists; resume it or explicitly replace a terminal campaign")
-        record = empty_round(1)
-        record["base_commit"] = args.base
-        atomic_write({
-            "schema": "ralph-campaign/v2", "status": "active",
-            "rounds_requested": args.rounds, "round": 1, "phase": "planning",
-            "tui": args.tui == "true", "verification_command_sha256": args.verification_digest,
-            "rounds": [record],
-        })
-        return 0
-
-    if args.command == "rebind-implementation":
+        start_campaign(args)
+    elif args.command == "rebind-implementation":
         rebind_implementation(args.expected_old, args.new)
-        return 0
-
-    data = load()
-    if args.command == "show": print(json.dumps(data, sort_keys=True, indent=2))
-    elif args.command == "get":
-        value = get_path(data, args.path)
-        if isinstance(value, bool): print("true" if value else "false")
-        elif value is not None: print(value if isinstance(value, str) else json.dumps(value, sort_keys=True))
     elif args.command == "update":
-        if data["status"] != "active" or data["phase"] != args.expect_phase:
-            fail(f"expected active phase {args.expect_phase}, found {data['status']}:{data['phase']}")
-        allowed_fields = {
-            "planning": {"base_commit", "planning_started", "plan_commit"},
-            "implementation": {"implementation_started", "implementation_commit"},
-            "verification": {"verification_commit", "runner_evidence_sha256"},
-            "audit": {"audit_started", "audit_commit", "audit_result"},
-        }[args.expect_phase]
-        record = data["rounds"][-1]
-        for assignment in args.round_field:
-            if "=" not in assignment: fail("--round-field requires key=JSON")
-            key, raw = assignment.split("=", 1)
-            if key not in allowed_fields: fail(f"field {key} is not writable in {args.expect_phase}")
-            value = parse_value(raw)
-            current = record[key]
-            if current not in (None, False) and current != value:
-                fail(f"field {key} is write-once")
-            if current is False and value is not True:
-                fail(f"phase marker {key} may only transition false to true")
-            if current is None and value is None:
-                fail(f"field {key} cannot be recorded as null")
-            record[key] = value
-        if args.phase:
-            expected_next = {"planning": "implementation", "implementation": "verification", "verification": "audit"}.get(args.expect_phase)
-            if args.phase != expected_next:
-                fail(f"invalid transition {args.expect_phase} -> {args.phase}")
-            data["phase"] = args.phase
-        atomic_write(data)
+        update_state(args)
     elif args.command == "advance":
-        if data["status"] != "active" or data["phase"] != args.expect_phase or not complete_record(data["rounds"][-1]):
-            fail("cannot advance an incomplete audit phase")
-        if data["round"] >= data["rounds_requested"]: fail("cannot advance beyond requested rounds")
-        if git("rev-parse", "HEAD") != data["rounds"][-1]["audit_commit"]:
-            fail("cannot advance away from the recorded audit commit")
-        data["round"] += 1; data["phase"] = "planning"
-        record = empty_round(data["round"]); record["base_commit"] = data["rounds"][-1]["audit_commit"]
-        data["rounds"].append(record); atomic_write(data)
+        advance_state(args)
     elif args.command == "finish":
-        record = data["rounds"][-1]
-        if data["status"] != "active" or data["phase"] != "audit" or not complete_record(record):
-            fail("campaign can finish only from a completed audit phase")
-        if record["audit_result"] != args.result or git("rev-parse", "HEAD") != record["audit_commit"]:
-            fail("finish result or HEAD does not match the recorded audit")
-        data["status"] = "complete" if args.result == "pass" else "blocked"
-        data["phase"] = "complete" if args.result == "pass" else "blocked-findings"
-        atomic_write(data)
+        finish_state(args)
+    elif args.command == "audit-binding":
+        print(json.dumps(audit_binding(), sort_keys=True))
+    else:
+        data = load()
+        if args.command == "show":
+            print(json.dumps(data, sort_keys=True, indent=2))
+        elif args.command == "get":
+            value = get_path(data, args.path)
+            if isinstance(value, bool):
+                print("true" if value else "false")
+            elif value is not None:
+                print(value if isinstance(value, str) else json.dumps(value, sort_keys=True))
     return 0
 
 

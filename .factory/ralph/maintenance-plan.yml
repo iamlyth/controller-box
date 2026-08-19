@@ -48,7 +48,7 @@ hooks:
         command: ["./scripts/check-maintenance-freshness.sh", "--planning"]
         on_error: block
       - name: maintenance-planning-scratchpad
-        command: ["./scripts/check-scratchpad.sh", "--allow-missing", "--allow-oversize"]
+        command: ["./scripts/check-scratchpad.sh", "MAINTENANCE_PLAN_COMPLETE", "--allow-missing", "--allow-oversize"]
         on_error: block
       - name: maintenance-planning-checkpoint
         command: ["./scripts/git-commit-hook.sh", "--maintenance-plan"]
@@ -58,9 +58,12 @@ hooks:
         timeout_seconds: 691200
         on_error: block
     pre.loop.complete:
-      - name: final-maintenance-planning-gate
-        command: ["./scripts/ralph-completion-gate.sh", "maintenance-planning"]
+      - name: finalize-maintenance-planning-ledger
+        command: ["./scripts/finalize-maintenance-planning.sh"]
         on_error: block
       - name: final-maintenance-planning-checkpoint
-        command: ["./scripts/git-commit-hook.sh", "--maintenance-plan"]
+        command: ["./scripts/git-commit-hook.sh", "--maintenance-plan", "--final-handoff"]
+        on_error: block
+      - name: final-maintenance-planning-gate
+        command: ["./scripts/ralph-completion-gate.sh", "maintenance-planning"]
         on_error: block

@@ -305,9 +305,12 @@ implementations, verification passes, and independent gap audits, run:
 Campaigns are headless by default so phase completion does not wait for a TUI
 to close; use `--tui` only for attended diagnostics. Every round receives a new
 Git base and replaces the active plan; completed plans and audits remain in Git
-history. Attempt-bound stale loops receive fixed strict-gate recovery instructions
-and bounded automatic continuation; unrelated failures still stop safely. Interrupted campaigns
-resume with the same round count and phase using `--resume`. A narrowly guarded first-round
+history. Attempt-bound stale and completion-rejection ceilings persist across
+child restarts. Scratchpad-only updates remain recoverable without creating
+commits, while one tightly scoped final handoff precedes clean-HEAD attestation.
+Arbitrary nonzero leaf or gate failures stop after one invocation at the same
+resumable phase; quota waits remain leaf-owned. Interrupted campaigns resume
+with the same round count and phase using `--resume`. A narrowly guarded first-round
 pre-verification fast-forward recovery is documented in
 [docs/OPERATIONS.md](docs/OPERATIONS.md); it does not weaken normal write-once state updates.
 Available local tools and external runners are declared without credentials in `.factory/environment.toml`.
@@ -317,8 +320,10 @@ accepted production evidence remain findings rather than fabricated completion.
 Ralph 2.10.1 starts a five-second deadline when Pi returns the successful
 `ralph emit` acknowledgement, then misclassifies its own timeout signal as a
 failed iteration. `scripts/pi2-ollama.sh` loads an explicit Pi extension that
-rewrites only a direct final `ralph emit` tool command to a repository shim. The
-shim invokes the real Ralph binary from the jail's trusted PATH and changes only
+rewrites only a direct final `ralph emit` tool command to a repository shim and
+blocks lifecycle completion tokens as event topics or payloads. Completion uses
+only the exact standalone reserved model-output line. The shim invokes the real
+binary from the jail's trusted PATH and changes only
 that command's acknowledgement after Ralph writes the authoritative event;
 arbitrary identical model/backend text is left untouched. The wrapper and secure prompt launcher retain `exec` semantics,
 so backend errors and signals propagate normally. Pi can therefore finish its

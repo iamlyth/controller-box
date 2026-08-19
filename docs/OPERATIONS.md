@@ -553,16 +553,21 @@ Ralph's normal five-minute inactivity timeout still bounding a silent backend.
 Remove the compatibility behavior only after the pinned Ralph version no longer
 reproduces the regression and the integration probe passes without it.
 
-Do not change the round count or TUI mode during resume. Reserved-token mistakes
-in a checkpoint handoff are rejected by the strict completion gate and resumed
-automatically rather than terminating the leaf process. A Ralph `loop_stale`
-result is accepted for recovery only when it was appended during the current
-attempt; the supervisor records a fixed strict-gate command in the handoff and
-retries at most twice by default. The resumed agent runs that command to inspect
-and repair exact failures; raw diagnostics are not injected into its prompt. Corrupt history, exhausted stale retries, corrupt state,
-a dirty phase boundary, stale/rewritten Git bindings, or final-round findings
-still stop the campaign rather than skipping work. Leaf planning, implementation, and audit
-recovery retain their normal quota and completion-rejection behavior.
+Do not change the round count or TUI mode during resume. Lifecycle tokens in a
+scratchpad or `ralph emit` topic/payload are rejected before checkpointing; only
+the exact standalone final model-output line requests completion. Ordinary
+scratchpad-only updates remain uncommitted in the worktree for recovery. A
+strict final-handoff checkpoint may commit only that file once, then the final
+gate attests a clean unchanged HEAD with no later tracked commit.
+
+A current-attempt `loop_stale` result may receive at most two recoveries.
+Completion rejection and combined no-progress ceilings are also persisted, so
+restarting a child or resuming the campaign cannot reset them. Quota handling
+stays in leaf launchers. Any other nonzero leaf or gate result stops immediately
+with campaign state active at the same phase; the campaign never unlinks its
+locked pathname or retries an arbitrary failure. Corrupt history/state, dirty
+boundaries, stale Git bindings, exhausted ceilings, and final-round findings all
+remain resumable blockers rather than skipped work.
 
 `.factory/environment.toml` declares available tools and runners without
 publishing credentials or endpoints. Validate and exercise declarations with:

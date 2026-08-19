@@ -11,6 +11,7 @@ RESTART=false
 TUI=false
 TUI_EXPLICIT=false
 TUI_OPTION=
+ORIGINAL_ARGS=("$@")
 
 usage() {
     cat <<'EOF'
@@ -47,38 +48,33 @@ done
 $RESUME && $RESTART && { echo "ralph-campaign: --resume and --restart are mutually exclusive" >&2; exit 2; }
 
 cd -- "$PROJECT_ROOT"
-./scripts/branch-guard.sh
-./scripts/check-factory-environment.py
 # shellcheck source=scripts/factory-lock.sh
 source "$SCRIPT_DIR/factory-lock.sh"
+factory_lock_bootstrap "$PROJECT_ROOT/.factory-lock" "$PROJECT_ROOT/scripts/ralph-campaign.sh" "${ORIGINAL_ARGS[@]}"
+./scripts/branch-guard.sh
+./scripts/check-factory-environment.py
 factory_lock_acquire "$PROJECT_ROOT/.factory-lock"
 
-# A campaign owns leaf-lifecycle recovery. Refuse a live Ralph owner, but remove
-# an abandoned exclusive lock before starting or reconciling the saved phase.
-if [[ -e .ralph/loop.lock ]]; then
-    [[ ! -L .ralph/loop.lock && -f .ralph/loop.lock ]] || { echo "ralph-campaign: unsafe Ralph loop lock" >&2; exit 1; }
-    lock_pid=$(python3 - <<'PY'
-import json
-try:
-    value=json.load(open('.ralph/loop.lock', encoding='utf-8')).get('pid')
-    print(value if isinstance(value, int) and value > 0 else '')
-except Exception:
-    print('')
-PY
-)
-    if [[ -n "$lock_pid" && -d "/proc/$lock_pid" ]]; then
-        lock_command=$(tr '\0' ' ' < "/proc/$lock_pid/cmdline" 2>/dev/null || true)
-        [[ "$lock_command" != *ralph* ]] || { echo "ralph-campaign: live Ralph process $lock_pid owns the loop lock" >&2; exit 1; }
-    fi
-    echo "ralph-campaign: removing abandoned Ralph loop lock${lock_pid:+ for PID $lock_pid}" >&2
-    rm -f -- .ralph/loop.lock
+# Campaign orchestration never guesses whether Ralph's own exclusive lock is
+# stale. Recovery validates and repairs that lock explicitly; ambiguous, live,
+# and dead-but-unreconciled lock records all remain untouched here.
+if [[ -e .ralph/loop.lock || -L .ralph/loop.lock ]]; then
+    echo "ralph-campaign: Ralph loop lock exists; reconcile it with ralph-recover before campaign resume" >&2
+    exit 1
 fi
 
-[[ ! -L .factory-state && ( ! -e .factory-state || -d .factory-state ) ]] || {
-    echo "ralph-campaign: unsafe .factory-state path" >&2; exit 1;
-}
-mkdir -p .factory-state
-chmod 700 .factory-state
+python3 - <<'PY'
+import os, stat
+from pathlib import Path
+path = Path('.factory-state')
+if path.exists() or path.is_symlink():
+    info = path.lstat()
+    if (not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode)
+            or info.st_uid != os.getuid() or info.st_mode & 0o077):
+        raise SystemExit('ralph-campaign: unsafe .factory-state directory')
+else:
+    path.mkdir(mode=0o700)
+PY
 STATE_FILE=$PROJECT_ROOT/.factory-state/ralph-campaign.json
 export FACTORY_CAMPAIGN_STATE="$STATE_FILE"
 verify_argv_file=$(mktemp "$PROJECT_ROOT/.factory-state/campaign-verify.XXXXXX")
@@ -147,22 +143,18 @@ record_field() {
 launcher_args=()
 $TUI || launcher_args+=(--no-tui)
 
-# Run a phase script (ralph-plan/run/audit) with campaign-level resilience.
-# If the script exits non-zero (e.g. infrastructure failure), clean up the
-# factory lock and signal the caller to retry via the while loop.
+# Leaf launchers own quota waits and their persisted bounded recoveries. Any
+# other nonzero result stops this active campaign at the same resumable phase.
 run_phase() {
     local label=$1; shift
-    set +e
-    "$@"
-    local rc=$?
-    set -e
-    if (( rc != 0 )); then
-        rm -f "$PROJECT_ROOT/.factory-lock"
-        echo "ralph-campaign: $label exited with status $rc; retrying in ${CAMPAIGN_RETRY_DELAY:-30}s" >&2
-        sleep "${CAMPAIGN_RETRY_DELAY:-30}"
-        return 1
+    local rc
+    if "$@"; then
+        return 0
+    else
+        rc=$?
     fi
-    return 0
+    echo "ralph-campaign: $label exited with status $rc; campaign remains active at this phase" >&2
+    return "$rc"
 }
 
 while [[ $(state_get status) == active ]]; do
@@ -181,19 +173,29 @@ while [[ $(state_get status) == active ]]; do
             planning_ok=false
             if [[ "$started" == true ]]; then
                 set +e
-                FACTORY_PLANNING_BASE_COMMIT=$base ./scripts/final-gate.sh --planning >/dev/null 2>&1
+                FACTORY_FINAL_GATE_ATTEST=1 FACTORY_PLANNING_BASE_COMMIT=$base ./scripts/final-gate.sh --planning >/dev/null 2>&1
                 gate_rc=$?
                 set -e
-                (( gate_rc == 0 )) && [[ -z $(git status --porcelain --untracked-files=normal) ]] && planning_ok=true
+                if (( gate_rc == 0 )); then
+                    planning_ok=true
+                elif (( gate_rc != 1 )); then
+                    echo "ralph-campaign: planning gate failed with infrastructure status $gate_rc" >&2
+                    exit "$gate_rc"
+                fi
             fi
             if ! $planning_ok; then
                 if [[ "$started" != true ]]; then
                     record_field planning planning_started true
                 fi
-                if [[ -s .factory-state/planning-base-commit ]] && [[ $(tr -d '[:space:]' < .factory-state/planning-base-commit) == "$base" ]]; then
-                    run_phase "planning" "$SCRIPT_DIR/ralph-plan.sh" --resume "${launcher_args[@]}" || continue
+                if [[ "$started" == true ]]; then
+                    [[ -s .factory-state/planning-base-commit \
+                        && $(tr -d '[:space:]' < .factory-state/planning-base-commit) == "$base" ]] || {
+                        echo "ralph-campaign: planning resume marker does not match the round base" >&2
+                        exit 1
+                    }
+                    run_phase "planning" "$SCRIPT_DIR/ralph-plan.sh" --resume "${launcher_args[@]}"
                 elif [[ $(git rev-parse HEAD) == "$base" ]] && [[ -z $(git status --porcelain --untracked-files=normal) ]]; then
-                    run_phase "planning" "$SCRIPT_DIR/ralph-plan.sh" "${launcher_args[@]}" || continue
+                    run_phase "planning" "$SCRIPT_DIR/ralph-plan.sh" "${launcher_args[@]}"
                 else
                     echo "ralph-campaign: planning state cannot be reconciled safely" >&2
                     exit 1
@@ -207,7 +209,7 @@ print(match.group(1) if match else '')
 PY
 )
             [[ "$plan_base" == "$base" ]] || { echo "ralph-campaign: plan base does not match round base" >&2; exit 1; }
-            ./scripts/final-gate.sh --planning
+            FACTORY_FINAL_GATE_ATTEST=1 ./scripts/final-gate.sh --planning
             plan_commit=$(git rev-parse HEAD)
             "$STATE_HELPER" update --expect-phase planning --phase implementation --round-field "plan_commit=$(json_string "$plan_commit")"
             ;;
@@ -215,23 +217,18 @@ PY
             started=$(round_field implementation_started)
             implementation_ok=false
             if [[ "$started" == true ]]; then
-                for precheck_attempt in 1 2 3; do
-                    set +e
-                    ./scripts/final-gate.sh --implementation >/tmp/precheck-debug.log 2>&1
-                    gate_rc=$?
-                    set -e
-                    if (( gate_rc == 0 )); then
-                        [[ -z $(git status --porcelain --untracked-files=normal) ]] && implementation_ok=true
-                        break
-                    elif (( gate_rc >= 128 )); then
-                        echo "ralph-campaign: implementation pre-check interrupted (rc=$gate_rc); retrying ($precheck_attempt/3)" >&2
-                        rm -f "$PROJECT_ROOT/.factory-lock"
-                        sleep "${CAMPAIGN_RETRY_DELAY:-30}"
-                        continue
-                    else
-                        break  # real failure — let Ralph attempt recovery
-                    fi
-                done
+                precheck_diagnostics=$(mktemp "$PROJECT_ROOT/.factory-state/implementation-precheck.XXXXXX")
+                set +e
+                FACTORY_FINAL_GATE_ATTEST=1 ./scripts/final-gate.sh --implementation >"$precheck_diagnostics" 2>&1
+                gate_rc=$?
+                set -e
+                rm -f -- "$precheck_diagnostics"
+                if (( gate_rc == 0 )); then
+                    implementation_ok=true
+                elif (( gate_rc != 1 )); then
+                    echo "ralph-campaign: implementation pre-check failed with infrastructure status $gate_rc" >&2
+                    exit "$gate_rc"
+                fi
             fi
             if ! $implementation_ok; then
                 if [[ "$started" != true ]]; then
@@ -240,12 +237,12 @@ PY
                 # Preserve legitimate uncommitted leaf work after interruption.
                 # A clean checkpoint starts a fresh context; a dirty interrupted
                 # lifecycle must use the launcher's validated recovery path.
-                if [[ "$started" == true && -n $(git status --porcelain --untracked-files=normal) ]]; then
-                    run_phase "implementation" "$SCRIPT_DIR/ralph-run.sh" --resume "${launcher_args[@]}" || continue
+                if [[ "$started" == true ]]; then
+                    run_phase "implementation" "$SCRIPT_DIR/ralph-run.sh" --resume "${launcher_args[@]}"
                 else
-                    run_phase "implementation" "$SCRIPT_DIR/ralph-run.sh" "${launcher_args[@]}" || continue
+                    run_phase "implementation" "$SCRIPT_DIR/ralph-run.sh" "${launcher_args[@]}"
                 fi
-                run_phase "implementation-gate" ./scripts/final-gate.sh --implementation || continue
+                run_phase "implementation-gate" env FACTORY_FINAL_GATE_ATTEST=1 ./scripts/final-gate.sh --implementation
             fi
             implementation_commit=$(git rev-parse HEAD)
             "$STATE_HELPER" update --expect-phase implementation --phase verification --round-field "implementation_commit=$(json_string "$implementation_commit")"
@@ -275,19 +272,20 @@ PY
                 ./scripts/initialize-campaign-audit.py --round "$round" --base "$expected_audit_base" \
                     --runner-evidence-sha256 "$expected_runner_evidence"
                 record_field audit audit_started true
-                run_phase "audit" "$SCRIPT_DIR/ralph-audit.sh" "${launcher_args[@]}" || continue
+                run_phase "audit" "$SCRIPT_DIR/ralph-audit.sh" "${launcher_args[@]}"
             else
                 set +e
-                ./scripts/final-gate.sh --campaign-audit >/dev/null 2>&1
+                FACTORY_FINAL_GATE_ATTEST=1 ./scripts/final-gate.sh --campaign-audit >/dev/null 2>&1
                 audit_gate_rc=$?
                 set -e
-                if (( audit_gate_rc != 0 )); then
-                    # The report and Git binding persist; use a fresh audit context
-                    # instead of continuing an unrelated volatile event stream.
-                    run_phase "audit" "$SCRIPT_DIR/ralph-audit.sh" "${launcher_args[@]}" || continue
+                if (( audit_gate_rc == 1 )); then
+                    run_phase "audit" "$SCRIPT_DIR/ralph-audit.sh" --resume "${launcher_args[@]}"
+                elif (( audit_gate_rc != 0 )); then
+                    echo "ralph-campaign: audit gate failed with infrastructure status $audit_gate_rc" >&2
+                    exit "$audit_gate_rc"
                 fi
             fi
-            ./scripts/final-gate.sh --campaign-audit
+            FACTORY_FINAL_GATE_ATTEST=1 ./scripts/final-gate.sh --campaign-audit
             audit_result=$(python3 - <<'PY'
 import re
 text=open('.factory/artifacts/campaign-audit.md', encoding='utf-8').read()

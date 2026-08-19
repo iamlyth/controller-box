@@ -20,7 +20,7 @@ class Repo:
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
         (self.root / "scripts").mkdir()
-        (self.root / ".factory-state").mkdir()
+        (self.root / ".factory-state").mkdir(mode=0o700)
         shutil.copy2(SOURCE, self.root / "scripts/ralph-campaign-state.py")
         (self.root / ".gitignore").write_text(".factory-state/\n.factory-lock\n", encoding="utf-8")
         (self.root / "history.txt").write_text("base\n", encoding="utf-8")
@@ -302,6 +302,41 @@ def test_lock_and_unsafe_lock_rejections() -> None:
         repo.close()
 
 
+def test_audit_binding_reconstruction() -> None:
+    repo = Repo()
+    try:
+        repo.helper(
+            "update", "--expect-phase", "verification", "--phase", "audit",
+            "--round-field", f"verification_commit={json.dumps(repo.old)}",
+            "--round-field", f"runner_evidence_sha256={json.dumps(DIGEST)}",
+        )
+        binding = json.loads(repo.helper("audit-binding").stdout)
+        assert binding == {
+            "round": 1,
+            "base": repo.old,
+            "runner_evidence_sha256": DIGEST,
+        }
+    finally:
+        repo.close()
+
+
+def test_malformed_terminal_replacement_rejected() -> None:
+    repo = Repo()
+    try:
+        malformed = repo.state()
+        malformed["status"] = "complete"
+        malformed["phase"] = "complete"
+        del malformed["verification_command_sha256"]
+        repo.state_path.write_text(json.dumps(malformed) + "\n", encoding="utf-8")
+        repo.assert_rejected(
+            "start", "--rounds", "1", "--tui", "false",
+            "--verification-digest", DIGEST, "--base", repo.head(),
+            "--replace-terminal", contains="unexpected fields",
+        )
+    finally:
+        repo.close()
+
+
 def main() -> None:
     test_success_and_normal_write_once()
     test_identity_phase_and_head_rejections()
@@ -310,6 +345,8 @@ def main() -> None:
     test_verification_evidence_and_audit_rejections()
     test_later_round_rejected()
     test_lock_and_unsafe_lock_rejections()
+    test_audit_binding_reconstruction()
+    test_malformed_terminal_replacement_rejected()
     print("test: Ralph campaign state recovery checks passed")
 
 

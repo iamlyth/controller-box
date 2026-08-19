@@ -6,6 +6,7 @@ PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 RALPH_BIN=${RALPH_BIN:-ralph}
 RESUME=false
 TUI=true
+ORIGINAL_ARGS=("$@")
 while (( $# > 0 )); do
     case "$1" in
         --resume) RESUME=true; shift ;;
@@ -15,16 +16,17 @@ while (( $# > 0 )); do
     esac
 done
 cd -- "$PROJECT_ROOT"
+# shellcheck source=scripts/factory-lock.sh
+source "$SCRIPT_DIR/factory-lock.sh"
+factory_lock_bootstrap "$PROJECT_ROOT/.factory-lock" "$PROJECT_ROOT/scripts/ralph-maintenance-run.sh" "${ORIGINAL_ARGS[@]}"
 command -v "$RALPH_BIN" >/dev/null || { echo "ralph-maintenance-run: Ralph executable not found: $RALPH_BIN" >&2; exit 2; }
 command -v pi2 >/dev/null || { echo "ralph-maintenance-run: pi2 is unavailable" >&2; exit 2; }
 ./scripts/branch-guard.sh
 
-# shellcheck source=scripts/factory-lock.sh
-source "$SCRIPT_DIR/factory-lock.sh"
 # shellcheck source=scripts/ralph-supervision.sh
 source "$SCRIPT_DIR/ralph-supervision.sh"
 factory_lock_acquire "$PROJECT_ROOT/.factory-lock"
-mkdir -p .factory-state
+ralph_supervision_prepare_state_directory
 ./scripts/check-maintenance-freshness.sh
 python3 - <<'PY'
 import json, pathlib, subprocess
@@ -45,16 +47,19 @@ fi
     echo "ralph-maintenance-run: tree changed before launch" >&2; exit 1;
 }
 printf '%s\n' maintenance > .factory-state/loop-mode
+ralph_supervision_initialize maintenance "$RESUME"
 
 finish_maintenance_cycle() {
-    if ./scripts/final-gate.sh --maintenance; then :; else return $?; fi
-    local payload
+    local payload head
+    if ./scripts/ralph-final-state.py verify maintenance >/dev/null 2>&1; then
+        echo "ralph-maintenance-run: maintenance cycle completed"
+        return 0
+    fi
     payload=$(printf '{"loop":{"workspace":"%s","id":"maintenance-final"},"iteration":{"current":"final"}}' "$PROJECT_ROOT")
-    if printf '%s' "$payload" | ./scripts/git-commit-hook.sh --maintenance; then :; else return $?; fi
-    [[ -z $(git status --porcelain --untracked-files=normal) ]] || {
-        echo "ralph-maintenance-run: completion left a dirty Git tree" >&2
-        return 1
-    }
+    if printf '%s' "$payload" | ./scripts/git-commit-hook.sh --maintenance --final-handoff; then :; else return $?; fi
+    if FACTORY_FINAL_GATE_ATTEST=1 ./scripts/final-gate.sh --maintenance; then :; else return $?; fi
+    head=$(git rev-parse HEAD)
+    ./scripts/ralph-final-state.py attest maintenance "$head" >/dev/null
     echo "ralph-maintenance-run: maintenance cycle completed"
 }
 
@@ -103,7 +108,7 @@ while true; do
         echo "ralph-maintenance-run: quota status check failed with status $quota_rc" >&2
         exit "$quota_rc"
     fi
-    stale_diagnostics=$(mktemp)
+    stale_diagnostics=$(ralph_supervision_diagnostics_file maintenance)
     set +e
     ./scripts/final-gate.sh --maintenance >"$stale_diagnostics" 2>&1
     gate_rc=$?

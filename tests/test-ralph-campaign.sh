@@ -11,8 +11,11 @@ cp "$PROJECT_ROOT/scripts/ralph-campaign.sh" \
    "$PROJECT_ROOT/scripts/initialize-campaign-audit.py" \
    "$PROJECT_ROOT/scripts/check-factory-environment.py" \
    "$PROJECT_ROOT/scripts/run-factory-runners.py" \
-   "$PROJECT_ROOT/scripts/check-factory-runner-evidence.py" "$tmp/scripts/"
+   "$PROJECT_ROOT/scripts/check-factory-runner-evidence.py" \
+   "$PROJECT_ROOT/scripts/factory-lock.sh" \
+   "$PROJECT_ROOT/scripts/factory-lock-exec.py" "$tmp/scripts/"
 chmod +x "$tmp/scripts/"*
+chmod 700 "$tmp/.factory-state"
 cat > "$tmp/.factory/environment.toml" <<'EOF'
 schema_version = 1
 EOF
@@ -43,10 +46,6 @@ cat > "$tmp/scripts/branch-guard.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 [[ $(git branch --show-current) == develop ]]
-EOF
-cat > "$tmp/scripts/factory-lock.sh" <<'EOF'
-#!/usr/bin/env bash
-factory_lock_acquire() { export FACTORY_LOCK_HELD=1; }
 EOF
 cat > "$tmp/scripts/ralph-plan.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -174,13 +173,27 @@ assert [c.split()[0] for c in latest] == ['plan','implement','verify','audit'], 
 assert all('--no-tui' not in c for c in latest), latest
 PY
 
-# Campaign-level resilience: a phase script that exits non-zero (e.g.
-# infrastructure failure) must self-recover via the while loop, not exit.
+# An arbitrary nonzero leaf result is invoked once and stops at the same active,
+# resumable phase. The campaign never unlinks its locked pathname.
+rm -f "$tmp/.factory-state/failed-implementation"
+implementation_calls_before=$(grep -c '^implement ' "$tmp/.factory-state/calls")
 set +e
-(cd "$tmp" && CAMPAIGN_RETRY_DELAY=0 FAKE_FAIL_IMPL_ONCE=1 FAKE_DIRTY_IMPL=1 ./scripts/ralph-campaign.sh --rounds 1 --restart >/dev/null 2>&1)
+(cd "$tmp" && FAKE_FAIL_IMPL_ONCE=1 FAKE_DIRTY_IMPL=1 ./scripts/ralph-campaign.sh --rounds 1 --restart >/dev/null 2>&1)
 fail_rc=$?
 set -e
-[[ $fail_rc -eq 0 ]]
+[[ $fail_rc -eq 42 ]]
+[[ -f "$tmp/.factory-lock" ]]
+[[ $(grep -c '^implement ' "$tmp/.factory-state/calls") -eq $((implementation_calls_before + 1)) ]]
+python3 - "$tmp" <<'PY'
+import json, pathlib, sys
+root=pathlib.Path(sys.argv[1])
+state=json.loads((root/'.factory-state/ralph-campaign.json').read_text())
+assert state['status']=='active' and state['phase']=='implementation'
+assert state['rounds'][-1]['implementation_started'] is True
+assert state['rounds'][-1]['implementation_commit'] is None
+assert (root/'product.txt').read_text().strip() == 'interrupted work'
+PY
+(cd "$tmp" && ./scripts/ralph-campaign.sh --rounds 1 --resume >/dev/null)
 grep -q '^implement --resume --no-tui$' "$tmp/.factory-state/calls"
 python3 - "$tmp" <<'PY'
 import json, pathlib, sys
@@ -188,13 +201,14 @@ state=json.loads((pathlib.Path(sys.argv[1])/'.factory-state/ralph-campaign.json'
 assert state['status']=='complete'
 PY
 
-# Attended mode: self-recovery preserves the saved TUI mode.
+# Attended mode also stops once, then preserves its mode on explicit resume.
 rm -f "$tmp/.factory-state/failed-implementation"
 set +e
-(cd "$tmp" && CAMPAIGN_RETRY_DELAY=0 FAKE_FAIL_IMPL_ONCE=1 FAKE_DIRTY_IMPL=1 FAKE_DIRTY_CONTENT='attended interrupted work' ./scripts/ralph-campaign.sh --rounds 1 --restart --tui >/dev/null 2>&1)
+(cd "$tmp" && FAKE_FAIL_IMPL_ONCE=1 FAKE_DIRTY_IMPL=1 FAKE_DIRTY_CONTENT='attended interrupted work' ./scripts/ralph-campaign.sh --rounds 1 --restart --tui >/dev/null 2>&1)
 attended_fail_rc=$?
 set -e
-[[ $attended_fail_rc -eq 0 ]]
+[[ $attended_fail_rc -eq 42 ]]
+(cd "$tmp" && ./scripts/ralph-campaign.sh --rounds 1 --resume --tui >/dev/null)
 grep -q '^implement --resume$' "$tmp/.factory-state/calls"
 python3 - "$tmp" <<'PY'
 import json, pathlib, sys
@@ -223,6 +237,17 @@ assert state['status']=='blocked' and state['phase']=='blocked-findings'
 assert state['rounds'][-1]['audit_result']=='findings'
 PY
 
+# Campaign startup never guesses about or unlinks Ralph's exclusive lock.
+printf '{broken\n' > "$tmp/.ralph/loop.lock"
+state_before_lock_rejection=$(sha256sum "$tmp/.factory-state/ralph-campaign.json" | cut -d' ' -f1)
+set +e
+(cd "$tmp" && ./scripts/ralph-campaign.sh --rounds 1 --resume >/dev/null 2>&1)
+loop_lock_rc=$?
+set -e
+[[ $loop_lock_rc -ne 0 && -f "$tmp/.ralph/loop.lock" ]]
+[[ $(sha256sum "$tmp/.factory-state/ralph-campaign.json" | cut -d' ' -f1) == "$state_before_lock_rejection" ]]
+rm -f "$tmp/.ralph/loop.lock"
+
 # Invalid verification configuration must fail closed before any phase runs.
 cp "$tmp/.factory/config.toml" "$tmp/.factory/config.toml.good"
 sed -i '/campaign_command/d' "$tmp/.factory/config.toml"
@@ -233,12 +258,46 @@ set -e
 mv "$tmp/.factory/config.toml.good" "$tmp/.factory/config.toml"
 [[ $config_rc -eq 1 ]]
 
+# A symlinked state directory is rejected before campaign state is read or
+# replaced.
+mv "$tmp/.factory-state" "$tmp/.factory-state.real"
+mkdir "$tmp/external-state"
+ln -s "$tmp/external-state" "$tmp/.factory-state"
+set +e
+(cd "$tmp" && ./scripts/ralph-campaign.sh --rounds 1 --restart >/dev/null 2>&1)
+symlink_state_rc=$?
+set -e
+[[ $symlink_state_rc -ne 0 && -z $(find "$tmp/external-state" -mindepth 1 -print -quit) ]]
+rm "$tmp/.factory-state"
+mv "$tmp/.factory-state.real" "$tmp/.factory-state"
+
 # The real inherited descriptor lock is re-entrant for children and excludes a
 # competing non-inheriting writer when flock is available.
 if command -v flock >/dev/null; then
     lock_tmp=$(mktemp -d)
-    cp "$PROJECT_ROOT/scripts/factory-lock.sh" "$lock_tmp/"
-    bash -c 'unset FACTORY_LOCK_HELD; exec 9>&-; source "$1/factory-lock.sh"; factory_lock_acquire "$1/lock"; bash -c '\''source "$1/factory-lock.sh"; factory_lock_acquire "$1/lock"'\'' _ "$1"; if env -u FACTORY_LOCK_HELD bash -c '\''source "$1/factory-lock.sh"; factory_lock_acquire "$1/lock"'\'' _ "$1"; then exit 1; fi' _ "$lock_tmp"
+    cp "$PROJECT_ROOT/scripts/factory-lock-exec.py" "$lock_tmp/"
+    chmod +x "$lock_tmp/factory-lock-exec.py"
+    cat > "$lock_tmp/probe.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+python3 "$1/factory-lock-exec.py" "$1/lock" -- true
+if env -u FACTORY_LOCK_HELD -u FACTORY_LOCK_FD -u FACTORY_LOCK_ID \
+    python3 "$1/factory-lock-exec.py" "$1/lock" -- true; then
+    exit 1
+fi
+EOF
+    chmod +x "$lock_tmp/probe.sh"
+    python3 "$lock_tmp/factory-lock-exec.py" "$lock_tmp/lock" -- "$lock_tmp/probe.sh" "$lock_tmp"
+    printf 'external\n' > "$lock_tmp/external"
+    ln -s "$lock_tmp/external" "$lock_tmp/symlink-lock"
+    if python3 "$lock_tmp/factory-lock-exec.py" "$lock_tmp/symlink-lock" -- true >/dev/null 2>&1; then
+        echo 'test-ralph-campaign: symlinked factory lock was accepted' >&2; exit 1
+    fi
+    ln "$lock_tmp/external" "$lock_tmp/hardlink-lock"
+    if python3 "$lock_tmp/factory-lock-exec.py" "$lock_tmp/hardlink-lock" -- true >/dev/null 2>&1; then
+        echo 'test-ralph-campaign: multiply linked factory lock was accepted' >&2; exit 1
+    fi
+    [[ $(<"$lock_tmp/external") == external ]]
     rm -rf "$lock_tmp"
 fi
 

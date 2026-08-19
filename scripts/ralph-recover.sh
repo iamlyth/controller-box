@@ -14,6 +14,7 @@ DRY_RUN=false
 PREPARE_ONLY=false
 MODE=implementation
 EXPLICIT_LOOP_ID=""
+ORIGINAL_ARGS=("$@")
 
 usage() {
     cat <<'EOF'
@@ -46,13 +47,14 @@ case "$MODE" in
     implementation|planning|campaign-audit|maintenance-planning|maintenance) ;;
     *) die "invalid mode '$MODE'" ;;
 esac
-[[ -d "$RALPH_DIR" && ! -L "$RALPH_DIR" ]] || die "missing or unsafe $RALPH_DIR"
 
 # Serialize recovery with planning and implementation, and pass the inherited
 # lock descriptor into the resumed supervisor.
 # shellcheck source=scripts/factory-lock.sh
 source "$SCRIPT_DIR/factory-lock.sh"
+factory_lock_bootstrap "$PROJECT_ROOT/.factory-lock" "$PROJECT_ROOT/scripts/ralph-recover.sh" "${ORIGINAL_ARGS[@]}"
 factory_lock_acquire "$PROJECT_ROOT/.factory-lock"
+[[ -d "$RALPH_DIR" && ! -L "$RALPH_DIR" ]] || die "missing or unsafe $RALPH_DIR"
 python3 - "$RALPH_DIR" <<'PY' || die "unsafe Ralph recovery paths"
 import os
 import stat
@@ -82,27 +84,34 @@ fi
 
 if [[ -f "$LOCK_FILE" ]]; then
     lock_pid=$(python3 - "$LOCK_FILE" <<'PY'
-import json, sys
+import json, os, stat, sys
+path = sys.argv[1]
+fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
 try:
-    pid = json.load(open(sys.argv[1], encoding='utf-8')).get('pid')
-    print(pid if isinstance(pid, int) and pid > 0 else '')
-except Exception:
-    print('')
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid():
+        raise SystemExit('ralph-recover: unsafe loop lock')
+    raw = os.read(fd, 16385)
+    if len(raw) > 16384:
+        raise SystemExit('ralph-recover: loop lock exceeds the validation limit')
+    data = json.loads(raw.decode('utf-8'))
+finally:
+    os.close(fd)
+if not isinstance(data, dict) or not isinstance(data.get('pid'), int) or data['pid'] <= 0:
+    raise SystemExit('ralph-recover: loop lock has no unambiguous positive PID')
+print(data['pid'])
 PY
-)
-    if [[ -n "$lock_pid" && -d "/proc/$lock_pid" ]]; then
-        command_line=$(tr '\0' ' ' < "/proc/$lock_pid/cmdline" 2>/dev/null || true)
-        [[ "$command_line" != *ralph* ]] || die "live Ralph process $lock_pid owns the lock"
-        warn "lock PID $lock_pid belongs to another process; treating lock as stale"
-    else
-        warn "stale loop lock detected${lock_pid:+ for PID $lock_pid}"
-    fi
+) || die "ambiguous Ralph loop lock; refusing removal"
+    [[ ! -d "/proc/$lock_pid" ]] || die "live process $lock_pid owns the Ralph loop lock"
+    warn "stale loop lock detected for dead PID $lock_pid"
     if [[ "$DRY_RUN" == false ]]; then
-        python3 - "$RALPH_DIR" <<'PY'
+        python3 - "$RALPH_DIR" "$lock_pid" <<'PY'
 import os
 import stat
 import sys
-root=sys.argv[1]
+root, raw_pid = sys.argv[1:]
+if os.path.isdir(f'/proc/{raw_pid}'):
+    raise SystemExit(f'ralph-recover: PID {raw_pid} became live; refusing loop-lock removal')
 fd=os.open(root, os.O_RDONLY | os.O_DIRECTORY | getattr(os, 'O_NOFOLLOW', 0))
 try:
     try: info=os.stat('loop.lock', dir_fd=fd, follow_symlinks=False)

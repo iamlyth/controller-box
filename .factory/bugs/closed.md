@@ -181,6 +181,22 @@ Schema: `ralph-bug-ledger/v1`
     "resolution": "Added ralph-campaign-state.py rebind-implementation. It serializes through the factory lock, validates state and explicit first-round phase preconditions, requires exact expected-old and current clean develop HEAD, enforces strict merge-free ancestry, preserves normal update semantics, fsyncs the atomic state replacement, reload-validates persisted state, and emits old/new plus before/after SHA-256 receipt fields. Added shared adversarial recovery tests and backup/digest operations guidance, synchronized to the generic boilerplate.",
     "verification": "tests/test-ralph-campaign-state.py and tests/test-ralph-campaign.sh pass in Controller-Box and the generic counterpart; scripts/verify-boilerplate.sh passes in both repositories; scripts/verify-project.sh passes with 98/98 CTest targets successful (2 expected environment skips), mandatory installed-functional acceptance, installed smoke, clean build, and packaging. Campaign state remained unchanged in active round-1 verification.",
     "closed": "2026-08-19"
+  },
+  {
+    "id": "BUG-0012",
+    "title": "Ralph completion churn bypasses bounded recovery",
+    "status": "closed",
+    "severity": "high",
+    "reported": "2026-08-19",
+    "external": [],
+    "contract_change": false,
+    "reproduction": "Run an active campaign whose worker repeatedly updates only the tracked scratchpad, emits lifecycle tokens as Ralph event topics, or exits nonzero after exhausting leaf recovery.",
+    "expected": "Scratchpad-only handoffs remain recoverable without commits; completion uses only the standalone token; bounded failures stop once at the same resumable phase under one lock.",
+    "actual": "Ordinary hooks committed scratchpad-only updates, event-token shortcuts bypassed completion, campaign retries reset leaf ceilings indefinitely, and the locked pathname was unlinked.",
+    "acceptance": "Controller-Box adversarial checkpoint, token, validator, durable recovery, clean-HEAD attestation, single-writer lock, campaign stop, and full verification checks pass; generic parity remains separate follow-up work.",
+    "resolution": "Bounded Ralph lifecycle recovery now preserves scratchpad handoffs without checkpoint churn, uses cycle-bound single final attestation, validates final emit argv, serializes campaign state, and fails closed on unsafe lock/state paths.",
+    "verification": "Targeted checkpoint, scratchpad, Pi wrapper, completion/stale recovery, recovery safety, campaign state/campaign, plan-cycle, and bug-workflow tests passed; ./scripts/verify-boilerplate.sh passed; nix-shell --run ./scripts/verify-project.sh passed 98/98 CTest targets plus installed functional, packaging, and installed smoke checks.",
+    "closed": "2026-08-19"
   }
 ]
 ```

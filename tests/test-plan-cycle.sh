@@ -94,7 +94,7 @@ status: active
 ---
 # Implementation Plan
 ## Specification conformance matrix
-| Requirement | Spec section | Classification | Evidence | Task |
+| ID | Spec § | Classification | Evidence | Task |
 |---|---|---|---|---|
 | REQ-1 | §1 | missing | no implementation | Task 1 |
 ## Interaction acceptance inventory
@@ -117,7 +117,13 @@ status: active
 - Documentation impact: README
 EOF
 printf '%s\n' "$base" > .factory-state/planning-base-commit
-FACTORY_PLANNING_BASE_COMMIT=$base ./scripts/final-gate.sh --planning >/dev/null
+git add .factory/artifacts/implementation-plan.md .ralph/agent/scratchpad.md
+git commit -qm 'valid planning checkpoint'
+attested_head=$(git rev-parse HEAD)
+FACTORY_FINAL_GATE_ATTEST=1 FACTORY_PLANNING_BASE_COMMIT=$base \
+    ./scripts/final-gate.sh --planning >/dev/null
+[[ $(git rev-parse HEAD) == "$attested_head" ]]
+[[ -z $(git status --porcelain --untracked-files=normal) ]]
 cp .factory/artifacts/implementation-plan.md "$tmp/valid-plan.md"
 sed -i '0,/- Status: pending/s//- Status: complete/' .factory/artifacts/implementation-plan.md
 set +e
@@ -129,6 +135,68 @@ set -e
 cp "$tmp/valid-plan.md" .factory/artifacts/implementation-plan.md
 sed -i 's/status: active/status: complete/; s/- Status: pending/- Status: complete/g; s/| missing |/| verified |/' .factory/artifacts/implementation-plan.md
 ./scripts/validate-implementation-plan.py complete .factory/artifacts/implementation-plan.md >/dev/null
+cp .factory/artifacts/implementation-plan.md "$tmp/valid-complete-plan.md"
+
+# Adversarial structure checks: IDs, columns, fields, and dependencies are
+# canonical rather than inferred from nearby prose.
+cp "$tmp/valid-complete-plan.md" .factory/artifacts/implementation-plan.md
+sed -i '/| REQ-1 |/a | REQ-1 | §2 | verified | duplicate ID | |' .factory/artifacts/implementation-plan.md
+if ./scripts/validate-implementation-plan.py complete .factory/artifacts/implementation-plan.md >/dev/null 2>&1; then
+    echo 'test-plan-cycle: validator accepted a duplicate conformance ID' >&2; exit 1
+fi
+cp "$tmp/valid-complete-plan.md" .factory/artifacts/implementation-plan.md
+sed -i 's/| REQ-1 | §1 | verified | no implementation | Task 1 |/| REQ-1 | §1 | verified | Task 1 |/' .factory/artifacts/implementation-plan.md
+if ./scripts/validate-implementation-plan.py complete .factory/artifacts/implementation-plan.md >/dev/null 2>&1; then
+    echo 'test-plan-cycle: validator accepted a short conformance row' >&2; exit 1
+fi
+cp "$tmp/valid-complete-plan.md" .factory/artifacts/implementation-plan.md
+sed -i 's/- Dependencies: Task 1/- Dependencies: Task 99/' .factory/artifacts/implementation-plan.md
+if ./scripts/validate-implementation-plan.py complete .factory/artifacts/implementation-plan.md >/dev/null 2>&1; then
+    echo 'test-plan-cycle: validator accepted an unknown dependency' >&2; exit 1
+fi
+cp "$tmp/valid-complete-plan.md" .factory/artifacts/implementation-plan.md
+sed -i 's/- Dependencies: Task 1/- Dependencies: Task 1 trailing prose/' .factory/artifacts/implementation-plan.md
+if ./scripts/validate-implementation-plan.py complete .factory/artifacts/implementation-plan.md >/dev/null 2>&1; then
+    echo 'test-plan-cycle: validator accepted a malformed dependency expression' >&2; exit 1
+fi
+cp "$tmp/valid-complete-plan.md" .factory/artifacts/implementation-plan.md
+sed -i 's/## Task 2:/## Task 3:/' .factory/artifacts/implementation-plan.md
+if ./scripts/validate-implementation-plan.py complete .factory/artifacts/implementation-plan.md >/dev/null 2>&1; then
+    echo 'test-plan-cycle: validator accepted non-contiguous task IDs' >&2; exit 1
+fi
+cp "$tmp/valid-complete-plan.md" .factory/artifacts/implementation-plan.md
+sed -i '/- Status: complete/a - Status: complete' .factory/artifacts/implementation-plan.md
+if ./scripts/validate-implementation-plan.py complete .factory/artifacts/implementation-plan.md >/dev/null 2>&1; then
+    echo 'test-plan-cycle: validator accepted duplicate canonical task fields' >&2; exit 1
+fi
+
+for unfinished in pending blocked in_progress; do
+    cp "$tmp/valid-complete-plan.md" .factory/artifacts/implementation-plan.md
+    sed -i "0,/- Status: complete/s//- Status: $unfinished/" .factory/artifacts/implementation-plan.md
+    if ./scripts/validate-implementation-plan.py complete .factory/artifacts/implementation-plan.md >/dev/null 2>&1; then
+        echo "test-plan-cycle: complete validator accepted task status $unfinished" >&2
+        exit 1
+    fi
+done
+cp "$tmp/valid-complete-plan.md" .factory/artifacts/implementation-plan.md
+sed -i 's/status: complete/status: blocked/' .factory/artifacts/implementation-plan.md
+if ./scripts/validate-implementation-plan.py complete .factory/artifacts/implementation-plan.md >/dev/null 2>&1; then
+    echo 'test-plan-cycle: complete validator accepted blocked front matter' >&2
+    exit 1
+fi
+cp "$tmp/valid-complete-plan.md" .factory/artifacts/implementation-plan.md
+sed -i 's/| verified |/| partial |/' .factory/artifacts/implementation-plan.md
+if ./scripts/validate-implementation-plan.py complete .factory/artifacts/implementation-plan.md >/dev/null 2>&1; then
+    echo 'test-plan-cycle: complete validator accepted a nonverified row' >&2
+    exit 1
+fi
+cp "$tmp/valid-complete-plan.md" .factory/artifacts/implementation-plan.md
+sed -i 's/no implementation/hardware deferred and unavailable/' .factory/artifacts/implementation-plan.md
+if ./scripts/validate-implementation-plan.py complete .factory/artifacts/implementation-plan.md >/dev/null 2>&1; then
+    echo 'test-plan-cycle: complete validator accepted a hidden hardware deferral' >&2
+    exit 1
+fi
+cp "$tmp/valid-complete-plan.md" .factory/artifacts/implementation-plan.md
 set +e
 ./scripts/final-gate.sh --implementation >/dev/null 2>&1
 open_bug_rc=$?
