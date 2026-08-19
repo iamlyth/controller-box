@@ -213,7 +213,7 @@ Keyboard tests in `test_manager_interaction_prof.c` relabeled from
 | D08 | Empty profile save blocked | Controller + pointer | NES validation blocks save | `test_installed_functional.c` D08 |
 
 ## Task 1: Complete interaction inventory and fix stale documentation
-- Status: pending
+- Status: complete
 - Dependencies: none
 - Scope: `tests/interaction_inventory.c`, `tests/test_interaction_inventory.c`, `README.md`, `docs/OPERATIONS.md`, `tests/CMakeLists.txt`
 - Acceptance criteria:

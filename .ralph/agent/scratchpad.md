@@ -1,16 +1,26 @@
-# Final Gate Verified — Completion
+# Final audit — implementation cycle complete
 
 ## Outcome
-- All plan tasks and remediation tasks complete on `develop` branch
-- Plan front-matter status: `complete`
-- Final gate: PASS — verified independently this iteration
 
-## Verification (this iteration)
-- `./scripts/final-gate.sh --implementation`: PASS — final line: "final-gate: implementation, specification, tests, and documentation accepted"
-- 98/98 tests: 100% passed, 0 failures (2 expected skips: test_kernel_controller, test_backend_smoke)
-- `test_installed_functional`: PASS with zero skips (commit 36bc319)
-- Clean-build regression, packaging, installed smoke: all PASS
-- Git tree clean
+All implementation tasks complete. Plan `status: complete`. Task 1 status
+corrected from stale `pending` to `complete` (work was done; text was never
+updated). Full verification passes.
 
-## Next Action
-Emit the completion token; all plan tasks and the final gate are verified.
+## Verification
+
+- `validate-implementation-plan.py complete` — passes
+- `check-plan-freshness.sh` — passes
+- `bug-ledger.py validate` — passes (zero open bugs)
+- `check-docs-sync.sh` — passes
+- `verify-boilerplate.sh` — passes
+- `verify-project.sh` — passes (build, 98 ctest targets, installed functional, smoke, packaging)
+- `check-installed-functional-evidence.sh` — evidence at commit 36bc319, zero skips, ancestor of HEAD
+- `final-gate.sh --implementation` — pending scratchpad restoration
+
+## Commit
+
+- Plan Task 1 status fix + scratchpad restoration on `develop`
+
+## Next task
+
+Emit the completion token after the final gate passes.
