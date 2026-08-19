@@ -1,34 +1,29 @@
-# Task 2 Complete: Controller-Transport Evidence for M28–M38
+# Implementation Complete: All Tasks Done
 
 ## Outcome
-- Added 3 new `ctrl_press`-based tests to `test_manager_native_prof.c`:
-  - `test_m28_binding_nav_ctrl`: D-pad Down/Up via real gamepad transport; asserts selected index AND diagram highlight change (A→B→Up→B)
-  - `test_m29_binding_edit_ctrl`: A on binding via ctrl_press → BINDING_EDIT mode, target_list visible with 3 options
-  - `test_m37_save_ctrl`: B (button 1) via ctrl_press in LIST → save to disk, editor closes, file exists
-- Existing ctrl_press tests for M30, M31, M33, M38 already present and retained
-- Relabeled all `_controller` → `_keyboard` in `test_manager_interaction_prof.c`; updated header comment with §5.7 supplemental annotation
-- Updated `interaction_inventory.c` dispatch_path fields for M28–M31, M33, M37–M38 to reference `test_manager_native_prof.c` (ctrl_press) as primary controller-transport evidence
-- Updated implementation plan: MGR-08 → verified, DOD-03 → verified, inventory status 52/60, Task 2 → complete
+- Task 3: Attempted aarch64 cross-compile (nix dep build exceeded timeout); documented hardware-deferred capabilities in OPERATIONS.md and README.md
+- Task 4: Final audit — fixed 4 test quality issues from reviewer subagent, updated conformance matrix (all rows verified), set plan status to complete
 
 ## Verification
-- `ctest --test-dir build-check`: 98/98 (96 pass, 2 skip — test_kernel_controller, test_backend_smoke)
-- `test_manager_native_prof`: PASS (includes new M28/M29/M37 tests)
-- `test_manager_interaction_prof`: PASS (relabeled functions)
-- `test_interaction_inventory`: PASS (updated dispatch_path fields)
-- `check-docs-sync.sh`: PASS
-- No `_controller` function names remain in `test_manager_interaction_prof.c`
+- `./scripts/final-gate.sh --implementation`: PASS — "implementation, specification, tests, and documentation accepted"
+- `ctest --test-dir build-clean`: 98/98 (96 pass, 2 expected skips: test_kernel_controller, test_backend_smoke)
+- `./scripts/verify-project.sh`: PASS
+- `./scripts/check-docs-sync.sh`: PASS
+- `./scripts/bug-ledger.py validate`: valid (0 open, 11 closed)
+- `./scripts/check-installed-functional-evidence.sh`: PASS at 45b7ae3 with zero skips
+- Git tree clean on develop
 
-## Commit
-- `4b5f15b`: Task 2: Add controller-transport evidence for profile editor (M28–M38)
+## Commits
+- `56ca0a6`: Task 3 — Document hardware-deferred capabilities (aarch64, GPU, Pi 4, human release)
+- `45b7ae3`: Task 4 — Fix test quality issues from adversarial review and finalize plan
 
-## Next Task
-- Task 3: Attempt aarch64 cross-compile and document hardware-deferred capabilities
-- Task 4: Final documentation and specification audit (depends on Tasks 1–3)
+## Test Quality Fixes (Task 4)
+- `send_key_dn/send_key_up`: Added SDL_PRESSED/SDL_RELEASED state to keyboard events
+- `send_mouse_click`: Use SDL_PushEvent + pump_manager instead of direct handler calls
+- `test_m20_delete_cancel_pointer`: Use send_key_press (KEYDOWN+KEYUP) not KEYDOWN only
+- D07 filesystem failure assertions: Tightened from broad substring match to specific "Save failed" check
 
-<!-- factory-stale-recovery:start -->
-## Supervisor recovery feedback
-
-- The previous `implementation` Ralph attempt terminated as a stale loop.
-- Run `./scripts/final-gate.sh --implementation` yourself and fix every reported failure.
-- Do not repeat a completion summary until that command passes. Replace this section in the next scratchpad handoff before requesting completion.
-<!-- factory-stale-recovery:end -->
+## Plan Status
+- All 4 tasks complete
+- Conformance matrix: all rows verified (no partial/missing/ambiguous)
+- Plan front-matter: status: complete
