@@ -1,26 +1,25 @@
-# Final audit complete: plan status complete, all gates passing
+# Implementation cycle complete — all gates accepted
 
 ## Outcome
 
-All four implementation tasks are complete. The conformance matrix has
-every row `verified` with source and executable evidence. The final
-gate (`scripts/final-gate.sh --implementation`) accepts the cycle.
+All implementation tasks complete. Plan status `complete`. Final gate
+`--implementation` accepted on clean tree at HEAD 8e0beff.
 
-## Verification
+## Verification (final-gate.sh --implementation, full run)
 
-- `validate-implementation-plan.py complete` — passes
-- `bug-ledger.py validate` — 0 open, 12 closed
-- `check-docs-sync.sh` — passes
-- `verify-boilerplate.sh` — passes
-- `verify-project.sh` — 98 CTest targets, 0 failures, 0 unexplained skips
-- `check-installed-functional-evidence.sh` — PASS, zero skips
-- `final-gate.sh --implementation` — accepted
+- check-plan-freshness: spec 3a10f6b7d04a, blob 58f5d3cb72bc
+- bug-ledger: 0 open, 13 closed
+- check-docs-sync: passed
+- verify-boilerplate: passed
+- verify-project: 98/98 CTest targets, 0 failures, 2 expected skips
+- check-installed-functional-evidence: PASS, zero skips
+- final-gate: implementation, specification, tests, and documentation accepted
 
 ## Commit
 
-- 0c85722: Final audit — plan complete, matrix reclassified, all tasks done
-- Scratchpad handoff commit (this change)
+- 8e0beff (HEAD): final state with BUG-0013 fix
+- Git tree clean
 
 ## Next
 
-Emit the completion token. The implementation cycle is satisfied.
+Emit the completion token.
