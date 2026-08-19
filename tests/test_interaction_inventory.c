@@ -3,7 +3,7 @@
  *
  * Verifies that the interaction acceptance inventory:
  *   - compiles and is accessible via cbx_interaction_inventory_get()
- *   - has the expected number of entries (M01–M38, O01–O13, D01–D08)
+ *   - has the expected number of entries (M01–M39, O01–O13, D01–D08)
  *   - every entry has non-NULL required fields (id, context, controller_path,
  *     pointer_path, semantic_outcome, dispatch_path, evidence_task)
  *   - the inventory covers all required control IDs
@@ -27,7 +27,7 @@
 #include <stdbool.h>
 
 /* ---- Expected counts ---- */
-#define EXPECTED_MANAGER_COUNT  38  /* M01–M38 */
+#define EXPECTED_MANAGER_COUNT  39  /* M01–M39 */
 #define EXPECTED_OVERLAY_COUNT  13  /* O01–O13 */
 #define EXPECTED_DISABLED_COUNT   8  /* D01–D08 */
 #define EXPECTED_TOTAL         (EXPECTED_MANAGER_COUNT + EXPECTED_OVERLAY_COUNT + EXPECTED_DISABLED_COUNT)
@@ -59,8 +59,8 @@ static void test_inventory_all_fields_populated(void **state)
 static void test_inventory_has_all_manager_controls(void **state)
 {
     (void)state;
-    /* M01 through M38 must all be present */
-    for (int n = 1; n <= 38; n++) {
+    /* M01 through M39 must all be present */
+    for (int n = 1; n <= 39; n++) {
         char id[8];
         snprintf(id, sizeof(id), "M%02d", n);
         const cbx_interaction_entry *e = cbx_interaction_inventory_find(id);
@@ -188,6 +188,13 @@ static void test_inventory_specific_entries(void **state)
     assert_int_equal(m37->pointer_path_avail, CBX_PATH_AVAILABLE);
     assert_int_equal(m37->verify_status, CBX_VERIFY_VERIFIED);
 
+    /* M39 — First-run service install: both paths available (Yes/No buttons) */
+    const cbx_interaction_entry *m39 = cbx_interaction_inventory_find("M39");
+    assert_non_null(m39);
+    assert_int_equal(m39->category, CBX_CAT_MANAGER_SETTINGS);
+    assert_int_equal(m39->pointer_path_avail, CBX_PATH_AVAILABLE);
+    assert_int_equal(m39->verify_status, CBX_VERIFY_VERIFIED);
+
     /* O12 — Host cycle profile: verification status deferred */
     const cbx_interaction_entry *o12 = cbx_interaction_inventory_find("O12");
     assert_non_null(o12);
@@ -245,6 +252,7 @@ static void test_inventory_covers_required_scenarios(void **state)
     bool has_save_and_close = false;
     bool has_cancel_editor = false;
     bool has_player_mode_conflict = false;
+    bool has_first_run_service_install = false;
 
     const cbx_interaction_entry *inv = cbx_interaction_inventory_get();
     for (size_t i = 0; inv[i].id != NULL; i++) {
@@ -262,6 +270,8 @@ static void test_inventory_covers_required_scenarios(void **state)
             has_cancel_editor = true;
         if (strcmp(inv[i].id, "O13") == 0)
             has_player_mode_conflict = true;
+        if (strcmp(inv[i].id, "M39") == 0)
+            has_first_run_service_install = true;
     }
 
     assert_true(has_create_source_picker);
@@ -271,6 +281,7 @@ static void test_inventory_covers_required_scenarios(void **state)
     assert_true(has_save_and_close);
     assert_true(has_cancel_editor);
     assert_true(has_player_mode_conflict);
+    assert_true(has_first_run_service_install);
 }
 
 /* Task 1: Verify that the inventory's verify_status is internally
@@ -311,7 +322,7 @@ static void test_inventory_specific_verify_statuses(void **state)
         "M01", "M02", "M03", "M04", "M05", "M06", "M07", "M08",
         "M09", "M10", "M11", "M12", "M15", "M17", "M18",
         "M19", "M20", "M21", "M22", "M23", "M24", "M25", "M26",
-        "M27", "M28", "M29", "M30", "M31", "M33",
+        "M27", "M28", "M29", "M30", "M31", "M33", "M39",
         "O01", "O02", "O03", "O04", "O05", "O06", "O07", "O08",
         "O09", "O10", "O11", "O13",
         "D01", "D02", "D03", "D04", "D05", "D06", "D07", "D08"
@@ -343,7 +354,7 @@ static void test_inventory_dialog_pointer_paths_available(void **state)
 {
     (void)state;
     const char *avail_ids[] = {
-        "M09", "M15", "M19", "M20", "M24", "M25", "M26",
+        "M09", "M15", "M19", "M20", "M24", "M25", "M26", "M39",
         "D01", "D02", "D03", "D04", "D05", "D06", "D07", "D08"
     };
     for (size_t i = 0; i < sizeof(avail_ids)/sizeof(avail_ids[0]); i++) {

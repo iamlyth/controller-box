@@ -201,7 +201,7 @@ geometry correctness:
 | 5. Installed production smoke | `test_installed_smoke` | Launches installed binary under Xvfb, sends keyboard + coordinate-based mouse clicks on body controls via xdotool, captures screenshots, verifies non-blank output and semantic outcomes (state change, file mutation) |
 | 5a. Installed functional acceptance | `test_installed_functional` | Links against production library; starts private native-signature DBus server, creates SDL virtual controller, exercises manager + overlay lifecycle through production poll path (InterceptMode PASS→ALL activation, framebuffer readback, B-close, assignment persistence) |
 | 5b. Installed binary acceptance | `test_installed_binary` | Launches installed binary as subprocess under Xvfb with private DBus server; verifies manager launch, tab navigation, settings persistence, target creation, profile load/save, overlay activation (InterceptMode→ALL, non-blank screenshot, clean close) |
-| 5c. Kernel-backed controller | `test_kernel_controller` | Creates a synthetic evdev gamepad via `/dev/uinput`, launches installed Manager binary with private DBus server, sends real kernel gamepad events (D-pad, A/B/Start) through production event loop, verifies semantic outcomes (manager survival, settings persistence). Skips (exit 77) when `/dev/uinput` is unavailable — no `kernel-uinput` runner capability declared in `.factory/environment.toml`. See SPEC §5.7 for controller acceptance requirements. |
+| 5c. Kernel-backed controller | `test_kernel_controller` | Creates a synthetic evdev gamepad via `/dev/uinput`, launches installed Manager binary with private DBus server, sends real kernel gamepad events (D-pad, A/B/Start) through production event loop, verifies semantic outcomes (manager survival, settings persistence). Skips (exit 77) when `/dev/uinput` is unavailable locally; the `kernel-uinput` runner capability IS declared in `.factory/environment.toml` and proven by runner receipt at commit 26df6c0. See SPEC §5.7 for controller acceptance requirements. |
 | 6. Backend smoke | `test_backend_smoke` | Exercises accelerated renderer (OpenGL/ES) with same invariants; skips (exit 77) in headless environments |
 | 7. Human release acceptance | (documented process) | Human reviews captures on target hardware for legibility, clipping, contrast, controller-only usability |
 
@@ -259,7 +259,7 @@ the overlay — not direct callback invocation):
 | `test_manager_native_prof` | M10, M12–M14, M16, M18, M20, M30–M36, D02–D04, D07–D08 — controller + pointer paths (native DBus) |
 | `test_overlay_interaction` | O01–O12 (overlay open, move, profile cycle, host mode, conflict, close) — controller + DBus InputEvent paths (mock DBus) |
 | `test_overlay_native` | O01–O13 (overlay open, move, profile cycle, host mode, Player Mode conflict, close) — native DBus backend via `cbx_overlay_service_step` |
-| `test_interaction_inventory` | M01–M38, O01–O13, D01–D08 inventory validation |
+| `test_interaction_inventory` | M01–M39, O01–O13, D01–D08 inventory validation |
 
 Disabled-control scenarios (D01–D08) verify that disabled controls reject both
 activation paths and produce no backend or filesystem side effect.
@@ -280,7 +280,7 @@ release acceptance per SPEC §11.1.7:
 
 | Requirement | Spec § | Limitation | Verification approach |
 |-------------|--------|------------|----------------------|
-| Controller acceptance (kernel-backed) | §5.7 | No `kernel-uinput` runner capability | `test_kernel_controller.c` creates a uinput-backed evdev gamepad but skips (exit 77) when `/dev/uinput` is unavailable. 52/59 interaction inventory entries verified through production SDL event dispatch with SDL virtual gamepads; 6 NOT_APPLICABLE (controller-only paths); 1 DEFERRED per §13. |
+| Controller acceptance (kernel-backed) | §5.7 | `kernel-uinput` declared but skips locally without `/dev/uinput` | `test_kernel_controller.c` creates a uinput-backed evdev gamepad; passes on runner (receipt 26df6c0) but skips (exit 77) when `/dev/uinput` is unavailable locally. 52/60 interaction inventory entries verified through production SDL event dispatch with SDL virtual gamepads; 7 NOT_APPLICABLE (controller-only paths); 1 DEFERRED per §13. |
 | aarch64 architecture | §3 | No aarch64 runner declared | Code is architecture-agnostic (no arch-specific code in `src/` or `CMakeLists.txt`); Flatpak manifest targets `org.freedesktop.Platform` 24.08 supporting both x86_64 and aarch64; x86_64 build and 98 CTest targets registered (96 pass, 2 skip with exit 77 in headless: `test_backend_smoke`, `test_kernel_controller`). |
 | Wayland/Gamescope compositor | §3 | No Wayland runner declared | All rendering through SDL2 display abstraction — zero compositor-specific API calls in `src/`. Tested with X11 (Xvfb) and dummy drivers. SDL2 supports X11, Wayland, and Gamescope. |
 | GPU backend | §11.1 | No GPU runner declared | `test_backend_smoke` skips (exit 77) in headless environments; software renderer smoke (`test_backend_smoke_sw`) passes with broad framebuffer invariants. |

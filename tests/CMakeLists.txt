@@ -20,7 +20,9 @@ add_test(NAME smoke_test_nanosvg COMMAND smoke_test_nanosvg)
 # Manager binary against a private InputPlumber-compatible DBus server, and
 # verifies semantic outcomes from real kernel gamepad events through the
 # production event loop.  Skips (exit 77) when /dev/uinput is unavailable
-# (no kernel-uinput runner capability declared in environment.toml).
+# (skips locally without /dev/uinput; kernel-uinput capability IS
+# declared in .factory/environment.toml and proven by runner receipt
+# at commit 26df6c0).
 add_executable(test_kernel_controller tests/test_kernel_controller.c)
 add_test(NAME test_kernel_controller
     COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/run-kernel-controller-test.sh
@@ -675,7 +677,7 @@ if(CMOCKA_FOUND)
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
 
     # --- Task 7: Interaction acceptance inventory (SPEC §5.7) ----------
-    # Machine-readable inventory of every interactive control (M01–M38),
+    # Machine-readable inventory of every interactive control (M01–M39),
     # overlay action (O01–O13), and disabled/degraded scenario (D01–D08).
     # Verifies enumeration completeness, field population, uniqueness,
     # and lookup.  Links cbx_test_support for interaction_inventory.

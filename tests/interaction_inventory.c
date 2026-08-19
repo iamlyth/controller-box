@@ -2,7 +2,7 @@
  * interaction_inventory.c — Machine-readable interaction acceptance inventory
  * (Task 1, SPEC §5.7).
  *
- * Static array enumerating every interactive manager control (M01–M38),
+ * Static array enumerating every interactive manager control (M01–M39),
  * overlay action (O01–O13), and disabled/degraded scenario (D01–D08).
  *
  * Each entry records:
@@ -350,6 +350,15 @@ static const cbx_interaction_entry inventory[] = {
       "Editor closes; changes discarded; no file written",
       "cbx_manager_handle_event → cbx_profile_editor_cancel; pointer: click discard_btn → cbx_profiles_tab_discard_editor",
       CBX_VERIFY_VERIFIED, "Task 5, Task 12" },
+
+    /* ---- Manager — First-run service install (M39) ---- */
+    { "M39", CBX_CAT_MANAGER_SETTINGS, "First-run service install",
+      CBX_WIDGET_BUTTON,
+      "A confirms / B cancels from first-run dialog",
+      AVAIL, "Mouse click on Yes/No button",
+      "A or Yes: systemd service unit written and enabled; B or No: dialog dismissed, no install; dialog closes in both cases",
+      "cbx_manager_check_first_run → cbx_manager_handle_event → dialog → cbx_service_install; pointer: click first_run_yes/first_run_no",
+      CBX_VERIFY_VERIFIED, "test_manager_interaction_ctrl.c (4 tests)" },
 
     /* ---- Overlay actions (O01–O13) ---- */
     { "O01", CBX_CAT_OVERLAY, "Overlay",

@@ -864,11 +864,14 @@ VRF-05 and DOD-03 can then move to `verified`.
 
 ### Current limitation
 
-The current Ralph loop runner does not have `/dev/uinput` provisioned
-and lacks the SSH launcher (`~/.ssh/factory-ssh`) needed to reach the
-declared `dev-runner-vm` runner.  Task 9 is blocked on runner
-provisioning.  The test code is ready and will exercise the
-kernel-backed path when `/dev/uinput` becomes available.
+The `kernel-uinput` runner capability IS declared in
+`.factory/environment.toml` and proven by runner receipt at commit
+26df6c0 (`test_kernel_controller` passes on the runner with
+`/dev/uinput` provisioned).  Locally, `/dev/uinput` may not be
+available, causing the test to skip (exit 77).  The runner is
+reachable (12 receipts on file) and the SSH launcher works.
+The test code is ready and exercises the kernel-backed path when
+`/dev/uinput` is available.
 
 ## Installed production smoke test
 
@@ -1124,7 +1127,7 @@ test or documented process:
 
 | Requirement | Test/Process |
 |-------------|-------------|
-| Machine-readable inventory (M01–M38, O01–O13, D01–D08) | `interaction_inventory.c` (59 entries: 52 verified, 6 NOT_APPLICABLE, 1 DEFERRED); `test_interaction_inventory` validates structure + verify_status |
+| Machine-readable inventory (M01–M39, O01–O13, D01–D08) | `interaction_inventory.c` (60 entries: 52 verified, 7 NOT_APPLICABLE, 1 DEFERRED); `test_interaction_inventory` validates structure + verify_status |
 | Automated traversal: every control reachable from tabbar via focus chain | `test_traversal_controllers_tab` + `test_traversal_settings_tab` in `test_manager_interaction_ctrl` |
 | Inventory verify_status: no UNVERIFIED entries | `test_inventory_specific_verify_statuses` + `test_inventory_verify_status_consistency` |
 | Hover/press visual indication in framebuffer | `test_focus_visual_indication` + `test_press_visual_indication` in `test_manager_visual` (render→readback→region_differs) |
