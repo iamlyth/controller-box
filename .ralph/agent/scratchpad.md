@@ -1,32 +1,14 @@
-# Implementation Loop — All Infrastructure Tasks Marked Blocked
+# Campaign Audit Round 1 — Handoff
 
-## Outcome
-- Tasks 10, 11, 12, 13 updated from `pending` to `blocked` with evidence
-- Task 9 was already `blocked` with evidence (from prior iteration)
-- Task 14 (final audit) remains `pending` — depends on all blocked tasks
-- `./scripts/final-gate.sh --implementation` **PASSED** after plan update
-- 98/98 tests pass (2 skipped: test_kernel_controller, test_backend_smoke — hardware-blocked)
+## Status
+Audit complete. Writing findings to `.factory/artifacts/campaign-audit.md`.
 
-## Verification
-- `final-gate: implementation, specification, tests, and documentation accepted`
-- `installed-functional-evidence: PASS at 093e1e4 with zero skips`
-- Packaging integration: passed
-- Installed smoke test: passed (Xvfb + xdotool)
-- Clean build: passed
+## Key discoveries
+- Runner evidence at audit base commit 26df6c0 shows `test_kernel_controller` PASSES (10.88s) and Flatpak build PASSES. Capabilities `kernel-uinput` and `installed-package` are declared in environment.toml and evidenced.
+- Implementation plan conformance matrix is STALE: VRF-05, PKG-01, DBUS-02, DOD-03, DOD-05 marked partial/blocked despite runner evidence showing pass.
+- Documentation inaccuracies: interaction inventory counts wrong (52/6/1 vs actual 51/7/1), M01-M39 vs M01-M38, stale kernel-uinput claims.
+- Genuinely blocked: GPU backend smoke (VRF-06), aarch64 build (SYS-01), Pi 4 latency (SYS-02/PERF-01), human release acceptance (VRF-07).
+- Test-quality, security, and production-path reviews found no critical issues. All production paths complete. No test bypasses. No env-var injection.
 
-## Blocked Tasks Summary
-| Task | Block Reason | Partial Deliverable |
-|------|-------------|-------------------|
-| 9 | No /dev/uinput, no SSH to runner | Test code ready (Task 8) |
-| 10 | No GPU compositor declared | test_backend_smoke_sw.c (software) |
-| 11 | No aarch64 cross-compiler in nix-shell | cmake/aarch64-toolchain.cmake, cross-shell.nix |
-| 12 | No Pi 4 hardware, no human reviewer | None |
-| 13 | No flatpak-builder, no InputPlumber DBus | packaging/org.shadowblip.ControllerBox.yaml |
-
-## Commit
-- `b36a564`: Mark Tasks 10, 11, 12, 13 as blocked with infrastructure evidence
-
-## Next Task
-- Plan remains `blocked` — all software-addressable work is complete
-- Infrastructure provisioning required for Tasks 9–13, then Task 14 (final audit) can proceed
-- No further software work available in current iteration
+## Next action
+Run final gate, then emit the completion token.
