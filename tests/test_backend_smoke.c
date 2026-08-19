@@ -2,6 +2,15 @@
  * test_backend_smoke.c — Accelerated backend smoke test (Task 10,
  * SPEC §11.1.6).
  *
+ * Deferral notice: This test requires a GPU-accelerated compositor
+ * (capability `gpu-compositor`, undeclared in .factory/environment.toml).
+ * It skips with exit 77 in headless environments. Software-renderer
+ * partial evidence is provided by test_backend_smoke_sw.c. The skip
+ * and deferral are documented in docs/OPERATIONS.md § Hardware-deferred
+ * capabilities and in README.md § Known environment limitations.
+ * Per SPEC §11.2.6, this is a documented deferral tied to an undeclared
+ * runner capability, not an open defect.
+ *
  * Verifies that rendering through an accelerated SDL2 backend (OpenGL
  * or OpenGL ES) produces correct pixel output — not just successful
  * draw calls, but actual framebuffer content verified via fb_read_pixels.
