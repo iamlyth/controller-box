@@ -85,6 +85,10 @@ for path in ('AGENTS.md', '.factory/bugs/open.md', '.factory/bugs/closed.md', '.
              'scripts/check-scratchpad.sh', 'tests/test-scratchpad-guard.sh',
              'scripts/ralph-completion-gate.sh', 'scripts/ralph-supervision.sh',
              'scripts/factory-lock.sh', 'scripts/factory-lock-exec.py',
+             'scripts/factory_lock.py', 'scripts/factory_state_io.py',
+             'scripts/factory-state-file.py', 'scripts/ralph_lock.py',
+             'scripts/ralph-lock-recover.py', 'scripts/ralph-event-boundary.py',
+             'scripts/campaign-verifier-binding.py', 'scripts/ralph-supervision-migrate.py',
              'scripts/ralph-final-state.py', 'scripts/finalize-maintenance-planning.sh',
              'tests/test-git-checkpoint.sh',
              'tests/test-ralph-completion-recovery.sh',
@@ -97,6 +101,7 @@ for path in ('AGENTS.md', '.factory/bugs/open.md', '.factory/bugs/closed.md', '.
              'scripts/ralph-audit.sh', 'scripts/ralph-campaign.sh',
              'tests/test-factory-environment.sh', 'tests/test-campaign-audit.sh',
              'tests/test-ralph-campaign.sh', 'tests/test-ralph-campaign-state.py',
+             'tests/test-factory-lock.py', 'tests/test-orchestration-security.py',
              'scripts/pi2-secure-exec.py',
              'scripts/pi-cli-shims/ralph', 'scripts/pi-ralph-emit-extension.mjs',
              'tests/test-pi2-ollama-wrapper.sh'):
@@ -119,7 +124,7 @@ for name, mode in {
 }.items():
     text = (root / 'scripts' / name).read_text(encoding='utf-8')
     lock = text.index('factory_lock_acquire')
-    marker = text.index(f"printf '%s\\n' {mode} > .factory-state/loop-mode")
+    marker = text.index(f'write loop-mode {mode}')
     assert marker > lock, f'{name}: loop-mode marker is not under factory lock'
 tokens = {
     '.factory/ralph/implementation.yml': 'LOOP_COMPLETE',
@@ -141,7 +146,7 @@ assert planning.index('check-plan-freshness.sh", "--planning') < planning.index(
     '.factory/ralph/plan.yml: immutable planning metadata must be checked before checkpoint'
 maintenance = (root / 'scripts/ralph-maintenance-plan.sh').read_text(encoding='utf-8')
 lock = maintenance.index('factory_lock_acquire')
-selection = maintenance.index('> .factory-state/maintenance-bug-id')
+selection = maintenance.index('write maintenance-bug-id "$BUG_ID"')
 clean = maintenance.index('git status --porcelain')
 assert lock < clean < selection, 'maintenance selection/clean check is not serialized'
 recover = (root / 'scripts/ralph-recover.sh').read_text(encoding='utf-8')
@@ -176,5 +181,7 @@ PY
 "$PROJECT_ROOT/tests/test-campaign-audit.sh"
 "$PROJECT_ROOT/tests/test-ralph-campaign.sh"
 "$PROJECT_ROOT/tests/test-ralph-campaign-state.py"
+"$PROJECT_ROOT/tests/test-factory-lock.py"
+"$PROJECT_ROOT/tests/test-orchestration-security.py"
 
 echo "test: boilerplate integration checks passed"

@@ -7,7 +7,10 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/scripts" "$tmp/.ralph/agent" "$tmp/.factory-state"
 cp "$PROJECT_ROOT/scripts/ralph-recover.sh" "$PROJECT_ROOT/scripts/factory-lock.sh" \
-    "$PROJECT_ROOT/scripts/factory-lock-exec.py" "$tmp/scripts/"
+    "$PROJECT_ROOT/scripts/factory-lock-exec.py" "$PROJECT_ROOT/scripts/factory_lock.py" \
+    "$PROJECT_ROOT/scripts/factory_state_io.py" "$PROJECT_ROOT/scripts/factory-state-file.py" \
+    "$PROJECT_ROOT/scripts/ralph_lock.py" "$PROJECT_ROOT/scripts/ralph-lock-recover.py" \
+    "$tmp/scripts/"
 chmod +x "$tmp/scripts/"*
 chmod 700 "$tmp/.factory-state"
 printf '# Recovery handoff\n\n- Safe.\n' > "$tmp/.ralph/agent/scratchpad.md"

@@ -37,6 +37,8 @@ ralph_supervision_initialize() {
     FACTORY_RALPH_CYCLE_ID=$(python3 - "$RALPH_SUPERVISION_STATE_FILE" "$mode" "$resume" <<'PY'
 import json, os, secrets, stat, subprocess, sys
 from pathlib import Path
+sys.path.insert(0, str((Path.cwd() / 'scripts').resolve()))
+from factory_state_io import StateIOError, atomic_write_json, read_json
 
 name, mode, resume_text = sys.argv[1:]
 resume = resume_text == 'true'
@@ -56,19 +58,13 @@ keys_v2 = {
     'schema', 'mode', 'cycle_id', 'stale_recoveries',
     'completion_recoveries', 'no_progress_recoveries',
 }
-keys_v1 = keys_v2 - {'cycle_id'}
-
-def validate(data, allow_v1=False):
+def validate(data):
     if not isinstance(data, dict) or data.get('mode') != mode:
         raise SystemExit('ralph-supervision: durable recovery state has an invalid schema')
     if set(data) == keys_v2 and data.get('schema') == 'ralph-supervision/v2':
         cycle = data.get('cycle_id')
         if not isinstance(cycle, str) or len(cycle) != 64 or any(c not in '0123456789abcdef' for c in cycle):
             raise SystemExit('ralph-supervision: durable cycle ID is invalid')
-    elif allow_v1 and set(data) == keys_v1 and data.get('schema') == 'ralph-supervision/v1':
-        data = dict(data)
-        data['schema'] = 'ralph-supervision/v2'
-        data['cycle_id'] = secrets.token_hex(32)
     else:
         raise SystemExit('ralph-supervision: durable recovery state has an invalid schema')
     for key in ('stale_recoveries', 'completion_recoveries', 'no_progress_recoveries'):
@@ -77,43 +73,19 @@ def validate(data, allow_v1=False):
     return data
 
 def read_json_file(candidate, label, maximum=16384):
+    candidate = Path(candidate)
+    if candidate.parent.absolute() != expected_parent or candidate.name != candidate.name.replace('/', ''):
+        raise SystemExit(f'ralph-supervision: unsafe {label} path')
     try:
-        fd = os.open(candidate, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
-    except OSError as exc:
-        raise SystemExit(f'ralph-supervision: cannot safely open {label}: {exc}')
-    try:
-        info = os.fstat(fd)
-        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
-                or info.st_uid != os.getuid() or info.st_mode & 0o077
-                or info.st_size > maximum):
-            raise SystemExit(f'ralph-supervision: unsafe {label}')
-        raw = os.read(fd, maximum + 1)
-    finally:
-        os.close(fd)
-    try:
-        return json.loads(raw.decode('utf-8'))
-    except (UnicodeError, json.JSONDecodeError) as exc:
-        raise SystemExit(f'ralph-supervision: invalid {label}: {exc}')
+        return read_json(Path.cwd(), candidate.name, maximum=maximum)
+    except (OSError, StateIOError) as exc:
+        raise SystemExit(f'ralph-supervision: cannot safely read {label}: {exc}')
 
 def write(data):
-    if path.exists() or path.is_symlink():
-        info = path.lstat()
-        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
-                or info.st_uid != os.getuid() or info.st_mode & 0o077):
-            raise SystemExit('ralph-supervision: unsafe durable recovery state')
-    temporary = expected_parent / f'.{path.name}.{secrets.token_hex(16)}'
-    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o600)
     try:
-        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
-            json.dump(data, stream, sort_keys=True)
-            stream.write('\n'); stream.flush(); os.fsync(stream.fileno())
-        os.replace(temporary, path)
-        directory_fd = os.open(expected_parent, os.O_RDONLY | os.O_DIRECTORY | getattr(os, 'O_NOFOLLOW', 0))
-        try: os.fsync(directory_fd)
-        finally: os.close(directory_fd)
-    finally:
-        try: temporary.unlink()
-        except FileNotFoundError: pass
+        atomic_write_json(Path.cwd(), path.name, data)
+    except (OSError, StateIOError) as exc:
+        raise SystemExit(f'ralph-supervision: cannot safely write durable recovery state: {exc}')
 
 if path.exists() or path.is_symlink():
     info = path.lstat()
@@ -122,13 +94,15 @@ if path.exists() or path.is_symlink():
         raise SystemExit('ralph-supervision: unsafe durable recovery state')
     existing_data = read_json_file(path, 'durable recovery state')
     if resume:
-        migrated = existing_data.get('schema') == 'ralph-supervision/v1' if isinstance(existing_data, dict) else False
-        data = validate(existing_data, allow_v1=True)
-        if migrated:
-            write(data)
+        if isinstance(existing_data, dict) and existing_data.get('schema') == 'ralph-supervision/v1':
+            raise SystemExit(
+                'ralph-supervision: legacy durable state requires explicit '
+                'scripts/ralph-supervision-migrate.py migration'
+            )
+        data = validate(existing_data)
         print(data['cycle_id'])
         raise SystemExit(0)
-    data = validate(existing_data, allow_v1=False)
+    data = validate(existing_data)
     final_marker = expected_parent / f'final-handoff-{mode}.json'
     final = read_json_file(final_marker, 'prior final-state marker')
     final_keys = {'schema', 'mode', 'cycle_id', 'checkpoint_head', 'attested_head'}
@@ -157,7 +131,10 @@ if path.exists() or path.is_symlink():
         ).returncode):
         raise SystemExit('ralph-supervision: prior final-state history was rewritten')
 elif resume:
-    print('ralph-supervision: no prior durable counters; initializing migration state', file=sys.stderr)
+    raise SystemExit(
+        'ralph-supervision: durable recovery state is missing; refuse budget reset. '
+        'For the stopped legacy campaign run scripts/ralph-supervision-migrate.py explicitly.'
+    )
 data = {
     'schema': 'ralph-supervision/v2', 'mode': mode, 'cycle_id': secrets.token_hex(32),
     'stale_recoveries': 0, 'completion_recoveries': 0, 'no_progress_recoveries': 0,
@@ -171,6 +148,39 @@ PY
     }
     export FACTORY_RALPH_CYCLE_ID
     RALPH_SUPERVISION_INITIALIZED=true
+}
+
+ralph_supervision_should_continue() {
+    local mode=${1:?ralph_supervision_should_continue requires a lifecycle mode}
+    ralph_supervision_ensure_initialized "$mode" || return $?
+    python3 - "$mode" "${FACTORY_RALPH_CYCLE_ID:?missing cycle ID}" <<'PY'
+import sys
+from pathlib import Path
+sys.path.insert(0, str((Path.cwd() / 'scripts').resolve()))
+from factory_state_io import read_json
+mode, cycle = sys.argv[1:]
+handshake = read_json(Path.cwd(), f'ralph-launch-handshake-{mode}.json', maximum=16384, missing_ok=True)
+handshake_keys = {
+    'schema', 'mode', 'cycle_id', 'attempt_id', 'campaign_round',
+    'campaign_phase', 'campaign_state_sha256', 'loop_id', 'events',
+    'events_dev', 'events_ino', 'events_size',
+}
+if (isinstance(handshake, dict) and set(handshake) == handshake_keys
+        and handshake.get('schema') == 'ralph-launch-handshake/v1'
+        and handshake.get('mode') == mode and handshake.get('cycle_id') == cycle):
+    raise SystemExit(0)
+migration = read_json(
+    Path.cwd(), f'ralph-supervision-migration-{mode}.json', maximum=16384, missing_ok=True,
+)
+migration_keys = {
+    'schema', 'mode', 'cycle_id', 'campaign_state_sha256', 'round',
+    'legacy_verification_command_sha256', 'verification_binding_sha256',
+}
+if (not isinstance(migration, dict) or set(migration) != migration_keys
+        or migration.get('schema') != 'ralph-supervision-migration/v1'
+        or migration.get('mode') != mode or migration.get('cycle_id') != cycle):
+    raise SystemExit(1)
+PY
 }
 
 ralph_supervision_ensure_initialized() {
@@ -202,26 +212,16 @@ ralph_supervision_claim_recovery() {
         "$kind" "$maximum" "$no_progress_maximum" <<'PY'
 import json, os, re, secrets, stat, sys
 from pathlib import Path
+sys.path.insert(0, str((Path.cwd() / 'scripts').resolve()))
+from factory_state_io import StateIOError, atomic_write_json, read_json
 path_text, mode, expected_cycle, kind, raw_maximum, raw_no_progress = sys.argv[1:]
 maximum, no_progress_maximum = int(raw_maximum), int(raw_no_progress)
 path = Path(path_text)
-try:
-    fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
-except OSError:
+if path.parent.absolute() != Path('.factory-state').absolute() or path.name != f'ralph-supervision-{mode}.json':
     raise SystemExit(2)
 try:
-    info = os.fstat(fd)
-    named = path.lstat()
-    if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid()
-            or info.st_mode & 0o077 or (info.st_dev, info.st_ino) != (named.st_dev, named.st_ino)
-            or info.st_size > 16384):
-        raise SystemExit(2)
-    raw = os.read(fd, 16385)
-finally:
-    os.close(fd)
-try:
-    data = json.loads(raw.decode('utf-8'))
-except (UnicodeError, json.JSONDecodeError):
+    data = read_json(Path.cwd(), path.name, maximum=16384)
+except (OSError, StateIOError):
     raise SystemExit(2)
 expected = {
     'schema', 'mode', 'cycle_id', 'stale_recoveries',
@@ -241,20 +241,10 @@ if data[key] >= maximum or data['no_progress_recoveries'] >= no_progress_maximum
     raise SystemExit(1)
 data[key] += 1
 data['no_progress_recoveries'] += 1
-parent = path.parent if str(path.parent) else Path('.')
-temporary = parent / f'.{path.name}.{secrets.token_hex(16)}'
-fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o600)
 try:
-    with os.fdopen(fd, 'w', encoding='utf-8') as stream:
-        json.dump(data, stream, sort_keys=True)
-        stream.write('\n'); stream.flush(); os.fsync(stream.fileno())
-    os.replace(temporary, path)
-    directory_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | getattr(os, 'O_NOFOLLOW', 0))
-    try: os.fsync(directory_fd)
-    finally: os.close(directory_fd)
-finally:
-    try: temporary.unlink()
-    except FileNotFoundError: pass
+    atomic_write_json(Path.cwd(), path.name, data)
+except (OSError, StateIOError):
+    raise SystemExit(2)
 print(f'ralph-supervision: {kind} recovery {data[key]}/{maximum}; '
       f'no-progress {data["no_progress_recoveries"]}/{no_progress_maximum}', file=sys.stderr)
 PY
@@ -335,6 +325,23 @@ PY
 ) || return 1
     read -r FACTORY_RALPH_HISTORY_ID FACTORY_RALPH_HISTORY_OFFSET <<<"$history_snapshot"
     export FACTORY_RALPH_HISTORY_ID FACTORY_RALPH_HISTORY_OFFSET
+    "$SCRIPT_DIR/ralph-event-boundary.py" begin "$mode"
+}
+
+ralph_supervision_finish_attempt() {
+    local mode=${1:?ralph_supervision_finish_attempt requires a lifecycle mode}
+    local boundary_rc
+    set +e
+    "$SCRIPT_DIR/ralph-event-boundary.py" finish "$mode"
+    boundary_rc=$?
+    set -e
+    if (( boundary_rc == 0 )); then
+        return 0
+    elif (( boundary_rc == 3 )); then
+        return 3
+    fi
+    echo "ralph-supervision: received event stream failed closed" >&2
+    return 2
 }
 
 ralph_supervision_consume_rejection() {

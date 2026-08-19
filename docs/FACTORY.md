@@ -63,7 +63,9 @@ Volatile, ignored state:
 - event streams and pointer files under `.ralph/`
 - loop locks, diagnostics, API state, task/memory stores, and TUI exports
 - Pi transcripts and scheduled-agent state
-- `.factory-lock`, `.bug-ledger.lock`, and `.factory-state/` lifecycle markers
+- the retained `.git/controller-box-factory/lifecycle.lock`, legacy
+  `.factory-lock` during one-time migration, `.bug-ledger.lock`, and
+  `.factory-state/` lifecycle markers
 - `.ollama-usage-env`
 
 Git checkpoints make the plan, scratchpad, and implementation recoverable. Event/task files improve same-disk recovery but are not treated as portable project history.
@@ -246,9 +248,12 @@ runs Ralph or changes evidence. Review the receipt, then use the normal campaign
 already-verified, dirty, backward, equal, non-ancestor, merge, or wrong-old
 requests fail without changing state.
 
-The campaign and its children share the inherited factory lock, so planning,
-implementation, verification, audit checkpointing, and recovery retain one
-repository writer. The locked `.factory-lock` pathname is never unlinked.
+The trusted campaign, launchers, and state transitions share the inherited
+factory lock, so planning, implementation, verification, audit checkpointing,
+and recovery retain one repository writer. Ralph/Pi and other untrusted leaves
+run after all lock-inode descriptors and lock metadata are dropped. The retained
+`.git/controller-box-factory/lifecycle.lock` pathname is never unlinked; a safe
+legacy `.factory-lock` is dual-locked and removed only during migration.
 Quota waits and bounded rejection/stale recovery remain inside each leaf.
 The campaign does not retry arbitrary nonzero leaf or gate results: it returns
 nonzero with durable state still active at the same resumable phase. Invalid or

@@ -4,13 +4,12 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 from pathlib import Path
 import re
-import secrets
-import stat
 import subprocess
+
+from factory_state_io import StateIOError, atomic_write_json, read_json
 
 ROOT = Path(__file__).resolve().parent.parent
 MODES = {"implementation", "planning", "campaign-audit", "maintenance-planning", "maintenance"}
@@ -29,24 +28,8 @@ def git(*args: str, check: bool = True) -> str:
     return result.stdout.strip()
 
 
-def state_directory() -> Path:
-    path = ROOT / ".factory-state"
-    try:
-        info = path.lstat()
-    except FileNotFoundError:
-        fail(".factory-state is missing")
-    if (
-        stat.S_ISLNK(info.st_mode)
-        or not stat.S_ISDIR(info.st_mode)
-        or info.st_uid != os.getuid()
-        or info.st_mode & 0o077
-    ):
-        fail("unsafe .factory-state directory")
-    return path
-
-
-def marker_path(mode: str) -> Path:
-    return state_directory() / f"final-handoff-{mode}.json"
+def marker_name(mode: str) -> str:
+    return f"final-handoff-{mode}.json"
 
 
 def cycle_id() -> str:
@@ -78,71 +61,21 @@ def validate(data: object, mode: str) -> dict:
 
 
 def load(mode: str, *, missing_ok: bool = False) -> dict | None:
-    path = marker_path(mode)
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
-        descriptor = os.open(path, flags)
-    except FileNotFoundError:
-        if missing_ok:
-            return None
-        fail("final-state marker is missing")
-    except OSError as exc:
-        fail(f"cannot safely open final-state marker: {exc}")
-    try:
-        info = os.fstat(descriptor)
-        if (
-            not stat.S_ISREG(info.st_mode)
-            or info.st_uid != os.getuid()
-            or info.st_nlink != 1
-            or info.st_mode & 0o077
-            or info.st_size > 16384
-        ):
-            fail("unsafe final-state marker")
-        raw = os.read(descriptor, 16385)
-    finally:
-        os.close(descriptor)
-    try:
-        return validate(json.loads(raw.decode("utf-8")), mode)
-    except (UnicodeError, json.JSONDecodeError) as exc:
-        fail(f"invalid final-state marker: {exc}")
+        data = read_json(ROOT, marker_name(mode), maximum=16384, missing_ok=missing_ok)
+    except (OSError, StateIOError) as exc:
+        fail(f"cannot safely read final-state marker: {exc}")
+    if data is None:
+        return None
+    return validate(data, mode)
 
 
 def write(mode: str, data: dict) -> None:
     validate(data, mode)
-    path = marker_path(mode)
-    if path.exists() or path.is_symlink():
-        info = path.lstat()
-        if (
-            stat.S_ISLNK(info.st_mode)
-            or not stat.S_ISREG(info.st_mode)
-            or info.st_uid != os.getuid()
-            or info.st_nlink != 1
-            or info.st_mode & 0o077
-        ):
-            fail("unsafe final-state marker")
-    temporary = path.parent / f".{path.name}.{secrets.token_hex(16)}"
-    descriptor = os.open(
-        temporary,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
-        0o600,
-    )
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            json.dump(data, stream, sort_keys=True)
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-        directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0))
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
-    finally:
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
+        atomic_write_json(ROOT, marker_name(mode), data)
+    except (OSError, StateIOError) as exc:
+        fail(f"cannot safely write final-state marker: {exc}")
 
 
 def require_head(head: str) -> None:

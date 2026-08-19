@@ -24,7 +24,7 @@ done
 cd -- "$PROJECT_ROOT"
 # shellcheck source=scripts/factory-lock.sh
 source "$SCRIPT_DIR/factory-lock.sh"
-factory_lock_bootstrap "$PROJECT_ROOT/.factory-lock" "$PROJECT_ROOT/scripts/ralph-run.sh" "${ORIGINAL_ARGS[@]}"
+factory_lock_bootstrap "$PROJECT_ROOT" "$PROJECT_ROOT/scripts/ralph-run.sh" "${ORIGINAL_ARGS[@]}"
 command -v "$RALPH_BIN" >/dev/null || { echo "ralph-run: Ralph executable not found: $RALPH_BIN" >&2; exit 2; }
 command -v pi2 >/dev/null || { echo "ralph-run: pi2 is not available in this shell" >&2; exit 2; }
 ./scripts/branch-guard.sh
@@ -38,10 +38,12 @@ fi
 
 # shellcheck source=scripts/ralph-supervision.sh
 source "$SCRIPT_DIR/ralph-supervision.sh"
-factory_lock_acquire "$PROJECT_ROOT/.factory-lock"
+factory_lock_acquire "$PROJECT_ROOT"
 ralph_supervision_prepare_state_directory
-printf '%s\n' implementation > .factory-state/loop-mode
+"$SCRIPT_DIR/factory-state-file.py" write loop-mode implementation
 ralph_supervision_initialize implementation "$RESUME"
+CONTINUE=false
+if $RESUME && ralph_supervision_should_continue implementation; then CONTINUE=true; fi
 
 finish_implementation_cycle() {
     local payload head
@@ -51,7 +53,7 @@ finish_implementation_cycle() {
     fi
     payload=$(printf '{"loop":{"workspace":"%s","id":"implementation-final"},"iteration":{"current":"final"}}' "$PROJECT_ROOT")
     if printf '%s' "$payload" | ./scripts/git-commit-hook.sh --final-handoff; then :; else return $?; fi
-    if FACTORY_FINAL_GATE_ATTEST=1 ./scripts/final-gate.sh --implementation; then :; else return $?; fi
+    if factory_lock_run_untrusted env FACTORY_FINAL_GATE_ATTEST=1 ./scripts/final-gate.sh --implementation; then :; else return $?; fi
     head=$(git rev-parse HEAD)
     ./scripts/ralph-final-state.py attest implementation "$head" >/dev/null
     echo "ralph-run: implementation loop completed"
@@ -59,16 +61,24 @@ finish_implementation_cycle() {
 
 while true; do
     ./scripts/ollama-usage-guard.sh --wait
+    CONTINUE=false
+    if $RESUME && ralph_supervision_should_continue implementation; then CONTINUE=true; fi
     ralph_supervision_begin implementation
 
     command=("$RALPH_BIN" -c .factory/ralph/implementation.yml run --exclusive)
-    $RESUME && command+=(--continue)
+    $CONTINUE && command+=(--continue)
     $TUI || command+=(--no-tui)
 
     set +e
-    "${command[@]}"
+    factory_lock_run_untrusted "${command[@]}"
     rc=$?
+    ralph_supervision_finish_attempt implementation
+    boundary_rc=$?
     set -e
+    if (( boundary_rc == 2 || (rc == 0 && boundary_rc != 0) )); then
+        echo "ralph-run: launch/event boundary validation failed" >&2
+        exit 2
+    fi
 
     if (( rc == 0 )); then
         finish_implementation_cycle
@@ -110,7 +120,7 @@ while true; do
 
     stale_diagnostics=$(ralph_supervision_diagnostics_file implementation)
     set +e
-    ./scripts/final-gate.sh --implementation >"$stale_diagnostics" 2>&1
+    factory_lock_run_untrusted ./scripts/final-gate.sh --implementation >"$stale_diagnostics" 2>&1
     gate_rc=$?
     set -e
     if (( $(wc -c < "$stale_diagnostics") > 65536 )); then

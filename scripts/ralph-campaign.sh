@@ -50,10 +50,10 @@ $RESUME && $RESTART && { echo "ralph-campaign: --resume and --restart are mutual
 cd -- "$PROJECT_ROOT"
 # shellcheck source=scripts/factory-lock.sh
 source "$SCRIPT_DIR/factory-lock.sh"
-factory_lock_bootstrap "$PROJECT_ROOT/.factory-lock" "$PROJECT_ROOT/scripts/ralph-campaign.sh" "${ORIGINAL_ARGS[@]}"
+factory_lock_bootstrap "$PROJECT_ROOT" "$PROJECT_ROOT/scripts/ralph-campaign.sh" "${ORIGINAL_ARGS[@]}"
 ./scripts/branch-guard.sh
 ./scripts/check-factory-environment.py
-factory_lock_acquire "$PROJECT_ROOT/.factory-lock"
+factory_lock_acquire "$PROJECT_ROOT"
 
 # Campaign orchestration never guesses whether Ralph's own exclusive lock is
 # stale. Recovery validates and repairs that lock explicitly; ambiguous, live,
@@ -77,36 +77,23 @@ else:
 PY
 STATE_FILE=$PROJECT_ROOT/.factory-state/ralph-campaign.json
 export FACTORY_CAMPAIGN_STATE="$STATE_FILE"
+verification_binding=$("$SCRIPT_DIR/campaign-verifier-binding.py") || exit $?
 verify_argv_file=$(mktemp "$PROJECT_ROOT/.factory-state/campaign-verify.XXXXXX")
 trap 'rm -f -- "$verify_argv_file"' EXIT
-if ! python3 - > "$verify_argv_file" <<'PY'
-import os, tomllib
-with open('.factory/config.toml', 'rb') as stream:
-    command = tomllib.load(stream).get('verification', {}).get('campaign_command')
-if not isinstance(command, list) or not command or not all(isinstance(arg, str) and arg and '\0' not in arg for arg in command):
-    raise SystemExit('ralph-campaign: verification.campaign_command must be a non-empty argv array')
-if command[0] in {'bash', 'sh', 'zsh', 'env'} or command[:2] in (["python", "-c"], ["python3", "-c"]):
-    raise SystemExit('ralph-campaign: campaign verifier must not be an inline interpreter command')
-for arg in command:
-    os.write(1, arg.encode() + b'\0')
+verification_digest=$(python3 - "$verification_binding" "$verify_argv_file" <<'PY'
+import json, os, sys
+binding = json.loads(sys.argv[1])
+if set(binding) != {'binding', 'sha256'}:
+    raise SystemExit('ralph-campaign: invalid verifier binding output')
+for argument in binding['binding']['argv']:
+    with open(sys.argv[2], 'ab') as stream:
+        stream.write(argument.encode() + b'\0')
+print(binding['sha256'])
 PY
-then
-    rm -f -- "$verify_argv_file"
-    exit 1
-fi
+) || exit $?
 mapfile -d '' -t CAMPAIGN_VERIFY_COMMAND < "$verify_argv_file"
 rm -f -- "$verify_argv_file"
 (( ${#CAMPAIGN_VERIFY_COMMAND[@]} > 0 )) || { echo "ralph-campaign: empty verification command" >&2; exit 1; }
-if [[ ${CAMPAIGN_VERIFY_COMMAND[0]} == */* ]]; then
-    [[ -x ${CAMPAIGN_VERIFY_COMMAND[0]} ]] || { echo "ralph-campaign: verifier is not executable: ${CAMPAIGN_VERIFY_COMMAND[0]}" >&2; exit 1; }
-else
-    command -v "${CAMPAIGN_VERIFY_COMMAND[0]}" >/dev/null || { echo "ralph-campaign: verifier is unavailable: ${CAMPAIGN_VERIFY_COMMAND[0]}" >&2; exit 1; }
-fi
-verification_digest=$(python3 - "${CAMPAIGN_VERIFY_COMMAND[@]}" <<'PY'
-import hashlib, json, sys
-print(hashlib.sha256(json.dumps(sys.argv[1:], separators=(',', ':')).encode()).hexdigest())
-PY
-)
 
 if $RESUME; then
     [[ -f "$STATE_FILE" && ! -L "$STATE_FILE" ]] || { echo "ralph-campaign: no safe saved campaign to resume" >&2; exit 1; }
@@ -114,7 +101,16 @@ if $RESUME; then
     saved_tui=$($STATE_HELPER get tui)
     saved_digest=$($STATE_HELPER get verification_command_sha256)
     [[ "$saved_rounds" == "$ROUNDS" ]] || { echo "ralph-campaign: requested rounds do not match saved campaign ($saved_rounds)" >&2; exit 1; }
-    [[ "$saved_digest" == "$verification_digest" ]] || { echo "ralph-campaign: verification command changed during the campaign" >&2; exit 1; }
+    if [[ "$saved_digest" != "$verification_digest" ]]; then
+        migration_mode=$($STATE_HELPER get phase)
+        [[ "$migration_mode" != audit ]] || migration_mode=campaign-audit
+        if ! "$STATE_HELPER" promote-verifier-binding \
+                --mode "$migration_mode" --expected-old "$saved_digest" \
+                --new "$verification_digest"; then
+            echo "ralph-campaign: verification executable/config binding changed during the campaign" >&2
+            exit 1
+        fi
+    fi
     requested_tui=$($TUI && echo true || echo false)
     if $TUI_EXPLICIT && [[ "$saved_tui" != "$requested_tui" ]]; then
         echo "ralph-campaign: requested TUI mode does not match saved campaign" >&2; exit 1
@@ -157,14 +153,58 @@ run_phase() {
     return "$rc"
 }
 
+confirm_prepared_launch() {
+    local phase=$1 rc
+    if "$STATE_HELPER" confirm-launch --expect-phase "$phase" --missing-ok; then
+        return 0
+    else
+        rc=$?
+    fi
+    (( rc == 3 )) && return 3
+    echo "ralph-campaign: saved $phase launch handshake is invalid" >&2
+    return 2
+}
+
+run_leaf_phase() {
+    local phase=$1 label=$2 rc confirm_rc
+    shift 2
+    if "$@"; then rc=0; else rc=$?; fi
+    if "$STATE_HELPER" confirm-launch --expect-phase "$phase" --missing-ok; then
+        confirm_rc=0
+    else
+        confirm_rc=$?
+    fi
+    if (( confirm_rc != 0 && confirm_rc != 3 )); then
+        echo "ralph-campaign: $label launch handshake validation failed" >&2
+        return 2
+    fi
+    if (( rc == 0 && confirm_rc == 3 )); then
+        echo "ralph-campaign: $label exited successfully without receiver-side launch evidence" >&2
+        return 2
+    fi
+    if (( rc != 0 )); then
+        echo "ralph-campaign: $label exited with status $rc; campaign remains active at this phase" >&2
+        return "$rc"
+    fi
+}
+
 while [[ $(state_get status) == active ]]; do
     round=$(state_get round)
     phase=$(state_get phase)
+    export FACTORY_CAMPAIGN_ROUND=$round FACTORY_CAMPAIGN_PHASE=$phase
     echo "ralph-campaign: round $round/$ROUNDS phase $phase"
     case "$phase" in
         planning)
             base=$(round_field base_commit)
             started=$(round_field planning_started)
+            if $RESUME && [[ "$started" != true ]]; then
+                set +e
+                confirm_prepared_launch planning
+                prepared_rc=$?
+                set -e
+                (( prepared_rc == 0 || prepared_rc == 3 )) || exit "$prepared_rc"
+                [[ $prepared_rc -eq 0 ]] && started=true
+            fi
             if [[ -z "$base" ]]; then
                 [[ -z $(git status --porcelain --untracked-files=normal) ]] || { echo "ralph-campaign: planning round requires a clean tree" >&2; exit 1; }
                 base=$(git rev-parse HEAD)
@@ -184,18 +224,19 @@ while [[ $(state_get status) == active ]]; do
                 fi
             fi
             if ! $planning_ok; then
-                if [[ "$started" != true ]]; then
-                    record_field planning planning_started true
-                fi
                 if [[ "$started" == true ]]; then
-                    [[ -s .factory-state/planning-base-commit \
-                        && $(tr -d '[:space:]' < .factory-state/planning-base-commit) == "$base" ]] || {
+                    saved_planning_base=$("$SCRIPT_DIR/factory-state-file.py" \
+                        read planning-base-commit --missing-ok) || {
+                        echo "ralph-campaign: planning resume marker is unsafe" >&2
+                        exit 1
+                    }
+                    [[ "$saved_planning_base" == "$base" ]] || {
                         echo "ralph-campaign: planning resume marker does not match the round base" >&2
                         exit 1
                     }
-                    run_phase "planning" "$SCRIPT_DIR/ralph-plan.sh" --resume "${launcher_args[@]}"
+                    run_leaf_phase planning "planning" "$SCRIPT_DIR/ralph-plan.sh" --resume "${launcher_args[@]}"
                 elif [[ $(git rev-parse HEAD) == "$base" ]] && [[ -z $(git status --porcelain --untracked-files=normal) ]]; then
-                    run_phase "planning" "$SCRIPT_DIR/ralph-plan.sh" "${launcher_args[@]}"
+                    run_leaf_phase planning "planning" "$SCRIPT_DIR/ralph-plan.sh" "${launcher_args[@]}"
                 else
                     echo "ralph-campaign: planning state cannot be reconciled safely" >&2
                     exit 1
@@ -215,6 +256,14 @@ PY
             ;;
         implementation)
             started=$(round_field implementation_started)
+            if $RESUME && [[ "$started" != true ]]; then
+                set +e
+                confirm_prepared_launch implementation
+                prepared_rc=$?
+                set -e
+                (( prepared_rc == 0 || prepared_rc == 3 )) || exit "$prepared_rc"
+                [[ $prepared_rc -eq 0 ]] && started=true
+            fi
             implementation_ok=false
             if [[ "$started" == true ]]; then
                 precheck_diagnostics=$(mktemp "$PROJECT_ROOT/.factory-state/implementation-precheck.XXXXXX")
@@ -231,16 +280,13 @@ PY
                 fi
             fi
             if ! $implementation_ok; then
-                if [[ "$started" != true ]]; then
-                    record_field implementation implementation_started true
-                fi
                 # Preserve legitimate uncommitted leaf work after interruption.
                 # A clean checkpoint starts a fresh context; a dirty interrupted
                 # lifecycle must use the launcher's validated recovery path.
                 if [[ "$started" == true ]]; then
-                    run_phase "implementation" "$SCRIPT_DIR/ralph-run.sh" --resume "${launcher_args[@]}"
+                    run_leaf_phase implementation "implementation" "$SCRIPT_DIR/ralph-run.sh" --resume "${launcher_args[@]}"
                 else
-                    run_phase "implementation" "$SCRIPT_DIR/ralph-run.sh" "${launcher_args[@]}"
+                    run_leaf_phase implementation "implementation" "$SCRIPT_DIR/ralph-run.sh" "${launcher_args[@]}"
                 fi
                 run_phase "implementation-gate" env FACTORY_FINAL_GATE_ATTEST=1 ./scripts/final-gate.sh --implementation
             fi
@@ -262,6 +308,14 @@ PY
             ;;
         audit)
             started=$(round_field audit_started)
+            if $RESUME && [[ "$started" != true ]]; then
+                set +e
+                confirm_prepared_launch audit
+                prepared_rc=$?
+                set -e
+                (( prepared_rc == 0 || prepared_rc == 3 )) || exit "$prepared_rc"
+                [[ $prepared_rc -eq 0 ]] && started=true
+            fi
             expected_audit_base=$(round_field verification_commit)
             expected_runner_evidence=$(round_field runner_evidence_sha256)
             export FACTORY_CAMPAIGN_AUDIT_ROUND=$round
@@ -271,15 +325,14 @@ PY
                 [[ $(git rev-parse HEAD) == "$expected_audit_base" ]] || { echo "ralph-campaign: audit HEAD does not match verified implementation" >&2; exit 1; }
                 ./scripts/initialize-campaign-audit.py --round "$round" --base "$expected_audit_base" \
                     --runner-evidence-sha256 "$expected_runner_evidence"
-                record_field audit audit_started true
-                run_phase "audit" "$SCRIPT_DIR/ralph-audit.sh" "${launcher_args[@]}"
+                run_leaf_phase audit "audit" "$SCRIPT_DIR/ralph-audit.sh" "${launcher_args[@]}"
             else
                 set +e
                 FACTORY_FINAL_GATE_ATTEST=1 ./scripts/final-gate.sh --campaign-audit >/dev/null 2>&1
                 audit_gate_rc=$?
                 set -e
                 if (( audit_gate_rc == 1 )); then
-                    run_phase "audit" "$SCRIPT_DIR/ralph-audit.sh" --resume "${launcher_args[@]}"
+                    run_leaf_phase audit "audit" "$SCRIPT_DIR/ralph-audit.sh" --resume "${launcher_args[@]}"
                 elif (( audit_gate_rc != 0 )); then
                     echo "ralph-campaign: audit gate failed with infrastructure status $audit_gate_rc" >&2
                     exit "$audit_gate_rc"

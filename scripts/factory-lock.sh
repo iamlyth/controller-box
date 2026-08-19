@@ -2,24 +2,43 @@
 # Source-only helper for the cross-process single-writer lock.
 
 FACTORY_LOCK_HELPER_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+FACTORY_LOCK_ROOT=
 
 factory_lock_bootstrap() {
-    local lock_path=${1:?factory lock path required}
+    local root=${1:?repository root required}
     shift
     (( $# > 0 )) || { echo "factory-lock: lifecycle command required" >&2; return 2; }
+    FACTORY_LOCK_ROOT=$root
 
     if [[ ${FACTORY_LOCK_HELD:-0} == 1 ]]; then
-        python3 "$FACTORY_LOCK_HELPER_DIR/factory-lock-exec.py" "$lock_path" -- true
+        python3 "$FACTORY_LOCK_HELPER_DIR/factory-lock-exec.py" "$root" --check
         return $?
     fi
-    exec python3 "$FACTORY_LOCK_HELPER_DIR/factory-lock-exec.py" "$lock_path" -- "$@"
+    exec python3 "$FACTORY_LOCK_HELPER_DIR/factory-lock-exec.py" "$root" -- "$@"
 }
 
 factory_lock_acquire() {
-    local lock_path=${1:?factory lock path required}
+    local root=${1:-${FACTORY_LOCK_ROOT:?repository root required}}
     if [[ ${FACTORY_LOCK_HELD:-0} != 1 ]]; then
         echo "factory-lock: lifecycle did not bootstrap the factory lock" >&2
         return 1
     fi
-    python3 "$FACTORY_LOCK_HELPER_DIR/factory-lock-exec.py" "$lock_path" -- true
+    python3 "$FACTORY_LOCK_HELPER_DIR/factory-lock-exec.py" "$root" --check
+}
+
+factory_lock_assert_held() {
+    local root=${1:?repository root required}
+    if [[ ${FACTORY_LOCK_HELD:-0} != 1 ]]; then
+        echo "factory-lock: trusted transition did not inherit the lifecycle lock" >&2
+        return 1
+    fi
+    python3 "$FACTORY_LOCK_HELPER_DIR/factory-lock-exec.py" "$root" --check
+}
+
+# Run an untrusted leaf without any descriptor referring to the lock inode and
+# without lock metadata in its environment. The trusted caller retains its FD.
+factory_lock_run_untrusted() {
+    local root=${FACTORY_LOCK_ROOT:?factory_lock_bootstrap must run first}
+    (( $# > 0 )) || { echo "factory-lock: untrusted command required" >&2; return 2; }
+    python3 "$FACTORY_LOCK_HELPER_DIR/factory-lock-exec.py" "$root" --drop -- "$@"
 }

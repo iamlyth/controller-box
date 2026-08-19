@@ -240,4 +240,55 @@ maintenance_non_pending_rc=$?
 set -e
 [[ $maintenance_non_pending_rc -eq 1 ]]
 
+# Maintenance dependencies are parsed as a strict graph. The final audit must
+# depend on every prior task, and no task may depend on itself, a future task,
+# an unknown task, or trailing prose.
+cat > .factory/artifacts/maintenance-plan.md <<EOF
+---
+bug_id: BUG-0001
+bug_fingerprint: $fingerprint
+spec_path: docs/SPEC.md
+spec_commit: $spec_commit
+spec_blob: $spec_blob
+base_commit: $base
+status: active
+---
+# Maintenance Plan
+## Task 1: Fix the defect
+- Status: pending
+- Dependencies: none
+- Scope: bounded fix
+- Acceptance criteria: fixed
+- Verification: focused test
+- Documentation impact: none
+## Task 2: Maintenance verification and documentation audit
+- Status: pending
+- Dependencies: Task 1
+- Scope: verify
+- Acceptance criteria: all gates pass
+- Verification: full gate
+- Documentation impact: ledger
+EOF
+./scripts/validate-maintenance-plan.py planning .factory/artifacts/maintenance-plan.md >/dev/null
+cp .factory/artifacts/maintenance-plan.md "$tmp/valid-maintenance-dependencies.md"
+for replacement in \
+    'Dependencies: none' \
+    'Dependencies: Task 2' \
+    'Dependencies: Task 99' \
+    'Dependencies: Task 1 trailing prose'; do
+    cp "$tmp/valid-maintenance-dependencies.md" .factory/artifacts/maintenance-plan.md
+    python3 - "$replacement" <<'PY'
+from pathlib import Path
+import sys
+path=Path('.factory/artifacts/maintenance-plan.md')
+text=path.read_text()
+old='Dependencies: Task 1'
+path.write_text(text.replace(old, sys.argv[1], 1))
+PY
+    if ./scripts/validate-maintenance-plan.py planning .factory/artifacts/maintenance-plan.md >/dev/null 2>&1; then
+        echo "test-plan-cycle: maintenance validator accepted $replacement" >&2
+        exit 1
+    fi
+done
+
 echo "test: fresh planning cycles discard completed task context"

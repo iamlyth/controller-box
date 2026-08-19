@@ -8,7 +8,9 @@ trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/scripts" "$tmp/.factory-state" "$tmp/.ralph/agent"
 cp "$PROJECT_ROOT/scripts/ralph-completion-gate.sh" "$tmp/scripts/"
 cp "$PROJECT_ROOT/scripts/ralph-supervision.sh" "$tmp/scripts/"
-cp "$PROJECT_ROOT/scripts/ralph-final-state.py" "$tmp/scripts/"
+cp "$PROJECT_ROOT/scripts/ralph-final-state.py" \
+    "$PROJECT_ROOT/scripts/factory_state_io.py" \
+    "$PROJECT_ROOT/scripts/ralph-event-boundary.py" "$tmp/scripts/"
 chmod 700 "$tmp/.factory-state"
 cat > "$tmp/scripts/final-gate.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -16,13 +18,13 @@ printf '%s\n' "$*" >> "${FAKE_GATE_LOG:?}"
 exit "${FAKE_GATE_RC:-0}"
 EOF
 chmod +x "$tmp/scripts/final-gate.sh" "$tmp/scripts/ralph-completion-gate.sh" \
-    "$tmp/scripts/ralph-final-state.py"
+    "$tmp/scripts/ralph-final-state.py" "$tmp/scripts/ralph-event-boundary.py"
 
 git -C "$tmp" init -q -b develop
 git -C "$tmp" config user.name test
 git -C "$tmp" config user.email test@example.invalid
 printf 'base\n' > "$tmp/tracked.txt"
-printf '.factory-state/\n.ralph/\ngate.log\nstale-diagnostics\nexternal-state/\nsymlink-state\nelsewhere\nunsafe/\n' > "$tmp/.gitignore"
+printf '.factory-state/\n.ralph/\n__pycache__/\ngate.log\nstale-diagnostics\nexternal-state/\nsymlink-state\nelsewhere\nunsafe/\n' > "$tmp/.gitignore"
 git -C "$tmp" add .
 git -C "$tmp" commit -qm base
 cd -- "$tmp"
@@ -30,6 +32,7 @@ export RALPH_COMPLETION_REJECTION_MARKER="$tmp/.factory-state/completion-rejecte
 export FAKE_GATE_LOG="$tmp/gate.log"
 # shellcheck source=scripts/ralph-supervision.sh
 source "$tmp/scripts/ralph-supervision.sh"
+SCRIPT_DIR="$tmp/scripts"
 payload=$(printf '{"schema_version":1,"phase":"pre","event":"loop.complete","phase_event":"pre.loop.complete","loop":{"workspace":"%s","id":"test-loop"},"iteration":{"current":1}}' "$tmp")
 
 export FAKE_GATE_RC=1

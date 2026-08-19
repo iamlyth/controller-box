@@ -116,7 +116,7 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 | DOD-03 | §11.2.3 | verified | M39 added to inventory (Task 1); M28–M38 controller-transport evidence via ctrl_press in test_manager_native_prof.c (Task 2); keyboard tests in test_manager_interaction_prof.c relabeled to _keyboard per §5.7 | Task 1, Task 2 |
 | DOD-04 | §11.2.4 | verified | `test_overlay_visual.c`, `test_manager_visual.c` cover degraded/error/recovery states | |
 | DOD-05 | §11.2.5 | partial | GPU backend smoke remains unevidenced on an available compositor | Task 3 |
-| DOD-06 | §11.2.6 | verified | `.factory/bugs/open.md` is empty after the orchestration regression gates passed | Task 4 |
+| DOD-06 | §11.2.6 | verified | `BUG-0012` closed after focused orchestration security tests, complete factory checks, boilerplate verification, and the 98-target project gate passed | Task 4 |
 | DOD-07 | §11.2.7 | verified | Campaign audit round 1 completed with 5 findings; this plan addresses all | |
 | DOD-08 | §11.2.8 | verified | README.md/OPERATIONS.md capability claims and inventory counts corrected (Task 1); hardware-deferred capabilities documented (Task 3) | Task 1, Task 3 |
 | DOD-09 | §11.2.9 | partial | The plan remains active and has no final clean-tree completion attestation | Task 4 |

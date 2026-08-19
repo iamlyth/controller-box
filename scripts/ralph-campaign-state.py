@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
-import fcntl
 import hashlib
 import json
 import os
@@ -13,8 +12,9 @@ from pathlib import Path
 import re
 import stat
 import subprocess
-import tempfile
-from typing import Iterator
+
+from factory_lock import FactoryLockError, locked
+from factory_state_io import StateIOError, atomic_write_json, read_bytes, read_json, remove
 
 ROOT = Path(__file__).resolve().parent.parent
 # Recorded Git bindings must not be reinterpreted through local replacement refs.
@@ -96,9 +96,9 @@ def validate(data: object, *, allow_terminal_head_mismatch: bool = False) -> dic
         fail("state has unexpected fields")
     if data["schema"] != "ralph-campaign/v2" or data["status"] not in {"active", "complete", "blocked"}:
         fail("state schema or status is invalid")
-    if not isinstance(data["rounds_requested"], int) or data["rounds_requested"] < 1:
+    if type(data["rounds_requested"]) is not int or data["rounds_requested"] < 1:
         fail("rounds_requested is invalid")
-    if not isinstance(data["round"], int) or not 1 <= data["round"] <= data["rounds_requested"]:
+    if type(data["round"]) is not int or not 1 <= data["round"] <= data["rounds_requested"]:
         fail("current round is invalid")
     if data["phase"] not in PHASES or not isinstance(data["tui"], bool):
         fail("phase or TUI state is invalid")
@@ -109,7 +109,12 @@ def validate(data: object, *, allow_terminal_head_mismatch: bool = False) -> dic
         fail("round records are inconsistent")
     previous_audit = None
     for number, record in enumerate(records, 1):
-        if not isinstance(record, dict) or set(record) != ROUND_KEYS or record["number"] != number:
+        if (
+            not isinstance(record, dict)
+            or set(record) != ROUND_KEYS
+            or type(record["number"]) is not int
+            or record["number"] != number
+        ):
             fail(f"round {number} record is invalid")
         for key in ("base_commit", "plan_commit", "implementation_commit", "verification_commit", "audit_commit"):
             value = record[key]
@@ -144,6 +149,47 @@ def validate(data: object, *, allow_terminal_head_mismatch: bool = False) -> dic
 
     current = records[-1]
     phase = data["phase"]
+    # Reject populated future-phase fields rather than merely checking that the
+    # current phase has its minimum prerequisites.
+    if phase == "planning" and (
+        current["plan_commit"] is not None
+        or current["implementation_started"]
+        or current["implementation_commit"] is not None
+        or current["verification_commit"] is not None
+        or current["runner_evidence_sha256"] is not None
+        or current["audit_started"]
+        or current["audit_commit"] is not None
+        or current["audit_result"] is not None
+    ):
+        fail("planning state contains future-phase fields")
+    if phase == "implementation" and (
+        current["implementation_commit"] is not None
+        or current["verification_commit"] is not None
+        or current["runner_evidence_sha256"] is not None
+        or current["audit_started"]
+        or current["audit_commit"] is not None
+        or current["audit_result"] is not None
+    ):
+        fail("implementation state contains future-phase fields")
+    if phase == "verification" and (
+        current["verification_commit"] is not None
+        or current["runner_evidence_sha256"] is not None
+        or current["audit_started"]
+        or current["audit_commit"] is not None
+        or current["audit_result"] is not None
+    ):
+        fail("verification state contains future-phase fields")
+    if phase == "audit" and (
+        (current["audit_commit"] is None) != (current["audit_result"] is None)
+        or (current["audit_commit"] is not None and not current["audit_started"])
+    ):
+        fail("audit state has inconsistent current-phase fields")
+    if not current["planning_started"] and current["plan_commit"] is not None:
+        fail("planning commit exists without a confirmed launch")
+    if not current["implementation_started"] and current["implementation_commit"] is not None:
+        fail("implementation commit exists without a confirmed launch")
+    if not current["audit_started"] and (current["audit_commit"] is not None or current["audit_result"] is not None):
+        fail("audit result exists without a confirmed launch")
     if phase in {"implementation", "verification", "audit", "complete", "blocked-findings"}:
         if not current["planning_started"] or not current["base_commit"] or not current["plan_commit"]:
             fail(f"phase {phase} lacks completed planning state")
@@ -180,33 +226,12 @@ def validate(data: object, *, allow_terminal_head_mismatch: bool = False) -> dic
 
 
 def read_state_file(path: Path) -> object:
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
-        descriptor = os.open(path, flags)
-    except OSError as exc:
+        data = read_json(ROOT, path.name, maximum=1024 * 1024)
+    except (OSError, StateIOError) as exc:
         fail(f"missing or unsafe state file: {exc}")
-    try:
-        info = os.fstat(descriptor)
-        if (
-            not stat.S_ISREG(info.st_mode)
-            or info.st_uid != os.getuid()
-            or info.st_nlink != 1
-            or info.st_mode & 0o077
-            or info.st_size > 1024 * 1024
-        ):
-            fail(f"missing or unsafe state file: {path}")
-        raw = bytearray()
-        while True:
-            chunk = os.read(descriptor, 65536)
-            if not chunk:
-                break
-            raw.extend(chunk)
-    finally:
-        os.close(descriptor)
-    try:
-        return json.loads(bytes(raw).decode("utf-8"))
-    except (UnicodeError, json.JSONDecodeError) as exc:
-        fail(f"invalid state: {exc}")
+    assert data is not None
+    return data
 
 
 def load(*, allow_terminal_head_mismatch: bool = False) -> dict:
@@ -219,96 +244,67 @@ def load(*, allow_terminal_head_mismatch: bool = False) -> dict:
 def atomic_write(data: dict) -> None:
     validate(data)
     path = state_path()
-    if path.exists() or path.is_symlink():
-        info = path.lstat()
-        if (
-            stat.S_ISLNK(info.st_mode)
-            or not stat.S_ISREG(info.st_mode)
-            or info.st_uid != os.getuid()
-            or info.st_nlink != 1
-            or info.st_mode & 0o077
-        ):
-            fail(f"unsafe state path: {path}")
-    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            json.dump(data, stream, sort_keys=True, indent=2)
-            stream.write("\n"); stream.flush(); os.fsync(stream.fileno())
-        os.replace(temporary, path)
-        directory_fd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
-    finally:
-        try: os.unlink(temporary)
-        except FileNotFoundError: pass
+        atomic_write_json(ROOT, path.name, data, indent=2)
+    except (OSError, StateIOError) as exc:
+        fail(f"unsafe state path: {exc}")
 
 
 def file_sha256(path: Path) -> str:
     try:
-        return hashlib.sha256(path.read_bytes()).hexdigest()
-    except OSError as exc:
+        raw = read_bytes(ROOT, path.name, maximum=1024 * 1024)
+        assert raw is not None
+        return hashlib.sha256(raw).hexdigest()
+    except (OSError, StateIOError) as exc:
         fail(f"cannot digest campaign state: {exc}")
 
 
-def validate_lock_descriptor(descriptor: int, path: Path) -> os.stat_result:
-    try:
-        opened = os.fstat(descriptor)
-        named = path.lstat()
-    except OSError as exc:
-        fail(f"cannot validate factory lock: {exc}")
-    if (
-        not stat.S_ISREG(opened.st_mode)
-        or not stat.S_ISREG(named.st_mode)
-        or stat.S_ISLNK(named.st_mode)
-        or opened.st_uid != os.getuid()
-        or named.st_uid != os.getuid()
-        or opened.st_nlink != 1
-        or named.st_nlink != 1
-        or opened.st_mode & 0o022
-        or (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)
-    ):
-        fail("unsafe factory lock path")
-    return opened
-
-
 @contextmanager
-def recovery_lock() -> Iterator[None]:
-    """Acquire or verify the lock for every campaign-state mutation."""
-    path = ROOT / ".factory-lock"
-    inherited = os.environ.get("FACTORY_LOCK_HELD") == "1"
-    if inherited:
-        try:
-            descriptor = int(os.environ.get("FACTORY_LOCK_FD", ""))
-        except ValueError:
-            fail("invalid inherited factory lock descriptor")
-        if descriptor < 3:
-            fail("invalid inherited factory lock descriptor")
-        opened = validate_lock_descriptor(descriptor, path)
-        if os.environ.get("FACTORY_LOCK_ID") != f"{opened.st_dev}:{opened.st_ino}":
-            fail("inherited factory lock identity changed")
-        close_descriptor = False
-    else:
-        flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
-        try:
-            descriptor = os.open(path, flags, 0o600)
-        except OSError as exc:
-            fail(f"unsafe factory lock path: {exc}")
-        close_descriptor = True
-        validate_lock_descriptor(descriptor, path)
+def recovery_lock():
+    """Acquire or verify the stable git-common lock for every state mutation."""
     try:
+        with locked(ROOT) as descriptor:
+            yield descriptor
+    except FactoryLockError as exc:
+        fail(str(exc))
+
+
+def promote_verifier_binding(args: argparse.Namespace) -> None:
+    if not DIGEST.fullmatch(args.expected_old) or not DIGEST.fullmatch(args.new):
+        fail("old or new verifier binding digest is invalid")
+    expected_phase = "audit" if args.mode == "campaign-audit" else args.mode
+    with recovery_lock():
+        data = load()
+        if data["status"] != "active" or data["phase"] != expected_phase:
+            fail("verifier binding migration does not match the active campaign phase")
+        if data["verification_command_sha256"] == args.new:
+            return
+        if data["verification_command_sha256"] != args.expected_old:
+            fail("saved verifier binding does not match the expected legacy digest")
+        marker_name = f"ralph-supervision-migration-{args.mode}.json"
         try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            fail("another planner, worker, or recovery process is active")
-        except OSError as exc:
-            fail(f"cannot acquire factory lock: {exc}")
-        validate_lock_descriptor(descriptor, path)
-        yield
-    finally:
-        if close_descriptor:
-            os.close(descriptor)
+            marker = read_json(ROOT, marker_name, maximum=16384)
+        except (OSError, StateIOError) as exc:
+            fail(f"cannot safely read verifier migration marker: {exc}")
+        expected_keys = {
+            "schema", "mode", "cycle_id", "campaign_state_sha256", "round",
+            "legacy_verification_command_sha256", "verification_binding_sha256",
+        }
+        if (
+            not isinstance(marker, dict)
+            or set(marker) != expected_keys
+            or marker.get("schema") != "ralph-supervision-migration/v1"
+            or marker.get("mode") != args.mode
+            or marker.get("campaign_state_sha256") != file_sha256(state_path())
+            or marker.get("round") != data["round"]
+            or marker.get("legacy_verification_command_sha256") != args.expected_old
+            or marker.get("verification_binding_sha256") != args.new
+            or not isinstance(marker.get("cycle_id"), str)
+            or not DIGEST.fullmatch(marker["cycle_id"])
+        ):
+            fail("verifier binding migration marker does not match the saved campaign")
+        data["verification_command_sha256"] = args.new
+        atomic_write(data)
 
 
 def require_rebind_head(requested_new: str) -> None:
@@ -406,16 +402,135 @@ def start_campaign(args: argparse.Namespace) -> None:
         })
 
 
+def _read_ralph_marker(name: str) -> str:
+    ralph = ROOT / ".ralph"
+    directory_fd = os.open(ralph, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0))
+    descriptor = None
+    try:
+        descriptor = os.open(name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=directory_fd)
+        info = os.fstat(descriptor)
+        named = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.getuid()
+            or info.st_nlink != 1
+            or info.st_size > 4096
+            or (info.st_dev, info.st_ino) != (named.st_dev, named.st_ino)
+        ):
+            fail(f"unsafe Ralph launch marker: {name}")
+        return os.read(descriptor, 4097).decode("utf-8").strip()
+    except (OSError, UnicodeError) as exc:
+        fail(f"cannot validate Ralph launch marker {name}: {exc}")
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        os.close(directory_fd)
+
+
+def launch_handshake_name(phase: str) -> str:
+    mode = "campaign-audit" if phase == "audit" else phase
+    return f"ralph-launch-handshake-{mode}.json"
+
+
+def discard_launch_handshake(phase: str) -> None:
+    try:
+        remove(ROOT, launch_handshake_name(phase))
+    except (OSError, StateIOError) as exc:
+        fail(f"cannot remove completed launch handshake: {exc}")
+
+
+def confirm_launch(args: argparse.Namespace) -> None:
+    phase = args.expect_phase
+    mode = "campaign-audit" if phase == "audit" else phase
+    marker_name = launch_handshake_name(phase)
+    with recovery_lock():
+        data = load()
+        if data["status"] != "active" or data["phase"] != phase:
+            fail(f"launch confirmation expected active phase {phase}")
+        record = data["rounds"][-1]
+        started_key = {
+            "planning": "planning_started",
+            "implementation": "implementation_started",
+            "audit": "audit_started",
+        }[phase]
+        if record[started_key]:
+            return
+        try:
+            handshake = read_json(ROOT, marker_name, maximum=16384, missing_ok=args.missing_ok)
+        except (OSError, StateIOError) as exc:
+            fail(f"cannot safely read launch handshake: {exc}")
+        if handshake is None:
+            raise SystemExit(3)
+        expected_keys = {
+            "schema", "mode", "cycle_id", "attempt_id", "campaign_round",
+            "campaign_phase", "campaign_state_sha256", "loop_id", "events",
+            "events_dev", "events_ino", "events_size",
+        }
+        if (
+            not isinstance(handshake, dict)
+            or set(handshake) != expected_keys
+            or handshake.get("schema") != "ralph-launch-handshake/v1"
+            or handshake.get("mode") != mode
+            or handshake.get("campaign_round") != str(data["round"])
+            or handshake.get("campaign_phase") != phase
+            or handshake.get("campaign_state_sha256") != file_sha256(state_path())
+            or not isinstance(handshake.get("cycle_id"), str)
+            or not DIGEST.fullmatch(handshake["cycle_id"])
+            or not isinstance(handshake.get("attempt_id"), str)
+            or not DIGEST.fullmatch(handshake["attempt_id"])
+            or any(
+                type(handshake.get(key)) is not int or handshake[key] < 0
+                for key in ("events_dev", "events_ino", "events_size")
+            )
+        ):
+            fail("launch handshake does not match this campaign phase")
+        try:
+            supervision = read_json(ROOT, f"ralph-supervision-{mode}.json", maximum=16384)
+            loop_mode = read_bytes(ROOT, "loop-mode", maximum=128)
+        except (OSError, StateIOError) as exc:
+            fail(f"cannot validate launch cycle state: {exc}")
+        if (
+            not isinstance(supervision, dict)
+            or supervision.get("schema") != "ralph-supervision/v2"
+            or supervision.get("mode") != mode
+            or supervision.get("cycle_id") != handshake["cycle_id"]
+            or loop_mode is None
+            or loop_mode.decode("utf-8").strip() != mode
+            or _read_ralph_marker("current-loop-id") != handshake["loop_id"]
+            or _read_ralph_marker("current-events") != handshake["events"]
+        ):
+            fail("launch handshake cycle or marker state changed")
+        event_relative = handshake["events"]
+        if not isinstance(event_relative, str) or not re.fullmatch(r"\.ralph/events(?:-[0-9]{8}-[0-9]{6})?\.jsonl", event_relative):
+            fail("launch handshake event path is invalid")
+        event_path = ROOT / event_relative
+        descriptor = os.open(event_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            info = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.getuid()
+                or info.st_nlink != 1
+                or (info.st_dev, info.st_ino) != (handshake["events_dev"], handshake["events_ino"])
+                or info.st_size < handshake["events_size"]
+            ):
+                fail("launch handshake event stream changed")
+        finally:
+            os.close(descriptor)
+        record[started_key] = True
+        atomic_write(data)
+
+
 def update_state(args: argparse.Namespace) -> None:
     with recovery_lock():
         data = load()
         if data["status"] != "active" or data["phase"] != args.expect_phase:
             fail(f"expected active phase {args.expect_phase}, found {data['status']}:{data['phase']}")
         allowed_fields = {
-            "planning": {"base_commit", "planning_started", "plan_commit"},
-            "implementation": {"implementation_started", "implementation_commit"},
+            "planning": {"base_commit", "plan_commit"},
+            "implementation": {"implementation_commit"},
             "verification": {"verification_commit", "runner_evidence_sha256"},
-            "audit": {"audit_started", "audit_commit", "audit_result"},
+            "audit": {"audit_commit", "audit_result"},
         }[args.expect_phase]
         record = data["rounds"][-1]
         for assignment in args.round_field:
@@ -440,6 +555,8 @@ def update_state(args: argparse.Namespace) -> None:
             }.get(args.expect_phase)
             if args.phase != expected_next:
                 fail(f"invalid transition {args.expect_phase} -> {args.phase}")
+            if args.expect_phase in {"planning", "implementation"}:
+                discard_launch_handshake(args.expect_phase)
             data["phase"] = args.phase
         atomic_write(data)
 
@@ -453,6 +570,7 @@ def advance_state(args: argparse.Namespace) -> None:
             fail("cannot advance beyond requested rounds")
         if git("rev-parse", "HEAD") != data["rounds"][-1]["audit_commit"]:
             fail("cannot advance away from the recorded audit commit")
+        discard_launch_handshake("audit")
         data["round"] += 1
         data["phase"] = "planning"
         record = empty_round(data["round"])
@@ -469,6 +587,7 @@ def finish_state(args: argparse.Namespace) -> None:
             fail("campaign can finish only from a completed audit phase")
         if record["audit_result"] != args.result or git("rev-parse", "HEAD") != record["audit_commit"]:
             fail("finish result or HEAD does not match the recorded audit")
+        discard_launch_handshake("audit")
         data["status"] = "complete" if args.result == "pass" else "blocked"
         data["phase"] = "complete" if args.result == "pass" else "blocked-findings"
         atomic_write(data)
@@ -501,6 +620,15 @@ def main() -> int:
     update = sub.add_parser("update")
     update.add_argument("--expect-phase", required=True); update.add_argument("--phase")
     update.add_argument("--round-field", action="append", default=[])
+    confirm = sub.add_parser("confirm-launch")
+    confirm.add_argument("--expect-phase", choices=("planning", "implementation", "audit"), required=True)
+    confirm.add_argument("--missing-ok", action="store_true")
+    promote = sub.add_parser("promote-verifier-binding")
+    promote.add_argument("--expected-old", required=True)
+    promote.add_argument("--new", required=True)
+    promote.add_argument(
+        "--mode", choices=("planning", "implementation", "campaign-audit"), required=True
+    )
     rebind = sub.add_parser("rebind-implementation")
     rebind.add_argument("--expected-old", required=True)
     rebind.add_argument("--new", required=True)
@@ -510,10 +638,14 @@ def main() -> int:
 
     if args.command == "start":
         start_campaign(args)
+    elif args.command == "promote-verifier-binding":
+        promote_verifier_binding(args)
     elif args.command == "rebind-implementation":
         rebind_implementation(args.expected_old, args.new)
     elif args.command == "update":
         update_state(args)
+    elif args.command == "confirm-launch":
+        confirm_launch(args)
     elif args.command == "advance":
         advance_state(args)
     elif args.command == "finish":

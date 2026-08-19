@@ -9,6 +9,8 @@ mkdir -p "$tmp/scripts" "$tmp/bin" "$tmp/docs" "$tmp/.factory" \
     "$tmp/.factory/artifacts" "$tmp/.ralph/agent" "$tmp/.factory-state"
 cp "$PROJECT_ROOT/scripts/ralph-plan.sh" "$PROJECT_ROOT/scripts/ralph-supervision.sh" \
     "$PROJECT_ROOT/scripts/factory-lock.sh" "$PROJECT_ROOT/scripts/factory-lock-exec.py" \
+    "$PROJECT_ROOT/scripts/factory_lock.py" "$PROJECT_ROOT/scripts/factory_state_io.py" \
+    "$PROJECT_ROOT/scripts/factory-state-file.py" "$PROJECT_ROOT/scripts/ralph-event-boundary.py" \
     "$PROJECT_ROOT/scripts/ralph-final-state.py" "$tmp/scripts/"
 chmod 700 "$tmp/.factory-state"
 
@@ -22,6 +24,7 @@ printf '# Initial plan\n' > "$tmp/.factory/artifacts/implementation-plan.md"
 cat > "$tmp/.gitignore" <<'EOF'
 .factory-state/
 .factory-lock
+__pycache__/
 .ralph/*
 !.ralph/agent/
 .ralph/agent/*
@@ -81,9 +84,15 @@ cat > "$tmp/bin/ralph" <<'EOF'
 set -euo pipefail
 printf 'ralph %s\n' "$*" >> .factory-state/fake-calls
 mkdir -p .ralph
+printf '%s\n' '.ralph/events.jsonl' > .ralph/current-events
+printf '%s\n' 'fake-planning-loop' > .ralph/current-loop-id
+printf '%s\n' \
+    '{"ts":"2026-08-14T00:00:00Z","iteration":0,"hat":"loop","topic":"factory.plan","triggered":"planner","payload":"fake planning prompt"}' \
+    >> .ralph/events.jsonl
 printf '%s\n' '{"ts":"2026-08-14T00:00:00Z","type":{"kind":"loop_started","prompt":"fake planning"}}' >> .ralph/history.jsonl
 if [[ -n ${FAKE_NOOP_SUCCESS:-} ]]; then
     printf '%s\n' '{"ts":"2026-08-14T00:00:01Z","type":{"kind":"loop_completed","reason":"completed"}}' >> .ralph/history.jsonl
+    printf '%s\n' '{"ts":"2026-08-14T00:00:01Z","iteration":1,"hat":"loop","topic":"iteration.summary","payload":"done"}' >> .ralph/events.jsonl
     exit 0
 fi
 if [[ ! -e .factory-state/fake-stale-seen ]]; then
@@ -98,6 +107,7 @@ PLAN
     git add .factory/artifacts/implementation-plan.md .ralph/agent/scratchpad.md
     git commit -qm 'fake stale planning checkpoint'
     printf '%s\n' '{"ts":"2026-08-14T00:00:01Z","type":{"kind":"loop_completed","reason":"loop_stale"}}' >> .ralph/history.jsonl
+    printf '%s\n' '{"ts":"2026-08-14T00:00:01Z","iteration":1,"hat":"loop","topic":"iteration.summary","payload":"stale"}' >> .ralph/events.jsonl
     exit 1
 fi
 grep -q 'Supervisor recovery feedback' .ralph/agent/scratchpad.md
@@ -114,6 +124,7 @@ printf '# Planning handoff\n\n- Strict gate now passes.\n' > .ralph/agent/scratc
 git add .factory/artifacts/implementation-plan.md .ralph/agent/scratchpad.md
 git commit -qm 'fake recovered planning checkpoint'
 printf '%s\n' '{"ts":"2026-08-14T00:00:02Z","type":{"kind":"loop_completed","reason":"completed"}}' >> .ralph/history.jsonl
+printf '%s\n' '{"ts":"2026-08-14T00:00:02Z","iteration":1,"hat":"loop","topic":"iteration.summary","payload":"recovered"}' >> .ralph/events.jsonl
 exit 0
 EOF
 chmod +x "$tmp/scripts/"* "$tmp/bin/"*

@@ -9,13 +9,11 @@ cd -- "$PROJECT_ROOT"
 # it must never create a standalone ledger writer.
 # shellcheck source=scripts/factory-lock.sh
 source "$SCRIPT_DIR/factory-lock.sh"
-factory_lock_acquire "$PROJECT_ROOT/.factory-lock"
-selection=.factory-state/maintenance-bug-id
-[[ -s "$selection" && ! -L "$selection" ]] || {
+factory_lock_assert_held "$PROJECT_ROOT"
+bug_id=$("$SCRIPT_DIR/factory-state-file.py" read maintenance-bug-id) || {
     echo "maintenance-planning-finalize: missing or unsafe selected bug" >&2
     exit 1
 }
-bug_id=$(tr -d '[:space:]' < "$selection")
 [[ "$bug_id" =~ ^BUG-[0-9]{4,}$ ]] || {
     echo "maintenance-planning-finalize: invalid selected bug ID" >&2
     exit 1

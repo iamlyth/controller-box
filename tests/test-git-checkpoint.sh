@@ -11,12 +11,17 @@ cp "$PROJECT_ROOT/scripts/git-commit-hook.sh" \
    "$PROJECT_ROOT/scripts/ralph-recover.sh" \
    "$PROJECT_ROOT/scripts/factory-lock.sh" \
    "$PROJECT_ROOT/scripts/factory-lock-exec.py" \
+   "$PROJECT_ROOT/scripts/factory_lock.py" \
+   "$PROJECT_ROOT/scripts/factory_state_io.py" \
+   "$PROJECT_ROOT/scripts/factory-state-file.py" \
+   "$PROJECT_ROOT/scripts/ralph_lock.py" \
+   "$PROJECT_ROOT/scripts/ralph-lock-recover.py" \
    "$PROJECT_ROOT/scripts/ralph-final-state.py" "$tmp/scripts/"
 chmod +x "$tmp/scripts/"*
 chmod 700 "$tmp/.factory-state"
 FACTORY_RALPH_CYCLE_ID=$(printf 'a%.0s' {1..64})
 export FACTORY_RALPH_CYCLE_ID
-printf '.factory-state/\n.factory-lock\n.ralph/*\n!.ralph/agent/\n.ralph/agent/*\n!.ralph/agent/scratchpad.md\n' > "$tmp/.gitignore"
+printf '.factory-state/\n.factory-lock\n__pycache__/\n.ralph/*\n!.ralph/agent/\n.ralph/agent/*\n!.ralph/agent/scratchpad.md\n' > "$tmp/.gitignore"
 printf 'base\n' > "$tmp/source.txt"
 printf '# Initial handoff\n\n## Next\n\n- Start.\n' > "$tmp/.ralph/agent/scratchpad.md"
 git -C "$tmp" init -q -b develop

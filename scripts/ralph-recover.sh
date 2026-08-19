@@ -52,8 +52,8 @@ esac
 # lock descriptor into the resumed supervisor.
 # shellcheck source=scripts/factory-lock.sh
 source "$SCRIPT_DIR/factory-lock.sh"
-factory_lock_bootstrap "$PROJECT_ROOT/.factory-lock" "$PROJECT_ROOT/scripts/ralph-recover.sh" "${ORIGINAL_ARGS[@]}"
-factory_lock_acquire "$PROJECT_ROOT/.factory-lock"
+factory_lock_bootstrap "$PROJECT_ROOT" "$PROJECT_ROOT/scripts/ralph-recover.sh" "${ORIGINAL_ARGS[@]}"
+factory_lock_acquire "$PROJECT_ROOT"
 [[ -d "$RALPH_DIR" && ! -L "$RALPH_DIR" ]] || die "missing or unsafe $RALPH_DIR"
 python3 - "$RALPH_DIR" <<'PY' || die "unsafe Ralph recovery paths"
 import os
@@ -74,56 +74,19 @@ for path in (root/'agent/scratchpad.md', root/'agent/tasks.jsonl', root/'current
     if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid():
         raise SystemExit(f'ralph-recover: unsafe runtime file {path}')
 PY
-MODE_MARKER="$PROJECT_ROOT/.factory-state/loop-mode"
-if [[ -s "$MODE_MARKER" ]]; then
-    recorded_mode=$(tr -d '[:space:]' < "$MODE_MARKER")
+recorded_mode=$("$SCRIPT_DIR/factory-state-file.py" read loop-mode --missing-ok) || die "unsafe loop-mode marker"
+if [[ -n "$recorded_mode" ]]; then
     [[ "$recorded_mode" == "$MODE" ]] || die "requested mode '$MODE' does not match recorded loop mode '$recorded_mode'"
 else
     warn "old run has no .factory-state/loop-mode marker; continuing with requested mode '$MODE'"
 fi
 
-if [[ -f "$LOCK_FILE" ]]; then
-    lock_pid=$(python3 - "$LOCK_FILE" <<'PY'
-import json, os, stat, sys
-path = sys.argv[1]
-fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
-try:
-    info = os.fstat(fd)
-    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid():
-        raise SystemExit('ralph-recover: unsafe loop lock')
-    raw = os.read(fd, 16385)
-    if len(raw) > 16384:
-        raise SystemExit('ralph-recover: loop lock exceeds the validation limit')
-    data = json.loads(raw.decode('utf-8'))
-finally:
-    os.close(fd)
-if not isinstance(data, dict) or not isinstance(data.get('pid'), int) or data['pid'] <= 0:
-    raise SystemExit('ralph-recover: loop lock has no unambiguous positive PID')
-print(data['pid'])
-PY
-) || die "ambiguous Ralph loop lock; refusing removal"
-    [[ ! -d "/proc/$lock_pid" ]] || die "live process $lock_pid owns the Ralph loop lock"
-    warn "stale loop lock detected for dead PID $lock_pid"
-    if [[ "$DRY_RUN" == false ]]; then
-        python3 - "$RALPH_DIR" "$lock_pid" <<'PY'
-import os
-import stat
-import sys
-root, raw_pid = sys.argv[1:]
-if os.path.isdir(f'/proc/{raw_pid}'):
-    raise SystemExit(f'ralph-recover: PID {raw_pid} became live; refusing loop-lock removal')
-fd=os.open(root, os.O_RDONLY | os.O_DIRECTORY | getattr(os, 'O_NOFOLLOW', 0))
-try:
-    try: info=os.stat('loop.lock', dir_fd=fd, follow_symlinks=False)
-    except FileNotFoundError: raise SystemExit(0)
-    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid():
-        raise SystemExit('ralph-recover: unsafe loop lock')
-    os.unlink('loop.lock', dir_fd=fd)
-    os.fsync(fd)
-finally:
-    os.close(fd)
-PY
-    fi
+if [[ -e "$LOCK_FILE" || -L "$LOCK_FILE" ]]; then
+    lock_args=("$RALPH_DIR")
+    $DRY_RUN && lock_args+=(--dry-run)
+    lock_pid=$("$SCRIPT_DIR/ralph-lock-recover.py" "${lock_args[@]}") || \
+        die "ambiguous or changed Ralph loop lock; refusing removal"
+    warn "stale loop lock validated for PID $lock_pid"
 fi
 
 if [[ ! -s "$SCRATCHPAD" ]]; then
@@ -238,9 +201,7 @@ case "$MODE" in
     implementation) exec "$SCRIPT_DIR/ralph-run.sh" --resume ;;
     campaign-audit) exec "$SCRIPT_DIR/ralph-audit.sh" --resume ;;
     maintenance-planning)
-        selection="$PROJECT_ROOT/.factory-state/maintenance-bug-id"
-        [[ -s "$selection" ]] || die "missing maintenance bug selection"
-        bug_id=$(tr -d '[:space:]' < "$selection")
+        bug_id=$("$SCRIPT_DIR/factory-state-file.py" read maintenance-bug-id) || die "missing or unsafe maintenance bug selection"
         exec "$SCRIPT_DIR/ralph-maintenance-plan.sh" "$bug_id" --resume
         ;;
     maintenance) exec "$SCRIPT_DIR/ralph-maintenance-run.sh" --resume ;;

@@ -22,7 +22,12 @@ class Repo:
         (self.root / "scripts").mkdir()
         (self.root / ".factory-state").mkdir(mode=0o700)
         shutil.copy2(SOURCE, self.root / "scripts/ralph-campaign-state.py")
-        (self.root / ".gitignore").write_text(".factory-state/\n.factory-lock\n", encoding="utf-8")
+        scripts = Path(__file__).resolve().parent.parent / "scripts"
+        shutil.copy2(scripts / "factory_lock.py", self.root / "scripts/factory_lock.py")
+        shutil.copy2(scripts / "factory_state_io.py", self.root / "scripts/factory_state_io.py")
+        (self.root / ".gitignore").write_text(
+            ".factory-state/\n.factory-lock\n__pycache__/\n", encoding="utf-8"
+        )
         (self.root / "history.txt").write_text("base\n", encoding="utf-8")
         self.git("init", "-q", "-b", "develop")
         self.git("config", "user.name", "test")
@@ -71,19 +76,16 @@ class Repo:
             "start", "--rounds", "3", "--tui", "false",
             "--verification-digest", DIGEST, "--base", self.base,
         )
-        self.helper(
-            "update", "--expect-phase", "planning", "--phase", "implementation",
-            "--round-field", "planning_started=true",
-            "--round-field", f"plan_commit={json.dumps(self.plan)}",
-        )
-        arguments = [
-            "update", "--expect-phase", "implementation",
-            "--round-field", "implementation_started=true",
-            "--round-field", f"implementation_commit={json.dumps(self.old)}",
-        ]
+        data = self.state()
+        data["phase"] = "implementation"
+        data["rounds"][0]["planning_started"] = True
+        data["rounds"][0]["plan_commit"] = self.plan
+        data["rounds"][0]["implementation_started"] = True
         if verification_phase:
-            arguments[3:3] = ["--phase", "verification"]
-        self.helper(*arguments)
+            data["rounds"][0]["implementation_commit"] = self.old
+            data["phase"] = "verification"
+        self.state_path.write_text(json.dumps(data, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+        self.helper("show")
 
     def state(self) -> dict:
         return json.loads(self.state_path.read_text(encoding="utf-8"))
@@ -133,10 +135,14 @@ def test_success_and_normal_write_once() -> None:
 
     repo = Repo(verification_phase=False)
     try:
+        repo.helper(
+            "update", "--expect-phase", "implementation", "--phase", "verification",
+            "--round-field", f"implementation_commit={json.dumps(repo.old)}",
+        )
         repo.assert_rejected(
-            "update", "--expect-phase", "implementation",
+            "update", "--expect-phase", "verification",
             "--round-field", f"implementation_commit={json.dumps(repo.head())}",
-            contains="write-once",
+            contains="not writable in verification",
         )
     finally:
         repo.close()
@@ -210,38 +216,6 @@ def test_merge_range_rejected() -> None:
         repo.close()
 
 
-def test_verification_evidence_and_audit_rejections() -> None:
-    repo = Repo()
-    try:
-        repo.helper(
-            "update", "--expect-phase", "verification",
-            "--round-field", f"verification_commit={json.dumps(repo.old)}",
-        )
-        repo.assert_rejected(*repo.rebind_args(), contains="must still be unset")
-    finally:
-        repo.close()
-
-    repo = Repo()
-    try:
-        repo.helper(
-            "update", "--expect-phase", "verification",
-            "--round-field", f"runner_evidence_sha256={json.dumps(DIGEST)}",
-        )
-        repo.assert_rejected(*repo.rebind_args(), contains="must still be unset")
-    finally:
-        repo.close()
-
-    repo = Repo()
-    try:
-        state = repo.state()
-        state["rounds"][0]["audit_started"] = True
-        repo.state_path.write_text(json.dumps(state, sort_keys=True, indent=2) + "\n", encoding="utf-8")
-        repo.helper("show")  # The explicit recovery guard, not generic validation, rejects this.
-        repo.assert_rejected(*repo.rebind_args(), contains="must still be unset")
-    finally:
-        repo.close()
-
-
 def test_later_round_rejected() -> None:
     repo = Repo(descendants=0)
     try:
@@ -251,25 +225,28 @@ def test_later_round_rejected() -> None:
             "--round-field", f"runner_evidence_sha256={json.dumps(DIGEST)}",
         )
         audit = repo.commit("audit")
+        state = repo.state()
+        state["rounds"][0]["audit_started"] = True
+        repo.state_path.write_text(json.dumps(state, sort_keys=True, indent=2) + "\n", encoding="utf-8")
         repo.helper(
             "update", "--expect-phase", "audit",
-            "--round-field", "audit_started=true",
             "--round-field", f"audit_commit={json.dumps(audit)}",
             "--round-field", 'audit_result="pass"',
         )
         repo.helper("advance", "--expect-phase", "audit")
         plan2 = repo.commit("plan-2")
-        repo.helper(
-            "update", "--expect-phase", "planning", "--phase", "implementation",
-            "--round-field", "planning_started=true",
-            "--round-field", f"plan_commit={json.dumps(plan2)}",
-        )
+        state = repo.state()
+        state["phase"] = "implementation"
+        state["rounds"][1]["planning_started"] = True
+        state["rounds"][1]["plan_commit"] = plan2
+        repo.state_path.write_text(json.dumps(state, sort_keys=True, indent=2) + "\n", encoding="utf-8")
         implementation2 = repo.commit("implementation-2")
-        repo.helper(
-            "update", "--expect-phase", "implementation", "--phase", "verification",
-            "--round-field", "implementation_started=true",
-            "--round-field", f"implementation_commit={json.dumps(implementation2)}",
-        )
+        state = repo.state()
+        state["phase"] = "verification"
+        state["rounds"][1]["implementation_started"] = True
+        state["rounds"][1]["implementation_commit"] = implementation2
+        repo.state_path.write_text(json.dumps(state, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+        repo.helper("show")
         new2 = repo.commit("new-2")
         repo.assert_rejected(
             "rebind-implementation", "--expected-old", implementation2, "--new", new2,
@@ -282,7 +259,8 @@ def test_later_round_rejected() -> None:
 def test_lock_and_unsafe_lock_rejections() -> None:
     repo = Repo()
     try:
-        lock_path = repo.root / ".factory-lock"
+        repo.helper("show")
+        lock_path = repo.root / ".git/controller-box-factory/lifecycle.lock"
         with lock_path.open("a", encoding="utf-8") as lock:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             repo.assert_rejected(*repo.rebind_args(), contains="another planner")
@@ -291,13 +269,34 @@ def test_lock_and_unsafe_lock_rejections() -> None:
 
     repo = Repo()
     try:
-        lock_path = repo.root / ".factory-lock"
-        lock_path.unlink(missing_ok=True)
+        repo.helper("show")
+        lock_path = repo.root / ".git/controller-box-factory/lifecycle.lock"
+        lock_path.unlink()
         external = repo.root / "external-lock"
         external.write_text("untouched\n", encoding="utf-8")
         lock_path.symlink_to(external)
-        repo.assert_rejected(*repo.rebind_args(), contains="unsafe factory lock path")
+        repo.assert_rejected(*repo.rebind_args(), contains="factory lock")
         assert external.read_text(encoding="utf-8") == "untouched\n"
+    finally:
+        repo.close()
+
+
+def test_future_phase_fields_rejected() -> None:
+    repo = Repo(verification_phase=False)
+    try:
+        state = repo.state()
+        state["rounds"][0]["implementation_commit"] = repo.old
+        repo.state_path.write_text(json.dumps(state, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+        repo.assert_rejected("show", contains="future-phase fields")
+    finally:
+        repo.close()
+
+    repo = Repo()
+    try:
+        state = repo.state()
+        state["rounds"][0]["runner_evidence_sha256"] = DIGEST
+        repo.state_path.write_text(json.dumps(state, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+        repo.assert_rejected("show", contains="future-phase fields")
     finally:
         repo.close()
 
@@ -342,9 +341,9 @@ def main() -> None:
     test_identity_phase_and_head_rejections()
     test_equal_backward_and_nonancestor_rejections()
     test_merge_range_rejected()
-    test_verification_evidence_and_audit_rejections()
     test_later_round_rejected()
     test_lock_and_unsafe_lock_rejections()
+    test_future_phase_fields_rejected()
     test_audit_binding_reconstruction()
     test_malformed_terminal_replacement_rejected()
     print("test: Ralph campaign state recovery checks passed")

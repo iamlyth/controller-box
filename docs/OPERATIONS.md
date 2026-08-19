@@ -513,12 +513,39 @@ Every round performs fresh planning, strict implementation, the configured
 project verification command, installed-evidence validation, exact-tree
 verification on every declared factory runner, and a separate adversarial audit.
 Runtime state is persisted atomically in the ignored
-`.factory-state/ralph-campaign.json`. After interruption, confirm no child
-Ralph process is alive and resume the exact phase with:
+`.factory-state/ralph-campaign.json`. The lifecycle lock is a retained,
+owner-private file at `.git/controller-box-factory/lifecycle.lock`; the trusted
+supervisor keeps its descriptor while Ralph/Pi and verifier leaves receive no
+lock descriptor or lock metadata. After interruption, confirm no child Ralph
+process is alive and resume the exact phase with:
 
 ```bash
 ./scripts/ralph-campaign.sh --rounds 3 --resume
 ```
+
+The stopped legacy campaign currently saved on this checkout is a special
+one-time migration case: round 2, active `implementation`, five requested
+rounds, with campaign JSON SHA-256
+`800ced3fd2c6889913d1035906fdc9093d76c0ad2ebe4162c1c380b547561b91`.
+Do not edit that JSON and do not resume it during migration. After this
+corrective commit is clean, first verify that exact digest and that
+`.ralph/loop.lock` is absent, then run only:
+
+```bash
+sha256sum .factory-state/ralph-campaign.json
+./scripts/ralph-supervision-migrate.py --mode implementation \
+  --expected-campaign-sha256 800ced3fd2c6889913d1035906fdc9093d76c0ad2ebe4162c1c380b547561b91
+```
+
+The helper holds the stable factory lock, strictly validates the campaign and
+current committed verifier blob, preserves any legacy recovery counters, and
+creates cycle-bound supervision and migration markers without changing the
+campaign JSON. Its deterministic partial-write recovery may complete an
+interrupted first invocation, while an already completed migration is rejected.
+Only a later explicitly authorized operator action may resume this saved state
+with `./scripts/ralph-campaign.sh --rounds 5 --resume`; that resume validates the
+exact migration marker and atomically promotes the saved legacy verifier digest
+before any leaf launch, so later interruptions remain resumable.
 
 If reviewed linear commits landed after the first-round implementation
 checkpoint but before verification/evidence/audit state was recorded, do not
