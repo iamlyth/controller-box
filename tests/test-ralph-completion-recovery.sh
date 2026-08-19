@@ -45,6 +45,10 @@ set -e
 [[ $gate_rc -eq 1 && -f "$RALPH_COMPLETION_REJECTION_MARKER" ]] || {
     echo 'test-completion-recovery: rejected gate did not create a marker' >&2; exit 1;
 }
+if compgen -G "$tmp/.factory-state/completion-hook.*" >/dev/null; then
+    echo 'test-completion-recovery: hook payload was exposed through a reopenable pathname' >&2
+    exit 1
+fi
 consumed_loop=$(ralph_supervision_consume_rejection implementation "$tmp")
 [[ "$consumed_loop" == test-loop ]] || {
     echo 'test-completion-recovery: consumed marker returned the wrong loop ID' >&2; exit 1;

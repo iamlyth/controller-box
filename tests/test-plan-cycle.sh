@@ -271,6 +271,38 @@ status: active
 EOF
 ./scripts/validate-maintenance-plan.py planning .factory/artifacts/maintenance-plan.md >/dev/null
 cp .factory/artifacts/maintenance-plan.md "$tmp/valid-maintenance-dependencies.md"
+for mutation in metadata-order field-order unknown-field; do
+    cp "$tmp/valid-maintenance-dependencies.md" .factory/artifacts/maintenance-plan.md
+    python3 - "$mutation" <<'PY'
+from pathlib import Path
+import sys
+path=Path('.factory/artifacts/maintenance-plan.md')
+text=path.read_text()
+if sys.argv[1] == 'metadata-order':
+    text=text.replace(
+        'bug_id: BUG-0001\nbug_fingerprint:',
+        'bug_fingerprint:', 1,
+    ).replace('---\nbug_fingerprint:', '---\nbug_fingerprint:', 1)
+    # Reinsert bug_id after the fingerprint value to preserve all required keys.
+    lines=text.splitlines()
+    fingerprint=next(line for line in lines if line.startswith('bug_fingerprint:'))
+    index=lines.index(fingerprint)
+    lines.insert(index + 1, 'bug_id: BUG-0001')
+    text='\n'.join(lines)+'\n'
+elif sys.argv[1] == 'field-order':
+    text=text.replace(
+        '- Status: pending\n- Dependencies: none',
+        '- Dependencies: none\n- Status: pending', 1,
+    )
+else:
+    text=text.replace('- Scope: bounded fix', '- Unexpected field: reject\n- Scope: bounded fix', 1)
+path.write_text(text)
+PY
+    if ./scripts/validate-maintenance-plan.py planning .factory/artifacts/maintenance-plan.md >/dev/null 2>&1; then
+        echo "test-plan-cycle: maintenance validator accepted $mutation" >&2
+        exit 1
+    fi
+done
 for replacement in \
     'Dependencies: none' \
     'Dependencies: Task 2' \

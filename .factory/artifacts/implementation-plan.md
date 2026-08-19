@@ -116,7 +116,7 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 | DOD-03 | §11.2.3 | verified | M39 added to inventory (Task 1); M28–M38 controller-transport evidence via ctrl_press in test_manager_native_prof.c (Task 2); keyboard tests in test_manager_interaction_prof.c relabeled to _keyboard per §5.7 | Task 1, Task 2 |
 | DOD-04 | §11.2.4 | verified | `test_overlay_visual.c`, `test_manager_visual.c` cover degraded/error/recovery states | |
 | DOD-05 | §11.2.5 | partial | GPU backend smoke remains unevidenced on an available compositor | Task 3 |
-| DOD-06 | §11.2.6 | verified | `BUG-0012` closed after focused orchestration security tests, complete factory checks, boilerplate verification, and the 98-target project gate passed | Task 4 |
+| DOD-06 | §11.2.6 | verified | `BUG-0012` closed after repository-root-flock, descriptor-boundary, verifier/event-byte binding, quarantine-race, strict-protocol/parser, complete factory/boilerplate, and 98-target project verification passed | Task 4 |
 | DOD-07 | §11.2.7 | verified | Campaign audit round 1 completed with 5 findings; this plan addresses all | |
 | DOD-08 | §11.2.8 | verified | README.md/OPERATIONS.md capability claims and inventory counts corrected (Task 1); hardware-deferred capabilities documented (Task 3) | Task 1, Task 3 |
 | DOD-09 | §11.2.9 | partial | The plan remains active and has no final clean-tree completion attestation | Task 4 |
@@ -270,7 +270,7 @@ Keyboard tests in `test_manager_interaction_prof.c` relabeled from
   - Independent adversarial review: launch read-only reviewer and docs-reviewer subagents; no blocking issues found
   - Interaction inventory is exhaustive: M01–M39 + O01–O13 + D01–D08 all verified or NOT_APPLICABLE, with production-path controller and pointer evidence per §5.7
   - Definition of done (§11.2) all 9 criteria satisfied or explicitly deferred with human approval
-- Verification: `./scripts/final-gate.sh --planning` passes (planning mode); `./scripts/verify-project.sh` passes; conformance matrix has no unverified rows without task references or documented deferrals
+- Verification: `./scripts/final-gate.sh --planning` passes (planning mode); `./scripts/verify-project.sh` passes; conformance matrix has no unverified rows without task references or documented deferrals. BUG-0012 correction evidence: changed syntax/static/mode/diff checks; focused lock, orchestration, campaign state/sequence, completion/stale/recovery, plan-parser, checkpoint, bug, audit, runner/environment, Pi-wrapper, and bypass tests; `./scripts/verify-boilerplate.sh`; and `nix-shell --run './scripts/verify-project.sh'` all passed serially. Project CTest passed 98/98 with the two declared environment skips (`test_kernel_controller`, `test_backend_smoke`); installed-functional acceptance, packaging, and installed smoke passed. Campaign state SHA-256 remained `800ced3fd2c6889913d1035906fdc9093d76c0ad2ebe4162c1c380b547561b91`.
 - Documentation impact: Final reconciliation of README.md, OPERATIONS.md, and implementation-plan conformance matrix
 
 ## Remediation rule

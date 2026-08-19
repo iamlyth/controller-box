@@ -7,7 +7,9 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import stat
+import sys
 from typing import Callable
 
 BOOT_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
@@ -15,6 +17,17 @@ BOOT_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 
 class RalphLockError(RuntimeError):
     pass
+
+
+def require_linux_primitives() -> None:
+    if (
+        sys.platform != "linux"
+        or not hasattr(os, "O_NOFOLLOW")
+        or not hasattr(os, "O_DIRECTORY")
+        or any(function not in os.supports_dir_fd for function in (os.open, os.stat, os.rename, os.unlink))
+        or not Path("/proc/self/fd").is_dir()
+    ):
+        raise RalphLockError("required Linux no-follow/dirfd/proc primitives are unavailable")
 
 
 def current_boot_id() -> str | None:
@@ -103,16 +116,27 @@ def remove_stale_lock(
     dry_run: bool = False,
     before_unlink: Callable[[], None] | None = None,
 ) -> dict | None:
+    require_linux_primitives()
     directory_fd = os.open(
         ralph_directory,
-        os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
     )
     descriptor: int | None = None
     try:
+        directory_info = os.fstat(directory_fd)
+        directory_named = ralph_directory.lstat()
+        if (
+            not stat.S_ISDIR(directory_info.st_mode)
+            or directory_info.st_uid != os.getuid()
+            or directory_info.st_mode & 0o022
+            or (directory_info.st_dev, directory_info.st_ino)
+            != (directory_named.st_dev, directory_named.st_ino)
+        ):
+            raise RalphLockError("unsafe .ralph directory")
         try:
             descriptor = os.open(
                 "loop.lock",
-                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                os.O_RDONLY | os.O_NOFOLLOW,
                 dir_fd=directory_fd,
             )
         except FileNotFoundError:
@@ -130,11 +154,9 @@ def remove_stale_lock(
         owner_is_stale(record)
         if dry_run:
             return record
-        if before_unlink is not None:
-            before_unlink()
 
         # Retain the original descriptor and revalidate inode, bytes, and owner
-        # identity immediately before unlinking the directory entry.
+        # identity immediately before atomically quarantining the directory entry.
         after = os.fstat(descriptor)
         current = os.stat("loop.lock", dir_fd=directory_fd, follow_symlinks=False)
         _validate_file(after)
@@ -150,7 +172,29 @@ def remove_stale_lock(
         if repeated != raw or parse_record(repeated) != record:
             raise RalphLockError("Ralph loop lock record changed during recovery")
         owner_is_stale(record)
-        os.unlink("loop.lock", dir_fd=directory_fd)
+        final_directory = ralph_directory.lstat()
+        if (final_directory.st_dev, final_directory.st_ino) != (
+            directory_info.st_dev, directory_info.st_ino
+        ):
+            raise RalphLockError(".ralph directory changed during recovery")
+        if before_unlink is not None:
+            # The race seam is deliberately after the final byte/owner check;
+            # quarantine validation below remains the removal authority.
+            before_unlink()
+        quarantine = f".loop.lock.quarantine-{secrets.token_hex(16)}"
+        os.rename("loop.lock", quarantine, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
+        os.fsync(directory_fd)
+        quarantined = os.stat(quarantine, dir_fd=directory_fd, follow_symlinks=False)
+        opened = os.fstat(descriptor)
+        identity = (before.st_dev, before.st_ino)
+        if (
+            (quarantined.st_dev, quarantined.st_ino) != identity
+            or (opened.st_dev, opened.st_ino) != identity
+        ):
+            raise RalphLockError("Ralph loop lock was substituted at quarantine")
+        _validate_file(quarantined)
+        _validate_file(opened)
+        os.unlink(quarantine, dir_fd=directory_fd)
         os.fsync(directory_fd)
         return record
     except FileNotFoundError as exc:

@@ -51,8 +51,8 @@ cd -- "$PROJECT_ROOT"
 # shellcheck source=scripts/factory-lock.sh
 source "$SCRIPT_DIR/factory-lock.sh"
 factory_lock_bootstrap "$PROJECT_ROOT" "$PROJECT_ROOT/scripts/ralph-campaign.sh" "${ORIGINAL_ARGS[@]}"
-./scripts/branch-guard.sh
-./scripts/check-factory-environment.py
+factory_lock_run_untrusted ./scripts/branch-guard.sh
+factory_lock_run_untrusted ./scripts/check-factory-environment.py
 factory_lock_acquire "$PROJECT_ROOT"
 
 # Campaign orchestration never guesses whether Ralph's own exclusive lock is
@@ -77,23 +77,17 @@ else:
 PY
 STATE_FILE=$PROJECT_ROOT/.factory-state/ralph-campaign.json
 export FACTORY_CAMPAIGN_STATE="$STATE_FILE"
-verification_binding=$("$SCRIPT_DIR/campaign-verifier-binding.py") || exit $?
-verify_argv_file=$(mktemp "$PROJECT_ROOT/.factory-state/campaign-verify.XXXXXX")
-trap 'rm -f -- "$verify_argv_file"' EXIT
-verification_digest=$(python3 - "$verification_binding" "$verify_argv_file" <<'PY'
-import json, os, sys
+verification_binding=$(factory_lock_run_untrusted "$SCRIPT_DIR/campaign-verifier-binding.py") || exit $?
+verification_digest=$(python3 - "$verification_binding" <<'PY'
+import json, sys
 binding = json.loads(sys.argv[1])
 if set(binding) != {'binding', 'sha256'}:
     raise SystemExit('ralph-campaign: invalid verifier binding output')
-for argument in binding['binding']['argv']:
-    with open(sys.argv[2], 'ab') as stream:
-        stream.write(argument.encode() + b'\0')
+if binding['binding'].get('schema') != 'campaign-verifier-binding/v1':
+    raise SystemExit('ralph-campaign: invalid verifier binding schema')
 print(binding['sha256'])
 PY
 ) || exit $?
-mapfile -d '' -t CAMPAIGN_VERIFY_COMMAND < "$verify_argv_file"
-rm -f -- "$verify_argv_file"
-(( ${#CAMPAIGN_VERIFY_COMMAND[@]} > 0 )) || { echo "ralph-campaign: empty verification command" >&2; exit 1; }
 
 if $RESUME; then
     [[ -f "$STATE_FILE" && ! -L "$STATE_FILE" ]] || { echo "ralph-campaign: no safe saved campaign to resume" >&2; exit 1; }
@@ -213,7 +207,8 @@ while [[ $(state_get status) == active ]]; do
             planning_ok=false
             if [[ "$started" == true ]]; then
                 set +e
-                FACTORY_FINAL_GATE_ATTEST=1 FACTORY_PLANNING_BASE_COMMIT=$base ./scripts/final-gate.sh --planning >/dev/null 2>&1
+                factory_lock_run_untrusted env FACTORY_FINAL_GATE_ATTEST=1 \
+                    FACTORY_PLANNING_BASE_COMMIT="$base" ./scripts/final-gate.sh --planning >/dev/null 2>&1
                 gate_rc=$?
                 set -e
                 if (( gate_rc == 0 )); then
@@ -250,7 +245,8 @@ print(match.group(1) if match else '')
 PY
 )
             [[ "$plan_base" == "$base" ]] || { echo "ralph-campaign: plan base does not match round base" >&2; exit 1; }
-            FACTORY_FINAL_GATE_ATTEST=1 ./scripts/final-gate.sh --planning
+            factory_lock_run_untrusted env FACTORY_FINAL_GATE_ATTEST=1 \
+                ./scripts/final-gate.sh --planning
             plan_commit=$(git rev-parse HEAD)
             "$STATE_HELPER" update --expect-phase planning --phase implementation --round-field "plan_commit=$(json_string "$plan_commit")"
             ;;
@@ -268,7 +264,8 @@ PY
             if [[ "$started" == true ]]; then
                 precheck_diagnostics=$(mktemp "$PROJECT_ROOT/.factory-state/implementation-precheck.XXXXXX")
                 set +e
-                FACTORY_FINAL_GATE_ATTEST=1 ./scripts/final-gate.sh --implementation >"$precheck_diagnostics" 2>&1
+                factory_lock_run_untrusted env FACTORY_FINAL_GATE_ATTEST=1 \
+                    ./scripts/final-gate.sh --implementation >"$precheck_diagnostics" 2>&1
                 gate_rc=$?
                 set -e
                 rm -f -- "$precheck_diagnostics"
@@ -288,18 +285,26 @@ PY
                 else
                     run_leaf_phase implementation "implementation" "$SCRIPT_DIR/ralph-run.sh" "${launcher_args[@]}"
                 fi
-                run_phase "implementation-gate" env FACTORY_FINAL_GATE_ATTEST=1 ./scripts/final-gate.sh --implementation
+                run_phase "implementation-gate" factory_lock_run_untrusted env \
+                    FACTORY_FINAL_GATE_ATTEST=1 ./scripts/final-gate.sh --implementation
             fi
             implementation_commit=$(git rev-parse HEAD)
             "$STATE_HELPER" update --expect-phase implementation --phase verification --round-field "implementation_commit=$(json_string "$implementation_commit")"
             ;;
         verification)
-            "${CAMPAIGN_VERIFY_COMMAND[@]}"
+            saved_verification_digest=$(state_get verification_command_sha256)
+            [[ "$saved_verification_digest" == "$verification_digest" ]] || {
+                echo "ralph-campaign: saved verifier binding changed before verification" >&2
+                exit 1
+            }
+            factory_lock_run_untrusted "$SCRIPT_DIR/campaign-verifier-binding.py" \
+                --expected-digest "$saved_verification_digest" --exec
             if [[ -x ./scripts/check-installed-functional-evidence.sh ]]; then
-                ./scripts/check-installed-functional-evidence.sh
+                factory_lock_run_untrusted ./scripts/check-installed-functional-evidence.sh
             fi
-            ./scripts/run-factory-runners.py
-            runner_evidence_sha256=$(./scripts/check-factory-runner-evidence.py --print-digest)
+            factory_lock_run_untrusted ./scripts/run-factory-runners.py
+            runner_evidence_sha256=$(factory_lock_run_untrusted \
+                ./scripts/check-factory-runner-evidence.py --print-digest)
             [[ -z $(git status --porcelain --untracked-files=normal) ]] || { echo "ralph-campaign: verification left a dirty tree" >&2; exit 1; }
             verification_commit=$(git rev-parse HEAD)
             "$STATE_HELPER" update --expect-phase verification --phase audit \
@@ -328,7 +333,8 @@ PY
                 run_leaf_phase audit "audit" "$SCRIPT_DIR/ralph-audit.sh" "${launcher_args[@]}"
             else
                 set +e
-                FACTORY_FINAL_GATE_ATTEST=1 ./scripts/final-gate.sh --campaign-audit >/dev/null 2>&1
+                factory_lock_run_untrusted env FACTORY_FINAL_GATE_ATTEST=1 \
+                    ./scripts/final-gate.sh --campaign-audit >/dev/null 2>&1
                 audit_gate_rc=$?
                 set -e
                 if (( audit_gate_rc == 1 )); then
@@ -338,7 +344,8 @@ PY
                     exit "$audit_gate_rc"
                 fi
             fi
-            FACTORY_FINAL_GATE_ATTEST=1 ./scripts/final-gate.sh --campaign-audit
+            factory_lock_run_untrusted env FACTORY_FINAL_GATE_ATTEST=1 \
+                ./scripts/final-gate.sh --campaign-audit
             audit_result=$(python3 - <<'PY'
 import re
 text=open('.factory/artifacts/campaign-audit.md', encoding='utf-8').read()

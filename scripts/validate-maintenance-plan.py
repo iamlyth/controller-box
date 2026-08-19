@@ -72,6 +72,8 @@ def parse(text: str) -> tuple[dict[str, str], list[dict[str, object]]]:
         fail(f"missing front-matter key(s): {', '.join(missing)}")
     if set(metadata) != set(KEYS):
         fail("front matter must contain exactly the seven required keys")
+    if tuple(metadata) != KEYS:
+        fail("front-matter keys must use the required order")
 
     headers: list[tuple[int, int, str]] = []
     for index, line in enumerate(lines[end + 1 :], end + 2):
@@ -96,9 +98,12 @@ def parse(text: str) -> tuple[dict[str, str], list[dict[str, object]]]:
             if match:
                 name, value = match.groups()
                 entries.append((offset, name, value))
+        unknown_fields = [name for _offset, name, _value in entries if name not in FIELDS]
+        if unknown_fields:
+            fail(f"Task {number}: unknown field(s): {', '.join(unknown_fields)}")
+        if tuple(name for _offset, name, _value in entries) != FIELDS:
+            fail(f"Task {number}: fields must appear exactly once in the required order")
         for entry_index, (offset, name, value) in enumerate(entries):
-            if name not in FIELDS:
-                continue
             if name in found:
                 fail(f"Task {number}: duplicate {name}")
             next_offset = entries[entry_index + 1][0] if entry_index + 1 < len(entries) else len(task_lines)

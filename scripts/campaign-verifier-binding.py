@@ -3,12 +3,14 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
 import stat
 import subprocess
+import sys
 import tomllib
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -30,13 +32,15 @@ def git(*args: str) -> str:
 
 
 def secure_read(path: Path, maximum: int) -> tuple[bytes, os.stat_result]:
+    if sys.platform != "linux" or not hasattr(os, "O_NOFOLLOW"):
+        fail("required Linux no-follow primitive is unavailable")
     absolute = path.absolute()
     try:
         if absolute.resolve(strict=True) != absolute:
             fail(f"path contains a symlink: {path.relative_to(ROOT)}")
     except OSError as exc:
         fail(f"path is unavailable: {exc}")
-    descriptor = os.open(absolute, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    descriptor = os.open(absolute, os.O_RDONLY | os.O_NOFOLLOW)
     try:
         before = os.fstat(descriptor)
         named = absolute.lstat()
@@ -44,6 +48,7 @@ def secure_read(path: Path, maximum: int) -> tuple[bytes, os.stat_result]:
             not stat.S_ISREG(before.st_mode)
             or before.st_uid != os.getuid()
             or before.st_nlink != 1
+            or before.st_mode & 0o022
             or (before.st_dev, before.st_ino) != (named.st_dev, named.st_ino)
             or before.st_size > maximum
         ):
@@ -89,7 +94,7 @@ def tracked_blob(path: str, data: bytes, expected_mode: str) -> str:
     return committed
 
 
-def main() -> None:
+def binding() -> tuple[dict[str, object], str, list[str], Path, bytes]:
     config_bytes, _ = secure_read(CONFIG, 1024 * 1024)
     try:
         config = tomllib.loads(config_bytes.decode("utf-8"))
@@ -131,7 +136,61 @@ def main() -> None:
     digest = hashlib.sha256(
         json.dumps(binding, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
-    print(json.dumps({"binding": binding, "sha256": digest}, sort_keys=True, separators=(",", ":")))
+    return binding, digest, command, executable, executable_bytes
+
+
+def execute_verified(command: list[str], executable: Path, expected_bytes: bytes) -> None:
+    if not hasattr(os, "O_NOFOLLOW"):
+        fail("required Linux no-follow execution primitive is unavailable")
+    descriptor = os.open(executable, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.getuid()
+            or before.st_nlink != 1
+            or before.st_mode & 0o022
+            or not before.st_mode & 0o111
+        ):
+            fail("campaign verifier became unsafe before execution")
+        raw = b""
+        while len(raw) <= len(expected_bytes):
+            chunk = os.read(descriptor, min(65536, len(expected_bytes) + 1 - len(raw)))
+            if not chunk:
+                break
+            raw += chunk
+        after = os.fstat(descriptor)
+        if (
+            raw != expected_bytes
+            or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+            != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+        ):
+            fail("campaign verifier changed after binding")
+        named = executable.lstat()
+        if (before.st_dev, before.st_ino) != (named.st_dev, named.st_ino):
+            fail("campaign verifier pathname changed immediately before execution")
+        # argv[0] remains the canonical repository-relative command validated
+        # above, preserving the verifier's production SCRIPT_DIR semantics.
+        os.execve(command[0], command, os.environ)
+    except OSError as exc:
+        fail(f"cannot execute bound campaign verifier: {exc}")
+    finally:
+        os.close(descriptor)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--expected-digest")
+    parser.add_argument("--exec", dest="execute", action="store_true")
+    args = parser.parse_args()
+    bound, digest, command, executable, executable_bytes = binding()
+    if args.expected_digest is not None and args.expected_digest != digest:
+        fail("verification binding changed immediately before execution")
+    if args.execute:
+        if args.expected_digest is None:
+            fail("--exec requires --expected-digest")
+        execute_verified(command, executable, executable_bytes)
+    print(json.dumps({"binding": bound, "sha256": digest}, sort_keys=True, separators=(",", ":")))
 
 
 if __name__ == "__main__":

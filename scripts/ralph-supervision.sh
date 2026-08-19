@@ -163,10 +163,12 @@ handshake = read_json(Path.cwd(), f'ralph-launch-handshake-{mode}.json', maximum
 handshake_keys = {
     'schema', 'mode', 'cycle_id', 'attempt_id', 'campaign_round',
     'campaign_phase', 'campaign_state_sha256', 'loop_id', 'events',
-    'events_dev', 'events_ino', 'events_size',
+    'events_dev', 'events_ino', 'events_offset', 'events_size', 'events_sha256',
+    'events_delta_size', 'events_delta_sha256', 'start_record_size',
+    'start_record_sha256', 'start_record_nonce',
 }
 if (isinstance(handshake, dict) and set(handshake) == handshake_keys
-        and handshake.get('schema') == 'ralph-launch-handshake/v1'
+        and handshake.get('schema') == 'ralph-launch-handshake/v2'
         and handshake.get('mode') == mode and handshake.get('cycle_id') == cycle):
     raise SystemExit(0)
 migration = read_json(
@@ -259,30 +261,17 @@ ralph_supervision_begin() {
     ralph_supervision_ensure_initialized "$mode" || return $?
 
     python3 - "$RALPH_COMPLETION_REJECTION_MARKER" <<'PY' || return 1
-import os
-import stat
 import sys
 from pathlib import Path
-
-marker = Path(sys.argv[1])
-parent = marker.parent if str(marker.parent) else Path('.')
+sys.path.insert(0, str((Path.cwd() / 'scripts').resolve()))
+from factory_state_io import StateIOError, remove
+canonical = (Path.cwd() / '.factory-state/completion-rejected.json').absolute()
+if Path(sys.argv[1]).absolute() != canonical:
+    raise SystemExit('ralph-supervision: completion marker must use its canonical state-local path')
 try:
-    parent_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | getattr(os, 'O_NOFOLLOW', 0))
-except OSError as exc:
-    print(f'ralph-supervision: unsafe completion-marker parent: {exc}', file=sys.stderr)
-    raise SystemExit(1)
-try:
-    try:
-        info = os.stat(marker.name, dir_fd=parent_fd, follow_symlinks=False)
-    except FileNotFoundError:
-        raise SystemExit(0)
-    if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid()):
-        print('ralph-supervision: unsafe completion-rejection marker', file=sys.stderr)
-        raise SystemExit(1)
-    os.unlink(marker.name, dir_fd=parent_fd)
-    os.fsync(parent_fd)
-finally:
-    os.close(parent_fd)
+    remove(Path.cwd(), 'completion-rejected.json', missing_ok=True)
+except (OSError, StateIOError) as exc:
+    raise SystemExit(f'ralph-supervision: cannot safely remove completion marker: {exc}')
 PY
     FACTORY_RALPH_ATTEMPT_ID=$(python3 - <<'PY'
 import secrets
@@ -308,7 +297,8 @@ except OSError as exc:
     raise SystemExit(1)
 try:
     info = os.fstat(fd)
-    if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid()):
+    if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid()
+            or info.st_mode & 0o022):
         print('ralph-supervision: history is not a safe regular file', file=sys.stderr)
         raise SystemExit(1)
     size = info.st_size
@@ -348,61 +338,38 @@ ralph_supervision_consume_rejection() {
     local mode=${1:?ralph_supervision_consume_rejection requires a lifecycle mode}
     local workspace=${2:?ralph_supervision_consume_rejection requires a workspace}
     python3 - "$RALPH_COMPLETION_REJECTION_MARKER" "$FACTORY_RALPH_ATTEMPT_ID" "$mode" "$workspace" <<'PY'
-import json
-import os
 import re
-import stat
 import sys
 from pathlib import Path
-
+sys.path.insert(0, str((Path.cwd() / 'scripts').resolve()))
+from factory_state_io import StateIOError, consume_json
 marker, attempt, mode, workspace = sys.argv[1:]
-path = Path(marker)
-parent = path.parent if str(path.parent) else Path('.')
-try:
-    parent_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | getattr(os, 'O_NOFOLLOW', 0))
-except OSError as exc:
-    print(f'ralph-supervision: unsafe completion-marker parent: {exc}', file=sys.stderr)
+canonical = (Path.cwd() / '.factory-state/completion-rejected.json').absolute()
+if Path(marker).absolute() != canonical:
+    print('ralph-supervision: completion marker must use its canonical state-local path', file=sys.stderr)
     raise SystemExit(2)
-fd = None
-try:
-    try:
-        fd = os.open(path.name, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0), dir_fd=parent_fd)
-    except FileNotFoundError:
-        raise SystemExit(1)
-    info = os.fstat(fd)
-    if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid()
-            or info.st_size > 16384):
-        print('ralph-supervision: unsafe completion-rejection marker', file=sys.stderr)
-        raise SystemExit(2)
-    raw = os.read(fd, 16385)
-    try:
-        data = json.loads(raw.decode('utf-8'))
-    except (UnicodeError, json.JSONDecodeError) as exc:
-        print(f'ralph-supervision: invalid completion-rejection marker: {exc}', file=sys.stderr)
-        raise SystemExit(2)
+def validate(data):
     if not isinstance(data, dict) or set(data) != {'schema', 'attempt_id', 'mode', 'workspace', 'loop_id'}:
-        print('ralph-supervision: completion-rejection marker has an invalid schema', file=sys.stderr)
-        raise SystemExit(2)
+        raise StateIOError('completion-rejection marker has an invalid schema')
     expected = {
         'schema': 'ralph-completion-rejection/v1',
         'attempt_id': attempt,
         'mode': mode,
-        'workspace': str(Path(workspace).resolve()),
+        'workspace': str(Path(workspace).resolve(strict=True)),
     }
     if any(data.get(key) != value for key, value in expected.items()):
-        print('ralph-supervision: stale or mismatched completion-rejection marker', file=sys.stderr)
-        raise SystemExit(2)
+        raise StateIOError('stale or mismatched completion-rejection marker')
     loop_id = data.get('loop_id')
     if not isinstance(loop_id, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}', loop_id):
-        print('ralph-supervision: completion-rejection marker has an invalid loop ID', file=sys.stderr)
-        raise SystemExit(2)
-    os.unlink(path.name, dir_fd=parent_fd)
-    os.fsync(parent_fd)
-    print(loop_id)
-finally:
-    if fd is not None:
-        os.close(fd)
-    os.close(parent_fd)
+        raise StateIOError('completion-rejection marker has an invalid loop ID')
+    return loop_id
+try:
+    print(consume_json(Path.cwd(), 'completion-rejected.json', validate, maximum=16384))
+except FileNotFoundError:
+    raise SystemExit(1)
+except (OSError, StateIOError) as exc:
+    print(f'ralph-supervision: invalid completion-rejection marker: {exc}', file=sys.stderr)
+    raise SystemExit(2)
 PY
 }
 
@@ -435,7 +402,8 @@ except OSError as exc:
     raise SystemExit(2)
 try:
     info = os.fstat(fd)
-    if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid()):
+    if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid()
+            or info.st_mode & 0o022):
         print('ralph-supervision: history is not a safe regular file', file=sys.stderr)
         raise SystemExit(2)
     identity = f'{info.st_dev}:{info.st_ino}'

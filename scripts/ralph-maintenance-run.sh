@@ -21,13 +21,13 @@ source "$SCRIPT_DIR/factory-lock.sh"
 factory_lock_bootstrap "$PROJECT_ROOT" "$PROJECT_ROOT/scripts/ralph-maintenance-run.sh" "${ORIGINAL_ARGS[@]}"
 command -v "$RALPH_BIN" >/dev/null || { echo "ralph-maintenance-run: Ralph executable not found: $RALPH_BIN" >&2; exit 2; }
 command -v pi2 >/dev/null || { echo "ralph-maintenance-run: pi2 is unavailable" >&2; exit 2; }
-./scripts/branch-guard.sh
+factory_lock_run_untrusted ./scripts/branch-guard.sh
 
 # shellcheck source=scripts/ralph-supervision.sh
 source "$SCRIPT_DIR/ralph-supervision.sh"
 factory_lock_acquire "$PROJECT_ROOT"
 ralph_supervision_prepare_state_directory
-./scripts/check-maintenance-freshness.sh
+factory_lock_run_untrusted ./scripts/check-maintenance-freshness.sh
 FACTORY_MAINTENANCE_BUG_ID=$("$SCRIPT_DIR/factory-state-file.py" read maintenance-bug-id)
 export FACTORY_MAINTENANCE_BUG_ID
 python3 - <<'PY'
@@ -44,7 +44,7 @@ if [[ "$RESUME" == false && -n $(git status --porcelain --untracked-files=normal
     exit 1
 fi
 # Repeat freshness and cleanliness under the held lock immediately before launch.
-./scripts/check-maintenance-freshness.sh >/dev/null
+factory_lock_run_untrusted ./scripts/check-maintenance-freshness.sh >/dev/null
 [[ -z $(git status --porcelain --untracked-files=normal) || "$RESUME" == true ]] || {
     echo "ralph-maintenance-run: tree changed before launch" >&2; exit 1;
 }
@@ -60,7 +60,8 @@ finish_maintenance_cycle() {
         return 0
     fi
     payload=$(printf '{"loop":{"workspace":"%s","id":"maintenance-final"},"iteration":{"current":"final"}}' "$PROJECT_ROOT")
-    if printf '%s' "$payload" | ./scripts/git-commit-hook.sh --maintenance --final-handoff; then :; else return $?; fi
+    if printf '%s' "$payload" | factory_lock_run_untrusted \
+            ./scripts/git-commit-hook.sh --maintenance --final-handoff; then :; else return $?; fi
     if factory_lock_run_untrusted env FACTORY_FINAL_GATE_ATTEST=1 ./scripts/final-gate.sh --maintenance; then :; else return $?; fi
     head=$(git rev-parse HEAD)
     ./scripts/ralph-final-state.py attest maintenance "$head" >/dev/null
@@ -68,7 +69,7 @@ finish_maintenance_cycle() {
 }
 
 while true; do
-    ./scripts/ollama-usage-guard.sh --wait
+    factory_lock_run_untrusted ./scripts/ollama-usage-guard.sh --wait
     CONTINUE=false
     if $RESUME && ralph_supervision_should_continue maintenance; then CONTINUE=true; fi
     ralph_supervision_begin maintenance
@@ -108,11 +109,11 @@ while true; do
         exit 1
     fi
     set +e
-    ./scripts/ollama-usage-guard.sh --check
+    factory_lock_run_untrusted ./scripts/ollama-usage-guard.sh --check
     quota_rc=$?
     set -e
     if (( quota_rc == 1 )); then
-        ./scripts/ollama-usage-guard.sh --wait
+        factory_lock_run_untrusted ./scripts/ollama-usage-guard.sh --wait
         ./scripts/ralph-recover.sh --mode maintenance --prepare-only
         RESUME=true
         continue

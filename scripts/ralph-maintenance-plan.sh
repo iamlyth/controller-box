@@ -29,14 +29,14 @@ source "$SCRIPT_DIR/factory-lock.sh"
 factory_lock_bootstrap "$PROJECT_ROOT" "$PROJECT_ROOT/scripts/ralph-maintenance-plan.sh" "${ORIGINAL_ARGS[@]}"
 command -v "$RALPH_BIN" >/dev/null || { echo "ralph-maintenance-plan: Ralph executable not found: $RALPH_BIN" >&2; exit 2; }
 command -v pi2 >/dev/null || { echo "ralph-maintenance-plan: pi2 is unavailable" >&2; exit 2; }
-./scripts/branch-guard.sh
+factory_lock_run_untrusted ./scripts/branch-guard.sh
 
 # Select and validate the cycle only while holding the single-writer lock. This
 # closes the race between clean-tree inspection and writing volatile selection.
 # shellcheck source=scripts/ralph-supervision.sh
 source "$SCRIPT_DIR/ralph-supervision.sh"
 factory_lock_acquire "$PROJECT_ROOT"
-./scripts/branch-guard.sh
+factory_lock_run_untrusted ./scripts/branch-guard.sh
 ralph_supervision_prepare_state_directory
 STATE_FILE_HELPER="$SCRIPT_DIR/factory-state-file.py"
 if [[ "$RESUME" == false ]]; then
@@ -127,7 +127,8 @@ finish_maintenance_planning_cycle() {
     # become a later metadata-only commit that authorizes another checkpoint.
     if ./scripts/finalize-maintenance-planning.sh; then :; else return $?; fi
     payload=$(printf '{"loop":{"workspace":"%s","id":"maintenance-planning-final"},"iteration":{"current":"final"}}' "$PROJECT_ROOT")
-    if printf '%s' "$payload" | ./scripts/git-commit-hook.sh --maintenance-plan --final-handoff; then :; else return $?; fi
+    if printf '%s' "$payload" | factory_lock_run_untrusted \
+            ./scripts/git-commit-hook.sh --maintenance-plan --final-handoff; then :; else return $?; fi
     if factory_lock_run_untrusted env FACTORY_FINAL_GATE_ATTEST=1 ./scripts/final-gate.sh --maintenance-planning; then :; else return $?; fi
     head=$(git rev-parse HEAD)
     ./scripts/ralph-final-state.py attest maintenance-planning "$head" >/dev/null
@@ -135,7 +136,7 @@ finish_maintenance_planning_cycle() {
 }
 
 while true; do
-    ./scripts/ollama-usage-guard.sh --wait
+    factory_lock_run_untrusted ./scripts/ollama-usage-guard.sh --wait
     CONTINUE=false
     if $RESUME && ralph_supervision_should_continue maintenance-planning; then CONTINUE=true; fi
     ralph_supervision_begin maintenance-planning
@@ -175,11 +176,11 @@ while true; do
         exit 1
     fi
     set +e
-    ./scripts/ollama-usage-guard.sh --check
+    factory_lock_run_untrusted ./scripts/ollama-usage-guard.sh --check
     quota_rc=$?
     set -e
     if (( quota_rc == 1 )); then
-        ./scripts/ollama-usage-guard.sh --wait
+        factory_lock_run_untrusted ./scripts/ollama-usage-guard.sh --wait
         ./scripts/ralph-recover.sh --mode maintenance-planning --prepare-only
         RESUME=true
         continue

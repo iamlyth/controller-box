@@ -6,8 +6,10 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import tempfile
 
@@ -260,23 +262,24 @@ def test_lock_and_unsafe_lock_rejections() -> None:
     repo = Repo()
     try:
         repo.helper("show")
-        lock_path = repo.root / ".git/controller-box-factory/lifecycle.lock"
-        with lock_path.open("a", encoding="utf-8") as lock:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        lock_fd = os.open(repo.root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             repo.assert_rejected(*repo.rebind_args(), contains="another planner")
+        finally:
+            os.close(lock_fd)
     finally:
         repo.close()
 
     repo = Repo()
     try:
         repo.helper("show")
-        lock_path = repo.root / ".git/controller-box-factory/lifecycle.lock"
-        lock_path.unlink()
-        external = repo.root / "external-lock"
-        external.write_text("untouched\n", encoding="utf-8")
-        lock_path.symlink_to(external)
-        repo.assert_rejected(*repo.rebind_args(), contains="factory lock")
-        assert external.read_text(encoding="utf-8") == "untouched\n"
+        original_mode = stat.S_IMODE(repo.root.stat().st_mode)
+        repo.root.chmod(original_mode | 0o020)
+        try:
+            repo.assert_rejected(*repo.rebind_args(), contains="unsafe repository root")
+        finally:
+            repo.root.chmod(original_mode)
     finally:
         repo.close()
 

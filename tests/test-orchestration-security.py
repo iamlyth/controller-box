@@ -66,6 +66,56 @@ def test_symlink_safe_state_markers() -> None:
         shutil.rmtree(root)
 
 
+def test_state_removal_quarantines_post_check_substitution() -> None:
+    module = load_module(SOURCE / "scripts/factory_state_io.py", "factory_state_io_race_module")
+    root = Path(tempfile.mkdtemp(prefix="controller-box-state-race-test."))
+    try:
+        state = root / ".factory-state"
+        state.mkdir(mode=0o700)
+        marker = state / "completion-rejected.json"
+        replacement = state / "replacement"
+
+        def install_original() -> None:
+            marker.write_text('{"value":"original"}\n', encoding="utf-8")
+            marker.chmod(0o600)
+            replacement.write_text('{"value":"replacement"}\n', encoding="utf-8")
+            replacement.chmod(0o600)
+
+        def substitute() -> None:
+            marker.unlink()
+            replacement.rename(marker)
+
+        install_original()
+        try:
+            module.remove(root, "completion-rejected.json", after_final_check=substitute)
+        except module.StateIOError as exc:
+            assert "substituted at quarantine" in str(exc)
+        else:
+            raise AssertionError("post-check marker replacement was removed")
+        quarantines = list(state.glob(".completion-rejected.json.quarantine-*"))
+        assert len(quarantines) == 1
+        assert json.loads(quarantines[0].read_text(encoding="utf-8"))["value"] == "replacement"
+        quarantines[0].unlink()
+
+        install_original()
+        try:
+            module.consume_json(
+                root,
+                "completion-rejected.json",
+                lambda data: data["value"],
+                after_final_check=substitute,
+            )
+        except module.StateIOError as exc:
+            assert "substituted at quarantine" in str(exc)
+        else:
+            raise AssertionError("post-validation rejection marker replacement was consumed")
+        quarantines = list(state.glob(".completion-rejected.json.quarantine-*"))
+        assert len(quarantines) == 1
+        assert json.loads(quarantines[0].read_text(encoding="utf-8"))["value"] == "replacement"
+    finally:
+        shutil.rmtree(root)
+
+
 def load_module(path: Path, name: str):
     spec = importlib.util.spec_from_file_location(name, path)
     assert spec and spec.loader
@@ -114,10 +164,12 @@ def test_loop_lock_process_identity_and_inode_race() -> None:
         try:
             module.remove_stale_lock(root, before_unlink=replace_before_unlink)
         except module.RalphLockError as exc:
-            assert "replaced" in str(exc) or "unsafe" in str(exc)
+            assert any(word in str(exc) for word in ("replaced", "substituted", "unsafe"))
         else:
             raise AssertionError("replacement inode was unlinked")
-        assert lock.read_text(encoding="utf-8") == "replacement\n"
+        quarantines = list(root.glob(".loop.lock.quarantine-*"))
+        assert len(quarantines) == 1
+        assert quarantines[0].read_text(encoding="utf-8") == "replacement\n"
     finally:
         shutil.rmtree(root)
 
@@ -125,7 +177,9 @@ def test_loop_lock_process_identity_and_inode_race() -> None:
 def event_record(topic: str, payload: object, *, iteration: int | None = None) -> dict[str, object]:
     record: dict[str, object] = {"ts": "2026-08-19T00:00:00+00:00", "topic": topic, "payload": payload}
     if iteration is not None:
-        record.update({"iteration": iteration, "hat": "loop", "triggered": "planner"})
+        record.update({"iteration": iteration, "hat": "loop"})
+        if iteration == 0:
+            record["triggered"] = "planner"
     return record
 
 
@@ -134,6 +188,9 @@ def test_receiver_side_token_contamination() -> None:
     try:
         (root / ".factory-state").mkdir(mode=0o700)
         (root / ".ralph").mkdir()
+        (root / ".factory/prompts").mkdir(parents=True)
+        prompt = "trusted start prompt names LOOP_COMPLETE"
+        (root / ".factory/prompts/implementation.md").write_text(prompt, encoding="utf-8")
         copy_scripts(root, "ralph-event-boundary.py", "factory_state_io.py")
         event_path = root / ".ralph/events-20260819-000000.jsonl"
         event_path.write_text("", encoding="utf-8")
@@ -151,6 +208,7 @@ def test_receiver_side_token_contamination() -> None:
         contaminated = (
             {"topic": "LOOP_COMPLETE", "payload": "indirect emit topic"},
             {"topic": "factory.implement", "payload": ["/absolute/bin/ralph", "emit", "LOOP_COMPLETE"]},
+            {"topic": "factory.implement", "payload": {"parts": ["LOOP_", "COMPLETE"]}},
             {
                 "ts": "2026-08-19T00:00:01+00:00",
                 "iteration": 0,
@@ -163,10 +221,13 @@ def test_receiver_side_token_contamination() -> None:
         for bad in contaminated:
             run([str(helper), "begin", "implementation"], root, env=env)
             with event_path.open("a", encoding="utf-8") as stream:
-                stream.write(json.dumps(event_record("factory.implement", "prompt names LOOP_COMPLETE", iteration=0)) + "\n")
+                stream.write(json.dumps(event_record("factory.implement", prompt, iteration=0)) + "\n")
                 stream.write(json.dumps(bad) + "\n")
             rejected = run([str(helper), "finish", "implementation"], root, env=env, check=False)
-            assert rejected.returncode != 0 and "contaminated" in rejected.stderr
+            assert rejected.returncode != 0 and (
+                "contaminated" in rejected.stderr or "allowlist" in rejected.stderr
+                or "invalid schema" in rejected.stderr
+            )
             assert supervision.read_bytes() == progress
             assert not (root / ".factory-state/ralph-launch-handshake-implementation.json").exists()
 
@@ -174,13 +235,33 @@ def test_receiver_side_token_contamination() -> None:
         # creates the launch handshake.
         run([str(helper), "begin", "implementation"], root, env=env)
         with event_path.open("a", encoding="utf-8") as stream:
-            stream.write(json.dumps(event_record("factory.implement", "prompt names LOOP_COMPLETE", iteration=0)) + "\n")
-            stream.write(json.dumps(event_record("iteration.summary", "ordinary progress", iteration=1)) + "\n")
+            stream.write(json.dumps(event_record("factory.implement", prompt, iteration=0)) + "\n")
+            summary = {key: 0 for key in (
+                "cache_read_tokens", "cache_write_tokens", "context_pct", "context_tokens",
+                "context_window", "cost_usd", "duration_ms", "input_tokens", "num_turns",
+                "output_tokens",
+            )}
+            stream.write(json.dumps(event_record("iteration.summary", json.dumps(summary), iteration=1)) + "\n")
         run([str(helper), "finish", "implementation"], root, env=env)
         handshake = json.loads(
             (root / ".factory-state/ralph-launch-handshake-implementation.json").read_text(encoding="utf-8")
         )
+        assert handshake["schema"] == "ralph-launch-handshake/v2"
         assert handshake["attempt_id"] == HEX and handshake["campaign_state_sha256"] is None
+        assert handshake["events_size"] == handshake["events_offset"] + handshake["events_delta_size"]
+        assert handshake["start_record_nonce"] == HEX
+
+        event_path.chmod(0o664)
+        rejected = run([str(helper), "begin", "implementation"], root, env=env, check=False)
+        assert rejected.returncode != 0 and "unsafe Ralph event stream" in rejected.stderr
+        event_path.chmod(0o644)
+        (root / ".ralph/current-events").chmod(0o666)
+        rejected = run([str(helper), "begin", "implementation"], root, env=env, check=False)
+        assert rejected.returncode != 0 and "unsafe Ralph marker" in rejected.stderr
+        (root / ".ralph/current-events").chmod(0o644)
+        (root / ".ralph").chmod(0o775)
+        rejected = run([str(helper), "begin", "implementation"], root, env=env, check=False)
+        assert rejected.returncode != 0 and "unsafe .ralph directory" in rejected.stderr
     finally:
         shutil.rmtree(root)
 
@@ -208,20 +289,35 @@ def test_verifier_executable_blob_binding() -> None:
         run(["git", "commit", "-qm", "base"], root)
         helper = root / "scripts/campaign-verifier-binding.py"
         binding = json.loads(run([str(helper)], root).stdout)
+        digest = binding["sha256"]
+        run([str(helper), "--expected-digest", digest, "--exec"], root)
         assert binding["binding"]["executable_blob"] == run(
             ["git", "rev-parse", "HEAD:scripts/verify-project.sh"], root
         ).stdout.strip()
 
         verifier.write_text("#!/usr/bin/env bash\nexit 7\n", encoding="utf-8")
-        rejected = run([str(helper)], root, check=False)
-        assert rejected.returncode != 0 and "committed blob" in rejected.stderr
+        rejected = run([str(helper), "--expected-digest", digest, "--exec"], root, check=False)
+        assert rejected.returncode != 0 and (
+            "committed blob" in rejected.stderr or "binding changed" in rejected.stderr
+        )
         run(["git", "restore", "--", "scripts/verify-project.sh"], root)
+
+        verifier.chmod(0o775)
+        rejected = run([str(helper)], root, check=False)
+        assert rejected.returncode != 0 and "unsafe file" in rejected.stderr
+        verifier.chmod(0o755)
 
         config = root / ".factory/config.toml"
         config.write_text(config.read_text(encoding="utf-8") + "# changed\n", encoding="utf-8")
-        rejected = run([str(helper)], root, check=False)
-        assert rejected.returncode != 0 and "committed blob" in rejected.stderr
+        rejected = run([str(helper), "--expected-digest", digest, "--exec"], root, check=False)
+        assert rejected.returncode != 0 and (
+            "committed blob" in rejected.stderr or "binding changed" in rejected.stderr
+        )
         run(["git", "restore", "--", ".factory/config.toml"], root)
+        config.chmod(0o664)
+        rejected = run([str(helper)], root, check=False)
+        assert rejected.returncode != 0 and "unsafe file" in rejected.stderr
+        config.chmod(0o644)
 
         external = root / "external-verifier"
         external.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
@@ -355,6 +451,7 @@ def test_one_time_supervision_migration() -> None:
 
 def main() -> None:
     test_symlink_safe_state_markers()
+    test_state_removal_quarantines_post_check_substitution()
     test_loop_lock_process_identity_and_inode_race()
     test_receiver_side_token_contamination()
     test_verifier_executable_blob_binding()

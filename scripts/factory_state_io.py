@@ -10,13 +10,30 @@ from pathlib import Path
 import re
 import secrets
 import stat
-from typing import Iterator
+import sys
+from typing import Callable, Iterator, TypeVar
+
+T = TypeVar("T")
 
 SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 class StateIOError(RuntimeError):
     pass
+
+
+def require_linux_primitives() -> None:
+    required = ("O_NOFOLLOW", "O_DIRECTORY")
+    missing = [name for name in required if not hasattr(os, name)]
+    dirfd_functions = (os.open, os.stat, os.unlink, os.rename, os.link)
+    if (
+        sys.platform != "linux"
+        or missing
+        or any(function not in os.supports_dir_fd for function in dirfd_functions)
+        or not Path("/proc/self/fd").is_dir()
+    ):
+        detail = ", ".join(missing) if missing else "dirfd/proc"
+        raise StateIOError(f"required Linux no-follow primitives are unavailable: {detail}")
 
 
 def _name(name: str) -> str:
@@ -47,8 +64,9 @@ def _validate_file(info: os.stat_result, *, maximum: int) -> None:
 
 @contextmanager
 def state_dir(root: Path, *, create: bool = False) -> Iterator[int]:
+    require_linux_primitives()
     root = root.absolute()
-    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     root_fd = os.open(root, flags)
     directory_fd: int | None = None
     try:
@@ -169,11 +187,12 @@ def atomic_write(root: Path, name: str, data: bytes, *, create_directory: bool =
         temporary = f".{name}.{secrets.token_hex(16)}"
         descriptor = os.open(
             temporary,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
             0o600,
             dir_fd=directory_fd,
         )
-        renamed = False
+        temporary_exists = True
+        quarantine: str | None = None
         try:
             view = memoryview(data)
             while view:
@@ -188,17 +207,40 @@ def atomic_write(root: Path, name: str, data: bytes, *, create_directory: bool =
                 current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
                 if (current.st_dev, current.st_ino) != (existing.st_dev, existing.st_ino):
                     raise StateIOError(f"lifecycle marker replaced before update: {name}")
-            os.rename(temporary, name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
-            renamed = True
+                quarantine = f".{name}.quarantine-{secrets.token_hex(16)}"
+                os.rename(name, quarantine, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
+                os.fsync(directory_fd)
+                quarantined = os.stat(quarantine, dir_fd=directory_fd, follow_symlinks=False)
+                _validate_file(quarantined, maximum=1024 * 1024)
+                if (quarantined.st_dev, quarantined.st_ino) != (existing.st_dev, existing.st_ino):
+                    raise StateIOError(f"lifecycle marker substituted at quarantine: {name}")
+            try:
+                # linkat publishes only if the canonical name is still absent;
+                # unlike rename it cannot silently replace a raced pathname.
+                os.link(
+                    temporary, name,
+                    src_dir_fd=directory_fd, dst_dir_fd=directory_fd,
+                    follow_symlinks=False,
+                )
+            except FileExistsError as exc:
+                raise StateIOError(f"lifecycle marker raced during update: {name}") from exc
+            os.unlink(temporary, dir_fd=directory_fd)
+            temporary_exists = False
+            if quarantine is not None:
+                os.unlink(quarantine, dir_fd=directory_fd)
+                quarantine = None
             os.fsync(directory_fd)
         finally:
             if descriptor >= 0:
                 os.close(descriptor)
-            if not renamed:
+            if temporary_exists:
                 try:
                     os.unlink(temporary, dir_fd=directory_fd)
                 except FileNotFoundError:
                     pass
+            # A validated original is intentionally retained under quarantine
+            # on publication failure so a raced pathname is never unlinked and
+            # durable state is not destroyed silently.
 
 
 def atomic_write_text(root: Path, name: str, value: str) -> None:
@@ -210,18 +252,114 @@ def atomic_write_json(root: Path, name: str, value: object, *, indent: int | Non
     atomic_write_text(root, name, raw + "\n")
 
 
-def remove(root: Path, name: str, *, missing_ok: bool = True) -> None:
+def consume_json(
+    root: Path,
+    name: str,
+    validator: Callable[[object], T],
+    *,
+    maximum: int = 16384,
+    after_final_check: Callable[[], None] | None = None,
+) -> T:
+    """Validate and one-shot consume JSON through one retained descriptor."""
     name = _name(name)
     with state_dir(root) as directory_fd:
+        descriptor: int | None = None
         try:
-            before = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
-        except FileNotFoundError:
-            if missing_ok:
-                return
-            raise StateIOError(f"lifecycle marker is missing: {name}")
-        _validate_file(before, maximum=1024 * 1024)
-        current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
-        if (current.st_dev, current.st_ino) != (before.st_dev, before.st_ino):
-            raise StateIOError(f"lifecycle marker replaced before removal: {name}")
-        os.unlink(name, dir_fd=directory_fd)
-        os.fsync(directory_fd)
+            descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
+            before = os.fstat(descriptor)
+            named = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            _validate_file(before, maximum=maximum)
+            _validate_file(named, maximum=maximum)
+            if (before.st_dev, before.st_ino) != (named.st_dev, named.st_ino):
+                raise StateIOError(f"lifecycle marker changed while opening: {name}")
+            raw = os.read(descriptor, maximum + 1)
+            after_read = os.fstat(descriptor)
+            if (
+                len(raw) > maximum
+                or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+                != (
+                    after_read.st_dev, after_read.st_ino,
+                    after_read.st_size, after_read.st_mtime_ns,
+                )
+            ):
+                raise StateIOError(f"lifecycle marker changed while reading: {name}")
+            try:
+                data = json.loads(raw.decode("utf-8"))
+            except (UnicodeError, json.JSONDecodeError) as exc:
+                raise StateIOError(f"invalid JSON lifecycle marker {name}: {exc}") from exc
+            result = validator(data)
+            opened = os.fstat(descriptor)
+            identity = (before.st_dev, before.st_ino)
+            if (
+                (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns)
+                != (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+            ):
+                raise StateIOError(f"lifecycle marker changed before consumption: {name}")
+            if after_final_check is not None:
+                after_final_check()
+            quarantine = f".{name}.quarantine-{secrets.token_hex(16)}"
+            os.rename(name, quarantine, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
+            os.fsync(directory_fd)
+            quarantined = os.stat(quarantine, dir_fd=directory_fd, follow_symlinks=False)
+            opened = os.fstat(descriptor)
+            if (
+                (quarantined.st_dev, quarantined.st_ino) != identity
+                or (opened.st_dev, opened.st_ino) != identity
+            ):
+                raise StateIOError(f"lifecycle marker substituted at quarantine: {name}")
+            _validate_file(quarantined, maximum=maximum)
+            _validate_file(opened, maximum=maximum)
+            os.unlink(quarantine, dir_fd=directory_fd)
+            os.fsync(directory_fd)
+            return result
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+
+
+def remove(
+    root: Path,
+    name: str,
+    *,
+    missing_ok: bool = True,
+    after_final_check: Callable[[], None] | None = None,
+) -> None:
+    name = _name(name)
+    with state_dir(root) as directory_fd:
+        descriptor: int | None = None
+        try:
+            try:
+                descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
+            except FileNotFoundError:
+                if missing_ok:
+                    return
+                raise StateIOError(f"lifecycle marker is missing: {name}")
+            before = os.fstat(descriptor)
+            named = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            _validate_file(before, maximum=1024 * 1024)
+            _validate_file(named, maximum=1024 * 1024)
+            if (named.st_dev, named.st_ino) != (before.st_dev, before.st_ino):
+                raise StateIOError(f"lifecycle marker changed while opening: {name}")
+            current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            if (current.st_dev, current.st_ino) != (before.st_dev, before.st_ino):
+                raise StateIOError(f"lifecycle marker replaced before removal: {name}")
+            if after_final_check is not None:
+                after_final_check()
+            quarantine = f".{name}.quarantine-{secrets.token_hex(16)}"
+            os.rename(name, quarantine, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
+            os.fsync(directory_fd)
+            quarantined = os.stat(quarantine, dir_fd=directory_fd, follow_symlinks=False)
+            opened = os.fstat(descriptor)
+            identity = (before.st_dev, before.st_ino)
+            if (
+                (quarantined.st_dev, quarantined.st_ino) != identity
+                or (opened.st_dev, opened.st_ino) != identity
+            ):
+                raise StateIOError(f"lifecycle marker substituted at quarantine: {name}")
+            _validate_file(quarantined, maximum=1024 * 1024)
+            _validate_file(opened, maximum=1024 * 1024)
+            os.unlink(quarantine, dir_fd=directory_fd)
+            os.fsync(directory_fd)
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)

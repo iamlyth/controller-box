@@ -16,12 +16,15 @@
 
 - Changed shell syntax, Python compile/AST, Node syntax, executable modes, and
   `git diff --check` passed.
-- Focused lock, marker, token-boundary, launch-handshake, migration, verifier,
-  campaign, recovery, dependency, and sentinel regressions passed.
+- Focused root-lock/background-retention/migration, marker and stale-lock
+  final-window races, receiver token protocol, exact event-byte handshake,
+  verifier replacement/FD boundaries, campaign, recovery, strict maintenance
+  parsing, runner, dependency, and sentinel regressions passed.
 - The complete factory set and `./scripts/verify-boilerplate.sh` passed.
 - `nix-shell --run './scripts/verify-project.sh'` passed: 98/98 CTest targets,
   mandatory installed-functional acceptance, packaging, and installed smoke;
-  the declared headless GPU backend test was the only skip.
+  `test_kernel_controller` and `test_backend_smoke` were the two declared
+  environment skips.
 
 ## Scope
 

@@ -63,9 +63,8 @@ Volatile, ignored state:
 - event streams and pointer files under `.ralph/`
 - loop locks, diagnostics, API state, task/memory stores, and TUI exports
 - Pi transcripts and scheduled-agent state
-- the retained `.git/controller-box-factory/lifecycle.lock`, legacy
-  `.factory-lock` during one-time migration, `.bug-ledger.lock`, and
-  `.factory-state/` lifecycle markers
+- legacy `.factory-lock` only during one-time migration,
+  `.bug-ledger.lock`, and `.factory-state/` lifecycle markers
 - `.ollama-usage-env`
 
 Git checkpoints make the plan, scratchpad, and implementation recoverable. Event/task files improve same-disk recovery but are not treated as portable project history.
@@ -179,13 +178,15 @@ There is no minimum iteration count: high quality is determined by evidence, not
 
 ### Completion protocol and checkpoint guards
 
-Ralph recognizes a completion promise only when the reserved token is the exact final non-empty model-output line outside all `<event>` tags. A token inside an event is never completion, and the Pi extension blocks every lifecycle token as a `ralph emit` topic or payload. Each prompt therefore requires the standalone final line after the normal event is closed.
+Ralph recognizes a completion promise only when the reserved token is the exact final non-empty model-output line outside all `<event>` tags. A token inside an event is never completion. Sender-side Pi rewriting and command filtering are defense in depth, not an authority: same-UID code can hide or replace an executable. The trusted receiver therefore enforces the strict event-topic/schema allowlist, recursively rejects reserved tokens (including ordered string fragments), and terminates the leaf fail-closed. Each prompt still requires the standalone final line after the normal event is closed.
 
 Before every checkpoint, planning revalidates the launcher's immutable specification metadata and cycle `base_commit`; maintenance planning performs its equivalent freshness check. `scripts/check-scratchpad.sh` requires one level-one handoff document, and every iteration hook passes its lifecycle token so contamination fails before checkpointing. `--allow-missing` covers only Ralph's fresh-loop scratchpad removal, while `--allow-oversize` warns without accepting an oversized final handoff. An ordinary checkpoint never commits a scratchpad-only change: it leaves the latest non-empty handoff in the worktree for `--resume` and recovery. Substantive source, test, plan-state, ledger, or documentation changes may commit with the scratchpad.
 
 The tightly scoped `--final-handoff` checkpoint accepts no dirty path except the scratchpad and permits at most one metadata-only final commit per durable lifecycle cycle. It runs before `scripts/ralph-completion-gate.sh`; the gate then records at most one successful clean-HEAD attestation for that cycle and fails if HEAD or the tracked tree changes during validation. No tracked commit follows a passing attestation. In implementation completion, front matter must be exactly `complete`, every task must be `complete`, and every conformance row must be `verified`; unavailable hardware remains a finding until real evidence exists.
 
-When the strict gate rejects a valid premature completion request, it still writes an atomic, one-shot marker bound to the launcher nonce, lifecycle mode, loop ID, and canonical workspace. The supervisor consumes only a matching marker and continues the same cycle with `--continue`. Completion-rejection, stale, and combined no-progress counts are persisted under `.factory-state/`, so process or campaign resume cannot reset their ceilings (eight, two, and eight by default). Stale, malformed, mismatched, or symlink markers cannot authorize continuation. History replacement, malformed records, exhausted budgets, and arbitrary non-quota failures are terminal; quota exhaustion remains inside the leaf launcher's verified wait path.
+When the strict gate rejects a valid premature completion request, it still writes an atomic, one-shot marker bound to the launcher nonce, lifecycle mode, loop ID, and canonical workspace. Hook payload bytes are retained in memory, and marker removal is a dirfd/no-follow quarantine-then-validate operation, so pathname substitution cannot authorize continuation. The supervisor consumes only a matching marker and continues the same cycle with `--continue`. Completion-rejection, stale, and combined no-progress counts are persisted under `.factory-state/`, so process or campaign resume cannot reset their ceilings (eight, two, and eight by default). Stale, malformed, mismatched, or symlink markers cannot authorize continuation. History replacement, malformed records, exhausted budgets, and arbitrary non-quota failures are terminal; quota exhaustion remains inside the leaf launcher's verified wait path.
+
+A phase-start handshake records the exact received event delta digest and size, the exact first trusted record digest and size, and its attempt/cycle nonce. Campaign confirmation requires the same inode, exact total size, and identical bytes; both later appends and same-size rewrites fail closed. `.ralph`, pointer markers, and event streams must be owned and not group/other writable. These controls require Linux `O_NOFOLLOW`, dirfd, `/proc`, and directory `flock` primitives; the lifecycle exits explicitly when they are unavailable.
 
 ## Run a finite multi-round campaign
 
@@ -202,8 +203,13 @@ stopping boundaries:
 Each mandatory round records the current clean `HEAD` as a new base, runs a
 fresh `ralph-plan.sh` cycle, runs the resulting plan through `ralph-run.sh`,
 executes `verification.campaign_command`, validates installed-functional
-evidence, transfers the exact clean Git tree to every declared runner, validates
-commit-bound runner receipts, and launches an independent adversarial audit
+evidence, transfers the exact clean Git tree to every declared runner, and
+validates commit-bound runner receipts.
+Immediately before local verification, the campaign recomputes and compares the
+tracked config and executable Git blobs, content digests, canonical argv, and
+secure modes, then revalidates and executes that canonical repository-relative
+command; implementation-time replacement, same-size rewrite, or group/other-writable mode
+fails before the verifier runs. It then launches an independent adversarial audit
 through `ralph-audit.sh`. A prior completion claim never shortens the requested
 round count. The next round's fresh planner consumes the preceding
 `.factory/artifacts/campaign-audit.md`; prior plans and audit reports remain in Git history.
@@ -248,12 +254,16 @@ runs Ralph or changes evidence. Review the receipt, then use the normal campaign
 already-verified, dirty, backward, equal, non-ancestor, merge, or wrong-old
 requests fail without changing state.
 
-The trusted campaign, launchers, and state transitions share the inherited
-factory lock, so planning, implementation, verification, audit checkpointing,
-and recovery retain one repository writer. Ralph/Pi and other untrusted leaves
-run after all lock-inode descriptors and lock metadata are dropped. The retained
-`.git/controller-box-factory/lifecycle.lock` pathname is never unlinked; a safe
-legacy `.factory-lock` is dual-locked and removed only during migration.
+The trusted campaign, launchers, and state transitions share an inherited
+exclusive `flock` on the already-open canonical repository-root directory, so
+planning, implementation, verification, audit checkpointing, and recovery
+retain one repository writer without a replaceable authority pathname. Ralph/Pi,
+hooks, gates, verifiers, runners, evidence checkers, tests, and product commands
+run only after every inherited descriptor for that root inode and all lock
+metadata are dropped. A separately opened root FD cannot unlock the parent's
+open-file description. Migration first acquires any safe legacy `.factory-lock`,
+fails if it is busy or ambiguous, then quarantines and validates it before
+removal.
 Quota waits and bounded rejection/stale recovery remain inside each leaf.
 The campaign does not retry arbitrary nonzero leaf or gate results: it returns
 nonzero with durable state still active at the same resumable phase. Invalid or

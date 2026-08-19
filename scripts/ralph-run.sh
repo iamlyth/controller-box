@@ -27,9 +27,9 @@ source "$SCRIPT_DIR/factory-lock.sh"
 factory_lock_bootstrap "$PROJECT_ROOT" "$PROJECT_ROOT/scripts/ralph-run.sh" "${ORIGINAL_ARGS[@]}"
 command -v "$RALPH_BIN" >/dev/null || { echo "ralph-run: Ralph executable not found: $RALPH_BIN" >&2; exit 2; }
 command -v pi2 >/dev/null || { echo "ralph-run: pi2 is not available in this shell" >&2; exit 2; }
-./scripts/branch-guard.sh
-./scripts/check-factory-environment.py
-./scripts/check-plan-freshness.sh
+factory_lock_run_untrusted ./scripts/branch-guard.sh
+factory_lock_run_untrusted ./scripts/check-factory-environment.py
+factory_lock_run_untrusted ./scripts/check-plan-freshness.sh
 
 if [[ "$RESUME" == false ]] && [[ -n $(git status --porcelain --untracked-files=normal) ]]; then
     echo "ralph-run: start from a clean Git tree; commit the spec and implementation plan first" >&2
@@ -52,7 +52,8 @@ finish_implementation_cycle() {
         return 0
     fi
     payload=$(printf '{"loop":{"workspace":"%s","id":"implementation-final"},"iteration":{"current":"final"}}' "$PROJECT_ROOT")
-    if printf '%s' "$payload" | ./scripts/git-commit-hook.sh --final-handoff; then :; else return $?; fi
+    if printf '%s' "$payload" | factory_lock_run_untrusted \
+            ./scripts/git-commit-hook.sh --final-handoff; then :; else return $?; fi
     if factory_lock_run_untrusted env FACTORY_FINAL_GATE_ATTEST=1 ./scripts/final-gate.sh --implementation; then :; else return $?; fi
     head=$(git rev-parse HEAD)
     ./scripts/ralph-final-state.py attest implementation "$head" >/dev/null
@@ -60,7 +61,7 @@ finish_implementation_cycle() {
 }
 
 while true; do
-    ./scripts/ollama-usage-guard.sh --wait
+    factory_lock_run_untrusted ./scripts/ollama-usage-guard.sh --wait
     CONTINUE=false
     if $RESUME && ralph_supervision_should_continue implementation; then CONTINUE=true; fi
     ralph_supervision_begin implementation
@@ -104,12 +105,12 @@ while true; do
     fi
 
     set +e
-    ./scripts/ollama-usage-guard.sh --check
+    factory_lock_run_untrusted ./scripts/ollama-usage-guard.sh --check
     quota_rc=$?
     set -e
     if (( quota_rc == 1 )); then
         echo "ralph-run: backend stopped while quota is blocked; waiting before automatic continuation" >&2
-        ./scripts/ollama-usage-guard.sh --wait
+        factory_lock_run_untrusted ./scripts/ollama-usage-guard.sh --wait
         ./scripts/ralph-recover.sh --prepare-only
         RESUME=true
         continue

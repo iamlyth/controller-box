@@ -513,10 +513,15 @@ Every round performs fresh planning, strict implementation, the configured
 project verification command, installed-evidence validation, exact-tree
 verification on every declared factory runner, and a separate adversarial audit.
 Runtime state is persisted atomically in the ignored
-`.factory-state/ralph-campaign.json`. The lifecycle lock is a retained,
-owner-private file at `.git/controller-box-factory/lifecycle.lock`; the trusted
-supervisor keeps its descriptor while Ralph/Pi and verifier leaves receive no
-lock descriptor or lock metadata. After interruption, confirm no child Ralph
+`.factory-state/ralph-campaign.json`. The lifecycle lock is an exclusive
+Linux `flock` on the already-open canonical repository-root directory itself;
+there is no replaceable lock-file authority. The trusted supervisor retains that
+dynamic descriptor, while Ralph/Pi, hooks, gates, verifiers, runner/evidence
+commands, tests, and product leaves receive neither a root descriptor nor lock
+metadata. A separately opened root FD cannot unlock the supervisor's open-file
+description. Safe legacy lock files are acquired, quarantined, revalidated, and
+removed once; busy or ambiguous migration state stops the lifecycle. After
+interruption, confirm no child Ralph
 process is alive and resume the exact phase with:
 
 ```bash

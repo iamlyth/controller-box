@@ -402,18 +402,36 @@ def start_campaign(args: argparse.Namespace) -> None:
         })
 
 
-def _read_ralph_marker(name: str) -> str:
+def _open_ralph_directory() -> int:
+    if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
+        fail("required Linux no-follow primitives are unavailable")
     ralph = ROOT / ".ralph"
-    directory_fd = os.open(ralph, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0))
+    directory_fd = os.open(ralph, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    info = os.fstat(directory_fd)
+    named = ralph.lstat()
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or info.st_uid != os.getuid()
+        or info.st_mode & 0o022
+        or (info.st_dev, info.st_ino) != (named.st_dev, named.st_ino)
+    ):
+        os.close(directory_fd)
+        fail("unsafe .ralph directory")
+    return directory_fd
+
+
+def _read_ralph_marker(name: str) -> str:
+    directory_fd = _open_ralph_directory()
     descriptor = None
     try:
-        descriptor = os.open(name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=directory_fd)
+        descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
         info = os.fstat(descriptor)
         named = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
         if (
             not stat.S_ISREG(info.st_mode)
             or info.st_uid != os.getuid()
             or info.st_nlink != 1
+            or info.st_mode & 0o022
             or info.st_size > 4096
             or (info.st_dev, info.st_ino) != (named.st_dev, named.st_ino)
         ):
@@ -464,12 +482,14 @@ def confirm_launch(args: argparse.Namespace) -> None:
         expected_keys = {
             "schema", "mode", "cycle_id", "attempt_id", "campaign_round",
             "campaign_phase", "campaign_state_sha256", "loop_id", "events",
-            "events_dev", "events_ino", "events_size",
+            "events_dev", "events_ino", "events_offset", "events_size", "events_sha256",
+            "events_delta_size", "events_delta_sha256", "start_record_size",
+            "start_record_sha256", "start_record_nonce",
         }
         if (
             not isinstance(handshake, dict)
             or set(handshake) != expected_keys
-            or handshake.get("schema") != "ralph-launch-handshake/v1"
+            or handshake.get("schema") != "ralph-launch-handshake/v2"
             or handshake.get("mode") != mode
             or handshake.get("campaign_round") != str(data["round"])
             or handshake.get("campaign_phase") != phase
@@ -478,10 +498,23 @@ def confirm_launch(args: argparse.Namespace) -> None:
             or not DIGEST.fullmatch(handshake["cycle_id"])
             or not isinstance(handshake.get("attempt_id"), str)
             or not DIGEST.fullmatch(handshake["attempt_id"])
+            or handshake.get("start_record_nonce") != handshake.get("attempt_id")
+            or not isinstance(handshake.get("events_sha256"), str)
+            or not DIGEST.fullmatch(handshake["events_sha256"])
+            or not isinstance(handshake.get("events_delta_sha256"), str)
+            or not DIGEST.fullmatch(handshake["events_delta_sha256"])
+            or not isinstance(handshake.get("start_record_sha256"), str)
+            or not DIGEST.fullmatch(handshake["start_record_sha256"])
             or any(
                 type(handshake.get(key)) is not int or handshake[key] < 0
-                for key in ("events_dev", "events_ino", "events_size")
+                for key in (
+                    "events_dev", "events_ino", "events_offset", "events_size",
+                    "events_delta_size", "start_record_size",
+                )
             )
+            or handshake.get("events_size")
+            != handshake.get("events_offset") + handshake.get("events_delta_size")
+            or handshake.get("start_record_size", 0) > handshake.get("events_delta_size", -1)
         ):
             fail("launch handshake does not match this campaign phase")
         try:
@@ -503,20 +536,44 @@ def confirm_launch(args: argparse.Namespace) -> None:
         event_relative = handshake["events"]
         if not isinstance(event_relative, str) or not re.fullmatch(r"\.ralph/events(?:-[0-9]{8}-[0-9]{6})?\.jsonl", event_relative):
             fail("launch handshake event path is invalid")
-        event_path = ROOT / event_relative
-        descriptor = os.open(event_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        event_name = event_relative.removeprefix(".ralph/")
+        directory_fd = _open_ralph_directory()
+        descriptor = None
         try:
+            descriptor = os.open(event_name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
             info = os.fstat(descriptor)
+            named = os.stat(event_name, dir_fd=directory_fd, follow_symlinks=False)
             if (
                 not stat.S_ISREG(info.st_mode)
                 or info.st_uid != os.getuid()
                 or info.st_nlink != 1
+                or info.st_mode & 0o022
+                or (info.st_dev, info.st_ino) != (named.st_dev, named.st_ino)
                 or (info.st_dev, info.st_ino) != (handshake["events_dev"], handshake["events_ino"])
-                or info.st_size < handshake["events_size"]
+                or info.st_size != handshake["events_size"]
+                or info.st_size > 64 * 1024 * 1024
             ):
                 fail("launch handshake event stream changed")
+            raw = os.pread(descriptor, handshake["events_size"], 0)
+            delta = raw[handshake["events_offset"]:]
+            if (
+                len(raw) != handshake["events_size"]
+                or hashlib.sha256(raw).hexdigest() != handshake["events_sha256"]
+                or len(delta) != handshake["events_delta_size"]
+                or hashlib.sha256(delta).hexdigest() != handshake["events_delta_sha256"]
+                or len(delta) < handshake["start_record_size"]
+                or hashlib.sha256(delta[:handshake["start_record_size"]]).hexdigest()
+                != handshake["start_record_sha256"]
+                or not delta[:handshake["start_record_size"]].endswith(b"\n")
+            ):
+                fail("launch handshake event bytes changed")
+            after = os.fstat(descriptor)
+            if (info.st_size, info.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+                fail("launch handshake event stream changed while reading")
         finally:
-            os.close(descriptor)
+            if descriptor is not None:
+                os.close(descriptor)
+            os.close(directory_fd)
         record[started_key] = True
         atomic_write(data)
 
