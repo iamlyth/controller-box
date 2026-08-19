@@ -5,10 +5,18 @@
  * Task 9 — Every control M10–M20 (Profiles) and M28–M38 (Profile editor),
  * plus disabled scenarios D03, D04, D07, D08, is exercised through
  * cbx_manager_handle_event (the same dispatch path the installed binary
- * uses) for BOTH the controller (keyboard) and pointer (mouse) input
+ * uses) for BOTH the keyboard (SDL_KEYDOWN/KEYUP — supplemental
+ * accessibility evidence per SPEC §5.7) and pointer (mouse) input
  * paths.  Semantic outcomes (mode transitions, file creation/deletion,
  * binding changes, save validation) are asserted — never mere handler
  * return values.
+ *
+ * IMPORTANT (SPEC §5.7): keyboard-generated SDL events are supplemental
+ * accessibility evidence and must never be labeled controller acceptance.
+ * Real controller-transport acceptance for M28–M38 is in
+ * test_manager_native_prof.c, which uses ctrl_press (virtual gamepad
+ * via SDL_JoystickSetVirtualButton → SDL_CONTROLLERBUTTONDOWN →
+ * cbx_manager_controller_to_key → cbx_manager_handle_event).
  *
  * Profile editor interactions use the production Edit-button path to
  * open the editor (not manual initialization).
@@ -364,10 +372,10 @@ open_editor_pointer(cbx_manager *mgr)
 /*  Profiles tab — Profile list (M10)                                 */
 /* ------------------------------------------------------------------ */
 
-/* M10 controller path: DOWN from tabbar → list gets focus, UP/DOWN
+/* M10 keyboard path (supplemental per §5.7): DOWN from tabbar → list gets focus, UP/DOWN
  * selects items. */
 static void
-test_prof_list_select_controller(void **state)
+test_prof_list_select_keyboard(void **state)
 {
     mip_fixture *f = *state;
     cbx_manager *mgr = &f->mgr;
@@ -416,10 +424,10 @@ test_prof_list_select_pointer(void **state)
 /*  Profiles tab — Create button (M11) + source picker (M12)         */
 /* ------------------------------------------------------------------ */
 
-/* M11 controller path: navigate to Create, press A → create source
+/* M11 keyboard path (supplemental per §5.7): navigate to Create, press A → create source
  * picker opens. */
 static void
-test_prof_create_open_controller(void **state)
+test_prof_create_open_keyboard(void **state)
 {
     mip_fixture *f = *state;
     cbx_manager *mgr = &f->mgr;
@@ -451,10 +459,10 @@ test_prof_create_open_pointer(void **state)
     assert_true(pt->create_picker.base.visible);
 }
 
-/* M12 controller path: create picker → DOWN to select "Empty" → A →
+/* M12 keyboard path (supplemental per §5.7): create picker → DOWN to select "Empty" → A →
  * name input mode opens. */
 static void
-test_prof_create_source_controller(void **state)
+test_prof_create_source_keyboard(void **state)
 {
     mip_fixture *f = *state;
     cbx_manager *mgr = &f->mgr;
@@ -501,7 +509,7 @@ test_prof_create_source_pointer(void **state)
 /*  Profiles tab — Name input (M13, M14, M15, M16)                   */
 /* ------------------------------------------------------------------ */
 
-/* M13 controller path: type letter keys → characters appended. */
+/* M13 keyboard path (supplemental per §5.7): type letter keys → characters appended. */
 static void
 test_prof_name_input_chars(void **state)
 {
@@ -526,7 +534,7 @@ test_prof_name_input_chars(void **state)
     assert_string_equal(cbx_profiles_tab_name_buffer(pt), "hello");
 }
 
-/* M14 controller path: type chars, then backspace removes last char. */
+/* M14 keyboard path (supplemental per §5.7): type chars, then backspace removes last char. */
 static void
 test_prof_name_input_backspace(void **state)
 {
@@ -550,7 +558,7 @@ test_prof_name_input_backspace(void **state)
     assert_string_equal(cbx_profiles_tab_name_buffer(pt), "xy");
 }
 
-/* M15 controller path: type name → A to confirm → editor opens with
+/* M15 keyboard path (supplemental per §5.7): type name → A to confirm → editor opens with
  * in-memory profile (Default copy → has Default bindings). */
 static void
 test_prof_name_input_confirm(void **state)
@@ -580,7 +588,7 @@ test_prof_name_input_confirm(void **state)
     assert_int_equal(cbx_profile_editor_binding_count(&pt->editor), 6);
 }
 
-/* M16 controller path: type name → B to cancel → returns to list. */
+/* M16 keyboard path (supplemental per §5.7): type name → B to cancel → returns to list. */
 static void
 test_prof_name_input_cancel(void **state)
 {
@@ -608,10 +616,10 @@ test_prof_name_input_cancel(void **state)
 /*  Profiles tab — Edit button (M17)                                  */
 /* ------------------------------------------------------------------ */
 
-/* M17 controller path: select profile → navigate to Edit → A →
+/* M17 keyboard path (supplemental per §5.7): select profile → navigate to Edit → A →
  * editor opens with selected profile's bindings. */
 static void
-test_prof_edit_open_controller(void **state)
+test_prof_edit_open_keyboard(void **state)
 {
     mip_fixture *f = *state;
     cbx_manager *mgr = &f->mgr;
@@ -656,10 +664,10 @@ test_prof_edit_open_pointer(void **state)
 /*  Profiles tab — Delete button (M18) + confirm (M19) + cancel (M20)*/
 /* ------------------------------------------------------------------ */
 
-/* M18 controller path: navigate to Delete, press A → confirm delete
+/* M18 keyboard path (supplemental per §5.7): navigate to Delete, press A → confirm delete
  * mode opens. */
 static void
-test_prof_delete_open_controller(void **state)
+test_prof_delete_open_keyboard(void **state)
 {
     mip_fixture *f = *state;
     cbx_manager *mgr = &f->mgr;
@@ -704,7 +712,7 @@ test_prof_delete_open_pointer(void **state)
     assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_CONFIRM_DELETE);
 }
 
-/* M19 controller path: confirm delete → profile file unlinked, list
+/* M19 keyboard path (supplemental per §5.7): confirm delete → profile file unlinked, list
  * refreshes. */
 static void
 test_prof_delete_confirm(void **state)
@@ -737,7 +745,7 @@ test_prof_delete_confirm(void **state)
     assert_int_not_equal(access(path, F_OK), 0);
 }
 
-/* M20 controller path: cancel delete → returns to list, no deletion. */
+/* M20 keyboard path (supplemental per §5.7): cancel delete → returns to list, no deletion. */
 static void
 test_prof_delete_cancel(void **state)
 {
@@ -771,7 +779,7 @@ test_prof_delete_cancel(void **state)
 /*  Profile editor — Binding list navigation (M28)                   */
 /* ------------------------------------------------------------------ */
 
-/* M28 controller path: editor open → UP/DOWN navigates binding list. */
+/* M28 keyboard path (supplemental per §5.7): editor open → UP/DOWN navigates binding list. */
 static void
 test_editor_list_nav(void **state)
 {
@@ -803,9 +811,9 @@ test_editor_list_nav(void **state)
 /*  Profile editor — Edit binding / activate (M29)                   */
 /* ------------------------------------------------------------------ */
 
-/* M29 controller path: A on binding → binding edit sub-menu opens. */
+/* M29 keyboard path (supplemental per §5.7): A on binding → binding edit sub-menu opens. */
 static void
-test_editor_activate_binding_controller(void **state)
+test_editor_activate_binding_keyboard(void **state)
 {
     mip_fixture *f = *state;
     cbx_manager *mgr = &f->mgr;
@@ -856,10 +864,10 @@ editor_enter_target_pick(cbx_manager *mgr)
     send_key_press(mgr, SDLK_a);
 }
 
-/* M30 controller path: target pick → A to confirm → binding target
+/* M30 keyboard path (supplemental per §5.7): target pick → A to confirm → binding target
  * updated, picker closes. */
 static void
-test_editor_target_pick_controller(void **state)
+test_editor_target_pick_keyboard(void **state)
 {
     mip_fixture *f = *state;
     cbx_manager *mgr = &f->mgr;
@@ -915,9 +923,9 @@ test_editor_target_pick_pointer(void **state)
 /*  Profile editor — Capture mode (M31, M32)                         */
 /* ------------------------------------------------------------------ */
 
-/* M31 controller path: binding edit → A on "Capture" → capture mode. */
+/* M31 keyboard path (supplemental per §5.7): binding edit → A on "Capture" → capture mode. */
 static void
-test_editor_capture_begin_controller(void **state)
+test_editor_capture_begin_keyboard(void **state)
 {
     mip_fixture *f = *state;
     cbx_manager *mgr = &f->mgr;
@@ -1026,10 +1034,10 @@ test_editor_capture_event(void **state)
 /*  Profile editor — Sequential mode (M33, M34, M35, M36)           */
 /* ------------------------------------------------------------------ */
 
-/* M33 controller path: binding edit → A on "Sequential" → sequential
+/* M33 keyboard path (supplemental per §5.7): binding edit → A on "Sequential" → sequential
  * mode begins. */
 static void
-test_editor_seq_begin_controller(void **state)
+test_editor_seq_begin_keyboard(void **state)
 {
     mip_fixture *f = *state;
     cbx_manager *mgr = &f->mgr;
@@ -1130,7 +1138,7 @@ test_editor_seq_capture(void **state)
     assert_true(found_up_button);
 }
 
-/* M35 controller path: B during sequential → skip current button. */
+/* M35 keyboard path (supplemental per §5.7): B during sequential → skip current button. */
 static void
 test_editor_seq_skip(void **state)
 {
@@ -1158,7 +1166,7 @@ test_editor_seq_skip(void **state)
     assert_int_equal(cbx_profile_editor_seq_get_step(&pt->editor), 2);
 }
 
-/* M36 controller path: Start (Tab) during sequential → cancel
+/* M36 keyboard path (supplemental per §5.7): Start (Tab) during sequential → cancel
  * sequential, changes discarded, return to editor LIST. */
 static void
 test_editor_seq_cancel(void **state)
@@ -1188,7 +1196,7 @@ test_editor_seq_cancel(void **state)
 /*  Profile editor — Save and close (M37)                             */
 /* ------------------------------------------------------------------ */
 
-/* M37 controller path: B in editor LIST mode → save via
+/* M37 keyboard path (supplemental per §5.7): B in editor LIST mode → save via
  * cbx_profile_save_to_dir → file written, editor closes, list
  * refreshes. */
 static void
@@ -1241,7 +1249,7 @@ test_editor_save_button_pointer(void **state)
 /*  Profile editor — Cancel editor / discard (M38)                   */
 /* ------------------------------------------------------------------ */
 
-/* M38 controller path: Tab (Start) in editor LIST mode → discard
+/* M38 keyboard path (supplemental per §5.7): Tab (Start) in editor LIST mode → discard
  * changes, close editor, no file written. */
 static void
 test_editor_cancel_discard(void **state)
@@ -1443,12 +1451,12 @@ test_d08_empty_profile_create(void **state)
 /*  Task 3: Clone existing profile (PR-02/M15/IA-10)                 */
 /* ================================================================== */
 
-/* M15 controller path: create picker -> DOWN x2 to "Clone current"
+/* M15 keyboard path (supplemental per §5.7): create picker -> DOWN x2 to "Clone current"
  * -> A -> type name -> A -> editor opens with cloned bindings.
  * The user profile (index 1, "myprof") has 6 NES bindings; the
  * cloned editor should have the same count. */
 static void
-test_prof_create_clone_controller(void **state)
+test_prof_create_clone_keyboard(void **state)
 {
     mip_fixture *f = *state;
     cbx_manager *mgr = &f->mgr;
@@ -1799,17 +1807,17 @@ main(void)
     const struct CMUnitTest tests[] = {
         /* Profiles tab — list select (M10) */
         cmocka_unit_test_setup_teardown(
-            test_prof_list_select_controller, mip_setup, mip_teardown),
+            test_prof_list_select_keyboard, mip_setup, mip_teardown),
         cmocka_unit_test_setup_teardown(
             test_prof_list_select_pointer, mip_setup, mip_teardown),
 
         /* Profiles tab — Create button (M11) + source picker (M12) */
         cmocka_unit_test_setup_teardown(
-            test_prof_create_open_controller, mip_setup, mip_teardown),
+            test_prof_create_open_keyboard, mip_setup, mip_teardown),
         cmocka_unit_test_setup_teardown(
             test_prof_create_open_pointer, mip_setup, mip_teardown),
         cmocka_unit_test_setup_teardown(
-            test_prof_create_source_controller, mip_setup, mip_teardown),
+            test_prof_create_source_keyboard, mip_setup, mip_teardown),
         cmocka_unit_test_setup_teardown(
             test_prof_create_source_pointer, mip_setup, mip_teardown),
 
@@ -1825,13 +1833,13 @@ main(void)
 
         /* Profiles tab — Edit button (M17) */
         cmocka_unit_test_setup_teardown(
-            test_prof_edit_open_controller, mip_setup, mip_teardown),
+            test_prof_edit_open_keyboard, mip_setup, mip_teardown),
         cmocka_unit_test_setup_teardown(
             test_prof_edit_open_pointer, mip_setup, mip_teardown),
 
         /* Profiles tab — Delete (M18, M19, M20) */
         cmocka_unit_test_setup_teardown(
-            test_prof_delete_open_controller, mip_setup, mip_teardown),
+            test_prof_delete_open_keyboard, mip_setup, mip_teardown),
         cmocka_unit_test_setup_teardown(
             test_prof_delete_open_pointer, mip_setup, mip_teardown),
         cmocka_unit_test_setup_teardown(
@@ -1845,7 +1853,7 @@ main(void)
 
         /* Profile editor — edit binding (M29) */
         cmocka_unit_test_setup_teardown(
-            test_editor_activate_binding_controller,
+            test_editor_activate_binding_keyboard,
             mip_setup, mip_teardown),
         cmocka_unit_test_setup_teardown(
             test_editor_activate_binding_pointer,
@@ -1853,13 +1861,13 @@ main(void)
 
         /* Profile editor — target picker (M30) */
         cmocka_unit_test_setup_teardown(
-            test_editor_target_pick_controller, mip_setup, mip_teardown),
+            test_editor_target_pick_keyboard, mip_setup, mip_teardown),
         cmocka_unit_test_setup_teardown(
             test_editor_target_pick_pointer, mip_setup, mip_teardown),
 
         /* Profile editor — capture (M31, M32) */
         cmocka_unit_test_setup_teardown(
-            test_editor_capture_begin_controller, mip_setup, mip_teardown),
+            test_editor_capture_begin_keyboard, mip_setup, mip_teardown),
         cmocka_unit_test_setup_teardown(
             test_editor_capture_begin_pointer, mip_setup, mip_teardown),
         cmocka_unit_test_setup_teardown(
@@ -1867,7 +1875,7 @@ main(void)
 
         /* Profile editor — sequential (M33, M34, M35, M36) */
         cmocka_unit_test_setup_teardown(
-            test_editor_seq_begin_controller, mip_setup, mip_teardown),
+            test_editor_seq_begin_keyboard, mip_setup, mip_teardown),
         cmocka_unit_test_setup_teardown(
             test_editor_seq_begin_pointer, mip_setup, mip_teardown),
         cmocka_unit_test_setup_teardown(
@@ -1902,7 +1910,7 @@ main(void)
 
         /* Task 3: Clone existing (M15/PR-02/IA-10) */
         cmocka_unit_test_setup_teardown(
-            test_prof_create_clone_controller, mip_setup, mip_teardown),
+            test_prof_create_clone_keyboard, mip_setup, mip_teardown),
         cmocka_unit_test_setup_teardown(
             test_prof_create_clone_pointer, mip_setup, mip_teardown),
 

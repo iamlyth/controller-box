@@ -868,6 +868,89 @@ test_m20_delete_cancel_pointer(void **state)
 }
 
 /* ================================================================== */
+/*  M28 — Binding list navigation (diagram highlight follows select) */
+/* ================================================================== */
+
+/* M28 controller path: D-pad Down/Up navigates binding list; the
+ * diagram highlight follows the selected binding.
+ * Dispatch: SDL_CONTROLLERBUTTONDOWN DPAD_DOWN → cbx_manager_controller_to_key
+ * → SDLK_DOWN → cbx_profiles_tab_handle_key → cbx_profile_editor_move_down
+ * → sync_diagram_highlight. */
+static void
+test_m28_binding_nav_ctrl(void **state)
+{
+    mnp_fixture *f = *state;
+    cbx_manager mgr;
+    mnp_init_manager(f, &mgr);
+
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+
+    open_editor_ctrl(&mgr, f->joystick, 2);
+    assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
+                     CBX_EDITOR_MODE_LIST);
+
+    /* Initial selection = 0 (btn_A); diagram highlights A. */
+    assert_int_equal(cbx_profile_editor_get_selected(&pt->editor), 0);
+    assert_int_equal(cbx_profile_editor_get_diagram_highlight(&pt->editor),
+                     CBX_DIAG_BTN_A);
+
+    /* DOWN → selected = 1 (btn_B); diagram highlights B. */
+    ctrl_press(&mgr, f->joystick, 12);
+    assert_int_equal(cbx_profile_editor_get_selected(&pt->editor), 1);
+    assert_int_equal(cbx_profile_editor_get_diagram_highlight(&pt->editor),
+                     CBX_DIAG_BTN_B);
+
+    /* DOWN → selected = 2 (btn_Up); diagram highlights Up. */
+    ctrl_press(&mgr, f->joystick, 12);
+    assert_int_equal(cbx_profile_editor_get_selected(&pt->editor), 2);
+    assert_int_equal(cbx_profile_editor_get_diagram_highlight(&pt->editor),
+                     CBX_DIAG_BTN_UP);
+
+    /* UP → selected = 1 (btn_B); diagram highlights B. */
+    ctrl_press(&mgr, f->joystick, 11);
+    assert_int_equal(cbx_profile_editor_get_selected(&pt->editor), 1);
+    assert_int_equal(cbx_profile_editor_get_diagram_highlight(&pt->editor),
+                     CBX_DIAG_BTN_B);
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* ================================================================== */
+/*  M29 — Binding edit sub-menu (activate binding)                    */
+/* ================================================================== */
+
+/* M29 controller path: A on binding → BINDING_EDIT mode opens with
+ * target-pick / capture / sequential options.
+ * Dispatch: SDL_CONTROLLERBUTTONDOWN A → cbx_manager_controller_to_key
+ * → SDLK_a KEYDOWN (swallowed) → SDL_CONTROLLERBUTTONUP A → SDLK_a KEYUP
+ * → cbx_manager_tab_activate → cbx_profiles_tab_activate →
+ * cbx_profile_editor_activate → BINDING_EDIT. */
+static void
+test_m29_binding_edit_ctrl(void **state)
+{
+    mnp_fixture *f = *state;
+    cbx_manager mgr;
+    mnp_init_manager(f, &mgr);
+
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+
+    open_editor_ctrl(&mgr, f->joystick, 2);
+    assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
+                     CBX_EDITOR_MODE_LIST);
+
+    /* A (button 0) on first binding → BINDING_EDIT mode. */
+    ctrl_press(&mgr, f->joystick, 0);
+    assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
+                     CBX_EDITOR_MODE_BINDING_EDIT);
+    assert_true(cbx_widget_is_visible(&pt->editor.target_list.base));
+
+    /* Target list has 3 options: Pick Target, Capture, Sequential. */
+    assert_int_equal(cbx_list_item_count(&pt->editor.target_list), 3);
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* ================================================================== */
 /*  M30 — Target picker confirm                                       */
 /* ================================================================== */
 
@@ -1368,6 +1451,50 @@ test_m36_seq_cancel(void **state)
 }
 
 /* ================================================================== */
+/*  M37 — Save profile (B in editor LIST → save + close)             */
+/* ================================================================== */
+
+/* M37 controller path: B (button 1) in editor LIST mode → save
+ * profile to disk via cbx_profile_save_to_dir, close editor, return
+ * to profiles list.
+ * Dispatch: SDL_CONTROLLERBUTTONDOWN B → cbx_manager_controller_to_key
+ * → SDLK_b KEYDOWN (swallowed by profiles_tab_handle_key) →
+ * SDL_CONTROLLERBUTTONUP B → SDLK_b KEYUP → cbx_manager_tab_cancel
+ * → cbx_profiles_tab_cancel → cbx_profiles_tab_save_editor. */
+static void
+test_m37_save_ctrl(void **state)
+{
+    mnp_fixture *f = *state;
+    cbx_manager mgr;
+    mnp_init_manager(f, &mgr);
+
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+
+    open_editor_ctrl(&mgr, f->joystick, 2);
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_EDITOR);
+    assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
+                     CBX_EDITOR_MODE_LIST);
+
+    int before = cbx_profiles_tab_profile_count(pt);
+
+    /* B (button 1) in LIST mode → save and close. */
+    ctrl_press(&mgr, f->joystick, 1);
+
+    /* Editor closed, back to profiles list. */
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_LIST);
+
+    /* Profile count unchanged (editing existing profile). */
+    assert_int_equal(cbx_profiles_tab_profile_count(pt), before);
+
+    /* Verify the file exists on disk. */
+    char path[PATH_MAX + 128];
+    snprintf(path, sizeof(path), "%s/myprof.yaml", f->user_dir);
+    assert_int_equal(access(path, F_OK), 0);
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* ================================================================== */
 /*  M38 — Discard changes (Start from editor LIST → close, no save)  */
 /* ================================================================== */
 
@@ -1833,6 +1960,12 @@ main(void)
                                         mnp_setup, mnp_teardown),
         cmocka_unit_test_setup_teardown(test_m20_delete_cancel_pointer,
                                         mnp_setup, mnp_teardown),
+        /* M28 — Binding list navigation (diagram highlight) */
+        cmocka_unit_test_setup_teardown(test_m28_binding_nav_ctrl,
+                                        mnp_setup, mnp_teardown),
+        /* M29 — Binding edit sub-menu */
+        cmocka_unit_test_setup_teardown(test_m29_binding_edit_ctrl,
+                                        mnp_setup, mnp_teardown),
         /* M30 — Target picker confirm */
         cmocka_unit_test_setup_teardown(test_m30_target_pick_controller,
                                         mnp_setup, mnp_teardown),
@@ -1863,6 +1996,9 @@ main(void)
                                         mnp_setup, mnp_teardown),
         /* M36 — Sequential cancel */
         cmocka_unit_test_setup_teardown(test_m36_seq_cancel,
+                                        mnp_setup, mnp_teardown),
+        /* M37 — Save profile (B in editor LIST) */
+        cmocka_unit_test_setup_teardown(test_m37_save_ctrl,
                                         mnp_setup, mnp_teardown),
         /* M38 — Discard changes (Start from editor LIST) */
         cmocka_unit_test_setup_teardown(test_m38_discard_ctrl,

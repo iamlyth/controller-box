@@ -72,7 +72,7 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 | MGR-05 | §5.4 | verified | `profile_validate.c` NES minimum (A/B/D-pad); `test_profile_validate.c`; `profile_save.c` enforces before write | |
 | MGR-06 | §5.5 | verified | `settings_tab.c` all settings; `test_settings_tab.c`, `test_manager_native.c` M21–M26 | |
 | MGR-07 | §5.6 | verified | `test_manager_visual.c` (13 tests), `test_golden.c` (7 manager baselines) | |
-| MGR-08 | §5.7 | partial | 51/59 inventory verified, 7 NA, 1 deferred; M39 missing from inventory; M28–M38 editor tests use keyboard labeled as controller, not real gamepad transport | Task 1, Task 2 |
+| MGR-08 | §5.7 | verified | 52/60 inventory verified (M01–M39 + O01–O13 + D01–D08), 7 NA, 1 deferred; M39 added (Task 1); M28–M38 controller-transport evidence via ctrl_press in test_manager_native_prof.c (Task 2); keyboard tests relabeled to _keyboard per §5.7 | Task 1, Task 2 |
 | ID-01 | §6.2 | verified | `identity.c` 4-layer auto-assignment; `test_identity.c` | |
 | ID-02 | §6.3 | verified | `identity.c` BT:/USB:/USB:phys:/ORDER: prefixes; `config_assignments.c` validation | |
 | ID-03 | §6.3 | verified | `identity_downgrade.c` fallback to ORDER:n; `test_identity_downgrade.c` | |
@@ -113,7 +113,7 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 | VRF-07 | §11.1.7 | missing | No human release acceptance artifact; `target-consumer` undeclared | Task 3 |
 | DOD-01 | §11.2.1 | partial | This matrix; non-verified rows map to Tasks 1–3 | Task 4 |
 | DOD-02 | §11.2.2 | verified | Tests use production dispatch; native DBus preserves signatures | |
-| DOD-03 | §11.2.3 | partial | M39 missing from inventory; M28–M38 editor tests lack real controller-transport evidence | Task 1, Task 2 |
+| DOD-03 | §11.2.3 | verified | M39 added to inventory (Task 1); M28–M38 controller-transport evidence via ctrl_press in test_manager_native_prof.c (Task 2); keyboard tests in test_manager_interaction_prof.c relabeled to _keyboard per §5.7 | Task 1, Task 2 |
 | DOD-04 | §11.2.4 | verified | `test_overlay_visual.c`, `test_manager_visual.c` cover degraded/error/recovery states | |
 | DOD-05 | §11.2.5 | partial | `test_backend_smoke` GPU skip unexplained; no human-approved deferral documented | Task 3 |
 | DOD-06 | §11.2.6 | verified | `.factory/bugs/open.md` is empty `[]` | |
@@ -123,25 +123,22 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 
 ## Interaction acceptance inventory
 
-Source: `tests/interaction_inventory.c` (59 entries: M01–M38, O01–O13, D01–D08).
-Status: 51 verified, 7 NOT_APPLICABLE (controller-only paths: M13, M14, M16,
+Source: `tests/interaction_inventory.c` (60 entries: M01–M39, O01–O13, D01–D08).
+Status: 52 verified, 7 NOT_APPLICABLE (controller-only paths: M13, M14, M16,
 M32, M34, M35, M36), 1 DEFERRED (O12 host profile cycling, §13).
 
-**Gap — M39 (first-run service install):** Tested in
-`test_manager_interaction_ctrl.c` (4 tests: controller confirm/cancel, pointer
-confirm/cancel) but NOT enumerated in `interaction_inventory.c`. Task 1 adds
-M39 to the inventory data structure and updates the expected count.
+**M39 (first-run service install):** Added to `interaction_inventory.c`
+by Task 1. Tested in `test_manager_interaction_ctrl.c` (4 tests:
+controller confirm/cancel, pointer confirm/cancel).
 
-**Gap — controller transport for M28–M38:** Profile editor interaction tests in
-`test_manager_interaction_prof.c` use `send_key_dn` (SDL_KEYDOWN via
-`cbx_manager_handle_event`) with functions labeled `_controller`. Per §5.7,
-keyboard-generated SDL events are supplemental and must never be labeled
-controller acceptance. Real controller-transport evidence exists in
-`test_installed_functional.c::test_installed_controller_acceptance` for
-Profiles tab (create/save, edit/cancel, delete/confirm) but NOT for editor
-binding-list navigation (M28–M31), sequential mode start (M33), or
-save/discard in editor (M37–M38). Task 2 adds `ctrl_press`-based tests through
-production gamepad transport for these entries.
+**Controller transport for M28–M38:** Resolved by Task 2. Real
+gamepad-transport tests using `ctrl_press` (SDL_JoystickSetVirtualButton →
+SDL_CONTROLLERBUTTONDOWN → cbx_manager_controller_to_key →
+cbx_manager_handle_event) added to `test_manager_native_prof.c` for M28
+(binding nav + diagram highlight), M29 (binding edit sub-menu), M37 (save
+via B). Existing ctrl_press tests for M30, M31, M33, M38 retained.
+Keyboard tests in `test_manager_interaction_prof.c` relabeled from
+`_controller` to `_keyboard` and annotated as supplemental per §5.7.
 
 ### Manager controls (M01–M38 + M39)
 
@@ -171,17 +168,17 @@ production gamepad transport for these entries.
 | M25 | Edit confirmed (A) | A | Mouse click | Edit exits, value applied | `cbx_manager_handle_event` → list | `test_manager_native.c` |
 | M26 | Edit cancelled (B) | B | Mouse click outside | Edit exits, value reverts | `cbx_manager_handle_event` → list | `test_manager_native.c` |
 | M27 | Save settings | A on Save | Mouse click Save | settings.yaml written | `cbx_manager_handle_event` → button | `test_manager_native.c`, `test_installed_functional.c` |
-| M28 | Binding highlighted, diagram lights | D-pad U/D in editor | Mouse click row | Diagram button lights | `cbx_manager_handle_event` → list → `profile_editor_list.c` | `test_manager_interaction_prof.c` (keyboard — Task 2 adds ctrl_press) |
-| M29 | Binding edit sub-menu | A on binding | Mouse click row | Sub-menu opens (Pick/Capture/Seq) | `cbx_manager_handle_event` → list | `test_manager_interaction_prof.c` (keyboard — Task 2 adds ctrl_press) |
-| M30 | Target picked, binding updated | A on target | Mouse click target | Binding updated, picker closes | `cbx_manager_handle_event` → list | `test_manager_interaction_prof.c` (keyboard — Task 2 adds ctrl_press) |
-| M31 | Capture mode begins | A on Capture | Mouse click Capture | Waiting for physical button | `cbx_manager_handle_event` → list | `test_manager_interaction_prof.c` (keyboard — Task 2 adds ctrl_press) |
+| M28 | Binding highlighted, diagram lights | D-pad U/D in editor | Mouse click row | Diagram button lights | `cbx_manager_handle_event` → list → `profile_editor_list.c` | `test_manager_native_prof.c` (ctrl_press); `test_manager_interaction_prof.c` (keyboard supplemental) |
+| M29 | Binding edit sub-menu | A on binding | Mouse click row | Sub-menu opens (Pick/Capture/Seq) | `cbx_manager_handle_event` → list | `test_manager_native_prof.c` (ctrl_press); `test_manager_interaction_prof.c` (keyboard supplemental) |
+| M30 | Target picked, binding updated | A on target | Mouse click target | Binding updated, picker closes | `cbx_manager_handle_event` → list | `test_manager_native_prof.c` (ctrl_press); `test_manager_interaction_prof.c` (keyboard supplemental) |
+| M31 | Capture mode begins | A on Capture | Mouse click Capture | Waiting for physical button | `cbx_manager_handle_event` → list | `test_manager_native_prof.c` (ctrl_press); `test_manager_interaction_prof.c` (keyboard supplemental) |
 | M32 | Binding captured (NA pointer) | Physical button via DBus InputEvent | N/A | Source event set, capture ends | DBus signal → `ip_input_signal.c` → editor | `test_manager_native_prof.c` DBus signal path |
-| M33 | Sequential mode begins | A on Sequential | Mouse click Sequential | First button prompted, diagram lights | `cbx_manager_handle_event` → list | `test_manager_interaction_prof.c` (keyboard — Task 2 adds ctrl_press) |
+| M33 | Sequential mode begins | A on Sequential | Mouse click Sequential | First button prompted, diagram lights | `cbx_manager_handle_event` → list | `test_manager_native_prof.c` (ctrl_press); `test_manager_interaction_prof.c` (keyboard supplemental) |
 | M34 | Button captured in sequential (NA pointer) | Physical button via DBus InputEvent | N/A | Auto-advance, progress bar | DBus signal → editor | `test_manager_native_prof.c` DBus signal path |
 | M35 | Skip binding in sequential (NA pointer) | B | N/A | Advance to next | `cbx_profile_editor_seq_skip()` | `test_manager_native_prof.c` |
 | M36 | Sequential cancelled (NA pointer) | Start | N/A | Changes discarded, editor returns | `cbx_manager_handle_event` | `test_manager_native_prof.c` |
-| M37 | Profile saved | B in LIST (save) | Mouse click Save | File written, editor closes, list refresh | `cbx_manager_handle_event` → button → `profile_save.c` | `test_manager_interaction_prof.c` (keyboard — Task 2 adds ctrl_press), `test_installed_functional.c` |
-| M38 | Editor discard | Start in LIST | Mouse click Discard | No file written, editor closes | `cbx_manager_handle_event` | `test_manager_interaction_prof.c` (keyboard — Task 2 adds ctrl_press) |
+| M37 | Profile saved | B in LIST (save) | Mouse click Save | File written, editor closes, list refresh | `cbx_manager_handle_event` → button → `profile_save.c` | `test_manager_native_prof.c` (ctrl_press); `test_manager_interaction_prof.c` (keyboard supplemental), `test_installed_functional.c` |
+| M38 | Editor discard | Start in LIST | Mouse click Discard | No file written, editor closes | `cbx_manager_handle_event` | `test_manager_native_prof.c` (ctrl_press); `test_manager_interaction_prof.c` (keyboard supplemental) |
 | M39 | First-run service install | A=confirm / B=cancel | Mouse click Yes/No | Service installed or dismissed | `cbx_manager_handle_event` → dialog → `service_install.c` | `test_manager_interaction_ctrl.c` (4 tests) — Task 1 adds to inventory |
 
 ### Overlay actions (O01–O13)
@@ -233,7 +230,7 @@ production gamepad transport for these entries.
 - Documentation impact: README.md test layer table, known limitations table; OPERATIONS.md coverage table and current limitations
 
 ## Task 2: Add controller-transport evidence for profile editor interactions
-- Status: pending
+- Status: complete
 - Dependencies: none
 - Scope: `tests/test_manager_interaction_prof.c` or new `tests/test_manager_editor_ctrl.c`, `tests/interaction_inventory.c` (update dispatch_path annotations)
 - Acceptance criteria:
