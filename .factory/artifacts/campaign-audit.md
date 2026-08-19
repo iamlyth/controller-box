@@ -1,42 +1,15 @@
 ---
 schema: ralph-campaign-audit/v1
-round: 5
-audit_base_commit: 64650139a2beda772d58953a0c3f8666c812d80b
-plan_commit: caee37a2d9b635f91400edadca60af585abb9ce0
-plan_blob: fc114538a8b2b355cd0d746ace17f5914ac54403
-environment_blob: 0acf81d25bde43ac5d97d8067189d0191116496b
-runner_evidence_sha256: d25fa57fdca1bf1093d8060977a5f8b104057e9bd93186d0b6bb72e04d33c61e
-result: findings
+round: 1
+audit_base_commit: 26df6c05a5319214f1c0a97a2c3c6f763128b1c6
+plan_commit: b36a56474bc994a109e19dab42770497283eb1dc
+plan_blob: c89f0e137c3b93649c59ffcb8cf61d1dd2929620
+environment_blob: 0a54fa8893b542386a61312c28c97e5e79ff5366
+runner_evidence_sha256: 7e29a2b045fe42251d04848a2fa5940e7178b458e93cad5710357ddfa4e0d098
+result: pending
 ---
-# Campaign Round 5 Independent Gap Audit
+# Campaign Round 1 Independent Gap Audit
 
-## Evidence reviewed
-- Specification: `docs/SPEC.md` §4.10 (overlay visual acceptance — virtual-device icons), §5.7 (interaction acceptance — kernel-backed controller transport), §11.1.5 (installed functional smoke — kernel-backed synthetic controller), §11.1.6 (backend smoke — hardware renderer), §11.1.7 (human release acceptance on target hardware), §11 (Pi 4 ≤75ms p99 latency), §3 (aarch64 build), §9.1 (Flatpak experimental criteria), §10.1 (InputPlumber system DBus)
-- Production paths: `src/app/overlay_service.c:1163-1164` (icon cache init with `cbx_icon_dir()`), `src/icons/icon_cache.c:99` (SVG path construction `icon_dir/{name}.svg`), `src/config/config_paths.c:213-221` (`cbx_icon_dir()` returns `ICON_DIR` without `/svg` suffix), `CMakeLists.txt:26` (`CBX_ICON_DIR="${CBX_DATA_DIR}/icons"`), `CMakeLists.txt:204` (SVG install to `${CBX_ICON_INSTALL_DIR}/svg`), `src/manager/profile_editor_list.c:252-253` (diagram path correctly appends `/svg/`), `src/manager/manager.c:194-197` (settings load after defaults), `src/dbus/dbus_interface.h` (production DBus definitions — no `src/` file includes `dbus_mock.h`)
-- Executable evidence: `python3 scripts/check-factory-runner-evidence.py --expected-commit 64650139a2beda772d58953a0c3f8666c812d80b --print-capabilities` PASS (2 capabilities: `remote-project-gate`, `systemd-user`); `grep -r 'include.*dbus_mock.h' src/` PASS (no matches — production code clean); `ls data/icons/svg/generic-gamepad.svg` PASS (SVG file exists for diagram); `grep -n 'cbx_icon_dir()' src/app/overlay_service.c` PASS (confirms `cbx_icon_dir()` passed to icon cache init without `/svg/`); `python3 scripts/check-factory-runner-evidence.py --expected-commit 64650139a2beda772d58953a0c3f8666c812d80b --print-digest` PASS (digest matches front matter); tests use `CBX_SOURCE_DIR "/data/icons/svg/"` directly (BLOCKED — synthetic evidence bypassing production `cbx_icon_dir()` path, masking the path mismatch)
-- Environment limits: `.factory/environment.toml` declares only `remote-project-gate` and `systemd-user` capabilities on runner `dev-runner-vm`; 5 of 7 campaign-required capabilities (`physical-controller`, `kernel-uinput`, `inputplumber-system-dbus`, `gpu-compositor`, `installed-package`, `target-consumer`) are undeclared and unevidenced; no GPU compositor, kernel-backed controller, target hardware, or real InputPlumber system DBus available for production-path acceptance
-
-## Finding 1: Production icon cache path mismatch — overlay renders without virtual-device icons
-- Requirement: SPEC §4.10 requires "virtual-device icons" in overlay visual output; SPEC §8.1 requires icons showing the virtual controller type
-- Production evidence: `src/app/overlay_service.c:1163-1164` passes `cbx_icon_dir()` (returns `ICON_DIR` = `/usr/share/controller-box/icons`) to `cbx_icon_cache_init()`. `src/icons/icon_cache.c:99` constructs SVG paths as `icon_dir/{name}.svg` → `/usr/share/controller-box/icons/xbox-360.svg`. But `CMakeLists.txt:204` installs SVGs to `${CBX_ICON_INSTALL_DIR}/svg` = `/usr/share/controller-box/icons/svg/`. The files exist at `icons/svg/xbox-360.svg` but the code looks at `icons/xbox-360.svg`. All overlay visual and golden tests bypass this by passing `CBX_SOURCE_DIR "/data/icons/svg/"` directly to `cbx_icon_cache_init()` (see `tests/test_overlay_visual.c:166`, `tests/test_golden.c:230`, `tests/test_installed_functional.c:783`). The installed functional test also uses `OVERLAY_SVG_DIR = CBX_SOURCE_DIR "/data/icons/svg/"` instead of the production `cbx_icon_dir()` path. The `cbx_icon_cache_load` call is best-effort and silently continues with an empty cache, so the overlay renders without icons. The manager diagram path in `profile_editor_list.c:252-253` correctly appends `/svg/generic-gamepad.svg`, confirming the correct production path pattern — the icon cache is inconsistent with it.
-- Required remediation: production overlay icon cache must load SVGs from the installed `icons/svg/` subdirectory; a test exercising the production `cbx_icon_dir()` → `cbx_icon_cache_init()` → `cbx_icon_cache_load()` path must verify at least one icon texture is successfully loaded from the installed directory structure
-
-## Finding 2: Kernel-backed controller acceptance not evidenced
-- Requirement: SPEC §5.7 requires "Controller acceptance uses the production controller transport with a physical or kernel-backed synthetic gamepad"; SPEC §11.1.5 requires "hotplug a physical or kernel-backed synthetic controller"; campaign requires `physical-controller` and `kernel-uinput` capabilities
-- Production evidence: `tests/test_installed_functional.c:155-157` uses `SDL_JoystickAttachVirtual` (process-local SDL API), not a kernel-backed gamepad via `/dev/uinput`. `tests/test_kernel_controller.c:420-422` returns exit 77 (skip) when `/dev/uinput` is unavailable. No test in the regular pipeline exercises the kernel evdev → SDL joystick → manager dispatch path. The capabilities `physical-controller` and `kernel-uinput` are not declared in `.factory/environment.toml` and not evidenced by `check-factory-runner-evidence.py`. Conformance rows MGR-11, MGR-13, VRF-05, DOD-03 remain partial.
-- Required remediation: declare and evidence `physical-controller` or `kernel-uinput` capability via a runner with `/dev/uinput`; run `test_kernel_controller` to completion (exit 0); installed functional acceptance must use kernel-backed synthetic controller
-
-## Finding 3: GPU backend smoke not evidenced
-- Requirement: SPEC §11.1.6 requires "Exercise the deployment renderer backend (OpenGL/OpenGL ES where available) with broad framebuffer invariants"; campaign requires `gpu-compositor` capability
-- Production evidence: `tests/test_backend_smoke.c` returns exit 77 (skip) when no accelerated OpenGL/GLES backend is available. Only `test_backend_smoke_sw.c` runs, exercising the software renderer. The capability `gpu-compositor` is not declared in `.factory/environment.toml`. Conformance rows VRF-06, DOD-05 remain partial.
-- Required remediation: declare and evidence `gpu-compositor` capability via a runner with an accelerated backend; run `test_backend_smoke` to completion (exit 0) with framebuffer invariants
-
-## Finding 4: Target hardware latency, aarch64 build, and human release acceptance not evidenced
-- Requirement: SPEC §3 requires aarch64 build target and Pi 4 minimum hardware; SPEC §11 requires ≤75ms p99 overlay latency on Pi 4; SPEC §11.1.7 requires human release acceptance on target hardware; campaign requires `target-consumer` capability
-- Production evidence: no aarch64 build has been executed or evidenced (only x86_64). No Pi 4 latency measurement exists. No human release acceptance artifact with reviewer name, date, hardware, captures, and criteria checklist exists. The capability `target-consumer` is not declared in `.factory/environment.toml`. Conformance rows SYS-01, SYS-02, OVL-10, PERF-01, VRF-07, DOD-08 remain partial or missing.
-- Required remediation: declare and evidence `target-consumer` capability via a runner with Pi 4 or equivalent ARM64 hardware; build on aarch64 with zero warnings; measure and record overlay latency on target hardware; produce signed human acceptance artifact
-
-## Finding 5: Flatpak publication and InputPlumber system DBus criteria not met
-- Requirement: SPEC §9.1 requires Flatpak manifest to remain experimental until clean build passes installed functional gate, host DBus access verified, and application published; SPEC §10.1 requires system DBus connection to real InputPlumber; campaign requires `installed-package` and `inputplumber-system-dbus` capabilities
-- Production evidence: the Flatpak manifest is correctly marked experimental and no Flathub install command is advertised in documentation. However, no clean Flatpak build has passed the installed functional gate, host InputPlumber DBus access has not been verified on a Flatpak runtime, and the application is not published. No real InputPlumber system DBus service is available for end-to-end testing — all DBus tests use a private sd-bus service with native signatures (valid for type-fidelity verification per SPEC §5.7, but not a substitute for real system DBus acceptance). The capabilities `installed-package` and `inputplumber-system-dbus` are not declared in `.factory/environment.toml`. Conformance row PKG-01 remains partial.
-- Required remediation: declare and evidence `installed-package` and `inputplumber-system-dbus` capabilities; verify Flatpak build passes installed functional gate with host DBus access; verify end-to-end workflow against a real InputPlumber system DBus service
+Fresh audit initialized. Distrust the preceding completion claim and replace
+this notice with production-path evidence and either a clean pass or concrete
+findings for the next fresh planning round.
