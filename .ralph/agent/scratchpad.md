@@ -2,25 +2,21 @@
 
 ## Outcome
 
-All implementation tasks complete. Plan `status: complete`. Task 1 status
-corrected from stale `pending` to `complete` (work was done; text was never
-updated). Full verification passes.
+All implementation tasks complete. Plan `status: complete`. Final gate
+passed. Git tree clean at commit `8862fa5` on `develop`.
 
 ## Verification
 
-- `validate-implementation-plan.py complete` — passes
-- `check-plan-freshness.sh` — passes
-- `bug-ledger.py validate` — passes (zero open bugs)
-- `check-docs-sync.sh` — passes
-- `verify-boilerplate.sh` — passes
-- `verify-project.sh` — passes (build, 98 ctest targets, installed functional, smoke, packaging)
-- `check-installed-functional-evidence.sh` — evidence at commit 36bc319, zero skips, ancestor of HEAD
-- `final-gate.sh --implementation` — pending scratchpad restoration
+- `final-gate.sh --implementation` — **PASSED**
+  - 98/98 ctest targets (2 skipped: test_kernel_controller hardware, test_backend_smoke hardware)
+  - test_installed_functional: zero skips, evidence at 8862fa5
+  - Packaging, clean build, installed smoke, project verification all pass
+  - `final-gate: implementation, specification, tests, and documentation accepted`
 
 ## Commit
 
-- Plan Task 1 status fix + scratchpad restoration on `develop`
+- `8862fa5` Final audit: fix Task 1 status, restore scratchpad for completion gate
 
-## Next task
+## Next
 
-Emit the completion token after the final gate passes.
+Emit completion token.
