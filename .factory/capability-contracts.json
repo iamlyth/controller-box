@@ -1,0 +1,38 @@
+{
+  "schema": "ralph-capability-contract/v1",
+  "description": "Tracked contracts for capabilities that are declared in .factory/environment.toml and required by this product's conformance rows. A declared capability without a contract, a contract without a passing non-skipped probe receipt, or a receipt that shows skip/simulated markers is unevidenced and is never auto-reclassified. Do not add contracts for unavailable capabilities: an undeclared capability must stay a finding.",
+  "capabilities": [
+    {
+      "name": "remote-project-gate",
+      "probe_argv": ["./scripts/verify-project.sh"],
+      "probe_marker": "",
+      "must_execute": true,
+      "must_not_skip": [],
+      "deny_simulated_markers": ["simulated", "synthetic", "staged", "fixture-only"]
+    },
+    {
+      "name": "systemd-user",
+      "probe_argv": ["/usr/bin/systemd-run", "--user", "--quiet", "--wait", "--pipe", "--collect", "--service-type=exec", "/usr/bin/printf", "factory-systemd-user-ok"],
+      "probe_marker": "",
+      "must_execute": true,
+      "must_not_skip": [],
+      "deny_simulated_markers": ["simulated", "private session", "synthetic"]
+    },
+    {
+      "name": "kernel-uinput",
+      "probe_argv": ["nix-shell", "--run", "ctest --test-dir build-check -R '^test_kernel_controller$' --no-tests=error --output-on-failure"],
+      "probe_marker": "--- kernel-uinput capability contract ---",
+      "must_execute": true,
+      "must_not_skip": ["Skipped", "Not Run", "skip"],
+      "deny_simulated_markers": ["mock", "private service", "simulated", "synthetic", "staged", "fixture-only"]
+    },
+    {
+      "name": "installed-package",
+      "probe_argv": ["nix-shell", "--run", "CBX_REQUIRE_FLATPAK=1 ./tests/test_packaging.sh build-check"],
+      "probe_marker": "--- installed-package capability contract ---",
+      "must_execute": true,
+      "must_not_skip": ["OPTIONAL: flatpak-builder build failed"],
+      "deny_simulated_markers": ["simulated", "synthetic", "staged", "fixture-only"]
+    }
+  ]
+}

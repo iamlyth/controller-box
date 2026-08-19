@@ -10,9 +10,17 @@ Preserve every front-matter value already seeded in `.factory/artifacts/campaign
 
 ## Audit method
 
-Use fresh read-only subagents adaptively for independent correctness, security, test-quality, documentation, interaction, packaging, and production-runtime reviews. Trace real initialization, controller/pointer dispatch, native backend communication, persistence, rendering, installed entry points, recovery, and shutdown. Attempt to falsify tests: distinguish private fixtures, process-local SDL virtual devices, mocks, callback invocation, pixels, keyboard proxies, DBus object state, and staged libraries from a genuinely installed and routable product.
+Use fresh read-only subagents adaptively for independent correctness, security, test-quality, documentation, interaction, packaging, visual, runner, evidence, and specification reviews. Visual, runner, evidence, and specification reviewers are read-only and have no runtime-certification authority. Trace real initialization, controller/pointer dispatch, native backend communication, persistence, rendering, installed entry points, recovery, and shutdown. Attempt to falsify tests: distinguish private fixtures, process-local SDL virtual devices, mocks, callback invocation, pixels, keyboard proxies, DBus object state, and staged libraries from a genuinely installed and routable product. Pixel/offscreen framebuffer checks are not real visual acceptance; a private/session-scoped DBus service is not the real system service; a uinput producer is not the target consumer; and declaring evidence is not evidence.
 
-Verify claimed environment evidence using only declared and mechanically evidenced capabilities. Missing backend, GPU, compositor, physical or kernel-backed controller, target consumer, package installation, systemd session, or hardware runner is not a skip and must not be inferred from synthetic evidence.
+Every runtime command you execute must be wrapped by the machine receipt recorder and the resulting path cited on the evidence line:
+
+```bash
+./scripts/machine-receipt.py --tag <unique-tag> -- <argv...>
+```
+
+Each `- Executable evidence:` line must carry PASS, FAIL, or BLOCKED and, for PASS/FAIL, a `[receipt: <path>]` (or `[manifest: <path>]` for an accepted runner receipt). Prose cannot certify runtime. Any BLOCKED evidence forces `result: findings`; a report with BLOCKED content may never claim `result: pass`.
+
+Verify claimed environment evidence using only declared and mechanically evidenced capabilities. Missing backend, GPU, compositor, physical or kernel-backed controller, target consumer, package installation, systemd session, or hardware runner is not a skip and must not be inferred from synthetic evidence. Every conformance claim must be backed by the machine-readable `.factory/artifacts/conformance.json` sidecar: classification, evidence tier, required capabilities, exact evidence commit, and receipt/artifact refs. A `verified` normative real-system/visual/hardware row is a finding when satisfied by a lower evidence tier or by an undeclared/unevidenced capability; a missing contract, probe, receipt, or a skipped probe is unevidenced and is never auto-reclassified.
 
 ## Visual rendering verification
 
