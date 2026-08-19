@@ -27,3 +27,11 @@
 - All 4 tasks complete
 - Conformance matrix: all rows verified (no partial/missing/ambiguous)
 - Plan front-matter: status: complete
+
+<!-- factory-stale-recovery:start -->
+## Supervisor recovery feedback
+
+- The previous `implementation` Ralph attempt terminated as a stale loop.
+- Run `./scripts/final-gate.sh --implementation` yourself and fix every reported failure.
+- Do not repeat a completion summary until that command passes. Replace this section in the next scratchpad handoff before requesting completion.
+<!-- factory-stale-recovery:end -->
