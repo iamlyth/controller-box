@@ -1,37 +1,22 @@
-# Implementation Complete: All Tasks Done
+# Implementation Complete — All Tasks Done
 
 ## Outcome
-- Task 3: Attempted aarch64 cross-compile (nix dep build exceeded timeout); documented hardware-deferred capabilities in OPERATIONS.md and README.md
-- Task 4: Final audit — fixed 4 test quality issues from reviewer subagent, updated conformance matrix (all rows verified), set plan status to complete
+- All 4 plan tasks complete (Tasks 1-4) on `develop` branch
+- Final gate passed: `final-gate: implementation, specification, tests, and documentation accepted`
 
 ## Verification
-- `./scripts/final-gate.sh --implementation`: PASS — "implementation, specification, tests, and documentation accepted"
-- `ctest --test-dir build-clean`: 98/98 (96 pass, 2 expected skips: test_kernel_controller, test_backend_smoke)
-- `./scripts/verify-project.sh`: PASS
-- `./scripts/check-docs-sync.sh`: PASS
-- `./scripts/bug-ledger.py validate`: valid (0 open, 11 closed)
-- `./scripts/check-installed-functional-evidence.sh`: PASS at 45b7ae3 with zero skips
-- Git tree clean on develop
+- `./scripts/final-gate.sh --implementation`: PASS
+- ctest (build-maintenance-verify): 98/98 (96 pass, 2 expected skips: test_kernel_controller, test_backend_smoke)
+- installed-functional-evidence: PASS at commit 5085d8d with zero skips
+- verify-project: PASS
+- check-docs-sync: PASS
+- bug-ledger: valid (0 open, 11 closed)
+- test-production-path-bypass: no resource-path env-var injection found
+- Git tree clean on `develop`
 
 ## Commits
-- `56ca0a6`: Task 3 — Document hardware-deferred capabilities (aarch64, GPU, Pi 4, human release)
+- `56ca0a6`: Task 3 — Document hardware-deferred capabilities
 - `45b7ae3`: Task 4 — Fix test quality issues from adversarial review and finalize plan
 
-## Test Quality Fixes (Task 4)
-- `send_key_dn/send_key_up`: Added SDL_PRESSED/SDL_RELEASED state to keyboard events
-- `send_mouse_click`: Use SDL_PushEvent + pump_manager instead of direct handler calls
-- `test_m20_delete_cancel_pointer`: Use send_key_press (KEYDOWN+KEYUP) not KEYDOWN only
-- D07 filesystem failure assertions: Tightened from broad substring match to specific "Save failed" check
-
 ## Plan Status
-- All 4 tasks complete
-- Conformance matrix: all rows verified (no partial/missing/ambiguous)
-- Plan front-matter: status: complete
-
-<!-- factory-stale-recovery:start -->
-## Supervisor recovery feedback
-
-- The previous `implementation` Ralph attempt terminated as a stale loop.
-- Run `./scripts/final-gate.sh --implementation` yourself and fix every reported failure.
-- Do not repeat a completion summary until that command passes. Replace this section in the next scratchpad handoff before requesting completion.
-<!-- factory-stale-recovery:end -->
+- All tasks complete; conformance matrix fully verified; plan front-matter status: complete
