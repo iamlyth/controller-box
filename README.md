@@ -307,8 +307,10 @@ to close; use `--tui` only for attended diagnostics. Every round receives a new
 Git base and replaces the active plan; completed plans and audits remain in Git
 history. Attempt-bound stale loops receive fixed strict-gate recovery instructions
 and bounded automatic continuation; unrelated failures still stop safely. Interrupted campaigns
-resume with the same round count and phase using `--resume`. Available local tools and external
-runners are declared without credentials in `.factory/environment.toml`.
+resume with the same round count and phase using `--resume`. A narrowly guarded first-round
+pre-verification fast-forward recovery is documented in
+[docs/OPERATIONS.md](docs/OPERATIONS.md); it does not weaken normal write-once state updates.
+Available local tools and external runners are declared without credentials in `.factory/environment.toml`.
 Verification validates exact-commit runner receipts; required capabilities without
 accepted production evidence remain findings rather than fabricated completion.
 

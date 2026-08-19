@@ -66,6 +66,7 @@ required = [
     'scripts/pi-cli-shims/ralph', 'scripts/pi-ralph-emit-extension.mjs',
     'tests/test-factory-environment.sh', 'tests/test-factory-runner.sh',
     'tests/test-campaign-audit.sh', 'tests/test-ralph-campaign.sh',
+    'tests/test-ralph-campaign-state.py',
     'tests/test-ralph-stale-recovery.sh', 'tests/test-ralph-recover-safety.sh',
     'tests/test-pi2-ollama-wrapper.sh', 'tests/test-production-path-bypass.sh',
 ]
@@ -167,6 +168,7 @@ PY
 ./tests/test-factory-runner.sh
 ./tests/test-campaign-audit.sh
 ./tests/test-ralph-campaign.sh
+./tests/test-ralph-campaign-state.py
 ./tests/test-ralph-stale-recovery.sh
 ./tests/test-ralph-recover-safety.sh
 ./tests/test-pi2-ollama-wrapper.sh

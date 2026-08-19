@@ -215,6 +215,35 @@ Resume an interrupted active campaign with exactly matching options:
 ./scripts/ralph-campaign.sh --rounds 3 --resume --tui
 ```
 
+### Rebind a reviewed pre-verification fast-forward
+
+A stopped first round may exceptionally need to include reviewed linear commits
+that landed after its implementation checkpoint but before any verification
+binding was recorded. Confirm no Ralph process is alive, retain an
+operator-controlled copy of `.factory-state/ralph-campaign.json`, and record its
+digest before recovery:
+
+```bash
+sha256sum .factory-state/ralph-campaign.json
+cp -a .factory-state/ralph-campaign.json /operator-controlled/ralph-campaign.before-rebind.json
+old=<recorded-implementation-commit>
+new=$(git rev-parse HEAD)
+./scripts/ralph-campaign-state.py rebind-implementation \
+  --expected-old "$old" --new "$new"
+```
+
+Do not use the generic `update` command or edit the JSON. The dedicated command
+acquires the factory lock and succeeds only for an active first-round
+`verification` phase whose verification, runner-evidence, and audit fields are
+all unset. The explicit old value must match, the new value must be the current
+clean `develop` HEAD and a strict merge-free descendant, and state is strictly
+validated before and after an fsync-backed atomic replacement. Its JSON receipt
+records the old/new commits and before/after state SHA-256 digests. It never
+runs Ralph or changes evidence. Review the receipt, then use the normal campaign
+`--resume`; verification reruns for the rebound commit. All later-round,
+already-verified, dirty, backward, equal, non-ancestor, merge, or wrong-old
+requests fail without changing state.
+
 The campaign and its children share the inherited factory lock, so planning,
 implementation, verification, audit checkpointing, and recovery retain one
 repository writer. Quota waits and rejected completion requests remain handled

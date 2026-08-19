@@ -520,6 +520,26 @@ Ralph process is alive and resume the exact phase with:
 ./scripts/ralph-campaign.sh --rounds 3 --resume
 ```
 
+If reviewed linear commits landed after the first-round implementation
+checkpoint but before verification/evidence/audit state was recorded, do not
+edit campaign JSON or weaken normal write-once updates. Back up and digest the
+state, then use the one-purpose recovery operation:
+
+```bash
+sha256sum .factory-state/ralph-campaign.json
+cp -a .factory-state/ralph-campaign.json /operator-controlled/ralph-campaign.before-rebind.json
+./scripts/ralph-campaign-state.py rebind-implementation \
+  --expected-old <recorded-implementation-commit> --new "$(git rev-parse HEAD)"
+```
+
+It locks the factory, requires active first-round `verification` with all later
+fields unset, and accepts only the current clean `develop` HEAD as a strict,
+merge-free descendant of the explicit old commit. Validation and fsync-backed
+atomic replacement bracket the change; the receipt reports before/after state
+digests. Every wrong-old, dirty, equal, backward, non-ancestor, merge,
+already-verified/audited, or later-round case is non-mutating. Resume the normal
+campaign afterward so verification and exact-commit evidence rerun.
+
 Ralph 2.10.1 has a backend edge case in which the successful `ralph emit`
 acknowledgement starts a five-second post-event deadline and its resulting
 SIGTERM is counted as a failed iteration. The Pi2 wrapper loads an explicit Pi

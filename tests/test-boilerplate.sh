@@ -93,7 +93,8 @@ for path in ('AGENTS.md', '.factory/bugs/open.md', '.factory/bugs/closed.md', '.
              'scripts/validate-campaign-audit.py', 'scripts/campaign-audit-scope-guard.sh',
              'scripts/ralph-audit.sh', 'scripts/ralph-campaign.sh',
              'tests/test-factory-environment.sh', 'tests/test-campaign-audit.sh',
-             'tests/test-ralph-campaign.sh', 'scripts/pi2-secure-exec.py',
+             'tests/test-ralph-campaign.sh', 'tests/test-ralph-campaign-state.py',
+             'scripts/pi2-secure-exec.py',
              'scripts/pi-cli-shims/ralph', 'scripts/pi-ralph-emit-extension.mjs',
              'tests/test-pi2-ollama-wrapper.sh'):
     assert (root / path).is_file(), f'missing maintenance artifact: {path}'
@@ -150,5 +151,6 @@ PY
 "$PROJECT_ROOT/tests/test-factory-environment.sh"
 "$PROJECT_ROOT/tests/test-campaign-audit.sh"
 "$PROJECT_ROOT/tests/test-ralph-campaign.sh"
+"$PROJECT_ROOT/tests/test-ralph-campaign-state.py"
 
 echo "test: boilerplate integration checks passed"

@@ -4,12 +4,17 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import tempfile
+from typing import Iterator
 
 ROOT = Path(__file__).resolve().parent.parent
 # Recorded Git bindings must not be reinterpreted through local replacement refs.
@@ -206,9 +211,110 @@ def atomic_write(data: dict) -> None:
             json.dump(data, stream, sort_keys=True, indent=2)
             stream.write("\n"); stream.flush(); os.fsync(stream.fileno())
         os.replace(temporary, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
     finally:
         try: os.unlink(temporary)
         except FileNotFoundError: pass
+
+
+def file_sha256(path: Path) -> str:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError as exc:
+        fail(f"cannot digest campaign state: {exc}")
+
+
+@contextmanager
+def recovery_lock() -> Iterator[None]:
+    """Exclude campaign writers while a one-off state recovery runs."""
+    path = ROOT / ".factory-lock"
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        info = None
+    if info is not None and (
+        stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode)
+        or info.st_uid != os.getuid()
+    ):
+        fail("unsafe factory lock path")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags, 0o600)
+    except OSError as exc:
+        fail(f"cannot open factory lock: {exc}")
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode) or opened.st_uid != os.getuid():
+            fail("unsafe factory lock file")
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            fail("another planner, worker, or recovery process is active")
+        yield
+    finally:
+        os.close(descriptor)
+
+
+def require_rebind_head(requested_new: str) -> None:
+    if git("symbolic-ref", "--quiet", "--short", "HEAD", check=False) != "develop":
+        fail("rebind requires the develop branch")
+    if git("rev-parse", "HEAD") != requested_new:
+        fail("requested new implementation commit must equal current HEAD")
+    if git("status", "--porcelain=v1", "--untracked-files=normal"):
+        fail("rebind requires a clean Git tree")
+
+
+def rebind_implementation(expected_old: str, requested_new: str) -> None:
+    if not SHA.fullmatch(expected_old) or not SHA.fullmatch(requested_new):
+        fail("expected-old or new implementation commit is invalid")
+    with recovery_lock():
+        data = load()
+        if data["status"] != "active" or data["phase"] != "verification":
+            fail("rebind requires an active verification phase")
+        if data["round"] != 1 or len(data["rounds"]) != 1:
+            fail("rebind is limited to the first campaign round")
+        record = data["rounds"][0]
+        if record["implementation_commit"] != expected_old:
+            fail("implementation commit does not match --expected-old")
+        if (
+            record["verification_commit"] is not None
+            or record["runner_evidence_sha256"] is not None
+            or record["audit_started"]
+            or record["audit_commit"] is not None
+            or record["audit_result"] is not None
+        ):
+            fail("verification, evidence, and audit fields must still be unset")
+        require_rebind_head(requested_new)
+        if expected_old == requested_new:
+            fail("new implementation commit must strictly descend from expected-old")
+        if subprocess.run(
+            ["git", "merge-base", "--is-ancestor", expected_old, requested_new], cwd=ROOT,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        ).returncode:
+            fail("new implementation commit is not a descendant of expected-old")
+        if git("rev-list", "--min-parents=2", f"{expected_old}..{requested_new}"):
+            fail("implementation rebind range contains a merge")
+
+        before_digest = file_sha256(state_path())
+        record["implementation_commit"] = requested_new
+        # Recheck mutable Git preconditions immediately before the atomic write.
+        require_rebind_head(requested_new)
+        atomic_write(data)
+        persisted = load()
+        if persisted != data:
+            fail("persisted campaign state does not match the validated rebind")
+        print(json.dumps({
+            "operation": "rebind-implementation",
+            "round": 1,
+            "expected_old": expected_old,
+            "new": requested_new,
+            "state_sha256_before": before_digest,
+            "state_sha256_after": file_sha256(state_path()),
+        }, sort_keys=True))
 
 
 def get_path(data: object, expression: str) -> object:
@@ -239,6 +345,9 @@ def main() -> int:
     update = sub.add_parser("update")
     update.add_argument("--expect-phase", required=True); update.add_argument("--phase")
     update.add_argument("--round-field", action="append", default=[])
+    rebind = sub.add_parser("rebind-implementation")
+    rebind.add_argument("--expected-old", required=True)
+    rebind.add_argument("--new", required=True)
     advance = sub.add_parser("advance"); advance.add_argument("--expect-phase", default="audit")
     finish = sub.add_parser("finish"); finish.add_argument("--result", choices=("pass", "findings"), required=True)
     args = parser.parse_args()
@@ -267,6 +376,10 @@ def main() -> int:
             "tui": args.tui == "true", "verification_command_sha256": args.verification_digest,
             "rounds": [record],
         })
+        return 0
+
+    if args.command == "rebind-implementation":
+        rebind_implementation(args.expected_old, args.new)
         return 0
 
     data = load()

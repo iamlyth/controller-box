@@ -165,6 +165,22 @@ Schema: `ralph-bug-ledger/v1`
     "resolution": "Removed getenv(\"CBX_ICON_DIR\") override from cbx_icon_dir() in config_paths.c — production code no longer checks env var for resource paths. Removed all setenv/unsetenv(\"CBX_ICON_DIR\") calls from test_manager_visual.c and test_golden.c. Replaced all hardcoded SVG_DIR/OVERLAY_SVG_DIR macros passed to cbx_icon_cache_init with cbx_icon_dir() in test_icon_cache.c, test_icon_lookup.c, test_overlay_visual.c, test_golden.c, test_installed_functional.c, test_backend_smoke_sw.c, and test_backend_smoke.c. Removed unused SVG_DIR/OVERLAY_SVG_DIR macro definitions. Removed putenv(\"CBX_ICON_DIR=\") from test_production_path_icon_load. cbx_icon_dir() resolves via ICON_DIR (install path) with SOURCE_ICON_DIR fallback (source tree), matching cbx_builtin_profiles_dir() pattern.",
     "verification": "grep -r 'setenv.*CBX_ICON_DIR' tests/ returns no matches. ./tests/test-production-path-bypass.sh passes (no resource-path env-var injection found). Full ctest suite: 98/98 pass (2 hardware skips). All visual, golden, and installed functional tests pass through cbx_icon_dir() production path.",
     "closed": "2026-08-17"
+  },
+  {
+    "id": "BUG-0011",
+    "title": "Active verification campaign cannot safely adopt reviewed fast-forward work",
+    "status": "closed",
+    "severity": "high",
+    "reported": "2026-08-19",
+    "external": [],
+    "contract_change": false,
+    "reproduction": "Stop round 1 after implementation enters verification, then fast-forward clean develop through reviewed linear runner, packaging, or build commits before verification fields are recorded. Normal state update correctly refuses implementation_commit because that field is not writable in verification.",
+    "expected": "An explicit one-purpose recovery can bind the still-unverified first-round implementation checkpoint to the current reviewed clean linear develop HEAD without weakening ordinary write-once state transitions or editing state JSON manually.",
+    "actual": "The only available helper path was the generic update command, which correctly rejected the rewrite; recovery therefore required an unsafe manual JSON edit or abandoning durable campaign phase state.",
+    "acceptance": "A locked atomic command requires the exact old implementation commit, active first-round verification, unset verification/evidence/audit fields, a clean current develop HEAD that strictly and merge-freely descends from old, and rejects dirty, equal, backward, non-ancestor, merge, wrong-old, already-verified/audited, and later-round cases without changing state; normal update remains write-once; generic boilerplate parity and adversarial tests pass.",
+    "resolution": "Added ralph-campaign-state.py rebind-implementation. It serializes through the factory lock, validates state and explicit first-round phase preconditions, requires exact expected-old and current clean develop HEAD, enforces strict merge-free ancestry, preserves normal update semantics, fsyncs the atomic state replacement, reload-validates persisted state, and emits old/new plus before/after SHA-256 receipt fields. Added shared adversarial recovery tests and backup/digest operations guidance, synchronized to the generic boilerplate.",
+    "verification": "tests/test-ralph-campaign-state.py and tests/test-ralph-campaign.sh pass in Controller-Box and the generic counterpart; scripts/verify-boilerplate.sh passes in both repositories; scripts/verify-project.sh passes with 98/98 CTest targets successful (2 expected environment skips), mandatory installed-functional acceptance, installed smoke, clean build, and packaging. Campaign state remained unchanged in active round-1 verification.",
+    "closed": "2026-08-19"
   }
 ]
 ```
