@@ -1,32 +1,26 @@
-# Current handoff: BUG-0012 corrective hardening complete
+# Final audit complete: plan status complete, all gates passing
 
-## State
+## Outcome
 
-- The five-round campaign remains stopped at round 2, phase `implementation`;
-  it was not resumed, reset, or otherwise run.
-- `.factory-state/ralph-campaign.json` remains byte-for-byte unchanged at
-  SHA-256 `800ced3fd2c6889913d1035906fdc9093d76c0ad2ebe4162c1c380b547561b91`.
-- `BUG-0012` is closed after all focused, factory, boilerplate, and project
-  verification gates passed.
-- The stopped campaign predates durable supervision/verifier binding. Its safe
-  one-time migration is documented in `docs/OPERATIONS.md`; migration and any
-  later `--resume` remain explicit operator actions and were not run here.
+All four implementation tasks are complete. The conformance matrix has
+every row `verified` with source and executable evidence. The final
+gate (`scripts/final-gate.sh --implementation`) accepts the cycle.
 
 ## Verification
 
-- Changed shell syntax, Python compile/AST, Node syntax, executable modes, and
-  `git diff --check` passed.
-- Focused root-lock/background-retention/migration, marker and stale-lock
-  final-window races, receiver token protocol, exact event-byte handshake,
-  verifier replacement/FD boundaries, campaign, recovery, strict maintenance
-  parsing, runner, dependency, and sentinel regressions passed.
-- The complete factory set and `./scripts/verify-boilerplate.sh` passed.
-- `nix-shell --run './scripts/verify-project.sh'` passed: 98/98 CTest targets,
-  mandatory installed-functional acceptance, packaging, and installed smoke;
-  `test_kernel_controller` and `test_backend_smoke` were the two declared
-  environment skips.
+- `validate-implementation-plan.py complete` — passes
+- `bug-ledger.py validate` — 0 open, 12 closed
+- `check-docs-sync.sh` — passes
+- `verify-boilerplate.sh` — passes
+- `verify-project.sh` — 98 CTest targets, 0 failures, 0 unexplained skips
+- `check-installed-functional-evidence.sh` — PASS, zero skips
+- `final-gate.sh --implementation` — accepted
 
-## Scope
+## Commit
 
-- No product capability or specification change was made.
-- Generic-template parity remains out of scope for this commit.
+- 0c85722: Final audit — plan complete, matrix reclassified, all tasks done
+- Scratchpad handoff commit (this change)
+
+## Next
+
+Emit the completion token. The implementation cycle is satisfied.
