@@ -3,7 +3,7 @@ spec_path: docs/SPEC.md
 spec_commit: 3a10f6b7d04a615b2b9d06eef6c91e431fa9c079
 spec_blob: 58f5d3cb72bc6b3e5f573fa09a63c11a653ed577
 base_commit: 860922af39ed7e2aef9b95705705f7ed90344e87
-status: active
+status: complete
 ---
 
 # Implementation Plan
@@ -256,7 +256,7 @@ Keyboard tests in `test_manager_interaction_prof.c` relabeled from
 - Documentation impact: OPERATIONS.md current limitations section; README.md known limitations table
 
 ## Task 4: Final documentation and specification audit
-- Status: pending
+- Status: complete
 - Dependencies: Task 1, Task 2, Task 3
 - Scope: `.factory/artifacts/implementation-plan.md` (conformance matrix update), `README.md`, `docs/OPERATIONS.md`, full clean verification
 - Acceptance criteria:

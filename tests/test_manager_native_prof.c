@@ -123,6 +123,7 @@ send_key_dn(cbx_manager *mgr, SDL_Keycode sym)
 {
     SDL_Event ev = {0};
     ev.type = SDL_KEYDOWN;
+    ev.key.state = SDL_PRESSED;
     ev.key.keysym.sym = sym;
     return cbx_manager_handle_event(mgr, &ev);
 }
@@ -132,6 +133,7 @@ send_key_up(cbx_manager *mgr, SDL_Keycode sym)
 {
     SDL_Event ev = {0};
     ev.type = SDL_KEYUP;
+    ev.key.state = SDL_RELEASED;
     ev.key.keysym.sym = sym;
     return cbx_manager_handle_event(mgr, &ev);
 }
@@ -151,12 +153,15 @@ send_mouse_click(cbx_manager *mgr, int x, int y)
     ev.button.button = SDL_BUTTON_LEFT;
     ev.button.x = x;
     ev.button.y = y;
-    bool down = cbx_manager_handle_event(mgr, &ev);
+    SDL_PushEvent(&ev);
+    pump_manager(mgr);
+    bool down = true;  /* pump_manager processes the event through the full SDL queue */
 
     ev.type = SDL_MOUSEBUTTONUP;
     ev.button.x = x;
     ev.button.y = y;
-    cbx_manager_handle_event(mgr, &ev);
+    SDL_PushEvent(&ev);
+    pump_manager(mgr);
     return down;
 }
 
@@ -855,7 +860,7 @@ test_m20_delete_cancel_pointer(void **state)
     assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_CONFIRM_DELETE);
 
     /* B → cancel. */
-    send_key_dn(&mgr, SDLK_b);
+    send_key_press(&mgr, SDLK_b);
     assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_LIST);
     assert_int_equal(cbx_profiles_tab_profile_count(pt), before);
 
@@ -1719,9 +1724,7 @@ test_d07_filesystem_failure(void **state)
      * check).  Production code sets "Save failed." on filesystem error. */
     const char *status = cbx_profile_editor_get_status(&pt->editor);
     assert_non_null(status);
-    assert_true(strstr(status, "fail") != NULL || strstr(status, "Fail") != NULL
-                 || strstr(status, "error") != NULL || strstr(status, "Error") != NULL
-                 || strstr(status, "Missing") != NULL);
+    assert_true(strstr(status, "Save failed") != NULL);
 
     /* Restore permissions for cleanup. */
     chmod(f->user_dir, 0700);
@@ -1858,12 +1861,10 @@ test_d07_filesystem_failure_pointer(void **state)
     /* Editor stays open (save failed). */
     assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_EDITOR);
 
-    /* Status should show save failure — check for error content. */
+    /* Status should show save failure — production code sets "Save failed." */
     const char *status = cbx_profile_editor_get_status(&pt->editor);
     assert_non_null(status);
-    assert_true(strstr(status, "fail") != NULL || strstr(status, "Fail") != NULL
-                 || strstr(status, "error") != NULL || strstr(status, "Error") != NULL
-                 || strstr(status, "Missing") != NULL);
+    assert_true(strstr(status, "Save failed") != NULL);
 
     /* Restore permissions for cleanup. */
     chmod(f->user_dir, 0700);
