@@ -1,14 +1,18 @@
 # Campaign Audit Round 1 — Handoff
 
 ## Status
-Audit complete. Writing findings to `.factory/artifacts/campaign-audit.md`.
+Audit complete. Report written to `.factory/artifacts/campaign-audit.md` with `result: findings`.
+Final gate `./scripts/final-gate.sh --campaign-audit` PASSED with env vars:
+- `FACTORY_CAMPAIGN_AUDIT_ROUND=1`
+- `FACTORY_CAMPAIGN_AUDIT_BASE=26df6c05a5319214f1c0a97a2c3c6f763128b1c6`
+- `FACTORY_CAMPAIGN_RUNNER_EVIDENCE_SHA256=7e29a2b045fe42251d04848a2fa5940e7178b458e93cad5710357ddfa4e0d098`
 
-## Key discoveries
-- Runner evidence at audit base commit 26df6c0 shows `test_kernel_controller` PASSES (10.88s) and Flatpak build PASSES. Capabilities `kernel-uinput` and `installed-package` are declared in environment.toml and evidenced.
-- Implementation plan conformance matrix is STALE: VRF-05, PKG-01, DBUS-02, DOD-03, DOD-05 marked partial/blocked despite runner evidence showing pass.
-- Documentation inaccuracies: interaction inventory counts wrong (52/6/1 vs actual 51/7/1), M01-M39 vs M01-M38, stale kernel-uinput claims.
-- Genuinely blocked: GPU backend smoke (VRF-06), aarch64 build (SYS-01), Pi 4 latency (SYS-02/PERF-01), human release acceptance (VRF-07).
-- Test-quality, security, and production-path reviews found no critical issues. All production paths complete. No test bypasses. No env-var injection.
+## Findings (5)
+1. Stale conformance matrix — VRF-05, PKG-01, DBUS-02, DOD-03, DOD-05 marked partial/blocked despite runner evidence at commit 26df6c0 showing pass.
+2. Documentation inaccuracies — stale kernel-uinput claims, wrong interaction inventory counts (52/6/1 vs actual 51/7/1), M01-M39 vs M01-M38.
+3. GPU backend smoke (VRF-06) not evidenced — `gpu-compositor` capability undeclared.
+4. aarch64 build (SYS-01) not evidenced — no cross-compiler or ARM64 runner.
+5. Pi 4 latency (SYS-02/PERF-01) and human release acceptance (VRF-07) not evidenced.
 
 ## Next action
-Run final gate, then emit the completion token.
+Emit the completion token.
