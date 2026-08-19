@@ -3,7 +3,41 @@ spec_path: docs/SPEC.md
 spec_commit: 3a10f6b7d04a615b2b9d06eef6c91e431fa9c079
 spec_blob: 58f5d3cb72bc6b3e5f573fa09a63c11a653ed577
 base_commit: 860922af39ed7e2aef9b95705705f7ed90344e87
-status: complete
+status: active
+---
+
+## Blocking findings (2026-08-19, lifecycle operator)
+
+Two human-observed production acceptance failures invalidate the previous
+`status: complete` claim. The plan is returned to `active` until Ralph owns
+a product diagnosis/fix for each and re-verifies with real acceptance
+evidence. No completion may proceed on the old evidence.
+
+1. **BUG-0014 — Manager shows no controller diagram in production launch.**
+   Launching `./build-check/controller-box --manager` (real binary, real
+   window server) shows a blank controller diagram area. Existing
+   `test_manager_visual.c`, `test_golden.c`, and `test_overlay_visual.c`
+   pass without catching this, so goldens/pixel tests do not prove the
+   production diagram rendering path. Required: a Ralph-owned renderer/
+   asset-path diagnosis and fix plus a production-window/installed-path
+   semantic test proving recognizable diagram content (not a non-NULL
+   texture, a fallback, or a broad pixel-count change).
+2. **BUG-0015 — Manager reports `Topology incomplete: 0 of 4 virtual
+   controllers active`; no virtual controller works.** Real
+   InputPlumber system-bus acceptance is required: four expected
+   target/controller objects present and usable through production
+   dispatch. `inputplumber-system-dbus` is NOT declared in
+   `.factory/environment.toml` (declared: remote-project-gate,
+   systemd-user, kernel-uinput, installed-package), so private/
+   native-signature sd-bus tests must not be counted as real
+   system-bus evidence, and rows relying on them must not claim
+   `verified`. If the capability remains unavailable, it is an explicit
+   blocking finding and the affected rows stay non-verified.
+
+Affected rows reclassified `verified` -> `partial` in the conformance
+matrix below: ARCH-04, SYS-06, DBUS-02, DBUS-05, OVL-10, MGR-02, MGR-07,
+MGR-08, DOD-01, DOD-09. Task 4 (final audit) is returned to `blocked`.
+
 ---
 
 # Implementation Plan
@@ -47,14 +81,14 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 | ARCH-01 | §2.1 | verified | `dbus_client.c` — all ops through DBus vtable; no direct input routing | |
 | ARCH-02 | §2.2 | verified | `dbus_client.c` sd-bus; `ip_connection.c` system bus | |
 | ARCH-03 | §2.3 | verified | `main.c` mode dispatch; `overlay_service.c`, `manager.c` | |
-| ARCH-04 | §2.4 | verified | `ip_connection.c` NameOwnerChanged, degraded/recovery, ≤2s re-enumerate; `test_native_dbus.c` test 2–3 | |
+| ARCH-04 | §2.4 | partial | `ip_connection.c` NameOwnerChanged, degraded/recovery, ≤2s re-enumerate; `test_native_dbus.c` is a private native-signature test, not real InputPlumber system-bus acceptance (BUG-0015, inputplumber-system-dbus undeclared) | Task 4 |
 | ARCH-05 | §2.5 | verified | `trigger.c` SetInterceptActivation; `ip_intercept_poll.c` 50 ms poll; `test_trigger.c`, `test_intercept_poll.c` | |
 | SYS-01 | §3 | verified | aarch64 toolchain files present and correctly configured (cmake/aarch64-toolchain.cmake, cross-shell.nix); codebase architecture-agnostic; Flatpak manifest targets multi-arch Platform 24.08; cross-compile attempted, nix dependency build exceeds time bound; capability rationale in OPERATIONS.md per §11.2.6 | Task 3 |
 | SYS-02 | §3 | verified | x86_64 build and full test suite verified (98 CTest targets); ARM64 portability confirmed by code review and Flatpak multi-arch target; Pi 4 runtime requires physical target hardware per §11.2.6 rationale in OPERATIONS.md | Task 3 |
 | SYS-03 | §3 | verified | SDL2 supports X11/Wayland/Gamescope; `test_sdl_dummy.c` | |
 | SYS-04 | §3 | verified | `CMakeLists.txt` deps: SDL2, SDL2_ttf, SDL2_image, libsystemd, libyaml; nanosvg vendored `third_party/nanosvg/` | |
 | SYS-05 | §3 | verified | InputPlumber not bundled; runtime bus-name check in `ip_connection.c` | |
-| SYS-06 | §3 | verified | Native sd-bus tests pass with polkit-equivalent access; `test_native_dbus.c` | |
+| SYS-06 | §3 | partial | Native sd-bus tests are private native-signature tests, not real InputPlumber system-bus acceptance; inputplumber-system-dbus undeclared (BUG-0015) | Task 4 |
 | OVL-01 | §4.1 | verified | `grid_render.c` select-screen grid; `test_grid_render.c`, `test_overlay_visual.c` | |
 | OVL-02 | §4.2 | verified | `trigger.c` default Select+A, configurable; `test_trigger.c` | |
 | OVL-03 | §4.3 | verified | `player_mode.c` independent per-controller; `test_player_mode.c`, `test_overlay_native.c` O11 | |
@@ -64,15 +98,15 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 | OVL-07 | §4.7 | verified | `dynamic_columns.c` scales with target count; `test_dynamic_columns.c` | |
 | OVL-08 | §4.8 | verified | `grid_render.c` model name + slot, no nicknames | |
 | OVL-09 | §4.9 | verified | Pre-built surface architecture (surface_build.c) and 50 ms poll cycle (ip_intercept_poll.c) verified; x86_64 latency measured by test_overlay_latency.c over 200+ iterations; Pi 4 latency bound requires physical target hardware per §11.2.6 in OPERATIONS.md | Task 3 |
-| OVL-10 | §4.10 | verified | `test_overlay_visual.c` (8 tests), `test_golden.c` (4 overlay baselines) | |
+| OVL-10 | §4.10 | partial | `test_overlay_visual.c` and `test_golden.c` pass without proving the production diagram; human-observed blank diagram (BUG-0014) | Task 4 |
 | MGR-01 | §5.1 | verified | `manager.c` tab bar, 3 tabs, controller + pointer; `test_manager_tabs.c`, `test_manager_native.c` | |
-| MGR-02 | §5.2 | verified | `controllers_tab.c` add/remove/type-change, topology reconcile; `test_controllers_tab.c`, `test_manager_native.c` MG-04 | |
+| MGR-02 | §5.2 | partial | `controllers_tab.c` add/remove/type-change, topology reconcile; production launch reports 0/4 virtual controllers active (BUG-0015) | Task 4 |
 | MGR-03 | §5.3 | verified | `profiles_tab.c` browse/create/edit/delete, built-in Default; `test_profiles_tab.c`, `test_installed_functional.c` | |
 | MGR-04 | §5.4 | verified | `profile_editor_list.c`, `profile_editor_seq.c` both modes; `test_editor_list_mode.c`, `test_editor_seq_mode.c` | |
 | MGR-05 | §5.4 | verified | `profile_validate.c` NES minimum (A/B/D-pad); `test_profile_validate.c`; `profile_save.c` enforces before write | |
 | MGR-06 | §5.5 | verified | `settings_tab.c` all settings; `test_settings_tab.c`, `test_manager_native.c` M21–M26 | |
-| MGR-07 | §5.6 | verified | `test_manager_visual.c` (13 tests), `test_golden.c` (7 manager baselines) | |
-| MGR-08 | §5.7 | verified | 52/60 inventory verified (M01–M39 + O01–O13 + D01–D08), 7 NA, 1 release-gated (O12 per §13); M39 added (Task 1); M28–M38 controller-transport evidence via ctrl_press in test_manager_native_prof.c (Task 2); keyboard tests relabeled to _keyboard per §5.7 | Task 1, Task 2 |
+| MGR-07 | §5.6 | partial | `test_manager_visual.c`, `test_golden.c` pass without proving the production diagram; production manager shows no controller diagram (BUG-0014) | Task 4 |
+| MGR-08 | §5.7 | partial | 52/60 inventory claimed verified with controller-transport evidence via ctrl_press and keyboard relabels; premise contradicted by 0/4 virtual controllers active and blank diagram (BUG-0014, BUG-0015) | Task 2, Task 4 |
 | ID-01 | §6.2 | verified | `identity.c` 4-layer auto-assignment; `test_identity.c` | |
 | ID-02 | §6.3 | verified | `identity.c` BT:/USB:/USB:phys:/ORDER: prefixes; `config_assignments.c` validation | |
 | ID-03 | §6.3 | verified | `identity_downgrade.c` fallback to ORDER:n; `test_identity_downgrade.c` | |
@@ -93,10 +127,10 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 | PKG-04 | §9.4 | verified | `ip_connection.c` runtime bus-name check; no cross-manager dependency | |
 | PKG-05 | §9.1 | verified | `service_install.c` first-run install; `test_service_install.c`; `test_manager_interaction_ctrl.c` M39 tests | |
 | DBUS-01 | §10.1 | verified | `ip_connection.c`, `dbus_client.c` system bus connection; `test_connection.c` | |
-| DBUS-02 | §10.1 | verified | `dbus_client.c` native sd-bus types (u, b, as, s); `test_dbus_signatures.c`, `test_native_dbus.c` 11 tests | |
+| DBUS-02 | §10.1 | partial | `dbus_client.c` native sd-bus types (u, b, as, s); `test_dbus_signatures.c`, `test_native_dbus.c` exercise a private service, not real InputPlumber system-bus acceptance (BUG-0015) | Task 4 |
 | DBUS-03 | §10.1 | verified | `ip_objectmanager.c` GetManagedObjects; `test_objectmanager_parse.c` | |
 | DBUS-04 | §10.1 | verified | `ip_hotplug.c` InterfacesAdded/Removed; `test_hotplug.c` | |
-| DBUS-05 | §10.1 | verified | `ip_connection.c` owner check, version, enumeration; `test_native_dbus.c` test 2 | |
+| DBUS-05 | §10.1 | partial | `ip_connection.c` owner check, version, enumeration via `test_native_dbus.c` (private service); real InputPlumber system-bus acceptance pending (BUG-0015) | Task 4 |
 | DBUS-06 | §10.2 | verified | `ip_manager.c`, `ip_composite.c`, `ip_target.c`, `ip_source.c` full API surface | |
 | DBUS-07 | §10.3 | verified | All 5 gaps: intercept poll, gamepad order persist, temp composite YAML, filesystem enumerate, no-op gap 5 | |
 | PERF-01 | §11 | verified | x86_64 latency measured by test_overlay_latency.c (p50/p99/max over 200+ iterations); surface architecture and 50 ms poll cycle verified; Pi 4 ≤75 ms p99 bound requires physical target hardware per §11.2.6 rationale in OPERATIONS.md | Task 3 |
@@ -111,7 +145,7 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 | VRF-05 | §11.1.5 | verified | `test_installed_functional.c` (4 tests), `test_installed_smoke.sh`, `test_installed_binary.sh`; runner receipt 26df6c0 all pass | |
 | VRF-06 | §11.1.6 | verified | Software-renderer smoke test_backend_smoke_sw.c passes (non-blank framebuffer, region content assertions); GPU backend test_backend_smoke.c exits 77 in headless, ready for GPU compositor; capability rationale in OPERATIONS.md per §11.2.6 | Task 3 |
 | VRF-07 | §11.1.7 | verified | Human release acceptance checklist documented with procedure, criteria, and evidence storage; requires human reviewer on target hardware per §11.1.7; rationale in OPERATIONS.md per §11.2.6 | Task 3 |
-| DOD-01 | §11.2.1 | verified | All conformance matrix rows verified; hardware-dependent capabilities accounted in OPERATIONS.md per §11.2.6; bug ledger open.md is empty (0 records) | Task 4 |
+| DOD-01 | §11.2.1 | partial | Not all matrix rows verified: ARCH-04, SYS-06, DBUS-02, DBUS-05, OVL-10, MGR-02, MGR-07, MGR-08 are partial pending BUG-0014/BUG-0015 | Task 4 |
 | DOD-02 | §11.2.2 | verified | Tests use production dispatch; native DBus preserves signatures | |
 | DOD-03 | §11.2.3 | verified | M39 added to inventory (Task 1); M28–M38 controller-transport evidence via ctrl_press in test_manager_native_prof.c (Task 2); keyboard tests in test_manager_interaction_prof.c relabeled to _keyboard per §5.7 | Task 1, Task 2 |
 | DOD-04 | §11.2.4 | verified | `test_overlay_visual.c`, `test_manager_visual.c` cover degraded/error/recovery states | |
@@ -119,7 +153,7 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 | DOD-06 | §11.2.6 | verified | `BUG-0012` closed after repository-root-flock, descriptor-boundary, verifier/event-byte binding, quarantine-race, strict-protocol/parser, complete factory/boilerplate, and 98-target project verification passed | Task 4 |
 | DOD-07 | §11.2.7 | verified | Campaign audit round 1 completed with 5 findings; this plan addresses all | |
 | DOD-08 | §11.2.8 | verified | README.md/OPERATIONS.md capability claims and inventory counts corrected (Task 1); capability-accounted items documented in OPERATIONS.md (Task 3) | Task 1, Task 3 |
-| DOD-09 | §11.2.9 | verified | Plan status complete; all tasks complete; clean-tree verification passed; final gate accepted | Task 4 |
+| DOD-09 | §11.2.9 | partial | Plan status is active; two production acceptance failures open (BUG-0014, BUG-0015); final gate cannot accept completion | Task 4 |
 
 ## Interaction acceptance inventory
 
@@ -256,7 +290,8 @@ Keyboard tests in `test_manager_interaction_prof.c` relabeled from
 - Documentation impact: OPERATIONS.md current limitations section; README.md known limitations table
 
 ## Task 4: Final documentation and specification audit
-- Status: complete
+- Status: blocked
+- Block reason: BUG-0014 (invisible diagram) and BUG-0015 (0/4 virtual controllers); real InputPlumber system-bus acceptance required; block lifts only with Ralph-owned product fixes and real acceptance evidence
 - Dependencies: Task 1, Task 2, Task 3
 - Scope: `.factory/artifacts/implementation-plan.md` (conformance matrix update), `README.md`, `docs/OPERATIONS.md`, full clean verification
 - Acceptance criteria:
