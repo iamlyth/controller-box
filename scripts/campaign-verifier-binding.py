@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import stat
 import subprocess
 import sys
@@ -15,6 +16,8 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG = ROOT / ".factory/config.toml"
+HELPER_RELATIVE = "scripts/campaign-verifier-binding.py"
+HELPER_MODE = "100755"
 
 
 def fail(message: str) -> None:
@@ -94,6 +97,60 @@ def tracked_blob(path: str, data: bytes, expected_mode: str) -> str:
     return committed
 
 
+def retained_helper_binding() -> dict[str, str] | None:
+    """Bind this helper through its retained descriptor when so invoked.
+
+    The campaign opens and retains an immutable descriptor to the helper before
+    any untrusted phase. When the helper is executed through that descriptor
+    (`/proc/self/fd/N`), `__file__` is that procfs path; the descriptor still
+    refers to the exact committed inode opened at campaign startup, so a
+    workspace pathname swap cannot substitute helper code. Direct pathname
+    invocation (tests, debugging) performs no self-binding.
+    """
+    script = Path(__file__)
+    match = re.fullmatch(r"/proc/self/fd/([0-9]+)", str(script))
+    if not match:
+        return None
+    descriptor = int(match.group(1))
+    try:
+        info = os.fstat(descriptor)
+    except OSError as exc:
+        fail(f"cannot validate retained binding helper: {exc}")
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or info.st_uid != os.getuid()
+        or info.st_nlink != 1
+        or info.st_mode & 0o022
+        or not info.st_mode & 0o111
+    ):
+        fail("retained binding helper is not a safe executable file")
+    # The retained descriptor is shared with the campaign shell's open-file
+    # description, so its position persists across helper invocations. Rewind
+    # it before binding the exact committed inode it pins.
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = os.read(descriptor, 65536)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > 16 * 1024 * 1024:
+            fail("retained binding helper exceeds the read limit")
+        chunks.append(chunk)
+    raw = b"".join(chunks)
+    after = os.fstat(descriptor)
+    if (info.st_size, info.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+        fail("retained binding helper changed while reading")
+    helper_blob = tracked_blob(HELPER_RELATIVE, raw, HELPER_MODE)
+    return {
+        "path": HELPER_RELATIVE,
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "blob": helper_blob,
+        "mode": format(stat.S_IMODE(info.st_mode), "04o"),
+    }
+
+
 def binding() -> tuple[dict[str, object], str, list[str], Path, bytes]:
     config_bytes, _ = secure_read(CONFIG, 1024 * 1024)
     try:
@@ -169,9 +226,14 @@ def execute_verified(command: list[str], executable: Path, expected_bytes: bytes
         named = executable.lstat()
         if (before.st_dev, before.st_ino) != (named.st_dev, named.st_ino):
             fail("campaign verifier pathname changed immediately before execution")
-        # argv[0] remains the canonical repository-relative command validated
-        # above, preserving the verifier's production SCRIPT_DIR semantics.
-        os.execve(command[0], command, os.environ)
+        # Execute the exact opened verifier inode through the retained
+        # descriptor instead of reopening command[0]: the kernel resolves
+        # /proc/self/fd/N to this open file description, so a pathname swap in
+        # the final validation->exec race can never substitute another file.
+        # The descriptor must survive the interpreter's reopen of the script
+        # path, so it is explicitly made inheritable across the exec.
+        os.set_inheritable(descriptor, True)
+        os.execve(f"/proc/self/fd/{descriptor}", command, os.environ)
     except OSError as exc:
         fail(f"cannot execute bound campaign verifier: {exc}")
     finally:
@@ -183,6 +245,7 @@ def main() -> None:
     parser.add_argument("--expected-digest")
     parser.add_argument("--exec", dest="execute", action="store_true")
     args = parser.parse_args()
+    helper = retained_helper_binding()
     bound, digest, command, executable, executable_bytes = binding()
     if args.expected_digest is not None and args.expected_digest != digest:
         fail("verification binding changed immediately before execution")
@@ -190,7 +253,10 @@ def main() -> None:
         if args.expected_digest is None:
             fail("--exec requires --expected-digest")
         execute_verified(command, executable, executable_bytes)
-    print(json.dumps({"binding": bound, "sha256": digest}, sort_keys=True, separators=(",", ":")))
+    print(json.dumps(
+        {"binding": bound, "sha256": digest, "helper": helper},
+        sort_keys=True, separators=(",", ":"),
+    ))
 
 
 if __name__ == "__main__":

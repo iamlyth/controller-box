@@ -36,9 +36,21 @@ factory_lock_assert_held() {
 }
 
 # Run an untrusted leaf without any descriptor referring to the lock inode and
-# without lock metadata in its environment. The trusted caller retains its FD.
+# without lock metadata in its environment. This is already-loaded shell logic:
+# a subshell closes the dynamic repository-root lock descriptor and unsets all
+# lock metadata BEFORE any mutable workspace executable runs, so a workspace
+# helper is never executed while authority is live and background descendants
+# of the untrusted command can retain, unlock, or claim nothing. The trusted
+# caller retains its own descriptor outside the subshell.
 factory_lock_run_untrusted() {
     local root=${FACTORY_LOCK_ROOT:?factory_lock_bootstrap must run first}
     (( $# > 0 )) || { echo "factory-lock: untrusted command required" >&2; return 2; }
-    python3 "$FACTORY_LOCK_HELPER_DIR/factory-lock-exec.py" "$root" --drop -- "$@"
+    local fd=${FACTORY_LOCK_FD:-}
+    (
+        if [[ ${FACTORY_LOCK_HELD:-0} == 1 && "$fd" =~ ^[0-9]+$ && $fd -ge 3 ]]; then
+            eval "exec $fd>&-"
+        fi
+        unset FACTORY_LOCK_HELD FACTORY_LOCK_FD FACTORY_LOCK_ID FACTORY_LOCK_ROOT
+        exec "$@"
+    )
 }

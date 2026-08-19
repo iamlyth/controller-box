@@ -25,7 +25,7 @@ def run(command: list[str], root: Path, *, check: bool = True) -> subprocess.Com
 def make_repo() -> Path:
     root = Path(tempfile.mkdtemp(prefix="controller-box-lock-test."))
     (root / "scripts").mkdir()
-    for name in ("factory-lock-exec.py", "factory_lock.py", "factory_state_io.py", "ralph-campaign-state.py"):
+    for name in ("factory-lock-exec.py", "factory_lock.py", "factory_state_io.py", "ralph-campaign-state.py", "factory-lock.sh"):
         shutil.copy2(SOURCE / "scripts" / name, root / "scripts" / name)
     (root / ".gitignore").write_text(".factory-state/\n.factory-lock\n", encoding="utf-8")
     (root / "tracked").write_text("test\n", encoding="utf-8")
@@ -80,19 +80,57 @@ print('untrusted-clean')
         probe.write_text(
             """#!/usr/bin/env bash
 set -euo pipefail
-root=$1
-helper=$root/scripts/factory-lock-exec.py
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+root=${1:?repository root required}
+helper=$SCRIPT_DIR/scripts/factory-lock-exec.py
+# shellcheck source=scripts/factory-lock.sh
+source "$SCRIPT_DIR/scripts/factory-lock.sh"
+factory_lock_bootstrap "$root" bash "$0" "$@"
 python3 "$helper" "$root" --check
 fd=${FACTORY_LOCK_FD:?}
 [[ $fd =~ ^[0-9]+$ ]] && (( fd >= 3 ))
 [[ -e /proc/self/fd/$fd ]]
 [[ ${FACTORY_LOCK_ROOT:?} == "$root" ]]
-python3 "$helper" "$root" --drop -- python3 "$root/inspect.py" "$root"
+# The already-loaded shell function drops every lock descriptor and variable
+# before any mutable workspace executable runs.
+factory_lock_run_untrusted python3 "$root/inspect.py" "$root"
+# The trusted parent retained its descriptor and authority.
+[[ -e /proc/self/fd/$fd ]]
 python3 "$helper" "$root" --check
-if env -u FACTORY_LOCK_HELD -u FACTORY_LOCK_FD -u FACTORY_LOCK_ID -u FACTORY_LOCK_ROOT \
-    python3 "$helper" "$root" -- true; then
-    exit 41
-fi
+# Rebind the repository pathname (the bwrap bind-mount analog): the retained
+# descriptor pins the original root inode, the untrusted leaf still receives
+# nothing, and the parent fails closed on pathname drift.
+parent=$(dirname -- "$root")
+name=$(basename -- "$root")
+renamed="$parent/root.renamed.$$"
+mv "$root" "$renamed"
+mkdir "$parent/$name"
+trap 'rmdir "$parent/$name" 2>/dev/null || true; mv "$renamed" "$root" 2>/dev/null || true' EXIT
+helper="$renamed/scripts/factory-lock-exec.py"
+factory_lock_run_untrusted python3 "$renamed/inspect.py" "$renamed"
+# The parent's open-file description still owns the original inode after the
+# pathname rebind; a fresh lock on the renamed root must contend.
+python3 - "$renamed" <<'PY'
+import fcntl, os, sys
+root = sys.argv[1]
+descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+try:
+    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    os.close(descriptor)
+    raise SystemExit(0)
+os.close(descriptor)
+raise SystemExit('lock was lost during rebind')
+PY
+set +e
+python3 "$helper" "$root" --check
+rebound_rc=$?
+set -e
+[[ $rebound_rc -ne 0 ]] || { echo "rebound root pathname still authorized the lock" >&2; exit 44; }
+rmdir "$parent/$name"
+mv "$renamed" "$root"
+trap - EXIT
+python3 "$root/scripts/factory-lock-exec.py" "$root" --check
 """,
             encoding="utf-8",
         )

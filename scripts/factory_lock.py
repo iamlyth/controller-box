@@ -244,32 +244,6 @@ def _clear_environment() -> None:
         os.environ.pop(key, None)
 
 
-def close_inherited_copies(root: Path) -> None:
-    descriptor = inherited_descriptor(root)
-    if descriptor is None:
-        _clear_environment()
-        return
-    identity = os.fstat(descriptor)
-    candidates: set[int] = {descriptor}
-    proc_fds = Path("/proc/self/fd")
-    if not proc_fds.is_dir():
-        raise FactoryLockError("cannot enumerate inherited descriptors before untrusted exec")
-    for item in proc_fds.iterdir():
-        try:
-            candidate = int(item.name)
-            info = os.fstat(candidate)
-        except (ValueError, OSError):
-            continue
-        if candidate >= 3 and (info.st_dev, info.st_ino) == (identity.st_dev, identity.st_ino):
-            candidates.add(candidate)
-    for candidate in sorted(candidates, reverse=True):
-        try:
-            os.close(candidate)
-        except OSError:
-            pass
-    _clear_environment()
-
-
 @contextmanager
 def locked(root: Path) -> Iterator[int]:
     descriptor = inherited_descriptor(root)

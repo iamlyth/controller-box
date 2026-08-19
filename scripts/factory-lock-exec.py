@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Acquire/validate the git-common factory lock or drop it at a leaf boundary."""
+"""Acquire/validate the git-common factory lock at a lifecycle boundary."""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ import sys
 from factory_lock import (
     FactoryLockError,
     acquire,
-    close_inherited_copies,
     inherited_descriptor,
     validate_open_lock,
 )
@@ -31,7 +30,7 @@ def execute(command: list[str]) -> None:
 
 def main() -> None:
     if len(sys.argv) < 3:
-        fail("usage: factory-lock-exec.py ROOT [--check|--drop -- COMMAND|-- COMMAND]")
+        fail("usage: factory-lock-exec.py ROOT [--check|-- COMMAND]")
     root = Path(sys.argv[1])
     arguments = sys.argv[2:]
     try:
@@ -41,11 +40,6 @@ def main() -> None:
                 fail("lifecycle did not bootstrap the factory lock")
             validate_open_lock(descriptor, root)
             return
-        if arguments and arguments[0] == "--drop":
-            if len(arguments) < 3 or arguments[1] != "--":
-                fail("--drop requires -- COMMAND")
-            close_inherited_copies(root)
-            execute(arguments[2:])
         if not arguments or arguments[0] != "--":
             fail("expected -- before lifecycle command")
         if inherited_descriptor(root) is None:

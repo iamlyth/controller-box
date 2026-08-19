@@ -38,8 +38,13 @@ case "$status" in
         exit 1
         ;;
 esac
-[[ -z $(git status --porcelain --untracked-files=normal) ]] || {
-    echo "maintenance-planning-finalize: ledger transition left a dirty tree" >&2
+# The ledger transition must leave no unexpected dirty files. The recovery
+# scratchpad is the sole permitted exception: the parent's strict final-handoff
+# checkpoint commits exactly that file after this finalizer returns.
+leftover=$(git status --porcelain --untracked-files=normal \
+    | grep -v '^ M \.ralph/agent/scratchpad\.md$' || true)
+[[ -z "$leftover" ]] || {
+    echo "maintenance-planning-finalize: ledger transition left unexpected dirty files" >&2
     exit 1
 }
 ./scripts/check-maintenance-freshness.sh >/dev/null

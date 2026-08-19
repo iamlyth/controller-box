@@ -182,7 +182,7 @@ Ralph recognizes a completion promise only when the reserved token is the exact 
 
 Before every checkpoint, planning revalidates the launcher's immutable specification metadata and cycle `base_commit`; maintenance planning performs its equivalent freshness check. `scripts/check-scratchpad.sh` requires one level-one handoff document, and every iteration hook passes its lifecycle token so contamination fails before checkpointing. `--allow-missing` covers only Ralph's fresh-loop scratchpad removal, while `--allow-oversize` warns without accepting an oversized final handoff. An ordinary checkpoint never commits a scratchpad-only change: it leaves the latest non-empty handoff in the worktree for `--resume` and recovery. Substantive source, test, plan-state, ledger, or documentation changes may commit with the scratchpad.
 
-The tightly scoped `--final-handoff` checkpoint accepts no dirty path except the scratchpad and permits at most one metadata-only final commit per durable lifecycle cycle. It runs before `scripts/ralph-completion-gate.sh`; the gate then records at most one successful clean-HEAD attestation for that cycle and fails if HEAD or the tracked tree changes during validation. No tracked commit follows a passing attestation. In implementation completion, front matter must be exactly `complete`, every task must be `complete`, and every conformance row must be `verified`; unavailable hardware remains a finding until real evidence exists.
+The tightly scoped `--final-handoff` checkpoint accepts no dirty path except the scratchpad and permits at most one metadata-only final commit per durable lifecycle cycle. In hook-finalized modes it runs before `scripts/ralph-completion-gate.sh`; the gate then records at most one successful clean-HEAD attestation for that cycle and fails if HEAD or the tracked tree changes during validation. Maintenance planning instead runs its completion hook validate-only: the untrusted hook chain must not hold the factory lock, so after Ralph returns success the trusted launcher performs the ledger transition, the strict final handoff, the gate attestation, and the final-state attestation under the retained lock, with the finalizer permitting only the scratchpad that the handoff commits. No tracked commit follows a passing attestation. In implementation completion, front matter must be exactly `complete`, every task must be `complete`, and every conformance row must be `verified`; unavailable hardware remains a finding until real evidence exists.
 
 When the strict gate rejects a valid premature completion request, it still writes an atomic, one-shot marker bound to the launcher nonce, lifecycle mode, loop ID, and canonical workspace. Hook payload bytes are retained in memory, and marker removal is a dirfd/no-follow quarantine-then-validate operation, so pathname substitution cannot authorize continuation. The supervisor consumes only a matching marker and continues the same cycle with `--continue`. Completion-rejection, stale, and combined no-progress counts are persisted under `.factory-state/`, so process or campaign resume cannot reset their ceilings (eight, two, and eight by default). Stale, malformed, mismatched, or symlink markers cannot authorize continuation. History replacement, malformed records, exhausted budgets, and arbitrary non-quota failures are terminal; quota exhaustion remains inside the leaf launcher's verified wait path.
 
@@ -205,11 +205,7 @@ fresh `ralph-plan.sh` cycle, runs the resulting plan through `ralph-run.sh`,
 executes `verification.campaign_command`, validates installed-functional
 evidence, transfers the exact clean Git tree to every declared runner, and
 validates commit-bound runner receipts.
-Immediately before local verification, the campaign recomputes and compares the
-tracked config and executable Git blobs, content digests, canonical argv, and
-secure modes, then revalidates and executes that canonical repository-relative
-command; implementation-time replacement, same-size rewrite, or group/other-writable mode
-fails before the verifier runs. It then launches an independent adversarial audit
+Immediately before local verification, the campaign opens and retains an immutable descriptor to the binding helper before any untrusted phase, recomputes and compares the tracked config and executable Git blobs, content digests, canonical argv, and secure modes, then executes the exact opened verifier inode through the retained `/proc/self/fd` descriptor; implementation-time replacement, same-size rewrite, writable modes, or binding drift fails before the verifier runs. It then launches an independent adversarial audit
 through `ralph-audit.sh`. A prior completion claim never shortens the requested
 round count. The next round's fresh planner consumes the preceding
 `.factory/artifacts/campaign-audit.md`; prior plans and audit reports remain in Git history.
@@ -259,8 +255,7 @@ exclusive `flock` on the already-open canonical repository-root directory, so
 planning, implementation, verification, audit checkpointing, and recovery
 retain one repository writer without a replaceable authority pathname. Ralph/Pi,
 hooks, gates, verifiers, runners, evidence checkers, tests, and product commands
-run only after every inherited descriptor for that root inode and all lock
-metadata are dropped. A separately opened root FD cannot unlock the parent's
+run only after an already-loaded shell function closes the dynamic repository-root descriptor and unsets all lock metadata in a subshell before any mutable workspace executable runs, so background descendants retain, unlock, or claim nothing. A separately opened root FD cannot unlock the parent's
 open-file description. Migration first acquires any safe legacy `.factory-lock`,
 fails if it is busy or ambiguous, then quarantines and validates it before
 removal.

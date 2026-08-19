@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 
 SOURCE = Path(__file__).resolve().parent.parent
@@ -22,11 +23,14 @@ def run(
     *,
     env: dict[str, str] | None = None,
     check: bool = True,
+    pass_fds: tuple[int, ...] = (),
 ) -> subprocess.CompletedProcess[str]:
     merged = os.environ.copy()
     if env:
         merged.update(env)
-    result = subprocess.run(command, cwd=root, env=merged, text=True, capture_output=True)
+    result = subprocess.run(
+        command, cwd=root, env=merged, text=True, capture_output=True, pass_fds=pass_fds
+    )
     if check and result.returncode:
         raise AssertionError((command, result.returncode, result.stdout, result.stderr))
     return result
@@ -290,6 +294,7 @@ def test_verifier_executable_blob_binding() -> None:
         helper = root / "scripts/campaign-verifier-binding.py"
         binding = json.loads(run([str(helper)], root).stdout)
         digest = binding["sha256"]
+        assert binding["helper"] is None  # direct pathname invocation performs no self-binding
         run([str(helper), "--expected-digest", digest, "--exec"], root)
         assert binding["binding"]["executable_blob"] == run(
             ["git", "rev-parse", "HEAD:scripts/verify-project.sh"], root
@@ -326,6 +331,109 @@ def test_verifier_executable_blob_binding() -> None:
         verifier.symlink_to(external)
         rejected = run([str(helper)], root, check=False)
         assert rejected.returncode != 0 and "symlink" in rejected.stderr
+    finally:
+        shutil.rmtree(root)
+
+
+def test_retained_helper_fd_immune_to_pathname_swap() -> None:
+    root = Path(tempfile.mkdtemp(prefix="controller-box-helper-race."))
+    try:
+        (root / ".factory").mkdir()
+        copy_scripts(root, "campaign-verifier-binding.py")
+        verifier = root / "scripts/verify-project.sh"
+        verifier.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+        verifier.chmod(0o755)
+        (root / ".factory/config.toml").write_text(
+            '[verification]\ncampaign_command = ["./scripts/verify-project.sh", "--strict"]\n',
+            encoding="utf-8",
+        )
+        init_git(root)
+        run(["git", "add", "."], root)
+        run(["git", "commit", "-qm", "base"], root)
+        helper = root / "scripts/campaign-verifier-binding.py"
+        original_bytes = helper.read_bytes()
+        original_blob = run(
+            ["git", "rev-parse", "HEAD:scripts/campaign-verifier-binding.py"], root
+        ).stdout.strip()
+        fd = os.open(helper, os.O_RDONLY)
+        try:
+            os.set_inheritable(fd, True)
+            # Replace the helper pathname before invocation. The retained
+            # descriptor still refers to the exact committed inode opened at
+            # campaign startup, so the original helper runs and self-binds;
+            # the substitute never runs.
+            helper.rename(root / "scripts/campaign-verifier-binding.py.original")
+            substitute = root / "scripts/campaign-verifier-binding.py"
+            substitute.write_text(
+                "#!/usr/bin/env python3\nprint('SUBSTITUTE-HELPER-RAN')\n", encoding="utf-8"
+            )
+            substitute.chmod(0o755)
+            result = run([f"/proc/self/fd/{fd}"], root, pass_fds=(fd,))
+            # A second invocation through the same retained descriptor must
+            # still bind: the shared open-file description position is rewound
+            # before each self-binding read.
+            repeated = run([f"/proc/self/fd/{fd}"], root, pass_fds=(fd,))
+            assert json.loads(repeated.stdout)["sha256"] == json.loads(result.stdout)["sha256"]
+        finally:
+            os.close(fd)
+        assert "SUBSTITUTE-HELPER-RAN" not in result.stdout
+        binding = json.loads(result.stdout)
+        assert binding["binding"]["schema"] == "campaign-verifier-binding/v1"
+        assert binding["helper"] == {
+            "path": "scripts/campaign-verifier-binding.py",
+            "sha256": hashlib.sha256(original_bytes).hexdigest(),
+            "blob": original_blob,
+            "mode": "0755",
+        }
+        assert binding["sha256"]
+    finally:
+        shutil.rmtree(root)
+
+
+def test_verifier_swap_in_final_exec_race_runs_original() -> None:
+    root = Path(tempfile.mkdtemp(prefix="controller-box-verifier-race."))
+    try:
+        (root / ".factory").mkdir()
+        copy_scripts(root, "campaign-verifier-binding.py")
+        verifier = root / "scripts/verify-project.sh"
+        verifier.write_text(
+            "#!/usr/bin/env bash\necho ORIGINAL-VERIFIER-RAN\nexit 0\n", encoding="utf-8"
+        )
+        verifier.chmod(0o755)
+        (root / ".factory/config.toml").write_text(
+            '[verification]\ncampaign_command = ["./scripts/verify-project.sh", "--strict"]\n',
+            encoding="utf-8",
+        )
+        init_git(root)
+        run(["git", "add", "."], root)
+        run(["git", "commit", "-qm", "base"], root)
+        driver = root / "scripts/race-driver.py"
+        driver.write_text(
+            """import importlib.util, os, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location('cvb', root / 'scripts/campaign-verifier-binding.py')
+cvb = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(cvb)
+verifier = root / 'scripts/verify-project.sh'
+real_execve = os.execve
+def racing_execve(path, argv, env):
+    # The final validation->exec race: swap the verifier pathname now.
+    verifier.rename(root / 'scripts/verify-project.sh.original')
+    substitute = root / 'scripts/verify-project.sh'
+    substitute.write_text('#!/usr/bin/env bash\\necho SUBSTITUTE-VERIFIER-RAN\\nexit 7\\n')
+    substitute.chmod(0o755)
+    return real_execve(path, argv, env)
+os.execve = racing_execve
+_binding, digest, command, executable, executable_bytes = cvb.binding()
+cvb.execute_verified(command, executable, executable_bytes)
+""",
+            encoding="utf-8",
+        )
+        result = run([sys.executable, str(driver), str(root)], root, check=False)
+        assert result.returncode == 0, (result.returncode, result.stdout, result.stderr)
+        assert "ORIGINAL-VERIFIER-RAN" in result.stdout
+        assert "SUBSTITUTE-VERIFIER-RAN" not in result.stdout
     finally:
         shutil.rmtree(root)
 
@@ -455,6 +563,8 @@ def main() -> None:
     test_loop_lock_process_identity_and_inode_race()
     test_receiver_side_token_contamination()
     test_verifier_executable_blob_binding()
+    test_retained_helper_fd_immune_to_pathname_swap()
+    test_verifier_swap_in_final_exec_race_runs_original()
     test_one_time_supervision_migration()
     print("test: orchestration security checks passed")
 

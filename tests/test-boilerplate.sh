@@ -92,6 +92,7 @@ for path in ('AGENTS.md', '.factory/bugs/open.md', '.factory/bugs/closed.md', '.
              'scripts/ralph-final-state.py', 'scripts/finalize-maintenance-planning.sh',
              'tests/test-git-checkpoint.sh',
              'tests/test-ralph-completion-recovery.sh',
+             'tests/test-maintenance-planning-completion.sh',
              'scripts/ralph-maintenance-plan.sh',
              'scripts/ralph-maintenance-run.sh', 'docs/BUG_WORKFLOW.md',
              '.factory/environment.toml', '.factory/artifacts/campaign-audit.md', '.factory/ralph/audit.yml',
@@ -138,9 +139,10 @@ for name, token in tokens.items():
     assert text.index('check-scratchpad.sh') < text.index('git-commit-hook.sh'), \
         f'{name}: scratchpad guard must run before checkpoint'
     assert f'check-scratchpad.sh", "{token}"' in text, f'{name}: lifecycle token guard missing'
-    final_checkpoint = text.rindex('git-commit-hook.sh')
-    final_gate = text.rindex('ralph-completion-gate.sh')
-    assert final_checkpoint < final_gate, f'{name}: completion gate must attest after final checkpoint'
+    if name != '.factory/ralph/maintenance-plan.yml':
+        final_checkpoint = text.rindex('git-commit-hook.sh')
+        final_gate = text.rindex('ralph-completion-gate.sh')
+        assert final_checkpoint < final_gate, f'{name}: completion gate must attest after final checkpoint'
 planning = (root / '.factory/ralph/plan.yml').read_text(encoding='utf-8')
 assert planning.index('check-plan-freshness.sh", "--planning') < planning.index('git-commit-hook.sh'), \
     '.factory/ralph/plan.yml: immutable planning metadata must be checked before checkpoint'
@@ -169,9 +171,23 @@ audit = (root / 'scripts/ralph-audit.sh').read_text(encoding='utf-8')
 assert 'ralph-campaign-state.py audit-binding' in audit
 assert 'FACTORY_CAMPAIGN_RUNNER_EVIDENCE_SHA256=${saved_binding[2]}' in audit
 maintenance_hooks = (root / '.factory/ralph/maintenance-plan.yml').read_text(encoding='utf-8')
-assert maintenance_hooks.index('finalize-maintenance-planning-ledger') < \
-       maintenance_hooks.index('final-maintenance-planning-checkpoint') < \
-       maintenance_hooks.index('final-maintenance-planning-gate')
+# The untrusted completion hook may only validate unprivileged completion
+# artifacts. No lock-needing finalizer or strict checkpoint may run in the
+# hook chain; the trusted parent performs the ledger transition, final
+# handoff, gate attestation, and final-state attestation under the lock.
+assert 'finalize-maintenance-planning.sh' not in maintenance_hooks
+assert '--final-handoff' not in maintenance_hooks
+pre_complete = maintenance_hooks.split('pre.loop.complete:', 1)[1]
+assert 'git-commit-hook.sh' not in pre_complete
+assert pre_complete.count('command: [') == 1
+assert 'ralph-completion-gate.sh", "maintenance-planning"' in pre_complete
+launcher = (root / 'scripts/ralph-maintenance-plan.sh').read_text(encoding='utf-8')
+assert 'finalize-maintenance-planning.sh' in launcher
+assert 'git-commit-hook.sh --maintenance-plan --final-handoff' in launcher
+assert 'final-gate.sh --maintenance-planning' in launcher
+assert 'ralph-final-state.py attest maintenance-planning' in launcher
+completion_gate = (root / 'scripts/ralph-completion-gate.sh').read_text(encoding='utf-8')
+assert "mode == 'maintenance-planning'" in completion_gate
 PY
 "$PROJECT_ROOT/tests/test-git-checkpoint.sh"
 "$PROJECT_ROOT/tests/test-bug-workflow.sh"

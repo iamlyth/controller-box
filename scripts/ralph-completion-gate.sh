@@ -74,7 +74,13 @@ except OSError:
 if workspace_path != root.resolve(strict=True):
     raise SystemExit('ralph-completion-gate: hook workspace does not match this repository')
 
-child_env = {**os.environ, 'FACTORY_FINAL_GATE_ATTEST': '1'}
+child_env = {**os.environ}
+if mode != 'maintenance-planning':
+    # Completion attestation belongs to the trusted hook/leaf authority for
+    # these modes. Maintenance planning delegates finalization to its trusted
+    # parent (see below) and the uncommitted scratchpad still needs the
+    # parent's final-handoff checkpoint, so its gate runs validate-only.
+    child_env['FACTORY_FINAL_GATE_ATTEST'] = '1'
 result = subprocess.run([str(root / 'scripts/final-gate.sh'), f'--{mode}'], cwd=root, env=child_env)
 rc = result.returncode
 if rc == 0:
@@ -82,6 +88,14 @@ if rc == 0:
         remove(root, 'completion-rejected.json', missing_ok=True)
     except (OSError, StateIOError) as exc:
         raise SystemExit(f'ralph-completion-gate: cannot safely remove rejection marker: {exc}') from exc
+    if mode == 'maintenance-planning':
+        # The completion hook validates only unprivileged completion artifacts.
+        # The trusted parent shell performs the ledger/finalization transition
+        # under the retained factory lock, commits the strict final handoff,
+        # attests the clean unchanged HEAD, and only then marks final state;
+        # attesting here would authorize completion without the lock and let a
+        # later ledger-only commit follow the attested handoff.
+        raise SystemExit(0)
     head_result = subprocess.run(
         ['git', 'rev-parse', 'HEAD'], cwd=root, text=True, capture_output=True,
         env={**os.environ, 'GIT_NO_REPLACE_OBJECTS': '1'},

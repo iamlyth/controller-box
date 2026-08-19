@@ -2,7 +2,18 @@
 # Full Controller-Box verification used by the maintenance completion gate.
 set -euo pipefail
 
-SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+# The campaign executes this verifier through a retained descriptor
+# (/proc/self/fd/N) so a pathname swap cannot substitute another file. The
+# procfs descriptor path is not a real directory, so resolve it to the
+# canonical script path before deriving SCRIPT_DIR.
+SCRIPT_SOURCE=${BASH_SOURCE[0]}
+if [[ "$SCRIPT_SOURCE" == /proc/self/fd/* ]]; then
+    SCRIPT_SOURCE=$(readlink -f -- "$SCRIPT_SOURCE") || {
+        echo "verify-project: cannot resolve retained descriptor script path" >&2
+        exit 2
+    }
+fi
+SCRIPT_DIR=$(cd -- "$(dirname -- "$SCRIPT_SOURCE")" && pwd)
 PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 BUILD_DIR=${CBX_VERIFY_BUILD_DIR:-build-maintenance-verify}
 cd -- "$PROJECT_ROOT"

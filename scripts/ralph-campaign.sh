@@ -51,6 +51,30 @@ cd -- "$PROJECT_ROOT"
 # shellcheck source=scripts/factory-lock.sh
 source "$SCRIPT_DIR/factory-lock.sh"
 factory_lock_bootstrap "$PROJECT_ROOT" "$PROJECT_ROOT/scripts/ralph-campaign.sh" "${ORIGINAL_ARGS[@]}"
+
+# Open and retain an immutable descriptor to the binding helper before any
+# untrusted phase. Every later helper invocation executes this exact opened
+# inode through /proc/self/fd/N, so a workspace pathname swap can never
+# substitute helper code between binding and verification. The helper binds
+# its own committed blob/mode through that retained descriptor.
+exec {verifier_helper_fd}<"$SCRIPT_DIR/campaign-verifier-binding.py"
+verification_binding=$(factory_lock_run_untrusted "/proc/self/fd/$verifier_helper_fd") || exit $?
+verification_digest=$(python3 - "$verification_binding" <<'PY'
+import json, sys
+binding = json.loads(sys.argv[1])
+if set(binding) != {'binding', 'sha256', 'helper'}:
+    raise SystemExit('ralph-campaign: invalid verifier binding output')
+if binding['binding'].get('schema') != 'campaign-verifier-binding/v1':
+    raise SystemExit('ralph-campaign: invalid verifier binding schema')
+helper = binding.get('helper')
+if (not isinstance(helper, dict) or set(helper) != {'path', 'sha256', 'blob', 'mode'}
+        or helper.get('path') != 'scripts/campaign-verifier-binding.py'
+        or helper.get('mode') != '0755'):
+    raise SystemExit('ralph-campaign: invalid retained helper binding')
+print(binding['sha256'])
+PY
+) || exit $?
+
 factory_lock_run_untrusted ./scripts/branch-guard.sh
 factory_lock_run_untrusted ./scripts/check-factory-environment.py
 factory_lock_acquire "$PROJECT_ROOT"
@@ -77,17 +101,6 @@ else:
 PY
 STATE_FILE=$PROJECT_ROOT/.factory-state/ralph-campaign.json
 export FACTORY_CAMPAIGN_STATE="$STATE_FILE"
-verification_binding=$(factory_lock_run_untrusted "$SCRIPT_DIR/campaign-verifier-binding.py") || exit $?
-verification_digest=$(python3 - "$verification_binding" <<'PY'
-import json, sys
-binding = json.loads(sys.argv[1])
-if set(binding) != {'binding', 'sha256'}:
-    raise SystemExit('ralph-campaign: invalid verifier binding output')
-if binding['binding'].get('schema') != 'campaign-verifier-binding/v1':
-    raise SystemExit('ralph-campaign: invalid verifier binding schema')
-print(binding['sha256'])
-PY
-) || exit $?
 
 if $RESUME; then
     [[ -f "$STATE_FILE" && ! -L "$STATE_FILE" ]] || { echo "ralph-campaign: no safe saved campaign to resume" >&2; exit 1; }
@@ -297,7 +310,7 @@ PY
                 echo "ralph-campaign: saved verifier binding changed before verification" >&2
                 exit 1
             }
-            factory_lock_run_untrusted "$SCRIPT_DIR/campaign-verifier-binding.py" \
+            factory_lock_run_untrusted "/proc/self/fd/$verifier_helper_fd" \
                 --expected-digest "$saved_verification_digest" --exec
             if [[ -x ./scripts/check-installed-functional-evidence.sh ]]; then
                 factory_lock_run_untrusted ./scripts/check-installed-functional-evidence.sh

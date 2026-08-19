@@ -76,6 +76,7 @@ required = [
     'tests/test-ralph-campaign-state.py', 'tests/test-factory-lock.py',
     'tests/test-orchestration-security.py',
     'tests/test-ralph-stale-recovery.sh', 'tests/test-ralph-recover-safety.sh',
+    'tests/test-maintenance-planning-completion.sh',
     'tests/test-pi2-ollama-wrapper.sh', 'tests/test-production-path-bypass.sh',
 ]
 for name in required:
@@ -145,8 +146,7 @@ grep -q 'factory_lock_bootstrap' scripts/ralph-recover.sh
 grep -q '^TUI=false$' scripts/ralph-campaign.sh
 grep -q -- '--tui)' scripts/ralph-campaign.sh
 for config in .factory/ralph/plan.yml .factory/ralph/implementation.yml \
-        .factory/ralph/audit.yml .factory/ralph/maintenance-plan.yml \
-        .factory/ralph/maintenance.yml; do
+        .factory/ralph/audit.yml .factory/ralph/maintenance.yml; do
     checkpoint=$(grep 'command: \["./scripts/check-scratchpad.sh"' "$config")
     [[ $checkpoint == *'_COMPLETE"'* ]] || {
         echo "verify: iteration scratchpad hook must reject its lifecycle token: $config" >&2
@@ -154,6 +154,16 @@ for config in .factory/ralph/plan.yml .factory/ralph/implementation.yml \
     }
     grep -q -- '--final-handoff' "$config"
 done
+# Maintenance planning defers the strict final handoff to its trusted parent
+# launcher, which performs the ledger transition and final checkpoint under
+# the retained factory lock; its completion hook validates only.
+checkpoint=$(grep 'command: \["./scripts/check-scratchpad.sh"' .factory/ralph/maintenance-plan.yml)
+[[ $checkpoint == *'MAINTENANCE_PLAN_COMPLETE"'* ]] || {
+    echo "verify: maintenance-planning scratchpad hook must reject its lifecycle token" >&2
+    exit 1
+}
+grep -q -- '--final-handoff' scripts/ralph-maintenance-plan.sh
+grep -q 'finalize-maintenance-planning.sh' scripts/ralph-maintenance-plan.sh
 grep -q '.factory/environment.toml' .factory/prompts/plan.md
 grep -q '.factory/environment.toml' .factory/prompts/implementation.md
 ./scripts/check-factory-environment.py
@@ -184,6 +194,7 @@ PY
 ./tests/test-ralph-campaign-state.py
 ./tests/test-factory-lock.py
 ./tests/test-orchestration-security.py
+./tests/test-maintenance-planning-completion.sh
 ./tests/test-ralph-stale-recovery.sh
 ./tests/test-ralph-recover-safety.sh
 ./tests/test-pi2-ollama-wrapper.sh
