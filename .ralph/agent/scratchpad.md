@@ -1,18 +1,24 @@
-# Campaign Audit Round 1 — Handoff
+# Planning cycle — conformance matrix and gap reconciliation
 
-## Status
-Audit complete. Report written to `.factory/artifacts/campaign-audit.md` with `result: findings`.
-Final gate `./scripts/final-gate.sh --campaign-audit` PASSED with env vars:
-- `FACTORY_CAMPAIGN_AUDIT_ROUND=1`
-- `FACTORY_CAMPAIGN_AUDIT_BASE=26df6c05a5319214f1c0a97a2c3c6f763128b1c6`
-- `FACTORY_CAMPAIGN_RUNNER_EVIDENCE_SHA256=7e29a2b045fe42251d04848a2fa5940e7178b458e93cad5710357ddfa4e0d098`
+## Current state
 
-## Findings (5)
-1. Stale conformance matrix — VRF-05, PKG-01, DBUS-02, DOD-03, DOD-05 marked partial/blocked despite runner evidence at commit 26df6c0 showing pass.
-2. Documentation inaccuracies — stale kernel-uinput claims, wrong interaction inventory counts (52/6/1 vs actual 51/7/1), M01-M39 vs M01-M38.
-3. GPU backend smoke (VRF-06) not evidenced — `gpu-compositor` capability undeclared.
-4. aarch64 build (SYS-01) not evidenced — no cross-compiler or ARM64 runner.
-5. Pi 4 latency (SYS-02/PERF-01) and human release acceptance (VRF-07) not evidenced.
+- Codebase substantially complete: 66 source files, 92 test files, 98 CTest targets
+- Runner receipt at commit 26df6c0 proves `kernel-uinput` + `installed-package` (test_kernel_controller passes, Flatpak build passes)
+- Campaign audit round 1 found 5 findings; all addressed in this plan
+
+## Plan tasks (4 total)
+
+1. **Fix stale docs + add M39 to inventory** — README/OPERATIONS/CMakeLists stale capability claims, wrong inventory counts (52/6/1 → 51/7/1 pre-M39), M39 tested but not enumerated
+2. **Controller-transport evidence for profile editor** — M28–M38 tested via keyboard labeled `_controller` (§5.7 violation); need ctrl_press tests through production gamepad transport
+3. **aarch64 cross-compile attempt + hardware deferrals** — GPU smoke (gpu-compositor undeclared), Pi 4 latency (target-consumer undeclared), human release acceptance (§11.1.7)
+4. **Final audit** — depends on 1–3; §11.2 definition of done
+
+## Key decisions
+
+- VRF-05, PKG-01, DBUS-02, DOD-03, DOD-05 marked verified where runner evidence at 26df6c0 proves them (reconciling campaign audit Finding 1)
+- Hardware-blocked items (GPU, aarch64, Pi 4, human) classified partial/missing with Task 3 documenting deferrals per §11.2.6
+- `ip_dbus_backend` vtable string conversion is NOT a §10.1 violation — wire-level sd-bus reads use native types (u, b, as); vtable is internal abstraction
 
 ## Next action
-Emit the completion token.
+
+Run `./scripts/final-gate.sh --planning`; if it passes, emit the completion token.
