@@ -43,6 +43,7 @@ TMPDIR=""
 pass() { echo "PASS: $*"; }
 fail() { echo "FAIL: $*" >&2; FAILURES=$((FAILURES + 1)); }
 
+# shellcheck disable=SC2329  # invoked indirectly via `trap cleanup EXIT`
 cleanup() {
     if [ -n "$MANAGER_PID" ] && kill -0 "$MANAGER_PID" 2>/dev/null; then
         kill -TERM "$MANAGER_PID" 2>/dev/null || true
@@ -205,9 +206,8 @@ fi
 # 5b. Slot highlight (focus-colored highlight on a mapped button). The
 # highlight is theme.focus (100,180,255) blended over the panel, appearing as a
 # muted blue. Count pixels that are clearly blue-dominant and not panel/black.
-HIGHLIGHT=$(convert "$EDITOR_CAPTURE" -crop "$DIAG" +repage -colorspace HSL \
-        -channel G -separate +channel -format "%[fx:mean*w*h]" info: 2>/dev/null)
-# HSL saturation channel mean count is not a reliable count; use a colour range.
+# Use a colour-range fuzz match (an HSL saturation channel mean is not a
+# reliable pixel count).
 HIGHLIGHT2=$(convert "$EDITOR_CAPTURE" -crop "$DIAG" +repage \
         -fuzz 25% -fill white -opaque "srgb(79,136,192)" -fill black +opaque white \
         -colorspace gray -format "%[fx:mean*w*h]" info: 2>/dev/null)

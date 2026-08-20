@@ -1,1 +1,0 @@
-/nix/store/l5qkpzsr4gxvksh45b3nhxbkyr5cviar-gcc-wrapper-15.3.0/bin/gcc -g -Wl,--dependency-file=CMakeFiles/test_kernel_controller.dir/link.d CMakeFiles/test_kernel_controller.dir/tests/test_kernel_controller.c.o -o test_kernel_controller

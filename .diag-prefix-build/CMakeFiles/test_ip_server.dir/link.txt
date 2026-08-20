@@ -1,1 +1,0 @@
-/nix/store/l5qkpzsr4gxvksh45b3nhxbkyr5cviar-gcc-wrapper-15.3.0/bin/gcc -g -Wl,--dependency-file=CMakeFiles/test_ip_server.dir/link.d CMakeFiles/test_ip_server.dir/tests/test_ip_server_main.c.o CMakeFiles/test_ip_server.dir/tests/native_ip_server.c.o -o test_ip_server  /nix/store/hbg7ib0c60pn7hi8sx7w5yvs8yfahwgw-systemd-261.1/lib/libsystemd.so

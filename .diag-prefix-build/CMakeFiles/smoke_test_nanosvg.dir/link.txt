@@ -1,1 +1,0 @@
-/nix/store/l5qkpzsr4gxvksh45b3nhxbkyr5cviar-gcc-wrapper-15.3.0/bin/gcc -g -Wl,--dependency-file=CMakeFiles/smoke_test_nanosvg.dir/link.d CMakeFiles/smoke_test_nanosvg.dir/tests/smoke_test_nanosvg.c.o -o smoke_test_nanosvg  libnanosvg.a -lm

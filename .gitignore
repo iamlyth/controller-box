@@ -50,3 +50,10 @@ __pycache__/
 *~
 Testing/
 tests/golden-fail/
+
+# Diagnostic and installed-prefix build staging (build artifacts, never commit)
+.diag-prefix-build/
+.test-diag-inspect/
+.install-prefix/
+.build-install-diagram/
+.test-install-diagram/

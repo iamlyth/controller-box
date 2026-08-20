@@ -1,7 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/workspace/project/.diag-prefix-build/cmake_install.cmake"
-	],
-	"Parallel" : false
-}

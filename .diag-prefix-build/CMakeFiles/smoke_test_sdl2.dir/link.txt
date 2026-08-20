@@ -1,1 +1,0 @@
-/nix/store/l5qkpzsr4gxvksh45b3nhxbkyr5cviar-gcc-wrapper-15.3.0/bin/gcc -g -Wl,--dependency-file=CMakeFiles/smoke_test_sdl2.dir/link.d CMakeFiles/smoke_test_sdl2.dir/tests/smoke_test_sdl2.c.o -o smoke_test_sdl2  /nix/store/qd707z3py0n0qws77j9ydm8xc5imjb96-sdl2-compat-2.32.70/lib/libSDL2.so
