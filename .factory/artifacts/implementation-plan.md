@@ -344,7 +344,7 @@ Keyboard tests in `test_manager_interaction_prof.c` relabeled from
 - Documentation impact: Final reconciliation of README.md, OPERATIONS.md, implementation-plan conformance matrix, conformance sidecar, and blocked-facts ledger
 
 ## Task 5: Perceptible installed diagram acceptance
-- Status: pending
+- Status: in_progress
 - Dependencies: Task 1, Task 2, Task 3
 - Scope: renderer/asset-path diagnosis and fix for the production diagram (BUG-0014), a production-window/installed-path semantic test proving recognizable diagram content, `.factory/artifacts/blocked-facts.json` (resolve FACT-001 with receipt/artifact or human decision), `.factory/artifacts/conformance.json`
 - Acceptance criteria:
