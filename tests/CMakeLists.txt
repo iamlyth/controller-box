@@ -112,6 +112,15 @@ if(BASH_EXECUTABLE)
             ${CMAKE_CURRENT_BINARY_DIR})
     set_tests_properties(test_installed_binary PROPERTIES
         SKIP_RETURN_CODE 77)
+
+    # Candidate controller-production-routing probe: deterministic fixture
+    # adversarial checks (private bus, 0/partial target topology, direct
+    # injection, stale events, ambiguous cardinality, source/build fallback,
+    # missing/mismatched artifact hashes, cleanup failure, and the full
+    # 4 + fresh physical->target routed event pass).
+    add_test(NAME test_controller_production_routing_probe
+        COMMAND ${BASH_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test-controller-production-routing-probe.sh)
 else()
     message(STATUS "bash not found — test_installed_smoke skipped")
 endif()
