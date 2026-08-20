@@ -158,6 +158,19 @@ make_base_fixture() { # dir
     printf 'yes\n' > "$dir/input-ok"
     printf 'yes\n' > "$dir/egl-ok"
     printf '{"x":100,"y":80,"w":1280,"h":720}\n' > "$dir/geometry.json"
+    # Exact-commit/install/source-removed facts the live probe now asserts:
+    # the recorded binary was built from the exact HEAD, installed into an
+    # isolated prefix, and the archived source+build were deleted before the
+    # isolated-CWD launch with PATH prefixed to the install bin dir.
+    printf '%s\n' "$(git -C "$PROJECT_ROOT" rev-parse HEAD)" > "$dir/commit"
+    printf 'yes\n' > "$dir/built-from-head"
+    printf 'yes\n' > "$dir/binary-inside-prefix"
+    printf 'yes\n' > "$dir/assets-inside-prefix"
+    printf 'yes\n' > "$dir/source-removed"
+    printf 'yes\n' > "$dir/launch-cwd-isolated"
+    printf 'yes\n' > "$dir/path-prefixed"
+    printf 'yes\n' > "$dir/build-ok"
+    printf 'yes\n' > "$dir/install-ok"
 }
 
 # Pass fixture 1: the production SVG rendered through ImageMagick.
@@ -217,6 +230,76 @@ rm -f "$tmp/no-binary/binary"
 compose_shot "$tmp/no-binary/screenshot.png" "$tmp/diagram-svg.png"
 must_fail "missing installed binary" "installed-launch-rejected" \
     run_probe "$tmp/no-binary"
+
+# ---------------------------------------------------------------------------
+# Exact-commit / install / source-removed fact rejection (the live probe now
+# builds+installs the exact HEAD itself; these facts must all hold or the
+# probe fails closed BEFORE any renderer/compositor evidence is read).
+# ---------------------------------------------------------------------------
+# Ambient PATH binary: the recorded binary was NOT produced by this probe's
+# own exact-HEAD build/install.
+make_base_fixture "$tmp/ambient-path"
+printf 'no\n' > "$tmp/ambient-path/built-from-head"
+compose_shot "$tmp/ambient-path/screenshot.png" "$tmp/diagram-svg.png"
+must_fail "ambient PATH binary rejected" "ambient-path-binary-rejected" \
+    run_probe "$tmp/ambient-path"
+
+# Recorded build commit is not the exact HEAD the probe is running against.
+make_base_fixture "$tmp/wrong-commit"
+printf '%040d\n' 0 > "$tmp/wrong-commit/commit"
+compose_shot "$tmp/wrong-commit/screenshot.png" "$tmp/diagram-svg.png"
+must_fail "recorded commit not exact HEAD rejected" "exact-commit-mismatch" \
+    run_probe "$tmp/wrong-commit"
+
+# The archived source/build tree was still present at launch: the compiled-in
+# SOURCE_PROFILE_DIR / SOURCE_ICON_DIR fallbacks would still be reachable.
+make_base_fixture "$tmp/source-accessible"
+printf 'no\n' > "$tmp/source-accessible/source-removed"
+compose_shot "$tmp/source-accessible/screenshot.png" "$tmp/diagram-svg.png"
+must_fail "source tree still accessible rejected" "source-tree-accessible-rejected" \
+    run_probe "$tmp/source-accessible"
+
+# Installed binary does not resolve inside its install prefix (wrong prefix).
+make_base_fixture "$tmp/wrong-prefix"
+printf 'no\n' > "$tmp/wrong-prefix/binary-inside-prefix"
+compose_shot "$tmp/wrong-prefix/screenshot.png" "$tmp/diagram-svg.png"
+must_fail "binary outside its prefix rejected" "binary-outside-prefix-rejected" \
+    run_probe "$tmp/wrong-prefix"
+
+# Installed assets do not resolve inside the prefix (missing/wrong assets).
+make_base_fixture "$tmp/assets-outside"
+printf 'no\n' > "$tmp/assets-outside/assets-inside-prefix"
+compose_shot "$tmp/assets-outside/screenshot.png" "$tmp/diagram-svg.png"
+must_fail "assets outside prefix rejected" "assets-outside-prefix-rejected" \
+    run_probe "$tmp/assets-outside"
+
+# Fresh exact-HEAD configure/build failure.
+make_base_fixture "$tmp/build-failed"
+printf 'no\n' > "$tmp/build-failed/build-ok"
+compose_shot "$tmp/build-failed/screenshot.png" "$tmp/diagram-svg.png"
+must_fail "exact-HEAD build failure rejected" "build-failed" \
+    run_probe "$tmp/build-failed"
+
+# Fresh exact-HEAD install failure.
+make_base_fixture "$tmp/install-failed"
+printf 'no\n' > "$tmp/install-failed/install-ok"
+compose_shot "$tmp/install-failed/screenshot.png" "$tmp/diagram-svg.png"
+must_fail "exact-HEAD install failure rejected" "install-failed" \
+    run_probe "$tmp/install-failed"
+
+# Launch CWD not isolated: relative source data lookups could resolve.
+make_base_fixture "$tmp/cwd-not-isolated"
+printf 'no\n' > "$tmp/cwd-not-isolated/launch-cwd-isolated"
+compose_shot "$tmp/cwd-not-isolated/screenshot.png" "$tmp/diagram-svg.png"
+must_fail "source CWD launch rejected" "launch-cwd-source-fallback-rejected" \
+    run_probe "$tmp/cwd-not-isolated"
+
+# PATH not prefixed with the install bin dir.
+make_base_fixture "$tmp/path-not-prefixed"
+printf 'no\n' > "$tmp/path-not-prefixed/path-prefixed"
+compose_shot "$tmp/path-not-prefixed/screenshot.png" "$tmp/diagram-svg.png"
+must_fail "PATH not prefixed rejected" "path-not-prefixed-rejected" \
+    run_probe "$tmp/path-not-prefixed"
 
 make_base_fixture "$tmp/weston-down"
 printf 'no\n' > "$tmp/weston-down/weston-ok"
