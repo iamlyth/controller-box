@@ -64,7 +64,8 @@ def sha(path):
 
 # Artifacts (screenshot + log) are always referenced by facts.json with a
 # committed sha256. The builder can omit the screenshot file on disk or
-# corrupt the log hash to exercise the missing/mismatched-hash scenarios.
+# corrupt the log hash to exercise the missing/mismatched-hash scenarios,
+# or point the path at a traversal/symlink escape.
 artifacts = {}
 if scenario.get("omit_artifact") != "screenshot":
     write(os.path.join(base, "screenshot.png"), os.urandom(256))
@@ -76,6 +77,11 @@ else:
     # Referenced but never created on disk: the validator must fail on the
     # missing artifact file.
     artifacts["screenshot"] = {"path": "screenshot.png", "sha256": "0" * 64}
+if scenario.get("artifact_traversal"):
+    artifacts["screenshot"]["path"] = "../escape.png"
+if scenario.get("artifact_symlink"):
+    os.symlink("/etc/passwd", os.path.join(base, "escape-link"))
+    artifacts["screenshot"] = {"path": "escape-link", "sha256": "0" * 64}
 write(os.path.join(base, "observer.log"), os.urandom(128))
 artifacts["log"] = {
     "path": "observer.log",
@@ -99,6 +105,7 @@ facts = {
     "binary": {
         "realpath_inside_prefix": bool(scenario.get("realpath_inside", 1)),
         "assets_inside_prefix": bool(scenario.get("assets_inside", 1)),
+        "launch_cwd_isolated": bool(scenario.get("launch_cwd_isolated", 1)),
     },
     "topology": {
         "expected": 4,
@@ -106,12 +113,20 @@ facts = {
         "target_paths": scenario.get("target_paths", 4),
         "kernel_nodes": scenario.get("kernel_nodes", 4),
         "cardinality": scenario.get("cardinality", "exact"),
+        "identities_match": bool(scenario.get("identities_match", 1)),
     },
     "observer": {
         "event_stream": "event-stream",
         "direct_injection": bool(scenario.get("direct_injection", 0)),
         "physical_name": scenario.get("physical_name", ""),
         "target_name": scenario.get("target_name", ""),
+    },
+    "bus": {
+        "system_socket": "/run/dbus/system_bus_socket",
+        "socket_root_owned": bool(scenario.get("socket_root_owned", 1)),
+        "owner_pid": scenario.get("owner_pid", 1234),
+        "owner_exe": scenario.get("owner_exe", "/usr/bin/inputplumber"),
+        "owner_exe_pinned": bool(scenario.get("owner_exe_pinned", 1)),
     },
     "artifacts": artifacts,
     "cleanup": {
@@ -140,6 +155,26 @@ unrouted_event() { build_fixture "$1" "$(scen_json unrouted "{\"event_stream\": 
 cleanup_failure() { build_fixture "$1" "$(scen_json cleanup "{\"target_cleanup\": \"fail\", \"event_stream\": \"physical event 1 304 1 ts 1500\\ntarget event 1 304 1 ts 1600\\n\"}")"; }
 missing_artifact() { build_fixture "$1" "$(scen_json missart "{\"omit_artifact\": \"screenshot\", \"event_stream\": \"physical event 1 304 1 ts 1500\\ntarget event 1 304 1 ts 1600\\n\"}")"; }
 corrupt_hash() { build_fixture "$1" "$(scen_json corrupt "{\"corrupt_hash\": \"log\", \"event_stream\": \"physical event 1 304 1 ts 1500\\ntarget event 1 304 1 ts 1600\\n\"}")"; }
+# Physical event present but does NOT match the expected type/code/value, then
+# a matching target event: correlation must fail.
+mismatched_physical() { build_fixture "$1" "$(scen_json misphys "{\"event_stream\": \"physical event 1 999 1 ts 1500\\ntarget event 1 304 1 ts 1600\\n\"}")"; }
+# Target event arrives BEFORE any fresh physical event.
+target_before_physical() { build_fixture "$1" "$(scen_json tbph "{\"event_stream\": \"target event 1 304 1 ts 1500\\nphysical event 1 304 1 ts 1600\\n\"}")"; }
+# Counted target identities do not match (wrong target name/type).
+wrong_target_identity() { build_fixture "$1" "$(scen_json wrongid "{\"identities_match\": 0, \"event_stream\": \"physical event 1 304 1 ts 1500\\ntarget event 1 304 1 ts 1600\\n\"}")"; }
+# Targets were created but left over (never all stopped): cleanup must fail
+# the probe even though the topology is also incomplete.
+leftover_cleanup() { build_fixture "$1" "$(scen_json leftover "{\"observed\": 2, \"target_paths\": 2, \"kernel_nodes\": 2, \"target_cleanup\": \"fail\", \"event_stream\": \"\"}")"; }
+# Fake/substituted InputPlumber bus owner.
+fake_bus_owner() { build_fixture "$1" "$(scen_json fakebus "{\"owner_exe\": \"/usr/bin/evil\", \"owner_exe_pinned\": 0, \"event_stream\": \"physical event 1 304 1 ts 1500\\ntarget event 1 304 1 ts 1600\\n\"}")"; }
+# Product launched from a source CWD (source fallback via relative lookup).
+cwd_source_fallback() { build_fixture "$1" "$(scen_json cwdfb "{\"launch_cwd_isolated\": 0, \"event_stream\": \"physical event 1 304 1 ts 1500\\ntarget event 1 304 1 ts 1600\\n\"}")"; }
+# Artifact path escapes the fixture dir via '..' traversal.
+artifact_traversal() { build_fixture "$1" "$(scen_json trav "{\"artifact_traversal\": 1, \"event_stream\": \"physical event 1 304 1 ts 1500\\ntarget event 1 304 1 ts 1600\\n\"}")"; }
+# Artifact path is a symlink escaping the fixture dir.
+artifact_symlink() { build_fixture "$1" "$(scen_json symlink "{\"artifact_symlink\": 1, \"event_stream\": \"physical event 1 304 1 ts 1500\\ntarget event 1 304 1 ts 1600\\n\"}")"; }
+# Boolean-typed topology count (bool is not an int).
+bool_counts() { build_fixture "$1" "$(scen_json boolc "{\"observed\": true, \"target_paths\": true, \"kernel_nodes\": true, \"event_stream\": \"\"}")"; }
 
 
 # ---------------------------------------------------------------------------
@@ -238,6 +273,71 @@ cleanup_failure "$tmp/cleanup-fail"
 must_fail "cleanup failure fails the probe" bash "$PROBE" --fixture "$tmp/cleanup-fail"
 grep -q 'cleanup failure' "$tmp/last.out"
 grep -q 'cleanup: termination=ok target-cleanup=fail' "$tmp/cleanup-fail/cleanup.log"
+
+# ---------------------------------------------------------------------------
+# Mismatched physical-event correlation: a physical event that does not match
+# the expected type/code/value cannot anchor a routed target event.
+# ---------------------------------------------------------------------------
+mismatched_physical "$tmp/misphys"
+must_fail "mismatched physical event correlation rejected" bash "$PROBE" --fixture "$tmp/misphys"
+grep -q 'does not match expected type/code/value' "$tmp/last.out"
+
+# ---------------------------------------------------------------------------
+# Target-before-physical: a matching target event with no preceding fresh
+# physical event is direct injection/synthetic routing.
+# ---------------------------------------------------------------------------
+target_before_physical "$tmp/tbph"
+must_fail "target event before any physical event rejected" bash "$PROBE" --fixture "$tmp/tbph"
+grep -q 'direct injection/synthetic routing' "$tmp/last.out"
+
+# ---------------------------------------------------------------------------
+# Wrong target name/type: counted target identities do not match.
+# ---------------------------------------------------------------------------
+wrong_target_identity "$tmp/wrongid"
+must_fail "wrong target name/type identity rejected" bash "$PROBE" --fixture "$tmp/wrongid"
+grep -q 'target/kernel identities do not match' "$tmp/last.out"
+
+# ---------------------------------------------------------------------------
+# Leftover target cleanup: targets were created but not all stopped; the probe
+# must fail on cleanup even though the topology was also incomplete.
+# ---------------------------------------------------------------------------
+leftover_cleanup "$tmp/leftover"
+must_fail "leftover target cleanup fails the probe" bash "$PROBE" --fixture "$tmp/leftover"
+grep -q 'production-topology-incomplete: 2 of 4' "$tmp/last.out"
+grep -q 'cleanup failure' "$tmp/last.out"
+grep -q 'cleanup: termination=ok target-cleanup=fail' "$tmp/leftover/cleanup.log"
+
+# ---------------------------------------------------------------------------
+# Fake/substituted InputPlumber bus owner: no routing evidence may be claimed.
+# ---------------------------------------------------------------------------
+fake_bus_owner "$tmp/fakebus"
+must_fail "fake bus owner rejected" bash "$PROBE" --fixture "$tmp/fakebus"
+grep -q 'must be pinned' "$tmp/last.out"
+
+# ---------------------------------------------------------------------------
+# CWD source fallback: product launched from a source working directory.
+# ---------------------------------------------------------------------------
+cwd_source_fallback "$tmp/cwdfb"
+must_fail "CWD source fallback rejected" bash "$PROBE" --fixture "$tmp/cwdfb"
+grep -q 'source CWD' "$tmp/last.out"
+
+# ---------------------------------------------------------------------------
+# Path traversal and symlink escapes must be rejected by the validator.
+# ---------------------------------------------------------------------------
+artifact_traversal "$tmp/trav"
+must_fail "artifact '..' traversal rejected" bash "$PROBE" --fixture "$tmp/trav"
+grep -q 'must not traverse' "$tmp/last.out"
+
+artifact_symlink "$tmp/symlink"
+must_fail "artifact symlink escape rejected" bash "$PROBE" --fixture "$tmp/symlink"
+grep -q 'escapes the fixture directory' "$tmp/last.out"
+
+# ---------------------------------------------------------------------------
+# Boolean-typed counts (bool is not an int) must be rejected.
+# ---------------------------------------------------------------------------
+bool_counts "$tmp/boolc"
+must_fail "bool-typed topology counts rejected" bash "$PROBE" --fixture "$tmp/boolc"
+grep -q 'must be int' "$tmp/last.out"
 
 # ---------------------------------------------------------------------------
 # Unknown argument and validator safety.

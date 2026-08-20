@@ -12,14 +12,23 @@
  * events, and never touches InputEvent / a private DBus. It only observes.
  *
  * PASS requires, in order, within the window:
- *  - a FRESH (post-baseline) physical event with the expected type/code/value,
- *    then
- *  - a FRESH target event with the SAME expected type/code/value.
- * If a matching target event arrives with NO preceding fresh physical event,
- * that is treated as direct injection/synthetic routing and the observer
- * fails. A physical event before the baseline is stale and ignored. A target
- * event that never arrives after a fresh physical event means the physical
- * event was not routed and the observer fails.
+ *  - a FRESH (post-baseline) physical event matching the expected
+ *    type/code/value, whose timestamp is recorded, then
+ *  - a FRESH target event with the SAME expected type/code/value at or after
+ *    that physical event's timestamp.
+ * A matching target event with NO preceding fresh physical event is direct
+ * injection/synthetic routing and fails. A matching target event whose
+ * preceding physical event did not match (or which precedes the physical
+ * event) is a correlation failure and fails. A physical event before the
+ * baseline is stale and ignored.
+ *
+ * Live mode REQUIRES --physical-name and --target-name: both the physical and
+ * the target EVIOCGNAME identities must match before any event is accepted,
+ * so a substituted or injected device cannot be observed as evidence.
+ *
+ * --name-only PATH prints the EVIOCGNAME identity of one evdev node (used by
+ * the probe to compare target DBus object names against kernel node names
+ * for collective-cardinality binding) and exits 0/1.
  *
  * Fixture mode (--fixture FILE) replays a recorded event stream for the
  * deterministic adversarial test suite. The committed candidate contract
@@ -81,10 +90,12 @@ static long long now_usec(void)
     return (long long)ts.tv_sec * 1000000LL + (long long)ts.tv_nsec / 1000LL;
 }
 
-/* Read all pending events off a fd.  Returns 1 if a matching fresh event
- * was seen (timestamp >= baseline_usec), else 0. */
+/* Read all pending events off a fd.  Returns 1 if a fresh (>= baseline)
+ * matching event was seen; if match_ts is non-NULL the timestamp of that
+ * matching event is stored there. saw_fresh is set when any fresh event was
+ * read. */
 static int drain_events(int fd, long long baseline_usec, const char *label,
-                        int *saw_fresh)
+                        int *saw_fresh, long long *match_ts)
 {
     struct input_event events[16];
     ssize_t count;
@@ -108,6 +119,8 @@ static int drain_events(int fd, long long baseline_usec, const char *label,
                 printf("routing-observer: %s FRESH MATCH type=%d code=%d value=%d\n",
                        label, ev->type, ev->code, ev->value);
                 matched = 1;
+                if (match_ts)
+                    *match_ts = ts;
             }
         }
     }
@@ -121,8 +134,11 @@ static int drain_events(int fd, long long baseline_usec, const char *label,
 /* Verify an evdev node's identity name matches the expectation. */
 static int check_identity(int fd, const char *expected, const char *label)
 {
-    if (!expected)
-        return 1;
+    if (!expected) {
+        fprintf(stderr, "routing-observer: no %s identity name provided (required)\n",
+                label);
+        return 0;
+    }
     char name[256] = {0};
     if (ioctl(fd, EVIOCGNAME(sizeof(name)), name) < 0) {
         fprintf(stderr, "routing-observer: cannot read %s evdev identity: %s\n",
@@ -139,6 +155,34 @@ static int check_identity(int fd, const char *expected, const char *label)
     return 1;
 }
 
+/* Read the EVIOCGNAME of a single evdev node (identity-only mode). */
+static int run_name_only(const char *path)
+{
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) {
+        fprintf(stderr, "routing-observer: cannot open %s: %s\n", path,
+                strerror(errno));
+        return 1;
+    }
+    unsigned char bit[1] = {0};
+    if (ioctl(fd, EVIOCGBIT(0, sizeof(bit)), bit) < 0) {
+        fprintf(stderr, "routing-observer: %s is not an evdev node: %s\n", path,
+                strerror(errno));
+        close(fd);
+        return 1;
+    }
+    char name[256] = {0};
+    if (ioctl(fd, EVIOCGNAME(sizeof(name)), name) < 0) {
+        fprintf(stderr, "routing-observer: cannot read identity of %s: %s\n", path,
+                strerror(errno));
+        close(fd);
+        return 1;
+    }
+    printf("%s\n", name);
+    close(fd);
+    return 0;
+}
+
 /* ------------------------------------------------------------------ */
 /* Fixture replay (deterministic adversarial tests only)               */
 /* ------------------------------------------------------------------ */
@@ -151,7 +195,7 @@ static int run_fixture(void)
     char line[512];
     long long baseline = 1000;
     int physical_seen = 0;
-    int physical_fresh = 0;
+    int physical_matched = 0;
     long long physical_ts = -1;
     while (fgets(line, sizeof(line), stream)) {
         long long ts = 0;
@@ -171,11 +215,11 @@ static int run_fixture(void)
                     continue;
                 }
                 physical_seen = 1;
-                physical_fresh = 1;
-                physical_ts = ts;
-                if (!code_matches(type, code, value)) {
+                if (code_matches(type, code, value)) {
+                    physical_matched = 1;
+                    physical_ts = ts;
+                } else {
                     printf("routing-observer: physical event does not match expected type/code/value\n");
-                    continue;
                 }
             } else if (strcmp(device, "target") == 0) {
                 if (!physical_seen) {
@@ -185,10 +229,12 @@ static int run_fixture(void)
                     fclose(stream);
                     return 1;
                 }
-                if (ts < baseline || ts < physical_ts) {
-                    printf("routing-observer: target event ts=%lld before physical ts=%lld (stale)\n",
+                if (!physical_matched || ts < physical_ts || ts < baseline) {
+                    printf("routing-observer: target event cannot be correlated to a "
+                           "fresh matching physical event (ts=%lld physical_ts=%lld)\n",
                            ts, physical_ts);
-                    continue;
+                    fclose(stream);
+                    return 1;
                 }
                 if (code_matches(type, code, value)) {
                     printf("routing-observer: target FRESH MATCH type=%d code=%d value=%d\n",
@@ -204,10 +250,10 @@ static int run_fixture(void)
     if (!physical_seen) {
         fail_observer("no fresh physical event observed (presence alone cannot pass)");
     }
-    if (!physical_fresh) {
-        fail_observer("physical event was stale (before baseline)");
+    if (!physical_matched) {
+        fail_observer("physical event present but did not match expected type/code/value");
     }
-    fail_observer("no routed target event observed after the fresh physical event");
+    fail_observer("no routed target event observed after the fresh matching physical event");
     return 1;
 }
 
@@ -239,6 +285,10 @@ static int open_device(const char *path, const char *label,
 
 static int run_live(void)
 {
+    if (!g_physical_name || !g_target_name) {
+        fail_observer("live mode requires --physical-name and --target-name "
+                      "(EVIOCGNAME identity verification)");
+    }
     int physical_fd = open_device(g_physical_device, "physical", g_physical_name);
     int target_fd = open_device(g_target_device, "target", g_target_name);
 
@@ -255,6 +305,7 @@ static int run_live(void)
     int deadline = g_window_ms;
     int physical_fresh = 0;
     int physical_matched = 0;
+    long long physical_matched_ts = -1;
     while (deadline > 0) {
         int ready = poll(pollfds, 2, 200);
         if (ready < 0) {
@@ -266,20 +317,29 @@ static int run_live(void)
         }
         if (pollfds[0].revents & POLLIN) {
             int saw_fresh = 0;
-            if (drain_events(physical_fd, baseline, "physical", &saw_fresh)) {
+            long long mts = -1;
+            if (drain_events(physical_fd, baseline, "physical", &saw_fresh, &mts)) {
                 physical_matched = 1;
+                physical_matched_ts = mts;
             }
             if (saw_fresh)
                 physical_fresh = 1;
         }
         if (pollfds[1].revents & POLLIN) {
             int saw_fresh = 0;
-            if (drain_events(target_fd, baseline, "target", &saw_fresh)) {
+            long long mts = -1;
+            if (drain_events(target_fd, baseline, "target", &saw_fresh, &mts)) {
                 if (!physical_fresh) {
                     close(physical_fd);
                     close(target_fd);
                     fail_observer("target event without a preceding fresh physical event "
                                   "(direct injection/synthetic routing rejected)");
+                }
+                if (!physical_matched || mts < physical_matched_ts) {
+                    close(physical_fd);
+                    close(target_fd);
+                    fail_observer("target event cannot be correlated to a fresh matching "
+                                  "physical event (physical->target correlation rejected)");
                 }
                 close(physical_fd);
                 close(target_fd);
@@ -295,14 +355,16 @@ static int run_live(void)
         fail_observer("no fresh physical event observed within the window");
     if (!physical_matched)
         fail_observer("fresh physical event present but did not match expected type/code/value");
-    fail_observer("fresh physical event observed but no matching routed target event");
+    fail_observer("fresh matching physical event observed but no matching routed target event");
     return 1;
 }
 
 int main(int argc, char **argv)
 {
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--fixture") == 0 && i + 1 < argc) {
+        if (strcmp(argv[i], "--name-only") == 0 && i + 1 < argc) {
+            return run_name_only(argv[++i]);
+        } else if (strcmp(argv[i], "--fixture") == 0 && i + 1 < argc) {
             g_fixture = argv[++i];
         } else if (strcmp(argv[i], "--physical-device") == 0 && i + 1 < argc) {
             g_physical_device = argv[++i];

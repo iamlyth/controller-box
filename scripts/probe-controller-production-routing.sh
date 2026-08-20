@@ -6,42 +6,58 @@
 # Live behavior:
 #   1. Refuse root, a private/system-bus-address override, and a non-default
 #      system DBus.
-#   2. Archive the exact HEAD into a temp source tree, then configure, build,
+#   2. Verify the REAL system bus identity: the root-owned
+#      /run/dbus/system_bus_socket plus the org.shadowblip.InputPlumber owner
+#      PID from the DBus driver whose /proc/PID/exe is the pinned
+#      /usr/bin/inputplumber (or a dpkg-owned pinned binary). No routing
+#      evidence is claimed without this.
+#   3. Archive the exact HEAD into a temp source tree, then configure, build,
 #      and install under an isolated prefix.
-#   3. Verify the launched binary realpath and its assets all resolve inside
+#   4. Verify the launched binary realpath and its assets all resolve inside
 #      the prefix, then DELETE the temp source/build trees before launch so
 #      the compiled-in SOURCE_PROFILE_DIR / SOURCE_ICON_DIR fallbacks can
 #      never satisfy the runtime asset lookups (installed assets must win).
-#   4. Run under an isolated HOME (defaults request exactly 4 xb360 virtual
-#      controllers) on its own Xvfb.
-#   5. Snapshot the real InputPlumber Target object paths and kernel event
-#      nodes BEFORE launch, then launch the installed, unmodified
-#      `controller-box --overlay-service`.
-#   6. Poll the ObjectManager for exactly 4 newly created
-#      org.shadowblip.Input.Target paths and exactly 4 new matching virtual
-#      xb360 kernel event nodes (collective cardinality binding; extra or
-#      ambiguous nodes fail). While the count is below 4 it emits the
-#      distinct immediate marker `production-topology-incomplete: N of 4`;
-#      when N is 0 it additionally emits `BUG-0015-negative-control`.
-#   7. Then, on separate read-only file descriptors, require a fresh physical
-#      045e:028e controller event and a matching event on a new virtual xb360
-#      target node (the helper polls both; it never writes, never uses uinput,
-#      never calls InputEvent directly, and never uses a private DBus).
-#   8. Preserve fact/log hashes and require clean termination + target
+#   5. Run under an isolated HOME (defaults request exactly 4 xb360 virtual
+#      controllers) on its own Xvfb, and launch the installed, unmodified
+#      `controller-box --overlay-service` with its working directory set to
+#      the isolated temp dir (never the repository), so a relative asset
+#      lookup cannot resolve back to a source CWD.
+#   6. Snapshot the real InputPlumber Target object paths and kernel event
+#      nodes BEFORE launch.
+#   7. Poll the ObjectManager for exactly 4 newly created
+#      org.shadowblip.Input.Target paths whose DeviceType==xb360 and Name is
+#      non-empty, bound to exactly 4 new matching virtual xb360 kernel event
+#      nodes (collective cardinality binding: identical name sets, exact
+#      count, no extra nodes; uinput/unrelated nodes rejected). While below 4
+#      it emits the distinct immediate marker `production-topology-incomplete:
+#      N of 4`; at N=0 it additionally emits `BUG-0015-negative-control`.
+#      Every discovered target is recorded for cleanup before any topology
+#      assessment or failure.
+#   8. Then, on separate read-only file descriptors, require a fresh physical
+#      045e:028e controller event matching the expected type/code/value and a
+#      matching event on a new virtual xb360 target node at/after the physical
+#      event's timestamp, with BOTH the physical and target EVIOCGNAME
+#      identities verified (the helper never writes, never uses uinput, never
+#      calls InputEvent directly, and never uses a private DBus).
+#   9. Retain the live artifacts (observer.log, overlay.log) under a
+#      caller-controlled artifact directory (safe default under the ignored
+#      .factory-state tree) and print their sha256 hashes for the signer; the
+#      retained copy is never deleted. Require clean termination + target
 #      cleanup on every path. PASS only with 4 targets + a fresh
 #      physical->target routed event + clean cleanup.
 #
 # Fixture mode (--fixture DIR) is adversarial-test only: it validates a
-# committed JSON fact bundle (schema + artifact sha256 hashes) and drives the
-# exact same decision logic from the recorded facts. The committed contract
-# probe_argv never passes --fixture, so production runs always follow the
-# live path above.
+# committed JSON fact bundle (schema + artifact sha256 hashes + confined
+# paths + bus identity) and drives the exact same decision logic from the
+# recorded facts. The committed contract probe_argv never passes --fixture,
+# so production runs always follow the live path above.
 #
 # Usage:
 #   probe-controller-production-routing.sh [--fixture DIR]
 set -u
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 VALIDATOR="$SCRIPT_DIR/iprunner-probes/validate-production-routing-facts.py"
 OBSERVER_SOURCE="$SCRIPT_DIR/iprunner-probes/routing_observer.c"
 EXPECTED_TARGETS=4
@@ -55,6 +71,11 @@ PHYSICAL_PRODUCT="0x028e"
 OBSERVE_TYPE=1
 OBSERVE_CODE=304
 OBSERVE_VALUE=1
+PINNED_INPUTPLUMBER="/usr/bin/inputplumber"
+
+# Caller-controlled artifact retention dir. Safe default lives under the
+# gitignored .factory-state tree.
+ARTIFACT_DIR="${CONTROLLER_PRODUCTION_ROUTING_ARTIFACTS:-"$PROJECT_ROOT/.factory-state/artifacts/controller-production-routing/$(date +%Y%m%dT%H%M%S)"}"
 
 [[ -f "$VALIDATOR" && -f "$OBSERVER_SOURCE" ]] || {
     echo "production-routing-probe: validator or observer source missing" >&2
@@ -142,6 +163,26 @@ record_cleanup() {
     return 0
 }
 
+# Retain live artifacts under the caller-controlled ARTIFACT_DIR and print
+# their sha256 hashes for the signer. The retained copy is never deleted.
+retain_artifacts() {
+    mkdir -p "$ARTIFACT_DIR" || {
+        echo "production-routing-probe: cannot create artifact dir $ARTIFACT_DIR" >&2
+        return 1
+    }
+    local a
+    for a in "$@"; do
+        [[ -f "$a" ]] || continue
+        cp -f "$a" "$ARTIFACT_DIR/$(basename "$a")" || {
+            echo "production-routing-probe: cannot retain artifact $a" >&2
+            return 1
+        }
+        echo "production-routing-probe: artifact hash $(sha256sum "$ARTIFACT_DIR/$(basename "$a")" | cut -d' ' -f1) $ARTIFACT_DIR/$(basename "$a")"
+    done
+    echo "production-routing-probe: artifacts retained under $ARTIFACT_DIR"
+    return 0
+}
+
 # --------------------------------------------------------------------------
 # Fixture mode: validate the committed fact bundle + artifact hashes, then
 # drive the same decision logic deterministically from the recorded facts.
@@ -160,51 +201,69 @@ run_fixture() {
     CLEANUP_LOG="$dir/cleanup.log"
     : > "$CLEANUP_LOG"
 
-    # Validate the committed fact bundle + artifact sha256 hashes. A missing
-    # or mismatched artifact hash fails the probe here (missing screenshot /
-    # log / fact hash).
+    # Validate the committed fact bundle + artifact sha256 hashes + confined
+    # paths + bus identity. A missing/mismatched/hostile fact fails here.
     if ! python3 "$VALIDATOR" --facts "$dir/facts.json" --fixture-dir "$dir"; then
         echo "production-routing-probe: fact bundle or artifact hash verification failed" >&2
         return 1
     fi
 
     # Read the recorded facts into shell variables.
-    readarray -t FACTS < <(python3 - "$dir/facts.json" "$dir" <<'PY'
+    readarray -t FACTS < <(python3 - "$dir/facts.json" <<'PY'
 import json, sys
 facts = json.load(open(sys.argv[1], encoding="utf-8"))
-base = sys.argv[2]
 binary = facts["binary"]
 topo = facts["topology"]
 observer = facts.get("observer", {})
 cleanup = facts.get("cleanup", {})
+bus = facts.get("bus", {})
 print(int(binary["realpath_inside_prefix"]))
 print(int(binary["assets_inside_prefix"]))
+print(int(binary["launch_cwd_isolated"]))
 print(int(topo["expected"]))
 print(int(topo["observed"]))
 print(int(topo["target_paths"]))
 print(int(topo["kernel_nodes"]))
 print(topo.get("cardinality", "exact"))
+print(int(topo.get("identities_match", 1)))
 print(observer.get("event_stream", ""))
 print(int(observer.get("direct_injection", 0)))
-print(cleanup.get("termination", "ok"))
-print(cleanup.get("target_cleanup", "ok"))
 print(observer.get("physical_name", ""))
 print(observer.get("target_name", ""))
+print(cleanup.get("termination", "ok"))
+print(cleanup.get("target_cleanup", "ok"))
+print(int(bus.get("socket_root_owned", 0)))
+print(int(bus.get("owner_exe_pinned", 0)))
+print(bus.get("owner_exe", ""))
 PY
 )
-    local realpath_inside=${FACTS[0]} assets_inside=${FACTS[1]}
-    local observed=${FACTS[3]}
-    local target_paths=${FACTS[4]} kernel_nodes=${FACTS[5]} cardinality=${FACTS[6]}
-    local event_stream=${FACTS[7]} direct_injection=${FACTS[8]}
-    local termination=${FACTS[9]} target_cleanup=${FACTS[10]}
+    local realpath_inside=${FACTS[0]} assets_inside=${FACTS[1]} launch_cwd_isolated=${FACTS[2]}
+    local observed=${FACTS[4]}
+    local target_paths=${FACTS[5]} kernel_nodes=${FACTS[6]} cardinality=${FACTS[7]}
+    local identities_match=${FACTS[8]}
+    local event_stream=${FACTS[9]} direct_injection=${FACTS[10]}
     local physical_name=${FACTS[11]} target_name=${FACTS[12]}
+    local termination=${FACTS[13]} target_cleanup=${FACTS[14]}
+    local socket_root_owned=${FACTS[15]} owner_exe_pinned=${FACTS[16]} owner_exe=${FACTS[17]}
+
+    # Real bus identity: no routing evidence may be claimed for a fake or
+    # substituted InputPlumber bus owner.
+    if [[ "$socket_root_owned" -ne 1 || "$owner_exe_pinned" -ne 1 || "$owner_exe" != "$PINNED_INPUTPLUMBER" ]]; then
+        echo "production-routing-probe: FAIL: fake/substituted InputPlumber bus owner (no routing evidence claimed)" >&2
+        record_cleanup "$termination" "$target_cleanup"
+        return 1
+    fi
 
     # Source/build or asset fallback: the installed binary must be the one
-    # launched and its assets must live inside the prefix. Deleting the temp
-    # source/build trees before launch is what makes SOURCE_* fallbacks
-    # impossible; the recorded facts must confirm the installed path won.
+    # launched, its assets must live inside the prefix, and it must have been
+    # launched with the isolated temp dir as its CWD (never the repo source).
     if [[ "$realpath_inside" -ne 1 || "$assets_inside" -ne 1 ]]; then
         echo "production-routing-probe: FAIL: source/build or asset fallback detected (binary realpath inside prefix=$realpath_inside assets inside prefix=$assets_inside)" >&2
+        record_cleanup "$termination" "$target_cleanup"
+        return 1
+    fi
+    if [[ "$launch_cwd_isolated" -ne 1 ]]; then
+        echo "production-routing-probe: FAIL: product launched from a source CWD (CWD source fallback possible)" >&2
         record_cleanup "$termination" "$target_cleanup"
         return 1
     fi
@@ -215,9 +274,25 @@ PY
         return 1
     fi
 
+    # Collective identity binding: the counted target identities (all xb360,
+    # non-empty Name) must match the kernel node identities exactly. A wrong
+    # target name/type is not a routed topology.
+    if [[ "$identities_match" -ne 1 ]]; then
+        echo "production-routing-probe: FAIL: target/kernel identities do not match (wrong target name/type)" >&2
+        record_cleanup "$termination" "$target_cleanup"
+        return 1
+    fi
+
     # Observer: replay the recorded physical->target event stream through the
     # same C helper used live. Deterministic, read-only, no injection.
     if [[ -n "$event_stream" ]]; then
+        case "$event_stream" in
+            /*|*".."*)
+                echo "production-routing-probe: FAIL: event stream path is unsafe" >&2
+                record_cleanup "$termination" "$target_cleanup"
+                return 1
+                ;;
+        esac
         local stream="$dir/$event_stream"
         [[ -f "$stream" && ! -L "$stream" ]] || {
             echo "production-routing-probe: fixture event stream is missing or unsafe" >&2
@@ -245,7 +320,7 @@ PY
         [[ -z "$target_name" ]] || obs_args+=(--target-name "$target_name")
         if ! "$OBSERVER" "${obs_args[@]}" > "$dir/observer.log" 2>&1; then
             cat "$dir/observer.log" >&2
-            echo "production-routing-probe: FAIL: no fresh physical->target routed event observed (stale/injected/unrouted)" >&2
+            echo "production-routing-probe: FAIL: no fresh physical->target routed event observed (stale/injected/unrouted/correlated-fail)" >&2
             record_cleanup "$termination" "$target_cleanup"
             return 1
         fi
@@ -323,25 +398,138 @@ new_virtual_nodes() {
     printf '%s\n' "${nodes[@]}"
 }
 
-# New org.shadowblip.Input.Target object paths not in the baseline set.
-new_target_paths() {
-    local baseline=$1
-    local output after new
-    if output=$(busctl --system --json=short call "$BUS_NAME" "$OM_PATH" \
-        org.freedesktop.DBus.ObjectManager GetManagedObjects 2>/dev/null); then
-        after=$(python3 - "$output" "$TARGET_IFACE" <<'PY'
+# New org.shadowblip.Input.Target object paths (raw) not in the baseline.
+new_target_paths_from_om() {
+    python3 - "$1" "$2" "$TARGET_IFACE" <<'PY'
 import json, sys
 data = json.loads(sys.argv[1])
-paths = []
-for path, interfaces in data.items():
-    if sys.argv[2] in interfaces:
-        paths.append(path)
-print("\n".join(sorted(paths)))
+base = set()
+try:
+    for line in open(sys.argv[2], encoding="utf-8"):
+        line = line.strip()
+        if line:
+            base.add(line)
+except FileNotFoundError:
+    pass
+iface = sys.argv[3]
+for path in sorted(data):
+    if iface in data[path] and path not in base:
+        print(path)
 PY
-        )
+}
+
+# New xb360 Target paths (with non-empty Name) not in the baseline. Requires
+# each new target to have DeviceType==xb360 and a Name; prints "path\tName".
+# Fails if a new target is non-xb360 or nameless.
+extract_new_xb360_targets() {
+    python3 - "$1" "$2" "$TARGET_IFACE" <<'PY'
+import json, sys
+data = json.loads(sys.argv[1])
+base = set()
+try:
+    for line in open(sys.argv[2], encoding="utf-8"):
+        line = line.strip()
+        if line:
+            base.add(line)
+except FileNotFoundError:
+    pass
+iface = sys.argv[3]
+
+def variant_val(prop):
+    if not isinstance(prop, dict):
+        return None
+    body = prop.get("body")
+    if isinstance(body, dict):
+        return body.get("data")
+    return prop.get("data")
+
+new_paths = []
+for path in sorted(data):
+    if iface in data[path] and path not in base:
+        new_paths.append(path)
+bad = 0
+for p in new_paths:
+    props = data[p].get(iface, {})
+    dt = variant_val(props.get("DeviceType"))
+    name = variant_val(props.get("Name"))
+    if dt != "xb360":
+        print(f"FAIL: new target {p} DeviceType={dt!r} is not xb360", file=sys.stderr)
+        bad = 1
+    if not isinstance(name, str) or not name:
+        print(f"FAIL: new target {p} has no Name", file=sys.stderr)
+        bad = 1
+if bad:
+    sys.exit(1)
+for p in new_paths:
+    name = variant_val(data[p].get(iface, {}).get("Name"))
+    print(f"{p}\t{name}")
+PY
+}
+
+# Verify the kernel event nodes collectively match the counted xb360 target
+# names (identical name sets, exact count, no extra nodes). Reads EVIOCGNAME
+# via the observer's identity-only mode; rejects uinput/unrelated nodes.
+NODE_NAMES=()
+verify_node_identities() {
+    local -a node_names=()
+    local node name
+    for node in "$@"; do
+        name=$("$OBSERVER" --name-only "/dev/input/$node" 2>/dev/null) || {
+            echo "production-routing-probe: FAIL: node /dev/input/$node has no readable evdev identity (uinput/unrelated node rejected)" >&2
+            return 1
+        }
+        node_names+=("$name")
+    done
+    NODE_NAMES=("${node_names[@]}")
+    local -a st sn
+    mapfile -t st < <(printf '%s\n' "${TARGET_NAMES[@]}" | sort)
+    mapfile -t sn < <(printf '%s\n' "${node_names[@]}" | sort)
+    if [[ "${#st[@]}" -ne "${#sn[@]}" ]]; then
+        echo "production-routing-probe: FAIL: target/kernel node identity counts differ (targets=${#st[@]} nodes=${#sn[@]})" >&2
+        return 1
     fi
-    new=$(comm -13 <(cat "$baseline") <(printf '%s\n' "$after") || true)
-    printf '%s\n' "$new"
+    for ((i = 0; i < ${#st[@]}; i++)); do
+        if [[ "${st[$i]}" != "${sn[$i]}" ]]; then
+            echo "production-routing-probe: FAIL: kernel node identities do not collectively match the counted xb360 targets" >&2
+            return 1
+        fi
+    done
+    echo "production-routing-probe: all ${#node_names[@]} kernel nodes match the ${#TARGET_NAMES[@]} counted xb360 target identities"
+    return 0
+}
+
+# Verify the real system bus identity before claiming any routing evidence.
+verify_bus_identity() {
+    [[ -S /run/dbus/system_bus_socket ]] || {
+        echo "production-routing-probe: FAIL: system bus socket missing" >&2
+        return 1
+    }
+    local sowner
+    sowner=$(stat -c %U /run/dbus/system_bus_socket 2>/dev/null || true)
+    [[ "$sowner" == "root" ]] || {
+        echo "production-routing-probe: FAIL: system bus socket is not root-owned" >&2
+        return 1
+    }
+    local pid exe dpkgline
+    pid=$(busctl --system call org.freedesktop.DBus /org/freedesktop/DBus \
+        org.freedesktop.DBus GetConnectionUnixProcessID s "$BUS_NAME" 2>/dev/null | awk '{print $2}')
+    [[ "$pid" =~ ^[0-9]+$ ]] || {
+        echo "production-routing-probe: FAIL: cannot resolve InputPlumber owner PID" >&2
+        return 1
+    }
+    exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)
+    if [[ "$exe" == "$PINNED_INPUTPLUMBER" ]]; then
+        echo "production-routing-probe: bus owner verified pid=$pid exe=$exe"
+        return 0
+    fi
+    # dpkg-owned pinned binary alternative.
+    if command -v dpkg >/dev/null 2>&1 && \
+       dpkgline=$(dpkg -S "$exe" 2>/dev/null) && [[ "$dpkgline" == *"inputplumber"* ]]; then
+        echo "production-routing-probe: bus owner verified (dpkg-owned) pid=$pid exe=$exe"
+        return 0
+    fi
+    echo "production-routing-probe: FAIL: InputPlumber bus owner exe '$exe' is not the pinned $PINNED_INPUTPLUMBER" >&2
+    return 1
 }
 
 run_live() {
@@ -459,11 +647,12 @@ run_live() {
         echo "production-routing-probe: warning: Xvfb unavailable; continuing headless" >&2
     fi
 
-    # 7. Snapshot existing targets + kernel nodes BEFORE launch.
+    # 7. Verify the real system bus identity before claiming evidence, and
+    #    snapshot existing targets + kernel nodes BEFORE launch.
+    verify_bus_identity || { cleanup_live; return 1; }
     list_event_devices > "$tmp/kernel-baseline"
     busctl --system --json=short call "$BUS_NAME" "$OM_PATH" \
         org.freedesktop.DBus.ObjectManager GetManagedObjects > "$tmp/om-baseline.json" 2>/dev/null || true
-    # Derive the baseline target path set (all currently managed Targets).
     if [[ -f "$tmp/om-baseline.json" ]]; then
         python3 - "$tmp/om-baseline.json" "$TARGET_IFACE" <<'PY' > "$tmp/target-baseline"
 import json, sys
@@ -476,19 +665,66 @@ PY
         : > "$tmp/target-baseline"
     fi
 
-    # 8. Launch the installed, unmodified overlay service.
-    "$binary" --overlay-service > "$tmp/overlay.log" 2>&1 &
+    # Compile the observer early so its identity-only mode is available for
+    # collective-cardinality node-name verification.
+    OBSERVER="$tmp/routing_observer"
+    if ! cc -O2 -o "$OBSERVER" "$OBSERVER_SOURCE" 2>"$tmp/cc.log"; then
+        cat "$tmp/cc.log" >&2
+        echo "production-routing-probe: observer build failed" >&2
+        cleanup_live
+        return 1
+    fi
+
+    # 8. Launch the installed, unmodified overlay service with its CWD set to
+    #    the isolated temp dir (never the repository), so a relative asset
+    #    lookup cannot resolve back to a source CWD.
+    (
+        cd "$tmp" || exit 1
+        exec "$binary" --overlay-service
+    ) > "$tmp/overlay.log" 2>&1 &
     overlay_pid=$!
 
     # 9. Poll ObjectManager for exactly 4 new xb360 targets + 4 new virtual
-    #    kernel event nodes (collective cardinality binding).
+    #    kernel event nodes (collective cardinality binding). Populate
+    #    created_targets during EVERY poll, before assessment or failure, so
+    #    every discovered target is cleaned up on every path.
     local deadline=$(( $(date +%s) + 120 ))
     local observed=0 target_paths=0 kernel_nodes=0
-    local -a new_targets=() new_nodes=()
+    local -a new_targets=() target_names=() new_nodes=() target_recs=()
     while :; do
-        mapfile -t new_targets < <(new_target_paths "$tmp/target-baseline")
+        local om_output
+        om_output=$(busctl --system --json=short call "$BUS_NAME" "$OM_PATH" \
+            org.freedesktop.DBus.ObjectManager GetManagedObjects 2>/dev/null || true)
+        new_targets=()
+        target_names=()
+        if [[ -n "$om_output" ]]; then
+            mapfile -t new_targets < <(new_target_paths_from_om "$om_output" "$tmp/target-baseline")
+            created_targets=("${new_targets[@]}")
+            if ! extract_new_xb360_targets "$om_output" "$tmp/target-baseline" \
+                > "$tmp/target-records" 2> "$tmp/target-err"; then
+                cat "$tmp/target-err" >&2
+                echo "production-routing-probe: FAIL: a new Target object is not an xb360 device or has no Name" >&2
+                cleanup_live
+                return 1
+            fi
+            mapfile -t target_recs < "$tmp/target-records"
+            new_targets=()
+            target_names=()
+            local rec p tname
+            for rec in "${target_recs[@]}"; do
+                p=${rec%%$'\t'*}
+                tname=${rec#*$'\t'}
+                new_targets+=("$p")
+                target_names+=("$tname")
+            done
+            created_targets=("${new_targets[@]}")
+            target_paths=${#new_targets[@]}
+        else
+            # Bus transiently unavailable: keep the last discovered targets so
+            # they are still cleaned up, and keep polling for the expected set.
+            target_paths=${#created_targets[@]}
+        fi
         mapfile -t new_nodes < <(new_virtual_nodes "$tmp/kernel-baseline")
-        target_paths=${#new_targets[@]}
         kernel_nodes=${#new_nodes[@]}
         observed=$target_paths
         if [[ "$target_paths" -lt "$EXPECTED_TARGETS" ]]; then
@@ -508,10 +744,18 @@ PY
         cleanup_live
         return 1
     fi
-    created_targets=("${new_targets[@]}")
+
+    # Collective cardinality: the kernel node identities must match the
+    # counted xb360 target names exactly (no extra nodes, no uinput/unrelated).
+    TARGET_NAMES=("${target_names[@]}")
+    if ! verify_node_identities "${new_nodes[@]}"; then
+        cleanup_live
+        return 1
+    fi
 
     # 10. Observe a fresh physical 045e:028e event routed to a new virtual
-    #     xb360 target node on separate read-only fds.
+    #     xb360 target node on separate read-only fds, verifying BOTH the
+    #     physical and target EVIOCGNAME identities.
     local physical
     physical=$(discover_physical) || {
         echo "production-routing-probe: FAIL: physical 045e:028e controller absent" >&2
@@ -524,14 +768,15 @@ PY
         cleanup_live
         return 1
     }
-    local observer="$tmp/routing_observer"
-    if ! cc -O2 -o "$observer" "$OBSERVER_SOURCE" 2>"$tmp/cc.log"; then
-        cat "$tmp/cc.log" >&2
-        echo "production-routing-probe: observer build failed" >&2
+    local physical_name target_name
+    physical_name=$("$OBSERVER" --name-only "$physical" 2>/dev/null) || {
+        echo "production-routing-probe: FAIL: cannot read physical controller EVIOCGNAME identity" >&2
         cleanup_live
         return 1
-    fi
-    if ! "$observer" --physical-device "$physical" --target-device "/dev/input/$target_node" \
+    }
+    target_name="${NODE_NAMES[0]}"
+    if ! "$OBSERVER" --physical-device "$physical" --target-device "/dev/input/$target_node" \
+        --physical-name "$physical_name" --target-name "$target_name" \
         --type "$OBSERVE_TYPE" --code "$OBSERVE_CODE" --value "$OBSERVE_VALUE" \
         --window 90 > "$tmp/observer.log" 2>&1; then
         cat "$tmp/observer.log" >&2
@@ -541,11 +786,13 @@ PY
     fi
     cat "$tmp/observer.log"
 
-    # 11. Preserve fact/log hashes.
-    local -a facts=("$tmp/observer.log" "$tmp/overlay.log")
-    for artifact in "${facts[@]}"; do
-        echo "production-routing-probe: artifact hash $(sha256sum "$artifact" | cut -d' ' -f1) $artifact"
-    done
+    # 11. Retain the live artifacts under the caller-controlled ARTIFACT_DIR
+    #     and print their hashes for the signer; the retained copy is never
+    #     deleted by cleanup_live.
+    if ! retain_artifacts "$tmp/observer.log" "$tmp/overlay.log"; then
+        cleanup_live
+        return 1
+    fi
 
     cleanup_live || return 1
     echo "production-routing-probe: PASS"
