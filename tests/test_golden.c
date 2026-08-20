@@ -726,6 +726,26 @@ g_send_key(cbx_manager *mgr, SDL_Keycode sym)
     return cbx_manager_handle_event(mgr, &ev);
 }
 
+/* Select the profile entry with the given filename (base, no extension) in
+ * the profiles list.  The default selection (index 0) is environment-
+ * dependent because enumeration sorts the built-in Default alongside any
+ * host/system InputPlumber profiles; resolve the entry we wrote instead
+ * (BUG-0017). */
+static bool
+g_select_profile(cbx_profiles_tab *pt, const char *filename)
+{
+    if (!pt)
+        return false;
+    for (int i = 0; i < pt->profiles.count; i++) {
+        if (strcmp(pt->profiles.entries[i].filename, filename) == 0) {
+            pt->selected_profile = i;
+            cbx_list_set_selected(&pt->profile_list_w, i);
+            return true;
+        }
+    }
+    return false;
+}
+
 static void
 g_write_nes_profile(const char *home_dir)
 {
@@ -752,6 +772,8 @@ g_open_editor(cbx_manager *mgr, const char *home_dir)
         g_send_key(mgr, SDLK_RIGHT);
     cbx_profiles_tab *pt = cbx_manager_profiles_tab(mgr);
     if (!pt || cbx_profiles_tab_profile_count(pt) == 0)
+        return NULL;
+    if (!g_select_profile(pt, "testprof"))
         return NULL;
     SDL_Rect br;
     cbx_widget_get_rect(&pt->edit_btn.base, &br);

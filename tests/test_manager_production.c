@@ -380,6 +380,60 @@ static void test_render_with_font(void **state)
     cbx_manager_shutdown(&mgr);
 }
 
+/* Write a profile with the given filename, display name and mapping count
+ * into the isolated HOME profiles directory.  Used to stage profiles for
+ * the editor via the production dispatch path. */
+static void
+mp_write_profile(const char *home_dir, const char *filename,
+                 const char *display_name, int count)
+{
+    char prof_path[PATH_MAX + 64];
+    snprintf(prof_path, sizeof(prof_path),
+             "%s/.local/share/inputplumber/profiles/%s.yaml",
+             home_dir, filename);
+    FILE *fp = fopen(prof_path, "w");
+    assert_non_null(fp);
+    fprintf(fp, "version: 1\nkind: DeviceProfile\nname: %s\n",
+            display_name);
+    fprintf(fp, "description: test profile\n");
+    if (count > 0) {
+        fprintf(fp, "mapping:\n");
+        const char *btns[] = {"A", "B", "Up", "Down", "Left", "Right"};
+        const char *keys[] = {"KeyA", "KeyB", "KeyUp", "KeyDown",
+                              "KeyLeft", "KeyRight"};
+        for (int i = 0; i < count; i++)
+            fprintf(fp,
+                "  - name: btn_%s\n"
+                "    source_event:\n"
+                "      gamepad:\n"
+                "        button: %s\n"
+                "    target_events:\n"
+                "      - keyboard: %s\n",
+                btns[i % 6], btns[i % 6], keys[i % 6]);
+    }
+    fclose(fp);
+}
+
+/* Select the profile entry with the given filename (base, no extension) in
+ * the profiles list.  The default selection (index 0) is environment-
+ * dependent because enumeration sorts the built-in Default alongside any
+ * host/system InputPlumber profiles, so resolve the entry we wrote instead
+ * (BUG-0017). */
+static void
+mp_select_profile(cbx_profiles_tab *pt, const char *filename)
+{
+    int idx = -1;
+    for (int i = 0; i < pt->profiles.count; i++) {
+        if (strcmp(pt->profiles.entries[i].filename, filename) == 0) {
+            idx = i;
+            break;
+        }
+    }
+    assert_true(idx >= 0);
+    pt->selected_profile = idx;
+    cbx_list_set_selected(&pt->profile_list_w, idx);
+}
+
 /* (g) Profile editor opens via production dispatch: write a NES profile,
  *     switch to Profiles tab, click the Edit button, verify editor is open. */
 static void test_editor_opens_via_dispatch(void **state)
@@ -390,26 +444,7 @@ static void test_editor_opens_via_dispatch(void **state)
     assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
 
     /* Write a user profile with NES bindings to the profiles directory. */
-    char prof_path[PATH_MAX + 64];
-    snprintf(prof_path, sizeof(prof_path),
-             "%s/.local/share/inputplumber/profiles/testprof.yaml", f->tmp);
-    FILE *fp = fopen(prof_path, "w");
-    assert_non_null(fp);
-    fprintf(fp, "version: 1\nkind: DeviceProfile\nname: TestProf\n");
-    fprintf(fp, "description: NES test profile\nmapping:\n");
-    const char *btns[] = {"A", "B", "Up", "Down", "Left", "Right"};
-    const char *keys[] = {"KeyA", "KeyB", "KeyUp", "KeyDown",
-                         "KeyLeft", "KeyRight"};
-    for (int i = 0; i < 6; i++)
-        fprintf(fp,
-            "  - name: btn_%s\n"
-            "    source_event:\n"
-            "      gamepad:\n"
-            "        button: %s\n"
-            "    target_events:\n"
-            "      - keyboard: %s\n",
-            btns[i], btns[i], keys[i]);
-    fclose(fp);
+    mp_write_profile(f->tmp, "testprof", "TestProf", 6);
 
     /* Switch to Profiles tab (triggers refresh). */
     while (cbx_manager_active_tab(&mgr) != CBX_MGR_TAB_PROFILES)
@@ -418,6 +453,12 @@ static void test_editor_opens_via_dispatch(void **state)
     cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
     assert_non_null(pt);
     assert_true(cbx_profiles_tab_profile_count(pt) > 0);
+
+    /* Select the NES profile we wrote.  The list is sorted across the
+     * built-in Default and any host/system InputPlumber profiles, so the
+     * default selection (index 0) is environment-dependent.  Resolve the
+     * entry by filename so the editor edits OUR 6-binding profile (BUG-0017). */
+    mp_select_profile(pt, "testprof");
 
     /* Click on the Edit button to open the editor. */
     SDL_Rect btn_rect;
@@ -444,6 +485,60 @@ static void test_editor_opens_via_dispatch(void **state)
     cbx_manager_shutdown(&mgr);
 }
 
+/* (h) BUG-0017 regression: the editor must load the SELECTED profile, not
+ *     whatever sorts to index 0.  A host/system InputPlumber profile that
+ *     sorts before the built-in Default (and before the target profile)
+ *     would make the old index-0 assumption load a profile with a different
+ *     mapping count.  Stage such a profile in the isolated HOME and confirm
+ *     the editor still loads the 6-binding target profile through production
+ *     dispatch. */
+static void test_editor_edits_selected_profile(void **state)
+{
+    mp_fixture *f = FIX(state);
+    ensure_dummy_driver();
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+
+    /* A noisy profile that sorts before "testprof" (name "AAA...") with a
+     * different mapping count, plus the 6-binding target profile. */
+    mp_write_profile(f->tmp, "aaa_noise", "AAA Noise", 3);
+    mp_write_profile(f->tmp, "testprof", "TestProf", 6);
+
+    /* Switch to Profiles tab (triggers refresh). */
+    while (cbx_manager_active_tab(&mgr) != CBX_MGR_TAB_PROFILES)
+        send_key(&mgr, SDLK_RIGHT);
+
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+    assert_non_null(pt);
+    assert_true(cbx_profiles_tab_profile_count(pt) >= 2);
+
+    /* The target profile sorts after the noisy profile, so the default
+     * selection (index 0) would NOT be testprof without an explicit
+     * selection. */
+    mp_select_profile(pt, "testprof");
+
+    /* Click the Edit button to open the editor. */
+    SDL_Rect btn_rect;
+    cbx_widget_get_rect(&pt->edit_btn.base, &btn_rect);
+    int cx = btn_rect.x + btn_rect.w / 2;
+    int cy = btn_rect.y + btn_rect.h / 2;
+    SDL_Event mev = {0};
+    mev.type = SDL_MOUSEBUTTONDOWN;
+    mev.button.button = SDL_BUTTON_LEFT;
+    mev.button.x = cx; mev.button.y = cy;
+    cbx_manager_handle_event(&mgr, &mev);
+    mev.type = SDL_MOUSEBUTTONUP;
+    cbx_manager_handle_event(&mgr, &mev);
+
+    /* The editor edits the SELECTED 6-binding profile, not the 3-binding
+     * noisy profile that sorts first. */
+    assert_int_equal(pt->mode, CBX_PT_MODE_EDITOR);
+    assert_true(pt->editor_initialized);
+    assert_int_equal(cbx_profile_editor_binding_count(&pt->editor), 6);
+
+    cbx_manager_shutdown(&mgr);
+}
+
 /* ------------------------------------------------------------------ */
 /*  Test runner                                                        */
 /* ------------------------------------------------------------------ */
@@ -460,6 +555,7 @@ static const struct CMUnitTest tests[] = {
     cmocka_unit_test_setup_teardown(test_shutdown_clean, setup, teardown),
     cmocka_unit_test_setup_teardown(test_render_with_font, setup, teardown),
     cmocka_unit_test_setup_teardown(test_editor_opens_via_dispatch, setup, teardown),
+    cmocka_unit_test_setup_teardown(test_editor_edits_selected_profile, setup, teardown),
 };
 
 int main(void)

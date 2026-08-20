@@ -304,8 +304,23 @@ test_manager_focus_traversal_no_trap(void **state)
     assert_int_equal(fc->focused, 0);
     assert_true(send_key(&mgr, SDLK_DOWN));
     int profile_list_idx = fc->focused;
-    assert_true(send_key(&mgr, SDLK_DOWN));
-    assert_true(fc->focused > profile_list_idx);
+
+    /* Press DOWN until focus escapes the profile list to the next widget.
+     * The list is a single focus node: with one entry a single DOWN escapes
+     * to a button, but with several entries DOWN is consumed as in-list
+     * selection moves until the last item.  Loop to the first index beyond
+     * the list node so the assertion holds for any number of enumerated
+     * profiles (BUG-0017) — the key property is that the list does not trap
+     * focus. */
+    bool escaped = false;
+    for (int guard = 0; guard < 64 && !escaped; guard++) {
+        send_key(&mgr, SDLK_DOWN);
+        if (fc->focused > profile_list_idx)
+            escaped = true;
+    }
+    assert_true(escaped);
+    /* UP returns to the list widget (the list node index is unchanged by
+     * in-list selection movement). */
     assert_true(send_key(&mgr, SDLK_UP));
     assert_int_equal(fc->focused, profile_list_idx);
 
