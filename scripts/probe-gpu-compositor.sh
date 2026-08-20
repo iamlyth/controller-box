@@ -26,32 +26,49 @@
 #                            runtime asset lookups — the installed prefix
 #                            assets must win (source-tree-accessible-rejected /
 #                            source-data-path-available);
-#   3. isolated launch       runs the installed binary from an isolated CWD
-#                            with PATH prefixed to the install bin dir and a
-#                            private HOME/XDG tree (never the repository);
-#   4. compositor check      starts a private Weston (headless backend,
-#                            GL renderer, Xwayland) on a private runtime
-#                            dir and compiles+queries the EGL renderer
-#                            probe; software rasterizers fail
+#   3. compositor check      starts a private Weston (headless backend,
+#                            GL renderer, Xwayland) with an explicit output
+#                            of at least 1280x720 on a private runtime dir
+#                            and compiles+queries the EGL renderer probe;
+#                            software rasterizers fail
 #                            (software-renderer-rejected /
 #                            renderer-unverified) and weston failures fail
 #                            (compositor-start-failed);
-#   5. input route               Xwayland + xdotool must drive the real UI
-#                                (input-route-failed otherwise);
-#   6. navigate + capture        opens the profile editor through the real
-#                                keyboard and pointer route, captures the
-#                                compositor output (weston-screenshooter);
-#   7. semantic analysis         analyze-gpu-compositor.py verifies the
-#                                diagram region independently of the asset,
-#                                texture, or any golden; failure emits
-#                                diagram-not-recognizable (the BUG-0014
-#                                negative-control marker).
+#   4. display binding       DISPLAY is bound to the exact Xwayland display
+#                            that THIS weston instance logged — never the
+#                            first /tmp/.X11-unix socket; a pre-existing or
+#                            ambiguous display is rejected
+#                            (display-binding-rejected / input-route-failed);
+#   5. isolated launch       runs the installed binary from an isolated CWD
+#                            with PATH prefixed to the install bin dir and a
+#                            private HOME/XDG tree (never the repository);
+#                            the systemd user unit is seeded under
+#                            $XDG_CONFIG_HOME so the SPEC §9.1 first-run
+#                            modal is provably skipped (first-run-modal-
+#                            not-seeded);
+#   6. input proof           focuses the exact manager window, sends Right,
+#                            captures before/after compositor screenshots,
+#                            and asserts a semantic tab-region pixel change
+#                            BEFORE the Edit click (tab-change-not-observed
+#                            otherwise);
+#   7. navigate + capture    opens the profile editor through the real
+#                            keyboard and pointer route, captures the
+#                            compositor output (weston-screenshooter) and
+#                            rejects clipped (<1280x720) output
+#                            (output-too-small);
+#   8. semantic analysis     analyze-gpu-compositor.py verifies the
+#                            diagram region independently of the asset,
+#                            texture, or any golden; failure emits
+#                            diagram-not-recognizable (the BUG-0014
+#                            negative-control marker).
 #
-# The screenshot SHA-256, the probe log, the verdict JSON, and the
-# configure/build/install/Weston/manager logs are retained with their hashes
-# under $CBX_GPU_PROBE_ARTIFACTS (safe default under the gitignored
-# .factory-state tree) so later live negative-control evidence can bind
-# hashes to markers.
+# Every retained artifact (configure/build/install/Weston/manager logs, the
+# before/after input screenshots, the final controller-box-compositor.png,
+# and the verdict JSON) is copied under $CBX_GPU_PROBE_ARTIFACTS (safe
+# default under the gitignored .factory-state tree) with its SHA-256 listed
+# in artifact-manifest.json; the final screenshot's relative filename+hash is
+# embedded in the verdict itself.  The failure marker/reason and the cleanup
+# record are appended to probe.log on EVERY live exit path.
 #
 # Fixture mode:
 #   probe-gpu-compositor.sh --fixture DIR
@@ -68,6 +85,12 @@
 #   source-removed      yes|no (archived source+build deleted before launch)
 #   launch-cwd-isolated yes|no (launched from an isolated CWD)
 #   path-prefixed       yes|no (PATH prefixed with the install bin dir)
+#   modal-seeded        yes|no (systemd user unit seeded so the first-run
+#                       modal is provably skipped)
+#   display-bound       yes|no (launch bound to THIS probe's Xwayland display)
+#   tab-change-observed yes|no (Right input changed the tab bar before Edit)
+#   screenshot-hash     64-hex sha256 of the retained screenshot (mismatch
+#                       is rejected: screenshot-hash-mismatch)
 #   build-ok            yes|no (exact-HEAD configure+build succeeded)
 #   install-ok          yes|no (install to the isolated prefix succeeded)
 #   weston-ok           yes|no
@@ -88,6 +111,8 @@ PROBE_TAG="gpu-compositor-probe"
 WIN_TITLE="Controller-Box"
 WIN_W=1280
 WIN_H=720
+TAB_BAR_H=48
+TAB_DIFF_MIN=200
 DIAGRAM_RECT="16,88,300,300"
 EDIT_CLICK="332,522"
 PROFILE_NAME="nes-gamepad"
@@ -97,8 +122,18 @@ PROFILE_NAME="nes-gamepad"
     exit 1
 }
 
+# Caller-controlled artifact retention dir (live mode only). Safe default
+# lives under the gitignored .factory-state tree.
+ARTIFACTS=${CBX_GPU_PROBE_ARTIFACTS:-}
+PROBE_MARKER=""
+
 fail() { # marker reason
-    echo "$PROBE_TAG: FAIL marker=$1 ($2)" >&2
+    local msg="$PROBE_TAG: FAIL marker=$1 ($2)"
+    echo "$msg" >&2
+    if [[ -n "$ARTIFACTS" && -f "$ARTIFACTS/probe.log" ]]; then
+        echo "$msg" >> "$ARTIFACTS/probe.log"
+    fi
+    PROBE_MARKER="$1"
     exit 1
 }
 
@@ -113,11 +148,6 @@ fi
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/cbx-gpu-probe.XXXXXX")
 chmod 700 "$tmp"
-trap 'rm -rf "$tmp"' EXIT
-
-# Caller-controlled artifact retention dir (live mode only). Safe default
-# lives under the gitignored .factory-state tree.
-ARTIFACTS=${CBX_GPU_PROBE_ARTIFACTS:-}
 
 echo "$MARKER"
 
@@ -125,6 +155,35 @@ sha256sum_file() { # path -> prints "hash  path" ("" when unreadable)
     local path=$1
     if [[ -f "$path" && ! -L "$path" ]]; then
         sha256sum "$path" 2>/dev/null || true
+    fi
+}
+
+png_size() { # path -> "W H" (via python3 PNG header parse; no ImageMagick dep)
+    python3 - "$1" <<'PY'
+import struct, sys
+with open(sys.argv[1], "rb") as f:
+    head = f.read(24)
+if head[:8] != b"\x89PNG\r\n\x1a\n":
+    raise SystemExit("not-a-png")
+w, h = struct.unpack(">II", head[16:24])
+print(f"{w} {h}")
+PY
+}
+
+# Fail output-too-small unless the PNG is at least the production window size
+# (the explicit headless output must be >=1280x720 — never clipped).
+require_output_size() { # png-path
+    local png=$1 size_out size_rc w h
+    set +e
+    size_out=$(png_size "$png" 2>/dev/null)
+    size_rc=$?
+    set -e
+    if [[ $size_rc -ne 0 ]]; then
+        fail output-too-small "screenshot is not a readable PNG: $png"
+    fi
+    read -r w h <<<"$size_out"
+    if [[ ! "$w" =~ ^[0-9]+$ || ! "$h" =~ ^[0-9]+$ || "$w" -lt "$WIN_W" || "$h" -lt "$WIN_H" ]]; then
+        fail output-too-small "compositor output ${w:-?}x${h:-?} is smaller than ${WIN_W}x${WIN_H}"
     fi
 }
 
@@ -155,8 +214,9 @@ PY
 # ---------------------------------------------------------------------------
 # Live-artifact retention + process cleanup. Runs on EVERY live exit path
 # (success and failure) via the EXIT trap so the signer always has the
-# configure/build/install/Weston/manager logs, the screenshot, and the
-# verdict with their hashes. The retained copies are never deleted.
+# configure/build/install/Weston/manager logs, the before/after input
+# screens, the final compositor screenshot, and the verdict — each with its
+# SHA-256 in artifact-manifest.json. The retained copies are never deleted.
 # ---------------------------------------------------------------------------
 retain_live_artifacts() {
     [[ -n "$ARTIFACTS" ]] || return 0
@@ -168,15 +228,40 @@ retain_live_artifacts() {
     for f in \
         "$tmp/configure.log" "$tmp/build.log" "$tmp/install.log" \
         "$tmp/weston.log" "$tmp/egl-build.log" "$tmp/screenshooter.log" \
-        "$tmp/manager.log" "$tmp/diagram.out" "$tmp/screenshot.png" \
+        "$tmp/manager.log" "$tmp/diagram.out" \
+        "$tmp/controller-box-before-input.png" \
+        "$tmp/controller-box-after-input.png" \
+        "$tmp/controller-box-compositor.png" \
         "$tmp/verdict.json"; do
         [[ -f "$f" && ! -L "$f" ]] || continue
         cp -f "$f" "$ARTIFACTS/$(basename "$f")" 2>/dev/null || continue
         echo "$PROBE_TAG: artifact hash $(sha256sum "$ARTIFACTS/$(basename "$f")" | awk '{print $1}') $ARTIFACTS/$(basename "$f")"
     done
-    if [[ -f "$tmp/screenshot.png" && ! -L "$tmp/screenshot.png" ]]; then
-        sha256sum_file "$tmp/screenshot.png" > "$ARTIFACTS/screenshot.sha256" 2>/dev/null || true
+    if [[ -f "$tmp/controller-box-compositor.png" && ! -L "$tmp/controller-box-compositor.png" ]]; then
+        sha256sum_file "$tmp/controller-box-compositor.png" \
+            > "$ARTIFACTS/controller-box-compositor.sha256" 2>/dev/null || true
     fi
+    python3 - "$ARTIFACTS" "$PROBE_MARKER" <<'PY'
+import hashlib, json, os, sys
+adir, marker = sys.argv[1], sys.argv[2]
+entries = []
+for name in sorted(os.listdir(adir)):
+    if name == "artifact-manifest.json":
+        continue
+    path = os.path.join(adir, name)
+    if os.path.isfile(path) and not os.path.islink(path):
+        with open(path, "rb") as f:
+            entries.append({"filename": name, "sha256": hashlib.sha256(f.read()).hexdigest()})
+manifest = {
+    "schema": "gpu-compositor-artifacts/v1",
+    "probe": "gpu-compositor-probe",
+    "marker": marker or "unknown",
+    "artifacts": entries,
+}
+with open(os.path.join(adir, "artifact-manifest.json"), "w", encoding="utf-8") as f:
+    json.dump(manifest, f, indent=2)
+    f.write("\n")
+PY
     echo "$PROBE_TAG: artifacts retained under $ARTIFACTS"
     return 0
 }
@@ -189,6 +274,10 @@ cleanup_live() {
     for pid in "${weston_pid:-}" "${manager_pid:-}"; do
         [[ -n "$pid" ]] && wait "$pid" 2>/dev/null || true
     done
+    if [[ -n "$ARTIFACTS" && -f "$ARTIFACTS/probe.log" ]]; then
+        echo "$PROBE_TAG: cleanup weston_pid=${weston_pid:-none} manager_pid=${manager_pid:-none} marker=$PROBE_MARKER" \
+            >> "$ARTIFACTS/probe.log"
+    fi
     retain_live_artifacts || true
     rm -rf "$tmp"
 }
@@ -255,7 +344,43 @@ if [[ -n "$FIXTURE" ]]; then
         fail path-not-prefixed-rejected "fixture: PATH was not prefixed with the install bin dir"
     fi
 
-    # 2. Compositor + renderer facts.
+    # 2. First-run modal precondition: the launch env must have the seeded
+    #    systemd user unit so the SPEC §9.1 first-run modal is provably
+    #    skipped and can never block the navigation.
+    if [[ "$(cat_fixture modal-seeded)" != "yes" ]]; then
+        fail first-run-modal-not-seeded "fixture: systemd user unit not seeded (first-run modal could appear)"
+    fi
+
+    # 3. Display binding: the launch must be bound to THIS probe's Xwayland
+    #    instance only — never an ambient/pre-existing display.
+    if [[ "$(cat_fixture display-bound)" != "yes" ]]; then
+        fail display-binding-rejected "fixture: launch DISPLAY not bound to the private Xwayland instance"
+    fi
+
+    # 4. Tab-change proof: the Right navigation visibly changed the tab bar
+    #    before the Edit click.
+    if [[ "$(cat_fixture tab-change-observed)" != "yes" ]]; then
+        fail tab-change-not-observed "fixture: no semantic tab-region pixel change after input"
+    fi
+
+    # 5. Screenshot retention + hash binding.
+    local_shot=$FIXTURE/screenshot.png
+    if [[ "$(cat_fixture screenshot-missing)" == "yes" || ! -f "$local_shot" || -L "$local_shot" ]]; then
+        fail screenshot-missing "fixture: no compositor-level screenshot"
+    fi
+    local_hash=$(cat_fixture screenshot-hash)
+    if [[ -n "$local_hash" ]]; then
+        actual_hash=$(sha256sum_file "$local_shot" | awk '{print $1}')
+        if [[ -z "$actual_hash" || "$actual_hash" != "$local_hash" ]]; then
+            fail screenshot-hash-mismatch "fixture: retained screenshot sha256 $actual_hash != recorded $local_hash"
+        fi
+    fi
+
+    # 6. The compositor output must be at least the production window size
+    #    (an explicit headless output >=1280x720; never a clipped one).
+    require_output_size "$local_shot"
+
+    # 7. Compositor + renderer facts.
     if [[ "$(cat_fixture weston-ok)" != "yes" ]]; then
         fail compositor-start-failed "fixture: private Weston failed to start"
     fi
@@ -266,18 +391,12 @@ if [[ -n "$FIXTURE" ]]; then
     [[ -n "$renderer" ]] || fail renderer-unverified "fixture: no renderer string"
     check_renderer "$renderer"
 
-    # 3. Input route.
+    # 8. Input route.
     if [[ "$(cat_fixture input-ok)" != "yes" ]]; then
         fail input-route-failed "fixture: Xwayland/xdotool route unavailable"
     fi
 
-    # 4. Screenshot.
-    local_shot=$FIXTURE/screenshot.png
-    if [[ "$(cat_fixture screenshot-missing)" == "yes" || ! -f "$local_shot" || -L "$local_shot" ]]; then
-        fail screenshot-missing "fixture: no compositor-level screenshot"
-    fi
-
-    # 5. Window geometry + diagram analysis.
+    # 9. Window geometry + diagram analysis.
     local_geom=$FIXTURE/geometry.json
     local_diag=$FIXTURE/diagram-rect
     if [[ -f "$local_geom" && ! -L "$local_geom" ]]; then
@@ -300,7 +419,7 @@ PY
     marker_analyzed=""
     set +e
     python3 "$ANALYZER" diagram --screenshot "$local_shot" --geometry "$geom" \
-        --diagram "$diag" --out "$verdict" --expect-controller \
+        --diagram "$diag" --out "$verdict" \
         >"$tmp/diagram.out" 2>&1
     rc=$?
     set -e
@@ -320,6 +439,7 @@ PY
     # Preserve hashes/markers for the fixture (owned by the test).
     sha256sum_file "$local_shot" > "$FIXTURE/screenshot.sha256" 2>/dev/null || true
     cp "$verdict" "$FIXTURE/verdict.json" 2>/dev/null || true
+    PROBE_MARKER="pass"
     echo "gpu-compositor-probe: PASS (fixture)"
     exit 0
 fi
@@ -330,13 +450,11 @@ fi
 if [[ -z "$ARTIFACTS" ]]; then
     ARTIFACTS="$SCRIPT_DIR/../.factory-state/artifacts/gpu-compositor/$(date +%Y%m%dT%H%M%S)"
 fi
-if [[ -n "$ARTIFACTS" ]]; then
-    mkdir -p "$ARTIFACTS"
-    : > "$ARTIFACTS/probe.log"
-fi
+mkdir -p "$ARTIFACTS"
+: > "$ARTIFACTS/probe.log"
 log() { # msg
     echo "$PROBE_TAG: $1"
-    [[ -z "$ARTIFACTS" ]] || echo "$PROBE_TAG: $1" >> "$ARTIFACTS/probe.log"
+    echo "$PROBE_TAG: $1" >> "$ARTIFACTS/probe.log"
 }
 
 # --- 1. exact-HEAD build + install under an isolated prefix -----------------
@@ -362,6 +480,7 @@ ANALYZER="$tmp/runtime/analyze-gpu-compositor.py"
 EGL_SOURCE="$tmp/runtime/egl_renderer_probe.c"
 
 prefix="$tmp/prefix"
+prefix_real=$(readlink -f "$prefix")
 if ! cmake -S "$tmp/source" -B "$tmp/build" -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX="$prefix" >"$tmp/configure.log" 2>&1; then
     cat "$tmp/configure.log" >&2
@@ -378,12 +497,16 @@ fi
 log "install: exact-HEAD build installed under $prefix"
 
 # Verify the installed binary realpath and every required asset resolve
-# inside the prefix (no source/build-tree fallback can satisfy them).
+# inside the prefix (no source/build-tree fallback can satisfy them).  The
+# binary must be a regular executable (never a symlink into the ambient
+# PATH), and every path must stay under the REAL prefix path.
 installed_bin="$prefix/bin/controller-box"
-[[ -x "$installed_bin" ]] || fail installed-launch-rejected "installed binary missing: $installed_bin"
+if [[ ! -x "$installed_bin" || -L "$installed_bin" ]]; then
+    fail installed-launch-rejected "installed binary missing or a symlink: $installed_bin"
+fi
 installed_real=$(readlink -f "$installed_bin")
 case "$installed_real" in
-    "$prefix"/*) ;;
+    "$prefix_real"/*) ;;
     *) fail binary-outside-prefix-rejected "installed binary realpath escapes the prefix: $installed_real" ;;
 esac
 installed_svg=""
@@ -395,7 +518,7 @@ for asset in \
     if [[ -f "$asset" && ! -L "$asset" ]]; then
         asset_real=$(readlink -f "$asset")
         case "$asset_real" in
-            "$prefix"/*) ;;
+            "$prefix_real"/*) ;;
             *) asset_ok=0 ;;
         esac
         if [[ -z "$installed_svg" && "$asset" == *generic-gamepad.svg ]]; then
@@ -416,11 +539,6 @@ log "installed-launch: binary=$installed_real assets=$installed_svg prefix=$pref
 rm -rf "$tmp/source" "$tmp/build"
 if [[ -e "$tmp/source" || -e "$tmp/build" ]]; then
     fail source-tree-accessible-rejected "archived source/build tree still present at launch"
-fi
-# The binary's relative data/profiles fallback must not resolve from the
-# isolated launch CWD either (no source-relative data path available).
-if [[ -e "$tmp/data/profiles/default.yaml" || -e "$tmp/data/icons/svg/generic-gamepad.svg" ]]; then
-    fail source-data-path-available "a source-relative data path is reachable from the launch CWD"
 fi
 
 # --- 2. private Weston compositor with GL/VirGL ----------------------------
@@ -448,16 +566,29 @@ export WAYLAND_DISPLAY="cbx-gpu-weston"
 export XDG_CONFIG_HOME="$tmp/config"
 mkdir -p "$XDG_CONFIG_HOME"
 
+# Explicit headless output of at least 1280x720 (never the 1024x768 default).
 cat > "$XDG_CONFIG_HOME/weston.ini" <<INI
 [core]
 shell=desktop-shell.so
 xwayland=true
 [keyboard]
+[output]
+name=headless
+mode=1280x720
 [shell]
 background-color=0xff18181c
 INI
 
+# Record every X11 display that exists BEFORE this weston starts, so the
+# Xwayland display the probe binds to can be proven to be the probe's own
+# (never a pre-existing/ambient display).
+pre_x_socks=""
+for sock in /tmp/.X11-unix/X*; do
+    [[ -S "$sock" ]] && pre_x_socks+="$sock "
+done
+
 weston --backend=headless-backend.so --renderer=gl --socket="$WAYLAND_DISPLAY" \
+    --width=1280 --height=720 \
     >"$tmp/weston.log" 2>&1 &
 weston_pid=$!
 
@@ -476,20 +607,30 @@ if [[ "$compositor_ready" != "true" ]]; then
 fi
 log "compositor: private Weston ready (socket=$WAYLAND_DISPLAY)"
 
-# Xwayland: weston spawns it from the xwayland module; wait for its display.
-x_display=""
-for _ in $(seq 1 60); do
-    for sock in /tmp/.X11-unix/X*; do
-        [[ -S "$sock" ]] || continue
-        x_display=":${sock##*/X}"
-        break
-    done
-    [[ -n "$x_display" ]] && break
-    sleep 0.25
-done
-[[ -n "$x_display" ]] || fail input-route-failed "Xwayland display did not appear"
+# Bind DISPLAY to the Xwayland display THAT THIS weston logged — never the
+# first socket in /tmp/.X11-unix.  The log must identify exactly one
+# display, the socket must exist, and it must not have pre-existed.
+x_displays=()
+while IFS= read -r d; do
+    [[ -n "$d" ]] && x_displays+=("$d")
+done < <(grep -aoE 'DISPLAY=:[0-9]+' "$tmp/weston.log" | sed 's/.*=//' | sort -u || true)
+if [[ ${#x_displays[@]} -eq 0 ]]; then
+    while IFS= read -r d; do
+        [[ -n "$d" ]] && x_displays+=("$d")
+    done < <(grep -aoE 'Xwayland on :[0-9]+' "$tmp/weston.log" | sed -E 's/.*(:[0-9]+)/\1/' | sort -u || true)
+fi
+if [[ ${#x_displays[@]} -ne 1 ]]; then
+    fail display-binding-rejected "weston log identified ${#x_displays[@]} Xwayland displays: ${x_displays[*]:-none}"
+fi
+x_display=${x_displays[0]}
+x_num=${x_display#:}
+x_sock="/tmp/.X11-unix/X$x_num"
+[[ -S "$x_sock" ]] || fail input-route-failed "Xwayland socket $x_sock missing"
+case " $pre_x_socks " in
+    *" $x_sock "*) fail display-binding-rejected "display $x_display pre-existed — not this probe's instance" ;;
+esac
 export DISPLAY="$x_display"
-log "input-route: Xwayland on $DISPLAY"
+log "input-route: bound to private Xwayland DISPLAY=$DISPLAY (socket=$x_sock)"
 
 # EGL renderer: the compositor itself must be on GL/VirGL, not a software
 # rasterizer.  The EGL helper queries GL_RENDERER through the private socket.
@@ -509,7 +650,7 @@ log "renderer: accepted GL_RENDERER=$renderer_line"
 xdotool getdisplaygeometry >/dev/null 2>&1 \
     || fail input-route-failed "xdotool cannot reach the Xwayland display"
 
-# --- 4. installed launch + navigation + capture -----------------------------
+# --- 4. installed launch + first-run skip + navigation ----------------------
 # The manager must find a profile to edit; provision one in a private data
 # home (mirrors tests/test_manager_visual.c vis_open_editor).
 export XDG_DATA_HOME="$tmp/data"
@@ -539,9 +680,44 @@ bindings:
     source: "0:5"
 PROFILE
 
+# Seed the systemd user unit under the isolated XDG_CONFIG_HOME so the
+# SPEC §9.1 first-run modal is provably skipped (cbx_manager_check_first_run
+# returns immediately when $XDG_CONFIG_HOME/systemd/user/controller-box.service
+# exists).  The unit references the INSTALLED binary — never an ambient one.
+mkdir -p "$XDG_CONFIG_HOME/systemd/user"
+unit="$XDG_CONFIG_HOME/systemd/user/controller-box.service"
+cat > "$unit" <<UNIT
+[Unit]
+Description=Controller-Box Overlay Service
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=$installed_real --overlay-service
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=graphical-session.target
+UNIT
+if [[ ! -f "$unit" || -L "$unit" || ! -s "$unit" ]] || ! grep -qF "ExecStart=$installed_real" "$unit"; then
+    fail first-run-modal-not-seeded "seeded systemd user unit missing or malformed"
+fi
+log "modal: first-run skipped (unit $unit -> $installed_real)"
+
+# The binary's relative data/profiles fallback ("data/profiles" relative to
+# the launch CWD) must not resolve — checked AFTER all XDG dirs exist so a
+# directory the app or the probe created cannot be mistaken for a fallback.
+if [[ -e "$XDG_DATA_HOME/profiles/default.yaml" || -e "$XDG_DATA_HOME/icons/svg/generic-gamepad.svg" \
+      || -e "$XDG_DATA_HOME/controller-icons.yaml" || -e "$XDG_DATA_HOME/profiles" \
+      || -e "$XDG_DATA_HOME/icons" ]]; then
+    fail source-data-path-available "a CWD-relative source fallback path is reachable at launch"
+fi
+
 # Launch the installed, unmodified manager from an isolated CWD (never the
 # repository) with PATH prefixed to the install bin dir, so a relative
 # source asset lookup or an ambient-PATH binary can never win.
+mkdir -p "$tmp/home"
 (
     cd "$tmp" || exit 1
     export PATH="$prefix/bin:$PATH"
@@ -570,10 +746,39 @@ win_h=$(printf '%s\n' "$win_geom" | sed -n 's/^HEIGHT=//p')
 [[ "$win_w" == "$WIN_W" && "$win_h" == "$WIN_H" ]] \
     || fail window-geometry-unexpected "manager window is ${win_w}x${win_h}, expected ${WIN_W}x${WIN_H}"
 
-# Navigate: Right opens the Profiles tab; the Edit button opens the editor.
+# Prove the input route reaches the manager BEFORE the Edit click: focus the
+# exact window, capture the tab bar, send Right (switches to the Profiles
+# tab, SPEC §5.1), capture again, and require a semantic pixel change in the
+# tab region.
 xdotool windowactivate --sync "$window_id" >/dev/null 2>&1 || true
+xdotool windowfocus --sync "$window_id" >/dev/null 2>&1 || true
+sleep 0.4
+before_shot=$tmp/controller-box-before-input.png
+weston-screenshooter "$before_shot" >"$tmp/screenshooter.log" 2>&1 \
+    || fail screenshot-missing "pre-input compositor capture failed"
+[[ -f "$before_shot" && -s "$before_shot" ]] || fail screenshot-missing "pre-input capture is empty"
+
 xdotool key Right
-sleep 0.5
+sleep 0.8
+after_shot=$tmp/controller-box-after-input.png
+weston-screenshooter "$after_shot" >>"$tmp/screenshooter.log" 2>&1 \
+    || fail screenshot-missing "post-input compositor capture failed"
+[[ -f "$after_shot" && -s "$after_shot" ]] || fail screenshot-missing "post-input capture is empty"
+
+tab_diff=0
+set +e
+convert "$before_shot" -crop "${WIN_W}x${TAB_BAR_H}+${win_x}+${win_y}" +repage "$tmp/tab-before.png" 2>/dev/null
+convert "$after_shot" -crop "${WIN_W}x${TAB_BAR_H}+${win_x}+${win_y}" +repage "$tmp/tab-after.png" 2>/dev/null
+tab_diff=$(compare -metric AE "$tmp/tab-before.png" "$tmp/tab-after.png" null: 2>&1 | grep -oE '[0-9]+' | head -n 1 || true)
+set -e
+[[ "$tab_diff" =~ ^[0-9]+$ ]] || tab_diff=0
+if [[ "$tab_diff" -lt "$TAB_DIFF_MIN" ]]; then
+    log "input: tab region changed ${tab_diff}px (minimum $TAB_DIFF_MIN)"
+    fail tab-change-not-observed "Right input did not visibly change the tab bar (${tab_diff}px)"
+fi
+log "input: Right changed the tab bar (${tab_diff}px differ from pre-input)"
+
+# Navigate: the Edit button opens the editor on the Profiles tab.
 edit_x=$((win_x + ${EDIT_CLICK%,*}))
 edit_y=$((win_y + ${EDIT_CLICK#*,}))
 xdotool mousemove --sync "$edit_x" "$edit_y"
@@ -582,9 +787,14 @@ sleep 1.0
 
 # Capture the compositor output (includes the Xwayland surface).
 shot=$tmp/controller-box-compositor.png
-weston-screenshooter "$shot" >"$tmp/screenshooter.log" 2>&1 \
+weston-screenshooter "$shot" >>"$tmp/screenshooter.log" 2>&1 \
     || fail screenshot-missing "weston-screenshooter failed"
 [[ -f "$shot" && -s "$shot" ]] || fail screenshot-missing "compositor screenshot is empty"
+
+# The headless output must be at least the production window size — a
+# clipped/smaller output is a hard fail (output-too-small).
+require_output_size "$shot"
+log "output: compositor output >= ${WIN_W}x${WIN_H}"
 
 # --- 5. semantic diagram analysis -------------------------------------------
 verdict=$tmp/verdict.json
@@ -592,7 +802,7 @@ marker_analyzed=""
 set +e
 python3 "$ANALYZER" diagram --screenshot "$shot" \
     --geometry "$win_x,$win_y,$win_w,$win_h" --diagram "$DIAGRAM_RECT" \
-    --out "$verdict" --expect-controller >"$tmp/diagram.out" 2>&1
+    --out "$verdict" >"$tmp/diagram.out" 2>&1
 analyzer_rc=$?
 set -e
 if [[ -f "$verdict" ]]; then
@@ -608,8 +818,24 @@ if [[ $analyzer_rc -ne 0 ]]; then
 fi
 log "diagram analysis marker=$marker_analyzed"
 
-# Screenshot/log hashes and the verdict are retained with the probe log by
-# retain_live_artifacts on the EXIT trap (every live exit path).
-log "artifact: screenshot sha256=$(sha256sum_file "$shot" | awk '{print $1}') marker=$marker_analyzed"
+# Bind the retained screenshot's relative filename + sha256 into the verdict
+# itself so later negative-control evidence can tie pixels to the file.
+shot_sha=$(sha256sum_file "$shot" | awk '{print $1}')
+python3 - "$verdict" "controller-box-compositor.png" "$shot_sha" <<'PY'
+import json, sys
+path, name, h = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(path, encoding="utf-8") as f:
+    data = json.load(f)
+data["retained_screenshot"] = {"filename": name, "sha256": h}
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+PY
+
+# Every artifact (logs, before/after input screens, screenshot, verdict) is
+# retained with its hash by retain_live_artifacts on the EXIT trap (every
+# live exit path).
+log "artifact: screenshot sha256=$shot_sha marker=$marker_analyzed retained=controller-box-compositor.png"
+PROBE_MARKER="pass"
 echo "gpu-compositor-probe: PASS"
 log "gpu-compositor-probe: PASS"

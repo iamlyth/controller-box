@@ -38,7 +38,7 @@ implementation that produced the pixels:
 Usage:
   analyze-gpu-compositor.py renderer --renderer STRING
   analyze-gpu-compositor.py diagram --screenshot FILE --geometry X,Y,W,H
-      [--diagram X,Y,W,H] [--out VERDICT.json] [--expect-controller]
+      [--diagram X,Y,W,H] [--out VERDICT.json]
 """
 
 from __future__ import annotations
@@ -462,7 +462,6 @@ def main() -> int:
     diagram.add_argument("--geometry", required=True, help="window rect X,Y,W,H in output coords")
     diagram.add_argument("--diagram", default="16,88,300,300", help="diagram rect relative to window")
     diagram.add_argument("--out", help="write verdict JSON here")
-    diagram.add_argument("--expect-controller", action="store_true", dest="expect_controller")
 
     args = parser.parse_args()
     if args.command == "renderer":

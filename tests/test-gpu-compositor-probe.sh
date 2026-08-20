@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 # Adversarial gpu-compositor candidate probe checks: the probe must fail
 # closed against software renderers, source-tree binaries, missing installed
-# assets, a broken compositor, an unusable input route, a missing screenshot,
-# and blank/dark/noise diagram regions — and it must accept exactly two kinds
-# of evidence: a real VirGL-style renderer AND a diagram region whose pixels
-# independently prove a recognizable controller silhouette.  Fixtures are
-# generated deterministically (fixed seed) and replay the exact staged facts
-# the live probe validates; a fixture that could produce a false pass is
-# itself a failure.
+# assets, an unseeded first-run modal, wrong display binding, no tab change,
+# clipped output, a broken compositor, an unusable input route, a missing
+# screenshot, a retention-hash mismatch, and blank/dark/noise diagram
+# regions — and it must accept exactly two kinds of evidence: a real
+# VirGL-style renderer AND a diagram region whose pixels independently prove
+# a recognizable controller silhouette.  The exact-HEAD smoke mirrors the
+# live probe's archive->configure/build/install->source-removal pipeline (no
+# Weston needed) and compiles egl_renderer_probe.c under the nix shell.
+# Fixtures are generated deterministically (fixed seed) and replay the exact
+# staged facts the live probe validates; a fixture that could produce a false
+# pass is itself a failure.
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
@@ -80,6 +84,9 @@ compose_shot() { # out.png diagram.png|"blank"|"dark"|"noise"
             convert "$out" "$diagram" -geometry +116+168 -composite "$out"
             ;;
     esac
+    # Record the retained screenshot's exact sha256 as a fixture fact so the
+    # probe can prove retention hash binding (screenshot-hash-mismatch).
+    sha256sum "$out" | awk '{print $1}' > "$(dirname "$out")/screenshot-hash"
 }
 
 # Render the real production asset exactly as a compositor would rasterize it.
@@ -145,6 +152,80 @@ must_fail "empty renderer is unverified" "renderer-unverified" \
     python3 "$ANALYZER" renderer --renderer ""
 
 # ---------------------------------------------------------------------------
+# Exact-HEAD archive -> configure/build/install smoke (no Weston needed).
+# Mirrors the live probe's steps 1-2: compile egl_renderer_probe.c exactly
+# as the probe does, archive the exact HEAD into an isolated source tree,
+# configure/build/install into an isolated prefix, verify the installed
+# binary + assets resolve inside the prefix, then delete source+build and
+# assert the compiled-in SOURCE_PROFILE_DIR / SOURCE_ICON_DIR fallback paths
+# (which point into the archived source) are unreachable.
+# ---------------------------------------------------------------------------
+smoke=$tmp/smoke
+mkdir -p "$smoke"
+cat > "$smoke/smoke.sh" <<SMOKE
+set -euo pipefail
+EGL_SRC='$PROJECT_ROOT/scripts/gpurunner-probes/egl_renderer_probe.c'
+SM='$smoke'
+# 1. Compile the EGL renderer helper under the nix shell, with the same
+#    pkg-config flags the live probe uses.
+if pkg-config --exists egl glesv2 wayland-client 2>/dev/null; then
+    cc -O2 -o "\$SM/egl_renderer_probe" "\$EGL_SRC" \
+        \$(pkg-config --cflags --libs egl glesv2 wayland-client)
+else
+    cc -O2 -o "\$SM/egl_renderer_probe" "\$EGL_SRC" -lEGL -lGLESv2 -lwayland-client
+fi
+test -x "\$SM/egl_renderer_probe"
+echo "smoke: egl_renderer_probe compiled"
+# 2. Archive the exact HEAD.
+head_commit=\$(git -C '$PROJECT_ROOT' rev-parse HEAD)
+mkdir -p "\$SM/source"
+git -C '$PROJECT_ROOT' archive "\$head_commit" | tar -x -C "\$SM/source"
+# 3. Configure/build/install into an isolated prefix OUTSIDE the source.
+cmake -S "\$SM/source" -B "\$SM/build" -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX="\$SM/prefix" >"\$SM/configure.log" 2>&1
+cmake --build "\$SM/build" --parallel >>"\$SM/build.log" 2>&1
+cmake --install "\$SM/build" --prefix "\$SM/prefix" >>"\$SM/install.log" 2>&1
+# 4. Installed binary + assets resolve inside the prefix (regular files).
+test -x "\$SM/prefix/bin/controller-box"
+test ! -L "\$SM/prefix/bin/controller-box"
+case "\$(readlink -f "\$SM/prefix/bin/controller-box")" in
+    "\$(readlink -f "\$SM/prefix")"/*) ;;
+    *) echo "smoke: installed binary escapes the prefix" >&2; exit 1;;
+esac
+for asset in \
+    "\$SM/prefix/share/controller-box/profiles/default.yaml" \
+    "\$SM/prefix/share/controller-box/icons/svg/generic-gamepad.svg" \
+    "\$SM/prefix/share/controller-box/controller-icons.yaml"; do
+    test -f "\$asset" && test ! -L "\$asset" || { echo "smoke: missing asset \$asset" >&2; exit 1; }
+    case "\$(readlink -f "\$asset")" in
+        "\$(readlink -f "\$SM/prefix")"/*) ;;
+        *) echo "smoke: asset outside prefix: \$asset" >&2; exit 1;;
+    esac
+done
+# 5. Capture the compiled-in SOURCE fallback paths (from generated config.h).
+src_profile=\$(sed -n 's/.*#define SOURCE_PROFILE_DIR "\(.*\)".*/\1/p' "\$SM/build/config.h")
+src_icon=\$(sed -n 's/.*#define SOURCE_ICON_DIR "\(.*\)".*/\1/p' "\$SM/build/config.h")
+test -n "\$src_profile" && test -n "\$src_icon"
+case "\$src_profile" in "\$SM/source"/*) ;;
+    *) echo "smoke: SOURCE_PROFILE_DIR \$src_profile not inside archived source" >&2; exit 1;;
+esac
+case "\$src_icon" in "\$SM/source"/*) ;;
+    *) echo "smoke: SOURCE_ICON_DIR \$src_icon not inside archived source" >&2; exit 1;;
+esac
+# 6. Delete the archived source+build trees, then assert the compiled-in
+#    SOURCE fallback paths are unreachable and the installed binary still runs.
+rm -rf "\$SM/source" "\$SM/build"
+test ! -e "\$SM/source"
+test ! -e "\$SM/build"
+test ! -e "\$src_profile"
+test ! -e "\$src_icon"
+"\$SM/prefix/bin/controller-box" --version | grep -q '^controller-box '
+test -f "\$SM/prefix/share/controller-box/profiles/default.yaml"
+echo "smoke: exact-HEAD install smoke passed"
+SMOKE
+nix-shell --run "bash '$smoke/smoke.sh'"
+
+# ---------------------------------------------------------------------------
 # Full-pass fixtures (two independent renderings of a recognizable
 # controller silhouette).
 # ---------------------------------------------------------------------------
@@ -171,6 +252,13 @@ make_base_fixture() { # dir
     printf 'yes\n' > "$dir/path-prefixed"
     printf 'yes\n' > "$dir/build-ok"
     printf 'yes\n' > "$dir/install-ok"
+    # First-run modal precondition: the isolated launch env had the systemd
+    # user unit seeded under XDG_CONFIG_HOME (SPEC §9.1 modal provably
+    # skipped).  Display binding: launch was on THIS probe's Xwayland.
+    # Tab change: Right input visibly changed the tab bar before Edit.
+    printf 'yes\n' > "$dir/modal-seeded"
+    printf 'yes\n' > "$dir/display-bound"
+    printf 'yes\n' > "$dir/tab-change-observed"
 }
 
 # Pass fixture 1: the production SVG rendered through ImageMagick.
@@ -300,6 +388,49 @@ printf 'no\n' > "$tmp/path-not-prefixed/path-prefixed"
 compose_shot "$tmp/path-not-prefixed/screenshot.png" "$tmp/diagram-svg.png"
 must_fail "PATH not prefixed rejected" "path-not-prefixed-rejected" \
     run_probe "$tmp/path-not-prefixed"
+
+# First-run modal precondition: the systemd user unit was NOT seeded under
+# XDG_CONFIG_HOME, so the SPEC §9.1 modal could block the navigation.
+make_base_fixture "$tmp/modal-unseeded"
+printf 'no\n' > "$tmp/modal-unseeded/modal-seeded"
+compose_shot "$tmp/modal-unseeded/screenshot.png" "$tmp/diagram-svg.png"
+must_fail "unseeded first-run modal rejected" "first-run-modal-not-seeded" \
+    run_probe "$tmp/modal-unseeded"
+
+# Screenshot retention mismatch: the recorded sha256 does not match the
+# retained screenshot pixels.
+make_base_fixture "$tmp/hash-mismatch"
+compose_shot "$tmp/hash-mismatch/screenshot.png" "$tmp/diagram-svg.png"
+printf '%064d\n' 0 > "$tmp/hash-mismatch/screenshot-hash"
+must_fail "screenshot retention hash mismatch rejected" "screenshot-hash-mismatch" \
+    run_probe "$tmp/hash-mismatch"
+
+# Wrong display binding: the launch was NOT bound to this probe's private
+# Xwayland instance (an ambient/pre-existing display would be a false pass).
+make_base_fixture "$tmp/wrong-display"
+printf 'no\n' > "$tmp/wrong-display/display-bound"
+compose_shot "$tmp/wrong-display/screenshot.png" "$tmp/diagram-svg.png"
+must_fail "wrong display binding rejected" "display-binding-rejected" \
+    run_probe "$tmp/wrong-display"
+
+# No tab change: the Right input did not visibly change the tab bar, so the
+# Edit click could have landed on the wrong tab.
+make_base_fixture "$tmp/no-tab-change"
+printf 'no\n' > "$tmp/no-tab-change/tab-change-observed"
+compose_shot "$tmp/no-tab-change/screenshot.png" "$tmp/diagram-svg.png"
+must_fail "no tab change rejected" "tab-change-not-observed" \
+    run_probe "$tmp/no-tab-change"
+
+# Clipped output: the compositor output is smaller than the production
+# 1280x720 window, so the capture cannot be trusted.
+make_base_fixture "$tmp/clipped-output"
+convert -size 800x600 xc:"#18181c" "$tmp/clipped-output/screenshot.png"
+convert "$tmp/clipped-output/screenshot.png" -fill "#12121c" \
+    -draw "rectangle 60,40 739,599" "$tmp/clipped-output/screenshot.png"
+sha256sum "$tmp/clipped-output/screenshot.png" | awk '{print $1}' \
+    > "$tmp/clipped-output/screenshot-hash"
+must_fail "clipped output rejected" "output-too-small" \
+    run_probe "$tmp/clipped-output"
 
 make_base_fixture "$tmp/weston-down"
 printf 'no\n' > "$tmp/weston-down/weston-ok"

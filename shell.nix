@@ -20,6 +20,8 @@ pkgs.mkShell {
     systemd      # provides sd-bus (libsystemd)
     libyaml
     cmocka
+    # gpu-compositor probe helper (egl_renderer_probe.c) compile-time deps:
+    wayland          # wayland-client.h + wayland-client.pc (EGL/GLES2 come from libglvnd/mesa)
     # Installed smoke test dependencies (Task 9, §11.1.5):
     xorg-server     # Xvfb — headless X11 server
     xdotool          # keyboard/mouse input injection
