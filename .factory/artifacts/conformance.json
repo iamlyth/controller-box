@@ -399,21 +399,18 @@
       "spec_sections": [
         "\u00a74.10"
       ],
-      "classification": "partial",
-      "evidence_tier": "simulated",
+      "classification": "verified",
+      "evidence_tier": "installed",
       "required_tier": "installed",
       "required_capabilities": [],
-      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "evidence_commit": "ae4ef52880741d44c0e959dae67ceb8a55f7d0aa",
       "receipts": [],
       "artifacts": [
-        "tests/test_overlay_visual.c",
-        "tests/test_golden.c",
-        "tests/golden/overlay_player_mode.png"
+        "tests/test_installed_diagram.sh",
+        "src/manager/profile_diagram.c"
       ],
-      "fact_refs": [
-        "FACT-001"
-      ],
-      "reason": "Visual/golden tests pass without proving the production diagram; human-observed blank diagram in production (BUG-0014)."
+      "fact_refs": [],
+      "reason": "Installed-window diagram semantic acceptance (BUG-0014): tests/test_installed_diagram.sh drives the real installed controller-box --manager under Xvfb through production pointer dispatch to the profile editor and asserts recognizable diagram content (controller outline, slot highlight, title/model label, binding list) via the production path; ABGR8888 byte-order fix in src/manager/profile_diagram.c renders the controller outline. Proven on the installed production window."
     },
     {
       "id": "MGR-01",
@@ -543,22 +540,19 @@
       "spec_sections": [
         "\u00a75.6"
       ],
-      "classification": "partial",
-      "evidence_tier": "simulated",
+      "classification": "verified",
+      "evidence_tier": "installed",
       "required_tier": "installed",
       "required_capabilities": [],
-      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "evidence_commit": "ae4ef52880741d44c0e959dae67ceb8a55f7d0aa",
       "receipts": [],
       "artifacts": [
+        "tests/test_installed_diagram.sh",
         "src/manager/profile_diagram.c",
-        "tests/test_manager_visual.c",
-        "tests/test_golden.c",
-        "tests/golden/manager_controllers_connected.png"
+        "tests/test_manager_visual.c"
       ],
-      "fact_refs": [
-        "FACT-001"
-      ],
-      "reason": "Manager visual tests pass without proving the production diagram; production manager shows no controller diagram (BUG-0014)."
+      "fact_refs": [],
+      "reason": "Installed production-window diagram semantic acceptance (BUG-0014): tests/test_installed_diagram.sh drives the real installed binary through a real X11 window to the profile editor and asserts recognizable diagram content via the production path; the production manager now renders the controller diagram (outline, slot highlight, model label)."
     },
     {
       "id": "MGR-08",
@@ -579,12 +573,11 @@
         "tests/test_manager_interaction_ctrl.c"
       ],
       "fact_refs": [
-        "FACT-001",
         "FACT-002",
         "FACT-003",
         "FACT-004"
       ],
-      "reason": "Inventory claims contradicted by 0/4 virtual controllers active and blank diagram (BUG-0014, BUG-0015); real four-target routing acceptance required."
+      "reason": "Inventory claims contradicted by 0/4 virtual controllers active (BUG-0015); real four-target InputPlumber routing acceptance required."
     },
     {
       "id": "ID-01",
@@ -1324,13 +1317,12 @@
       "receipts": [],
       "artifacts": [],
       "fact_refs": [
-        "FACT-001",
         "FACT-002",
         "FACT-004",
         "FACT-005",
         "FACT-006"
       ],
-      "reason": "Not all matrix rows verified: 21 of 76 rows partial (including MGR-03, PKG-01, VRF-05, DOD-06 held open by FACT-007 for runner signer provisioning) pending BUG-0014/BUG-0015 and hardware/capability facts."
+      "reason": "Not all matrix rows verified: 19 of 76 rows partial (ARCH-04, SYS-01, SYS-02, SYS-06, OVL-09, MGR-02, MGR-03, MGR-08, PKG-01, DBUS-02, DBUS-05, PERF-01, VRF-05, VRF-06, VRF-07, DOD-01, DOD-05, DOD-06, DOD-09) pending BUG-0015, signer-provisioning (FACT-007), and hardware/capability facts"
     },
     {
       "id": "DOD-02",
@@ -1486,13 +1478,12 @@
       "receipts": [],
       "artifacts": [],
       "fact_refs": [
-        "FACT-001",
         "FACT-002",
         "FACT-004",
         "FACT-005",
         "FACT-006"
       ],
-      "reason": "Plan status is active; two production acceptance failures open (BUG-0014, BUG-0015); final gate cannot accept completion."
+      "reason": "Plan status is active; production acceptance failure BUG-0015 open; final gate cannot accept completion."
     }
   ]
 }

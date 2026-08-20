@@ -4,16 +4,14 @@ Generated for a fresh implementation context only; this file is not
 release evidence and contains no satisfied/done claims.
 
 ## Active task
-- Task 5 (pending): Perceptible installed diagram acceptance
+- Task 6 (pending): Real four-target InputPlumber routing acceptance
 
 ## Open tasks
 - Task 4 (blocked): Final documentation and specification audit
-- Task 5 (pending): Perceptible installed diagram acceptance
 - Task 6 (pending): Real four-target InputPlumber routing acceptance
 - Task 7 (pending): Environment-independent profile editor acceptance
 
 ## Unresolved facts
-- FACT-001 (open): BUG-0014: perceptible installed controller diagram acceptance
 - FACT-002 (open): BUG-0015: real InputPlumber system-bus acceptance with four targets
 - FACT-003 (open): Missing InputPlumber system-bus capability (inputplumber-system-dbus)
 - FACT-004 (open): Missing target consumer for real four-target routing and Pi 4 runtime
@@ -25,16 +23,14 @@ release evidence and contains no satisfied/done claims.
 - ARCH-04 (partial): tasks=Task 6; facts=FACT-002,FACT-003
 - DBUS-02 (partial): tasks=Task 6; facts=FACT-002,FACT-003
 - DBUS-05 (partial): tasks=Task 6; facts=FACT-002,FACT-003
-- DOD-01 (partial): tasks=Task 4; facts=FACT-001,FACT-002,FACT-004,FACT-005,FACT-006
+- DOD-01 (partial): tasks=Task 4; facts=FACT-002,FACT-004,FACT-005,FACT-006
 - DOD-05 (partial): tasks=Task 4; facts=FACT-005
 - DOD-06 (partial): tasks=Task 4; facts=FACT-007
-- DOD-09 (partial): tasks=Task 4; facts=FACT-001,FACT-002,FACT-004,FACT-005,FACT-006
+- DOD-09 (partial): tasks=Task 4; facts=FACT-002,FACT-004,FACT-005,FACT-006
 - MGR-02 (partial): tasks=Task 6; facts=FACT-002,FACT-003
 - MGR-03 (partial): tasks=Task 7; facts=FACT-007
-- MGR-07 (partial): tasks=Task 5; facts=FACT-001
-- MGR-08 (partial): tasks=Task 6; facts=FACT-001,FACT-002,FACT-003,FACT-004
+- MGR-08 (partial): tasks=Task 6; facts=FACT-002,FACT-003,FACT-004
 - OVL-09 (partial): tasks=Task 4; facts=FACT-004,FACT-006
-- OVL-10 (partial): tasks=Task 5; facts=FACT-001
 - PERF-01 (partial): tasks=Task 4; facts=FACT-004,FACT-006
 - PKG-01 (partial): tasks=Task 4; facts=FACT-007
 - SYS-01 (partial): tasks=Task 4; facts=FACT-004

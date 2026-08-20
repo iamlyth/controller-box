@@ -8,20 +8,22 @@ status: active
 
 ## Blocking findings (2026-08-19, lifecycle operator)
 
-Two human-observed production acceptance failures invalidate the previous
-`status: complete` claim. The plan is returned to `active` until Ralph owns
+Two human-observed production acceptance failures invalidated the previous
+`status: complete` claim. The plan was returned to `active` until Ralph owns
 a product diagnosis/fix for each and re-verifies with real acceptance
-evidence. No completion may proceed on the old evidence.
+evidence.
 
 1. **BUG-0014 — Manager shows no controller diagram in production launch.**
-   Launching `./build-check/controller-box --manager` (real binary, real
-   window server) shows a blank controller diagram area. Existing
-   `test_manager_visual.c`, `test_golden.c`, and `test_overlay_visual.c`
-   pass without catching this, so goldens/pixel tests do not prove the
-   production diagram rendering path. Required: a Ralph-owned renderer/
-   asset-path diagnosis and fix plus a production-window/installed-path
-   semantic test proving recognizable diagram content (not a non-NULL
-   texture, a fallback, or a broad pixel-count change).
+   RESOLVED (Task 5). The blank diagram was a byte-order bug: nanosvg
+   rasterises to RGBA byte order (byte 0 = red), but the texture was created
+   with `SDL_PIXELFORMAT_RGBA8888`, whose little-endian memory byte order is
+   A,B,G,R — so the opaque black controller outline was read as fully
+   transparent. `src/manager/profile_diagram.c` now uses
+   `SDL_PIXELFORMAT_ABGR8888` (memory byte order R,G,B,A, matching nanosvg),
+   and `tests/test_installed_diagram.sh` drives the real installed binary
+   through a real X11 window to the profile editor, asserting recognizable
+   diagram content (outline, slot highlight, title/model label, binding list)
+   via the production path. OVL-10 and MGR-07 reclassified `verified`.
 2. **BUG-0015 — Manager reports `Topology incomplete: 0 of 4 virtual
    controllers active`; no virtual controller works.** Real
    InputPlumber system-bus acceptance is required: four expected
@@ -37,6 +39,10 @@ evidence. No completion may proceed on the old evidence.
 Affected rows reclassified `verified` -> `partial` in the conformance matrix below:
 ARCH-04, SYS-06, DBUS-02, DBUS-05, OVL-10, MGR-02, MGR-07, MGR-08,
 DOD-01, DOD-09. Task 4 (final audit) is returned to `blocked`.
+With BUG-0014 resolved (Task 5), OVL-10 and MGR-07 are reclassified back to
+`verified` with installed-window evidence; FACT-001 is resolved. Remaining
+`partial` rows are bound to BUG-0015 and hardware/capability facts (FACT-002
+through FACT-007).
 
 ### Machine-readable migration (BUG-0016 hardening stage B)
 
@@ -47,7 +53,7 @@ Every blocked/partial row whose required evidence is unavailable references an
 open entry in the append-only `.factory/artifacts/blocked-facts.json` ledger
 (`ralph-blocked-facts/v1`):
 
-- FACT-001 — BUG-0014 perceptible installed diagram acceptance;
+- FACT-001 — BUG-0014 perceptible installed diagram acceptance (RESOLVED in Task 5);
 - FACT-002 — BUG-0015 real InputPlumber system-bus acceptance;
 - FACT-003 — missing `inputplumber-system-dbus` capability;
 - FACT-004 — missing `target-consumer` capability (real four-target routing,
@@ -131,15 +137,15 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 | OVL-07 | §4.7 | verified | `dynamic_columns.c` scales with target count; `test_dynamic_columns.c` | |
 | OVL-08 | §4.8 | verified | `grid_render.c` model name + slot, no nicknames | |
 | OVL-09 | §4.9 | partial | Pre-built surface architecture (surface_build.c) and 50 ms poll cycle (ip_intercept_poll.c) verified; x86_64 latency measured by test_overlay_latency.c over 200+ iterations; Pi 4 latency bound requires physical target hardware and real target consumer (FACT-004, FACT-006) | Task 4 |
-| OVL-10 | §4.10 | partial | `test_overlay_visual.c` and `test_golden.c` pass without proving the production diagram; human-observed blank diagram (BUG-0014, FACT-001) | Task 5 |
+| OVL-10 | §4.10 | verified | `tests/test_installed_diagram.sh` drives the installed binary through a real X11 window to the profile editor and asserts recognizable diagram content (outline/slot highlight/title/binding list) via the production path; ABGR8888 byte-order fix in `profile_diagram.c`; BUG-0014 fixed (28154 outline px) | |
 | MGR-01 | §5.1 | verified | `manager.c` tab bar, 3 tabs, controller + pointer; `test_manager_tabs.c`, `test_manager_native.c` | |
 | MGR-02 | §5.2 | partial | `controllers_tab.c` add/remove/type-change, topology reconcile; production launch reports 0/4 virtual controllers active (BUG-0015, FACT-002/FACT-003) | Task 6 |
 | MGR-03 | §5.3 | partial | `profiles_tab.c` browse/create/edit/delete, built-in Default; `test_profiles_tab.c`, `test_installed_functional.c`; BUG-0017 exposes environment-dependent editor loading/focus behavior | Task 7 |
 | MGR-04 | §5.4 | verified | `profile_editor_list.c`, `profile_editor_seq.c` both modes; `test_editor_list_mode.c`, `test_editor_seq_mode.c` | |
 | MGR-05 | §5.4 | verified | `profile_validate.c` NES minimum (A/B/D-pad); `test_profile_validate.c`; `profile_save.c` enforces before write | |
 | MGR-06 | §5.5 | verified | `settings_tab.c` all settings; `test_settings_tab.c`, `test_manager_native.c` M21–M26 | |
-| MGR-07 | §5.6 | partial | `test_manager_visual.c`, `test_golden.c` pass without proving the production diagram; production manager shows no controller diagram (BUG-0014, FACT-001) | Task 5 |
-| MGR-08 | §5.7 | partial | 52/60 inventory claimed verified with controller-transport evidence via ctrl_press and keyboard relabels; premise contradicted by 0/4 virtual controllers active and blank diagram (BUG-0014, BUG-0015, FACT-001/FACT-002/FACT-004) | Task 6 |
+| MGR-07 | §5.6 | verified | `tests/test_installed_diagram.sh` drives the real installed binary through a real X11 window to the profile editor and asserts recognizable diagram content (outline, slot highlight, model label, binding list) via the production path; BUG-0014 fixed | |
+| MGR-08 | §5.7 | partial | 52/60 inventory claimed verified with controller-transport evidence via ctrl_press and keyboard relabels; premise contradicted by 0/4 virtual controllers active (BUG-0015, FACT-002/FACT-003/FACT-004) | Task 6 |
 | ID-01 | §6.2 | verified | `identity.c` 4-layer auto-assignment; `test_identity.c` | |
 | ID-02 | §6.3 | verified | `identity.c` BT:/USB:/USB:phys:/ORDER: prefixes; `config_assignments.c` validation | |
 | ID-03 | §6.3 | verified | `identity_downgrade.c` fallback to ORDER:n; `test_identity_downgrade.c` | |
@@ -178,7 +184,7 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 | VRF-05 | §11.1.5 | partial | `test_installed_functional.c` (4 tests), `test_installed_smoke.sh`, `test_installed_binary.sh`; runner receipt 26df6c0 all pass | Task 4 |
 | VRF-06 | §11.1.6 | partial | Software-renderer smoke test_backend_smoke_sw.c passes (non-blank framebuffer, region content assertions); GPU backend test_backend_smoke.c exits 77 in headless, gpu-compositor undeclared (FACT-005) | Task 4 |
 | VRF-07 | §11.1.7 | partial | Human release acceptance checklist documented with procedure, criteria, and evidence storage; requires human reviewer on target hardware per §11.1.7 (FACT-004, FACT-006) | Task 4 |
-| DOD-01 | §11.2.1 | partial | Not all matrix rows verified: 21 of 76 rows partial (ARCH-04, SYS-01, SYS-02, SYS-06, OVL-09, OVL-10, MGR-02, MGR-03, MGR-07, MGR-08, PKG-01, DBUS-02, DBUS-05, PERF-01, VRF-05, VRF-06, VRF-07, DOD-01, DOD-05, DOD-06, DOD-09) pending BUG-0014/BUG-0015, signer-provisioning (FACT-007), and hardware/capability facts | Task 4 |
+| DOD-01 | §11.2.1 | partial | Not all matrix rows verified: 19 of 76 rows partial (ARCH-04, SYS-01, SYS-02, SYS-06, OVL-09, MGR-02, MGR-03, MGR-08, PKG-01, DBUS-02, DBUS-05, PERF-01, VRF-05, VRF-06, VRF-07, DOD-01, DOD-05, DOD-06, DOD-09) pending BUG-0015, signer-provisioning (FACT-007), and hardware/capability facts | Task 4 |
 | DOD-02 | §11.2.2 | verified | Tests use production dispatch; native DBus preserves signatures | |
 | DOD-03 | §11.2.3 | verified | M39 added to inventory (Task 1); M28–M38 controller-transport evidence via ctrl_press in test_manager_native_prof.c (Task 2); keyboard tests in test_manager_interaction_prof.c relabeled to _keyboard per §5.7 | Task 1, Task 2 |
 | DOD-04 | §11.2.4 | verified | `test_overlay_visual.c`, `test_manager_visual.c` cover degraded/error/recovery states | |
@@ -186,7 +192,7 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 | DOD-06 | §11.2.6 | partial | Runner receipt evidence (dev-runner-vm manifest 26df6c0) is no longer acceptable: the manifest is unsigned (no signer provisioned, FACT-007) and not a Git blob at the declared evidence commit; installed verification evidence stays unevidenced until a signed commit-bound receipt exists | Task 4 |
 | DOD-07 | §11.2.7 | verified | Campaign audit round 1 completed with 5 findings; this plan addresses all | |
 | DOD-08 | §11.2.8 | verified | README.md/OPERATIONS.md capability claims and inventory counts corrected (Task 1); capability-accounted items documented in OPERATIONS.md (Task 3) | Task 1, Task 3 |
-| DOD-09 | §11.2.9 | partial | Plan status is active; two production acceptance failures open (BUG-0014, BUG-0015); final gate cannot accept completion | Task 4 |
+| DOD-09 | §11.2.9 | partial | Plan status is active; production acceptance failure BUG-0015 open; final gate cannot accept completion | Task 4 |
 
 ## Interaction acceptance inventory
 
@@ -344,7 +350,7 @@ Keyboard tests in `test_manager_interaction_prof.c` relabeled from
 - Documentation impact: Final reconciliation of README.md, OPERATIONS.md, implementation-plan conformance matrix, conformance sidecar, and blocked-facts ledger
 
 ## Task 5: Perceptible installed diagram acceptance
-- Status: in_progress
+- Status: complete
 - Dependencies: Task 1, Task 2, Task 3
 - Scope: renderer/asset-path diagnosis and fix for the production diagram (BUG-0014), a production-window/installed-path semantic test proving recognizable diagram content, `.factory/artifacts/blocked-facts.json` (resolve FACT-001 with receipt/artifact or human decision), `.factory/artifacts/conformance.json`
 - Acceptance criteria:

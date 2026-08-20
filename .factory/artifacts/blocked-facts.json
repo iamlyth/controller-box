@@ -4,17 +4,20 @@
     {
       "id": "FACT-001",
       "title": "BUG-0014: perceptible installed controller diagram acceptance",
-      "status": "open",
+      "status": "resolved",
       "capabilities": [],
-      "requirements": [
-        "OVL-10",
-        "MGR-07",
-        "MGR-08",
-        "DOD-01",
-        "DOD-09"
-      ],
+      "requirements": [],
       "blocking_evidence": "Production launch of the real binary in a real window server shows a blank controller diagram area while test_manager_visual, test_overlay_visual, and test_golden pass. Goldens/pixel tests do not prove the production diagram rendering path. Required: a perceptible installed-diagram acceptance test on the installed X11 production path (recognizable diagram content, not a non-NULL texture, fallback, or broad pixel-count change).",
-      "resolution": null
+      "resolution": {
+        "type": "artifact",
+        "refs": [
+          "tests/test_installed_diagram.sh",
+          "src/manager/profile_diagram.c"
+        ],
+        "evidence_commit": "ae4ef52880741d44c0e959dae67ceb8a55f7d0aa",
+        "resolved_at": "2026-08-20",
+        "reason": "BUG-0014 fixed and proven on the installed production path: tests/test_installed_diagram.sh drives the real installed controller-box --manager under Xvfb and asserts recognizable diagram content (controller outline black silhouette, slot highlight, title/model label, binding list); ABGR8888 byte-order fix in src/manager/profile_diagram.c renders the previously fully-transparent controller outline. OVL-10 and MGR-07 reclassified verified with this installed-window evidence."
+      }
     },
     {
       "id": "FACT-002",

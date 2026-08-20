@@ -213,6 +213,22 @@ Schema: `ralph-bug-ledger/v1`
     "resolution": "verify-boilerplate.sh now unsets the ambient lifecycle variables (FACTORY_FINAL_GATE_ATTEST, attempt/cycle bindings, campaign bindings, recovery ceilings) before running the isolated scenario suite, so the completion gate's attestation flag can no longer leak into nested final-gate invocations; test-maintenance-planning-completion.sh additionally scopes its own attestation state. Regression tests/test-boilerplate-env-isolation.sh recreates the exact completion-gate leak and requires the maintenance-planning chain to pass. Committed as 8e0beff and ported to the generic parity boilerplate as a8c74b0 in /tmp/unattended-ralph-fix.",
     "verification": "Serial validation on develop (HEAD 8e0beff): (1) tests/test-boilerplate-env-isolation.sh passes; (2) FACTORY_FINAL_GATE_ATTEST=1 ./tests/test-maintenance-planning-completion.sh exits 0 (failed rc=1 before the fix); (3) ./scripts/verify-boilerplate.sh passes under ambient FACTORY_FINAL_GATE_ATTEST=1 plus FACTORY_RALPH_CYCLE_ID; (4) full project gate nix-shell --run ./scripts/verify-project.sh passes 98/98 CTest targets, installed functional acceptance with zero skips, packaging, and installed smoke; (5) a clean completed cycle passes scripts/ralph-completion-gate.sh implementation with final-gate attestation and writes no completion-rejected.json; (6) parity port passes the same targeted regressions.",
     "closed": "2026-08-19"
+  },
+  {
+    "id": "BUG-0014",
+    "title": "Manager shows no controller diagram in production launch",
+    "status": "closed",
+    "severity": "critical",
+    "reported": "2026-08-19",
+    "external": [],
+    "contract_change": false,
+    "reproduction": "Launch the installed/real production binary with a real window server: ./build-check/controller-box --manager under Xvfb. The manager window opens, but the controller diagram area is blank — no controller schematic/grid is drawn. This was observed by a human operator on the real launch path.",
+    "expected": "The manager production window renders a recognizable controller diagram (controller figure, binding lights, select-screen grid) through the real SDL rendering path, and a production-window/installed-path semantic test proves recognizable diagram content — not merely a non-NULL texture, a fallback path, or a broad pixel-count change.",
+    "actual": "Launching ./build-check/controller-box --manager shows no controller diagram. Existing coverage (test_manager_visual.c, test_golden.c, test_overlay_visual.c) passed without catching this, so those goldens/visual tests do not prove the production diagram rendering path.",
+    "acceptance": "A Ralph-owned product diagnosis and fix: the real manager window renders the controller diagram through the production path; a new semantic test drives a real production window (installed path under Xvfb or equivalent) and asserts recognizable diagram content (expected regions/figures), not just non-NULL textures or broad pixel changes; the full project gate passes; the diagram row in the conformance matrix is re-verified only with this evidence.",
+    "resolution": "Renderer/asset-path diagnosis: nanosvg rasterises to RGBA byte order (byte 0 = red) but the texture was created with SDL_PIXELFORMAT_RGBA8888 whose little-endian memory byte order is A,B,G,R, reading the opaque black controller outline as fully transparent. Fixed in src/manager/profile_diagram.c by using SDL_PIXELFORMAT_ABGR8888 (memory R,G,B,A matching nanosvg).",
+    "verification": "tests/test_installed_diagram.sh drives the real installed controller-box --manager under Xvfb through production pointer dispatch to the profile editor and asserts recognizable diagram content via the production path: 28154 controller-outline black pixels, slot highlight, title/model label, binding list. Verify: nix-shell --run './tests/test_installed_diagram.sh build-check' passes; test_installed_diagram registered in tests/CMakeLists.txt and verify-project.sh.",
+    "closed": "2026-08-20"
   }
 ]
 ```

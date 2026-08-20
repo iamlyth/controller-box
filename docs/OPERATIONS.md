@@ -1003,6 +1003,50 @@ SKIP: required tool 'Xvfb' is not installed
 ```
 (ctest reports the test as Skipped, not Failed.)
 
+## Installed production-window controller diagram test
+
+The `test_installed_diagram` ctest (SPEC §11.1, BUG-0014 / Task 5) drives the
+**real installed** `controller-box --manager` binary under a real X11 window
+server (Xvfb) and asserts that the profile editor's controller diagram region
+contains **recognizable diagram content** through the production path — not a
+non-NULL texture, a fallback rectangle, or a broad pixel-count change.
+
+### What it does
+
+1. Builds and installs the binary to a dedicated custom-prefix staging
+   directory so `ICON_DIR` resolves to the installed share tree at runtime
+   (no source-tree/env-var injection; the installed layout must load the
+   diagram asset itself).
+2. Verifies the installed layout delivers `generic-gamepad.svg` to
+   `share/controller-box/icons/svg/`.
+3. Starts Xvfb on display `:93` (1280×720×24) with
+   `SDL_VIDEODRIVER=x11` / `SDL_RENDER_DRIVER=software`, and a temporary
+   HOME carrying DejaVuSans.ttf.
+4. Launches the installed manager, uses `xdotool` pointer dispatch to click
+   the Profiles tab, select a profile row, and open the profile editor.
+5. Captures the editor window with ImageMagick `import` and asserts, in the
+   diagram region, recognizable content: a black controller-outline silhouette
+   (≥5000 px), a focus-colored slot highlight, the title/model label, and the
+   binding list.
+6. If Xvfb, xdotool, or ImageMagick is unavailable it exits 77 (Skipped).
+
+### Why it matters
+
+Earlier `test_manager_visual`, `test_overlay_visual`, and `test_golden` passed
+while the production manager rendered a blank controller diagram (BUG-0014).
+The root cause was a byte-order mismatch: nanosvg rasterises to RGBA byte order
+(byte 0 = red) but the texture used `SDL_PIXELFORMAT_RGBA8888`, whose
+little-endian memory byte order is A,B,G,R — so the opaque black outline was
+read as fully transparent. `src/manager/profile_diagram.c` now uses
+`SDL_PIXELFORMAT_ABGR8888` (memory R,G,B,A, matching nanosvg). This test drives
+the real installed production window so a blank diagram can no longer pass.
+
+### Running
+
+```sh
+nix-shell --run './tests/test_installed_diagram.sh build-check'
+```
+
 ## Visual framebuffer tests
 
 The `test_overlay_visual` and `test_manager_visual` ctests (SPEC §11.1.1–2)
@@ -1164,7 +1208,7 @@ test or documented process:
 | Controllers: connected + degraded modes | `test_manager_visual::test_controllers_tab_degraded` + `test_controllers_tab_connected` |
 | Profiles: Default profile + create/edit/delete | `test_manager_visual::test_profiles_tab` |
 | Settings: every setting + current/default value | `test_manager_visual::test_settings_per_setting_visual` + `test_settings_edit_changes_region` |
-| Profile editor: diagram, binding list, sequential, validation, progress | `test_manager_visual::test_profile_editor_list_mode` + `test_profile_editor_sequential_mode` + `test_profile_editor_validation_error` |
+| Profile editor: diagram, binding list, sequential, validation, progress | `test_manager_visual::test_profile_editor_list_mode` + `test_profile_editor_sequential_mode` + `test_profile_editor_validation_error`; installed production-window diagram semantic acceptance: `test_installed_diagram` |
 | Meaningful non-background output in every region | All `test_manager_visual` sub-tests assert `fb_region_has_content` |
 | Tab/mode switching changes captured frame | `test_manager_visual::test_tab_switch_differs` |
 | No struct-field-only checks | All sub-tests assert on pixel content |
@@ -1189,11 +1233,11 @@ test or documented process:
 | 2. Region-level assertions | Non-background + text-colored pixels, state changes alter regions | `fb_assert.c` library, used by all visual tests |
 | 3. Golden images | Reviewed baselines, documented tolerance, explicit updates | `test_golden` (11 baselines, ±3/channel, <2% image) + `scripts/generate-golden.sh` |
 | 4. Failure artifacts | Actual/expected/diff PNGs on mismatch | `test_golden` writes to `tests/golden-fail/` |
-| 5. Installed production acceptance | Installed binary under X11, input events, non-blank capture; functional lifecycle with native DBus | `test_installed_smoke` (Xvfb + xdotool + ImageMagick); `test_installed_functional` (private native-signature DBus, SDL virtual controller, manager + overlay lifecycle, assignment persistence); `test_installed_binary` (installed binary subprocess, tab nav, settings, target creation, profile load/save, overlay activation); `test_kernel_controller` (kernel-backed evdev gamepad; skips exit 77 without `/dev/uinput`) |
+| 5. Installed production acceptance | Installed binary under X11, input events, non-blank capture; functional lifecycle with native DBus | `test_installed_smoke` (Xvfb + xdotool + ImageMagick); `test_installed_diagram` (installed production-window controller diagram semantic acceptance — recognizable diagram content, BUG-0014); `test_installed_functional` (private native-signature DBus, SDL virtual controller, manager + overlay lifecycle, assignment persistence); `test_installed_binary` (installed binary subprocess, tab nav, settings, target creation, profile load/save, overlay activation); `test_kernel_controller` (kernel-backed evdev gamepad; skips exit 77 without `/dev/uinput`) |
 | 6. Backend smoke | Accelerated renderer (OpenGL/ES), broad invariants | `test_backend_smoke.c` (skips exit 77 if no GPU); `test_backend_smoke_sw.c` (software renderer, headless-safe) |
 | 7. Human release acceptance | Human review on target hardware | Documented checklist above (§Human release acceptance checklist) |
 | Supplemental | Interaction acceptance (§5.7) | `test_manager_interaction_ctrl`, `test_manager_interaction_prof`, `test_overlay_interaction`, `test_overlay_native`, `test_manager_native`, `test_manager_native_prof`, `test_interaction_inventory` |
-| Closing mandate | Suite fails on blank/incomplete screens | All visual tests assert `fb_region_has_content`; golden test fails on >2% pixel diff |
+| Closing mandate | Suite fails on blank/incomplete screens | All visual tests assert `fb_region_has_content`; golden test fails on >2% pixel diff; `test_installed_diagram` fails on a blank controller diagram |
 
 ## Hardware-deferred capabilities
 

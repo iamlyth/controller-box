@@ -7,22 +7,6 @@ Schema: `ralph-bug-ledger/v1`
 ```json
 [
   {
-    "id": "BUG-0014",
-    "title": "Manager shows no controller diagram in production launch",
-    "status": "open",
-    "severity": "critical",
-    "reported": "2026-08-19",
-    "external": [],
-    "contract_change": false,
-    "reproduction": "Launch the installed/real production binary with a real window server: ./build-check/controller-box --manager under Xvfb. The manager window opens, but the controller diagram area is blank — no controller schematic/grid is drawn. This was observed by a human operator on the real launch path.",
-    "expected": "The manager production window renders a recognizable controller diagram (controller figure, binding lights, select-screen grid) through the real SDL rendering path, and a production-window/installed-path semantic test proves recognizable diagram content — not merely a non-NULL texture, a fallback path, or a broad pixel-count change.",
-    "actual": "Launching ./build-check/controller-box --manager shows no controller diagram. Existing coverage (test_manager_visual.c, test_golden.c, test_overlay_visual.c) passed without catching this, so those goldens/visual tests do not prove the production diagram rendering path.",
-    "acceptance": "A Ralph-owned product diagnosis and fix: the real manager window renders the controller diagram through the production path; a new semantic test drives a real production window (installed path under Xvfb or equivalent) and asserts recognizable diagram content (expected regions/figures), not just non-NULL textures or broad pixel changes; the full project gate passes; the diagram row in the conformance matrix is re-verified only with this evidence.",
-    "resolution": "",
-    "verification": "",
-    "closed": null
-  },
-  {
     "id": "BUG-0015",
     "title": "Manager reports Topology incomplete: 0 of 4 virtual controllers active",
     "status": "open",
