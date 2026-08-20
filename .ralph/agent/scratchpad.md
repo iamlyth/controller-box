@@ -1,45 +1,45 @@
-# Stopped: two production acceptance failures invalidate completion (BUG-0014, BUG-0015)
+# Resumed: Task 5 (BUG-0014) — perceptible installed controller diagram acceptance
 
-## State
+## State (refreshed 2026-08-20)
 
-- Campaign stopped gracefully by lifecycle operator (SIGTERM, status 143) at
-  round 2/5 implementation phase, `ralph-campaign.json` preserved
-  (active, phase implementation, round 2, verifier 8de1bdd6), supervision
-  preserved (completion 4/8, no-progress 4/8, cycle 83b26cbf), tree clean at
-  23299b2, stale `.ralph/loop.lock` from PID 40395 requires
-  `ralph-recover.sh --mode implementation --prepare-only` before any resume.
-- Do NOT resume without human approval. Completion premise is invalidated.
+- Loop resumed via `task.resume`. On-disk scratchpad was stale (described the
+  prior graceful stop); actual repo has advanced well past that. Tree clean on
+  `develop` at 837d417.
+- Runtime task `task-1787192943-7d10` = **BUG-0014** is `in_progress` (P1).
+  Plan Task 5 "Perceptible installed diagram acceptance" now marked
+  `in_progress` (deps Tasks 1,2,3 all complete).
+- Plan front-matter `status: active`; Task 4 (final audit) blocked on Tasks
+  5,6,7. Conformance rows OVL-10, MGR-07, MGR-08, DOD-01, DOD-09 all `partial`
+  bound to FACT-001 (BUG-0014).
+- Capability posture (`.factory/environment.toml`): runner `dev-runner-vm`
+  declares only `remote-project-gate, systemd-user, kernel-uinput,
+  installed-package`. `inputplumber-system-dbus`, `target-consumer`,
+  `gpu-compositor` are NOT declared -> BUG-0015/FACT-002..007 remain open.
 
-## Blocking defects (human-observed, recorded in the bug ledger)
+## This iteration
 
-- BUG-0014: `./build-check/controller-box --manager` shows NO controller
-  diagram on the real launch path. Existing goldens/visual tests miss it.
-  Required: renderer/asset-path diagnosis and fix + a production-window /
-  installed-path semantic test proving recognizable diagram content.
-- BUG-0015: manager reports "Topology incomplete: 0 of 4 virtual controllers
-  active"; no virtual controller works. `inputplumber-system-dbus` is NOT
-  declared in `.factory/environment.toml`, so private/native-signature sd-bus
-  tests are not real system-bus evidence. Required: real InputPlumber
-  system-bus acceptance (4 objects active/usable through production dispatch)
-  or an explicit blocking finding with no `verified` claims.
+- Mark Task 5 in_progress (done) and delegate `factory.implement` for BUG-0014
+  product work.
 
-## Plan state
+## Delegation target (Factory Worker)
 
-- `.factory/artifacts/implementation-plan.md` front matter returned to
-  `status: active` with a Blocking findings section; rows ARCH-04, SYS-06,
-  DBUS-02, DBUS-05, OVL-10, MGR-02, MGR-07, MGR-08, DOD-01, DOD-09
-  reclassified verified -> partial; Task 4 set `blocked`. The plan is
-  intentionally not `complete`-validatable until the fixes land with real
-  acceptance evidence.
-- Prior fix committed: 8e0beff (BUG-0013 attestation env isolation, ported
-  a8c74b0 to /tmp/unattended-ralph-fix); 2d1fb2d closes BUG-0013.
+Task 5 scope:
+- Diagnose and fix BUG-0014: `./build-check/controller-box --manager` shows a
+  blank controller diagram on the installed X11 production path.
+- Add a semantic production-window/installed-path test asserting recognizable
+  diagram content (outline/model label/slot highlight) — NOT non-NULL texture,
+  fallback, or broad pixel count.
+- No env-var or source-tree path injection to load diagram assets; installed
+  layout must load them via the production path (see memory
+  mem-1786926804-0788 / mem-1786926134-2b16 on `cbx_icon_dir()` + `/svg/`
+  append in `icon_cache.c` and `profile_diagram.c`).
+- Reclassify OVL-10, MGR-07 partial->verified in matrix + conformance.json
+  with installed-window evidence; resolve FACT-001.
+- Guardrails: run backpressure first, then `./scripts/verify-project.sh`; do
+  not weaken existing goldens/assertions; keep runner receipts exact-commit.
 
-## Next (Ralph, after human resume approval)
+## Next (after worker completes)
 
-- Diagnose and fix BUG-0014 (diagram rendering) and BUG-0015 (real system-bus
-  topology) as product work; add the semantic production-window tests;
-  reclassify the ten partial rows only with real acceptance evidence; never
-  mark a row verified with private-mock, /dev/uinput-presence, installed
-  smoke, inferred-request, or golden-only evidence. Do not emit the
-  completion token while the ledger is non-empty or the matrix has partial
-  rows.
+- Verify commit + receipts, then plan Task 6 (BUG-0015 real InputPlumber
+  system-bus) or append remediation if Task 5 unblocks more.
+- Do NOT emit completion token while ledger open / matrix has partial rows.
