@@ -134,7 +134,7 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 | OVL-10 | §4.10 | partial | `test_overlay_visual.c` and `test_golden.c` pass without proving the production diagram; human-observed blank diagram (BUG-0014, FACT-001) | Task 5 |
 | MGR-01 | §5.1 | verified | `manager.c` tab bar, 3 tabs, controller + pointer; `test_manager_tabs.c`, `test_manager_native.c` | |
 | MGR-02 | §5.2 | partial | `controllers_tab.c` add/remove/type-change, topology reconcile; production launch reports 0/4 virtual controllers active (BUG-0015, FACT-002/FACT-003) | Task 6 |
-| MGR-03 | §5.3 | verified | `profiles_tab.c` browse/create/edit/delete, built-in Default; `test_profiles_tab.c`, `test_installed_functional.c` | |
+| MGR-03 | §5.3 | partial | `profiles_tab.c` browse/create/edit/delete, built-in Default; `test_profiles_tab.c`, `test_installed_functional.c` |  |
 | MGR-04 | §5.4 | verified | `profile_editor_list.c`, `profile_editor_seq.c` both modes; `test_editor_list_mode.c`, `test_editor_seq_mode.c` | |
 | MGR-05 | §5.4 | verified | `profile_validate.c` NES minimum (A/B/D-pad); `test_profile_validate.c`; `profile_save.c` enforces before write | |
 | MGR-06 | §5.5 | verified | `settings_tab.c` all settings; `test_settings_tab.c`, `test_manager_native.c` M21–M26 | |
@@ -154,7 +154,7 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 | ICN-03 | §8.3 | verified | `icon_cache.c` nanosvg rasterize at startup, cached; `test_icon_cache.c`, `smoke_test_nanosvg.c` | |
 | ICN-04 | §8.4 | verified | `icon_map.c` controller-icons.yaml; `test_icon_map.c` | |
 | ICN-05 | §8.5 | verified | `icon_lookup.c` profile override; `test_icon_lookup.c` | |
-| PKG-01 | §9.1 | verified | `packaging/org.shadowblip.ControllerBox.yaml`; `test_flatpak_manifest.py`; runner receipt 26df6c0 Flatpak PASS | |
+| PKG-01 | §9.1 | partial | `packaging/org.shadowblip.ControllerBox.yaml`; `test_flatpak_manifest.py`; runner receipt 26df6c0 Flatpak PASS |  |
 | PKG-02 | §9.2 | verified | CMake install rules; `test_packaging.sh` | |
 | PKG-03 | §9.3 | verified | `CMakeLists.txt` install layout; `test_packaging.sh` | |
 | PKG-04 | §9.4 | verified | `ip_connection.c` runtime bus-name check; no cross-manager dependency | |
@@ -175,15 +175,15 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 | VRF-02 | §11.1.2 | verified | `fb_assert.c` region-level assertions; `test_fb_assert.c` | |
 | VRF-03 | §11.1.3 | verified | `test_golden.c` 11 baselines in `tests/golden/`, ±3/channel <2% tolerance | |
 | VRF-04 | §11.1.4 | verified | `fb_assert.c` saves actual/expected/diff on mismatch | |
-| VRF-05 | §11.1.5 | verified | `test_installed_functional.c` (4 tests), `test_installed_smoke.sh`, `test_installed_binary.sh`; runner receipt 26df6c0 all pass | |
+| VRF-05 | §11.1.5 | partial | `test_installed_functional.c` (4 tests), `test_installed_smoke.sh`, `test_installed_binary.sh`; runner receipt 26df6c0 all pass |  |
 | VRF-06 | §11.1.6 | partial | Software-renderer smoke test_backend_smoke_sw.c passes (non-blank framebuffer, region content assertions); GPU backend test_backend_smoke.c exits 77 in headless, gpu-compositor undeclared (FACT-005) | Task 4 |
 | VRF-07 | §11.1.7 | partial | Human release acceptance checklist documented with procedure, criteria, and evidence storage; requires human reviewer on target hardware per §11.1.7 (FACT-004, FACT-006) | Task 4 |
-| DOD-01 | §11.2.1 | partial | Not all matrix rows verified: ARCH-04, SYS-06, DBUS-02, DBUS-05, OVL-10, MGR-02, MGR-07, MGR-08 are partial pending BUG-0014/BUG-0015 | Task 4 |
+| DOD-01 | §11.2.1 | partial | Not all matrix rows verified: 21 of 76 rows partial (ARCH-04, SYS-01, SYS-02, SYS-06, OVL-09, OVL-10, MGR-02, MGR-03, MGR-07, MGR-08, PKG-01, DBUS-02, DBUS-05, PERF-01, VRF-05, VRF-06, VRF-07, DOD-01, DOD-05, DOD-06, DOD-09) pending BUG-0014/BUG-0015, signer-provisioning (FACT-007), and hardware/capability facts | Task 4 |
 | DOD-02 | §11.2.2 | verified | Tests use production dispatch; native DBus preserves signatures | |
 | DOD-03 | §11.2.3 | verified | M39 added to inventory (Task 1); M28–M38 controller-transport evidence via ctrl_press in test_manager_native_prof.c (Task 2); keyboard tests in test_manager_interaction_prof.c relabeled to _keyboard per §5.7 | Task 1, Task 2 |
 | DOD-04 | §11.2.4 | verified | `test_overlay_visual.c`, `test_manager_visual.c` cover degraded/error/recovery states | |
 | DOD-05 | §11.2.5 | partial | Software-renderer smoke test_backend_smoke_sw.c provides rendering evidence; GPU backend test_backend_smoke.c skipped (exit 77), gpu-compositor undeclared — an unexplained skip per §11.2.5 (FACT-005) | Task 4 |
-| DOD-06 | §11.2.6 | verified | `BUG-0012` closed after repository-root-flock, descriptor-boundary, verifier/event-byte binding, quarantine-race, strict-protocol/parser, complete factory/boilerplate, and 98-target project verification passed | Task 4 |
+| DOD-06 | §11.2.6 | partial | Runner receipt evidence (dev-runner-vm manifest 26df6c0) is no longer acceptable: the manifest is unsigned (no signer provisioned, FACT-007) and not a Git blob at the declared evidence commit; installed verification evidence stays unevidenced until a signed commit-bound receipt exists | Task 4 |
 | DOD-07 | §11.2.7 | verified | Campaign audit round 1 completed with 5 findings; this plan addresses all | |
 | DOD-08 | §11.2.8 | verified | README.md/OPERATIONS.md capability claims and inventory counts corrected (Task 1); capability-accounted items documented in OPERATIONS.md (Task 3) | Task 1, Task 3 |
 | DOD-09 | §11.2.9 | partial | Plan status is active; two production acceptance failures open (BUG-0014, BUG-0015); final gate cannot accept completion | Task 4 |

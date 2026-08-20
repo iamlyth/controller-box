@@ -462,7 +462,7 @@
       "spec_sections": [
         "\u00a75.3"
       ],
-      "classification": "verified",
+      "classification": "partial",
       "evidence_tier": "installed",
       "required_tier": "installed",
       "required_capabilities": [],
@@ -475,8 +475,10 @@
         "tests/test_profiles_tab.c",
         "tests/test_installed_functional.c"
       ],
-      "fact_refs": [],
-      "reason": ""
+      "fact_refs": [
+        "FACT-007"
+      ],
+      "reason": "Runner receipt evidence is no longer acceptable: the declared runner manifest is unsigned (no signer provisioned in .factory/signer-trust.json) and is not a Git blob at the declared evidence commit. Capability evidence requiring runner trust stays unevidenced until a provisioned signer produces a commit-bound signed receipt."
     },
     {
       "id": "MGR-04",
@@ -842,7 +844,7 @@
       "spec_sections": [
         "\u00a79.1"
       ],
-      "classification": "verified",
+      "classification": "partial",
       "evidence_tier": "installed",
       "required_tier": "installed",
       "required_capabilities": [],
@@ -854,8 +856,10 @@
         "packaging/org.shadowblip.ControllerBox.yaml",
         "tests/test_flatpak_manifest.py"
       ],
-      "fact_refs": [],
-      "reason": ""
+      "fact_refs": [
+        "FACT-007"
+      ],
+      "reason": "Runner receipt evidence is no longer acceptable: the declared runner manifest is unsigned (no signer provisioned in .factory/signer-trust.json) and is not a Git blob at the declared evidence commit. Capability evidence requiring runner trust stays unevidenced until a provisioned signer produces a commit-bound signed receipt."
     },
     {
       "id": "PKG-02",
@@ -1239,7 +1243,7 @@
       "spec_sections": [
         "\u00a711.1.5"
       ],
-      "classification": "verified",
+      "classification": "partial",
       "evidence_tier": "installed",
       "required_tier": "installed",
       "required_capabilities": [],
@@ -1252,8 +1256,10 @@
         "tests/test_installed_smoke.sh",
         "tests/test_installed_binary.sh"
       ],
-      "fact_refs": [],
-      "reason": ""
+      "fact_refs": [
+        "FACT-007"
+      ],
+      "reason": "Runner receipt evidence is no longer acceptable: the declared runner manifest is unsigned (no signer provisioned in .factory/signer-trust.json) and is not a Git blob at the declared evidence commit. Capability evidence requiring runner trust stays unevidenced until a provisioned signer produces a commit-bound signed receipt."
     },
     {
       "id": "VRF-06",
@@ -1324,7 +1330,7 @@
         "FACT-005",
         "FACT-006"
       ],
-      "reason": "Not all matrix rows verified: 17 rows partial pending BUG-0014/BUG-0015 and hardware/capability facts."
+      "reason": "Not all matrix rows verified: 21 of 76 rows partial (including MGR-03, PKG-01, VRF-05, DOD-06 held open by FACT-007 for runner signer provisioning) pending BUG-0014/BUG-0015 and hardware/capability facts."
     },
     {
       "id": "DOD-02",
@@ -1409,7 +1415,7 @@
       "spec_sections": [
         "\u00a711.2.6"
       ],
-      "classification": "verified",
+      "classification": "partial",
       "evidence_tier": "installed",
       "required_tier": "installed",
       "required_capabilities": [],
@@ -1421,8 +1427,10 @@
         "scripts/verify-boilerplate.sh",
         ".factory/artifacts/campaign-audit.md"
       ],
-      "fact_refs": [],
-      "reason": ""
+      "fact_refs": [
+        "FACT-007"
+      ],
+      "reason": "Runner receipt evidence is unevidenced: unsigned manifest (FACT-007, no signer provisioned) and receipt not a Git blob at the declared evidence commit."
     },
     {
       "id": "DOD-07",

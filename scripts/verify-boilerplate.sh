@@ -110,6 +110,9 @@ required = [
     'tests/test-audit-receipts.sh',
     'tests/test-blocked-facts.sh', 'tests/test-campaign-objectives.sh',
     'tests/test-context-summary.sh', 'tests/test-golden-policy.sh',
+    'tests/test-runner-signer.sh', 'scripts/check-spec-provided.sh',
+    '.factory/signer-trust.json', '.factory/requirement-policy.json',
+    '.factory/campaign-receipt-policy.json',
 ]
 for name in required:
     assert pathlib.Path(name).is_file(), f'missing {name}'
@@ -156,6 +159,9 @@ grep -q 'uinput producer is not the target consumer' .factory/prompts/implementa
 grep -q 'declaring or asserting evidence is not evidence' .factory/prompts/implementation.md
 grep -q 'conformance.json' .factory/prompts/implementation.md
 grep -q 'machine-receipt.py --tag' .factory/prompts/implementation.md
+grep -q 'requirement-policy.json' .factory/prompts/implementation.md
+grep -q 'signer-trust.json' .factory/prompts/implementation.md
+grep -q 'out-of-band and non-automatable' .factory/prompts/implementation.md
 # Unavailable evidence must be fact-bound; fresh contexts receive only the
 # durable context summary; golden baselines are protected by review manifests.
 grep -q 'blocked-facts.json' .factory/prompts/implementation.md
@@ -169,6 +175,8 @@ grep -q 'Final documentation and specification audit' .factory/prompts/plan.md
 grep -q 'Specification conformance matrix' .factory/prompts/plan.md
 grep -q 'conformance.json' .factory/prompts/plan.md
 grep -q 'evidence tier' .factory/prompts/plan.md
+grep -q 'requirement-policy.json' .factory/prompts/plan.md
+grep -q 'out-of-band and non-automatable' .factory/prompts/plan.md
 grep -q 'Pixel/offscreen framebuffer checks are not real visual acceptance' .factory/prompts/plan.md
 grep -q 'capability-contracts.json' .factory/prompts/plan.md
 grep -q 'blocked-facts.json' .factory/prompts/plan.md
@@ -188,6 +196,9 @@ grep -q 'machine-receipt.py --tag' .factory/prompts/audit.md
 grep -q '\[receipt:' .factory/prompts/audit.md
 grep -q 'BLOCKED evidence forces' .factory/prompts/audit.md
 grep -q 'check-campaign-objectives.py' .factory/prompts/audit.md
+grep -q 'campaign-receipt-policy.json' .factory/prompts/audit.md
+grep -q 'FACTORY_CAMPAIGN_AUDIT_NONCE' .factory/prompts/audit.md
+grep -q 'out-of-band and non-automatable' .factory/prompts/audit.md
 grep -q 'blocked-facts.json' .factory/prompts/audit.md
 grep -q 'Pixel/offscreen framebuffer checks are not real visual acceptance' .factory/prompts/audit.md
 grep -q 'conformance.json' .factory/prompts/audit.md
@@ -228,6 +239,7 @@ grep -q '.factory/environment.toml' .factory/prompts/plan.md
 grep -q '.factory/environment.toml' .factory/prompts/implementation.md
 ./scripts/check-factory-environment.py
 ./scripts/check-capability-contracts.py
+./scripts/check-spec-provided.sh
 ./scripts/validate-blocked-facts.py planning .factory/artifacts/blocked-facts.json
 ./scripts/check-golden-policy.py
 ./scripts/check-context-summary.py
@@ -271,5 +283,6 @@ PY
 ./tests/test-campaign-objectives.sh
 ./tests/test-context-summary.sh
 ./tests/test-golden-policy.sh
+./tests/test-runner-signer.sh
 ./tests/test-boilerplate.sh
 echo "verify: boilerplate checks passed"

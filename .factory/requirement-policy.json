@@ -1,0 +1,538 @@
+{
+  "schema": "ralph-requirement-policy/v1",
+  "description": "Separately committed requirement policy map. required_tier is assigned here (external authority), never self-declared by the conformance sidecar. The conformance validator rejects any sidecar required_tier that differs from this map, and any matrix/sidecar requirement absent from this map.",
+  "requirements": [
+    {
+      "id": "ARCH-01",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a72.1"
+      ]
+    },
+    {
+      "id": "ARCH-02",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a72.2"
+      ]
+    },
+    {
+      "id": "ARCH-03",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a72.3"
+      ]
+    },
+    {
+      "id": "ARCH-04",
+      "required_tier": "real_system",
+      "spec_sections": [
+        "\u00a72.4"
+      ]
+    },
+    {
+      "id": "ARCH-05",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a72.5"
+      ]
+    },
+    {
+      "id": "SYS-01",
+      "required_tier": "installed",
+      "spec_sections": [
+        "\u00a73"
+      ]
+    },
+    {
+      "id": "SYS-02",
+      "required_tier": "real_system",
+      "spec_sections": [
+        "\u00a73"
+      ]
+    },
+    {
+      "id": "SYS-03",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a73"
+      ]
+    },
+    {
+      "id": "SYS-04",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a73"
+      ]
+    },
+    {
+      "id": "SYS-05",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a73"
+      ]
+    },
+    {
+      "id": "SYS-06",
+      "required_tier": "real_system",
+      "spec_sections": [
+        "\u00a73"
+      ]
+    },
+    {
+      "id": "OVL-01",
+      "required_tier": "simulated",
+      "spec_sections": [
+        "\u00a74.1"
+      ]
+    },
+    {
+      "id": "OVL-02",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a74.2"
+      ]
+    },
+    {
+      "id": "OVL-03",
+      "required_tier": "simulated",
+      "spec_sections": [
+        "\u00a74.3"
+      ]
+    },
+    {
+      "id": "OVL-04",
+      "required_tier": "simulated",
+      "spec_sections": [
+        "\u00a74.4"
+      ]
+    },
+    {
+      "id": "OVL-05",
+      "required_tier": "simulated",
+      "spec_sections": [
+        "\u00a74.5"
+      ]
+    },
+    {
+      "id": "OVL-06",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a74.6"
+      ]
+    },
+    {
+      "id": "OVL-07",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a74.7"
+      ]
+    },
+    {
+      "id": "OVL-08",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a74.8"
+      ]
+    },
+    {
+      "id": "OVL-09",
+      "required_tier": "real_system",
+      "spec_sections": [
+        "\u00a74.9"
+      ]
+    },
+    {
+      "id": "OVL-10",
+      "required_tier": "installed",
+      "spec_sections": [
+        "\u00a74.10"
+      ]
+    },
+    {
+      "id": "MGR-01",
+      "required_tier": "simulated",
+      "spec_sections": [
+        "\u00a75.1"
+      ]
+    },
+    {
+      "id": "MGR-02",
+      "required_tier": "real_system",
+      "spec_sections": [
+        "\u00a75.2"
+      ]
+    },
+    {
+      "id": "MGR-03",
+      "required_tier": "installed",
+      "spec_sections": [
+        "\u00a75.3"
+      ]
+    },
+    {
+      "id": "MGR-04",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a75.4"
+      ]
+    },
+    {
+      "id": "MGR-05",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a75.4"
+      ]
+    },
+    {
+      "id": "MGR-06",
+      "required_tier": "simulated",
+      "spec_sections": [
+        "\u00a75.5"
+      ]
+    },
+    {
+      "id": "MGR-07",
+      "required_tier": "installed",
+      "spec_sections": [
+        "\u00a75.6"
+      ]
+    },
+    {
+      "id": "MGR-08",
+      "required_tier": "real_system",
+      "spec_sections": [
+        "\u00a75.7"
+      ]
+    },
+    {
+      "id": "ID-01",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a76.2"
+      ]
+    },
+    {
+      "id": "ID-02",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a76.3"
+      ]
+    },
+    {
+      "id": "ID-03",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a76.3"
+      ]
+    },
+    {
+      "id": "CFG-01",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a77.1"
+      ]
+    },
+    {
+      "id": "CFG-02",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a77.2"
+      ]
+    },
+    {
+      "id": "CFG-03",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a77.3"
+      ]
+    },
+    {
+      "id": "CFG-04",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a77.4"
+      ]
+    },
+    {
+      "id": "CFG-05",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a77.5"
+      ]
+    },
+    {
+      "id": "CFG-06",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a77.6"
+      ]
+    },
+    {
+      "id": "ICN-01",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a78.1"
+      ]
+    },
+    {
+      "id": "ICN-02",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a78.2"
+      ]
+    },
+    {
+      "id": "ICN-03",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a78.3"
+      ]
+    },
+    {
+      "id": "ICN-04",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a78.4"
+      ]
+    },
+    {
+      "id": "ICN-05",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a78.5"
+      ]
+    },
+    {
+      "id": "PKG-01",
+      "required_tier": "installed",
+      "spec_sections": [
+        "\u00a79.1"
+      ]
+    },
+    {
+      "id": "PKG-02",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a79.2"
+      ]
+    },
+    {
+      "id": "PKG-03",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a79.3"
+      ]
+    },
+    {
+      "id": "PKG-04",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a79.4"
+      ]
+    },
+    {
+      "id": "PKG-05",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a79.1"
+      ]
+    },
+    {
+      "id": "DBUS-01",
+      "required_tier": "private_integration",
+      "spec_sections": [
+        "\u00a710.1"
+      ]
+    },
+    {
+      "id": "DBUS-02",
+      "required_tier": "real_system",
+      "spec_sections": [
+        "\u00a710.1"
+      ]
+    },
+    {
+      "id": "DBUS-03",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a710.1"
+      ]
+    },
+    {
+      "id": "DBUS-04",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a710.1"
+      ]
+    },
+    {
+      "id": "DBUS-05",
+      "required_tier": "real_system",
+      "spec_sections": [
+        "\u00a710.1"
+      ]
+    },
+    {
+      "id": "DBUS-06",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a710.2"
+      ]
+    },
+    {
+      "id": "DBUS-07",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a710.3"
+      ]
+    },
+    {
+      "id": "PERF-01",
+      "required_tier": "real_system",
+      "spec_sections": [
+        "\u00a711"
+      ]
+    },
+    {
+      "id": "PERF-02",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a711"
+      ]
+    },
+    {
+      "id": "PERF-03",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a711"
+      ]
+    },
+    {
+      "id": "PERF-04",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a711"
+      ]
+    },
+    {
+      "id": "PERF-05",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a711"
+      ]
+    },
+    {
+      "id": "VRF-01",
+      "required_tier": "simulated",
+      "spec_sections": [
+        "\u00a711.1.1"
+      ]
+    },
+    {
+      "id": "VRF-02",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a711.1.2"
+      ]
+    },
+    {
+      "id": "VRF-03",
+      "required_tier": "simulated",
+      "spec_sections": [
+        "\u00a711.1.3"
+      ]
+    },
+    {
+      "id": "VRF-04",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a711.1.4"
+      ]
+    },
+    {
+      "id": "VRF-05",
+      "required_tier": "installed",
+      "spec_sections": [
+        "\u00a711.1.5"
+      ]
+    },
+    {
+      "id": "VRF-06",
+      "required_tier": "real_system",
+      "spec_sections": [
+        "\u00a711.1.6"
+      ]
+    },
+    {
+      "id": "VRF-07",
+      "required_tier": "human",
+      "spec_sections": [
+        "\u00a711.1.7"
+      ]
+    },
+    {
+      "id": "DOD-01",
+      "required_tier": "real_system",
+      "spec_sections": [
+        "\u00a711.2.1"
+      ]
+    },
+    {
+      "id": "DOD-02",
+      "required_tier": "private_integration",
+      "spec_sections": [
+        "\u00a711.2.2"
+      ]
+    },
+    {
+      "id": "DOD-03",
+      "required_tier": "simulated",
+      "spec_sections": [
+        "\u00a711.2.3"
+      ]
+    },
+    {
+      "id": "DOD-04",
+      "required_tier": "simulated",
+      "spec_sections": [
+        "\u00a711.2.4"
+      ]
+    },
+    {
+      "id": "DOD-05",
+      "required_tier": "real_system",
+      "spec_sections": [
+        "\u00a711.2.5"
+      ]
+    },
+    {
+      "id": "DOD-06",
+      "required_tier": "installed",
+      "spec_sections": [
+        "\u00a711.2.6"
+      ]
+    },
+    {
+      "id": "DOD-07",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a711.2.7"
+      ]
+    },
+    {
+      "id": "DOD-08",
+      "required_tier": "unit",
+      "spec_sections": [
+        "\u00a711.2.8"
+      ]
+    },
+    {
+      "id": "DOD-09",
+      "required_tier": "real_system",
+      "spec_sections": [
+        "\u00a711.2.9"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,69 @@
+{
+  "schema": "ralph-receipt-policy/v1",
+  "description": "Authorizes campaign objective receipt categories. A machine receipt satisfies a category only when its recorded argv equals one of the category's allowlisted argv exactly, its evidence_commit equals the active campaign audit base, and it carries the audit coordinator round/nonce binding. A runner manifest satisfies a category only when the category allows manifests and the manifest is an accepted exact-commit runner receipt whose path contains the category. Arbitrary commands (for example a bare `true`) are never allowed; receipt tags alone never authorize.",
+  "categories": [
+    {
+      "name": "runner-evidence",
+      "tier": "installed",
+      "allow_manifest": true,
+      "argv": [["./scripts/run-factory-runners.py"]]
+    },
+    {
+      "name": "project-verify",
+      "tier": "installed",
+      "allow_manifest": false,
+      "argv": [["./scripts/verify-project.sh"]]
+    },
+    {
+      "name": "installed-functional",
+      "tier": "installed",
+      "allow_manifest": true,
+      "argv": [["./scripts/check-installed-functional-evidence.sh"]]
+    },
+    {
+      "name": "visual-render",
+      "tier": "installed",
+      "allow_manifest": false,
+      "argv": [
+        ["./build-check/controller-box", "--manager", "--dry-run"],
+        ["./build-check/controller-box", "--overlay-service", "--dry-run"]
+      ]
+    },
+    {
+      "name": "real-system-service",
+      "tier": "real_system",
+      "allow_manifest": false,
+      "argv": [["./build-check/controller-box", "--probe-system-bus"]]
+    },
+    {
+      "name": "target-consumer",
+      "tier": "real_system",
+      "allow_manifest": false,
+      "argv": [["./build-check/controller-box", "--probe-target-consumer"]]
+    },
+    {
+      "name": "package-build",
+      "tier": "installed",
+      "allow_manifest": true,
+      "argv": [["./tests/test_packaging.sh", "build-check"]]
+    },
+    {
+      "name": "package-install",
+      "tier": "installed",
+      "allow_manifest": true,
+      "argv": [["./tests/test_installed_smoke.sh", "build-check"]]
+    },
+    {
+      "name": "final-gate",
+      "tier": "installed",
+      "allow_manifest": false,
+      "argv": [["./scripts/final-gate.sh", "--implementation"]]
+    },
+    {
+      "name": "audit-report",
+      "tier": "unit",
+      "allow_manifest": false,
+      "argv": [["./scripts/validate-campaign-audit.py", "complete", ".factory/artifacts/campaign-audit.md"]]
+    }
+  ]
+}

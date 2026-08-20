@@ -33,6 +33,21 @@ printf '# Spec\n' > "$tmp/repo/docs/SPEC.md"
 cat > "$tmp/repo/.gitignore" <<'EOF'
 .factory-state/
 EOF
+# Ephemeral signer for runner-receipt trust (private key stays out-of-tree).
+ssh-keygen -q -t ed25519 -N '' -f "$tmp/signer-key"
+PUBLIC_KEY=$(cut -d' ' -f1,2 "$tmp/signer-key.pub")
+python3 - "$PUBLIC_KEY" <<'PY' > "$tmp/repo/.factory/signer-trust.json"
+import json, sys
+print(json.dumps({
+    "schema": "ralph-runner-signer-trust/v1",
+    "description": "ephemeral test fixture signer",
+    "require_signature": True,
+    "enabled": True,
+    "namespace": "factory-runner-receipt",
+    "public_keys": [{"principal": "factory-signer", "public_key": sys.argv[1]}],
+    "allowed_principals": ["factory-signer"],
+}))
+PY
 cat > "$tmp/fake-ssh" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
@@ -59,6 +74,10 @@ git -C "$tmp/repo" commit -qm base
 (
     cd "$tmp/repo"
     ./scripts/run-factory-runners.py >/dev/null
+    head=$(git rev-parse HEAD)
+    cat ".factory-state/runner-evidence/fake-runner/$head/manifest.json" \
+        | ssh-keygen -Y sign -f "$tmp/signer-key" -n factory-runner-receipt \
+            > ".factory-state/runner-evidence/fake-runner/$head/manifest.sig" 2>/dev/null
     ./scripts/check-factory-runner-evidence.py >/dev/null
     capabilities=$(./scripts/check-factory-runner-evidence.py --print-capabilities)
     grep -qx 'remote-project-gate' <<<"$capabilities"
