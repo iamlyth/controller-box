@@ -43,3 +43,11 @@ Task 5 scope:
 - Verify commit + receipts, then plan Task 6 (BUG-0015 real InputPlumber
   system-bus) or append remediation if Task 5 unblocks more.
 - Do NOT emit completion token while ledger open / matrix has partial rows.
+
+<!-- factory-stale-recovery:start -->
+## Supervisor recovery feedback
+
+- The previous `implementation` Ralph attempt terminated as a stale loop.
+- Run `./scripts/final-gate.sh --implementation` yourself and fix every reported failure.
+- Do not repeat a completion summary until that command passes. Replace this section in the next scratchpad handoff before requesting completion.
+<!-- factory-stale-recovery:end -->
