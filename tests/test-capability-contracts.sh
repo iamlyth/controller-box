@@ -160,6 +160,50 @@ PY
         "cd '$tmp/runner-class-bad-$runner_class_bad' && ./scripts/check-capability-contracts.py"
 done
 
+# A candidate bound to the iprunner class with the fixed live probe argv is
+# accepted; the fixed probe command is the live path (no fixture options).
+setup_repo "$tmp/iprunner-candidate" probe-capability
+write_contract "$tmp/iprunner-candidate" probe-capability "--- probe-capability contract ---"
+python3 - "$tmp/iprunner-candidate/.factory/capability-contracts.json" <<'CONTRACT'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path, encoding="utf-8"))
+data['capabilities'].append({
+    "name": "controller-production-routing",
+    "status": "candidate",
+    "runner_class": "iprunner",
+    "probe_argv": ["nix-shell", "--run", "bash scripts/probe-controller-production-routing.sh"],
+    "probe_marker": "--- controller-production-routing capability contract ---",
+    "probe_stage": "post",
+    "probe_stdout_contains": ["production-routing-probe: PASS"],
+    "probe_is_verify_run": False,
+    "must_execute": True,
+    "must_not_skip": ["Skipped", "Not Run", "skip", "OPTIONAL"],
+    "deny_simulated_markers": ["--fixture", "--fixture=", "--fixture-dir", "--fixture-facts", "fixture-only", "fixture", "simulated", "synthetic", "staged", "private bus", "DBUS_SYSTEM_BUS_ADDRESS", "source fallback", "asset fallback", "SOURCE_PROFILE_DIR", "SOURCE_ICON_DIR", "production-topology-incomplete", "BUG-0015-negative-control", "topology incomplete", "no routing evidence", "direct injection"],
+})
+open(path, "w", encoding="utf-8").write(json.dumps(data, indent=2))
+CONTRACT
+(cd "$tmp/iprunner-candidate" && ./scripts/check-capability-contracts.py >/dev/null)
+
+# Structural fail-closed: a committed contract probe argv may never carry a
+# token that equals or is prefixed by a fixture/simulation option, because the
+# exact probe command could then switch into fixture mode and fabricate a pass.
+fixture_token_bad=0
+for token in '--fixture' '--fixture=/tmp/facts' '--fixture-dir' '--fixture-dir=/tmp/f' '--fixture-facts' '--fixture-facts=/tmp/f.json'; do
+    fixture_token_bad=$((fixture_token_bad + 1))
+    setup_repo "$tmp/fixture-token-$fixture_token_bad" probe-capability
+    write_contract "$tmp/fixture-token-$fixture_token_bad" probe-capability "--- probe-capability contract ---"
+    python3 - "$tmp/fixture-token-$fixture_token_bad/.factory/capability-contracts.json" "$token" <<PY
+import json, sys
+path, token = sys.argv[1], sys.argv[2]
+data = json.load(open(path, encoding="utf-8"))
+data['capabilities'][0]['probe_argv'] = ["nix-shell", "--run", "bash scripts/probe.sh", token]
+open(path, 'w', encoding="utf-8").write(json.dumps(data, indent=2))
+PY
+    must_fail "probe argv fixture token '$token'" \
+        "cd '$tmp/fixture-token-$fixture_token_bad' && ./scripts/check-capability-contracts.py"
+done
+
 # A missing receipt (no aggregate) is unevidenced.
 cp -a "$tmp/valid" "$tmp/missing-receipt"
 rm -f "$tmp/missing-receipt/.factory-state/runner-evidence.json"

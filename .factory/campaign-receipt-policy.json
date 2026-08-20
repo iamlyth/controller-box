@@ -1,6 +1,6 @@
 {
   "schema": "ralph-receipt-policy/v1",
-  "description": "Authorizes campaign objective receipt categories. A machine receipt satisfies a category only when its recorded argv equals one of the category's allowlisted argv exactly, its evidence_commit equals the active campaign audit base, and it carries the audit coordinator round/nonce binding. A runner manifest satisfies a category only when the category allows manifests and the manifest is an accepted exact-commit runner receipt whose path contains the category: every [manifest:] reference must be an exact signed record in the runner-evidence aggregate at the audit base, validated by scripts/check-factory-runner-evidence.py --verify-manifest. Standalone/minimal, unsigned, fabricated, and path-category-only manifests are rejected. Arbitrary commands (for example a bare `true`) are never allowed; receipt tags alone never authorize.",
+  "description": "Authorizes campaign objective receipt categories. A machine receipt satisfies a category only when its recorded argv equals one of the category's allowlisted argv exactly, its evidence_commit equals the active campaign audit base, and it carries the audit coordinator round/nonce binding. A runner manifest satisfies a category only when the category allows manifests and the manifest is an accepted exact-commit runner receipt whose recorded capabilities contain the exact capability that runs the category's allowlisted probe command (resolved through .factory/capability-contracts.json): every [manifest:] reference must be an exact signed record in the runner-evidence aggregate at the audit base, validated by scripts/check-factory-runner-evidence.py --verify-manifest. Manifest matching is exact capability evidence, never a path-substring proxy: the manifest path is ignored. Standalone/minimal, unsigned, fabricated, and path-category-only manifests are rejected. Arbitrary commands (for example a bare `true`) are never allowed; receipt tags alone never authorize.",
   "categories": [
     {
       "name": "runner-evidence",
@@ -32,14 +32,20 @@
     {
       "name": "real-system-service",
       "tier": "real_system",
-      "allow_manifest": false,
-      "argv": [["./build-check/controller-box", "--probe-system-bus"]]
+      "allow_manifest": true,
+      "argv": [["nix-shell", "--run", "bash scripts/probe-inputplumber-system-dbus.sh"]]
     },
     {
       "name": "target-consumer",
       "tier": "real_system",
-      "allow_manifest": false,
-      "argv": [["./build-check/controller-box", "--probe-target-consumer"]]
+      "allow_manifest": true,
+      "argv": [["nix-shell", "--run", "bash scripts/probe-target-consumer.sh"]]
+    },
+    {
+      "name": "controller-production-routing",
+      "tier": "real_system",
+      "allow_manifest": true,
+      "argv": [["nix-shell", "--run", "bash scripts/probe-controller-production-routing.sh"]]
     },
     {
       "name": "package-build",

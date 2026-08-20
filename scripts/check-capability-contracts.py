@@ -23,6 +23,22 @@ ROOT = Path(__file__).resolve().parent.parent
 NAME = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 TOKEN = re.compile(r"^[^\x00-\x1f\x7f]{1,128}$")
 BARE_NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*$")
+# Fixture/simulation option tokens are structural fail-closed: a committed
+# contract probe argv may never carry a token that equals or is prefixed by
+# one of these, so the exact probe command can never switch into fixture mode.
+FIXTURE_OPTION_PREFIXES = ("--fixture", "--fixture-dir", "--fixture-facts")
+
+
+def is_fixture_option_token(token: str) -> bool:
+    """True when a probe argv token equals or is prefixed by a fixture option.
+
+    Covers `--fixture`, `--fixture=/path`, `--fixture-dir`, `--fixture-dir=/p`,
+    `--fixture-facts`, and `--fixture-facts=/p`; any such token in a committed
+    probe argv would let the probe run in fixture mode, so it is rejected.
+    """
+    return token == "--fixture" or any(
+        token.startswith(prefix) for prefix in FIXTURE_OPTION_PREFIXES
+    )
 
 
 def fail(message: str) -> None:
@@ -82,6 +98,12 @@ def validate_contract(contract: dict, index: int) -> tuple[str, str]:
         fail(f"contracts[{index}].probe_argv must be a non-empty array of strings")
     if any(any(ord(char) < 32 for char in item) for item in argv):
         fail(f"contracts[{index}].probe_argv must be control-character-free")
+    fixture_tokens = [item for item in argv if is_fixture_option_token(item)]
+    if fixture_tokens:
+        fail(
+            f"contracts[{index}].probe_argv carries a fixture/simulation option "
+            f"token {fixture_tokens!r}; a committed probe can never run in fixture mode"
+        )
     probe0 = argv[0]
     if "/" in probe0:
         relative = Path(probe0)

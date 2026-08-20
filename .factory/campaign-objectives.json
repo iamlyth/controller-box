@@ -17,8 +17,8 @@
     {
       "key": "real-system",
       "label": "Real system/service falsification",
-      "receipt_categories": ["real-system-service", "target-consumer"],
-      "rationale": "Challenge whether a real system service and a real target consumer were exercised through the production path."
+      "receipt_categories": ["real-system-service", "target-consumer", "controller-production-routing"],
+      "rationale": "Challenge whether a real system service, a real target consumer, and real InputPlumber production routing were exercised through the production path."
     },
     {
       "key": "package-namespace",

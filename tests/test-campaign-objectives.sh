@@ -46,14 +46,52 @@ ssh_config_alias = "real-system-service"
 working_directory = "/srv/dev-runner/workspaces/system-project"
 capabilities = ["system-gate"]
 verify_argv = ["./scripts/verify-project.sh"]
+[[runners]]
+name = "verify-runner"
+transport = "ssh"
+ssh_config_alias = "verify-runner"
+working_directory = "/srv/dev-runner/workspaces/verify-project"
+capabilities = ["verify-gate"]
+verify_argv = ["./scripts/verify-project.sh"]
 EOF
+    cat > "$dir/.factory/capability-contracts.json" <<'CONTRACTS'
+{
+  "schema": "ralph-capability-contract/v1",
+  "capabilities": [
+    {
+      "name": "runner-gate",
+      "probe_argv": ["./scripts/run-factory-runners.py"],
+      "probe_marker": "",
+      "must_execute": true,
+      "must_not_skip": [],
+      "deny_simulated_markers": []
+    },
+    {
+      "name": "system-gate",
+      "probe_argv": ["./scripts/probe-system.sh"],
+      "probe_marker": "",
+      "must_execute": true,
+      "must_not_skip": [],
+      "deny_simulated_markers": []
+    },
+    {
+      "name": "verify-gate",
+      "probe_argv": ["./scripts/verify-project.sh"],
+      "probe_marker": "",
+      "must_execute": true,
+      "must_not_skip": [],
+      "deny_simulated_markers": []
+    }
+  ]
+}
+CONTRACTS
     cat > "$dir/.factory/campaign-objectives.json" <<'OBJECTIVES'
 {
   "schema": "ralph-campaign-objectives/v1",
   "objectives": [
     {"key": "runner-capability", "label": "runner", "receipt_categories": ["runner-evidence", "project-verify"]},
     {"key": "visual-installed", "label": "visual", "receipt_categories": ["installed-visual", "visual-render"]},
-    {"key": "real-system", "label": "real", "receipt_categories": ["real-system-service", "target-consumer"]}
+    {"key": "real-system", "label": "real", "receipt_categories": ["real-system-service", "target-consumer", "controller-production-routing"]}
   ]
 }
 OBJECTIVES
@@ -65,8 +103,9 @@ OBJECTIVES
     {"name": "project-verify", "tier": "installed", "allow_manifest": false, "argv": [["./scripts/verify-project.sh"]]},
     {"name": "installed-visual", "tier": "installed", "allow_manifest": false, "argv": [["./scripts/probe-visual.sh"]]},
     {"name": "visual-render", "tier": "installed", "allow_manifest": false, "argv": [["./scripts/probe-visual.sh"]]},
-    {"name": "real-system-service", "tier": "real_system", "allow_manifest": false, "argv": [["./scripts/probe-system.sh"]]},
-    {"name": "target-consumer", "tier": "real_system", "allow_manifest": false, "argv": [["./scripts/probe-system.sh"]]}
+    {"name": "real-system-service", "tier": "real_system", "allow_manifest": true, "argv": [["./scripts/probe-system.sh"]]},
+    {"name": "target-consumer", "tier": "real_system", "allow_manifest": true, "argv": [["./scripts/probe-system.sh"]]},
+    {"name": "controller-production-routing", "tier": "real_system", "allow_manifest": true, "argv": [["./scripts/probe-routing.sh"]]}
   ]
 }
 POLICY
@@ -243,6 +282,7 @@ setup_repo "$tmp/blessed"
 head=$(git -C "$tmp/blessed" rev-parse HEAD)
 write_evidence "$tmp/blessed" fake-runner
 write_evidence "$tmp/blessed" real-system-service
+write_evidence "$tmp/blessed" verify-runner
 receipt "$tmp/blessed" 1 runner-evidence 0 ./scripts/run-factory-runners.py
 receipt "$tmp/blessed" 1 project-verify 0 ./scripts/verify-project.sh
 receipt "$tmp/blessed" 1 visual-render 1 ./scripts/probe-visual.sh
@@ -265,6 +305,7 @@ expect_rc "$tmp/blessed" 3 "$head" 1 "round 3 replay of round 1 suite"
 # A complete real-system suite (round-bound receipts) passes round 3.
 receipt "$tmp/blessed" 3 real-system-service 0 ./scripts/probe-system.sh
 receipt "$tmp/blessed" 3 target-consumer 0 ./scripts/probe-system.sh
+receipt "$tmp/blessed" 3 controller-production-routing 0 ./scripts/probe-routing.sh
 cat > "$tmp/blessed/.factory/artifacts/campaign-audit.md" <<'REPORT'
 ---
 result: pass
@@ -274,6 +315,7 @@ result: pass
 - Service: docs/SPEC.md §2
 - Executable evidence: ./scripts/probe-system.sh PASS [receipt: .factory-state/audit-receipts/real-system-service.json]
 - Executable evidence: ./scripts/probe-system.sh PASS [receipt: .factory-state/audit-receipts/target-consumer.json]
+- Executable evidence: ./scripts/probe-routing.sh PASS [receipt: .factory-state/audit-receipts/controller-production-routing.json]
 
 ## Findings
 None.
@@ -375,7 +417,9 @@ mint_state "$tmp/blessed" 1
 expect_rc "$tmp/blessed" 1 "$head" 1 "minimal path-category manifest"
 
 # A signed, fully bound exact aggregate fixture DOES satisfy a manifest-allowed
-# category (runner-evidence) at the audit base.
+# category (runner-evidence) at the audit base: the fake-runner manifest's
+# recorded capabilities contain runner-gate, whose committed contract probe
+# argv equals the category's allowlisted argv exactly.
 receipt "$tmp/blessed" 1 project-verify 0 ./scripts/verify-project.sh
 cat > "$tmp/blessed/.factory/artifacts/campaign-audit.md" <<REPORT
 ---
@@ -391,8 +435,29 @@ REPORT
 mint_state "$tmp/blessed" 1
 expect_rc "$tmp/blessed" 1 "$head" 0 "signed aggregate manifest for a manifest-allowed category"
 
-# A signed, fully bound manifest whose path carries a NON-manifest category
-# cannot cover that category: real-system categories require machine receipts.
+# Manifest matching is exact capability evidence, never a path-substring
+# proxy: the real-system-service manifest's path carries the runner-evidence
+# evidence-root segment, but its recorded capabilities (system-gate) do not
+# evidence the runner-evidence category, so the category stays uncovered.
+cat > "$tmp/blessed/.factory/artifacts/campaign-audit.md" <<REPORT
+---
+result: pass
+---
+# Campaign Audit
+## Evidence reviewed
+- Executable evidence: ./scripts/verify-project.sh PASS [receipt: .factory-state/audit-receipts/project-verify.json]
+- Executable evidence: ./scripts/probe.sh PASS [manifest: .factory-state/runner-evidence/real-system-service/$head/manifest.json]
+
+pass
+REPORT
+mint_state "$tmp/blessed" 1
+expect_rc "$tmp/blessed" 1 "$head" 1 "path-substring manifest is not capability evidence"
+
+# A signed, fully bound real-system manifest DOES satisfy the manifest-allowed
+# real-system categories: the real-system-service manifest's recorded
+# capabilities (system-gate, whose contract probe argv equals the allowlisted
+# probe-system.sh) cover real-system-service AND target-consumer exactly.
+receipt "$tmp/blessed" 3 controller-production-routing 0 ./scripts/probe-routing.sh
 cat > "$tmp/blessed/.factory/artifacts/campaign-audit.md" <<REPORT
 ---
 result: pass
@@ -400,11 +465,29 @@ result: pass
 # Campaign Audit
 ## Evidence reviewed
 - Executable evidence: ./scripts/probe.sh PASS [manifest: .factory-state/runner-evidence/real-system-service/$head/manifest.json]
+- Executable evidence: ./scripts/probe-routing.sh PASS [receipt: .factory-state/audit-receipts/controller-production-routing.json]
 
 pass
 REPORT
 mint_state "$tmp/blessed" 3
-expect_rc "$tmp/blessed" 3 "$head" 1 "signed manifest cannot cover a non-manifest category"
+expect_rc "$tmp/blessed" 3 "$head" 0 "signed manifest covers the real-system manifest-allowed categories"
+
+# A signed, fully bound manifest whose capabilities evidence a NON-manifest
+# category cannot cover it: verify-gate's contract probe argv matches the
+# project-verify category, which forbids manifest coverage, so a machine
+# receipt with the allowlisted argv is required.
+cat > "$tmp/blessed/.factory/artifacts/campaign-audit.md" <<REPORT
+---
+result: pass
+---
+# Campaign Audit
+## Evidence reviewed
+- Executable evidence: ./scripts/probe.sh PASS [manifest: .factory-state/runner-evidence/verify-runner/$head/manifest.json]
+
+pass
+REPORT
+mint_state "$tmp/blessed" 1
+expect_rc "$tmp/blessed" 1 "$head" 1 "signed manifest cannot cover a non-manifest category"
 
 # A receipt with the wrong coordinator nonce is rejected even when every other
 # binding matches.

@@ -64,6 +64,8 @@ chmod +x "$tmp/repo/scripts/verify-project.sh"
 printf '# Spec\n' > "$tmp/repo/docs/SPEC.md"
 cat > "$tmp/repo/.gitignore" <<'EOF'
 .factory-state/
+__pycache__/
+*.pyc
 EOF
 # Ephemeral signer for runner-receipt trust (private key stays out-of-tree).
 ssh-keygen -q -t ed25519 -N '' -f "$tmp/signer-key"
@@ -279,6 +281,33 @@ set +e
 skip_probe_rc=$?
 set -e
 [[ $skip_probe_rc -eq 1 ]]
+git -C "$tmp/repo" reset -q --hard "$base"
+write_policy '["remote-project-gate"]'
+
+# Structural fail-closed: a committed contract whose probe argv carries a
+# fixture/simulation option token (--fixture, --fixture=, --fixture-dir,
+# --fixture-facts) is rejected by the endpoint before any probe can run, so a
+# live capability can never be evidenced by a fixture-mode run.
+write_policy '["remote-project-gate", "kernel-uinput"]'
+python3 - "$tmp/repo/.factory/capability-contracts.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path))
+for contract in data["capabilities"]:
+    if contract["name"] == "kernel-uinput":
+        contract["probe_argv"] = ["/usr/bin/true", "--fixture=/tmp/facts.json"]
+open(path, "w").write(json.dumps(data, indent=2) + "\n")
+PY
+sed -i 's/\["remote-project-gate"\]/["remote-project-gate", "kernel-uinput"]/' \
+    "$tmp/repo/.factory/environment.toml"
+git -C "$tmp/repo" add .
+git -C "$tmp/repo" commit -qm fixture-token-contract-probe
+set +e
+(cd "$tmp/repo" && ./scripts/run-factory-runners.py >/dev/null 2>&1)
+fixture_probe_rc=$?
+set -e
+[[ $fixture_probe_rc -eq 1 ]]
+[[ ! -e "$tmp/runner/workspaces/fake-project/job" ]]
 git -C "$tmp/repo" reset -q --hard "$base"
 write_policy '["remote-project-gate"]'
 
