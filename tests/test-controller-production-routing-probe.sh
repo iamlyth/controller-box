@@ -187,10 +187,25 @@ cc -O2 -o "$OBSERVER" "$OBSERVER_SOURCE"
 # Full pass: 4/4 exact + fresh physical->target routed event + cleanup.
 # ---------------------------------------------------------------------------
 full_pass "$tmp/pass"
-must_pass "full 4+fresh physical+routed event pass" bash "$PROBE" --fixture "$tmp/pass"
+# Run with a caller-controlled artifact dir so the fixture retains cleanup.log
+# and prints its hash for the signer (finding: signed cleanup.log artifact).
+must_pass "full 4+fresh physical+routed event pass" \
+    env CONTROLLER_PRODUCTION_ROUTING_ARTIFACTS="$tmp/artifacts" bash "$PROBE" --fixture "$tmp/pass"
 grep -q 'production-routing-probe: PASS' "$tmp/last.out"
 grep -q 'topology confirmed: 4 of 4' "$tmp/last.out"
 grep -q 'cleanup: termination=ok target-cleanup=ok' "$tmp/pass/cleanup.log"
+# cleanup.log must be retained as a signed/hash-printed artifact.
+grep -q 'artifact hash' "$tmp/last.out"
+grep -q "$tmp/artifacts/cleanup.log" "$tmp/last.out"
+[[ -f "$tmp/artifacts/cleanup.log" ]] || { echo "test: cleanup.log not retained" >&2; exit 1; }
+hashline=$(grep 'artifact hash' "$tmp/last.out" | grep 'cleanup.log')
+printed_hash=$(printf '%s' "$hashline" | sed -n 's/.*artifact hash \([0-9a-f]\{64\}\).*/\1/p')
+[[ -n "$printed_hash" ]] || { echo "test: no cleanup.log hash printed" >&2; exit 1; }
+actual_hash=$(sha256sum "$tmp/artifacts/cleanup.log" | cut -d' ' -f1)
+[[ "$actual_hash" == "$printed_hash" ]] || {
+    echo "test: retained cleanup.log hash mismatch" >&2
+    exit 1
+}
 
 # ---------------------------------------------------------------------------
 # Exact 0/4: distinct immediate marker + BUG-0015 negative control.
@@ -356,5 +371,120 @@ json.dump(d, open(p, "w", encoding="utf-8"))
 PY
 must_fail "validator rejects wrong schema" \
     python3 "$VALIDATOR" --facts "$tmp/vbad/facts.json" --fixture-dir "$tmp/vbad"
+
+# ---------------------------------------------------------------------------
+# unwrap_variant.py: busctl `data` and `body` shapes, dict/list/scalar forms.
+# ---------------------------------------------------------------------------
+UW="$PROJECT_ROOT/scripts/iprunner-probes/unwrap_variant.py"
+unwrap_eq() {
+    local input=$1 expected=$2
+    local got
+    got=$(printf '%s' "$input" | python3 "$UW" --check)
+    [[ "$got" == "$expected" ]] || {
+        echo "test: unwrap_variant: got '$got' expected '$expected'" >&2
+        exit 1
+    }
+}
+# get-property `data` shape.
+unwrap_eq '{"type":"s","data":"xb360"}' '"xb360"'
+# GetManagedObjects `body` variant shape.
+unwrap_eq '{"type":"v","body":{"type":"s","data":"Xbox 360 Controller"}}' '"Xbox 360 Controller"'
+# nested variant with `data`.
+unwrap_eq '{"type":"v","data":{"type":"s","data":"/org/x"}}' '"/org/x"'
+# scalar passthrough.
+unwrap_eq '"plain"' '"plain"'
+unwrap_eq '7' '7'
+# list passthrough.
+unwrap_eq '["a","b"]' '["a", "b"]'
+# list-valued `body`.
+unwrap_eq '{"type":"v","body":["a","b"]}' '["a", "b"]'
+# plain dict (struct) with neither data nor body is preserved as-is.
+unwrap_eq '{"a":1}' '{"a": 1}'
+
+# ---------------------------------------------------------------------------
+# extract_om_targets.py: new xb360 targets parsed from both data/body shapes.
+# ---------------------------------------------------------------------------
+EXTRACT_OM="$PROJECT_ROOT/scripts/iprunner-probes/extract_om_targets.py"
+: > "$tmp/om-baseline-empty"
+cat > "$tmp/om-data-body.json" <<'EOF'
+{
+  "/org/shadowblip/InputPlumber/Target/1": {
+    "org.shadowblip.Input.Target": {
+      "DeviceType": {"type":"v","body":{"type":"s","data":"xb360"}},
+      "Name": {"type":"v","body":{"type":"s","data":"Xbox 360 Controller"}}
+    }
+  },
+  "/org/shadowblip/InputPlumber/Target/2": {
+    "org.shadowblip.Input.Target": {
+      "DeviceType": {"type":"s","data":"xb360"},
+      "Name": {"type":"s","data":"Xbox 360 Controller"}
+    }
+  }
+}
+EOF
+python3 "$EXTRACT_OM" "$tmp/om-data-body.json" "$tmp/om-baseline-empty" "org.shadowblip.Input.Target" > "$tmp/om-out"
+grep -q '^/org/shadowblip/InputPlumber/Target/1	Xbox 360 Controller$' "$tmp/om-out"
+grep -q '^/org/shadowblip/InputPlumber/Target/2	Xbox 360 Controller$' "$tmp/om-out"
+
+# A target whose DeviceType is not xb360 must fail (both shapes).
+cat > "$tmp/om-wrongtype.json" <<'EOF'
+{
+  "/org/shadowblip/InputPlumber/Target/3": {
+    "org.shadowblip.Input.Target": {
+      "DeviceType": {"type":"v","body":{"type":"s","data":"keyboard"}},
+      "Name": {"type":"s","data":"Keyboard"}
+    }
+  }
+}
+EOF
+must_fail "extractor rejects non-xb360 DeviceType" \
+    python3 "$EXTRACT_OM" "$tmp/om-wrongtype.json" "$tmp/om-baseline-empty" "org.shadowblip.Input.Target"
+
+# A target whose Name is a non-string variant (list body) must fail.
+cat > "$tmp/om-noname.json" <<'EOF'
+{
+  "/org/shadowblip/InputPlumber/Target/4": {
+    "org.shadowblip.Input.Target": {
+      "DeviceType": {"type":"s","data":"xb360"},
+      "Name": {"type":"v","body":["Xbox 360 Controller"]}
+    }
+  }
+}
+EOF
+must_fail "extractor rejects non-string Name" \
+    python3 "$EXTRACT_OM" "$tmp/om-noname.json" "$tmp/om-baseline-empty" "org.shadowblip.Input.Target"
+
+# ---------------------------------------------------------------------------
+# create-xb360-targets.sh: deterministic fixture validation of the
+# DBus Target.Name <-> EVIOCGNAME set/cardinality assumption.
+# ---------------------------------------------------------------------------
+CREATE="$PROJECT_ROOT/scripts/create-xb360-targets.sh"
+mkdir -p "$tmp/cb-pass"
+printf 'Xbox 360 Controller\nXbox 360 Controller\nXbox 360 Controller\nXbox 360 Controller\n' > "$tmp/cb-pass/target-names"
+cp "$tmp/cb-pass/target-names" "$tmp/cb-pass/node-names"
+must_pass "create-xb360-targets collective name/cardinality pass" bash "$CREATE" --fixture "$tmp/cb-pass"
+grep -q 'PASS (collective name/cardinality validated)' "$tmp/last.out"
+
+mkdir -p "$tmp/cb-mismatch"
+printf 'Xbox 360 Controller\nXbox 360 Controller\nXbox 360 Controller\nXbox 360 Controller\n' > "$tmp/cb-mismatch/target-names"
+printf 'Xbox 360 Controller\nXbox 360 Controller\nXbox 360 Controller\nOther Pad\n' > "$tmp/cb-mismatch/node-names"
+must_fail "create-xb360-targets name mismatch" bash "$CREATE" --fixture "$tmp/cb-mismatch"
+
+mkdir -p "$tmp/cb-extra"
+cp "$tmp/cb-pass/target-names" "$tmp/cb-extra/target-names"
+printf 'Xbox 360 Controller\nXbox 360 Controller\nXbox 360 Controller\nXbox 360 Controller\nXbox 360 Controller\n' > "$tmp/cb-extra/node-names"
+must_fail "create-xb360-targets extra node rejected" bash "$CREATE" --fixture "$tmp/cb-extra"
+
+mkdir -p "$tmp/cb-few"
+printf 'Xbox 360 Controller\nXbox 360 Controller\nXbox 360 Controller\n' > "$tmp/cb-few/target-names"
+cp "$tmp/cb-few/target-names" "$tmp/cb-few/node-names"
+must_fail "create-xb360-targets wrong count rejected" bash "$CREATE" --fixture "$tmp/cb-few"
+
+must_fail "create-xb360-targets private bus refused" \
+    env DBUS_SYSTEM_BUS_ADDRESS=unix:path=/tmp/private bash "$CREATE" --fixture "$tmp/cb-pass"
+grep -q 'private bus' "$tmp/last.out"
+
+must_fail "create-xb360-targets unknown arguments" bash "$CREATE" --bogus
+must_fail "create-xb360-targets symlink fixture dir" bash "$CREATE" --fixture /etc/passwd
 
 echo "test: controller-production-routing probe adversarial checks passed"

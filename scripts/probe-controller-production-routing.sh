@@ -336,6 +336,10 @@ PY
     if ! record_cleanup "$termination" "$target_cleanup"; then
         return 1
     fi
+    # Retain the cleanup log as a signed/hash-printed artifact (alongside
+    # observer.log / overlay.log in live mode) under the caller-controlled
+    # ARTIFACT_DIR; the retained copy is never deleted.
+    retain_artifacts "$CLEANUP_LOG" || return 1
 
     echo "production-routing-probe: CLEANUP OK"
     echo "production-routing-probe: PASS"
@@ -420,50 +424,12 @@ PY
 
 # New xb360 Target paths (with non-empty Name) not in the baseline. Requires
 # each new target to have DeviceType==xb360 and a Name; prints "path\tName".
-# Fails if a new target is non-xb360 or nameless.
+# Variant values are unwrapped defensively (data / body / dict / list / scalar)
+# by the shared extract_om_targets.py helper. Fails if a new target is
+# non-xb360 or nameless.
 extract_new_xb360_targets() {
-    python3 - "$1" "$2" "$TARGET_IFACE" <<'PY'
-import json, sys
-data = json.loads(sys.argv[1])
-base = set()
-try:
-    for line in open(sys.argv[2], encoding="utf-8"):
-        line = line.strip()
-        if line:
-            base.add(line)
-except FileNotFoundError:
-    pass
-iface = sys.argv[3]
-
-def variant_val(prop):
-    if not isinstance(prop, dict):
-        return None
-    body = prop.get("body")
-    if isinstance(body, dict):
-        return body.get("data")
-    return prop.get("data")
-
-new_paths = []
-for path in sorted(data):
-    if iface in data[path] and path not in base:
-        new_paths.append(path)
-bad = 0
-for p in new_paths:
-    props = data[p].get(iface, {})
-    dt = variant_val(props.get("DeviceType"))
-    name = variant_val(props.get("Name"))
-    if dt != "xb360":
-        print(f"FAIL: new target {p} DeviceType={dt!r} is not xb360", file=sys.stderr)
-        bad = 1
-    if not isinstance(name, str) or not name:
-        print(f"FAIL: new target {p} has no Name", file=sys.stderr)
-        bad = 1
-if bad:
-    sys.exit(1)
-for p in new_paths:
-    name = variant_val(data[p].get(iface, {}).get("Name"))
-    print(f"{p}\t{name}")
-PY
+    python3 "$SCRIPT_DIR/iprunner-probes/extract_om_targets.py" \
+        "$1" "$2" "$TARGET_IFACE"
 }
 
 # Verify the kernel event nodes collectively match the counted xb360 target
@@ -499,6 +465,8 @@ verify_node_identities() {
 }
 
 # Verify the real system bus identity before claiming any routing evidence.
+# The InputPlumber bus-owner process executable's REALPATH must equal the
+# pinned /usr/bin/inputplumber exactly; no loose dpkg alternative is accepted.
 verify_bus_identity() {
     [[ -S /run/dbus/system_bus_socket ]] || {
         echo "production-routing-probe: FAIL: system bus socket missing" >&2
@@ -510,7 +478,7 @@ verify_bus_identity() {
         echo "production-routing-probe: FAIL: system bus socket is not root-owned" >&2
         return 1
     }
-    local pid exe dpkgline
+    local pid exe
     pid=$(busctl --system call org.freedesktop.DBus /org/freedesktop/DBus \
         org.freedesktop.DBus GetConnectionUnixProcessID s "$BUS_NAME" 2>/dev/null | awk '{print $2}')
     [[ "$pid" =~ ^[0-9]+$ ]] || {
@@ -522,13 +490,7 @@ verify_bus_identity() {
         echo "production-routing-probe: bus owner verified pid=$pid exe=$exe"
         return 0
     fi
-    # dpkg-owned pinned binary alternative.
-    if command -v dpkg >/dev/null 2>&1 && \
-       dpkgline=$(dpkg -S "$exe" 2>/dev/null) && [[ "$dpkgline" == *"inputplumber"* ]]; then
-        echo "production-routing-probe: bus owner verified (dpkg-owned) pid=$pid exe=$exe"
-        return 0
-    fi
-    echo "production-routing-probe: FAIL: InputPlumber bus owner exe '$exe' is not the pinned $PINNED_INPUTPLUMBER" >&2
+    echo "production-routing-probe: FAIL: InputPlumber bus owner realpath '$exe' is not the pinned $PINNED_INPUTPLUMBER" >&2
     return 1
 }
 
@@ -561,6 +523,10 @@ run_live() {
             done
         fi
         record_cleanup "$termination" "$target_cleanup" || rc=1
+        # Retain the signed artifacts (observer.log, overlay.log, cleanup.log)
+        # under the caller-controlled ARTIFACT_DIR and print their hashes; the
+        # retained copies are never deleted by cleanup_live.
+        retain_artifacts "$tmp/observer.log" "$tmp/overlay.log" "$CLEANUP_LOG" || rc=1
         if [[ -n "$xvfb_pid" ]]; then
             kill "$xvfb_pid" 2>/dev/null || true
             wait "$xvfb_pid" 2>/dev/null || true
@@ -786,13 +752,10 @@ PY
     fi
     cat "$tmp/observer.log"
 
-    # 11. Retain the live artifacts under the caller-controlled ARTIFACT_DIR
-    #     and print their hashes for the signer; the retained copy is never
-    #     deleted by cleanup_live.
-    if ! retain_artifacts "$tmp/observer.log" "$tmp/overlay.log"; then
-        cleanup_live
-        return 1
-    fi
+    # 11. Retained live artifacts (observer.log, overlay.log, cleanup.log) and
+    #     their hashes are produced inside cleanup_live, then the temp dir is
+    #     removed. A retention failure fails the probe so the signer always has
+    #     the artifacts.
 
     cleanup_live || return 1
     echo "production-routing-probe: PASS"
