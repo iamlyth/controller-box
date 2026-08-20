@@ -134,7 +134,7 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 | OVL-10 | §4.10 | partial | `test_overlay_visual.c` and `test_golden.c` pass without proving the production diagram; human-observed blank diagram (BUG-0014, FACT-001) | Task 5 |
 | MGR-01 | §5.1 | verified | `manager.c` tab bar, 3 tabs, controller + pointer; `test_manager_tabs.c`, `test_manager_native.c` | |
 | MGR-02 | §5.2 | partial | `controllers_tab.c` add/remove/type-change, topology reconcile; production launch reports 0/4 virtual controllers active (BUG-0015, FACT-002/FACT-003) | Task 6 |
-| MGR-03 | §5.3 | partial | `profiles_tab.c` browse/create/edit/delete, built-in Default; `test_profiles_tab.c`, `test_installed_functional.c` |  |
+| MGR-03 | §5.3 | partial | `profiles_tab.c` browse/create/edit/delete, built-in Default; `test_profiles_tab.c`, `test_installed_functional.c`; BUG-0017 exposes environment-dependent editor loading/focus behavior | Task 7 |
 | MGR-04 | §5.4 | verified | `profile_editor_list.c`, `profile_editor_seq.c` both modes; `test_editor_list_mode.c`, `test_editor_seq_mode.c` | |
 | MGR-05 | §5.4 | verified | `profile_validate.c` NES minimum (A/B/D-pad); `test_profile_validate.c`; `profile_save.c` enforces before write | |
 | MGR-06 | §5.5 | verified | `settings_tab.c` all settings; `test_settings_tab.c`, `test_manager_native.c` M21–M26 | |
@@ -154,7 +154,7 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 | ICN-03 | §8.3 | verified | `icon_cache.c` nanosvg rasterize at startup, cached; `test_icon_cache.c`, `smoke_test_nanosvg.c` | |
 | ICN-04 | §8.4 | verified | `icon_map.c` controller-icons.yaml; `test_icon_map.c` | |
 | ICN-05 | §8.5 | verified | `icon_lookup.c` profile override; `test_icon_lookup.c` | |
-| PKG-01 | §9.1 | partial | `packaging/org.shadowblip.ControllerBox.yaml`; `test_flatpak_manifest.py`; runner receipt 26df6c0 Flatpak PASS |  |
+| PKG-01 | §9.1 | partial | `packaging/org.shadowblip.ControllerBox.yaml`; `test_flatpak_manifest.py`; runner receipt 26df6c0 Flatpak PASS | Task 4 |
 | PKG-02 | §9.2 | verified | CMake install rules; `test_packaging.sh` | |
 | PKG-03 | §9.3 | verified | `CMakeLists.txt` install layout; `test_packaging.sh` | |
 | PKG-04 | §9.4 | verified | `ip_connection.c` runtime bus-name check; no cross-manager dependency | |
@@ -175,7 +175,7 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 | VRF-02 | §11.1.2 | verified | `fb_assert.c` region-level assertions; `test_fb_assert.c` | |
 | VRF-03 | §11.1.3 | verified | `test_golden.c` 11 baselines in `tests/golden/`, ±3/channel <2% tolerance | |
 | VRF-04 | §11.1.4 | verified | `fb_assert.c` saves actual/expected/diff on mismatch | |
-| VRF-05 | §11.1.5 | partial | `test_installed_functional.c` (4 tests), `test_installed_smoke.sh`, `test_installed_binary.sh`; runner receipt 26df6c0 all pass |  |
+| VRF-05 | §11.1.5 | partial | `test_installed_functional.c` (4 tests), `test_installed_smoke.sh`, `test_installed_binary.sh`; runner receipt 26df6c0 all pass | Task 4 |
 | VRF-06 | §11.1.6 | partial | Software-renderer smoke test_backend_smoke_sw.c passes (non-blank framebuffer, region content assertions); GPU backend test_backend_smoke.c exits 77 in headless, gpu-compositor undeclared (FACT-005) | Task 4 |
 | VRF-07 | §11.1.7 | partial | Human release acceptance checklist documented with procedure, criteria, and evidence storage; requires human reviewer on target hardware per §11.1.7 (FACT-004, FACT-006) | Task 4 |
 | DOD-01 | §11.2.1 | partial | Not all matrix rows verified: 21 of 76 rows partial (ARCH-04, SYS-01, SYS-02, SYS-06, OVL-09, OVL-10, MGR-02, MGR-03, MGR-07, MGR-08, PKG-01, DBUS-02, DBUS-05, PERF-01, VRF-05, VRF-06, VRF-07, DOD-01, DOD-05, DOD-06, DOD-09) pending BUG-0014/BUG-0015, signer-provisioning (FACT-007), and hardware/capability facts | Task 4 |
@@ -325,7 +325,7 @@ Keyboard tests in `test_manager_interaction_prof.c` relabeled from
 ## Task 4: Final documentation and specification audit
 - Status: blocked
 - Block reason: BUG-0014 (invisible diagram) and BUG-0015 (0/4 virtual controllers); real InputPlumber system-bus acceptance required; block lifts only with Ralph-owned product fixes and real acceptance evidence (Tasks 5 and 6)
-- Dependencies: Task 1, Task 2, Task 3, Task 5, Task 6
+- Dependencies: Task 1, Task 2, Task 3, Task 5, Task 6, Task 7
 - Scope: `.factory/artifacts/implementation-plan.md` (conformance matrix update), `.factory/artifacts/conformance.json` (sidecar), `.factory/artifacts/blocked-facts.json` (facts ledger), `README.md`, `docs/OPERATIONS.md`, full clean verification
 - Acceptance criteria:
   - Task 5 (perceptible installed diagram acceptance) and Task 6 (real four-target InputPlumber routing acceptance) are complete, with exact receipt/artifact evidence resolving FACT-001, FACT-002, and FACT-003 (or an explicit human decision where SPEC §11.2.6 permits it)
@@ -362,6 +362,17 @@ Keyboard tests in `test_manager_interaction_prof.c` relabeled from
 - Acceptance criteria: four expected target/controller objects present and usable through production dispatch on the real InputPlumber system bus; `Topology incomplete: 0 of 4` no longer appears; ARCH-04, SYS-06, DBUS-02, DBUS-05, MGR-02, MGR-08 reclassify to `verified` in the matrix and sidecar; FACT-002 and FACT-003 resolve with exact system-bus probe receipts and routing acceptance evidence
 - Verification: `./scripts/run-factory-runners.py` then `./scripts/check-factory-runner-evidence.py` accept exact-commit receipts; `./scripts/check-capability-evidence.py` accepts `inputplumber-system-dbus`; the real four-target routing acceptance passes on the production dispatch path
 - Documentation impact: OPERATIONS.md capability declarations and acceptance evidence updated
+
+## Task 7: Environment-independent profile editor acceptance
+- Status: pending
+- Dependencies: Task 1, Task 2, Task 3, Task 5, Task 6
+- Scope: diagnose and fix BUG-0017 without weakening assertions or golden baselines; preserve the production profile-loading path across filesystems and runner environments; add a regression test that reproduces the local clean-build failure while retaining signed-runner coverage
+- Acceptance criteria:
+  - The same exact Controller-Box commit passes `test_manager_tabs`, `test_manager_production`, `test_manager_visual`, and `test_golden` in a fresh local Nix build and in signed exact-commit remote runner evidence
+  - Profile editor production dispatch loads all expected bindings; focus traversal escapes the profile list; semantic and golden editor assertions pass without source-tree fallback, environment-specific bypasses, timing sleeps, or regenerated baselines that hide the defect
+  - Root cause and cross-environment evidence are attached to BUG-0017 before closure
+- Verification: build pristine archives of the same commit in both environments; run `ctest --test-dir <fresh-build> -R '^(test_manager_tabs|test_manager_production|test_manager_visual|test_golden)$' --output-on-failure`; run signed `remote-project-gate`; compare exact commit/tree/environment bindings; then run `./scripts/verify-project.sh`
+- Documentation impact: record any newly discovered production profile-path constraint in OPERATIONS.md; no documentation-only closure
 
 ## Remediation rule
 

@@ -1,0 +1,33 @@
+{
+  "schema": "iprunner-target-consumer-expectations/v1",
+  "description": "CANDIDATE pins for the target-consumer probe (scripts/probe-target-consumer.sh). These describe how to create an xb360 target on the real InputPlumber system bus, send one real InputEvent through the Target interface, and observe the exact resulting kernel event on an independent consumer fd. The payload/observe pins are candidates: they must be re-verified live under the provisioned iprunner class before the capability is declared. If the live run shows a different InputEvent signature, report format, or resulting event code, correct THIS file (and the probe) — never weaken the probe to make it pass.",
+  "target_kind": "xb360",
+  "manager": {
+    "bus": "org.shadowblip.InputPlumber",
+    "path": "/org/shadowblip/InputPlumber/Manager",
+    "interface": "org.shadowblip.InputManager",
+    "create_method": "CreateTargetDevice",
+    "stop_method": "StopTargetDevice",
+    "composite_method": "CreateCompositeDevice",
+    "attach_method": "AttachTargetDevice",
+    "gamepad_order_property": "GamepadOrder",
+    "target_ids_property": "SupportedTargetDeviceIds"
+  },
+  "target_interface": "org.shadowblip.Input.Target",
+  "input_event": {
+    "interface": "org.shadowblip.Input.Target",
+    "method": "InputEvent",
+    "signature_hint": "say",
+    "action": "report",
+    "data": [0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+  },
+  "observe": {
+    "type": 1,
+    "code": 304,
+    "value": 1
+  },
+  "timeouts": {
+    "device_appearance_seconds": 20,
+    "consumer_window_seconds": 15
+  }
+}

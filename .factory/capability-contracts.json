@@ -1,38 +1,90 @@
 {
   "schema": "ralph-capability-contract/v1",
-  "description": "Tracked contracts for capabilities that are declared in .factory/environment.toml and required by this product's conformance rows. A declared capability without a contract, a contract without a passing non-skipped probe receipt, or a receipt that shows skip/simulated markers is unevidenced and is never auto-reclassified. Do not add contracts for unavailable capabilities: an undeclared capability must stay a finding.",
+  "description": "Tracked contracts for capabilities that are declared in .factory/environment.toml and required by this product's conformance rows, plus candidate contracts for designed-but-unprovisioned capabilities. A declared capability without a contract, a contract without a passing non-skipped probe receipt, or a receipt that shows skip/simulated markers is unevidenced and is never auto-reclassified. A candidate contract is the committed probe definition for a capability that is not yet declared: the root endpoint refuses to run candidate contracts until the capability is declared, its contract is promoted to status=declared, and the runner class allowlist (root-configured, out-of-tree) grants it. Do not add contracts for unavailable capabilities with no designed probe.",
   "capabilities": [
     {
       "name": "remote-project-gate",
+      "status": "declared",
       "probe_argv": ["./scripts/verify-project.sh"],
       "probe_marker": "",
+      "probe_stage": "post",
+      "probe_stdout_contains": [],
+      "probe_is_verify_run": true,
       "must_execute": true,
       "must_not_skip": [],
       "deny_simulated_markers": ["simulated", "synthetic", "staged", "fixture-only"]
     },
     {
       "name": "systemd-user",
+      "status": "declared",
       "probe_argv": ["/usr/bin/systemd-run", "--user", "--quiet", "--wait", "--pipe", "--collect", "--service-type=exec", "/usr/bin/printf", "factory-systemd-user-ok"],
       "probe_marker": "",
+      "probe_stage": "env",
+      "probe_stdout_contains": ["factory-systemd-user-ok"],
+      "probe_is_verify_run": false,
       "must_execute": true,
       "must_not_skip": [],
       "deny_simulated_markers": ["simulated", "private session", "synthetic"]
     },
     {
       "name": "kernel-uinput",
-      "probe_argv": ["nix-shell", "--run", "ctest --test-dir build-check -R '^test_kernel_controller$' --no-tests=error --output-on-failure"],
+      "status": "declared",
+      "probe_argv": ["nix-shell", "--run", "ctest --test-dir build-maintenance-verify --no-tests=error -R '^test_kernel_controller$' --output-on-failure"],
       "probe_marker": "--- kernel-uinput capability contract ---",
+      "probe_stage": "post",
+      "probe_stdout_contains": ["100% tests passed", "test_kernel_controller"],
+      "probe_is_verify_run": false,
       "must_execute": true,
       "must_not_skip": ["Skipped", "Not Run", "skip"],
       "deny_simulated_markers": ["mock", "private service", "simulated", "synthetic", "staged", "fixture-only"]
     },
     {
       "name": "installed-package",
-      "probe_argv": ["nix-shell", "--run", "CBX_REQUIRE_FLATPAK=1 ./tests/test_packaging.sh build-check"],
+      "status": "declared",
+      "probe_argv": ["nix-shell", "--run", "CBX_REQUIRE_FLATPAK=1 ./tests/test_packaging.sh build-maintenance-verify"],
       "probe_marker": "--- installed-package capability contract ---",
+      "probe_stage": "post",
+      "probe_stdout_contains": ["PASS: flatpak --version:"],
+      "probe_is_verify_run": false,
       "must_execute": true,
       "must_not_skip": ["OPTIONAL: flatpak-builder build failed"],
       "deny_simulated_markers": ["simulated", "synthetic", "staged", "fixture-only"]
+    },
+    {
+      "name": "inputplumber-system-dbus",
+      "status": "candidate",
+      "probe_argv": ["nix-shell", "--run", "bash scripts/probe-inputplumber-system-dbus.sh"],
+      "probe_marker": "--- inputplumber-system-dbus capability contract ---",
+      "probe_stage": "post",
+      "probe_stdout_contains": ["inputplumber-system-dbus-probe: PASS"],
+      "probe_is_verify_run": false,
+      "must_execute": true,
+      "must_not_skip": ["Skipped", "Not Run", "skip", "OPTIONAL"],
+      "deny_simulated_markers": ["private bus", "mock", "simulated", "synthetic", "staged", "fixture-only", "fixture"]
+    },
+    {
+      "name": "physical-controller",
+      "status": "candidate",
+      "probe_argv": ["nix-shell", "--run", "bash scripts/probe-physical-controller.sh"],
+      "probe_marker": "--- physical-controller capability contract ---",
+      "probe_stage": "post",
+      "probe_stdout_contains": ["physical-controller-probe: PASS"],
+      "probe_is_verify_run": false,
+      "must_execute": true,
+      "must_not_skip": ["Skipped", "Not Run", "skip", "OPTIONAL"],
+      "deny_simulated_markers": ["fixture-only", "simulated", "synthetic", "staged", "injected device"]
+    },
+    {
+      "name": "target-consumer",
+      "status": "candidate",
+      "probe_argv": ["nix-shell", "--run", "bash scripts/probe-target-consumer.sh"],
+      "probe_marker": "--- target-consumer capability contract (candidate) ---",
+      "probe_stage": "post",
+      "probe_stdout_contains": ["target-consumer-probe: PASS"],
+      "probe_is_verify_run": false,
+      "must_execute": true,
+      "must_not_skip": ["Skipped", "Not Run", "skip", "OPTIONAL", "consumer skipped"],
+      "deny_simulated_markers": ["private bus", "fixture-only", "simulated", "synthetic", "staged"]
     }
   ]
 }
