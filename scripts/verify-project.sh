@@ -58,6 +58,12 @@ fi
 # Exits 77 (skip) if Xvfb/xdotool/ImageMagick are unavailable.
 "$PROJECT_ROOT/tests/test_installed_smoke.sh" "$BUILD_DIR" || \
     { rc=$?; if [ "$rc" -ne 77 ]; then echo "verify-project: installed smoke test failed (exit $rc)" >&2; exit 1; fi; }
+# Installed production-window controller diagram semantic acceptance
+# (BUG-0014, Task 5): drives the installed binary through a real X11 window
+# to the profile editor and asserts recognizable diagram content.  Exits 77
+# (skip) if Xvfb/xdotool/ImageMagick are unavailable.
+"$PROJECT_ROOT/tests/test_installed_diagram.sh" "$BUILD_DIR" || \
+    { rc=$?; if [ "$rc" -ne 77 ]; then echo "verify-project: installed diagram acceptance failed (exit $rc)" >&2; exit 1; fi; }
 mkdir -p .factory-state
 cat > .factory-state/installed-functional-evidence.env <<EOF
 schema=factory-installed-functional/v1

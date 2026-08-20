@@ -75,6 +75,15 @@ if(BASH_EXECUTABLE)
             ${CMAKE_CURRENT_BINARY_DIR})
     set_tests_properties(test_installed_smoke PROPERTIES
         SKIP_RETURN_CODE 77)
+    # Installed production-window controller diagram semantic acceptance
+    # (BUG-0014, Task 5). Drives the installed binary through a real X11
+    # window to the profile editor and asserts recognizable diagram content.
+    add_test(NAME test_installed_diagram
+        COMMAND ${BASH_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_installed_diagram.sh
+            ${CMAKE_CURRENT_BINARY_DIR})
+    set_tests_properties(test_installed_diagram PROPERTIES
+        SKIP_RETURN_CODE 77)
     add_test(NAME test_installed_functional_evidence
         COMMAND ${BASH_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test-installed-functional-evidence.sh
