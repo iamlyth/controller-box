@@ -10,6 +10,7 @@ release evidence and contains no satisfied/done claims.
 - Task 4 (blocked): Final documentation and specification audit
 - Task 5 (pending): Perceptible installed diagram acceptance
 - Task 6 (pending): Real four-target InputPlumber routing acceptance
+- Task 7 (pending): Environment-independent profile editor acceptance
 
 ## Unresolved facts
 - FACT-001 (open): BUG-0014: perceptible installed controller diagram acceptance
@@ -29,17 +30,17 @@ release evidence and contains no satisfied/done claims.
 - DOD-06 (partial): tasks=Task 4; facts=FACT-007
 - DOD-09 (partial): tasks=Task 4; facts=FACT-001,FACT-002,FACT-004,FACT-005,FACT-006
 - MGR-02 (partial): tasks=Task 6; facts=FACT-002,FACT-003
-- MGR-03 (partial): tasks=; facts=FACT-007
+- MGR-03 (partial): tasks=Task 7; facts=FACT-007
 - MGR-07 (partial): tasks=Task 5; facts=FACT-001
 - MGR-08 (partial): tasks=Task 6; facts=FACT-001,FACT-002,FACT-003,FACT-004
 - OVL-09 (partial): tasks=Task 4; facts=FACT-004,FACT-006
 - OVL-10 (partial): tasks=Task 5; facts=FACT-001
 - PERF-01 (partial): tasks=Task 4; facts=FACT-004,FACT-006
-- PKG-01 (partial): tasks=; facts=FACT-007
+- PKG-01 (partial): tasks=Task 4; facts=FACT-007
 - SYS-01 (partial): tasks=Task 4; facts=FACT-004
 - SYS-02 (partial): tasks=Task 4; facts=FACT-004,FACT-006
 - SYS-06 (partial): tasks=Task 6; facts=FACT-002,FACT-003
-- VRF-05 (partial): tasks=; facts=FACT-007
+- VRF-05 (partial): tasks=Task 4; facts=FACT-007
 - VRF-06 (partial): tasks=Task 4; facts=FACT-005
 - VRF-07 (partial): tasks=Task 4; facts=FACT-004,FACT-006
 
