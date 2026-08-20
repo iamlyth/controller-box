@@ -66,7 +66,7 @@ def validate_contract(contract: dict, index: int) -> tuple[str, str]:
     required = {
         "name", "probe_argv", "probe_marker", "must_execute", "must_not_skip", "deny_simulated_markers",
     }
-    optional = {"status", "probe_stage", "probe_stdout_contains", "probe_is_verify_run"}
+    optional = {"status", "probe_stage", "probe_stdout_contains", "probe_is_verify_run", "runner_class"}
     if not isinstance(contract, dict):
         fail(f"contracts[{index}] must be an object")
     if not required.issubset(set(contract)) or not set(contract).issubset(required | optional):
@@ -105,6 +105,11 @@ def validate_contract(contract: dict, index: int) -> tuple[str, str]:
         fail(f"contracts[{index}].probe_stage must be env or post")
     if contract.get("probe_is_verify_run") not in (None, True, False):
         fail(f"contracts[{index}].probe_is_verify_run must be a boolean")
+    runner_class = contract.get("runner_class")
+    if runner_class is not None and (
+        not isinstance(runner_class, str) or not NAME.fullmatch(runner_class)
+    ):
+        fail(f"contracts[{index}].runner_class must be a lowercase runner class name")
     contains = contract.get("probe_stdout_contains", [])
     if not isinstance(contains, list) or not all(isinstance(item, str) and TOKEN.fullmatch(item) and item for item in contains):
         fail(f"contracts[{index}].probe_stdout_contains must be an array of non-empty tokens")
@@ -144,7 +149,17 @@ def main() -> int:
     for name in candidates:
         if name in declared:
             fail(f"capability {name} is declared but its contract is still candidate")
-    print(f"capability-contracts: valid ({len(named)} contracts, {len(declared)} declared capabilities, {len(candidates)} candidates)")
+    classes = sorted(
+        {
+            contract.get("runner_class")
+            for contract in contracts
+            if contract.get("runner_class")
+        }
+    )
+    print(
+        f"capability-contracts: valid ({len(named)} contracts, {len(declared)} declared capabilities, "
+        f"{len(candidates)} candidates, runner classes {classes})"
+    )
     return 0
 
 

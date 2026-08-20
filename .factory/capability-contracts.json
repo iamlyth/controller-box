@@ -1,6 +1,6 @@
 {
   "schema": "ralph-capability-contract/v1",
-  "description": "Tracked contracts for capabilities that are declared in .factory/environment.toml and required by this product's conformance rows, plus candidate contracts for designed-but-unprovisioned capabilities. A declared capability without a contract, a contract without a passing non-skipped probe receipt, or a receipt that shows skip/simulated markers is unevidenced and is never auto-reclassified. A candidate contract is the committed probe definition for a capability that is not yet declared: the root endpoint refuses to run candidate contracts until the capability is declared, its contract is promoted to status=declared, and the runner class allowlist (root-configured, out-of-tree) grants it. Do not add contracts for unavailable capabilities with no designed probe.",
+  "description": "Tracked contracts for capabilities that are declared in .factory/environment.toml and required by this product's conformance rows, plus candidate contracts for designed-but-unprovisioned capabilities. A declared capability without a contract, a contract without a passing non-skipped probe receipt, or a receipt that shows skip/simulated markers is unevidenced and is never auto-reclassified. A candidate contract is the committed probe definition for a capability that is not yet declared: the root endpoint refuses to run candidate contracts until the capability is declared, its contract is promoted to status=declared, and the runner class allowlist (root-configured, out-of-tree) grants it. The optional runner_class field records the dedicated runner class a probe is designed for (e.g. gpurunner) so the intended class allowlist is explicit before provisioning. Do not add contracts for unavailable capabilities with no designed probe.",
   "capabilities": [
     {
       "name": "remote-project-gate",
@@ -85,6 +85,19 @@
       "must_execute": true,
       "must_not_skip": ["Skipped", "Not Run", "skip", "OPTIONAL", "consumer skipped"],
       "deny_simulated_markers": ["private bus", "fixture-only", "simulated", "synthetic", "staged"]
+    },
+    {
+      "name": "gpu-compositor",
+      "status": "candidate",
+      "runner_class": "gpurunner",
+      "probe_argv": ["nix-shell", "--run", "bash scripts/probe-gpu-compositor.sh"],
+      "probe_marker": "--- gpu-compositor capability contract ---",
+      "probe_stage": "post",
+      "probe_stdout_contains": ["gpu-compositor-probe: PASS"],
+      "probe_is_verify_run": false,
+      "must_execute": true,
+      "must_not_skip": ["Skipped", "Not Run", "skip", "OPTIONAL"],
+      "deny_simulated_markers": ["mock", "private service", "simulated", "staged"]
     }
   ]
 }

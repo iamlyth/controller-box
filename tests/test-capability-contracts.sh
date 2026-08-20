@@ -130,6 +130,36 @@ write_receipt "$tmp/valid" clean
 (cd "$tmp/valid" && ./scripts/check-capability-contracts.py >/dev/null)
 (cd "$tmp/valid" && ./scripts/check-capability-evidence.py >/dev/null)
 
+# runner_class is optional candidate metadata (the gpu-compositor candidate
+# binds itself to the root-configured gpurunner class before provisioning):
+# a valid lowercase class name passes, an invalid one is rejected.
+setup_repo "$tmp/runner-class-ok" probe-capability
+write_contract "$tmp/runner-class-ok" probe-capability "--- probe-capability contract ---"
+python3 - "$tmp/runner-class-ok/.factory/capability-contracts.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path, encoding="utf-8"))
+data['capabilities'][0]['runner_class'] = 'gpurunner'
+open(path, 'w', encoding="utf-8").write(json.dumps(data, indent=2))
+PY
+(cd "$tmp/runner-class-ok" && ./scripts/check-capability-contracts.py >/dev/null)
+
+runner_class_bad=0
+for bad in 'GpuRunner' '' 'gpu runner' 'gpu/runner' 'G'; do
+    runner_class_bad=$((runner_class_bad + 1))
+    setup_repo "$tmp/runner-class-bad-$runner_class_bad" probe-capability
+    write_contract "$tmp/runner-class-bad-$runner_class_bad" probe-capability "--- probe-capability contract ---"
+    python3 - "$tmp/runner-class-bad-$runner_class_bad/.factory/capability-contracts.json" <<PY
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path, encoding="utf-8"))
+data['capabilities'][0]['runner_class'] = '''$bad'''
+open(path, 'w', encoding="utf-8").write(json.dumps(data, indent=2))
+PY
+    must_fail "invalid runner_class '$bad'" \
+        "cd '$tmp/runner-class-bad-$runner_class_bad' && ./scripts/check-capability-contracts.py"
+done
+
 # A missing receipt (no aggregate) is unevidenced.
 cp -a "$tmp/valid" "$tmp/missing-receipt"
 rm -f "$tmp/missing-receipt/.factory-state/runner-evidence.json"
