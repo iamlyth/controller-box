@@ -1,0 +1,1490 @@
+{
+  "schema": "ralph-conformance/v1",
+  "requirements": [
+    {
+      "id": "ARCH-01",
+      "spec_sections": [
+        "\u00a72.1"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/dbus/dbus_client.c",
+        "src/dbus/dbus_interface.h"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "ARCH-02",
+      "spec_sections": [
+        "\u00a72.2"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/dbus/dbus_client.c",
+        "src/dbus/ip_connection.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "ARCH-03",
+      "spec_sections": [
+        "\u00a72.3"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/app/main.c",
+        "src/app/overlay_service.c",
+        "src/manager/manager.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "ARCH-04",
+      "spec_sections": [
+        "\u00a72.4"
+      ],
+      "classification": "partial",
+      "evidence_tier": "private_integration",
+      "required_tier": "real_system",
+      "required_capabilities": [
+        "inputplumber-system-dbus"
+      ],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/dbus/ip_connection.c",
+        "tests/test_native_dbus.c"
+      ],
+      "fact_refs": [
+        "FACT-002",
+        "FACT-003"
+      ],
+      "reason": "Real InputPlumber system-bus acceptance pending; private native-signature tests are not real system-bus evidence (BUG-0015, inputplumber-system-dbus undeclared)."
+    },
+    {
+      "id": "ARCH-05",
+      "spec_sections": [
+        "\u00a72.5"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/overlay/trigger.c",
+        "src/dbus/ip_intercept_poll.c",
+        "tests/test_trigger.c",
+        "tests/test_intercept_poll.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "SYS-01",
+      "spec_sections": [
+        "\u00a73"
+      ],
+      "classification": "partial",
+      "evidence_tier": "unit",
+      "required_tier": "installed",
+      "required_capabilities": [
+        "target-consumer"
+      ],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "cmake/aarch64-toolchain.cmake",
+        "cross-shell.nix",
+        "packaging/org.shadowblip.ControllerBox.yaml"
+      ],
+      "fact_refs": [
+        "FACT-004"
+      ],
+      "reason": "aarch64 cross-compile attempted but no zero-warning build artifact exists; requires a real aarch64-capable build path (SPEC \u00a73)."
+    },
+    {
+      "id": "SYS-02",
+      "spec_sections": [
+        "\u00a73"
+      ],
+      "classification": "partial",
+      "evidence_tier": "installed",
+      "required_tier": "real_system",
+      "required_capabilities": [
+        "target-consumer"
+      ],
+      "evidence_commit": "26df6c05a5319214f1c0a97a2c3c6f763128b1c6",
+      "receipts": [
+        ".factory-state/runner-evidence/dev-runner-vm/26df6c05a5319214f1c0a97a2c3c6f763128b1c6/manifest.json"
+      ],
+      "artifacts": [
+        "docs/OPERATIONS.md"
+      ],
+      "fact_refs": [
+        "FACT-004",
+        "FACT-006"
+      ],
+      "reason": "x86_64 build/test suite verified by runner receipt; Pi 4 minimum-hardware runtime unproven (SPEC \u00a73, \u00a711)."
+    },
+    {
+      "id": "SYS-03",
+      "spec_sections": [
+        "\u00a73"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/ui/renderer.c",
+        "tests/test_sdl_dummy.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "SYS-04",
+      "spec_sections": [
+        "\u00a73"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "CMakeLists.txt",
+        "third_party/nanosvg/"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "SYS-05",
+      "spec_sections": [
+        "\u00a73"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/dbus/ip_connection.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "SYS-06",
+      "spec_sections": [
+        "\u00a73"
+      ],
+      "classification": "partial",
+      "evidence_tier": "private_integration",
+      "required_tier": "real_system",
+      "required_capabilities": [
+        "inputplumber-system-dbus"
+      ],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/dbus/ip_connection.c",
+        "tests/test_native_dbus.c"
+      ],
+      "fact_refs": [
+        "FACT-002",
+        "FACT-003"
+      ],
+      "reason": "Native sd-bus tests are private native-signature tests, not real InputPlumber system-bus acceptance; inputplumber-system-dbus undeclared (BUG-0015)."
+    },
+    {
+      "id": "OVL-01",
+      "spec_sections": [
+        "\u00a74.1"
+      ],
+      "classification": "verified",
+      "evidence_tier": "simulated",
+      "required_tier": "simulated",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/overlay/grid_render.c",
+        "tests/test_grid_render.c",
+        "tests/test_overlay_visual.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "OVL-02",
+      "spec_sections": [
+        "\u00a74.2"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/overlay/trigger.c",
+        "tests/test_trigger.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "OVL-03",
+      "spec_sections": [
+        "\u00a74.3"
+      ],
+      "classification": "verified",
+      "evidence_tier": "simulated",
+      "required_tier": "simulated",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/overlay/player_mode.c",
+        "tests/test_player_mode.c",
+        "tests/test_overlay_native.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "OVL-04",
+      "spec_sections": [
+        "\u00a74.4"
+      ],
+      "classification": "verified",
+      "evidence_tier": "simulated",
+      "required_tier": "simulated",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/overlay/host_mode.c",
+        "tests/test_host_mode.c",
+        "tests/test_overlay_native.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "OVL-05",
+      "spec_sections": [
+        "\u00a74.5"
+      ],
+      "classification": "verified",
+      "evidence_tier": "simulated",
+      "required_tier": "simulated",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/overlay/conflict.c",
+        "src/overlay/grid_render.c",
+        "tests/test_conflict.c",
+        "tests/test_overlay_native.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "OVL-06",
+      "spec_sections": [
+        "\u00a74.6"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/overlay/profile_cycle.c",
+        "tests/test_profile_cycle.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "OVL-07",
+      "spec_sections": [
+        "\u00a74.7"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/overlay/dynamic_columns.c",
+        "tests/test_dynamic_columns.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "OVL-08",
+      "spec_sections": [
+        "\u00a74.8"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/overlay/grid_render.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "OVL-09",
+      "spec_sections": [
+        "\u00a74.9"
+      ],
+      "classification": "partial",
+      "evidence_tier": "simulated",
+      "required_tier": "real_system",
+      "required_capabilities": [
+        "target-consumer"
+      ],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/overlay/surface_build.c",
+        "src/dbus/ip_intercept_poll.c",
+        "tests/test_overlay_latency.c"
+      ],
+      "fact_refs": [
+        "FACT-004",
+        "FACT-006"
+      ],
+      "reason": "x86_64 latency measured; Pi 4 \u226475 ms p99 bound requires physical target hardware (SPEC \u00a74.9, \u00a711)."
+    },
+    {
+      "id": "OVL-10",
+      "spec_sections": [
+        "\u00a74.10"
+      ],
+      "classification": "partial",
+      "evidence_tier": "simulated",
+      "required_tier": "installed",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "tests/test_overlay_visual.c",
+        "tests/test_golden.c",
+        "tests/golden/overlay_player_mode.png"
+      ],
+      "fact_refs": [
+        "FACT-001"
+      ],
+      "reason": "Visual/golden tests pass without proving the production diagram; human-observed blank diagram in production (BUG-0014)."
+    },
+    {
+      "id": "MGR-01",
+      "spec_sections": [
+        "\u00a75.1"
+      ],
+      "classification": "verified",
+      "evidence_tier": "simulated",
+      "required_tier": "simulated",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/manager/manager.c",
+        "tests/test_manager_tabs.c",
+        "tests/test_manager_native.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "MGR-02",
+      "spec_sections": [
+        "\u00a75.2"
+      ],
+      "classification": "partial",
+      "evidence_tier": "simulated",
+      "required_tier": "real_system",
+      "required_capabilities": [
+        "inputplumber-system-dbus"
+      ],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/manager/controllers_tab.c",
+        "tests/test_controllers_tab.c"
+      ],
+      "fact_refs": [
+        "FACT-002",
+        "FACT-003"
+      ],
+      "reason": "Topology reconcile shows 0/4 virtual controllers active in production (BUG-0015); real system-bus acceptance required."
+    },
+    {
+      "id": "MGR-03",
+      "spec_sections": [
+        "\u00a75.3"
+      ],
+      "classification": "verified",
+      "evidence_tier": "installed",
+      "required_tier": "installed",
+      "required_capabilities": [],
+      "evidence_commit": "26df6c05a5319214f1c0a97a2c3c6f763128b1c6",
+      "receipts": [
+        ".factory-state/runner-evidence/dev-runner-vm/26df6c05a5319214f1c0a97a2c3c6f763128b1c6/manifest.json"
+      ],
+      "artifacts": [
+        "src/manager/profiles_tab.c",
+        "tests/test_profiles_tab.c",
+        "tests/test_installed_functional.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "MGR-04",
+      "spec_sections": [
+        "\u00a75.4"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/manager/profile_editor_list.c",
+        "src/manager/profile_editor_seq.c",
+        "tests/test_editor_list_mode.c",
+        "tests/test_editor_seq_mode.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "MGR-05",
+      "spec_sections": [
+        "\u00a75.4"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/manager/profile_validate.c",
+        "src/manager/profile_save.c",
+        "tests/test_profile_validate.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "MGR-06",
+      "spec_sections": [
+        "\u00a75.5"
+      ],
+      "classification": "verified",
+      "evidence_tier": "simulated",
+      "required_tier": "simulated",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/manager/settings_tab.c",
+        "tests/test_settings_tab.c",
+        "tests/test_manager_native.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "MGR-07",
+      "spec_sections": [
+        "\u00a75.6"
+      ],
+      "classification": "partial",
+      "evidence_tier": "simulated",
+      "required_tier": "installed",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/manager/profile_diagram.c",
+        "tests/test_manager_visual.c",
+        "tests/test_golden.c",
+        "tests/golden/manager_controllers_connected.png"
+      ],
+      "fact_refs": [
+        "FACT-001"
+      ],
+      "reason": "Manager visual tests pass without proving the production diagram; production manager shows no controller diagram (BUG-0014)."
+    },
+    {
+      "id": "MGR-08",
+      "spec_sections": [
+        "\u00a75.7"
+      ],
+      "classification": "partial",
+      "evidence_tier": "simulated",
+      "required_tier": "real_system",
+      "required_capabilities": [
+        "inputplumber-system-dbus"
+      ],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "tests/interaction_inventory.c",
+        "tests/test_manager_native_prof.c",
+        "tests/test_manager_interaction_ctrl.c"
+      ],
+      "fact_refs": [
+        "FACT-001",
+        "FACT-002",
+        "FACT-003",
+        "FACT-004"
+      ],
+      "reason": "Inventory claims contradicted by 0/4 virtual controllers active and blank diagram (BUG-0014, BUG-0015); real four-target routing acceptance required."
+    },
+    {
+      "id": "ID-01",
+      "spec_sections": [
+        "\u00a76.2"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/identify/identity.c",
+        "tests/test_identity.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "ID-02",
+      "spec_sections": [
+        "\u00a76.3"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/identify/identity.c",
+        "src/config/config_assignments.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "ID-03",
+      "spec_sections": [
+        "\u00a76.3"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/identify/identity_downgrade.c",
+        "tests/test_identity_downgrade.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "CFG-01",
+      "spec_sections": [
+        "\u00a77.1"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/config/config_profile.c",
+        "src/config/config_profile_list.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "CFG-02",
+      "spec_sections": [
+        "\u00a77.2"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/config/config_paths.c",
+        "tests/test_config_paths.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "CFG-03",
+      "spec_sections": [
+        "\u00a77.3"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/config/config_settings.c",
+        "tests/test_settings.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "CFG-04",
+      "spec_sections": [
+        "\u00a77.4"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/config/config_assignments.c",
+        "tests/test_assignments.c",
+        "tests/test_assign_persist.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "CFG-05",
+      "spec_sections": [
+        "\u00a77.5"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/config/config_profile_meta.c",
+        "tests/test_profile_save.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "CFG-06",
+      "spec_sections": [
+        "\u00a77.6"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/config/config_profile.c",
+        "tests/test_profile_yaml.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "ICN-01",
+      "spec_sections": [
+        "\u00a78.1"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/icons/icon_map.c",
+        "tests/test_icon_map.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "ICN-02",
+      "spec_sections": [
+        "\u00a78.2"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/icons/icon_cache.c",
+        "data/icons/"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "ICN-03",
+      "spec_sections": [
+        "\u00a78.3"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/icons/icon_cache.c",
+        "tests/test_icon_cache.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "ICN-04",
+      "spec_sections": [
+        "\u00a78.4"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/icons/icon_map.c",
+        "tests/test_icon_map.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "ICN-05",
+      "spec_sections": [
+        "\u00a78.5"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/icons/icon_lookup.c",
+        "tests/test_icon_lookup.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "PKG-01",
+      "spec_sections": [
+        "\u00a79.1"
+      ],
+      "classification": "verified",
+      "evidence_tier": "installed",
+      "required_tier": "installed",
+      "required_capabilities": [],
+      "evidence_commit": "26df6c05a5319214f1c0a97a2c3c6f763128b1c6",
+      "receipts": [
+        ".factory-state/runner-evidence/dev-runner-vm/26df6c05a5319214f1c0a97a2c3c6f763128b1c6/manifest.json"
+      ],
+      "artifacts": [
+        "packaging/org.shadowblip.ControllerBox.yaml",
+        "tests/test_flatpak_manifest.py"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "PKG-02",
+      "spec_sections": [
+        "\u00a79.2"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "CMakeLists.txt",
+        "tests/test_packaging.sh"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "PKG-03",
+      "spec_sections": [
+        "\u00a79.3"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "CMakeLists.txt",
+        "tests/test_packaging.sh"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "PKG-04",
+      "spec_sections": [
+        "\u00a79.4"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/dbus/ip_connection.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "PKG-05",
+      "spec_sections": [
+        "\u00a79.1"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/manager/service_install.c",
+        "tests/test_service_install.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "DBUS-01",
+      "spec_sections": [
+        "\u00a710.1"
+      ],
+      "classification": "verified",
+      "evidence_tier": "private_integration",
+      "required_tier": "private_integration",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/dbus/ip_connection.c",
+        "src/dbus/dbus_client.c",
+        "tests/test_connection.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "DBUS-02",
+      "spec_sections": [
+        "\u00a710.1"
+      ],
+      "classification": "partial",
+      "evidence_tier": "private_integration",
+      "required_tier": "real_system",
+      "required_capabilities": [
+        "inputplumber-system-dbus"
+      ],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/dbus/dbus_client.c",
+        "tests/test_dbus_signatures.c",
+        "tests/test_native_dbus.c"
+      ],
+      "fact_refs": [
+        "FACT-002",
+        "FACT-003"
+      ],
+      "reason": "Native sd-bus types exercised against a private service, not the real InputPlumber system bus (BUG-0015)."
+    },
+    {
+      "id": "DBUS-03",
+      "spec_sections": [
+        "\u00a710.1"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/dbus/ip_objectmanager.c",
+        "tests/test_objectmanager_parse.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "DBUS-04",
+      "spec_sections": [
+        "\u00a710.1"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/dbus/ip_hotplug.c",
+        "tests/test_hotplug.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "DBUS-05",
+      "spec_sections": [
+        "\u00a710.1"
+      ],
+      "classification": "partial",
+      "evidence_tier": "private_integration",
+      "required_tier": "real_system",
+      "required_capabilities": [
+        "inputplumber-system-dbus"
+      ],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/dbus/ip_connection.c",
+        "tests/test_native_dbus.c"
+      ],
+      "fact_refs": [
+        "FACT-002",
+        "FACT-003"
+      ],
+      "reason": "Owner/version/enumeration verified against a private service only; real InputPlumber system-bus acceptance pending (BUG-0015)."
+    },
+    {
+      "id": "DBUS-06",
+      "spec_sections": [
+        "\u00a710.2"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/dbus/ip_manager.c",
+        "src/dbus/ip_composite.c",
+        "src/dbus/ip_target.c",
+        "src/dbus/ip_source.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "DBUS-07",
+      "spec_sections": [
+        "\u00a710.3"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/dbus/ip_intercept_poll.c",
+        "src/identify/gamepad_order_restore.c",
+        "src/dbus/ip_create_composite.c",
+        "src/config/config_profile_list.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "PERF-01",
+      "spec_sections": [
+        "\u00a711"
+      ],
+      "classification": "partial",
+      "evidence_tier": "simulated",
+      "required_tier": "real_system",
+      "required_capabilities": [
+        "target-consumer"
+      ],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "tests/test_overlay_latency.c",
+        "docs/OPERATIONS.md"
+      ],
+      "fact_refs": [
+        "FACT-004",
+        "FACT-006"
+      ],
+      "reason": "x86_64 latency measured; Pi 4 \u226475 ms p99 bound requires physical target hardware (SPEC \u00a711)."
+    },
+    {
+      "id": "PERF-02",
+      "spec_sections": [
+        "\u00a711"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/dbus/ip_intercept_poll.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "PERF-03",
+      "spec_sections": [
+        "\u00a711"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "tests/test_close.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "PERF-04",
+      "spec_sections": [
+        "\u00a711"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "tests/test_daemon_footprint.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "PERF-05",
+      "spec_sections": [
+        "\u00a711"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/dbus/ip_gamepad_order.c",
+        "tests/test_gamepad_order.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "VRF-01",
+      "spec_sections": [
+        "\u00a711.1.1"
+      ],
+      "classification": "verified",
+      "evidence_tier": "simulated",
+      "required_tier": "simulated",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "tests/test_overlay_visual.c",
+        "tests/test_manager_visual.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "VRF-02",
+      "spec_sections": [
+        "\u00a711.1.2"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "tests/fb_assert.c",
+        "tests/test_fb_assert.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "VRF-03",
+      "spec_sections": [
+        "\u00a711.1.3"
+      ],
+      "classification": "verified",
+      "evidence_tier": "simulated",
+      "required_tier": "simulated",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "tests/test_golden.c",
+        "tests/golden/"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "VRF-04",
+      "spec_sections": [
+        "\u00a711.1.4"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "tests/fb_assert.c",
+        "tests/test_fb_assert.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "VRF-05",
+      "spec_sections": [
+        "\u00a711.1.5"
+      ],
+      "classification": "verified",
+      "evidence_tier": "installed",
+      "required_tier": "installed",
+      "required_capabilities": [],
+      "evidence_commit": "26df6c05a5319214f1c0a97a2c3c6f763128b1c6",
+      "receipts": [
+        ".factory-state/runner-evidence/dev-runner-vm/26df6c05a5319214f1c0a97a2c3c6f763128b1c6/manifest.json"
+      ],
+      "artifacts": [
+        "tests/test_installed_functional.c",
+        "tests/test_installed_smoke.sh",
+        "tests/test_installed_binary.sh"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "VRF-06",
+      "spec_sections": [
+        "\u00a711.1.6"
+      ],
+      "classification": "partial",
+      "evidence_tier": "simulated",
+      "required_tier": "real_system",
+      "required_capabilities": [
+        "gpu-compositor"
+      ],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "tests/test_backend_smoke_sw.c",
+        "tests/test_backend_smoke.c",
+        "docs/OPERATIONS.md"
+      ],
+      "fact_refs": [
+        "FACT-005"
+      ],
+      "reason": "Software-renderer smoke passes; GPU backend smoke exits 77 in headless and gpu-compositor is undeclared (SPEC \u00a711.1.6)."
+    },
+    {
+      "id": "VRF-07",
+      "spec_sections": [
+        "\u00a711.1.7"
+      ],
+      "classification": "partial",
+      "evidence_tier": "unit",
+      "required_tier": "human",
+      "required_capabilities": [
+        "target-consumer"
+      ],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "docs/OPERATIONS.md",
+        "docs/REVIEW.md"
+      ],
+      "fact_refs": [
+        "FACT-004",
+        "FACT-006"
+      ],
+      "reason": "Human release acceptance checklist documented; no human reviewer on target hardware (SPEC \u00a711.1.7)."
+    },
+    {
+      "id": "DOD-01",
+      "spec_sections": [
+        "\u00a711.2.1"
+      ],
+      "classification": "partial",
+      "evidence_tier": "unit",
+      "required_tier": "real_system",
+      "required_capabilities": [
+        "inputplumber-system-dbus",
+        "gpu-compositor",
+        "target-consumer"
+      ],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [],
+      "fact_refs": [
+        "FACT-001",
+        "FACT-002",
+        "FACT-004",
+        "FACT-005",
+        "FACT-006"
+      ],
+      "reason": "Not all matrix rows verified: 17 rows partial pending BUG-0014/BUG-0015 and hardware/capability facts."
+    },
+    {
+      "id": "DOD-02",
+      "spec_sections": [
+        "\u00a711.2.2"
+      ],
+      "classification": "verified",
+      "evidence_tier": "private_integration",
+      "required_tier": "private_integration",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "src/dbus/dbus_client.c",
+        "tests/test_native_dbus.c",
+        "tests/test_overlay_native.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "DOD-03",
+      "spec_sections": [
+        "\u00a711.2.3"
+      ],
+      "classification": "verified",
+      "evidence_tier": "simulated",
+      "required_tier": "simulated",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "tests/interaction_inventory.c",
+        "tests/test_manager_interaction_ctrl.c",
+        "tests/test_manager_native_prof.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "DOD-04",
+      "spec_sections": [
+        "\u00a711.2.4"
+      ],
+      "classification": "verified",
+      "evidence_tier": "simulated",
+      "required_tier": "simulated",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "tests/test_overlay_visual.c",
+        "tests/test_manager_visual.c"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "DOD-05",
+      "spec_sections": [
+        "\u00a711.2.5"
+      ],
+      "classification": "partial",
+      "evidence_tier": "simulated",
+      "required_tier": "real_system",
+      "required_capabilities": [
+        "gpu-compositor"
+      ],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "tests/test_backend_smoke_sw.c",
+        "tests/test_backend_smoke.c"
+      ],
+      "fact_refs": [
+        "FACT-005"
+      ],
+      "reason": "Regression gates pass with a skipped GPU backend; SPEC \u00a711.2.5 disallows unexplained skips until gpu-compositor evidence exists."
+    },
+    {
+      "id": "DOD-06",
+      "spec_sections": [
+        "\u00a711.2.6"
+      ],
+      "classification": "verified",
+      "evidence_tier": "installed",
+      "required_tier": "installed",
+      "required_capabilities": [],
+      "evidence_commit": "26df6c05a5319214f1c0a97a2c3c6f763128b1c6",
+      "receipts": [
+        ".factory-state/runner-evidence/dev-runner-vm/26df6c05a5319214f1c0a97a2c3c6f763128b1c6/manifest.json"
+      ],
+      "artifacts": [
+        "scripts/verify-boilerplate.sh",
+        ".factory/artifacts/campaign-audit.md"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "DOD-07",
+      "spec_sections": [
+        "\u00a711.2.7"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        ".factory/artifacts/campaign-audit.md",
+        ".factory/bugs/open.md",
+        ".factory/bugs/closed.md"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "DOD-08",
+      "spec_sections": [
+        "\u00a711.2.8"
+      ],
+      "classification": "verified",
+      "evidence_tier": "unit",
+      "required_tier": "unit",
+      "required_capabilities": [],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [
+        "README.md",
+        "docs/OPERATIONS.md"
+      ],
+      "fact_refs": [],
+      "reason": ""
+    },
+    {
+      "id": "DOD-09",
+      "spec_sections": [
+        "\u00a711.2.9"
+      ],
+      "classification": "partial",
+      "evidence_tier": "unit",
+      "required_tier": "real_system",
+      "required_capabilities": [
+        "inputplumber-system-dbus",
+        "gpu-compositor",
+        "target-consumer"
+      ],
+      "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
+      "receipts": [],
+      "artifacts": [],
+      "fact_refs": [
+        "FACT-001",
+        "FACT-002",
+        "FACT-004",
+        "FACT-005",
+        "FACT-006"
+      ],
+      "reason": "Plan status is active; two production acceptance failures open (BUG-0014, BUG-0015); final gate cannot accept completion."
+    }
+  ]
+}

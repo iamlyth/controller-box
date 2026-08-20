@@ -34,9 +34,42 @@ evidence. No completion may proceed on the old evidence.
    `verified`. If the capability remains unavailable, it is an explicit
    blocking finding and the affected rows stay non-verified.
 
-Affected rows reclassified `verified` -> `partial` in the conformance
-matrix below: ARCH-04, SYS-06, DBUS-02, DBUS-05, OVL-10, MGR-02, MGR-07,
-MGR-08, DOD-01, DOD-09. Task 4 (final audit) is returned to `blocked`.
+Affected rows reclassified `verified` -> `partial` in the conformance matrix below:
+ARCH-04, SYS-06, DBUS-02, DBUS-05, OVL-10, MGR-02, MGR-07, MGR-08,
+DOD-01, DOD-09. Task 4 (final audit) is returned to `blocked`.
+
+### Machine-readable migration (BUG-0016 hardening stage B)
+
+The conformance matrix is bound to the machine-readable sidecar
+`.factory/artifacts/conformance.json` (`ralph-conformance/v1`), which is the
+only authority for `verified` claims (see `scripts/validate-conformance.py`).
+Every blocked/partial row whose required evidence is unavailable references an
+open entry in the append-only `.factory/artifacts/blocked-facts.json` ledger
+(`ralph-blocked-facts/v1`):
+
+- FACT-001 — BUG-0014 perceptible installed diagram acceptance;
+- FACT-002 — BUG-0015 real InputPlumber system-bus acceptance;
+- FACT-003 — missing `inputplumber-system-dbus` capability;
+- FACT-004 — missing `target-consumer` capability (real four-target routing,
+  aarch64/Pi 4 runtime);
+- FACT-005 — missing `gpu-compositor` capability;
+- FACT-006 — missing target-Pi latency measurement and human release
+  acceptance (SPEC §11.1.7).
+
+Facts resolve only with an exact receipt/artifact at an evidence commit or an
+explicit human decision where the specification permits it (SPEC §11.2.6);
+documentation/rationale alone never resolves a normative requirement. Open
+facts fail implementation completion.
+
+Beyond the blocking-findings downgrades above, rows whose `verified` claim
+rested on real-system/GPU/target/human evidence that was only reasoned about
+(not executed) are also downgraded to `partial`: SYS-01 (aarch64 build),
+SYS-02 (Pi 4 runtime), OVL-09 (Pi 4 latency bound), PERF-01 (Pi 4 p99
+bound), VRF-06 (GPU backend smoke), VRF-07 (human release acceptance), and
+DOD-05 (unexplained GPU skip). Two uniquely numbered implementation tasks are
+appended — Task 5 (perceptible installed diagram acceptance) and Task 6 (real
+four-target InputPlumber routing acceptance). Task 4 (final audit) remains
+`blocked` and now depends on Tasks 1, 2, 3, 5, and 6.
 
 ---
 
@@ -81,14 +114,14 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 | ARCH-01 | §2.1 | verified | `dbus_client.c` — all ops through DBus vtable; no direct input routing | |
 | ARCH-02 | §2.2 | verified | `dbus_client.c` sd-bus; `ip_connection.c` system bus | |
 | ARCH-03 | §2.3 | verified | `main.c` mode dispatch; `overlay_service.c`, `manager.c` | |
-| ARCH-04 | §2.4 | partial | `ip_connection.c` NameOwnerChanged, degraded/recovery, ≤2s re-enumerate; `test_native_dbus.c` is a private native-signature test, not real InputPlumber system-bus acceptance (BUG-0015, inputplumber-system-dbus undeclared) | Task 4 |
+| ARCH-04 | §2.4 | partial | `ip_connection.c` NameOwnerChanged, degraded/recovery, ≤2s re-enumerate; `test_native_dbus.c` is a private native-signature test, not real InputPlumber system-bus acceptance (BUG-0015, inputplumber-system-dbus undeclared) | Task 6 |
 | ARCH-05 | §2.5 | verified | `trigger.c` SetInterceptActivation; `ip_intercept_poll.c` 50 ms poll; `test_trigger.c`, `test_intercept_poll.c` | |
-| SYS-01 | §3 | verified | aarch64 toolchain files present and correctly configured (cmake/aarch64-toolchain.cmake, cross-shell.nix); codebase architecture-agnostic; Flatpak manifest targets multi-arch Platform 24.08; cross-compile attempted, nix dependency build exceeds time bound; capability rationale in OPERATIONS.md per §11.2.6 | Task 3 |
-| SYS-02 | §3 | verified | x86_64 build and full test suite verified (98 CTest targets); ARM64 portability confirmed by code review and Flatpak multi-arch target; Pi 4 runtime requires physical target hardware per §11.2.6 rationale in OPERATIONS.md | Task 3 |
+| SYS-01 | §3 | partial | aarch64 toolchain files present and correctly configured (cmake/aarch64-toolchain.cmake, cross-shell.nix); cross-compile attempted but no zero-warning aarch64 build artifact exists; requires an aarch64-capable build path (FACT-004) | Task 4 |
+| SYS-02 | §3 | partial | x86_64 build and full test suite verified (98 CTest targets, runner receipt); ARM64 portability confirmed by code review and Flatpak multi-arch target; Pi 4 runtime requires physical target hardware and real target consumer (FACT-004, FACT-006) | Task 4 |
 | SYS-03 | §3 | verified | SDL2 supports X11/Wayland/Gamescope; `test_sdl_dummy.c` | |
 | SYS-04 | §3 | verified | `CMakeLists.txt` deps: SDL2, SDL2_ttf, SDL2_image, libsystemd, libyaml; nanosvg vendored `third_party/nanosvg/` | |
 | SYS-05 | §3 | verified | InputPlumber not bundled; runtime bus-name check in `ip_connection.c` | |
-| SYS-06 | §3 | partial | Native sd-bus tests are private native-signature tests, not real InputPlumber system-bus acceptance; inputplumber-system-dbus undeclared (BUG-0015) | Task 4 |
+| SYS-06 | §3 | partial | Native sd-bus tests are private native-signature tests, not real InputPlumber system-bus acceptance; inputplumber-system-dbus undeclared (BUG-0015) | Task 6 |
 | OVL-01 | §4.1 | verified | `grid_render.c` select-screen grid; `test_grid_render.c`, `test_overlay_visual.c` | |
 | OVL-02 | §4.2 | verified | `trigger.c` default Select+A, configurable; `test_trigger.c` | |
 | OVL-03 | §4.3 | verified | `player_mode.c` independent per-controller; `test_player_mode.c`, `test_overlay_native.c` O11 | |
@@ -97,16 +130,16 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 | OVL-06 | §4.6 | verified | `profile_cycle.c` profile follows controller; `test_profile_cycle.c` | |
 | OVL-07 | §4.7 | verified | `dynamic_columns.c` scales with target count; `test_dynamic_columns.c` | |
 | OVL-08 | §4.8 | verified | `grid_render.c` model name + slot, no nicknames | |
-| OVL-09 | §4.9 | verified | Pre-built surface architecture (surface_build.c) and 50 ms poll cycle (ip_intercept_poll.c) verified; x86_64 latency measured by test_overlay_latency.c over 200+ iterations; Pi 4 latency bound requires physical target hardware per §11.2.6 in OPERATIONS.md | Task 3 |
-| OVL-10 | §4.10 | partial | `test_overlay_visual.c` and `test_golden.c` pass without proving the production diagram; human-observed blank diagram (BUG-0014) | Task 4 |
+| OVL-09 | §4.9 | partial | Pre-built surface architecture (surface_build.c) and 50 ms poll cycle (ip_intercept_poll.c) verified; x86_64 latency measured by test_overlay_latency.c over 200+ iterations; Pi 4 latency bound requires physical target hardware and real target consumer (FACT-004, FACT-006) | Task 4 |
+| OVL-10 | §4.10 | partial | `test_overlay_visual.c` and `test_golden.c` pass without proving the production diagram; human-observed blank diagram (BUG-0014, FACT-001) | Task 5 |
 | MGR-01 | §5.1 | verified | `manager.c` tab bar, 3 tabs, controller + pointer; `test_manager_tabs.c`, `test_manager_native.c` | |
-| MGR-02 | §5.2 | partial | `controllers_tab.c` add/remove/type-change, topology reconcile; production launch reports 0/4 virtual controllers active (BUG-0015) | Task 4 |
+| MGR-02 | §5.2 | partial | `controllers_tab.c` add/remove/type-change, topology reconcile; production launch reports 0/4 virtual controllers active (BUG-0015, FACT-002/FACT-003) | Task 6 |
 | MGR-03 | §5.3 | verified | `profiles_tab.c` browse/create/edit/delete, built-in Default; `test_profiles_tab.c`, `test_installed_functional.c` | |
 | MGR-04 | §5.4 | verified | `profile_editor_list.c`, `profile_editor_seq.c` both modes; `test_editor_list_mode.c`, `test_editor_seq_mode.c` | |
 | MGR-05 | §5.4 | verified | `profile_validate.c` NES minimum (A/B/D-pad); `test_profile_validate.c`; `profile_save.c` enforces before write | |
 | MGR-06 | §5.5 | verified | `settings_tab.c` all settings; `test_settings_tab.c`, `test_manager_native.c` M21–M26 | |
-| MGR-07 | §5.6 | partial | `test_manager_visual.c`, `test_golden.c` pass without proving the production diagram; production manager shows no controller diagram (BUG-0014) | Task 4 |
-| MGR-08 | §5.7 | partial | 52/60 inventory claimed verified with controller-transport evidence via ctrl_press and keyboard relabels; premise contradicted by 0/4 virtual controllers active and blank diagram (BUG-0014, BUG-0015) | Task 2, Task 4 |
+| MGR-07 | §5.6 | partial | `test_manager_visual.c`, `test_golden.c` pass without proving the production diagram; production manager shows no controller diagram (BUG-0014, FACT-001) | Task 5 |
+| MGR-08 | §5.7 | partial | 52/60 inventory claimed verified with controller-transport evidence via ctrl_press and keyboard relabels; premise contradicted by 0/4 virtual controllers active and blank diagram (BUG-0014, BUG-0015, FACT-001/FACT-002/FACT-004) | Task 6 |
 | ID-01 | §6.2 | verified | `identity.c` 4-layer auto-assignment; `test_identity.c` | |
 | ID-02 | §6.3 | verified | `identity.c` BT:/USB:/USB:phys:/ORDER: prefixes; `config_assignments.c` validation | |
 | ID-03 | §6.3 | verified | `identity_downgrade.c` fallback to ORDER:n; `test_identity_downgrade.c` | |
@@ -127,13 +160,13 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 | PKG-04 | §9.4 | verified | `ip_connection.c` runtime bus-name check; no cross-manager dependency | |
 | PKG-05 | §9.1 | verified | `service_install.c` first-run install; `test_service_install.c`; `test_manager_interaction_ctrl.c` M39 tests | |
 | DBUS-01 | §10.1 | verified | `ip_connection.c`, `dbus_client.c` system bus connection; `test_connection.c` | |
-| DBUS-02 | §10.1 | partial | `dbus_client.c` native sd-bus types (u, b, as, s); `test_dbus_signatures.c`, `test_native_dbus.c` exercise a private service, not real InputPlumber system-bus acceptance (BUG-0015) | Task 4 |
+| DBUS-02 | §10.1 | partial | `dbus_client.c` native sd-bus types (u, b, as, s); `test_dbus_signatures.c`, `test_native_dbus.c` exercise a private service, not real InputPlumber system-bus acceptance (BUG-0015) | Task 6 |
 | DBUS-03 | §10.1 | verified | `ip_objectmanager.c` GetManagedObjects; `test_objectmanager_parse.c` | |
 | DBUS-04 | §10.1 | verified | `ip_hotplug.c` InterfacesAdded/Removed; `test_hotplug.c` | |
-| DBUS-05 | §10.1 | partial | `ip_connection.c` owner check, version, enumeration via `test_native_dbus.c` (private service); real InputPlumber system-bus acceptance pending (BUG-0015) | Task 4 |
+| DBUS-05 | §10.1 | partial | `ip_connection.c` owner check, version, enumeration via `test_native_dbus.c` (private service); real InputPlumber system-bus acceptance pending (BUG-0015) | Task 6 |
 | DBUS-06 | §10.2 | verified | `ip_manager.c`, `ip_composite.c`, `ip_target.c`, `ip_source.c` full API surface | |
 | DBUS-07 | §10.3 | verified | All 5 gaps: intercept poll, gamepad order persist, temp composite YAML, filesystem enumerate, no-op gap 5 | |
-| PERF-01 | §11 | verified | x86_64 latency measured by test_overlay_latency.c (p50/p99/max over 200+ iterations); surface architecture and 50 ms poll cycle verified; Pi 4 ≤75 ms p99 bound requires physical target hardware per §11.2.6 rationale in OPERATIONS.md | Task 3 |
+| PERF-01 | §11 | partial | x86_64 latency measured by test_overlay_latency.c (p50/p99/max over 200+ iterations); surface architecture and 50 ms poll cycle verified; Pi 4 ≤75 ms p99 bound requires physical target hardware and real target consumer (FACT-004, FACT-006) | Task 4 |
 | PERF-02 | §11 | verified | PASS mode kernel-level; no DBus gameplay routing | |
 | PERF-03 | §11 | verified | `test_close.c` InterceptMode=PASS close <1 ms | |
 | PERF-04 | §11 | verified | `test_daemon_footprint.c` resident footprint | |
@@ -143,13 +176,13 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 | VRF-03 | §11.1.3 | verified | `test_golden.c` 11 baselines in `tests/golden/`, ±3/channel <2% tolerance | |
 | VRF-04 | §11.1.4 | verified | `fb_assert.c` saves actual/expected/diff on mismatch | |
 | VRF-05 | §11.1.5 | verified | `test_installed_functional.c` (4 tests), `test_installed_smoke.sh`, `test_installed_binary.sh`; runner receipt 26df6c0 all pass | |
-| VRF-06 | §11.1.6 | verified | Software-renderer smoke test_backend_smoke_sw.c passes (non-blank framebuffer, region content assertions); GPU backend test_backend_smoke.c exits 77 in headless, ready for GPU compositor; capability rationale in OPERATIONS.md per §11.2.6 | Task 3 |
-| VRF-07 | §11.1.7 | verified | Human release acceptance checklist documented with procedure, criteria, and evidence storage; requires human reviewer on target hardware per §11.1.7; rationale in OPERATIONS.md per §11.2.6 | Task 3 |
+| VRF-06 | §11.1.6 | partial | Software-renderer smoke test_backend_smoke_sw.c passes (non-blank framebuffer, region content assertions); GPU backend test_backend_smoke.c exits 77 in headless, gpu-compositor undeclared (FACT-005) | Task 4 |
+| VRF-07 | §11.1.7 | partial | Human release acceptance checklist documented with procedure, criteria, and evidence storage; requires human reviewer on target hardware per §11.1.7 (FACT-004, FACT-006) | Task 4 |
 | DOD-01 | §11.2.1 | partial | Not all matrix rows verified: ARCH-04, SYS-06, DBUS-02, DBUS-05, OVL-10, MGR-02, MGR-07, MGR-08 are partial pending BUG-0014/BUG-0015 | Task 4 |
 | DOD-02 | §11.2.2 | verified | Tests use production dispatch; native DBus preserves signatures | |
 | DOD-03 | §11.2.3 | verified | M39 added to inventory (Task 1); M28–M38 controller-transport evidence via ctrl_press in test_manager_native_prof.c (Task 2); keyboard tests in test_manager_interaction_prof.c relabeled to _keyboard per §5.7 | Task 1, Task 2 |
 | DOD-04 | §11.2.4 | verified | `test_overlay_visual.c`, `test_manager_visual.c` cover degraded/error/recovery states | |
-| DOD-05 | §11.2.5 | verified | Software-renderer smoke test_backend_smoke_sw.c provides rendering evidence; GPU backend test ready for compositor; capability accounted in OPERATIONS.md per §11.2.6 | Task 3 |
+| DOD-05 | §11.2.5 | partial | Software-renderer smoke test_backend_smoke_sw.c provides rendering evidence; GPU backend test_backend_smoke.c skipped (exit 77), gpu-compositor undeclared — an unexplained skip per §11.2.5 (FACT-005) | Task 4 |
 | DOD-06 | §11.2.6 | verified | `BUG-0012` closed after repository-root-flock, descriptor-boundary, verifier/event-byte binding, quarantine-race, strict-protocol/parser, complete factory/boilerplate, and 98-target project verification passed | Task 4 |
 | DOD-07 | §11.2.7 | verified | Campaign audit round 1 completed with 5 findings; this plan addresses all | |
 | DOD-08 | §11.2.8 | verified | README.md/OPERATIONS.md capability claims and inventory counts corrected (Task 1); capability-accounted items documented in OPERATIONS.md (Task 3) | Task 1, Task 3 |
@@ -291,12 +324,14 @@ Keyboard tests in `test_manager_interaction_prof.c` relabeled from
 
 ## Task 4: Final documentation and specification audit
 - Status: blocked
-- Block reason: BUG-0014 (invisible diagram) and BUG-0015 (0/4 virtual controllers); real InputPlumber system-bus acceptance required; block lifts only with Ralph-owned product fixes and real acceptance evidence
-- Dependencies: Task 1, Task 2, Task 3
-- Scope: `.factory/artifacts/implementation-plan.md` (conformance matrix update), `README.md`, `docs/OPERATIONS.md`, full clean verification
+- Block reason: BUG-0014 (invisible diagram) and BUG-0015 (0/4 virtual controllers); real InputPlumber system-bus acceptance required; block lifts only with Ralph-owned product fixes and real acceptance evidence (Tasks 5 and 6)
+- Dependencies: Task 1, Task 2, Task 3, Task 5, Task 6
+- Scope: `.factory/artifacts/implementation-plan.md` (conformance matrix update), `.factory/artifacts/conformance.json` (sidecar), `.factory/artifacts/blocked-facts.json` (facts ledger), `README.md`, `docs/OPERATIONS.md`, full clean verification
 - Acceptance criteria:
-  - All conformance matrix rows that depended on Tasks 1–3 reclassified: DOD-08 → verified (docs fixed), DOD-03 → verified (M39 added + controller transport evidence), MGR-08 → verified, DOD-01 → verified, DOD-05 → verified or deferral-accounted, VRF-06 → verified or deferral-accounted, VRF-07 → verified or deferral-accounted, SYS-01 → verified or deferral-accounted, SYS-02 → verified or deferral-accounted, OVL-09 → verified or deferral-accounted, PERF-01 → verified or deferral-accounted
-  - Any row that remains non-verified after Tasks 1–3 has a human-approved deferral documented in `.factory/bugs/open.md` or OPERATIONS.md per §11.2.6
+  - Task 5 (perceptible installed diagram acceptance) and Task 6 (real four-target InputPlumber routing acceptance) are complete, with exact receipt/artifact evidence resolving FACT-001, FACT-002, and FACT-003 (or an explicit human decision where SPEC §11.2.6 permits it)
+  - All conformance matrix rows reclassified: every row that depended on Tasks 1–3 or on Tasks 5–6 is `verified` in the matrix AND in `.factory/artifacts/conformance.json` at the evidence tier actually proven; no `partial`/`missing`/`ambiguous`/`blocked` row remains unless a blocked row is a documented blocking finding that fails completion
+  - Every open fact in `.factory/artifacts/blocked-facts.json` resolved by exact receipt/artifact or explicit human decision; documentation/rationale alone never resolves a normative requirement
+  - Any row that remains non-verified has a human-approved deferral documented per §11.2.6 (FACT-004/FACT-005/FACT-006 resolve only with real evidence or human decision)
   - Full clean build and test suite: `nix-shell --run 'rm -rf build-check && cmake -S . -B build-check -DCMAKE_BUILD_TYPE=Debug && cmake --build build-check --parallel && ctest --test-dir build-check --output-on-failure'` — zero failures, zero unexplained skips
   - `./scripts/verify-project.sh` passes
   - `./scripts/check-docs-sync.sh` passes (docs changed alongside implementation)
@@ -305,16 +340,39 @@ Keyboard tests in `test_manager_interaction_prof.c` relabeled from
   - Independent adversarial review: launch read-only reviewer and docs-reviewer subagents; no blocking issues found
   - Interaction inventory is exhaustive: M01–M39 + O01–O13 + D01–D08 all verified or NOT_APPLICABLE, with production-path controller and pointer evidence per §5.7
   - Definition of done (§11.2) all 9 criteria satisfied or explicitly deferred with human approval
-- Verification: `./scripts/final-gate.sh --planning` passes (planning mode); `./scripts/verify-project.sh` passes; conformance matrix has no unverified rows without task references or documented deferrals. BUG-0012 correction evidence: changed syntax/static/mode/diff checks; focused lock, orchestration, campaign state/sequence, completion/stale/recovery, plan-parser, checkpoint, bug, audit, runner/environment, Pi-wrapper, and bypass tests; `./scripts/verify-boilerplate.sh`; and `nix-shell --run './scripts/verify-project.sh'` all passed serially. Project CTest passed 98/98 with the two declared environment skips (`test_kernel_controller`, `test_backend_smoke`); installed-functional acceptance, packaging, and installed smoke passed. Campaign state SHA-256 remained `800ced3fd2c6889913d1035906fdc9093d76c0ad2ebe4162c1c380b547561b91`.
-- Documentation impact: Final reconciliation of README.md, OPERATIONS.md, and implementation-plan conformance matrix
+- Verification: `./scripts/final-gate.sh --implementation` passes (complete mode; rejected while any row is non-verified or any fact is open); `./scripts/verify-project.sh` passes; `./scripts/validate-conformance.py complete .factory/artifacts/conformance.json` and `./scripts/validate-blocked-facts.py complete` accept; conformance matrix, sidecar, and facts ledger agree with no drift. BUG-0012 correction evidence: changed syntax/static/mode/diff checks; focused lock, orchestration, campaign state/sequence, completion/stale/recovery, plan-parser, checkpoint, bug, audit, runner/environment, Pi-wrapper, and bypass tests; `./scripts/verify-boilerplate.sh`; and `nix-shell --run './scripts/verify-project.sh'` all passed serially. Project CTest passed 98/98 with the two declared environment skips (`test_kernel_controller`, `test_backend_smoke`); installed-functional acceptance, packaging, and installed smoke passed. Campaign state SHA-256 remained `800ced3fd2c6889913d1035906fdc9093d76c0ad2ebe4162c1c380b547561b91`.
+- Documentation impact: Final reconciliation of README.md, OPERATIONS.md, implementation-plan conformance matrix, conformance sidecar, and blocked-facts ledger
+
+## Task 5: Perceptible installed diagram acceptance
+- Status: pending
+- Dependencies: Task 1, Task 2, Task 3
+- Scope: renderer/asset-path diagnosis and fix for the production diagram (BUG-0014), a production-window/installed-path semantic test proving recognizable diagram content, `.factory/artifacts/blocked-facts.json` (resolve FACT-001 with receipt/artifact or human decision), `.factory/artifacts/conformance.json`
+- Acceptance criteria:
+  - `./build-check/controller-box --manager` on the installed X11 production path renders a controller diagram with recognizable content (outline, model label, slot highlight) in the diagram region — not a non-NULL texture, a fallback, or a broad pixel-count change
+  - A semantic test on the installed production window asserts recognizable diagram content (region-level assertions or equivalent), and `test_manager_visual`/`test_overlay_visual`/`test_golden` no longer pass while the production diagram is blank
+  - OVL-10 and MGR-07 reclassify `partial` -> `verified` in the conformance matrix and sidecar with the installed-window evidence; FACT-001 resolves with an exact receipt/artifact at the evidence commit
+  - No test injects an env var or source-tree path to load the diagram assets; the installed layout must load them through the production path
+- Verification: `nix-shell --run './scripts/verify-project.sh'`; installed diagram acceptance test passes on the real window server; `./scripts/validate-conformance.py planning` and `./scripts/validate-blocked-facts.py planning` accept; bug-ledger/BUG-0014 evidence attached
+- Documentation impact: README.md and OPERATIONS.md production launch notes updated
+
+## Task 6: Real four-target InputPlumber routing acceptance
+- Status: pending
+- Dependencies: Task 1, Task 2, Task 3
+- Scope: declare and provision `inputplumber-system-dbus` (and the real system-bus `org.shadowblip.InputPlumber` service with four target devices) in `.factory/environment.toml`, route all InputPlumber operations through the DBus backend abstraction on the real system bus, add a real four-target production acceptance test, `.factory/artifacts/blocked-facts.json` (FACT-002/FACT-003), `.factory/artifacts/conformance.json`
+- Acceptance criteria: four expected target/controller objects present and usable through production dispatch on the real InputPlumber system bus; `Topology incomplete: 0 of 4` no longer appears; ARCH-04, SYS-06, DBUS-02, DBUS-05, MGR-02, MGR-08 reclassify to `verified` in the matrix and sidecar; FACT-002 and FACT-003 resolve with exact system-bus probe receipts and routing acceptance evidence
+- Verification: `./scripts/run-factory-runners.py` then `./scripts/check-factory-runner-evidence.py` accept exact-commit receipts; `./scripts/check-capability-evidence.py` accepts `inputplumber-system-dbus`; the real four-target routing acceptance passes on the production dispatch path
+- Documentation impact: OPERATIONS.md capability declarations and acceptance evidence updated
 
 ## Remediation rule
 
-When the final audit (Task 4) finds a gap that Tasks 1–3 did not close:
-1. Preserve the existing task ledger and conformance matrix.
-2. Append a uniquely numbered pending task (Task 5, 6, …) with bounded scope.
-3. Add the new task to Task 4's dependencies.
-4. Return Task 4 to `pending` status.
+When the final audit (Task 4) finds a gap that earlier tasks did not close:
+1. Preserve the existing task ledger, conformance matrix, sidecar, and facts ledger.
+2. Append a uniquely numbered pending task (Task 7, 8, …) with bounded scope; the final
+   audit may be followed by appended tasks and must depend on every other task.
+3. Bind every affected blocked/partial conformance row to an open entry in
+   `.factory/artifacts/blocked-facts.json` with the exact unavailable evidence.
+4. Keep Task 4 `blocked` while any blocking finding or open fact remains;
+   return it to `pending` only when the facts it depends on are resolvable.
 5. Continue the loop.
 
 Reaching an iteration, runtime, or session ceiling leaves the cycle

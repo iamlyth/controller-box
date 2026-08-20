@@ -1,0 +1,59 @@
+{
+  "schema": "ralph-blocked-facts/v1",
+  "facts": [
+    {
+      "id": "FACT-001",
+      "title": "BUG-0014: perceptible installed controller diagram acceptance",
+      "status": "open",
+      "capabilities": [],
+      "requirements": ["OVL-10", "MGR-07", "MGR-08", "DOD-01", "DOD-09"],
+      "blocking_evidence": "Production launch of the real binary in a real window server shows a blank controller diagram area while test_manager_visual, test_overlay_visual, and test_golden pass. Goldens/pixel tests do not prove the production diagram rendering path. Required: a perceptible installed-diagram acceptance test on the installed X11 production path (recognizable diagram content, not a non-NULL texture, fallback, or broad pixel-count change).",
+      "resolution": null
+    },
+    {
+      "id": "FACT-002",
+      "title": "BUG-0015: real InputPlumber system-bus acceptance with four targets",
+      "status": "open",
+      "capabilities": ["inputplumber-system-dbus"],
+      "requirements": ["ARCH-04", "SYS-06", "DBUS-02", "DBUS-05", "MGR-02", "MGR-08", "DOD-01", "DOD-09"],
+      "blocking_evidence": "Manager reports 'Topology incomplete: 0 of 4 virtual controllers active' and no virtual controller works. inputplumber-system-dbus is NOT declared in .factory/environment.toml, so private/native-signature sd-bus tests are not real system-bus evidence. Required: four expected target/controller objects present and usable through production dispatch against the real org.shadowblip.InputPlumber system bus.",
+      "resolution": null
+    },
+    {
+      "id": "FACT-003",
+      "title": "Missing InputPlumber system-bus capability (inputplumber-system-dbus)",
+      "status": "open",
+      "capabilities": ["inputplumber-system-dbus"],
+      "requirements": ["ARCH-04", "SYS-06", "DBUS-02", "DBUS-05", "MGR-02", "MGR-08"],
+      "blocking_evidence": "inputplumber-system-dbus is undeclared in .factory/environment.toml with no tracked capability contract and no exact-commit receipt; no real org.shadowblip.InputPlumber bus owner/enumeration exists on the factory. Every row bound to this capability stays non-verified until a real system-bus probe receipt exists.",
+      "resolution": null
+    },
+    {
+      "id": "FACT-004",
+      "title": "Missing target consumer for real four-target routing and Pi 4 runtime",
+      "status": "open",
+      "capabilities": ["target-consumer"],
+      "requirements": ["SYS-01", "SYS-02", "OVL-09", "PERF-01", "MGR-08", "VRF-07", "DOD-01", "DOD-09"],
+      "blocking_evidence": "target-consumer is undeclared in .factory/environment.toml. A uinput producer is not the target consumer: real four-target InputPlumber routing, aarch64/Pi 4 build and runtime, and Pi 4 latency measurement all require the real target consumer hardware. No receipt proves any of them.",
+      "resolution": null
+    },
+    {
+      "id": "FACT-005",
+      "title": "Missing GPU compositor backend evidence",
+      "status": "open",
+      "capabilities": ["gpu-compositor"],
+      "requirements": ["VRF-06", "DOD-05", "DOD-01", "DOD-09"],
+      "blocking_evidence": "gpu-compositor is undeclared in .factory/environment.toml. test_backend_smoke exits 77 (skips) in headless; test_backend_smoke_sw provides software-renderer evidence only. Successful object creation or draw calls are insufficient for hardware-backend acceptance (SPEC §11.1.6).",
+      "resolution": null
+    },
+    {
+      "id": "FACT-006",
+      "title": "Missing target Pi runtime and human release acceptance",
+      "status": "open",
+      "capabilities": ["target-consumer"],
+      "requirements": ["SYS-02", "OVL-09", "PERF-01", "VRF-07", "DOD-01", "DOD-09"],
+      "blocking_evidence": "The Pi 4 ≤75 ms p99 overlay appearance bound (§4.9, §11) is derived from poll+show computation, not measured on minimum supported hardware; and SPEC §11.1.7 human release acceptance requires a human reviewer on target hardware with captures and a criteria checklist. Neither the hardware measurement nor the human review artifact exists.",
+      "resolution": null
+    }
+  ]
+}
