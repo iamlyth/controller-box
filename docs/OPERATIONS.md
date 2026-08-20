@@ -615,9 +615,18 @@ tracked files/directories with ordinary executable modes; symlinks, gitlinks,
 and special Git modes fail closed. Evidence and bounded logs are stored under
 `.factory-state/runner-evidence/`; they bind the commit, tree, environment
 declaration, verifier argv, archive, runner, nonce, capabilities, exit status,
-and cleanup result. Runner provisioning, SSH policy, credentials, endpoints,
-and host-specific setup remain outside the repository. Synthetic local tests
-cannot satisfy undeclared production hardware capabilities.
+cleanup result, and the provisioned signer identity. The detached signature
+(`manifest.sig`) and aggregate signer metadata are validated by
+`check-factory-runner-evidence.py` with `ssh-keygen -Y verify` against
+`.factory/signer-trust.json` (public keys only). The root-owned signer helper
+on the runner signs only manifests it rebuilds from a clean pass, so failures,
+skips, unsupported claims, and caller-supplied bytes are never certified;
+rotation is fail-closed (removed keys are rejected). Until a signer is
+provisioned (`enabled = true` in `.factory/signer-trust.json`), unsigned
+legacy/local manifests are rejected and runner-evidenced capabilities stay
+unevidenced. Runner provisioning, SSH policy, credentials, endpoints,
+signer keys, and host-specific setup remain outside the repository. Synthetic
+local tests cannot satisfy undeclared production hardware capabilities.
 
 ## Bug maintenance
 
