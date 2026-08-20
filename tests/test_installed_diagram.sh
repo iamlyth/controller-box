@@ -28,6 +28,12 @@ cd -- "$PROJECT_ROOT"
 
 BUILD_DIR="${1:-${BUILD_DIR:-build-check}}"
 STAGING_DIR="$PROJECT_ROOT/.test-install-diagram"
+# Dedicated custom-prefix build directory (AGENTS.md): the installed
+# production-path diagram test must exercise the installed layout, so the
+# binary is configured with CMAKE_INSTALL_PREFIX=$STAGING_DIR.  This makes
+# ICON_DIR resolve to the installed share tree at runtime instead of falling
+# back to SOURCE_ICON_DIR (which would be a production-path bypass).
+PREFIX_BUILD_DIR="$PROJECT_ROOT/.build-install-diagram"
 XVFB_DISPLAY=":93"
 XVFB_PID=""
 MANAGER_PID=""
@@ -51,7 +57,7 @@ cleanup() {
     if [ -n "$TMPDIR" ] && [ -d "$TMPDIR" ]; then
         rm -rf "$TMPDIR"
     fi
-    rm -rf "$STAGING_DIR" 2>/dev/null || true
+    rm -rf "$STAGING_DIR" "$PREFIX_BUILD_DIR" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -64,16 +70,27 @@ for tool in Xvfb xdotool import convert; do
 done
 
 # --- Step 1: build + install to staging prefix --------------------------------
-if [ ! -d "$BUILD_DIR" ]; then
-    cmake -S . -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Debug
+# Configure a dedicated build with CMAKE_INSTALL_PREFIX=$STAGING_DIR so the
+# installed binary's ICON_DIR points at the installed data directory.  This is
+# the only way the installed production path can be exercised without a
+# source-tree fallback (BUG-0014, Task 5): installing a default-prefix build
+# only relocates files while the binary still resolves ICON_DIR to /usr/share.
+rm -rf "$PREFIX_BUILD_DIR" "$STAGING_DIR"
+if cmake -S . -B "$PREFIX_BUILD_DIR" \
+        -DCMAKE_INSTALL_PREFIX="$STAGING_DIR" \
+        -DCMAKE_BUILD_TYPE=Debug >/dev/null 2>&1; then
+    :
+else
+    fail "custom-prefix cmake configure failed"
+    exit 1
 fi
-if [ ! -f "$BUILD_DIR/controller-box" ]; then
-    cmake --build "$BUILD_DIR" --parallel
+if ! cmake --build "$PREFIX_BUILD_DIR" --parallel >/dev/null 2>&1; then
+    fail "custom-prefix cmake build failed"
+    exit 1
 fi
-rm -rf "$STAGING_DIR"
 INSTALL_OK=0
 for attempt in 1 2 3; do
-    if cmake --install "$BUILD_DIR" --prefix "$STAGING_DIR" 2>&1; then
+    if cmake --install "$PREFIX_BUILD_DIR" >/dev/null 2>&1; then
         INSTALL_OK=1
         break
     fi
@@ -82,6 +99,14 @@ for attempt in 1 2 3; do
 done
 if [ "$INSTALL_OK" -ne 1 ]; then
     fail "cmake --install failed after 3 attempts"
+    exit 1
+fi
+# The custom-prefix install must deliver the diagram asset to the installed
+# data layout.  If it is missing, the binary would fall back to the source
+# tree, which the acceptance must reject.
+INSTALLED_SVG="$STAGING_DIR/share/controller-box/icons/svg/generic-gamepad.svg"
+if [ ! -f "$INSTALLED_SVG" ]; then
+    fail "installed layout missing controller SVG: $INSTALLED_SVG"
     exit 1
 fi
 INSTALLED_BIN="$STAGING_DIR/bin/controller-box"

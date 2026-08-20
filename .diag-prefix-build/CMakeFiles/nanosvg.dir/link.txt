@@ -1,0 +1,2 @@
+/nix/store/l5qkpzsr4gxvksh45b3nhxbkyr5cviar-gcc-wrapper-15.3.0/bin/ar qc libnanosvg.a CMakeFiles/nanosvg.dir/third_party/nanosvg/nanosvg_impl.c.o
+/nix/store/l5qkpzsr4gxvksh45b3nhxbkyr5cviar-gcc-wrapper-15.3.0/bin/ranlib libnanosvg.a

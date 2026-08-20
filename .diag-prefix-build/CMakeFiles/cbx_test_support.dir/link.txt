@@ -1,0 +1,2 @@
+/nix/store/l5qkpzsr4gxvksh45b3nhxbkyr5cviar-gcc-wrapper-15.3.0/bin/ar qc libcbx_test_support.a CMakeFiles/cbx_test_support.dir/tests/test_harness.c.o CMakeFiles/cbx_test_support.dir/tests/dbus_mock.c.o CMakeFiles/cbx_test_support.dir/tests/fb_assert.c.o CMakeFiles/cbx_test_support.dir/tests/interaction_inventory.c.o
+/nix/store/l5qkpzsr4gxvksh45b3nhxbkyr5cviar-gcc-wrapper-15.3.0/bin/ranlib libcbx_test_support.a

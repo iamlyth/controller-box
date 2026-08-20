@@ -1,0 +1,29 @@
+CMakeFiles/controllerbox.dir/src/identify/assign.c.o: \
+ /workspace/project/src/identify/assign.c \
+ /nix/store/29isvm6vfq10c528i31igdiy3fnvjcm3-glibc-2.42-67-dev/include/stdc-predef.h \
+ /workspace/project/src/identify/assign.h \
+ /nix/store/qrn789mrv652j7f5bcjp367npzpcyvdi-gcc-15.3.0/lib/gcc/x86_64-unknown-linux-gnu/15.3.0/include/stdbool.h \
+ /nix/store/qrn789mrv652j7f5bcjp367npzpcyvdi-gcc-15.3.0/lib/gcc/x86_64-unknown-linux-gnu/15.3.0/include/stddef.h \
+ /workspace/project/src/config/config_assignments.h \
+ /nix/store/29isvm6vfq10c528i31igdiy3fnvjcm3-glibc-2.42-67-dev/include/errno.h \
+ /nix/store/29isvm6vfq10c528i31igdiy3fnvjcm3-glibc-2.42-67-dev/include/features.h \
+ /nix/store/29isvm6vfq10c528i31igdiy3fnvjcm3-glibc-2.42-67-dev/include/features-time64.h \
+ /nix/store/29isvm6vfq10c528i31igdiy3fnvjcm3-glibc-2.42-67-dev/include/bits/wordsize.h \
+ /nix/store/29isvm6vfq10c528i31igdiy3fnvjcm3-glibc-2.42-67-dev/include/bits/timesize.h \
+ /nix/store/29isvm6vfq10c528i31igdiy3fnvjcm3-glibc-2.42-67-dev/include/sys/cdefs.h \
+ /nix/store/29isvm6vfq10c528i31igdiy3fnvjcm3-glibc-2.42-67-dev/include/bits/long-double.h \
+ /nix/store/29isvm6vfq10c528i31igdiy3fnvjcm3-glibc-2.42-67-dev/include/gnu/stubs.h \
+ /nix/store/29isvm6vfq10c528i31igdiy3fnvjcm3-glibc-2.42-67-dev/include/gnu/stubs-64.h \
+ /nix/store/29isvm6vfq10c528i31igdiy3fnvjcm3-glibc-2.42-67-dev/include/bits/errno.h \
+ /nix/store/29isvm6vfq10c528i31igdiy3fnvjcm3-glibc-2.42-67-dev/include/linux/errno.h \
+ /nix/store/29isvm6vfq10c528i31igdiy3fnvjcm3-glibc-2.42-67-dev/include/asm/errno.h \
+ /nix/store/29isvm6vfq10c528i31igdiy3fnvjcm3-glibc-2.42-67-dev/include/asm-generic/errno.h \
+ /nix/store/29isvm6vfq10c528i31igdiy3fnvjcm3-glibc-2.42-67-dev/include/asm-generic/errno-base.h \
+ /nix/store/29isvm6vfq10c528i31igdiy3fnvjcm3-glibc-2.42-67-dev/include/bits/types/error_t.h \
+ /nix/store/29isvm6vfq10c528i31igdiy3fnvjcm3-glibc-2.42-67-dev/include/string.h \
+ /nix/store/29isvm6vfq10c528i31igdiy3fnvjcm3-glibc-2.42-67-dev/include/bits/libc-header-start.h \
+ /nix/store/29isvm6vfq10c528i31igdiy3fnvjcm3-glibc-2.42-67-dev/include/bits/types/locale_t.h \
+ /nix/store/29isvm6vfq10c528i31igdiy3fnvjcm3-glibc-2.42-67-dev/include/bits/types/__locale_t.h \
+ /nix/store/29isvm6vfq10c528i31igdiy3fnvjcm3-glibc-2.42-67-dev/include/strings.h \
+ /nix/store/29isvm6vfq10c528i31igdiy3fnvjcm3-glibc-2.42-67-dev/include/bits/strings_fortified.h \
+ /nix/store/29isvm6vfq10c528i31igdiy3fnvjcm3-glibc-2.42-67-dev/include/bits/string_fortified.h
