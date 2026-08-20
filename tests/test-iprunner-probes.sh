@@ -182,6 +182,8 @@ tc_fixture() {
     echo "/org/shadowblip/InputPlumber/devices/target/xb360-1" > "$dir/create-response"
     printf 'event0\nevent1\n' > "$dir/device-baseline"
     printf 'event0\nevent1\nevent5\n' > "$dir/device-after"
+    printf 'Microsoft X-Box 360 pad\txb360\n' > "$dir/target-identity"
+    printf 'event5\tMicrosoft X-Box 360 pad\tinput/input42\n' > "$dir/device-identities"
     printf 'event 1 304 1\n' > "$dir/event-stream"
     echo ok > "$dir/input-event-result"
     echo ok > "$dir/stop-result"
@@ -209,6 +211,27 @@ grep -q 'stop-target=fail' "$tmp/tc-noclean/cleanup.log"
 tc_fixture "$tmp/tc-stale"
 printf 'event0\nevent1\n' > "$tmp/tc-stale/device-after"
 must_fail "stale device tree (no new event device)" bash "$TARGET_PROBE" --fixture "$tmp/tc-stale"
+
+# The exact DBus target identity must match one and only one newly appeared
+# kernel event device. Wrong identities and duplicate matches are rejected;
+# an unrelated concurrent node is ignored rather than selected first.
+tc_fixture "$tmp/tc-wrong-identity"
+printf 'event5\tUnrelated virtual input\tinput/input42\n' > "$tmp/tc-wrong-identity/device-identities"
+must_fail "wrong target device identity" bash "$TARGET_PROBE" --fixture "$tmp/tc-wrong-identity"
+
+tc_fixture "$tmp/tc-ambiguous"
+printf 'event0\nevent1\nevent5\nevent6\n' > "$tmp/tc-ambiguous/device-after"
+printf 'event5\tMicrosoft X-Box 360 pad\tinput/input42\nevent6\tMicrosoft X-Box 360 pad\tinput/input43\n' > "$tmp/tc-ambiguous/device-identities"
+must_fail "ambiguous target device identity" bash "$TARGET_PROBE" --fixture "$tmp/tc-ambiguous"
+
+tc_fixture "$tmp/tc-unrelated"
+printf 'event0\nevent1\nevent4\nevent5\n' > "$tmp/tc-unrelated/device-after"
+printf 'event4\tConcurrent unrelated input\tinput/input41\nevent5\tMicrosoft X-Box 360 pad\tinput/input42\n' > "$tmp/tc-unrelated/device-identities"
+must_pass "unrelated concurrent device is not mistaken for target" bash "$TARGET_PROBE" --fixture "$tmp/tc-unrelated"
+
+tc_fixture "$tmp/tc-wrong-type"
+printf 'Microsoft X-Box 360 pad\tkeyboard\n' > "$tmp/tc-wrong-type/target-identity"
+must_fail "wrong target DeviceType" bash "$TARGET_PROBE" --fixture "$tmp/tc-wrong-type"
 
 # Creation failure still runs the cleanup path (nothing to stop, but the
 # probe must fail and the journal must record the attempted path).

@@ -94,7 +94,6 @@ TARGET_IFACE=${PIN_VALUES[12]}
 tmp=$(mktemp -d)
 RESULT=0
 TARGET_PATH=""
-COMPOSITE_PATH=""
 CONSUMER_PID=""
 CLEANUP_LOG="$tmp/cleanup.log"
 
@@ -199,10 +198,17 @@ PY
             return 1
         fi
     else
-        if create_output=$(busctl --system call "$BUS_NAME" "$MANAGER_PATH" "$MANAGER_IFACE" \
+        if create_output=$(busctl --system --json=short call "$BUS_NAME" "$MANAGER_PATH" "$MANAGER_IFACE" \
             CreateTargetDevice s "$TARGET_KIND" 2>/dev/null); then
-            TARGET_PATH=$(python3 -c "import json,sys;print(json.loads(sys.argv[1]).get('data',''))" \
-                "$create_output" 2>/dev/null || true)
+            TARGET_PATH=$(python3 -c '
+import json, sys
+v = json.loads(sys.argv[1])
+while isinstance(v, dict) and "data" in v:
+    v = v["data"]
+if isinstance(v, list) and len(v) == 1:
+    v = v[0]
+print(v if isinstance(v, str) else "")
+' "$create_output" 2>/dev/null || true)
             echo "target-consumer-probe: created target $TARGET_PATH"
         else
             echo "target-consumer-probe: CreateTargetDevice failed on the real bus" >&2
@@ -214,32 +220,73 @@ PY
         return 1
     }
 
-    # ---- Independently discover the new kernel event device. -------------
-    # Poll the kernel device tree for a new non-USB event node; the target's
-    # virtual device is not a USB device. If a standalone target exposes no
-    # device, try the composite/attach path once before failing.
+    # ---- Bind the created DBus target to exactly one new evdev node. ------
+    # InputPlumber v0.78 exposes Name and DeviceType on the exact Target
+    # object path. It does not expose a devnode, so independently cross-check
+    # that identity against every newly appeared kernel event node. Never
+    # accept the first new node: zero and multiple matches both fail closed.
+    if [[ -n "$FIXTURE" ]]; then
+        if [[ ! -f "$FIXTURE/target-identity" ]]; then
+            echo "target-consumer-probe: fixture missing target-identity" >&2
+            return 1
+        fi
+        IFS=$'\t' read -r TARGET_NAME TARGET_DEVICE_TYPE < "$FIXTURE/target-identity"
+    else
+        read_target_property() {
+            busctl --system --json=short get-property "$BUS_NAME" "$TARGET_PATH" \
+                "$TARGET_IFACE" "$1" 2>/dev/null | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+while isinstance(v, dict) and "data" in v:
+    v = v["data"]
+if isinstance(v, list) and len(v) == 1:
+    v = v[0]
+if not isinstance(v, str):
+    raise SystemExit(1)
+print(v)
+'
+        }
+        TARGET_NAME=$(read_target_property Name) || {
+            echo "target-consumer-probe: cannot read Name from created target $TARGET_PATH" >&2
+            return 1
+        }
+        TARGET_DEVICE_TYPE=$(read_target_property DeviceType) || {
+            echo "target-consumer-probe: cannot read DeviceType from created target $TARGET_PATH" >&2
+            return 1
+        }
+    fi
+    if [[ -z "$TARGET_NAME" || "$TARGET_DEVICE_TYPE" != "$TARGET_KIND" ]]; then
+        echo "target-consumer-probe: created target identity mismatch (name=$TARGET_NAME type=$TARGET_DEVICE_TYPE expected-type=$TARGET_KIND)" >&2
+        return 1
+    fi
+
     discover_device() {
         local deadline=$(( $(date +%s) + DEVICE_WAIT ))
         while :; do
-            local after
+            local after new entry name resolved
+            local -a matches=()
             after=$( { if [[ -n "$FIXTURE" ]]; then cat "$FIXTURE/device-after" 2>/dev/null || cat "$tmp/baseline"; else list_event_devices; fi; } )
-            local new
             new=$(comm -13 <(cat "$tmp/baseline") <(printf '%s\n' "$after") || true)
-            local non_usb=""
             while IFS= read -r entry; do
                 [[ -n "$entry" ]] || continue
                 if [[ -n "$FIXTURE" ]]; then
-                    non_usb=$entry
-                    break
+                    name=$(awk -F '\t' -v node="$entry" '$1 == node {print $2; found=1; exit} END {if (!found) exit 1}' \
+                        "$FIXTURE/device-identities" 2>/dev/null) || continue
+                else
+                    resolved=$(readlink -f "/sys/class/input/$entry/device" 2>/dev/null || true)
+                    [[ -n "$resolved" && "$resolved" != *usb* ]] || continue
+                    name=$(cat "/sys/class/input/$entry/device/name" 2>/dev/null || true)
                 fi
-                case "$(readlink -f "/sys/class/input/$entry/device" 2>/dev/null || true)" in
-                    *usb*) ;;
-                    *) non_usb=$entry; break ;;
-                esac
+                [[ "$name" == "$TARGET_NAME" ]] && matches+=("$entry")
             done <<< "$new"
-            if [[ -n "$non_usb" ]]; then
-                printf '%s\n' "$non_usb"
+            if [[ ${#matches[@]} -eq 1 ]]; then
+                printf '%s\n' "${matches[0]}"
                 return 0
+            fi
+            if [[ ${#matches[@]} -gt 1 ]]; then
+                echo "target-consumer-probe: ambiguous target identity: ${#matches[@]} new devices match $TARGET_NAME" >&2
+                printf '%s\n' "AMBIGUOUS"
+                return 2
             fi
             if [[ "$(date +%s)" -ge "$deadline" ]]; then
                 printf '%s\n' "STALE_OR_ABSENT"
@@ -251,23 +298,12 @@ PY
 
     NEW_DEVICE=""
     NEW_DEVICE=$(discover_device) || true
-    if [[ "$NEW_DEVICE" == "STALE_OR_ABSENT" ]]; then
-        if [[ -z "$FIXTURE" ]]; then
-            echo "target-consumer-probe: no new kernel event device after CreateTargetDevice; trying composite/attach" >&2
-            if composite_output=$(busctl --system call "$BUS_NAME" "$MANAGER_PATH" "$MANAGER_IFACE" \
-                CreateCompositeDevice s "iprunner-probe" 2>/dev/null); then
-                COMPOSITE_PATH=$(python3 -c "import json,sys;print(json.loads(sys.argv[1]).get('data',''))" \
-                    "$composite_output" 2>/dev/null || true)
-                if [[ -n "$COMPOSITE_PATH" ]]; then
-                    busctl --system call "$BUS_NAME" "$MANAGER_PATH" "$MANAGER_IFACE" \
-                        AttachTargetDevice ss "$TARGET_PATH" "$COMPOSITE_PATH" >/dev/null 2>&1 || true
-                    NEW_DEVICE=$(discover_device) || true
-                fi
-            fi
-        fi
+    if [[ "$NEW_DEVICE" == "AMBIGUOUS" ]]; then
+        echo "target-consumer-probe: refusing ambiguous kernel target identity" >&2
+        return 1
     fi
     if [[ "$NEW_DEVICE" == "STALE_OR_ABSENT" || -z "$NEW_DEVICE" ]]; then
-        echo "target-consumer-probe: no new kernel event device appeared (stale/absent device tree); FAIL" >&2
+        echo "target-consumer-probe: no uniquely identity-bound kernel event device appeared; FAIL" >&2
         return 1
     fi
     CONSUMER_DEVICE="/dev/input/$NEW_DEVICE"
@@ -318,8 +354,8 @@ PY
                 --code "$OBSERVE_CODE" --value "$OBSERVE_VALUE" > "$tmp/observer.out" 2>&1 &
         fi
     else
-        "$OBSERVER" --device "$CONSUMER_DEVICE" --type "$OBSERVE_TYPE" \
-            --code "$OBSERVE_CODE" --value "$OBSERVE_VALUE" --window "$CONSUMER_WINDOW" \
+        "$OBSERVER" --device "$CONSUMER_DEVICE" --expect-name "$TARGET_NAME" \
+            --type "$OBSERVE_TYPE" --code "$OBSERVE_CODE" --value "$OBSERVE_VALUE" --window "$CONSUMER_WINDOW" \
             > "$tmp/observer.out" 2>&1 &
     fi
     CONSUMER_PID=$!

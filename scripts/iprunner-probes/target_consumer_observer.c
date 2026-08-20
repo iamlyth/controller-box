@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
 
 static const char *g_device = NULL;
@@ -33,6 +34,7 @@ static int g_expected_code = BTN_A;
 static int g_expected_value = 1;
 static int g_window_ms = 15000;
 static const char *g_fixture = NULL;
+static const char *g_expected_name = NULL;
 
 static void fail_observer(const char *message)
 {
@@ -80,6 +82,18 @@ static int run_live(void)
     if (ioctl(fd, EVIOCGBIT(0, sizeof(bit)), bit) < 0) {
         close(fd);
         fail_observer("device is not an evdev node");
+    }
+    if (g_expected_name) {
+        char name[256] = {0};
+        if (ioctl(fd, EVIOCGNAME(sizeof(name)), name) < 0) {
+            close(fd);
+            fail_observer("cannot read evdev identity");
+        }
+        if (strcmp(name, g_expected_name) != 0) {
+            close(fd);
+            fail_observer("evdev identity does not match the created target");
+        }
+        printf("target-consumer-observer: identity name=%s\n", name);
     }
     printf("target-consumer-observer: observing %s for type=%d code=%d value=%d "
            "within %d ms\n", g_device, g_expected_type, g_expected_code,
@@ -140,6 +154,8 @@ int main(int argc, char **argv)
             g_window_ms = (int)strtol(argv[++i], NULL, 0) * 1000;
         } else if (strcmp(argv[i], "--fixture") == 0 && i + 1 < argc) {
             g_fixture = argv[++i];
+        } else if (strcmp(argv[i], "--expect-name") == 0 && i + 1 < argc) {
+            g_expected_name = argv[++i];
         } else {
             fprintf(stderr, "target-consumer-observer: unknown argument: %s\n", argv[i]);
             return 2;
