@@ -268,6 +268,26 @@ flatpak_id_is_valid(const char *id)
     return true;
 }
 
+/* The single Flatpak app ID this build is allowed to trust from the
+ * FLATPAK_ID environment variable (matches packaging/
+ * org.shadowblip.ControllerBox.yaml).  Binding to this exact value (rather
+ * than accepting any app-ID-shaped string) prevents persisting an
+ * attacker-chosen app ID into the systemd unit ExecStart line when the
+ * manager runs with a hostile FLATPAK_ID in the environment. */
+#define CBX_EXPECTED_FLATPAK_ID "org.shadowblip.ControllerBox"
+
+/* True only when the FLATPAK_ID environment variable holds exactly the
+ * expected app ID.  Keeps the charset validation as defense-in-depth but
+ * no longer treats an arbitrary reverse-DNS string as trusted. */
+static bool
+flatpak_id_is_expected(void)
+{
+    const char *id = getenv("FLATPAK_ID");
+    if (!id || strcmp(id, CBX_EXPECTED_FLATPAK_ID) != 0)
+        return false;
+    return flatpak_id_is_valid(id);
+}
+
 int
 cbx_service_unit_content(char *buf, size_t buflen)
 {
@@ -286,7 +306,7 @@ cbx_service_unit_content(char *buf, size_t buflen)
     const char *exec_start;
     char exec_buf[512];
 
-    if (flatpak_id_is_valid(flatpak_id)) {
+    if (flatpak_id_is_expected()) {
         snprintf(exec_buf, sizeof(exec_buf),
                  "flatpak run %s --overlay-service", flatpak_id);
         exec_start = exec_buf;
@@ -508,11 +528,14 @@ systemctl_prefix(void)
     if (mock_systemctl)
         return mock_systemctl;
 
-    /* Detect Flatpak — use flatpak-spawn --host for systemctl. */
-    if (flatpak_id_is_valid(getenv("FLATPAK_ID")))
-        return "flatpak-spawn --host systemctl --user";
+    /* Detect Flatpak — use flatpak-spawn --host for systemctl.  Tool paths
+     * are absolute so a hostile PATH cannot redirect execvp to an arbitrary
+     * binary executed with the app's privileges (security hardening: the
+     * shell is gone, but PATH search must be too). */
+    if (flatpak_id_is_expected())
+        return "/usr/bin/flatpak-spawn --host /usr/bin/systemctl --user";
 
-    return "systemctl --user";
+    return "/usr/bin/systemctl --user";
 }
 
 int

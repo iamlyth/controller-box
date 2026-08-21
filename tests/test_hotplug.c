@@ -162,6 +162,23 @@ test_model_add_composite(void **state)
     assert_int_equal(model.composites[0].index, 0);
 }
 
+/* Composite with an out-of-range numeric index is parsed safely (no wrap). */
+static void
+test_model_add_composite_overflow(void **state)
+{
+    (void)state;
+    cbx_device_model model;
+    cbx_device_model_init(&model);
+
+    /* A digit string far beyond the signed int range wraps under atoi
+     * (undefined behavior).  The bounds-checked parse must reject it. */
+    bool ok = cbx_device_model_add_composite(&model,
+        IP_ROOT "/CompositeDevice99999999999999999999999999999999");
+    assert_true(ok);
+    assert_int_equal(model.composite_count, 1);
+    assert_int_equal(model.composites[0].index, -1);
+}
+
 /* Add composite duplicate is idempotent. */
 static void
 test_model_add_composite_dup(void **state)
@@ -749,6 +766,7 @@ main(void)
 
         /* Device model mutation */
         cmocka_unit_test(test_model_add_composite),
+        cmocka_unit_test(test_model_add_composite_overflow),
         cmocka_unit_test(test_model_add_composite_dup),
         cmocka_unit_test(test_model_add_composite_full),
         cmocka_unit_test(test_model_remove_composite),

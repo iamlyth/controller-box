@@ -182,6 +182,26 @@ static void test_unit_content_flatpak(void **state)
     unsetenv("FLATPAK_ID");
 }
 
+static void test_unit_content_flatpak_rejects_other_id(void **state)
+{
+    (void)state;
+    /* A hostile, app-ID-shaped FLATPAK_ID must NOT be persisted into the
+     * systemd unit ExecStart line.  Only the expected app ID
+     * (org.shadowblip.ControllerBox) is trusted; anything else falls back
+     * to the compiled binary path instead of `flatpak run <attacker>`. */
+    setenv("FLATPAK_ID", "org.malicious.Evil", 1);
+
+    char buf[2048];
+    int rc = cbx_service_unit_content(buf, sizeof(buf));
+    assert_int_equal(rc, 0);
+
+    assert_null(strstr(buf, "flatpak run org.malicious.Evil"));
+    assert_null(strstr(buf, "org.malicious.Evil"));
+    assert_non_null(strstr(buf, "--overlay-service"));
+
+    unsetenv("FLATPAK_ID");
+}
+
 static void test_unit_content_overflow(void **state)
 {
     (void)state;
@@ -700,6 +720,7 @@ static const struct CMUnitTest tests[] = {
     /* Unit file content. */
     cmocka_unit_test_setup_teardown(test_unit_content_basic, setup, teardown),
     cmocka_unit_test_setup_teardown(test_unit_content_flatpak, setup, teardown),
+    cmocka_unit_test_setup_teardown(test_unit_content_flatpak_rejects_other_id, setup, teardown),
     cmocka_unit_test_setup_teardown(test_unit_content_overflow, setup, teardown),
     cmocka_unit_test_setup_teardown(test_unit_content_null_args, setup, teardown),
 

@@ -77,6 +77,19 @@ ip_create_composite_device(const ip_dbus_backend *backend,
     if (fd < 0)
         return -errno;
 
+    /* Capture the created file's identity (dev/inode) so we can detect a
+     * TOCTOU swap later.  In a world-writable directory (e.g. /tmp) another
+     * local process could unlink our file between creation and the DBus
+     * read and plant a symlink; the fstat/lstat comparison below rejects
+     * that before InputPlumber opens the path. */
+    struct stat st_created;
+    if (fstat(fd, &st_created) != 0) {
+        int saved = errno;
+        close(fd);
+        unlink(template);
+        return -saved;
+    }
+
     /* Set restrictive permissions immediately. */
     if (fchmod(fd, 0600) != 0) {
         int saved = errno;
@@ -115,8 +128,18 @@ ip_create_composite_device(const ip_dbus_backend *backend,
     }
 
     /* Call CreateCompositeDevice via the backend, passing the temp
-     * file path (not user-controlled).  The temp file is unlinked
-     * below regardless of the call result. */
+     * file path (not user-controlled).  First confirm the path still
+     * resolves to the inode we created (TOCTOU hardening): if it was
+     * swapped for a symlink after close(fd), refuse to hand it to
+     * InputPlumber. */
+    struct stat st_now;
+    if (lstat(template, &st_now) != 0 ||
+        st_now.st_dev != st_created.st_dev ||
+        st_now.st_ino != st_created.st_ino) {
+        unlink(template);
+        return -ESTALE;
+    }
+
     int rc = backend->call_method(bus, IP_DBUS_NAME,
                                     IP_DBUS_MANAGER_PATH,
                                     IP_IFACE_MANAGER,

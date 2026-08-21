@@ -331,7 +331,7 @@ Keyboard tests in `test_manager_interaction_prof.c` relabeled from
 ## Task 4: Final documentation and specification audit
 - Status: blocked
 - Block reason: BUG-0014 (invisible diagram) and BUG-0015 (0/4 virtual controllers); real InputPlumber system-bus acceptance required; block lifts only with Ralph-owned product fixes and real acceptance evidence (Tasks 5 and 6)
-- Dependencies: Task 1, Task 2, Task 3, Task 5, Task 6, Task 7, Task 8
+- Dependencies: Task 1, Task 2, Task 3, Task 5, Task 6, Task 7, Task 8, Task 9, Task 10, Task 11, Task 12
 - Scope: `.factory/artifacts/implementation-plan.md` (conformance matrix update), `.factory/artifacts/conformance.json` (sidecar), `.factory/artifacts/blocked-facts.json` (facts ledger), `README.md`, `docs/OPERATIONS.md`, full clean verification
 - Acceptance criteria:
   - Task 5 (perceptible installed diagram acceptance) and Task 6 (real four-target InputPlumber routing acceptance) are complete, with exact receipt/artifact evidence resolving FACT-001, FACT-002, and FACT-003 (or an explicit human decision where SPEC §11.2.6 permits it)
@@ -396,6 +396,56 @@ Keyboard tests in `test_manager_interaction_prof.c` relabeled from
 - Verification: reproduce the host-profile failure, apply the fix, and verify both environments pass; `nix-shell --run './scripts/verify-project.sh'`; `./scripts/validate-conformance.py planning` and `./scripts/validate-blocked-facts.py planning` accept; bug-ledger/BUG-0018 harness entry attached as evidence of the binding-stability mechanism only
 - Documentation impact: OPERATIONS.md production launch notes note the environment-independent installed diagram acceptance
 - Result: the test now creates a test-owned profile (`cbx-diagram-test`, 4 diagram-button mappings) in the isolated user profiles dir with a `display_order: -50` sidecar, computes that profile's sorted row (never a first-row click), and verifies the outline/slot-highlight/title/binding-list content. `CBX_DIAGRAM_STAGE_HOST=1` stages a zero-binding profile at `display_order: -100` that sorts ahead, reproducing the host-sorts-first failure. Verified passing without staging (row 0) and with staging (row 1); forcing selection of the staged first-row profile fails the slot-highlight and binding-list assertions, confirming the regression is real. Evidence commit `3ddefae`. OVL-10/MGR-07 reclassified `verified` in matrix and sidecar; FACT-008 resolved with an artifact resolution.
+
+## Task 9: Security hardening of process-execution and parsing trust boundaries
+- Status: pending
+- Dependencies: Task 1, Task 2, Task 3
+- Scope: `src/manager/service_install.c`, `src/dbus/ip_objectmanager.c`, `src/dbus/ip_device_model.c`, `src/dbus/ip_create_composite.c`, `tests/test_service_install.c`, `tests/test_hotplug.c`
+- Acceptance criteria:
+  - Process-execution hardening: `systemctl`/`flatpak-spawn` resolved via absolute paths (no PATH search) in `systemctl_prefix()` (F1)
+  - `FLATPAK_ID` bound to the exact expected app ID `org.shadowblip.ControllerBox` (not any app-ID-shaped string) in both `cbx_service_unit_content` and `systemctl_prefix` (F2)
+  - Composite temp-file TOCTOU hardening: fstat/lstat inode comparison immediately before the `CreateCompositeDevice` call rejects a path swapped for a symlink (F4)
+  - `atoi` replaced with bounds-checked `strtol` in `parse_composite_index` (both `ip_objectmanager.c` and `ip_device_model.c`) so an attacker-influenced oversized path component cannot wrap (F5)
+  - New regression tests: hostile `FLATPAK_ID` rejected (falls back to binary path, no `flatpak run <attacker>`); out-of-range composite index parsed safely
+  - Full suite passes; ASan+UBSan clean on the touched paths
+- Verification: build + full ctest (100/100 pass, same 2 environmental skips); targeted ASan+UBSan on the four touched test targets passes; full sanitizer build passes 100/100
+- Documentation impact: none — internal hardening only; no public behavior change
+- Result: All four F1/F2/F4/F5 fixes implemented and verified in this cycle (see commit). `parse_composite_index` returns -1 on any out-of-range numeric suffix instead of wrapping; `systemctl_prefix()` returns absolute tool paths; `FLATPAK_ID` is accepted only when it equals `org.shadowblip.ControllerBox`; `ip_create_composite_device` verifies the temp path's dev/inode before handing it to InputPlumber. New tests `test_unit_content_flatpak_rejects_other_id` and `test_model_add_composite_overflow` added and passing. Status kept `pending` (not `complete`) per the appended-after-final-audit convention: Task 4 is the single gate that marks the cycle complete. The two remaining security-reviewer findings (F3 DBus name-squatting credential verification, F6 test-mock gating) are deferred to Task 10; the docs-reviewer and reviewer findings are tracked as Task 11 (test-quality) and Task 12 (documentation accuracy).
+
+## Task 10: Security hardening — DBus sender credential verification and test-mock gating
+- Status: pending
+- Dependencies: Task 1, Task 2, Task 3, Task 9
+- Scope: `src/dbus/dbus_client.c`, `src/dbus/ip_connection.c`, `src/manager/service_install.c`, `src/manager/service_install.h`, `tests/CMakeLists.txt`
+- Acceptance criteria:
+  - After resolving InputPlumber's unique bus name (`GetNameOwner`), verify the sender via `GetConnectionCredentials`/`GetConnectionUnixProcessID` and re-verify on every `NameOwnerChanged`; reject signals/method replies from an unverified sender even when InputPlumber is down (F3, prevents name squatting)
+  - Gate the `cbx_service_set_mock_*` test overrides behind `#ifdef CBX_TESTING` (or move them to a test-only compilation unit) so they cannot appear in release builds (F6); ensure test targets still compile with the gate defined
+- Verification: build + full ctest; ASan+UBSan clean; confirm release (non-test) build has no mock symbols
+- Documentation impact: OPERATIONS.md trust-boundary notes if behavior changes
+
+## Task 11: Test-quality remediation for §5.7 semantic-outcome gaps
+- Status: pending
+- Dependencies: Task 1, Task 2, Task 3, Task 9
+- Scope: `tests/test_kernel_controller.c`, `tests/test_overlay_native.c`, `tests/test_manager_native_prof.c`, `tests/test_manager_visual.c`, `tests/test_golden.c`, `tests/test_installed_smoke.sh`, `tests/test_interaction_inventory.c`
+- Acceptance criteria:
+  - `test_kernel_controller.c` asserts a semantic outcome produced by kernel-backed events (e.g. settings.yaml read-back or tab change) and registers the gamecontroller mapping, not merely "manager did not crash" (finding 1)
+  - Overlay close (O10/O10b/O13) exercised via the DBus `InputEvent` transport (`emit_input_event(...,"B",1.0)`) instead of only the keyboard `SDLK_b` path (finding 2)
+  - M36 uses the controller Start button (`ctrl_press`), M37 asserts on-disk profile change (not a pre-existing file), M30 asserts the target event was applied (findings 3-5)
+  - Validation-error visual states rendered through the production save path, not manually injected (finding 6)
+  - `test_installed_smoke.sh` no longer blesses an early exit as pass where §11.1.5 declares it a failure (finding 7); inventory ledger ties `verified` flags to actual test pass status (finding 8)
+- Verification: build + full ctest; affected tests pass with the semantic assertions in place
+- Documentation impact: interaction inventory rows updated if dispatch evidence changes
+
+## Task 12: Documentation accuracy remediation
+- Status: pending
+- Dependencies: Task 1, Task 2, Task 3, Task 9
+- Scope: `README.md`, `docs/REVIEW.md`, `docs/OPERATIONS.md`, `.factory/artifacts/implementation-plan.md`
+- Acceptance criteria:
+  - CTest target count corrected from 98 to 100 (with 98 pass / 2 environmental skips) in README.md, docs/REVIEW.md, and the implementation-plan matrix/runner block (finding 1)
+  - README.md "Known environment limitations" intro enumerates all four declared runner capabilities (`remote-project-gate`, `systemd-user`, `kernel-uinput`, `installed-package`), not just two (finding 2)
+  - "Proven by runner receipt 26df6c0" downgraded to note the receipt is unsigned/unevidenced pending a signed commit-bound receipt (FACT-007) wherever it appears (finding 3)
+  - OPERATIONS.md receipt count corrected from 12 to 13 (finding 4); REVIEW.md "98/98 passing … 2 skips" made internally consistent (finding 5)
+- Verification: `./scripts/check-docs-sync.sh` passes; grep confirms no stale "98" or "proven by runner receipt" claims remain; `./scripts/validate-conformance.py planning` and `./scripts/validate-implementation-plan.py planning` accept
+- Documentation impact: README.md, docs/REVIEW.md, docs/OPERATIONS.md, implementation-plan conformance matrix
 
 ## Remediation rule
 

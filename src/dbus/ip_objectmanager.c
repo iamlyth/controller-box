@@ -21,6 +21,7 @@
 #include "ip_objectmanager.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -99,7 +100,17 @@ parse_composite_index(const char *path)
     if (!*p)
         return -1;
 
-    return atoi(p);
+    /* Parse the trailing number with bounds checking (strtol, not atoi).
+     * The path component is attacker-influenced DBus data; atoi on an
+     * out-of-range digit string is undefined behavior and wraps, and the
+     * result feeds fallback labels.  Reject any value outside the signed
+     * int range rather than silently wrapping. */
+    errno = 0;
+    char *end = NULL;
+    long v = strtol(p, &end, 10);
+    if (end == p || errno == ERANGE || v < INT_MIN || v > INT_MAX)
+        return -1;
+    return (int)v;
 }
 
 /* Add a composite entry to the model.  Returns true if added, false if full. */

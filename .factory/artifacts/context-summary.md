@@ -12,6 +12,10 @@ release evidence and contains no satisfied/done claims.
 - Task 6 (blocked): Real four-target InputPlumber routing acceptance
 - Task 7 (pending): Environment-independent profile editor acceptance
 - Task 8 (pending): Environment-independent installed diagram acceptance
+- Task 9 (pending): Security hardening of process-execution and parsing trust boundaries
+- Task 10 (pending): Security hardening — DBus sender credential verification and test-mock gating
+- Task 11 (pending): Test-quality remediation for §5.7 semantic-outcome gaps
+- Task 12 (pending): Documentation accuracy remediation
 
 ## Unresolved facts
 - FACT-002 (open): BUG-0015: real InputPlumber system-bus acceptance with four targets
