@@ -1,3 +1,4 @@
+#define _GNU_SOURCE 1
 /*
  * test_manager_native_prof.c — Manager Profiles + Profile Editor
  * interaction acceptance with native DBus backend (Task 5).
@@ -49,6 +50,7 @@
 #include "dbus/ip_device_model.h"
 #include "dbus/ip_input_signal.h"
 #include "dbus/dbus_interface.h"             /* IP_DBUS_PATH, IP_IFACE_* — constants only */
+#include "interaction_inventory.h"
 
 #include "config/config_settings.h"
 #include "config/config_paths.h"
@@ -977,10 +979,30 @@ test_m30_target_pick_controller(void **state)
                      CBX_EDITOR_MODE_TARGET_PICK);
     assert_true(cbx_list_item_count(&pt->editor.target_list) > 0);
 
+    /* Capture which binding is being edited (for the semantic check). */
+    int editing_index = pt->editor.editing_index;
+    assert_true(editing_index >= 0);
+
     /* A → confirm target → back to LIST. */
     ctrl_press(&mgr, f->joystick, 0);
     assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
                      CBX_EDITOR_MODE_LIST);
+
+    /* Verify the picked target event was actually applied to the edited
+     * binding (semantic outcome), not just a mode transition. */
+    const cbx_profile *prof = cbx_profile_editor_get_profile(&pt->editor);
+    assert_non_null(prof);
+    assert_true(editing_index < prof->mapping_count);
+    const cbx_profile_mapping *m = &prof->mappings[editing_index];
+    assert_true(m->target_event_count >= 1);
+    assert_string_equal(m->target_events[0].device_class,
+                        pt->editor.targets[0].device_class);
+    assert_string_equal(m->target_events[0].value,
+                        pt->editor.targets[0].value);
+
+    /* All assertions passed — record this passing dispatch test in the
+     * runtime verification ledger (ties the verified flag to pass status). */
+    assert_int_equal(cbx_interaction_inventory_mark_verified("M30"), 0);
 
     cbx_manager_shutdown(&mgr);
 }
@@ -1002,12 +1024,31 @@ test_m30_target_pick_pointer(void **state)
     assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
                      CBX_EDITOR_MODE_TARGET_PICK);
 
+    /* Capture which binding is being edited (for the semantic check). */
+    int editing_index = pt->editor.editing_index;
+    assert_true(editing_index >= 0);
+
     /* Click on first target → confirm → LIST. */
     int px = list_center_x(&pt->editor.target_list);
     int py = list_item_y(&pt->editor.target_list, 0);
     send_mouse_click(&mgr, px, py);
     assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
                      CBX_EDITOR_MODE_LIST);
+
+    /* Verify the clicked target event was actually applied (semantic
+     * outcome), not just a mode transition. */
+    const cbx_profile *prof = cbx_profile_editor_get_profile(&pt->editor);
+    assert_non_null(prof);
+    assert_true(editing_index < prof->mapping_count);
+    const cbx_profile_mapping *m = &prof->mappings[editing_index];
+    assert_true(m->target_event_count >= 1);
+    assert_string_equal(m->target_events[0].device_class,
+                        pt->editor.targets[0].device_class);
+    assert_string_equal(m->target_events[0].value,
+                        pt->editor.targets[0].value);
+
+    /* All assertions passed — record in the runtime verification ledger. */
+    assert_int_equal(cbx_interaction_inventory_mark_verified("M30"), 0);
 
     cbx_manager_shutdown(&mgr);
 }
@@ -1446,11 +1487,16 @@ test_m36_seq_cancel(void **state)
     assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
                      CBX_EDITOR_MODE_SEQUENTIAL);
 
-    /* Start (Tab) → cancel sequential. */
-    send_key_dn(&mgr, SDLK_TAB);
+    /* Start (virtual gamepad button 6) → cancel sequential.
+     * Controller path: SDL_CONTROLLERBUTTONDOWN START →
+     * cbx_manager_controller_to_key → SDLK_TAB → cancel. */
+    ctrl_press(&mgr, f->joystick, 6);
     assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
                      CBX_EDITOR_MODE_LIST);
     assert_false(cbx_profile_editor_seq_is_active(&pt->editor));
+
+    /* All assertions passed — record in the runtime verification ledger. */
+    assert_int_equal(cbx_interaction_inventory_mark_verified("M36"), 0);
 
     cbx_manager_shutdown(&mgr);
 }
@@ -1482,6 +1528,16 @@ test_m37_save_ctrl(void **state)
 
     int before = cbx_profiles_tab_profile_count(pt);
 
+    /* Determine the exact file the editor save will produce, from the
+     * in-editor profile name (the fixture pre-creates files, so merely
+     * checking a hardcoded path's existence proves nothing). */
+    char path[PATH_MAX + 512];
+    snprintf(path, sizeof(path), "%s/%s.yaml", f->user_dir,
+             pt->editor_profile_name);
+    struct stat st_before;
+    int existed_before = (stat(path, &st_before) == 0);
+    time_t before_mtime = existed_before ? st_before.st_mtime : 0;
+
     /* B (button 1) in LIST mode → save and close. */
     ctrl_press(&mgr, f->joystick, 1);
 
@@ -1491,10 +1547,23 @@ test_m37_save_ctrl(void **state)
     /* Profile count unchanged (editing existing profile). */
     assert_int_equal(cbx_profiles_tab_profile_count(pt), before);
 
-    /* Verify the file exists on disk. */
-    char path[PATH_MAX + 128];
-    snprintf(path, sizeof(path), "%s/myprof.yaml", f->user_dir);
-    assert_int_equal(access(path, F_OK), 0);
+    /* Verify an on-disk profile change actually occurred: the editor
+     * save must either create the file (if it did not pre-exist) or
+     * advance its modification time — not merely be present. */
+    struct stat st_after;
+    assert_int_equal(stat(path, &st_after), 0);
+    if (existed_before) {
+        /* Compare at nanosecond resolution: the editor save rewrites the
+         * file shortly after the fixture created it, so second-level mtime
+         * may be identical while the nanosecond field advances. */
+        assert_true(st_after.st_mtime > before_mtime ||
+                    (st_after.st_mtime == before_mtime &&
+                     st_after.st_mtim.tv_nsec > st_before.st_mtim.tv_nsec));
+    }
+    /* If the file did not pre-exist, the save creating it is the change. */
+
+    /* All assertions passed — record in the runtime verification ledger. */
+    assert_int_equal(cbx_interaction_inventory_mark_verified("M37"), 0);
 
     cbx_manager_shutdown(&mgr);
 }
@@ -2030,5 +2099,16 @@ main(void)
         cmocka_unit_test_setup_teardown(test_d08_empty_profile_create_pointer,
                                         mnp_setup, mnp_teardown),
     };
-    return cmocka_run_group_tests(tests, NULL, NULL);
+
+    int rc = cmocka_run_group_tests(tests, NULL, NULL);
+    if (rc == 0) {
+        /* All dispatch tests passed.  The controls they exercised must now
+         * be recorded as verified in the runtime ledger (via
+         * mark_verified() inside each passing test) — proving the
+         * inventory's verified flags reflect actual pass status. */
+        assert_int_equal(cbx_interaction_inventory_is_verified("M30"), 1);
+        assert_int_equal(cbx_interaction_inventory_is_verified("M36"), 1);
+        assert_int_equal(cbx_interaction_inventory_is_verified("M37"), 1);
+    }
+    return rc;
 }

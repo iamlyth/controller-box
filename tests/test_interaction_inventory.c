@@ -310,15 +310,20 @@ static void test_inventory_verify_status_consistency(void **state)
     }
 }
 
-/* Task 1: Verify that entries known to have native-DBus production-path
- * evidence are marked VERIFIED, and mock-only entries are marked UNVERIFIED. */
-static void test_inventory_specific_verify_statuses(void **state)
+/* Task 11: The inventory ledger ties "verified" flags to actual test pass
+ * status.  The static table's verify_status is a DECLARATION of intent —
+ * not runtime truth.  A control is only considered verified after a
+ * passing production-dispatch test calls
+ * cbx_interaction_inventory_mark_verified().  Prove the ledger is runtime
+ * driven and starts unseeded (no static claim is treated as verified). */
+static void test_inventory_verified_flags_are_runtime_marks(void **state)
 {
     (void)state;
-    /* Entries with native-DBus evidence (from test_installed_functional.c,
-     * test_installed_backend_recovery, test_overlay_native.c,
-     * test_manager_native.c, or test_manager_native_prof.c) must be VERIFIED */
-    const char *verified_ids[] = {
+
+    /* Reset the runtime ledger — it must start empty (unseeded). */
+    cbx_interaction_inventory_reset();
+
+    const char *declared_verified[] = {
         "M01", "M02", "M03", "M04", "M05", "M06", "M07", "M08",
         "M09", "M10", "M11", "M12", "M15", "M17", "M18",
         "M19", "M20", "M21", "M22", "M23", "M24", "M25", "M26",
@@ -327,25 +332,27 @@ static void test_inventory_specific_verify_statuses(void **state)
         "O09", "O10", "O11", "O13",
         "D01", "D02", "D03", "D04", "D05", "D06", "D07", "D08"
     };
-    for (size_t i = 0; i < sizeof(verified_ids)/sizeof(verified_ids[0]); i++) {
-        const cbx_interaction_entry *e = cbx_interaction_inventory_find(verified_ids[i]);
+    for (size_t i = 0; i < sizeof(declared_verified)/sizeof(declared_verified[0]); i++) {
+        /* The static table declares VERIFIED as intent ... */
+        const cbx_interaction_entry *e = cbx_interaction_inventory_find(declared_verified[i]);
         assert_non_null(e);
         assert_int_equal(e->verify_status, CBX_VERIFY_VERIFIED);
+        /* ... but the runtime ledger is NOT verified until a passing
+         * dispatch test marks it.  A hardcoded claim must never read
+         * back as verified. */
+        assert_int_equal(cbx_interaction_inventory_is_verified(declared_verified[i]), 0);
     }
 
-    /* All previously mock-only entries are now VERIFIED with native-DBus evidence */
+    /* A passing dispatch test marks its control; the ledger flips. */
+    assert_int_equal(cbx_interaction_inventory_mark_verified("M30"), 0);
+    assert_int_equal(cbx_interaction_inventory_is_verified("M30"), 1);
 
-    /* O12 is DEFERRED */
-    const cbx_interaction_entry *o12 = cbx_interaction_inventory_find("O12");
-    assert_int_equal(o12->verify_status, CBX_VERIFY_DEFERRED);
+    /* A control that was not marked stays unverified. */
+    assert_int_equal(cbx_interaction_inventory_is_verified("M13"), 0);
 
-    /* Controller-only entries remain NOT_APPLICABLE (sample check) */
-    const char *na_ids[] = {"M13", "M14", "M16", "M32", "M34", "M35", "M36"};
-    for (size_t i = 0; i < sizeof(na_ids)/sizeof(na_ids[0]); i++) {
-        const cbx_interaction_entry *e = cbx_interaction_inventory_find(na_ids[i]);
-        assert_non_null(e);
-        assert_int_equal(e->verify_status, CBX_VERIFY_NOT_APPLICABLE);
-    }
+    /* Reset clears the runtime mark (proving it is a mark, not a claim). */
+    cbx_interaction_inventory_reset();
+    assert_int_equal(cbx_interaction_inventory_is_verified("M30"), 0);
 }
 
 /* Task 1: Verify that dialog/disabled entries now have pointer_path_avail
@@ -385,8 +392,9 @@ int main(void)
         cmocka_unit_test(test_inventory_covers_required_scenarios),
         /* Task 1: verify_status ledger checks */
         cmocka_unit_test(test_inventory_verify_status_consistency),
-        cmocka_unit_test(test_inventory_specific_verify_statuses),
         cmocka_unit_test(test_inventory_dialog_pointer_paths_available),
+        /* Task 11: verified flags are runtime marks, not static claims */
+        cmocka_unit_test(test_inventory_verified_flags_are_runtime_marks),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

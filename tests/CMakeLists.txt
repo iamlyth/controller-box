@@ -742,7 +742,7 @@ if(CMOCKA_FOUND)
     add_executable(test_overlay_native tests/test_overlay_native.c tests/native_ip_server.c)
     target_compile_definitions(test_overlay_native PRIVATE
         DBUS_SESSION_CONFIG="${DBUS_PREFIX}/share/dbus-1/session.conf")
-    target_link_libraries(test_overlay_native PRIVATE controllerbox PkgConfig::CMOCKA)
+    target_link_libraries(test_overlay_native PRIVATE controllerbox cbx_test_support PkgConfig::CMOCKA)
     add_test(NAME test_overlay_native COMMAND test_overlay_native)
     set_tests_properties(test_overlay_native PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
@@ -781,7 +781,7 @@ if(CMOCKA_FOUND)
     add_executable(test_manager_native_prof tests/test_manager_native_prof.c tests/native_ip_server.c)
     target_compile_definitions(test_manager_native_prof PRIVATE
         DBUS_SESSION_CONFIG="${DBUS_PREFIX}/share/dbus-1/session.conf")
-    target_link_libraries(test_manager_native_prof PRIVATE controllerbox PkgConfig::CMOCKA)
+    target_link_libraries(test_manager_native_prof PRIVATE controllerbox cbx_test_support PkgConfig::CMOCKA)
     add_test(NAME test_manager_native_prof COMMAND test_manager_native_prof)
     set_tests_properties(test_manager_native_prof PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")

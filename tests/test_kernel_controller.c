@@ -594,41 +594,48 @@ static int run_integration_test(const char *build_dir)
     printf("\n--- Sending kernel gamepad events through uinput ---\n");
 
     /*
-     * Navigation sequence:
-     * 1. D-pad RIGHT × 3 → navigate to Settings tab
-     * 2. D-pad DOWN → focus first setting
-     * 3. A button → toggle/change setting
-     * 4. D-pad DOWN × 4 → navigate to Save button
-     * 5. A button → save settings
-     * 6. D-pad LEFT × 3 → navigate back to Controllers tab
-     * 7. A button → activate controller entry
-     * 8. B button → cancel/go back
+     * The synthetic gamepad uses the standard Xbox 360 device identity
+     * (vendor 0x045E, product 0x028E), which SDL's built-in game-controller
+     * database maps as a controller — so the manager recognizes the
+     * kernel-backed gamepad through the production path with no manual
+     * mapping registration required.
      *
-     * The exact focus chain depends on the manager layout, but the key
-     * verification is that the manager processes kernel gamepad events
-     * through the production event loop without crashing.
+     * Navigation sequence (drives the manager to write settings.yaml as a
+     * persisted semantic outcome):
+     * 1. D-pad RIGHT × 3 → Settings tab
+     * 2. D-pad DOWN → focus first setting (Launch at Boot)
+     * 3. A button → toggle the setting (marks it changed)
+     * 4. D-pad DOWN → focus the list's "Save" entry
+     * 5. A button → activate Save → cbx_settings_tab_save → writes
+     *    settings.yaml to disk
      */
 
-    /* Navigate tabs with D-pad RIGHT. */
+    /* Navigate tabs with D-pad RIGHT to the Settings tab. */
     for (int i = 0; i < 3; i++) {
         uinput_dpad(3);  /* RIGHT */
         msleep(200);
     }
-    pass("D-pad RIGHT events sent (tab navigation)");
+    pass("D-pad RIGHT events sent (navigated to Settings tab)");
 
-    /* Navigate content with D-pad DOWN. */
-    for (int i = 0; i < 3; i++) {
-        uinput_dpad(1);  /* DOWN */
-        msleep(200);
-    }
-    pass("D-pad DOWN events sent (content navigation)");
+    /* Focus the first setting in the list. */
+    uinput_dpad(1);  /* DOWN */
+    msleep(200);
 
-    /* Press A button (activate/select). */
+    /* A → toggle the first setting. */
     uinput_press_button(BTN_SOUTH);
     msleep(300);
-    pass("A button press sent (activate)");
+    pass("A button press sent (toggled setting)");
 
-    /* Press B button (cancel/back). */
+    /* DOWN → focus the settings list's "Save" entry. */
+    uinput_dpad(1);  /* DOWN */
+    msleep(200);
+
+    /* A → activate Save → persists settings.yaml. */
+    uinput_press_button(BTN_SOUTH);
+    msleep(300);
+    pass("A button press sent (activated Save)");
+
+    /* B button (cancel/back). */
     uinput_press_button(BTN_EAST);
     msleep(300);
     pass("B button press sent (cancel)");
@@ -659,15 +666,16 @@ static int run_integration_test(const char *build_dir)
         return -1;
     }
 
-    /* Check 2: Settings.yaml may have been created/modified. */
+    /* Check 2: Assert a SEMANTIC outcome produced by the kernel-backed
+     * gamepad events — a persisted settings.yaml written to disk.  "The
+     * manager did not crash" is not outcome evidence (SPEC §5.7/§11.1.5);
+     * the test must fail if no semantic effect was produced, not merely
+     * survive the event sequence. */
     time_t settings_mtime = 0;
     if (check_settings_yaml(&settings_mtime)) {
-        pass("settings.yaml exists in temp HOME");
+        pass("settings.yaml persisted in temp HOME (semantic outcome)");
     } else {
-        /* Settings.yaml may not exist if we didn't navigate to the Save button
-         * successfully. This is not a failure — the key outcome is that the
-         * manager processes gamepad events without crashing. */
-        printf("INFO: settings.yaml not yet created (navigation may not have reached Save)\n");
+        fail("settings.yaml was not created — kernel gamepad events produced no persisted semantic outcome");
     }
 
     /* Check 3: Send more events to stress-test stability. */

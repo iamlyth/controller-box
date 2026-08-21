@@ -1205,10 +1205,15 @@ cbx_profiles_tab_save_editor(cbx_profiles_tab *tab)
                                        missing_buf, sizeof(missing_buf));
     if (rc != 0) {
         if (rc == -EINVAL && missing_buf[0] != '\0') {
-            /* NES minimum validation failed — show missing buttons. */
+            /* NES minimum validation failed — show missing buttons.
+             * Surface the error in the theme's conflict (red) color so
+             * the visual error state is produced by the production save
+             * path itself, never injected by a test. */
             char msg[CBX_PT_LABEL_LEN + 16];
             snprintf(msg, sizeof(msg), "Missing: %s", missing_buf);
             cbx_label_set_text(&tab->editor.status_lbl, msg);
+            cbx_label_set_color(&tab->editor.status_lbl,
+                                 tab->editor.theme->conflict);
         } else {
             cbx_label_set_text(&tab->editor.status_lbl,
                                  "Save failed.");

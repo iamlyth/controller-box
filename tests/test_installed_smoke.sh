@@ -38,6 +38,7 @@ XVFB_DISPLAY=":99"
 XVFB_PID=""
 MANAGER_PID=""
 OVERLAY_PID=""
+IP_SERVER_PID=""
 FAILURES=0
 TMPDIR=""
 
@@ -55,6 +56,13 @@ cleanup() {
             kill -KILL "$pid" 2>/dev/null || true
         fi
     done
+    # Kill the private InputPlumber-compatible DBus server if we started it
+    # (it also tears down its own private dbus-daemon).
+    if [ -n "$IP_SERVER_PID" ] && kill -0 "$IP_SERVER_PID" 2>/dev/null; then
+        kill -TERM "$IP_SERVER_PID" 2>/dev/null || true
+        sleep 0.3
+        kill -KILL "$IP_SERVER_PID" 2>/dev/null || true
+    fi
     # Kill Xvfb if we started it (SIGTERM then SIGKILL)
     if [ -n "$XVFB_PID" ] && kill -0 "$XVFB_PID" 2>/dev/null; then
         kill -TERM "$XVFB_PID" 2>/dev/null || true
@@ -452,13 +460,44 @@ echo ""
 echo "--- Overlay service mode smoke test ---"
 
 # The overlay service connects to InputPlumber via the system DBus.
-# In a test environment without InputPlumber, it will exit with code 1
-# ("InputPlumber not found").  This is a clean failure, not a crash.
-# If InputPlumber IS available, the service runs and we verify it stays
-# alive briefly.
+# Per SPEC §11.1.5, the installed smoke test must exercise the overlay
+# against a real (or private native-signature) InputPlumber-compatible
+# DBus service.  Without a backend, the overlay cannot be exercised and
+# the requirement is a FAILURE, not a pass or a skip.  To satisfy this in
+# environments without a system-wide InputPlumber, start a private
+# native-signature InputPlumber-compatible server (test_ip_server) on its
+# own dbus-daemon and point the installed overlay binary at it.
 
+IP_ADDR_FILE="$TMPDIR/cbx_overlay_bus_addr"
+rm -f "$IP_ADDR_FILE"
+
+if [ ! -x "$BUILD_DIR/test_ip_server" ]; then
+    fail "test_ip_server binary not found — cannot start InputPlumber-compatible backend (missing backend is FAILURE per §11.1.5)"
+else
+    "$BUILD_DIR/test_ip_server" "$IP_ADDR_FILE" &
+    IP_SERVER_PID=$!
+fi
+
+# Wait for the private server to write its bus address.
+IP_SERVER_READY=0
+for _ in $(seq 1 30); do
+    if [ -s "$IP_ADDR_FILE" ]; then
+        IP_SERVER_READY=1
+        break
+    fi
+    if ! kill -0 "$IP_SERVER_PID" 2>/dev/null; then
+        break
+    fi
+    sleep 0.2
+done
+
+if [ "$IP_SERVER_READY" -ne 1 ]; then
+    fail "private InputPlumber-compatible server failed to start (missing backend is FAILURE per §11.1.5)"
+fi
+
+OVERLAY_BUS_ADDR=$(cat "$IP_ADDR_FILE" 2>/dev/null)
 OVERLAY_TIMEOUT=5
-HOME="$FONT_HOME" "$INSTALLED_BIN" --overlay-service &
+HOME="$FONT_HOME" DBUS_SYSTEM_BUS_ADDRESS="$OVERLAY_BUS_ADDR" "$INSTALLED_BIN" --overlay-service &
 OVERLAY_PID=$!
 
 # Wait up to OVERLAY_TIMEOUT seconds for the process to either stay
@@ -473,8 +512,9 @@ for _ in $(seq 1 "$OVERLAY_TIMEOUT"); do
 done
 
 if [ "$OVERLAY_RUNNING" -eq 1 ] && kill -0 "$OVERLAY_PID" 2>/dev/null; then
-    # Overlay service is running — InputPlumber is available
-    pass "overlay service running with InputPlumber (PID $OVERLAY_PID)"
+    # Overlay service is running — connected to the InputPlumber-compatible
+    # backend (§11.1.5: real or private native-signature service).
+    pass "overlay service running against InputPlumber-compatible service (PID $OVERLAY_PID)"
 
     # Capture the root window (overlay window may be hidden until activated)
     OVERLAY_CAPTURE="$TMPDIR/overlay_capture.png"
@@ -504,12 +544,16 @@ else
     set -e
 
     if [ "$OVERLAY_EXIT" -eq 1 ]; then
-        pass "overlay service exited cleanly (code 1: InputPlumber not found — expected in test env)"
+        # Per SPEC §11.1.5, a missing backend (InputPlumber unavailable) is
+        # FAILURE, not a pass and not a skip: the overlay was never
+        # exercised against a real service, so we cannot claim acceptance.
+        fail "overlay service exited early (code 1: InputPlumber not found — missing backend is FAILURE per §11.1.5)"
     elif [ "$OVERLAY_EXIT" -eq 139 ] || [ "$OVERLAY_EXIT" -eq 134 ]; then
         fail "overlay service crashed with signal (exit $OVERLAY_EXIT)"
     else
-        # Other non-zero exit codes are acceptable as long as it's not a crash
-        pass "overlay service exited (code $OVERLAY_EXIT — not a crash)"
+        # Per SPEC §11.1.5, an expected early exit is FAILURE, not a pass —
+        # the overlay was not exercised.
+        fail "overlay service exited early (code $OVERLAY_EXIT — expected early exit is FAILURE per §11.1.5)"
     fi
 fi
 

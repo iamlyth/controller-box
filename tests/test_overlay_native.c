@@ -40,6 +40,7 @@
 #include "dbus/ip_target.h"
 #include "dbus/dbus_interface.h"             /* IP_DBUS_NAME, IP_IFACE_*, constants only */
 #include "config/config_settings.h"
+#include "interaction_inventory.h"
 #include "config/config_assignments.h"
 #include "config/config_profile_list.h"
 #include "config/config_paths.h"
@@ -1051,8 +1052,10 @@ static void test_o10_close_saves_and_sets_pass(void **state)
     cbx_overlay_service_step(svc);
     assert_int_equal(cbx_select_grid_get_cur_col(&svc->grid, 0), 1);
 
-    /* Close via B. */
-    push_keydown(SDLK_b);
+    /* Close via B through the production DBus InputEvent transport
+     * (not the keyboard SDL path). */
+    emit_input_event(svc->conn.backend, svc->conn.bus, COMP_PATH_0, "B", 1.0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
     cbx_overlay_service_step(svc);
 
     /* Overlay hidden. */
@@ -1080,6 +1083,9 @@ static void test_o10_close_saves_and_sets_pass(void **state)
         assert_int_equal(loaded.assignment_count, 1);
         assert_int_equal(loaded.assignments[0].slot, 0);
     }
+
+    /* All assertions passed — record in the runtime verification ledger. */
+    assert_int_equal(cbx_interaction_inventory_mark_verified("O10"), 0);
 }
 
 /* --- O10b/O13: Close with conflict resolution --- */
@@ -1116,14 +1122,19 @@ static void test_o10b_close_conflict_resolution(void **state)
     cbx_overlay_service_step(svc);
     assert_false(cbx_host_mode_is_active(&svc->hm));
 
-    /* Close — conflict should be auto-resolved. */
-    push_keydown(SDLK_b);
+    /* Close — conflict should be auto-resolved (DBus InputEvent). */
+    emit_input_event(svc->conn.backend, svc->conn.bus, COMP_PATH_0, "B", 1.0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
     cbx_overlay_service_step(svc);
     assert_int_equal(svc->lifecycle.state, CBX_OVERLAY_IDLE);
 
     /* Row 0 keeps P1, row 1 auto-moved to P2. */
     assert_int_equal(svc->grid.rows[0].cur_col, 1);
     assert_int_equal(svc->grid.rows[1].cur_col, 2);
+
+    /* All assertions passed — record in the runtime verification ledger.
+     * O10b is a close-with-conflict variant of the O10 close entry. */
+    assert_int_equal(cbx_interaction_inventory_mark_verified("O10"), 0);
 }
 
 /* --- O11: Multi-controller independence via DBus InputEvent --- */
@@ -1278,14 +1289,18 @@ static void test_o13_conflict_resolution_on_save(void **state)
     cbx_conflict_detect(&svc->grid, &conflicts);
     assert_true(conflicts.count > 0);
 
-    /* Close — auto-resolves conflict. */
-    push_keydown(SDLK_b);
+    /* Close — auto-resolves conflict (DBus InputEvent). */
+    emit_input_event(svc->conn.backend, svc->conn.bus, COMP_PATH_0, "B", 1.0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
     cbx_overlay_service_step(svc);
     assert_int_equal(svc->lifecycle.state, CBX_OVERLAY_IDLE);
 
     /* Row 0 keeps P1, row 1 auto-moved to P2. */
     assert_int_equal(svc->grid.rows[0].cur_col, 1);
     assert_int_equal(svc->grid.rows[1].cur_col, 2);
+
+    /* All assertions passed — record in the runtime verification ledger. */
+    assert_int_equal(cbx_interaction_inventory_mark_verified("O13"), 0);
 }
 
 /* ================================================================== */
@@ -1366,5 +1381,14 @@ static const struct CMUnitTest tests[] = {
 
 int main(void)
 {
-    return cmocka_run_group_tests(tests, NULL, NULL);
+    int rc = cmocka_run_group_tests(tests, NULL, NULL);
+    if (rc == 0) {
+        /* All dispatch tests passed.  The overlay close/conflict actions
+         * they exercised must now be recorded as verified in the runtime
+         * ledger (via mark_verified() inside each passing test), proving
+         * the inventory's verified flags reflect actual pass status. */
+        assert_int_equal(cbx_interaction_inventory_is_verified("O10"), 1);
+        assert_int_equal(cbx_interaction_inventory_is_verified("O13"), 1);
+    }
+    return rc;
 }

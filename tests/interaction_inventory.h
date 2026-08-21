@@ -89,4 +89,41 @@ size_t cbx_interaction_inventory_count(void);
  */
 const cbx_interaction_entry *cbx_interaction_inventory_find(const char *id);
 
+/*
+ * Runtime verification ledger (SPEC §5.7).
+ *
+ * The static table's `verify_status` is a declaration of intent — it is
+ * NOT runtime truth.  A control is only considered verified when a
+ * passing production-dispatch test marks it via
+ * cbx_interaction_inventory_mark_verified() (called after the test's
+ * assertions all pass).  This ties the ledger's verified flags to actual
+ * test pass status rather than to a hardcoded claim.
+ *
+ * The runtime ledger is a mutable side table separate from the read-only
+ * descriptive array, so tests that run the controls populate it and a
+ * ledger test can assert that no control is "verified" unless it was
+ * marked by a passing test in the same process.
+ */
+
+/*
+ * Mark a control as verified at runtime.  Returns 0 on success (entry
+ * found and marked) or -EINVAL if the ID is unknown.
+ *
+ * Dispatch tests call this only after their assertions all pass, so the
+ * ledger reflects real pass status, not declared intent.
+ */
+int cbx_interaction_inventory_mark_verified(const char *id);
+
+/*
+ * Returns 1 if the control was marked verified at runtime, 0 otherwise
+ * (or -1 if the ID is unknown).
+ */
+int cbx_interaction_inventory_is_verified(const char *id);
+
+/*
+ * Reset all runtime verification marks (used to prove the ledger is not
+ * pre-seeded with static claims, e.g. at the start of a ledger test).
+ */
+void cbx_interaction_inventory_reset(void);
+
 #endif /* CBX_INTERACTION_INVENTORY_H */

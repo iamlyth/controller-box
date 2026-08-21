@@ -35,6 +35,8 @@
  */
 #include "interaction_inventory.h"
 
+#include <errno.h>
+#include <stdbool.h>
 #include <string.h>
 
 /* Helper macros for readability */
@@ -332,7 +334,7 @@ static const cbx_interaction_entry inventory[] = {
       "Start during sequential",
       NA, "n/a",
       "Sequential mode cancelled; changes discarded",
-      "ip_input_events → cbx_profile_editor_cancel_sequential",
+      "SDL_CONTROLLERBUTTON START → cbx_manager_controller_to_key → SDLK_TAB → cbx_profile_editor_cancel_sequential; controller: ctrl_press test_manager_native_prof.c::test_m36_seq_cancel",
       CBX_VERIFY_NOT_APPLICABLE, "Task 5" },
 
     { "M37", CBX_CAT_MANAGER_EDITOR, "Profile editor",
@@ -438,7 +440,7 @@ static const cbx_interaction_entry inventory[] = {
       "B key",
       NA, "n/a",
       "Assignments saved; conflicts auto-resolved; InterceptMode set to PASS; surface hidden",
-      "poll loop → cbx_player_mode_handle/cbx_host_mode_handle → cbx_overlay_lifecycle_close → cbx_close_on_save",
+      "DBus InputEvent 'B' (value 1.0) → ip_input_signal → cbx_player_mode_handle/cbx_host_mode_handle → cbx_overlay_lifecycle_close → cbx_close_on_save; controller close via emit_input_event test_overlay_native.c::test_o10_close_saves_and_sets_pass / test_o10b_close_conflict_resolution",
       CBX_VERIFY_VERIFIED, "Task 3" },
 
     { "O11", CBX_CAT_OVERLAY, "Overlay",
@@ -555,4 +557,50 @@ const cbx_interaction_entry *cbx_interaction_inventory_find(const char *id)
             return &inventory[i];
     }
     return NULL;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Runtime verification ledger (SPEC §5.7)                            */
+/* ------------------------------------------------------------------ */
+/*
+ * Mutable side table holding runtime "verified" marks.  Unlike the static
+ * `inventory[]` array (whose verify_status is a declaration of intent),
+ * these flags are only set by cbx_interaction_inventory_mark_verified()
+ * which dispatch tests call after their assertions all pass.  This is
+ * what ties the ledger's verified flags to actual test pass status.
+ */
+#define CBX_INV_MAX_ENTRIES 64
+static bool g_runtime_verified[CBX_INV_MAX_ENTRIES];
+
+int
+cbx_interaction_inventory_mark_verified(const char *id)
+{
+    if (!id)
+        return -EINVAL;
+    for (size_t i = 0; inventory[i].id != NULL && i < CBX_INV_MAX_ENTRIES; i++) {
+        if (strcmp(inventory[i].id, id) == 0) {
+            g_runtime_verified[i] = true;
+            return 0;
+        }
+    }
+    return -EINVAL;
+}
+
+int
+cbx_interaction_inventory_is_verified(const char *id)
+{
+    if (!id)
+        return -1;
+    for (size_t i = 0; inventory[i].id != NULL && i < CBX_INV_MAX_ENTRIES; i++) {
+        if (strcmp(inventory[i].id, id) == 0)
+            return g_runtime_verified[i] ? 1 : 0;
+    }
+    return -1;
+}
+
+void
+cbx_interaction_inventory_reset(void)
+{
+    for (size_t i = 0; i < CBX_INV_MAX_ENTRIES; i++)
+        g_runtime_verified[i] = false;
 }

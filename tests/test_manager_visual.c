@@ -997,21 +997,25 @@ test_profile_editor_validation_error(void **state)
         fb_read_pixels(mgr->rend.renderer, NULL, f->buf_a, MGR_W * MGR_H * 4),
         0);
 
-    /* Create an incomplete profile and validate it. */
-    cbx_profile incomplete;
-    build_test_profile(&incomplete, "Incomplete", 3);
+    /* Load an incomplete profile into the in-editor profile so the
+     * NES-minimum validation fails on save (not a detached struct). */
+    build_test_profile(&ed->profile, "Incomplete", 3);
 
-    char missing[256] = {0};
-    int vrc = cbx_profile_validate_nes_minimum(&incomplete, missing,
-                                                  sizeof(missing));
-    assert_int_equal(vrc, -EINVAL);
-    assert_true(strlen(missing) > 0);
-
-    /* Set the editor status label to the error message with red color. */
-    char error_msg[512];
-    snprintf(error_msg, sizeof(error_msg), "Missing: %s", missing);
-    cbx_label_set_text(&ed->status_lbl, error_msg);
-    cbx_label_set_color(&ed->status_lbl, mgr->theme.conflict);
+    /* Click the real Save button through the production pointer path so
+     * on_save → cbx_profiles_tab_save_editor → cbx_profile_save_to_dir
+     * validates the in-editor profile and surfaces the error via the
+     * status label — the error visual is not injected manually. */
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(mgr);
+    SDL_Rect save_rect;
+    cbx_widget_get_rect(&pt->save_btn.base, &save_rect);
+    SDL_Event mev = {0};
+    mev.type = SDL_MOUSEBUTTONDOWN;
+    mev.button.button = SDL_BUTTON_LEFT;
+    mev.button.x = save_rect.x + save_rect.w / 2;
+    mev.button.y = save_rect.y + save_rect.h / 2;
+    cbx_manager_handle_event(mgr, &mev);
+    mev.type = SDL_MOUSEBUTTONUP;
+    cbx_manager_handle_event(mgr, &mev);
 
     /* Render error state. */
     cbx_manager_render(mgr);
