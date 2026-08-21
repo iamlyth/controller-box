@@ -156,6 +156,112 @@ else
     echo "WARN: no DejaVuSans.ttf found; text regions may not assert"
 fi
 
+# --- Step 3b: test-owned profile + sidecar (+ optional staged host) ----------
+# (Task 8) The diagram acceptance must not depend on which profile happens to
+# sort to the first row.  We create a profile the test itself owns in the
+# isolated user profiles dir, and select it by its computed row rather than by
+# a hardcoded first-row click.  The sidecar display_order forces the test
+# profile into a deterministic position: every other profile (builtin Default,
+# and any real host/system InputPlumber profiles in /usr/share/inputplumber)
+# has display_order 0, so the test profile (order -50) sorts ahead of all of
+# them — and behind any staged competitor at an even lower order.  This is
+# deterministic with or without host/system profiles present.
+USER_PROFILES_DIR="$FONT_HOME/.local/share/inputplumber/profiles"
+mkdir -p "$USER_PROFILES_DIR"
+CONFIG_DIR="$FONT_HOME/.config/controller-box"
+SIDECAR_DIR="$CONFIG_DIR/profile-metadata"
+mkdir -p "$SIDECAR_DIR"
+
+TEST_PROFILE="cbx-diagram-test"
+TEST_ORDER=-50
+# 4 diagram-button mappings (A/B/X/Y): enough for a recognisable binding list,
+# with the first mapping (A) on the diagram so the slot highlight renders.
+cat > "$USER_PROFILES_DIR/$TEST_PROFILE.yaml" <<'YAML'
+version: 1
+kind: DeviceProfile
+name: "Diagram-Test-Profile"
+description: "Test-owned profile for environment-independent installed diagram acceptance"
+mapping:
+  - name: "A"
+    source_event:
+      gamepad:
+        button: A
+    target_events:
+      - gamepad: A
+  - name: "B"
+    source_event:
+      gamepad:
+        button: B
+    target_events:
+      - gamepad: B
+  - name: "X"
+    source_event:
+      gamepad:
+        button: X
+    target_events:
+      - gamepad: X
+  - name: "Y"
+    source_event:
+      gamepad:
+        button: Y
+    target_events:
+      - gamepad: Y
+YAML
+cat > "$SIDECAR_DIR/$TEST_PROFILE.meta.yaml" <<YAML
+display_order: $TEST_ORDER
+YAML
+
+# Regression (opt-in via CBX_DIAGRAM_STAGE_HOST=1): stage a profile that sorts
+# ahead of the test-owned profile and has zero bindings.  /usr/share/inputplumber
+# is unwritable in the sandbox (no root, no sudo), so the competitor is staged
+# in the isolated user dir with a lower display_order — this reproduces exactly
+# the operator's host-sorts-first failure mechanism (a non-test profile at the
+# first row).  If the old first-row-click behaviour selected it, the slot
+# highlight (5b) and binding list (5d) assertions would fail, mirroring the
+# operator's verify-project exit 8.
+STAGED_HOST="${CBX_DIAGRAM_STAGE_HOST:-0}"
+if [ "$STAGED_HOST" = "1" ]; then
+    HOST_PROFILE="0-host-sorts-first"
+    HOST_ORDER=-100
+    cat > "$USER_PROFILES_DIR/$HOST_PROFILE.yaml" <<'YAML'
+version: 1
+kind: DeviceProfile
+name: "0-Host-Sorts-First"
+description: "Staged host InputPlumber profile that sorts ahead of the test-owned profile"
+mapping: []
+YAML
+    cat > "$SIDECAR_DIR/$HOST_PROFILE.meta.yaml" <<YAML
+display_order: $HOST_ORDER
+YAML
+fi
+
+# Compute the sorted row index of the test-owned profile.  The app sorts
+# profiles by display_order (ascending) then display_name.  Every profile other
+# than the test's staged ones has display_order 0 (builtin/system profiles
+# carry no sidecar here), so the number of profiles with a strictly lower
+# display_order is exactly the test profile's row index — environment-
+# independent.  Selecting this computed row (and verifying by the resulting
+# diagram content, §5b/5d) is the "by name" selection, never a first-row click.
+TEST_INDEX=0
+for f in "$USER_PROFILES_DIR"/*.yaml; do
+    [ -f "$f" ] || continue
+    base=$(basename "$f" .yaml)
+    order=0
+    meta="$SIDECAR_DIR/$base.meta.yaml"
+    if [ -f "$meta" ]; then
+        order=$(sed -n 's/^[[:space:]]*display_order:[[:space:]]*\(-\{0,1\}[0-9][0-9]*\).*/\1/p' "$meta" | head -1)
+        order=${order:-0}
+    fi
+    if [ "$order" -lt "$TEST_ORDER" ]; then
+        TEST_INDEX=$((TEST_INDEX + 1))
+    fi
+done
+echo "  test-owned profile '$TEST_PROFILE' sorted at row $TEST_INDEX"
+if [ "$STAGED_HOST" = "1" ] && [ "$TEST_INDEX" -eq 0 ]; then
+    fail "staged host profile did not sort ahead of the test profile (regression not reproduced)"
+    exit 1
+fi
+
 # --- Step 4: launch manager and navigate to the profile editor ---------------
 HOME="$FONT_HOME" XDG_CONFIG_HOME="$FONT_HOME/.config" \
 XDG_DATA_HOME="$FONT_HOME/.local/share" "$INSTALLED_BIN" --manager 2>"$TMPDIR/mgr.err" &
@@ -171,9 +277,12 @@ fi
 # Controllers tab is the default.  Click the Profiles tab (middle of 3 tabs).
 xdotool mousemove 550 24 click 1
 sleep 0.6
-# Click the first profile row in the list to select it, then the Edit button.
-# Profiles panel: list (16,64,1248x420), Edit button (212,500,180x44).
-xdotool mousemove 200 90 click 1
+# Select the test-owned profile by its computed row, then the Edit button.
+# Profiles panel: list (16,64,1248x420, 32px rows), Edit (212,500,180x44).
+# Row i spans y [64+32*i, 96+32*i); use the same 90px relative offset as the
+# original first-row click, shifted by the row index.
+ROW_Y=$((90 + 32 * TEST_INDEX))
+xdotool mousemove 200 "$ROW_Y" click 1
 sleep 0.3
 xdotool mousemove 302 522 click 1
 sleep 0.7
@@ -218,7 +327,12 @@ else
     pass "slot highlight rendered in diagram region ($HIGHLIGHT2 px)"
 fi
 
-# 5c. Model label / title (profile name text above the diagram).
+# 5c. Model label / title (profile name text above the diagram). The title
+#     shows the loaded profile's name — for a correctly selected test-owned
+#     profile this is "Diagram-Test-Profile".  (No OCR in the sandbox, so the
+#     assertion is semantic: the title region carries text, and §5b/§5d below
+#     prove the loaded profile is the test-owned one, not a first-row host
+#     profile with different binding content.)
 TITLE_PX=$(convert "$EDITOR_CAPTURE" -crop "$TITLE" +repage -colorspace gray \
         -threshold 60% -format "%[fx:mean*w*h]" info: 2>/dev/null)
 echo "    title text pixels: $TITLE_PX"

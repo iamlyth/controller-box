@@ -1032,12 +1032,31 @@ non-NULL texture, a fallback rectangle, or a broad pixel-count change.
    `SDL_VIDEODRIVER=x11` / `SDL_RENDER_DRIVER=software`, and a temporary
    HOME carrying DejaVuSans.ttf.
 4. Launches the installed manager, uses `xdotool` pointer dispatch to click
-   the Profiles tab, select a profile row, and open the profile editor.
+   the Profiles tab, select the test-owned profile, and open the profile
+   editor.
 5. Captures the editor window with ImageMagick `import` and asserts, in the
    diagram region, recognizable content: a black controller-outline silhouette
    (≥5000 px), a focus-colored slot highlight, the title/model label, and the
    binding list.
 6. If Xvfb, xdotool, or ImageMagick is unavailable it exits 77 (Skipped).
+
+### Environment independence (Task 8)
+
+Earlier versions of this test clicked the first profile row in the editor, so
+on a host with InputPlumber installed a system profile at
+`/usr/share/inputplumber/profiles` that sorts first would change the loaded
+profile's mapping count and break the semantic pixel assertions (the operator
+independent gate observed `verify-project` exit 8 with only
+`test_installed_diagram` failing). The test now creates a profile it owns in
+the isolated user profiles dir with a `display_order` sidecar that forces it
+into a deterministic sort position, computes that profile's row from the
+sorted list (never a hardcoded first-row click), and verifies the resulting
+diagram content — so the acceptance is deterministic with or without host
+InputPlumber profiles. `CBX_DIAGRAM_STAGE_HOST=1` additionally stages a
+zero-binding profile that sorts ahead of the test profile to reproduce the
+host-sorts-first failure mechanism; the test passes both without and with that
+staging, and (were it to select the staged first-row profile) the slot
+highlight and binding-list assertions fail — confirming the regression is real.
 
 ### Why it matters
 
