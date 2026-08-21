@@ -4,11 +4,13 @@ Generated for a fresh implementation context only; this file is not
 release evidence and contains no satisfied/done claims.
 
 ## Active task
-- Task 6 (pending): Real four-target InputPlumber routing acceptance
+- Task 5 (pending): Perceptible installed diagram acceptance
 
 ## Open tasks
 - Task 4 (blocked): Final documentation and specification audit
-- Task 6 (pending): Real four-target InputPlumber routing acceptance
+- Task 5 (pending): Perceptible installed diagram acceptance
+- Task 6 (blocked): Real four-target InputPlumber routing acceptance
+- Task 7 (pending): Environment-independent profile editor acceptance
 
 ## Unresolved facts
 - FACT-002 (open): BUG-0015: real InputPlumber system-bus acceptance with four targets

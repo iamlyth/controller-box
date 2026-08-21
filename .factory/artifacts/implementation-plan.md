@@ -350,7 +350,7 @@ Keyboard tests in `test_manager_interaction_prof.c` relabeled from
 - Documentation impact: Final reconciliation of README.md, OPERATIONS.md, implementation-plan conformance matrix, conformance sidecar, and blocked-facts ledger
 
 ## Task 5: Perceptible installed diagram acceptance
-- Status: complete
+- Status: pending
 - Dependencies: Task 1, Task 2, Task 3
 - Scope: renderer/asset-path diagnosis and fix for the production diagram (BUG-0014), a production-window/installed-path semantic test proving recognizable diagram content, `.factory/artifacts/blocked-facts.json` (resolve FACT-001 with receipt/artifact or human decision), `.factory/artifacts/conformance.json`
 - Acceptance criteria:
@@ -360,9 +360,11 @@ Keyboard tests in `test_manager_interaction_prof.c` relabeled from
   - No test injects an env var or source-tree path to load the diagram assets; the installed layout must load them through the production path
 - Verification: `nix-shell --run './scripts/verify-project.sh'`; installed diagram acceptance test passes on the real window server; `./scripts/validate-conformance.py planning` and `./scripts/validate-blocked-facts.py planning` accept; bug-ledger/BUG-0014 evidence attached
 - Documentation impact: README.md and OPERATIONS.md production launch notes updated
+- Result: BUG-0014 resolved (evidence commit `ae4ef52`). Root cause was a byte-order bug in `src/manager/profile_diagram.c`: nanosvg rasterises to RGBA byte order (byte 0 = red) but the texture used `SDL_PIXELFORMAT_RGBA8888`, whose little-endian memory byte order is A,B,G,R — so the opaque black controller outline was read as fully transparent. Now `SDL_PIXELFORMAT_ABGR8888` (memory byte order R,G,B,A, matching nanosvg). `tests/test_installed_diagram.sh` drives the real installed binary through a real X11 window to the profile editor via the production path and asserts recognizable diagram content (outline, slot highlight, title/model label, binding list). OVL-10 and MGR-07 reclassified `verified`; FACT-001 resolved. Status kept `pending` (not `complete`) because this is an appended task after the final audit; the final audit (Task 4) is the single gate that marks the cycle complete.
 
 ## Task 6: Real four-target InputPlumber routing acceptance
-- Status: pending
+- Status: blocked
+- Block reason: `inputplumber-system-dbus` capability is NOT declared in `.factory/environment.toml` (declared: `remote-project-gate`, `systemd-user`, `kernel-uinput`, `installed-package`). Real InputPlumber system-bus acceptance requires a real `org.shadowblip.InputPlumber` system bus with four target/controller objects usable through production dispatch, which is not provisioned on the factory. FACT-002/FACT-003 remain open; private/native-signature sd-bus tests are not real system-bus evidence and must not be counted. No fabricated evidence. Block lifts only when the capability is declared and provisioned with an exact-commit signed receipt (signer also not provisioned, FACT-007).
 - Dependencies: Task 1, Task 2, Task 3
 - Scope: declare and provision `inputplumber-system-dbus` (and the real system-bus `org.shadowblip.InputPlumber` service with four target devices) in `.factory/environment.toml`, route all InputPlumber operations through the DBus backend abstraction on the real system bus, add a real four-target production acceptance test, `.factory/artifacts/blocked-facts.json` (FACT-002/FACT-003), `.factory/artifacts/conformance.json`
 - Acceptance criteria: four expected target/controller objects present and usable through production dispatch on the real InputPlumber system bus; `Topology incomplete: 0 of 4` no longer appears; ARCH-04, SYS-06, DBUS-02, DBUS-05, MGR-02, MGR-08 reclassify to `verified` in the matrix and sidecar; FACT-002 and FACT-003 resolve with exact system-bus probe receipts and routing acceptance evidence
@@ -370,7 +372,7 @@ Keyboard tests in `test_manager_interaction_prof.c` relabeled from
 - Documentation impact: OPERATIONS.md capability declarations and acceptance evidence updated
 
 ## Task 7: Environment-independent profile editor acceptance
-- Status: complete
+- Status: pending
 - Dependencies: Task 1, Task 2, Task 3, Task 5, Task 6
 - Scope: diagnose and fix BUG-0017 without weakening assertions or golden baselines; preserve the production profile-loading path across filesystems and runner environments; add a regression test that reproduces the local clean-build failure while retaining signed-runner coverage
 - Acceptance criteria:
