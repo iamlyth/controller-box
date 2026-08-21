@@ -226,6 +226,6 @@ the bugs surfaced and were fixed.
 - Reviews conducted via parallel read-only subagents (reviewer, security-reviewer, docs-reviewer)
 - Review commit base: `93133d8` on `develop`
 - All prior security fixes (iterations 9, 17–19) confirmed in place with no regressions
-- 98/98 CTest passing, 0 failures, 2 hardware skips (MGR-36)
+- 100 CTest targets registered (98 pass, 0 failures, 2 environment skips: `test_kernel_controller`, `test_backend_smoke`)
 - Sanitizer gate (ASan+UBSan): clean
 - Final gate `--implementation`: EXIT 0

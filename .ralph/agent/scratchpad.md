@@ -1,32 +1,27 @@
-# Handoff: cycle still blocked on external facts; no ready task; all planning validators pass
+# Handoff: Task 12 (documentation accuracy) remediated; 3 ready tasks remain
 
 ## Outcome
-- Ledger unchanged at HEAD a609712 (`factory: fail-closed git commit boundary for scratchpad-only
-  checkpoints` — a tooling commit, not a plan change). Git clean; `ralph tools task ready` -> none.
-- Plan active. Task statuses: 1-3 complete; 5/7/8 pending by appended-after-audit convention; Task 6
-  blocked (undeclared `inputplumber-system-dbus`); Task 4 final audit blocked (depends on Task 6).
-- No software-addressable work remains in-cycle. Tasks 4/6 and open facts depend on external
-  provisioning: real InputPlumber system bus, target consumer, gpu-compositor, Pi/aarch64 hardware,
-  and a signer for runner manifests. Must not fake evidence.
+- Completed Task 12: Documentation accuracy remediation (plan:task-12). All five findings fixed in
+  README.md, docs/REVIEW.md, docs/OPERATIONS.md, and the implementation-plan runner block + SYS-02
+  matrix row: CTest count corrected 98→100 (98 pass / 2 skips: `test_kernel_controller`,
+  `test_backend_smoke`); README "Known environment limitations" now enumerates all four declared
+  runner capabilities (`remote-project-gate`, `systemd-user`, `kernel-uinput`, `installed-package`);
+  legacy receipt 26df6c0 downgraded to unsigned/unevidenced pending a signed commit-bound receipt
+  (FACT-007) wherever it appeared; OPERATIONS.md receipt count corrected 12→13 (13 receipts on
+  file); REVIEW.md evidence made internally consistent. Task 12 plan status kept `pending` per the
+  appended-after-final-audit convention (Task 4 is the single gate).
+- Verification: `check-docs-sync.sh` passes; `validate-implementation-plan.py planning` exit 0;
+  `validate-conformance.py planning` valid (76); `verify-boilerplate.sh` passes; grep confirms no
+  stale "98"/"proven by runner receipt" claims in current-state docs.
 
-## Facts
-- FACT-001/FACT-008 resolved. FACT-002..FACT-007 open: inputplumber-system-dbus, target-consumer,
-  gpu-compositor, Pi runtime/human release, unsigned runner manifest (signer not provisioned).
-- 52 verified, 7 NOT_APPLICABLE, 19 partial bound to FACT-002..FACT-007. Task 6 blocked; Task 4 audit blocked.
+## Remaining ready tasks (all P2, unblocked)
+- Task 10 (task-1787286665-b7bd): Security — DBus sender credential verification (F3) + gate
+  `cbx_service_set_mock_*` behind `#ifdef CBX_TESTING` (F6). Scope: src/dbus/dbus_client.c,
+  src/dbus/ip_connection.c, src/manager/service_install.[ch], tests/CMakeLists.txt.
+- Task 11 (task-1787286665-c52b): Test-quality — §5.7 semantic-outcome gaps (7 findings).
+- Task 12 done (task-1787286641-7e65).
 
-## Verification (this session, correct invocation)
-- validate-implementation-plan.py planning .factory/artifacts/implementation-plan.md -> exit 0
-- validate-conformance.py planning -> valid (76)
-- validate-blocked-facts.py planning -> valid (8)
-- check-context-summary.py -> pass; check-plan-freshness.sh -> pass; verify-boilerplate.sh -> pass
-- git clean at a609712; `ralph tools task ready` -> none
-
-## Constraints
-- Do not emit the completion token: ledger still open (FACT-002..FACT-007, 19 partial rows, Task 6
-  blocked, Task 4 audit blocked). If a future iteration is asked for a ready task, re-check
-  `ralph tools task ready` and the plan for any newly appended remediation task; otherwise the cycle
-  stays blocked on external facts until a human provisions the capability/signer/hardware target.
-- Git guard is now fail-closed for scratchpad-only commits: with no substantive change this iteration,
-  the scratchpad refresh is not committed (no progress-forging). Any future substantive commit may
-  carry the scratchpad; the one-shot final-handoff token is only for the single final-handoff commit
-  after the audit passes.
+## Next
+Pick Task 10 or Task 11 next (both P2, independent, deps 1/2/3/9 complete). Re-check
+`ralph tools task ready` at start. No change to open facts (FACT-002..FACT-007), 19 partial rows,
+Task 6 blocked, Task 4 audit blocked — unchanged; do not emit the completion token (ledger open).

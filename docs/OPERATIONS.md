@@ -920,11 +920,12 @@ VRF-05 and DOD-03 can then move to `verified`.
 ### Current limitation
 
 The `kernel-uinput` runner capability IS declared in
-`.factory/environment.toml` and proven by runner receipt at commit
+`.factory/environment.toml` and covered by the legacy runner receipt at commit
 26df6c0 (`test_kernel_controller` passes on the runner with
-`/dev/uinput` provisioned).  Locally, `/dev/uinput` may not be
+`/dev/uinput` provisioned); that receipt is unsigned/unevidenced pending a
+signed commit-bound receipt (FACT-007).  Locally, `/dev/uinput` may not be
 available, causing the test to skip (exit 77).  The runner is
-reachable (12 receipts on file) and the SSH launcher works.
+reachable (13 receipts on file) and the SSH launcher works.
 The test code is ready and exercises the kernel-backed path when
 `/dev/uinput` is available.
 

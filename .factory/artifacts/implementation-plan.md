@@ -100,8 +100,10 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
   the GUI never touches input routing.
 - **Declared runner capabilities** (`.factory/environment.toml`):
   `remote-project-gate`, `systemd-user`, `kernel-uinput`, `installed-package`.
-  Runner receipt at commit `26df6c0` proves all four (test_kernel_controller
-  passes, Flatpak build passes, 98 CTest targets, 97 pass / 1 skip).
+  Runner receipt at commit `26df6c0` is unsigned/unevidenced (FACT-007); it
+  nominally covers all four (test_kernel_controller passes, Flatpak build
+  passes, 100 CTest targets, 98 pass / 2 skips) pending a signed
+  commit-bound receipt.
 - **Undeclared capabilities**: `gpu-compositor`, `physical-controller`,
   `inputplumber-system-dbus`, `target-consumer`. Native-signature private
   sd-bus tests cover `inputplumber-system-dbus` per §10.1 ("real/private
@@ -123,7 +125,7 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 | ARCH-04 | §2.4 | partial | `ip_connection.c` NameOwnerChanged, degraded/recovery, ≤2s re-enumerate; `test_native_dbus.c` is a private native-signature test, not real InputPlumber system-bus acceptance (BUG-0015, inputplumber-system-dbus undeclared) | Task 6 |
 | ARCH-05 | §2.5 | verified | `trigger.c` SetInterceptActivation; `ip_intercept_poll.c` 50 ms poll; `test_trigger.c`, `test_intercept_poll.c` | |
 | SYS-01 | §3 | partial | aarch64 toolchain files present and correctly configured (cmake/aarch64-toolchain.cmake, cross-shell.nix); cross-compile attempted but no zero-warning aarch64 build artifact exists; requires an aarch64-capable build path (FACT-004) | Task 4 |
-| SYS-02 | §3 | partial | x86_64 build and full test suite verified (98 CTest targets, runner receipt); ARM64 portability confirmed by code review and Flatpak multi-arch target; Pi 4 runtime requires physical target hardware and real target consumer (FACT-004, FACT-006) | Task 4 |
+| SYS-02 | §3 | partial | x86_64 build and full test suite verified (100 CTest targets; 98 pass / 2 environment skips; runner receipt unsigned — FACT-007); ARM64 portability confirmed by code review and Flatpak multi-arch target; Pi 4 runtime requires physical target hardware and real target consumer (FACT-004, FACT-006) | Task 4 |
 | SYS-03 | §3 | verified | SDL2 supports X11/Wayland/Gamescope; `test_sdl_dummy.c` | |
 | SYS-04 | §3 | verified | `CMakeLists.txt` deps: SDL2, SDL2_ttf, SDL2_image, libsystemd, libyaml; nanosvg vendored `third_party/nanosvg/` | |
 | SYS-05 | §3 | verified | InputPlumber not bundled; runtime bus-name check in `ip_connection.c` | |
@@ -446,6 +448,7 @@ Keyboard tests in `test_manager_interaction_prof.c` relabeled from
   - OPERATIONS.md receipt count corrected from 12 to 13 (finding 4); REVIEW.md "98/98 passing … 2 skips" made internally consistent (finding 5)
 - Verification: `./scripts/check-docs-sync.sh` passes; grep confirms no stale "98" or "proven by runner receipt" claims remain; `./scripts/validate-conformance.py planning` and `./scripts/validate-implementation-plan.py planning` accept
 - Documentation impact: README.md, docs/REVIEW.md, docs/OPERATIONS.md, implementation-plan conformance matrix
+- Result: All five findings remediated. CTest counts corrected to 100 targets / 98 pass / 2 environment skips (`test_kernel_controller`, `test_backend_smoke`) in README.md (aarch64 row), docs/REVIEW.md Evidence, and the plan runner block + SYS-02 matrix row. README.md "Known environment limitations" intro now enumerates all four declared runner capabilities (`remote-project-gate`, `systemd-user`, `kernel-uinput`, `installed-package`). The legacy receipt at commit `26df6c0` is now described as unsigned/unevidenced pending a signed commit-bound receipt (FACT-007) in README.md (5c row + kernel-backed limitation row), docs/OPERATIONS.md (Current limitation), and the plan runner block. OPERATIONS.md receipt count corrected from 12 to 13 (13 receipts on file). REVIEW.md evidence made internally consistent. `check-docs-sync.sh`, `validate-implementation-plan.py planning`, and `validate-conformance.py planning` all pass. Status kept `pending` per the appended-after-final-audit convention: Task 4 is the single gate that marks the cycle complete.
 
 ## Remediation rule
 
