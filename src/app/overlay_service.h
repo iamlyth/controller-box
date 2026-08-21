@@ -295,4 +295,19 @@ int cbx_overlay_on_profile_change(int row_idx, const char *profile,
                                      const char *composite_path,
                                      void *userdata);
 
+/* --- Production InterceptMode poll callbacks (Task 13) ---------------- */
+
+/*
+ * The production per-composite activating/deactivating/error callbacks that
+ * the overlay service wires into its intercept polls.  They are static in
+ * release builds; under CBX_TESTING they are exported so native tests can
+ * register the exact production callbacks instead of re-implementing local
+ * copies (which can drift from the real lifecycle behaviour).
+ */
+#ifdef CBX_TESTING
+void on_intercept_activating(void *userdata);
+void on_intercept_deactivating(void *userdata);
+void on_intercept_error(int error_code, void *userdata);
+#endif /* CBX_TESTING */
+
 #endif /* CBX_OVERLAY_SERVICE_H */

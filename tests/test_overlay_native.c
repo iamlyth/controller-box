@@ -126,15 +126,22 @@ static void push_poll_event(uint32_t event_type)
 }
 
 /* Activate the overlay through the production InterceptMode poll path,
- * exercising the full activation lifecycle (IDLE → ACTIVATING → VISIBLE)
- * including the on_activating callback, cbx_overlay_lifecycle_activate,
- * surface show, and on_visible callback.  This replaces the earlier
- * direct state mutation that bypassed the activation lifecycle. */
+ * exercising the full activation lifecycle (IDLE → PASS_WAIT → ACTIVE →
+ * VISIBLE) including the on_intercept_activating callback,
+ * cbx_overlay_lifecycle_activate, surface show, and on_visible callback.
+ *
+ * The IDLE→PASS_WAIT transition is driven by ip_intercept_poll_start()
+ * (the same function the production loop uses to arm a poll) rather than
+ * by directly mutating poll->state.  The subsequent PASS_WAIT→ACTIVE
+ * transition is driven by ip_intercept_poll_tick() reading InterceptMode. */
 static void activate_overlay(native_fixture *f)
 {
     cbx_overlay_service_ctx *svc = f->svc;
     assert_int_equal(svc->lifecycle.state, CBX_OVERLAY_IDLE);
-    svc->polls[0].state = IP_POLL_PASS_WAIT;
+    assert_int_equal(ip_intercept_poll_start(&svc->polls[0],
+                      IP_INTERCEPT_POLL_INTERVAL_MS,
+                      svc->poll_event_type), 0);
+    assert_int_equal(svc->polls[0].state, IP_POLL_PASS_WAIT);
     assert_int_equal(ip_composite_set_intercept_mode(
         svc->conn.backend, svc->conn.bus, COMP_PATH_0, "2"), 0);
     push_poll_event(svc->poll_event_type);
@@ -178,34 +185,14 @@ static void create_profile_file(const char *dir, const char *filename,
     fclose(fp);
 }
 
-/* --- Poll callbacks (test-local wrappers that exercise production paths) --- */
-
-static void test_on_activating(void *userdata)
-{
-    cbx_poll_activation_ctx *act = (cbx_poll_activation_ctx *)userdata;
-    if (!act || !act->lifecycle)
-        return;
-    if (act->composite_path[0]) {
-        size_t len = strlen(act->composite_path);
-        if (len >= sizeof(act->lifecycle->composite_path))
-            len = sizeof(act->lifecycle->composite_path) - 1;
-        memcpy(act->lifecycle->composite_path, act->composite_path, len);
-        act->lifecycle->composite_path[len] = '\0';
-    }
-    cbx_overlay_lifecycle_activate(act->lifecycle);
-}
-
-static void test_on_deactivating(void *userdata)
-{
-    cbx_overlay_lifecycle *lc = (cbx_overlay_lifecycle *)userdata;
-    cbx_overlay_lifecycle_close(lc);
-}
-
-static void test_on_poll_error(int error_code, void *userdata)
-{
-    (void)error_code;
-    (void)userdata;
-}
+/* --- Poll callbacks (production paths) -------------------------------- */
+/*
+ * The native test registers the production on_intercept_activating /
+ * on_intercept_deactivating / on_intercept_error callbacks (exposed under
+ * CBX_TESTING from overlay_service.c) rather than re-implementing local
+ * copies.  This keeps the test wiring identical to production so the
+ * lifecycle behaviour under test cannot drift from the shipped code.
+ */
 
 /* --- Setup / Teardown -------------------------------------------------- */
 
@@ -455,9 +442,9 @@ static int native_setup(void **state)
         ip_intercept_poll_init(&f->svc->polls[i],
                                 f->svc->conn.backend, f->svc->conn.bus,
                                 f->svc->composites[i].composite_path,
-                                test_on_activating, &f->svc->poll_acts[i],
-                                test_on_deactivating, &f->svc->lifecycle,
-                                test_on_poll_error, NULL);
+                                on_intercept_activating, &f->svc->poll_acts[i],
+                                on_intercept_deactivating, &f->svc->lifecycle,
+                                on_intercept_error, NULL);
         f->svc->poll_count++;
     }
 
@@ -540,8 +527,11 @@ static void test_o01_open_activates(void **state)
     /* Verify starting state. */
     assert_int_equal(svc->lifecycle.state, CBX_OVERLAY_IDLE);
 
-    /* Set poll to PASS_WAIT state. */
-    svc->polls[0].state = IP_POLL_PASS_WAIT;
+    /* Arm the poll via the production IDLE→PASS_WAIT transition. */
+    assert_int_equal(ip_intercept_poll_start(&svc->polls[0],
+                      IP_INTERCEPT_POLL_INTERVAL_MS,
+                      svc->poll_event_type), 0);
+    assert_int_equal(svc->polls[0].state, IP_POLL_PASS_WAIT);
 
     /* Set InterceptMode = ALL (2) on server — native u type on wire. */
     assert_int_equal(ip_composite_set_intercept_mode(
@@ -570,7 +560,10 @@ static void test_o01b_deactivation_closes(void **state)
     cbx_overlay_service_ctx *svc = f->svc;
 
     activate_overlay(f);
-    svc->polls[0].state = IP_POLL_ACTIVE;
+
+    /* activate_overlay() leaves the poll in ACTIVE; make the state explicit
+     * for the deactivation step below (no manual state mutation). */
+    assert_int_equal(svc->polls[0].state, IP_POLL_ACTIVE);
 
     /* Set InterceptMode = PASS (1) on server. */
     assert_int_equal(ip_composite_set_intercept_mode(

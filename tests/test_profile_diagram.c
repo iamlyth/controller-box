@@ -16,6 +16,7 @@
 
 #include "manager/profile_diagram.h"
 #include "test_harness.h"
+#include "fb_assert.h"
 
 /* ------------------------------------------------------------------ */
 /*  Fixture                                                           */
@@ -51,6 +52,64 @@ static int teardown(void **state)
     test_harness_sdl_shutdown(&f->sdl);
     free(f);
     return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Framebuffer helpers (real pixel readback, not "no-crash" stubs)    */
+/* ------------------------------------------------------------------ */
+
+/* Read the full renderer framebuffer into a fresh heap buffer. */
+static uint8_t *
+diag_read_fb(SDL_Renderer *r, int *w, int *h)
+{
+    assert_int_equal(SDL_GetRendererOutputSize(r, w, h), 0);
+    uint8_t *buf = malloc((size_t)(*w) * (*h) * 4);
+    assert_non_null(buf);
+    assert_int_equal(fb_read_pixels(r, NULL, buf, (size_t)(*w) * (*h) * 4), 0);
+    return buf;
+}
+
+/* Clear the renderer to a known background distinct from the panel fill. */
+static void
+diag_clear(SDL_Renderer *r, uint8_t c)
+{
+    SDL_SetRenderDrawColor(r, c, c, c, 255);
+    SDL_RenderClear(r);
+}
+
+/* Compute the on-screen rect of a highlighted button within the diagram. */
+static SDL_Rect
+diag_button_rect(const cbx_diag_button_pos *pos, const SDL_Rect *diag)
+{
+    SDL_Rect r;
+    r.x = diag->x + (int)(pos->x * (float)diag->w);
+    r.y = diag->y + (int)(pos->y * (float)diag->h);
+    r.w = (int)(pos->w * (float)diag->w);
+    r.h = (int)(pos->h * (float)diag->h);
+    if (r.w < 1) r.w = 1;
+    if (r.h < 1) r.h = 1;
+    return r;
+}
+
+/*
+ * Assert that the highlighted button region is painted over the panel
+ * background (semantic highlight outcome).  A non-highlighted button
+ * region is exactly panel_bg, so `expected=false` proves no highlight.
+ */
+static void
+diag_assert_highlight(SDL_Renderer *r, const SDL_Rect *diag,
+                      cbx_diag_button btn, bool expected)
+{
+    const cbx_diag_button_pos *pos = cbx_profile_diagram_get_button_pos(btn);
+    assert_non_null(pos);
+    SDL_Rect br = diag_button_rect(pos, diag);
+    int w, h;
+    uint8_t *buf = diag_read_fb(r, &w, &h);
+    /* panel_bg (theme) is what a non-highlighted button region looks like. */
+    uint8_t panel_bg[3] = {30, 30, 42};
+    bool has = fb_region_has_content(buf, w, h, &br, panel_bg, 15);
+    free(buf);
+    assert_int_equal(has, expected);
 }
 
 /* ------------------------------------------------------------------ */
@@ -290,8 +349,17 @@ static void test_shutdown_cleans_up(void **state)
 
     cbx_profile_diagram_highlight(&f->diag, CBX_DIAG_BTN_X);
     cbx_profile_diagram_shutdown(&f->diag);
-    /* After shutdown, struct is zeroed — no crash is the main check */
-    assert_true(1);
+    /* Shutdown releases owned resources and zeroes the struct: no owned
+     * texture remains, and the widget vtable is gone. */
+    assert_false(f->diag.owns_base_texture);
+    assert_null(f->diag.base_texture);
+    assert_null(f->diag.base.vt);
+    /* Shutdown is idempotent — calling it again on the released struct is
+     * safe and leaves the struct in the same released state. */
+    cbx_profile_diagram_shutdown(&f->diag);
+    assert_false(f->diag.owns_base_texture);
+    assert_null(f->diag.base_texture);
+    assert_null(f->diag.base.vt);
 }
 
 /* ------------------------------------------------------------------ */
@@ -302,27 +370,37 @@ static void test_render_no_crash(void **state)
 {
     pd_fixture *f = *state;
 
-    /* Render without highlight */
+    /* Render without highlight — the diagram must paint its panel_bg. */
+    diag_clear(f->sdl.renderer, 255);
     cbx_widget_draw(&f->diag.base, f->sdl.renderer);
+    int w, h;
+    uint8_t *buf = diag_read_fb(f->sdl.renderer, &w, &h);
+    SDL_Rect diag = f->diag.base.rect;
+    SDL_Rect sample = { diag.x + 4, diag.y + 4, 60, 60 };
+    uint8_t white[3] = {255, 255, 255};
+    assert_true(fb_region_has_content(buf, w, h, &sample, white, 10));
+    free(buf);
 
-    /* Render with highlight */
+    /* Render with highlight — the highlighted button must differ from
+     * the surrounding panel_bg (semantic highlight outcome). */
     cbx_profile_diagram_highlight(&f->diag, CBX_DIAG_BTN_A);
     cbx_widget_draw(&f->diag.base, f->sdl.renderer);
-
-    /* Should not crash */
-    assert_true(1);
+    diag_assert_highlight(f->sdl.renderer, &f->diag.base.rect,
+                          CBX_DIAG_BTN_A, true);
 }
 
 static void test_render_all_buttons(void **state)
 {
     pd_fixture *f = *state;
 
+    /* Every button's highlight must actually change pixels in the
+     * framebuffer (not merely not crash). */
     for (int i = 0; i < CBX_DIAG_BTN_COUNT; i++) {
         cbx_profile_diagram_highlight(&f->diag, (cbx_diag_button)i);
         cbx_widget_draw(&f->diag.base, f->sdl.renderer);
+        diag_assert_highlight(f->sdl.renderer, &f->diag.base.rect,
+                              (cbx_diag_button)i, true);
     }
-    /* should not crash for any button */
-    assert_true(1);
 }
 
 static void test_render_with_rect(void **state)
@@ -333,12 +411,23 @@ static void test_render_with_rect(void **state)
     cbx_widget_set_rect(&f->diag.base, &r);
 
     cbx_profile_diagram_highlight(&f->diag, CBX_DIAG_BTN_START);
+    diag_clear(f->sdl.renderer, 0);
     cbx_widget_draw(&f->diag.base, f->sdl.renderer);
 
     SDL_Rect out;
     cbx_widget_get_rect(&f->diag.base, &out);
     assert_int_equal(out.w, 400);
     assert_int_equal(out.h, 400);
+
+    /* The enlarged rect is still painted, and the START highlight is
+     * visible in the framebuffer. */
+    int w, h;
+    uint8_t *buf = diag_read_fb(f->sdl.renderer, &w, &h);
+    SDL_Rect sample = { out.x + 4, out.y + 4, 60, 60 };
+    uint8_t black[3] = {0, 0, 0};
+    assert_true(fb_region_has_content(buf, w, h, &sample, black, 10));
+    free(buf);
+    diag_assert_highlight(f->sdl.renderer, &out, CBX_DIAG_BTN_START, true);
 }
 
 static void test_render_null_safe(void **state)

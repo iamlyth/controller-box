@@ -22,6 +22,7 @@
 #include "ui/theme.h"
 #include "ui/widget.h"
 #include "test_harness.h"
+#include "fb_assert.h"
 #include "dbus_mock.h"
 
 /* ------------------------------------------------------------------ */
@@ -672,10 +673,10 @@ static void test_status_message(void **state)
     cbx_profile p = make_test_profile(1);
     cbx_profile_editor_load_profile(&f->ed, &p);
 
-    /* In list mode, status is empty */
+    /* In list mode, status is empty. */
     const char *status = cbx_profile_editor_get_status(&f->ed);
     assert_non_null(status);
-    assert_true(strlen(status) == 0 || strlen(status) > 0);  /* just non-null */
+    assert_true(strlen(status) == 0);  /* list mode shows no status hint */
 
     /* Enter target pick → status should be set */
     cbx_profile_editor_activate(&f->ed);
@@ -695,11 +696,27 @@ static void test_render_no_crash(void **state)
     cbx_profile p = make_test_profile(3);
     cbx_profile_editor_load_profile(&f->ed, &p);
 
-    /* Render the panel (includes diagram + list) */
+    /* Clear to a known background distinct from the theme panel fill. */
+    SDL_SetRenderDrawColor(f->sdl.renderer, 255, 255, 255, 255);
+    SDL_RenderClear(f->sdl.renderer);
+
+    /* Render the panel (includes diagram + list). */
     cbx_widget_draw(&f->panel.base, f->sdl.renderer);
 
-    /* should not crash */
-    assert_true(1);
+    /* The editor's diagram region must have painted non-background
+     * pixels — real rendering, not merely "did not crash". */
+    int w, h;
+    SDL_GetRendererOutputSize(f->sdl.renderer, &w, &h);
+    uint8_t *buf = malloc((size_t)w * h * 4);
+    assert_non_null(buf);
+    assert_int_equal(fb_read_pixels(f->sdl.renderer, NULL, buf,
+                                    (size_t)w * h * 4), 0);
+    /* Diagram is laid out at {16, 40, 300, 300}; sample inside the
+     * 320x240 window and inside the diagram's painted area. */
+    SDL_Rect sample = { 20, 60, 100, 100 };
+    uint8_t white[3] = {255, 255, 255};
+    assert_true(fb_region_has_content(buf, w, h, &sample, white, 10));
+    free(buf);
 }
 
 static void test_render_target_pick(void **state)
@@ -715,9 +732,23 @@ static void test_render_target_pick(void **state)
     assert_int_equal(cbx_profile_editor_get_mode(&f->ed),
                        CBX_EDITOR_MODE_TARGET_PICK);
 
+    /* Clear to a known background, then render the panel. */
+    SDL_SetRenderDrawColor(f->sdl.renderer, 255, 255, 255, 255);
+    SDL_RenderClear(f->sdl.renderer);
     cbx_widget_draw(&f->panel.base, f->sdl.renderer);
-    /* should not crash */
-    assert_true(1);
+
+    /* The diagram (still visible in target-pick mode) must paint
+     * non-background pixels. */
+    int w, h;
+    SDL_GetRendererOutputSize(f->sdl.renderer, &w, &h);
+    uint8_t *buf = malloc((size_t)w * h * 4);
+    assert_non_null(buf);
+    assert_int_equal(fb_read_pixels(f->sdl.renderer, NULL, buf,
+                                    (size_t)w * h * 4), 0);
+    SDL_Rect sample = { 20, 60, 100, 100 };
+    uint8_t white[3] = {255, 255, 255};
+    assert_true(fb_region_has_content(buf, w, h, &sample, white, 10));
+    free(buf);
 }
 
 /* ------------------------------------------------------------------ */

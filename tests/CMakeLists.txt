@@ -741,8 +741,11 @@ if(CMOCKA_FOUND)
     # real DBus InputEvent signals.
     add_executable(test_overlay_native tests/test_overlay_native.c tests/native_ip_server.c)
     target_compile_definitions(test_overlay_native PRIVATE
-        DBUS_SESSION_CONFIG="${DBUS_PREFIX}/share/dbus-1/session.conf")
-    target_link_libraries(test_overlay_native PRIVATE controllerbox cbx_test_support PkgConfig::CMOCKA)
+        DBUS_SESSION_CONFIG="${DBUS_PREFIX}/share/dbus-1/session.conf"
+        CBX_TESTING)
+    # Link the CBX_TESTING-instrumented library so the production
+    # on_intercept_* poll callbacks are exported to this test.
+    target_link_libraries(test_overlay_native PRIVATE controllerbox_testing cbx_test_support PkgConfig::CMOCKA)
     add_test(NAME test_overlay_native COMMAND test_overlay_native)
     set_tests_properties(test_overlay_native PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")

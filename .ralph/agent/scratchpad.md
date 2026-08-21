@@ -1,46 +1,46 @@
-# Handoff: corrected stale FACT-007 rationale; ledger accurate; still no ready task / completion
+# Handoff: test-quality gaps closed; final audit still blocked on external facts
 
 ## Outcome this iteration
-Corrected a genuine documentation-accuracy defect in the blocked-facts ledger and
-conformance sidecar: FACT-007's stated rationale ("no signer provisioned,
-`enabled=false`, no public keys") was **factually stale**. Re-verified reality:
+Closed the ready runtime task `task-1787293432-7333` (software-fixable test-quality
+gaps from reviewer audit). Plan remains `active` + fresh (spec=3a10f6b7d04a,
+blob=58f5d3cb72bc). Uncommitted changes on `develop`.
 
-- `.factory/signer-trust.json` is `enabled=true`, `require_signature=true`, has a
-  committed public key for `dev-runner-vm`, and the detached signature on the
-  c45336a manifest **verifies** via `ssh-keygen -Y verify`.
-- A valid signed, commit-bound runner receipt exists at c45336a (ancestor of HEAD).
+- **(1) No-op assertions removed.** test_editor_list_mode.c: fixed the
+  `strlen(status)==0||>0` tautology (now asserts empty in list mode) and replaced
+  `assert_true(1)`-after-draw in test_render_no_crash/test_render_target_pick with
+  real `fb_read_pixels`+`fb_region_has_content` checks on the diagram region.
+  test_profile_diagram.c: replaced `assert_true(1)` in test_render_no_crash,
+  test_render_all_buttons, test_render_with_rect, test_shutdown_cleans_up with
+  framebuffer content + `diag_assert_highlight` (highlighted button differs from
+  panel_bg {30,30,42}, tol 15) + resource-release/idempotency checks.
+- **(2) Production callbacks wired.** overlay_service.c exposes
+  `on_intercept_activating/deactivating/error` as non-static under CBX_TESTING
+  (still static in release); declared in overlay_service.h under the gate.
+  test_overlay_native.c now registers the production callbacks (dropped local
+  test_on_* copies); tests/CMakeLists.txt links `controllerbox_testing` +
+  defines CBX_TESTING. nm confirms release `controllerbox` keeps them `t`.
+- **(3) Poll transition via production path.** activate_overlay()/test_o01/test_o01b
+  now use `ip_intercept_poll_start()` (IDLE→PASS_WAIT) + `ip_intercept_poll_tick`
+  (PASS_WAIT→ACTIVE via InterceptMode read); no `polls[].state = IP_POLL_*`
+  mutation remains. Repeated test_overlay_native 10× — deterministic.
+- **(4) get_unique_name failure branch tested.** dbus_mock gains
+  `unique_name_rc` + `ip_dbus_mock_set_unique_name_fail()`; test_connect_unique_name_fail
+  asserts connect still succeeds (rc 0, CONNECTED) but sender unverified +
+  unique_name NULL.
+- Full suite 100/100 pass (2 pre-existing hardware skips: test_kernel_controller,
+  test_backend_smoke). verify-boilerplate passes. Added Task 13 section to
+  implementation-plan recording evidence.
 
-FACT-007 stays `open` for the accurate reason: the receipt is bound to c45336a,
-not the current implementation commit b66dbdb; the runner-evidence aggregate
-reports "stale" relative to HEAD; and the receipts live in untracked
-`.factory-state/runner-evidence/` (not Git blobs at any evidence commit), so
-complete-mode conformance cannot accept them. The `dev-runner-vm` runner is not
-reachable from this sandbox (no `~/.ssh/factory-ssh`, hostname unresolvable), so a
-fresh signed receipt at HEAD cannot be produced here.
+## Blocked-facts ledger (unchanged)
+8 facts; FACT-001/008 resolved; FACT-002..007 open — all external hardware/
+capability/signer blockers (real InputPlumber system-bus, target consumer / Pi 4,
+gpu-compositor, target Pi runtime + human release acceptance, runner-evidence
+signer re-run). Runner VM unreachable (no ~/.ssh/factory-ssh); FACT-007 signer
+provisioned but receipt stale vs HEAD and untracked.
 
-## Verified this iteration
-- `ralph tools task ready` → no ready tasks.
-- Plan fresh (spec=3a10f6b7d04a), `status: active`, tree clean on `develop` @ b66dbdb.
-- Signer provisioned; signed commit-bound receipt exists at c45336a but is stale
-  relative to HEAD and untracked (not a Git blob).
-- Corrected: `.factory/artifacts/blocked-facts.json` FACT-007 (title +
-  blocking_evidence), `.factory/artifacts/conformance.json` reasons for
-  MGR-03/PKG-01/VRF-05/DOD-06, regenerated `.factory/artifacts/context-summary.md`.
-- Validators pass: validate-blocked-facts (8 facts), validate-conformance planning
-  (76 reqs), check-context-summary, verify-boilerplate.
-
-## Remaining blockers (unchanged, external)
-- FACT-002/003 BUG-0015 real InputPlumber system-bus — capability undeclared.
-- FACT-004 target-consumer (four-target routing, aarch64/Pi 4) undeclared.
-- FACT-005 gpu-compositor undeclared.
-- FACT-006 target Pi runtime + human release acceptance (out-of-band).
-- FACT-007 (corrected): needs runner re-run at current HEAD producing a signed
-  commit-bound receipt tracked as a Git blob; runner VM unreachable from sandbox.
-- environment.toml forbids inventing these capabilities until acceptance
-  contracts exist. A human must provision hardware/capabilities/signer re-run or
-  make an explicit spec-scoped deferral before Task 4 (final audit) can run.
-
-## Rule
-No ready task, no further software-fixable work available. Do not emit the
-completion token; the ledger stays open. Re-check `ralph tools task ready` and the
-plan's open/blocked rows and facts on each fresh iteration.
+## Next
+- Commit the substantive test-quality checkpoint to `develop` (guard allows
+  substantive commits carrying scratchpad). Final audit (Task 4) remains blocked
+  on external facts; requires human hardware/capability/signer re-run or explicit
+  spec-scoped deferral.
+- Do not emit the completion token; ledger stays open.

@@ -76,6 +76,7 @@ typedef struct {
     uint32_t             creds_pid;   /* GetConnectionCredentials pid (default 4242) */
     uint32_t             creds_uid;   /* GetConnectionCredentials uid (default 0 = root/trusted) */
     int                  creds_rc;    /* 0 = success; <0 to simulate creds lookup failure */
+    int                  unique_name_rc; /* 0 = success; <0 to simulate get_unique_name failure */
 } ip_dbus_mock;
 
 /* --- Mock lifecycle -------------------------------------------------------- */
@@ -124,6 +125,11 @@ void ip_dbus_mock_set_creds(ip_dbus_mock *mock, uint32_t pid, uint32_t uid);
  * lookup failure (e.g. the owner vanished between name resolution and
  * verification). */
 void ip_dbus_mock_set_creds_fail(ip_dbus_mock *mock, int rc);
+
+/* Force get_unique_name to fail with `rc` (<0), simulating a name-to-
+ * unique-connection resolution failure during connect.  This is a
+ * non-fatal condition in ip_connection (still connected, sender unverified). */
+void ip_dbus_mock_set_unique_name_fail(ip_dbus_mock *mock, int rc);
 
 /* Queue a NameOwnerChanged signal for dispatch by mock_process().
  * This allows tests to verify that a run-loop's process() call drains

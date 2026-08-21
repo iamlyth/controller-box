@@ -545,22 +545,24 @@ test_connect_invalid_args(void **state)
     assert_int_equal(ip_connection_get_state(&ctx->conn), IP_CONN_DISCONNECTED);
 }
 
-/* Test: get_unique_name failure during connect is non-fatal. */
+/* Test: get_unique_name failure during connect is non-fatal (sender
+ * unverified, but still connected and watching NameOwnerChanged). */
 static void
 test_connect_unique_name_fail(void **state)
 {
     struct test_ctx *ctx = *state;
 
-    /* Version succeeds but there's no expectation for unique_name lookup.
-     * Mock's get_unique_name always returns ":1.42" regardless of
-     * expectations, so this tests the happy path.  To test failure we'd
-     * need to modify the mock — skip for now, just verify connect works. */
     ip_dbus_mock_expect_ok(&ctx->mock, IP_IFACE_MANAGER, "Version", "1.0.0");
+    ip_dbus_mock_set_unique_name_fail(&ctx->mock, -EIO);
 
     int rc = ip_connection_connect(&ctx->conn);
     assert_int_equal(rc, 0);
+    assert_int_equal(ip_connection_get_state(&ctx->conn), IP_CONN_CONNECTED);
     assert_true(ip_connection_is_connected(&ctx->conn));
-    assert_non_null(ip_connection_get_unique_name(&ctx->conn));
+    /* Unique name could not be resolved → sender is not verified, and no
+     * unique name is advertised for later sender checks. */
+    assert_false(ip_connection_is_sender_verified(&ctx->conn));
+    assert_null(ip_connection_get_unique_name(&ctx->conn));
 }
 
 /* Test: multiple subscribe calls work (NameOwnerChanged only). */

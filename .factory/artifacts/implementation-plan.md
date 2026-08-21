@@ -460,6 +460,20 @@ Keyboard tests in `test_manager_interaction_prof.c` relabeled from
 - Documentation impact: README.md, docs/REVIEW.md, docs/OPERATIONS.md, implementation-plan conformance matrix
 - Result: All five findings remediated. CTest counts corrected to 100 targets / 98 pass / 2 environment skips (`test_kernel_controller`, `test_backend_smoke`) in README.md (aarch64 row), docs/REVIEW.md Evidence, and the plan runner block + SYS-02 matrix row. README.md "Known environment limitations" intro now enumerates all four declared runner capabilities (`remote-project-gate`, `systemd-user`, `kernel-uinput`, `installed-package`). The legacy receipt at commit `26df6c0` is now described as unsigned/unevidenced pending a signed commit-bound receipt (FACT-007) in README.md (5c row + kernel-backed limitation row), docs/OPERATIONS.md (Current limitation), and the plan runner block. OPERATIONS.md receipt count corrected from 12 to 13 (13 receipts on file). REVIEW.md evidence made internally consistent. `check-docs-sync.sh`, `validate-implementation-plan.py planning`, and `validate-conformance.py planning` all pass. Status kept `pending` per the appended-after-final-audit convention: Task 4 is the single gate that marks the cycle complete.
 
+## Task 13: Close software-fixable test-quality gaps (reviewer audit)
+- Status: pending
+- Dependencies: Task 1, Task 2, Task 3, Task 9, Task 10
+- Source: reviewer audit of the cycle (mem-1786909852-cc11 lesson) — software-fixable, independent of FACT-002..007 hardware/capability/signer blockers. Runtime task `task-1787293432-7333`.
+- Scope: `tests/test_editor_list_mode.c`, `tests/test_profile_diagram.c`, `tests/test_overlay_native.c`, `tests/test_connection.c`, `tests/dbus_mock.{c,h}`, `src/app/overlay_service.{c,h}`, `tests/CMakeLists.txt`
+- Acceptance criteria:
+  - No no-op assertions remain: `test_editor_list_mode.c` tautology `assert_true(strlen(status)==0 || strlen(status)>0)` and both `assert_true(1)`-after-draw stubs, and `test_profile_diagram.c` `assert_true(1)` in test_render_no_crash / test_render_all_buttons / test_render_with_rect / test_shutdown_cleans_up are replaced with real framebuffer/semantic assertions (fb_read_pixels + fb_region_has_content against known backgrounds; highlight differs from panel_bg).
+  - test_overlay_native.c registers the production `on_intercept_activating` / `on_intercept_deactivating` / `on_intercept_error` callbacks (exposed from overlay_service.c under CBX_TESTING) instead of local test copies; the test links `controllerbox_testing` and defines CBX_TESTING; release `controllerbox` keeps the callbacks static.
+  - `activate_overlay()` (and test_o01/test_o01b) drive the poll through the production `ip_intercept_poll_start()` IDLE→PASS_WAIT transition and `ip_intercept_poll_tick()` PASS_WAIT→ACTIVE via InterceptMode read; no `polls[...].state = IP_POLL_*` manual mutation remains.
+  - `test_connection.c` `test_connect_unique_name_fail` exercises the real `get_unique_name` failure path via a new `ip_dbus_mock_set_unique_name_fail()` mock capability, asserting connect still succeeds but the sender stays unverified and no unique name is advertised.
+- Verification: `ctest --test-dir build-check -R 'test_profile_diagram|test_editor_list_mode|test_connection|test_overlay_native' --output-on-failure` all pass; full suite 100/100 pass (2 pre-existing hardware skips: `test_kernel_controller`, `test_backend_smoke`); `test_overlay_native` repeated 10× deterministic; `verify-boilerplate.sh` passes; release `controllerbox` library shows `on_intercept_*` as local `t` symbols (no CBX_TESTING leak, F6).
+- Documentation impact: none (production behavior unchanged; the CBX_TESTING exposure is test-only and the test-only mock knob does not alter release symbols).
+- Result: All four reviewer findings closed. Status kept `pending` per the appended-after-final-audit convention; Task 4 remains the single completion gate.
+
 ## Remediation rule
 
 When the final audit (Task 4) finds a gap that earlier tasks did not close:

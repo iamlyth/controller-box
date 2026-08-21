@@ -44,6 +44,7 @@ void ip_dbus_mock_reset(ip_dbus_mock *mock) {
     mock->creds_pid = 4242;
     mock->creds_uid = 0;
     mock->creds_rc  = 0;
+    mock->unique_name_rc = 0;
 }
 
 void ip_dbus_mock_set_creds(ip_dbus_mock *mock, uint32_t pid, uint32_t uid) {
@@ -56,6 +57,11 @@ void ip_dbus_mock_set_creds(ip_dbus_mock *mock, uint32_t pid, uint32_t uid) {
 void ip_dbus_mock_set_creds_fail(ip_dbus_mock *mock, int rc) {
     if (!mock) return;
     mock->creds_rc = rc;
+}
+
+void ip_dbus_mock_set_unique_name_fail(ip_dbus_mock *mock, int rc) {
+    if (!mock) return;
+    mock->unique_name_rc = rc;
 }
 
 /* --- Queued signal helper ----------------------------------------------- */
@@ -147,6 +153,8 @@ static int mock_get_unique_name(ip_bus_handle bus, const char *well_known,
     (void)well_known;
     ip_dbus_mock *mock = (ip_dbus_mock *)bus;
     if (!mock || !out_unique) return -EINVAL;
+    if (mock->unique_name_rc < 0)
+        return mock->unique_name_rc;
     /* Return a deterministic fake unique name. */
     *out_unique = strdup(":1.42");
     return 0;

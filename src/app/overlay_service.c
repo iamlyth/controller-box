@@ -97,9 +97,18 @@ cbx_overlay_service_reset_shutdown(void)
  * to the composite that triggered the activation, then activates the
  * overlay.  This ensures that close sets InterceptMode=PASS on the
  * activating composite, not just the primary one (SPEC §2.5).
+ *
+ * Under CBX_TESTING the storage class is dropped so native tests can wire
+ * these exact production callbacks (instead of re-implementing local
+ * copies) — see overlay_service.h.  In release builds they remain static.
  */
+#ifdef CBX_TESTING
+void
+on_intercept_activating(void *userdata)
+#else
 static void
 on_intercept_activating(void *userdata)
+#endif
 {
     cbx_poll_activation_ctx *act = (cbx_poll_activation_ctx *)userdata;
     if (!act || !act->lifecycle)
@@ -115,16 +124,26 @@ on_intercept_activating(void *userdata)
     cbx_overlay_lifecycle_activate(act->lifecycle);
 }
 
+#ifdef CBX_TESTING
+void
+on_intercept_deactivating(void *userdata)
+#else
 static void
 on_intercept_deactivating(void *userdata)
+#endif
 {
     cbx_overlay_lifecycle *lc = (cbx_overlay_lifecycle *)userdata;
     /* If already closing/closed, close() returns -EPERM — that's fine. */
     cbx_overlay_lifecycle_close(lc);
 }
 
+#ifdef CBX_TESTING
+void
+on_intercept_error(int error_code, void *userdata)
+#else
 static void
 on_intercept_error(int error_code, void *userdata)
+#endif
 {
     (void)userdata;
     fprintf(stderr,
