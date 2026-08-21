@@ -1,41 +1,37 @@
-# Handoff: cycle blocked on Task 6 (BUG-0015); ledger made consistent
+# Handoff: plan ledger reconciled (Task 8 pending); cycle still blocked on external facts
 
 ## Outcome
-- The only remaining implementation task, Task 6 (BUG-0015 real four-target
-  InputPlumber routing), is a hardware/capability blocker: `inputplumber-system-dbus`
-  is NOT declared in `.factory/environment.toml` (declared: remote-project-gate,
-  systemd-user, kernel-uinput, installed-package). FACT-002/FACT-003 open; BUG-0015/
-  BUG-0016 open in ledger. No real org.shadowblip.InputPlumber system bus is
-  provisioned. Cannot fabricate system-bus evidence. Marked Task 6 `blocked` with
-  exact reason.
-- Fixed a pre-existing ledger inconsistency: `validate-implementation-plan.py planning`
-  failed because Task 5 (and Task 7) were marked `complete` while they are appended
-  tasks AFTER the final audit (Task 4), which is still `blocked`. The validator
-  requires appended tasks to stay `pending`/`blocked` until the final audit gates the
-  cycle. Reclassified Task 5 -> `pending` (added Result note: BUG-0014 resolved at
-  `ae4ef52`), Task 7 -> `pending` (BUG-0017 resolved at `04e2b37`), Task 6 -> `blocked`.
-  Updated `.factory/artifacts/context-summary.md` active/open-task set to match.
+- Found a real backpressure failure the prior handoff missed: `validate-implementation-plan.py planning`
+  FAILED with "a completed appended task after the final audit contradicts the active ledger"
+  because Task 8 was marked `complete` in the plan text. Per the convention established in
+  `4d2026f`, appended remediation tasks after the final audit (Task 4) must stay
+  `pending`/`blocked` until the audit gates the cycle.
+- Reclassified Task 8 -> `pending` in `.factory/artifacts/implementation-plan.md`. The real
+  work and evidence are preserved: conformance.json still records OVL-10/MGR-07 verified,
+  blocked-facts.json still records FACT-008 resolved. Added Task 8 to
+  `.factory/artifacts/context-summary.md` Open tasks (active task stays Task 5).
+- Commit: `239efe4`.
 
-## Verification (exact, this session)
-- `validate-implementation-plan.py planning` -> OK (was failing before this fix).
-- `validate-conformance.py planning` -> valid (76 requirements).
-- `validate-blocked-facts.py planning` -> valid (7 facts).
-- `bug-ledger.py validate` -> valid (2 open, 15 closed).
-- `check-context-summary.py` -> valid (active task, unresolved facts, exact receipt refs).
-- `check-plan-freshness.sh` -> spec commit/blob match.
-- `verify-boilerplate.sh` -> passes.
+## State
+- Tasks 1, 2, 3 complete. Tasks 5, 7, 8 pending (work done + verified; kept pending by the
+  appended-task-after-audit convention until Task 4 gates the cycle). Task 6 blocked
+  (undeclared `inputplumber-system-dbus`, FACT-002/FACT-003). Task 4 final audit blocked
+  (depends on Task 6 + hardware/signer facts).
+- Conformance: 52 verified, 7 NOT_APPLICABLE, 19 partial bound to FACT-002..FACT-007.
+- No ready implementation task. Cycle genuinely blocked on external capability/hardware/signer
+  facts; must not be faked.
 
-## Commit
-- Ledger-consistency fix on `develop`: Task 5/6/7 statuses + Result notes in
-  implementation-plan.md, context-summary.md active/open-task set.
+## Verification (this session)
+- validate-implementation-plan.py planning -> exit 0 (was failing before reconciliation)
+- validate-conformance.py planning -> valid (76 requirements)
+- validate-blocked-facts.py planning -> valid (8 facts)
+- check-context-summary.py -> valid
+- check-plan-freshness.sh -> pass
+- verify-boilerplate.sh -> pass
 
-## Next (supervisor/planning)
-- Task 6 stays `blocked` on the undeclared `inputplumber-system-dbus` capability
-  (FACT-002/FACT-003). Do NOT fabricate system-bus evidence. Either provision the
-  capability on a real bus with a signed exact-commit receipt (signer also not
-  provisioned, FACT-007) or keep Task 6 blocked with this recovery handoff.
-- Task 4 (final audit) stays `blocked` until Task 6 resolves.
-- Tasks 5 and 7 are `pending` (work done, awaiting the final-audit gate); do not
-  redo their work.
-- Do NOT emit the completion token: ledger still open (FACT-002..FACT-007), matrix
-  has partial rows, Task 6 blocked, Task 4 audit blocked.
+## Constraints
+- Do not emit the completion token: ledger still open (FACT-002..FACT-007, 19 partial rows,
+  Task 6 blocked, Task 4 audit blocked). If a future iteration is asked for a ready task,
+  re-check `ralph tools task ready` and the plan for any newly appended remediation task;
+  otherwise the cycle stays blocked on external facts until a human provisions the
+  capability/signer/hardware target.
