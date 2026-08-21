@@ -384,7 +384,7 @@ Keyboard tests in `test_manager_interaction_prof.c` relabeled from
 - Result: BUG-0017 resolved (commit `04e2b37`). Root cause was environment-dependent test selection: `cbx_profile_list_enumerate` sorts the built-in Default alongside any host/system InputPlumber profiles (`/usr/share/inputplumber/profiles`), so the editor tests' index-0 default selection loaded a host profile with a different mapping count on hosts with InputPlumber installed. Reproduced by staging a host profile that sorts first (all four tests failed at the reported line numbers), then fixed so the editor tests select the profile they wrote by filename and the focus test presses DOWN until focus escapes the list. Cross-environment verified: a pristine archive of `04e2b37` passes all four tests both without and with a host profile that sorts first. `test_editor_edits_selected_profile` regression added (verified to fail without the fix). MGR-03 sidecar stays `partial` bound to FACT-007 (unsigned runner receipt / signer not provisioned — outside this task's scope).
 
 ## Task 8: Environment-independent installed diagram acceptance
-- Status: complete
+- Status: pending
 - Dependencies: Task 1, Task 2, Task 3, Task 5
 - Scope: fix the deterministic `tests/test_installed_diagram.sh` environment dependency (host InputPlumber profile at first row) by selecting a test-owned profile, without weakening the semantic pixel assertions; `.factory/artifacts/blocked-facts.json` (resolve FACT-008 with receipt/artifact or human decision), `.factory/artifacts/conformance.json`
 - Acceptance criteria:

@@ -11,6 +11,7 @@ release evidence and contains no satisfied/done claims.
 - Task 5 (pending): Perceptible installed diagram acceptance
 - Task 6 (blocked): Real four-target InputPlumber routing acceptance
 - Task 7 (pending): Environment-independent profile editor acceptance
+- Task 8 (pending): Environment-independent installed diagram acceptance
 
 ## Unresolved facts
 - FACT-002 (open): BUG-0015: real InputPlumber system-bus acceptance with four targets
