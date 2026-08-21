@@ -1,7 +1,7 @@
 # Handoff: cycle still blocked on external facts; no ready task, all planning validators pass
 
 ## Outcome
-- Ledger unchanged at HEAD 612acdc; git clean; `ralph tools task ready` -> none.
+- Ledger unchanged at HEAD 38eded2; git clean; `ralph tools task ready` -> none (re-verified this iteration).
 - Plan active. Task statuses: 1-3 complete; 5/7/8 pending by appended-after-audit
   convention (work done + verified with evidence commits, held pending until the final
   audit gates the cycle); Task 6 blocked (undeclared `inputplumber-system-dbus`); Task 4
