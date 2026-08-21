@@ -17,6 +17,7 @@ cp "$PROJECT_ROOT/scripts/ralph-campaign.sh" \
    "$PROJECT_ROOT/scripts/factory_lock.py" \
    "$PROJECT_ROOT/scripts/factory_state_io.py" \
    "$PROJECT_ROOT/scripts/campaign-verifier-binding.py" \
+   "$PROJECT_ROOT/scripts/ralph-verifier-migrate.sh" \
    "$PROJECT_ROOT/scripts/check-capability-contracts.py" \
    "$PROJECT_ROOT/scripts/check-capability-evidence.py" "$tmp/scripts/"
 cp "$PROJECT_ROOT/.factory/campaign-objectives.json" "$tmp/.factory/"
@@ -78,6 +79,15 @@ development_branch = "develop"
 campaign_command = ["./scripts/verify-project.sh"]
 [git]
 allow_worktrees = false
+EOF
+cat > "$tmp/.factory/verifier-acceptance.json" <<'EOF'
+{
+  "schema": "ralph-verifier-acceptance/v1",
+  "gates": [
+    {"name": "test-one.sh", "args": []},
+    {"name": "test-two.sh", "args": []}
+  ]
+}
 EOF
 cat > "$tmp/.gitignore" <<'EOF'
 .factory-state/
@@ -414,6 +424,125 @@ set -e
 [[ $symlink_state_rc -ne 0 && -z $(find "$tmp/external-state" -mindepth 1 -print -quit) ]]
 rm "$tmp/.factory-state"
 mv "$tmp/.factory-state.real" "$tmp/.factory-state"
+
+# Dedicated descriptor-drop and legacy migration coverage lives in
+# test-factory-lock.py; campaign sequencing creates no lock-file authority.
+[[ ! -e "$tmp/.factory-lock" ]]
+
+# --- Verifier binding: strict strengthening auto-rebinds on resume -----------
+# A gate-list growth (entrypoint and config unchanged) is legitimate progress:
+# the campaign auto-rebinds with a durable audit record instead of halting.
+rm -f "$tmp/.factory-state/failed-implementation"
+set +e
+(cd "$tmp" && FAKE_FAIL_IMPL_ONCE=1 ./scripts/ralph-campaign.sh --rounds 1 --restart --no-tui >/dev/null 2>&1)
+strengthen_start_rc=$?
+set -e
+[[ $strengthen_start_rc -eq 42 ]]
+python3 - "$tmp" <<'PY'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+state = json.loads((root/'.factory-state/ralph-campaign.json').read_text())
+assert state['status'] == 'active' and state['phase'] == 'implementation'
+contract = json.loads((root/'.factory-state/verifier-contract.json').read_text())
+assert contract['schema'] == 'ralph-verifier-contract/v1'
+assert contract['acceptance_gates'] == ['test-one.sh', 'test-two.sh']
+PY
+# Grow the gate list (strict strengthening) and commit.
+python3 - "$tmp" <<'PY'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+manifest = json.loads((root/'.factory/verifier-acceptance.json').read_text())
+manifest['gates'].append({'name': 'test-three.sh', 'args': []})
+(root/'.factory/verifier-acceptance.json').write_text(json.dumps(manifest, indent=2) + '\n')
+PY
+(cd "$tmp" && git add .factory/verifier-acceptance.json && git commit -qm "grow gate list")
+# Resume: the campaign auto-rebinds and completes without any operator step.
+(cd "$tmp" && ./scripts/ralph-campaign.sh --rounds 1 --resume --no-tui >/dev/null)
+python3 - "$tmp" <<'PY'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+state = json.loads((root/'.factory-state/ralph-campaign.json').read_text())
+assert state['status'] == 'complete'
+audit = (root/'.factory-state/verifier-rebind-audit.jsonl').read_text().splitlines()
+assert len(audit) == 1
+entry = json.loads(audit[0])
+assert entry['classification'] == 'auto-strengthening'
+assert entry['old_gates'] == ['test-one.sh', 'test-two.sh']
+assert entry['new_gates'] == ['test-one.sh', 'test-two.sh', 'test-three.sh']
+contract = json.loads((root/'.factory-state/verifier-contract.json').read_text())
+assert contract['acceptance_gates'] == ['test-one.sh', 'test-two.sh', 'test-three.sh']
+PY
+
+# --- Verifier binding: gate removal (weakening) halts for the operator --------
+rm -f "$tmp/.factory-state/failed-implementation"
+set +e
+(cd "$tmp" && FAKE_FAIL_IMPL_ONCE=1 ./scripts/ralph-campaign.sh --rounds 1 --restart --no-tui >/dev/null 2>&1)
+weaken_start_rc=$?
+set -e
+[[ $weaken_start_rc -eq 42 ]]
+# Remove a gate (weakening) and commit.
+python3 - "$tmp" <<'PY'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+manifest = json.loads((root/'.factory/verifier-acceptance.json').read_text())
+manifest['gates'] = [g for g in manifest['gates'] if g['name'] != 'test-two.sh']
+(root/'.factory/verifier-acceptance.json').write_text(json.dumps(manifest, indent=2) + '\n')
+PY
+(cd "$tmp" && git add .factory/verifier-acceptance.json && git commit -qm "shrink gate list")
+# Resume without the operator pathway: the campaign must halt, state unchanged.
+state_before_weaken=$(sha256sum "$tmp/.factory-state/ralph-campaign.json" | cut -d' ' -f1)
+set +e
+(cd "$tmp" && ./scripts/ralph-campaign.sh --rounds 1 --resume --no-tui >/dev/null 2>&1)
+weaken_resume_rc=$?
+set -e
+[[ $weaken_resume_rc -ne 0 ]]
+[[ $(sha256sum "$tmp/.factory-state/ralph-campaign.json" | cut -d' ' -f1) == "$state_before_weaken" ]]
+# The audited operator pathway records a receipt, archives prior state, creates
+# the marker, and promotes the binding; then resume continues.
+(cd "$tmp" && ./scripts/ralph-verifier-migrate.sh --mode implementation --authority "test-operator" --reason "adversarial test" >/dev/null)
+python3 - "$tmp" <<'PY'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+archives = sorted((root/'.factory-state/operator-archive').glob('verifier-migration-*/authorization-receipt.json'))
+assert archives, 'no authorization receipt recorded'
+receipt = json.loads(archives[-1].read_text())
+assert receipt['schema'] == 'factory-operator-verifier-authorization/v1'
+assert receipt['authority'] == 'test-operator'
+assert receipt['classification'] == 'weakening'
+assert (root/'.factory-state/ralph-supervision-migration-implementation.json').is_file()
+state = json.loads((root/'.factory-state/ralph-campaign.json').read_text())
+contract = json.loads((root/'.factory-state/verifier-contract.json').read_text())
+assert state['verification_command_sha256'] == contract['digest']
+PY
+(cd "$tmp" && ./scripts/ralph-campaign.sh --rounds 1 --resume --no-tui >/dev/null)
+python3 - "$tmp" <<'PY'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+state = json.loads((root/'.factory-state/ralph-campaign.json').read_text())
+assert state['status'] == 'complete'
+PY
+# The operator pathway is idempotent when the binding is already current.
+(cd "$tmp" && ./scripts/ralph-verifier-migrate.sh --mode implementation >/dev/null)
+# A weakening change without operator authority is refused.
+rm -f "$tmp/.factory-state/failed-implementation"
+set +e
+(cd "$tmp" && FAKE_FAIL_IMPL_ONCE=1 ./scripts/ralph-campaign.sh --rounds 1 --restart --no-tui >/dev/null 2>&1)
+refuse_start_rc=$?
+set -e
+[[ $refuse_start_rc -eq 42 ]]
+python3 - "$tmp" <<'PY'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+manifest = json.loads((root/'.factory/verifier-acceptance.json').read_text())
+manifest['gates'] = [g for g in manifest['gates'] if g['name'] != 'test-one.sh']
+(root/'.factory/verifier-acceptance.json').write_text(json.dumps(manifest, indent=2) + '\n')
+PY
+(cd "$tmp" && git add .factory/verifier-acceptance.json && git commit -qm "shrink gate list again")
+set +e
+(cd "$tmp" && ./scripts/ralph-verifier-migrate.sh --mode implementation >/dev/null 2>&1)
+refuse_migrate_rc=$?
+set -e
+[[ $refuse_migrate_rc -ne 0 ]]
 
 # Dedicated descriptor-drop and legacy migration coverage lives in
 # test-factory-lock.py; campaign sequencing creates no lock-file authority.

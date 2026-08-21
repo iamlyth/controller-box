@@ -1,5 +1,11 @@
 const SHIM = "./scripts/pi-cli-shims/ralph";
 const DIRECT_PREFIX = /^[ \t]*ralph(?=[ \t]+emit(?:[ \t]|$))/;
+// A leading `cd <path> && ` before the direct `ralph emit` is a common model
+// pattern (the harness scripts themselves cd into the project root). The cd is
+// a simple directory change and the emit still goes through the trusted shim,
+// so it is rewritten rather than blocked. The path must be a single token
+// without shell metacharacters; anything else stays unsafe.
+const CD_PREFIX = /^[ \t]*cd[ \t]+[^;&|<>(){}`$#\n\r \t]+[ \t]*&&[ \t]+ralph(?=[ \t]+emit(?:[ \t]|$))/;
 const LIFECYCLE_TOKENS = [
   "PLAN_COMPLETE",
   "LOOP_COMPLETE",
@@ -88,6 +94,14 @@ export function rewriteRalphEmitCommand(command) {
   if (reserved) {
     return { command, matched: false, unsafe: true, reserved: true };
   }
+  if (CD_PREFIX.test(command)) {
+    return {
+      command: command.replace(CD_PREFIX, (match) => match.replace(/ralph$/, SHIM)),
+      matched: true,
+      unsafe: false,
+      reserved: false,
+    };
+  }
   if (
     !parsed.unsupported
     && parsed.words[0] === "ralph"
@@ -121,7 +135,7 @@ export default function registerRalphEmitShim(pi) {
     if (result.unsafe) {
       return {
         block: true,
-        reason: "Run `ralph emit` as the direct final command so the factory can publish it safely.",
+        reason: "Run `ralph emit` as the direct final command (optionally after a simple `cd <path> &&`, with no other chaining) so the factory can publish it safely.",
       };
     }
   });

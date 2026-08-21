@@ -148,23 +148,37 @@ for (const command of [
   assert.equal(tokenResult.reserved, true, command);
   assert.equal(tokenResult.matched, false, command);
 }
-const unsafeEvent = { toolName: 'bash', input: { command: 'cd /tmp && ralph emit factory.implement done' } };
+const unsafeEvent = { toolName: 'bash', input: { command: 'PAYLOAD=done ralph emit factory.implement done' } };
 assert.equal(toolHandler(unsafeEvent).block, true);
+// A simple `cd <path> && ` prefix before the direct `ralph emit` is rewritten
+// to the shim (the cd is a harmless directory change; the emit still goes
+// through the trusted shim). Reserved lifecycle tokens stay blocked even with
+// the cd prefix.
+const cdEvent = { toolName: 'bash', input: { command: 'cd /tmp && ralph emit factory.implement done' } };
+toolHandler(cdEvent);
+assert.equal(cdEvent.input.command, 'cd /tmp && ./scripts/pi-cli-shims/ralph emit factory.implement done');
+const cdReserved = { toolName: 'bash', input: { command: 'cd /tmp && ralph emit factory.implement LOOP_COMPLETE' } };
+assert.equal(toolHandler(cdReserved).block, true);
 let result = rewriteRalphEmitCommand('ralph emit factory.implement "done"');
 assert.equal(result.matched, true);
 assert.equal(result.unsafe, false);
 assert.equal(result.command, './scripts/pi-cli-shims/ralph emit factory.implement "done"');
+result = rewriteRalphEmitCommand('cd /tmp && ralph emit factory.implement done');
+assert.equal(result.matched, true);
+assert.equal(result.unsafe, false);
+assert.equal(result.command, 'cd /tmp && ./scripts/pi-cli-shims/ralph emit factory.implement done');
 for (const command of [
   'ralph emit factory.implement "$payload"',
   'ralph emit factory.implement "${payload}"',
   'PAYLOAD=done ralph emit factory.implement "$PAYLOAD"',
-  'cd /tmp && ralph emit factory.implement done',
   'ralph emit factory.implement done; sleep 600',
   'ralph emit factory.implement done | cat',
   'ralph emit factory.implement done > /tmp/result',
   'ralph emit factory.implement done # trailing command',
   '(ralph emit factory.implement done)',
   'echo "$(ralph emit factory.implement done)"',
+  'cd /tmp/my dir && ralph emit factory.implement done',
+  'cd /tmp && echo hi && ralph emit factory.implement done',
 ]) {
   result = rewriteRalphEmitCommand(command);
   assert.equal(result.matched, false, command);

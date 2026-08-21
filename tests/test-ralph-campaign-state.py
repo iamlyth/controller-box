@@ -22,11 +22,32 @@ class Repo:
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
         (self.root / "scripts").mkdir()
+        (self.root / ".factory").mkdir()
         (self.root / ".factory-state").mkdir(mode=0o700)
         shutil.copy2(SOURCE, self.root / "scripts/ralph-campaign-state.py")
         scripts = Path(__file__).resolve().parent.parent / "scripts"
         shutil.copy2(scripts / "factory_lock.py", self.root / "scripts/factory_lock.py")
         shutil.copy2(scripts / "factory_state_io.py", self.root / "scripts/factory_state_io.py")
+        shutil.copy2(scripts / "campaign-verifier-binding.py", self.root / "scripts/campaign-verifier-binding.py")
+        (self.root / ".factory/config.toml").write_text(
+            "[project]\nspec = \"docs/SPEC.md\"\nplan = \".factory/artifacts/implementation-plan.md\"\n"
+            "development_branch = \"develop\"\n[verification]\ncampaign_command = [\"./scripts/verify-project.sh\"]\n",
+            encoding="utf-8",
+        )
+        (self.root / ".factory/verifier-acceptance.json").write_text(
+            json.dumps({
+                "schema": "ralph-verifier-acceptance/v1",
+                "gates": [
+                    {"name": "test-one.sh", "args": []},
+                    {"name": "test-two.sh", "args": []},
+                ],
+            }, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        (self.root / "scripts/verify-project.sh").write_text(
+            "#!/usr/bin/env bash\nset -euo pipefail\nexit 0\n", encoding="utf-8"
+        )
+        (self.root / "scripts/verify-project.sh").chmod(0o755)
         (self.root / ".gitignore").write_text(
             ".factory-state/\n.factory-lock\n__pycache__/\n", encoding="utf-8"
         )
@@ -339,6 +360,131 @@ def test_malformed_terminal_replacement_rejected() -> None:
         repo.close()
 
 
+def real_binding(repo: "Repo") -> dict:
+    result = subprocess.run(
+        [str(repo.root / "scripts/campaign-verifier-binding.py")],
+        cwd=repo.root, text=True, capture_output=True,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def test_verifier_contract_roundtrip() -> None:
+    repo = Repo(verification_phase=False)
+    try:
+        binding = {
+            "binding": {
+                "schema": "campaign-verifier-binding/v1",
+                "argv": ["./scripts/verify-project.sh"],
+                "executable": "scripts/verify-project.sh",
+                "executable_sha256": "a" * 64,
+                "executable_blob": "a" * 40,
+                "executable_mode": "0755",
+                "config_sha256": "b" * 64,
+                "config_blob": "b" * 40,
+                "acceptance_sha256": "c" * 64,
+                "acceptance_blob": "c" * 40,
+                "acceptance_gates": ["test-one.sh", "test-two.sh"],
+            },
+            "sha256": DIGEST,
+            "helper": None,
+        }
+        repo.helper("record-verifier-contract", "--digest", DIGEST, "--binding", json.dumps(binding))
+        contract = json.loads(repo.helper("verifier-contract").stdout)
+        assert contract["schema"] == "ralph-verifier-contract/v1"
+        assert contract["acceptance_gates"] == ["test-one.sh", "test-two.sh"]
+        # --if-missing keeps the original baseline contract.
+        repo.helper(
+            "record-verifier-contract", "--if-missing",
+            "--digest", "f" * 64, "--binding", json.dumps(binding),
+        )
+        contract = json.loads(repo.helper("verifier-contract").stdout)
+        assert contract["digest"] == DIGEST
+        # A mismatched current binding classifies as ambiguous.
+        classification = repo.helper(
+            "classify-verifier-change", "--expected-old", DIGEST, "--new", "e" * 64,
+        ).stdout.strip()
+        assert classification == "ambiguous"
+    finally:
+        repo.close()
+
+
+def test_verifier_strengthening_auto_rebind() -> None:
+    repo = Repo(verification_phase=False)
+    try:
+        binding = real_binding(repo)
+        digest = binding["sha256"]
+        state = repo.state()
+        state["verification_command_sha256"] = digest
+        repo.state_path.write_text(json.dumps(state, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+        repo.helper("record-verifier-contract", "--digest", digest, "--binding", json.dumps(binding))
+        # Grow the gate list (strict strengthening) and commit.
+        manifest = json.loads((repo.root / ".factory/verifier-acceptance.json").read_text())
+        manifest["gates"].append({"name": "test-three.sh", "args": []})
+        (repo.root / ".factory/verifier-acceptance.json").write_text(
+            json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+        )
+        repo.git("add", ".factory/verifier-acceptance.json")
+        repo.git("commit", "-qm", "grow gates")
+        new_binding = real_binding(repo)
+        new_digest = new_binding["sha256"]
+        assert new_digest != digest
+        repo.helper(
+            "promote-verifier-binding", "--mode", "implementation",
+            "--expected-old", digest, "--new", new_digest,
+        )
+        state = repo.state()
+        assert state["verification_command_sha256"] == new_digest
+        contract = json.loads(repo.helper("verifier-contract").stdout)
+        assert contract["acceptance_gates"] == ["test-one.sh", "test-two.sh", "test-three.sh"]
+        audit = (repo.root / ".factory-state/verifier-rebind-audit.jsonl").read_text().splitlines()
+        assert len(audit) == 1
+        assert json.loads(audit[0])["classification"] == "auto-strengthening"
+        # Idempotent: promoting to the already-saved digest is a no-op.
+        repo.helper(
+            "promote-verifier-binding", "--mode", "implementation",
+            "--expected-old", new_digest, "--new", new_digest,
+        )
+        assert len((repo.root / ".factory-state/verifier-rebind-audit.jsonl").read_text().splitlines()) == 1
+    finally:
+        repo.close()
+
+
+def test_verifier_weakening_requires_marker() -> None:
+    repo = Repo(verification_phase=False)
+    try:
+        binding = real_binding(repo)
+        digest = binding["sha256"]
+        state = repo.state()
+        state["verification_command_sha256"] = digest
+        repo.state_path.write_text(json.dumps(state, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+        repo.helper("record-verifier-contract", "--digest", digest, "--binding", json.dumps(binding))
+        # Weakening: remove a gate and commit.
+        manifest = json.loads((repo.root / ".factory/verifier-acceptance.json").read_text())
+        manifest["gates"] = [g for g in manifest["gates"] if g["name"] != "test-two.sh"]
+        (repo.root / ".factory/verifier-acceptance.json").write_text(
+            json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+        )
+        repo.git("add", ".factory/verifier-acceptance.json")
+        repo.git("commit", "-qm", "shrink gates")
+        new_binding = real_binding(repo)
+        new_digest = new_binding["sha256"]
+        # Without the operator marker the promotion is rejected, state unchanged.
+        repo.assert_rejected(
+            "promote-verifier-binding", "--mode", "implementation",
+            "--expected-old", digest, "--new", new_digest,
+            contains="migration marker",
+        )
+        assert repo.state()["verification_command_sha256"] == digest
+        # Classification reports the weakening.
+        classification = repo.helper(
+            "classify-verifier-change", "--expected-old", digest, "--new", new_digest,
+        ).stdout.strip()
+        assert classification == "weakening"
+    finally:
+        repo.close()
+
+
 def main() -> None:
     test_success_and_normal_write_once()
     test_identity_phase_and_head_rejections()
@@ -349,6 +495,9 @@ def main() -> None:
     test_future_phase_fields_rejected()
     test_audit_binding_reconstruction()
     test_malformed_terminal_replacement_rejected()
+    test_verifier_contract_roundtrip()
+    test_verifier_strengthening_auto_rebind()
+    test_verifier_weakening_requires_marker()
     print("test: Ralph campaign state recovery checks passed")
 
 

@@ -53,6 +53,16 @@ assert config['issues'] == {
     'external_sync': 'manual',
     'credentials': False,
 }
+manifest = json.load(open('.factory/verifier-acceptance.json', encoding='utf-8'))
+assert manifest.get('schema') == 'ralph-verifier-acceptance/v1'
+gates = manifest.get('gates')
+assert isinstance(gates, list) and gates
+for gate in gates:
+    assert isinstance(gate, dict) and set(gate) == {'name', 'args'}
+    assert isinstance(gate['name'], str) and gate['name'] and '/' not in gate['name']
+    assert isinstance(gate['args'], list) and all(isinstance(a, str) and a for a in gate['args'])
+    if gate['name'] not in ('ctest', 'test_installed_functional'):
+        assert (pathlib.Path('tests') / gate['name']).is_file(), f'missing gate {gate["name"]}'
 required = [
     'AGENTS.md', '.factory/config.toml', '.factory/environment.toml',
     '.factory/artifacts/implementation-plan.md', '.factory/artifacts/maintenance-plan.md',
@@ -83,6 +93,7 @@ required = [
     'scripts/ralph-campaign-state.py', 'scripts/initialize-campaign-audit.py',
     'scripts/validate-campaign-audit.py', 'scripts/campaign-audit-scope-guard.sh',
     'scripts/ralph-audit.sh', 'scripts/ralph-campaign.sh',
+    'scripts/ralph-verifier-migrate.sh', '.factory/verifier-acceptance.json',
     'scripts/run-factory-runners.py', 'scripts/check-factory-runner-evidence.py',
     'scripts/factory-runner-server.py', 'scripts/pi2-secure-exec.py',
     'scripts/pi-cli-shims/ralph', 'scripts/pi-ralph-emit-extension.mjs',

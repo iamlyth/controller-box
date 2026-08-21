@@ -16,6 +16,7 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG = ROOT / ".factory/config.toml"
+ACCEPTANCE = ROOT / ".factory/verifier-acceptance.json"
 HELPER_RELATIVE = "scripts/campaign-verifier-binding.py"
 HELPER_MODE = "100755"
 
@@ -151,6 +152,47 @@ def retained_helper_binding() -> dict[str, str] | None:
     }
 
 
+def acceptance_contract() -> tuple[bytes, list[str], str]:
+    """Read the tracked verifier acceptance manifest (test discovery).
+
+    The manifest is the authoritative gate list the verifier entrypoint runs.
+    It is part of the binding so a gate-list change is detected; the campaign
+    classifies a strict superset growth as legitimate strengthening and
+    auto-rebinds with an audit record, while a shrink or entrypoint change
+    requires the audited operator pathway.
+    """
+    raw, _ = secure_read(ACCEPTANCE, 1024 * 1024)
+    try:
+        manifest = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        fail(f"invalid verifier acceptance manifest: {exc}")
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("schema") != "ralph-verifier-acceptance/v1"
+        or not isinstance(manifest.get("gates"), list)
+        or not manifest["gates"]
+    ):
+        fail("verifier acceptance manifest must declare a non-empty gates list")
+    gates: list[str] = []
+    for gate in manifest["gates"]:
+        if not isinstance(gate, dict) or set(gate) != {"name", "args"}:
+            fail("verifier acceptance gate must be an object with name and args")
+        name = gate["name"]
+        args = gate["args"]
+        if (
+            not isinstance(name, str)
+            or not name
+            or "/" in name
+            or name.startswith(".")
+            or not isinstance(args, list)
+            or not all(isinstance(arg, str) and arg for arg in args)
+        ):
+            fail(f"verifier acceptance gate is invalid: {gate!r}")
+        gates.append(name)
+    acceptance_blob = tracked_blob(".factory/verifier-acceptance.json", raw, "100644")
+    return raw, gates, acceptance_blob
+
+
 def binding() -> tuple[dict[str, object], str, list[str], Path, bytes]:
     config_bytes, _ = secure_read(CONFIG, 1024 * 1024)
     try:
@@ -180,6 +222,7 @@ def binding() -> tuple[dict[str, object], str, list[str], Path, bytes]:
     relative_text = relative.as_posix()
     executable_blob = tracked_blob(relative_text, executable_bytes, "100755")
     config_blob = tracked_blob(".factory/config.toml", config_bytes, "100644")
+    acceptance_raw, acceptance_gates, acceptance_blob = acceptance_contract()
     binding = {
         "schema": "campaign-verifier-binding/v1",
         "argv": command,
@@ -189,6 +232,9 @@ def binding() -> tuple[dict[str, object], str, list[str], Path, bytes]:
         "executable_mode": format(stat.S_IMODE(executable_info.st_mode), "04o"),
         "config_sha256": hashlib.sha256(config_bytes).hexdigest(),
         "config_blob": config_blob,
+        "acceptance_sha256": hashlib.sha256(acceptance_raw).hexdigest(),
+        "acceptance_blob": acceptance_blob,
+        "acceptance_gates": acceptance_gates,
     }
     digest = hashlib.sha256(
         json.dumps(binding, sort_keys=True, separators=(",", ":")).encode("utf-8")

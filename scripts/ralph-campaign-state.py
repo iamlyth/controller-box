@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+import datetime
 import hashlib
 import json
 import os
@@ -14,7 +15,14 @@ import stat
 import subprocess
 
 from factory_lock import FactoryLockError, locked
-from factory_state_io import StateIOError, atomic_write_json, read_bytes, read_json, remove
+from factory_state_io import (
+    StateIOError,
+    atomic_write as io_atomic_write,
+    atomic_write_json,
+    read_bytes,
+    read_json,
+    remove,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 # Recorded Git bindings must not be reinterpreted through local replacement refs.
@@ -23,6 +31,12 @@ DEFAULT_STATE = ROOT / ".factory-state/ralph-campaign.json"
 SHA = re.compile(r"^[0-9a-f]{40}$")
 DIGEST = re.compile(r"^[0-9a-f]{64}$")
 PHASES = {"planning", "implementation", "verification", "audit", "complete", "blocked-findings"}
+CONTRACT_NAME = "verifier-contract.json"
+AUDIT_NAME = "verifier-rebind-audit.jsonl"
+CONTRACT_KEYS = {
+    "schema", "digest", "executable_sha256", "config_sha256",
+    "acceptance_sha256", "acceptance_gates",
+}
 ROUND_KEYS = {
     "number", "base_commit", "planning_started", "plan_commit",
     "implementation_started", "implementation_commit", "verification_commit",
@@ -269,6 +283,134 @@ def recovery_lock():
         fail(str(exc))
 
 
+def read_contract() -> dict | None:
+    try:
+        return read_json(ROOT, CONTRACT_NAME, maximum=16384, missing_ok=True)
+    except (OSError, StateIOError) as exc:
+        fail(f"cannot safely read verifier contract: {exc}")
+
+
+def validate_contract(contract: object) -> dict:
+    if (
+        not isinstance(contract, dict)
+        or set(contract) != CONTRACT_KEYS
+        or contract.get("schema") != "ralph-verifier-contract/v1"
+        or not isinstance(contract.get("digest"), str)
+        or not DIGEST.fullmatch(contract["digest"])
+        or not isinstance(contract.get("executable_sha256"), str)
+        or not DIGEST.fullmatch(contract["executable_sha256"])
+        or not isinstance(contract.get("config_sha256"), str)
+        or not DIGEST.fullmatch(contract["config_sha256"])
+        or not isinstance(contract.get("acceptance_sha256"), str)
+        or not DIGEST.fullmatch(contract["acceptance_sha256"])
+        or not isinstance(contract.get("acceptance_gates"), list)
+        or not contract["acceptance_gates"]
+        or not all(isinstance(gate, str) and gate for gate in contract["acceptance_gates"])
+    ):
+        fail("verifier contract is invalid")
+    return contract
+
+
+def current_binding() -> dict:
+    result = subprocess.run(
+        [str(ROOT / "scripts/campaign-verifier-binding.py")],
+        cwd=ROOT, text=True, capture_output=True,
+    )
+    if result.returncode:
+        fail("current campaign verifier binding is invalid")
+    try:
+        output = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        fail(f"current campaign verifier binding is unreadable: {exc}")
+    if set(output) != {"binding", "sha256", "helper"}:
+        fail("current campaign verifier binding output is invalid")
+    return output
+
+
+def contract_from_binding(binding: dict) -> dict:
+    bound = binding["binding"]
+    return {
+        "schema": "ralph-verifier-contract/v1",
+        "digest": binding["sha256"],
+        "executable_sha256": bound["executable_sha256"],
+        "config_sha256": bound["config_sha256"],
+        "acceptance_sha256": bound["acceptance_sha256"],
+        "acceptance_gates": list(bound["acceptance_gates"]),
+    }
+
+
+def append_rebind_audit(mode: str, old_contract: dict, new_contract: dict, classification: str) -> None:
+    entry = {
+        "schema": "ralph-verifier-rebind/v1",
+        "mode": mode,
+        "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "classification": classification,
+        "old_digest": old_contract["digest"],
+        "new_digest": new_contract["digest"],
+        "old_gates": old_contract["acceptance_gates"],
+        "new_gates": new_contract["acceptance_gates"],
+    }
+    try:
+        existing = read_bytes(ROOT, AUDIT_NAME, maximum=1024 * 1024, missing_ok=True)
+    except (OSError, StateIOError) as exc:
+        fail(f"cannot safely read verifier rebind audit: {exc}")
+    raw = (existing or b"") + json.dumps(entry, sort_keys=True).encode("utf-8") + b"\n"
+    try:
+        io_atomic_write(ROOT, AUDIT_NAME, raw)
+    except (OSError, StateIOError) as exc:
+        fail(f"cannot safely write verifier rebind audit: {exc}")
+
+
+def record_verifier_contract(args: argparse.Namespace) -> None:
+    with recovery_lock():
+        if args.if_missing and read_contract() is not None:
+            return
+        if not DIGEST.fullmatch(args.digest):
+            fail("verifier contract digest is invalid")
+        try:
+            binding = json.loads(args.binding)
+        except json.JSONDecodeError as exc:
+            fail(f"verifier binding is unreadable: {exc}")
+        if set(binding) != {"binding", "sha256", "helper"} or binding["sha256"] != args.digest:
+            fail("verifier binding does not match the recorded digest")
+        contract = contract_from_binding(binding)
+        atomic_write_json(ROOT, CONTRACT_NAME, contract)
+        print(json.dumps(contract, sort_keys=True))
+
+
+def show_verifier_contract() -> None:
+    contract = read_contract()
+    if contract is None:
+        fail("verifier contract is not recorded")
+    print(json.dumps(validate_contract(contract), sort_keys=True))
+
+
+def classify_verifier_change(args: argparse.Namespace) -> None:
+    if not DIGEST.fullmatch(args.expected_old) or not DIGEST.fullmatch(args.new):
+        fail("old or new verifier binding digest is invalid")
+    contract = read_contract()
+    if contract is None:
+        print("ambiguous")
+        return
+    contract = validate_contract(contract)
+    if contract["digest"] != args.expected_old:
+        print("ambiguous")
+        return
+    current = current_binding()
+    if current["sha256"] != args.new:
+        print("ambiguous")
+        return
+    new_contract = contract_from_binding(current)
+    if (
+        contract["executable_sha256"] == new_contract["executable_sha256"]
+        and contract["config_sha256"] == new_contract["config_sha256"]
+        and set(new_contract["acceptance_gates"]) >= set(contract["acceptance_gates"])
+    ):
+        print("auto-strengthening")
+        return
+    print("weakening")
+
+
 def promote_verifier_binding(args: argparse.Namespace) -> None:
     if not DIGEST.fullmatch(args.expected_old) or not DIGEST.fullmatch(args.new):
         fail("old or new verifier binding digest is invalid")
@@ -281,6 +423,34 @@ def promote_verifier_binding(args: argparse.Namespace) -> None:
             return
         if data["verification_command_sha256"] != args.expected_old:
             fail("saved verifier binding does not match the expected legacy digest")
+        # Strict strengthening: the verifier entrypoint and config are unchanged
+        # and the acceptance gate list only grew. This is legitimate progress
+        # (a stricter gate), so the campaign auto-rebinds with a durable audit
+        # record instead of halting for the operator (BUG-0018).
+        contract = read_contract()
+        if contract is not None:
+            contract = validate_contract(contract)
+            current = current_binding()
+            new_contract = contract_from_binding(current)
+            if (
+                contract["digest"] == args.expected_old
+                and current["sha256"] == args.new
+                and contract["executable_sha256"] == new_contract["executable_sha256"]
+                and contract["config_sha256"] == new_contract["config_sha256"]
+                and set(new_contract["acceptance_gates"]) >= set(contract["acceptance_gates"])
+            ):
+                data["verification_command_sha256"] = args.new
+                atomic_write(data)
+                atomic_write_json(ROOT, CONTRACT_NAME, new_contract)
+                append_rebind_audit(args.mode, contract, new_contract, "auto-strengthening")
+                print(json.dumps({
+                    "operation": "promote-verifier-binding",
+                    "mode": args.mode,
+                    "classification": "auto-strengthening",
+                    "old": args.expected_old,
+                    "new": args.new,
+                }, sort_keys=True))
+                return
         marker_name = f"ralph-supervision-migration-{args.mode}.json"
         try:
             marker = read_json(ROOT, marker_name, maximum=16384)
@@ -305,6 +475,14 @@ def promote_verifier_binding(args: argparse.Namespace) -> None:
             fail("verifier binding migration marker does not match the saved campaign")
         data["verification_command_sha256"] = args.new
         atomic_write(data)
+        # After an operator-authorized migration, the new contract becomes the
+        # baseline for future strengthening classification.
+        current = current_binding()
+        new_contract = contract_from_binding(current)
+        old_contract = read_contract()
+        atomic_write_json(ROOT, CONTRACT_NAME, new_contract)
+        if old_contract is not None:
+            append_rebind_audit(args.mode, validate_contract(old_contract), new_contract, "operator-authorized")
 
 
 def require_rebind_head(requested_new: str) -> None:
@@ -696,6 +874,14 @@ def main() -> int:
     promote.add_argument(
         "--mode", choices=("planning", "implementation", "campaign-audit"), required=True
     )
+    record = sub.add_parser("record-verifier-contract")
+    record.add_argument("--digest", required=True)
+    record.add_argument("--binding", required=True)
+    record.add_argument("--if-missing", action="store_true")
+    sub.add_parser("verifier-contract")
+    classify = sub.add_parser("classify-verifier-change")
+    classify.add_argument("--expected-old", required=True)
+    classify.add_argument("--new", required=True)
     rebind = sub.add_parser("rebind-implementation")
     rebind.add_argument("--expected-old", required=True)
     rebind.add_argument("--new", required=True)
@@ -707,6 +893,12 @@ def main() -> int:
         start_campaign(args)
     elif args.command == "promote-verifier-binding":
         promote_verifier_binding(args)
+    elif args.command == "record-verifier-contract":
+        record_verifier_contract(args)
+    elif args.command == "verifier-contract":
+        show_verifier_contract()
+    elif args.command == "classify-verifier-change":
+        classify_verifier_change(args)
     elif args.command == "rebind-implementation":
         rebind_implementation(args.expected_old, args.new)
     elif args.command == "update":

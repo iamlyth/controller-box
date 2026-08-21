@@ -44,26 +44,61 @@ if [[ -f "$BUILD_DIR/CMakeCache.txt" ]]; then
 fi
 cmake -S . -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Debug
 cmake --build "$BUILD_DIR" --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-2}"
-ctest --test-dir "$BUILD_DIR" --output-on-failure --timeout 120
-functional_log=$(mktemp)
-trap 'rm -f "$functional_log"' EXIT
-ctest --test-dir "$BUILD_DIR" --no-tests=error --timeout 120 \
-    -R '^test_installed_functional$' --output-on-failure | tee "$functional_log"
-if grep -Eq 'Skipped|Not Run|0 tests passed' "$functional_log"; then
-    echo "verify-project: installed functional acceptance was skipped" >&2
-    exit 1
-fi
-"$PROJECT_ROOT/tests/test_packaging.sh" "$BUILD_DIR"
-# Installed production smoke test (Task 9, §11.1.5):
-# Exits 77 (skip) if Xvfb/xdotool/ImageMagick are unavailable.
-"$PROJECT_ROOT/tests/test_installed_smoke.sh" "$BUILD_DIR" || \
-    { rc=$?; if [ "$rc" -ne 77 ]; then echo "verify-project: installed smoke test failed (exit $rc)" >&2; exit 1; fi; }
-# Installed production-window controller diagram semantic acceptance
-# (BUG-0014, Task 5): drives the installed binary through a real X11 window
-# to the profile editor and asserts recognizable diagram content.  Exits 77
-# (skip) if Xvfb/xdotool/ImageMagick are unavailable.
-"$PROJECT_ROOT/tests/test_installed_diagram.sh" "$BUILD_DIR" || \
-    { rc=$?; if [ "$rc" -ne 77 ]; then echo "verify-project: installed diagram acceptance failed (exit $rc)" >&2; exit 1; fi; }
+
+# The acceptance gates are the tracked test-discovery contract
+# (.factory/verifier-acceptance.json, schema ralph-verifier-acceptance/v1).
+# The campaign binding covers that manifest, so adding a gate (strict
+# strengthening) auto-rebinds with an audit record instead of halting the
+# campaign, while removing a gate or changing the entrypoint requires the
+# audited operator pathway (scripts/ralph-verifier-migrate.sh).
+python3 - "$BUILD_DIR" <<'PY' || exit 1
+import json, subprocess, sys
+from pathlib import Path
+root = Path.cwd()
+build_dir = Path(sys.argv[1])
+manifest = json.load(open(root / '.factory/verifier-acceptance.json', encoding='utf-8'))
+if manifest.get('schema') != 'ralph-verifier-acceptance/v1':
+    raise SystemExit('verify-project: invalid verifier acceptance manifest schema')
+gates = manifest.get('gates')
+if not isinstance(gates, list) or not gates:
+    raise SystemExit('verify-project: verifier acceptance manifest has no gates')
+for gate in gates:
+    if not isinstance(gate, dict) or set(gate) != {'name', 'args'}:
+        raise SystemExit(f'verify-project: invalid gate entry: {gate!r}')
+    name = gate['name']
+    args = gate['args']
+    if not isinstance(name, str) or not name or '/' in name or name.startswith('.'):
+        raise SystemExit(f'verify-project: invalid gate name: {name!r}')
+    if not isinstance(args, list) or not all(isinstance(a, str) and a for a in args):
+        raise SystemExit(f'verify-project: invalid gate args: {name!r}')
+    print(f'verify-project: running gate {name}', flush=True)
+    if name == 'ctest':
+        subprocess.run(
+            ['ctest', '--test-dir', str(build_dir), '--output-on-failure', '--timeout', '120'],
+            check=True,
+        )
+    elif name == 'test_installed_functional':
+        result = subprocess.run(
+            ['ctest', '--test-dir', str(build_dir), '--no-tests=error', '--timeout', '120',
+             '-R', '^test_installed_functional$', '--output-on-failure'],
+            capture_output=True, text=True,
+        )
+        combined = result.stdout + result.stderr
+        if result.returncode != 0 or any(t in combined for t in ('Skipped', 'Not Run', '0 tests passed')):
+            print(combined, file=sys.stderr)
+            raise SystemExit(f'verify-project: installed functional acceptance was skipped or failed (gate {name})')
+    else:
+        argv = [str(root / 'tests' / name)]
+        argv += [str(build_dir) if a == '{BUILD_DIR}' else a for a in args]
+        result = subprocess.run(argv)
+        if name == 'test_packaging.sh':
+            if result.returncode != 0:
+                raise SystemExit(f'verify-project: gate {name} failed (exit {result.returncode})')
+        elif result.returncode not in (0, 77):
+            raise SystemExit(f'verify-project: gate {name} failed (exit {result.returncode})')
+        elif result.returncode == 77:
+            print(f'verify-project: gate {name} skipped (77)')
+PY
 mkdir -p .factory-state
 cat > .factory-state/installed-functional-evidence.env <<EOF
 schema=factory-installed-functional/v1
