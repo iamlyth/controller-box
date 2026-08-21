@@ -65,6 +65,11 @@ A custom `CMAKE_INSTALL_PREFIX` build is for isolated install/UI testing and sho
 - A runner declaration is not evidence; accept only exact-commit receipts validated by the runner evidence checker.
 - Documentation records why a constraint or test matters, not iteration history.
 
+## Git commit boundary
+
+- Ordinary checkpoints never commit scratchpad-only state; the one trusted exception is a single final-handoff commit per durable cycle, authorized by a one-shot lifecycle token. The boundary is enforced at Git level by `scripts/git-commit-guard.sh` (installed as `pre-commit`, `prepare-commit-msg`, `pre-merge-commit`, `applypatch-msg`, `pre-applypatch`, `commit-msg` hooks by `scripts/install-git-commit-guard.sh`, which launchers run on every launch) and at the command layer by `scripts/pi-cli-shims/git` and `scripts/pi-ralph-emit-extension.mjs`.
+- Direct `git commit` of metadata-only state is rejected; substantive commits that also carry the scratchpad are allowed. Do not bypass hooks (`--no-verify`, `core.hooksPath`, `GIT_CONFIG_*`); only `git commit` may create commits from the model command boundary.
+
 ## Acceptance evidence (BUG-0016 machinery)
 
 - Conformance rows are machine-checked from `.factory/artifacts/conformance.json` (`ralph-conformance/v1`) by `scripts/validate-conformance.py`; free-text matrix cells cannot prove acceptance, and `blocked`/`partial`/`not_applicable` rows fail implementation completion unless re-classified with evidence.

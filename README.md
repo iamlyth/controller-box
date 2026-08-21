@@ -192,6 +192,14 @@ The project includes a multi-layer visual acceptance suite (SPEC §11.1)
 that verifies actual framebuffer pixel output, not just state-machine or
 geometry correctness:
 
+A fail-closed Git commit boundary (`scripts/install-git-commit-guard.sh`,
+installed by every Ralph launcher) rejects scratchpad-only commits at the
+hook level: ordinary checkpoints never manufacture Git progress, and only the
+single per-cycle final handoff may commit recovery metadata, authorized by a
+one-shot lifecycle token consumed at `commit-msg`. Hook bypass markers and
+commit-creation verbs without hook coverage are refused at the model command
+boundary (`scripts/pi-cli-shims/git`, `scripts/pi-ralph-emit-extension.mjs`).
+
 | Layer | Test | What it verifies |
 |-------|------|-----------------|
 | 1. Deterministic framebuffer | `test_overlay_visual`, `test_manager_visual` | Renders through production composition path, reads back pixels via `SDL_RenderReadPixels`, asserts content in expected regions |
