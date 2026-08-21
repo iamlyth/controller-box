@@ -188,6 +188,20 @@ Controller-Box communicates with InputPlumber via:
 
 See [DBus-API.md](DBus-API.md) for the full API reference.
 
+#### Sender verification / trust boundary
+
+Controller-Box never trusts a process merely because it owns the
+`org.shadowblip.InputPlumber` well-known name.  After resolving the owner's
+unique bus name (`GetNameOwner`), it verifies the owner via the DBus
+daemon's `GetConnectionCredentials` (`UnixProcessID`/`UnixUserID`) and
+re-verifies on every `NameOwnerChanged`.  The owner is trusted only when its
+Unix user ID is **root** (the normal `inputplumber` system service) or the
+same user running Controller-Box (dev/session setup).  A name-squatting
+process that grabs the well-known name from any other user is rejected:
+its signals are dropped and its replies are not treated as readiness, even
+while the real InputPlumber is down.  A raw system-bus connection is never
+readiness without this credential verification (SPEC §10.1).
+
 ### Overlay service startup
 
 The overlay service (`controller-box --overlay-service`) follows this

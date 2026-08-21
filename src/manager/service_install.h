@@ -134,8 +134,11 @@ int cbx_service_is_active(void);
 int cbx_service_uninstall(void);
 
 /* ------------------------------------------------------------------ */
-/*  Test overrides                                                     */
+/*  Test overrides (available only in test builds, CBX_TESTING)         */
+/*  Declared under the gate so release headers never expose a way to    */
+/*  redirect the systemctl path or group file (F6).                     */
 /* ------------------------------------------------------------------ */
+#ifdef CBX_TESTING
 
 /*
  * Set a test override for the systemctl command.  When set, service
@@ -166,6 +169,8 @@ void cbx_service_set_mock_group_file(const char *path);
  * @param username  Mock username, or NULL to reset.
  */
 void cbx_service_set_mock_username(const char *username);
+
+#endif /* CBX_TESTING */
 
 #ifdef __cplusplus
 }

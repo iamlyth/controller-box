@@ -73,6 +73,9 @@ typedef struct {
     int                  subscribe_fail_rc;  /* 0 = normal, <0 = fail subscribe */
     ip_mock_queued_signal queued_signals[IP_MOCK_MAX_QUEUED_SIGNALS];
     int                  queued_signal_count;
+    uint32_t             creds_pid;   /* GetConnectionCredentials pid (default 4242) */
+    uint32_t             creds_uid;   /* GetConnectionCredentials uid (default 0 = root/trusted) */
+    int                  creds_rc;    /* 0 = success; <0 to simulate creds lookup failure */
 } ip_dbus_mock;
 
 /* --- Mock lifecycle -------------------------------------------------------- */
@@ -110,6 +113,17 @@ const ip_mock_expectation *ip_dbus_mock_find(ip_dbus_mock *mock,
 
 /* Reset the mock to its initial (empty) state, freeing canned values. */
 void ip_dbus_mock_reset(ip_dbus_mock *mock);
+
+/* Configure the credential fingerprint returned by get_connection_creds.
+ * Defaults to pid=4242, uid=0 (root — trusted by the anti-squatting
+ * policy).  Pass an untrusted uid (e.g. 12345) to exercise sender
+ * verification rejection. */
+void ip_dbus_mock_set_creds(ip_dbus_mock *mock, uint32_t pid, uint32_t uid);
+
+/* Force get_connection_creds to fail with `rc` (<0), simulating a creds
+ * lookup failure (e.g. the owner vanished between name resolution and
+ * verification). */
+void ip_dbus_mock_set_creds_fail(ip_dbus_mock *mock, int rc);
 
 /* Queue a NameOwnerChanged signal for dispatch by mock_process().
  * This allows tests to verify that a run-loop's process() call drains

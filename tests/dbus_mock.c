@@ -22,6 +22,9 @@ void ip_dbus_mock_init(ip_dbus_mock *mock) {
     if (!mock) return;
     memset(mock, 0, sizeof(*mock));
     mock->bus = mock;  /* opaque handle points back to the mock struct */
+    mock->creds_pid = 4242;
+    mock->creds_uid = 0;   /* root — trusted by the anti-squatting policy */
+    mock->creds_rc  = 0;
 }
 
 void ip_dbus_mock_free(ip_dbus_mock *mock) {
@@ -38,6 +41,21 @@ void ip_dbus_mock_reset(ip_dbus_mock *mock) {
     mock->sub_count = 0;
     mock->subscribe_fail_rc = 0;
     mock->queued_signal_count = 0;
+    mock->creds_pid = 4242;
+    mock->creds_uid = 0;
+    mock->creds_rc  = 0;
+}
+
+void ip_dbus_mock_set_creds(ip_dbus_mock *mock, uint32_t pid, uint32_t uid) {
+    if (!mock) return;
+    mock->creds_pid = pid;
+    mock->creds_uid = uid;
+    mock->creds_rc  = 0;
+}
+
+void ip_dbus_mock_set_creds_fail(ip_dbus_mock *mock, int rc) {
+    if (!mock) return;
+    mock->creds_rc = rc;
 }
 
 /* --- Queued signal helper ----------------------------------------------- */
@@ -207,6 +225,19 @@ static int mock_set_property(ip_bus_handle bus, const char *dest,
     return e ? e->rc : -ENXIO;
 }
 
+static int mock_get_connection_creds(ip_bus_handle bus,
+                                     const char *unique_name,
+                                     uint32_t *pid, uint32_t *uid) {
+    (void)unique_name;
+    ip_dbus_mock *mock = (ip_dbus_mock *)bus;
+    if (!mock || !pid || !uid) return -EINVAL;
+    if (mock->creds_rc < 0)
+        return mock->creds_rc;
+    *pid = mock->creds_pid;
+    *uid = mock->creds_uid;
+    return 0;
+}
+
 static int mock_get_managed_objects(ip_bus_handle bus, const char *dest,
                                     const char *path, char **out_reply) {
     (void)dest; (void)path;
@@ -290,6 +321,7 @@ const ip_dbus_backend *ip_dbus_mock_backend(ip_dbus_mock *mock) {
     s_mock_backend.connect              = mock_connect;
     s_mock_backend.disconnect           = mock_disconnect;
     s_mock_backend.get_unique_name      = mock_get_unique_name;
+    s_mock_backend.get_connection_creds = mock_get_connection_creds;
     s_mock_backend.call_method          = mock_call_method;
     s_mock_backend.get_property         = mock_get_property;
     s_mock_backend.set_property         = mock_set_property;

@@ -576,11 +576,13 @@ if(CMOCKA_FOUND)
 
     # Task 40 — Systemd service installation and manager integration test.
     add_executable(test_service_install tests/test_service_install.c)
-    target_link_libraries(test_service_install PRIVATE controllerbox cbx_test_support PkgConfig::CMOCKA)
+    target_link_libraries(test_service_install PRIVATE controllerbox_testing cbx_test_support PkgConfig::CMOCKA)
+    target_compile_definitions(test_service_install PRIVATE CBX_TESTING)
     add_test(NAME test_service_install COMMAND test_service_install)
 
     add_executable(test_manager_integration tests/test_manager_integration.c)
-    target_link_libraries(test_manager_integration PRIVATE controllerbox cbx_test_support PkgConfig::CMOCKA)
+    target_link_libraries(test_manager_integration PRIVATE controllerbox_testing cbx_test_support PkgConfig::CMOCKA)
+    target_compile_definitions(test_manager_integration PRIVATE CBX_TESTING)
     target_compile_definitions(test_manager_integration PRIVATE CBX_FONT_PATH="${CBX_FONT_PATH}")
     add_test(NAME test_manager_integration COMMAND test_manager_integration)
     set_tests_properties(test_manager_integration PROPERTIES
@@ -748,7 +750,8 @@ if(CMOCKA_FOUND)
     # Task 8 — Manager interaction tests: Controllers + Settings tabs
     # through production dispatch (SPEC §5.7).
     add_executable(test_manager_interaction_ctrl tests/test_manager_interaction_ctrl.c)
-    target_link_libraries(test_manager_interaction_ctrl PRIVATE controllerbox cbx_test_support PkgConfig::CMOCKA)
+    target_link_libraries(test_manager_interaction_ctrl PRIVATE controllerbox_testing cbx_test_support PkgConfig::CMOCKA)
+    target_compile_definitions(test_manager_interaction_ctrl PRIVATE CBX_TESTING)
     target_compile_definitions(test_manager_interaction_ctrl PRIVATE CBX_FONT_PATH="${CBX_FONT_PATH}")
     add_test(NAME test_manager_interaction_ctrl COMMAND test_manager_interaction_ctrl)
     set_tests_properties(test_manager_interaction_ctrl PROPERTIES

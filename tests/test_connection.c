@@ -12,9 +12,11 @@
 #include "dbus/ip_connection.h"
 
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <cmocka.h>
 
@@ -92,7 +94,101 @@ inject_noc(const struct test_ctx *ctx, const char *old, const char *new_)
         "org.freedesktop.DBus", "NameOwnerChanged", &payload);
 }
 
-/* --- Tests --------------------------------------------------------------- */
+/* --- F3: sender credential verification (anti name-squatting) ----------- */
+
+/* Test: the anti-squatting UID policy trusts root and the invoking user. */
+static void
+test_uid_is_trusted(void **state)
+{
+    (void)state;
+    assert_true(ip_connection_uid_is_trusted(0));
+    assert_true(ip_connection_uid_is_trusted((uint32_t)geteuid()));
+    /* A foreign user's UID must be rejected as a potential squatter. */
+    uint32_t foreign = ((uint32_t)geteuid() == 12345) ? 54321 : 12345;
+    assert_false(ip_connection_uid_is_trusted(foreign));
+}
+
+/* Test: connect succeeds and marks the sender verified for a trusted owner. */
+static void
+test_connect_trusted_owner_verified(void **state)
+{
+    struct test_ctx *ctx = *state;
+    ip_dbus_mock_set_creds(&ctx->mock, 4242, 0);  /* root */
+    ip_dbus_mock_expect_ok(&ctx->mock, IP_IFACE_MANAGER, "Version", "1.2.3");
+
+    int rc = ip_connection_connect(&ctx->conn);
+    assert_int_equal(rc, 0);
+    assert_int_equal(ip_connection_get_state(&ctx->conn), IP_CONN_CONNECTED);
+    assert_true(ip_connection_is_sender_verified(&ctx->conn));
+    assert_non_null(ip_connection_get_unique_name(&ctx->conn));
+}
+
+/* Test: a name-squatting owner (untrusted UID) is never trusted. */
+static void
+test_connect_untrusted_owner_rejected(void **state)
+{
+    struct test_ctx *ctx = *state;
+    ip_dbus_mock_set_creds(&ctx->mock, 4242, 12345);  /* foreign user */
+    ip_dbus_mock_expect_ok(&ctx->mock, IP_IFACE_MANAGER, "Version", "1.2.3");
+
+    int rc = ip_connection_connect(&ctx->conn);
+    assert_int_equal(rc, IP_ERR_ACCESS_DENIED);
+    assert_false(ip_connection_is_connected(&ctx->conn));
+    assert_true(ip_connection_is_degraded(&ctx->conn));
+    assert_false(ip_connection_is_sender_verified(&ctx->conn));
+    assert_null(ip_connection_get_unique_name(&ctx->conn));
+}
+
+/* Test: a creds lookup failure leaves the owner unverified. */
+static void
+test_connect_creds_lookup_failure(void **state)
+{
+    struct test_ctx *ctx = *state;
+    ip_dbus_mock_set_creds_fail(&ctx->mock, -ETIMEDOUT);
+    ip_dbus_mock_expect_ok(&ctx->mock, IP_IFACE_MANAGER, "Version", "1.2.3");
+
+    int rc = ip_connection_connect(&ctx->conn);
+    assert_int_equal(rc, IP_ERR_ACCESS_DENIED);
+    assert_false(ip_connection_is_sender_verified(&ctx->conn));
+    assert_null(ip_connection_get_unique_name(&ctx->conn));
+}
+
+/* Test: re-verification on NameOwnerChanged rejects an untrusted new owner. */
+static void
+test_reacquire_untrusted_owner_rejected(void **state)
+{
+    struct test_ctx *ctx = *state;
+    ip_dbus_mock_expect_ok(&ctx->mock, IP_IFACE_MANAGER, "Version", "1.2.3");
+    ip_connection_connect(&ctx->conn);
+    ip_connection_set_degraded_cb(&ctx->conn, test_degraded_cb, NULL);
+    assert_true(ip_connection_is_sender_verified(&ctx->conn));
+
+    /* The name is re-acquired by a foreign user → must be rejected. */
+    ip_dbus_mock_set_creds(&ctx->mock, 7777, 12345);
+    inject_noc(ctx, ":1.42", ":1.99");
+
+    assert_false(ip_connection_is_sender_verified(&ctx->conn));
+    assert_null(ip_connection_get_unique_name(&ctx->conn));
+    assert_true(ip_connection_is_degraded(&ctx->conn));
+    assert_int_equal(s_degraded_called, 1);
+}
+
+/* Test: re-verification on NameOwnerChanged accepts a trusted new owner. */
+static void
+test_reacquire_trusted_owner_verified(void **state)
+{
+    struct test_ctx *ctx = *state;
+    ip_dbus_mock_expect_ok(&ctx->mock, IP_IFACE_MANAGER, "Version", "1.2.3");
+    ip_connection_connect(&ctx->conn);
+
+    ip_dbus_mock_set_creds(&ctx->mock, 9999, 0);
+    ip_dbus_mock_expect_ok(&ctx->mock, IP_IFACE_MANAGER, "Version", "1.2.3");
+    inject_noc(ctx, ":1.42", ":1.99");
+
+    assert_true(ip_connection_is_sender_verified(&ctx->conn));
+    assert_string_equal(ip_connection_get_unique_name(&ctx->conn), ":1.99");
+    assert_true(ip_connection_is_connected(&ctx->conn));
+}
 
 /* Test: successful connect. */
 static void
@@ -731,6 +827,18 @@ main(void)
                                         setup_basic, teardown_basic),
         cmocka_unit_test(test_reason_for_error_mapping),
         cmocka_unit_test(test_version_compatibility),
+        /* F3: sender credential verification / anti name-squatting. */
+        cmocka_unit_test(test_uid_is_trusted),
+        cmocka_unit_test_setup_teardown(test_connect_trusted_owner_verified,
+                                        setup_basic, teardown_basic),
+        cmocka_unit_test_setup_teardown(test_connect_untrusted_owner_rejected,
+                                        setup_basic, teardown_basic),
+        cmocka_unit_test_setup_teardown(test_connect_creds_lookup_failure,
+                                        setup_basic, teardown_basic),
+        cmocka_unit_test_setup_teardown(test_reacquire_untrusted_owner_rejected,
+                                        setup_basic, teardown_basic),
+        cmocka_unit_test_setup_teardown(test_reacquire_trusted_owner_verified,
+                                        setup_basic, teardown_basic),
         cmocka_unit_test_setup_teardown(test_process_drains_queued_noc,
                                         setup_basic, teardown_basic),
     };

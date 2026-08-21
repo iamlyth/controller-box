@@ -18,6 +18,7 @@
 #define CBX_DBUS_INTERFACE_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 /*
  * InputPlumber DBus constants (SPEC §2.4, shared by production and tests).
@@ -119,6 +120,18 @@ typedef struct ip_dbus_backend {
     /* Resolve the unique bus name for `well_known` (e.g. IP_DBUS_NAME). */
     int  (*get_unique_name)(ip_bus_handle bus, const char *well_known,
                             char **out_unique);
+
+    /* Query the DBus daemon for the owning connection's credentials for
+     * `unique_name`.  Fills *pid and *uid from GetConnectionCredentials
+     * (UnixProcessID / UnixUserID).  Used for sender verification so a
+     * name-squatting process that grabs InputPlumber's well-known name
+     * is detected by its process/user identity rather than trusted
+     * merely because it owns the name (F3, SPEC §10.1).
+     *
+     * Returns 0 on success, negative errno on failure (including when
+     * the name has no owner). */
+    int  (*get_connection_creds)(ip_bus_handle bus, const char *unique_name,
+                                 uint32_t *pid, uint32_t *uid);
 
     /* Generic method call.  `sig` is the sd-bus signature string; variadic
      * arguments are the call parameters.  Returns 0 on success, negative

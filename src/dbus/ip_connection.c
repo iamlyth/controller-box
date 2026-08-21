@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 /* DBus daemon interface for NameOwnerChanged subscription. */
 #define DBUS_DAEMON_IFACE  "org.freedesktop.DBus"
@@ -76,6 +77,44 @@ ip_version_is_compatible(const char *version)
     if (minor != IP_COMPAT_MIN_MINOR)
         return minor > IP_COMPAT_MIN_MINOR;
     return patch >= IP_COMPAT_MIN_PATCH;
+}
+
+bool
+ip_connection_uid_is_trusted(uint32_t uid)
+{
+    /* InputPlumber runs as a system service (root) or, in a dev/session
+     * setup, as the same user as Controller-Box.  A bus owner from any
+     * other user is treated as a name-squatting process. */
+    if (uid == 0)
+        return true;
+    return uid == (uint32_t)geteuid();
+}
+
+/* Verify the owner of `unique_name` by querying GetConnectionCredentials
+ * and applying the anti-squatting UID policy.  On success records the
+ * credential fingerprint and marks the sender verified. */
+static bool
+verify_sender(ip_connection *conn, const char *unique_name)
+{
+    conn->sender_verified = false;
+    conn->expected_pid    = 0;
+    conn->expected_uid    = 0;
+
+    if (!conn || !conn->backend || !conn->backend->get_connection_creds ||
+        !unique_name)
+        return false;
+
+    uint32_t pid = 0, uid = 0;
+    if (conn->backend->get_connection_creds(conn->bus, unique_name,
+                                            &pid, &uid) != 0)
+        return false;
+    if (!ip_connection_uid_is_trusted(uid))
+        return false;
+
+    conn->expected_pid    = pid;
+    conn->expected_uid    = uid;
+    conn->sender_verified = true;
+    return true;
 }
 
 /* --- Public API ---------------------------------------------------------- */
@@ -143,14 +182,29 @@ ip_connection_connect(ip_connection *conn)
         char *unique = NULL;
         rc = conn->backend->get_unique_name(conn->bus, IP_DBUS_NAME, &unique);
         if (rc == 0 && unique) {
-            conn->unique_name = unique;
+            /* Credential-verify the owner before trusting any signal or
+             * method reply from it (F3, prevents name squatting). */
+            if (verify_sender(conn, unique)) {
+                conn->unique_name = unique;
+                conn->state = IP_CONN_CONNECTED;
+                return 0;
+            }
+            /* Owner present but unverified (untrusted UID / creds lookup
+             * failed): stay on the bus watching NameOwnerChanged, but do
+             * not report readiness and do not advertise a trusted sender. */
+            free(unique);
+            conn->unique_name = NULL;
+            conn->state = IP_CONN_DEGRADED;
+            return IP_ERR_ACCESS_DENIED;
         } else {
             /* Non-fatal: unique name is used for signal sender verification
-             * in later tasks. If unavailable, we're still connected. */
+             * in later tasks. If unavailable, we're still connected but the
+             * sender cannot be verified. */
+            conn->sender_verified = false;
             free(unique);
+            conn->state = IP_CONN_CONNECTED;
+            return 0;
         }
-        conn->state = IP_CONN_CONNECTED;
-        return 0;
     }
 
     /* Version read failed. */
@@ -216,6 +270,12 @@ ip_connection_get_unique_name(const ip_connection *conn)
 }
 
 bool
+ip_connection_is_sender_verified(const ip_connection *conn)
+{
+    return conn && conn->sender_verified;
+}
+
+bool
 ip_connection_is_connected(const ip_connection *conn)
 {
     return conn && conn->state == IP_CONN_CONNECTED;
@@ -260,11 +320,26 @@ ip_connection_handle_name_changed(ip_connection *conn,
                      (!new_owner || new_owner[0] == '\0'));
 
     if (acquired) {
-        /* InputPlumber's bus name was (re-)acquired. */
+        /* InputPlumber's bus name was (re-)acquired.  Credential-verify the
+         * new owner before trusting it; if verification fails, treat the
+         * owner as untrusted (stay degraded, no trusted sender). */
         char *new_name = strdup(new_owner);
         if (new_name) {
-            free(conn->unique_name);
-            conn->unique_name = new_name;
+            if (verify_sender(conn, new_owner)) {
+                free(conn->unique_name);
+                conn->unique_name = new_name;
+            } else {
+                free(new_name);
+                free(conn->unique_name);
+                conn->unique_name = NULL;
+                conn->state = IP_CONN_DEGRADED;
+                if (conn->degraded_cb)
+                    conn->degraded_cb("InputPlumber owner could not be verified",
+                                      conn->degraded_ud);
+                return;
+            }
+        } else {
+            conn->sender_verified = false;
         }
 
         /* Re-read the Version property. */
@@ -296,6 +371,10 @@ ip_connection_handle_name_changed(ip_connection *conn,
         /* InputPlumber's bus name was lost — daemon stopped. */
         free(conn->unique_name);
         conn->unique_name = NULL;
+
+        conn->sender_verified = false;
+        conn->expected_pid    = 0;
+        conn->expected_uid    = 0;
 
         free(conn->version);
         conn->version = NULL;

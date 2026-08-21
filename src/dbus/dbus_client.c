@@ -35,6 +35,8 @@ typedef struct {
     void        *slot_data[MAX_SD_SLOTS];   /* heap-allocated callback data */
     int          slot_count;
     char        *expected_sender;  /* InputPlumber's unique bus name for sender verification */
+    uint32_t     expected_pid;     /* verified PID of the InputPlumber owner (0 = unverified) */
+    bool         expected_pid_set; /* whether expected_pid carries a verified value */
 } sd_bus_wrapper;
 
 /* Forward declarations — defined with the property setter below. */
@@ -54,17 +56,50 @@ typedef struct {
 
 /* Verify that the signal sender matches InputPlumber's tracked unique
  * bus name.  Returns true if the sender is acceptable, false if the
- * signal should be silently dropped.  When expected_sender is NULL
- * (InputPlumber not yet discovered), signals are allowed through — the
- * downstream handler (ip_hotplug sender_ok) will reject them. */
+ * signal should be silently dropped.
+ *
+ * When expected_sender is NULL (InputPlumber not yet discovered, or its
+ * name was lost), signals are REJECTED — an unverified sender is never
+ * trusted even while InputPlumber is down (F3, prevents name squatting
+ * during the degraded window). */
 static bool
 sd_sender_ok(const sd_signal_data *data, const char *sender)
 {
-    if (!data || !data->wrapper || !data->wrapper->expected_sender)
-        return true;  /* no expected sender tracked — allow (downstream verifies) */
+    if (!data || !data->wrapper)
+        return false;
+    if (!data->wrapper->expected_sender)
+        return false;  /* no trusted sender tracked — reject */
     if (!sender)
         return false;
     return strcmp(sender, data->wrapper->expected_sender) == 0;
+}
+
+/* Query the DBus daemon for the owning connection's PID and UID for
+ * `unique_name` via GetConnectionCredentials.  Used both for the
+ * per-name-change credential re-verification and the vtable method.
+ * Returns 0 on success (pid/uid filled), negative errno on failure. */
+static int
+sd_query_owner_creds(const sd_bus_wrapper *w, const char *unique_name,
+                     uint32_t *pid, uint32_t *uid)
+{
+    if (!w || !w->bus || !unique_name || !pid || !uid)
+        return -EINVAL;
+
+    sd_bus_creds *creds = NULL;
+    int r = sd_bus_get_name_creds(w->bus, unique_name,
+                                  SD_BUS_CREDS_PID | SD_BUS_CREDS_EUID,
+                                  &creds);
+    if (r < 0)
+        return r;
+
+    pid_t  cpid = 0;
+    uid_t  cuid = (uid_t)-1;
+    sd_bus_creds_get_pid(creds, &cpid);
+    sd_bus_creds_get_euid(creds, &cuid);
+    *pid = (uint32_t)cpid;
+    *uid = (uint32_t)cuid;
+    creds = sd_bus_creds_unref(creds);
+    return 0;
 }
 
 static int
@@ -82,12 +117,18 @@ sd_noc_callback(sd_bus_message *msg, void *userdata, sd_bus_error *ret_error)
 
     /* Update the wrapper's expected sender when InputPlumber (re-)acquires
      * its bus name, so that InterfacesAdded/Removed callbacks can verify
-     * signal senders against the current unique name. */
+     * signal senders against the current unique name.  The PID fingerprint
+     * is refreshed alongside so the (sender, pid) pair stays consistent. */
     if (data->wrapper && new_owner && new_owner[0] != '\0') {
         char *new_sender = strdup(new_owner);
         if (new_sender) {
             free(data->wrapper->expected_sender);
             data->wrapper->expected_sender = new_sender;
+        }
+        uint32_t pid = 0, uid = 0;
+        if (sd_query_owner_creds(data->wrapper, new_owner, &pid, &uid) == 0) {
+            data->wrapper->expected_pid     = pid;
+            data->wrapper->expected_pid_set = true;
         }
     }
 
@@ -536,10 +577,28 @@ sd_get_unique_name(ip_bus_handle bus, const char *well_known,
     free(w->expected_sender);
     w->expected_sender = strdup(unique);
 
+    /* Capture the owning connection's credential fingerprint (PID) so the
+     * (sender, pid) pair can be re-verified across name changes (F3). */
+    uint32_t pid = 0, uid = 0;
+    if (sd_query_owner_creds(w, unique, &pid, &uid) == 0) {
+        w->expected_pid     = pid;
+        w->expected_pid_set = true;
+    }
+
     sd_bus_message_unref(reply);
     sd_bus_error_free(&error);
 
     return *out_unique ? 0 : -ENOMEM;
+}
+
+/* --- Vtable: get_connection_creds (F3) ---------------------------------- */
+
+static int
+sd_get_connection_creds(ip_bus_handle bus, const char *unique_name,
+                        uint32_t *pid, uint32_t *uid)
+{
+    sd_bus_wrapper *w = (sd_bus_wrapper *)bus;
+    return sd_query_owner_creds(w, unique_name, pid, uid);
 }
 
 /* --- Vtable: get_property ------------------------------------------------ */
@@ -1224,6 +1283,7 @@ static const ip_dbus_backend s_sd_backend = {
     .connect              = sd_connect,
     .disconnect           = sd_disconnect,
     .get_unique_name      = sd_get_unique_name,
+    .get_connection_creds = sd_get_connection_creds,
     .call_method          = sd_call_method,
     .get_property         = sd_get_property,
     .set_property         = sd_set_property,

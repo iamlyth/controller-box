@@ -186,6 +186,92 @@ target_link_libraries(controllerbox
         PkgConfig::YAML
         nanosvg)
 
+# --- Test-instrumented library (CBX_TESTING) --------------------------------
+# A second copy of the same product sources compiled with CBX_TESTING so the
+# gated cbx_service_set_mock_* overrides in service_install.c are available to
+# the unit tests that exercise systemd installation.  The release library and
+# the production binary are built from `controllerbox` WITHOUT CBX_TESTING, so
+# the mock override symbols can never appear in a release build (F6).
+add_library(controllerbox_testing STATIC
+    src/config/config_paths.c
+    src/config/config_settings.c
+    src/config/config_assignments.c
+    src/config/config_profile.c
+    src/config/config_profile_meta.c
+    src/config/config_profile_list.c
+    src/dbus/dbus_client.c
+    src/dbus/ip_composite.c
+    src/dbus/ip_create_composite.c
+    src/dbus/ip_gamepad_order.c
+    src/dbus/ip_connection.c
+    src/dbus/ip_device_model.c
+    src/dbus/ip_hotplug.c
+    src/dbus/ip_input_signal.c
+    src/dbus/ip_intercept_poll.c
+    src/dbus/ip_manager.c
+    src/dbus/ip_objectmanager.c
+    src/dbus/ip_properties.c
+    src/dbus/ip_source.c
+    src/dbus/ip_target.c
+    src/icons/icon_map.c
+    src/icons/icon_cache.c
+    src/icons/icon_lookup.c
+    src/ui/renderer.c
+    src/ui/theme.c
+    src/ui/text.c
+    src/ui/widget.c
+    src/ui/widget_button.c
+    src/ui/widget_label.c
+    src/ui/widget_image.c
+    src/ui/widget_panel.c
+    src/ui/widget_list.c
+    src/ui/widget_grid.c
+    src/ui/widget_tabbar.c
+    src/ui/widget_progress.c
+    src/ui/focus.c
+    src/ui/input_map.c
+    src/ui/animation.c
+    src/ui/dirty_rect.c
+    src/overlay/surface_build.c
+    src/overlay/lifecycle.c
+    src/overlay/grid_render.c
+    src/overlay/player_mode.c
+    src/overlay/host_mode.c
+    src/overlay/conflict.c
+    src/overlay/profile_cycle.c
+    src/overlay/dynamic_columns.c
+    src/overlay/trigger.c
+    src/overlay/close.c
+    src/manager/manager.c
+    src/manager/controllers_tab.c
+    src/manager/profiles_tab.c
+    src/manager/profile_diagram.c
+    src/manager/profile_editor_list.c
+    src/manager/profile_editor_seq.c
+    src/manager/profile_validate.c
+    src/manager/profile_save.c
+    src/manager/settings_tab.c
+    src/manager/service_install.c
+    src/identify/identity.c
+    src/identify/assign.c
+    src/identify/assign_persist.c
+    src/identify/identity_downgrade.c
+    src/identify/gamepad_order_restore.c
+    src/app/overlay_service.c)
+target_include_directories(controllerbox_testing
+    PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${CMAKE_CURRENT_BINARY_DIR}")
+target_link_libraries(controllerbox_testing
+    PUBLIC
+        PkgConfig::SDL2
+        PkgConfig::SDL2TTF
+        PkgConfig::SDL2IMG
+        PkgConfig::SYSTEMD
+        PkgConfig::YAML
+        nanosvg)
+target_compile_definitions(controllerbox_testing PRIVATE CBX_TESTING)
+
 # --- Dual-mode executable (Task 2, SPEC §2.3) --------------------------------
 # controller-box is one binary with two modes (--overlay-service default,
 # --manager). Both link against the shared static library.

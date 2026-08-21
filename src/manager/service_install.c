@@ -59,8 +59,12 @@
  */
 
 /* ------------------------------------------------------------------ */
-/*  Test overrides (static state)                                      */
+/*  Test overrides (static state) — compiled only into test builds      */
+/*  (CBX_TESTING).  These must never appear in a release binary: a      */
+/*  malicious environment or caller must not be able to redirect the    */
+/*  systemctl path or group file (F6).                                  */
 /* ------------------------------------------------------------------ */
+#ifdef CBX_TESTING
 
 static const char *mock_systemctl  = NULL;  /* mock systemctl command   */
 static const char *mock_group_file  = NULL;  /* mock /etc/group path      */
@@ -83,6 +87,8 @@ cbx_service_set_mock_username(const char *username)
 {
     mock_username = username;
 }
+
+#endif /* CBX_TESTING */
 
 /* ------------------------------------------------------------------ */
 /*  fork/exec helper (defense-in-depth: no shell invocation)            */
@@ -462,9 +468,10 @@ cbx_service_write_unit(const char *unit_path, const char *content)
 static const char *
 get_current_username(void)
 {
+#ifdef CBX_TESTING
     if (mock_username)
         return mock_username;
-
+#endif
     struct passwd *pw = getpwuid(getuid());
     return pw ? pw->pw_name : NULL;
 }
@@ -476,7 +483,11 @@ cbx_service_check_group(void)
     if (!username)
         return -ENOENT;
 
+#ifdef CBX_TESTING
     const char *group_path = mock_group_file ? mock_group_file : "/etc/group";
+#else
+    const char *group_path = "/etc/group";
+#endif
     FILE *f = fopen(group_path, "r");
     if (!f) {
         /* If /etc/group is not readable, assume not in group. */
@@ -525,8 +536,10 @@ cbx_service_check_group(void)
 static const char *
 systemctl_prefix(void)
 {
+#ifdef CBX_TESTING
     if (mock_systemctl)
         return mock_systemctl;
+#endif
 
     /* Detect Flatpak — use flatpak-spawn --host for systemctl.  Tool paths
      * are absolute so a hostile PATH cannot redirect execvp to an arbitrary

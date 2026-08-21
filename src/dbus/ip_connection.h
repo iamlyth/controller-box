@@ -18,6 +18,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 /* --- Categorized error codes ---------------------------------------------- */
 /* Negative errno values that map to specific DBus error conditions.
@@ -63,6 +64,9 @@ typedef struct {
     ip_conn_state           state;
     char                   *unique_name;  /* InputPlumber's unique bus name (e.g. ":1.42") */
     char                   *version;      /* InputPlumber version string (e.g. "0.1.0") */
+    uint32_t                expected_pid; /* credential fingerprint of the verified owner */
+    uint32_t                expected_uid; /* credential fingerprint of the verified owner */
+    bool                    sender_verified; /* true once GetConnectionCredentials confirms the owner */
     ip_reenumerate_cb       reenumerate_cb;
     void                   *reenumerate_ud;
     ip_degraded_cb          degraded_cb;
@@ -96,8 +100,19 @@ ip_conn_state ip_connection_get_state(const ip_connection *conn);
 /* Get the InputPlumber version string (NULL if not available). */
 const char *ip_connection_get_version(const ip_connection *conn);
 
-/* Get InputPlumber's unique bus name (NULL if not connected). */
+/* Get InputPlumber's unique bus name (NULL if not connected or the
+ * owner has not been credential-verified). */
 const char *ip_connection_get_unique_name(const ip_connection *conn);
+
+/* True once the current InputPlumber owner has passed sender-credential
+ * verification (GetConnectionCredentials on the resolved unique name).
+ * An unverified or down owner is never reported as a trusted sender. */
+bool ip_connection_is_sender_verified(const ip_connection *conn);
+
+/* Anti-squatting policy: whether a bus-owner UnixUserID is trusted as a
+ * legitimate InputPlumber.  InputPlumber runs as a system service (root)
+ * or, in a dev/session setup, as the same user as Controller-Box. */
+bool ip_connection_uid_is_trusted(uint32_t uid);
 
 /* Convenience: state == CONNECTED. */
 bool ip_connection_is_connected(const ip_connection *conn);
