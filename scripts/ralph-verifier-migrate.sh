@@ -115,13 +115,14 @@ for name in ("ralph-campaign.json", f"ralph-supervision-{mode}.json", f"ralph-su
 PY
 
 # 6. Create the supervision migration marker (validates the campaign digest and
-#    the old/new binding digests; idempotent when the marker already matches).
-python3 - "$MODE" "$saved_digest" "$verification_digest" <<'PY'
+#    the old/new binding digests; a superseded previous marker is archived in the
+#    operator archive before replacement, idempotent when the marker matches).
+python3 - "$MODE" "$saved_digest" "$verification_digest" "$archive_dir" <<'PY'
 import hashlib, json, os, re, sys
 from pathlib import Path
 sys.path.insert(0, str((Path.cwd() / 'scripts').resolve()))
 from factory_state_io import StateIOError, atomic_write_json, read_json
-mode, old, new = sys.argv[1:]
+mode, old, new, archive_dir = sys.argv[1:]
 sha256 = re.compile(r'^[0-9a-f]{64}$')
 if not sha256.fullmatch(old) or not sha256.fullmatch(new):
     raise SystemExit('ralph-verifier-migrate: invalid verifier binding digest')
@@ -156,12 +157,17 @@ marker = {
     'verification_binding_sha256': new,
 }
 if existing is not None and existing != marker:
-    raise SystemExit('ralph-verifier-migrate: existing migration marker does not match this migration')
-if existing is None:
+    # A superseded migration marker is preserved in the operator archive
+    # before replacement; the lifecycle state was already archived in step 5.
+    source = Path('.factory-state') / marker_name
     try:
-        atomic_write_json(Path.cwd(), marker_name, marker)
-    except (OSError, StateIOError) as exc:
-        raise SystemExit(f'ralph-verifier-migrate: cannot safely write migration marker: {exc}')
+        os.replace(source, Path(archive_dir) / marker_name)
+    except OSError as exc:
+        raise SystemExit(f'ralph-verifier-migrate: cannot archive stale migration marker: {exc}')
+try:
+    atomic_write_json(Path.cwd(), marker_name, marker)
+except (OSError, StateIOError) as exc:
+    raise SystemExit(f'ralph-verifier-migrate: cannot safely write migration marker: {exc}')
 PY
 
 # 7. Promote the binding (auto-rebinds on strict strengthening; otherwise the
