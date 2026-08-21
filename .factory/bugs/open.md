@@ -37,6 +37,22 @@ Schema: `ralph-bug-ledger/v1`
     "resolution": "",
     "verification": "",
     "closed": null
+  },
+  {
+    "id": "BUG-0018",
+    "title": "Installed manager controller diagram renders but is materially incorrect (visual acceptance gap)",
+    "status": "open",
+    "severity": "critical",
+    "reported": "2026-08-21",
+    "external": [],
+    "contract_change": false,
+    "reproduction": "Human dogfooding run: the fresh installed build now shows the controller diagram in the profile editor (the BUG-0014 blank-diagram fix works), but the rendered diagram looks materially incorrect — wrong geometry/layout/relationships, not merely cosmetic. This was observed by a human operator on the real installed launch path.",
+    "expected": "The installed production manager profile editor renders the controller diagram correctly (correct controller silhouette geometry, slot highlight placement, binding-light positions, model label, and binding list), verified by a perceptible installed-window acceptance that asserts semantic diagram content — not only silhouette/pixel counts or golden PASS. A machine visual-audit inventory (exact-commit installed screenshots, per-state provenance+hashes, parallel read-only vision review by roles with calibration) is the reproducible capture path; vision findings are supplemental falsification evidence only and never replace deterministic/compositor/human acceptance.",
+    "actual": "BUG-0014 was closed on silhouette/pixel acceptance (test_installed_diagram.sh asserts black-outline pixel count, slot highlight, title, binding list) and Task 8's environment-independent profile selection. A human fresh-build run shows the diagram now renders but is materially incorrect, so the silhouette/pixel evidence did not catch a perceptible visual defect. No reproducible exact-commit screenshot inventory or parallel vision review exists yet for the manager/editor/overlay states.",
+    "acceptance": "A Ralph-owned product diagnosis and fix: reproduce the materially-incorrect diagram in a fresh installed build, correct the rendering so the diagram is perceptibly correct, and add a semantic installed-window acceptance that requires recognizable correct diagram content (not merely silhouette pixels or a PASS golden). The machine visual-audit framework (.factory/visual-audit.toml, scripts/visual-capture-driver.sh, scripts/visual-audit-review*.py, sealed SDK image delivery, calibration) must produce exact-commit installed captures and structured findings for manager-main/profiles/editor/overlay states; vision output is supplemental falsification evidence only and never elevates an evidence tier. BUG-0014 closure must not be re-accepted solely from silhouette/pixel tests.",
+    "resolution": "",
+    "verification": "",
+    "closed": null
   }
 ]
 ```
