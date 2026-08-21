@@ -209,8 +209,8 @@ boundary (`scripts/pi-cli-shims/git`, `scripts/pi-ralph-emit-extension.mjs`).
 | 5. Installed production smoke | `test_installed_smoke` | Launches installed binary under Xvfb, sends keyboard + coordinate-based mouse clicks on body controls via xdotool, captures screenshots, verifies non-blank output and semantic outcomes (state change, file mutation) |
 | 5a. Installed functional acceptance | `test_installed_functional` | Links against production library; starts private native-signature DBus server, creates SDL virtual controller, exercises manager + overlay lifecycle through production poll path (InterceptMode PASS→ALL activation, framebuffer readback, B-close, assignment persistence) |
 | 5b. Installed binary acceptance | `test_installed_binary` | Launches installed binary as subprocess under Xvfb with private DBus server; verifies manager launch, tab navigation, settings persistence, target creation, profile load/save, overlay activation (InterceptMode→ALL, non-blank screenshot, clean close) |
-| 5d. Installed diagram semantic acceptance | `test_installed_diagram` | Drives the real installed `controller-box --manager` through a real X11 window to the profile editor and asserts recognizable controller-diagram content (outline, slot highlight, model label, binding list) via the production path — proves the production diagram rendering path (BUG-0014) |
 | 5c. Kernel-backed controller | `test_kernel_controller` | Creates a synthetic evdev gamepad via `/dev/uinput`, launches installed Manager binary with private DBus server, sends real kernel gamepad events (D-pad, A/B/Start) through production event loop, verifies semantic outcomes (manager survival, settings persistence). Skips (exit 77) when `/dev/uinput` is unavailable locally; the `kernel-uinput` runner capability IS declared in `.factory/environment.toml`. The legacy runner receipt at commit 26df6c0 is unsigned/unevidenced pending a signed commit-bound receipt (FACT-007). See SPEC §5.7 for controller acceptance requirements. |
+| 5d. Installed diagram semantic acceptance | `test_installed_diagram` | Drives the real installed `controller-box --manager` through a real X11 window to the profile editor and asserts recognizable controller-diagram content (outline, slot highlight, model label, binding list) via the production path — proves the production diagram rendering path (BUG-0014) |
 | 6. Backend smoke | `test_backend_smoke` | Exercises accelerated renderer (OpenGL/ES) with same invariants; skips (exit 77) in headless environments |
 | 7. Human release acceptance | (documented process) | Human reviews captures on target hardware for legibility, clipping, contrast, controller-only usability |
 
@@ -263,9 +263,9 @@ the overlay — not direct callback invocation):
 | Test | Coverage |
 |------|----------|
 | `test_manager_interaction_ctrl` | M01–M09 (Controllers tab), M21–M27 (Settings tab) — controller + pointer paths (mock DBus) |
-| `test_manager_interaction_prof` | M10–M20 (Profiles tab), M28–M38 (Profile editor) — controller + pointer paths (mock DBus) |
+| `test_manager_interaction_prof` | M10–M20 (Profiles tab), M28–M38 (Profile editor) — keyboard (supplemental per §5.7) + pointer paths (mock DBus) |
 | `test_manager_native` | M04, M09, M21, M23–M26 — controller + pointer paths (native DBus) |
-| `test_manager_native_prof` | M10, M12–M14, M16, M18, M20, M30–M36, D02–D04, D07–D08 — controller + pointer paths (native DBus) |
+| `test_manager_native_prof` | M10, M12–M14, M16, M18, M20, M28–M38, D02–D04, D07–D08 — controller + pointer paths (native DBus) |
 | `test_overlay_interaction` | O01–O12 (overlay open, move, profile cycle, host mode, conflict, close) — controller + DBus InputEvent paths (mock DBus) |
 | `test_overlay_native` | O01–O13 (overlay open, move, profile cycle, host mode, Player Mode conflict, close) — native DBus backend via `cbx_overlay_service_step` |
 | `test_interaction_inventory` | M01–M39, O01–O13, D01–D08 inventory validation |
@@ -283,10 +283,11 @@ The factory runner environment (`.factory/environment.toml`) declares one SSH
 runner with `remote-project-gate`, `systemd-user`, `kernel-uinput`, and
 `installed-package` capabilities. The
 following spec requirements have environment limitations that affect full
-hardware-specific acceptance; they are classified `verified` based on code
-portability, architectural evidence, and tests available in the declared
-environment, with remaining hardware-specific verification deferred to human
-release acceptance per SPEC §11.1.7:
+hardware-specific acceptance; they are classified `partial` (not `verified`)
+in `.factory/artifacts/conformance.json` based on code portability,
+architectural evidence, and tests available in the declared environment, with
+remaining hardware-specific verification deferred to human release acceptance
+per SPEC §11.1.7:
 
 | Requirement | Spec § | Limitation | Verification approach |
 |-------------|--------|------------|----------------------|

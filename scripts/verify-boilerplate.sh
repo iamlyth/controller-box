@@ -114,6 +114,15 @@ required = [
     'scripts/validate-blocked-facts.py', 'scripts/check-context-summary.py',
     'scripts/ralph-context-summary.py', 'scripts/check-campaign-objectives.py',
     'scripts/check-golden-policy.py',
+    '.factory/visual-audit.toml', '.factory/visual-audit-inventory.json',
+    '.factory/visual-audit-calibration.json',
+    '.factory/schemas/visual-audit-review.schema.json',
+    '.factory/prompts/visual-audit.md',
+    'scripts/visual-audit-provenance.py', 'scripts/visual-audit-lease.py',
+    'scripts/visual-audit-review.py', 'scripts/visual-audit-review-sdk.mjs',
+    'scripts/visual-audit-capture.sh', 'scripts/visual-audit-probe.sh',
+    'scripts/visual-capture-driver.sh', 'scripts/check-visual-audit.py',
+    'tests/test-visual-audit.sh',
     '.factory/artifacts/blocked-facts.json', '.factory/artifacts/conformance.json',
     '.factory/artifacts/context-summary.md',
     '.factory/campaign-objectives.json', '.factory/golden-policy.json',
@@ -302,4 +311,5 @@ PY
 ./tests/test-golden-policy.sh
 ./tests/test-runner-signer.sh
 ./tests/test-boilerplate.sh
+./tests/test-visual-audit.sh
 echo "verify: boilerplate checks passed"

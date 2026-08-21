@@ -428,9 +428,12 @@ given `DeviceType`. Unknown types fall back to `generic-gamepad` with the raw
 type string as the label.
 
 SVG files live in `/usr/share/controller-box/icons/svg/`. Controllercons
-icons are prefixed `cc-` (e.g. `cc-xbox-360`, `cc-ps5`). Custom icons use
-plain names (`steam-deck`, `generic-gamepad`, `arcade-stick`, `hitbox`,
-`mouse`, `keyboard`).
+icons are prefixed `cc-` (e.g. `cc-xbox-360`, `cc-ps5`).  The mapping table
+in `controller-icons.yaml` references three project custom icons under the
+`cc-` prefix as well (`cc-steam-deck`, `cc-mouse`, `cc-keyboard`), although
+their SVG files use plain names (`steam-deck.svg`, `mouse.svg`,
+`keyboard.svg`); the `cc-` prefix is stripped before file lookup.  Other
+custom icons (`generic-gamepad`, `arcade-stick`, `hitbox`) use plain names.
 
 To add a new device type mapping, append an entry to `controller-icons.yaml`
 under `virtual_types:`. To add a new icon, place the SVG in the icons directory
@@ -973,11 +976,13 @@ keyboard input, and produces a non-blank framebuffer capture.
    checking that `$HOME/.config/controller-box/settings.yaml` was
    created or mutated (file mutation from the Save button).
 6. **Overlay service mode**: launches `controller-box --overlay-service`.
-   If InputPlumber is available on the system DBus, the service runs
-   and is terminated via SIGTERM.  If InputPlumber is unavailable, the
-   service enters degraded mode and stays running (terminated via
-   SIGTERM in the test).  If the system DBus itself is unavailable, the
-   service exits cleanly with code 1 (not a crash).
+   Per SPEC §11.1.5 the installed smoke test must exercise the overlay
+   against a real backend, so the test starts the private
+   native-signature InputPlumber-compatible server (`test_ip_server`)
+   on its own `dbus-daemon`, points `DBUS_SYSTEM_BUS_ADDRESS` at it, and
+   launches the installed overlay against that backend, requiring the
+   service to stay running.  An early exit or missing backend is
+   reported as FAILURE per §11.1.5 (never pass/skip).
 7. Cleans up Xvfb and temporary files.
 
 ### Prerequisites
@@ -1017,7 +1022,7 @@ PASS: settings list item click produced visible state change (diff=...)
 PASS: Save button click mutated settings file (mtime increased, size=...)
 PASS: coordinate-based mouse clicks completed
 PASS: manager terminated cleanly
-PASS: overlay service exited cleanly (code 1: InputPlumber not found)
+PASS: overlay service running against InputPlumber-compatible service (PID ...)
 PASS: all installed smoke test checks passed
 ```
 
@@ -1385,7 +1390,13 @@ autonomous loop model per SPEC §11.1.7.
 ### Bug ledger accounting
 
 Per SPEC §11.2.6, no open defect contradicts a v1 requirement.
-`.factory/bugs/open.md` is empty (`[]`).  The hardware-deferred
-capabilities listed above are not defects — they are documented
-deferrals tied to undeclared runner capabilities, each with an
-explicit rationale and a human-approved release decision path.
+The open bug ledger `.factory/bugs/open.md` currently lists BUG-0015
+(real InputPlumber system-bus acceptance with four targets), BUG-0016
+(proxy evidence promoted to production verification), and BUG-0018
+(installed manager controller diagram renders but is materially
+incorrect).  BUG-0015 is a real-system-bus blocker and BUG-0018 is an
+installed-window visual defect, both tracked against the hardware-
+deferred capabilities listed above; the hardware-deferred capabilities
+listed above are not defects — they are documented deferrals tied to
+undeclared runner capabilities, each with an explicit rationale and a
+human-approved release decision path.
