@@ -140,7 +140,7 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 | OVL-10 | §4.10 | verified | `tests/test_installed_diagram.sh` drives the installed binary through a real X11 window to the profile editor and asserts recognizable diagram content (outline/slot highlight/title/binding list) via the production path; ABGR8888 byte-order fix in `profile_diagram.c`; BUG-0014 fixed (28154 outline px) | |
 | MGR-01 | §5.1 | verified | `manager.c` tab bar, 3 tabs, controller + pointer; `test_manager_tabs.c`, `test_manager_native.c` | |
 | MGR-02 | §5.2 | partial | `controllers_tab.c` add/remove/type-change, topology reconcile; production launch reports 0/4 virtual controllers active (BUG-0015, FACT-002/FACT-003) | Task 6 |
-| MGR-03 | §5.3 | partial | `profiles_tab.c` browse/create/edit/delete, built-in Default; `test_profiles_tab.c`, `test_installed_functional.c`; BUG-0017 exposes environment-dependent editor loading/focus behavior | Task 7 |
+| MGR-03 | §5.3 | partial | `profiles_tab.c` browse/create/edit/delete, built-in Default; `test_profiles_tab.c`, `test_installed_functional.c`; BUG-0017 resolved (commit `04e2b37`): editor tests now select the profile they wrote by filename, so the four profile-editor tests pass with or without host/system InputPlumber profiles. Remaining `partial` is FACT-007 (unsigned runner receipt — signer not provisioned) | Task 4 |
 | MGR-04 | §5.4 | verified | `profile_editor_list.c`, `profile_editor_seq.c` both modes; `test_editor_list_mode.c`, `test_editor_seq_mode.c` | |
 | MGR-05 | §5.4 | verified | `profile_validate.c` NES minimum (A/B/D-pad); `test_profile_validate.c`; `profile_save.c` enforces before write | |
 | MGR-06 | §5.5 | verified | `settings_tab.c` all settings; `test_settings_tab.c`, `test_manager_native.c` M21–M26 | |
@@ -370,7 +370,7 @@ Keyboard tests in `test_manager_interaction_prof.c` relabeled from
 - Documentation impact: OPERATIONS.md capability declarations and acceptance evidence updated
 
 ## Task 7: Environment-independent profile editor acceptance
-- Status: pending
+- Status: complete
 - Dependencies: Task 1, Task 2, Task 3, Task 5, Task 6
 - Scope: diagnose and fix BUG-0017 without weakening assertions or golden baselines; preserve the production profile-loading path across filesystems and runner environments; add a regression test that reproduces the local clean-build failure while retaining signed-runner coverage
 - Acceptance criteria:
@@ -379,6 +379,7 @@ Keyboard tests in `test_manager_interaction_prof.c` relabeled from
   - Root cause and cross-environment evidence are attached to BUG-0017 before closure
 - Verification: build pristine archives of the same commit in both environments; run `ctest --test-dir <fresh-build> -R '^(test_manager_tabs|test_manager_production|test_manager_visual|test_golden)$' --output-on-failure`; run signed `remote-project-gate`; compare exact commit/tree/environment bindings; then run `./scripts/verify-project.sh`
 - Documentation impact: record any newly discovered production profile-path constraint in OPERATIONS.md; no documentation-only closure
+- Result: BUG-0017 resolved (commit `04e2b37`). Root cause was environment-dependent test selection: `cbx_profile_list_enumerate` sorts the built-in Default alongside any host/system InputPlumber profiles (`/usr/share/inputplumber/profiles`), so the editor tests' index-0 default selection loaded a host profile with a different mapping count on hosts with InputPlumber installed. Reproduced by staging a host profile that sorts first (all four tests failed at the reported line numbers), then fixed so the editor tests select the profile they wrote by filename and the focus test presses DOWN until focus escapes the list. Cross-environment verified: a pristine archive of `04e2b37` passes all four tests both without and with a host profile that sorts first. `test_editor_edits_selected_profile` regression added (verified to fail without the fix). MGR-03 sidecar stays `partial` bound to FACT-007 (unsigned runner receipt / signer not provisioned — outside this task's scope).
 
 ## Remediation rule
 

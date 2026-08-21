@@ -463,19 +463,23 @@
       "evidence_tier": "installed",
       "required_tier": "installed",
       "required_capabilities": [],
-      "evidence_commit": "26df6c05a5319214f1c0a97a2c3c6f763128b1c6",
+      "evidence_commit": "04e2b373460c10ff0c7487f5750616a688d27df1",
       "receipts": [
         ".factory-state/runner-evidence/dev-runner-vm/26df6c05a5319214f1c0a97a2c3c6f763128b1c6/manifest.json"
       ],
       "artifacts": [
         "src/manager/profiles_tab.c",
         "tests/test_profiles_tab.c",
-        "tests/test_installed_functional.c"
+        "tests/test_installed_functional.c",
+        "tests/test_manager_production.c",
+        "tests/test_manager_tabs.c",
+        "tests/test_manager_visual.c",
+        "tests/test_golden.c"
       ],
       "fact_refs": [
         "FACT-007"
       ],
-      "reason": "Runner receipt evidence is no longer acceptable: the declared runner manifest is unsigned (no signer provisioned in .factory/signer-trust.json) and is not a Git blob at the declared evidence commit. Capability evidence requiring runner trust stays unevidenced until a provisioned signer produces a commit-bound signed receipt."
+      "reason": "BUG-0017 environment-dependent editor acceptance resolved at 04e2b37: editor tests select the profile they wrote by filename and the focus test presses DOWN until focus escapes the list, so the four profile-editor tests pass with or without host/system InputPlumber profiles. MGR-03 remains `partial` because its runner-receipt evidence is unsigned (FACT-007): no signer provisioned in .factory/signer-trust.json, so capability evidence requiring runner trust stays unevidenced until a provisioned signer produces a commit-bound signed receipt."
     },
     {
       "id": "MGR-04",

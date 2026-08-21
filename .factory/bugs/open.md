@@ -37,22 +37,6 @@ Schema: `ralph-bug-ledger/v1`
     "resolution": "",
     "verification": "",
     "closed": null
-  },
-  {
-    "id": "BUG-0017",
-    "title": "Profile editor tests fail in pristine local clean builds while the identical commit passes the signed remote runner",
-    "status": "open",
-    "severity": "high",
-    "reported": "2026-08-20",
-    "external": [],
-    "contract_change": false,
-    "reproduction": "Build both the current factory-only dirty tree and a pristine git archive of c45336a in separate fresh Debug build directories, then run test_manager_tabs, test_manager_production, test_manager_visual, and test_golden. Both local trees fail identically: tests/test_manager_tabs.c line 308 (`fc->focused > profile_list_idx` is false), tests/test_manager_production.c line 442 (0 != 6 for cbx_profile_editor_binding_count), tests/test_manager_visual.c line 815 (0 != 6 for cbx_profile_editor_binding_count), and tests/test_golden.c lines 783/839 (golden_check is false for manager_editor_list and manager_editor_validation_error). The exact same commit c45336a passed 98/98 on the signed remote runner.",
-    "expected": "The four profile-editor acceptance tests pass in fresh local and signed remote builds of the same exact commit/tree, with no dependence on filesystem ordering, ambient installation state, or leftover environment state; the editor loads all 6 expected profile bindings, focus traversal does not trap, and reviewed golden assertions pass.",
-    "actual": "Both fresh local builds load 0 bindings instead of 6 in production and visual dispatch tests, fail the profile-list focus traversal assertion, and mismatch the two editor goldens. The signed exact-commit remote run passes. Root cause is not yet diagnosed; the divergence is environment/filesystem-dependent.",
-    "acceptance": "A Ralph-owned product diagnosis and fix: reproduce the pristine local failures, identify and remove the environment/filesystem dependency, and make all four profile-editor tests pass in a pristine local clean build of the same commit the signed remote runner passes, without weakening assertions or regenerating goldens. The full project gate must then pass locally with no unexplained skips.",
-    "resolution": "",
-    "verification": "",
-    "closed": null
   }
 ]
 ```

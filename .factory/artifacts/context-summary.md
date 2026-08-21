@@ -9,7 +9,6 @@ release evidence and contains no satisfied/done claims.
 ## Open tasks
 - Task 4 (blocked): Final documentation and specification audit
 - Task 6 (pending): Real four-target InputPlumber routing acceptance
-- Task 7 (pending): Environment-independent profile editor acceptance
 
 ## Unresolved facts
 - FACT-002 (open): BUG-0015: real InputPlumber system-bus acceptance with four targets
@@ -28,7 +27,7 @@ release evidence and contains no satisfied/done claims.
 - DOD-06 (partial): tasks=Task 4; facts=FACT-007
 - DOD-09 (partial): tasks=Task 4; facts=FACT-002,FACT-004,FACT-005,FACT-006
 - MGR-02 (partial): tasks=Task 6; facts=FACT-002,FACT-003
-- MGR-03 (partial): tasks=Task 7; facts=FACT-007
+- MGR-03 (partial): tasks=Task 4; facts=FACT-007
 - MGR-08 (partial): tasks=Task 6; facts=FACT-002,FACT-003,FACT-004
 - OVL-09 (partial): tasks=Task 4; facts=FACT-004,FACT-006
 - PERF-01 (partial): tasks=Task 4; facts=FACT-004,FACT-006

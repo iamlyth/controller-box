@@ -54,6 +54,15 @@ The profile editor (§5.4) is opened from the Profiles tab:
 
 - **Edit existing:** Select a profile in the list and click Edit (or navigate
   to the Edit button with Up/Down and press A).
+
+**Profile-list enumeration (BUG-0017):** the Profiles-tab list is built from
+`cbx_profile_list_enumerate()`, which merges the built-in Default
+(`data/profiles`), the user's `~/.local/share/inputplumber/profiles`, and the
+host system `/usr/share/inputplumber/profiles`, then sorts by display order and
+display name. The initial selection is the first-sorted entry, so on a host
+with InputPlumber installed a system profile may be selected by default — the
+editor always edits the *selected* profile, never an assumed index. Selecting
+a specific profile in the list is what determines which bindings load.
 - **Create new:** Click Create, choose a source (Default copy / Empty /
   Clone), type a name, and press A — the editor opens with the new
   in-memory profile. No file is written until you save from the editor.
