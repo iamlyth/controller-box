@@ -1,0 +1,34 @@
+{
+  "schema": "ralph-visual-audit-inventory/v1",
+  "description": "Risk-based visual-state inventory for Controller-Box installed production captures. Each state drives the installed binary through real pointer/keyboard dispatch to a semantically reachable window state. Captures are exact-commit, installed-path, serial and isolated.",
+  "states": [
+    {
+      "id": "manager-main",
+      "risk": "critical",
+      "navigation": ["launch installed binary with --manager"],
+      "expected": "Manager window renders the Profiles tab list with profile rows, status line, and controls",
+      "crops": ["full-frame"]
+    },
+    {
+      "id": "manager-profiles",
+      "risk": "critical",
+      "navigation": ["launch installed binary with --manager", "activate Profiles tab via Right"],
+      "expected": "Profiles list shows a selected profile with highlight and the mapping count column",
+      "crops": ["full-frame", "list-region"]
+    },
+    {
+      "id": "manager-editor",
+      "risk": "critical",
+      "navigation": ["launch installed binary with --manager", "activate Profiles tab", "open the profile editor via Return"],
+      "expected": "Profile editor renders the controller diagram (recognizable controller outline), slot highlight, model label, and binding list (BUG-0014 acceptance area)",
+      "crops": ["full-frame", "diagram-region"]
+    },
+    {
+      "id": "overlay-active",
+      "risk": "high",
+      "navigation": ["launch installed binary with --overlay"],
+      "expected": "Overlay window renders its icon/status content in an active state",
+      "crops": ["full-frame"]
+    }
+  ]
+}

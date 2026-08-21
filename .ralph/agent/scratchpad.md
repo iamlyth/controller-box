@@ -1,27 +1,31 @@
-# Handoff: Task 12 (documentation accuracy) remediated; 3 ready tasks remain
+# Handoff: Task 10 (F3 sender credential verification + F6 mock gating) complete; Task 11 remains
 
 ## Outcome
-- Completed Task 12: Documentation accuracy remediation (plan:task-12). All five findings fixed in
-  README.md, docs/REVIEW.md, docs/OPERATIONS.md, and the implementation-plan runner block + SYS-02
-  matrix row: CTest count corrected 98→100 (98 pass / 2 skips: `test_kernel_controller`,
-  `test_backend_smoke`); README "Known environment limitations" now enumerates all four declared
-  runner capabilities (`remote-project-gate`, `systemd-user`, `kernel-uinput`, `installed-package`);
-  legacy receipt 26df6c0 downgraded to unsigned/unevidenced pending a signed commit-bound receipt
-  (FACT-007) wherever it appeared; OPERATIONS.md receipt count corrected 12→13 (13 receipts on
-  file); REVIEW.md evidence made internally consistent. Task 12 plan status kept `pending` per the
-  appended-after-final-audit convention (Task 4 is the single gate).
-- Verification: `check-docs-sync.sh` passes; `validate-implementation-plan.py planning` exit 0;
-  `validate-conformance.py planning` valid (76); `verify-boilerplate.sh` passes; grep confirms no
-  stale "98"/"proven by runner receipt" claims in current-state docs.
+- Completed Task 10 (plan:task-10): Security hardening — DBus sender credential
+  verification (F3) + test-mock gating (F6). Commit a890ba1 (code/tests), 5b454fd
+  (plan evidence).
+- F3: added `ip_dbus_backend.get_connection_creds` (sd-bus GetConnectionCredentials;
+  mock-configurable pid/uid). `ip_connection` now credential-verifies the owner after
+  `GetNameOwner` and on every `NameOwnerChanged`, applies anti-squatting UID policy
+  (`ip_connection_uid_is_trusted`: root or self-uid), exposes `is_sender_verified`,
+  and `sd_sender_ok` rejects signals when no trusted sender is tracked (down-state).
+  Untrusted/squatting owners stay degraded and never become a trusted sender.
+- F6: `cbx_service_set_mock_*` gated behind `#ifdef CBX_TESTING`. New
+  `controllerbox_testing` static library (same sources + CBX_TESTING) serves the 3
+  tests that use the overrides; `nm` confirms the release library and binary carry no
+  mock symbols.
+- Verification: full ctest 100% pass (98 pass / 2 environmental skips:
+  `test_kernel_controller`, `test_backend_smoke`); ASan+UBSan clean with project LSAN
+  suppressions (the only bare-leak hit, test_text/harfbuzz, is the known suppressed
+  third-party leak); +6 connection tests; verify-boilerplate + check-docs-sync pass;
+  validate-implementation-plan.py planning exit 0. OPERATIONS.md trust-boundary note added.
 
 ## Remaining ready tasks (all P2, unblocked)
-- Task 10 (task-1787286665-b7bd): Security — DBus sender credential verification (F3) + gate
-  `cbx_service_set_mock_*` behind `#ifdef CBX_TESTING` (F6). Scope: src/dbus/dbus_client.c,
-  src/dbus/ip_connection.c, src/manager/service_install.[ch], tests/CMakeLists.txt.
-- Task 11 (task-1787286665-c52b): Test-quality — §5.7 semantic-outcome gaps (7 findings).
-- Task 12 done (task-1787286641-7e65).
+- Task 11 (task-1787286665-c52b): Test-quality — §5.7 semantic-outcome gaps (findings
+  1-8). Scope: test_kernel_controller, test_overlay_native, test_manager_native_prof,
+  test_manager_visual, test_golden, test_installed_smoke.sh, test_interaction_inventory.
 
 ## Next
-Pick Task 10 or Task 11 next (both P2, independent, deps 1/2/3/9 complete). Re-check
-`ralph tools task ready` at start. No change to open facts (FACT-002..FACT-007), 19 partial rows,
-Task 6 blocked, Task 4 audit blocked — unchanged; do not emit the completion token (ledger open).
+Pick Task 11 next (only ready task). Re-check `ralph tools task ready` at start.
+No change to open facts (FACT-002..FACT-007), 19 partial rows, Task 6 blocked, Task 4
+audit blocked — unchanged; do not emit the completion token (ledger open).
