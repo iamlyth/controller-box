@@ -133,14 +133,20 @@
     {
       "id": "FACT-008",
       "title": "test_installed_diagram environment dependency: host InputPlumber profile at first row",
-      "status": "open",
+      "status": "resolved",
       "capabilities": [],
-      "requirements": [
-        "OVL-10",
-        "MGR-07"
-      ],
+      "requirements": [],
       "blocking_evidence": "tests/test_installed_diagram.sh clicks the first profile row in the profile editor. cbx_profile_list_enumerate sorts the built-in Default alongside host/system InputPlumber profiles (/usr/share/inputplumber/profiles), so on hosts with InputPlumber installed a host profile can sort first with a different mapping count, changing the diagram content and breaking the semantic pixel assertions. The operator independent gate observed verify-project exit 8 with only test_installed_diagram failing. Required: the editor test selects a test-owned profile by name (Task 8) and passes both without and with a staged host profile that sorts first, at an evidence commit with exact receipts.",
-      "resolution": null
+      "resolution": {
+        "type": "artifact",
+        "refs": [
+          "tests/test_installed_diagram.sh",
+          "src/manager/profile_diagram.c"
+        ],
+        "evidence_commit": "3ddefae0c9d2f56aa89d414306481645b38f5e02",
+        "resolved_at": "2026-08-21",
+        "reason": "Task 8 made the installed diagram acceptance environment-independent: tests/test_installed_diagram.sh creates a test-owned profile (cbx-diagram-test) in the isolated user profiles dir with a display_order sidecar that forces a deterministic sort position, computes that profile's row from the sorted list (never a hardcoded first-row click), and asserts the outline/slot-highlight/title/binding-list content. Verified passing both without (row 0) and with CBX_DIAGRAM_STAGE_HOST=1 staging a zero-binding profile that sorts ahead (row 1); forcing selection of the staged first-row profile fails the slot-highlight and binding-list assertions, reproducing the operator's exit-8 failure. OVL-10 and MGR-07 reclassified verified."
+      }
     }
   ]
 }

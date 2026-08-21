@@ -399,20 +399,18 @@
       "spec_sections": [
         "\u00a74.10"
       ],
-      "classification": "partial",
+      "classification": "verified",
       "evidence_tier": "installed",
       "required_tier": "installed",
       "required_capabilities": [],
-      "evidence_commit": "ae4ef52880741d44c0e959dae67ceb8a55f7d0aa",
+      "evidence_commit": "3ddefae0c9d2f56aa89d414306481645b38f5e02",
       "receipts": [],
       "artifacts": [
         "tests/test_installed_diagram.sh",
         "src/manager/profile_diagram.c"
       ],
-      "fact_refs": [
-        "FACT-008"
-      ],
-      "reason": "Installed-window diagram semantic acceptance (BUG-0014) proven on the installed production window, but the editor test clicks the first profile row, so a host/system InputPlumber profile that sorts first changes the loaded profile mapping count and breaks the semantic pixel assertions (FACT-008, Task 8). Reclassify to verified only with environment-independent evidence."
+      "fact_refs": [],
+      "reason": "Environment-independent installed-window diagram semantic acceptance (Task 8): tests/test_installed_diagram.sh creates a test-owned profile with a display_order sidecar forcing a deterministic sort position and selects it by its computed row (never a hardcoded first-row click), so the outline/slot-highlight/title/binding-list assertions are deterministic with or without host/system InputPlumber profiles. Verified passing both without and with a staged host profile that sorts first (CBX_DIAGRAM_STAGE_HOST=1). FACT-008 resolved."
     },
     {
       "id": "MGR-01",
@@ -546,21 +544,19 @@
       "spec_sections": [
         "\u00a75.6"
       ],
-      "classification": "partial",
+      "classification": "verified",
       "evidence_tier": "installed",
       "required_tier": "installed",
       "required_capabilities": [],
-      "evidence_commit": "ae4ef52880741d44c0e959dae67ceb8a55f7d0aa",
+      "evidence_commit": "3ddefae0c9d2f56aa89d414306481645b38f5e02",
       "receipts": [],
       "artifacts": [
         "tests/test_installed_diagram.sh",
         "src/manager/profile_diagram.c",
         "tests/test_manager_visual.c"
       ],
-      "fact_refs": [
-        "FACT-008"
-      ],
-      "reason": "Installed production-window diagram semantic acceptance (BUG-0014) proven via the production path, but the editor test clicks the first profile row, so a host/system InputPlumber profile that sorts first breaks the assertions (FACT-008, Task 8). Reclassify to verified only with environment-independent evidence."
+      "fact_refs": [],
+      "reason": "Environment-independent installed production-window diagram semantic acceptance (Task 8): tests/test_installed_diagram.sh selects a test-owned profile by its computed row (not a first-row click) with deterministic sort position via a display_order sidecar, so the outline/slot-highlight/title/binding-list assertions pass with or without host/system InputPlumber profiles. FACT-008 resolved."
     },
     {
       "id": "MGR-08",

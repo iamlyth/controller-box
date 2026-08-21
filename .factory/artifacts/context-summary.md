@@ -11,7 +11,6 @@ release evidence and contains no satisfied/done claims.
 - Task 5 (pending): Perceptible installed diagram acceptance
 - Task 6 (blocked): Real four-target InputPlumber routing acceptance
 - Task 7 (pending): Environment-independent profile editor acceptance
-- Task 8 (pending): Environment-independent installed diagram acceptance
 
 ## Unresolved facts
 - FACT-002 (open): BUG-0015: real InputPlumber system-bus acceptance with four targets
@@ -20,7 +19,6 @@ release evidence and contains no satisfied/done claims.
 - FACT-005 (open): Missing GPU compositor backend evidence
 - FACT-006 (open): Missing target Pi runtime and human release acceptance
 - FACT-007 (open): Runner receipt evidence is not trusted: no signer provisioned and receipts are not commit-bound
-- FACT-008 (open): test_installed_diagram environment dependency: host InputPlumber profile at first row
 
 ## Blocked/partial conformance rows
 - ARCH-04 (partial): tasks=Task 6; facts=FACT-002,FACT-003
@@ -32,10 +30,8 @@ release evidence and contains no satisfied/done claims.
 - DOD-09 (partial): tasks=Task 4; facts=FACT-002,FACT-004,FACT-005,FACT-006
 - MGR-02 (partial): tasks=Task 6; facts=FACT-002,FACT-003
 - MGR-03 (partial): tasks=Task 4; facts=FACT-007
-- MGR-07 (partial): tasks=Task 8; facts=FACT-008
 - MGR-08 (partial): tasks=Task 6; facts=FACT-002,FACT-003,FACT-004
 - OVL-09 (partial): tasks=Task 4; facts=FACT-004,FACT-006
-- OVL-10 (partial): tasks=Task 8; facts=FACT-008
 - PERF-01 (partial): tasks=Task 4; facts=FACT-004,FACT-006
 - PKG-01 (partial): tasks=Task 4; facts=FACT-007
 - SYS-01 (partial): tasks=Task 4; facts=FACT-004
