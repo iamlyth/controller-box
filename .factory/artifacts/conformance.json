@@ -399,7 +399,7 @@
       "spec_sections": [
         "\u00a74.10"
       ],
-      "classification": "verified",
+      "classification": "partial",
       "evidence_tier": "installed",
       "required_tier": "installed",
       "required_capabilities": [],
@@ -409,8 +409,10 @@
         "tests/test_installed_diagram.sh",
         "src/manager/profile_diagram.c"
       ],
-      "fact_refs": [],
-      "reason": "Installed-window diagram semantic acceptance (BUG-0014): tests/test_installed_diagram.sh drives the real installed controller-box --manager under Xvfb through production pointer dispatch to the profile editor and asserts recognizable diagram content (controller outline, slot highlight, title/model label, binding list) via the production path; ABGR8888 byte-order fix in src/manager/profile_diagram.c renders the controller outline. Proven on the installed production window."
+      "fact_refs": [
+        "FACT-008"
+      ],
+      "reason": "Installed-window diagram semantic acceptance (BUG-0014) proven on the installed production window, but the editor test clicks the first profile row, so a host/system InputPlumber profile that sorts first changes the loaded profile mapping count and breaks the semantic pixel assertions (FACT-008, Task 8). Reclassify to verified only with environment-independent evidence."
     },
     {
       "id": "MGR-01",
@@ -544,7 +546,7 @@
       "spec_sections": [
         "\u00a75.6"
       ],
-      "classification": "verified",
+      "classification": "partial",
       "evidence_tier": "installed",
       "required_tier": "installed",
       "required_capabilities": [],
@@ -555,8 +557,10 @@
         "src/manager/profile_diagram.c",
         "tests/test_manager_visual.c"
       ],
-      "fact_refs": [],
-      "reason": "Installed production-window diagram semantic acceptance (BUG-0014): tests/test_installed_diagram.sh drives the real installed binary through a real X11 window to the profile editor and asserts recognizable diagram content via the production path; the production manager now renders the controller diagram (outline, slot highlight, model label)."
+      "fact_refs": [
+        "FACT-008"
+      ],
+      "reason": "Installed production-window diagram semantic acceptance (BUG-0014) proven via the production path, but the editor test clicks the first profile row, so a host/system InputPlumber profile that sorts first breaks the assertions (FACT-008, Task 8). Reclassify to verified only with environment-independent evidence."
     },
     {
       "id": "MGR-08",

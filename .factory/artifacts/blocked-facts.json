@@ -129,6 +129,18 @@
       ],
       "blocking_evidence": "Rows MGR-03/PKG-01/VRF-05/DOD-06 relied on the dev-runner-vm manifest (a legacy unsigned local manifest not tracked as a Git blob at the declared evidence commit). .factory/signer-trust.json declares require_signature=true with no provisioned signer (enabled=false, no public keys), so capability evidence requiring runner trust must reject unsigned legacy/local manifests. Every such row stays partial/open until an out-of-tree root-owned signer is provisioned and a signed, commit-bound runner receipt exists.",
       "resolution": null
+    },
+    {
+      "id": "FACT-008",
+      "title": "test_installed_diagram environment dependency: host InputPlumber profile at first row",
+      "status": "open",
+      "capabilities": [],
+      "requirements": [
+        "OVL-10",
+        "MGR-07"
+      ],
+      "blocking_evidence": "tests/test_installed_diagram.sh clicks the first profile row in the profile editor. cbx_profile_list_enumerate sorts the built-in Default alongside host/system InputPlumber profiles (/usr/share/inputplumber/profiles), so on hosts with InputPlumber installed a host profile can sort first with a different mapping count, changing the diagram content and breaking the semantic pixel assertions. The operator independent gate observed verify-project exit 8 with only test_installed_diagram failing. Required: the editor test selects a test-owned profile by name (Task 8) and passes both without and with a staged host profile that sorts first, at an evidence commit with exact receipts.",
+      "resolution": null
     }
   ]
 }

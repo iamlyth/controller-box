@@ -137,14 +137,14 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 | OVL-07 | §4.7 | verified | `dynamic_columns.c` scales with target count; `test_dynamic_columns.c` | |
 | OVL-08 | §4.8 | verified | `grid_render.c` model name + slot, no nicknames | |
 | OVL-09 | §4.9 | partial | Pre-built surface architecture (surface_build.c) and 50 ms poll cycle (ip_intercept_poll.c) verified; x86_64 latency measured by test_overlay_latency.c over 200+ iterations; Pi 4 latency bound requires physical target hardware and real target consumer (FACT-004, FACT-006) | Task 4 |
-| OVL-10 | §4.10 | verified | `tests/test_installed_diagram.sh` drives the installed binary through a real X11 window to the profile editor and asserts recognizable diagram content (outline/slot highlight/title/binding list) via the production path; ABGR8888 byte-order fix in `profile_diagram.c`; BUG-0014 fixed (28154 outline px) | |
+| OVL-10 | §4.10 | partial | `tests/test_installed_diagram.sh` drives the installed binary through a real X11 window to the profile editor and asserts recognizable diagram content (outline/slot highlight/title/binding list) via the production path; ABGR8888 byte-order fix in `profile_diagram.c`; BUG-0014 fixed (28154 outline px). The editor test clicks the first profile row, so a host/system InputPlumber profile that sorts first changes the loaded profile's mapping count and breaks the semantic pixel assertions (FACT-008) — fix by selecting a test-owned profile (Task 8) | Task 8 |
 | MGR-01 | §5.1 | verified | `manager.c` tab bar, 3 tabs, controller + pointer; `test_manager_tabs.c`, `test_manager_native.c` | |
 | MGR-02 | §5.2 | partial | `controllers_tab.c` add/remove/type-change, topology reconcile; production launch reports 0/4 virtual controllers active (BUG-0015, FACT-002/FACT-003) | Task 6 |
 | MGR-03 | §5.3 | partial | `profiles_tab.c` browse/create/edit/delete, built-in Default; `test_profiles_tab.c`, `test_installed_functional.c`; BUG-0017 resolved (commit `04e2b37`): editor tests now select the profile they wrote by filename, so the four profile-editor tests pass with or without host/system InputPlumber profiles. Remaining `partial` is FACT-007 (unsigned runner receipt — signer not provisioned) | Task 4 |
 | MGR-04 | §5.4 | verified | `profile_editor_list.c`, `profile_editor_seq.c` both modes; `test_editor_list_mode.c`, `test_editor_seq_mode.c` | |
 | MGR-05 | §5.4 | verified | `profile_validate.c` NES minimum (A/B/D-pad); `test_profile_validate.c`; `profile_save.c` enforces before write | |
 | MGR-06 | §5.5 | verified | `settings_tab.c` all settings; `test_settings_tab.c`, `test_manager_native.c` M21–M26 | |
-| MGR-07 | §5.6 | verified | `tests/test_installed_diagram.sh` drives the real installed binary through a real X11 window to the profile editor and asserts recognizable diagram content (outline, slot highlight, model label, binding list) via the production path; BUG-0014 fixed | |
+| MGR-07 | §5.6 | partial | `tests/test_installed_diagram.sh` drives the real installed binary through a real X11 window to the profile editor and asserts recognizable diagram content (outline, slot highlight, model label, binding list) via the production path; BUG-0014 fixed. The editor test clicks the first profile row, so a host/system InputPlumber profile that sorts first changes the loaded profile and breaks the semantic pixel assertions (FACT-008) — fix by selecting a test-owned profile (Task 8) | Task 8 |
 | MGR-08 | §5.7 | partial | 52/60 inventory claimed verified with controller-transport evidence via ctrl_press and keyboard relabels; premise contradicted by 0/4 virtual controllers active (BUG-0015, FACT-002/FACT-003/FACT-004) | Task 6 |
 | ID-01 | §6.2 | verified | `identity.c` 4-layer auto-assignment; `test_identity.c` | |
 | ID-02 | §6.3 | verified | `identity.c` BT:/USB:/USB:phys:/ORDER: prefixes; `config_assignments.c` validation | |
@@ -331,7 +331,7 @@ Keyboard tests in `test_manager_interaction_prof.c` relabeled from
 ## Task 4: Final documentation and specification audit
 - Status: blocked
 - Block reason: BUG-0014 (invisible diagram) and BUG-0015 (0/4 virtual controllers); real InputPlumber system-bus acceptance required; block lifts only with Ralph-owned product fixes and real acceptance evidence (Tasks 5 and 6)
-- Dependencies: Task 1, Task 2, Task 3, Task 5, Task 6, Task 7
+- Dependencies: Task 1, Task 2, Task 3, Task 5, Task 6, Task 7, Task 8
 - Scope: `.factory/artifacts/implementation-plan.md` (conformance matrix update), `.factory/artifacts/conformance.json` (sidecar), `.factory/artifacts/blocked-facts.json` (facts ledger), `README.md`, `docs/OPERATIONS.md`, full clean verification
 - Acceptance criteria:
   - Task 5 (perceptible installed diagram acceptance) and Task 6 (real four-target InputPlumber routing acceptance) are complete, with exact receipt/artifact evidence resolving FACT-001, FACT-002, and FACT-003 (or an explicit human decision where SPEC §11.2.6 permits it)
@@ -382,6 +382,19 @@ Keyboard tests in `test_manager_interaction_prof.c` relabeled from
 - Verification: build pristine archives of the same commit in both environments; run `ctest --test-dir <fresh-build> -R '^(test_manager_tabs|test_manager_production|test_manager_visual|test_golden)$' --output-on-failure`; run signed `remote-project-gate`; compare exact commit/tree/environment bindings; then run `./scripts/verify-project.sh`
 - Documentation impact: record any newly discovered production profile-path constraint in OPERATIONS.md; no documentation-only closure
 - Result: BUG-0017 resolved (commit `04e2b37`). Root cause was environment-dependent test selection: `cbx_profile_list_enumerate` sorts the built-in Default alongside any host/system InputPlumber profiles (`/usr/share/inputplumber/profiles`), so the editor tests' index-0 default selection loaded a host profile with a different mapping count on hosts with InputPlumber installed. Reproduced by staging a host profile that sorts first (all four tests failed at the reported line numbers), then fixed so the editor tests select the profile they wrote by filename and the focus test presses DOWN until focus escapes the list. Cross-environment verified: a pristine archive of `04e2b37` passes all four tests both without and with a host profile that sorts first. `test_editor_edits_selected_profile` regression added (verified to fail without the fix). MGR-03 sidecar stays `partial` bound to FACT-007 (unsigned runner receipt / signer not provisioned — outside this task's scope).
+
+## Task 8: Environment-independent installed diagram acceptance
+- Status: pending
+- Dependencies: Task 1, Task 2, Task 3, Task 5
+- Scope: fix the deterministic `tests/test_installed_diagram.sh` environment dependency (host InputPlumber profile at first row) by selecting a test-owned profile, without weakening the semantic pixel assertions; `.factory/artifacts/blocked-facts.json` (resolve FACT-008 with receipt/artifact or human decision), `.factory/artifacts/conformance.json`
+- Acceptance criteria:
+  - The installed-window diagram acceptance drives the profile editor to a profile the test itself owns/creates (selected by name, never by first-row click position), so the diagram content assertions are deterministic with or without host/system InputPlumber profiles (`/usr/share/inputplumber/profiles`) on the machine
+  - The semantic pixel assertions are preserved (controller outline, slot highlight, title/model label, binding list regions) — no weakened thresholds, no regenerated baselines, no skip
+  - A regression case reproduces the host-profile-sorts-first failure (the operator gate observed `verify-project` exit 8 with only `test_installed_diagram` failing) and passes after the fix
+  - OVL-10 and MGR-07 reclassify `partial` -> `verified` in the matrix and sidecar with the environment-independent evidence; FACT-008 resolves with an exact receipt/artifact at the evidence commit
+  - `nix-shell --run 'bash tests/test_installed_diagram.sh build-check'` passes both without and with a staged host profile that sorts first
+- Verification: reproduce the host-profile failure, apply the fix, and verify both environments pass; `nix-shell --run './scripts/verify-project.sh'`; `./scripts/validate-conformance.py planning` and `./scripts/validate-blocked-facts.py planning` accept; bug-ledger/BUG-0018 harness entry attached as evidence of the binding-stability mechanism only
+- Documentation impact: OPERATIONS.md production launch notes note the environment-independent installed diagram acceptance
 
 ## Remediation rule
 
