@@ -479,7 +479,7 @@
       "fact_refs": [
         "FACT-007"
       ],
-      "reason": "BUG-0017 environment-dependent editor acceptance resolved at 04e2b37: editor tests select the profile they wrote by filename and the focus test presses DOWN until focus escapes the list, so the four profile-editor tests pass with or without host/system InputPlumber profiles. MGR-03 remains `partial` because its runner-receipt evidence is unsigned (FACT-007): no signer provisioned in .factory/signer-trust.json, so capability evidence requiring runner trust stays unevidenced until a provisioned signer produces a commit-bound signed receipt."
+      "reason": "FACT-007 (corrected): the runner signer IS provisioned (.factory/signer-trust.json enabled=true, public key at c45336a) and a valid signed, commit-bound dev-runner-vm receipt exists at c45336a. This row stays partial because the receipt is bound to c45336a (not the current implementation commit b66dbdb), the runner-evidence aggregate is stale relative to HEAD, and the receipts live in untracked .factory-state/ (not Git blobs at any evidence commit), so complete-mode conformance cannot accept them. Resolving requires re-running the declared runner at the current HEAD and tracking the receipt as a Git blob."
     },
     {
       "id": "MGR-04",
@@ -856,7 +856,7 @@
       "fact_refs": [
         "FACT-007"
       ],
-      "reason": "Runner receipt evidence is no longer acceptable: the declared runner manifest is unsigned (no signer provisioned in .factory/signer-trust.json) and is not a Git blob at the declared evidence commit. Capability evidence requiring runner trust stays unevidenced until a provisioned signer produces a commit-bound signed receipt."
+      "reason": "FACT-007 (corrected): the runner signer IS provisioned (.factory/signer-trust.json enabled=true, public key at c45336a) and a valid signed, commit-bound dev-runner-vm receipt exists at c45336a. This row stays partial because the receipt is bound to c45336a (not the current implementation commit b66dbdb), the runner-evidence aggregate is stale relative to HEAD, and the receipts live in untracked .factory-state/ (not Git blobs at any evidence commit), so complete-mode conformance cannot accept them. Resolving requires re-running the declared runner at the current HEAD and tracking the receipt as a Git blob."
     },
     {
       "id": "PKG-02",
@@ -1256,7 +1256,7 @@
       "fact_refs": [
         "FACT-007"
       ],
-      "reason": "Runner receipt evidence is no longer acceptable: the declared runner manifest is unsigned (no signer provisioned in .factory/signer-trust.json) and is not a Git blob at the declared evidence commit. Capability evidence requiring runner trust stays unevidenced until a provisioned signer produces a commit-bound signed receipt."
+      "reason": "FACT-007 (corrected): the runner signer IS provisioned (.factory/signer-trust.json enabled=true, public key at c45336a) and a valid signed, commit-bound dev-runner-vm receipt exists at c45336a. This row stays partial because the receipt is bound to c45336a (not the current implementation commit b66dbdb), the runner-evidence aggregate is stale relative to HEAD, and the receipts live in untracked .factory-state/ (not Git blobs at any evidence commit), so complete-mode conformance cannot accept them. Resolving requires re-running the declared runner at the current HEAD and tracking the receipt as a Git blob."
     },
     {
       "id": "VRF-06",
@@ -1426,7 +1426,7 @@
       "fact_refs": [
         "FACT-007"
       ],
-      "reason": "Runner receipt evidence is unevidenced: unsigned manifest (FACT-007, no signer provisioned) and receipt not a Git blob at the declared evidence commit."
+      "reason": "FACT-007 (corrected): the runner signer IS provisioned (.factory/signer-trust.json enabled=true, public key at c45336a) and a valid signed, commit-bound dev-runner-vm receipt exists at c45336a. This row stays partial because the receipt is bound to c45336a (not the current implementation commit b66dbdb), the runner-evidence aggregate is stale relative to HEAD, and the receipts live in untracked .factory-state/ (not Git blobs at any evidence commit), so complete-mode conformance cannot accept them. Resolving requires re-running the declared runner at the current HEAD and tracking the receipt as a Git blob."
     },
     {
       "id": "DOD-07",

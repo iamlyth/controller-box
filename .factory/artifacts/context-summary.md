@@ -23,7 +23,7 @@ release evidence and contains no satisfied/done claims.
 - FACT-004 (open): Missing target consumer for real four-target routing and Pi 4 runtime
 - FACT-005 (open): Missing GPU compositor backend evidence
 - FACT-006 (open): Missing target Pi runtime and human release acceptance
-- FACT-007 (open): Runner receipt evidence is not trusted: no signer provisioned and receipts are not commit-bound
+- FACT-007 (open): Runner receipt evidence is not accepted: signed receipt is bound to an older commit and is not tracked as a Git blob
 
 ## Blocked/partial conformance rows
 - ARCH-04 (partial): tasks=Task 6; facts=FACT-002,FACT-003

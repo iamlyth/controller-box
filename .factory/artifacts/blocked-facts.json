@@ -113,7 +113,7 @@
     },
     {
       "id": "FACT-007",
-      "title": "Runner receipt evidence is not trusted: no signer provisioned and receipts are not commit-bound",
+      "title": "Runner receipt evidence is not accepted: signed receipt is bound to an older commit and is not tracked as a Git blob",
       "status": "open",
       "capabilities": [
         "remote-project-gate",
@@ -127,7 +127,7 @@
         "VRF-05",
         "DOD-06"
       ],
-      "blocking_evidence": "Rows MGR-03/PKG-01/VRF-05/DOD-06 relied on the dev-runner-vm manifest (a legacy unsigned local manifest not tracked as a Git blob at the declared evidence commit). .factory/signer-trust.json declares require_signature=true with no provisioned signer (enabled=false, no public keys), so capability evidence requiring runner trust must reject unsigned legacy/local manifests. Every such row stays partial/open until an out-of-tree root-owned signer is provisioned and a signed, commit-bound runner receipt exists.",
+      "blocking_evidence": "Rows MGR-03/PKG-01/VRF-05/DOD-06 require runner-trust capability evidence. The signer IS provisioned (.factory/signer-trust.json enabled=true, public key for dev-runner-vm committed at c45336a, signature verifies via ssh-keygen) and a valid signed, commit-bound dev-runner-vm receipt exists at c45336a. However, the runner-evidence aggregate is bound to c45336a, not the current implementation commit b66dbdb, so check-factory-runner-evidence.py reports the aggregate Git/environment binding as stale. The signed receipts live in untracked .factory-state/runner-evidence/ and are not Git blobs at any evidence commit, so they cannot satisfy complete-mode conformance. Resolving requires re-running the declared runner at the current HEAD to produce a signed commit-bound receipt tracked as a Git blob; the dev-runner-vm runner is not reachable from this environment.",
       "resolution": null
     },
     {

@@ -1,49 +1,46 @@
-# Handoff: Task 11 (§5.7 semantic-outcome test-quality) work complete; ledger open
+# Handoff: corrected stale FACT-007 rationale; ledger accurate; still no ready task / completion
 
-## Outcome
-- Completed the Task 11 remediation of all 8 §5.7 semantic-outcome gaps across
-  7 test files + 1 production file. Full ctest green: 100 tests, 98 pass /
-  2 environmental skips (`test_kernel_controller`, `test_backend_smoke`).
-  verify-boilerplate, check-docs-sync, validate-implementation-plan (planning),
-  validate-conformance (planning) all pass.
-- Finding 1 (kernel): settings.yaml check is now a HARD semantic assertion; the
-  navigation deliberately reaches the Settings tab and the settings list's
-  "Save" entry (writes settings.yaml); Xbox 360 identity (0x045E:0x028E) is
-  recognized via SDL's built-in controller DB (no manual mapping needed).
-  Environmental skip locally (no /dev/uinput); needs kernel-uinput runner.
-- Finding 2 (overlay): O10/O10b/O13 close now via DBus InputEvent transport
-  (emit_input_event(...,"B",1.0)+drain_bus), not push_keydown(SDLK_b).
-- Findings 3-5 (native_prof): M36 uses ctrl_press(6) Start (not SDLK_TAB);
-  M37 asserts on-disk profile change (st_mtim.tv_nsec advanced, or file created);
-  M30 asserts the picked target was applied to mappings[editing_index].
-- Finding 6: validation-error visual produced by the production save path —
-  test loads incomplete profile into ed->profile and clicks the real Save button;
-  cbx_profiles_tab_save_editor now also sets status_lbl to theme->conflict (red).
-- Finding 7 (installed_smoke): overlay early-exit is FAILURE per §11.1.5, not
-  pass; the script now starts a private native-signature InputPlumber-compatible
-  service (build-check/test_ip_server) and points DBUS_SYSTEM_BUS_ADDRESS at it
-  so the installed overlay is genuinely exercised. test_installed_smoke passes.
-- Finding 8: added a runtime verification ledger to interaction_inventory
-  (mark_verified/is_verified/reset); verified flags now reflect actual passing
-  dispatch tests, not static claims. Dispatch tests (M30/M36/M37, O10/O13) mark
-  after passing; each binary's main() asserts runtime-verified. Linked
-  cbx_test_support to test_overlay_native and test_manager_native_prof.
+## Outcome this iteration
+Corrected a genuine documentation-accuracy defect in the blocked-facts ledger and
+conformance sidecar: FACT-007's stated rationale ("no signer provisioned,
+`enabled=false`, no public keys") was **factually stale**. Re-verified reality:
 
-## Verification
-- `nix-shell --run 'ctest --test-dir build-check --output-on-failure'`: 98 pass / 2 skips.
-- `./scripts/verify-boilerplate.sh`, `./scripts/check-docs-sync.sh`: pass.
-- `./scripts/validate-implementation-plan.py planning`: exit 0.
-- `./scripts/validate-conformance.py planning`: valid (76 requirements).
+- `.factory/signer-trust.json` is `enabled=true`, `require_signature=true`, has a
+  committed public key for `dev-runner-vm`, and the detached signature on the
+  c45336a manifest **verifies** via `ssh-keygen -Y verify`.
+- A valid signed, commit-bound runner receipt exists at c45336a (ancestor of HEAD).
 
-## Plan / task state
-- Plan Task 11 kept `Status: pending` (appended-after-final-audit convention;
-  only Task 4 gates completion). Result section documents all 8 remediations.
-- Runtime task task-1787286665-c52b closed (work done).
-- No change to open facts (FACT-002..FACT-008), 19 partial rows, Task 6 blocked,
-  Task 4 audit blocked — unchanged; do not emit the completion token (ledger open).
+FACT-007 stays `open` for the accurate reason: the receipt is bound to c45336a,
+not the current implementation commit b66dbdb; the runner-evidence aggregate
+reports "stale" relative to HEAD; and the receipts live in untracked
+`.factory-state/runner-evidence/` (not Git blobs at any evidence commit), so
+complete-mode conformance cannot accept them. The `dev-runner-vm` runner is not
+reachable from this sandbox (no `~/.ssh/factory-ssh`, hostname unresolvable), so a
+fresh signed receipt at HEAD cannot be produced here.
 
-## Next
-No ready runtime tasks remain. The final audit (Task 4) remains blocked pending
-resolved facts. If a fresh cycle continues, re-check `ralph tools task ready`
-and the plan's open/blocked rows (Task 6, Task 4). Commit the checkpoint to
-`develop` with the scratchpad riding along.
+## Verified this iteration
+- `ralph tools task ready` → no ready tasks.
+- Plan fresh (spec=3a10f6b7d04a), `status: active`, tree clean on `develop` @ b66dbdb.
+- Signer provisioned; signed commit-bound receipt exists at c45336a but is stale
+  relative to HEAD and untracked (not a Git blob).
+- Corrected: `.factory/artifacts/blocked-facts.json` FACT-007 (title +
+  blocking_evidence), `.factory/artifacts/conformance.json` reasons for
+  MGR-03/PKG-01/VRF-05/DOD-06, regenerated `.factory/artifacts/context-summary.md`.
+- Validators pass: validate-blocked-facts (8 facts), validate-conformance planning
+  (76 reqs), check-context-summary, verify-boilerplate.
+
+## Remaining blockers (unchanged, external)
+- FACT-002/003 BUG-0015 real InputPlumber system-bus — capability undeclared.
+- FACT-004 target-consumer (four-target routing, aarch64/Pi 4) undeclared.
+- FACT-005 gpu-compositor undeclared.
+- FACT-006 target Pi runtime + human release acceptance (out-of-band).
+- FACT-007 (corrected): needs runner re-run at current HEAD producing a signed
+  commit-bound receipt tracked as a Git blob; runner VM unreachable from sandbox.
+- environment.toml forbids inventing these capabilities until acceptance
+  contracts exist. A human must provision hardware/capabilities/signer re-run or
+  make an explicit spec-scoped deferral before Task 4 (final audit) can run.
+
+## Rule
+No ready task, no further software-fixable work available. Do not emit the
+completion token; the ledger stays open. Re-check `ralph tools task ready` and the
+plan's open/blocked rows and facts on each fresh iteration.
