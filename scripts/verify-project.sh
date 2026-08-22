@@ -43,6 +43,21 @@ if ! command -v convert >/dev/null 2>&1; then
     exit 2
 fi
 
+# Nix gate for the atomic-capture publication regressions (test-visual-audit.sh
+# 13f). The complete project verification always runs under the declared Nix
+# environment (which provides Xvfb/xdotool/ImageMagick, with dbus-daemon
+# available transitively), so the display/capture toolchain must be present
+# here. Asserting it guarantees the 13f non-skipping atomic publication (incl.
+# fsync ordering, TOCTOU race, symlink/hardlink refusal, and signal-withdrawal)
+# regressions can never silently skip for lack of a display server or capture
+# tool.
+for tool in Xvfb xdotool import convert dbus-daemon; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        echo "verify-project: $tool is required for the visual capture publication regressions" >&2
+        exit 2
+    fi
+done
+
 # Invalidate the CMake cache when the source directory has changed
 # (e.g. bind-mount path differs between Ralph and campaign environments).
 if [[ -f "$BUILD_DIR/CMakeCache.txt" ]]; then

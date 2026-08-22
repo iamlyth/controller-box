@@ -192,6 +192,19 @@ if [[ ${RALPH_VISUAL_AUDIT_TESTING:-0} == 1 && -n "${CBX_VISUAL_VALIDATE_ONLY:-}
     exit 1
 fi
 
+# Production tool selection/test hooks must FAIL CLOSED outside the explicit
+# RALPH_VISUAL_AUDIT_TESTING marker: a stray CBX_ATOMIC_PUBLISH or
+# CBX_PRE_PUBLISH_HOOK in a production environment is an injection, not
+# something to silently ignore (or to hide behind a tool SKIP). Only under the
+# marker is an override honored. This check sits above the display-tool gate so
+# a production run carrying an override always refuses (exit 1) rather than
+# skipping (77).
+if [[ -n "${CBX_ATOMIC_PUBLISH:-}" || -n "${CBX_PRE_PUBLISH_HOOK:-}" ]] \
+        && [[ ${RALPH_VISUAL_AUDIT_TESTING:-0} != 1 ]]; then
+    echo "visual-capture: test-only publish override present without RALPH_VISUAL_AUDIT_TESTING; refusing to run" >&2
+    exit 1
+fi
+
 # Full production capture needs a real X11/display toolchain. This gate sits
 # AFTER the test-only validation hook so the fail-closed validator (which needs
 # only ImageMagick `convert`) can be exercised by non-skipping negative
@@ -249,11 +262,41 @@ WINDOW_TIMEOUT="${VISUAL_AUDIT_WINDOW_TIMEOUT:-30}"
 # ---------------------------------------------------------------------------
 declare -a OWNED_GROUPS=()
 TMPDIR=""
+# Current user identity: every owned artifact and the output parent must be
+# owned by this uid, and only identity-matched owned entries are ever removed
+# on failure/signal (a pre-existing/unowned OUTPUT or a path raced in by
+# another principal is never deleted or replaced).
+ME=$(id -u 2>/dev/null || echo 0)
 # Owned capture/receipt temp paths. Written in the same directory as OUTPUT so
 # the final publish is an atomic same-filesystem rename; only these exactly-
 # owned paths are ever removed on failure/signal, never a pre-existing OUTPUT.
 CAPTURE_TMP=""
 RECEIPT_TMP=""
+# Atomic-publication state machine: tracks how far a publication has progressed
+# so the EXIT trap can withdraw exactly the owned artifacts between the two
+# publishes and before the final directory fsync (point: no half-published or
+# orphaned image/receipt ever survives an error or a terminating signal).
+RECEIPT_PUBLISHED=0
+IMAGE_PUBLISHED=0
+COMMITTED=0
+
+# Remove a path ONLY if it is a current-user-owned regular single-link file.
+# Defense-in-depth identity match: a temp/artifact that was raced away or
+# replaced by a symlink/hardlink, or that is owned by another principal, is
+# never removed. A pre-existing/unowned OUTPUT is therefore never deleted.
+rm_owned() { # path
+    local p=$1 owner links
+    [[ -n "$p" ]] || return 0
+    [[ -e "$p" || -L "$p" ]] || return 0
+    owner=$(stat -c %u "$p" 2>/dev/null) || return 0
+    [[ "$owner" == "$ME" ]] || return 0
+    # Regular (incl. empty) file that is not a symlink and has a single link.
+    [[ -L "$p" ]] && return 0
+    [[ -f "$p" ]] || return 0
+    links=$(stat -c %h "$p" 2>/dev/null)
+    [[ "$links" == "1" ]] || return 0
+    rm -f -- "$p"
+}
 
 kill_group() { # pgid
     local pgid="$1" deadline
@@ -272,11 +315,22 @@ cleanup() {
         kill_group "$g"
     done
     [[ -z "$TMPDIR" ]] || rm -rf -- "$TMPDIR"
-    # Remove only owned capture/receipt temps. A pre-existing/unowned OUTPUT is
-    # never deleted; a rejected or interrupted capture leaves no partial bytes
-    # at the requested output path and no orphaned receipt sidecar.
-    [[ -z "$CAPTURE_TMP" ]] || rm -f -- "$CAPTURE_TMP"
-    [[ -z "$RECEIPT_TMP" ]] || rm -f -- "$RECEIPT_TMP"
+    # Withdraw only identity-matched owned entries. A pre-existing/unowned
+    # OUTPUT (or a path raced in by another principal) is never deleted.
+    #   * temps not yet published: the capture and receipt temps;
+    #   * a published-but-not-committed receipt (between the receipt publish
+    #     and the image commit point / final directory fsync);
+    #   * a published image and its receipt once the image is at OUTPUT but
+    #     before the final directory fsync (the image commit point was reached
+    #     but durability was not confirmed).
+    rm_owned "$CAPTURE_TMP"
+    rm_owned "$RECEIPT_TMP"
+    if [[ "$RECEIPT_PUBLISHED" == 1 && "$COMMITTED" == 0 ]]; then
+        rm_owned "$OUTPUT.receipt.json"
+    fi
+    if [[ "$IMAGE_PUBLISHED" == 1 && "$COMMITTED" == 0 ]]; then
+        rm_owned "$OUTPUT"
+    fi
 }
 # Run the same owned-temp/process-group cleanup on terminating signals as well
 # as normal exit, so an interrupt never strands a partial capture or receipt.
@@ -296,12 +350,16 @@ done
 ATOMIC="$SCRIPT_DIR/atomic-publish.py"
 # A test may inject a mock helper via CBX_ATOMIC_PUBLISH, honored ONLY under the
 # RALPH_VISUAL_AUDIT_TESTING marker (the completion gate rejects that marker, so
-# it can never weaken the production publish path).
+# it can never weaken the production publish path). The fail-closed check for a
+# stray override lives above the display-tool gate.
 if [[ ${RALPH_VISUAL_AUDIT_TESTING:-0} == 1 && -n "${CBX_ATOMIC_PUBLISH:-}" ]]; then
     ATOMIC="$CBX_ATOMIC_PUBLISH"
 fi
-if [[ ! -f "$ATOMIC" && ! -x "$ATOMIC" ]]; then
-    echo "visual-capture: publish helper '$ATOMIC' unavailable" >&2
+# The publish helper must be a REGULAR file AND executable (a world-writable,
+# directory, or non-executable substitute is refused). `test -x` alone would
+# accept a directory or a helper that is executable but not a regular file.
+if [[ ! -f "$ATOMIC" || ! -x "$ATOMIC" ]]; then
+    echo "visual-capture: publish helper '$ATOMIC' is not a regular executable file" >&2
     exit 1
 fi
 
@@ -538,13 +596,79 @@ xdotool windowfocus "$WIN" >/dev/null 2>&1 || true
 # contract: a rejected capture must not leave a partial artifact at the
 # requested output path).
 # ---------------------------------------------------------------------------
-OUTPUT_DIR=$(dirname -- "$OUTPUT")
-if [[ ! -d "$OUTPUT_DIR" ]]; then
-    echo "visual-capture: output directory '$OUTPUT_DIR' does not exist" >&2
-    exit 1
-fi
+# ---------------------------------------------------------------------------
+# Owned, canonical output parent + single-link owned temps.
+#
+# The output parent and every ancestor must be a NON-symlink path component
+# (a symlinked parent lets an attacker redirect the atomic rename to an
+# attacker-chosen directory), the immediate parent must be owned by the
+# current user and must not be writable by group/other (a group/world-writable
+# output dir lets another principal swap an owned temp or the final artifact),
+# and every temp is created there and must remain a current-user-owned regular
+# file with a single link. Together these close the "owned temp" identity gap
+# the atomic no-replace rename depends on.
+# ---------------------------------------------------------------------------
+# Reject the output parent if any path component is a symlink. Also handles a
+# relative OUTPUT (dirname bottoming out at "." or "..") by terminating the
+# walk there instead of spinning forever.
+reject_symlinked_path() { # dir
+    local d=$1 prev=""
+    while [[ -n "$d" && "$d" != "/" && "$d" != "." && "$d" != ".." ]]; do
+        if [[ -L "$d" ]]; then
+            echo "visual-capture: output parent/ancestor is a symlink: $d" >&2
+            return 1
+        fi
+        prev="$d"
+        d=$(dirname -- "$d")
+        [[ "$d" == "$prev" ]] && break
+    done
+    return 0
+}
+
+# Validate the output parent is a non-symlink, current-user-owned directory
+# that is not writable by group/other; echoes the canonical path on success.
+verify_output_parent() { # dir
+    local dir=$1 perms owner type
+    [[ -d "$dir" ]] || { echo "visual-capture: output directory '$dir' does not exist" >&2; return 1; }
+    reject_symlinked_path "$dir" || return 1
+    owner=$(stat -c %u "$dir" 2>/dev/null) || { echo "visual-capture: cannot stat output directory '$dir'" >&2; return 1; }
+    [[ "$owner" == "$ME" ]] || { echo "visual-capture: output directory '$dir' is not owned by current user" >&2; return 1; }
+    type=$(stat -c %F "$dir" 2>/dev/null)
+    [[ "$type" == "directory" ]] || { echo "visual-capture: output parent '$dir' is not a directory" >&2; return 1; }
+    perms=$(stat -c %a "$dir" 2>/dev/null)
+    if (( (8#$perms & 8#022) != 0 )); then
+        echo "visual-capture: output directory '$dir' is writable by group/other (perms $perms)" >&2
+        return 1
+    fi
+    echo "$dir"
+}
+
+# Assert a temp is still a current-user-owned regular single-link file. `-f` is
+# true for both empty and non-empty regular files (the capture temp is allocated
+# empty by mktemp and only later filled by `import`); the `-L` guard rejects a
+# symlink (which `-f` would otherwise follow).
+assert_safe_temp() { # path label
+    local p=$1 label=$2 owner links
+    owner=$(stat -c %u "$p" 2>/dev/null) || { echo "visual-capture: cannot stat $label temp $p" >&2; return 1; }
+    [[ "$owner" == "$ME" ]] || { echo "visual-capture: $label temp $p is not owned by current user" >&2; return 1; }
+    [[ -L "$p" ]] && { echo "visual-capture: $label temp $p is a symlink" >&2; return 1; }
+    [[ -f "$p" ]] || { echo "visual-capture: $label temp $p is not a regular file" >&2; return 1; }
+    links=$(stat -c %h "$p" 2>/dev/null)
+    [[ "$links" == "1" ]] || { echo "visual-capture: $label temp $p has link count $links (not a single-link owned temp)" >&2; return 1; }
+    return 0
+}
+
+# The output parent is validated here; temps are allocated in this same owned
+# directory so the final publish is an atomic same-filesystem rename. dirfd-
+# relative operations are approximated by allocating every temp in the
+# validated OUTPUT_DIR and by never accepting a path from outside it; full
+# dirfd-relative syscalls are impractical in a shell driver, so the identity
+# checks (owned, regular, single-link, non-symlink parents) carry the security
+# guarantee instead.
+OUTPUT_DIR=$(verify_output_parent "$(dirname -- "$OUTPUT")") || exit 1
 CAPTURE_TMP=$(mktemp "$OUTPUT_DIR/.cbx-capture.XXXXXX" 2>/dev/null) \
     || { echo "visual-capture: cannot allocate capture temp in $OUTPUT_DIR" >&2; exit 1; }
+assert_safe_temp "$CAPTURE_TMP" capture || exit 1
 
 # Capture the focused production window (isolated display, deterministic). The
 # `png:` prefix forces ImageMagick output format regardless of the temp name.
@@ -568,24 +692,38 @@ fi
 # sha256. Also built on an owned temp and renamed last, so a partial receipt
 # never accompanies a failed/absent capture.
 # ---------------------------------------------------------------------------
-BIN_SHA=$(sha256sum "$INSTALLED_BIN" 2>/dev/null | awk '{print $1}' || true)
-IMG_SHA=$(sha256sum "$CAPTURE_TMP" 2>/dev/null | awk '{print $1}' || true)
+# Durability before hashing: the capture temp bytes are fsynced FIRST so the
+# image is on stable storage before it is referenced by a committed receipt,
+# then the stable regular inode is hashed (CAPTURE_TMP is the same inode that
+# is atomically renamed to OUTPUT, so its sha256 is the committed image hash).
+# Both hashes are REQUIRED to be valid 64-hex (the receipt serializer enforces
+# it); a failed hash is a fail-closed error, never a silent "unknown".
+if ! fsync_path "$CAPTURE_TMP"; then
+    echo "visual-capture: fsync failed on capture temp; capture withheld" >&2
+    exit 1
+fi
+BIN_SHA=$(sha256sum "$INSTALLED_BIN" 2>/dev/null | awk '{print $1}') || true
+IMG_SHA=$(sha256sum "$CAPTURE_TMP" 2>/dev/null | awk '{print $1}') || true
 RECEIPT_TMP=$(mktemp "$OUTPUT_DIR/.cbx-receipt.XXXXXX" 2>/dev/null) \
     || { echo "visual-capture: cannot allocate receipt temp in $OUTPUT_DIR" >&2; exit 1; }
-cat > "$RECEIPT_TMP" <<EOF
-{
-  "schema": "controller-box/visual-capture-receipt/v1",
-  "state": "$STATE",
-  "commit": "$COMMIT",
-  "install_prefix": "$PREFIX",
-  "binary_sha256": "${BIN_SHA:-unknown}",
-  "image": "$OUTPUT",
-  "image_sha256": "${IMG_SHA:-unknown}",
-  "window_title": "$EXPECTED_TITLE",
-  "display": ":$DISPLAY_NUM",
-  "finished_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-}
-EOF
+assert_safe_temp "$RECEIPT_TMP" receipt || exit 1
+# Build the receipt through the atomic-publish JSON serializer (proper escaping
+# of any quotes/backslashes/tabs/newlines in paths/titles; strict 64-hex hash
+# validation). A malformed hash or missing field fails closed here.
+if ! "$ATOMIC" receipt "$RECEIPT_TMP" \
+        "schema=controller-box/visual-capture-receipt/v1" \
+        "state=$STATE" \
+        "commit=$COMMIT" \
+        "install_prefix=$PREFIX" \
+        "binary_sha256=${BIN_SHA:-}" \
+        "image=$OUTPUT" \
+        "image_sha256=${IMG_SHA:-}" \
+        "window_title=$EXPECTED_TITLE" \
+        "display=:$DISPLAY_NUM" \
+        "finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"; then
+    echo "visual-capture: failed to build receipt; capture withheld" >&2
+    exit 1
+fi
 # Test-only pre-publish injection (gated behind RALPH_VISUAL_AUDIT_TESTING,
 # rejected by the completion gate): a regression may source a hook that creates
 # OUTPUT/receipt in the exact TOCTOU window between validation and the atomic
@@ -612,6 +750,11 @@ fi
 #     and exits non-zero, so a half-published or non-durable artifact is never
 #     presented as a successful capture.
 #
+# The RECEIPT_PUBLISHED/IMAGE_PUBLISHED/COMMITTED barriers (set after each
+# publish and after the final directory fsync) drive the EXIT-trap cleanup so
+# only identity-matched owned artifacts between the two publishes and before
+# the final fsync are ever withdrawn.
+#
 # Flush the receipt bytes to stable storage BEFORE publishing them.
 if ! fsync_path "$RECEIPT_TMP"; then
     echo "visual-capture: fsync failed on receipt temp; capture withheld" >&2
@@ -630,11 +773,19 @@ elif [[ $rc -ne 0 ]]; then
     exit 1
 fi
 RECEIPT_TMP=""
-# Make the published receipt entry durable before the image commit point.
+# Barrier (signal point) after the receipt publish. There is an inherent few-
+# statement window between the syscall returning 0 and this assignment: a
+# terminating signal landing exactly there could withdraw the counterpart and
+# orphan the just-published receipt. The window is sub-millisecond and the
+# EXIT-trap identity checks make any such orphan removable by a human, but it
+# is acknowledged here rather than silently ignored. 13f(5) exercises the
+# pre-publish signal path; the post-publish window is bounded and accepted.
+RECEIPT_PUBLISHED=1
+# Make the published receipt entry durable before the image commit point. On a
+# failure the EXIT trap withdraws the owned receipt (identity-matched) so a
+# failed/doubtful publish leaves neither OUTPUT nor an orphaned, possibly
+# non-durable receipt.
 if ! fsync_path "$OUTPUT_DIR"; then
-    # We own the receipt we just published; remove it so a failed/doubtful
-    # publish leaves neither OUTPUT nor an orphaned, possibly non-durable receipt.
-    rm -f -- "$OUTPUT.receipt.json"
     echo "visual-capture: fsync failed on receipt directory entry; capture withheld" >&2
     exit 1
 fi
@@ -644,25 +795,26 @@ rc=0
 publish_no_replace "$CAPTURE_TMP" "$OUTPUT" || rc=$?
 if [[ $rc -eq 2 ]]; then
     # A pre-existing/unowned OUTPUT appeared (the TOCTOU window is closed by the
-    # no-replace primitive). We own the receipt we just published; remove it so
-    # no image is ever published without its receipt and the pre-existing
-    # OUTPUT/sentinel is preserved.
-    rm -f -- "$OUTPUT.receipt.json"
+    # no-replace primitive). The EXIT trap withdraws the owned receipt (identity-
+    # matched) so no image is ever published without its receipt and the
+    # pre-existing OUTPUT/sentinel is preserved.
     echo "visual-capture: refusing to overwrite pre-existing OUTPUT '$OUTPUT'" >&2
     exit 1
 elif [[ $rc -ne 0 ]]; then
-    rm -f -- "$OUTPUT.receipt.json"
     echo "visual-capture: failed to publish capture for $STATE; no artifact recorded" >&2
     exit 1
 fi
 CAPTURE_TMP=""
+# Barrier (signal point) after the image commit-point publish (see the note on
+# the receipt barrier for the acknowledged sub-millisecond signal window).
+IMAGE_PUBLISHED=1
 # Make the image commit-point entry durable. If this fsync fails the image is
-# already atomically at OUTPUT; to keep a clean fail-closed state we withdraw
-# the image and its receipt (both owned by us).
+# already atomically at OUTPUT; the EXIT trap withdraws the owned image and its
+# receipt (identity-matched) to keep a clean fail-closed state.
 if ! fsync_path "$OUTPUT_DIR"; then
-    rm -f -- "$OUTPUT" "$OUTPUT.receipt.json"
     echo "visual-capture: fsync failed on capture directory entry; capture withdrawn" >&2
     exit 1
 fi
+COMMITTED=1
 
 echo "visual-capture: captured $STATE -> $OUTPUT (commit ${COMMIT:0:12}, bin ${BIN_SHA:0:12})"

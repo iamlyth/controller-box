@@ -1550,14 +1550,40 @@ EOF
         [[ -z "$(find "$ATOM_DIR" -maxdepth 1 \( -name '.cbx-capture.*' -o -name '.cbx-receipt.*' \) | head -n 1)" ]] \
             || fail "receipt-publish failure left an owned temp behind"
 
-        # (7b) fsync failure on the receipt temp (before any publish): the
-        # driver must fail closed and leave neither OUTPUT, nor a receipt, nor a
-        # temp — never presenting a non-durable capture as successful.
+        # (7a) fsync failure on the capture temp (before any publish): the
+        # image bytes must be durable before they are referenced by a committed
+        # receipt, so a capture-temp fsync failure fails closed and leaves
+        # neither OUTPUT, nor a receipt, nor a temp. This is the FIRST fsync the
+        # driver issues (image durability precedes receipt publication).
         : > "$tmp/fsync.count"
         set +e
         MOCK_IMPORT_SRC="$ATOM_DIR/frame-ok.png" \
         RALPH_VISUAL_AUDIT_TESTING=1 CBX_ATOMIC_PUBLISH="$tmp/fakepub/atomic-fsync.sh" \
         CBX_FAIL_FSYNC_N=1 \
+        VISUAL_AUDIT_INSTALL_PREFIX="$ATOM_PREFIX" \
+        "$PROJECT_ROOT/scripts/visual-capture-driver.sh" manager-main \
+            "$ATOM_DIR/fsynccap.png" "$ATOM_HEAD" >"$tmp/atom-fsynccap.out" 2>&1
+        rc=$?
+        set -e
+        [[ $rc -ne 0 ]] || fail "fsync-failure (capture temp) unexpectedly succeeded"
+        [[ ! -e "$ATOM_DIR/fsynccap.png" ]] \
+            || fail "fsync-failure (capture temp) left an image at OUTPUT"
+        [[ ! -e "$ATOM_DIR/fsynccap.png.receipt.json" ]] \
+            || fail "fsync-failure (capture temp) left a receipt"
+        grep -qi "fsync failed on capture temp" "$tmp/atom-fsynccap.out" \
+            || fail "fsync-failure (capture temp) must report the failed fsync"
+        [[ -z "$(find "$ATOM_DIR" -maxdepth 1 \( -name '.cbx-capture.*' -o -name '.cbx-receipt.*' \) | head -n 1)" ]] \
+            || fail "fsync-failure (capture temp) left an owned temp behind"
+
+        # (7b) fsync failure on the receipt temp (fsync #2, after the capture
+        # temp is durable): the driver must fail closed and leave neither OUTPUT,
+        # nor a receipt, nor a temp — never presenting a non-durable capture as
+        # successful.
+        : > "$tmp/fsync.count"
+        set +e
+        MOCK_IMPORT_SRC="$ATOM_DIR/frame-ok.png" \
+        RALPH_VISUAL_AUDIT_TESTING=1 CBX_ATOMIC_PUBLISH="$tmp/fakepub/atomic-fsync.sh" \
+        CBX_FAIL_FSYNC_N=2 \
         VISUAL_AUDIT_INSTALL_PREFIX="$ATOM_PREFIX" \
         "$PROJECT_ROOT/scripts/visual-capture-driver.sh" manager-main \
             "$ATOM_DIR/fsyncreceipt.png" "$ATOM_HEAD" >"$tmp/atom-fsyncreceipt.out" 2>&1
@@ -1574,13 +1600,13 @@ EOF
             || fail "fsync-failure (receipt temp) left an owned temp behind"
 
         # (7c) fsync failure on the directory entry after the receipt is
-        # published: the driver must withdraw its (owned) receipt and leave
-        # neither OUTPUT nor a possibly-non-durable receipt.
+        # published (fsync #3): the driver must withdraw its (owned) receipt and
+        # leave neither OUTPUT nor a possibly-non-durable receipt.
         : > "$tmp/fsync.count"
         set +e
         MOCK_IMPORT_SRC="$ATOM_DIR/frame-ok.png" \
         RALPH_VISUAL_AUDIT_TESTING=1 CBX_ATOMIC_PUBLISH="$tmp/fakepub/atomic-fsync.sh" \
-        CBX_FAIL_FSYNC_N=2 \
+        CBX_FAIL_FSYNC_N=3 \
         VISUAL_AUDIT_INSTALL_PREFIX="$ATOM_PREFIX" \
         "$PROJECT_ROOT/scripts/visual-capture-driver.sh" manager-main \
             "$ATOM_DIR/fsyncdir.png" "$ATOM_HEAD" >"$tmp/atom-fsyncdir.out" 2>&1
@@ -1597,14 +1623,14 @@ EOF
             || fail "fsync-failure (receipt dir entry) left an owned temp behind"
 
         # (7d) fsync failure on the directory entry after the image commit
-        # point: the image is already atomically at OUTPUT, so to keep a clean
-        # fail-closed state the driver withdraws the image and its receipt
+        # point (fsync #4): the image is already atomically at OUTPUT, so to keep
+        # a clean fail-closed state the driver withdraws the image and its receipt
         # (both owned) and leaves nothing behind.
         : > "$tmp/fsync.count"
         set +e
         MOCK_IMPORT_SRC="$ATOM_DIR/frame-ok.png" \
         RALPH_VISUAL_AUDIT_TESTING=1 CBX_ATOMIC_PUBLISH="$tmp/fakepub/atomic-fsync.sh" \
-        CBX_FAIL_FSYNC_N=3 \
+        CBX_FAIL_FSYNC_N=4 \
         VISUAL_AUDIT_INSTALL_PREFIX="$ATOM_PREFIX" \
         "$PROJECT_ROOT/scripts/visual-capture-driver.sh" manager-main \
             "$ATOM_DIR/fsyncimg.png" "$ATOM_HEAD" >"$tmp/atom-fsyncimg.out" 2>&1
@@ -1728,14 +1754,273 @@ EOF
             || fail "TOCTOU race (receipt): an image was published without its matching receipt"
         [[ -z "$(find "$ATOM_DIR" -maxdepth 1 \( -name '.cbx-capture.*' -o -name '.cbx-receipt.*' \) | head -n 1)" ]] \
             || fail "TOCTOU race (receipt) left an owned temp behind"
+
+        # (13) validated capture targeting a symlink/hardlink OUTPUT is refused:
+        # the no-replace primitive never follows a symlinked destination nor
+        # replaces a hardlinked inode, so the link and its target are preserved
+        # and no receipt is left (no image-without-receipt).
+        printf 'LINK-TARGET' > "$ATOM_DIR/linktarget.png"
+        ln -s "$ATOM_DIR/linktarget.png" "$ATOM_DIR/valid-symlink.png"
+        ln "$ATOM_DIR/linktarget.png" "$ATOM_DIR/valid-hardlink.png"
+        for link in valid-symlink.png valid-hardlink.png; do
+            set +e
+            MOCK_IMPORT_SRC="$ATOM_DIR/frame-ok.png" \
+            VISUAL_AUDIT_INSTALL_PREFIX="$ATOM_PREFIX" \
+            "$PROJECT_ROOT/scripts/visual-capture-driver.sh" manager-main \
+                "$ATOM_DIR/$link" "$ATOM_HEAD" >"$tmp/atom-$link.out" 2>&1
+            rc=$?
+            set -e
+            [[ $rc -ne 0 ]] || fail "validated capture unexpectedly overwrote the $link OUTPUT"
+            grep -q 'LINK-TARGET' "$ATOM_DIR/linktarget.png" \
+                || fail "validated capture clobbered the target behind $link"
+            [[ -L "$ATOM_DIR/valid-symlink.png" ]] || fail "validated capture replaced the symlink with a regular file"
+            [[ ! -e "$ATOM_DIR/$link.receipt.json" ]] \
+                || fail "validated symlink/hardlink refusal left a receipt sidecar"
+            grep -qi "refusing to overwrite pre-existing OUTPUT" "$tmp/atom-$link.out" \
+                || fail "validated symlink/hardlink refusal must report the refusal"
+            [[ -z "$(find "$ATOM_DIR" -maxdepth 1 \( -name '.cbx-capture.*' -o -name '.cbx-receipt.*' \) | head -n 1)" ]] \
+                || fail "validated symlink/hardlink refusal left an owned temp behind"
+        done
+
+        # (14) true race DURING the publish syscall: a concurrent principal
+        # repeatedly claims OUTPUT with a sentinel (noclobber refuses to
+        # overwrite an already-published image) while the driver publishes. The
+        # no-replace primitive (not an existence pre-check) is the authority, so
+        # whichever wins, the final state is self-consistent: either the racer
+        # claimed OUTPUT (driver refused, no receipt, sentinel preserved) or the
+        # driver committed the validated image first (racer's noclobber refused,
+        # image + matching receipt present). An image-without-receipt or a
+        # clobbered sentinel is impossible.
+        printf 'racer-src' > "$ATOM_DIR/race-frame.png"
+        : > "$tmp/race.done"
+        ( set -euo pipefail
+          for _i in $(seq 1 400); do
+              ( set -o noclobber; printf 'RACE-CLAIM-SENTINEL' > "$ATOM_DIR/race-during.png" ) 2>/dev/null || true
+              [ -e "$ATOM_DIR/race-during.png.receipt.json" ] && break
+          done
+          touch "$tmp/race.done" ) &
+        RACER_PID=$!
+        set +e
+        MOCK_IMPORT_SRC="$ATOM_DIR/race-frame.png" \
+        VISUAL_AUDIT_INSTALL_PREFIX="$ATOM_PREFIX" \
+        "$PROJECT_ROOT/scripts/visual-capture-driver.sh" manager-main \
+            "$ATOM_DIR/race-during.png" "$ATOM_HEAD" >"$tmp/atom-race-during.out" 2>&1
+        rc=$?
+        set -e
+        # Wait for the racer to finish (bounded) so no child lingers.
+        for _i in $(seq 1 50); do
+            [ -e "$tmp/race.done" ] && break
+            kill -0 "$RACER_PID" 2>/dev/null || break
+            sleep 0.1
+        done
+        kill "$RACER_PID" 2>/dev/null || true
+        wait "$RACER_PID" 2>/dev/null || true
+        if [[ $rc -eq 0 ]]; then
+            # Driver committed first: image is the validated frame, receipt present.
+            cmp -s "$ATOM_DIR/race-during.png" "$ATOM_DIR/race-frame.png" \
+                || fail "syscall race: driver committed but OUTPUT is not the validated frame"
+            [[ -f "$ATOM_DIR/race-during.png.receipt.json" ]] \
+                || fail "syscall race: driver committed without a matching receipt"
+        else
+            # Racer claimed OUTPUT first: the driver fails closed (its exit 1
+            # convention for a refused publish), never overwrites, no receipt.
+            [[ $rc -ne 0 ]] || fail "syscall race: driver unexpectedly succeeded"
+            grep -q 'RACE-CLAIM-SENTINEL' "$ATOM_DIR/race-during.png" \
+                || fail "syscall race: refused OUTPUT was clobbered"
+            [[ ! -e "$ATOM_DIR/race-during.png.receipt.json" ]] \
+                || fail "syscall race: refusal left an image-without-receipt"
+        fi
+        [[ -z "$(find "$ATOM_DIR" -maxdepth 1 \( -name '.cbx-capture.*' -o -name '.cbx-receipt.*' \) | head -n 1)" ]] \
+            || fail "syscall race left an owned temp behind"
         echo "test-visual-audit: atomic capture publication passed (13f)"
         PATH="${PATH#"$tmp/fakebin:"}"
     else
         echo "SKIP: no installed production binary available for the atomic-publish test"
     fi
+elif [[ ${CBX_VERIFY_IN_NIX_SHELL:-0} == 1 || -n ${IN_NIX_SHELL:-} ]]; then
+    fail "Xvfb/xdotool/convert are required for the atomic capture publication regressions (Nix project environment)"
 else
     echo "SKIP: Xvfb/xdotool/convert unavailable for the atomic-publish test"
 fi
+
+# --- 13g. atomic-publish primitive: source validation, fallback, receipt JSON ---
+# Deterministic (no display/installed-binary) regressions for the atomic
+# no-replace publish primitive and the JSON-serializer receipt builder:
+#   * source validation (directory / symlink source refused, fail closed);
+#   * destination semantics (pre-existing file, dangling symlink, hardlink all
+#     refused, never clobbered);
+#   * the link()+unlink() fallback success and its fail-on-source-unlink error;
+#   * fsync file success and missing-file failure;
+#   * receipt JSON escaping (quote/backslash/tab/newline in fields) and the
+#     strict 64-hex hash requirement;
+#   * a true concurrent race during the publish syscall (noclobber racer):
+#     whichever side wins, the destination is never clobbered.
+APUB="$PROJECT_ROOT/scripts/atomic-publish.py"
+mkdir -p "$tmp/apub"
+# (a) successful publish: rc 0, source removed, destination == source bytes.
+printf 'hello' > "$tmp/apub/src.txt"
+set +e
+"$APUB" publish "$tmp/apub/src.txt" "$tmp/apub/dst.txt" >/dev/null 2>&1; rc=$?
+set -e
+expect_rc 0 $rc "primitive successful publish"
+[[ -e "$tmp/apub/dst.txt" ]] || fail "primitive publish produced no destination"
+[[ ! -e "$tmp/apub/src.txt" ]] || fail "primitive publish did not remove the source temp"
+[[ "$(cat "$tmp/apub/dst.txt")" == "hello" ]] || fail "primitive publish destination content mismatch"
+# (b) pre-existing destination refused: rc 2, destination preserved.
+printf 'world' > "$tmp/apub/s2.txt"
+printf 'KEEP' > "$tmp/apub/d2.txt"
+set +e
+"$APUB" publish "$tmp/apub/s2.txt" "$tmp/apub/d2.txt" >/dev/null 2>&1; rc=$?
+set -e
+expect_rc 2 $rc "primitive refuses pre-existing destination"
+[[ "$(cat "$tmp/apub/d2.txt")" == "KEEP" ]] || fail "primitive clobbered a pre-existing destination"
+# (c) dangling-symlink destination refused and preserved (never followed).
+printf 'x' > "$tmp/apub/s3.txt"
+ln -s "$tmp/apub/nowhere" "$tmp/apub/dangling"
+set +e
+"$APUB" publish "$tmp/apub/s3.txt" "$tmp/apub/dangling" >/dev/null 2>&1; rc=$?
+set -e
+expect_rc 2 $rc "primitive refuses a dangling-symlink destination"
+[[ -L "$tmp/apub/dangling" ]] || fail "primitive replaced the dangling-symlink destination"
+# (d) non-regular source refused: directory source and symlink source rc 3.
+mkdir -p "$tmp/apub/srcdir"
+set +e
+"$APUB" publish "$tmp/apub/srcdir" "$tmp/apub/d4.txt" >/dev/null 2>&1; rc=$?
+set -e
+expect_rc 3 $rc "primitive refuses a directory source"
+printf 't' > "$tmp/apub/srctarget"
+ln -s "$tmp/apub/srctarget" "$tmp/apub/srclink"
+set +e
+"$APUB" publish "$tmp/apub/srclink" "$tmp/apub/d5.txt" >/dev/null 2>&1; rc=$?
+set -e
+expect_rc 3 $rc "primitive refuses a symlink source (O_NOFOLLOW)"
+# (e) fsync: existing file rc 0, missing path rc 3.
+printf 'z' > "$tmp/apub/fs.txt"
+set +e
+"$APUB" fsync "$tmp/apub/fs.txt" >/dev/null 2>&1; rc=$?
+set -e
+expect_rc 0 $rc "primitive fsync existing file"
+set +e
+"$APUB" fsync "$tmp/apub/nope.txt" >/dev/null 2>&1; rc=$?
+set -e
+expect_rc 3 $rc "primitive fsync missing file fails closed"
+# (f) link()+unlink() fallback success + fail-on-source-unlink (imported module).
+python3 - "$tmp/apub" "$APUB" <<'PY'
+import errno, importlib.util, os, sys, unittest.mock as um
+d, apath = sys.argv[1], sys.argv[2]
+spec = importlib.util.spec_from_file_location("ap", apath)
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+open(f"{d}/fb-src", "w").write("fallback")
+rc = m._publish_link(f"{d}/fb-src", f"{d}/fb-dst")
+assert rc == 0, rc
+assert open(f"{d}/fb-dst").read() == "fallback"
+assert not os.path.exists(f"{d}/fb-src"), "fallback left the source temp"
+open(f"{d}/fb2-src", "w").write("x"); open(f"{d}/fb2-dst", "w").write("KEEP")
+rc = m._publish_link(f"{d}/fb2-src", f"{d}/fb2-dst")
+assert rc == 2, rc
+assert open(f"{d}/fb2-dst").read() == "KEEP"
+open(f"{d}/fb3-src", "w").write("x")
+def boom(p):
+    raise OSError(errno.EPERM, "boom")
+with um.patch("os.link", return_value=None), um.patch("os.unlink", side_effect=boom):
+    rc = m._publish_link(f"{d}/fb3-src", f"{d}/fb3-dst")
+    assert rc == 3, rc
+# D1: on a source-unlink failure the primitive must restore the pre-publish
+# state by withdrawing the just-created destination (no orphaned image/
+# receipt-without-its-pair). Real link, source unlink fails, destination
+# unlink succeeds.
+real_link, real_unlink = os.link, os.unlink
+open(f"{d}/fb4-src", "w").write("x")
+def unlink_src_only_fails(p):
+    if p.endswith("/fb4-src"):
+        raise OSError(errno.EPERM, "boom")
+    return real_unlink(p)
+with um.patch("os.link", side_effect=real_link), um.patch("os.unlink", side_effect=unlink_src_only_fails):
+    rc = m._publish_link(f"{d}/fb4-src", f"{d}/fb4-dst")
+    assert rc == 3, rc
+    assert not os.path.exists(f"{d}/fb4-dst"), "destination not withdrawn after source-unlink failure"
+    assert os.path.exists(f"{d}/fb4-src"), "source should remain after a failed publish"
+print("test-visual-audit: atomic-publish fallback + fail-on-unlink (with withdrawal) passed")
+PY
+# (g) receipt JSON serializer: quote/backslash/tab/newline escaping + strict hashes.
+SHA=$(printf 'data' | sha256sum | awk '{print $1}')
+COMMIT40=$(printf 'c%.0s' {1..40})
+# ANSI-C quoting injects real quote/backslash/tab/newline characters into the
+# image field value; the serializer must preserve them and emit valid JSON.
+IMG_FIELD=$'image=path/with "quote" \\ backslash	and	tab
+second-line'
+set +e
+"$APUB" receipt "$tmp/apub/rec.json" \
+    "schema=controller-box/visual-capture-receipt/v1" \
+    "state=manager-main" "commit=$COMMIT40" "install_prefix=/opt/controller-box" \
+    "binary_sha256=$SHA" "$IMG_FIELD" \
+    "image_sha256=$SHA" 'window_title=Controller "Mgr"' \
+    "display=:99" "finished_at=2026-01-01T00:00:00Z" >/dev/null 2>&1; rc=$?
+set -e
+expect_rc 0 $rc "receipt serializer accepts valid hashes"
+python3 - "$tmp/apub/rec.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["schema"] == "controller-box/visual-capture-receipt/v1"
+assert d["state"] == "manager-main"
+# The serializer must have preserved the metacharacters literally and escaped
+# them into valid JSON (quote, backslash, tab, newline).
+assert '"' in d["image"], repr(d["image"])
+assert "\\" in d["image"], repr(d["image"])
+assert "\t" in d["image"], repr(d["image"])
+assert "\n" in d["image"], repr(d["image"])
+assert "second-line" in d["image"], repr(d["image"])
+print("test-visual-audit: receipt JSON escaping preserved quote/backslash/tab/newline")
+PY
+# Invalid (non-64-hex) binary_sha256 must fail closed, writing no receipt.
+set +e
+"$APUB" receipt "$tmp/apub/bad.json" \
+    "schema=s" "state=x" "commit=$COMMIT40" "install_prefix=/p" \
+    "binary_sha256=nothex" "image=i" "image_sha256=$SHA" \
+    "window_title=t" "display=d" "finished_at=f" >/dev/null 2>&1; rc=$?
+set -e
+expect_rc 3 $rc "receipt serializer rejects a non-64-hex hash"
+[[ ! -e "$tmp/apub/bad.json" ]] || fail "receipt serializer wrote a receipt despite a bad hash"
+# Missing required field must fail closed.
+set +e
+"$APUB" receipt "$tmp/apub/miss.json" \
+    "schema=s" "state=x" "commit=$COMMIT40" "binary_sha256=$SHA" \
+    "image=i" "image_sha256=$SHA" "window_title=t" "display=d" \
+    "finished_at=f" >/dev/null 2>&1; rc=$?
+set -e
+expect_rc 3 $rc "receipt serializer rejects a missing required field"
+# (h) true concurrent race during the publish syscall: a noclobber racer claims
+# the destination while publish runs; the destination is never clobbered and
+# the outcome is self-consistent (either the racer won and rc=2, or publish won
+# and the source bytes are present).
+printf 'racer-bytes' > "$tmp/apub/race-src.txt"
+: > "$tmp/apub/race.done"
+( set -euo pipefail
+  for _i in $(seq 1 300); do
+      ( set -o noclobber; printf 'RACE-CLAIM' > "$tmp/apub/race-dst.txt" ) 2>/dev/null || true
+      [ -e "$tmp/apub/race-src.txt" ] || break
+  done
+  touch "$tmp/apub/race.done" ) &
+RACER_PID=$!
+set +e
+"$APUB" publish "$tmp/apub/race-src.txt" "$tmp/apub/race-dst.txt" >/dev/null 2>&1; rc=$?
+set -e
+for _i in $(seq 1 50); do
+    [ -e "$tmp/apub/race.done" ] && break
+    kill -0 "$RACER_PID" 2>/dev/null || break
+    sleep 0.05
+done
+kill "$RACER_PID" 2>/dev/null || true
+wait "$RACER_PID" 2>/dev/null || true
+if [[ $rc -eq 0 ]]; then
+    [[ "$(cat "$tmp/apub/race-dst.txt")" == "racer-bytes" ]] \
+        || fail "primitive syscall race: publish won but destination content wrong"
+else
+    expect_rc 2 $rc "primitive syscall race must refuse a concurrently-claimed destination"
+    [[ "$(cat "$tmp/apub/race-dst.txt")" == "RACE-CLAIM" ]] \
+        || fail "primitive syscall race: refused destination was clobbered"
+fi
+echo "test-visual-audit: atomic-publish primitive regressions passed (13g)"
 
 # --- 14. capture: ok driver succeeds and is deterministic ---------------------
 cat > "$tmp/mock-cap-ok.sh" <<'EOF'

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""atomic-publish.py — atomic no-replace publish + fail-closed fsync helper.
+"""atomic-publish.py — atomic no-replace publish + fail-closed fsync/identity helper.
 
 Owned primitive used by scripts/visual-capture-driver.sh so the driver never
 uses an ordinary overwriting `mv` (which is TOCTOU-prone and would silently
@@ -11,11 +11,22 @@ Subcommands:
       Atomically rename <src> to <dst> ONLY if <dst> does not already exist
       (as a regular file, symlink, dangling symlink, hardlink, or any other
       directory entry). Uses renameat2(RENAME_NOREPLACE) on Linux; falls back
-      to link()+unlink() where the filesystem does not support RENAME_NOREPLACE.
-      Both paths must be on the same filesystem (the driver guarantees this by
-      writing its owned temps in the same directory as the destination).
+      to link()+unlink() ONLY when the kernel/filesystem genuinely lacks the
+      no-replace flag (ENOSYS/EINVAL/EOPNOTSUPP). Any other error (EACCES,
+      EPERM, EIO, EROFS, ...) is a real failure, not a reason to silently
+      change strategy. Both paths must be on the same filesystem (the driver
+      guarantees this by writing its owned temps in the same directory as the
+      destination).
+      Before publishing, the source is validated to be a CURRENT-USER-owned
+      regular file with a single link (never a symlink, directory, or an
+      inode hardlinked elsewhere), and the destination existence check uses
+      follow_symlinks=False (lexists) so a dangling or real symlink is never
+      followed/replaced. On the link() fallback, a failure to unlink the
+      source after the destination is published is treated as a failure
+      (fail closed) rather than a silent success.
       Exit: 0 success; 2 destination already exists (never overwritten);
-            3 any other error.
+            3 any other error (including a non-regular/non-owned/multi-link
+               source or a hard error from the no-replace syscall).
 
   fsync <path>
       fsync the given file or directory and propagate failure via a nonzero
@@ -24,19 +35,77 @@ Subcommands:
       crash/power-durable publish unless every file and directory entry it
       depends on was actually flushed to stable storage.
       Exit: 0 success; 3 on any open/fsync error.
+
+  receipt <out> <field=value> [...]
+      Build a capture receipt as JSON through the Python json serializer so
+      every field value (which may legitimately contain quotes, backslashes,
+      tabs, newlines, or other JSON metacharacters in paths/titles) is
+      correctly escaped — never string-interpolated into a hand-built JSON
+      blob. The binary_sha256 and image_sha256 fields are REQUIRED to be
+      exactly 64 lowercase/uppercase hex characters; any other value fails
+      closed (exit 3) so a capture is never recorded without a verifiable
+      content hash.
+      Exit: 0 success; 3 on a missing required field, a non-64-hex hash, or a
+            write error.
 """
 
 import ctypes
 import errno
+import json
 import os
+import re
 import sys
 
 AT_FDCWD = -100
 RENAME_NOREPLACE = 1
 
+# Fall back to link()+unlink() only for filesystems/kernels that genuinely do
+# not implement renameat2(RENAME_NOREPLACE). Any other errno is a real
+# failure. ENOTSUP is an alias of EOPNOTSUPP on Linux; the set tolerates both.
+_FALLBACK_ERRNOS = {errno.ENOSYS, errno.EINVAL, errno.EOPNOTSUPP, errno.ENOTSUP}
+
+_HEX64 = re.compile(r"^[0-9a-fA-F]{64}$")
+
+_ME = os.geteuid()
+
+
+def _regular_owned_single_link(st) -> bool:
+    """True iff st is a current-user-owned regular file with link count 1."""
+    return (
+        st is not None
+        and st.st_mode & 0o170000 == 0o100000  # S_IFREG
+        and st.st_uid == _ME
+        and st.st_nlink == 1
+    )
+
+
+def _validate_source(src: str):
+    """Fail closed unless src is a current-user-owned single-link regular file.
+
+    Opens O_NOFOLLOW (never follows a symlink) and returns the fstat on
+    success or None on any violation, printing the reason to stderr.
+    """
+    try:
+        fd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as e:
+        print(f"atomic-publish: source open {src}: {e}", file=sys.stderr)
+        return None
+    try:
+        st = os.fstat(fd)
+    finally:
+        os.close(fd)
+    if not _regular_owned_single_link(st):
+        print(
+            f"atomic-publish: source not a current-user-owned single-link "
+            f"regular file: {src}",
+            file=sys.stderr,
+        )
+        return None
+    return st
+
 
 def _renameat2_noreplace(src: str, dst: str):
-    """Return 0 on success, 2 if dst exists, or None to fall back to link()."""
+    """Return 0 success, 2 dst-exists, None to fall back, or -1 on a hard error."""
     try:
         libc = ctypes.CDLL(None, use_errno=True)
         renameat2 = getattr(libc, "renameat2", None)
@@ -55,8 +124,14 @@ def _renameat2_noreplace(src: str, dst: str):
     err = ctypes.get_errno()
     if err == errno.EEXIST:
         return 2
-    # EINVAL/ENOSYS/ENOTSUP/EPERM/other: fall back to the universal link().
-    return None
+    if err in _FALLBACK_ERRNOS:
+        # Kernel/filesystem lacks RENAME_NOREPLACE; fall back to link()+unlink().
+        return None
+    print(
+        f"atomic-publish: renameat2 {src} -> {dst}: {os.strerror(err)}",
+        file=sys.stderr,
+    )
+    return -1
 
 
 def _publish_link(src: str, dst: str):
@@ -71,21 +146,40 @@ def _publish_link(src: str, dst: str):
         print(f"atomic-publish: link {src} -> {dst}: {e}", file=sys.stderr)
         return 3
     # The destination is published; remove the source temp. A failure here is
-    # non-fatal (the published entry already exists).
+    # FATAL (fail closed): leaving a still-present source would let a caller
+    # mistake an already-published capture for an unpublished one. To keep the
+    # pre-publish state (and the driver's "no destination-without-receipt / no
+    # receipt-without-image" invariant), first withdraw the just-created
+    # no-replace destination (which is provably ours), then report the error.
     try:
         os.unlink(src)
-    except OSError:
-        pass
+    except OSError as e:
+        try:
+            os.unlink(dst)
+        except OSError:
+            pass
+        print(
+            f"atomic-publish: unlink source {src} after publish: {e}; "
+            f"destination {dst} withdrawn to restore pre-publish state",
+            file=sys.stderr,
+        )
+        return 3
     return 0
 
 
 def cmd_publish(src: str, dst: str) -> int:
-    if os.path.exists(dst) or os.path.islink(dst):
-        # Fast path for a clear pre-existing/unowned destination; the syscall
-        # below is still the authoritative gate (it refuses atomically), so a
-        # destination that appears after this check is still caught.
+    if not _validate_source(src):
+        return 3
+    # Fast path for a clearly pre-existing/unowned destination. lexists uses
+    # follow_symlinks=False (lstat), so a dangling or real symlink is seen as
+    # "exists" and never followed. The no-replace syscall below is still the
+    # authoritative gate: a destination that appears after this check is
+    # refused atomically in the same syscall as the publish.
+    if os.path.lexists(dst):
         return 2
     rc = _renameat2_noreplace(src, dst)
+    if rc == -1:
+        return 3
     if rc is not None:
         return rc
     return _publish_link(src, dst)
@@ -93,7 +187,7 @@ def cmd_publish(src: str, dst: str) -> int:
 
 def cmd_fsync(path: str) -> int:
     try:
-        fd = os.open(path, os.O_RDONLY)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     except OSError as e:
         print(f"atomic-publish: open {path} for fsync: {e}", file=sys.stderr)
         return 3
@@ -107,6 +201,48 @@ def cmd_fsync(path: str) -> int:
     return 0
 
 
+_RECEIPT_REQUIRED = (
+    "schema", "state", "commit", "install_prefix", "binary_sha256",
+    "image", "image_sha256", "window_title", "display", "finished_at",
+)
+_RECEIPT_HASH_FIELDS = ("binary_sha256", "image_sha256")
+
+
+def cmd_receipt(out: str, pairs) -> int:
+    """Build a receipt as JSON, requiring 64-hex hashes; 0 ok, 3 error."""
+    fields: dict[str, str] = {}
+    for pair in pairs:
+        key, sep, value = pair.partition("=")
+        if sep != "=" or not key:
+            print(f"atomic-publish: receipt field must be key=value: {pair!r}",
+                  file=sys.stderr)
+            return 3
+        fields[key] = value
+    missing = [k for k in _RECEIPT_REQUIRED if k not in fields]
+    if missing:
+        print(
+            f"atomic-publish: receipt missing required fields: {', '.join(missing)}",
+            file=sys.stderr,
+        )
+        return 3
+    for k in _RECEIPT_HASH_FIELDS:
+        if not _HEX64.fullmatch(fields[k]):
+            print(
+                f"atomic-publish: receipt field {k} is not a 64-hex hash: "
+                f"{fields[k]!r}",
+                file=sys.stderr,
+            )
+            return 3
+    try:
+        with open(out, "w", encoding="utf-8") as fh:
+            json.dump(fields, fh, indent=2, sort_keys=True, ensure_ascii=False)
+            fh.write("\n")
+    except OSError as e:
+        print(f"atomic-publish: receipt write {out}: {e}", file=sys.stderr)
+        return 3
+    return 0
+
+
 def main(argv) -> int:
     if len(argv) < 2:
         print(__doc__, file=sys.stderr)
@@ -116,8 +252,13 @@ def main(argv) -> int:
         return cmd_publish(argv[2], argv[3])
     if sub == "fsync" and len(argv) == 3:
         return cmd_fsync(argv[2])
-    print(f"atomic-publish: usage: {argv[0]} publish <src> <dst> | fsync <path>",
-          file=sys.stderr)
+    if sub == "receipt" and len(argv) >= 3:
+        return cmd_receipt(argv[2], argv[3:])
+    print(
+        f"atomic-publish: usage: {argv[0]} publish <src> <dst> | fsync <path> "
+        f"| receipt <out> <field=value> [...]",
+        file=sys.stderr,
+    )
     return 3
 
 
