@@ -134,4 +134,32 @@ const char *cbx_profile_diagram_button_name(cbx_diag_button btn);
 /* Total number of highlightable buttons (excludes NONE). */
 int cbx_profile_diagram_button_count(void);
 
+/* ------------------------------------------------------------------ */
+/*  Geometry helpers (BUG-0018)                                       */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Compute the on-screen content rectangle used to draw the base texture
+ * within `rect`, preserving aspect ratio and centring (letterboxing).
+ * Returns false if there is no base texture or `rect` is empty, in which
+ * case `out` is left untouched.
+ *
+ * The production renderer (diag_draw) anchors every mapped-button marker
+ * inside this same content rect, so a highlighted marker always lands on
+ * the rendered control.  Tests use this helper to compute marker geometry
+ * exactly as the renderer does (BUG-0018).
+ */
+bool cbx_profile_diagram_content_rect(const cbx_profile_diagram *diag,
+                                      const SDL_Rect *rect,
+                                      SDL_Rect *out);
+
+/*
+ * Return the base texture's raster dimensions (pixels) into *w and *h.
+ * Returns false if there is no base texture. Used to verify that the
+ * rasterised resolution is not below the displayed size (pixelation
+ * guard) and that the aspect ratio is preserved (stretch guard).
+ */
+bool cbx_profile_diagram_base_texture_size(const cbx_profile_diagram *diag,
+                                           int *w, int *h);
+
 #endif /* CBX_PROFILE_DIAGRAM_H */

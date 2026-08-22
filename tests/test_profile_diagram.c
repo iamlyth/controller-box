@@ -15,6 +15,7 @@
 #include <errno.h>
 
 #include "manager/profile_diagram.h"
+#include "config/config_paths.h"
 #include "test_harness.h"
 #include "fb_assert.h"
 
@@ -459,6 +460,158 @@ static void test_init_with_svg_nonexistent(void **state)
 }
 
 /* ------------------------------------------------------------------ */
+/*  Geometry tests (BUG-0018)                                         */
+/* ------------------------------------------------------------------ */
+/*
+ * The installed diagram was pixelated/stretched and its mapped-button
+ * markers did not align with the rendered controls.  These tests load the
+ * real production generic-gamepad.svg through the production rasteriser and
+ * assert, from real framebuffer readback:
+ *
+ *   - pixelation guard: the rasterised base texture is not smaller than the
+ *     on-screen content rect (i.e. never up-scaled);
+ *   - stretch guard: the content rect preserves the texture's aspect ratio;
+ *   - marker-to-control alignment: every highlighted button's marker rect
+ *     (computed with the same content-rect transform the renderer uses)
+ *     overlaps the light-grey control pixels on the rendered controller.
+ *
+ * The production SVG is drawn so each control sits at the button table's
+ * normalised coordinates, so marker geometry == control geometry.  A marker
+ * that landed in the letterbox void or on the black body would fail the
+ * alignment assertion below.
+ */
+
+/* Light-grey control fill used by the production generic-gamepad.svg. */
+static const uint8_t s_control_rgb[3] = {221, 221, 221};
+
+/* On-screen marker rect for `btn` within the aspect-fitted content rect, */
+/* replicating diag_draw() exactly (BUG-0018). */
+static SDL_Rect
+geo_marker_rect(const cbx_diag_button_pos *pos, const SDL_Rect *content)
+{
+    SDL_Rect r;
+    r.x = content->x + (int)(pos->x * (float)content->w);
+    r.y = content->y + (int)(pos->y * (float)content->h);
+    r.w = (int)(pos->w * (float)content->w);
+    r.h = (int)(pos->h * (float)content->h);
+    if (r.w < 1) r.w = 1;
+    if (r.h < 1) r.h = 1;
+    return r;
+}
+
+static void test_geometry_pixelation_and_stretch(void **state)
+{
+    pd_fixture *f = *state;
+
+    /* Load the production diagram SVG through the production rasteriser. */
+    char svg_path[PATH_MAX];
+    snprintf(svg_path, sizeof(svg_path), "%s/svg/generic-gamepad.svg",
+             cbx_icon_dir());
+
+    cbx_profile_diagram diag;
+    cbx_theme theme;
+    cbx_theme_default(&theme);
+    assert_int_equal(cbx_profile_diagram_init(&diag, f->sdl.renderer,
+                                              svg_path, &theme), 0);
+    assert_non_null(diag.base_texture);
+
+    /* Landscape content box that matches the SVG's 5:3 aspect ratio. */
+    SDL_Rect rect = {0, 0, 300, 180};
+    cbx_widget_set_rect(&diag.base, &rect);
+
+    SDL_Rect content;
+    assert_true(cbx_profile_diagram_content_rect(&diag, &rect, &content));
+    assert_int_equal(content.x, 0);
+    assert_int_equal(content.y, 0);
+    assert_int_equal(content.w, 300);
+    assert_int_equal(content.h, 180);
+
+    int tw, th;
+    assert_true(cbx_profile_diagram_base_texture_size(&diag, &tw, &th));
+    fprintf(stderr, "DBG tw=%d th=%d content=%dx%d\n", tw, th, content.w, content.h);
+
+    /* Pixelation guard: raster resolution >= displayed content size, so the
+     * texture is never up-scaled (BUG-0018). */
+    assert_true(tw >= content.w);
+    assert_true(th >= content.h);
+
+    /* Stretch guard: content rect preserves the texture's aspect ratio. */
+    /* Compare cross-multiplied integers to avoid float rounding. */
+    long long tw_th = (long long)tw * content.h;
+    long long th_tw = (long long)th * content.w;
+    assert_true(llabs(tw_th - th_tw) <= content.w); /* within 1 row of px */
+
+    cbx_profile_diagram_shutdown(&diag);
+}
+
+static void test_geometry_marker_control_alignment(void **state)
+{
+    pd_fixture *f = *state;
+
+    char icon_path[PATH_MAX];
+    snprintf(icon_path, sizeof(icon_path), "%s/svg/generic-gamepad.svg",
+             cbx_icon_dir());
+
+    cbx_profile_diagram diag;
+    cbx_theme theme;
+    cbx_theme_default(&theme);
+    assert_int_equal(cbx_profile_diagram_init(&diag, f->sdl.renderer,
+                                              icon_path, &theme), 0);
+    assert_non_null(diag.base_texture);
+
+    SDL_Rect rect = {0, 0, 300, 180};
+    cbx_widget_set_rect(&diag.base, &rect);
+
+    SDL_Rect content;
+    assert_true(cbx_profile_diagram_content_rect(&diag, &rect, &content));
+
+    int w, h;
+    uint8_t *buf = diag_read_fb(f->sdl.renderer, &w, &h);
+
+    /* No highlight: the marker region must show the raw control (grey). */
+    cbx_profile_diagram_clear_highlight(&diag);
+    cbx_widget_draw(&diag.base, f->sdl.renderer);
+    {
+        int minx=999,miny=999,maxx=-1,maxy=-1, cnt=0;
+        for(int y=0;y<h;y++)for(int x=0;x<w;x++){
+            int i=(y*w+x)*4;
+            if(buf[i+0]>180&&buf[i+1]>180&&buf[i+2]>180){cnt++; if(x<minx)minx=x; if(y<miny)miny=y; if(x>maxx)maxx=x; if(y>maxy)maxy=y;}
+        }
+        int bcnt=0,bminx=999,bminy=999,bmaxx=-1,bmaxy=-1;
+        for(int y=0;y<h;y++)for(int x=0;x<w;x++){int i=(y*w+x)*4;if(buf[i+0]<20&&buf[i+1]<20&&buf[i+2]<20){bcnt++;if(x<bminx)bminx=x;if(y<bminy)bminy=y;if(x>bmaxx)bmaxx=x;if(y>bmaxy)bmaxy=y;}}
+        fprintf(stderr,"DBG gray cnt=%d bbox=%d,%d - %d,%d | black cnt=%d bbox=%d,%d - %d,%d\n",cnt,minx,miny,maxx,maxy,bcnt,bminx,bminy,bmaxx,bmaxy);
+    }
+
+    for (int i = 0; i < CBX_DIAG_BTN_COUNT; i++) {
+        const cbx_diag_button_pos *pos =
+            cbx_profile_diagram_get_button_pos((cbx_diag_button)i);
+        assert_non_null(pos);
+        SDL_Rect mr = geo_marker_rect(pos, &content);
+        /* The marker rect must contain the grey control pixel(s) — this is
+         * what proves the marker is anchored on its control, not floating in
+         * the letterbox/panel or on the black body. */
+        if (!fb_region_has_color(buf, w, h, &mr, s_control_rgb, 40)) {
+            fail_msg("button %s (%d): marker rect (%d,%d,%d,%d) does not "
+                     "overlap its rendered control",
+                     pos->name, i, mr.x, mr.y, mr.w, mr.h);
+        }
+    }
+
+    /* With a highlight the marker region must change away from the plain
+     * control (semantic highlight outcome), proving the overlay is anchored
+     * to the same content box. */
+    cbx_profile_diagram_highlight(&diag, CBX_DIAG_BTN_A);
+    cbx_widget_draw(&diag.base, f->sdl.renderer);
+    const cbx_diag_button_pos *apos =
+        cbx_profile_diagram_get_button_pos(CBX_DIAG_BTN_A);
+    SDL_Rect amr = geo_marker_rect(apos, &content);
+    assert_false(fb_region_has_color(buf, w, h, &amr, s_control_rgb, 40));
+
+    free(buf);
+    cbx_profile_diagram_shutdown(&diag);
+}
+
+/* ------------------------------------------------------------------ */
 /*  Test runner                                                        */
 /* ------------------------------------------------------------------ */
 
@@ -508,6 +661,12 @@ int main(void)
 
         /* SVG loading */
         cmocka_unit_test_setup_teardown(test_init_with_svg_nonexistent,
+                                          setup, teardown),
+
+        /* Geometry (BUG-0018) */
+        cmocka_unit_test_setup_teardown(test_geometry_pixelation_and_stretch,
+                                          setup, teardown),
+        cmocka_unit_test_setup_teardown(test_geometry_marker_control_alignment,
                                           setup, teardown),
     };
 

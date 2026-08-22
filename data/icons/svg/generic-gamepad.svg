@@ -1,1 +1,47 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64"><path fill="#000" d="M32 8c-9 0-17 3-20 8-2 4-6 18-6 24 0 5 4 9 9 9 3 0 5-2 7-4l2-3c1-1 3-2 5-2h6c2 0 4 1 5 2l2 3c2 2 4 4 7 4 5 0 9-4 9-9 0-6-4-20-6-24-3-5-11-8-20-8zm-12 14a4 4 0 1 1 0 8 4 4 0 0 1 0-8zm24 0a4 4 0 1 1 0 8 4 4 0 0 1 0-8zM20 36a3 3 0 1 1 0 6 3 3 0 0 1 0-6zm6 0a3 3 0 1 1 0 6 3 3 0 0 1 0-6zm12 0a3 3 0 1 1 0 6 3 3 0 0 1 0-6zm6 0a3 3 0 1 1 0 6 3 3 0 0 1 0-6z"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 60" width="100" height="60">
+<!--
+  Controller diagram base image (BUG-0018).
+
+  Purpose-built landscape generic gamepad schematic whose controls are drawn
+  at EXACTLY the normalised coordinates used by the button-position table in
+  src/manager/profile_diagram.c (CBX_DIAG_BTN_*).  The profile editor rasterises
+  this SVG through nanosvg (production path) and anchors every mapped-button
+  marker inside the same aspect-fitted content rect, so each marker sits on the
+  control it represents.
+
+  Body fill #000 keeps the installed-window black-silhouette assertion valid;
+  the controls are light grey (#dddddd) so a marker-over-control region is
+  distinguishable from the black body and the panel background.
+-->
+  <!-- Controller body + grip lobes (silhouette) -->
+  <path fill="#000" d="M4 34 L4 12 C4 5 7 0 15 0 L85 0 C93 0 96 5 96 12 L96 34 C96 39 92 42 86 42 L72 42 L72 50 C72 55 68 60 60 60 L40 60 C32 60 28 55 28 50 L28 42 L14 42 C8 42 4 39 4 34 Z"/>
+  <rect x="6" y="0" width="20" height="54" rx="9" fill="#000"/>
+  <rect x="74" y="0" width="20" height="54" rx="9" fill="#000"/>
+
+  <!-- D-pad (left): arms centred on CBX_DIAG_BTN_UP/DOWN/LEFT/RIGHT -->
+  <rect x="16" y="12.6" width="8" height="4.8" fill="#dddddd"/>
+  <rect x="16" y="22.2" width="8" height="4.8" fill="#dddddd"/>
+  <rect x="6"  y="18.6" width="8" height="4.8" fill="#dddddd"/>
+  <rect x="26" y="18.6" width="8" height="4.8" fill="#dddddd"/>
+
+  <!-- Face buttons (right, diamond): centre at A/B/X/Y -->
+  <circle cx="72" cy="24.6" r="2.6" fill="#dddddd"/>
+  <circle cx="82" cy="19.8" r="2.6" fill="#dddddd"/>
+  <circle cx="62" cy="19.8" r="2.6" fill="#dddddd"/>
+  <circle cx="72" cy="15.0" r="2.6" fill="#dddddd"/>
+
+  <!-- Centre buttons: Start / Select / Guide -->
+  <circle cx="58" cy="10.2" r="1.8" fill="#dddddd"/>
+  <circle cx="38" cy="10.2" r="1.8" fill="#dddddd"/>
+  <circle cx="48" cy="10.2" r="2.2" fill="#dddddd"/>
+
+  <!-- Shoulders / triggers (top edge): L1/R1 (y=3) and L2/R2 (y=0) -->
+  <rect x="11" y="1.2" width="8" height="3.6" fill="#dddddd"/>
+  <rect x="71" y="1.2" width="8" height="3.6" fill="#dddddd"/>
+  <rect x="11" y="-1.2" width="8" height="3.6" fill="#dddddd"/>
+  <rect x="71" y="-1.2" width="8" height="3.6" fill="#dddddd"/>
+
+  <!-- Stick clicks: L3 (40,33) / R3 (55,33) -->
+  <circle cx="40" cy="33" r="3.0" fill="#dddddd"/>
+  <circle cx="55" cy="33" r="3.0" fill="#dddddd"/>
+</svg>

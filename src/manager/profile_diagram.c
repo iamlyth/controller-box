@@ -23,6 +23,14 @@
 #include <nanosvg.h>
 #include <nanosvgrast.h>
 
+/*
+ * Rasterisation resolution used for the base texture.  This is higher than
+ * the largest diagram widget rect (300px) so the texture is down-scaled
+ * (never up-scaled) to the on-screen content rect, avoiding the pixelated,
+ * stretched look observed in BUG-0018.  Aspect ratio is preserved.
+ */
+#define CBX_DIAG_RASTER_SIZE 512
+
 /* ------------------------------------------------------------------ */
 /*  Button position table                                             */
 /* ------------------------------------------------------------------ */
@@ -135,15 +143,14 @@ load_svg_texture(SDL_Renderer *renderer, const char *svg_path, int size)
     int w = image->width > 0 ? (int)image->width : size;
     int h = image->height > 0 ? (int)image->height : size;
 
-    /* Scale to fit within `size` while preserving aspect ratio */
-    float scale = 1.0f;
-    if (w > h) {
-        if (w > size)
-            scale = (float)size / (float)w;
-    } else {
-        if (h > size)
-            scale = (float)size / (float)h;
-    }
+    /* Scale to fit within `size` while preserving aspect ratio.  This scales
+     * UP as well as down: a small source SVG (e.g. 100x60) is rasterised at
+     * the requested resolution so the on-screen diagram is sharp and
+     * aspect-correct rather than blown up from the native pixels (BUG-0018). */
+    float denom = w > h ? (float)w : (float)h;
+    if (denom <= 0.0f)
+        denom = 1.0f;
+    float scale = (float)size / denom;
     int tw = (int)((float)w * scale);
     int th = (int)((float)h * scale);
     if (tw < 1) tw = 1;
@@ -216,7 +223,8 @@ cbx_profile_diagram_init(cbx_profile_diagram *diag,
 
     /* Try to load the SVG base image */
     if (svg_path && renderer) {
-        diag->base_texture = load_svg_texture(renderer, svg_path, 256);
+        diag->base_texture = load_svg_texture(renderer, svg_path,
+                                              CBX_DIAG_RASTER_SIZE);
         diag->owns_base_texture = (diag->base_texture != NULL);
     }
 
@@ -310,8 +318,68 @@ cbx_profile_diagram_button_count(void)
 }
 
 /* ------------------------------------------------------------------ */
+/*  Geometry helpers                                                   */
+/* ------------------------------------------------------------------ */
+
+bool
+cbx_profile_diagram_content_rect(const cbx_profile_diagram *diag,
+                                  const SDL_Rect *rect,
+                                  SDL_Rect *out)
+{
+    if (!diag || !diag->base_texture || !rect || !out)
+        return false;
+    if (rect->w <= 0 || rect->h <= 0)
+        return false;
+
+    int tw, th;
+    SDL_QueryTexture(diag->base_texture, NULL, NULL, &tw, &th);
+    if (tw <= 0 || th <= 0)
+        return false;
+
+    /* Preserve aspect ratio: fit within rect, centred. */
+    float sx = (float)rect->w / (float)tw;
+    float sy = (float)rect->h / (float)th;
+    float scale = sx < sy ? sx : sy;
+    SDL_Rect dst = *rect;
+    dst.w = (int)((float)tw * scale);
+    dst.h = (int)((float)th * scale);
+    if (dst.w < 1) dst.w = 1;
+    if (dst.h < 1) dst.h = 1;
+    dst.x = rect->x + (rect->w - dst.w) / 2;
+    dst.y = rect->y + (rect->h - dst.h) / 2;
+    *out = dst;
+    return true;
+}
+
+bool
+cbx_profile_diagram_base_texture_size(const cbx_profile_diagram *diag,
+                                       int *w, int *h)
+{
+    if (!diag || !diag->base_texture || !w || !h)
+        return false;
+    SDL_QueryTexture(diag->base_texture, NULL, NULL, w, h);
+    return (*w > 0 && *h > 0);
+}
+
+/* ------------------------------------------------------------------ */
 /*  Widget vtable implementation                                      */
 /* ------------------------------------------------------------------ */
+
+static void
+_diag_draw_content(cbx_profile_diagram *diag, SDL_Renderer *r,
+                   const SDL_Rect *rect, SDL_Rect *content_out)
+{
+    SDL_Rect content = *rect;
+    if (diag->base_texture) {
+        SDL_Rect dst;
+        if (cbx_profile_diagram_content_rect(diag, rect, &dst)) {
+            content = dst;
+            SDL_RenderCopy(r, diag->base_texture, NULL, &dst);
+        }
+    }
+    if (content_out)
+        *content_out = content;
+}
 
 static void
 diag_draw(cbx_widget *w, SDL_Renderer *r)
@@ -331,35 +399,26 @@ diag_draw(cbx_widget *w, SDL_Renderer *r)
         SDL_SetRenderDrawColor(r, 30, 30, 30, 255);
     SDL_RenderFillRect(r, &rect);
 
-    /* Draw base texture (if any) — fit within rect preserving aspect */
-    if (diag->base_texture) {
-        int tw, th;
-        SDL_QueryTexture(diag->base_texture, NULL, NULL, &tw, &th);
-        SDL_Rect dst = rect;
-        /* Preserve aspect ratio: fit within rect */
-        float scale = 1.0f;
-        if (tw > 0 && th > 0) {
-            float sx = (float)rect.w / (float)tw;
-            float sy = (float)rect.h / (float)th;
-            scale = sx < sy ? sx : sy;
-        }
-        dst.w = (int)((float)tw * scale);
-        dst.h = (int)((float)th * scale);
-        dst.x = rect.x + (rect.w - dst.w) / 2;
-        dst.y = rect.y + (rect.h - dst.h) / 2;
-        SDL_RenderCopy(r, diag->base_texture, NULL, &dst);
-    }
+    /* Draw base texture (if any) and obtain the aspect-fitted content box. */
+    SDL_Rect content;
+    _diag_draw_content(diag, r, &rect, &content);
 
-    /* Draw highlight overlay for the highlighted button */
+    /* Highlight overlay is anchored inside the same content box as the
+     * rendered controller, so a mapped-button marker lands on the control
+     * it represents regardless of the widget rect's aspect ratio (BUG-0018).
+     * Without a base texture (headless tests) the content box is the full
+     * widget rect, preserving the prior behaviour. */
     if (diag->highlighted >= 0 && diag->highlighted < CBX_DIAG_BTN_COUNT) {
         const cbx_diag_button_pos *pos =
             &s_button_pos[diag->highlighted];
         if (pos && pos->name) {
             SDL_Rect hr;
-            hr.x = rect.x + (int)(pos->x * (float)rect.w);
-            hr.y = rect.y + (int)(pos->y * (float)rect.h);
-            hr.w = (int)(pos->w * (float)rect.w);
-            hr.h = (int)(pos->h * (float)rect.h);
+            hr.x = content.x + (int)(pos->x * (float)content.w);
+            hr.y = content.y + (int)(pos->y * (float)content.h);
+            hr.w = (int)(pos->w * (float)content.w);
+            hr.h = (int)(pos->h * (float)content.h);
+            if (hr.w < 1) hr.w = 1;
+            if (hr.h < 1) hr.h = 1;
 
             SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
             SDL_SetRenderDrawColor(r,
