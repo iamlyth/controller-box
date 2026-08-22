@@ -1,57 +1,48 @@
-## Handoff: BUG-0018 installed visual capture adapter finished (task-1787416288-52b7)
+# Handoff: BUG-0018 verification-only round green (HEAD 5d8d192)
 
 ## Outcome this iteration
-- Fixed `scripts/visual-capture-driver.sh` (the ready task) and verified it end-to-end
-  against a real installed custom-prefix `controller-box` binary under Xvfb.
-  All four states capture successfully with clean owned-group teardown.
-- HEAD = `b4f4577` (unchanged); only the listed files changed (tree otherwise clean
-  except the handoff scratchpad). Plan freshness green (spec `3a10f6b`); plan validates
-  `planning` mode.
+Fresh-context re-verification confirms state at commit `5d8d192`. No ready
+tasks exist; sole open task remains blocked on external facts. No code work
+possible or warranted this round.
 
-## What changed
-- `scripts/visual-capture-driver.sh`: bounded window polling for the real production
-  titles (`Controller-Box Manager`/`Controller-Box Overlay`), never `xdotool search --sync`;
-  collision-free display probe (socket/lock check), no global `pkill`; isolated HOME/XDG +
-  deterministic test-owned profile (`display_order -50`) for the editor; `--overlay-service`
-  for the overlay state backed by a private dbus-daemon system bus (so the installed
-  overlay's production connect/render path runs without system InputPlumber); exact-commit
-  receipt sidecar (`<output>.receipt.json`: commit, binary sha256, prefix, state, window
-  title); all children in `setsid` process groups with TERM→KILL group cleanup.
-- `.factory/visual-audit-inventory.json`: overlay nav corrected `--overlay` → `--overlay-service`.
-- `tests/test-visual-audit.sh`: added 13b (driver source invariants: titles, only
-  `--overlay-service`, time-bounded poll, no global pkill, collision-free display, owned-group
-  cleanup) and 13c (hanging-child: mock installed binary never opens the window + ignores TERM;
-  asserts bounded fail-closed wall time, no partial image, hanging child reaped, no leaked
-  Xvfb; SKIP 77 only when display tools absent).
-- `.factory/artifacts/implementation-plan.md`: appended remediation Task 16 (this adapter),
-  added to Task 4 dependencies; Task 4 stays `blocked` (hardware/facts unresolved).
+## Verification (fresh context, HEAD 5d8d192)
+- `./scripts/check-plan-freshness.sh` → EXIT 0 (spec docs/SPEC.md 3a10f6b7 blob 58f5d3cb72bc).
+- Git tree clean except `.ralph/agent/scratchpad.md`.
+- Runtime task state: sole open task `task-1787407706-bacd` in_progress; `ralph tools task ready` → none.
+- Plan front-matter `status: active`; Task 4 (final audit) blocked.
+- All BUG-0018 software-addressable remediation complete+verified: Task 15 (renderer
+  geometry/aspect + marker-coordinate transform), Task 16 (visual-capture-driver
+  adapter), Task 17 (wrong-state capture + semantic validation). BUG-0015 software
+  portion closed in Task 14. Appended tasks keep `pending` (not the final gate) by
+  convention.
 
-## Verification (all green)
-- `nix-shell --run 'bash tests/test-visual-audit.sh'` → EXIT 0 (all adversarial cases incl. 13b/13c).
-- `./scripts/verify-boilerplate.sh` → passes (hanging-child test SKIPs 77 outside nix-shell).
-- `shellcheck` clean on driver + test; plan `planning` valid; `check-plan-freshness.sh` green.
-- Real installed captures: manager-main/profiles/editor + overlay-active all rc=0, valid
-  PNGs, valid receipts, no stray Xvfb/app/dbus-daemon after.
+## Open blockers (external, not software-fixable here)
+- FACT-002/003 `inputplumber-system-dbus` undeclared (no real org.shadowblip.InputPlumber
+  system bus on the factory).
+- FACT-004/006 — `target-consumer` hardware, aarch64/Pi 4 runtime, human release
+  acceptance missing.
+- FACT-005 — `gpu-compositor` undeclared.
+- FACT-007 — dev-runner-vm runner unreachable (signed receipts not Git blobs at current
+  commit).
+- Out-of-band golden re-approval (test_golden's three editor baselines encode the
+  pre-BUG-0018 diagram; regen forbidden by `.factory/golden-policy.json`).
+- FACT-001/008 resolved. None of these are software-fixable in this environment.
+
+## Task state
+No ready tasks. Sole open BUG-0018 runtime task `task-1787407706-bacd` stays
+in_progress/blocked on external facts FACT-002..007 + out-of-band golden re-admission.
+Never the completion gate while any fact is open.
 
 ## Next
-- Runtime task `task-1787416288-52b7` → close (verified). Sole open BUG-0018 runtime task
-  `task-1787407706-bacd` stays in_progress/blocked (external facts + golden re-approval).
-- Do not emit the completion token. Ledger stays open; Task 4 final audit remains the sole
-  completion gate, blocked on external facts plus golden re-approval.
+No code work remains this round. Emit `factory.implement` to continue; never the
+completion token. Recovery: when external facts (system bus, target hardware, GPU
+compositor, Pi 4 runtime, runner receipt) and golden re-approval are provisioned, run
+the Task 4 final audit gate (§11.2).
 
----
-
-# Handoff: iteration N+1 — no ready work; cycle blocked on external facts
-
-No ready tasks (`ralph tools task ready` empty). Sole open runtime task
-`task-1787407706-bacd` (BUG-0018 umbrella) stays in_progress/blocked: its
-remaining acceptance is out-of-band golden re-approval plus the Task 4 final
-audit, which is blocked on external facts that no software work can resolve:
-FACT-002/003 (real InputPlumber system-bus capability `inputplumber-system-dbus`
-undeclared/not provisioned), FACT-004/006 (missing Pi target/human release
-acceptance), FACT-005 (GPU compositor backend), FACT-007 (runner signer not
-provisioned). All software-addressable work is complete and verified at HEAD
-`a8126a8`; plan `status: active`, freshness green. Emit `factory.implement` to
-continue; never the completion token while any fact is open or golden re-approval
-is pending. Recovery: when FACT-002/003/007 and golden re-approval are provisioned
-externally, run the Task 4 final audit gate.
+## Re-verification (fresh context, HEAD 5d8d192)
+Confirmed unchanged: plan fresh (SPEC 3a10f6b7 blob 58f5d3cb72bc), plan front-matter
+`status: active`, git tree clean at HEAD 5d8d192 (only scratchpad modified), sole open
+task task-1787407706-bacd in_progress/blocked, no ready tasks, 6 open external facts
+FACT-002..007 (system DBus, target consumer hardware, aarch64/Pi4 runtime, GPU compositor,
+dev-runner-vm runner receipt) + out-of-band golden re-approval. No software-addressable
+work remains. Continue; never the completion token while any fact/golden gate is open.

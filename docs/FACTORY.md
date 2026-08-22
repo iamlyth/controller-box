@@ -481,6 +481,22 @@ real Kimi probe, calibration, and installed state inventory are ready. Mutable
 captures, receipts, leases, and reports remain ignored factory state; tracked
 configuration contains no credentials.
 
+Production SDK review uses the same Pi model/credential authority as factory
+`pi2`. Provision Pi's standard variable before probing, calibration, or review:
+
+```bash
+export PI_CODING_AGENT_DIR="<trusted-pi2-agent-directory>"
+```
+
+The directory must be canonical, owned by the invoking user, beneath that
+user's `~/.pi`, and free of group/other-writable path components. Its
+`auth.json` and `models.json` must be owned, single-link regular non-symlink
+files, owner-readable, and inaccessible to group/other (normally mode `0600`).
+The SDK passes both paths explicitly to `ModelRuntime.create`; `agentDir` alone
+does not bind credentials. Missing or unsafe authority fails closed rather
+than falling back to `~/.pi/agent`. Credential contents are never logged or
+copied by the framework.
+
 ## Credential boundary guard
 
 `scripts/credential-guard.py` and the project-local Pi extension block

@@ -109,6 +109,7 @@ required = [
     'tests/test-maintenance-planning-completion.sh',
     'tests/test-boilerplate-env-isolation.sh',
     'tests/test-pi2-ollama-wrapper.sh', 'tests/test-production-path-bypass.sh',
+    'tests/test-visual-audit-sdk-authority.sh',
     '.factory/schemas/conformance.schema.json', '.factory/capability-contracts.json',
     'scripts/validate-conformance.py', 'scripts/check-capability-contracts.py',
     'scripts/check-capability-evidence.py', 'scripts/machine-receipt.py',
@@ -326,6 +327,7 @@ fi
 ./tests/test-runner-signer.sh
 ./tests/test-boilerplate.sh
 ./tests/test-visual-audit.sh
+./tests/test-visual-audit-sdk-authority.sh
 ./tests/test-credential-guard.sh
 ./tests/test-credential-extension.sh
 echo "verify: boilerplate checks passed"
