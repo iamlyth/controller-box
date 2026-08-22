@@ -18,13 +18,17 @@ PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 BUILD_DIR=${CBX_VERIFY_BUILD_DIR:-build-maintenance-verify}
 cd -- "$PROJECT_ROOT"
 
-# The project gate is Nix-bound even when a host happens to provide similarly
-# named development packages. Host package versions and feature defaults are
-# not the declared verification environment.
-if [[ ${CBX_VERIFY_IN_NIX_SHELL:-0} != 1 && -z ${IN_NIX_SHELL:-} ]] \
-        && command -v nix-shell >/dev/null; then
-    export CBX_VERIFY_IN_NIX_SHELL=1
-    exec nix-shell --run './scripts/verify-project.sh'
+# The project gate is bound to the declared Nix environment (shell.nix). The
+# authenticated boundary (scripts/nix-gate.sh + scripts/nix-gate-exec.sh)
+# replaces the forgeable CBX_VERIFY_IN_NIX_SHELL / IN_NIX_SHELL trust: this
+# script never trusts a caller-set variable to claim it is already "inside
+# Nix". If it is not running under the authenticated declared environment it
+# re-executes through the wrapper, which FAILS rather than silently verifying
+# against undeclared host packages when Nix is unavailable.
+source "$PROJECT_ROOT/scripts/nix-gate.sh"
+if ! nix_gate_require full; then
+    exec "$PROJECT_ROOT/scripts/nix-gate-exec.sh" \
+        "$PROJECT_ROOT/scripts/verify-project.sh" "$@"
 fi
 
 required=(sdl2 SDL2_ttf SDL2_image libsystemd yaml-0.1 cmocka)
@@ -69,6 +73,24 @@ if [[ -f "$BUILD_DIR/CMakeCache.txt" ]]; then
 fi
 cmake -S . -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Debug
 cmake --build "$BUILD_DIR" --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-2}"
+
+# The complete project verification now runs the adversarial visual-audit suite
+# (test-visual-audit.sh, a bound verifier gate). Its 13f atomic-capture
+# publication regressions drive the real installed binary, so the built artifact
+# is installed to a test-owned prefix and exported as
+# VISUAL_AUDIT_INSTALL_PREFIX (which the gate's binary discovery consults first;
+# a mutable caller-supplied value is validated by the driver's provenance
+# hardening before it is ever launched). Under the authenticated Nix inner gate
+# the 13f installed-binary-not-found case fails rather than skips.
+INSTALL_PREFIX=${CBX_VERIFY_INSTALL_PREFIX:-"$PROJECT_ROOT/.test-install"}
+mkdir -p "$INSTALL_PREFIX"
+cmake --install "$BUILD_DIR" --prefix "$INSTALL_PREFIX" >/dev/null
+if [[ -x "$INSTALL_PREFIX/bin/controller-box" ]]; then
+    export VISUAL_AUDIT_INSTALL_PREFIX="$INSTALL_PREFIX"
+else
+    echo "verify-project: installed binary not found at $INSTALL_PREFIX/bin/controller-box" >&2
+    exit 2
+fi
 
 # The acceptance gates are the tracked test-discovery contract
 # (.factory/verifier-acceptance.json, schema ralph-verifier-acceptance/v1).

@@ -14,11 +14,15 @@ PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 BUILD_DIR=${CBX_SANITIZER_BUILD_DIR:-build-sanitizer}
 cd -- "$PROJECT_ROOT"
 
-# The project gate is Nix-bound (same rationale as verify-project.sh).
-if [[ ${CBX_VERIFY_IN_NIX_SHELL:-0} != 1 && -z ${IN_NIX_SHELL:-} ]] \
-        && command -v nix-shell >/dev/null; then
-    export CBX_VERIFY_IN_NIX_SHELL=1
-    exec nix-shell --run './scripts/verify-sanitizers.sh'
+# The project gate is Nix-bound (same rationale as verify-project.sh). The
+# authenticated boundary (scripts/nix-gate.sh + scripts/nix-gate-exec.sh)
+# replaces the forgeable CBX_VERIFY_IN_NIX_SHELL / IN_NIX_SHELL trust and FAILS
+# rather than silently running against undeclared host packages when Nix is
+# unavailable.
+source "$PROJECT_ROOT/scripts/nix-gate.sh"
+if ! nix_gate_require full; then
+    exec "$PROJECT_ROOT/scripts/nix-gate-exec.sh" \
+        "$PROJECT_ROOT/scripts/verify-sanitizers.sh" "$@"
 fi
 
 required=(sdl2 SDL2_ttf SDL2_image libsystemd yaml-0.1 cmocka)

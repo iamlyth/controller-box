@@ -126,6 +126,8 @@ required = [
     'scripts/visual-audit-capture.sh', 'scripts/visual-audit-probe.sh',
     'scripts/visual-capture-driver.sh', 'scripts/check-visual-audit.py',
     'scripts/visual-audit-gate.sh', 'tests/test-visual-audit.sh',
+    'scripts/nix-gate.sh', 'scripts/nix-gate-exec.sh',
+    'scripts/nix-gate-check.py', 'tests/test-nix-gate.sh',
     'scripts/credential-guard.py', 'tests/test-credential-guard.sh',
     'tests/test-credential-extension.sh',
     '.factory/artifacts/blocked-facts.json', '.factory/artifacts/conformance.json',

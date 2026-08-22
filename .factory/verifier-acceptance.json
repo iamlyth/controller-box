@@ -6,6 +6,7 @@
     {"name": "test_installed_functional", "args": []},
     {"name": "test_packaging.sh", "args": ["{BUILD_DIR}"]},
     {"name": "test_installed_smoke.sh", "args": ["{BUILD_DIR}"]},
-    {"name": "test_installed_diagram.sh", "args": ["{BUILD_DIR}"]}
+    {"name": "test_installed_diagram.sh", "args": ["{BUILD_DIR}"]},
+    {"name": "test-visual-audit.sh", "args": []}
   ]
 }

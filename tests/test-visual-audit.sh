@@ -28,6 +28,13 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 cd -- "$PROJECT_ROOT"
 
+# Authenticated Nix gate (scripts/nix-gate.sh). Under the declared Nix
+# environment the visual regressions below are non-skipping (fail if a
+# prerequisite is missing); at host level they report an explicit skip. The
+# gate replaces the forgeable CBX_VERIFY_IN_NIX_SHELL / IN_NIX_SHELL env-var
+# trust so a single caller-set variable can no longer flip a fail into a skip.
+source "$PROJECT_ROOT/scripts/nix-gate.sh"
+
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
@@ -1317,7 +1324,7 @@ rc=$?
 set -e
 expect_rc 0 $rc "validator accepts a profile list with a selected row"
 echo "test-visual-audit: non-skipping blank-overlay + unselected-list negative regressions passed (13e)"
-elif [[ ${CBX_VERIFY_IN_NIX_SHELL:-0} == 1 || -n ${IN_NIX_SHELL:-} ]]; then
+elif nix_gate_require optional; then
     fail "ImageMagick convert is required for the visual validator (Nix project environment)"
 else
     echo "SKIP: ImageMagick convert unavailable for the non-skipping negative regressions (13e)"
@@ -1993,10 +2000,12 @@ EOF
         echo "test-visual-audit: symlinked output parent/ancestor refusal passed (13j)"
         echo "test-visual-audit: atomic capture publication passed (13f)"
         PATH="${PATH#"$tmp/fakebin:"}"
+    elif nix_gate_require optional; then
+        fail "no installed production binary available for the atomic-publish test (Nix inner gate)"
     else
         echo "SKIP: no installed production binary available for the atomic-publish test"
     fi
-elif [[ ${CBX_VERIFY_IN_NIX_SHELL:-0} == 1 || -n ${IN_NIX_SHELL:-} ]]; then
+elif nix_gate_require optional; then
     fail "Xvfb/xdotool/convert are required for the atomic capture publication regressions (Nix project environment)"
 else
     echo "SKIP: Xvfb/xdotool/convert unavailable for the atomic-publish test"
@@ -2306,6 +2315,8 @@ if command -v Xvfb >/dev/null 2>&1 && command -v xauth >/dev/null 2>&1 \
         || fail "driver must report the symlink/non-regular rejection"
     [[ ! -e "$HP_OUT" ]] || fail "rejected symlink capture must leave no OUTPUT"
     echo "test-visual-audit: installed-binary provenance hardening passed (13h)"
+elif nix_gate_require optional; then
+    fail "display toolchain (Xvfb/xauth/xdotool/convert) is required for installed-binary provenance (Nix project environment)"
 else
     echo "SKIP: display toolchain unavailable for installed-binary provenance (13h)"
 fi
