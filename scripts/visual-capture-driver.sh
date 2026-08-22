@@ -413,8 +413,12 @@ done
 # primitive (renameat2 RENAME_NOREPLACE, falling back to link()+unlink()) so a
 # destination created after any existence check is still refused atomically: no
 # TOCTOU and no ordinary overwriting `mv`. fsync failures FAIL CLOSED (nonzero),
-# so the crash/power-durability claim is real rather than best-effort: a
-# half-published or non-durable receipt/image is never presented as a success.
+# so the driver never presents a half-published or non-durable receipt/image as
+# a successful capture. Power-durability is scoped honestly (see the durable-
+# publication block below): the fsync ordering makes the RECEIPT the durable
+# COMMIT MARKER before the image commit, and a power loss in that window can
+# still leave an inert orphaned uncommitted temp that bounded recovery cleans
+# up and that is NEVER treated as evidence on its own.
 # ---------------------------------------------------------------------------
 ATOMIC="$SCRIPT_DIR/atomic-publish.py"
 # A test may inject a mock helper via CBX_ATOMIC_PUBLISH, honored ONLY under the
@@ -764,6 +768,19 @@ assert_safe_temp() { # path label
 # checks (owned, regular, single-link, non-symlink parents) carry the security
 # guarantee instead.
 OUTPUT_DIR=$(verify_output_parent "$(dirname -- "$OUTPUT")") || exit 1
+# Bounded power-loss / crash recovery (honest commit-marker contract). A prior
+# run may have committed its receipt but crashed before the image rename,
+# leaving the committed image durable at an orphaned `.cbx-capture.*` temp
+# instead of OUTPUT. Restore it to OUTPUT (atomic no-replace) so a committed
+# receipt never points at a missing image, and remove provably-uncommitted owned
+# `.cbx-receipt.*` temps. Recovery is best-effort and idempotent; it NEVER
+# sweeps arbitrary temp files (a sweep could orphan another committed receipt's
+# image) and NEVER treats an orphan temp as evidence on its own. See
+# atomic-publish.py recover.
+if ! "$ATOMIC" recover "$OUTPUT.receipt.json" "$OUTPUT"; then
+    echo "visual-capture: power-loss recovery failed; capture withheld" >&2
+    exit 1
+fi
 CAPTURE_TMP=$(mktemp "$OUTPUT_DIR/.cbx-capture.XXXXXX" 2>/dev/null) \
     || { echo "visual-capture: cannot allocate capture temp in $OUTPUT_DIR" >&2; exit 1; }
 assert_safe_temp "$CAPTURE_TMP" capture || exit 1
@@ -847,6 +864,16 @@ fi
 #     Every fsync failure FAILS CLOSED: the driver withdraws its owned artifacts
 #     and exits non-zero, so a half-published or non-durable artifact is never
 #     presented as a successful capture.
+#
+# Honest power-loss scope: the ordering makes the RECEIPT the durable COMMIT
+# MARKER (its bytes + directory entry are flushed before the image is renamed),
+# and the image bytes themselves are fsynced before the receipt references
+# their hash. A power loss in the window between the receipt commit and the
+# image rename therefore leaves the committed image durable but stranded at an
+# orphaned `.cbx-capture.*` temp — it is restored by the startup bounded
+# recovery (atomic-publish.py recover). A power loss before the receipt commit
+# can leave an inert orphaned temp that is NEVER evidence and requires bounded
+# recovery; the driver never claims a temp's mere presence is a capture.
 #
 # The RECEIPT_PUBLISHED/IMAGE_PUBLISHED/COMMITTED barriers (set after each
 # publish and after the final directory fsync) drive the EXIT-trap cleanup so

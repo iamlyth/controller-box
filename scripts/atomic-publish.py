@@ -47,10 +47,30 @@ Subcommands:
       content hash.
       Exit: 0 success; 3 on a missing required field, a non-64-hex hash, or a
             write error.
+
+  recover <receipt_path> <output_path>
+      Bounded power-loss/crash recovery of a committed-but-unpublished image.
+      The driver's receipt-first ordering makes <receipt_path> the durable
+      COMMIT MARKER: its bytes and directory entry are fsynced before the image
+      is renamed to <output_path>. A power loss in that window leaves the
+      committed image's bytes durable but stranded at an orphaned
+      `.cbx-capture.*` temp in the same directory (never at OUTPUT). This
+      recovers exactly that case: if <output_path> is absent and <receipt_path>
+      is a current-user committed receipt whose image_sha256 matches an owned
+      `.cbx-capture.*` temp's bytes, that temp IS the committed image and is
+      restored atomically (no-replace) and made durable. It also removes
+      provably-uncommitted owned `.cbx-receipt.*` temps (a receipt is only ever
+      published under the fixed <output>.receipt.json name, so such a temp is
+      always an interrupted draft, never a commit marker). Recovery NEVER sweeps
+      arbitrary files and NEVER treats an orphan temp as evidence on its own.
+      Exit: 0 always (best-effort restoration of prior state; it is never a
+            reason to withhold a fresh capture).
 """
 
 import ctypes
 import errno
+import glob
+import hashlib
 import json
 import os
 import re
@@ -67,6 +87,40 @@ _FALLBACK_ERRNOS = {errno.ENOSYS, errno.EINVAL, errno.EOPNOTSUPP, errno.ENOTSUP}
 _HEX64 = re.compile(r"^[0-9a-fA-F]{64}$")
 
 _ME = os.geteuid()
+
+
+def _lstat_regular_owned_single_link(path: str) -> bool:
+    """True iff <path> (via lstat, never following a symlink) is a current-
+    user-owned regular file with a single link."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    return _regular_owned_single_link(st)
+
+
+def _rm_owned(path: str) -> None:
+    """Remove <path> ONLY if it is a current-user-owned regular single-link
+    file; anything owned by another principal, a symlink, a directory, or a
+    hardlinked elsewhere is never removed."""
+    if not _lstat_regular_owned_single_link(path):
+        return
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+def _sha256_of(path: str):
+    """Return the lowercase hex sha256 of <path> or None on a read error."""
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for blk in iter(lambda: fh.read(1 << 16), b""):
+                h.update(blk)
+        return h.hexdigest()
+    except OSError:
+        return None
 
 
 def _regular_owned_single_link(st) -> bool:
@@ -243,6 +297,57 @@ def cmd_receipt(out: str, pairs) -> int:
     return 0
 
 
+def cmd_recover(receipt_path: str, output_path: str) -> int:
+    """Bounded power-loss/crash recovery; see the module docstring recover.
+
+    Always returns 0: restoration of prior state is best-effort and must never
+    be a reason to withhold a fresh capture. It is idempotent and safe to call
+    on every driver startup (a no-op unless a committed receipt is present and
+    its image is still missing at <output_path>).
+    """
+    d = os.path.dirname(output_path) or "."
+    # 1. Remove provably-uncommitted owned receipt temps. Receipts are only
+    #    ever published under the fixed <output>.receipt.json name, so a
+    #    `.cbx-receipt.*` temp is always an interrupted draft, never a commit
+    #    marker. It is never evidence and is inert; removing it is safe bounded
+    #    recovery.
+    for name in glob.glob(os.path.join(d, ".cbx-receipt.*")):
+        _rm_owned(name)
+    # 2. If the image is already at OUTPUT, nothing to restore.
+    if os.path.lexists(output_path):
+        return 0
+    # 3. A restore requires a committed, current-user receipt whose referenced
+    #    image is still missing.
+    if not _lstat_regular_owned_single_link(receipt_path):
+        return 0
+    try:
+        with open(receipt_path, encoding="utf-8") as fh:
+            rec = json.load(fh)
+        rec_hash = rec.get("image_sha256", "")
+    except (OSError, ValueError):
+        return 0
+    if not _HEX64.fullmatch(rec_hash):
+        return 0
+    # 4. Find an owned `.cbx-capture.*` temp whose bytes hash to the committed
+    #    image; it IS the committed image and is restored atomically (no-replace
+    #    refuses a concurrently-created OUTPUT) and made durable. Only the exact
+    #    committed hash is restored; an unrelated or unowned orphan is left
+    #    alone (a sweep could orphan another committed receipt's image).
+    for name in glob.glob(os.path.join(d, ".cbx-capture.*")):
+        if not _lstat_regular_owned_single_link(name):
+            continue
+        if _sha256_of(name) != rec_hash:
+            continue
+        rc = cmd_publish(name, output_path)
+        if rc == 0:
+            # Make the restored image's directory entry durable so the commit
+            # marker is no longer the only durable half of the pair.
+            cmd_fsync(d)
+            _rm_owned(name)
+        return 0
+    return 0
+
+
 def main(argv) -> int:
     if len(argv) < 2:
         print(__doc__, file=sys.stderr)
@@ -254,9 +359,11 @@ def main(argv) -> int:
         return cmd_fsync(argv[2])
     if sub == "receipt" and len(argv) >= 3:
         return cmd_receipt(argv[2], argv[3:])
+    if sub == "recover" and len(argv) == 4:
+        return cmd_recover(argv[2], argv[3])
     print(
         f"atomic-publish: usage: {argv[0]} publish <src> <dst> | fsync <path> "
-        f"| receipt <out> <field=value> [...]",
+        f"| receipt <out> <field=value> [...] | recover <receipt> <output>",
         file=sys.stderr,
     )
     return 3

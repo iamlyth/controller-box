@@ -2153,6 +2153,84 @@ else
 fi
 echo "test-visual-audit: atomic-publish primitive regressions passed (13g)"
 
+# --- 13i. bounded power-loss/crash recovery (receipt-as-commit-marker) -------
+# Point 5 of the Task 21 audit: either durable transactional/restart recovery
+# or an honest narrowing. We implement the honest narrowing + bounded recovery:
+# the RECEIPT is the durable commit marker (bytes + dir entry fsynced before
+# the image rename); a power loss in the commit window leaves the committed
+# image durable but stranded at an orphaned `.cbx-capture.*` temp, which the
+# `recover` subcommand restores atomically; provably-uncommitted owned
+# `.cbx-receipt.*` temps are removed; an orphan temp is NEVER evidence on its
+# own and recovery never sweeps arbitrary/unowned files. Tested deterministically
+# through the module API (like 13g).
+mkdir -p "$tmp/recov"
+D="$tmp/recov"
+# (a) recover is a no-op with no committed receipt (fresh output dir): removes
+#     a stray uncommitted owned receipt temp, leaves everything else.
+printf 'draft-receipt-bytes' > "$D/.cbx-receipt.abc"
+printf 'kept' > "$D/.cbx-capture.zzz"
+"$APUB" recover "$D/out.png.receipt.json" "$D/out.png"
+[[ ! -e "$D/.cbx-receipt.abc" ]] || fail "recover left a provably-uncommitted receipt temp"
+[[ -e "$D/.cbx-capture.zzz" ]] || fail "recover swept an unrelated orphan capture temp"
+[[ ! -e "$D/out.png" ]] || fail "recover created OUTPUT without a committed receipt"
+# (b) committed receipt with its image already at OUTPUT: no-op (nothing to
+#     restore, and the committed image is not disturbed).
+printf 'image-bytes' > "$D/out2.png"
+IMG2=$(printf 'image-bytes' | sha256sum | awk '{print $1}')
+"$APUB" receipt "$D/out2.png.receipt.json" \
+    "schema=controller-box/visual-capture-receipt/v1" "state=manager-main" \
+    "commit=$COMMIT40" "install_prefix=/p" "binary_sha256=$SHA" \
+    "image=$D/out2.png" "image_sha256=$IMG2" "window_title=t" \
+    "display=:99" "finished_at=2026-01-01T00:00:00Z"
+printf 'stale-temp' > "$D/.cbx-capture.orphan"
+"$APUB" recover "$D/out2.png.receipt.json" "$D/out2.png"
+[[ "$(cat "$D/out2.png")" == "image-bytes" ]] || fail "recover disturbed an already-committed OUTPUT"
+# (c) committed receipt, image MISSING at OUTPUT, but matching orphan temp
+#     exists: the orphan IS the committed image and is restored atomically, and
+#     the temp is consumed.
+IMG3=$(printf 'power-loss-frame' | sha256sum | awk '{print $1}')
+printf 'power-loss-frame' > "$D/.cbx-capture.abandoned"
+"$APUB" receipt "$D/out3.png.receipt.json" \
+    "schema=controller-box/visual-capture-receipt/v1" "state=manager-main" \
+    "commit=$COMMIT40" "install_prefix=/p" "binary_sha256=$SHA" \
+    "image=$D/out3.png" "image_sha256=$IMG3" "window_title=t" \
+    "display=:99" "finished_at=2026-01-01T00:00:00Z"
+"$APUB" recover "$D/out3.png.receipt.json" "$D/out3.png"
+[[ -e "$D/out3.png" ]] || fail "recover did not restore a committed-but-unpublished image"
+[[ "$(cat "$D/out3.png")" == "power-loss-frame" ]] \
+    || fail "recover restored the wrong bytes for the committed image"
+[[ ! -e "$D/.cbx-capture.abandoned" ]] || fail "recover left the consumed restore temp"
+# (d) committed receipt with a MISMATCHED orphan (different hash) must NOT be
+#     restored as the committed image (only the exact committed hash is), so a
+#     wrong/unrelated temp is never promoted to evidence.
+IMG4=$(printf 'committed-4' | sha256sum | awk '{print $1}')
+printf 'committed-4' > "$D/.cbx-capture.ok"
+printf 'WRONG-BYTES' > "$D/.cbx-capture.wrong"
+"$APUB" receipt "$D/out4.png.receipt.json" \
+    "schema=controller-box/visual-capture-receipt/v1" "state=manager-main" \
+    "commit=$COMMIT40" "install_prefix=/p" "binary_sha256=$SHA" \
+    "image=$D/out4.png" "image_sha256=$IMG4" "window_title=t" \
+    "display=:99" "finished_at=2026-01-01T00:00:00Z"
+"$APUB" recover "$D/out4.png.receipt.json" "$D/out4.png"
+[[ "$(cat "$D/out4.png")" == "committed-4" ]] \
+    || fail "recover restored a mismatched orphan as the committed image"
+# (e) unowned orphan temp is never removed nor restored (identity-matched).
+if [[ "$(id -u)" != 0 ]]; then
+    IMG5=$(printf 'root-owned' | sha256sum | awk '{print $1}')
+    "$APUB" receipt "$D/out5.png.receipt.json" \
+        "schema=controller-box/visual-capture-receipt/v1" "state=manager-main" \
+        "commit=$COMMIT40" "install_prefix=/p" "binary_sha256=$SHA" \
+        "image=$D/out5.png" "image_sha256=$IMG5" "window_title=t" \
+        "display=:99" "finished_at=2026-01-01T00:00:00Z"
+    printf 'root-owned' > "$D/.cbx-capture.rootowned"
+    chown 0:0 "$D/.cbx-capture.rootowned" 2>/dev/null || true
+    "$APUB" recover "$D/out5.png.receipt.json" "$D/out5.png"
+    if [[ -e "$D/.cbx-capture.rootowned" ]]; then
+        [[ ! -e "$D/out5.png" ]] || fail "recover promoted an unowned orphan temp"
+    fi
+fi
+echo "test-visual-audit: bounded power-loss recovery passed (13i)"
+
 # --- 13h. installed-binary/prefix provenance + Xvfb-auth hardening ----------
 # The driver must refuse to launch an installed binary that is not a genuine,
 # current-user-owned (or root), regular non-symlink, non-group/world-writable
