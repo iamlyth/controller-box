@@ -41,12 +41,13 @@ for tool in Xvfb xdotool import; do
 done
 
 # Prefer an already-installed binary from a prior gate (test-install prefix);
-# fall back to a fresh isolated custom-prefix install only if none exists.
+# VISUAL_AUDIT_INSTALL_PREFIX overrides the prefix for operator-driven runs.
 INSTALLED_BIN=""
 for candidate in \
+    "${VISUAL_AUDIT_INSTALL_PREFIX:+"$VISUAL_AUDIT_INSTALL_PREFIX/bin/controller-box"}" \
     "$PROJECT_ROOT/.test-install/usr/bin/controller-box" \
     "$PROJECT_ROOT/.test-install/bin/controller-box"; do
-    if [[ -x "$candidate" ]]; then INSTALLED_BIN=$candidate; break; fi
+    if [[ -n "$candidate" && -x "$candidate" ]]; then INSTALLED_BIN=$candidate; break; fi
 done
 if [[ -z "$INSTALLED_BIN" ]]; then
     echo "visual-capture: no installed production binary found; run the project gate first" >&2
@@ -84,10 +85,20 @@ export SDL_VIDEODRIVER=x11
 export SDL_RENDER_DRIVER=software
 export HOME="$TMPDIR/home"
 mkdir -p "$HOME/.config/systemd/user" "$HOME/.local/share/fonts"
-# Seed the first-run marker so the SPEC §9.1 modal is skipped (matches the
-# installed functional acceptance path; never an env-var production bypass).
-mkdir -p "$HOME/.config"
-printf '{"first_run_seen":true}\n' > "$HOME/.config/controller-box-first-run.json" 2>/dev/null || true
+# Seed the first-run service marker and a system font so the manager window
+# renders text (SPEC §9.1 first-run modal and font handling must not block
+# capture); mirrors the installed functional acceptance environment.
+touch "$HOME/.config/systemd/user/controller-box.service"
+FONT_FOUND=""
+if [ -f "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf" ]; then
+    FONT_FOUND="/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+fi
+if [ -z "$FONT_FOUND" ]; then
+    FONT_FOUND=$(find /nix/store -name "DejaVuSans.ttf" 2>/dev/null | head -1 || true)
+fi
+if [ -n "$FONT_FOUND" ]; then
+    cp "$FONT_FOUND" "$HOME/.local/share/fonts/DejaVuSans.ttf"
+fi
 
 "$INSTALLED_BIN" --manager >"$TMPDIR/app.log" 2>&1 &
 APP_PID=$!
