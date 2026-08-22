@@ -19,6 +19,7 @@ release evidence and contains no satisfied/done claims.
 - Task 13 (pending): Close software-fixable test-quality gaps (reviewer audit)
 - Task 14 (pending): Fix virtual-controller type-change topology preservation (BUG-0015 software portion)
 - Task 15 (pending): Fix installed mapping-editor diagram geometry (BUG-0018 software portion)
+- Task 16 (pending): Finish BUG-0018 installed visual capture adapter (visual-capture-driver.sh)
 
 ## Unresolved facts
 - FACT-002 (open): BUG-0015: real InputPlumber system-bus acceptance with four targets

@@ -38,3 +38,20 @@
   `task-1787407706-bacd` stays in_progress/blocked (external facts + golden re-approval).
 - Do not emit the completion token. Ledger stays open; Task 4 final audit remains the sole
   completion gate, blocked on external facts plus golden re-approval.
+
+---
+
+# Handoff: iteration N+1 — no ready work; cycle blocked on external facts
+
+No ready tasks (`ralph tools task ready` empty). Sole open runtime task
+`task-1787407706-bacd` (BUG-0018 umbrella) stays in_progress/blocked: its
+remaining acceptance is out-of-band golden re-approval plus the Task 4 final
+audit, which is blocked on external facts that no software work can resolve:
+FACT-002/003 (real InputPlumber system-bus capability `inputplumber-system-dbus`
+undeclared/not provisioned), FACT-004/006 (missing Pi target/human release
+acceptance), FACT-005 (GPU compositor backend), FACT-007 (runner signer not
+provisioned). All software-addressable work is complete and verified at HEAD
+`a8126a8`; plan `status: active`, freshness green. Emit `factory.implement` to
+continue; never the completion token while any fact is open or golden re-approval
+is pending. Recovery: when FACT-002/003/007 and golden re-approval are provisioned
+externally, run the Task 4 final audit gate.
