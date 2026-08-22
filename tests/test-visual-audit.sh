@@ -1532,6 +1532,83 @@ EOF
         [[ -z "$(find "$ATOM_DIR" -maxdepth 1 -name '.cbx-capture.*' -o -maxdepth 1 -name '.cbx-receipt.*' | head -n 1)" ]] \
             || fail "terminated capture left an owned temp behind"
 
+        # Post-publish signal-window mock: delegates to the real no-replace
+        # primitive for the targeted publish (so the entry is genuinely
+        # published) and THEN delivers TERM to the driver (\$PPID is the driver
+        # shell waiting on this foreground child). This lands deterministically
+        # in the window between the no-replace syscall returning and the
+        # driver's durable-commit barrier — the exact window the pre-armed
+        # inode-identity cleanup must close (no orphaned receipt-without-image,
+        # no non-durable image). Every other call delegates directly. Gated
+        # behind RALPH_VISUAL_AUDIT_TESTING; the completion gate rejects that
+        # marker.
+        cat > "$tmp/fakepub/atomic-signal.sh" <<EOF
+#!/usr/bin/env bash
+if [ "\${1:-}" = "publish" ] && [ "\${3:-}" = "\$CBX_SIGNAL_DST" ]; then
+    "$PROJECT_ROOT/scripts/atomic-publish.py" publish "\$2" "\$3"
+    rc=\$?
+    touch "\$CBX_SIGNAL_MARKER"
+    kill -TERM "\$PPID" 2>/dev/null || true
+    exit \$rc
+fi
+exec "$PROJECT_ROOT/scripts/atomic-publish.py" "\$@"
+EOF
+        chmod +x "$tmp/fakepub/atomic-signal.sh"
+
+        # (5a) post-publish TERM — receipt signal window: a TERM delivered
+        # immediately after the receipt no-replace publish (before the image
+        # commit point) must withdraw the just-published receipt (pre-armed
+        # identity cleanup) and leave no orphaned receipt-without-image, no
+        # image, and no owned temp. Without the pre-armed identity match this
+        # regression fails: the old barrier flag was still 0 when the signal
+        # landed, so the just-published receipt would survive.
+        set +e
+        MOCK_IMPORT_SRC="$ATOM_DIR/frame-ok.png" \
+        RALPH_VISUAL_AUDIT_TESTING=1 CBX_ATOMIC_PUBLISH="$tmp/fakepub/atomic-signal.sh" \
+        CBX_SIGNAL_DST="$ATOM_DIR/sigreceipt.png.receipt.json" \
+        CBX_SIGNAL_MARKER="$tmp/sigreceipt.marker" \
+        VISUAL_AUDIT_INSTALL_PREFIX="$ATOM_PREFIX" \
+        "$PROJECT_ROOT/scripts/visual-capture-driver.sh" manager-main \
+            "$ATOM_DIR/sigreceipt.png" "$ATOM_HEAD" >"$tmp/atom-sigreceipt.out" 2>&1
+        rc=$?
+        set -e
+        # The marker proves the post-publish TERM was genuinely delivered (a
+        # vacuous run that never reached the receipt publish would fail here).
+        [[ -e "$tmp/sigreceipt.marker" ]] \
+            || fail "post-publish TERM (receipt window) never reached the receipt publish"
+        [[ $rc -ne 0 ]] || fail "post-publish TERM (receipt window) unexpectedly succeeded"
+        [[ ! -e "$ATOM_DIR/sigreceipt.png" ]] \
+            || fail "post-publish TERM (receipt window) left an image at OUTPUT"
+        [[ ! -e "$ATOM_DIR/sigreceipt.png.receipt.json" ]] \
+            || fail "post-publish TERM (receipt window) left an orphaned receipt-without-image"
+        [[ -z "$(find "$ATOM_DIR" -maxdepth 1 \( -name '.cbx-capture.*' -o -name '.cbx-receipt.*' \) | head -n 1)" ]] \
+            || fail "post-publish TERM (receipt window) left an owned temp behind"
+
+        # (5b) post-publish TERM — image commit-point window: a TERM delivered
+        # immediately after the image no-replace publish (before the final
+        # directory fsync commits it) must withdraw the just-published image AND
+        # its receipt (pre-armed identity cleanup), leaving neither a
+        # non-durable image nor an orphaned receipt and no owned temp.
+        set +e
+        MOCK_IMPORT_SRC="$ATOM_DIR/frame-ok.png" \
+        RALPH_VISUAL_AUDIT_TESTING=1 CBX_ATOMIC_PUBLISH="$tmp/fakepub/atomic-signal.sh" \
+        CBX_SIGNAL_DST="$ATOM_DIR/sigimg.png" \
+        CBX_SIGNAL_MARKER="$tmp/sigimg.marker" \
+        VISUAL_AUDIT_INSTALL_PREFIX="$ATOM_PREFIX" \
+        "$PROJECT_ROOT/scripts/visual-capture-driver.sh" manager-main \
+            "$ATOM_DIR/sigimg.png" "$ATOM_HEAD" >"$tmp/atom-sigimg.out" 2>&1
+        rc=$?
+        set -e
+        [[ -e "$tmp/sigimg.marker" ]] \
+            || fail "post-publish TERM (image window) never reached the image publish"
+        [[ $rc -ne 0 ]] || fail "post-publish TERM (image window) unexpectedly succeeded"
+        [[ ! -e "$ATOM_DIR/sigimg.png" ]] \
+            || fail "post-publish TERM (image window) left an image at OUTPUT"
+        [[ ! -e "$ATOM_DIR/sigimg.png.receipt.json" ]] \
+            || fail "post-publish TERM (image window) left a receipt"
+        [[ -z "$(find "$ATOM_DIR" -maxdepth 1 \( -name '.cbx-capture.*' -o -name '.cbx-receipt.*' \) | head -n 1)" ]] \
+            || fail "post-publish TERM (image window) left an owned temp behind"
+
         # (6) successful atomic publish: a validated capture is published with
         # its receipt, and no temp remains.
         set +e

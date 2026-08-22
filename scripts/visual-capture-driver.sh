@@ -310,13 +310,20 @@ TMPDIR=""
 # owned paths are ever removed on failure/signal, never a pre-existing OUTPUT.
 CAPTURE_TMP=""
 RECEIPT_TMP=""
-# Atomic-publication state machine: tracks how far a publication has progressed
-# so the EXIT trap can withdraw exactly the owned artifacts between the two
-# publishes and before the final directory fsync (point: no half-published or
+# Atomic-publication state machine: COMMITTED tracks whether the image commit
+# point and its final directory fsync have completed; until then the EXIT trap
+# withdraws our identity-matched published artifacts (no half-published or
 # orphaned image/receipt ever survives an error or a terminating signal).
-RECEIPT_PUBLISHED=0
-IMAGE_PUBLISHED=0
 COMMITTED=0
+# Pre-armed dev:ino of the capture/receipt temps, captured just before each
+# publish. rename(2) preserves the inode, so the pre-armed dev:ino identifies
+# OUR published entry at OUTPUT / OUTPUT.receipt.json during EXIT-trap cleanup
+# without depending on a barrier flag that races with a terminating signal —
+# this closes the post-publish signal window (a TERM landing right after the
+# no-replace syscall returns can no longer orphan a just-published receipt or a
+# non-durable image).
+CAPTURE_DEVINO=""
+RECEIPT_DEVINO=""
 
 # Remove a path ONLY if it is a current-user-owned regular single-link file.
 # Defense-in-depth identity match: a temp/artifact that was raced away or
@@ -334,6 +341,23 @@ rm_owned() { # path
     links=$(stat -c %h "$p" 2>/dev/null)
     [[ "$links" == "1" ]] || return 0
     rm -f -- "$p"
+}
+
+# Remove a path ONLY if its current dev:ino matches the pre-armed identity of an
+# artifact WE created, AND it is a current-user-owned regular single-link file.
+# Because rename(2) preserves the inode, matching the pre-publish temp's dev:ino
+# against the published destination proves the entry is the one we just
+# published; a pre-existing/unowned/symlinked/hardlinked path has a different
+# inode and is never touched. This is the race-free withdrawal primitive: it
+# closes the post-publish signal window without relying on a barrier flag that
+# is assigned after the syscall returns.
+rm_identity_match() { # path expected_devino
+    local p=$1 want=$2 have
+    [[ -n "$p" && -n "$want" ]] || return 0
+    [[ -e "$p" || -L "$p" ]] || return 0
+    have=$(stat -c '%d:%i' "$p" 2>/dev/null) || return 0
+    [[ "$have" == "$want" ]] || return 0
+    rm_owned "$p"
 }
 
 kill_group() { # pgid
@@ -363,11 +387,18 @@ cleanup() {
     #     but durability was not confirmed).
     rm_owned "$CAPTURE_TMP"
     rm_owned "$RECEIPT_TMP"
-    if [[ "$RECEIPT_PUBLISHED" == 1 && "$COMMITTED" == 0 ]]; then
-        rm_owned "$OUTPUT.receipt.json"
-    fi
-    if [[ "$IMAGE_PUBLISHED" == 1 && "$COMMITTED" == 0 ]]; then
-        rm_owned "$OUTPUT"
+    # Pre-armed identity cleanup closes the post-publish signal window. A
+    # terminating signal landing between a no-replace publish returning and its
+    # RECEIPT_PUBLISHED/IMAGE_PUBLISHED barrier assignment previously left an
+    # orphaned receipt (receipt-without-image) or a non-durable image, because
+    # the withdrawal decision depended on the very flag the signal raced. Rename
+    # preserves the inode, so the pre-armed dev:ino of each temp equals the
+    # published entry's dev:ino; matching it here (independent of the racing
+    # flag) withdraws exactly our just-published entry and never a pre-existing
+    # sentinel or an unowned path.
+    if [[ "$COMMITTED" == 0 ]]; then
+        rm_identity_match "$OUTPUT.receipt.json" "$RECEIPT_DEVINO"
+        rm_identity_match "$OUTPUT" "$CAPTURE_DEVINO"
     fi
 }
 # Run the same owned-temp/process-group cleanup on terminating signals as well
@@ -828,6 +859,11 @@ if ! fsync_path "$RECEIPT_TMP"; then
     exit 1
 fi
 
+# Pre-arm the receipt's inode identity BEFORE the no-replace syscall so the
+# EXIT-trap cleanup can withdraw exactly this entry (the inode is preserved by
+# rename) even if a terminating signal lands in the window between the syscall
+# returning and the durable-commit fsync below.
+RECEIPT_DEVINO=$(stat -c '%d:%i' "$RECEIPT_TMP" 2>/dev/null || true)
 # Publish the receipt first (atomic no-replace; refuses a pre-existing/unowned/
 # symlinked/hardlinked receipt).
 rc=0
@@ -840,14 +876,12 @@ elif [[ $rc -ne 0 ]]; then
     exit 1
 fi
 RECEIPT_TMP=""
-# Barrier (signal point) after the receipt publish. There is an inherent few-
-# statement window between the syscall returning 0 and this assignment: a
-# terminating signal landing exactly there could withdraw the counterpart and
-# orphan the just-published receipt. The window is sub-millisecond and the
-# EXIT-trap identity checks make any such orphan removable by a human, but it
-# is acknowledged here rather than silently ignored. 13f(5) exercises the
-# pre-publish signal path; the post-publish window is bounded and accepted.
-RECEIPT_PUBLISHED=1
+# Barrier (signal point) after the receipt publish. A terminating signal
+# landing between the no-replace syscall returning and this point used to
+# orphan the just-published receipt (the old barrier flag was still 0, so
+# cleanup left it). The pre-armed RECEIPT_DEVINO closes that window: cleanup
+# now matches the published entry's dev:ino against the pre-armed identity, so
+# the just-published receipt is withdrawn even though no barrier had been set.
 # Make the published receipt entry durable before the image commit point. On a
 # failure the EXIT trap withdraws the owned receipt (identity-matched) so a
 # failed/doubtful publish leaves neither OUTPUT nor an orphaned, possibly
@@ -857,6 +891,11 @@ if ! fsync_path "$OUTPUT_DIR"; then
     exit 1
 fi
 
+# Pre-arm the image's inode identity BEFORE the commit-point syscall (same
+# rationale as the receipt: rename preserves the inode, so cleanup can withdraw
+# exactly this entry even if a signal lands in the post-publish window before
+# the durable-commit fsync).
+CAPTURE_DEVINO=$(stat -c '%d:%i' "$CAPTURE_TMP" 2>/dev/null || true)
 # Commit point: only now is the image visible at OUTPUT (atomic no-replace).
 rc=0
 publish_no_replace "$CAPTURE_TMP" "$OUTPUT" || rc=$?
@@ -872,9 +911,10 @@ elif [[ $rc -ne 0 ]]; then
     exit 1
 fi
 CAPTURE_TMP=""
-# Barrier (signal point) after the image commit-point publish (see the note on
-# the receipt barrier for the acknowledged sub-millisecond signal window).
-IMAGE_PUBLISHED=1
+# Barrier (signal point) after the image commit-point publish. A signal landing
+# between the syscall returning and this point leaves the image published but
+# not yet durable (COMMITTED still 0); the pre-armed CAPTURE_DEVINO lets
+# cleanup withdraw the image (and its receipt) exactly, closing that window.
 # Make the image commit-point entry durable. If this fsync fails the image is
 # already atomically at OUTPUT; the EXIT trap withdraws the owned image and its
 # receipt (identity-matched) to keep a clean fail-closed state.
