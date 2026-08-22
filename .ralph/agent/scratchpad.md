@@ -1,36 +1,19 @@
-# Handoff: HEAD 2703586 green on every software gate; completion blocked only on external hardware/capability/signer facts
-
-Re-verified directly; no code changed, tree clean (only scratchpad dirty).
+# Handoff: Task 14 (BUG-0015 software portion) implemented, verified, and recorded
 
 ## Outcome this iteration
-- Plan `active` + fresh (spec=3a10f6b7d04a, blob=58f5d3cb72bc, `check-plan-freshness.sh` exit 0).
-- HEAD 2703586 unchanged; branch `develop`, tree clean. `ralph tools task ready` → empty; no runtime tasks.
-- `check-factory-runner-evidence.py` → "aggregate Git/environment binding is stale"; `check-capability-evidence.py` → "not bound to HEAD 27035861f274" — exactly FACT-007 (runner receipt bound to c45336a, not the current implementation commit; dev-runner-vm not re-runnable here), NOT a software regression.
-- Blocked-facts ledger: 6 open (FACT-002..007) / 2 resolved (FACT-001, FACT-008). All open facts are external hardware/capability/signer blockers: real InputPlumber system bus (FACT-002/003), target-consumer/Pi 4 runtime (FACT-004/006), gpu-compositor (FACT-005), unsigned/unbound runner receipt (FACT-007).
+- Completed plan **Task 14** (Fix virtual-controller type-change topology preservation, BUG-0015 software portion, runtime task `task-1787407706-cd8d`). The production fix was already on `develop` at HEAD `69ccf9e`; this iteration re-verified it at the current HEAD and recorded the plan Result.
+- `cbx_controllers_tab_change_type` sends only the selected slot's new type via `ip_composite_set_target_devices` (SPEC §5.2) instead of assembling a CSV of every model target's type (which corrupted the other slots).
+- Mock DBus records most-recent `call_method` string args (`ip_dbus_mock_last_call`); `test_change_type_mixed`/`test_change_type_success` assert the exact `SetTargetDevices` CSV; Add path asserts exact `AttachTargetDevice` target→composite paths.
 
-No ready task; no software-addressable remediation exists.
+## Exact verification (no tree change)
+- Build: `cmake --build build-check --parallel` clean (Debug).
+- `ctest --test-dir build-check -R 'test_controllers_tab|test_manager_calls'` → 2/2 pass.
+- Full suite: 100% pass (98 pass / 2 pre-existing hardware skips `test_kernel_controller`, `test_backend_smoke`).
+- Regression real: temporarily reverted to buggy CSV assembly → `test_change_type_mixed` FAILS; restored fix → passes.
+- `validate-conformance.py planning` valid (76 reqs); `validate-implementation-plan.py planning` exit 0; `verify-boilerplate.sh` passed.
+
+## Commit
+- HEAD `69ccf9e` already carried the code+tests; this iteration recorded plan Task 14 Result. Commit boundary: plan path (`.factory/artifacts/...`) is outside `.ralph/`, so the commit is substantive and guard-allowed.
 
 ## Next
-Final audit (Task 4) is the sole gate and stays blocked on external hardware/capability/signer facts; requires a human to provision the real InputPlumber system bus / target consumer / Pi runtime / gpu-compositor / signer and re-run the runners on the current HEAD, or an explicit spec-scoped human deferral per §11.2.6. Do not emit the completion token; ledger stays open; plan stays `active`.
-
-## Iteration: BUG-0018 diagram geometry (task-1787407706-bacd)
-
-Chose the software-addressable P1 task over BUG-0015 (externally hardware-blocked: real InputPlumber system-bus/capability FACT-002/003). Started task-1787407706-bacd. Handed off to Factory Worker via factory.implement to:
-1. Append remediation task to plan (uniquely numbered), keep plan active.
-2. Diagnose source aspect/raster scaling + marker coordinate transforms in src/manager/profile_diagram.c.
-3. Repair installed exact-commit capture driver (real window title/class polling, manager/overlay modes, isolated DISPLAY/HOME/XDG, bounded cleanup).
-4. Add semantic installed-window tests that fail for stretch/pixelation/misalignment; machine vision findings-only; no golden regen; no human acceptance claim.
-Next iteration: after BUG-0018, evaluate BUG-0015 software-addressable portion vs external block.
-
-## Iteration: BUG-0015 virtual target creation/topology (task-1787407706-cd8d)
-
-Ready task is BUG-0015 (cd8d), marked in_progress. BUG-0018 (bacd) is in_progress from a prior iteration whose factory.implement event was never published; it is NOT ready this cycle. BUG-0015's runtime-task description frames it as software-addressable: diagnose/fix the production CreateTargetDevice/SetTargetDevices topology reconciliation (src/dbus/ip_manager.c, ip_composite.c, src/manager/controllers_tab.c), add production-path semantic coverage through the DBus backend abstraction, and keep external system-bus evidence (FACT-002/003) honestly open. Plan Task 6 (full four-target routing) stays externally blocked; this is distinct software work. Appended remediation numbering continues past Task 13 (next unique = Task 14).
-
-## Iteration: dispatch BUG-0015 (cd8d) via factory.implement (recovery)
-
-Recovery: previous iteration decided BUG-0015 (cd8d) is the ready software-addressable task (marked in_progress) but never published factory.implement. HEAD 2703586, plan active/fresh. Both BUG-0015 (cd8d) and BUG-0018 (bacd) are P1 in_progress; BUG-0018's event also was never published, but cd80 is the most recent decision and its runtime-task description is explicitly software-addressable. Dispatching cd8d now:
-1. Append uniquely-numbered remediation task (next = Task 14) to plan, keep active.
-2. Diagnose/fix production CreateTargetDevice/SetTargetDevices topology reconciliation (src/dbus/ip_manager.c, ip_composite.c, src/manager/controllers_tab.c).
-3. Add production-path semantic coverage through the DBus backend abstraction.
-4. Keep external system-bus evidence (FACT-002/003) honestly open; Task 6 (full four-target routing) stays externally blocked.
-Next: after cd8d, evaluate BUG-0018 (bacd) software work.
+- The next software task is BUG-0018 diagram geometry (runtime task `task-1787407706-bacd`): installed mapping-editor diagram is pixelated/stretched, mapped-button markers misaligned; requires repairing the installed exact-commit capture driver + semantic installed-window tests (machine-vision findings-only, no golden regen). After that the final audit (Task 4) is the sole gate, still blocked on external hardware/capability/signer facts (FACT-002..007). Do not emit the completion token; ledger stays open; plan stays `active`.
