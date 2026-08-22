@@ -1,4 +1,4 @@
-# Handoff: BUG-0018 installed visual capture adapter finished (task-1787416288-52b7)
+## Handoff: BUG-0018 installed visual capture adapter finished (task-1787416288-52b7)
 
 ## Outcome this iteration
 - Fixed `scripts/visual-capture-driver.sh` (the ready task) and verified it end-to-end
