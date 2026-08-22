@@ -122,7 +122,9 @@ required = [
     'scripts/visual-audit-review.py', 'scripts/visual-audit-review-sdk.mjs',
     'scripts/visual-audit-capture.sh', 'scripts/visual-audit-probe.sh',
     'scripts/visual-capture-driver.sh', 'scripts/check-visual-audit.py',
-    'tests/test-visual-audit.sh',
+    'scripts/visual-audit-gate.sh', 'tests/test-visual-audit.sh',
+    'scripts/credential-guard.py', 'tests/test-credential-guard.sh',
+    'tests/test-credential-extension.sh',
     '.factory/artifacts/blocked-facts.json', '.factory/artifacts/conformance.json',
     '.factory/artifacts/context-summary.md',
     '.factory/campaign-objectives.json', '.factory/golden-policy.json',
@@ -284,6 +286,15 @@ for name in subprocess.check_output(['git', 'remote'], text=True).split():
         raise SystemExit(f'verify: remote {name} embeds credentials; use SSH or a credential helper')
 PY
 
+# Completion only checks a retained visual report; it must never launch
+# capture, probe, SDK, or model work under the lifecycle lock.
+grep -q 'scripts/visual-audit-gate.sh' scripts/final-gate.sh
+grep -q 'check-visual-audit.py' scripts/visual-audit-gate.sh
+if grep -Eq 'visual-audit-(capture|probe)|review-sdk' scripts/visual-audit-gate.sh; then
+    echo "verify: visual-audit-gate.sh must never invoke capture/review-sdk/probe" >&2
+    exit 1
+fi
+
 ./tests/test-scratchpad-guard.sh
 ./tests/test-git-checkpoint.sh
 ./tests/test-git-commit-guard.sh
@@ -312,4 +323,6 @@ PY
 ./tests/test-runner-signer.sh
 ./tests/test-boilerplate.sh
 ./tests/test-visual-audit.sh
+./tests/test-credential-guard.sh
+./tests/test-credential-extension.sh
 echo "verify: boilerplate checks passed"

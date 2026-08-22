@@ -462,6 +462,44 @@ Pixel/offscreen framebuffer checks are not real visual acceptance, private/sessi
 - `.factory/campaign-objectives.json` (schema `ralph-campaign-objectives/v1`) binds each audit round to one product-neutral falsification objective with its own receipt categories. `scripts/check-campaign-objectives.py` requires the round's report to carry machine receipts (or accepted runner manifests) covering every category of that round's objective; replaying the same generic suite cannot satisfy all rounds.
 - Golden baselines are protected by `.factory/golden-policy.json` and `.factory/golden-review.json` (schema `ralph-golden-review/v1`). Generation can never overwrite active goldens: `scripts/generate-golden.sh` refuses to run without a review manifest path and human reviewer identity, and `scripts/check-golden-policy.py` requires every working-tree golden change to carry an exact before/after SHA-256 plus reviewer/human identity; committed changes stay valid against real Git transitions. Never regenerate goldens merely to make a test pass.
 
+## Machine visual audit
+
+The optional visual-audit framework captures serialized, installed
+exact-commit Controller-Box states and binds each image to its bytes, commit,
+tree, environment, prompt, schema, model, role, state, and request nonce.
+Review may run in parallel only after immutable captures exist. A current
+non-skipping probe and independently accepted calibration controls are required
+before live review. Machine vision is supplemental falsification evidence: it
+may add findings but never elevates an evidence tier, certifies a golden,
+replaces compositor/physical/target-consumer evidence, or substitutes for
+human acceptance. Completion runs `scripts/visual-audit-gate.sh`, which only
+validates an existing report and never captures or invokes a model under the
+lifecycle lock.
+
+Controller-Box keeps the framework disabled until its product capture adapter,
+real Kimi probe, calibration, and installed state inventory are ready. Mutable
+captures, receipts, leases, and reports remain ignored factory state; tracked
+configuration contains no credentials.
+
+## Credential boundary guard
+
+`scripts/credential-guard.py` and the project-local Pi extension block
+sensitive command/path reads before execution and redact tool-result strings
+before display or session persistence. Candidate command/output text is sent
+to the guard on standard input, never process arguments. Guard errors fail
+closed, direct file paths and literal Bash path arguments resolve symlinks, and
+nested result values are redacted by one bounded subprocess. Git boundary
+redirection and hook-bypass forms are rejected case-insensitively.
+
+Pi's built-in Bash tool can write a raw `pi-bash-*.log` before the
+`tool_result` hook runs. The extension accepts only the expected owned,
+single-link regular overflow path, changes it to mode 0600, and atomically
+replaces it with redacted bytes; failure truncates the recognized file. A
+small pre-hook crash window remains, so this is defense in depth rather than
+permission to expose credentials. Keep temporary storage private and rotate
+any credential known to have appeared in prior output. Tests use synthetic
+secret-shaped values only.
+
 ## Verify
 
 ```bash

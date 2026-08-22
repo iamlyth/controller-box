@@ -7,13 +7,18 @@ captured from. A provenance mismatch (wrong commit, wrong tree, missing
 image, altered hash) invalidates every dependent finding.
 
 Usage:
-  visual-audit-provenance.py manifest --out DIR --commit C --tree T [--environment E]
+  visual-audit-provenance.py manifest --out DIR --commit C --tree T
       Write a manifest describing the images in DIR (files named
       <state_id>.png or <state_id>-<crop>.png). Emits JSON to stdout and
-      writes <DIR>/provenance.json atomically.
+      writes <DIR>/provenance.json atomically. The environment binding is a
+      fixed lowercase SHA-256 of the committed .factory/environment.toml
+      bytes (or the canonical marker "absent" when the file is not committed)
+      computed here from the repository; arbitrary caller text is never
+      accepted.
   visual-audit-provenance.py verify --out DIR
-      Validate <DIR>/provenance.json: schema, commit/tree fields, and that
-      every listed image exists with a matching SHA-256. Exit 0 on success.
+      Validate <DIR>/provenance.json: schema, commit/tree fields, the
+      environment binding, and that every listed image exists with a matching
+      SHA-256. Exit 0 on success.
 """
 
 from __future__ import annotations
@@ -26,16 +31,55 @@ import re
 from pathlib import Path
 import secrets
 import stat
+import subprocess
 import sys
 
 SCHEMA = "ralph-visual-audit-provenance/v1"
 STATE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 SHA1 = re.compile(r"^[0-9a-f]{40}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
+ENVIRONMENT_REL = ".factory/environment.toml"
+# Explicit canonical marker used only when the generic template contract has
+# no committed environment.toml (it is committed in every boilerplate repo,
+# so the marker is the exceptional absent case, never arbitrary text).
+ENVIRONMENT_ABSENT = "absent"
 
 
 def die(message: str) -> "NoReturn":
     raise SystemExit(f"visual-audit-provenance: {message}")
+
+
+def git_stdout(root: Path, *argv: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", "-C", str(root), *argv], capture_output=True, check=False)
+
+
+def is_tracked(root: Path, path: Path) -> bool:
+    try:
+        rel = path.relative_to(root)
+    except ValueError:
+        return False
+    result = git_stdout(root, "ls-files", "--error-unmatch", "--", str(rel))
+    return result.returncode == 0
+
+
+def environment_binding(root: Path) -> str:
+    """Fixed lowercase SHA-256 of the committed environment.toml bytes.
+
+    Never accepts caller text: the blob is read from the committed Git object
+    (HEAD:.factory/environment.toml). A present-but-untracked file is an error;
+    a genuinely absent file binds to the canonical marker.
+    """
+    path = root / ENVIRONMENT_REL
+    if path.is_symlink():
+        die("environment.toml must not be a symlink")
+    if not is_tracked(root, path):
+        if path.exists():
+            die("environment.toml exists but is not committed; it must be tracked")
+        return ENVIRONMENT_ABSENT
+    result = git_stdout(root, "show", f"HEAD:{ENVIRONMENT_REL}")
+    if result.returncode != 0:
+        die("cannot read the committed environment.toml blob")
+    return hashlib.sha256(result.stdout).hexdigest()
 
 
 def image_entries(directory: Path) -> list[dict]:
@@ -85,11 +129,14 @@ def cmd_manifest(args: argparse.Namespace) -> int:
     images = image_entries(out)
     if not images:
         die("no capture images found in output directory")
+    # Environment binding is computed from the committed repo bytes; caller
+    # text (e.g. an --environment flag) is never accepted.
+    environment_blob = environment_binding(Path.cwd())
     manifest = {
         "schema": SCHEMA,
         "commit": args.commit,
         "tree": args.tree,
-        "environment_blob": args.environment or "",
+        "environment_blob": environment_blob,
         "images": images,
     }
     atomic_write_json(out / "provenance.json", manifest)
@@ -121,6 +168,11 @@ def cmd_verify(args: argparse.Namespace) -> int:
     environment = manifest.get("environment_blob")
     if not isinstance(environment, str):
         die("provenance.json environment_blob is invalid")
+    if environment != ENVIRONMENT_ABSENT and not SHA256.fullmatch(environment):
+        die("provenance.json environment_blob must be the committed environment.toml sha256 or the canonical absent marker")
+    binding = environment_binding(Path.cwd())
+    if environment != binding:
+        die(f"provenance.json environment binding mismatch (manifest {environment[:16]!r} != committed {binding[:16]!r})")
     images = manifest.get("images")
     if not isinstance(images, list) or not images:
         die("provenance.json images array is invalid")
@@ -164,7 +216,6 @@ def main() -> int:
     m.add_argument("--out", required=True)
     m.add_argument("--commit", required=True)
     m.add_argument("--tree", required=True)
-    m.add_argument("--environment", default="")
     m.set_defaults(func=cmd_manifest)
     v = sub.add_parser("verify")
     v.add_argument("--out", required=True)

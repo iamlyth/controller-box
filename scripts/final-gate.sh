@@ -70,6 +70,9 @@ PY
         ./scripts/check-golden-policy.py
         ./scripts/check-capability-contracts.py
         ./scripts/check-capability-evidence.py
+        # Check-only: validates retained visual evidence and never captures or
+        # invokes the vision model while the lifecycle lock is held.
+        ./scripts/visual-audit-gate.sh
         ./scripts/check-docs-sync.sh
         ./scripts/verify-boilerplate.sh
         if [[ -x scripts/verify-project.sh ]]; then

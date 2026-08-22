@@ -9,6 +9,7 @@
 #
 # Role: {role}  (one of diagram, layout, legibility, state, consistency, adversarial)
 # State: {state_id} — {expected}
+# Request nonce (must be echoed verbatim): {request_nonce}
 #
 # You are a read-only visual reviewer examining one exact-commit screenshot of
 # a production application window. Your report is advisory and feeds a
@@ -47,6 +48,7 @@
 #   "model": "{model}",
 #   "prompt_sha256": "{prompt_sha256}",
 #   "schema_sha256": "{schema_sha256}",
+#   "request_nonce": "{request_nonce}",
 #   "verdict": "pass" | "finding" | "error",
 #   "observations": [
 #     {
@@ -62,6 +64,12 @@
 # }
 #
 # Rules:
+# - The `request_nonce` field MUST be the exact 32-character lowercase hex
+#   nonce shown above, copied character-for-character. Do not invent, alter,
+#   truncate, or omit it: it proves this invocation is fresh. A wrong or
+#   missing nonce makes the finding unusable.
+# - Every other sealed field (state_id, image_sha256, role, model,
+#   prompt_sha256, schema_sha256) must also be echoed exactly as shown.
 # - verdict "pass" requires no findings above info/low severity.
 # - verdict "error" means the image was unusable or the state could not be
 #   assessed; never use "error" for a bad-looking but legible screenshot.
