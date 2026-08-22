@@ -1237,9 +1237,15 @@ fi
 # visibly selected/highlighted row (validator only checked the button row). The
 # validator must fail closed on both. These run through the test-only
 # validation hook, which needs only ImageMagick `convert` (no display server,
-# no installed binary), so they are genuinely non-skipping under nix-shell.
-command -v convert >/dev/null 2>&1 \
-    || fail "ImageMagick convert is required for the visual validator"
+# no installed binary). Under the declared Nix project environment
+# (shell.nix provides ImageMagick) they are genuinely non-skipping: a missing
+# convert fails the run rather than skipping. At host level (outside
+# nix-shell) boilerplate verification stays usable by reporting an explicit
+# tool-unavailable skip, consistent with the 13c/13d installed-adapter skip
+# policy. scripts/verify-project.sh re-executes under nix-shell and asserts
+# convert is present, so this negative regression can never silently skip in
+# the complete project verification.
+if command -v convert >/dev/null 2>&1; then
 NEG_HEAD=$(git -C "$PROJECT_ROOT" rev-parse HEAD)
 NEG="$tmp/negatives"; mkdir -p "$NEG"
 # Uniform black overlay frame must be rejected as overlay-active.
@@ -1287,6 +1293,11 @@ rc=$?
 set -e
 expect_rc 0 $rc "validator accepts a profile list with a selected row"
 echo "test-visual-audit: non-skipping blank-overlay + unselected-list negative regressions passed (13e)"
+elif [[ ${CBX_VERIFY_IN_NIX_SHELL:-0} == 1 || -n ${IN_NIX_SHELL:-} ]]; then
+    fail "ImageMagick convert is required for the visual validator (Nix project environment)"
+else
+    echo "SKIP: ImageMagick convert unavailable for the non-skipping negative regressions (13e)"
+fi
 
 # --- 13f. atomic capture publication: only validated frames reach OUTPUT -------
 # The driver must capture to an exclusively-owned temp in the SAME directory as

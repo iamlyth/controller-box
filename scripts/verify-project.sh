@@ -33,6 +33,16 @@ if ! pkg-config --exists "${required[@]}"; then
     exit 2
 fi
 
+# Nix gate for the visual-validator negative regressions (test-visual-audit.sh
+# 13e). The complete project verification always runs under the declared Nix
+# environment (shell.nix provides ImageMagick), so convert must be present
+# here. Asserting it guarantees the non-skipping blank-overlay/unselected-list
+# regressions can never silently skip for lack of the validator prerequisite.
+if ! command -v convert >/dev/null 2>&1; then
+    echo "verify-project: ImageMagick convert is required for the visual validator" >&2
+    exit 2
+fi
+
 # Invalidate the CMake cache when the source directory has changed
 # (e.g. bind-mount path differs between Ralph and campaign environments).
 if [[ -f "$BUILD_DIR/CMakeCache.txt" ]]; then
