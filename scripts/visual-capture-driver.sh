@@ -285,15 +285,31 @@ for _sig in INT TERM HUP QUIT; do
     trap 'cleanup; exit 130' "$_sig"
 done
 
-# Best-effort durable fsync of a single file (and, for the directory variant,
-# the directory that holds the renames). Used to make the atomic publish
-# crash/power-look durable: the receipt and the final OUTPUT rename are flushed
-# to stable storage before/after they land. A failure to fsync is not fatal to
-# the driver's correctness contract (which is about atomic visibility), so it
-# is best-effort and never aborts the operation.
-fsync_path() { # path
-    python3 -c 'import os,sys; fd=os.open(sys.argv[1], os.O_RDONLY); os.fsync(fd); os.close(fd)' \
-        "$1" 2>/dev/null || true
+# ---------------------------------------------------------------------------
+# Atomic publish + durable-fsync helper. Publication uses an atomic no-replace
+# primitive (renameat2 RENAME_NOREPLACE, falling back to link()+unlink()) so a
+# destination created after any existence check is still refused atomically: no
+# TOCTOU and no ordinary overwriting `mv`. fsync failures FAIL CLOSED (nonzero),
+# so the crash/power-durability claim is real rather than best-effort: a
+# half-published or non-durable receipt/image is never presented as a success.
+# ---------------------------------------------------------------------------
+ATOMIC="$SCRIPT_DIR/atomic-publish.py"
+# A test may inject a mock helper via CBX_ATOMIC_PUBLISH, honored ONLY under the
+# RALPH_VISUAL_AUDIT_TESTING marker (the completion gate rejects that marker, so
+# it can never weaken the production publish path).
+if [[ ${RALPH_VISUAL_AUDIT_TESTING:-0} == 1 && -n "${CBX_ATOMIC_PUBLISH:-}" ]]; then
+    ATOMIC="$CBX_ATOMIC_PUBLISH"
+fi
+if [[ ! -f "$ATOMIC" && ! -x "$ATOMIC" ]]; then
+    echo "visual-capture: publish helper '$ATOMIC' unavailable" >&2
+    exit 1
+fi
+
+publish_no_replace() { # src dst  -> 0 ok, 2 exists, 3 error
+    "$ATOMIC" publish "$1" "$2"
+}
+fsync_path() { # path  -> 0 ok, 3 error (fail-closed durability)
+    "$ATOMIC" fsync "$1"
 }
 
 # ---------------------------------------------------------------------------
@@ -570,50 +586,83 @@ cat > "$RECEIPT_TMP" <<EOF
   "finished_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 EOF
-# Flush the receipt bytes to stable storage before the atomic renames so the
-# published sidecar is durable, not just visible.
-fsync_path "$RECEIPT_TMP"
+# Test-only pre-publish injection (gated behind RALPH_VISUAL_AUDIT_TESTING,
+# rejected by the completion gate): a regression may source a hook that creates
+# OUTPUT/receipt in the exact TOCTOU window between validation and the atomic
+# no-replace publish, deterministically proving the primitive (not an existence
+# pre-check) refuses a concurrently-created/unowned destination and preserves
+# its sentinel with no image-without-receipt.
+if [[ ${RALPH_VISUAL_AUDIT_TESTING:-0} == 1 && -n "${CBX_PRE_PUBLISH_HOOK:-}" ]]; then
+    # shellcheck disable=SC1090  # path supplied only by a test-only hook
+    . "$CBX_PRE_PUBLISH_HOOK"
+fi
 
-# Fail-closed publication. Two guarantees make an image visible at OUTPUT only
-# with its matching validated receipt:
+# Durable fail-closed publication. Two guarantees make an image visible at
+# OUTPUT only with its matching validated receipt:
 #
-#  1. Refuse unowned destinations: OUTPUT and its receipt sidecar must not
-#     already exist (including via a symlink, a dangling symlink, or a hardlink
-#     to an unowned file). A plain `mv -f` would silently replace (or follow
-#     and clobber) a path we do not own; refusing is the only fail-safe.
-#  2. Commit-point ordering: the receipt is renamed into place FIRST, and the
-#     image rename is the LAST (commit-point) rename. So whenever OUTPUT exists
-#     after the driver, its validated receipt is already in place beside it. If
-#     the receipt publish fails we abort before touching OUTPUT; if the image
-#     publish fails we remove the just-published (owned) receipt so a failed
-#     publish leaves neither OUTPUT nor an orphaned receipt.
-# Both renames are same-filesystem and atomic; each is followed by a directory
-# fsync so a crash/power loss cannot leave a half-published directory entry.
-if [[ -e "$OUTPUT" || -L "$OUTPUT" ]]; then
-    echo "visual-capture: refusing to overwrite pre-existing OUTPUT '$OUTPUT'" >&2
+#  1. Atomic no-replace publish (renameat2 RENAME_NOREPLACE / link+unlink): the
+#     no-overwrite guarantee is enforced in the SAME syscall as the publish, so
+#     a destination that appears between any existence check and the publish
+#     (TOCTOU) is still refused. No pre-existing/unowned/symlinked/hardlinked
+#     path is ever overwritten, and no ordinary `mv` is used.
+#  2. Commit-point ordering + fail-closed durability: the receipt is fsynced
+#     and published FIRST, then its directory entry is fsynced; only then is
+#     the image renamed into place (the commit point) and the directory fsynced.
+#     Every fsync failure FAILS CLOSED: the driver withdraws its owned artifacts
+#     and exits non-zero, so a half-published or non-durable artifact is never
+#     presented as a successful capture.
+#
+# Flush the receipt bytes to stable storage BEFORE publishing them.
+if ! fsync_path "$RECEIPT_TMP"; then
+    echo "visual-capture: fsync failed on receipt temp; capture withheld" >&2
     exit 1
 fi
-if [[ -e "$OUTPUT.receipt.json" || -L "$OUTPUT.receipt.json" ]]; then
+
+# Publish the receipt first (atomic no-replace; refuses a pre-existing/unowned/
+# symlinked/hardlinked receipt).
+rc=0
+publish_no_replace "$RECEIPT_TMP" "$OUTPUT.receipt.json" || rc=$?
+if [[ $rc -eq 2 ]]; then
     echo "visual-capture: refusing to overwrite pre-existing receipt '$OUTPUT.receipt.json'" >&2
     exit 1
-fi
-
-if ! mv -- "$RECEIPT_TMP" "$OUTPUT.receipt.json" 2>/dev/null; then
+elif [[ $rc -ne 0 ]]; then
     echo "visual-capture: failed to publish receipt for $STATE; capture withheld" >&2
     exit 1
 fi
 RECEIPT_TMP=""
-fsync_path "$OUTPUT_DIR"
+# Make the published receipt entry durable before the image commit point.
+if ! fsync_path "$OUTPUT_DIR"; then
+    # We own the receipt we just published; remove it so a failed/doubtful
+    # publish leaves neither OUTPUT nor an orphaned, possibly non-durable receipt.
+    rm -f -- "$OUTPUT.receipt.json"
+    echo "visual-capture: fsync failed on receipt directory entry; capture withheld" >&2
+    exit 1
+fi
 
-# Commit point: only now is the image visible at OUTPUT.
-if ! mv -- "$CAPTURE_TMP" "$OUTPUT" 2>/dev/null; then
-    # We own the receipt we just published; remove it so a failed publish
-    # leaves neither OUTPUT nor a stray receipt sidecar.
+# Commit point: only now is the image visible at OUTPUT (atomic no-replace).
+rc=0
+publish_no_replace "$CAPTURE_TMP" "$OUTPUT" || rc=$?
+if [[ $rc -eq 2 ]]; then
+    # A pre-existing/unowned OUTPUT appeared (the TOCTOU window is closed by the
+    # no-replace primitive). We own the receipt we just published; remove it so
+    # no image is ever published without its receipt and the pre-existing
+    # OUTPUT/sentinel is preserved.
+    rm -f -- "$OUTPUT.receipt.json"
+    echo "visual-capture: refusing to overwrite pre-existing OUTPUT '$OUTPUT'" >&2
+    exit 1
+elif [[ $rc -ne 0 ]]; then
     rm -f -- "$OUTPUT.receipt.json"
     echo "visual-capture: failed to publish capture for $STATE; no artifact recorded" >&2
     exit 1
 fi
 CAPTURE_TMP=""
-fsync_path "$OUTPUT_DIR"
+# Make the image commit-point entry durable. If this fsync fails the image is
+# already atomically at OUTPUT; to keep a clean fail-closed state we withdraw
+# the image and its receipt (both owned by us).
+if ! fsync_path "$OUTPUT_DIR"; then
+    rm -f -- "$OUTPUT" "$OUTPUT.receipt.json"
+    echo "visual-capture: fsync failed on capture directory entry; capture withdrawn" >&2
+    exit 1
+fi
 
 echo "visual-capture: captured $STATE -> $OUTPUT (commit ${COMMIT:0:12}, bin ${BIN_SHA:0:12})"

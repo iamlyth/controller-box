@@ -1363,24 +1363,48 @@ EOF
         chmod +x "$tmp/fakebin/import"
         export PATH="$tmp/fakebin:$PATH"
 
-        # Receipt-blocking `mv` for the receipt-publish-failure case: it refuses
-        # any publish whose destination is the receipt sidecar (and passes every
-        # other mv through to the real /bin/mv), so a validated capture whose
-        # receipt cannot land must be withheld entirely.
-        mkdir -p "$tmp/fakebin2"
-        cat > "$tmp/fakebin2/mv" <<'EOF'
+        # Receipt-blocking publish helper for the receipt-publish-failure case:
+        # a mock atomic-publish that refuses any `publish` whose destination is
+        # the receipt sidecar (and delegates every other call to the real
+        # helper). It runs in place of the production publish primitive (gated
+        # behind RALPH_VISUAL_AUDIT_TESTING), so a validated capture whose
+        # receipt cannot land is withheld entirely. No /bin/mv is assumed.
+        mkdir -p "$tmp/fakepub"
+        cat > "$tmp/fakepub/atomic-publish.sh" <<EOF
 #!/usr/bin/env bash
-for a in "$@"; do
-    case "$a" in
-        *.receipt.json)
-            echo "mock mv: refusing to publish receipt" >&2
-            exit 1
-            ;;
-    esac
-done
-exec /bin/mv "$@"
+if [ "\${1:-}" = "publish" ]; then
+    for a in "\$@"; do
+        case "\$a" in
+            *.receipt.json)
+                echo "mock publish: refusing to publish receipt" >&2
+                exit 3
+                ;;
+        esac
+    done
+fi
+exec "$PROJECT_ROOT/scripts/atomic-publish.py" "\$@"
 EOF
-        chmod +x "$tmp/fakebin2/mv"
+        chmod +x "$tmp/fakepub/atomic-publish.sh"
+
+        # Fsync-failure publish helper: a mock atomic-publish that fails the Nth
+        # `fsync` call (counting via a shared counter file) and delegates every
+        # other call to the real helper. Proves the driver FAILS CLOSED on a
+        # non-durable publish and withdraws its owned artifacts.
+        cat > "$tmp/fakepub/atomic-fsync.sh" <<EOF
+#!/usr/bin/env bash
+if [ "\${1:-}" = "fsync" ]; then
+    n=0
+    [ -f "$tmp/fsync.count" ] && n=\$(cat "$tmp/fsync.count")
+    n=\$((n+1))
+    echo "\$n" > "$tmp/fsync.count"
+    if [ "\$n" = "\${CBX_FAIL_FSYNC_N:-0}" ]; then
+        echo "mock fsync: failed on call \$n" >&2
+        exit 3
+    fi
+fi
+exec "$PROJECT_ROOT/scripts/atomic-publish.py" "\$@"
+EOF
+        chmod +x "$tmp/fakepub/atomic-fsync.sh"
 
         # (1) semantic rejection: wrong-state frame must leave NO output, no
         # receipt, no temp.
@@ -1510,8 +1534,8 @@ EOF
         # before the image is ever published.
         set +e
         MOCK_IMPORT_SRC="$ATOM_DIR/frame-ok.png" \
+        RALPH_VISUAL_AUDIT_TESTING=1 CBX_ATOMIC_PUBLISH="$tmp/fakepub/atomic-publish.sh" \
         VISUAL_AUDIT_INSTALL_PREFIX="$ATOM_PREFIX" \
-        PATH="$tmp/fakebin2:$tmp/fakebin:$PATH" \
         "$PROJECT_ROOT/scripts/visual-capture-driver.sh" manager-main \
             "$ATOM_DIR/receiptfail.png" "$ATOM_HEAD" >"$tmp/atom-receiptfail.out" 2>&1
         rc=$?
@@ -1523,8 +1547,78 @@ EOF
             || fail "receipt-publish failure left a receipt sidecar"
         grep -qi "failed to publish receipt" "$tmp/atom-receiptfail.out" \
             || fail "receipt-publish failure must report the withheld capture"
-        [[ -z "$(find "$ATOM_DIR" -maxdepth 1 -name '.cbx-capture.*' -o -maxdepth 1 -name '.cbx-receipt.*' | head -n 1)" ]] \
+        [[ -z "$(find "$ATOM_DIR" -maxdepth 1 \( -name '.cbx-capture.*' -o -name '.cbx-receipt.*' \) | head -n 1)" ]] \
             || fail "receipt-publish failure left an owned temp behind"
+
+        # (7b) fsync failure on the receipt temp (before any publish): the
+        # driver must fail closed and leave neither OUTPUT, nor a receipt, nor a
+        # temp — never presenting a non-durable capture as successful.
+        : > "$tmp/fsync.count"
+        set +e
+        MOCK_IMPORT_SRC="$ATOM_DIR/frame-ok.png" \
+        RALPH_VISUAL_AUDIT_TESTING=1 CBX_ATOMIC_PUBLISH="$tmp/fakepub/atomic-fsync.sh" \
+        CBX_FAIL_FSYNC_N=1 \
+        VISUAL_AUDIT_INSTALL_PREFIX="$ATOM_PREFIX" \
+        "$PROJECT_ROOT/scripts/visual-capture-driver.sh" manager-main \
+            "$ATOM_DIR/fsyncreceipt.png" "$ATOM_HEAD" >"$tmp/atom-fsyncreceipt.out" 2>&1
+        rc=$?
+        set -e
+        [[ $rc -ne 0 ]] || fail "fsync-failure (receipt temp) unexpectedly succeeded"
+        [[ ! -e "$ATOM_DIR/fsyncreceipt.png" ]] \
+            || fail "fsync-failure (receipt temp) left an image at OUTPUT"
+        [[ ! -e "$ATOM_DIR/fsyncreceipt.png.receipt.json" ]] \
+            || fail "fsync-failure (receipt temp) left a receipt"
+        grep -qi "fsync failed on receipt temp" "$tmp/atom-fsyncreceipt.out" \
+            || fail "fsync-failure (receipt temp) must report the failed fsync"
+        [[ -z "$(find "$ATOM_DIR" -maxdepth 1 \( -name '.cbx-capture.*' -o -name '.cbx-receipt.*' \) | head -n 1)" ]] \
+            || fail "fsync-failure (receipt temp) left an owned temp behind"
+
+        # (7c) fsync failure on the directory entry after the receipt is
+        # published: the driver must withdraw its (owned) receipt and leave
+        # neither OUTPUT nor a possibly-non-durable receipt.
+        : > "$tmp/fsync.count"
+        set +e
+        MOCK_IMPORT_SRC="$ATOM_DIR/frame-ok.png" \
+        RALPH_VISUAL_AUDIT_TESTING=1 CBX_ATOMIC_PUBLISH="$tmp/fakepub/atomic-fsync.sh" \
+        CBX_FAIL_FSYNC_N=2 \
+        VISUAL_AUDIT_INSTALL_PREFIX="$ATOM_PREFIX" \
+        "$PROJECT_ROOT/scripts/visual-capture-driver.sh" manager-main \
+            "$ATOM_DIR/fsyncdir.png" "$ATOM_HEAD" >"$tmp/atom-fsyncdir.out" 2>&1
+        rc=$?
+        set -e
+        [[ $rc -ne 0 ]] || fail "fsync-failure (receipt dir entry) unexpectedly succeeded"
+        [[ ! -e "$ATOM_DIR/fsyncdir.png" ]] \
+            || fail "fsync-failure (receipt dir entry) left an image at OUTPUT"
+        [[ ! -e "$ATOM_DIR/fsyncdir.png.receipt.json" ]] \
+            || fail "fsync-failure (receipt dir entry) left a receipt"
+        grep -qi "fsync failed on receipt directory entry" "$tmp/atom-fsyncdir.out" \
+            || fail "fsync-failure (receipt dir entry) must report the failed fsync"
+        [[ -z "$(find "$ATOM_DIR" -maxdepth 1 \( -name '.cbx-capture.*' -o -name '.cbx-receipt.*' \) | head -n 1)" ]] \
+            || fail "fsync-failure (receipt dir entry) left an owned temp behind"
+
+        # (7d) fsync failure on the directory entry after the image commit
+        # point: the image is already atomically at OUTPUT, so to keep a clean
+        # fail-closed state the driver withdraws the image and its receipt
+        # (both owned) and leaves nothing behind.
+        : > "$tmp/fsync.count"
+        set +e
+        MOCK_IMPORT_SRC="$ATOM_DIR/frame-ok.png" \
+        RALPH_VISUAL_AUDIT_TESTING=1 CBX_ATOMIC_PUBLISH="$tmp/fakepub/atomic-fsync.sh" \
+        CBX_FAIL_FSYNC_N=3 \
+        VISUAL_AUDIT_INSTALL_PREFIX="$ATOM_PREFIX" \
+        "$PROJECT_ROOT/scripts/visual-capture-driver.sh" manager-main \
+            "$ATOM_DIR/fsyncimg.png" "$ATOM_HEAD" >"$tmp/atom-fsyncimg.out" 2>&1
+        rc=$?
+        set -e
+        [[ $rc -ne 0 ]] || fail "fsync-failure (image commit point) unexpectedly succeeded"
+        [[ ! -e "$ATOM_DIR/fsyncimg.png" ]] \
+            || fail "fsync-failure (image commit point) left an image at OUTPUT"
+        [[ ! -e "$ATOM_DIR/fsyncimg.png.receipt.json" ]] \
+            || fail "fsync-failure (image commit point) left a receipt"
+        grep -qi "fsync failed on capture directory entry" "$tmp/atom-fsyncimg.out" \
+            || fail "fsync-failure (image commit point) must report the failed fsync"
+        [[ -z "$(find "$ATOM_DIR" -maxdepth 1 \( -name '.cbx-capture.*' -o -name '.cbx-receipt.*' \) | head -n 1)" ]] \
+            || fail "fsync-failure (image commit point) left an owned temp behind"
 
         # (8) pre-existing OUTPUT refusal on a VALIDATED capture: the driver must
         # refuse to overwrite a pre-existing/unowned OUTPUT (not mv -f over it),
@@ -1585,6 +1679,55 @@ EOF
             || fail "overlay rejection must report the wrong-state capture"
         [[ -z "$(find "$ATOM_DIR" -maxdepth 1 -name '.cbx-capture.*' -o -maxdepth 1 -name '.cbx-receipt.*' | head -n 1)" ]] \
             || fail "rejected overlay left an owned temp behind"
+
+        # (11) TOCTOU race — OUTPUT appears between validation and publish: a
+        # concurrently-created (unowned) OUTPUT must be preserved, never
+        # clobbered, and no image-without-receipt may remain. The test-only
+        # pre-publish hook creates OUTPUT in the exact window after validation
+        # and before the atomic no-replace publish; the primitive (not an
+        # existence pre-check) must refuse it and the driver must withdraw the
+        # receipt it had just published.
+        cat > "$tmp/race-out-hook.sh" <<'EOF'
+printf 'RACE-OUT-SENTINEL' > "$OUTPUT"
+EOF
+        set +e
+        MOCK_IMPORT_SRC="$ATOM_DIR/frame-ok.png" \
+        RALPH_VISUAL_AUDIT_TESTING=1 CBX_PRE_PUBLISH_HOOK="$tmp/race-out-hook.sh" \
+        VISUAL_AUDIT_INSTALL_PREFIX="$ATOM_PREFIX" \
+        "$PROJECT_ROOT/scripts/visual-capture-driver.sh" manager-main \
+            "$ATOM_DIR/race-out.png" "$ATOM_HEAD" >"$tmp/atom-race-out.out" 2>&1
+        rc=$?
+        set -e
+        [[ $rc -ne 0 ]] || fail "TOCTOU race: validated capture unexpectedly overwrote a concurrently-created OUTPUT"
+        grep -q 'RACE-OUT-SENTINEL' "$ATOM_DIR/race-out.png" \
+            || fail "TOCTOU race: concurrently-created OUTPUT was clobbered"
+        [[ ! -e "$ATOM_DIR/race-out.png.receipt.json" ]] \
+            || fail "TOCTOU race: image-publish refusal left a receipt without an image"
+        [[ -z "$(find "$ATOM_DIR" -maxdepth 1 \( -name '.cbx-capture.*' -o -name '.cbx-receipt.*' \) | head -n 1)" ]] \
+            || fail "TOCTOU race (OUTPUT) left an owned temp behind"
+
+        # (12) TOCTOU race — receipt appears between validation and publish: a
+        # concurrently-created receipt sidecar must be preserved (refused, not
+        # overwritten) and no image may be published without its matching
+        # receipt.
+        cat > "$tmp/race-receipt-hook.sh" <<'EOF'
+printf 'RACE-RECEIPT-SENTINEL' > "$OUTPUT.receipt.json"
+EOF
+        set +e
+        MOCK_IMPORT_SRC="$ATOM_DIR/frame-ok.png" \
+        RALPH_VISUAL_AUDIT_TESTING=1 CBX_PRE_PUBLISH_HOOK="$tmp/race-receipt-hook.sh" \
+        VISUAL_AUDIT_INSTALL_PREFIX="$ATOM_PREFIX" \
+        "$PROJECT_ROOT/scripts/visual-capture-driver.sh" manager-main \
+            "$ATOM_DIR/race-receipt.png" "$ATOM_HEAD" >"$tmp/atom-race-receipt.out" 2>&1
+        rc=$?
+        set -e
+        [[ $rc -ne 0 ]] || fail "TOCTOU race: validated capture succeeded despite a concurrently-created receipt"
+        grep -q 'RACE-RECEIPT-SENTINEL' "$ATOM_DIR/race-receipt.png.receipt.json" \
+            || fail "TOCTOU race: concurrently-created receipt was overwritten"
+        [[ ! -e "$ATOM_DIR/race-receipt.png" ]] \
+            || fail "TOCTOU race (receipt): an image was published without its matching receipt"
+        [[ -z "$(find "$ATOM_DIR" -maxdepth 1 \( -name '.cbx-capture.*' -o -name '.cbx-receipt.*' \) | head -n 1)" ]] \
+            || fail "TOCTOU race (receipt) left an owned temp behind"
         echo "test-visual-audit: atomic capture publication passed (13f)"
         PATH="${PATH#"$tmp/fakebin:"}"
     else
