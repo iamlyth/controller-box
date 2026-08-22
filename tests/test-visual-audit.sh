@@ -1040,6 +1040,15 @@ grep -q 'controller diagram absent' "$DRIVER_SRC" \
     || fail "adapter must reject a manager-editor frame without the controller diagram"
 grep -q 'convert' "$DRIVER_SRC" \
     || fail "adapter must depend on convert for semantic frame validation"
+# Blank-overlay + unselected-list fail-closed hardening (the two additional
+# false-positive states found by the retained-capture audit): the adapter must
+# reject a uniform/blank overlay frame and a profile list with no selected row.
+grep -q 'overlay frame is blank/uniform' "$DRIVER_SRC" \
+    || fail "adapter must reject a blank overlay frame for overlay-active"
+grep -q 'no selected profile row' "$DRIVER_SRC" \
+    || fail "adapter must reject an unselected profile list for manager-profiles"
+grep -q 'row_selected' "$DRIVER_SRC" \
+    || fail "adapter must implement the selected-row semantic check"
 
 # --- 13c. product adapter hanging-child: bounded poll + owned group cleanup ---
 # Runs the real adapter against a mock installed prefix (no build tree). The
@@ -1156,6 +1165,64 @@ if command -v Xvfb >/dev/null 2>&1 && command -v xdotool >/dev/null 2>&1 \
 else
     echo "SKIP: Xvfb/xdotool/import/convert unavailable for the installed-adapter test"
 fi
+
+# --- 13e. non-skipping negative regressions: blank overlay + unselected list --
+# The exact-commit retained-capture audit found two more false-positive states:
+# a uniform/blank overlay frame (rc=0 for a 250-byte uniform black PNG despite
+# the inventory requiring active icon/status content) and a profile list with no
+# visibly selected/highlighted row (validator only checked the button row). The
+# validator must fail closed on both. These run through the test-only
+# validation hook, which needs only ImageMagick `convert` (no display server,
+# no installed binary), so they are genuinely non-skipping under nix-shell.
+command -v convert >/dev/null 2>&1 \
+    || fail "ImageMagick convert is required for the visual validator"
+NEG_HEAD=$(git -C "$PROJECT_ROOT" rev-parse HEAD)
+NEG="$tmp/negatives"; mkdir -p "$NEG"
+# Uniform black overlay frame must be rejected as overlay-active.
+convert -size 1280x720 xc:black "$NEG/ov-blank.png"
+set +e
+RALPH_VISUAL_AUDIT_TESTING=1 CBX_VISUAL_VALIDATE_ONLY="$NEG/ov-blank.png" \
+    "$PROJECT_ROOT/scripts/visual-capture-driver.sh" overlay-active \
+    "$NEG/out.png" "$NEG_HEAD" >"$tmp/neg-ov.out" 2>&1
+rc=$?
+set -e
+[[ $rc -ne 0 ]] || fail "validator accepted a blank overlay frame as overlay-active"
+grep -qi "blank/uniform" "$tmp/neg-ov.out" \
+    || fail "blank overlay rejection must report the blank/uniform frame"
+# Profile list with the button row but no selected/highlighted row must be
+# rejected as manager-profiles (button-row presence alone is not enough).
+convert -size 1280x720 xc:"rgb(30,30,42)" \
+    -fill "rgb(20,20,30)" -draw "rectangle 16,500 115,543" \
+    -fill "rgb(240,240,250)" -draw "rectangle 116,500 215,543" \
+    -fill "rgb(50,50,70)" -draw "rectangle 216,500 315,543" \
+    -fill "rgb(255,255,255)" -draw "rectangle 316,500 415,543" \
+    "$NEG/unselected.png"
+set +e
+RALPH_VISUAL_AUDIT_TESTING=1 CBX_VISUAL_VALIDATE_ONLY="$NEG/unselected.png" \
+    "$PROJECT_ROOT/scripts/visual-capture-driver.sh" manager-profiles \
+    "$NEG/out.png" "$NEG_HEAD" >"$tmp/neg-up.out" 2>&1
+rc=$?
+set -e
+[[ $rc -ne 0 ]] || fail "validator accepted an unselected profile list as manager-profiles"
+grep -qi "no selected profile row" "$tmp/neg-up.out" \
+    || fail "unselected list rejection must report the missing selected row"
+# The same button row with row 0 genuinely highlighted must still PASS, so the
+# selection check is not rejecting every list.
+convert -size 1280x720 xc:"rgb(30,30,42)" \
+    -fill "rgb(42,42,58)" -draw "rectangle 16,64 1264,96" \
+    -fill "rgb(20,20,30)" -draw "rectangle 16,500 115,543" \
+    -fill "rgb(240,240,250)" -draw "rectangle 116,500 215,543" \
+    -fill "rgb(50,50,70)" -draw "rectangle 216,500 315,543" \
+    -fill "rgb(255,255,255)" -draw "rectangle 316,500 415,543" \
+    "$NEG/selected.png"
+set +e
+RALPH_VISUAL_AUDIT_TESTING=1 CBX_VISUAL_VALIDATE_ONLY="$NEG/selected.png" \
+    "$PROJECT_ROOT/scripts/visual-capture-driver.sh" manager-profiles \
+    "$NEG/out.png" "$NEG_HEAD" >"$tmp/neg-sel.out" 2>&1
+rc=$?
+set -e
+expect_rc 0 $rc "validator accepts a profile list with a selected row"
+echo "test-visual-audit: non-skipping blank-overlay + unselected-list negative regressions passed (13e)"
 
 # --- 14. capture: ok driver succeeds and is deterministic ---------------------
 cat > "$tmp/mock-cap-ok.sh" <<'EOF'

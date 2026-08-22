@@ -65,10 +65,6 @@ if [[ -z "$CUR" || "$CUR" != "$COMMIT" ]]; then
     exit 1
 fi
 
-for tool in Xvfb xdotool import convert; do
-    command -v "$tool" >/dev/null 2>&1 || { echo "visual-capture: SKIP missing tool $tool" >&2; exit 77; }
-done
-
 # ---------------------------------------------------------------------------
 # Semantic state validation (ImageMagick). The installed manager is driven to a
 # requested visual state via deterministic coordinate clicks; before a capture
@@ -85,6 +81,32 @@ done
 img_std() { # png x y w h
     convert "$1" -crop "$4x$5+$2+$3" +repage \
         -format '%[fx:standard_deviation]' info: 2>/dev/null || echo ""
+}
+
+# Print the mean RGB triple ("r g b", each 0..1) of a crop; empty on error.
+img_mean() { # png x y w h
+    convert "$1" -crop "$4x$5+$2+$3" +repage \
+        -format '%[fx:mean.r] %[fx:mean.g] %[fx:mean.b]' info: 2>/dev/null || echo ""
+}
+
+# Is the first manager-profiles list row visibly selected? The profiles list
+# (panel y=48 + CBX_PT_LIST_Y=16 => list y=64..484, item_h=32, SPEC §5.3)
+# auto-selects row 0 on refresh (cbx_profiles_tab_refresh), which the list
+# widget paints with panel_bg_hover {42,42,58} against the unselected
+# panel_bg {30,30,42}. Compare background-only right-edge strips of row 0 and
+# row 1: a genuine selection leaves a measurable per-channel mean difference
+# (>= 0.03 ~ 8/255), while an unselected list has identical row backgrounds.
+row_selected() { # png
+    local img="$1" r0 r1
+    r0=$(img_mean "$img" 1150 70 100 16)
+    r1=$(img_mean "$img" 1150 102 100 16)
+    [[ -n "$r0" && -n "$r1" ]] || { echo "cannot measure profile list rows" >&2; return 1; }
+    awk -v a="$r0" -v b="$r1" 'BEGIN{
+        split(a, A, " "); split(b, B, " ");
+        dr=A[1]-B[1]; dg=A[2]-B[2]; db=A[3]-B[3];
+        if (dr<0) dr=-dr; if (dg<0) dg=-dg; if (db<0) db=-db;
+        exit (dr>=0.03 || dg>=0.03 || db>=0.03) ? 0 : 1;
+    }'
 }
 
 # Validate that a captured frame semantically matches the requested state.
@@ -116,6 +138,28 @@ validate_state() { # state png
             echo "visual-capture: state validation FAILED ($state): Create/Edit/Delete button row absent (btn std=$btn, expect >=0.13)" >&2
             return 1
         fi
+        # And a profile row must be visibly selected (the inventory requires a
+        # selected row, not merely the button row). A profile list with no
+        # highlighted row is a wrong-state/false-positive capture.
+        if row_selected "$img"; then :; else
+            echo "visual-capture: state validation FAILED ($state): no selected profile row visible (unselected list captured)" >&2
+            return 1
+        fi
+        ;;
+    overlay-active)
+        # Overlay active state requires real icon/status content rendered by
+        # the installed overlay. A uniform/blank frame means the overlay never
+        # reached an active state (it is created hidden and only shown when an
+        # active gamepad stimulus activates it via the real system service).
+        # Failing closed here honestly blocks the state when that required
+        # service stimulus is unavailable, instead of recording a false-positive
+        # black frame as evidence.
+        full=$(img_std "$img" 0 0 1280 720)
+        [[ -n "$full" ]] || { echo "visual-capture: cannot measure $state frame content ($img)" >&2; return 1; }
+        if awk "BEGIN{exit !($full >= 0.02)}"; then :; else
+            echo "visual-capture: state validation FAILED ($state): overlay frame is blank/uniform (std=$full); the overlay never rendered active icon/status content (requires an active gamepad stimulus via the real system service)" >&2
+            return 1
+        fi
         ;;
     manager-main)
         # Default Controllers view: neither the profile-list button row nor the
@@ -128,9 +172,6 @@ validate_state() { # state png
             echo "visual-capture: state validation FAILED ($state): editor diagram visible (diag std=$diag, expect <=0.09)" >&2
             return 1
         fi
-        ;;
-    overlay-active)
-        # Overlay frame: only the generic non-blank capture check applies.
         ;;
     esac
     return 0
@@ -150,6 +191,14 @@ if [[ ${RALPH_VISUAL_AUDIT_TESTING:-0} == 1 && -n "${CBX_VISUAL_VALIDATE_ONLY:-}
     echo "visual-capture: [test] state '$STATE' rejected for $CBX_VISUAL_VALIDATE_ONLY" >&2
     exit 1
 fi
+
+# Full production capture needs a real X11/display toolchain. This gate sits
+# AFTER the test-only validation hook so the fail-closed validator (which needs
+# only ImageMagick `convert`) can be exercised by non-skipping negative
+# regressions without a display server or installed binary.
+for tool in Xvfb xdotool import convert; do
+    command -v "$tool" >/dev/null 2>&1 || { echo "visual-capture: SKIP missing tool $tool" >&2; exit 77; }
+done
 
 # Prefer an already-installed binary from a prior gate (test-install prefix);
 # VISUAL_AUDIT_INSTALL_PREFIX overrides the prefix for operator-driven runs.
@@ -409,9 +458,16 @@ case "$STATE" in
     manager-profiles)
         xdotool mousemove 640 24 click 1   # Profiles tab
         sleep 0.8
+        # Deterministically select the first profile row so a selected/highlighted
+        # row is genuinely rendered (cbx_profiles_tab_refresh auto-selects row 0,
+        # and the click keeps focus on the list so the highlight is visible).
+        xdotool mousemove 640 80 click 1   # first profile row
+        sleep 0.8
         ;;
     manager-editor)
         xdotool mousemove 640 24 click 1   # Profiles tab
+        sleep 0.8
+        xdotool mousemove 640 80 click 1   # select first profile row
         sleep 0.8
         xdotool mousemove 302 522 click 1  # Edit Profile (deterministic first row)
         sleep 1.0

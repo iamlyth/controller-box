@@ -333,7 +333,7 @@ Keyboard tests in `test_manager_interaction_prof.c` relabeled from
 ## Task 4: Final documentation and specification audit
 - Status: blocked
 - Block reason: BUG-0014 (invisible diagram) and BUG-0015 (0/4 virtual controllers); real InputPlumber system-bus acceptance required; block lifts only with Ralph-owned product fixes and real acceptance evidence (Tasks 5 and 6)
-- Dependencies: Task 1, Task 2, Task 3, Task 5, Task 6, Task 7, Task 8, Task 9, Task 10, Task 11, Task 12, Task 13, Task 14, Task 15, Task 16, Task 17
+- Dependencies: Task 1, Task 2, Task 3, Task 5, Task 6, Task 7, Task 8, Task 9, Task 10, Task 11, Task 12, Task 13, Task 14, Task 15, Task 16, Task 17, Task 18
 - Scope: `.factory/artifacts/implementation-plan.md` (conformance matrix update), `.factory/artifacts/conformance.json` (sidecar), `.factory/artifacts/blocked-facts.json` (facts ledger), `README.md`, `docs/OPERATIONS.md`, full clean verification
 - Acceptance criteria:
   - Task 5 (perceptible installed diagram acceptance) and Task 6 (real four-target InputPlumber routing acceptance) are complete, with exact receipt/artifact evidence resolving FACT-001, FACT-002, and FACT-003 (or an explicit human decision where SPEC §11.2.6 permits it)
@@ -535,6 +535,23 @@ Keyboard tests in `test_manager_interaction_prof.c` relabeled from
 - Verification: `nix-shell --run 'bash tests/test-visual-audit.sh'` passes (incl. 13d real-installed regression); `./scripts/verify-boilerplate.sh` passes (13d/13c SKIP outside nix-shell); the real adapter captures manager-main/profiles/editor + overlay-active with genuine semantic validation and clean owned-group teardown. No golden regeneration; no human/visual acceptance claim; captures remain findings-only for external human review.
 - Documentation impact: no public-behavior change; `.factory/visual-audit-inventory.json` navigation/expected comments corrected to verified state content.
 - Result: Implemented and verified this iteration at HEAD (see verification below). BUG-0018 wrong-state capture closed. Task 4 remains the single completion gate; out-of-band golden re-approval and external facts (FACT-002/003/004/005/006/007) remain open and block implementation completion.
+
+## Task 18: Reject blank overlay and unselected-profile visual captures (runtime `task-1787422841-a8d8`)
+- Status: pending
+- Dependencies: Task 1, Task 2, Task 3, Task 5, Task 8, Task 9, Task 10, Task 13, Task 15, Task 16, Task 17
+- Source: runtime task `task-1787422841-a8d8`. The exact-commit retained-capture audit found two further false-positive states:
+  - `overlay-active` returned rc=0 and a receipt for a 250-byte uniform black PNG, despite the inventory requiring active icon/status content. `validate_state` applied no overlay check at all (only a non-empty file check).
+  - `manager-profiles` showed `Default [read-only]` with no visibly selected/highlighted row, despite the inventory requiring a selected row; the validator only checked button-row variance.
+- Scope: `scripts/visual-capture-driver.sh` (fail-closed semantic validation for overlay-active and manager-profiles selection; deterministic row-0 selection navigation; test-only validation hook moved ahead of the display-tool gate so negative regressions are non-skipping), `tests/test-visual-audit.sh` (13b invariants extended; new non-skipping 13e negative regressions).
+- Acceptance criteria:
+  - `overlay-active` validation fails closed (exit 1) on a uniform/blank frame, honestly blocking the state when the required active gamepad stimulus via the real system service is unavailable, instead of recording a black false-positive as evidence.
+  - `manager-profiles` validation requires a visibly selected profile row (row 0 background differs from an unselected row's background, panel_bg_hover vs panel_bg) in addition to the button row; an unselected list fails closed.
+  - Deterministic navigation clicks the first profile row after switching to the Profiles tab so the declared selection is genuinely rendered.
+  - The test-only validation hook runs before the Xvfb/xdotool/import gate so the validator can be exercised without a display server or installed binary.
+  - Regression: `tests/test-visual-audit.sh` section 13e (non-skipping, needs only ImageMagick `convert`) feeds a uniform-black frame as `overlay-active` and an unselected list as `manager-profiles`, asserts both are rejected with the intended diagnostics, and asserts a selected list still passes; 13b asserts the new source invariants (`overlay frame is blank/uniform`, `no selected profile row`, `row_selected`).
+- Verification: `nix-shell --run 'bash tests/test-visual-audit.sh'` passes (incl. 13d real-installed and 13e non-skipping negative regressions); `./scripts/verify-boilerplate.sh` passes; `shellcheck scripts/visual-capture-driver.sh tests/test-visual-audit.sh` clean; the real installed adapter captures manager-main/profiles/editor with rc=0 including the new selection check. `overlay-active` remains honestly blocked on the unavailable real-system service stimulus (FACT-002/003). No golden regeneration; no human/visual acceptance claim.
+- Documentation impact: no public-behavior change; overlay-active is documented as requiring the real system InputPlumber service stimulus (blocked in this environment).
+- Result: Implemented and verified this iteration at HEAD. Task 4 remains the single completion gate; out-of-band golden re-approval and external facts (FACT-002/003/004/005/006/007) remain open and block implementation completion.
 
 ## Remediation rule
 
