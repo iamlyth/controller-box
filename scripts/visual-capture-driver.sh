@@ -209,21 +209,63 @@ fi
 # AFTER the test-only validation hook so the fail-closed validator (which needs
 # only ImageMagick `convert`) can be exercised by non-skipping negative
 # regressions without a display server or installed binary.
-for tool in Xvfb xdotool import convert; do
+for tool in Xvfb xdotool import convert xauth; do
     command -v "$tool" >/dev/null 2>&1 || { echo "visual-capture: SKIP missing tool $tool" >&2; exit 77; }
 done
 
+# Current-user identity: used to validate the installed binary/prefix and every
+# owned artifact. Defined before the installed-binary selection so the provenance
+# validation below can reject an unowned substitute.
+ME=$(id -u 2>/dev/null || echo 0)
+
+# Validate an installed production binary and its prefix before launch. The
+# binary must be a regular NON-symlink file owned by the current user (or root
+# for a system-installed prefix) and not writable by group/other; the prefix and
+# every ancestor must be non-symlink. This binds the driver to a genuine
+# installed artifact instead of blindly trusting a mutable
+# VISUAL_AUDIT_INSTALL_PREFIX / test-install path, so an attacker-swapped,
+# unowned, group/world-writable, or symlinked substitute (which could redirect
+# the launch or the capture to an attacker-chosen artifact/directory) is refused.
+validate_installed_binary() { # bin  (also validates the derived prefix chain)
+    local bin=$1 owner mode dir prev
+    [[ -e "$bin" && ! -L "$bin" && -f "$bin" ]] || {
+        echo "visual-capture: installed binary '$bin' is not a regular non-symlink file" >&2; return 1; }
+    owner=$(stat -c %u "$bin" 2>/dev/null) || {
+        echo "visual-capture: cannot stat installed binary '$bin'" >&2; return 1; }
+    [[ "$owner" == "$ME" || "$owner" == "0" ]] || {
+        echo "visual-capture: installed binary '$bin' owner $owner is neither current user nor root" >&2; return 1; }
+    mode=$(stat -c %a "$bin" 2>/dev/null)
+    if (( (8#$mode & 8#022) != 0 )); then
+        echo "visual-capture: installed binary '$bin' is writable by group/other (mode $mode)" >&2; return 1
+    fi
+    # Prefix + every ancestor must be non-symlink (a symlinked prefix lets an
+    # attacker redirect the installed asset / capture path resolution).
+    dir=$(dirname -- "$bin")
+    while [[ -n "$dir" && "$dir" != "/" && "$dir" != "." && "$dir" != ".." ]]; do
+        if [[ -L "$dir" ]]; then
+            echo "visual-capture: installed prefix/ancestor is a symlink: $dir" >&2; return 1
+        fi
+        prev="$dir"; dir=$(dirname -- "$dir"); [[ "$dir" == "$prev" ]] && break
+    done
+    return 0
+}
+
 # Prefer an already-installed binary from a prior gate (test-install prefix);
 # VISUAL_AUDIT_INSTALL_PREFIX overrides the prefix for operator-driven runs.
+# Each candidate must pass the provenance validation above; a candidate that is
+# an unowned/group-writable/symlinked substitute is refused, not silently
+# selected.
 INSTALLED_BIN=""
 for candidate in \
     "${VISUAL_AUDIT_INSTALL_PREFIX:+"$VISUAL_AUDIT_INSTALL_PREFIX/bin/controller-box"}" \
     "$PROJECT_ROOT/.test-install/usr/bin/controller-box" \
     "$PROJECT_ROOT/.test-install/bin/controller-box"; do
-    if [[ -n "$candidate" && -x "$candidate" ]]; then INSTALLED_BIN=$candidate; break; fi
+    if [[ -n "$candidate" ]] && validate_installed_binary "$candidate"; then
+        INSTALLED_BIN=$candidate; break
+    fi
 done
 if [[ -z "$INSTALLED_BIN" ]]; then
-    echo "visual-capture: no installed production binary found; run the project gate first" >&2
+    echo "visual-capture: no trusted installed production binary found; run the project gate first" >&2
     exit 1
 fi
 # Installed assets must resolve inside the prefix (no source-tree fallback).
@@ -262,11 +304,7 @@ WINDOW_TIMEOUT="${VISUAL_AUDIT_WINDOW_TIMEOUT:-30}"
 # ---------------------------------------------------------------------------
 declare -a OWNED_GROUPS=()
 TMPDIR=""
-# Current user identity: every owned artifact and the output parent must be
-# owned by this uid, and only identity-matched owned entries are ever removed
-# on failure/signal (a pre-existing/unowned OUTPUT or a path raced in by
-# another principal is never deleted or replaced).
-ME=$(id -u 2>/dev/null || echo 0)
+# (ME is defined above the installed-binary provenance validation.)
 # Owned capture/receipt temp paths. Written in the same directory as OUTPUT so
 # the final publish is an atomic same-filesystem rename; only these exactly-
 # owned paths are ever removed on failure/signal, never a pre-existing OUTPUT.
@@ -355,11 +393,24 @@ ATOMIC="$SCRIPT_DIR/atomic-publish.py"
 if [[ ${RALPH_VISUAL_AUDIT_TESTING:-0} == 1 && -n "${CBX_ATOMIC_PUBLISH:-}" ]]; then
     ATOMIC="$CBX_ATOMIC_PUBLISH"
 fi
-# The publish helper must be a REGULAR file AND executable (a world-writable,
-# directory, or non-executable substitute is refused). `test -x` alone would
-# accept a directory or a helper that is executable but not a regular file.
-if [[ ! -f "$ATOMIC" || ! -x "$ATOMIC" ]]; then
-    echo "visual-capture: publish helper '$ATOMIC' is not a regular executable file" >&2
+# The publish helper must be a REGULAR NON-symlink file AND executable, owned
+# by the current user, and not writable by group/other (a world-writable,
+# directory, symlink, or non-executable substitute is refused). `test -x` alone
+# would accept a directory or a helper that is executable but not a regular
+# file; the lstat-based owner/mode checks reject an unowned or group/world-
+# writable helper that a concurrent principal could swap for a malicious one.
+if [[ ! -e "$ATOMIC" || -L "$ATOMIC" || ! -f "$ATOMIC" || ! -x "$ATOMIC" ]]; then
+    echo "visual-capture: publish helper '$ATOMIC' is not a regular executable non-symlink file" >&2
+    exit 1
+fi
+h_owner=$(stat -c %u "$ATOMIC" 2>/dev/null || echo -1)
+if [[ "$h_owner" != "$ME" ]]; then
+    echo "visual-capture: publish helper '$ATOMIC' is not owned by current user" >&2
+    exit 1
+fi
+h_mode=$(stat -c %a "$ATOMIC" 2>/dev/null || echo 777)
+if (( (8#$h_mode & 8#022) != 0 )); then
+    echo "visual-capture: publish helper '$ATOMIC' is writable by group/other (mode $h_mode)" >&2
     exit 1
 fi
 
@@ -453,7 +504,23 @@ fi
 export DISPLAY=":$DISPLAY_NUM"
 export SDL_VIDEODRIVER=x11
 export SDL_RENDER_DRIVER=software
-setsid Xvfb ":$DISPLAY_NUM" -screen 0 1280x720x24 >"$TMPDIR/xvfb.log" 2>&1 &
+# Private Xauthority cookie: only this driver's processes (and the launched app
+# / xdotool / import, which inherit XAUTHORITY) can connect to the isolated
+# Xvfb display. Without -auth, any local user could attach to the display and
+# inject input or observe the capture surface. The cookie file lives inside the
+# owned TMPDIR (removed on cleanup) with mode 0600; xauth keys the
+# MIT-MAGIC-COOKIE-1 entry by the local hostname/display so Xvfb -auth and the
+# connecting clients match.
+XAUTH_FILE="$TMPDIR/xauth"
+export XAUTHORITY="$XAUTH_FILE"
+umask 077
+XAUTH_COOKIE=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n') \
+    || { echo "visual-capture: cannot generate private Xauthority cookie" >&2; exit 1; }
+xauth -f "$XAUTH_FILE" add ":$DISPLAY_NUM" MIT-MAGIC-COOKIE-1 "$XAUTH_COOKIE" \
+    >"$TMPDIR/xauth.log" 2>&1 || {
+        echo "visual-capture: cannot write private Xauthority cookie" >&2; exit 1; }
+setsid Xvfb ":$DISPLAY_NUM" -screen 0 1280x720x24 -auth "$XAUTH_FILE" \
+    >"$TMPDIR/xvfb.log" 2>&1 &
 XVFB_GROUP=$!
 OWNED_GROUPS+=("$XVFB_GROUP")
 for _ in $(seq 1 40); do

@@ -24,6 +24,7 @@ release evidence and contains no satisfied/done claims.
 - Task 18 (pending): Reject blank overlay and unselected-profile visual captures (runtime `task-1787422841-a8d8`)
 - Task 19 (pending): Eliminate atomic publication TOCTOU and durability overclaim (runtime `task-1787429610-7982`)
 - Task 20 (pending): Close atomic capture security and durability gaps (runtime `task-1787431347-58a9`)
+- Task 21 (pending): Close remaining visual transaction and verifier trust gaps (runtime `task-1787434673-f6a4`)
 
 ## Unresolved facts
 - FACT-002 (open): BUG-0015: real InputPlumber system-bus acceptance with four targets

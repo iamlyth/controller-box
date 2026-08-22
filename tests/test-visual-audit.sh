@@ -1113,6 +1113,30 @@ grep -q 'no selected profile row' "$DRIVER_SRC" \
     || fail "adapter must reject an unselected profile list for manager-profiles"
 grep -q 'row_selected' "$DRIVER_SRC" \
     || fail "adapter must implement the selected-row semantic check"
+# Installed-binary/prefix trust hardening: the adapter must launch only a
+# genuine installed binary — a regular non-symlink file owned by the current
+# user (or root) and not writable by group/other, with a non-symlink prefix
+# chain — and the atomic-publish helper must be a regular non-symlink file
+# owned by the current user and not group/world-writable. A mutable
+# VISUAL_AUDIT_INSTALL_PREFIX must not be trusted to select an arbitrary
+# executable.
+grep -q 'validate_installed_binary' "$DRIVER_SRC" \
+    || fail "adapter must validate the installed binary/prefix provenance"
+grep -q 'not a regular non-symlink file' "$DRIVER_SRC" \
+    || fail "adapter must reject a symlink/directory installed binary"
+grep -q 'writable by group/other' "$DRIVER_SRC" \
+    || fail "adapter must reject a group/world-writable installed binary"
+grep -q 'is not owned by current user' "$DRIVER_SRC" \
+    || fail "adapter must reject an unowned atomic-publish helper"
+# Private Xvfb display auth: the adapter must launch Xvfb with a private
+# Xauthority cookie (-auth) so only its own processes can connect to the
+# isolated display.
+grep -q -- '-auth "' "$DRIVER_SRC" \
+    || fail "adapter must launch Xvfb with a private Xauthority cookie"
+grep -q 'XAUTHORITY' "$DRIVER_SRC" \
+    || fail "adapter must export XAUTHORITY for its display-bound processes"
+grep -q 'xauth -f' "$DRIVER_SRC" \
+    || fail "adapter must create the private cookie with xauth"
 
 # --- 13c. product adapter hanging-child: bounded poll + owned group cleanup ---
 # Runs the real adapter against a mock installed prefix (no build tree). The
@@ -2021,6 +2045,57 @@ else
         || fail "primitive syscall race: refused destination was clobbered"
 fi
 echo "test-visual-audit: atomic-publish primitive regressions passed (13g)"
+
+# --- 13h. installed-binary/prefix provenance + Xvfb-auth hardening ----------
+# The driver must refuse to launch an installed binary that is not a genuine,
+# current-user-owned (or root), regular non-symlink, non-group/world-writable
+# file — a mutable VISUAL_AUDIT_INSTALL_PREFIX must never be trusted to select
+# an arbitrary executable. A world-writable substitute (and a symlink
+# substitute) are refused before the display/app launch, leaving NO capture
+# OUTPUT. This needs only the display toolchain (the tool gate precedes the
+# binary selection), so it is non-skipping under the authenticated Nix gate.
+DRIVER="$PROJECT_ROOT/scripts/visual-capture-driver.sh"
+if command -v Xvfb >/dev/null 2>&1 && command -v xauth >/dev/null 2>&1 \
+        && command -v xdotool >/dev/null 2>&1 && command -v convert >/dev/null 2>&1; then
+    mkdir -p "$tmp/hp-bad/usr/bin" "$tmp/hp-bad/usr/share/controller-box/icons/svg"
+    cp -f "$PROJECT_ROOT/build-check/controller-box" "$tmp/hp-bad/usr/bin/controller-box" 2>/dev/null \
+        || cp -f /bin/true "$tmp/hp-bad/usr/bin/controller-box"
+    # Installed asset required by the driver.
+    mkdir -p "$tmp/hp-bad/usr/share/controller-box/icons/svg"
+    if [[ -f "$PROJECT_ROOT/data/icons/svg/generic-gamepad.svg" ]]; then
+        cp -f "$PROJECT_ROOT/data/icons/svg/generic-gamepad.svg" \
+            "$tmp/hp-bad/usr/share/controller-box/icons/svg/generic-gamepad.svg"
+    fi
+    chmod 666 "$tmp/hp-bad/usr/bin/controller-box"
+    HP_HEAD=$(git -C "$PROJECT_ROOT" rev-parse HEAD)
+    HP_OUT="$tmp/hp/out.png"
+    mkdir -p "$tmp/hp"; chmod 700 "$tmp/hp"
+    set +e
+    VISUAL_AUDIT_INSTALL_PREFIX="$tmp/hp-bad/usr" \
+        "$DRIVER" manager-main "$HP_OUT" "$HP_HEAD" >"$tmp/hp-bad.out" 2>&1
+    rc=$?
+    set -e
+    expect_rc 1 "$rc" "driver must refuse a group/world-writable installed binary"
+    grep -q "writable by group/other" "$tmp/hp-bad.out" \
+        || fail "driver must report the writable-by-group/other rejection"
+    [[ ! -e "$HP_OUT" ]] || fail "rejected capture must leave no OUTPUT"
+    # Symlink substitute is also refused.
+    rm -f "$tmp/hp-bad/usr/bin/controller-box"
+    ln -s "$PROJECT_ROOT/build-check/controller-box" "$tmp/hp-bad/usr/bin/controller-box" 2>/dev/null \
+        || ln -s /bin/true "$tmp/hp-bad/usr/bin/controller-box"
+    set +e
+    VISUAL_AUDIT_INSTALL_PREFIX="$tmp/hp-bad/usr" \
+        "$DRIVER" manager-main "$HP_OUT" "$HP_HEAD" >"$tmp/hp-sym.out" 2>&1
+    rc=$?
+    set -e
+    expect_rc 1 "$rc" "driver must refuse a symlink installed binary"
+    grep -q "not a regular non-symlink file" "$tmp/hp-sym.out" \
+        || fail "driver must report the symlink/non-regular rejection"
+    [[ ! -e "$HP_OUT" ]] || fail "rejected symlink capture must leave no OUTPUT"
+    echo "test-visual-audit: installed-binary provenance hardening passed (13h)"
+else
+    echo "SKIP: display toolchain unavailable for installed-binary provenance (13h)"
+fi
 
 # --- 14. capture: ok driver succeeds and is deterministic ---------------------
 cat > "$tmp/mock-cap-ok.sh" <<'EOF'

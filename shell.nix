@@ -24,6 +24,7 @@ pkgs.mkShell {
     wayland          # wayland-client.h + wayland-client.pc (EGL/GLES2 come from libglvnd/mesa)
     # Installed smoke test dependencies (Task 9, §11.1.5):
     xorg-server     # Xvfb — headless X11 server
+    xauth           # xauth — private MIT-MAGIC-COOKIE-1 for the isolated Xvfb display
     xdotool          # keyboard/mouse input injection
     imagemagick       # import (screenshot), convert/identify (pixel variance)
     bc               # floating-point arithmetic for mean threshold checks
