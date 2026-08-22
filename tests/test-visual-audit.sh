@@ -1288,6 +1288,192 @@ set -e
 expect_rc 0 $rc "validator accepts a profile list with a selected row"
 echo "test-visual-audit: non-skipping blank-overlay + unselected-list negative regressions passed (13e)"
 
+# --- 13f. atomic capture publication: only validated frames reach OUTPUT -------
+# The driver must capture to an exclusively-owned temp in the SAME directory as
+# OUTPUT, validate there, and rename to OUTPUT only after semantic success. A
+# rejected capture (wrong state), an import failure, or a terminating signal
+# must leave NO partial bytes at OUTPUT and no orphaned temp/receipt, and must
+# never delete a pre-existing/unowned OUTPUT (including one reached via a
+# symlink/hardlink). To make the capture deterministic we override `import` on
+# PATH to write a chosen PNG to its target path while the REAL installed binary
+# still opens the real window; the real-capture path is covered by 13d.
+if command -v Xvfb >/dev/null 2>&1 && command -v xdotool >/dev/null 2>&1 \
+        && command -v convert >/dev/null 2>&1; then
+    ATOM_PREFIX=""
+    for cand in "${VISUAL_AUDIT_INSTALL_PREFIX:-}" "$PROJECT_ROOT/.test-install/usr" \
+            "$PROJECT_ROOT/.test-install"; do
+        if [[ -n "$cand" && -x "$cand/bin/controller-box" ]]; then
+            ATOM_PREFIX="$cand"; break
+        fi
+    done
+    if [[ -z "$ATOM_PREFIX" && -x "$PROJECT_ROOT/build-check/controller-box" ]]; then
+        ATOM_INSTP="$tmp/atomic-prefix"
+        if cmake --install "$PROJECT_ROOT/build-check" --prefix "$ATOM_INSTP" >/dev/null 2>&1 \
+                && [[ -x "$ATOM_INSTP/bin/controller-box" ]]; then
+            ATOM_PREFIX="$ATOM_INSTP"
+        fi
+    fi
+    if [[ -n "$ATOM_PREFIX" ]]; then
+        ATOM_HEAD=$(git -C "$PROJECT_ROOT" rev-parse HEAD)
+        ATOM_DIR="$tmp/atomic"
+        mkdir -p "$ATOM_DIR"
+        # Valid manager-main frame (uniform: btn/std and diag/std both <=0.09).
+        convert -size 1280x720 xc:"rgb(30,30,42)" "$ATOM_DIR/frame-ok.png"
+        # Wrong-state manager-main frame (profile-list button row present =>
+        # btn std ~0.41 > 0.09, fails the main-view guard).
+        convert -size 1280x720 xc:"rgb(30,30,42)" \
+            -fill "rgb(20,20,30)" -draw "rectangle 16,500 115,543" \
+            -fill "rgb(240,240,250)" -draw "rectangle 116,500 215,543" \
+            -fill "rgb(50,50,70)" -draw "rectangle 216,500 315,543" \
+            -fill "rgb(255,255,255)" -draw "rectangle 316,500 415,543" \
+            "$ATOM_DIR/frame-wrong.png"
+        # Mock `import` on PATH: writes MOCK_IMPORT_SRC to its target path (the
+        # last arg, stripping an optional png: prefix). MOCK_IMPORT_FAIL makes
+        # it fail like a real capture error; MOCK_IMPORT_HOLD makes it park so a
+        # terminating signal can be delivered mid-capture.
+        mkdir -p "$tmp/fakebin"
+        cat > "$tmp/fakebin/import" <<'EOF'
+#!/usr/bin/env bash
+if [ "${MOCK_IMPORT_FAIL:-0}" = 1 ]; then echo "mock import failed" >&2; exit 1; fi
+target=""
+for a in "$@"; do target="$a"; done
+target="${target#png:}"
+if [ -n "${MOCK_IMPORT_HOLD:-}" ]; then
+    touch "$MOCK_IMPORT_MARKER"
+    for _i in $(seq 1 100); do [ -e "$MOCK_IMPORT_RELEASE" ] && break; sleep 0.1; done
+    [ -e "$MOCK_IMPORT_RELEASE" ] && exit 1
+    exit 0
+fi
+cp -- "$MOCK_IMPORT_SRC" "$target" 2>/dev/null || exit 1
+EOF
+        chmod +x "$tmp/fakebin/import"
+        export PATH="$tmp/fakebin:$PATH"
+
+        # (1) semantic rejection: wrong-state frame must leave NO output, no
+        # receipt, no temp.
+        set +e
+        MOCK_IMPORT_SRC="$ATOM_DIR/frame-wrong.png" \
+        VISUAL_AUDIT_INSTALL_PREFIX="$ATOM_PREFIX" \
+        "$PROJECT_ROOT/scripts/visual-capture-driver.sh" manager-main \
+            "$ATOM_DIR/reject.png" "$ATOM_HEAD" >"$tmp/atom-reject.out" 2>&1
+        rc=$?
+        set -e
+        [[ $rc -ne 0 ]] || fail "atomic publish accepted a wrong-state capture"
+        [[ ! -e "$ATOM_DIR/reject.png" ]] \
+            || fail "rejected capture left partial bytes at OUTPUT"
+        [[ ! -e "$ATOM_DIR/reject.png.receipt.json" ]] \
+            || fail "rejected capture left a receipt sidecar"
+        [[ -z "$(find "$ATOM_DIR" -maxdepth 1 -name '.cbx-capture.*' -o -maxdepth 1 -name '.cbx-receipt.*' | head -n 1)" ]] \
+            || fail "rejected capture left an owned temp behind"
+        grep -qi "wrong-state capture" "$tmp/atom-reject.out" \
+            || fail "semantic rejection must report the wrong-state capture"
+
+        # (2) import failure: no output, no receipt, no temp.
+        set +e
+        MOCK_IMPORT_FAIL=1 VISUAL_AUDIT_INSTALL_PREFIX="$ATOM_PREFIX" \
+        "$PROJECT_ROOT/scripts/visual-capture-driver.sh" manager-main \
+            "$ATOM_DIR/importerr.png" "$ATOM_HEAD" >"$tmp/atom-import.out" 2>&1
+        rc=$?
+        set -e
+        [[ $rc -ne 0 ]] || fail "atomic publish survived an import failure"
+        [[ ! -e "$ATOM_DIR/importerr.png" ]] \
+            || fail "import failure left partial bytes at OUTPUT"
+        [[ ! -e "$ATOM_DIR/importerr.png.receipt.json" ]] \
+            || fail "import failure left a receipt sidecar"
+        [[ -z "$(find "$ATOM_DIR" -maxdepth 1 -name '.cbx-capture.*' -o -maxdepth 1 -name '.cbx-receipt.*' | head -n 1)" ]] \
+            || fail "import failure left an owned temp behind"
+
+        # (3) pre-existing output protection: a rejected capture must never
+        # delete or overwrite a pre-existing (unowned) OUTPUT.
+        printf 'PREEXISTING-SENTINEL' > "$ATOM_DIR/sentinel.png"
+        set +e
+        MOCK_IMPORT_SRC="$ATOM_DIR/frame-wrong.png" \
+        VISUAL_AUDIT_INSTALL_PREFIX="$ATOM_PREFIX" \
+        "$PROJECT_ROOT/scripts/visual-capture-driver.sh" manager-main \
+            "$ATOM_DIR/sentinel.png" "$ATOM_HEAD" >"$tmp/atom-sentinel.out" 2>&1
+        rc=$?
+        set -e
+        [[ $rc -ne 0 ]] || fail "rejected capture unexpectedly succeeded against a pre-existing output"
+        grep -q 'PREEXISTING-SENTINEL' "$ATOM_DIR/sentinel.png" \
+            || fail "rejected capture deleted or overwrote a pre-existing OUTPUT"
+
+        # (4) symlink/hardlink protection: OUTPUT as a symlink/hardlink to a
+        # target with sentinel content; a rejected capture must not clobber it.
+        printf 'TARGET-SENTINEL' > "$ATOM_DIR/target.png"
+        ln -s "$ATOM_DIR/target.png" "$ATOM_DIR/symlink.png"
+        ln "$ATOM_DIR/target.png" "$ATOM_DIR/hardlink.png"
+        for link in symlink.png hardlink.png; do
+            set +e
+            MOCK_IMPORT_SRC="$ATOM_DIR/frame-wrong.png" \
+            VISUAL_AUDIT_INSTALL_PREFIX="$ATOM_PREFIX" \
+            "$PROJECT_ROOT/scripts/visual-capture-driver.sh" manager-main \
+                "$ATOM_DIR/$link" "$ATOM_HEAD" >"$tmp/atom-$link.out" 2>&1
+            rc=$?
+            set -e
+            [[ $rc -ne 0 ]] || fail "rejected capture unexpectedly succeeded on $link"
+            grep -q 'TARGET-SENTINEL' "$ATOM_DIR/target.png" \
+                || fail "rejected capture clobbered the target behind $link"
+            [[ -L "$ATOM_DIR/symlink.png" ]] || fail "rejected capture replaced the symlink with a regular file"
+        done
+
+        # (5) signals: a terminating signal delivered mid-capture must remove
+        # the owned temp and preserve a pre-existing OUTPUT.
+        printf 'SIGNAL-SENTINEL' > "$ATOM_DIR/signal.png"
+        : > "$ATOM_DIR/hold.marker"
+        rm -f "$ATOM_DIR/release"
+        set +e
+        MOCK_IMPORT_SRC="$ATOM_DIR/frame-ok.png" MOCK_IMPORT_HOLD=1 \
+        MOCK_IMPORT_MARKER="$ATOM_DIR/hold.marker" \
+        MOCK_IMPORT_RELEASE="$ATOM_DIR/release" \
+        VISUAL_AUDIT_INSTALL_PREFIX="$ATOM_PREFIX" \
+        "$PROJECT_ROOT/scripts/visual-capture-driver.sh" manager-main \
+            "$ATOM_DIR/signal.png" "$ATOM_HEAD" >"$tmp/atom-signal.out" 2>&1 &
+        DRV_PID=$!
+        # wait for the mock import to park mid-capture, then deliver TERM.
+        for _i in $(seq 1 100); do
+            [ -e "$ATOM_DIR/hold.marker" ] && break
+            kill -0 "$DRV_PID" 2>/dev/null || break
+            sleep 0.1
+        done
+        [ -e "$ATOM_DIR/hold.marker" ] || fail "driver never reached the capture park point"
+        kill -TERM "$DRV_PID" 2>/dev/null || true
+        wait "$DRV_PID" 2>/dev/null; rc=$?
+        set -e
+        # Release the parked mock import so it does not linger.
+        touch "$ATOM_DIR/release"
+        [[ $rc -ne 0 ]] || fail "driver did not exit non-zero on a terminating signal"
+        grep -q 'SIGNAL-SENTINEL' "$ATOM_DIR/signal.png" \
+            || fail "terminated capture deleted or overwrote a pre-existing OUTPUT"
+        [[ -z "$(find "$ATOM_DIR" -maxdepth 1 -name '.cbx-capture.*' -o -maxdepth 1 -name '.cbx-receipt.*' | head -n 1)" ]] \
+            || fail "terminated capture left an owned temp behind"
+
+        # (6) successful atomic publish: a validated capture is published with
+        # its receipt, and no temp remains.
+        set +e
+        MOCK_IMPORT_SRC="$ATOM_DIR/frame-ok.png" \
+        VISUAL_AUDIT_INSTALL_PREFIX="$ATOM_PREFIX" \
+        "$PROJECT_ROOT/scripts/visual-capture-driver.sh" manager-main \
+            "$ATOM_DIR/publish.png" "$ATOM_HEAD" >"$tmp/atom-publish.out" 2>&1
+        rc=$?
+        set -e
+        expect_rc 0 $rc "atomic publish of a validated capture"
+        cmp -s "$ATOM_DIR/publish.png" "$ATOM_DIR/frame-ok.png" \
+            || fail "published OUTPUT does not match the validated frame"
+        [[ -f "$ATOM_DIR/publish.png.receipt.json" ]] \
+            || fail "successful publish did not write a receipt sidecar"
+        python3 -c "import json,sys; json.load(open('$ATOM_DIR/publish.png.receipt.json'))" \
+            || fail "published receipt is not valid JSON"
+        [[ -z "$(find "$ATOM_DIR" -maxdepth 1 -name '.cbx-capture.*' -o -maxdepth 1 -name '.cbx-receipt.*' | head -n 1)" ]] \
+            || fail "successful publish left an owned temp behind"
+        echo "test-visual-audit: atomic capture publication passed (13f)"
+        PATH="${PATH#"$tmp/fakebin:"}"
+    else
+        echo "SKIP: no installed production binary available for the atomic-publish test"
+    fi
+else
+    echo "SKIP: Xvfb/xdotool/convert unavailable for the atomic-publish test"
+fi
+
 # --- 14. capture: ok driver succeeds and is deterministic ---------------------
 cat > "$tmp/mock-cap-ok.sh" <<'EOF'
 #!/usr/bin/env bash

@@ -249,6 +249,11 @@ WINDOW_TIMEOUT="${VISUAL_AUDIT_WINDOW_TIMEOUT:-30}"
 # ---------------------------------------------------------------------------
 declare -a OWNED_GROUPS=()
 TMPDIR=""
+# Owned capture/receipt temp paths. Written in the same directory as OUTPUT so
+# the final publish is an atomic same-filesystem rename; only these exactly-
+# owned paths are ever removed on failure/signal, never a pre-existing OUTPUT.
+CAPTURE_TMP=""
+RECEIPT_TMP=""
 
 kill_group() { # pgid
     local pgid="$1" deadline
@@ -267,8 +272,18 @@ cleanup() {
         kill_group "$g"
     done
     [[ -z "$TMPDIR" ]] || rm -rf -- "$TMPDIR"
+    # Remove only owned capture/receipt temps. A pre-existing/unowned OUTPUT is
+    # never deleted; a rejected or interrupted capture leaves no partial bytes
+    # at the requested output path and no orphaned receipt sidecar.
+    [[ -z "$CAPTURE_TMP" ]] || rm -f -- "$CAPTURE_TMP"
+    [[ -z "$RECEIPT_TMP" ]] || rm -f -- "$RECEIPT_TMP"
 }
+# Run the same owned-temp/process-group cleanup on terminating signals as well
+# as normal exit, so an interrupt never strands a partial capture or receipt.
 trap cleanup EXIT
+for _sig in INT TERM HUP QUIT; do
+    trap 'cleanup; exit 130' "$_sig"
+done
 
 # ---------------------------------------------------------------------------
 # Collision-free display selection: pick a display number whose X11 socket and
@@ -486,16 +501,36 @@ fi
 xdotool windowactivate "$WIN" >/dev/null 2>&1 || true
 xdotool windowfocus "$WIN" >/dev/null 2>&1 || true
 
-# Capture the focused production window (isolated display, deterministic).
-sleep 0.5
-import -window "$WIN" "$OUTPUT" 2>/dev/null || import -window root "$OUTPUT" 2>/dev/null
+# ---------------------------------------------------------------------------
+# Atomic capture publication. The frame is captured to an exclusively-owned
+# temporary file in the SAME directory as OUTPUT (so the final publish is an
+# atomic same-filesystem rename), semantically validated there, and renamed to
+# OUTPUT only after validation succeeds. On any failure or signal the owned
+# temp (and receipt temp) are removed and a pre-existing/unowned OUTPUT is
+# never deleted or replaced by unvalidated bytes (BUG-0018 fail-closed driver
+# contract: a rejected capture must not leave a partial artifact at the
+# requested output path).
+# ---------------------------------------------------------------------------
+OUTPUT_DIR=$(dirname -- "$OUTPUT")
+if [[ ! -d "$OUTPUT_DIR" ]]; then
+    echo "visual-capture: output directory '$OUTPUT_DIR' does not exist" >&2
+    exit 1
+fi
+CAPTURE_TMP=$(mktemp "$OUTPUT_DIR/.cbx-capture.XXXXXX" 2>/dev/null) \
+    || { echo "visual-capture: cannot allocate capture temp in $OUTPUT_DIR" >&2; exit 1; }
 
-[[ -s "$OUTPUT" ]] || { echo "visual-capture: no screenshot produced for $STATE" >&2; exit 1; }
+# Capture the focused production window (isolated display, deterministic). The
+# `png:` prefix forces ImageMagick output format regardless of the temp name.
+sleep 0.5
+import -window "$WIN" "png:$CAPTURE_TMP" 2>/dev/null \
+    || import -window root "png:$CAPTURE_TMP" 2>/dev/null
+
+[[ -s "$CAPTURE_TMP" ]] || { echo "visual-capture: no screenshot produced for $STATE" >&2; exit 1; }
 
 # Semantic validation: the freshly captured frame must actually match the
 # requested state. Fail closed (never record a wrong-state capture as evidence)
 # unless the expected content is present.
-if ! validate_state "$STATE" "$OUTPUT"; then
+if ! validate_state "$STATE" "$CAPTURE_TMP"; then
     echo "visual-capture: wrong-state capture for $STATE; refusing to record evidence" >&2
     exit 1
 fi
@@ -503,11 +538,14 @@ fi
 # ---------------------------------------------------------------------------
 # Exact-commit install receipt (retained beside the capture for external human
 # review): binds the capture to the requested commit and the installed binary
-# sha256.
+# sha256. Also built on an owned temp and renamed last, so a partial receipt
+# never accompanies a failed/absent capture.
 # ---------------------------------------------------------------------------
 BIN_SHA=$(sha256sum "$INSTALLED_BIN" 2>/dev/null | awk '{print $1}' || true)
-IMG_SHA=$(sha256sum "$OUTPUT" 2>/dev/null | awk '{print $1}' || true)
-cat > "$OUTPUT.receipt.json" <<EOF
+IMG_SHA=$(sha256sum "$CAPTURE_TMP" 2>/dev/null | awk '{print $1}' || true)
+RECEIPT_TMP=$(mktemp "$OUTPUT_DIR/.cbx-receipt.XXXXXX" 2>/dev/null) \
+    || { echo "visual-capture: cannot allocate receipt temp in $OUTPUT_DIR" >&2; exit 1; }
+cat > "$RECEIPT_TMP" <<EOF
 {
   "schema": "controller-box/visual-capture-receipt/v1",
   "state": "$STATE",
@@ -521,5 +559,13 @@ cat > "$OUTPUT.receipt.json" <<EOF
   "finished_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 EOF
+
+# Atomic same-directory publish: only after semantic validation and receipt
+# build succeed do we rename the owned temps into place. mv -f across the same
+# filesystem is atomic, so OUTPUT and its receipt appear together or not at all.
+mv -f -- "$CAPTURE_TMP" "$OUTPUT"
+CAPTURE_TMP=""
+mv -f -- "$RECEIPT_TMP" "$OUTPUT.receipt.json"
+RECEIPT_TMP=""
 
 echo "visual-capture: captured $STATE -> $OUTPUT (commit ${COMMIT:0:12}, bin ${BIN_SHA:0:12})"
