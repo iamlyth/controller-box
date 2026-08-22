@@ -341,8 +341,13 @@ cbx_profile_diagram_content_rect(const cbx_profile_diagram *diag,
     float sy = (float)rect->h / (float)th;
     float scale = sx < sy ? sx : sy;
     SDL_Rect dst = *rect;
-    dst.w = (int)((float)tw * scale);
-    dst.h = (int)((float)th * scale);
+    /* Round to nearest pixel instead of truncating so the fitted box
+     * preserves the texture's aspect ratio as closely as the raster
+     * resolution allows (BUG-0018): a 512x307 texture in a 300x180 box
+     * must yield 300x180, not 300x179, or the highlight/marker overlay
+     * is offset by a row and the diagram looks stretched. */
+    dst.w = (int)((float)tw * scale + 0.5f);
+    dst.h = (int)((float)th * scale + 0.5f);
     if (dst.w < 1) dst.w = 1;
     if (dst.h < 1) dst.h = 1;
     dst.x = rect->x + (rect->w - dst.w) / 2;

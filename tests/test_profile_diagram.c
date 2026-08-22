@@ -565,12 +565,12 @@ static void test_geometry_marker_control_alignment(void **state)
     SDL_Rect content;
     assert_true(cbx_profile_diagram_content_rect(&diag, &rect, &content));
 
-    int w, h;
-    uint8_t *buf = diag_read_fb(f->sdl.renderer, &w, &h);
-
     /* No highlight: the marker region must show the raw control (grey). */
     cbx_profile_diagram_clear_highlight(&diag);
     cbx_widget_draw(&diag.base, f->sdl.renderer);
+
+    int w, h;
+    uint8_t *buf = diag_read_fb(f->sdl.renderer, &w, &h);
     {
         int minx=999,miny=999,maxx=-1,maxy=-1, cnt=0;
         for(int y=0;y<h;y++)for(int x=0;x<w;x++){
@@ -602,6 +602,8 @@ static void test_geometry_marker_control_alignment(void **state)
      * to the same content box. */
     cbx_profile_diagram_highlight(&diag, CBX_DIAG_BTN_A);
     cbx_widget_draw(&diag.base, f->sdl.renderer);
+    free(buf);
+    buf = diag_read_fb(f->sdl.renderer, &w, &h);
     const cbx_diag_button_pos *apos =
         cbx_profile_diagram_get_button_pos(CBX_DIAG_BTN_A);
     SDL_Rect amr = geo_marker_rect(apos, &content);
