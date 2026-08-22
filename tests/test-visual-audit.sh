@@ -1144,6 +1144,34 @@ grep -q 'XAUTHORITY' "$DRIVER_SRC" \
     || fail "adapter must export XAUTHORITY for its display-bound processes"
 grep -q 'xauth -f' "$DRIVER_SRC" \
     || fail "adapter must create the private cookie with xauth"
+# Durable-commit barrier explicitness: the post-publish signal window (a TERM
+# landing between a no-replace publish returning and the durable-commit fsync)
+# must be closed by a PRE-ARMED inode identity (captured BEFORE each syscall),
+# NOT by a boolean barrier flag that is assigned AFTER the syscall and can be
+# raced. These source invariants pin the identity-based mechanism so it cannot
+# silently regress to the removed boolean-flag design: the temp identities are
+# pre-armed before each publish, withdrawal is identity-matched against exactly
+# the published entry, and it is gated on the COMMITTED durable-commit flag.
+grep -q 'rm_identity_match' "$DRIVER_SRC" \
+    || fail "adapter must withdraw published-but-uncommitted entries by identity match"
+# Pre-arm each temp's inode identity BEFORE its no-replace syscall (the literal
+# stat(1) capture that rename(2) preserves, so the published entry's dev:ino
+# equals the pre-armed value). The dollar is escaped because these are literal
+# fixed-string greps for the driver source, not expansions.
+grep -qF "RECEIPT_DEVINO=\$(stat -c '%d:%i'" "$DRIVER_SRC" \
+    || fail "adapter must pre-arm the receipt inode identity before its publish"
+grep -qF "CAPTURE_DEVINO=\$(stat -c '%d:%i'" "$DRIVER_SRC" \
+    || fail "adapter must pre-arm the image inode identity before its publish"
+grep -qF "rm_identity_match \"\$OUTPUT.receipt.json\" \"\$RECEIPT_DEVINO\"" "$DRIVER_SRC" \
+    || fail "adapter must withdraw the just-published receipt by its pre-armed identity"
+grep -qF "rm_identity_match \"\$OUTPUT\" \"\$CAPTURE_DEVINO\"" "$DRIVER_SRC" \
+    || fail "adapter must withdraw the just-published image by its pre-armed identity"
+grep -qF "if [[ \"\$COMMITTED\" == 0 ]]; then" "$DRIVER_SRC" \
+    || fail "adapter must gate identity withdrawal on the durable-commit barrier (COMMITTED)"
+# The durable-commit barrier must NOT rely on a boolean per-publish flag: the
+# removed RECEIPT_PUBLISHED/IMAGE_PUBLISHED flags must not reappear as code.
+grep -qE 'RECEIPT_PUBLISHED=|IMAGE_PUBLISHED=' "$DRIVER_SRC" \
+    && fail "adapter must not reintroduce a racy boolean publish barrier flag"
 
 # --- 13c. product adapter hanging-child: bounded poll + owned group cleanup ---
 # Runs the real adapter against a mock installed prefix (no build tree). The

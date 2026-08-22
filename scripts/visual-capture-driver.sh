@@ -388,14 +388,15 @@ cleanup() {
     rm_owned "$CAPTURE_TMP"
     rm_owned "$RECEIPT_TMP"
     # Pre-armed identity cleanup closes the post-publish signal window. A
-    # terminating signal landing between a no-replace publish returning and its
-    # RECEIPT_PUBLISHED/IMAGE_PUBLISHED barrier assignment previously left an
-    # orphaned receipt (receipt-without-image) or a non-durable image, because
-    # the withdrawal decision depended on the very flag the signal raced. Rename
-    # preserves the inode, so the pre-armed dev:ino of each temp equals the
-    # published entry's dev:ino; matching it here (independent of the racing
-    # flag) withdraws exactly our just-published entry and never a pre-existing
-    # sentinel or an unowned path.
+    # terminating signal landing between a no-replace publish returning and the
+    # durable-commit fsync would otherwise orphan a just-published receipt or a
+    # non-durable image. The barrier is NOT a boolean flag assigned after the
+    # syscall (the old RECEIPT_PUBLISHED/IMAGE_PUBLISHED flags were removed
+    # precisely because a signal could race them): the identity of each temp is
+    # pre-armed (CAPTURE_DEVINO/RECEIPT_DEVINO) BEFORE the no-replace syscall,
+    # and rename(2) preserves the inode, so matching the pre-armed dev:ino here
+    # (independent of any racing flag) withdraws exactly our just-published
+    # entry and never a pre-existing sentinel or an unowned path.
     if [[ "$COMMITTED" == 0 ]]; then
         rm_identity_match "$OUTPUT.receipt.json" "$RECEIPT_DEVINO"
         rm_identity_match "$OUTPUT" "$CAPTURE_DEVINO"
@@ -875,10 +876,15 @@ fi
 # can leave an inert orphaned temp that is NEVER evidence and requires bounded
 # recovery; the driver never claims a temp's mere presence is a capture.
 #
-# The RECEIPT_PUBLISHED/IMAGE_PUBLISHED/COMMITTED barriers (set after each
-# publish and after the final directory fsync) drive the EXIT-trap cleanup so
-# only identity-matched owned artifacts between the two publishes and before
-# the final fsync are ever withdrawn.
+# The durable-commit barrier is the pre-armed inode identity
+# (CAPTURE_DEVINO/RECEIPT_DEVINO, captured BEFORE each no-replace syscall) plus
+# the COMMITTED gate (set only after the image commit point and its final
+# directory fsync). Together they drive the EXIT-trap cleanup so only
+# identity-matched owned artifacts between the two publishes and before
+# COMMITTED are ever withdrawn. There is deliberately no per-publish boolean
+# barrier flag (RECEIPT_PUBLISHED/IMAGE_PUBLISHED were removed): a signal that
+# lands in the post-publish window before COMMITTED still lets cleanup match the
+# pre-armed dev:ino against the published entry and withdraw exactly it.
 #
 # Flush the receipt bytes to stable storage BEFORE publishing them.
 if ! fsync_path "$RECEIPT_TMP"; then
