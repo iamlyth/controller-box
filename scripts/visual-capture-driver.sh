@@ -285,6 +285,17 @@ for _sig in INT TERM HUP QUIT; do
     trap 'cleanup; exit 130' "$_sig"
 done
 
+# Best-effort durable fsync of a single file (and, for the directory variant,
+# the directory that holds the renames). Used to make the atomic publish
+# crash/power-look durable: the receipt and the final OUTPUT rename are flushed
+# to stable storage before/after they land. A failure to fsync is not fatal to
+# the driver's correctness contract (which is about atomic visibility), so it
+# is best-effort and never aborts the operation.
+fsync_path() { # path
+    python3 -c 'import os,sys; fd=os.open(sys.argv[1], os.O_RDONLY); os.fsync(fd); os.close(fd)' \
+        "$1" 2>/dev/null || true
+}
+
 # ---------------------------------------------------------------------------
 # Collision-free display selection: pick a display number whose X11 socket and
 # lock are free, so concurrent capture leases never collide and no global
@@ -559,13 +570,50 @@ cat > "$RECEIPT_TMP" <<EOF
   "finished_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 EOF
+# Flush the receipt bytes to stable storage before the atomic renames so the
+# published sidecar is durable, not just visible.
+fsync_path "$RECEIPT_TMP"
 
-# Atomic same-directory publish: only after semantic validation and receipt
-# build succeed do we rename the owned temps into place. mv -f across the same
-# filesystem is atomic, so OUTPUT and its receipt appear together or not at all.
-mv -f -- "$CAPTURE_TMP" "$OUTPUT"
-CAPTURE_TMP=""
-mv -f -- "$RECEIPT_TMP" "$OUTPUT.receipt.json"
+# Fail-closed publication. Two guarantees make an image visible at OUTPUT only
+# with its matching validated receipt:
+#
+#  1. Refuse unowned destinations: OUTPUT and its receipt sidecar must not
+#     already exist (including via a symlink, a dangling symlink, or a hardlink
+#     to an unowned file). A plain `mv -f` would silently replace (or follow
+#     and clobber) a path we do not own; refusing is the only fail-safe.
+#  2. Commit-point ordering: the receipt is renamed into place FIRST, and the
+#     image rename is the LAST (commit-point) rename. So whenever OUTPUT exists
+#     after the driver, its validated receipt is already in place beside it. If
+#     the receipt publish fails we abort before touching OUTPUT; if the image
+#     publish fails we remove the just-published (owned) receipt so a failed
+#     publish leaves neither OUTPUT nor an orphaned receipt.
+# Both renames are same-filesystem and atomic; each is followed by a directory
+# fsync so a crash/power loss cannot leave a half-published directory entry.
+if [[ -e "$OUTPUT" || -L "$OUTPUT" ]]; then
+    echo "visual-capture: refusing to overwrite pre-existing OUTPUT '$OUTPUT'" >&2
+    exit 1
+fi
+if [[ -e "$OUTPUT.receipt.json" || -L "$OUTPUT.receipt.json" ]]; then
+    echo "visual-capture: refusing to overwrite pre-existing receipt '$OUTPUT.receipt.json'" >&2
+    exit 1
+fi
+
+if ! mv -- "$RECEIPT_TMP" "$OUTPUT.receipt.json" 2>/dev/null; then
+    echo "visual-capture: failed to publish receipt for $STATE; capture withheld" >&2
+    exit 1
+fi
 RECEIPT_TMP=""
+fsync_path "$OUTPUT_DIR"
+
+# Commit point: only now is the image visible at OUTPUT.
+if ! mv -- "$CAPTURE_TMP" "$OUTPUT" 2>/dev/null; then
+    # We own the receipt we just published; remove it so a failed publish
+    # leaves neither OUTPUT nor a stray receipt sidecar.
+    rm -f -- "$OUTPUT.receipt.json"
+    echo "visual-capture: failed to publish capture for $STATE; no artifact recorded" >&2
+    exit 1
+fi
+CAPTURE_TMP=""
+fsync_path "$OUTPUT_DIR"
 
 echo "visual-capture: captured $STATE -> $OUTPUT (commit ${COMMIT:0:12}, bin ${BIN_SHA:0:12})"

@@ -1330,6 +1330,9 @@ if command -v Xvfb >/dev/null 2>&1 && command -v xdotool >/dev/null 2>&1 \
         mkdir -p "$ATOM_DIR"
         # Valid manager-main frame (uniform: btn/std and diag/std both <=0.09).
         convert -size 1280x720 xc:"rgb(30,30,42)" "$ATOM_DIR/frame-ok.png"
+        # Blank uniform overlay frame (BUG-0018 false-positive state): a uniform
+        # frame has std 0, so the overlay-active guard (full-std >=0.02) rejects it.
+        convert -size 1280x720 xc:black "$ATOM_DIR/frame-ovblank.png"
         # Wrong-state manager-main frame (profile-list button row present =>
         # btn std ~0.41 > 0.09, fails the main-view guard).
         convert -size 1280x720 xc:"rgb(30,30,42)" \
@@ -1359,6 +1362,25 @@ cp -- "$MOCK_IMPORT_SRC" "$target" 2>/dev/null || exit 1
 EOF
         chmod +x "$tmp/fakebin/import"
         export PATH="$tmp/fakebin:$PATH"
+
+        # Receipt-blocking `mv` for the receipt-publish-failure case: it refuses
+        # any publish whose destination is the receipt sidecar (and passes every
+        # other mv through to the real /bin/mv), so a validated capture whose
+        # receipt cannot land must be withheld entirely.
+        mkdir -p "$tmp/fakebin2"
+        cat > "$tmp/fakebin2/mv" <<'EOF'
+#!/usr/bin/env bash
+for a in "$@"; do
+    case "$a" in
+        *.receipt.json)
+            echo "mock mv: refusing to publish receipt" >&2
+            exit 1
+            ;;
+    esac
+done
+exec /bin/mv "$@"
+EOF
+        chmod +x "$tmp/fakebin2/mv"
 
         # (1) semantic rejection: wrong-state frame must leave NO output, no
         # receipt, no temp.
@@ -1428,9 +1450,13 @@ EOF
         done
 
         # (5) signals: a terminating signal delivered mid-capture must remove
-        # the owned temp and preserve a pre-existing OUTPUT.
+        # the owned temp and preserve a pre-existing OUTPUT. The park marker is
+        # NOT pre-created (pre-creating it made the wait return before the mock
+        # import ever parked, letting TERM arrive pre-capture); it exists only
+        # after the mock import actually touches it, so we signal only while the
+        # owned capture temp genuinely exists.
         printf 'SIGNAL-SENTINEL' > "$ATOM_DIR/signal.png"
-        : > "$ATOM_DIR/hold.marker"
+        rm -f "$ATOM_DIR/hold.marker"
         rm -f "$ATOM_DIR/release"
         set +e
         MOCK_IMPORT_SRC="$ATOM_DIR/frame-ok.png" MOCK_IMPORT_HOLD=1 \
@@ -1476,6 +1502,89 @@ EOF
             || fail "published receipt is not valid JSON"
         [[ -z "$(find "$ATOM_DIR" -maxdepth 1 -name '.cbx-capture.*' -o -maxdepth 1 -name '.cbx-receipt.*' | head -n 1)" ]] \
             || fail "successful publish left an owned temp behind"
+
+        # (7) receipt-publish failure: a validated capture whose receipt cannot
+        # land must be withheld entirely (no image, no receipt, no temp), never
+        # leaving an apparently-valid image without its receipt. The commit-point
+        # ordering (receipt first, image last) means a receipt failure aborts
+        # before the image is ever published.
+        set +e
+        MOCK_IMPORT_SRC="$ATOM_DIR/frame-ok.png" \
+        VISUAL_AUDIT_INSTALL_PREFIX="$ATOM_PREFIX" \
+        PATH="$tmp/fakebin2:$tmp/fakebin:$PATH" \
+        "$PROJECT_ROOT/scripts/visual-capture-driver.sh" manager-main \
+            "$ATOM_DIR/receiptfail.png" "$ATOM_HEAD" >"$tmp/atom-receiptfail.out" 2>&1
+        rc=$?
+        set -e
+        [[ $rc -ne 0 ]] || fail "receipt-publish failure unexpectedly succeeded"
+        [[ ! -e "$ATOM_DIR/receiptfail.png" ]] \
+            || fail "receipt-publish failure left an image at OUTPUT"
+        [[ ! -e "$ATOM_DIR/receiptfail.png.receipt.json" ]] \
+            || fail "receipt-publish failure left a receipt sidecar"
+        grep -qi "failed to publish receipt" "$tmp/atom-receiptfail.out" \
+            || fail "receipt-publish failure must report the withheld capture"
+        [[ -z "$(find "$ATOM_DIR" -maxdepth 1 -name '.cbx-capture.*' -o -maxdepth 1 -name '.cbx-receipt.*' | head -n 1)" ]] \
+            || fail "receipt-publish failure left an owned temp behind"
+
+        # (8) pre-existing OUTPUT refusal on a VALIDATED capture: the driver must
+        # refuse to overwrite a pre-existing/unowned OUTPUT (not mv -f over it),
+        # leaving the sentinel intact and writing no receipt.
+        printf 'VALID-SENTINEL' > "$ATOM_DIR/validpreexist.png"
+        set +e
+        MOCK_IMPORT_SRC="$ATOM_DIR/frame-ok.png" \
+        VISUAL_AUDIT_INSTALL_PREFIX="$ATOM_PREFIX" \
+        "$PROJECT_ROOT/scripts/visual-capture-driver.sh" manager-main \
+            "$ATOM_DIR/validpreexist.png" "$ATOM_HEAD" >"$tmp/atom-validpreexist.out" 2>&1
+        rc=$?
+        set -e
+        [[ $rc -ne 0 ]] || fail "validated capture unexpectedly overwrote a pre-existing OUTPUT"
+        grep -q 'VALID-SENTINEL' "$ATOM_DIR/validpreexist.png" \
+            || fail "validated capture overwrote a pre-existing OUTPUT"
+        [[ ! -e "$ATOM_DIR/validpreexist.png.receipt.json" ]] \
+            || fail "pre-existing OUTPUT refusal left a receipt sidecar"
+        grep -qi "refusing to overwrite pre-existing OUTPUT" "$tmp/atom-validpreexist.out" \
+            || fail "pre-existing OUTPUT refusal must report the refusal"
+
+        # (9) pre-existing receipt refusal on a VALIDATED capture: a pre-existing
+        # receipt sidecar must be refused (not replaced), so no image is published.
+        printf 'RECEIPT-SENTINEL' > "$ATOM_DIR/receiptpreexist.png.receipt.json"
+        set +e
+        MOCK_IMPORT_SRC="$ATOM_DIR/frame-ok.png" \
+        VISUAL_AUDIT_INSTALL_PREFIX="$ATOM_PREFIX" \
+        "$PROJECT_ROOT/scripts/visual-capture-driver.sh" manager-main \
+            "$ATOM_DIR/receiptpreexist.png" "$ATOM_HEAD" >"$tmp/atom-receiptpreexist.out" 2>&1
+        rc=$?
+        set -e
+        [[ $rc -ne 0 ]] || fail "validated capture unexpectedly succeeded despite a pre-existing receipt"
+        [[ ! -e "$ATOM_DIR/receiptpreexist.png" ]] \
+            || fail "pre-existing receipt refusal still published the image"
+        grep -q 'RECEIPT-SENTINEL' "$ATOM_DIR/receiptpreexist.png.receipt.json" \
+            || fail "pre-existing receipt was overwritten by the refusal"
+        grep -qi "refusing to overwrite pre-existing receipt" "$tmp/atom-receiptpreexist.out" \
+            || fail "pre-existing receipt refusal must report the refusal"
+
+        # (10) direct rejected overlay: a uniform/blank overlay frame (the BUG-0018
+        # false-positive state) must be REJECTED through the real publication path
+        # and leave neither OUTPUT nor a receipt nor a temp. This re-verifies that
+        # a directly rejected overlay capture does not create an ambiguous partial
+        # artifact (the installed overlay binary is launched and the blank frame
+        # fails the overlay-active semantic guard).
+        set +e
+        MOCK_IMPORT_SRC="$ATOM_DIR/frame-ovblank.png" \
+        VISUAL_AUDIT_INSTALL_PREFIX="$ATOM_PREFIX" \
+        "$PROJECT_ROOT/scripts/visual-capture-driver.sh" overlay-active \
+            "$ATOM_DIR/ovreject.png" "$ATOM_HEAD" >"$tmp/atom-ovreject.out" 2>&1
+        rc=$?
+        set -e
+        [[ $rc -ne 0 ]] || fail "atomic publish accepted a blank overlay frame"
+        [[ ! -e "$ATOM_DIR/ovreject.png" ]] \
+            || fail "rejected overlay left partial bytes at OUTPUT"
+        [[ ! -e "$ATOM_DIR/ovreject.png.receipt.json" ]] \
+            || fail "rejected overlay left a receipt sidecar"
+        grep -qi "wrong-state capture" "$tmp/atom-ovreject.out" \
+            || fail "overlay rejection must report the wrong-state capture"
+        [[ -z "$(find "$ATOM_DIR" -maxdepth 1 -name '.cbx-capture.*' -o -maxdepth 1 -name '.cbx-receipt.*' | head -n 1)" ]] \
+            || fail "rejected overlay left an owned temp behind"
         echo "test-visual-audit: atomic capture publication passed (13f)"
         PATH="${PATH#"$tmp/fakebin:"}"
     else
