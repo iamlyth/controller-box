@@ -1806,26 +1806,57 @@ EOF
                 || fail "validated symlink/hardlink refusal left an owned temp behind"
         done
 
-        # (14) true race DURING the publish syscall: a concurrent principal
-        # repeatedly claims OUTPUT with a sentinel (noclobber refuses to
-        # overwrite an already-published image) while the driver publishes. The
-        # no-replace primitive (not an existence pre-check) is the authority, so
-        # whichever wins, the final state is self-consistent: either the racer
-        # claimed OUTPUT (driver refused, no receipt, sentinel preserved) or the
-        # driver committed the validated image first (racer's noclobber refused,
-        # image + matching receipt present). An image-without-receipt or a
-        # clobbered sentinel is impossible.
-        printf 'racer-src' > "$ATOM_DIR/race-frame.png"
+        # (14) true race DURING the image publish syscall: a concurrent principal
+        # claims OUTPUT with a sentinel (noclobber) while the driver's image
+        # publish is in flight. The no-replace primitive (not an existence pre-
+        # check) is the authority, so the concurrently-created OUTPUT is refused
+        # and preserved, the driver fails closed with no image-without-receipt,
+        # and no owned temp remains. An image-without-receipt or a clobbered
+        # sentinel is impossible.
+        #
+        # The frame fed to the driver MUST be a VALID manager-main PNG: a
+        # plaintext/non-PNG frame would be rejected by semantic validation and
+        # the driver would exit before ever reaching the publish syscall, making
+        # this "race" test vacuous (it would only ever observe the pre-publish
+        # refusal). We therefore feed frame-ok.png and interpose a mock publish
+        # helper that raises a BARRIER (marker) immediately before the image
+        # no-replace syscall and holds until the racer has claimed OUTPUT, so the
+        # contention window coincides deterministically with the publish, and the
+        # marker proves the publish path was actually exercised.
+        cp "$ATOM_DIR/frame-ok.png" "$ATOM_DIR/race-frame.png"
+        rm -f "$tmp/publish-barrier.marker" "$tmp/racer-claimed.marker"
         : > "$tmp/race.done"
+        # Racer: claim OUTPUT with noclobber (succeeds only while the driver's
+        # image publish is held), then signal that it claimed. No receipt early-
+        # break: the receipt is published before the image by design, so breaking
+        # on its existence would let the racer give up before claiming OUTPUT and
+        # defeat the barrier.
         ( set -euo pipefail
           for _i in $(seq 1 400); do
-              ( set -o noclobber; printf 'RACE-CLAIM-SENTINEL' > "$ATOM_DIR/race-during.png" ) 2>/dev/null || true
-              [ -e "$ATOM_DIR/race-during.png.receipt.json" ] && break
+              if ( set -o noclobber; printf 'RACE-CLAIM-SENTINEL' > "$ATOM_DIR/race-during.png" ) 2>/dev/null; then
+                  touch "$tmp/racer-claimed.marker"; break
+              fi
           done
           touch "$tmp/race.done" ) &
         RACER_PID=$!
+        # Barrier mock publish helper: on the IMAGE publish (dst == OUTPUT) it
+        # raises the publish barrier marker and holds until the racer has claimed
+        # OUTPUT, then delegates to the real no-replace primitive (which refuses
+        # the now-existing OUTPUT with EEXIST). Every other call (e.g. the receipt
+        # publish) delegates directly. Gated behind RALPH_VISUAL_AUDIT_TESTING;
+        # the completion gate rejects that marker.
+        cat > "$tmp/fakepub/atomic-race.sh" <<EOF
+#!/usr/bin/env bash
+if [ "\${1:-}" = "publish" ] && [ "\${3:-}" = "$ATOM_DIR/race-during.png" ]; then
+    touch "$tmp/publish-barrier.marker"
+    for _i in \$(seq 1 200); do [ -e "$tmp/racer-claimed.marker" ] && break; sleep 0.02; done
+fi
+exec "$PROJECT_ROOT/scripts/atomic-publish.py" "\$@"
+EOF
+        chmod +x "$tmp/fakepub/atomic-race.sh"
         set +e
         MOCK_IMPORT_SRC="$ATOM_DIR/race-frame.png" \
+        RALPH_VISUAL_AUDIT_TESTING=1 CBX_ATOMIC_PUBLISH="$tmp/fakepub/atomic-race.sh" \
         VISUAL_AUDIT_INSTALL_PREFIX="$ATOM_PREFIX" \
         "$PROJECT_ROOT/scripts/visual-capture-driver.sh" manager-main \
             "$ATOM_DIR/race-during.png" "$ATOM_HEAD" >"$tmp/atom-race-during.out" 2>&1
@@ -1839,21 +1870,20 @@ EOF
         done
         kill "$RACER_PID" 2>/dev/null || true
         wait "$RACER_PID" 2>/dev/null || true
-        if [[ $rc -eq 0 ]]; then
-            # Driver committed first: image is the validated frame, receipt present.
-            cmp -s "$ATOM_DIR/race-during.png" "$ATOM_DIR/race-frame.png" \
-                || fail "syscall race: driver committed but OUTPUT is not the validated frame"
-            [[ -f "$ATOM_DIR/race-during.png.receipt.json" ]] \
-                || fail "syscall race: driver committed without a matching receipt"
-        else
-            # Racer claimed OUTPUT first: the driver fails closed (its exit 1
-            # convention for a refused publish), never overwrites, no receipt.
-            [[ $rc -ne 0 ]] || fail "syscall race: driver unexpectedly succeeded"
-            grep -q 'RACE-CLAIM-SENTINEL' "$ATOM_DIR/race-during.png" \
-                || fail "syscall race: refused OUTPUT was clobbered"
-            [[ ! -e "$ATOM_DIR/race-during.png.receipt.json" ]] \
-                || fail "syscall race: refusal left an image-without-receipt"
-        fi
+        # The barrier marker proves the image publish path was actually reached:
+        # a vacuous run that exited at semantic validation (a plaintext non-PNG
+        # frame) would never have touched it, so the race is genuinely exercised.
+        [[ -e "$tmp/publish-barrier.marker" ]] \
+            || fail "syscall race: the image publish path was never reached (barrier marker absent)"
+        # The racer claimed OUTPUT during the held publish; the no-replace
+        # primitive refused the concurrently-created OUTPUT, the driver failed
+        # closed (its exit 1 convention for a refused publish), never overwrote
+        # the sentinel, left no image-without-receipt, and no owned temp.
+        [[ $rc -ne 0 ]] || fail "syscall race: driver unexpectedly succeeded against a concurrently-created OUTPUT"
+        grep -q 'RACE-CLAIM-SENTINEL' "$ATOM_DIR/race-during.png" \
+            || fail "syscall race: refused OUTPUT was clobbered"
+        [[ ! -e "$ATOM_DIR/race-during.png.receipt.json" ]] \
+            || fail "syscall race: refusal left an image-without-receipt"
         [[ -z "$(find "$ATOM_DIR" -maxdepth 1 \( -name '.cbx-capture.*' -o -name '.cbx-receipt.*' \) | head -n 1)" ]] \
             || fail "syscall race left an owned temp behind"
         echo "test-visual-audit: atomic capture publication passed (13f)"
