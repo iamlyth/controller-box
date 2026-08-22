@@ -65,9 +65,91 @@ if [[ -z "$CUR" || "$CUR" != "$COMMIT" ]]; then
     exit 1
 fi
 
-for tool in Xvfb xdotool import; do
+for tool in Xvfb xdotool import convert; do
     command -v "$tool" >/dev/null 2>&1 || { echo "visual-capture: SKIP missing tool $tool" >&2; exit 77; }
 done
+
+# ---------------------------------------------------------------------------
+# Semantic state validation (ImageMagick). The installed manager is driven to a
+# requested visual state via deterministic coordinate clicks; before a capture
+# is accepted the driver verifies the *content* of the freshly captured frame
+# actually matches the requested state, so a wrong-state capture (e.g. the
+# profile list masquerading as the editor) fails closed instead of being
+# recorded as evidence. Regions and thresholds come from the fixed 1280x720
+# manager layout (SPEC §5.1): the controller-diagram region (x16 y40 300x300,
+# profile_editor_list.c CBX_PE_*) and the Profiles-tab Create/Edit/Delete
+# button row (x16 y500 400x44, profiles_tab.c CBX_PT_LIST_*/CBX_PT_BTN_*).
+# ---------------------------------------------------------------------------
+
+# Print the ImageMagick standard-deviation (0..1) of a crop; empty on error.
+img_std() { # png x y w h
+    convert "$1" -crop "$4x$5+$2+$3" +repage \
+        -format '%[fx:standard_deviation]' info: 2>/dev/null || echo ""
+}
+
+# Validate that a captured frame semantically matches the requested state.
+# Returns 0 on match, 1 (after an explanatory message) on a wrong state.
+validate_state() { # state png
+    local state="$1" img="$2" diag btn
+    diag=$(img_std "$img" 16 40 300 300)
+    btn=$(img_std "$img" 16 500 400 44)
+    [[ -n "$diag" && -n "$btn" ]] || {
+        echo "visual-capture: cannot measure $state frame content ($img)" >&2
+        return 1
+    }
+    case "$state" in
+    manager-editor)
+        # Editor: the controller diagram must be present (high variance) and
+        # the profile-list edit-button row must be hidden.
+        if awk "BEGIN{exit !($diag >= 0.13)}"; then :; else
+            echo "visual-capture: state validation FAILED ($state): controller diagram absent (diagram std=$diag, expect >=0.13)" >&2
+            return 1
+        fi
+        if awk "BEGIN{exit !($btn <= 0.09)}"; then :; else
+            echo "visual-capture: state validation FAILED ($state): profile-list buttons still visible (btn-row std=$btn, expect <=0.09)" >&2
+            return 1
+        fi
+        ;;
+    manager-profiles)
+        # Profiles tab: the Create/Edit/Delete button row must be visible.
+        if awk "BEGIN{exit !($btn >= 0.13)}"; then :; else
+            echo "visual-capture: state validation FAILED ($state): Create/Edit/Delete button row absent (btn std=$btn, expect >=0.13)" >&2
+            return 1
+        fi
+        ;;
+    manager-main)
+        # Default Controllers view: neither the profile-list button row nor the
+        # editor diagram may be present (guards against a wrong-state capture).
+        if awk "BEGIN{exit !($btn <= 0.09)}"; then :; else
+            echo "visual-capture: state validation FAILED ($state): profile-list button row visible (btn std=$btn, expect <=0.09)" >&2
+            return 1
+        fi
+        if awk "BEGIN{exit !($diag <= 0.09)}"; then :; else
+            echo "visual-capture: state validation FAILED ($state): editor diagram visible (diag std=$diag, expect <=0.09)" >&2
+            return 1
+        fi
+        ;;
+    overlay-active)
+        # Overlay frame: only the generic non-blank capture check applies.
+        ;;
+    esac
+    return 0
+}
+
+# Test-only validation hook (gated behind RALPH_VISUAL_AUDIT_TESTING): feed a
+# previously captured PNG and validate it against the requested state without
+# re-navigating. Lets the installed-adapter regression prove the validator
+# rejects a wrong-state frame (the BUG-0018 wrong-state capture) directly. The
+# production completion gate rejects this marker, so it never weakens the
+# production capture path.
+if [[ ${RALPH_VISUAL_AUDIT_TESTING:-0} == 1 && -n "${CBX_VISUAL_VALIDATE_ONLY:-}" ]]; then
+    if validate_state "$STATE" "$CBX_VISUAL_VALIDATE_ONLY"; then
+        echo "visual-capture: [test] state '$STATE' validated against $CBX_VISUAL_VALIDATE_ONLY"
+        exit 0
+    fi
+    echo "visual-capture: [test] state '$STATE' rejected for $CBX_VISUAL_VALIDATE_ONLY" >&2
+    exit 1
+fi
 
 # Prefer an already-installed binary from a prior gate (test-install prefix);
 # VISUAL_AUDIT_INSTALL_PREFIX overrides the prefix for operator-driven runs.
@@ -310,32 +392,57 @@ xdotool windowactivate "$WIN" >/dev/null 2>&1 || true
 xdotool windowfocus "$WIN" >/dev/null 2>&1 || true
 
 # ---------------------------------------------------------------------------
-# Semantic navigation per state (production event dispatch via xdotool).
+# Semantic navigation per state (deterministic coordinate clicks through the
+# production X11 event path). The manager window fills the isolated 1280x720
+# screen, so absolute coordinates in the window map to fixed layout positions:
+#   * Profiles tab: x=640, y=24   (tab bar 0..48, 3 tabs; Profiles is middle)
+#   * Edit Profile: x=302, y=522 (profiles_tab layout, CBX_PT_BTN_*)
+# Keyboard navigation (Right/Return) was abandoned because the profile list is
+# not activated from the tab-bar focus, so Return never opens the editor and
+# the capture silently recorded the wrong (profile-list) state (BUG-0018).
 # ---------------------------------------------------------------------------
 case "$STATE" in
     manager-main)
-        # Default view; nothing to navigate.
+        # Default view is the Controllers tab (SPEC §5.1 initial tab); nothing
+        # to navigate.
         ;;
     manager-profiles)
-        xdotool key Right   # Controllers -> Profiles tab
-        sleep 0.6
+        xdotool mousemove 640 24 click 1   # Profiles tab
+        sleep 0.8
         ;;
     manager-editor)
-        xdotool key Right   # Controllers -> Profiles tab
-        sleep 0.6
-        xdotool key Return  # open the editor on the deterministic first profile
+        xdotool mousemove 640 24 click 1   # Profiles tab
         sleep 0.8
+        xdotool mousemove 302 522 click 1  # Edit Profile (deterministic first row)
+        sleep 1.0
         ;;
     overlay-active)
         # Overlay service already running; nothing further to navigate.
         ;;
 esac
 
+# Reacquire the exact production window after navigation (the window id may
+# have changed or focus shifted); never capture a stale/replaced handle.
+if ! WIN=$(wait_window "^${EXPECTED_TITLE}$" "$WINDOW_TIMEOUT"); then
+    echo "visual-capture: window '$EXPECTED_TITLE' not re-found after navigation (state $STATE)" >&2
+    exit 1
+fi
+xdotool windowactivate "$WIN" >/dev/null 2>&1 || true
+xdotool windowfocus "$WIN" >/dev/null 2>&1 || true
+
 # Capture the focused production window (isolated display, deterministic).
 sleep 0.5
 import -window "$WIN" "$OUTPUT" 2>/dev/null || import -window root "$OUTPUT" 2>/dev/null
 
 [[ -s "$OUTPUT" ]] || { echo "visual-capture: no screenshot produced for $STATE" >&2; exit 1; }
+
+# Semantic validation: the freshly captured frame must actually match the
+# requested state. Fail closed (never record a wrong-state capture as evidence)
+# unless the expected content is present.
+if ! validate_state "$STATE" "$OUTPUT"; then
+    echo "visual-capture: wrong-state capture for $STATE; refusing to record evidence" >&2
+    exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # Exact-commit install receipt (retained beside the capture for external human

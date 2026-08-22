@@ -5,30 +5,51 @@
     {
       "id": "manager-main",
       "risk": "critical",
-      "navigation": ["launch installed binary with --manager"],
-      "expected": "Manager window renders the Profiles tab list with profile rows, status line, and controls",
-      "crops": ["full-frame"]
+      "navigation": [
+        "launch installed binary with --manager (default Controllers tab)"
+      ],
+      "expected": "Manager window renders the default Controllers tab (tab bar, device panel; no profile-list buttons, no editor diagram)",
+      "crops": [
+        "full-frame"
+      ]
     },
     {
       "id": "manager-profiles",
       "risk": "critical",
-      "navigation": ["launch installed binary with --manager", "activate Profiles tab via Right"],
-      "expected": "Profiles list shows a selected profile with highlight and the mapping count column",
-      "crops": ["full-frame", "list-region"]
+      "navigation": [
+        "launch installed binary with --manager",
+        "click Profiles tab (640,24)"
+      ],
+      "expected": "Profiles tab shows the profile list with a selected row and the Create/Edit/Delete button row",
+      "crops": [
+        "full-frame",
+        "list-region"
+      ]
     },
     {
       "id": "manager-editor",
       "risk": "critical",
-      "navigation": ["launch installed binary with --manager", "activate Profiles tab", "open the profile editor via Return"],
-      "expected": "Profile editor renders the controller diagram (recognizable controller outline), slot highlight, model label, and binding list (BUG-0014 acceptance area)",
-      "crops": ["full-frame", "diagram-region"]
+      "navigation": [
+        "launch installed binary with --manager",
+        "click Profiles tab (640,24)",
+        "click Edit Profile (302,522) to open the profile editor"
+      ],
+      "expected": "Profile editor renders the controller diagram (recognizable controller outline), slot highlight, model label, and binding list (BUG-0018/0014 acceptance area)",
+      "crops": [
+        "full-frame",
+        "diagram-region"
+      ]
     },
     {
       "id": "overlay-active",
       "risk": "high",
-      "navigation": ["launch installed binary with --overlay-service"],
+      "navigation": [
+        "launch installed binary with --overlay-service"
+      ],
       "expected": "Overlay window renders its icon/status content in an active state",
-      "crops": ["full-frame"]
+      "crops": [
+        "full-frame"
+      ]
     }
   ]
 }

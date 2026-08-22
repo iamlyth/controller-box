@@ -1021,6 +1021,25 @@ grep -q 'setsid' "$DRIVER_SRC" \
     || fail "adapter must run children in their own process group"
 grep -qF -- 'kill -- "-$' "$DRIVER_SRC" \
     || fail "adapter must TERM/KILL the whole owned process group"
+# Wrong-state hardening (BUG-0018 remediation): the adapter must navigate via
+# deterministic coordinate clicks (never fragile Right/Return that left the
+# profile list on screen while claiming the editor), reacquire the exact window
+# after navigation, and fail closed unless the captured frame semantically
+# matches the requested state.
+grep -q 'xdotool mousemove' "$DRIVER_SRC" \
+    || fail "adapter must navigate via deterministic coordinate clicks"
+grep -q 'validate_state' "$DRIVER_SRC" \
+    || fail "adapter must semantically validate the captured state"
+grep -q 'wrong-state capture' "$DRIVER_SRC" \
+    || fail "adapter must fail closed on a wrong-state capture"
+grep -vE '^[[:space:]]*#' "$DRIVER_SRC" | grep -q 'xdotool key Right' \
+    && fail "adapter must not rely on keyboard Right navigation (wrong-state risk)"
+grep -vE '^[[:space:]]*#' "$DRIVER_SRC" | grep -q 'xdotool key Return' \
+    && fail "adapter must not rely on keyboard Return navigation (wrong-state risk)"
+grep -q 'controller diagram absent' "$DRIVER_SRC" \
+    || fail "adapter must reject a manager-editor frame without the controller diagram"
+grep -q 'convert' "$DRIVER_SRC" \
+    || fail "adapter must depend on convert for semantic frame validation"
 
 # --- 13c. product adapter hanging-child: bounded poll + owned group cleanup ---
 # Runs the real adapter against a mock installed prefix (no build tree). The
@@ -1075,6 +1094,67 @@ EOF
     unset CAPB_DRIVER_APPPID
 else
     echo "SKIP: Xvfb/xdotool/import unavailable for the hanging-child adapter test"
+fi
+
+# --- 13d. product adapter wrong-state: real installed + semantic validation ---
+# Runs the REAL installed controller-box under Xvfb, drives each manager state
+# through the adapter's deterministic coordinate clicks, and asserts the
+# adapter's semantic validation: the editor capture must genuinely contain the
+# controller diagram (not the profile list), and the validator must REJECT a
+# wrong-state frame (the BUG-0018 defect: the profile list captured as the
+# editor). Skips only when the display tools or an installed production binary
+# are unavailable. This is the installed-adapter regression for the wrong-state
+# capture defect.
+if command -v Xvfb >/dev/null 2>&1 && command -v xdotool >/dev/null 2>&1 \
+        && command -v import >/dev/null 2>&1 && command -v convert >/dev/null 2>&1; then
+    CAP_PREFIX=""
+    for cand in "${VISUAL_AUDIT_INSTALL_PREFIX:-}" "$PROJECT_ROOT/.test-install/usr" \
+            "$PROJECT_ROOT/.test-install"; do
+        if [[ -n "$cand" && -x "$cand/bin/controller-box" ]]; then
+            CAP_PREFIX="$cand"; break
+        fi
+    done
+    if [[ -z "$CAP_PREFIX" && -x "$PROJECT_ROOT/build-check/controller-box" ]]; then
+        # Install from an existing build dir to a test-owned prefix so the
+        # adapter exercises the real installed artifact.
+        INSTP="$tmp/installed-prefix"
+        if cmake --install "$PROJECT_ROOT/build-check" --prefix "$INSTP" >/dev/null 2>&1 \
+                && [[ -x "$INSTP/bin/controller-box" ]]; then
+            CAP_PREFIX="$INSTP"
+        fi
+    fi
+    if [[ -n "$CAP_PREFIX" ]]; then
+        CAP_HEAD=$(git -C "$PROJECT_ROOT" rev-parse HEAD)
+        for st in manager-main manager-profiles manager-editor; do
+            set +e
+            VISUAL_AUDIT_INSTALL_PREFIX="$CAP_PREFIX" \
+            "$PROJECT_ROOT/scripts/visual-capture-driver.sh" "$st" \
+                "$tmp/inst-$st.png" "$CAP_HEAD" >"$tmp/inst-$st.out" 2>&1
+            rc=$?
+            set -e
+            expect_rc 0 $rc "installed adapter captures $st with real semantic validation"
+            [[ -s "$tmp/inst-$st.png" ]] || fail "installed adapter produced no image for $st"
+            grep -q "captured $st" "$tmp/inst-$st.out" \
+                || fail "installed adapter did not report a successful $st capture"
+        done
+        # The wrong-state frame (profile list) must be REJECTED as the editor:
+        # feed the freshly captured profiles frame through the validator as
+        # manager-editor via the test-only hook and assert it fails closed.
+        set +e
+        RALPH_VISUAL_AUDIT_TESTING=1 CBX_VISUAL_VALIDATE_ONLY="$tmp/inst-manager-profiles.png" \
+        "$PROJECT_ROOT/scripts/visual-capture-driver.sh" manager-editor \
+            "$tmp/inst-wrong.png" "$CAP_HEAD" >"$tmp/inst-wrong.out" 2>&1
+        rc=$?
+        set -e
+        [[ $rc -ne 0 ]] || fail "adapter accepted the wrong-state (profile-list-as-editor) capture"
+        grep -qi "state validation FAILED" "$tmp/inst-wrong.out" \
+            || fail "wrong-state rejection must report the failing semantic check"
+        echo "test-visual-audit: installed-adapter wrong-state regression passed (13d)"
+    else
+        echo "SKIP: no installed production binary available for the installed-adapter test"
+    fi
+else
+    echo "SKIP: Xvfb/xdotool/import/convert unavailable for the installed-adapter test"
 fi
 
 # --- 14. capture: ok driver succeeds and is deterministic ---------------------
