@@ -1963,6 +1963,34 @@ EOF
             || fail "syscall race: refusal left an image-without-receipt"
         [[ -z "$(find "$ATOM_DIR" -maxdepth 1 \( -name '.cbx-capture.*' -o -name '.cbx-receipt.*' \) | head -n 1)" ]] \
             || fail "syscall race left an owned temp behind"
+        # (15) symlinked output parent/ancestor directory is refused: a symlink
+        # anywhere in the OUTPUT path (not just OUTPUT itself) lets an attacker
+        # redirect the atomic rename into an attacker-chosen directory. The
+        # driver's reject_symlinked_path walks every parent/ancestor component
+        # and refuses before any capture, leaving no OUTPUT, never writing into
+        # the real target directory, and never dropping an owned temp there.
+        mkdir -p "$tmp/parsym/real"
+        printf 'REAL-SENTINEL' > "$tmp/parsym/real/sentinel.txt"
+        ln -s "$tmp/parsym/real" "$tmp/parsym/link"
+        set +e
+        MOCK_IMPORT_SRC="$ATOM_DIR/frame-ok.png" \
+        VISUAL_AUDIT_INSTALL_PREFIX="$ATOM_PREFIX" \
+        "$PROJECT_ROOT/scripts/visual-capture-driver.sh" manager-main \
+            "$tmp/parsym/link/out.png" "$ATOM_HEAD" >"$tmp/atom-parsym.out" 2>&1
+        rc=$?
+        set -e
+        [[ $rc -ne 0 ]] || fail "symlinked output parent unexpectedly accepted"
+        grep -q "parent/ancestor is a symlink" "$tmp/atom-parsym.out" \
+            || fail "symlinked output parent refusal must report the symlink"
+        [[ ! -e "$tmp/parsym/link/out.png" ]] \
+            || fail "symlinked output parent refusal left an OUTPUT"
+        [[ ! -e "$tmp/parsym/real/out.png" ]] \
+            || fail "symlinked output parent refusal wrote into the real target dir"
+        grep -q 'REAL-SENTINEL' "$tmp/parsym/real/sentinel.txt" \
+            || fail "symlinked output parent refusal disturbed the real target dir"
+        [[ -z "$(find "$tmp/parsym/real" -maxdepth 1 \( -name '.cbx-capture.*' -o -name '.cbx-receipt.*' \) | head -n 1)" ]] \
+            || fail "symlinked output parent refusal left an owned temp in the real dir"
+        echo "test-visual-audit: symlinked output parent/ancestor refusal passed (13j)"
         echo "test-visual-audit: atomic capture publication passed (13f)"
         PATH="${PATH#"$tmp/fakebin:"}"
     else
