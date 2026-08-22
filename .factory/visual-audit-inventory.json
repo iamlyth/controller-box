@@ -26,7 +26,7 @@
     {
       "id": "overlay-active",
       "risk": "high",
-      "navigation": ["launch installed binary with --overlay"],
+      "navigation": ["launch installed binary with --overlay-service"],
       "expected": "Overlay window renders its icon/status content in an active state",
       "crops": ["full-frame"]
     }

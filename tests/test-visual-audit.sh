@@ -991,6 +991,92 @@ rc=$?
 set -e
 expect_rc 64 $rc "capture driver usage gate"
 
+# --- 13b. product adapter invariants: correct window/mode/cleanup ------------
+# Regression guards for the previously-diagnosed adapter defects (BUG-0018
+# installed visual capture): the adapter must poll (boundedly) for the real
+# production window titles, pass --overlay-service (never the legacy invalid
+# flag), select a private collision-free display (never a fixed :N with a
+# global pkill), and clean up its whole owned process group (never a
+# single-PID kill). These source-level invariants keep the fix from regressing
+# without needing the installed binary or a display server.
+DRIVER_SRC="$PROJECT_ROOT/scripts/visual-capture-driver.sh"
+grep -q 'Controller-Box Manager' "$DRIVER_SRC" \
+    || fail "adapter must poll for the manager title 'Controller-Box Manager'"
+grep -q 'Controller-Box Overlay' "$DRIVER_SRC" \
+    || fail "adapter must poll for the overlay title 'Controller-Box Overlay'"
+grep -q -- '--overlay-service' "$DRIVER_SRC" \
+    || fail "adapter must use --overlay-service for the overlay state"
+bad_mode=$(grep -oE -- '--overlay[a-z-]*' "$DRIVER_SRC" | sort -u \
+              | grep -v -- '^--overlay-service$' || true)
+[[ -z "$bad_mode" ]] || fail "adapter must only pass --overlay-service, found: $bad_mode"
+grep -q 'WINDOW_TIMEOUT' "$DRIVER_SRC" \
+    || fail "adapter window polling must be time-bounded"
+grep -vE '^[[:space:]]*#' "$DRIVER_SRC" | grep -q 'search --sync' \
+    && fail "adapter must not use unbounded xdotool search --sync"
+grep -qE 'pkill[[:space:]].*Xvfb' "$DRIVER_SRC" \
+    && fail "adapter must not globally pkill Xvfb"
+grep -q 'pick_display' "$DRIVER_SRC" \
+    || fail "adapter must pick a private collision-free display"
+grep -q 'setsid' "$DRIVER_SRC" \
+    || fail "adapter must run children in their own process group"
+grep -qF -- 'kill -- "-$' "$DRIVER_SRC" \
+    || fail "adapter must TERM/KILL the whole owned process group"
+
+# --- 13c. product adapter hanging-child: bounded poll + owned group cleanup ---
+# Runs the real adapter against a mock installed prefix (no build tree). The
+# mock installed binary never opens the expected window and ignores TERM, so
+# the adapter's bounded window polling must fail closed within a bounded wall
+# time and its owned process-group cleanup must reap both the mock app (the
+# "hanging child") and the Xvfb it started. Skips only when the display tools
+# are unavailable.
+if command -v Xvfb >/dev/null 2>&1 && command -v xdotool >/dev/null 2>&1 \
+        && command -v import >/dev/null 2>&1; then
+    MOCK_PREFIX="$tmp/mock-install"
+    mkdir -p "$MOCK_PREFIX/bin" "$MOCK_PREFIX/share/controller-box/icons/svg"
+    printf 'placeholder' > "$MOCK_PREFIX/share/controller-box/icons/svg/generic-gamepad.svg"
+    cat > "$MOCK_PREFIX/bin/controller-box" <<'EOF'
+#!/usr/bin/env bash
+# Mock installed binary that never opens the expected window and ignores TERM,
+# so the adapter's bounded poll must fail closed and its owned-group cleanup
+# must SIGKILL this process after the TERM grace. Records its pid/starttime for
+# the test's gone-assertion.
+proc_st() {
+    awk '{print $22}' "/proc/$$/stat" 2>/dev/null || true
+}
+printf 'mock app started (pid %s)\n' "$$"
+echo "MOCKPID=$$ self_st=$(proc_st)" >> "${CAPB_DRIVER_APPPID:-/dev/null}"
+trap '' TERM
+while :; do sleep 300; done
+EOF
+    chmod +x "$MOCK_PREFIX/bin/controller-box"
+    : > "$tmp/capdrv.pids"
+    export CAPB_DRIVER_APPPID="$tmp/capdrv.pids"
+    CAP_HEAD=$(git -C "$PROJECT_ROOT" rev-parse HEAD)
+    xvfb_before=$(pgrep -fc 'Xvfb :9' 2>/dev/null || true)
+    start=$(date +%s)
+    set +e
+    VISUAL_AUDIT_INSTALL_PREFIX="$MOCK_PREFIX" \
+    VISUAL_AUDIT_WINDOW_TIMEOUT=4 \
+    "$PROJECT_ROOT/scripts/visual-capture-driver.sh" manager-main \
+        "$tmp/no-window.png" "$CAP_HEAD" >"$tmp/capdrv.out" 2>&1
+    rc=$?
+    set -e
+    elapsed=$(( $(date +%s) - start ))
+    [[ $elapsed -le 45 ]] || fail "adapter did not bound the window wait (${elapsed}s)"
+    expect_rc 1 $rc "missing-window capture fails closed"
+    grep -qi 'not found' "$tmp/capdrv.out" || fail "adapter must report the missing window"    [[ ! -e "$tmp/no-window.png" ]] || fail "failed adapter left a partial image"
+    app_pid=$(grep -o 'MOCKPID=[0-9]*' "$tmp/capdrv.pids" | cut -d= -f2)
+    app_st=$(grep -o 'self_st=[0-9]*' "$tmp/capdrv.pids" | cut -d= -f2)
+    [[ -n "$app_pid" && -n "$app_st" ]] || fail "mock app did not record its identity"
+    assert_gone "$app_pid" "$app_st" "adapter-owned mock app (hanging child)"
+    xvfb_after=$(pgrep -fc 'Xvfb :9' 2>/dev/null || true)
+    [[ "$xvfb_after" -le "$xvfb_before" ]] \
+        || fail "adapter leaked Xvfb processes (before=$xvfb_before after=$xvfb_after)"
+    unset CAPB_DRIVER_APPPID
+else
+    echo "SKIP: Xvfb/xdotool/import unavailable for the hanging-child adapter test"
+fi
+
 # --- 14. capture: ok driver succeeds and is deterministic ---------------------
 cat > "$tmp/mock-cap-ok.sh" <<'EOF'
 #!/usr/bin/env bash
