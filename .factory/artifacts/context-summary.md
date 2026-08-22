@@ -17,6 +17,7 @@ release evidence and contains no satisfied/done claims.
 - Task 11 (pending): Test-quality remediation for §5.7 semantic-outcome gaps
 - Task 12 (pending): Documentation accuracy remediation
 - Task 13 (pending): Close software-fixable test-quality gaps (reviewer audit)
+- Task 14 (pending): Fix virtual-controller type-change topology preservation (BUG-0015 software portion)
 
 ## Unresolved facts
 - FACT-002 (open): BUG-0015: real InputPlumber system-bus acceptance with four targets

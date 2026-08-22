@@ -617,43 +617,20 @@ cbx_controllers_tab_change_type(cbx_controllers_tab *tab,
 
     const char *composite_path = tab->model.composites[device_index].path;
 
-    /* Build the new types CSV: current types with the changed one
-     * replaced.  In the simple case (one target per composite), the
-     * CSV is just the new type.  For multiple targets, we replace
-     * the one at device_index. */
-    char csv[CBX_MAX_CONTROLLERS * (CBX_MAX_TYPE_LEN + 1)];
-    csv[0] = '\0';
-
-    for (int i = 0; i < tab->model.target_count; i++) {
-        char type_buf[CBX_MAX_TYPE_LEN];
-        const char *t;
-
-        if (i == device_index)
-            t = new_type;
-        else if (i < tab->device_type_count)
-            t = tab->device_types[i];
-        else {
-            /* Query the type if we don't have it cached. */
-            char *dtype = NULL;
-            int rc = ip_target_get_device_type(tab->backend, tab->bus,
-                                                 tab->model.targets[i].path,
-                                                 &dtype);
-            if (rc == 0 && dtype) {
-                snprintf(type_buf, CBX_MAX_TYPE_LEN, "%s", dtype);
-                free(dtype);
-                t = type_buf;
-            } else {
-                t = "gamepad"; /* fallback */
-            }
-        }
-
-        if (csv[0] != '\0')
-            strncat(csv, ",", sizeof(csv) - strlen(csv) - 1);
-        strncat(csv, t, sizeof(csv) - strlen(csv) - 1);
-    }
-
+    /* SPEC §5.2: "Type change replaces only the selected slot and
+     * preserves all other topology."
+     *
+     * SetTargetDevices is the CompositeDevice interface method that
+     * REPLACES ALL target devices on a single composite.  Under the slot
+     * model enforced by reconcile Phase 1/4 (target[i]↔composite[i], one
+     * virtual controller per composite), the composite for device_index
+     * owns exactly one target, so the requested type-change CSV is just
+     * the new type for that slot.  Passing a CSV assembled from every
+     * model target's type would make the selected composite instantiate
+     * all N target types at once, corrupting the other slots' topology.
+     */
     int rc = ip_composite_set_target_devices(tab->backend, tab->bus,
-                                                composite_path, csv);
+                                                composite_path, new_type);
     if (rc != 0)
         return rc;
 

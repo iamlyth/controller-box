@@ -333,7 +333,7 @@ Keyboard tests in `test_manager_interaction_prof.c` relabeled from
 ## Task 4: Final documentation and specification audit
 - Status: blocked
 - Block reason: BUG-0014 (invisible diagram) and BUG-0015 (0/4 virtual controllers); real InputPlumber system-bus acceptance required; block lifts only with Ralph-owned product fixes and real acceptance evidence (Tasks 5 and 6)
-- Dependencies: Task 1, Task 2, Task 3, Task 5, Task 6, Task 7, Task 8, Task 9, Task 10, Task 11, Task 12
+- Dependencies: Task 1, Task 2, Task 3, Task 5, Task 6, Task 7, Task 8, Task 9, Task 10, Task 11, Task 12, Task 13, Task 14
 - Scope: `.factory/artifacts/implementation-plan.md` (conformance matrix update), `.factory/artifacts/conformance.json` (sidecar), `.factory/artifacts/blocked-facts.json` (facts ledger), `README.md`, `docs/OPERATIONS.md`, full clean verification
 - Acceptance criteria:
   - Task 5 (perceptible installed diagram acceptance) and Task 6 (real four-target InputPlumber routing acceptance) are complete, with exact receipt/artifact evidence resolving FACT-001, FACT-002, and FACT-003 (or an explicit human decision where SPEC §11.2.6 permits it)
@@ -473,6 +473,18 @@ Keyboard tests in `test_manager_interaction_prof.c` relabeled from
 - Verification: `ctest --test-dir build-check -R 'test_profile_diagram|test_editor_list_mode|test_connection|test_overlay_native' --output-on-failure` all pass; full suite 100/100 pass (2 pre-existing hardware skips: `test_kernel_controller`, `test_backend_smoke`); `test_overlay_native` repeated 10× deterministic; `verify-boilerplate.sh` passes; release `controllerbox` library shows `on_intercept_*` as local `t` symbols (no CBX_TESTING leak, F6).
 - Documentation impact: none (production behavior unchanged; the CBX_TESTING exposure is test-only and the test-only mock knob does not alter release symbols).
 - Result: All four reviewer findings closed. Status kept `pending` per the appended-after-final-audit convention; Task 4 remains the single completion gate.
+
+## Task 14: Fix virtual-controller type-change topology preservation (BUG-0015 software portion)
+- Status: pending
+- Dependencies: Task 1, Task 2, Task 3, Task 5, Task 9, Task 10, Task 13
+- Source: BUG-0015 software-addressable surface (runtime task `task-1787407706-cd8d`). The full BUG-0015 real four-target system-bus acceptance remains externally blocked on FACT-002/FACT-003 and Task 6; this task closes only the production topology-reconciliation defect that is machine-testable through the DBus backend abstraction. External system-bus evidence stays honestly open.
+- Scope: `src/manager/controllers_tab.c`, `tests/test_controllers_tab.c`, `tests/dbus_mock.{c,h}`
+- Acceptance criteria:
+  - `cbx_controllers_tab_change_type` replaces only the selected slot's type and preserves all other topology (SPEC §5.2): it calls `SetTargetDevices` on the composite for `device_index` with only that slot's new type (per the slot model target[i]↔composite[i] enforced by `cbx_reconcile_startup_targets` Phase 1/4), NOT a CSV assembled from every model target's type applied to one composite (which would make the selected composite instantiate N target types and corrupt the other slots).
+  - The mock DBus records the string input args of the most recent `call_method`; a semantic regression asserts the exact `SetTargetDevices` CSV is the single new type and that `Add` sends the correct `AttachTargetDevice` target→composite paths. The prior false-positive `test_change_type_mixed` (asserting only rc/device-count) is strengthened to assert the request payload, so the topology-preservation behavior is machine-verified.
+  - Full suite passes; regression proven real (buggy code fails `test_change_type_mixed`); no golden regen; no human/visual acceptance claim; FACT-002/FACT-003 stay open; Task 6 stays externally blocked.
+- Verification: `nix-shell --run 'cmake -S . -B build-check -DCMAKE_BUILD_TYPE=Debug && cmake --build build-check --parallel'`; `nix-shell --run "ctest --test-dir build-check -R 'test_controllers_tab|test_manager_calls' --output-on-failure"`; full ctest 100/100 (98 pass / 2 pre-existing hardware skips `test_kernel_controller`, `test_backend_smoke`); temporary revert of the fix fails `test_change_type_mixed`, confirming the regression.
+- Documentation impact: none to public behavior (a corrected DBus request parameter). BUG-0015 stays open; the plan matrix rows bound to FACT-002/FACT-003 remain `partial`/non-verified. Result in next iteration.
 
 ## Remediation rule
 

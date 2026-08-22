@@ -405,6 +405,18 @@ test_add_success(void **state)
     int rc = cbx_controllers_tab_add(&f->tab, "ds5");
     assert_int_equal(rc, 0);
     assert_int_equal(cbx_controllers_tab_device_count(&f->tab), 2);
+
+    /* SPEC §5.2 / CT-05: the new target must be confirmed attached to its
+     * corresponding composite (target[1] → CompositeDevice1) via
+     * AttachTargetDevice — not merely created.  The mock records the
+     * exact production request payload, so assert it. */
+    char buf[IP_MOCK_LAST_ARGS_LEN];
+    assert_int_equal(ip_dbus_mock_last_call(&f->mock,
+                        IP_IFACE_MANAGER, "AttachTargetDevice",
+                        buf, sizeof(buf)), 0);
+    assert_string_equal(buf,
+        "/org/shadowblip/InputPlumber/devices/target/gamepad1,"
+        "/org/shadowblip/InputPlumber/CompositeDevice1");
 }
 
 static void
@@ -602,6 +614,18 @@ test_change_type_success(void **state)
     assert_int_equal(rc, 0);
     assert_string_equal(cbx_controllers_tab_device_type(&f->tab, 0),
                          "ds5");
+
+    /* SPEC §5.2: "Type change replaces only the selected slot and
+     * preserves all other topology."  SetTargetDevices is the
+     * CompositeDevice method that REPLACES ALL targets on one composite;
+     * in the slot model (target[i]↔composite[i]) the selected composite
+     * owns one target, so the request CSV must be exactly the new type,
+     * not a CSV of every model target's type. */
+    char buf[IP_MOCK_LAST_ARGS_LEN];
+    assert_int_equal(ip_dbus_mock_last_call(&f->mock,
+                        IP_IFACE_COMPOSITE, "SetTargetDevices",
+                        buf, sizeof(buf)), 0);
+    assert_string_equal(buf, "ds5");
 }
 
 static void
@@ -626,6 +650,17 @@ test_change_type_mixed(void **state)
      * verifies the change_type call succeeded with mixed types allowed
      * — the SetTargetDevices CSV includes both types. */
     assert_int_equal(cbx_controllers_tab_device_count(&f->tab), 2);
+
+    /* SPEC §5.2: replacing slot 1's type must preserve slot 0.  The
+     * request CSV sent to CompositeDevice1 must be exactly the single
+     * new type "deck", NOT a CSV of every model target's type (which
+     * would overwrite composite 1 with N targets and corrupt slot 0's
+     * topology). */
+    char buf[IP_MOCK_LAST_ARGS_LEN];
+    assert_int_equal(ip_dbus_mock_last_call(&f->mock,
+                        IP_IFACE_COMPOSITE, "SetTargetDevices",
+                        buf, sizeof(buf)), 0);
+    assert_string_equal(buf, "deck");
 }
 
 static void

@@ -45,6 +45,7 @@ void ip_dbus_mock_reset(ip_dbus_mock *mock) {
     mock->creds_uid = 0;
     mock->creds_rc  = 0;
     mock->unique_name_rc = 0;
+    memset(&mock->last_call, 0, sizeof(mock->last_call));
 }
 
 void ip_dbus_mock_set_creds(ip_dbus_mock *mock, uint32_t pid, uint32_t uid) {
@@ -199,12 +200,40 @@ static int mock_call_method(ip_bus_handle bus, const char *dest,
     const ip_mock_expectation *e = ip_dbus_mock_find(mock, iface, method);
     int rc = e ? e->rc : -ENXIO;
 
-    /* Process variadic args: skip input args, read output ptr. */
+    /* Process variadic args: capture input args, then read output ptr. */
     va_list ap;
     va_start(ap, sig);
     int nargs = mock_count_sig_args(sig ? sig : "");
-    for (int i = 0; i < nargs; i++)
-        (void)va_arg(ap, const char *);
+
+    /* Record the string input args for later assertion (last call wins). */
+    if (mock) {
+        mock->last_call.has_call = true;
+        snprintf(mock->last_call.iface, sizeof(mock->last_call.iface),
+                 "%s", iface ? iface : "");
+        snprintf(mock->last_call.member, sizeof(mock->last_call.member),
+                 "%s", method ? method : "");
+        mock->last_call.args[0] = '\0';
+        size_t used = 0;
+        for (int i = 0; i < nargs; i++) {
+            const char *arg = va_arg(ap, const char *);
+            if (!arg)
+                arg = "";
+            size_t want = strlen(arg) + (used ? 1 : 0);
+            if (used + want < sizeof(mock->last_call.args)) {
+                if (used) {
+                    mock->last_call.args[used++] = ',';
+                    mock->last_call.args[used] = '\0';
+                }
+                size_t alen = strlen(arg);
+                memcpy(mock->last_call.args + used, arg, alen);
+                used += alen;
+                mock->last_call.args[used] = '\0';
+            }
+        }
+    } else {
+        for (int i = 0; i < nargs; i++)
+            (void)va_arg(ap, const char *);
+    }
     char **out = va_arg(ap, char **);
     if (out && e && e->value && rc >= 0)
         *out = strdup(e->value);
@@ -318,6 +347,22 @@ static int mock_process(ip_bus_handle bus) {
     }
     mock->queued_signal_count = 0;
     return dispatched;
+}
+
+int ip_dbus_mock_last_call(ip_dbus_mock *mock,
+                            const char *iface,
+                            const char *member,
+                            char *out,
+                            size_t outsz)
+{
+    if (!mock || !out || outsz == 0)
+        return -EINVAL;
+    if (!mock->last_call.has_call ||
+        strcmp(mock->last_call.iface, iface ? iface : "") != 0 ||
+        strcmp(mock->last_call.member, member ? member : "") != 0)
+        return -ENOENT;
+    snprintf(out, outsz, "%s", mock->last_call.args);
+    return 0;
 }
 
 /* --- Backend accessor ------------------------------------------------------ */

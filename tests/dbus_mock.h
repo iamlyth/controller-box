@@ -16,6 +16,8 @@
 
 #include "dbus/dbus_interface.h"
 
+#include <stdbool.h>
+
 /*
  * Mock backend — a simple canned-response store.
  *
@@ -47,6 +49,21 @@ typedef struct {
  * mock_process() dispatches queued signals to registered callbacks. */
 #define IP_MOCK_MAX_QUEUED_SIGNALS 8
 
+/* --- Last method-call argument capture --------------------------------- */
+/* The mock records the string input arguments of the most recent
+ * call_method so tests can assert the exact values a production caller
+ * sends (e.g. the SetTargetDevices CSV, CreateTargetDevice kind,
+ * AttachTargetDevice paths) — not merely that a call returned OK.  This
+ * is what makes a topology-preservation semantic assertion possible. */
+#define IP_MOCK_LAST_ARGS_LEN 512
+
+typedef struct {
+    bool   has_call;   /* true after a call_method recorded args */
+    char   iface[64];
+    char   member[64];
+    char   args[IP_MOCK_LAST_ARGS_LEN]; /* string args joined by ',' */
+} ip_mock_last_call;
+
 typedef struct {
     char iface[64];
     char member[64];
@@ -77,6 +94,7 @@ typedef struct {
     uint32_t             creds_uid;   /* GetConnectionCredentials uid (default 0 = root/trusted) */
     int                  creds_rc;    /* 0 = success; <0 to simulate creds lookup failure */
     int                  unique_name_rc; /* 0 = success; <0 to simulate get_unique_name failure */
+    ip_mock_last_call    last_call;   /* most recent method call's string args */
 } ip_dbus_mock;
 
 /* --- Mock lifecycle -------------------------------------------------------- */
@@ -139,5 +157,18 @@ int ip_dbus_mock_queue_noc(ip_dbus_mock *mock,
                             const char *name,
                             const char *old_owner,
                             const char *new_owner);
+
+/*
+ * Return the string input arguments of the most recent call_method for
+ * (iface, member), joined by ','.  If the most recent call_method was not
+ * for (iface, member), returns -ENOENT.  On success returns 0 and copies
+ * the captured args into `out` (NUL-terminated).  This lets tests assert
+ * the exact production request payload, not just the return code.
+ */
+int ip_dbus_mock_last_call(ip_dbus_mock *mock,
+                            const char *iface,
+                            const char *member,
+                            char *out,
+                            size_t outsz);
 
 #endif /* CBX_DBUS_MOCK_H */
