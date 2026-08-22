@@ -1,48 +1,22 @@
-# Handoff: BUG-0018 verification-only round green (HEAD 5d8d192)
+# Handoff: BUG-0018 still fully blocked on external facts (re-verified, unchanged)
 
 ## Outcome this iteration
-Fresh-context re-verification confirms state at commit `5d8d192`. No ready
-tasks exist; sole open task remains blocked on external facts. No code work
-possible or warranted this round.
+Re-verified the fully blocked state; identical to prior handoff in every substantive way. No ready runtime tasks (task list empty). No software-fixable work remains and no new gap discovered -> no remediation task (AGENTS.md step 9).
+- Plan freshness EXIT 0 (spec 3a10f6b, blob 58f5d3); HEAD 9ec8d7f on develop; tree clean except scratchpad.
+- Conformance sidecar: 57 verified / 19 partial / 0 blocked; all 19 partial rows bind exclusively to open external facts FACT-002..007 (verified live from fact_refs in conformance.json requirement rows).
+- Blocked-facts ledger: FACT-001/008 resolved; FACT-002..007 open (verified live).
+- No `.factory/runner-evidence/` dir; `ssh dev-runner-vm` -> "Could not resolve hostname" (exit 255). `.factory/environment.toml` declares only `dev-runner-vm` (unreachable).
 
-## Verification (fresh context, HEAD 5d8d192)
-- `./scripts/check-plan-freshness.sh` → EXIT 0 (spec docs/SPEC.md 3a10f6b7 blob 58f5d3cb72bc).
-- Git tree clean except `.ralph/agent/scratchpad.md`.
-- Runtime task state: sole open task `task-1787407706-bacd` in_progress; `ralph tools task ready` → none.
-- Plan front-matter `status: active`; Task 4 (final audit) blocked.
-- All BUG-0018 software-addressable remediation complete+verified: Task 15 (renderer
-  geometry/aspect + marker-coordinate transform), Task 16 (visual-capture-driver
-  adapter), Task 17 (wrong-state capture + semantic validation). BUG-0015 software
-  portion closed in Task 14. Appended tasks keep `pending` (not the final gate) by
-  convention.
+## FACT-007 (signer) — still open
+`.factory/signer-trust.json` IS tracked (committed c45336a, enabled=true, namespace factory-runner-receipt). FACT-007 stays open because signed receipts live in untracked `.factory-state/runner-evidence/` (0 files Git-tracked) and the aggregate binds to older commits (c45336a/26df6c0/3c372a5), not current HEAD 9ec8d7f, so check-factory-runner-evidence.py reports the Git/environment binding stale. With dev-runner-vm unreachable, no fresh exact-commit Git-blob receipt can be generated.
 
-## Open blockers (external, not software-fixable here)
-- FACT-002/003 `inputplumber-system-dbus` undeclared (no real org.shadowblip.InputPlumber
-  system bus on the factory).
-- FACT-004/006 — `target-consumer` hardware, aarch64/Pi 4 runtime, human release
-  acceptance missing.
-- FACT-005 — `gpu-compositor` undeclared.
-- FACT-007 — dev-runner-vm runner unreachable (signed receipts not Git blobs at current
-  commit).
-- Out-of-band golden re-approval (test_golden's three editor baselines encode the
-  pre-BUG-0018 diagram; regen forbidden by `.factory/golden-policy.json`).
-- FACT-001/008 resolved. None of these are software-fixable in this environment.
+## Open external facts binding all 19 partial rows
+- FACT-002/003 (ARCH-04, DBUS-02/05, MGR-02/08, SYS-06, DOD-01/09) -> undeclared `inputplumber-system-dbus` (BUG-0015).
+- FACT-004/006 (SYS-01/02, OVL-09, MGR-08, PERF-01, VRF-07, DOD-01/09) -> undeclared `target-consumer` (Pi runtime + human release acceptance 11.1.7).
+- FACT-005 (VRF-06, DOD-05, DOD-01/09) -> undeclared `gpu-compositor`.
+- FACT-007 (MGR-03, PKG-01, VRF-05, DOD-06) -> `remote-project-gate`/`systemd-user`/`kernel-uinput`/`installed-package` declared only on unreachable `dev-runner-vm`; needs a fresh signed Git-blob receipt for HEAD + runner reachability.
 
-## Task state
-No ready tasks. Sole open BUG-0018 runtime task `task-1787407706-bacd` stays
-in_progress/blocked on external facts FACT-002..007 + out-of-band golden re-admission.
-Never the completion gate while any fact is open.
+All software-fixable tasks already implemented/resolved with evidence. Every acceptance path depends on external provisioning (real system bus, target hardware, reachable signed runner producing a fresh exact-commit Git-blob receipt, human release acceptance) plus out-of-band golden re-approval. Scratchpad-only change; not committed (AGENTS.md boundary).
 
 ## Next
-No code work remains this round. Emit `factory.implement` to continue; never the
-completion token. Recovery: when external facts (system bus, target hardware, GPU
-compositor, Pi 4 runtime, runner receipt) and golden re-approval are provisioned, run
-the Task 4 final audit gate (§11.2).
-
-## Re-verification (fresh context, HEAD 5d8d192)
-Confirmed unchanged: plan fresh (SPEC 3a10f6b7 blob 58f5d3cb72bc), plan front-matter
-`status: active`, git tree clean at HEAD 5d8d192 (only scratchpad modified), sole open
-task task-1787407706-bacd in_progress/blocked, no ready tasks, 6 open external facts
-FACT-002..007 (system DBus, target consumer hardware, aarch64/Pi4 runtime, GPU compositor,
-dev-runner-vm runner receipt) + out-of-band golden re-approval. No software-addressable
-work remains. Continue; never the completion token while any fact/golden gate is open.
+Emit `factory.implement` to continue; never the completion token. Recovery: once external facts are provisioned (real system bus, target hardware, reachable runner producing a fresh exact-commit Git-blob receipt, human release acceptance) AND golden re-approval granted, run Task 4 final audit gate (11.2) and reclassify the 19 partial rows.
