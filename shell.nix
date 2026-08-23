@@ -5,6 +5,16 @@
 # Provides: SDL2, SDL2_ttf, SDL2_image, libsystemd (sd-bus), libyaml, cmocka,
 # plus the build toolchain (cmake, pkg-config, gcc).
 # Also provides Xvfb, xdotool, and ImageMagick for the installed smoke test.
+#
+# UNPINNED nixpkgs ceiling (documented): `import <nixpkgs>` resolves the nixpkgs
+# channel/flake registry at evaluation time, so the exact toolchain/dependency
+# versions are NOT reproducible — there is no flake.lock or lockfile pinning the
+# nixpkgs revision. The authenticated Nix gate (scripts/nix-gate.sh) proves the
+# declared tools resolve under the immutable, content-addressed /nix/store (so a
+# run is genuinely Nix-built, never silently verified against undeclared host
+# packages), but it does NOT pin exact versions. Pin nixpkgs (a flake.lock, a
+# locked overlay, or a channel revision) before any release that requires
+# byte-exact toolchain reproducibility.
 { pkgs ? import <nixpkgs> {} }:
 
 pkgs.mkShell {

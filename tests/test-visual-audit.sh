@@ -1135,6 +1135,18 @@ grep -q 'writable by group/other' "$DRIVER_SRC" \
     || fail "adapter must reject a group/world-writable installed binary"
 grep -q 'is not owned by current user' "$DRIVER_SRC" \
     || fail "adapter must reject an unowned atomic-publish helper"
+# Post-Task-21 hardening: the installed binary must also be EXECUTABLE, and both
+# the installed binary and the atomic-publish helper must be revalidated (by
+# dev:ino/owner/mode) immediately before exec/invocation so a TOCTOU swap
+# between validation and use is never launched/invoked.
+grep -q 'is not executable' "$DRIVER_SRC" \
+    || fail "adapter must reject a non-executable installed binary"
+grep -q 'installed binary changed after validation' "$DRIVER_SRC" \
+    || fail "adapter must revalidate the installed binary immediately before launch"
+grep -q 'invoke_atomic' "$DRIVER_SRC" \
+    || fail "adapter must revalidate the atomic-publish helper before each invocation"
+grep -q 'inode changed since validation' "$DRIVER_SRC" \
+    || fail "adapter must detect a swapped atomic-publish helper by dev:ino"
 # Private Xvfb display auth: the adapter must launch Xvfb with a private
 # Xauthority cookie (-auth) so only its own processes can connect to the
 # isolated display.
@@ -1172,6 +1184,12 @@ grep -qF "if [[ \"\$COMMITTED\" == 0 ]]; then" "$DRIVER_SRC" \
 # removed RECEIPT_PUBLISHED/IMAGE_PUBLISHED flags must not reappear as code.
 grep -qE 'RECEIPT_PUBLISHED=|IMAGE_PUBLISHED=' "$DRIVER_SRC" \
     && fail "adapter must not reintroduce a racy boolean publish barrier flag"
+# Bounded recovery is best-effort and must NEVER withhold the fresh capture; a
+# dead guard that gates the capture on recovery's (always-zero) exit is a defect.
+# Comment lines are excluded so the explanatory docstring (which names the
+# removed guard to explain why it is gone) is not mistaken for the guard.
+grep -vE '^[[:space:]]*#' "$DRIVER_SRC" | grep -q 'power-loss recovery failed; capture withheld' \
+    && fail "adapter must not gate the fresh capture on best-effort recovery (dead guard)"
 
 # --- 13c. product adapter hanging-child: bounded poll + owned group cleanup ---
 # Runs the real adapter against a mock installed prefix (no build tree). The
@@ -2294,6 +2312,24 @@ if [[ "$(id -u)" != 0 ]]; then
         [[ ! -e "$D/out5.png" ]] || fail "recover promoted an unowned orphan temp"
     fi
 fi
+# (f) post-image-rename pre-fsync invariant: the image is already visible at
+#     OUTPUT (image renamed into place but its directory entry not yet fsynced)
+#     and a HASH-MATCHING orphan temp is also present. Recovery must be a NO-OP:
+#     it must not re-restore/overwrite/duplicate the existing OUTPUT (never
+#     double-publish a committed image), even though a matching temp exists.
+printf 'visible-output' > "$D/out6.png"
+IMG6=$(printf 'visible-output' | sha256sum | awk '{print $1}')
+printf 'visible-output' > "$D/.cbx-capture.matching"
+"$APUB" receipt "$D/out6.png.receipt.json" \
+    "schema=controller-box/visual-capture-receipt/v1" "state=manager-main" \
+    "commit=$COMMIT40" "install_prefix=/p" "binary_sha256=$SHA" \
+    "image=$D/out6.png" "image_sha256=$IMG6" "window_title=t" \
+    "display=:99" "finished_at=2026-01-01T00:00:00Z"
+"$APUB" recover "$D/out6.png.receipt.json" "$D/out6.png"
+[[ "$(cat "$D/out6.png")" == "visible-output" ]] \
+    || fail "recover must not disturb an OUTPUT visible in the post-rename pre-fsync window"
+[[ -e "$D/.cbx-capture.matching" ]] \
+    || fail "recover must not consume the matching orphan when OUTPUT already exists"
 echo "test-visual-audit: bounded power-loss recovery passed (13i)"
 
 # --- 13h. installed-binary/prefix provenance + Xvfb-auth hardening ----------
@@ -2316,7 +2352,7 @@ if command -v Xvfb >/dev/null 2>&1 && command -v xauth >/dev/null 2>&1 \
         cp -f "$PROJECT_ROOT/data/icons/svg/generic-gamepad.svg" \
             "$tmp/hp-bad/usr/share/controller-box/icons/svg/generic-gamepad.svg"
     fi
-    chmod 666 "$tmp/hp-bad/usr/bin/controller-box"
+    chmod 776 "$tmp/hp-bad/usr/bin/controller-box"  # executable but writable by group/other
     HP_HEAD=$(git -C "$PROJECT_ROOT" rev-parse HEAD)
     HP_OUT="$tmp/hp/out.png"
     mkdir -p "$tmp/hp"; chmod 700 "$tmp/hp"
@@ -2342,11 +2378,91 @@ if command -v Xvfb >/dev/null 2>&1 && command -v xauth >/dev/null 2>&1 \
     grep -q "not a regular non-symlink file" "$tmp/hp-sym.out" \
         || fail "driver must report the symlink/non-regular rejection"
     [[ ! -e "$HP_OUT" ]] || fail "rejected symlink capture must leave no OUTPUT"
+    # Non-executable substitute is refused (restored executable check): a
+    # provenance-valid but non-runnable binary must be refused before launch.
+    rm -f "$tmp/hp-bad/usr/bin/controller-box"
+    cp -f "$PROJECT_ROOT/build-check/controller-box" "$tmp/hp-bad/usr/bin/controller-box" 2>/dev/null \
+        || cp -f /bin/true "$tmp/hp-bad/usr/bin/controller-box"
+    chmod 644 "$tmp/hp-bad/usr/bin/controller-box"
+    set +e
+    VISUAL_AUDIT_INSTALL_PREFIX="$tmp/hp-bad/usr" \
+        "$DRIVER" manager-main "$HP_OUT" "$HP_HEAD" >"$tmp/hp-noexec.out" 2>&1
+    rc=$?
+    set -e
+    expect_rc 1 "$rc" "driver must refuse a non-executable installed binary"
+    grep -q "is not executable" "$tmp/hp-noexec.out" \
+        || fail "driver must report the non-executable rejection"
+    [[ ! -e "$HP_OUT" ]] || fail "rejected non-executable capture must leave no OUTPUT"
     echo "test-visual-audit: installed-binary provenance hardening passed (13h)"
 elif nix_gate_require optional; then
     fail "display toolchain (Xvfb/xauth/xdotool/convert) is required for installed-binary provenance (Nix project environment)"
 else
     echo "SKIP: display toolchain unavailable for installed-binary provenance (13h)"
+fi
+
+# --- 13k. private Xauthority: cookie-less client refused, cookie-bearing connects ---
+# Point 8 of Task 21: the driver launches its isolated Xvfb with -auth using a
+# private MIT-MAGIC-COOKIE-1 (xauth add into a mode-0600 file inside the owned
+# TMPDIR; XAUTHORITY is inherited by the app/xdotool/import). This functional
+# regression replicates that exact mechanism and proves the refusal boundary a
+# real display server enforces: a client WITHOUT the cookie is refused by the
+# -auth display while a cookie-bearing client connects. Non-skipping under the
+# authenticated Nix gate.
+if command -v Xvfb >/dev/null 2>&1 && command -v xauth >/dev/null 2>&1 \
+        && command -v xdotool >/dev/null 2>&1; then
+    KXN=""
+    kbase=$(( 90 + ( $$ % 700 ) ))
+    for ki in $(seq 0 60); do
+        kn=$(( kbase + ki ))
+        if [[ ! -e "/tmp/.X11-unix/X$kn" && ! -e "/tmp/.X${kn}-lock" ]]; then
+            KXN=$kn; break
+        fi
+    done
+    if [[ -z "$KXN" ]]; then
+        fail "13k: no free display for the Xauthority cookie refusal test"
+    fi
+    KXAF="$tmp/.xauth-k"
+    KCOOKIE=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n') \
+        || fail "13k: cannot generate a private Xauthority cookie"
+    umask 077
+    xauth -f "$KXAF" add ":$KXN" MIT-MAGIC-COOKIE-1 "$KCOOKIE" >/dev/null 2>&1 \
+        || fail "13k: xauth could not write the private cookie"
+    chmod 600 "$KXAF"
+    DISPLAY=":$KXN" XAUTHORITY="$KXAF" setsid Xvfb ":$KXN" -screen 0 640x480x24 \
+        -auth "$KXAF" >"$tmp/kxvfb.log" 2>&1 &
+    KXVFB_PID=$!
+    kready=0
+    for _ in $(seq 1 40); do
+        if [[ -e "/tmp/.X11-unix/X$KXN" ]] && kill -0 "$KXVFB_PID" 2>/dev/null; then
+            kready=1; break
+        fi
+        kill -0 "$KXVFB_PID" 2>/dev/null || break
+        sleep 0.1
+    done
+    if [[ $kready -ne 1 ]]; then
+        kill "$KXVFB_PID" 2>/dev/null || true
+        fail "13k: Xvfb with -auth did not become ready on :$KXN"
+    fi
+    # Cookie-bearing client connects (XAUTHORITY points at the private cookie).
+    if ! DISPLAY=":$KXN" XAUTHORITY="$KXAF" xdotool getdisplaygeometry >/dev/null 2>&1; then
+        kill "$KXVFB_PID" 2>/dev/null || true
+        fail "13k: a cookie-bearing client must connect to the authed display"
+    fi
+    # Cookie-less client (no XAUTHORITY / an empty cookie file) is REFUSED by
+    # the -auth display: only holders of the private cookie may connect.
+    set +e
+    DISPLAY=":$KXN" XAUTHORITY="$tmp/empty-xauth" xdotool getdisplaygeometry >/dev/null 2>&1
+    krc=$?
+    set -e
+    kill "$KXVFB_PID" 2>/dev/null || true
+    if [[ $krc -eq 0 ]]; then
+        fail "13k: a cookie-less client must be refused by the authed display"
+    fi
+    echo "test-visual-audit: private Xauthority cookie refusal passed (13k)"
+elif nix_gate_require optional; then
+    fail "Xvfb/xauth/xdotool are required for the Xauthority cookie refusal test (Nix project environment)"
+else
+    echo "SKIP: Xvfb/xauth/xdotool unavailable for the Xauthority cookie refusal test (13k)"
 fi
 
 # --- 14. capture: ok driver succeeds and is deterministic ---------------------

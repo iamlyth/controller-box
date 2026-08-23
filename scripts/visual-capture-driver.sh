@@ -230,6 +230,11 @@ validate_installed_binary() { # bin  (also validates the derived prefix chain)
     local bin=$1 owner mode dir prev
     [[ -e "$bin" && ! -L "$bin" && -f "$bin" ]] || {
         echo "visual-capture: installed binary '$bin' is not a regular non-symlink file" >&2; return 1; }
+    # The installed binary must be EXECUTABLE: a provenance-valid but
+    # non-runnable substitute (mode without any execute bit) is refused before
+    # launch rather than silently accepted and later failing at exec.
+    [[ -x "$bin" ]] || {
+        echo "visual-capture: installed binary '$bin' is not executable" >&2; return 1; }
     owner=$(stat -c %u "$bin" 2>/dev/null) || {
         echo "visual-capture: cannot stat installed binary '$bin'" >&2; return 1; }
     [[ "$owner" == "$ME" || "$owner" == "0" ]] || {
@@ -268,6 +273,9 @@ if [[ -z "$INSTALLED_BIN" ]]; then
     echo "visual-capture: no trusted installed production binary found; run the project gate first" >&2
     exit 1
 fi
+# Capture the validated binary's dev:ino so a TOCTOU swap between this
+# validation and the launch is detected (revalidated immediately before exec).
+INSTALLED_BIN_DEVINO=$(stat -c '%d:%i' "$INSTALLED_BIN" 2>/dev/null || true)
 # Installed assets must resolve inside the prefix (no source-tree fallback).
 PREFIX=$(cd -- "$(dirname -- "$INSTALLED_BIN")/.." && pwd)
 [[ -f "$PREFIX/share/controller-box/icons/svg/generic-gamepad.svg" ]] || {
@@ -449,12 +457,43 @@ if (( (8#$h_mode & 8#022) != 0 )); then
     echo "visual-capture: publish helper '$ATOMIC' is writable by group/other (mode $h_mode)" >&2
     exit 1
 fi
+# Capture the validated helper's dev:ino so every later invocation can detect a
+# TOCTOU swap (revalidated immediately before each call by invoke_atomic).
+H_DEVINO=$(stat -c '%d:%i' "$ATOMIC" 2>/dev/null || true)
+
+# TOCTOU revalidation immediately before EVERY helper invocation: between the
+# startup validation above and any given call, an attacker could swap the
+# helper for a malicious, unowned, world-writable, or symlinked substitute.
+# Re-stat it here (owner, mode, exec, regular non-symlink, and the exact
+# dev:ino captured at startup) and fail closed if anything changed; only then
+# is the real helper invoked. This closes the validation->invocation window for
+# the helper the same way the installed binary is revalidated before launch.
+invoke_atomic() { # args...  -> helper rc, or 3 on a revalidation refusal
+    local o m d
+    [[ -e "$ATOMIC" && ! -L "$ATOMIC" && -f "$ATOMIC" && -x "$ATOMIC" ]] || {
+        echo "visual-capture: publish helper '$ATOMIC' is no longer a regular executable non-symlink file" >&2
+        return 3; }
+    o=$(stat -c %u "$ATOMIC" 2>/dev/null || echo -1)
+    [[ "$o" == "$ME" ]] || {
+        echo "visual-capture: publish helper '$ATOMIC' is no longer owned by current user" >&2
+        return 3; }
+    d=$(stat -c '%d:%i' "$ATOMIC" 2>/dev/null || true)
+    [[ "$d" == "$H_DEVINO" ]] || {
+        echo "visual-capture: publish helper '$ATOMIC' inode changed since validation" >&2
+        return 3; }
+    m=$(stat -c %a "$ATOMIC" 2>/dev/null || echo 777)
+    if (( (8#$m & 8#022) != 0 )); then
+        echo "visual-capture: publish helper '$ATOMIC' became writable by group/other" >&2
+        return 3
+    fi
+    "$ATOMIC" "$@"
+}
 
 publish_no_replace() { # src dst  -> 0 ok, 2 exists, 3 error
-    "$ATOMIC" publish "$1" "$2"
+    invoke_atomic publish "$1" "$2"
 }
 fsync_path() { # path  -> 0 ok, 3 error (fail-closed durability)
-    "$ATOMIC" fsync "$1"
+    invoke_atomic fsync "$1"
 }
 
 # ---------------------------------------------------------------------------
@@ -611,6 +650,16 @@ fi
 # ---------------------------------------------------------------------------
 # Launch the installed binary in the requested mode (own session/group).
 # ---------------------------------------------------------------------------
+# TOCTOU revalidation immediately before exec: the installed binary could be
+# swapped between the startup provenance validation above and this launch.
+# Re-validate it (same provenance incl. the executable check) and require the
+# exact dev:ino captured at selection so an attacker-swapped substitute is
+# never exec'd.
+if ! validate_installed_binary "$INSTALLED_BIN" \
+        || [[ "$(stat -c '%d:%i' "$INSTALLED_BIN" 2>/dev/null || true)" != "$INSTALLED_BIN_DEVINO" ]]; then
+    echo "visual-capture: installed binary changed after validation; refusing to launch" >&2
+    exit 1
+fi
 setsid "$INSTALLED_BIN" "$APP_MODE" >"$TMPDIR/app.log" 2>&1 &
 APP_GROUP=$!
 OWNED_GROUPS+=("$APP_GROUP")
@@ -776,12 +825,21 @@ OUTPUT_DIR=$(verify_output_parent "$(dirname -- "$OUTPUT")") || exit 1
 # receipt never points at a missing image, and remove provably-uncommitted owned
 # `.cbx-receipt.*` temps. Recovery is best-effort and idempotent; it NEVER
 # sweeps arbitrary temp files (a sweep could orphan another committed receipt's
-# image) and NEVER treats an orphan temp as evidence on its own. See
+# image) and NEVER treats an orphan temp as evidence on its own. It is run
+# BEFORE the fresh capture so a committed image from a prior crash is restored
+# (or, if it is already at OUTPUT — the post-image-rename pre-fsync window —
+# left untouched by contract) before this run publishes its own artifact. See
 # atomic-publish.py recover.
-if ! "$ATOMIC" recover "$OUTPUT.receipt.json" "$OUTPUT"; then
-    echo "visual-capture: power-loss recovery failed; capture withheld" >&2
-    exit 1
-fi
+#
+# Recovery NEVER withholds the fresh capture (it returns 0 by contract), so
+# there is deliberately NO dead "power-loss recovery failed; capture withheld"
+# guard here: if a committed receipt still blocks OUTPUT after recovery, the
+# fresh capture's no-replace publish below fails closed against it. The helper
+# is revalidated immediately before this invocation (invoke_atomic); a recovery
+# that cannot run is logged and the fresh capture proceeds (any subsequent
+# helper call that also fails revalidation fails closed).
+invoke_atomic recover "$OUTPUT.receipt.json" "$OUTPUT" \
+    || echo "visual-capture: bounded recovery could not run; proceeding with a fresh capture" >&2
 CAPTURE_TMP=$(mktemp "$OUTPUT_DIR/.cbx-capture.XXXXXX" 2>/dev/null) \
     || { echo "visual-capture: cannot allocate capture temp in $OUTPUT_DIR" >&2; exit 1; }
 assert_safe_temp "$CAPTURE_TMP" capture || exit 1
@@ -826,7 +884,7 @@ assert_safe_temp "$RECEIPT_TMP" receipt || exit 1
 # Build the receipt through the atomic-publish JSON serializer (proper escaping
 # of any quotes/backslashes/tabs/newlines in paths/titles; strict 64-hex hash
 # validation). A malformed hash or missing field fails closed here.
-if ! "$ATOMIC" receipt "$RECEIPT_TMP" \
+if ! invoke_atomic receipt "$RECEIPT_TMP" \
         "schema=controller-box/visual-capture-receipt/v1" \
         "state=$STATE" \
         "commit=$COMMIT" \

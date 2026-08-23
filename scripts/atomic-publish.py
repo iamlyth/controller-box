@@ -63,6 +63,17 @@ Subcommands:
       published under the fixed <output>.receipt.json name, so such a temp is
       always an interrupted draft, never a commit marker). Recovery NEVER sweeps
       arbitrary files and NEVER treats an orphan temp as evidence on its own.
+
+      Post-image-rename pre-fsync invariant: if the image is already visible at
+      <output_path> (e.g. a power loss landed after the image rename but before
+      the output directory entry was fsynced — the commit point was reached but
+      durability was not confirmed), recovery is a NO-OP. It never re-restores,
+      overwrites, duplicates, or removes an OUTPUT that already exists, even if
+      a hash-matching orphan temp is also present. The image-visible-at-OUTPUT
+      state is terminal for recovery regardless of durability, so a committed
+      image is never double-published and a pre-existing OUTPUT is never
+      disturbed.
+
       Exit: 0 always (best-effort restoration of prior state; it is never a
             reason to withhold a fresh capture).
 """
@@ -303,7 +314,10 @@ def cmd_recover(receipt_path: str, output_path: str) -> int:
     Always returns 0: restoration of prior state is best-effort and must never
     be a reason to withhold a fresh capture. It is idempotent and safe to call
     on every driver startup (a no-op unless a committed receipt is present and
-    its image is still missing at <output_path>).
+    its image is still missing at <output_path>). The post-image-rename
+    pre-fsync invariant is honored: whenever <output_path> already exists
+    (image visible, even if not yet durable), recovery does nothing — it never
+    re-restores/overwrites/duplicates an existing OUTPUT.
     """
     d = os.path.dirname(output_path) or "."
     # 1. Remove provably-uncommitted owned receipt temps. Receipts are only

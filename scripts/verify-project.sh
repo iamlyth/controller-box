@@ -138,7 +138,13 @@ for gate in gates:
         argv = [str(root / 'tests' / name)]
         argv += [str(build_dir) if a == '{BUILD_DIR}' else a for a in args]
         result = subprocess.run(argv)
-        if name == 'test_packaging.sh':
+        if name in ('test_packaging.sh', 'test-visual-audit.sh'):
+            # test_packaging.sh and test-visual-audit.sh are strict-rc0 gates.
+            # test-visual-audit.sh is non-skipping under the authenticated Nix
+            # inner gate, so a 77 (skip) return would be a silent false-pass,
+            # never a legitimate skip: it is rejected here (the dead 77 is
+            # removed for this gate) so the adversarial visual/atomic-capture
+            # regressions can never pass by skipping.
             if result.returncode != 0:
                 raise SystemExit(f'verify-project: gate {name} failed (exit {result.returncode})')
         elif result.returncode not in (0, 77):
