@@ -69,6 +69,7 @@ typedef struct {
     cbx_widget base;
     SDL_Texture *base_texture;   /* controller image (owned if owns_base) */
     bool owns_base_texture;
+    const cbx_diag_button_pos *btn_table; /* active button-position table */
     cbx_diag_button highlighted;  /* currently highlighted button, -1 = none */
     SDL_Color highlight_color;
     const cbx_theme *theme;       /* borrowed */
@@ -133,6 +134,45 @@ const char *cbx_profile_diagram_button_name(cbx_diag_button btn);
 
 /* Total number of highlightable buttons (excludes NONE). */
 int cbx_profile_diagram_button_count(void);
+
+/* ------------------------------------------------------------------ */
+/*  Device-mapped base image & marker layout (BUG-0018)               */
+/* ------------------------------------------------------------------ */
+/*
+ * Adopt a base image texture that is owned by the production icon cache
+ * (i.e. resolved through cbx_icon_lookup / cbx_icon_map / cbx_icon_cache)
+ * rather than rasterised ad-hoc from a hand-built path.  The texture is
+ * BORROWED: the icon cache keeps ownership and destroys it, so the diagram
+ * must not.  Any texture the diagram currently owns is freed first.
+ *
+ * A NULL tex is a no-op (the diagram keeps whatever base it has).
+ */
+void cbx_profile_diagram_set_base_image(cbx_profile_diagram *diag,
+                                        SDL_Texture *tex);
+
+/*
+ * Select the marker layout for a device icon name resolved through the
+ * production icon map (e.g. "generic-gamepad" or "cc-xbox-360").  Only
+ * icons with a registered, geometry-verified button-position table switch
+ * the active table; every other/unknown name selects the generic table.
+ * This keeps every marker anchored to a physical control on the rendered
+ * asset (BUG-0018): a device silhouette whose control geometry is not yet
+ * registered never gets markers that could float off the controls.
+ */
+void cbx_profile_diagram_set_device(cbx_profile_diagram *diag,
+                                    const char *icon_name);
+
+/*
+ * Return true iff `icon_name` has a registered, geometry-verified
+ * button-position table (i.e. it is safe to display that device's SVG
+ * with markers aligned to its controls).  A NULL/empty name resolves to
+ * the default generic-gamepad device, which is always registered.
+ */
+bool cbx_profile_diagram_device_geometry_known(const char *icon_name);
+
+/* Active-table position lookup for a button.  Returns NULL for invalid IDs. */
+const cbx_diag_button_pos *cbx_profile_diagram_active_button_pos(
+    const cbx_profile_diagram *diag, cbx_diag_button btn);
 
 /* ------------------------------------------------------------------ */
 /*  Geometry helpers (BUG-0018)                                       */

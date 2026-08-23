@@ -1,55 +1,42 @@
-# Handoff: Task-21 hardening residuals closed, no evidence elevation
+# Handoff: BUG-0018 device-mapped diagram resolution implemented (task-1787452487-2cb0)
 
 ## Outcome this iteration
-Closed runtime task `task-1787443015-9b90` (P1, "Close Task-21 hardening
-residuals without evidence elevation"). All 8 documentation/test hardening
-residuals implemented on `develop`; NO golden regen and NO conformance
-elevation. The out-of-band final-audit gate (Task 4 / FACT-002..007) remains
-blocked independently.
+Implemented runtime task `task-1787452487-2cb0` (Fix BUG-0018, device-mapped redirect).
+Replaced the profile editor's hardcoded `cbx_icon_dir()/svg/generic-gamepad.svg` path
+build with production icon-utility resolution and added device-mapped marker-layout
+infrastructure. Tree was clean @ d5848c7 on develop before this work.
 
 ## What changed
-- `scripts/visual-capture-driver.sh`: restored the installed-binary EXECUTABLE
-  check; capture `INSTALLED_BIN_DEVINO` and revalidate binary (provenance +
-  dev:ino) immediately before launch; added `invoke_atomic()` helper
-  revalidation (owner/mode/exec/dev:ino) before every publish/fsync/receipt/
-  recover invocation; removed the dead `power-loss recovery failed; capture
-  withheld` guard (recovery is best-effort) with corrected diagnostic.
-- `scripts/atomic-publish.py`: documented the post-image-rename pre-fsync
-  recovery invariant (recovery is a no-op whenever OUTPUT already exists).
-- `scripts/verify-project.sh`: `test-visual-audit.sh` is now a strict-rc0 gate
-  (the dead 77-skip is removed for it; it is non-skipping under Nix).
-- `shell.nix`: documented the unpinned-nixpkgs ceiling.
-- `tests/test-visual-audit.sh`: new 13b source invariants (executable check,
-  launch revalidation, invoke_atomic dev:ino, negative dead-guard); 13i case
-  (f) pins the post-rename-pre-fsync invariant; 13h non-executable case (and
-  the writable case changed 666->776 so it stays executable); new 13k functional
-  cookie-less-Xauthority-refusal test (cookie-bearing connects, cookie-less
-  refused by the `-auth` display).
-- `.factory/artifacts/implementation-plan.md`: appended a Post-closure
-  hardening note to Task 21's section with evidence. Plan still validates and
-  is fresh (spec `3a10f6b7d04a`, blob `58f5d3cb72bc`).
+- `src/manager/profile_editor_list.c/.h`: diagram base + marker layout now resolved via
+  `cbx_icon_map` + `cbx_icon_cache` + `cbx_icon_lookup` keyed by device type
+  (`cbx_profile_editor_set_device`), with a geometry guard so unregistered devices keep
+  the generic-gamepad asset whose controls match the marker table. Editor owns the icon
+  cache (512 raster) + map; shutdown cleans the cache.
+- `src/manager/profile_diagram.c/.h`: `cbx_profile_diagram_set_base_image` (borrowed
+  cache texture), `set_device` (active layout from device-layout registry),
+  `device_geometry_known`, `active_button_pos`; renderer anchors markers through the
+  active table. Aspect/512-raster/content-box anchoring (prior BUG-0018 machinery)
+  unchanged.
+- Tests: `tests/test_profile_diagram.c` device-mapped resolution/pixelation/stretch/
+  marker-alignment/lookup tests; `tests/test_editor_list_mode.c` production-cache
+  resolution + set_device re-resolve. Real installed `test_installed_diagram.sh` passes.
+- Plan: appended "BUG-0018 device-mapped diagram resolution" section (validates clean).
 
-## Exact verification (all pass)
-- `nix-shell --run 'bash tests/test-visual-audit.sh'` exit 0, non-skipping:
-  13b/13d/13e/13f/13g/13h/13i/13j/13k all pass (my new cases included).
-- `nix-shell --run 'bash tests/test-nix-gate.sh'` exit 0 (9 regressions).
-- `./scripts/verify-boilerplate.sh` exit 0 at host.
-- `nix-shell --run 'shellcheck -x scripts/visual-capture-driver.sh tests/test-visual-audit.sh scripts/verify-project.sh'` clean.
-- `python3 scripts/validate-implementation-plan.py planning ...` OK;
-  `./scripts/check-plan-freshness.sh` OK.
-- Full `./scripts/verify-project.sh` stops only at the pre-existing open
-  BUG-0018 `test_golden` manager-editor mismatches (golden baselines protected
-  under `.factory/golden-policy.json`, out-of-band re-approval required). This
-  is unrelated to the hardening (only scripts/tests/docs/shell.nix changed — no
-  C, no goldens); every other ctest (100 tests) passes except test_golden.
+## Verification
+- Full `ctest --test-dir build-check` 99/100 pass; only failure is pre-existing
+  `test_golden` three-editor-baseline mismatch (goldens protected, out-of-band regen, NOT
+  regenerated). 2 hardware skips. `test_manager_visual`, `test_installed_diagram/smoke/
+  binary` pass. `./scripts/verify-boilerplate.sh` exit 0. Build clean under Debug -Werror.
+- `python3 scripts/validate-implementation-plan.py planning ...` exit 0; plan fresh.
 
-## Commit
-Committed to `develop` as `c9d...` (or see `git log -1`): substantive
-hardening commit (scripts, tests, shell.nix, plan note).
+## Constraints honoured
+No golden regenerated/closed, no conformance evidence tier elevated, BUG-0015/BUG-0018
+left open. Per-device marker calibration for licensed Controllercons SVGs (control
+geometry not machine-verifiable) stays out-of-band (visual/human). Out-of-band human
+review required before any acceptance claim.
 
 ## Next action
-Task `task-1787443015-9b90` is complete and may be closed. Do NOT touch the
-out-of-band final-audit gate (Task 4 / FACT-002..007) — still blocked
-independently. For the next iteration: close the runtime task, then re-confirm
-no ready/open work; emit `factory.implement` with a brief payload; do not emit
-the completion token (Task 4 + external facts remain open).
+Commit this checkpoint to develop. Do NOT emit the completion token: Task 4 final audit,
+FACT-002..007, and golden re-approval remain open. Later iterations should await the
+human/out-of-band device-calibration and acceptance review; no further software work is
+queued on this task.

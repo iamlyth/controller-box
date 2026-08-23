@@ -70,6 +70,47 @@ static const cbx_diag_button_pos s_button_pos[CBX_DIAG_BTN_COUNT] = {
     [CBX_DIAG_BTN_R3] = { CBX_DIAG_BTN_R3, "R3", 0.55f, 0.55f, 0.10f, 0.10f },
 };
 
+/*
+ * Registered per-device marker layouts (BUG-0018).
+ *
+ * Each entry associates an icon name (as resolved by the production icon
+ * map — cbx_icon_map_lookup) with the normalised button-position table
+ * that matches that device's rendered control geometry.  Only entries here
+ * are considered "geometry known": a device SVG is only shown with markers
+ * when its controls are registered, otherwise the generic-gamepad layout
+ * (the one asset whose controls are drawn at exactly these coordinates) is
+ * kept so no marker floats off a control.
+ *
+ * The generic table below is registered because data/icons/svg/
+ * generic-gamepad.svg is drawn with every control at the exact normalised
+ * coordinates of s_button_pos (BUG-0018).  Adding a new device requires
+ * its SVG's control geometry to be visually verified and its own table
+ * appended here — that calibration is out-of-band (human/visual), matching
+ * the BUG-0018 acceptance which forbids unverified marker placement.
+ */
+typedef struct {
+    const char *icon;                 /* icon name (e.g. "generic-gamepad") */
+    const cbx_diag_button_pos *table; /* matching button-position table    */
+} cbx_diag_device_layout;
+
+static const cbx_diag_device_layout s_device_layouts[] = {
+    { "generic-gamepad", s_button_pos },
+};
+
+/* The default layout used for unknown / unregistered device icons. */
+static const cbx_diag_button_pos *
+layout_for_icon(const char *icon_name)
+{
+    /* NULL / empty resolves to the default generic device. */
+    if (!icon_name || icon_name[0] == '\0')
+        return s_button_pos;
+    for (size_t i = 0; i < sizeof(s_device_layouts) / sizeof(s_device_layouts[0]); i++) {
+        if (strcmp(s_device_layouts[i].icon, icon_name) == 0)
+            return s_device_layouts[i].table;
+    }
+    return s_button_pos;
+}
+
 /* ------------------------------------------------------------------ */
 /*  Vtable forward declarations                                       */
 /* ------------------------------------------------------------------ */
@@ -211,6 +252,7 @@ cbx_profile_diagram_init(cbx_profile_diagram *diag,
     diag->base.vt = &s_diag_vt;
     diag->base.visible = true;
     diag->base.rect = (SDL_Rect){ 0, 0, 256, 256 };
+    diag->btn_table = s_button_pos;
     diag->highlighted = CBX_DIAG_BTN_NONE;
     diag->theme = theme;
 
@@ -276,6 +318,63 @@ cbx_profile_diagram_get_highlight(const cbx_profile_diagram *diag)
     if (!diag)
         return CBX_DIAG_BTN_NONE;
     return diag->highlighted;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Device-mapped base image & marker layout (BUG-0018)               */
+/* ------------------------------------------------------------------ */
+
+void
+cbx_profile_diagram_set_base_image(cbx_profile_diagram *diag,
+                                     SDL_Texture *tex)
+{
+    if (!diag)
+        return;
+    if (!tex)
+        return;                       /* keep whatever base we have */
+
+    /* Free any texture we own before adopting a borrowed cache texture. */
+    if (diag->owns_base_texture && diag->base_texture) {
+        SDL_DestroyTexture(diag->base_texture);
+        diag->base_texture = NULL;
+    }
+    diag->base_texture = tex;
+    diag->owns_base_texture = false;   /* icon cache owns it */
+}
+
+void
+cbx_profile_diagram_set_device(cbx_profile_diagram *diag,
+                                 const char *icon_name)
+{
+    if (!diag)
+        return;
+    diag->btn_table = layout_for_icon(icon_name);
+}
+
+bool
+cbx_profile_diagram_device_geometry_known(const char *icon_name)
+{
+    /* NULL/empty -> default generic device, always geometry-verified. */
+    if (!icon_name || icon_name[0] == '\0')
+        return true;
+    for (size_t i = 0; i < sizeof(s_device_layouts) / sizeof(s_device_layouts[0]); i++) {
+        if (strcmp(s_device_layouts[i].icon, icon_name) == 0)
+            return true;
+    }
+    return false;
+}
+
+const cbx_diag_button_pos *
+cbx_profile_diagram_active_button_pos(const cbx_profile_diagram *diag,
+                                        cbx_diag_button btn)
+{
+    if (btn < 0 || btn >= CBX_DIAG_BTN_COUNT)
+        return NULL;
+    const cbx_diag_button_pos *table =
+        diag ? diag->btn_table : s_button_pos;
+    if (!table)
+        table = s_button_pos;
+    return &table[btn];
 }
 
 /* ------------------------------------------------------------------ */
@@ -415,7 +514,7 @@ diag_draw(cbx_widget *w, SDL_Renderer *r)
      * widget rect, preserving the prior behaviour. */
     if (diag->highlighted >= 0 && diag->highlighted < CBX_DIAG_BTN_COUNT) {
         const cbx_diag_button_pos *pos =
-            &s_button_pos[diag->highlighted];
+            cbx_profile_diagram_active_button_pos(diag, diag->highlighted);
         if (pos && pos->name) {
             SDL_Rect hr;
             hr.x = content.x + (int)(pos->x * (float)content.w);

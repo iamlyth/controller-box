@@ -85,6 +85,50 @@ static int teardown(void **state)
 }
 
 /* ------------------------------------------------------------------ */
+/*  Device-mapped diagram resolution (BUG-0018)                       */
+/* ------------------------------------------------------------------ */
+/*
+ * The editor resolves its diagram base image + marker layout through the
+ * production icon mapping utilities (cbx_icon_map + cbx_icon_cache +
+ * cbx_icon_lookup) keyed by device type, not a hardcoded
+ * `.../svg/generic-gamepad.svg` path.  These tests assert that resolution
+ * path from the editor state: the diagram base is a cache-owned texture
+ * (borrowed, not owned) and set_device re-resolves it.
+ */
+
+static void test_editor_diagram_resolved_via_production_cache(void **state)
+{
+    pe_fixture *f = *state;
+
+    /* Default device (NULL -> generic) resolves a real base image through
+     * the production icon cache, so the editor never shows a blank diagram
+     * and the texture is cache-owned (borrowed, not owned). */
+    assert_non_null(f->ed.diagram.base_texture);
+    assert_false(f->ed.diagram.owns_base_texture);
+
+    /* The diagram marker layout matches the default generic table. */
+    assert_ptr_equal(
+        cbx_profile_diagram_active_button_pos(&f->ed.diagram, CBX_DIAG_BTN_A),
+        cbx_profile_diagram_get_button_pos(CBX_DIAG_BTN_A));
+}
+
+static void test_editor_set_device_reresolves(void **state)
+{
+    pe_fixture *f = *state;
+
+    /* A known device resolves through the icon map to generic-gamepad (the
+     * only geometry-verified asset), so base + layout are preserved. */
+    assert_int_equal(cbx_profile_editor_set_device(&f->ed, "xb360"), 0);
+    assert_non_null(f->ed.diagram.base_texture);
+    assert_false(f->ed.diagram.owns_base_texture);
+
+    /* Unknown device also keeps the geometry-safe generic diagram. */
+    assert_int_equal(cbx_profile_editor_set_device(&f->ed, NULL), 0);
+    assert_non_null(f->ed.diagram.base_texture);
+    assert_false(f->ed.diagram.owns_base_texture);
+}
+
+/* ------------------------------------------------------------------ */
 /*  Helper: create a test profile with mappings                        */
 /* ------------------------------------------------------------------ */
 
@@ -983,6 +1027,12 @@ int main(void)
 
         /* Full workflow */
         cmocka_unit_test_setup_teardown(test_full_workflow, setup, teardown),
+
+        /* Device-mapped diagram resolution (BUG-0018) */
+        cmocka_unit_test_setup_teardown(
+            test_editor_diagram_resolved_via_production_cache, setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            test_editor_set_device_reresolves, setup, teardown),
     };
 
     return cmocka_run_group_tests(tests, NULL, NULL);

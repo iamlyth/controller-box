@@ -35,6 +35,8 @@
 #include "config/config_profile.h"      /* cbx_profile */
 #include "config/config_profile_list.h" /* cbx_file_list */
 #include "dbus/ip_input_signal.h"        /* ip_input_events, ip_input_id */
+#include "icons/icon_map.h"              /* cbx_icon_map (device->icon) */
+#include "icons/icon_cache.h"            /* cbx_icon_cache (SVG textures) */
 #include "manager/profile_diagram.h"     /* cbx_profile_diagram */
 
 /* ------------------------------------------------------------------ */
@@ -90,6 +92,14 @@ typedef struct {
     const cbx_theme *theme;
     int             font_id;
     SDL_Renderer   *renderer;
+
+    /* --- Device-mapped diagram resolution (BUG-0018) -------------- */
+    /* Production icon mapping utilities: cbx_icon_map + cbx_icon_cache
+     * resolve the diagram's base SVG and its marker layout by device type
+     * instead of a hardcoded generic-gamepad path.  Owned by the editor. */
+    cbx_icon_map      icon_map;
+    cbx_icon_cache    icon_cache;
+    char              device_type[CBX_ICON_TYPE_LEN]; /* resolved DeviceType */
 
     /* --- DBus deps (borrowed, optional) --------------------------- */
     const ip_dbus_backend *backend;
@@ -147,6 +157,15 @@ int cbx_profile_editor_init(cbx_profile_editor *ed,
                               cbx_text_cache *cache,
                               const cbx_theme *theme,
                               int font_id);
+
+/*
+ * Set the device type whose controller diagram the editor should show.
+ * Re-resolves the diagram base SVG + marker layout through the production
+ * icon mapping utilities (cbx_icon_map / cbx_icon_cache).  A NULL/empty
+ * device type resolves to the default generic-gamepad device.  Returns 0.
+ */
+int cbx_profile_editor_set_device(cbx_profile_editor *ed,
+                                   const char *device_type);
 
 /*
  * Shut down and free all resources.  Safe on a zeroed struct.

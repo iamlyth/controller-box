@@ -16,6 +16,9 @@
 
 #include "manager/profile_diagram.h"
 #include "config/config_paths.h"
+#include "icons/icon_cache.h"
+#include "icons/icon_map.h"
+#include "icons/icon_lookup.h"
 #include "test_harness.h"
 #include "fb_assert.h"
 
@@ -614,6 +617,225 @@ static void test_geometry_marker_control_alignment(void **state)
 }
 
 /* ------------------------------------------------------------------ */
+/*  Tests: device-mapped base image & marker layout (BUG-0018)         */
+/* ------------------------------------------------------------------ */
+/*
+ * The profile editor now resolves its diagram base image + marker layout
+ * through the production icon mapping utilities (cbx_icon_map +
+ * cbx_icon_cache + cbx_icon_lookup) keyed by device type, instead of a
+ * hardcoded `.../svg/generic-gamepad.svg` path build.  These tests prove
+ * that production-utility path preserves the BUG-0018 acceptance
+ * invariants (adequate raster resolution, aspect preservation, marker-to-
+ * control alignment) on the real installed asset.
+ */
+
+/* Build a diagram whose base image comes from the production icon cache,
+ * mirroring the editor's cbx_profile_editor_set_device() path: resolve an
+ * icon name, load it through cbx_icon_cache_load_one(), adopt the cache-
+ * owned texture via cbx_profile_diagram_set_base_image(), and select the
+ * marker layout via cbx_profile_diagram_set_device().  Returns 0 and fills
+ * *cache (caller must cbx_icon_cache_cleanup + diagram_shutdown) on
+ * success; nonzero on failure. */
+static int
+build_cache_resolved_diagram(pd_fixture *f, cbx_icon_cache *cache,
+                             cbx_profile_diagram *diag, const char *icon)
+{
+    cbx_theme theme;
+    cbx_theme_default(&theme);
+
+    int rc = cbx_icon_cache_init(cache, f->sdl.renderer, cbx_icon_dir(), 512);
+    if (rc != 0)
+        return rc;
+    rc = cbx_icon_cache_load_one(cache, icon);
+    if (rc != 0) {
+        cbx_icon_cache_cleanup(cache);
+        return rc;
+    }
+    SDL_Texture *tex = cbx_icon_cache_get(cache, icon);
+    if (!tex) {
+        cbx_icon_cache_cleanup(cache);
+        return -ENOENT;
+    }
+    rc = cbx_profile_diagram_init(diag, f->sdl.renderer, NULL, &theme);
+    if (rc != 0) {
+        cbx_icon_cache_cleanup(cache);
+        return rc;
+    }
+    cbx_profile_diagram_set_base_image(diag, tex);
+    cbx_profile_diagram_set_device(diag, icon);
+    return 0;
+}
+
+static void test_device_geometry_known(void **state)
+{
+    (void)state;
+    /* NULL / empty resolve to the default generic device, always verified. */
+    assert_true(cbx_profile_diagram_device_geometry_known(NULL));
+    assert_true(cbx_profile_diagram_device_geometry_known(""));
+    assert_true(cbx_profile_diagram_device_geometry_known("generic-gamepad"));
+    /* Unregistered device icons must NOT be shown with markers: their
+     * control geometry is not verified, so markers could float off. */
+    assert_false(cbx_profile_diagram_device_geometry_known("cc-xbox-360"));
+    assert_false(cbx_profile_diagram_device_geometry_known("cc-ps5"));
+}
+
+static void test_set_device_default_layout(void **state)
+{
+    pd_fixture *f = *state;
+
+    /* Unregistered device falls back to the generic layout table. */
+    cbx_profile_diagram_set_device(&f->diag, "cc-xbox-360");
+    assert_ptr_equal(
+        cbx_profile_diagram_active_button_pos(&f->diag, CBX_DIAG_BTN_A),
+        cbx_profile_diagram_get_button_pos(CBX_DIAG_BTN_A));
+    /* Generic device uses the generic table. */
+    cbx_profile_diagram_set_device(&f->diag, "generic-gamepad");
+    assert_ptr_equal(
+        cbx_profile_diagram_active_button_pos(&f->diag, CBX_DIAG_BTN_A),
+        cbx_profile_diagram_get_button_pos(CBX_DIAG_BTN_A));
+    /* NULL device -> generic table. */
+    cbx_profile_diagram_set_device(&f->diag, NULL);
+    assert_ptr_equal(
+        cbx_profile_diagram_active_button_pos(&f->diag, CBX_DIAG_BTN_START),
+        cbx_profile_diagram_get_button_pos(CBX_DIAG_BTN_START));
+}
+
+static void test_set_base_image_borrowed(void **state)
+{
+    pd_fixture *f = *state;
+
+    /* Start from an owned-texture diagram (a path-based load) to prove the
+     * borrowed adoption frees the previously owned texture and switches
+     * ownership to the cache. */
+    char svg_path[PATH_MAX];
+    snprintf(svg_path, sizeof(svg_path), "%s/svg/generic-gamepad.svg",
+             cbx_icon_dir());
+    cbx_theme theme;
+    cbx_theme_default(&theme);
+    cbx_profile_diagram diag;
+    assert_int_equal(cbx_profile_diagram_init(&diag, f->sdl.renderer, svg_path,
+                                              &theme), 0);
+    assert_true(diag.owns_base_texture);
+    assert_non_null(diag.base_texture);
+
+    /* Adopt a cache-owned texture: the diagram must NOT own it and must
+     * not destroy it on shutdown (the icon cache does). */
+    cbx_icon_cache cache;
+    assert_int_equal(cbx_icon_cache_init(&cache, f->sdl.renderer, cbx_icon_dir(),
+                                         64), 0);
+    assert_int_equal(cbx_icon_cache_load_one(&cache, "generic-gamepad"), 0);
+    SDL_Texture *cache_tex = cbx_icon_cache_get(&cache, "generic-gamepad");
+    assert_non_null(cache_tex);
+
+    cbx_profile_diagram_set_base_image(&diag, cache_tex);
+    assert_ptr_equal(diag.base_texture, cache_tex);
+    assert_false(diag.owns_base_texture);
+
+    /* Shutdown must not destroy the cache-owned texture (it stays valid for
+     * the cache to destroy later). */
+    cbx_profile_diagram_shutdown(&diag);
+    assert_null(diag.base_texture);
+    /* The cache still owns its texture and can query it afterwards. */
+    assert_non_null(cbx_icon_cache_get(&cache, "generic-gamepad"));
+    cbx_icon_cache_cleanup(&cache);
+}
+
+/* Device-mapped base through the production icon cache preserves raster
+ * resolution and aspect (pixelation / stretch guards). */
+static void test_device_mapped_resolution_geometry(void **state)
+{
+    pd_fixture *f = *state;
+
+    cbx_icon_cache cache;
+    cbx_profile_diagram diag;
+    assert_int_equal(build_cache_resolved_diagram(f, &cache, &diag, "generic-gamepad"),
+                     0);
+    assert_non_null(diag.base_texture);
+
+    /* Landscape content box matching the 5:3 asset. */
+    SDL_Rect rect = {0, 0, 300, 180};
+    cbx_widget_set_rect(&diag.base, &rect);
+
+    SDL_Rect content;
+    assert_true(cbx_profile_diagram_content_rect(&diag, &rect, &content));
+    int tw, th;
+    assert_true(cbx_profile_diagram_base_texture_size(&diag, &tw, &th));
+
+    /* Pixelation guard: raster >= displayed content. */
+    assert_true(tw >= content.w);
+    assert_true(th >= content.h);
+    /* Stretch guard: aspect preserved. */
+    long long tw_th = (long long)tw * content.h;
+    long long th_tw = (long long)th * content.w;
+    assert_true(llabs(tw_th - th_tw) <= content.w);
+
+    cbx_profile_diagram_shutdown(&diag);
+    cbx_icon_cache_cleanup(&cache);
+}
+
+/* Device-mapped base through the production icon library still anchors every
+ * marker to its control (marker-to-control alignment), the BUG-0018 core. */
+static void test_device_mapped_marker_alignment(void **state)
+{
+    pd_fixture *f = *state;
+
+    cbx_icon_cache cache;
+    cbx_profile_diagram diag;
+    assert_int_equal(build_cache_resolved_diagram(f, &cache, &diag, "generic-gamepad"),
+                     0);
+
+    SDL_Rect rect = {0, 0, 300, 180};
+    cbx_widget_set_rect(&diag.base, &rect);
+    SDL_Rect content;
+    assert_true(cbx_profile_diagram_content_rect(&diag, &rect, &content));
+
+    cbx_profile_diagram_clear_highlight(&diag);
+    cbx_widget_draw(&diag.base, f->sdl.renderer);
+    int w, h;
+    uint8_t *buf = diag_read_fb(f->sdl.renderer, &w, &h);
+
+    /* Every button marker (active layout table, same content-rect transform
+     * as the renderer) must overlap the light-grey control pixels. */
+    for (int i = 0; i < CBX_DIAG_BTN_COUNT; i++) {
+        const cbx_diag_button_pos *pos =
+            cbx_profile_diagram_active_button_pos(&diag, (cbx_diag_button)i);
+        assert_non_null(pos);
+        SDL_Rect mr = geo_marker_rect(pos, &content);
+        if (!fb_region_has_color(buf, w, h, &mr, s_control_rgb, 40)) {
+            fail_msg("device-mapped button %s (%d): marker rect (%d,%d,%d,%d) "
+                     "does not overlap its rendered control",
+                     pos->name, i, mr.x, mr.y, mr.w, mr.h);
+        }
+    }
+
+    free(buf);
+    cbx_profile_diagram_shutdown(&diag);
+    cbx_icon_cache_cleanup(&cache);
+}
+
+/* The editor-level path (cbx_icon_lookup with a device type) resolves a
+ * non-NULL base image for the unknown device through the production icon
+ * cache, so the editor never shows a blank diagram. */
+static void test_lookup_device_diagram_resolves(void **state)
+{
+    pd_fixture *f = *state;
+
+    cbx_icon_map map;
+    cbx_icon_map_init(&map);
+    cbx_icon_cache cache;
+    assert_int_equal(cbx_icon_cache_init(&cache, f->sdl.renderer, cbx_icon_dir(),
+                                         512), 0);
+
+    /* Unknown device -> generic-gamepad (device-mapped via icon map). */
+    cbx_icon_result res;
+    assert_int_equal(cbx_icon_lookup(&cache, &map, NULL, NULL, &res), 0);
+    assert_non_null(res.texture);
+    assert_true(res.width > 0 && res.height > 0);
+
+    cbx_icon_cache_cleanup(&cache);
+}
+
+/* ------------------------------------------------------------------ */
 /*  Test runner                                                        */
 /* ------------------------------------------------------------------ */
 
@@ -669,6 +891,19 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_geometry_pixelation_and_stretch,
                                           setup, teardown),
         cmocka_unit_test_setup_teardown(test_geometry_marker_control_alignment,
+                                          setup, teardown),
+
+        /* Device-mapped base & marker layout (BUG-0018) */
+        cmocka_unit_test(test_device_geometry_known),
+        cmocka_unit_test_setup_teardown(test_set_device_default_layout,
+                                          setup, teardown),
+        cmocka_unit_test_setup_teardown(test_set_base_image_borrowed,
+                                          setup, teardown),
+        cmocka_unit_test_setup_teardown(test_device_mapped_resolution_geometry,
+                                          setup, teardown),
+        cmocka_unit_test_setup_teardown(test_device_mapped_marker_alignment,
+                                          setup, teardown),
+        cmocka_unit_test_setup_teardown(test_lookup_device_diagram_resolves,
                                           setup, teardown),
     };
 

@@ -19,6 +19,12 @@
 
 #include "dbus/ip_composite.h"
 #include "config/config_paths.h"
+#include "icons/icon_lookup.h"      /* cbx_icon_lookup (device->texture) */
+#include "icons/icon_map.h"          /* cbx_icon_map_lookup / default path */
+#include "icons/icon_cache.h"        /* cbx_icon_cache_init / load_one */
+
+/* Diagram base raster resolution (matches profile_diagram.c). */
+#define CBX_PE_DIAGRAM_RASTER 512
 
 /* ------------------------------------------------------------------ */
 /*  Layout constants                                                  */
@@ -241,20 +247,28 @@ cbx_profile_editor_init(cbx_profile_editor *ed,
     const int py = pr.y;
 
     /* --- Diagram (left panel) ------------------------------------- */
-    /* Load the generic-gamepad SVG as the controller outline base
-     * image.  BUG-0007: previously passed NULL, so the controller
-     * outline was never rendered.  Now constructs the path from
-     * cbx_icon_dir() (e.g., /usr/share/controller-box/icons/svg/
-     * generic-gamepad.svg).  If the file is not found, the diagram
-     * falls back to a flat panel_bg rectangle — still functional,
-     * just without the visual outline. */
-    char diag_svg_path[PATH_MAX];
-    snprintf(diag_svg_path, sizeof(diag_svg_path),
-             "%s/svg/generic-gamepad.svg", cbx_icon_dir());
-    int rc = cbx_profile_diagram_init(&ed->diagram, renderer,
-                                        diag_svg_path, theme);
+    /* BUG-0018: the diagram base image + marker layout are resolved
+     * through the production icon mapping utilities (cbx_icon_map +
+     * cbx_icon_cache + cbx_icon_lookup) keyed by the device type, instead
+     * of the former ad-hoc `cbx_icon_dir()/svg/generic-gamepad.svg` path
+     * build.  This keeps the diagram device-mapped (the correct licensed
+     * Controllercons asset for the connected device) and reuses the
+     * existing mapping/caching path rather than ad-hoc logic.  The base
+     * image is owned by the icon cache; the diagram adopts it borrowed. */
+    cbx_icon_map_init(&ed->icon_map);
+    {
+        char icon_map_path[512];
+        if (cbx_icon_map_default_path(icon_map_path, sizeof(icon_map_path)) == 0)
+            cbx_icon_map_load(&ed->icon_map, icon_map_path);  /* best-effort */
+    }
+    cbx_icon_cache_init(&ed->icon_cache, renderer, cbx_icon_dir(),
+                        CBX_PE_DIAGRAM_RASTER);
+    ed->device_type[0] = '\0';
+
+    int rc = cbx_profile_diagram_init(&ed->diagram, renderer, NULL, theme);
     if (rc != 0)
         return rc;
+    cbx_profile_editor_set_device(ed, NULL);   /* resolve default diagram */
     SDL_Rect diag_rect = { px + 16, py + CBX_PE_TITLE_H, CBX_PE_DIAGRAM_W,
                             CBX_PE_DIAGRAM_H };
     cbx_widget_set_rect(&ed->diagram.base, &diag_rect);
@@ -363,7 +377,70 @@ cbx_profile_editor_shutdown(cbx_profile_editor *ed)
     cbx_widget_destroy(&ed->status_lbl.base);
     cbx_widget_destroy(&ed->progress_bar.base);
 
+    /* The diagram's base image is borrowed from the icon cache; the cache
+     * owns and destroys those textures.  Clean it up now that the diagram
+     * widget has been destroyed (so the borrowed texture is not used after
+     * it is freed). */
+    cbx_icon_cache_cleanup(&ed->icon_cache);
+
     memset(ed, 0, sizeof(*ed));
+}
+
+/* ------------------------------------------------------------------ */
+/*  Device-mapped diagram resolution (BUG-0018)                       */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Re-resolve the diagram base SVG + marker layout for a device type
+ * through the production icon mapping utilities.  Only icons with a
+ * registered, geometry-verified marker table (cbx_profile_diagram_device_
+ * geometry_known) are shown with markers; any other device keeps the
+ * generic-gamepad asset whose control geometry matches its marker table,
+ * so no marker floats off a control (BUG-0018).
+ */
+int
+cbx_profile_editor_set_device(cbx_profile_editor *ed,
+                               const char *device_type)
+{
+    if (!ed)
+        return -EINVAL;
+
+    if (device_type)
+        strncpy(ed->device_type, device_type, sizeof(ed->device_type) - 1);
+    else
+        ed->device_type[0] = '\0';
+    ed->device_type[sizeof(ed->device_type) - 1] = '\0';
+
+    /* Resolve the device -> icon name through the production icon map.
+     * A NULL/empty device type (no connected/identified device) resolves
+     * directly to the default generic-gamepad asset, matching the icon
+     * map's own unknown-type default. */
+    char icon_name[CBX_ICON_ICON_LEN];
+    if (ed->device_type[0] == '\0') {
+        snprintf(icon_name, sizeof(icon_name), "%s", CBX_ICON_DEFAULT_ICON);
+    } else {
+        char display[CBX_ICON_NAME_LEN];
+        cbx_icon_map_lookup(&ed->icon_map, ed->device_type,
+                            icon_name, sizeof(icon_name),
+                            display, sizeof(display));
+    }
+
+    /* Geometry guard: only display an SVG whose marker layout is verified.
+     * Unknown/unregistered devices fall back to the generic-gamepad asset
+     * so markers stay aligned to controls (BUG-0018). */
+    if (icon_name[0] == '\0' ||
+        !cbx_profile_diagram_device_geometry_known(icon_name))
+        snprintf(icon_name, sizeof(icon_name), "%s", CBX_ICON_DEFAULT_ICON);
+
+    /* Load the resolved icon through the production icon cache (no ad-hoc
+     * path building) and adopt the cache-owned texture as the base image. */
+    cbx_icon_cache_load_one(&ed->icon_cache, icon_name);
+    SDL_Texture *tex = cbx_icon_cache_get(&ed->icon_cache, icon_name);
+    if (tex)
+        cbx_profile_diagram_set_base_image(&ed->diagram, tex);
+    cbx_profile_diagram_set_device(&ed->diagram, icon_name);
+
+    return 0;
 }
 
 /* ------------------------------------------------------------------ */
