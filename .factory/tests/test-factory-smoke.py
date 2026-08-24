@@ -524,8 +524,13 @@ class EvidenceSmokeUnit(_SmokeBase):
         self.assertEqual(parsed.serialize().encode("utf-8"), completed)
         task22 = next(t for t in parsed.tasks if t.number == 22)
         self.assertEqual(task22.status, "complete")
-        task25 = next(t for t in parsed.tasks if t.number == 25)
-        self.assertEqual(task25.status, "pending")
+        before = plan_parser_module.Plan.from_bytes(marker)
+        before_status = {task.number: task.status for task in before.tasks}
+        after_status = {task.number: task.status for task in parsed.tasks}
+        self.assertEqual(
+            [number for number in after_status if after_status[number] != before_status[number]],
+            [22],
+        )
         # The selector picks exactly the evidence task from the planner revision.
         import selector as selector_module  # noqa: PLC0415
 
