@@ -1,11 +1,8 @@
 #!/usr/bin/env bash
-# Adversarial regression (BUG-0013): the isolated boilerplate scenario suite
-# must be immune to ambient lifecycle state. The implementation completion
-# gate runs final-gate.sh with FACTORY_FINAL_GATE_ATTEST=1; before the fix
-# that flag leaked into nested final-gate invocations inside the scenario
-# chain, whose deliberately dirty root then failed the attestation clean-tree
-# check and made every completion attempt bounce through bounded recovery
-# with no semantic movement.
+# Adversarial regression (BUG-0013): isolated factory scenarios must not
+# inherit the final-gate attestation flag. Fresh campaign authority is stored
+# in `.factory-state/factory-loop.json`, not selected through lifecycle
+# environment variables.
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
@@ -17,11 +14,6 @@ grep -q '^unset FACTORY_FINAL_GATE_ATTEST' scripts/verify-boilerplate.sh || {
     echo "test: verify-boilerplate does not sanitize the ambient attestation flag" >&2
     exit 1
 }
-grep -q 'FACTORY_RALPH_CYCLE_ID' scripts/verify-boilerplate.sh || {
-    echo "test: verify-boilerplate does not sanitize ambient cycle state" >&2
-    exit 1
-}
-
 # Recreate the exact completion-gate leak: the attestation flag set in the
 # environment of the plan-cycle scenario chain. The chain must pass.
 FACTORY_FINAL_GATE_ATTEST=1 ./tests/test-plan-cycle.sh || {
