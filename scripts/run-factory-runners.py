@@ -156,6 +156,12 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
         returncode = process.returncode
     if len(transport_stdout) > MAX_RESPONSE or len(transport_stderr) > MAX_RESPONSE:
         fail(f"runner {name} response exceeded limits")
+    if returncode != 0 and not transport_stdout:
+        fail(
+            f"runner {name} transport exited without a protocol response "
+            f"(rc={returncode}, stderr_bytes={len(transport_stderr)}, "
+            f"stderr_sha256={hashlib.sha256(transport_stderr).hexdigest()})"
+        )
     try:
         receipt = json.loads(transport_stdout)
     except (UnicodeError, json.JSONDecodeError):

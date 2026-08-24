@@ -655,12 +655,13 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
   grep, and the visible lightweight tests pass.
 
 ## Task 26: Refresh exact-commit Controller runner evidence without changing the runner server
-- Status: pending
+- Status: blocked
 - Dependencies: Task 24, Task 25
+- Blocked on: FACT-007 — the declared `dev-runner-vm` SSH transport is not authorized from this environment, so no current signed exact-commit manifest can be obtained.
 - Scope: invoke the existing declared `dev-runner-vm` protocol at the final migration commit, validate its signed manifest and exact environment/verifier/probe bindings, and update only claims genuinely supported by the fresh receipt; do not deploy the staged generic server update unless separate protocol compatibility evidence requires it.
 - Acceptance criteria: current exact-commit signed evidence passes or the task becomes honestly blocked with FACT-007 open; unsigned, stale, skipped, simulated, or candidate-capability receipts never elevate conformance.
-- Verification: `run-factory-runners.py`, runner-evidence checker, capability-evidence checker, and receipt/conformance validators.
-- Documentation impact: record only the resulting current evidence or exact blocker.
+- Verification: at clean commit `682556d`, `run-factory-runners.py` failed closed before any runner protocol response (`rc=2`, zero stdout bytes, bounded stderr classified as SSH permission denied; raw transport bytes were not printed). The stale aggregate and historical receipts remain non-authoritative; runner-evidence/capability/conformance claims were not changed.
+- Documentation impact: FACT-007 and the operations documentation continue to state the exact external authorization/fresh-receipt blocker.
 
 ## Task 27: Final independent factory and product audit
 - Status: pending
