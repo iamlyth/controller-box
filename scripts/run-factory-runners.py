@@ -159,7 +159,16 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
     try:
         receipt = json.loads(transport_stdout)
     except (UnicodeError, json.JSONDecodeError):
-        fail(f"runner {name} returned malformed protocol output")
+        # Never echo remote bytes: they may contain host diagnostics or secret
+        # candidates. Structural metadata is sufficient to distinguish an
+        # empty/contaminated/incompatible protocol response safely.
+        fail(
+            f"runner {name} returned malformed protocol output "
+            f"(rc={returncode}, stdout_bytes={len(transport_stdout)}, "
+            f"stderr_bytes={len(transport_stderr)}, "
+            f"stdout_sha256={hashlib.sha256(transport_stdout).hexdigest()}, "
+            f"stderr_sha256={hashlib.sha256(transport_stderr).hexdigest()})"
+        )
     if returncode != 0 or not isinstance(receipt, dict) or receipt.get("result") != "pass":
         error = receipt.get("error", "remote verification failed") if isinstance(receipt, dict) else "remote verification failed"
         fail(f"runner {name} failed: {error}")
