@@ -87,7 +87,7 @@ required = [
     'tests/test-factory-lock.py',
     'tests/test-orchestration-security.py',
     'tests/test-boilerplate-env-isolation.sh',
-    'tests/test-pi2-ollama-wrapper.sh', 'tests/test-production-path-bypass.sh',
+    'tests/test-production-path-bypass.sh',
     'tests/test-visual-audit-sdk-authority.sh',
     '.factory/schemas/conformance.schema.json', '.factory/capability-contracts.json',
     'scripts/validate-conformance.py', 'scripts/check-capability-contracts.py',
@@ -328,7 +328,6 @@ PY
 ./tests/test-campaign-audit.sh
 ./tests/test-factory-lock.py
 ./tests/test-boilerplate-env-isolation.sh
-./tests/test-pi2-ollama-wrapper.sh
 ./tests/test-production-path-bypass.sh
 ./tests/test-conformance.sh
 ./tests/test-capability-contracts.sh

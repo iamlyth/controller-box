@@ -3044,7 +3044,7 @@ class CaseAdversarialSuite(_AdversarialBase):
         # ralph-verifier-migrate.sh, ralph-context-summary.py,
         # check-context-summary.py, repair-scratchpad-handoffs.py,
         # pi-ralph-emit-extension.mjs, pi-cli-shims/ralph, pi2-ollama.sh,
-        # the ralph-* launchers, and the ralph tests) is REMOVED from the
+        # the ralph-* launchers, and their tests) is REMOVED from the
         # tracked tree — the tracked-absence proof below is the strongest
         # form of non-dependence.
         lifecycle_tokens = (
@@ -3099,17 +3099,10 @@ class CaseAdversarialSuite(_AdversarialBase):
             ralph_tracked, [migration_module.FREEZE_MARKER_RELPATH],
             "the only tracked ralph-named path must be the freeze marker",
         )
-        # Retained deprecated forwarders that still name the removed surface
-        # (pi2-ollama.sh invokes the removed emit extension) are deprecated
-        # surface themselves, not new implementation; they are excluded only
-        # from this "new implementation" scan, and the tracked-absence proof
-        # above covers the removed files they name.
-        deprecated_retained = {"pi2-ollama.sh"}
         loop_modules = sorted(LOOP.glob("*.py"))
         scanned_scripts: list[Path] = []
         for candidate in sorted((ROOT / "scripts").glob("*")):
-            if (candidate.is_file()
-                    and candidate.name not in deprecated_retained):
+            if candidate.is_file():
                 scanned_scripts.append(candidate)
         for candidate in sorted((ROOT / "scripts" / "pi-cli-shims").glob("*")):
             if candidate.is_file():

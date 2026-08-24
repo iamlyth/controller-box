@@ -97,9 +97,6 @@ if(BASH_EXECUTABLE)
     add_test(NAME test_campaign_audit
         COMMAND ${BASH_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test-campaign-audit.sh)
-    add_test(NAME test_pi2_ollama_wrapper
-        COMMAND ${BASH_EXECUTABLE}
-            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test-pi2-ollama-wrapper.sh)
 
     # Task 7 — Installed binary functional acceptance test (§11.1.5).
     # Executes the installed `controller-box` binary as a subprocess
