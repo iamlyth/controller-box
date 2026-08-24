@@ -12,8 +12,8 @@ mapfile -t CHANGED < <({
 } | sort -u)
 for path in "${CHANGED[@]}"; do
     case "$path" in
-        .factory/artifacts/campaign-audit.md|.ralph/agent/scratchpad.md) ;;
+        .factory/artifacts/campaign-audit.md) ;;
         *) echo "campaign-audit-scope: audit modified forbidden path: $path" >&2; exit 1 ;;
     esac
 done
-echo "campaign-audit-scope: changes are confined to the audit and recovery scratchpad"
+echo "campaign-audit-scope: changes are confined to the canonical audit artifact"

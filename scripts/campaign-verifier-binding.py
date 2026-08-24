@@ -152,7 +152,7 @@ def retained_helper_binding() -> dict[str, str] | None:
     }
 
 
-def acceptance_contract() -> tuple[bytes, list[str], str]:
+def acceptance_contract() -> tuple[bytes, list[str], list[dict], str]:
     """Read the tracked verifier acceptance manifest (test discovery).
 
     The manifest is the authoritative gate list the verifier entrypoint runs.
@@ -160,6 +160,11 @@ def acceptance_contract() -> tuple[bytes, list[str], str]:
     classifies a strict superset growth as legitimate strengthening and
     auto-rebinds with an audit record, while a shrink or entrypoint change
     requires the audited operator pathway.
+
+    The binding carries both the plain gate names (for reporting) and the
+    canonical ordered structured entries (name + exact args), because a
+    name-only view would hide arg edits and reordering from strengthening
+    classification.
     """
     raw, _ = secure_read(ACCEPTANCE, 1024 * 1024)
     try:
@@ -174,6 +179,7 @@ def acceptance_contract() -> tuple[bytes, list[str], str]:
     ):
         fail("verifier acceptance manifest must declare a non-empty gates list")
     gates: list[str] = []
+    entries: list[dict] = []
     for gate in manifest["gates"]:
         if not isinstance(gate, dict) or set(gate) != {"name", "args"}:
             fail("verifier acceptance gate must be an object with name and args")
@@ -188,9 +194,12 @@ def acceptance_contract() -> tuple[bytes, list[str], str]:
             or not all(isinstance(arg, str) and arg for arg in args)
         ):
             fail(f"verifier acceptance gate is invalid: {gate!r}")
+        if name in gates:
+            fail(f"verifier acceptance manifest repeats gate name: {name!r}")
         gates.append(name)
+        entries.append({"name": name, "args": list(args)})
     acceptance_blob = tracked_blob(".factory/verifier-acceptance.json", raw, "100644")
-    return raw, gates, acceptance_blob
+    return raw, gates, entries, acceptance_blob
 
 
 def binding() -> tuple[dict[str, object], str, list[str], Path, bytes]:
@@ -222,7 +231,7 @@ def binding() -> tuple[dict[str, object], str, list[str], Path, bytes]:
     relative_text = relative.as_posix()
     executable_blob = tracked_blob(relative_text, executable_bytes, "100755")
     config_blob = tracked_blob(".factory/config.toml", config_bytes, "100644")
-    acceptance_raw, acceptance_gates, acceptance_blob = acceptance_contract()
+    acceptance_raw, acceptance_gates, acceptance_entries, acceptance_blob = acceptance_contract()
     binding = {
         "schema": "campaign-verifier-binding/v1",
         "argv": command,
@@ -235,6 +244,7 @@ def binding() -> tuple[dict[str, object], str, list[str], Path, bytes]:
         "acceptance_sha256": hashlib.sha256(acceptance_raw).hexdigest(),
         "acceptance_blob": acceptance_blob,
         "acceptance_gates": acceptance_gates,
+        "acceptance_entries": acceptance_entries,
     }
     digest = hashlib.sha256(
         json.dumps(binding, sort_keys=True, separators=(",", ":")).encode("utf-8")

@@ -13,7 +13,7 @@ fi
 cd -- "$PROJECT_ROOT"
 
 BUG_ID=$("$SCRIPT_DIR/factory-state-file.py" read maintenance-bug-id) || {
-    echo "maintenance-freshness: no safe selected bug; run ralph-maintenance-plan.sh BUG-ID" >&2; exit 1;
+    echo "maintenance-freshness: no safe selected bug in the trusted maintenance state" >&2; exit 1;
 }
 [[ "$BUG_ID" =~ ^BUG-[0-9]{4,}$ ]] || { echo "maintenance-freshness: invalid selected bug ID" >&2; exit 1; }
 [[ -s "$PLAN" ]] || { echo "maintenance-freshness: missing .factory/artifacts/maintenance-plan.md" >&2; exit 1; }

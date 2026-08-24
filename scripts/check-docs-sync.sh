@@ -1,8 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
+# Retained-descriptor execution names `/proc/self/fd/N`, so the trusted
+# verifier pins the canonical root. Direct invocation may derive it from the
+# script path; either route must contain the committed gate and config.
+if [[ -n "${FACTORY_VERIFIER_ROOT:-}" ]]; then
+    PROJECT_ROOT=${FACTORY_VERIFIER_ROOT%/}
+    SCRIPT_DIR=$PROJECT_ROOT/scripts
+else
+    SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+    PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
+fi
+for required_marker in scripts/check-docs-sync.sh .factory/config.toml; do
+    [[ -e "$PROJECT_ROOT/$required_marker" ]] || {
+        echo "docs-sync: cannot resolve the canonical repository root from FACTORY_VERIFIER_ROOT/BASH_SOURCE (missing $PROJECT_ROOT/$required_marker)" >&2
+        exit 1
+    }
+done
 cd -- "$PROJECT_ROOT"
 
 BASE=$(python3 - <<'PY'
@@ -25,7 +39,7 @@ docs_changed=false
 for path in "${CHANGED[@]}"; do
     case "$path" in
         README.md|docs/*) docs_changed=true ;;
-        .factory/artifacts/implementation-plan.md|.ralph/*|.pi/*) ;;
+        .factory/artifacts/implementation-plan.md|.pi/*) ;;
         *) product_changed=true ;;
     esac
 done

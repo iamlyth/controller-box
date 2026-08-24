@@ -105,7 +105,7 @@ def main() -> int:
         fail("merge commits are forbidden during an independent audit")
     for commit in commits:
         changed.update(filter(None, git("diff-tree", "--no-commit-id", "--name-only", "-r", "--root", commit).splitlines()))
-    forbidden = changed - {".factory/artifacts/campaign-audit.md", ".ralph/agent/scratchpad.md"}
+    forbidden = changed - {".factory/artifacts/campaign-audit.md"}
     if forbidden:
         fail(f"audit commits changed forbidden paths: {sorted(forbidden)}")
     if args.mode == "metadata":

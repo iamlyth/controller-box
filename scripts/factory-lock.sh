@@ -63,8 +63,8 @@ factory_lock_run_untrusted() {
     ) &
     child=$!
     # A lifecycle supervisor may be terminated while this shell is waiting on
-    # an untrusted Ralph/Pi leaf. Forward the signal, reap the exact child, and
-    # exit with the conventional signal status so no orchestrator is orphaned.
+    # an untrusted model process. Forward the signal, reap the exact child, and
+    # exit with the conventional signal status so no process is orphaned.
     trap 'kill -TERM -- -"$child" 2>/dev/null || kill -TERM "$child" 2>/dev/null || true; wait "$child" 2>/dev/null || true; exit 143' TERM
     trap 'kill -INT -- -"$child" 2>/dev/null || kill -INT "$child" 2>/dev/null || true; wait "$child" 2>/dev/null || true; exit 130' INT
     trap 'kill -HUP -- -"$child" 2>/dev/null || kill -HUP "$child" 2>/dev/null || true; wait "$child" 2>/dev/null || true; exit 129' HUP

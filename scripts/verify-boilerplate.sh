@@ -5,22 +5,14 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 cd -- "$PROJECT_ROOT"
 
-# The scenario suite exercises isolated temporary repositories and must not
-# inherit ambient lifecycle state. The implementation completion gate runs
-# this suite with FACTORY_FINAL_GATE_ATTEST=1; leaking the attestation flag,
-# attempt/cycle bindings, campaign bindings, or recovery ceilings into nested
-# final-gate invocations would make scenario tests attest dirty trees and fail
-# spuriously (BUG-0013 regression).
-unset FACTORY_FINAL_GATE_ATTEST FACTORY_RALPH_CYCLE_ID FACTORY_RALPH_ATTEMPT_ID \
-      FACTORY_RALPH_HISTORY_ID FACTORY_RALPH_HISTORY_OFFSET \
-      FACTORY_CAMPAIGN_PHASE FACTORY_CAMPAIGN_ROUND FACTORY_CAMPAIGN_AUDIT_ROUND \
-      FACTORY_CAMPAIGN_AUDIT_BASE FACTORY_CAMPAIGN_RUNNER_EVIDENCE_SHA256 \
-      FACTORY_CAMPAIGN_OBJECTIVE \
-      FACTORY_PLANNING_BASE_COMMIT FACTORY_MAINTENANCE_BASE_COMMIT \
-      FACTORY_RALPH_MAX_COMPLETION_RECOVERIES FACTORY_RALPH_MAX_NO_PROGRESS_RECOVERIES \
-      FACTORY_RALPH_MAX_STALE_RECOVERIES
+# Scenario suites use isolated repositories and must not inherit ambient
+# attestation or campaign metadata. Fresh control state is file-backed rather
+# than selected through environment variables.
+unset FACTORY_FINAL_GATE_ATTEST FACTORY_CAMPAIGN_PHASE FACTORY_CAMPAIGN_ROUND \
+      FACTORY_CAMPAIGN_AUDIT_ROUND FACTORY_CAMPAIGN_AUDIT_BASE \
+      FACTORY_CAMPAIGN_RUNNER_EVIDENCE_SHA256 FACTORY_CAMPAIGN_OBJECTIVE
 
-mapfile -t SHELL_FILES < <(find scripts tests -type f -name '*.sh' -print | sort)
+mapfile -t SHELL_FILES < <(find scripts tests .factory/tests -type f -name '*.sh' -print | sort)
 for file in "${SHELL_FILES[@]}"; do
     bash -n "$file"
 done
@@ -67,46 +59,33 @@ required = [
     'AGENTS.md', '.factory/config.toml', '.factory/environment.toml',
     '.factory/artifacts/implementation-plan.md', '.factory/artifacts/maintenance-plan.md',
     '.factory/artifacts/campaign-audit.md', '.factory/bugs/open.md', '.factory/bugs/closed.md',
-    '.factory/prompts/implementation.md', '.factory/prompts/plan.md',
-    '.factory/ralph/maintenance.yml', '.factory/ralph/maintenance-plan.yml',
-    '.factory/prompts/maintenance.md', '.factory/prompts/maintenance-plan.md',
+    '.factory/prompts/planner.md', '.factory/prompts/developer.md',
+    '.factory/prompts/tester.md', '.factory/prompts/auditor.md',
     'scripts/bug-ledger.py', 'scripts/validate-maintenance-plan.py',
-    'scripts/validate-implementation-plan.py', 'scripts/check-scratchpad.sh',
-    'scripts/ralph-completion-gate.sh', 'scripts/ralph-supervision.sh',
+    'scripts/validate-implementation-plan.py',
     'scripts/factory-lock.sh', 'scripts/factory-lock-exec.py',
     'scripts/factory_lock.py', 'scripts/factory_state_io.py',
-    'scripts/factory-state-file.py', 'scripts/ralph_lock.py',
-    'scripts/ralph-lock-recover.py', 'scripts/repair-scratchpad-handoffs.py',
-    'scripts/ralph-event-boundary.py',
-    'scripts/campaign-verifier-binding.py', 'scripts/ralph-supervision-migrate.py',
-    'scripts/ralph-final-state.py', 'scripts/finalize-maintenance-planning.sh',
-    'tests/test-git-checkpoint.sh',
+    'scripts/factory-state-file.py',
+    'scripts/campaign-verifier-binding.py',
     'scripts/git-commit-guard.sh', 'scripts/install-git-commit-guard.sh',
     'scripts/pi-cli-shims/git', 'tests/test-git-commit-guard.sh',
     'scripts/check-installed-functional-evidence.sh',
-    'scripts/initialize-plan-cycle.py', 'scripts/check-maintenance-freshness.sh',
-    'scripts/maintenance-plan-scope-guard.sh',
-    'scripts/ralph-maintenance-plan.sh', 'scripts/ralph-maintenance-run.sh',
+    'scripts/check-installed-harness-evidence.sh',
+    'scripts/check-maintenance-freshness.sh',
     'docs/BUG_WORKFLOW.md', 'tests/test-bug-workflow.sh',
-    'tests/test-plan-cycle.sh', 'tests/test-scratchpad-guard.sh',
-    'tests/test-ralph-completion-recovery.sh',
+    'tests/test-plan-cycle.sh',
     'tests/test-installed-functional-evidence.sh',
-    '.factory/environment.toml', '.factory/artifacts/campaign-audit.md', '.factory/ralph/audit.yml',
-    '.factory/prompts/audit.md', 'scripts/check-factory-environment.py',
-    'scripts/ralph-campaign-state.py', 'scripts/initialize-campaign-audit.py',
+    '.factory/environment.toml', '.factory/artifacts/campaign-audit.md',
+    'scripts/check-factory-environment.py',
+    'scripts/initialize-campaign-audit.py',
     'scripts/validate-campaign-audit.py', 'scripts/campaign-audit-scope-guard.sh',
-    'scripts/ralph-audit.sh', 'scripts/ralph-campaign.sh',
-    'scripts/ralph-verifier-migrate.sh', '.factory/verifier-acceptance.json',
+    '.factory/verifier-acceptance.json',
     'scripts/run-factory-runners.py', 'scripts/check-factory-runner-evidence.py',
     'scripts/factory-runner-server.py', 'scripts/pi2-secure-exec.py',
-    'scripts/pi-cli-shims/ralph', 'scripts/pi-ralph-emit-extension.mjs',
     'tests/test-factory-environment.sh', 'tests/test-factory-runner.sh',
-    'tests/test-campaign-audit.sh', 'tests/test-ralph-campaign.sh',
-    'tests/test-ralph-campaign-state.py', 'tests/test-factory-lock.py',
+    'tests/test-campaign-audit.sh',
+    'tests/test-factory-lock.py',
     'tests/test-orchestration-security.py',
-    'tests/test-ralph-stale-recovery.sh', 'tests/test-ralph-recover-safety.sh',
-    'tests/test-scratchpad-recovery-repair.sh',
-    'tests/test-maintenance-planning-completion.sh',
     'tests/test-boilerplate-env-isolation.sh',
     'tests/test-pi2-ollama-wrapper.sh', 'tests/test-production-path-bypass.sh',
     'tests/test-visual-audit-sdk-authority.sh',
@@ -114,8 +93,7 @@ required = [
     'scripts/validate-conformance.py', 'scripts/check-capability-contracts.py',
     'scripts/check-capability-evidence.py', 'scripts/machine-receipt.py',
     'scripts/check-audit-receipts.py',
-    'scripts/validate-blocked-facts.py', 'scripts/check-context-summary.py',
-    'scripts/ralph-context-summary.py', 'scripts/check-campaign-objectives.py',
+    'scripts/validate-blocked-facts.py', 'scripts/check-campaign-objectives.py',
     'scripts/check-golden-policy.py',
     '.factory/visual-audit.toml', '.factory/visual-audit-inventory.json',
     '.factory/visual-audit-calibration.json',
@@ -131,20 +109,82 @@ required = [
     'scripts/credential-guard.py', 'tests/test-credential-guard.sh',
     'tests/test-credential-extension.sh',
     '.factory/artifacts/blocked-facts.json', '.factory/artifacts/conformance.json',
-    '.factory/artifacts/context-summary.md',
     '.factory/campaign-objectives.json', '.factory/golden-policy.json',
     '.factory/golden-review.json', '.factory/schemas/blocked-facts.schema.json',
     '.factory/schemas/golden-review.schema.json',
     'tests/test-conformance.sh', 'tests/test-capability-contracts.sh',
     'tests/test-audit-receipts.sh',
     'tests/test-blocked-facts.sh', 'tests/test-campaign-objectives.sh',
-    'tests/test-context-summary.sh', 'tests/test-golden-policy.sh',
+    'tests/test-golden-policy.sh',
     'tests/test-runner-signer.sh', 'scripts/check-spec-provided.sh',
+    'scripts/check-generic-leakage.sh', '.factory/generic-leak-allowlist',
     '.factory/signer-trust.json', '.factory/requirement-policy.json',
     '.factory/campaign-receipt-policy.json',
+    '.factory/loop/migration.py', '.factory/ralph-freeze',
+    '.factory/tests/test-factory-migration.py',
+    '.factory/tests/test-factory-migration.sh',
+    '.factory/tests/adversarial-manifest.json',
+    '.factory/tests/test-factory-adversarial.py',
+    '.factory/tests/test-factory-adversarial.sh',
+    '.factory/loop/installer.py',
+    '.factory/bin/factory-launch',
+    '.factory/tests/test-factory-installed.py',
+    '.factory/tests/test-factory-installed.sh',
+    '.factory/loop/generic_evidence.py',
+    '.factory/bin/publish-generic-evidence',
+    '.factory/tests/test-factory-generic-evidence.py',
+    '.factory/tests/test-factory-generic-evidence.sh',
+    '.factory/smoke/evidence_smoke_common.py',
+    '.factory/smoke/evidence_smoke_driver.py',
+    '.factory/smoke/evidence_smoke_gate.py',
+    '.factory/smoke/evidence_smoke.py',
+    '.factory/tests/test-factory-smoke.py',
+    '.factory/tests/test-factory-smoke.sh',
+    '.factory/tests/test-factory-supervision.sh',
+    '.factory/loop/plan_parser.py', '.factory/loop/selector.py',
+    '.factory/loop/state.py', '.factory/loop/evidence.py',
+    '.factory/loop/gitutil.py', '.factory/loop/footprint.py',
+    '.factory/loop/lock.py', '.factory/loop/launch.py',
+    '.factory/loop/campaign.py', '.factory/loop/confine_launcher.py',
+    '.factory/loop/confinement.py', '.factory/loop/findings.py',
+    '.factory/loop/audit_objectives.py', '.factory/loop/usage.py',
+    '.factory/loop/usage_fetch.py', '.factory/loop/redaction.py',
+    '.factory/loop/promptset.py', '.factory/loop/workspace_confinement.py',
+    '.factory/loop/plan_parser.py',
+    '.factory/schemas/factory-plan-v1.schema.json',
+    '.factory/schemas/factory-plan-v1.requirements.json',
+    '.factory/schemas/factory-plan-v1.schema.md',
+    '.factory/schemas/factory-state-v1.schema.md',
+    '.factory/schemas/factory-campaign-result-v1.schema.json',
+    '.factory/schemas/factory-phase-result-v1.schema.json',
+    '.factory/schemas/factory-launch-result-v1.schema.json',
+    '.factory/schemas/factory-confinement-v1.schema.json',
+    '.factory/schemas/factory-findings-v1.schema.json',
+    '.factory/schemas/factory-findings-receipt-v1.schema.json',
+    '.factory/schemas/audit-objectives-v1.schema.json',
+    '.factory/schemas/ollama-usage-v1.schema.json',
+    '.factory/audit-objectives/registry.json',
+    'docs/FACTORY-LOOP-SPEC.md',
 ]
 for name in required:
     assert pathlib.Path(name).is_file(), f'missing {name}'
+# The fresh Python-factory control plane is stdlib-only: a Ralph runtime
+# import in the hidden loop fails the generic suite.
+migration_text = pathlib.Path('.factory/loop/migration.py').read_text(encoding='utf-8')
+for import_token in ('from ralph', 'import ralph', 'ralph.emit',
+                     'ralph.plan', 'ralph.audit', 'ralph.memory',
+                     'ralph_event', 'ralph_emit'):
+    assert import_token not in migration_text, \
+        f'migration.py must not import the Ralph runtime: {import_token}'
+# The deprecated context-summary authority is removed from the tracked tree
+# and unwired from every new-path control step, so the stale mirror can
+# never compete with the canonical plan as a task authority.
+assert not pathlib.Path('.factory/artifacts/context-summary.md').exists(), \
+    'the stale context-summary mirror must not be tracked'
+for script in ('scripts/final-gate.sh',):
+    text = pathlib.Path(script).read_text(encoding='utf-8')
+    for token in ('check-context-summary', 'ralph-context-summary'):
+        assert token not in text, f'{script} still wires the deprecated {token} authority'
 forbidden_root_factory_files = {
     'PROMPT.md', 'IMPLEMENTATION_PLAN.md', 'MAINTENANCE_PLAN.md',
     'CAMPAIGN_AUDIT.md', 'factory.toml', 'factory-environment.toml',
@@ -162,121 +202,95 @@ for path in pathlib.Path('.pi/agents').glob('*.md'):
         assert forbidden not in tools, f'{path}: read-only agent exposes {forbidden}'
 PY
 
-for config in .factory/ralph/implementation.yml .factory/ralph/plan.yml .factory/ralph/audit.yml .factory/ralph/maintenance.yml .factory/ralph/maintenance-plan.yml; do
-    grep -q 'parallel: false' "$config"
-    grep -q -- '--allow-oversize' "$config"
-    grep -q 'ralph-completion-gate.sh' "$config"
-done
-for role in visual-reviewer runner-reviewer evidence-reviewer spec-reviewer; do
-    grep -q 'no runtime-certification authority' ".pi/agents/$role.md"
-done
-for launcher in scripts/ralph-run.sh scripts/ralph-plan.sh scripts/ralph-audit.sh scripts/ralph-maintenance-run.sh scripts/ralph-maintenance-plan.sh; do
-    grep -q 'factory_lock_bootstrap' "$launcher"
-    grep -q 'install-git-commit-guard.sh' "$launcher"
-    grep -q 'ralph-supervision.sh' "$launcher"
-    grep -q 'ralph_supervision_consume_rejection' "$launcher"
-    grep -q 'ralph_supervision_recover_stale' "$launcher"
-done
-grep -q 'install-git-commit-guard.sh' scripts/ralph-campaign.sh
-grep -q 'install-git-commit-guard.sh' scripts/ralph-recover.sh
 grep -q '^## Build' AGENTS.md
 grep -q '^## Immediate validation' AGENTS.md
 (( $(wc -l < AGENTS.md) <= 100 )) || { echo 'verify: AGENTS.md must remain concise (100 lines maximum)' >&2; exit 1; }
-grep -q 'Do not assume functionality is missing or complete' .factory/prompts/implementation.md
-# False-positive-acceptance redesign: prompts must distinguish real acceptance
-# from proxy evidence and require machine-readable conformance evidence.
-grep -q 'Pixel/offscreen framebuffer checks are not real visual acceptance' .factory/prompts/implementation.md
-grep -q 'not the real system service' .factory/prompts/implementation.md
-grep -q 'uinput producer is not the target consumer' .factory/prompts/implementation.md
-grep -q 'declaring or asserting evidence is not evidence' .factory/prompts/implementation.md
-grep -q 'conformance.json' .factory/prompts/implementation.md
-grep -q 'machine-receipt.py --tag' .factory/prompts/implementation.md
-grep -q 'requirement-policy.json' .factory/prompts/implementation.md
-grep -q 'signer-trust.json' .factory/prompts/implementation.md
-grep -q 'out-of-band and non-automatable' .factory/prompts/implementation.md
-# Unavailable evidence must be fact-bound; fresh contexts receive only the
-# durable context summary; golden baselines are protected by review manifests.
-grep -q 'blocked-facts.json' .factory/prompts/implementation.md
-grep -q 'context-summary' .factory/prompts/implementation.md
-grep -q 'golden-policy' .factory/prompts/implementation.md
-# Keyboard prox .factory/prompts/implementation.md
-grep -q 'string-only mock' .factory/prompts/implementation.md
-grep -q 'fixture assembly' .factory/prompts/implementation.md
-grep -q 'missing-backend' .factory/prompts/implementation.md
-grep -q 'Final documentation and specification audit' .factory/prompts/plan.md
-grep -q 'Specification conformance matrix' .factory/prompts/plan.md
-grep -q 'conformance.json' .factory/prompts/plan.md
-grep -q 'evidence tier' .factory/prompts/plan.md
-grep -q 'requirement-policy.json' .factory/prompts/plan.md
-grep -q 'out-of-band and non-automatable' .factory/prompts/plan.md
-grep -q 'Pixel/offscreen framebuffer checks are not real visual acceptance' .factory/prompts/plan.md
-grep -q 'capability-contracts.json' .factory/prompts/plan.md
-grep -q 'blocked-facts.json' .factory/prompts/plan.md
-grep -q 'Interaction acceptance inventory' .factory/prompts/plan.md
-grep -q 'Keyboard prox' .factory/prompts/plan.md
-grep -q 'string-only mock' .factory/prompts/plan.md
-grep -q 'fixture assembly' .factory/prompts/plan.md
-grep -q 'missing-backend' .factory/prompts/plan.md
-grep -q '§11.2' .factory/prompts/implementation.md
-grep -q 'Maintenance verification and documentation audit' .factory/prompts/maintenance-plan.md
-grep -q 'PLAN_COMPLETE.*final non-empty line outside every event tag' .factory/prompts/plan.md
-grep -q 'LOOP_COMPLETE.*final non-empty line outside every event tag' .factory/prompts/implementation.md
-grep -q 'MAINTENANCE_PLAN_COMPLETE.*final non-empty line outside every event tag' .factory/prompts/maintenance-plan.md
-grep -q 'MAINTENANCE_COMPLETE.*final non-empty line outside every event tag' .factory/prompts/maintenance.md
-grep -q 'AUDIT_COMPLETE.*final non-empty line' .factory/prompts/audit.md
-grep -q 'machine-receipt.py --tag' .factory/prompts/audit.md
-grep -q '\[receipt:' .factory/prompts/audit.md
-grep -q 'BLOCKED evidence forces' .factory/prompts/audit.md
-grep -q 'check-campaign-objectives.py' .factory/prompts/audit.md
-grep -q 'campaign-receipt-policy.json' .factory/prompts/audit.md
-grep -q 'FACTORY_CAMPAIGN_AUDIT_NONCE' .factory/prompts/audit.md
-grep -q 'out-of-band and non-automatable' .factory/prompts/audit.md
-grep -q 'blocked-facts.json' .factory/prompts/audit.md
-grep -q 'Pixel/offscreen framebuffer checks are not real visual acceptance' .factory/prompts/audit.md
-grep -q 'conformance.json' .factory/prompts/audit.md
-grep -q 'final-gate.sh --planning' .factory/prompts/plan.md
-grep -q 'final-gate.sh --implementation' .factory/prompts/implementation.md
-grep -q 'final-gate.sh --campaign-audit' .factory/prompts/audit.md
-grep -q 'final-gate.sh --maintenance-planning' .factory/prompts/maintenance-plan.md
-grep -q 'final-gate.sh --maintenance' .factory/prompts/maintenance.md
-for prompt in .factory/prompts/plan.md .factory/prompts/implementation.md \
-        .factory/prompts/audit.md .factory/prompts/maintenance-plan.md \
-        .factory/prompts/maintenance.md; do
-    grep -q 'emit the completion token' "$prompt"
+# Fresh role prompts: the planner owns the sole task ledger, the developer
+# never leaves placeholders and treats the conformance sidecar/receipts as
+# the acceptance authority, the tester never substitutes proxy evidence for
+# the real production path, and the auditor treats blocked/partial rows as
+# failing unless re-classified with evidence.
+grep -q 'The plan is the sole task ledger' .factory/prompts/planner.md
+grep -q 'status: active' .factory/prompts/planner.md
+grep -q 'leave placeholders, stubs, weakened assertions' .factory/prompts/developer.md
+grep -q 'machine-readable conformance sidecar and exact-commit receipts remain the' .factory/prompts/developer.md
+grep -q 'not the real system service' .factory/prompts/tester.md
+grep -q 'synthetic producer is not the target' .factory/prompts/tester.md
+grep -q 'a declaration is not evidence' .factory/prompts/tester.md
+grep -q 'blocked. and .partial. rows fail' .factory/prompts/auditor.md
+grep -q 'out-of-band' .factory/prompts/auditor.md
+grep -q 'exact-commit receipt or manifest' .factory/prompts/auditor.md
+for role in visual-reviewer runner-reviewer evidence-reviewer spec-reviewer; do
+    grep -q 'no runtime-certification authority' ".pi/agents/$role.md"
 done
-grep -q 'factory_lock_bootstrap' scripts/ralph-campaign.sh
-grep -q 'factory_lock_bootstrap' scripts/ralph-recover.sh
-grep -q '^TUI=false$' scripts/ralph-campaign.sh
-grep -q -- '--tui)' scripts/ralph-campaign.sh
-for config in .factory/ralph/plan.yml .factory/ralph/implementation.yml \
-        .factory/ralph/audit.yml .factory/ralph/maintenance.yml; do
-    checkpoint=$(grep 'command: \["./scripts/check-scratchpad.sh"' "$config")
-    [[ $checkpoint == *'_COMPLETE"'* ]] || {
-        echo "verify: iteration scratchpad hook must reject its lifecycle token: $config" >&2
-        exit 1
-    }
-    grep -q -- '--final-handoff' "$config"
+# The fresh control plane never invokes the deprecated ralph shim or the emit
+# extension, and the retained production gates never invoke them either.
+# verify-boilerplate.sh is the checker itself: its only mentions of these
+# tokens are the check literals below, so it is not scanned for them.
+for script in scripts/final-gate.sh \
+        scripts/campaign-verifier-binding.py \
+        scripts/check-installed-harness-evidence.sh \
+        scripts/visual-audit-provenance.py; do
+    text=$(cat "$script")
+    for token in 'pi-cli-shims/ralph' 'pi-ralph-emit-extension' 'ralph emit' 'ralph_emit'; do
+        [[ $text != *"$token"* ]] || {
+            echo "verify: $script must not depend on '$token'" >&2
+            exit 1
+        }
+    done
 done
-# Maintenance planning defers the strict final handoff to its trusted parent
-# launcher, which performs the ledger transition and final checkpoint under
-# the retained factory lock; its completion hook validates only.
-checkpoint=$(grep 'command: \["./scripts/check-scratchpad.sh"' .factory/ralph/maintenance-plan.yml)
-[[ $checkpoint == *'MAINTENANCE_PLAN_COMPLETE"'* ]] || {
-    echo "verify: maintenance-planning scratchpad hook must reject its lifecycle token" >&2
+# The fresh launch authority invokes the committed secure wrapper directly.
+grep -q 'pi2-secure-exec.py' .factory/loop/launch.py
+# The migration tombstone is a safe non-executable regular file, and the
+# migration verifier enforces complete tracked absence of retired launchers.
+[[ -f .factory/ralph-freeze && ! -L .factory/ralph-freeze && ! -x .factory/ralph-freeze ]] || {
+    echo "verify: .factory/ralph-freeze must be a non-executable regular tracked file" >&2
     exit 1
 }
-grep -q -- '--final-handoff' scripts/ralph-maintenance-plan.sh
-grep -q 'finalize-maintenance-planning.sh' scripts/ralph-maintenance-plan.sh
-grep -q '.factory/environment.toml' .factory/prompts/plan.md
-grep -q '.factory/environment.toml' .factory/prompts/implementation.md
+python3 .factory/loop/migration.py --root "$PROJECT_ROOT" verify >/dev/null
+# The designated smoke seam, gate, and operator command are tracked
+# executables (100755): they execute only from their bound committed
+# descriptors through the pinned interpreter, never a PATH-resolved name.
+for name in .factory/smoke/evidence_smoke_driver.py \
+        .factory/smoke/evidence_smoke_gate.py .factory/smoke/evidence_smoke.py; do
+    entry=$(git ls-files -s -- "$name")
+    [[ -n "$entry" ]] || { echo "verify: $name is not tracked" >&2; exit 1; }
+    [[ ${entry%% *} == 100755 ]] || {
+        echo "verify: $name must be tracked executable 100755" >&2
+        exit 1
+    }
+done
+# Machine visual-audit scaffold invariants: the generic scaffold is disabled by
+# default and keeps every mutable capture/review/calibration/probe path under
+# the ignored .factory-state/visual-audit/ or .factory/artifacts/visual-audit/
+# directories (Controller's capture/review dirs live under the artifacts
+# namespace; the lease stays under the runtime state namespace).
+grep -q '^enabled = false' .factory/visual-audit.toml
+grep -q '^lease_file = ".factory-state/visual-audit' .factory/visual-audit.toml
+grep -q '^capture_dir = ".factory/artifacts/visual-audit/' .factory/visual-audit.toml
+grep -q '^review_dir = ".factory/artifacts/visual-audit/' .factory/visual-audit.toml
+git check-ignore -q .factory-state/visual-audit/captures/good-main.png
+git check-ignore -q .factory-state/visual-audit/reviews/report.json
+git check-ignore -q .factory-state/visual-audit/lease
+# The visual-audit completion gate is a check-only mechanical step: the
+# implementation final gate invokes it, and the gate itself only runs the
+# aggregate checker against existing review evidence -- it never invokes the
+# capture/probe paths or the review SDK driver / vision model.
+grep -q 'scripts/visual-audit-gate.sh' scripts/final-gate.sh
+grep -q 'check-visual-audit.py' scripts/visual-audit-gate.sh
+if grep -Eq 'visual-audit-(capture|probe)|review-sdk' scripts/visual-audit-gate.sh; then
+    echo "verify: visual-audit-gate.sh must never invoke capture/review-sdk/probe" >&2
+    exit 1
+fi
 ./scripts/check-factory-environment.py
 ./scripts/check-capability-contracts.py
 ./scripts/check-spec-provided.sh
 ./scripts/validate-blocked-facts.py planning .factory/artifacts/blocked-facts.json
 ./scripts/check-golden-policy.py
-./scripts/check-context-summary.py
 cmp -s .github/ISSUE_TEMPLATE/bug_report.md .forgejo/ISSUE_TEMPLATE/bug_report.md
 ./scripts/bug-ledger.py validate
+./scripts/check-generic-leakage.sh
+./scripts/check-docs-sync.sh
 
 if git ls-files | grep -E '(^|/)(\.ollama-usage-env|\.env)$' >/dev/null; then
     echo "verify: secret environment file is tracked" >&2
@@ -291,32 +305,29 @@ for name in subprocess.check_output(['git', 'remote'], text=True).split():
         raise SystemExit(f'verify: remote {name} embeds credentials; use SSH or a credential helper')
 PY
 
-# Completion only checks a retained visual report; it must never launch
-# capture, probe, SDK, or model work under the lifecycle lock.
-grep -q 'scripts/visual-audit-gate.sh' scripts/final-gate.sh
-grep -q 'check-visual-audit.py' scripts/visual-audit-gate.sh
-if grep -Eq 'visual-audit-(capture|probe)|review-sdk' scripts/visual-audit-gate.sh; then
-    echo "verify: visual-audit-gate.sh must never invoke capture/review-sdk/probe" >&2
-    exit 1
-fi
+# -- hidden fresh factory shell suites (deterministic serial order) ---------
+# The hidden suites are the harness's own acceptance path (HIDE-01 §3): they
+# run in isolated fixture repositories and never invoke the live publisher or
+# the runner server/client.  The installed suite is the exact-commit
+# installed-tier evidence driver; the generic-evidence suite proves the
+# two-stage publisher against fixture authorities; the migration suite proves
+# the legacy freeze surface; the adversarial suite proves the retained
+# receipt/evidence channels; the smoke suite drives one full campaign round.
+./.factory/tests/test-factory-footprint.sh
+./.factory/tests/test-factory-installed.sh
+./.factory/tests/test-factory-generic-evidence.sh
+./.factory/tests/test-factory-migration.sh
+./.factory/tests/test-factory-adversarial.sh
+./.factory/tests/test-factory-smoke.sh
 
-./tests/test-scratchpad-guard.sh
-./tests/test-scratchpad-recovery-repair.sh
-./tests/test-git-checkpoint.sh
+# -- retained visible (non-Ralph) suites -------------------------------------
 ./tests/test-git-commit-guard.sh
-./tests/test-ralph-completion-recovery.sh
 ./tests/test-installed-functional-evidence.sh "$PROJECT_ROOT"
 ./tests/test-factory-environment.sh
 ./tests/test-factory-runner.sh
 ./tests/test-campaign-audit.sh
-./tests/test-ralph-campaign.sh
-./tests/test-ralph-campaign-state.py
 ./tests/test-factory-lock.py
-./tests/test-orchestration-security.py
-./tests/test-maintenance-planning-completion.sh
 ./tests/test-boilerplate-env-isolation.sh
-./tests/test-ralph-stale-recovery.sh
-./tests/test-ralph-recover-safety.sh
 ./tests/test-pi2-ollama-wrapper.sh
 ./tests/test-production-path-bypass.sh
 ./tests/test-conformance.sh
@@ -324,7 +335,6 @@ fi
 ./tests/test-audit-receipts.sh
 ./tests/test-blocked-facts.sh
 ./tests/test-campaign-objectives.sh
-./tests/test-context-summary.sh
 ./tests/test-golden-policy.sh
 ./tests/test-runner-signer.sh
 ./tests/test-boilerplate.sh

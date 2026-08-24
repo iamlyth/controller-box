@@ -21,9 +21,14 @@ ROUND=2
 setup_repo() {
     local dir=$1
     mkdir -p "$dir/scripts" "$dir/.factory" "$dir/.factory/artifacts" "$dir/.ralph/agent" \
-        "$dir/.factory-state/runner-evidence" "$dir/docs"
+        "$dir/.factory-state/runner-evidence" "$dir/docs" "$dir/.factory/loop"
     chmod 700 "$dir/.factory-state"
     cp "$RECORDER" "$CHECKER" "$RUNNER_EVIDENCE" "$ENV_CHECKER" "$dir/scripts/"
+    # The receipt wrapper reuses the hidden control plane's supervised process
+    # boundary (`.factory/loop/lock.py` and its pinned-Git sibling) for the
+    # bounded descendant capture; the fixture must carry the exact fresh
+    # authorities so the wrapper never degrades.
+    cp "$PROJECT_ROOT/.factory/loop/lock.py" "$PROJECT_ROOT/.factory/loop/gitutil.py" "$dir/.factory/loop/"
     chmod +x "$dir/scripts/"*.py
     printf '# Spec\n' > "$dir/docs/SPEC.md"
     printf '# Plan\n' > "$dir/.factory/artifacts/implementation-plan.md"

@@ -86,12 +86,9 @@ def main() -> int:
     plan_commit = git("log", "-1", "--format=%H", "--", ".factory/artifacts/implementation-plan.md")
     plan_blob = git("rev-parse", "HEAD:.factory/artifacts/implementation-plan.md")
     environment_blob = git("rev-parse", "HEAD:.factory/environment.toml")
-    for directory in (ROOT / ".ralph", ROOT / ".ralph/agent"):
-        if directory.is_symlink() or not directory.is_dir():
-            raise SystemExit(f"initialize-campaign-audit: unsafe directory {directory}")
-    for target in (ROOT / ".factory/artifacts/campaign-audit.md", ROOT / ".ralph/agent/scratchpad.md"):
-        if target.is_symlink() or (target.exists() and not target.is_file()):
-            raise SystemExit(f"initialize-campaign-audit: unsafe target {target}")
+    target = ROOT / ".factory/artifacts/campaign-audit.md"
+    if target.is_symlink() or (target.exists() and not target.is_file()):
+        raise SystemExit(f"initialize-campaign-audit: unsafe target {target}")
     report = f"""---
 schema: ralph-campaign-audit/v1
 round: {args.round}
@@ -108,12 +105,7 @@ Fresh audit initialized. Distrust the preceding completion claim and replace
 this notice with production-path evidence and either a clean pass or concrete
 findings for the next fresh planning round.
 """
-    scratch = f"""# Campaign Audit Round {args.round} — Scratchpad
-
-Fresh independent audit initialized at `{args.base}`.
-"""
     atomic_write(ROOT / ".factory/artifacts/campaign-audit.md", report)
-    atomic_write(ROOT / ".ralph/agent/scratchpad.md", scratch)
     atomic_write(COORDINATOR_FILE, coordinator_state(args.round, args.base), mode=0o600)
     print(f"initialize-campaign-audit: seeded round {args.round} at {args.base[:12]}")
     print("initialize-campaign-audit: minted audit coordinator binding (nonce protected in .factory-state)")

@@ -5,16 +5,17 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/scripts" "$tmp/docs" "$tmp/.ralph/agent" "$tmp/.factory-state" \
-    "$tmp/.factory/artifacts" "$tmp/.factory/bugs"
-cp "$PROJECT_ROOT/scripts/initialize-plan-cycle.py" \
-   "$PROJECT_ROOT/scripts/bug-ledger.py" \
+mkdir -p "$tmp/scripts" "$tmp/docs" "$tmp/.factory-state" \
+    "$tmp/.factory/artifacts" "$tmp/.factory/bugs" "$tmp/.factory/loop"
+cp "$PROJECT_ROOT/scripts/bug-ledger.py" \
    "$PROJECT_ROOT/scripts/check-plan-freshness.sh" \
-   "$PROJECT_ROOT/scripts/plan-scope-guard.sh" \
    "$PROJECT_ROOT/scripts/final-gate.sh" \
-   "$PROJECT_ROOT/scripts/check-scratchpad.sh" \
    "$PROJECT_ROOT/scripts/validate-implementation-plan.py" \
    "$PROJECT_ROOT/scripts/validate-maintenance-plan.py" "$tmp/scripts/"
+cp "$PROJECT_ROOT/.factory/loop/gitutil.py" "$tmp/.factory/loop/"
+for policy in campaign-receipt-policy.json requirement-policy.json capability-contracts.json; do
+    cp "$PROJECT_ROOT/.factory/$policy" "$tmp/.factory/$policy"
+done
 chmod +x "$tmp/scripts/"*
 cat > "$tmp/.factory/config.toml" <<'EOF'
 [project]
@@ -66,7 +67,6 @@ EOF
 printf '.factory-state/\n' > "$tmp/.gitignore"
 printf 'OLD IMPLEMENTATION TASKS MUST DISAPPEAR\n' > "$tmp/.factory/artifacts/implementation-plan.md"
 printf 'OLD MAINTENANCE TASKS MUST DISAPPEAR\n' > "$tmp/.factory/artifacts/maintenance-plan.md"
-printf 'OLD SCRATCHPAD MUST DISAPPEAR\n' > "$tmp/.ralph/agent/scratchpad.md"
 cd "$tmp"
 git init -q
 git config user.name test
@@ -74,13 +74,6 @@ git config user.email test@example.invalid
 git add .
 git commit -qm baseline
 base=$(git rev-parse HEAD)
-
-./scripts/initialize-plan-cycle.py specification --base "$base" >/dev/null
-if grep -q 'OLD IMPLEMENTATION' .factory/artifacts/implementation-plan.md; then exit 1; fi
-if grep -q 'OLD SCRATCHPAD' .ralph/agent/scratchpad.md; then exit 1; fi
-grep -q "base_commit: $base" .factory/artifacts/implementation-plan.md
-grep -q 'Git history is their archive' .factory/artifacts/implementation-plan.md
-git show HEAD:.factory/artifacts/implementation-plan.md | grep -q 'OLD IMPLEMENTATION TASKS'
 
 spec_commit=$(git log -1 --format=%H -- docs/SPEC.md)
 spec_blob=$(git rev-parse HEAD:docs/SPEC.md)
@@ -117,7 +110,7 @@ status: active
 - Documentation impact: README
 EOF
 printf '%s\n' "$base" > .factory-state/planning-base-commit
-git add .factory/artifacts/implementation-plan.md .ralph/agent/scratchpad.md
+git add .factory/artifacts/implementation-plan.md
 git commit -qm 'valid planning checkpoint'
 attested_head=$(git rev-parse HEAD)
 FACTORY_FINAL_GATE_ATTEST=1 FACTORY_PLANNING_BASE_COMMIT=$base \
@@ -197,19 +190,15 @@ if ./scripts/validate-implementation-plan.py complete .factory/artifacts/impleme
     exit 1
 fi
 cp "$tmp/valid-complete-plan.md" .factory/artifacts/implementation-plan.md
+git add .factory/artifacts/implementation-plan.md
+git commit -qm 'complete plan'
 set +e
 ./scripts/final-gate.sh --implementation >/dev/null 2>&1
 open_bug_rc=$?
 set -e
 [[ $open_bug_rc -eq 1 ]]
 
-git restore -- .factory/artifacts/implementation-plan.md .ralph/agent/scratchpad.md
-
-./scripts/initialize-plan-cycle.py maintenance --base "$base" --bug-id BUG-0001 >/dev/null
-if grep -q 'OLD MAINTENANCE' .factory/artifacts/maintenance-plan.md; then exit 1; fi
-if grep -q 'OLD SCRATCHPAD' .ralph/agent/scratchpad.md; then exit 1; fi
-grep -q 'bug_id: BUG-0001' .factory/artifacts/maintenance-plan.md
-git show HEAD:.factory/artifacts/maintenance-plan.md | grep -q 'OLD MAINTENANCE TASKS'
+git restore -- .factory/artifacts/implementation-plan.md
 
 fingerprint=$(./scripts/bug-ledger.py fingerprint BUG-0001)
 cat > .factory/artifacts/maintenance-plan.md <<EOF

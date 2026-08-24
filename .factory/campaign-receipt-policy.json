@@ -60,6 +60,12 @@
       "argv": [["./tests/test_installed_smoke.sh", "build-check"]]
     },
     {
+      "name": "installed-harness-smoke",
+      "tier": "installed",
+      "allow_manifest": false,
+      "argv": [["./.factory/tests/test-factory-installed.sh"]]
+    },
+    {
       "name": "final-gate",
       "tier": "installed",
       "allow_manifest": false,

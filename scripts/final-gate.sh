@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
-# Enforce planning or implementation completion before Ralph may terminate.
+# Enforce planning or implementation completion before the harness may
+# terminate. The fresh Python factory derives planning freshness from the
+# committed plan front matter, Git, and the single factory-state file; the
+# retained completion gate validates the plan, conformance sidecar, blocked
+# facts, capability contracts, receipts, and documentation before accepting a
+# phase.
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
@@ -19,9 +24,7 @@ fi
 
 case "$MODE" in
     --planning)
-        ./scripts/plan-scope-guard.sh
         ./scripts/check-plan-freshness.sh --planning
-        ./scripts/check-scratchpad.sh PLAN_COMPLETE
         ./scripts/validate-implementation-plan.py planning .factory/artifacts/implementation-plan.md
         if [[ -f .factory/artifacts/blocked-facts.json ]]; then
             ./scripts/validate-blocked-facts.py planning .factory/artifacts/blocked-facts.json
@@ -32,15 +35,12 @@ case "$MODE" in
         echo "final-gate: planning completion accepted"
         ;;
     --maintenance-planning)
-        ./scripts/maintenance-plan-scope-guard.sh
         ./scripts/validate-maintenance-plan.py planning .factory/artifacts/maintenance-plan.md >/dev/null
         ./scripts/check-maintenance-freshness.sh --planning
-        ./scripts/check-scratchpad.sh MAINTENANCE_PLAN_COMPLETE
         echo "final-gate: maintenance planning completion accepted"
         ;;
     --implementation)
         ./scripts/check-plan-freshness.sh
-        ./scripts/check-scratchpad.sh LOOP_COMPLETE
         ./scripts/validate-implementation-plan.py complete .factory/artifacts/implementation-plan.md
         if [[ -x scripts/bug-ledger.py && -f .factory/bugs/open.md ]]; then
             ./scripts/bug-ledger.py validate
@@ -66,7 +66,6 @@ PY
         # receipt/artifact or an explicit human decision.
         ./scripts/validate-conformance.py complete .factory/artifacts/conformance.json
         ./scripts/validate-blocked-facts.py complete .factory/artifacts/blocked-facts.json
-        ./scripts/check-context-summary.py
         ./scripts/check-golden-policy.py
         ./scripts/check-capability-contracts.py
         ./scripts/check-capability-evidence.py
@@ -78,7 +77,7 @@ PY
         if [[ -x scripts/verify-project.sh ]]; then
             ./scripts/verify-project.sh
         fi
-        ./scripts/check-installed-functional-evidence.sh
+        ./scripts/check-installed-harness-evidence.sh
         echo "final-gate: implementation, specification, tests, and documentation accepted"
         ;;
     --campaign-audit)
@@ -106,7 +105,6 @@ PY
             && ${FACTORY_CAMPAIGN_RUNNER_EVIDENCE_SHA256:-} =~ ^[0-9a-f]{64}$ ]] || {
             echo "final-gate: missing campaign-owned audit binding" >&2; exit 1;
         }
-        ./scripts/check-scratchpad.sh AUDIT_COMPLETE
         ./scripts/validate-campaign-audit.py complete .factory/artifacts/campaign-audit.md \
             --expected-round "$FACTORY_CAMPAIGN_AUDIT_ROUND" \
             --expected-base "$FACTORY_CAMPAIGN_AUDIT_BASE" \
@@ -116,7 +114,6 @@ PY
     --maintenance)
         ./scripts/validate-maintenance-plan.py complete .factory/artifacts/maintenance-plan.md >/dev/null
         ./scripts/check-maintenance-freshness.sh
-        ./scripts/check-scratchpad.sh MAINTENANCE_COMPLETE
         ./scripts/bug-ledger.py validate
         python3 - <<'PY'
 import json, re, subprocess

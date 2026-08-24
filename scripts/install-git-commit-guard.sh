@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fail-closed Ralph Git commit boundary.
+# Fail-closed post-Ralph Git commit boundary.
 #
 # Installs six launcher hooks in .git/hooks, each executing the tracked
 # scripts/git-commit-guard.sh boundary:
@@ -9,17 +9,15 @@
 #   pre-merge-commit    policy gate for `git merge`
 #   applypatch-msg      policy gate for `git am`
 #   pre-applypatch      policy gate for `git am`
-#   commit-msg          one-shot token consumption; runs for `git commit` and
-#                       `git merge`
+#   commit-msg          policy gate for every commit-creation path
 #
-# commit-msg is the single consumption point, so the at-most-one final-handoff
-# guarantee holds across every hook-coverable commit path. Commit-creation
-# verbs with no hook coverage (cherry-pick, revert) and the patch/replay verbs
-# are refused by scripts/pi-cli-shims/git and scripts/pi-ralph-emit-extension.mjs
-# at the model's command boundary; the harness only ever creates commits via
-# `git commit`. Idempotent and safe to run before every Ralph launch and at
-# verify time; --check reports whether the installed hooks match the tracked
-# guard without writing anything.
+# The same content policy runs on every hook-coverable commit path.
+# Commit-creation verbs with no hook coverage (cherry-pick, revert) and the
+# patch/replay verbs are refused by scripts/pi-cli-shims/git at the model's
+# command boundary; the harness only ever creates commits via `git commit`.
+# Idempotent and safe to run before every launch and at verify time; --check
+# reports whether the installed hooks match the tracked guard without
+# writing anything.
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)

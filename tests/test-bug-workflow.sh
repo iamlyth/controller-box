@@ -8,10 +8,9 @@ trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/scripts" "$tmp/docs" "$tmp/.factory-state" "$tmp/.ralph/agent" \
     "$tmp/.factory/bugs" "$tmp/.factory/artifacts"
 cp "$PROJECT_ROOT/scripts/bug-ledger.py" "$PROJECT_ROOT/scripts/check-maintenance-freshness.sh" \
-    "$PROJECT_ROOT/scripts/check-scratchpad.sh" "$PROJECT_ROOT/scripts/factory-state-file.py" \
+    "$PROJECT_ROOT/scripts/factory-state-file.py" \
     "$PROJECT_ROOT/scripts/factory_state_io.py" \
     "$PROJECT_ROOT/scripts/validate-maintenance-plan.py" "$PROJECT_ROOT/scripts/final-gate.sh" "$tmp/scripts/"
-printf '# Scratchpad\n\n## Current handoff\n\n- Maintenance fixture.\n' > "$tmp/.ralph/agent/scratchpad.md"
 chmod +x "$tmp/scripts/"*
 chmod 700 "$tmp/.factory-state"
 cd "$tmp"
@@ -302,5 +301,4 @@ set +e; ./scripts/final-gate.sh --maintenance > verifier.out 2>&1; verifier_rc=$
 grep -q 'configured maintenance verifier is missing or not executable' verifier.out
 
 cmp -s "$PROJECT_ROOT/.github/ISSUE_TEMPLATE/bug_report.md" "$PROJECT_ROOT/.forgejo/ISSUE_TEMPLATE/bug_report.md"
-grep -Fq -- "write \`- Status: complete\`, never \`done\`" "$PROJECT_ROOT/.factory/prompts/maintenance.md"
 echo "test: provider-neutral bug workflow checks passed"

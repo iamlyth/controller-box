@@ -63,7 +63,7 @@ for tool in Xvfb xdotool import convert dbus-daemon; do
 done
 
 # Invalidate the CMake cache when the source directory has changed
-# (e.g. bind-mount path differs between Ralph and campaign environments).
+# (for example, a bind-mount path differs between verification environments).
 if [[ -f "$BUILD_DIR/CMakeCache.txt" ]]; then
     cached_source=$(grep 'CMAKE_HOME_DIRECTORY:INTERNAL=' "$BUILD_DIR/CMakeCache.txt" 2>/dev/null | cut -d= -f2)
     if [[ "$cached_source" != "$PROJECT_ROOT" ]]; then
@@ -96,8 +96,8 @@ fi
 # (.factory/verifier-acceptance.json, schema ralph-verifier-acceptance/v1).
 # The campaign binding covers that manifest, so adding a gate (strict
 # strengthening) auto-rebinds with an audit record instead of halting the
-# campaign, while removing a gate or changing the entrypoint requires the
-# audited operator pathway (scripts/ralph-verifier-migrate.sh).
+# campaign, while removing a gate or changing the entrypoint requires an
+# explicit independently audited policy commit.
 python3 - "$BUILD_DIR" <<'PY' || exit 1
 import json, subprocess, sys
 from pathlib import Path

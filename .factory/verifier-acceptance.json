@@ -1,6 +1,6 @@
 {
   "schema": "ralph-verifier-acceptance/v1",
-  "description": "Tracked test-discovery contract for the campaign verifier (verify-project.sh). The verifier entrypoint runs exactly these gates; the campaign binding covers this manifest so a gate-list growth (strict strengthening) auto-rebinds with an audit record while a shrink or entrypoint change requires the audited operator pathway (scripts/ralph-verifier-migrate.sh). Skip policy per gate is enforced by the bound entrypoint.",
+  "description": "Tracked test-discovery contract for the campaign verifier (verify-project.sh). The verifier entrypoint runs exactly these gates; the campaign binding covers this manifest so a gate-list growth (strict strengthening) auto-rebinds with an audit record while a shrink or entrypoint change requires an explicit independently audited policy commit. Skip policy per gate is enforced by the bound entrypoint.",
   "gates": [
     {"name": "ctest", "args": []},
     {"name": "test_installed_functional", "args": []},

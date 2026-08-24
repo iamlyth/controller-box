@@ -97,15 +97,6 @@ if(BASH_EXECUTABLE)
     add_test(NAME test_campaign_audit
         COMMAND ${BASH_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test-campaign-audit.sh)
-    add_test(NAME test_ralph_campaign
-        COMMAND ${BASH_EXECUTABLE}
-            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test-ralph-campaign.sh)
-    add_test(NAME test_ralph_stale_recovery
-        COMMAND ${BASH_EXECUTABLE}
-            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test-ralph-stale-recovery.sh)
-    add_test(NAME test_ralph_recover_safety
-        COMMAND ${BASH_EXECUTABLE}
-            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test-ralph-recover-safety.sh)
     add_test(NAME test_pi2_ollama_wrapper
         COMMAND ${BASH_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test-pi2-ollama-wrapper.sh)

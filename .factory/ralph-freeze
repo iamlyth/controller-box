@@ -1,0 +1,6 @@
+# Legacy Ralph Orchestrator tombstone.
+#
+# Tracked launchers, prompts, queues, scratchpads, summaries, lifecycle tokens,
+# and resumed-session state have been removed. The fresh `.factory/loop/`
+# control plane is authoritative. This non-executable marker prevents a future
+# migration from silently reintroducing the retired control plane.

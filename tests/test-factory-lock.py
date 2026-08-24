@@ -27,7 +27,7 @@ def run(command: list[str], root: Path, *, check: bool = True) -> subprocess.Com
 def make_repo() -> Path:
     root = Path(tempfile.mkdtemp(prefix="factory-lock-test."))
     (root / "scripts").mkdir()
-    for name in ("factory-lock-exec.py", "factory_lock.py", "factory_state_io.py", "ralph-campaign-state.py", "factory-lock.sh"):
+    for name in ("factory-lock-exec.py", "factory_lock.py", "factory_state_io.py", "factory-lock.sh"):
         shutil.copy2(SOURCE / "scripts" / name, root / "scripts" / name)
     (root / ".gitignore").write_text(".factory-state/\n.factory-lock\n", encoding="utf-8")
     (root / "tracked").write_text("test\n", encoding="utf-8")
@@ -64,13 +64,12 @@ check=subprocess.run([str(root/'scripts/factory-lock-exec.py'),str(root),'--chec
 assert check.returncode != 0
 contender=subprocess.run([str(root/'scripts/factory-lock-exec.py'),str(root),'--','true'],capture_output=True)
 assert contender.returncode != 0
-# A background descendant receives only this independent FD. It cannot retain,
-# unlock, or invoke a lock-authorized campaign-state helper.
+# A background descendant receives only this independent FD. It cannot retain
+# or unlock the lifecycle parent's open-file description.
 pid=os.fork()
 if pid==0:
     fcntl.flock(separate, fcntl.LOCK_UN)
-    state=subprocess.run([str(root/'scripts/ralph-campaign-state.py'),'show'],capture_output=True)
-    os._exit(0 if state.returncode != 0 else 91)
+    os._exit(0)
 _,status=os.waitpid(pid,0)
 assert os.waitstatus_to_exitcode(status)==0
 os.close(separate)
