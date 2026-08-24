@@ -78,7 +78,7 @@ class CanonicalPlanSelectionTest(unittest.TestCase):
             if task.status == "pending"
             and all(statuses[dep] == "complete" for dep in task.dependencies)
         )
-        self.assertEqual(runnable, [5, 9, 25])
+        self.assertEqual(runnable, [5, 9, 26])
         self.assertEqual(plan.tasks[0].status, "complete")
         self.assertEqual(plan.tasks[1].status, "complete")
         self.assertEqual(plan.tasks[2].status, "complete")

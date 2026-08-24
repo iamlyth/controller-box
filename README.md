@@ -192,13 +192,7 @@ The project includes a multi-layer visual acceptance suite (SPEC §11.1)
 that verifies actual framebuffer pixel output, not just state-machine or
 geometry correctness:
 
-A fail-closed Git commit boundary (`scripts/install-git-commit-guard.sh`,
-installed by every Ralph launcher) rejects scratchpad-only commits at the
-hook level: ordinary checkpoints never manufacture Git progress, and only the
-single per-cycle final handoff may commit recovery metadata, authorized by a
-one-shot lifecycle token consumed at `commit-msg`. Hook bypass markers and
-commit-creation verbs without hook coverage are refused at the model command
-boundary (`scripts/pi-cli-shims/git`, `scripts/pi-ralph-emit-extension.mjs`).
+A fail-closed Git commit boundary (`scripts/install-git-commit-guard.sh`, run on every factory launch) rejects empty metadata-only commits at the hook level: every commit must carry at least one substantive tracked path, and retired `.ralph/**` recovery paths may only be deleted from the index. There is no lifecycle token or scratchpad exemption. Hook bypass markers and commit-creation verbs without hook coverage are refused at the model command boundary (`scripts/pi-cli-shims/git`).
 
 | Layer | Test | What it verifies |
 |-------|------|-----------------|
@@ -304,58 +298,57 @@ environment for full production-path acceptance verification. Remaining
 hardware-specific verification is deferred to human release acceptance per
 SPEC §11.1.7.
 
-## Multi-round Ralph campaign
+## Finite factory campaign
 
-For a predetermined unattended sequence of fresh adversarial plans,
-implementations, verification passes, and independent gap audits, run:
+A predetermined, finite sequence of fresh-context rounds — planning,
+implementation, verification, and independent audit — runs through the fresh
+Python control plane (methodology: [docs/FACTORY-LOOP-SPEC.md](docs/FACTORY-LOOP-SPEC.md)):
 
 ```bash
-./scripts/ralph-campaign.sh --rounds 3
+python3 .factory/loop/campaign.py run --campaign-id <id> --rounds 3 --branch develop
 ```
 
-Campaigns are headless by default so phase completion does not wait for a TUI
-to close; use `--tui` only for attended diagnostics. Every round receives a new
-Git base and replaces the active plan; completed plans and audits remain in Git
-history. Attempt-bound stale and completion-rejection ceilings persist across
-child restarts. Scratchpad-only updates remain recoverable without creating
-commits, while one tightly scoped final handoff precedes clean-HEAD attestation.
-Arbitrary nonzero leaf or gate failures stop after one invocation at the same
-resumable phase; quota waits remain leaf-owned. Interrupted campaigns resume
-with the same round count and phase using `--resume`. A narrowly guarded first-round
-pre-verification fast-forward recovery is documented in
-[docs/OPERATIONS.md](docs/OPERATIONS.md); it does not weaken normal write-once state updates.
-Available local tools and external runners are declared without credentials in `.factory/environment.toml`.
-Verification validates exact-commit runner receipts; required capabilities without
-accepted production evidence remain findings rather than fabricated completion.
+`python3 .factory/loop/campaign.py show` prints the current phase and result.
+The installed operator entrypoint `.factory/bin/factory-launch` runs one
+supervised fresh-context role attempt (planner/developer/tester/auditor) with
+a strict invocation contract (role, model, provider, backend, prompt-set
+digest, bound commit, allowed tools, runtime/inactivity bounds).
 
-Ralph 2.10.1 starts a five-second deadline when Pi returns the successful
-`ralph emit` acknowledgement, then misclassifies its own timeout signal as a
-failed iteration. `scripts/pi2-ollama.sh` loads an explicit Pi extension that
-rewrites only a direct final `ralph emit` tool command to a repository shim and
-blocks lifecycle completion tokens as event topics or payloads. Completion uses
-only the exact standalone reserved model-output line. The shim invokes the real
-binary from the jail's trusted PATH and changes only
-that command's acknowledgement after Ralph writes the authoritative event;
-arbitrary identical model/backend text is left untouched. The wrapper and secure prompt launcher retain `exec` semantics,
-so backend errors and signals propagate normally. Pi can therefore finish its
-short post-tool turn under Ralph's normal five-minute inactivity timeout. This
-may add a brief model follow-up after publication but avoids false
-consecutive-failure termination.
+Each round starts a fresh planner process, selects one deterministic task from
+the canonical plan (`factory-plan/v1`, parsed by `.factory/loop/plan_parser.py`)
+for a fresh developer process, runs the configured project verifier, and
+launches an independent auditor. Tester and auditor findings reach the next
+planner only through a revised plan, never through memory injection. One
+mutable control-state file (`.factory-state/factory-loop.json`) records the
+phase, round, attempt, and a trusted outcome enum; recovery is derived from
+Git, the canonical plan, that state file, and process liveness. A finite
+campaign always terminates as `success`, `findings`, `blocked`, `failed`,
+`interrupted`, or `infrastructure_failure` — it never spins while no task is
+runnable. Available local tools and external runners are declared without
+credentials in `.factory/environment.toml`; the same runner `dev-runner-vm`
+and its four declared capabilities are unchanged. Verification validates
+exact-commit runner receipts; required capabilities without accepted
+production evidence remain findings rather than fabricated completion.
 
 ## Bug maintenance
 
-Portable bug state is tracked in `.factory/bugs/open.md` and `.factory/bugs/closed.md`. A bug may
+Portable bug state is tracked in `.factory/bugs/open.md` and
+`.factory/bugs/closed.md`. A bug may
 reference a GitHub issue, a Forgejo issue, both, or neither; external tickets do
 not replace the local ledger. Ordinary defects use the dedicated maintenance
-cycle and do not modify `docs/SPEC.md`:
+plan and do not modify `docs/SPEC.md`:
 
 ```bash
 ./scripts/bug-ledger.py validate
-./scripts/ralph-maintenance-plan.sh BUG-0001
-./scripts/ralph-maintenance-run.sh
 ```
 
-A fresh specification or maintenance planning command replaces the prior active plan and scratchpad with a minimal cycle skeleton before Ralph starts; completed tasks remain only in Git history and are not carried into future prompts. `--resume` preserves an interrupted draft, and newly accepted plans may contain only pending tasks.
+Maintenance keeps the selected bug and cycle base in ignored `.factory-state/`
+(via `scripts/factory-state-file.py`), a canonical
+`.factory/artifacts/maintenance-plan.md` validated by
+`scripts/validate-maintenance-plan.py` and `scripts/check-maintenance-freshness.sh`,
+and runs through the same fresh-context control plane as implementation.
+Completed tasks remain only in Git history; every newly accepted task must be
+`pending`.
 
 Contract changes return to the human specification and full planning workflow.
 See [docs/BUG_WORKFLOW.md](docs/BUG_WORKFLOW.md) for intake, triage, external
@@ -367,7 +360,7 @@ links, maintenance, verification, and recovery.
 - [docs/DBus-API.md](docs/DBus-API.md) — Full DBus API reference and gaps
 - [docs/PROFILES.md](docs/PROFILES.md) — Profile format, editor modes, validation
 - [docs/PACKAGING.md](docs/PACKAGING.md) — Flatpak, tarball, install layout
-- [docs/FACTORY.md](docs/FACTORY.md) — Development factory boilerplate (Ralph orchestration)
+- [docs/FACTORY.md](docs/FACTORY.md) — Development factory boilerplate (fresh Python factory orchestration)
 - [docs/BUG_WORKFLOW.md](docs/BUG_WORKFLOW.md) — GitHub/Forgejo tickets and portable maintenance ledgers
 
 ## Credits

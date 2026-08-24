@@ -1,6 +1,6 @@
 # Controller-Box Operational Guide
 
-Keep this file brief and operational. Progress, task status, and verification evidence belong in `.factory/artifacts/implementation-plan.md`; the latest recovery handoff belongs in `.ralph/agent/scratchpad.md`.
+Keep this file brief and operational. Progress, task status, and verification evidence belong in `.factory/artifacts/implementation-plan.md`; the fresh Python factory keeps its single mutable control state in `.factory-state/factory-loop.json` (methodology: `docs/FACTORY-LOOP-SPEC.md`).
 
 ## Sources of truth
 
@@ -30,15 +30,15 @@ nix-shell --run "ctest --test-dir build-check -R '<regex>' --output-on-failure"
 # Complete clean project gate: build, CTest, packaging, installed smoke
 nix-shell --run './scripts/verify-project.sh'
 
-# Ralph/factory policy and orchestration
+# Factory policy and orchestration
 ./scripts/verify-boilerplate.sh
 
 # Exact-commit declared runner gate and evidence check
 ./scripts/run-factory-runners.py
 ./scripts/check-factory-runner-evidence.py
 
-# Finite fresh-plan/implementation/audit campaign
-./scripts/ralph-campaign.sh --rounds 3
+# Finite fresh-plan/implementation/audit campaign (role entries: .factory/bin/factory-launch)
+python3 .factory/loop/campaign.py run --campaign-id <id> --rounds <n> --branch develop
 ```
 
 Run build/test commands serially. Do not dismiss an unrelated failure as pre-existing: determine its cause, fix it when safe, or append a remediation task with evidence.
@@ -67,8 +67,8 @@ A custom `CMAKE_INSTALL_PREFIX` build is for isolated install/UI testing and sho
 
 ## Git commit boundary
 
-- Ordinary checkpoints never commit scratchpad-only state; the one trusted exception is a single final-handoff commit per durable cycle, authorized by a one-shot lifecycle token. The boundary is enforced at Git level by `scripts/git-commit-guard.sh` (installed as `pre-commit`, `prepare-commit-msg`, `pre-merge-commit`, `applypatch-msg`, `pre-applypatch`, `commit-msg` hooks by `scripts/install-git-commit-guard.sh`, which launchers run on every launch) and at the command layer by `scripts/pi-cli-shims/git` and `scripts/pi-ralph-emit-extension.mjs`.
-- Direct `git commit` of metadata-only state is rejected; substantive commits that also carry the scratchpad are allowed. Do not bypass hooks (`--no-verify`, `core.hooksPath`, `GIT_CONFIG_*`); only `git commit` may create commits from the model command boundary.
+- Commits must carry at least one substantive tracked path; empty metadata-only commits are rejected, and retired `.ralph/**` recovery paths may only be deleted from the index. There is no lifecycle token, scratchpad exception, or final-handoff authorization. The boundary is enforced at Git level by `scripts/git-commit-guard.sh` (installed as `pre-commit`, `prepare-commit-msg`, `pre-merge-commit`, `applypatch-msg`, `pre-applypatch`, `commit-msg` hooks by `scripts/install-git-commit-guard.sh`, which runs on every launch) and at the model command layer by `scripts/pi-cli-shims/git`.
+- Do not bypass hooks (`--no-verify`, `core.hooksPath`, `GIT_CONFIG_*`); only `git commit` may create commits from the model command boundary.
 
 ## Acceptance evidence (BUG-0016 machinery)
 

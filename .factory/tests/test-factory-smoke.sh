@@ -9,7 +9,7 @@
 #
 #   0. hard-checks every authority prerequisite (the loop campaign/state/
 #      plan-parser modules, the four committed smoke-lane files, the
-#      canonical plan with Task 22 pending, and the smoke Python suite) with
+#      canonical Controller plan carrying migrated Task 22, and the smoke Python suite) with
 #      a named diagnostic before anything runs, so a missing or renamed
 #      authority can never silently weaken the lane;
 #   1. runs the hidden Python suite warning-free under
@@ -56,12 +56,19 @@ for prerequisite in "${required_prerequisites[@]}"; do
     [[ -f "$ROOT/$prerequisite" ]] || \
         fail "missing evidence-smoke authority prerequisite: $prerequisite"
 done
-# The canonical plan must still carry Task 22 pending for the evidence round.
-grep -q '^## Task 22: Live campaign and control-state instantiation' \
-    "$ROOT/.factory/artifacts/implementation-plan.md" || \
-    fail "the canonical plan no longer names the evidence task Task 22"
-grep -q '^- Status: pending' "$ROOT/.factory/artifacts/implementation-plan.md" || \
-    fail "the canonical plan no longer carries a pending task"
+# The Controller migration binds smoke's deterministic revision to Task 22;
+# the Python suite derives a pending fixture from this completed canonical task.
+"$PY" - <<'PY' || fail "the canonical plan no longer carries migrated Task 22"
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path('.factory/loop').resolve()))
+from plan_parser import Plan
+plan = Plan.from_bytes(Path('.factory/artifacts/implementation-plan.md').read_bytes())
+task = next((item for item in plan.tasks if item.number == 22), None)
+assert task is not None
+assert task.title == 'Port the fresh Python factory engine without changing Controller production or runner authority'
+assert task.status == 'complete'
+PY
 echo "test-factory-smoke: evidence-smoke authority prerequisites present"
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/factory-smoke.XXXXXX")

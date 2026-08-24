@@ -40,23 +40,41 @@ Each ledger-file replacement is individually atomic and deterministic; moving a 
 
 ## One-bug maintenance cycle
 
-Triage an ordinary defect, then start from a clean tree:
+Triage an ordinary defect, then record the selected bug and cycle base in the
+ignored trusted state (`scripts/factory-state-file.py`), seed a canonical
+`.factory/artifacts/maintenance-plan.md`, and validate it:
 
 ```bash
-./scripts/ralph-maintenance-plan.sh BUG-0001
-# Review the committed .factory/artifacts/maintenance-plan.md
-./scripts/ralph-maintenance-run.sh
+./scripts/bug-ledger.py validate
+./scripts/factory-state-file.py write maintenance-bug-id BUG-0001
+./scripts/validate-maintenance-plan.py planning .factory/artifacts/maintenance-plan.md
+./scripts/check-maintenance-freshness.sh --planning
 ```
 
-The selected ID, selected-cycle base commit, and loop mode are volatile local state in ignored `.factory-state/`. A fresh cycle atomically replaces the previous maintenance plan and scratchpad with a minimal selected-bug skeleton; old plans remain only in Git history and the closed ledger, while `--resume` preserves the current draft. The planning gate requires every new task to be `pending`. Planning accepts `triaged` (or `planned` only when resuming), commits the strict plan, and commits the ledger-only `planned` transition before final completion attestation. Draft checkpoints may be incomplete; scratchpad-only drafts stay uncommitted for recovery. Completion binds immutable metadata to a clean unchanged HEAD, and no tracked commit follows that attestation. Maintenance run accepts only `planned` or `in_progress`; its first implementation task transitions `planned` to `in_progress`. The plan ends with **Maintenance verification and documentation audit**. Only that completed final task may close the selected record.
+The maintenance lifecycle then runs through the same fresh-context Python
+control plane as implementation: a fresh planner seeds the minimal
+selected-bug skeleton, a fresh developer implements and tests, verification
+runs the configured project verifier, and the final maintenance audit is the
+only task that may close the selected record. The selected ID, selected-cycle
+base commit, and loop state are volatile local state in ignored
+`.factory-state/`. A fresh cycle atomically replaces the previous maintenance
+plan with a minimal selected-bug skeleton; old plans remain only in Git
+history and the closed ledger. The planning gate requires every new task to
+be `pending`. Planning accepts `triaged` (or `planned` only when resuming),
+commits the strict plan, and commits the ledger-only `planned` transition
+before final completion attestation. Completion binds immutable metadata to a
+clean unchanged HEAD, and no tracked commit follows that attestation.
+Maintenance run accepts only `planned` or `in_progress`; its first
+implementation task transitions `planned` to `in_progress`. The plan ends
+with **Maintenance verification and documentation audit**.
 
-Maintenance fails closed unless `[verification].maintenance_command` is a non-empty argv array whose first element exists and is executable. The generic boilerplate intentionally does not include `scripts/verify-project.sh`; each project must supply that executable before maintenance can complete. The argv is executed directly, without shell evaluation.
+Maintenance fails closed unless `[verification].maintenance_command` is a
+non-empty argv array whose first element exists and is executable. The argv
+is executed directly, without shell evaluation. The project supplies
+`scripts/verify-project.sh` as that command.
 
-Headless and continuation options are `--no-tui` and `--resume`. Recovery modes are:
-
-```bash
-./scripts/ralph-recover.sh --mode maintenance-planning
-./scripts/ralph-recover.sh --mode maintenance
-```
-
-Recovery retains the same selected bug and uses the factory lock, checkpoint hooks, clean-tree checks, and quota waiting. If either maintenance worker requests completion before its strict final gate passes, an attempt-bound one-shot rejection marker authorizes the supervisor to repair volatile Ralph state and continue that same lifecycle with `--continue`; arbitrary failures, stale markers, and mismatched modes do not trigger retries. If freshness reports changed intake/specification or a contract change, do not bypass it; return to human triage/specification workflow.
+Recovery is derived from Git, the canonical maintenance plan, the trusted
+state, and process liveness (see [FACTORY.md](FACTORY.md) — there is no
+separate recovery launcher and no resumed model session). If freshness
+reports changed intake/specification or a contract change, do not bypass it;
+return to human triage/specification workflow.

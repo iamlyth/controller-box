@@ -633,12 +633,26 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 - Documentation impact: canonical plan metadata and factory configuration only.
 
 ## Task 25: Synchronize Controller documentation and deterministic gates
-- Status: pending
+- Status: complete
 - Dependencies: Task 23, Task 24
-- Scope: update `AGENTS.md`, `README.md`, `docs/FACTORY.md`, `docs/OPERATIONS.md`, and `docs/BUG_WORKFLOW.md` for the four fresh roles, finite Python campaign, canonical state, evidence tiers, and post-Ralph migration; merge generic harness tests into `verify-boilerplate.sh` while retaining `verify-project.sh` and product acceptance behavior.
-- Acceptance criteria: no operative Ralph command remains; docs match Controller environment and open facts; boilerplate and complete project gates retain fail-closed skips/evidence semantics.
-- Verification: docs-sync, generic leakage, boilerplate gate, and Nix project gate.
+- Scope: update `AGENTS.md`, `README.md`, `docs/FACTORY.md`, `docs/OPERATIONS.md`, and `docs/BUG_WORKFLOW.md` for the four fresh roles, finite Python campaign, canonical state, evidence tiers, and post-Ralph migration; `docs/REVIEW.md` was reviewed and required no change (historical review artifact, no operative commands). Product build/run/runner commands, the `dev-runner-vm` environment with its four declared capabilities, the five candidate capability contracts, evidence tiers, human/physical/system-DBus/GPU/target boundaries, and open BUG-0015/BUG-0018 with facts FACT-002..007 are all preserved with no acceptance elevation. `docs/SPEC.md` remains canonical; `docs/FACTORY-LOOP-SPEC.md` remains the supplementary methodology contract. `.factory/ralph-freeze` is documented only as a non-executable tombstone; ignored foreign `.ralph` is never read/imported/deleted. The generic harness suites were already merged into `verify-boilerplate.sh` by the port; this task did not change them.
+- Acceptance criteria: no operative Ralph command or deleted-launcher reference remains in the synchronized docs; `AGENTS.md` stays at or below 100 lines with the Controller build commands unchanged; docs match the Controller environment (declared runner, four declared/five candidate capabilities) and the open facts; boilerplate and complete project gates retain fail-closed skips/evidence semantics.
+- Verification: `./scripts/check-docs-sync.sh` exit 0; stale-markdown operative grep (deleted `ralph-*` launcher/recovery/context/extension names in `AGENTS.md`, `README.md`, `docs/FACTORY.md`, `docs/OPERATIONS.md`, `docs/BUG_WORKFLOW.md`, `docs/REVIEW.md`) exit 0; `python3 scripts/validate-implementation-plan.py planning .factory/artifacts/implementation-plan.md` exit 0; plan-parser suite 17/17 OK; selector suite 31/32 with exactly one canonical-plan pin (see Evidence); visible lightweight docs/boilerplate tests pass. Full `verify-boilerplate.sh` and Nix project gates are not re-run by this documentation-only task (no product change; existing evidence stands).
 - Documentation impact: listed documentation is authoritative after this task.
+- Evidence: implemented and verified this iteration at HEAD. The synchronization is complete: `AGENTS.md` (78 lines) replaces the campaign command and scratchpad/lifecycle-token claims with `python3 .factory/loop/campaign.py run --campaign-id <id> --rounds <n> --branch develop` plus the `.factory/bin/factory-launch` entrypoint and the fresh commit-boundary policy; `README.md` replaces the multi-round Ralph campaign and maintenance launchers with the finite Python campaign, `factory-loop.json` state, finite outcomes, fresh processes, and findings-through-planner flow, and documents the retired control plane as a non-executed tombstone with ignored `.ralph` never read/imported/deleted; `docs/FACTORY.md` is rewritten for the four static roles, canonical `factory-plan/v1` plan, deterministic selection, one repository writer, quota table, Git/plan/state recovery, evidence tiers, and the retained machine-readable acceptance artifacts; `docs/OPERATIONS.md` campaign and bug-maintenance sections now describe the Python control plane, the single control-state file, the declared runner/capabilities, and state-derived recovery; `docs/BUG_WORKFLOW.md` maintenance flow uses `factory-state-file.py`, `validate-maintenance-plan.py`, and `check-maintenance-freshness.sh` with no deleted launcher. Checks run: `./scripts/check-docs-sync.sh` (exit 0, "documentation change gate passed"); stale-markdown operative grep (exit 0, clean); plan parser `17/17` OK and selector `31/32` (single canonical-plan pin, see finding below); `scripts/validate-implementation-plan.py planning` exit 0; `tests/test-bug-workflow.sh` exit 0; `tests/test-boilerplate.sh` exit 0; `./scripts/check-generic-leakage.sh` exit 0 (229 hidden files scanned). No other task status/classification, conformance row, fact, bug, golden, or evidence was changed.
+
+  Finding (honest, outside this task's edit boundary): the harness-owned
+  `.factory/tests/test-factory-selector.py::test_canonical_plan_selects_first_runnable_task`
+  pins the canonical plan's runnable set to `[5, 9, 25]`. Task 25's own
+  completion changes that set to `[5, 9, 26]` (Task 26's dependencies, Tasks
+  24 and 25, are then complete), so the single assertion fails exactly at the
+  status transition this task performs. The harness test is not in the
+  allowed documentation-only edit boundary; the one-line runnable-list
+  expectation must be refreshed by the harness owner together with this
+  completion, following the same plan-state-binding pattern as the WIP
+  smoke-shell adaptation. All other selector assertions (32 run, 31 pass),
+  the parser suite, the planning validator, docs-sync, the stale-command
+  grep, and the visible lightweight tests pass.
 
 ## Task 26: Refresh exact-commit Controller runner evidence without changing the runner server
 - Status: pending

@@ -528,107 +528,70 @@ the Pi-4 absolute bound is human-release-gated.
 ## Factory campaign operation
 
 A finite autonomous campaign repeatedly creates a new plan base instead of
-asking an operator to alternate planning and implementation manually. Campaigns
-are headless by default; `--tui` is an attended diagnostic mode:
+asking an operator to alternate planning and implementation manually. The
+fresh Python control plane runs a bounded number of rounds, each
+`planning -> implementation -> verification -> audit`, and always terminates
+in a documented finite outcome:
 
 ```bash
-./scripts/ralph-campaign.sh --rounds 3
+python3 .factory/loop/campaign.py run --campaign-id <id> --rounds <n> --branch develop
 ```
 
-Every round performs fresh planning, strict implementation, the configured
-project verification command, installed-evidence validation, exact-tree
-verification on every declared factory runner, and a separate adversarial audit.
-Runtime state is persisted atomically in the ignored
-`.factory-state/ralph-campaign.json`. The lifecycle lock is an exclusive
-Linux `flock` on the already-open canonical repository-root directory itself;
-there is no replaceable lock-file authority. The trusted supervisor retains that
-dynamic descriptor, while Ralph/Pi, hooks, gates, verifiers, runner/evidence
-commands, tests, and product leaves receive neither a root descriptor nor lock
-metadata. A separately opened root FD cannot unlock the supervisor's open-file
-description. Safe legacy lock files are acquired, quarantined, revalidated, and
-removed once; busy or ambiguous migration state stops the lifecycle. After
-interruption, confirm no child Ralph
-process is alive and resume the exact phase with:
+`python3 .factory/loop/campaign.py show` prints the current phase and
+result. The installed operator entrypoint `.factory/bin/factory-launch` runs
+one supervised fresh-context role attempt (planner/developer/tester/auditor)
+with a strict invocation contract and derives the exact committed task-excerpt
+digest for the developer; it never runs an interactive model session itself.
 
-```bash
-./scripts/ralph-campaign.sh --rounds 3 --resume
-```
+Every round starts a fresh planner process, selects one deterministic task
+from the canonical plan for a fresh developer process, runs the configured
+project verification command, validates installed evidence and exact-tree
+verification on the declared runner, and launches a separate adversarial
+auditor in a fresh process. Tester and auditor findings reach the next
+planner only through a revised canonical plan, never through memory injection.
 
-The stopped legacy campaign currently saved on this checkout is a special
-one-time migration case: round 2, active `implementation`, five requested
-rounds, with campaign JSON SHA-256
-`800ced3fd2c6889913d1035906fdc9093d76c0ad2ebe4162c1c380b547561b91`.
-Do not edit that JSON and do not resume it during migration. After this
-corrective commit is clean, first verify that exact digest and that
-`.ralph/loop.lock` is absent, then run only:
+One mutable control-state file, `.factory-state/factory-loop.json`
+(schema `factory-state/v1`), records the phase, round, attempt, digests, and a
+trusted outcome enum; it contains no model prose or evidence claims. All
+writes are atomic, no-follow, ownership/mode/link-count checked, and
+validated against the documented transition table
+(`planning -> implementation -> verification -> audit`). The lifecycle lock
+is an exclusive Linux `flock` on the already-open canonical repository-root
+directory descriptor itself — there is no replaceable lock-file authority.
+The trusted orchestrator retains that descriptor while Pi, hooks, gates,
+verifiers, runner/evidence commands, tests, and product leaves receive
+neither a root descriptor nor lock metadata; a separately opened root FD
+cannot unlock the orchestrator's open-file description. Every phase outcome
+is derived from plan state, Git state, exit status, and deterministic gates —
+never from model completion tokens.
 
-```bash
-sha256sum .factory-state/ralph-campaign.json
-./scripts/ralph-supervision-migrate.py --mode implementation \
-  --expected-campaign-sha256 800ced3fd2c6889913d1035906fdc9093d76c0ad2ebe4162c1c380b547561b91
-```
+A finite campaign always terminates as `success`, `findings`, `blocked`,
+`failed`, `interrupted`, or `infrastructure_failure`. It never spins while no
+task is runnable: `work_exhausted`/`blocked` implementation phases still run
+verification and audit. Any nonzero leaf or gate result stops immediately
+with campaign state active at the same phase; the campaign never retries an
+arbitrary failure. Corrupt history/state, dirty boundaries, stale Git
+bindings, exhausted attempt budgets, and final-round findings remain
+resumable blockers rather than skipped work.
 
-The helper holds the stable factory lock, strictly validates the campaign and
-current committed verifier blob, preserves any legacy recovery counters, and
-creates cycle-bound supervision and migration markers without changing the
-campaign JSON. Its deterministic partial-write recovery may complete an
-interrupted first invocation, while an already completed migration is rejected.
-Only a later explicitly authorized operator action may resume this saved state
-with `./scripts/ralph-campaign.sh --rounds 5 --resume`; that resume validates the
-exact migration marker and atomically promotes the saved legacy verifier digest
-before any leaf launch, so later interruptions remain resumable.
-
-If reviewed linear commits landed after the first-round implementation
-checkpoint but before verification/evidence/audit state was recorded, do not
-edit campaign JSON or weaken normal write-once updates. Back up and digest the
-state, then use the one-purpose recovery operation:
-
-```bash
-sha256sum .factory-state/ralph-campaign.json
-cp -a .factory-state/ralph-campaign.json /operator-controlled/ralph-campaign.before-rebind.json
-./scripts/ralph-campaign-state.py rebind-implementation \
-  --expected-old <recorded-implementation-commit> --new "$(git rev-parse HEAD)"
-```
-
-It locks the factory, requires active first-round `verification` with all later
-fields unset, and accepts only the current clean `develop` HEAD as a strict,
-merge-free descendant of the explicit old commit. Validation and fsync-backed
-atomic replacement bracket the change; the receipt reports before/after state
-digests. Every wrong-old, dirty, equal, backward, non-ancestor, merge,
-already-verified/audited, or later-round case is non-mutating. Resume the normal
-campaign afterward so verification and exact-commit evidence rerun.
-
-Ralph 2.10.1 has a backend edge case in which the successful `ralph emit`
-acknowledgement starts a five-second post-event deadline and its resulting
-SIGTERM is counted as a failed iteration. The Pi2 wrapper loads an explicit Pi
-extension that rewrites only a direct final `ralph emit` bash tool call to a
-repository shim. The shim invokes the real binary from the jail's trusted PATH
-and changes only that trusted `emit` command's exact acknowledgement while preserving its stderr and status.
-Arbitrary identical model/backend output remains visible to Ralph. The wrapper
-and secure bounded prompt launcher use `exec`, so real backend failures and
-signals propagate normally. This permits Pi's short final post-tool turn, with
-Ralph's normal five-minute inactivity timeout still bounding a silent backend.
-Remove the compatibility behavior only after the pinned Ralph version no longer
-reproduces the regression and the integration probe passes without it.
-
-Do not change the round count or TUI mode during resume. Lifecycle tokens in a
-scratchpad or `ralph emit` topic/payload are rejected before checkpointing; only
-the exact standalone final model-output line requests completion. Ordinary
-scratchpad-only updates remain uncommitted in the worktree for recovery. A
-strict final-handoff checkpoint may commit only that file once, then the final
-gate attests a clean unchanged HEAD with no later tracked commit.
-
-A current-attempt `loop_stale` result may receive at most two recoveries.
-Completion rejection and combined no-progress ceilings are also persisted, so
-restarting a child or resuming the campaign cannot reset them. Quota handling
-stays in leaf launchers. Any other nonzero leaf or gate result stops immediately
-with campaign state active at the same phase; the campaign never unlinks its
-locked pathname or retries an arbitrary failure. Corrupt history/state, dirty
-boundaries, stale Git bindings, exhausted ceilings, and final-round findings all
-remain resumable blockers rather than skipped work.
+Recovery is derived from Git, the canonical plan, the control-state file,
+and process liveness — there is no separate recovery launcher, no resumed
+model session, and no event stream to repair. A clean committed task resumes
+from the next deterministic task; an `in_progress` task resumes from current
+code and Git diff in a fresh context with its tests rerun. An ambiguous live
+process, changed repository identity or branch, unsafe state file, stale
+specification binding, changed plan base, or invalid transition fails closed
+for human/operator review. Dirty work is never reset, discarded, or silently
+overwritten.
 
 `.factory/environment.toml` declares available tools and runners without
-publishing credentials or endpoints. Validate and exercise declarations with:
+publishing credentials or endpoints. The single declared runner
+`dev-runner-vm` carries exactly four declared capabilities:
+`remote-project-gate`, `systemd-user`, `kernel-uinput`, `installed-package`;
+five more (`inputplumber-system-dbus`, `physical-controller`,
+`target-consumer`, `controller-production-routing`, `gpu-compositor`) are
+candidate contracts that the root endpoint refuses until declared and
+provisioned. Validate and exercise declarations with:
 
 ```bash
 ./scripts/check-factory-environment.py
@@ -650,9 +613,11 @@ skips, unsupported claims, and caller-supplied bytes are never certified;
 rotation is fail-closed (removed keys are rejected). Until a signer is
 provisioned (`enabled = true` in `.factory/signer-trust.json`), unsigned
 legacy/local manifests are rejected and runner-evidenced capabilities stay
-unevidenced. Runner provisioning, SSH policy, credentials, endpoints,
-signer keys, and host-specific setup remain outside the repository. Synthetic
-local tests cannot satisfy undeclared production hardware capabilities.
+unevidenced — the current Controller receipt at `26df6c0` is stale/unevidenced
+until Task 26 refreshes it and is never claimed as current evidence. Runner
+provisioning, SSH policy, credentials, endpoints, signer keys, and
+host-specific setup remain outside the repository. Synthetic local tests
+cannot satisfy undeclared production hardware capabilities.
 
 ## Bug maintenance
 
@@ -662,20 +627,18 @@ or credential-bearing URLs in either ledger. Use `scripts/bug-ledger.py` for
 validated intake, links, transitions, closure evidence, and interrupted-close
 recovery.
 
-An ordinary defect is triaged and handled with:
-
-```bash
-./scripts/ralph-maintenance-plan.sh BUG-0001
-./scripts/ralph-maintenance-run.sh
-```
-
-One cycle handles one bug and runs the configured project verifier before
-closure. Fresh specification and maintenance planning atomically seed minimal
-plan/scratchpad state, leaving completed plans only in Git history; `--resume`
-preserves the active draft, and planning gates reject carried-over non-pending
-tasks. If expected behavior requires a product decision or specification
+An ordinary defect is triaged, then the selected bug and cycle base are
+recorded in ignored `.factory-state/` (`scripts/factory-state-file.py`) and a
+canonical `.factory/artifacts/maintenance-plan.md` is validated by
+`scripts/validate-maintenance-plan.py planning|complete` and
+`scripts/check-maintenance-freshness.sh`. The maintenance lifecycle runs
+through the same fresh-context control plane as implementation; one cycle
+handles one bug and runs the configured project verifier before closure. The
+final maintenance audit is the only task that may close the ledger record.
+Completed plans remain only in Git history; every newly accepted task must be
+`pending`. If expected behavior requires a product decision or specification
 change, block maintenance and return to the human specification workflow.
-Recovery modes are `maintenance-planning` and `maintenance`. See
+Recovery is Git/plan/state derived (see above). See
 [BUG_WORKFLOW.md](BUG_WORKFLOW.md) for the complete process.
 
 ## Troubleshooting
