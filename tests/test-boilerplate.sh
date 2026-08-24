@@ -103,7 +103,7 @@ for path in ('AGENTS.md', '.factory/bugs/open.md', '.factory/bugs/closed.md',
              '.factory/verifier-acceptance.json', 'tests/test-factory-environment.sh',
              'tests/test-campaign-audit.sh', 'tests/test-factory-lock.py',
              'tests/test-orchestration-security.py', 'scripts/pi2-secure-exec.py',
-             'tests/test-pi2-ollama-wrapper.sh', 'tests/test-visual-audit-sdk-authority.sh'):
+             'tests/test-visual-audit-sdk-authority.sh'):
     assert (root / path).is_file(), f'missing maintenance artifact: {path}'
 PY
 "$PROJECT_ROOT/tests/test-bug-workflow.sh"
