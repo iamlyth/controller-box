@@ -12,6 +12,8 @@ trap 'rm -rf "$tmp"' EXIT
 
 CONTRACT_CHECKER="$PROJECT_ROOT/scripts/check-capability-contracts.py"
 EVIDENCE_CHECKER="$PROJECT_ROOT/scripts/check-capability-evidence.py"
+RUNNER_CHECKER="$PROJECT_ROOT/scripts/check-factory-runner-evidence.py"
+ENV_CHECKER="$PROJECT_ROOT/scripts/check-factory-environment.py"
 
 must_fail() {
     local label=$1 cmd=$2
@@ -24,9 +26,11 @@ must_fail() {
 
 setup_repo() {
     local dir=$1 capability=$2
-    mkdir -p "$dir/scripts" "$dir/.factory/artifacts" "$dir/docs" \
+    mkdir -p "$dir/scripts" "$dir/.factory/artifacts" "$dir/.factory/loop" "$dir/docs" \
         "$dir/.factory-state/runner-evidence/probe-runner"
-    cp "$CONTRACT_CHECKER" "$EVIDENCE_CHECKER" "$dir/scripts/"
+    cp "$CONTRACT_CHECKER" "$EVIDENCE_CHECKER" "$RUNNER_CHECKER" "$ENV_CHECKER" "$dir/scripts/"
+    cp "$PROJECT_ROOT/.factory/loop/gitutil.py" "$dir/.factory/loop/gitutil.py"
+    cp "$PROJECT_ROOT/.factory/signer-trust.json" "$dir/.factory/signer-trust.json"
     chmod +x "$dir/scripts/"*.py
     printf '#!/usr/bin/env bash\nexit 0\n' > "$dir/scripts/verify-project.sh"
     chmod +x "$dir/scripts/verify-project.sh"
@@ -123,12 +127,29 @@ setup_repo "$tmp/missing-contract" probe-capability
 must_fail "declared capability without a contract" \
     "cd '$tmp/missing-contract' && ./scripts/check-capability-contracts.py"
 
-# A valid contract plus a clean exact-commit receipt is evidenced.
+# A valid contract cannot elevate a fabricated/minimal aggregate. The strong
+# checker requires exact tree/environment/archive/argv/log digests and a
+# provisioned detached signature before contract-level log scanning begins.
 setup_repo "$tmp/valid" probe-capability
 write_contract "$tmp/valid" probe-capability "--- probe-capability contract ---"
 write_receipt "$tmp/valid" clean
 (cd "$tmp/valid" && ./scripts/check-capability-contracts.py >/dev/null)
-(cd "$tmp/valid" && ./scripts/check-capability-evidence.py >/dev/null)
+must_fail "fabricated minimal aggregate without strong runner proof" \
+    "cd '$tmp/valid' && ./scripts/check-capability-evidence.py"
+
+# Every contract must carry a meaningful nonempty skip-denial vocabulary;
+# an empty list can never prove that a zero-exit probe actually ran.
+setup_repo "$tmp/empty-skip-markers" probe-capability
+write_contract "$tmp/empty-skip-markers" probe-capability "--- probe-capability contract ---"
+python3 - "$tmp/empty-skip-markers/.factory/capability-contracts.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path, encoding='utf-8'))
+data['capabilities'][0]['must_not_skip'] = []
+open(path, 'w', encoding='utf-8').write(json.dumps(data))
+PY
+must_fail "empty must_not_skip marker list" \
+    "cd '$tmp/empty-skip-markers' && ./scripts/check-capability-contracts.py"
 
 # runner_class is optional candidate metadata (the gpu-compositor candidate
 # binds itself to the root-configured gpurunner class before provisioning):
@@ -204,7 +225,8 @@ PY
         "cd '$tmp/fixture-token-$fixture_token_bad' && ./scripts/check-capability-contracts.py"
 done
 
-# A missing receipt (no aggregate) is unevidenced.
+# A missing receipt (no aggregate) is unevidenced. The remaining mutations
+# likewise stay fail-closed; none can be elevated above unavailable evidence.
 cp -a "$tmp/valid" "$tmp/missing-receipt"
 rm -f "$tmp/missing-receipt/.factory-state/runner-evidence.json"
 rm -rf "$tmp/missing-receipt/.factory-state/runner-evidence/probe-runner"

@@ -71,6 +71,27 @@ if ./scripts/check-installed-functional-evidence.sh >/dev/null 2>&1 || [[ -e "$s
     echo 'evidence guard accepted or executed injected shell content' >&2
     exit 1
 fi
+# An explicit override is accepted only at the exact private campaign shape;
+# an outside path fails closed. The default root evidence remains untouched.
+mkdir -p .factory-state/campaigns/fixture-campaign
+chmod 700 .factory-state .factory-state/campaigns .factory-state/campaigns/fixture-campaign
+cat > .factory-state/installed-functional-evidence.env <<EOF
+schema=factory-installed-functional/v1
+commit=$commit
+test=test_installed_functional
+result=PASS
+skipped=0
+EOF
+cp .factory-state/installed-functional-evidence.env \
+   .factory-state/campaigns/fixture-campaign/installed-functional-evidence.env
+chmod 600 .factory-state/campaigns/fixture-campaign/installed-functional-evidence.env
+FACTORY_INSTALLED_FUNCTIONAL_EVIDENCE_PATH="$root/.factory-state/campaigns/fixture-campaign/installed-functional-evidence.env" \
+    ./scripts/check-installed-functional-evidence.sh >/dev/null
+if FACTORY_INSTALLED_FUNCTIONAL_EVIDENCE_PATH="$sentinel" \
+        ./scripts/check-installed-functional-evidence.sh >/dev/null 2>&1; then
+    echo 'evidence guard accepted an override outside the campaign namespace' >&2
+    exit 1
+fi
 # Reject symlinked and missing evidence files entirely.
 rm .factory-state/installed-functional-evidence.env
 ln -s /dev/null .factory-state/installed-functional-evidence.env

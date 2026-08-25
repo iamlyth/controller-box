@@ -695,7 +695,13 @@ def _verify_receipt(
     evidence record be published.
     """
     ref = f"{RECEIPTS_DIR}/{RECEIPT_TAG}.json"
-    receipt = evidence_module.validate_receipt(root, ref)
+    receipt = evidence_module.validate_receipt(
+        root,
+        ref,
+        expected_round=round_number,
+        expected_base=head,
+        expected_nonce=nonce,
+    )
     if receipt["exit_code"] != 0:
         raise GenericEvidenceError("the installed-harness receipt did not exit 0")
     if receipt["evidence_commit"] != head:

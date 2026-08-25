@@ -455,6 +455,26 @@ class ForbiddenTrackedTest(unittest.TestCase):
         fx = FixtureRepo(self)
         self.assertEqual(migration.forbidden_tracked(fx.root), ())
 
+    def test_generic_guard_extension_is_required_not_forbidden(self) -> None:
+        # The retired ralph emit extension and the legacy wrapper stay
+        # forbidden, while the generic model-side Pi guard extension is the
+        # required replacement: it is tracked, never forbidden, and the
+        # migration authority does not name it as a forbidden pathname.
+        self.assertIn("scripts/pi-ralph-emit-extension.mjs",
+                      migration.FORBIDDEN_TRACKED_EXACT)
+        self.assertIn("scripts/pi2-ollama.sh",
+                      migration.FORBIDDEN_TRACKED_EXACT)
+        self.assertNotIn("scripts/pi-factory-guard-extension.mjs",
+                         migration.FORBIDDEN_TRACKED_EXACT)
+        self.assertFalse(
+            migration._is_forbidden_tracked("scripts/pi-factory-guard-extension.mjs")
+        )
+        fx = FixtureRepo(self)
+        fx.commit_forbidden("scripts/pi-factory-guard-extension.mjs")
+        report = migration.verify_migration(fx.root)
+        self.assertTrue(report["ok"],
+                        "the generic guard extension must not be forbidden")
+
 
 # ---------------------------------------------------------------------------
 # Freeze-marker safety: symlink/FIFO/socket/device/executable/owner/mode/link

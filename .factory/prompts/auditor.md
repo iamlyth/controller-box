@@ -50,8 +50,15 @@ enforcement working, not a tool failure.
 
 ## Output contract
 
-Finish with a machine-readable audit report as your final output: the audit
-commit, the selected objective, each checked requirement's classification
-with its exact evidence reference, and every finding. The control plane
-records the audit outcome; your prose is never a receipt and never a
-completion claim.
+Your fresh prompt contains a **Structured phase-result channel** section with
+one exact pre-created path and the complete `factory-phase-result/v1` field
+contract. You must write that exact JSON object to that exact path; you must
+not select or infer another path. The path is role-specific context, not a
+credential or ambient environment authority. Landlock permits writing only
+that one result file. Printing JSON or prose without filling it is an
+infrastructure failure.
+
+You may also summarize the audit commit, selected objective, checked
+requirements, exact evidence references, and findings in final prose, but the
+control plane accepts only the validated exact-path JSON handoff. Prose is
+never a receipt or completion claim.

@@ -89,10 +89,14 @@ FORBIDDEN_TRACKED_PREFIXES: Tuple[str, ...] = (
 FORBIDDEN_TRACKED_EXACT: Tuple[str, ...] = (
     ".factory/artifacts/context-summary.md",  # stale context-summary mirror
     "scripts/pi-cli-shims/ralph",  # Pi Ralph shim
-    "scripts/pi-ralph-emit-extension.mjs",  # Pi Ralph emit extension
+    "scripts/pi-ralph-emit-extension.mjs",  # retired Pi Ralph emit extension
     "scripts/pi2-ollama.sh",  # legacy Ralph/Pi wrapper
     "tests/test-pi2-ollama-wrapper.sh",  # legacy wrapper tests
 )
+# The generic model-side Pi guard extension
+# (``scripts/pi-factory-guard-extension.mjs``) is the required replacement
+# for the retired emit extension: it is *not* forbidden here and is bound
+# by the boilerplate verifier and the launch authority.
 # Old role prompts replaced by the canonical planner/developer/tester/auditor
 # set.
 FORBIDDEN_OLD_PROMPTS: Tuple[str, ...] = (

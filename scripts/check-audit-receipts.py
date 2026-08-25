@@ -39,6 +39,8 @@ import hashlib
 import json
 import os
 import re
+import shlex
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -46,21 +48,78 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 RECEIPT = re.compile(r"\[receipt:\s*([^\]]+)\]")
 MANIFEST = re.compile(r"\[manifest:\s*([^\]]+)\]")
-STATUS = re.compile(r"\b(PASS|FAIL|BLOCKED)\b")
 SHA1 = re.compile(r"^[0-9a-f]{40}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 COORDINATOR_FILE = ".factory-state/audit-coordinator.json"
+MAX_ARTIFACT = 64 * 1024 * 1024
+
+# LOW4: the evidence-line prefix and the exact anchored status tokens.  A
+# status word embedded in a command, path, or citation is never a status; no
+# other spelling is accepted.
+EVIDENCE_PREFIX = "- Executable evidence:"
+STATUS_TOKENS = frozenset(("PASS", "FAIL", "BLOCKED"))
 
 
 def fail(message: str) -> None:
     raise SystemExit(f"audit-receipts: {message}")
 
 
+def secured_read_bytes(path: Path, *, what: str, maximum: int = MAX_ARTIFACT) -> bytes:
+    """Bounded no-follow read of one receipt artifact with identity checks.
+
+    The adjacent stdout/stderr transcripts and receipt records must be
+    regular single-link current-user-owned exact-mode-0600 files whose
+    descriptor identity matches the pathname
+    at both ends of the read (owner/mode/link-count/inode hardening, Task 12):
+    a symlink, hardlink alias, foreign owner, wrong mode, or inode
+    substitution fails closed.
+    """
+    absolute = path.absolute()
+    try:
+        descriptor = os.open(
+            absolute, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        )
+    except OSError as exc:
+        fail(f"cannot open {what}: {path}: {type(exc).__name__}")
+    try:
+        before = os.fstat(descriptor)
+        named = absolute.lstat()
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.getuid()
+            or before.st_nlink != 1
+            or stat.S_IMODE(before.st_mode) != 0o600
+            or (before.st_dev, before.st_ino) != (named.st_dev, named.st_ino)
+            or before.st_size > maximum
+        ):
+            fail(f"unsafe {what} (owner/mode/link-count/inode): {path}")
+        raw = b""
+        remaining = maximum + 1
+        while remaining:
+            chunk = os.read(descriptor, min(65536, remaining))
+            if not chunk:
+                break
+            raw += chunk
+            remaining -= len(chunk)
+        after = os.fstat(descriptor)
+        named_after = absolute.lstat()
+        if (
+            len(raw) > maximum
+            or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+            != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+            or (after.st_dev, after.st_ino) != (named_after.st_dev, named_after.st_ino)
+        ):
+            fail(f"{what} changed while reading: {path}")
+        return raw
+    finally:
+        os.close(descriptor)
+
+
 def regular_json(path: Path) -> dict:
     if path.is_symlink() or not path.is_file():
         fail(f"unsafe or missing evidence file: {path}")
     try:
-        raw = path.read_bytes()
+        raw = secured_read_bytes(path, what="evidence record", maximum=1024 * 1024)
         data = json.loads(raw)
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         fail(f"invalid evidence file {path}: {exc}")
@@ -70,55 +129,105 @@ def regular_json(path: Path) -> dict:
 
 
 def resolve(root: Path, reference: str) -> Path:
+    """Resolve one evidence citation inside the repository (no traversal).
+
+    LOW3: the parent directory is resolved (so a symlinked intermediate
+    component cannot redirect a citation out of the repository) but the
+    **final pathname is returned unresolved**: ``secured_read_bytes``'
+    no-follow open and final-component identity check are what reject a
+    symlinked evidence file or transcript.  A fully-resolved path here would
+    silently canonicalize a symlink away and validate its target instead.
+    """
     path = Path(reference)
     if path.is_absolute() or ".." in path.parts:
         fail(f"evidence reference escapes the repository: {reference}")
-    resolved = (root / reference).resolve()
     try:
-        resolved.relative_to(root.resolve())
-    except ValueError:
-        fail(f"evidence reference escapes the repository: {reference}")
-    return resolved
+        resolved_root = root.resolve()
+        resolved_parent = (root / path.parent).resolve(strict=True)
+        resolved_parent.relative_to(resolved_root)
+    except (OSError, ValueError) as exc:
+        fail(f"evidence reference escapes the repository or is unavailable: {reference}")
+    return resolved_parent / path.name
 
 
 def campaign_binding(root: Path) -> tuple[int | None, str | None, str | None]:
-    """Return (round, base, nonce) from the environment and protected state."""
+    """Return the environment binding plus the canonical hardened coordinator.
+
+    This intentionally mirrors ``factory.loop.evidence.active_coordinator``:
+    the directory is exactly current-user-owned mode 0700, and the coordinator
+    is exactly mode 0600, regular, single-link, no-follow, and inode-stable.
+    Read-only mode 0400 and permissive 0644/0660 are all rejected rather than
+    accepted by a weaker duplicate parser.
+    """
     env_round = os.environ.get("FACTORY_CAMPAIGN_AUDIT_ROUND", "")
     env_base = os.environ.get("FACTORY_CAMPAIGN_AUDIT_BASE", "")
     env_nonce = os.environ.get("FACTORY_CAMPAIGN_AUDIT_NONCE", "")
+    state_dir = root / ".factory-state"
     state = root / COORDINATOR_FILE
     state_round = None
     state_base = None
     state_nonce = None
-    if state.exists():
-        if state.is_symlink() or not state.is_file():
-            fail("audit coordinator state is unsafe")
-        try:
-            data = json.loads(state.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-            fail(f"invalid audit coordinator state: {exc}")
-        expected = {"schema", "round", "base_commit", "nonce", "created_at"}
+    try:
+        directory_info = state_dir.lstat()
+    except FileNotFoundError:
+        directory_info = None
+    except OSError as exc:
+        fail(f"audit coordinator directory is unsafe: {exc}")
+    if directory_info is not None:
         if (
-            not isinstance(data, dict)
-            or set(data) != expected
-            or data.get("schema") != "ralph-audit-coordinator/v1"
-            or type(data.get("round")) is not int
-            or data["round"] < 1
-            or not isinstance(data.get("base_commit"), str)
-            or not SHA1.fullmatch(data["base_commit"])
-            or not isinstance(data.get("nonce"), str)
-            or not SHA256.fullmatch(data["nonce"])
+            not stat.S_ISDIR(directory_info.st_mode)
+            or stat.S_ISLNK(directory_info.st_mode)
+            or directory_info.st_uid != os.getuid()
+            or stat.S_IMODE(directory_info.st_mode) != 0o700
         ):
-            fail("audit coordinator state is invalid")
-        state_round = data["round"]
-        state_base = data["base_commit"]
-        state_nonce = data["nonce"]
-        if env_round and env_round.isdigit() and int(env_round) != data["round"]:
-            fail("campaign audit round does not match the protected coordinator state")
-        if env_base and env_base != data["base_commit"]:
-            fail("campaign audit base does not match the protected coordinator state")
-        if env_nonce and env_nonce != data["nonce"]:
-            fail("campaign audit nonce does not match the protected coordinator state")
+            fail("audit coordinator directory must be current-user-owned mode 0700")
+        try:
+            info = state.lstat()
+        except FileNotFoundError:
+            info = None
+        except OSError as exc:
+            fail(f"audit coordinator state is unsafe: {exc}")
+        if info is not None:
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or stat.S_ISLNK(info.st_mode)
+                or info.st_uid != os.getuid()
+                or info.st_nlink != 1
+                or stat.S_IMODE(info.st_mode) != 0o600
+            ):
+                fail(
+                    "audit coordinator state must be a current-user-owned "
+                    "mode-0600 single-link regular file"
+                )
+            raw = secured_read_bytes(
+                state, what="audit coordinator state", maximum=16384)
+            try:
+                data = json.loads(raw)
+            except (UnicodeError, json.JSONDecodeError) as exc:
+                fail(f"invalid audit coordinator state: {exc}")
+            expected = {"schema", "round", "base_commit", "nonce", "created_at"}
+            if (
+                not isinstance(data, dict)
+                or set(data) != expected
+                or data.get("schema") != "ralph-audit-coordinator/v1"
+                or type(data.get("round")) is not int
+                or data["round"] < 1
+                or not isinstance(data.get("base_commit"), str)
+                or not SHA1.fullmatch(data["base_commit"])
+                or not isinstance(data.get("nonce"), str)
+                or not SHA256.fullmatch(data["nonce"])
+                or type(data.get("created_at")) is not int
+            ):
+                fail("audit coordinator state is invalid")
+            state_round = data["round"]
+            state_base = data["base_commit"]
+            state_nonce = data["nonce"]
+            if env_round and env_round.isdigit() and int(env_round) != data["round"]:
+                fail("campaign audit round does not match the protected coordinator state")
+            if env_base and env_base != data["base_commit"]:
+                fail("campaign audit base does not match the protected coordinator state")
+            if env_nonce and env_nonce != data["nonce"]:
+                fail("campaign audit nonce does not match the protected coordinator state")
     round_number = int(env_round) if env_round.isdigit() else state_round
     base = env_base or state_base
     nonce = state_nonce or env_nonce or None
@@ -146,10 +255,16 @@ def validate_receipt(root: Path, reference: str) -> dict:
         if not isinstance(data[field], str) or not SHA256.fullmatch(data[field]):
             fail(f"receipt {field} is invalid: {reference}")
     for log_name, digest_field in (("stdout", "stdout_sha256"), ("stderr", "stderr_sha256")):
+        # Task 12 §19: the adjacent stdout/stderr transcripts are read
+        # through the same no-follow owner/mode/link-count/inode check as
+        # the receipt record itself, so a symlinked, hardlinked, foreign-
+        # owned, or wrong-mode transcript can never certify runtime.
         log_path = path.parent / f"{path.stem}.{log_name}"
-        if log_path.is_symlink() or not log_path.is_file():
-            fail(f"receipt log is missing: {log_path}")
-        if hashlib.sha256(log_path.read_bytes()).hexdigest() != data[digest_field]:
+        raw = secured_read_bytes(
+            log_path, what=f"receipt {log_name} transcript",
+            maximum=MAX_ARTIFACT,
+        )
+        if hashlib.sha256(raw).hexdigest() != data[digest_field]:
             fail(f"receipt log digest mismatch: {log_path}")
     if not isinstance(data["exit_code"], int):
         fail(f"receipt exit_code is invalid: {reference}")
@@ -195,17 +310,26 @@ def parse_evidence(root: Path, report: Path) -> tuple[list[dict], bool]:
     match = re.search(r"^## Evidence reviewed\s*\n(.*?)(?=^## |\Z)", text, re.M | re.S)
     if not match:
         fail("audit report has no Evidence section")
-    blocked_anywhere = bool(re.search(r"\bBLOCKED\b", text))
+    # LOW4: a standalone BLOCKED token anywhere in the report forces
+    # findings (a BLOCKED evidence line can never be smuggled past the
+    # section-scoped scan by a paraphrase or a misplaced marker).
+    blocked_anywhere = bool(re.search(r"(?<!\S)BLOCKED(?!\S)", text))
     expected_round, expected_base, expected_nonce = campaign_binding(root)
     lines: list[dict] = []
     for line in match.group(1).splitlines():
         stripped = line.strip()
-        if not stripped.startswith("- Executable evidence:"):
+        if not stripped.startswith(EVIDENCE_PREFIX):
             continue
-        status = STATUS.search(stripped)
-        if not status:
-            fail(f"executable evidence line lacks a PASS/FAIL/BLOCKED marker: {stripped}")
-        marker = status.group(1)
+        body = stripped[len(EVIDENCE_PREFIX):].strip()
+        tokens = body.split()
+        status_index = next(
+            (index for index, token in enumerate(tokens) if token in STATUS_TOKENS),
+            None,
+        )
+        if status_index is None:
+            fail(f"executable evidence line lacks an anchored PASS/FAIL/BLOCKED status token: {stripped}")
+        marker = tokens[status_index]
+        command = " ".join(tokens[:status_index])
         receipt_match = RECEIPT.search(stripped)
         manifest_match = MANIFEST.search(stripped)
         if marker == "BLOCKED":
@@ -215,19 +339,43 @@ def parse_evidence(root: Path, report: Path) -> tuple[list[dict], bool]:
             fail(f"executable evidence line has no receipt/manifest reference (fabricated prose): {stripped}")
         receipt = None
         if receipt_match:
+            coordinator_path = root / COORDINATOR_FILE
+            if coordinator_path.is_symlink() or not coordinator_path.is_file():
+                fail(
+                    f"runtime receipt {receipt_match.group(1)} requires an "
+                    "active hardened audit coordinator"
+                )
+            if expected_round is None or expected_base is None or expected_nonce is None:
+                fail(
+                    f"runtime receipt {receipt_match.group(1)} lacks the "
+                    "coordinator's exact round/base/nonce binding"
+                )
             receipt = validate_receipt(root, receipt_match.group(1))
-            if expected_round is not None and receipt["coordinator_round"] != expected_round:
+            # LOW5: the command the line represents must exactly equal the
+            # receipt's recorded argv — a receipt certifies only the exact
+            # command the coordinator executed, never a relabeled one.
+            represented = _represented_command(command)
+            try:
+                represented_argv = shlex.split(represented)
+            except ValueError as exc:
+                fail(f"evidence line command is not a clean argv (unbalanced quotes): {stripped}")
+            if represented_argv != receipt["argv"]:
+                fail(
+                    f"evidence line command {represented!r} does not exactly equal the "
+                    f"receipt argv {receipt['argv']!r}: {stripped}"
+                )
+            if receipt["coordinator_round"] != expected_round:
                 fail(
                     f"receipt {receipt_match.group(1)} belongs to round "
                     f"{receipt['coordinator_round']}, not the active round {expected_round} "
                     f"(stale or reused across rounds)"
                 )
-            if expected_base is not None and receipt["evidence_commit"] != expected_base:
+            if receipt["evidence_commit"] != expected_base:
                 fail(
                     f"receipt {receipt_match.group(1)} evidence_commit {receipt['evidence_commit'][:12]} "
                     f"does not equal the campaign audit base {expected_base[:12]} (stale or reused)"
                 )
-            if expected_nonce is not None and receipt["coordinator_nonce"] != expected_nonce:
+            if receipt["coordinator_nonce"] != expected_nonce:
                 fail(f"receipt {receipt_match.group(1)} does not match the active audit coordinator nonce")
         if manifest_match:
             if marker == "FAIL":
@@ -248,6 +396,17 @@ def parse_evidence(root: Path, report: Path) -> tuple[list[dict], bool]:
             fail(f"FAIL claim has a receipt with exit 0: {stripped}")
         lines.append({"line": stripped, "marker": marker, "blocked": False})
     return lines, blocked_anywhere
+
+
+def _represented_command(represented: str) -> str:
+    """Strip one optional surrounding backtick pair from a command representation."""
+    text = represented.strip()
+    if len(text) >= 2 and text[0] == "`" and text[-1] == "`":
+        inner = text[1:-1].strip()
+        if inner and "`" not in inner:
+            return inner
+        fail(f"evidence line command is malformed: {represented!r}")
+    return text
 
 
 def main() -> int:

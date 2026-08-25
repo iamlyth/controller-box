@@ -76,7 +76,6 @@ FIXTURES = ROOT / ".factory" / "tests" / "fixtures"
 VISIBLE_FIXTURES = ROOT / "tests" / "fixtures"
 
 sys.path.insert(0, str(LOOP))
-import confinement  # noqa: E402
 import usage  # noqa: E402
 import usage_fetch  # noqa: E402
 import launch  # noqa: E402
@@ -235,17 +234,25 @@ class _Base(unittest.TestCase):
         return result
 
     def assertNoLiveFetchChildren(self) -> None:
-        """No synthetic fetch child survives any guard outcome."""
-        for pid in os.listdir("/proc"):
-            if not pid.isdigit():
-                continue
-            try:
-                cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
-            except OSError:
-                continue
-            if b"usage_fetch.py" not in cmdline:
-                continue
-            self.fail(f"surviving fetch child pid {pid}")
+        """No synthetic fetch child survives a bounded reap grace."""
+        deadline = time.monotonic() + 3.0
+        found: list[str] = []
+        while True:
+            found = []
+            for pid in os.listdir("/proc"):
+                if not pid.isdigit():
+                    continue
+                try:
+                    cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
+                except OSError:
+                    continue
+                if _is_fetch_child_cmdline(cmdline):
+                    found.append(pid)
+            if not found:
+                return
+            if time.monotonic() >= deadline:
+                self.fail(f"surviving fetch child pid(s) {found}")
+            time.sleep(0.02)
 
     def make_cookie_file(self, cookie: str = SYNTH_COOKIE, mode: int = 0o600) -> Path:
         path = self.tmp / "cookie.txt"
@@ -594,13 +601,26 @@ def _children_of(parent_pid: int) -> list[int]:
     return children
 
 
+def _is_fetch_child_cmdline(cmdline: bytes) -> bool:
+    """Match an actual argv element, not a parent shell command string."""
+    for raw in cmdline.split(b"\x00"):
+        if not raw:
+            continue
+        try:
+            if Path(os.fsdecode(raw)).name == "usage_fetch.py":
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
 def _find_fetch_child(parent_pid: int) -> int | None:
     for pid in _children_of(parent_pid):
         try:
             cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
         except OSError:
             continue
-        if b"usage_fetch.py" in cmdline:
+        if _is_fetch_child_cmdline(cmdline):
             return pid
     return None
 
@@ -990,6 +1010,17 @@ class LaunchIntegrationTests(_Base):
         scripts.mkdir()
         shutil.copy2(ROOT / "scripts" / "pi2-secure-exec.py",
                      scripts / "pi2-secure-exec.py")
+        shutil.copy2(ROOT / "scripts" / "credential-guard.py",
+                     scripts / "credential-guard.py")
+        shutil.copy2(ROOT / "scripts" / "pi-factory-guard-extension.mjs",
+                     scripts / "pi-factory-guard-extension.mjs")
+        (scripts / "pi-cli-shims").mkdir()
+        shutil.copy2(ROOT / "scripts" / "pi-cli-shims" / "git",
+                     scripts / "pi-cli-shims" / "git")
+        loop = self.workspace / ".factory" / "loop"
+        loop.mkdir(parents=True)
+        for module in ("confine_launcher.py", "usage.py", "usage_fetch.py"):
+            shutil.copy2(ROOT / ".factory" / "loop" / module, loop / module)
         backend = self.workspace / "backend.py"
         backend.write_text("#!/usr/bin/env python3\nprint('ok')\n", encoding="utf-8")
         os.chmod(backend, 0o700)
@@ -1046,56 +1077,106 @@ class LaunchIntegrationTests(_Base):
             **guard_kwargs,
         )
 
-    def _proof(self, binding, **kwargs) -> "object":
-        """The private synthetic Task 8 confinement proof (test-only seam)."""
-        return confinement._mint_synthetic_proof(binding, **kwargs)
-
     def test_ollama_provider_ok_proceeds(self) -> None:
-        """An ollama launch proceeds only behind a synthetic confinement proof.
+        """An Ollama launch receives an internally minted real proof first.
 
-        The private synthetic proof is required (the Task 8 production
-        authority is unavailable), and the guard runs against the committed
-        fixture through the hidden ``_usage_guard_html_file`` seam — the
-        production API/CLI surface has no ``html-file`` option.
+        The guard call itself is mocked only to avoid external transport; the
+        authority has already constructed, anchored, minted, and validated the
+        real production confinement before reaching that call.
         """
         cookie = self.make_cookie_file()
-        authority = self._authorize(
-            self._binding("ollama"),
-            _confinement_proof=self._proof(self._binding("ollama")),
-            _usage_guard_html_file=str(VISIBLE_FIXTURES / "usage-ok.html"),
-            usage_guard_cookie_file=str(cookie),
-        )
+        with mock.patch.object(launch, "_gate_ollama_launch") as gate:
+            authority = self._authorize(
+                self._binding("ollama"),
+                usage_guard_cookie_file=str(cookie),
+            )
+        gate.assert_called_once()
         self.assertIsInstance(authority, launch.LaunchAuthority)
+        staged_usage = Path(authority._usage_guard_module.__file__)
+        self.assertTrue(staged_usage.is_relative_to(authority._exec_dir))
+        fetch_argv = authority._usage_guard_module.fetch_child_argv(
+            "https://ollama.com/settings"
+        )
+        self.assertEqual(
+            Path(fetch_argv[1]), authority._exec_dir / "usage_fetch.py"
+        )
+        for path in (staged_usage, Path(fetch_argv[1])):
+            self.assertIn(str(path), authority._staged_digests)
 
     def test_ollama_provider_blocked_fails_closed(self) -> None:
         cookie = self.make_cookie_file()
         with self.assertRaises(launch.InvocationError) as caught:
-            self._authorize(
-                self._binding("ollama"),
-                _confinement_proof=self._proof(self._binding("ollama")),
-                _usage_guard_html_file=str(VISIBLE_FIXTURES / "usage-blocked.html"),
-                usage_guard_cookie_file=str(cookie),
-                usage_guard_max_polls=1,
-                usage_guard_poll_interval=0,
-            )
+            with mock.patch.object(
+                launch, "_gate_ollama_launch",
+                side_effect=launch.InvocationError("ollama usage guard blocked"),
+            ):
+                self._authorize(
+                    self._binding("ollama"),
+                    usage_guard_cookie_file=str(cookie),
+                    usage_guard_max_polls=1,
+                    usage_guard_poll_interval=0,
+                )
         self.assertIn("ollama usage guard", str(caught.exception))
 
     def test_ollama_provider_fatal_fails_closed(self) -> None:
         cookie = self.make_cookie_file()
         with self.assertRaises(launch.InvocationError):
-            self._authorize(
-                self._binding("ollama"),
-                _confinement_proof=self._proof(self._binding("ollama")),
-                _usage_guard_html_file=str(VISIBLE_FIXTURES / "login.html"),
-                usage_guard_cookie_file=str(cookie),
-            )
+            with mock.patch.object(
+                launch, "_gate_ollama_launch",
+                side_effect=launch.InvocationError("ollama usage guard fatal"),
+            ):
+                self._authorize(
+                    self._binding("ollama"),
+                    usage_guard_cookie_file=str(cookie),
+                )
 
     def test_non_ollama_provider_never_runs_the_guard(self) -> None:
         binding = self._binding("synthetic")
-        authority = self._authorize(
-            binding, _confinement_proof=self._proof(binding)
-        )
+        authority = self._authorize(binding)
         self.assertIsInstance(authority, launch.LaunchAuthority)
+
+    def test_bound_commit_origin_is_checked_before_channel_proof(self) -> None:
+        usage_source = self.workspace / ".factory" / "loop" / "usage.py"
+        original = usage_source.read_text(encoding="utf-8")
+        usage_source.write_text(
+            original.replace(
+                'DEFAULT_SETTINGS_URL = "https://ollama.com/settings"',
+                'DEFAULT_SETTINGS_URL = "https://evil.invalid/settings"',
+                1,
+            ),
+            encoding="utf-8",
+        )
+        _work(["add", str(usage_source.relative_to(self.workspace))], self.workspace)
+        _work(["commit", "-qm", "malicious origin"], self.workspace)
+        self.head = _work(
+            ["rev-parse", "HEAD"], self.workspace
+        ).stdout.decode().strip()
+        cookie = self.make_cookie_file()
+        with mock.patch.object(
+            launch.real_confinement_authority, "prove_confinement"
+        ) as prove:
+            with self.assertRaises(launch.InvocationError) as caught:
+                self._authorize(
+                    self._binding("ollama"), usage_guard_cookie_file=str(cookie)
+                )
+        self.assertIn("canonical Ollama", str(caught.exception))
+        prove.assert_not_called()
+
+    def test_usage_proof_rejects_nonmatching_bound_commit_source(self) -> None:
+        """Self-hashing worktree guard source cannot satisfy commit binding."""
+        usage_source = self.workspace / ".factory" / "loop" / "usage.py"
+        usage_source.write_text(
+            "# malicious committed replacement\nDEFAULT_SETTINGS_URL='x'\n",
+            encoding="utf-8",
+        )
+        _work(["add", str(usage_source.relative_to(self.workspace))], self.workspace)
+        _work(["commit", "-qm", "tamper usage guard"], self.workspace)
+        self.head = _work(
+            ["rev-parse", "HEAD"], self.workspace
+        ).stdout.decode().strip()
+        binding = self._binding("ollama")
+        with self.assertRaises(launch.InvocationError):
+            self._authorize(binding)
 
     def test_guard_cannot_be_bypassed_for_ollama(self) -> None:
         # No cookie store and a network settings URL: the guard must fail
@@ -1105,72 +1186,43 @@ class LaunchIntegrationTests(_Base):
         # the guard inside this test.
         with _scrubbed_ollama_env():
             with self.assertRaises(launch.InvocationError):
-                self._authorize(
-                    self._binding("ollama"),
-                    _confinement_proof=self._proof(self._binding("ollama")),
-                    usage_guard_settings_url="http://127.0.0.1:1/",
-                )
+                self._authorize(self._binding("ollama"))
 
-    def test_production_launch_rejects_loopback_settings_before_fetch(self) -> None:
-        """A production launch rejects http:// loopback settings before any fetch.
-
-        The ordinary launch path (the private loopback seam off) fails closed
-        on a ``127.0.0.1``/``localhost`` ``http://`` settings URL in the launch
-        authority *before* the guard runs, so an in-flight loopback server
-        never observes a request (Task 7 review, obligation 14 residual).
-        """
+    def test_production_launch_has_no_settings_origin_override(self) -> None:
+        """Caller-selected origins are absent before any credential can be read."""
+        parameters = inspect.signature(launch.authorize_launch).parameters
+        self.assertNotIn("usage_guard_settings_url", parameters)
         server = _ScriptedServer([(200, b"unreachable")], hold=True)
         self.addCleanup(server.close)
-        with _scrubbed_ollama_env():
+        with self.assertRaises(TypeError):
+            self._authorize(
+                self._binding("ollama"),
+                usage_guard_settings_url=f"http://127.0.0.1:{server.port}/",
+            )
+        self.assertFalse(server.request_seen.is_set())
+
+    def test_canonical_origin_is_validated_before_cookie_read(self) -> None:
+        cookie = self.make_cookie_file()
+        with mock.patch.object(
+            launch.usage_guard, "DEFAULT_SETTINGS_URL", "https://evil.invalid/settings"
+        ), mock.patch.object(launch.os, "open", wraps=os.open) as opened:
             with self.assertRaises(launch.InvocationError) as caught:
                 self._authorize(
-                    self._binding("ollama"),
-                    _confinement_proof=self._proof(self._binding("ollama")),
-                    usage_guard_settings_url=f"http://127.0.0.1:{server.port}/",
+                    self._binding("ollama"), usage_guard_cookie_file=str(cookie)
                 )
-        self.assertIn("loopback", str(caught.exception))
+        self.assertIn("canonical Ollama", str(caught.exception))
         self.assertFalse(
-            server.request_seen.is_set(),
-            "a production launch fetched despite rejecting loopback settings",
+            any(call.args and call.args[0] == str(cookie) for call in opened.mock_calls),
+            "credential file was opened before canonical origin validation",
         )
 
-    def test_loopback_seam_without_proof_fails_closed(self) -> None:
-        """The private loopback seam cannot be enabled without a proof.
-
-        Setting ``_usage_guard_allow_loopback`` without a valid synthetic
-        confinement proof fails closed before any transport/guard logic: the
-        seam enables a transport the ordinary production launch rejects, so it
-        is gated on a proof exactly like the Task 8 authority.
-        """
-        with self.assertRaises(launch.InvocationError) as caught:
+    def test_loopback_test_transport_is_absent_from_authorize_api(self) -> None:
+        """Installed callers cannot opt into loopback test transport."""
+        with self.assertRaises(TypeError):
             self._authorize(
                 self._binding("ollama"),
                 _usage_guard_allow_loopback=True,
-                usage_guard_settings_url="http://127.0.0.1:1/",
             )
-        self.assertIn("confinement proof", str(caught.exception))
-
-    def test_loopback_seam_with_synthetic_proof_proceeds(self) -> None:
-        """With a valid synthetic proof the hidden suite can use loopback.
-
-        The private seam plus a validated synthetic confinement proof lets the
-        hermetic suite exercise the loopback http transport end-to-end: the
-        guard fetches the committed fixture page from a loopback server and
-        the authority is minted.
-        """
-        server = _ScriptedServer(
-            [(200, (VISIBLE_FIXTURES / "usage-ok.html").read_bytes())],
-            hold=False,
-        )
-        self.addCleanup(server.close)
-        authority = self._authorize(
-            self._binding("ollama"),
-            _confinement_proof=self._proof(self._binding("ollama")),
-            _usage_guard_allow_loopback=True,
-            usage_guard_settings_url=f"http://127.0.0.1:{server.port}/",
-            usage_guard_cookie_file=str(self.make_cookie_file()),
-        )
-        self.assertIsInstance(authority, launch.LaunchAuthority)
 
 
 # ---------------------------------------------------------------------------
@@ -1226,156 +1278,25 @@ class ProviderRegistryTests(_Base):
 # ---------------------------------------------------------------------------
 
 class ConfinementProofTests(_Base):
-    def _binding(self, provider: str = "ollama") -> launch.InvocationBinding:
-        return launch.InvocationBinding(
-            role="planner",
-            model="m",
-            provider=provider,
-            backend=TRUSTED_EXECUTABLE,
-            workspace=self.tmp,
-            bound_commit="0" * 40,
-            role_prompt_digest=hashlib.sha256(b"r").hexdigest(),
-            prompt_set_digest=hashlib.sha256(b"s").hexdigest(),
-            plan_digest=hashlib.sha256(b"p").hexdigest(),
-            policy_digest=hashlib.sha256(b"a").hexdigest(),
-            specification_digest=hashlib.sha256(b"sp").hexdigest(),
+    """Regression: installed authorization carries no synthetic proof surface."""
+
+    def test_no_caller_proof_transport(self) -> None:
+        parameters = inspect.signature(launch.authorize_launch).parameters
+        self.assertNotIn("_confinement_proof", parameters)
+        self.assertNotIn("confinement_proof", parameters)
+        self.assertNotIn("synthetic", parameters)
+
+    def test_no_saved_html_or_loopback_transport(self) -> None:
+        parameters = inspect.signature(launch.authorize_launch).parameters
+        self.assertNotIn("_usage_guard_html_file", parameters)
+        self.assertNotIn("_usage_guard_allow_loopback", parameters)
+
+    def test_workspace_authority_has_no_synthetic_mint(self) -> None:
+        import workspace_confinement as authority
+        self.assertFalse(hasattr(authority, "_mint_synthetic_proof"))
+        self.assertNotIn(
+            "synthetic", inspect.signature(authority.prove_confinement).parameters
         )
-
-    def test_production_prove_confinement_unavailable(self) -> None:
-        """The Task 8 production authority is absent: every call fails closed."""
-        with self.assertRaises(confinement.ConfinementUnavailable):
-            confinement.prove_confinement(self._binding())
-
-    def test_ollama_launch_without_proof_fails_closed(self) -> None:
-        """No production Ollama launch proceeds without a confinement proof."""
-        workspace = self.tmp / "workspace"
-        workspace.mkdir()
-        scripts = workspace / "scripts"
-        scripts.mkdir()
-        shutil.copy2(ROOT / "scripts" / "pi2-secure-exec.py",
-                     scripts / "pi2-secure-exec.py")
-        backend = workspace / "backend.py"
-        backend.write_text("#!/usr/bin/env python3\nprint('ok')\n", encoding="utf-8")
-        os.chmod(backend, 0o700)
-        (workspace / "plan.md").write_bytes(
-            (FIXTURES / "plan-valid-base.md").read_bytes()
-        )
-        (workspace / "spec.md").write_text("SPEC\n", encoding="utf-8")
-        (workspace / "role.md").write_text("# ROLE\n", encoding="utf-8")
-        (workspace / "AGENTS.md").write_text("POLICY\n", encoding="utf-8")
-        _work(["init", "-q"], workspace)
-        _work(["config", "user.email", "factory@test"], workspace)
-        _work(["config", "user.name", "factory"], workspace)
-        _work(["add", "-A"], workspace)
-        _work(["commit", "-qm", "fixture"], workspace)
-        head = _work(["rev-parse", "HEAD"], workspace).stdout.decode().strip()
-
-        def digest(data: bytes) -> str:
-            return hashlib.sha256(data).hexdigest()
-
-        binding = launch.InvocationBinding(
-            role="planner",
-            model="m",
-            provider="ollama",
-            backend=backend,
-            workspace=workspace,
-            bound_commit=head,
-            role_prompt_digest=digest((workspace / "role.md").read_bytes()),
-            prompt_set_digest=digest(b"set"),
-            plan_digest=digest((workspace / "plan.md").read_bytes()),
-            policy_digest=digest((workspace / "AGENTS.md").read_bytes()),
-            specification_digest=digest((workspace / "spec.md").read_bytes()),
-        )
-        with _scrubbed_ollama_env():
-            with self.assertRaises(launch.InvocationError) as caught:
-                launch.authorize_launch(
-                    binding,
-                    role_prompt=(workspace / "role.md").read_bytes(),
-                    agents=(workspace / "AGENTS.md").read_bytes(),
-                    spec=(workspace / "spec.md").read_bytes(),
-                    plan=(workspace / "plan.md").read_bytes(),
-                )
-        self.assertIn("confinement", str(caught.exception).lower())
-        self.assertIn("Task 8", str(caught.exception))
-
-    def test_synthetic_proof_binds_exact_invocation(self) -> None:
-        binding = self._binding()
-        proof = confinement._mint_synthetic_proof(binding)
-        confinement.validate_proof(proof, binding)
-        self.assertEqual(proof.bound_commit, binding.bound_commit)
-        self.assertEqual(proof.provider, binding.provider)
-        self.assertEqual(proof.credential_stores, (usage._default_env_file(),))
-
-    def test_synthetic_proof_wrong_commit_rejected(self) -> None:
-        proof = confinement._mint_synthetic_proof(self._binding())
-        other = self._binding()
-        other = launch.InvocationBinding(
-            role=other.role, model=other.model, provider=other.provider,
-            backend=other.backend, workspace=other.workspace,
-            bound_commit="1" * 40, role_prompt_digest=other.role_prompt_digest,
-            prompt_set_digest=other.prompt_set_digest, plan_digest=other.plan_digest,
-            policy_digest=other.policy_digest,
-            specification_digest=other.specification_digest,
-        )
-        with self.assertRaises(confinement.ConfinementError):
-            confinement.validate_proof(proof, other)
-
-    def test_synthetic_proof_wrong_workspace_rejected(self) -> None:
-        proof = confinement._mint_synthetic_proof(self._binding())
-        other = self._binding()
-        other = launch.InvocationBinding(
-            role=other.role, model=other.model, provider=other.provider,
-            backend=other.backend, workspace=self.tmp / "elsewhere",
-            bound_commit=other.bound_commit,
-            role_prompt_digest=other.role_prompt_digest,
-            prompt_set_digest=other.prompt_set_digest, plan_digest=other.plan_digest,
-            policy_digest=other.policy_digest,
-            specification_digest=other.specification_digest,
-        )
-        with self.assertRaises(confinement.ConfinementError):
-            confinement.validate_proof(proof, other)
-
-    def test_synthetic_proof_wrong_provider_rejected(self) -> None:
-        proof = confinement._mint_synthetic_proof(self._binding())
-        other = self._binding(provider="synthetic")
-        with self.assertRaises(confinement.ConfinementError):
-            confinement.validate_proof(proof, other)
-
-    def test_synthetic_proof_wrong_guard_source_digest_rejected(self) -> None:
-        """A caller-supplied guard-source digest never matches the executing bytes."""
-        proof = confinement._mint_synthetic_proof(
-            self._binding(),
-            guard_source_digests=["0" * 64, "1" * 64],
-        )
-        with self.assertRaises(confinement.ConfinementError):
-            confinement.validate_proof(proof, self._binding())
-
-    def test_proof_cannot_be_forged_from_operator_claims(self) -> None:
-        with self.assertRaises(confinement.ConfinementError):
-            confinement.ConfinementProof(
-                bound_commit="0" * 40,
-                workspace=str(self.tmp),
-                provider="ollama",
-                guard_source_digests=("0" * 64, "1" * 64),
-                credential_stores=(str(self.tmp / "store"),),
-                _mint=object(),
-            )
-
-    def test_synthetic_proof_rejects_in_workspace_store(self) -> None:
-        inside = self.tmp / "workspace" / ".ollama-usage-env"
-        with self.assertRaises(confinement.ConfinementError):
-            confinement._mint_synthetic_proof(
-                self._binding(), credential_stores=[str(inside)]
-            )
-
-    def test_synthetic_proof_is_never_evidence(self) -> None:
-        """The capability evidence checker must never accept a synthetic proof."""
-        proof = confinement._mint_synthetic_proof(self._binding())
-        # The private mint marker is not the production authority's marker and
-        # the proof object carries no capability-claim surface: it is a
-        # skeleton token whose only producer is the hidden suite.
-        self.assertFalse(hasattr(proof, "evidence"))
-        self.assertTrue(proof._mint is not None)
 
 
 # ---------------------------------------------------------------------------
@@ -1886,12 +1807,25 @@ class CatchAllNoTracebackTests(_Base):
 # ---------------------------------------------------------------------------
 
 class ProductionSurfaceTests(_Base):
+    def test_installed_guard_rejects_alternate_origin_before_cookie_read(self) -> None:
+        cookie = self.make_cookie_file()
+        with mock.patch.object(
+            usage, "_noninstalled_test_transport_available", return_value=False
+        ), mock.patch.object(usage, "read_secure_file", wraps=usage.read_secure_file) as read:
+            with self.assertRaises(usage.UsageConfigError):
+                usage.acquire_credentials(
+                    cookie_file=str(cookie),
+                    settings_url="https://evil.invalid/settings",
+                )
+        read.assert_not_called()
+
     def test_authorize_launch_public_surface_has_no_html_file(self) -> None:
         parameters = inspect.signature(launch.authorize_launch).parameters
         self.assertNotIn("usage_guard_html_file", parameters)
-        # The hidden suite reaches the fixture path only through the private
-        # seam, exactly like the private confinement-proof seam.
-        self.assertIn("_usage_guard_html_file", parameters)
+        self.assertNotIn("_usage_guard_html_file", parameters)
+        self.assertNotIn("_usage_guard_allow_loopback", parameters)
+        self.assertNotIn("usage_guard_settings_url", parameters)
+        self.assertNotIn("_confinement_proof", parameters)
 
     def test_launch_cli_help_has_no_html_file(self) -> None:
         out = io.StringIO()
@@ -1914,8 +1848,7 @@ class ProductionSurfaceTests(_Base):
     def test_launch_cli_has_no_loopback_optin(self) -> None:
         """The production launch CLI/argparse exposes no loopback opt-in.
 
-        ``_usage_guard_allow_loopback`` is a private authority seam absent
-        from the CLI (Task 7 review, obligations 9 and 14): the help text must
+        No loopback authority seam exists in the API or CLI: the help text must
         not advertise it, and argparse must refuse the flag outright on an
         otherwise-valid command line rather than silently accepting it.
         """

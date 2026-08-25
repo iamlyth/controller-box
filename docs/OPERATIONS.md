@@ -533,15 +533,40 @@ fresh Python control plane runs a bounded number of rounds, each
 `planning -> implementation -> verification -> audit`, and always terminates
 in a documented finite outcome:
 
+Use the exact accepted-commit production sequence below. The campaign ID must
+be new; a collision is an operator error and existing bytes remain untouched.
+
 ```bash
-python3 .factory/loop/campaign.py run --campaign-id <id> --rounds <n> --branch develop
+ACCEPTED_COMMIT=$(git rev-parse HEAD)
+test -z "$(git status --porcelain --untracked-files=all)"
+INSTALL_PARENT=$(mktemp -d)
+INSTALL_PREFIX="$INSTALL_PARENT/controller-box-harness"
+INSTALL_MANIFEST="$INSTALL_PARENT/install-manifest.json"
+CAMPAIGN_ID="controller-box-$(date +%Y%m%dT%H%M%S)-$$"
+python3 .factory/loop/installer.py install --root "$PWD" --commit "$ACCEPTED_COMMIT" --prefix "$INSTALL_PREFIX" --manifest-out "$INSTALL_MANIFEST"
+python3 "$INSTALL_PREFIX/.factory/loop/installer.py" verify --root "$PWD" --commit "$ACCEPTED_COMMIT" --prefix "$INSTALL_PREFIX" --manifest "$INSTALL_MANIFEST"
+"$INSTALL_PREFIX/.factory/bin/factory-campaign" --root "$PWD" run --campaign-id "$CAMPAIGN_ID" --rounds 5 --branch develop --provider ollama --model "${OLLAMA_MODEL:?set OLLAMA_MODEL}" --backend "$(command -v pi)" --accepted-commit "$ACCEPTED_COMMIT" --install-manifest "$INSTALL_MANIFEST" --campaign-timeout 21600 --verification-command ./scripts/verify-project.sh --capability-command ./scripts/check-capability-evidence.py --acceptance-command '["./scripts/final-gate.sh","--implementation"]'
 ```
 
-`python3 .factory/loop/campaign.py show` prints the current phase and
-result. The installed operator entrypoint `.factory/bin/factory-launch` runs
-one supervised fresh-context role attempt (planner/developer/tester/auditor)
-with a strict invocation contract and derives the exact committed task-excerpt
-digest for the developer; it never runs an interactive model session itself.
+Sequence invariants are: accepted commit, clean `develop`, exact-commit
+production install verification, unique fresh mode-0700 campaign namespace,
+and an installed-copy five-round launch with explicit provider/model/backend,
+a bounded whole-campaign deadline, and exact verification, capability-evidence,
+and final-acceptance argv. The production launcher
+proves the executing installed bytes/manifest/commit and binds the verifier
+before the planner. State, results, receipts, and canonical bindings remain in
+`.factory-state/campaigns/$CAMPAIGN_ID/`. The pre-existing `.factory-state`
+root must be a real current-user-owned mode-0700 directory. Reservation
+lstats only that exact root and the fixed `campaigns` component, never
+enumerates the runtime root, and never reads, repairs, renames, removes, or
+overwrites foreign entries; their bytes, mode, and mtime remain unchanged.
+Production has no synthetic defaults. The selected task uses the exact
+verification command as its acceptance contract. Campaign success additionally
+requires `check-capability-evidence.py` and `final-gate.sh --implementation`
+(the Controller capability-contract/evidence, conformance, blocked-fact, and
+final acceptance chain) to exit zero with no skip marker. A nonzero planner,
+tester, or auditor is failing regardless of valid-looking output. The required
+wall-clock deadline includes quota waits.
 
 Every round starts a fresh planner process, selects one deterministic task
 from the canonical plan for a fresh developer process, runs the configured
@@ -550,7 +575,8 @@ verification on the declared runner, and launches a separate adversarial
 auditor in a fresh process. Tester and auditor findings reach the next
 planner only through a revised canonical plan, never through memory injection.
 
-One mutable control-state file, `.factory-state/factory-loop.json`
+One mutable control-state file,
+`.factory-state/campaigns/<campaign-id>/factory-loop.json`
 (schema `factory-state/v1`), records the phase, round, attempt, digests, and a
 trusted outcome enum; it contains no model prose or evidence claims. All
 writes are atomic, no-follow, ownership/mode/link-count checked, and
@@ -610,11 +636,11 @@ cleanup result, and the provisioned signer identity. The detached signature
 `.factory/signer-trust.json` (public keys only). The root-owned signer helper
 on the runner signs only manifests it rebuilds from a clean pass, so failures,
 skips, unsupported claims, and caller-supplied bytes are never certified;
-rotation is fail-closed (removed keys are rejected). Until a signer is
-provisioned (`enabled = true` in `.factory/signer-trust.json`), unsigned
-legacy/local manifests are rejected and runner-evidenced capabilities stay
-unevidenced — the current Controller receipt at `26df6c0` is stale/unevidenced
-until Task 26 refreshes it and is never claimed as current evidence. Runner
+rotation is fail-closed (removed keys are rejected). The signer is provisioned
+and enabled. The `26df6c0` receipt is legacy unsigned/unevidenced; valid signed
+evidence exists for historical commit `c45336a`, but it is stale. Neither is
+claimed as current evidence, and Task 26 remains blocked until runner transport
+is authorized and a fresh exact-commit signed manifest is obtained. Runner
 provisioning, SSH policy, credentials, endpoints, signer keys, and
 host-specific setup remain outside the repository. Synthetic local tests
 cannot satisfy undeclared production hardware capabilities.
@@ -900,14 +926,13 @@ VRF-05 and DOD-03 can then move to `verified`.
 ### Current limitation
 
 The `kernel-uinput` runner capability IS declared in
-`.factory/environment.toml` and covered by the legacy runner receipt at commit
-26df6c0 (`test_kernel_controller` passes on the runner with
-`/dev/uinput` provisioned); that receipt is unsigned/unevidenced pending a
-signed commit-bound receipt (FACT-007).  Locally, `/dev/uinput` may not be
-available, causing the test to skip (exit 77).  The runner is
-reachable (13 receipts on file) and the SSH launcher works.
-The test code is ready and exercises the kernel-backed path when
-`/dev/uinput` is available.
+`.factory/environment.toml`. The legacy `26df6c0` receipt records a passing
+`test_kernel_controller` with `/dev/uinput`, but it is unsigned/unevidenced;
+valid signed evidence at historical commit `c45336a` is stale. Neither proves
+the current tree (FACT-007). Locally, `/dev/uinput` may be unavailable and the
+test then skips (exit 77). The current environment's runner SSH transport is
+not authorized, so a fresh signed receipt cannot yet be obtained. The test
+code exercises the kernel-backed path when `/dev/uinput` is available.
 
 ## Installed production smoke test
 
@@ -1252,13 +1277,13 @@ test or documented process:
 
 ## Hardware-deferred capabilities
 
-Several SPEC requirements depend on hardware or runner capabilities not
-declared in `.factory/environment.toml`.  The implementation is complete
-and verified through all available paths; the remaining gap is
-target-hardware acceptance that cannot be performed autonomously.
-These deferrals are documented per SPEC §11.2.6 (known-defect accounting):
-no open defect contradicts a v1 requirement, and each deferral has an
-explicit, documented rationale tied to an undeclared runner capability.
+Several SPEC requirements depend on real-system, hardware, runner, or human
+capabilities not available in the current environment. Production acceptance
+is incomplete: open BUG-0015 and BUG-0018 and FACT-002 through FACT-007 record
+real InputPlumber system-bus, installed visual, physical/target-consumer, GPU,
+current signed runner, Pi latency, and human-review gaps. These are not
+silently deferred or treated as proof; each remains bound to its required
+evidence tier under SPEC §11.2.6.
 
 ### aarch64 cross-compile (SPEC §3, SYS-01, SYS-02)
 
@@ -1352,14 +1377,11 @@ autonomous loop model per SPEC §11.1.7.
 
 ### Bug ledger accounting
 
-Per SPEC §11.2.6, no open defect contradicts a v1 requirement.
-The open bug ledger `.factory/bugs/open.md` currently lists BUG-0015
-(real InputPlumber system-bus acceptance with four targets), BUG-0016
-(proxy evidence promoted to production verification), and BUG-0018
-(installed manager controller diagram renders but is materially
-incorrect).  BUG-0015 is a real-system-bus blocker and BUG-0018 is an
-installed-window visual defect, both tracked against the hardware-
-deferred capabilities listed above; the hardware-deferred capabilities
-listed above are not defects — they are documented deferrals tied to
-undeclared runner capabilities, each with an explicit rationale and a
-human-approved release decision path.
+Per SPEC §11.2.6, open acceptance-critical defects and unavailable evidence
+remain explicit. The open bug ledger `.factory/bugs/open.md` lists BUG-0015
+(real InputPlumber system-bus acceptance with four targets), BUG-0016 (proxy
+evidence promoted to production verification), and BUG-0018 (installed
+manager controller diagram renders but is materially incorrect). BUG-0015
+and BUG-0018 remain defects, not successful deferrals. The blocked-facts
+ledger separately preserves unavailable runner, real-system, physical,
+GPU, target-device, latency, and human evidence without elevation.

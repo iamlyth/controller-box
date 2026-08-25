@@ -339,7 +339,7 @@ class Redactor:
 
     ``digest`` is the SHA-256 of the exact committed guard bytes the
     instance runs — the digest the trusted pre-spawn authority forwards to
-    the Pi extension (``PI_RALPH_GUARD_DIGEST``) so the model-side guard
+    the Pi extension (``PI_FACTORY_GUARD_DIGEST``) so the model-side guard
     can verify its own worktree bytes against the same exact-commit binding
     without any Git access (Task 11 review).
     """

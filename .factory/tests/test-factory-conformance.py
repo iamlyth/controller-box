@@ -54,6 +54,8 @@ VALIDATOR = SCRIPTS / "validate-conformance.py"
 FACTS_VALIDATOR = SCRIPTS / "validate-blocked-facts.py"
 CAPABILITY_CHECKER = SCRIPTS / "check-capability-evidence.py"
 CONTRACT_CHECKER = SCRIPTS / "check-capability-contracts.py"
+RUNNER_CHECKER = SCRIPTS / "check-factory-runner-evidence.py"
+ENVIRONMENT_CHECKER = SCRIPTS / "check-factory-environment.py"
 
 
 def run(argv, cwd: Path, check: bool = False,
@@ -76,8 +78,15 @@ class ConformanceFixture:
         for rel in (".factory/artifacts", ".factory/schemas", ".factory/loop",
                     ".factory-state", "tests/fixtures", "docs", "scripts"):
             (root / rel).mkdir(parents=True, exist_ok=True)
-        for script in (VALIDATOR, FACTS_VALIDATOR, CAPABILITY_CHECKER, CONTRACT_CHECKER):
+        for script in (
+            VALIDATOR, FACTS_VALIDATOR, CAPABILITY_CHECKER, CONTRACT_CHECKER,
+            RUNNER_CHECKER, ENVIRONMENT_CHECKER,
+        ):
             shutil.copy2(script, root / "scripts" / script.name)
+        shutil.copy2(
+            ROOT / ".factory" / "signer-trust.json",
+            root / ".factory" / "signer-trust.json",
+        )
         # The validators run every trusted Git call through the committed
         # pinned-Git authority (.factory/loop/gitutil.py).  The fixture
         # receives the exact committed module (never a weakened stub): the
@@ -190,6 +199,14 @@ class ConformanceFixture:
         self.write_policy()
         self.write_facts()
         self.seed_refs()
+        # The fixture's own capability authority: no declared capabilities in
+        # the fixture environment, so an empty contract file is the exact
+        # consistent authority (never the live product's contracts/aggregate).
+        (self.root / ".factory" / "capability-contracts.json").write_text(
+            json.dumps({"schema": "ralph-capability-contract/v1",
+                        "capabilities": []}),
+            encoding="utf-8",
+        )
         self.commit_all("plan and policy and refs")
         self.write_sidecar()
         self.commit_all("sidecar")
@@ -259,8 +276,13 @@ class ConformanceFixtureTests(unittest.TestCase):
         self.assertIn("partial", result.stderr)
 
     def test_capability_evidence_and_contract_gates_pass(self) -> None:
-        for script in (CONTRACT_CHECKER, CAPABILITY_CHECKER):
-            result = run(["python3", str(script)], self.fixture.root)
+        # The fixture's own committed copies of the checkers run against the
+        # fixture's own authorities (empty capability declaration + empty
+        # contract file), never the live product's stale runner aggregate.
+        for name in ("check-capability-contracts.py",
+                     "check-capability-evidence.py"):
+            result = run([sys.executable, f"./scripts/{name}"],
+                         self.fixture.root)
             self.assertEqual(result.returncode, 0, result.stderr)
 
 
@@ -318,9 +340,12 @@ class RuntimeReceiptTests(unittest.TestCase):
         )
 
     def _sidecar_with_receipt(self, ref: str, *, in_artifacts: bool = False) -> None:
-        """Commit a sidecar whose REQ-01 cites ``ref``, then rebind the exact
-        evidence head and the coordinator so a freshly minted receipt matches
-        the row binding exactly."""
+        """Write a sidecar row at the active audit base.
+
+        Runtime receipts and the protected coordinator must bind the same
+        already-committed audit base; changing the sidecar worktree fixture
+        must not silently advance or rebind that coordinator.
+        """
         data = json.loads(self.fixture.sidecar_path.read_text(encoding="utf-8"))
         for req in data["requirements"]:
             if req["id"] == "REQ-01":
@@ -328,8 +353,6 @@ class RuntimeReceiptTests(unittest.TestCase):
                 req["artifacts"] = [ref] if in_artifacts else ["tests/probe.c"]
                 req["evidence_commit"] = self.head
         self.fixture.sidecar_path.write_text(json.dumps(data), encoding="utf-8")
-        self.head = self.fixture.commit_all("sidecar runtime receipt")
-        self._write_coordinator(1, self.head, self.nonce)
 
     def test_live_runtime_receipt_accepts_verified_row(self) -> None:
         """A real minted installed-harness receipt under the runtime namespace
@@ -341,6 +364,26 @@ class RuntimeReceiptTests(unittest.TestCase):
         )
         result = self.fixture.validator("planning")
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_runtime_receipt_requires_active_coordinator(self) -> None:
+        self._mint("installed-harness-smoke", "true")
+        self._sidecar_with_receipt(
+            ".factory-state/audit-receipts/installed-harness-smoke.json"
+        )
+        (self.state_dir / "audit-coordinator.json").unlink()
+        result = self.fixture.validator("planning")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("active hardened audit coordinator", result.stderr)
+
+    def test_runtime_receipt_coordinator_base_must_equal_row(self) -> None:
+        self._mint("installed-harness-smoke", "true")
+        self._sidecar_with_receipt(
+            ".factory-state/audit-receipts/installed-harness-smoke.json"
+        )
+        self._write_coordinator(1, "0" * 40, self.nonce)
+        result = self.fixture.validator("planning")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("coordinator base commit", result.stderr)
 
     def test_runtime_receipt_traversal_is_rejected(self) -> None:
         self._mint("installed-harness-smoke", "true")
@@ -400,7 +443,16 @@ class RuntimeReceiptTests(unittest.TestCase):
             if req["id"] == "REQ-01":
                 req["evidence_commit"] = self.head
         self.fixture.sidecar_path.write_text(json.dumps(data), encoding="utf-8")
-        self.fixture.commit_all("stale sidecar")
+        # Advance the repository, then bind the live sidecar row to that new
+        # commit without re-minting the old receipt/coordinator.
+        marker = self.fixture.root / "stale-marker"
+        marker.write_text("advance\n", encoding="utf-8")
+        newer = self.fixture.commit_all("stale sidecar base")
+        data = json.loads(self.fixture.sidecar_path.read_text(encoding="utf-8"))
+        for req in data["requirements"]:
+            if req["id"] == "REQ-01":
+                req["evidence_commit"] = newer
+        self.fixture.sidecar_path.write_text(json.dumps(data), encoding="utf-8")
         result = self.fixture.validator("planning")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("does not equal the row evidence_commit", result.stderr)
@@ -715,7 +767,7 @@ class UnevidencedCapabilityTests(unittest.TestCase):
         self._require_capability("probe-capability")
         result = self.fixture.validator("planning")
         self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertIn("runner evidence aggregate is missing", result.stderr)
+        self.assertIn("strong runner evidence rejected", result.stderr)
 
 
 class DuplicateAuthorityTests(unittest.TestCase):
@@ -795,6 +847,17 @@ class DuplicateAuthorityTests(unittest.TestCase):
         self.assertIn("duplicate JSON object key", result.stderr)
 
     # --- duplicate IDs -------------------------------------------------------
+    def test_duplicate_id_plan_matrix_fails(self) -> None:
+        plan = self.fixture.plan_path
+        text = plan.read_text(encoding="utf-8")
+        row = next(
+            line for line in text.splitlines() if line.startswith("| REQ-01 |")
+        )
+        plan.write_text(text.replace(row, row + "\n" + row, 1), encoding="utf-8")
+        result = self.fixture.validator("planning")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("plan matrix has a duplicate requirement ID", result.stderr)
+
     def test_duplicate_id_sidecar_fails(self) -> None:
         data = json.loads(self.fixture.sidecar_path.read_text(encoding="utf-8"))
         first = data["requirements"][0]

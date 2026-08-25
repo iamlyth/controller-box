@@ -61,6 +61,7 @@ CONTRACT_FIELDS = {
     "name", "status", "probe_argv", "probe_marker", "probe_stage",
     "probe_stdout_contains", "probe_is_verify_run",
     "must_execute", "must_not_skip", "deny_simulated_markers",
+    "runner_class",
 }
 CONTRACT_REQUIRED = {
     "name", "probe_argv", "probe_marker", "must_execute",
@@ -218,6 +219,11 @@ def load_contracts(job: Path) -> dict[str, dict]:
             fail(f"committed contract {name} probe_stage is invalid")
         if contract.get("probe_is_verify_run") not in (None, True, False):
             fail(f"committed contract {name} probe_is_verify_run is invalid")
+        runner_class = contract.get("runner_class")
+        if runner_class is not None and (
+            not isinstance(runner_class, str) or not NAME.fullmatch(runner_class)
+        ):
+            fail(f"committed contract {name} runner_class is invalid")
         for field in ("probe_stdout_contains", "must_not_skip", "deny_simulated_markers"):
             value = contract.get(field, [])
             if not isinstance(value, list) or not all(
@@ -508,8 +514,15 @@ def main() -> int:
             if missing:
                 fail(f"requested capability lacks a committed contract: {missing}")
             for capability in capabilities:
-                if contracts[capability].get("status", "declared") != "declared":
+                contract = contracts[capability]
+                if contract.get("status", "declared") != "declared":
                     fail(f"capability {capability} contract is not promoted (status=candidate)")
+                designed_class = contract.get("runner_class")
+                if designed_class is not None and designed_class != runner_class["name"]:
+                    fail(
+                        f"capability {capability} contract is designed for runner "
+                        f"class {designed_class}, not {runner_class['name']}"
+                    )
 
             returncode, stdout, stderr = run_bounded(argv, job, env)
             probes: dict[str, bool] = {}

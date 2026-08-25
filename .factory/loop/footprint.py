@@ -121,7 +121,9 @@ class FootprintError(RuntimeError):
 # are byte-exact ASCII: a case-fold or Unicode-normalized variant of a name
 # is never the namespace (a case-insensitive or normalization-blessed
 # filesystem could otherwise alias the namespace with a product path).
-HIDDEN_NAMESPACES: Tuple[str, ...] = (".factory", ".factory-state", ".pi")
+HIDDEN_NAMESPACES: Tuple[str, ...] = (
+    ".factory", ".factory-state", ".pi"
+)
 
 # Machine-readable install-manifest schema (Task 20 installed-tier evidence).
 # A trusted installer stages the committed harness into a test-owned prefix
@@ -982,6 +984,14 @@ def load_install_manifest(path: Path) -> dict:
         raise FootprintError(f"invalid install manifest {path}: {exc}") from exc
     if not isinstance(data, dict) or data.get("schema") != INSTALL_MANIFEST_SCHEMA:
         raise FootprintError(f"install manifest schema is invalid: {path}")
+    if (
+        data.get("installation_mode") != "production"
+        or data.get("acceptance_eligible") is not True
+    ):
+        raise FootprintError(
+            "install manifest is reviewer/non-production staging and cannot "
+            "satisfy installed acceptance"
+        )
     commit = data.get("commit")
     if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
         raise FootprintError(f"install manifest commit is invalid: {path}")

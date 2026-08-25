@@ -107,6 +107,7 @@ required = [
     'scripts/nix-gate.sh', 'scripts/nix-gate-exec.sh',
     'scripts/nix-gate-check.py', 'tests/test-nix-gate.sh',
     'scripts/credential-guard.py', 'tests/test-credential-guard.sh',
+    'scripts/pi-factory-guard-extension.mjs',
     'tests/test-credential-extension.sh',
     '.factory/artifacts/blocked-facts.json', '.factory/artifacts/conformance.json',
     '.factory/campaign-objectives.json', '.factory/golden-policy.json',
@@ -128,6 +129,7 @@ required = [
     '.factory/tests/test-factory-adversarial.sh',
     '.factory/loop/installer.py',
     '.factory/bin/factory-launch',
+    '.factory/bin/factory-campaign',
     '.factory/tests/test-factory-installed.py',
     '.factory/tests/test-factory-installed.sh',
     '.factory/loop/generic_evidence.py',
@@ -146,7 +148,7 @@ required = [
     '.factory/loop/gitutil.py', '.factory/loop/footprint.py',
     '.factory/loop/lock.py', '.factory/loop/launch.py',
     '.factory/loop/campaign.py', '.factory/loop/confine_launcher.py',
-    '.factory/loop/confinement.py', '.factory/loop/findings.py',
+    '.factory/loop/findings.py',
     '.factory/loop/audit_objectives.py', '.factory/loop/usage.py',
     '.factory/loop/usage_fetch.py', '.factory/loop/redaction.py',
     '.factory/loop/promptset.py', '.factory/loop/workspace_confinement.py',
@@ -223,8 +225,11 @@ grep -q 'exact-commit receipt or manifest' .factory/prompts/auditor.md
 for role in visual-reviewer runner-reviewer evidence-reviewer spec-reviewer; do
     grep -q 'no runtime-certification authority' ".pi/agents/$role.md"
 done
-# The fresh control plane never invokes the deprecated ralph shim or the emit
-# extension, and the retained production gates never invoke them either.
+# The fresh control plane never invokes the deprecated ralph shim or the
+# retired emit extension, and the retained production gates never invoke
+# them either.  The generic model-side Pi guard extension
+# (scripts/pi-factory-guard-extension.mjs) is the required replacement and
+# is bound by the launch authority and the credential-extension suite.
 # verify-boilerplate.sh is the checker itself: its only mentions of these
 # tokens are the check literals below, so it is not scanned for them.
 for script in scripts/final-gate.sh \
@@ -238,9 +243,15 @@ for script in scripts/final-gate.sh \
             exit 1
         }
     done
+    [[ $text == *'pi-factory-guard-extension'* ]] && {
+        echo "verify: $script must not depend on the model-side guard extension" >&2
+        exit 1
+    }
 done
-# The fresh launch authority invokes the committed secure wrapper directly.
+# The fresh launch authority invokes the committed secure wrapper directly
+# and always loads the committed model-side Pi guard extension.
 grep -q 'pi2-secure-exec.py' .factory/loop/launch.py
+grep -q 'pi-factory-guard-extension.mjs' .factory/loop/launch.py
 # The migration tombstone is a safe non-executable regular file, and the
 # migration verifier enforces complete tracked absence of retired launchers.
 [[ -f .factory/ralph-freeze && ! -L .factory/ralph-freeze && ! -x .factory/ralph-freeze ]] || {
@@ -319,6 +330,30 @@ PY
 ./.factory/tests/test-factory-migration.sh
 ./.factory/tests/test-factory-adversarial.sh
 ./.factory/tests/test-factory-smoke.sh
+
+# -- hidden fresh factory Python suites (deterministic serial order) ---------
+# Every hidden Python suite that is not already driven by a shell wrapper
+# above runs here directly (unittest entrypoints, warning-free under
+# ResourceWarning like the shell drivers), so a regression in any hidden
+# authority can never hide from the boilerplate gate.  Suites already covered
+# by their shell wrappers (footprint, installed, generic-evidence, migration,
+# adversarial, smoke) are intentionally not duplicated here.
+for hidden_suite in \
+        test-factory-campaign \
+        test-factory-confinement \
+        test-factory-conformance \
+        test-factory-evidence \
+        test-factory-findings \
+        test-factory-launch \
+        test-factory-lock \
+        test-factory-plan-parser \
+        test-factory-redaction \
+        test-factory-selector \
+        test-factory-state \
+        test-factory-usage; do
+    echo "verify: running hidden suite $hidden_suite"
+    python3 -W error::ResourceWarning ".factory/tests/$hidden_suite.py"
+done
 
 # -- retained visible (non-Ralph) suites -------------------------------------
 ./tests/test-git-commit-guard.sh

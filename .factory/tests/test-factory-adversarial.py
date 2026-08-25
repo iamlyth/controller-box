@@ -72,7 +72,6 @@ BRANCH = "fixture-main"
 sys.path.insert(0, str(LOOP))
 
 import campaign as campaign_module  # noqa: E402
-import confinement  # noqa: E402  (Task 7 private synthetic-proof seam)
 import evidence as evidence_module  # noqa: E402
 import gitutil  # noqa: E402
 import launch as launch_module  # noqa: E402
@@ -115,7 +114,7 @@ _findings_spec.loader.exec_module(FACTORY_FINDINGS)
 FindingsWorkspace = FACTORY_FINDINGS.FindingsWorkspace
 
 GIT = gitutil.GIT_EXECUTABLE
-PY = sys.executable
+PY = os.path.realpath(sys.executable)
 TRUE_EXECUTABLE = FACTORY_CAMPAIGN.TRUE_EXECUTABLE
 FALSE_EXECUTABLE = FACTORY_CAMPAIGN.FALSE_EXECUTABLE
 FixtureWorkspace = FACTORY_CAMPAIGN.FixtureWorkspace
@@ -406,8 +405,16 @@ def prepare_launch_workspace(ws: FixtureWorkspace, *backend_rel: str) -> None:
     (root / "src" / ".factory-test-output").mkdir(parents=True, exist_ok=True)
     shutil.copy2(ROOT / "scripts" / "pi2-secure-exec.py",
                  scripts / "pi2-secure-exec.py")
-    shutil.copy2(LOOP / "confine_launcher.py",
-                 root / ".factory" / "loop" / "confine_launcher.py")
+    # Task 11: the model-side Pi guard extension is a committed fixture blob
+    # too — the launch authority verifies the working-tree extension equals
+    # the committed blob and always loads it through ``--extension``.
+    shutil.copy2(ROOT / "scripts" / "pi-factory-guard-extension.mjs",
+                 scripts / "pi-factory-guard-extension.mjs")
+    (scripts / "pi-cli-shims").mkdir(exist_ok=True)
+    shutil.copy2(ROOT / "scripts" / "pi-cli-shims" / "git",
+                 scripts / "pi-cli-shims" / "git")
+    for module in ("confine_launcher.py", "usage.py", "usage_fetch.py"):
+        shutil.copy2(LOOP / module, root / ".factory" / "loop" / module)
     shutil.copy2(SCHEMAS / "factory-confinement-v1.schema.json",
                  root / ".factory" / "schemas" / "factory-confinement-v1.schema.json")
     for rel in backend_rel:
@@ -525,7 +532,7 @@ class CaseAdversarialSuite(_AdversarialBase):
             "the confined role must use a fresh private sanitized home",
         )
         # Only the documented allowlist keys plus the FACTORY_LOOP_LAUNCH_*
-        # invocation fields, the single documented PI_RALPH_GUARD_DIGEST
+        # invocation fields, the single documented PI_FACTORY_GUARD_DIGEST
         # guard-binding field (Task 11: the exact committed credential-guard
         # digest forwarded to the model-side extension), and the
         # confined-launch sanitized HOME/XDG keys (all pointing under the
@@ -538,7 +545,7 @@ class CaseAdversarialSuite(_AdversarialBase):
         for key in env:
             if key.startswith("FACTORY_LOOP_LAUNCH_"):
                 continue
-            if key == launch_module.PI_RALPH_GUARD_DIGEST_ENV:
+            if key == launch_module.PI_FACTORY_GUARD_DIGEST_ENV:
                 self.assertRegex(
                     env[key], r"^[0-9a-f]{64}$",
                     "the forwarded guard digest must be the exact 64-hex "
@@ -559,7 +566,7 @@ class CaseAdversarialSuite(_AdversarialBase):
         # launch authority forwards (and it is verified 64-hex above).
         pi_keys = [key for key in env if key.startswith("PI_")]
         self.assertEqual(
-            pi_keys, [launch_module.PI_RALPH_GUARD_DIGEST_ENV],
+            pi_keys, [launch_module.PI_FACTORY_GUARD_DIGEST_ENV],
             f"a PI_ session/memory key reached the role child: {pi_keys}",
         )
         for forbidden_prefix in ("OLLAMA_", "GIT_", "FACTORY_CAMPAIGN_",
@@ -614,16 +621,16 @@ class CaseAdversarialSuite(_AdversarialBase):
             self.assertIn(flag, probe1["argv"],
                           f"the one-shot flag {flag!r} must be present")
         # The child environment carries no session/memory/credential keys:
-        # the single documented PI_RALPH_GUARD_DIGEST invocation field (the
+        # the single documented PI_FACTORY_GUARD_DIGEST invocation field (the
         # exact 64-hex committed guard digest) is the only PI_ key the launch
         # authority forwards.
         pi_keys = [key for key in probe1["env"] if key.startswith("PI_")]
         self.assertEqual(
-            pi_keys, [launch_module.PI_RALPH_GUARD_DIGEST_ENV],
+            pi_keys, [launch_module.PI_FACTORY_GUARD_DIGEST_ENV],
             f"a PI_ session/memory key reached the child: {pi_keys}",
         )
         self.assertRegex(
-            probe1["env"].get(launch_module.PI_RALPH_GUARD_DIGEST_ENV, ""),
+            probe1["env"].get(launch_module.PI_FACTORY_GUARD_DIGEST_ENV, ""),
             r"^[0-9a-f]{64}$",
             "the forwarded guard digest must be the exact committed digest",
         )
@@ -1534,11 +1541,16 @@ class CaseAdversarialSuite(_AdversarialBase):
                 (ws.root / "docs" / "SPEC.md").read_bytes()),
             allowed_tools=("read", "bash"),
         )
-        proof = confinement._mint_synthetic_proof(binding)
         cookie = self.tmp / "cookie.txt"
         cookie.write_text(SYNTH_COOKIE, encoding="utf-8")
         os.chmod(cookie, 0o600)
-        with self.assertRaises(launch_module.InvocationError) as caught:
+        with self.assertRaises(launch_module.InvocationError) as caught, \
+             unittest.mock.patch.object(
+                 launch_module, "_gate_ollama_launch",
+                 side_effect=launch_module.InvocationError(
+                     "ollama usage guard blocked"
+                 ),
+             ):
             launch_module.authorize_launch(
                 binding,
                 role_prompt=(ws.root / ".factory" / "prompts" /
@@ -1546,9 +1558,6 @@ class CaseAdversarialSuite(_AdversarialBase):
                 agents=(ws.root / "AGENTS.md").read_bytes(),
                 spec=(ws.root / "docs" / "SPEC.md").read_bytes(),
                 plan=(ws.root / PLAN_REL).read_bytes(),
-                _confinement_proof=proof,
-                _usage_guard_html_file=str(VISIBLE_FIXTURES /
-                                           "usage-blocked.html"),
                 usage_guard_cookie_file=str(cookie),
                 usage_guard_max_polls=1,
                 usage_guard_poll_interval=0,
@@ -1556,17 +1565,16 @@ class CaseAdversarialSuite(_AdversarialBase):
         self.assertIn("ollama usage guard", str(caught.exception))
         # The same launch proceeds when the guard allows (the guard is a real
         # pre-invocation gate, not a stub).
-        authority = launch_module.authorize_launch(
-            binding,
-            role_prompt=(ws.root / ".factory" / "prompts" /
-                         "planner.md").read_bytes(),
-            agents=(ws.root / "AGENTS.md").read_bytes(),
-            spec=(ws.root / "docs" / "SPEC.md").read_bytes(),
-            plan=(ws.root / PLAN_REL).read_bytes(),
-            _confinement_proof=proof,
-            _usage_guard_html_file=str(VISIBLE_FIXTURES / "usage-ok.html"),
-            usage_guard_cookie_file=str(cookie),
-        )
+        with unittest.mock.patch.object(launch_module, "_gate_ollama_launch"):
+            authority = launch_module.authorize_launch(
+                binding,
+                role_prompt=(ws.root / ".factory" / "prompts" /
+                             "planner.md").read_bytes(),
+                agents=(ws.root / "AGENTS.md").read_bytes(),
+                spec=(ws.root / "docs" / "SPEC.md").read_bytes(),
+                plan=(ws.root / PLAN_REL).read_bytes(),
+                usage_guard_cookie_file=str(cookie),
+            )
         self.assertIsInstance(authority, launch_module.LaunchAuthority)
 
     # -- case 14: credential tool-call blocking and redaction stay active ----
@@ -2486,47 +2494,70 @@ class CaseAdversarialSuite(_AdversarialBase):
         proc = subprocess.Popen(argv, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, text=True,
                                 cwd=str(ws.root))
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline and not marker.is_file():
-            time.sleep(0.05)
-        self.assertTrue(marker.is_file(), "the escape probe must have started")
-        with open(marker, encoding="utf-8") as stream:
-            pids = json.load(stream)
-        out, err = proc.communicate(timeout=60)
-        # The launch supervisor detects the escaped descendant and fails
-        # closed (recovery is blocked while it survives).
-        self.assertEqual(proc.returncode, launch_module.EXIT_SUPERVISION,
-                         f"escaped-descendant fail-closed expected, got "
-                         f"{proc.returncode} (stderr: {err[-1000:]})")
-        self.assertIn("escaped", err)
-        # Cleanup: the test owns the probe processes and must reap them.
-        for pid in (pids["grandchild"], pids["pid"]):
-            try:
-                os.killpg(pid, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        deadline = time.monotonic() + 15
-        while time.monotonic() < deadline:
-            alive = []
-            for pid in (pids["grandchild"], pids["pid"]):
+        pids: dict[str, int] = {}
+        started = time.monotonic()
+        try:
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline and not marker.is_file():
+                time.sleep(0.05)
+            self.assertTrue(marker.is_file(), "the escape probe must have started")
+            with open(marker, encoding="utf-8") as stream:
+                pids = json.load(stream)
+            out, err = proc.communicate(timeout=60)
+            elapsed = time.monotonic() - started
+            # The ptrace broker detects a tracee that outlived its target,
+            # bounded-kills/reaps it, closes its pipe lifecycle, and sends an
+            # unspoofable report to the outer launch supervisor.  Recovery
+            # still fails closed even though no escaped process is leaked.
+            self.assertEqual(proc.returncode, launch_module.EXIT_SUPERVISION,
+                             f"escaped-descendant fail-closed expected, got "
+                             f"{proc.returncode} (stderr: {err[-1000:]})")
+            self.assertIn("escaped", err)
+            self.assertLess(
+                elapsed, 15.0,
+                "escaped-descendant cleanup exceeded its internal bounded "
+                "termination/reap window",
+            )
+            deadline = time.monotonic() + 5
+            alive: list[int] = []
+            while time.monotonic() < deadline:
+                alive = []
+                for pid in (pids["grandchild"], pids["pid"]):
+                    try:
+                        os.kill(pid, 0)
+                        alive.append(pid)
+                    except ProcessLookupError:
+                        pass
+                if not alive:
+                    break
+                time.sleep(0.05)
+            self.assertEqual(
+                alive, [],
+                f"the broker failed to terminate/reap escaped pids {alive}",
+            )
+        finally:
+            # Failure-path hygiene belongs to the test: never leak its outer
+            # Popen streams or any probe process while reporting a regression.
+            if proc.poll() is None:
                 try:
-                    os.kill(pid, 0)
-                    alive.append(pid)
+                    proc.kill()
+                    proc.wait(timeout=5)
+                except (ProcessLookupError, subprocess.TimeoutExpired):
+                    pass
+            for stream in (proc.stdout, proc.stderr):
+                if stream is not None and not stream.closed:
+                    stream.close()
+            for pid in pids.values():
+                try:
+                    os.killpg(pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+                try:
+                    os.kill(pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
-            if not alive:
-                break
-            time.sleep(0.1)
-        for pid in (pids["grandchild"], pids["pid"]):
-            try:
-                os.kill(pid, 0)
-                self.fail(f"escaped descendant pid {pid} survived the test")
-            except ProcessLookupError:
-                pass
+        self.assertTrue(proc.stdout is None or proc.stdout.closed)
+        self.assertTrue(proc.stderr is None or proc.stderr.closed)
 
     # -- case 21: the task excerpt is byte-bound to the committed plan -------
 
@@ -2645,7 +2676,12 @@ class CaseAdversarialSuite(_AdversarialBase):
         )
         home = wc.sanitized_home_directory()
         self.addCleanup(shutil.rmtree, home, ignore_errors=True)
-        spec = wc.confinement_spec(binding, sanitized_home=home)
+        rule_descriptors: list[int] = []
+        spec = wc.confinement_spec(
+            binding, sanitized_home=home,
+            _rule_descriptors=rule_descriptors,
+        )
+        self.addCleanup(lambda: [os.close(fd) for fd in rule_descriptors])
         wc.validate_confinement_spec(spec, binding)
         spec_path = self.tmp / "confinement-spec.json"
         spec_path.write_text(
@@ -2656,10 +2692,14 @@ class CaseAdversarialSuite(_AdversarialBase):
             argv = [PY, str(workspace / "probe.py"), json.dumps(targets)]
             if confined:
                 argv = [PY, str(LOOP / "confine_launcher.py"),
-                        "--spec-file", str(spec_path), "--", *argv]
+                        "--spec-file", str(spec_path),
+                        "--rule-fds", ",".join(
+                            str(fd) for fd in rule_descriptors),
+                        "--", *argv]
             proc = subprocess.run(
                 argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 cwd=str(workspace), timeout=60,
+                pass_fds=tuple(rule_descriptors) if confined else (),
             )
             self.assertEqual(proc.returncode, 0, proc.stderr.decode()[-2000:])
             line = next(
@@ -3046,7 +3086,9 @@ class CaseAdversarialSuite(_AdversarialBase):
         # pi-ralph-emit-extension.mjs, pi-cli-shims/ralph, pi2-ollama.sh,
         # the ralph-* launchers, and their tests) is REMOVED from the
         # tracked tree — the tracked-absence proof below is the strongest
-        # form of non-dependence.
+        # form of non-dependence.  The generic model-side Pi guard extension
+        # (scripts/pi-factory-guard-extension.mjs) is the required
+        # replacement and carries no lifecycle surface.
         lifecycle_tokens = (
             "ralph emit", "ralph_emit", "completion token",
             "completion_token", "ralphmemory", "ralph_event",
@@ -3191,24 +3233,31 @@ class CaseAdversarialSuite(_AdversarialBase):
         driver = (FIXTURES / "campaign_driver.py").read_text(encoding="utf-8")
         self.assertIn("embedded/fixture role seam", driver)
         # The new launch authority invokes the committed secure wrapper
-        # directly — never the deprecated ralph shim or the emit extension.
+        # directly and always loads the committed model-side Pi guard
+        # extension — never the deprecated ralph shim or the retired emit
+        # extension.
         launch_text = (LOOP / "launch.py").read_text(encoding="utf-8")
         for token in ("pi-cli-shims/ralph", "pi-ralph-emit-extension",
                       "ralph emit", "ralph_emit"):
             self.assertNotIn(token, launch_text,
                              f"launch.py must not depend on {token!r}")
         self.assertIn("pi2-secure-exec.py", launch_text)
+        self.assertIn("pi-factory-guard-extension.mjs", launch_text,
+                      "launch.py must always load the committed guard extension")
+        self.assertIn("--extension", launch_text,
+                      "launch.py must pass --extension in the child argv")
         # The retained production gates never invoke the deprecated emit
-        # extension or the ralph emit protocol.  verify-boilerplate.sh is the
-        # checker itself: its only mentions of these tokens are the check
-        # literals, so it is not scanned here.
+        # extension, the ralph emit protocol, or the model-side guard
+        # extension.  verify-boilerplate.sh is the checker itself: its only
+        # mentions of these tokens are the check literals, so it is not
+        # scanned here.
         for script in ("scripts/final-gate.sh",
                        "scripts/campaign-verifier-binding.py",
                        "scripts/check-installed-harness-evidence.sh",
                        "scripts/visual-audit-provenance.py"):
             text = (ROOT / script).read_text(encoding="utf-8")
             for token in ("pi-ralph-emit-extension", "ralph emit",
-                          "ralph-event"):
+                          "ralph-event", "pi-factory-guard-extension"):
                 self.assertNotIn(token, text,
                                  f"{script} must not depend on {token!r}")
 

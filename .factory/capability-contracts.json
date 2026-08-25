@@ -11,7 +11,7 @@
       "probe_stdout_contains": [],
       "probe_is_verify_run": true,
       "must_execute": true,
-      "must_not_skip": [],
+      "must_not_skip": ["SKIP:"],
       "deny_simulated_markers": ["simulated", "synthetic", "staged", "fixture-only"]
     },
     {
@@ -23,7 +23,7 @@
       "probe_stdout_contains": ["factory-systemd-user-ok"],
       "probe_is_verify_run": false,
       "must_execute": true,
-      "must_not_skip": [],
+      "must_not_skip": ["SKIP:"],
       "deny_simulated_markers": ["simulated", "private session", "synthetic"]
     },
     {

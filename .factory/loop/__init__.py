@@ -73,7 +73,6 @@ from .launch import (  # fresh-context execution and supervision (Task 6)
     verify_child_env,
     verify_invocation,
     verify_task_excerpt,
-    write_prompt_file,
 )
 from .plan_parser import (
     ALLOWED_TRANSITIONS,
@@ -88,13 +87,6 @@ from .plan_parser import (
     is_allowed_transition,
     parse_plan,
     round_trip,
-)
-from .confinement import (  # Task 7 proof seam; real authority follows below
-    ConfinementError,
-    ConfinementProof,
-    ConfinementUnavailable,
-    prove_confinement,
-    validate_proof,
 )
 from .workspace_confinement import (  # real Landlock authority (Task 8)
     ConfinementError as WorkspaceConfinementError,
@@ -470,7 +462,6 @@ __all__ = [
     "product_discovery",
     "preserve_phase_result",
     "publish_findings_receipt",
-    "prove_confinement",
     "prove_workspace_confinement",
     "prompt_set_digest",
     "phase_result_artifact_name",
@@ -517,7 +508,6 @@ __all__ = [
     "validate_launch_result",
     "validate_manifest_ref",
     "validate_receipt",
-    "validate_proof",
     "validate_workspace_confinement_proof",
     "verify_child_env",
     "verify_external_install",
@@ -527,6 +517,5 @@ __all__ = [
     "verify_phase_digest",
     "verify_task_excerpt",
     "wait",
-    "write_prompt_file",
     "write_state",
 ]

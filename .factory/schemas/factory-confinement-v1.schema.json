@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "factory-confinement/v1",
   "title": "factory confinement specification",
-  "description": "The per-launch model workspace/tool confinement specification (FACTORY-LOOP-SPEC sections 5.1/18; Task 8, schema factory-confinement/v1). It is a pure function of the verified invocation binding and the committed workspace state: role, provider, canonical workspace, bound commit, resolved backend, the fresh sanitized private HOME/XDG environment, and a deterministic deny-by-default allowlist of path rules. The confined-launch child (.factory/loop/confine_launcher.py, staged from its exact committed blob per F2) reads this specification through a bounded no-follow descriptor, builds a Landlock ruleset (one allow rule per entry; everything outside the allowlist is denied for read and write), restricts itself, installs the sanitized HOME/XDG environment, and then execs the secure wrapper. The real confinement proof (workspace_confinement.prove_confinement) binds the SHA-256 of the canonical JSON serialization of exactly this specification, and LaunchSupervision re-validates the proof against the exact specification immediately before exec. Validated by .factory/loop/workspace_confinement.py validate_confinement_spec.",
+  "description": "The per-launch model workspace/tool confinement specification (FACTORY-LOOP-SPEC sections 5.1/18; Task 8, schema factory-confinement/v1). Each deny-by-default rule binds path text plus dev/inode/type/owner/link-count identity. The trusted parent opens every component with no-follow descriptor-relative resolution and passes the retained descriptors to the staged confined-launch child; the child validates their identities and feeds only those descriptors to Landlock, never reopening a validated rule pathname. The real proof binds the canonical specification digest and LaunchSupervision revalidates proof and descriptors immediately before exec.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -45,7 +45,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["path", "access"],
+        "required": ["path", "access", "identity"],
         "properties": {
           "path": { "type": "string", "minLength": 1 },
           "access": {
@@ -55,6 +55,18 @@
             "items": {
               "type": "string",
               "enum": ["read", "write", "execute"]
+            }
+          },
+          "identity": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["dev", "ino", "type", "uid", "nlink"],
+            "properties": {
+              "dev": { "type": "integer", "minimum": 0 },
+              "ino": { "type": "integer", "minimum": 0 },
+              "type": { "type": "integer", "minimum": 0 },
+              "uid": { "type": "integer", "minimum": 0 },
+              "nlink": { "type": "integer", "minimum": 0 }
             }
           }
         }

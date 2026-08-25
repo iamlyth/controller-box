@@ -112,6 +112,9 @@ def main() -> int:
         if behavior == "planned":
             copy_template(f"planner-{round_no}.md", plan_rel, root)
             return 0
+        if behavior == "planned-exit1":
+            copy_template(f"planner-{round_no}.md", plan_rel, root)
+            return 1
         if behavior == "planned-complete":
             copy_template("planner-complete.md", plan_rel, root)
             return 0
@@ -342,6 +345,9 @@ def main() -> int:
             return 0
         if behavior == "findings":
             write_result_file(result_file, root, "findings", findings=["fixture finding"])
+            return 0
+        if behavior == "pass-exit1":
+            write_result_file(result_file, root, "pass")
             return 1
         if behavior == "secret-findings":
             # Task 23 (F): a free-text finding that embeds a raw credential-
@@ -354,7 +360,7 @@ def main() -> int:
                 result_file, root, "findings",
                 findings=["api_token=super-secret-value-123 leak in fixture"],
             )
-            return 1
+            return 0
         if behavior == "secret-blocked":
             write_result_file(
                 result_file, root, "blocked",
@@ -384,6 +390,9 @@ def main() -> int:
             write_result_file(
                 result_file, root, "findings", findings=["fixture audit finding"]
             )
+            return 0
+        if behavior == "pass-exit1":
+            write_result_file(result_file, root, "pass")
             return 1
         if behavior == "blocked":
             write_result_file(

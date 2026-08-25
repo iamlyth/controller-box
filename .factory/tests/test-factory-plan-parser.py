@@ -130,7 +130,7 @@ class CanonicalPlanAgreementTest(unittest.TestCase):
         plan = Plan.from_file(CANONICAL_PLAN)
         self.assertEqual(plan.schema, SCHEMA_NAME)
         self.assertEqual(plan.status, "active")
-        self.assertEqual(len(plan.tasks), 28)
+        self.assertEqual(len(plan.tasks), 31)
         self.assertEqual(len(plan.matrix), 76)
         self.assertEqual(
             [entry.boundary for entry in plan.interactions],
@@ -142,13 +142,13 @@ class CanonicalPlanAgreementTest(unittest.TestCase):
         )
         final = [task for task in plan.tasks if task.title == FINAL_AUDIT_TITLE]
         self.assertEqual(len(final), 1)
-        self.assertEqual(final[0].number, 28)
-        self.assertEqual(set(final[0].dependencies), set(range(1, 28)))
+        self.assertEqual(final[0].number, 31)
+        self.assertEqual(set(final[0].dependencies), set(range(1, 31)))
         # Default priority derives from the task id for a stable sort; no
         # Controller task carries an explicit priority.
         self.assertEqual(
             [task.priority for task in plan.tasks],
-            list(range(1, 29)),
+            list(range(1, 32)),
         )
         # Front matter binds the canonical specification.
         self.assertEqual(plan.spec_path, "docs/SPEC.md")

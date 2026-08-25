@@ -39,7 +39,7 @@ Coverage:
   result file, and gate detail stays bounded;
 * **the actual CLI and the Node extension** (CRED-01, §18): the tracked
   ``scripts/credential-guard.py`` CLI and the exported
-  ``scripts/pi-ralph-emit-extension.mjs`` tool_call/tool_result redaction
+  ``scripts/pi-factory-guard-extension.mjs`` tool_call/tool_result redaction
   helpers are exercised with synthetic secrets through real subprocesses;
 * **model-viewed Git shim** (GIT-01, Task 11): a caller-controlled PATH
   with a forged ``git`` cannot redirect the shim — the real executable is
@@ -75,7 +75,6 @@ GUARD_RELPATH = "scripts/credential-guard.py"
 
 sys.path.insert(0, str(LOOP))
 import campaign as campaign_module  # noqa: E402
-import confinement as confinement_module  # noqa: E402
 import gitutil  # noqa: E402
 import launch as launch_module  # noqa: E402
 import redaction  # noqa: E402
@@ -801,7 +800,7 @@ class CampaignGateEndToEndTests(unittest.TestCase):
         ws = FACTORY_CAMPAIGN.FixtureWorkspace(
             self.tmp / "ws",
             scenario={
-                "planner": {"behavior": "planned"},
+                "planner": {"behavior": "planned-complete"},
                 "developer": {"behavior": "complete"},
                 "tester": {"behavior": "pass"},
                 "auditor": {"behavior": "findings"},
@@ -1006,10 +1005,10 @@ class NodeExtensionRedactionTests(unittest.TestCase):
         # without any Git access (Task 11 review).
         guard_digest = hashlib.sha256(REAL_GUARD.read_bytes()).hexdigest()
         node_env = dict(os.environ)
-        node_env[launch_module.PI_RALPH_GUARD_DIGEST_ENV] = guard_digest
+        node_env[launch_module.PI_FACTORY_GUARD_DIGEST_ENV] = guard_digest
         result = run(
             ["node", "--input-type=module", "-",
-             str(ROOT / "scripts" / "pi-ralph-emit-extension.mjs")],
+             str(ROOT / "scripts" / "pi-factory-guard-extension.mjs")],
             input_data=self.fixture.read_bytes(),
             check=False,
             env=node_env,
@@ -1052,11 +1051,10 @@ class GitShimTests(unittest.TestCase):
         env["PATH"] = str(self.fake_dir) + os.pathsep + env.get("PATH", "")
         env["FAKE_MARKER"] = str(self.marker)
         result = subprocess.run(
-            [str(self.shim), "--version"],
-            env=env, capture_output=True, text=True,
+            [str(self.shim), "status", "--short"],
+            cwd=ROOT, env=env, capture_output=True, text=True,
         )
         self.assertEqual(result.returncode, 0)
-        self.assertIn("git version", result.stdout)
         self.assertNotIn("FAKE_GIT_RAN", result.stdout + result.stderr)
         self.assertFalse(self.marker.exists(),
                          "the fake PATH git executed behind the shim")
@@ -1137,6 +1135,19 @@ class ExternalBackendTests(unittest.TestCase):
         shutil.copy2(ROOT / launch_module.SECURE_WRAPPER,
                      scripts / Path(launch_module.SECURE_WRAPPER).name)
         shutil.copy2(REAL_GUARD, scripts / Path(GUARD_RELPATH).name)
+        shutil.copy2(
+            ROOT / "scripts" / "pi-factory-guard-extension.mjs",
+            scripts / "pi-factory-guard-extension.mjs",
+        )
+        (scripts / "pi-cli-shims").mkdir()
+        shutil.copy2(
+            ROOT / "scripts" / "pi-cli-shims" / "git",
+            scripts / "pi-cli-shims" / "git",
+        )
+        loop = self.workspace / ".factory" / "loop"
+        loop.mkdir(parents=True)
+        for module in ("confine_launcher.py", "usage.py", "usage_fetch.py"):
+            shutil.copy2(ROOT / ".factory" / "loop" / module, loop / module)
         self.backend = self.workspace / "backend.py"
         self.backend.write_text("#!/usr/bin/env python3\nprint('ok')\n",
                                 encoding="utf-8")
@@ -1198,7 +1209,6 @@ class ExternalBackendTests(unittest.TestCase):
         external = self.tmp / "external-backend.py"
         external.write_text("print('x')\n", encoding="utf-8")
         binding = self.binding(backend=external)
-        proof = confinement_module._mint_synthetic_proof(binding)
         with self.assertRaises(launch_module.InvocationError) as caught:
             launch_module.authorize_launch(
                 binding,
@@ -1206,7 +1216,6 @@ class ExternalBackendTests(unittest.TestCase):
                 agents=self.agents,
                 spec=self.spec,
                 plan=self.plan,
-                _confinement_proof=proof,
             )
         self.assertIn("external", str(caught.exception).lower())
 
@@ -1222,7 +1231,7 @@ class ExternalBackendTests(unittest.TestCase):
                 spec=self.spec,
                 plan=self.plan,
             )
-        self.assertIn("confinement", str(caught.exception).lower())
+        self.assertIn("external", str(caught.exception).lower())
 
     def test_in_workspace_backend_ok_under_synthetic_seam(self) -> None:
         # Task 6's private synthetic-proof path remains authorized for an
@@ -1235,7 +1244,6 @@ class ExternalBackendTests(unittest.TestCase):
             agents=self.agents,
             spec=self.spec,
             plan=self.plan,
-            _confinement_proof=confinement_module._mint_synthetic_proof(binding),
         )
         self.assertIsInstance(authority, launch_module.LaunchAuthority)
 
@@ -1268,26 +1276,19 @@ class ExternalBackendRealConfinementTests(FACTORY_CONFINEMENT._Base):
         # immutable-chain check and accepted.
         external = Path(gitutil.GIT_EXECUTABLE)
         binding = self.binding(role="planner", backend=external)
-        home = FACTORY_CONFINEMENT.wc.sanitized_home_directory()
-        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
-        spec = FACTORY_CONFINEMENT.wc.confinement_spec(
-            binding, sanitized_home=home)
         authority = launch_module.authorize_launch(
             binding,
             role_prompt=(self.workspace / "role.md").read_bytes(),
             agents=(self.workspace / "AGENTS.md").read_bytes(),
             spec=(self.workspace / "spec.md").read_bytes(),
             plan=(self.workspace / "plan.md").read_bytes(),
-            _confinement_spec=spec,
-            _sanitized_home=home,
         )
         self.assertIsInstance(authority, launch_module.LaunchAuthority)
-        self.assertFalse(authority._confinement_proof.synthetic)
+        self.assertFalse(hasattr(authority._confinement_proof, "synthetic"))
         resolved = os.path.realpath(str(external))
         self.assertIn(resolved, authority._external_paths)
         self.addCleanup(shutil.rmtree, authority._exec_dir, ignore_errors=True)
-        self.addCleanup(
-            shutil.rmtree, Path(authority._prompt_path).parent, ignore_errors=True)
+        self.addCleanup(os.close, authority._prompt_fd)
         self.addCleanup(
             shutil.rmtree, authority._session_dir, ignore_errors=True)
 
@@ -1298,10 +1299,6 @@ class ExternalBackendRealConfinementTests(FACTORY_CONFINEMENT._Base):
         bogus = self.diag / "external-backend.py"
         bogus.write_text("print('x')\n", encoding="utf-8")
         binding = self.binding(role="planner", backend=bogus)
-        home = FACTORY_CONFINEMENT.wc.sanitized_home_directory()
-        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
-        spec = FACTORY_CONFINEMENT.wc.confinement_spec(
-            binding, sanitized_home=home)
         with self.assertRaises(launch_module.InvocationError) as caught:
             launch_module.authorize_launch(
                 binding,
@@ -1309,8 +1306,6 @@ class ExternalBackendRealConfinementTests(FACTORY_CONFINEMENT._Base):
                 agents=(self.workspace / "AGENTS.md").read_bytes(),
                 spec=(self.workspace / "spec.md").read_bytes(),
                 plan=(self.workspace / "plan.md").read_bytes(),
-                _confinement_spec=spec,
-                _sanitized_home=home,
             )
         self.assertIn("external", str(caught.exception).lower())
 

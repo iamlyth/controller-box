@@ -224,7 +224,14 @@ class InstalledTierSuite(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp(prefix="factory-installed."))
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
-        self.head = gitutil.resolve_head(ROOT)
+        # Production installed acceptance is built from a clean committed
+        # snapshot of the exact reviewed working-tree surface. The live
+        # checkout may be intentionally dirty during review; reviewer staging
+        # is tested separately and can never satisfy this lane.
+        self.install_source = self.tmp / "clean-install-source"
+        self._make_repo(self.install_source)
+        self._copy_surface(self.install_source)
+        self.head = self._commit_all(self.install_source, "clean reviewed surface")
         self.assertTrue(SHA1.fullmatch(self.head), "cannot resolve the bound commit")
         self.external = self.tmp / "external-prefix"
         self.hidden = self.tmp / ".hidden-prefix"
@@ -302,6 +309,7 @@ class InstalledTierSuite(unittest.TestCase):
         ignore = shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo")
         for name in (".factory", ".pi", "scripts"):
             shutil.copytree(ROOT / name, target / name, ignore=ignore)
+        shutil.copy2(ROOT / ".gitignore", target / ".gitignore")
 
     @property
     def installed_root(self) -> str:
@@ -358,7 +366,7 @@ class InstalledTierSuite(unittest.TestCase):
         result = _run(
             [
                 sys.executable, str(INSTALLER), "install",
-                "--root", str(ROOT),
+                "--root", str(self.install_source),
                 "--commit", self.head,
                 "--prefix", str(prefix),
                 "--manifest-out", str(manifest_out),
@@ -369,6 +377,8 @@ class InstalledTierSuite(unittest.TestCase):
         manifest = json.loads(manifest_out.read_text(encoding="utf-8"))
         self.assertEqual(manifest["schema"], "factory-install-manifest/v1")
         self.assertEqual(manifest["commit"], self.head)
+        self.assertEqual(manifest["installation_mode"], "production")
+        self.assertIs(manifest["acceptance_eligible"], True)
         return manifest
 
     def assert_external_install_clean(self, prefix: Path, manifest: dict) -> None:
@@ -376,7 +386,8 @@ class InstalledTierSuite(unittest.TestCase):
         shared = [entry["path"] for entry in manifest["shared"]]
         entrypoints = [entry["path"] for entry in manifest["entrypoints"]]
         errors = footprint.verify_external_install(
-            ROOT, prefix, manifest=files, entrypoints=entrypoints, shared=shared
+            self.install_source, prefix,
+            manifest=files, entrypoints=entrypoints, shared=shared
         )
         self.assertEqual(errors, [], errors)
 
@@ -416,7 +427,10 @@ class InstalledTierSuite(unittest.TestCase):
         (when given) the certified argv/stdout must bind the installed
         root so a source invocation can never mint an equivalent receipt."""
         ref = f"{RECEIPTS_DIR}/{tag}.json"
-        receipt = evidence_module.validate_receipt(self.fixture, ref)
+        receipt = evidence_module.validate_receipt(
+            self.fixture, ref, expected_round=1, expected_base=self.head,
+            expected_nonce=self.nonce,
+        )
         self.assertEqual(receipt["exit_code"], 0,
                          f"gate {tag} must exit 0 to be certified PASS")
         self.assertEqual(receipt["evidence_commit"], self.head)
@@ -445,6 +459,22 @@ class InstalledTierSuite(unittest.TestCase):
         ):
             manifest = self.install(prefix, manifest_out)
             self.assert_external_install_clean(prefix, manifest)
+            self.assertFalse(
+                (prefix / ".factory/loop/confinement.py").exists(),
+                "legacy synthetic-confinement proof module entered the installed inventory",
+            )
+            self.assertFalse(
+                (prefix / ".factory/tests").exists(),
+                "harness tests/fixture role drivers entered the production install",
+            )
+            self.assertFalse(
+                (prefix / ".factory/smoke/evidence_smoke_driver.py").exists(),
+                "test-only smoke role driver entered the production install",
+            )
+            self.assertFalse(
+                (prefix / ".factory/tests/fixtures/campaign_driver.py").exists(),
+                "general fixture campaign driver entered the production install",
+            )
             # Committed content is blob-exact at the bound commit: every
             # non-pending file's recorded blob is a committed blob and its
             # staged bytes hash back to that blob (the installer re-proved it;
@@ -469,8 +499,10 @@ class InstalledTierSuite(unittest.TestCase):
             # assertion becoming fragile, and a fully committed install
             # derives an *empty* pending set (valid post-commit).
             derived_pending = sorted(
-                set(installer_module._pending_paths(ROOT, self.head))
-                & set(installer_module.PENDING_ALLOWLIST)
+                (
+                    set(installer_module._pending_paths(self.install_source, self.head))
+                    & set(installer_module.PENDING_ALLOWLIST)
+                ) - set(installer_module.NON_INSTALLED_MODULES)
             )
             all_pending = sorted(
                 e["path"]
@@ -501,7 +533,9 @@ class InstalledTierSuite(unittest.TestCase):
                 self.assertFalse(launcher["pending"], launcher)
             # The manifest binds the exact root and prefix the installer
             # staged from (root identity / prefix binding).
-            self.assertEqual(Path(manifest["root"]).absolute(), ROOT)
+            self.assertEqual(
+                Path(manifest["root"]).absolute(), self.install_source
+            )
             self.assertEqual(Path(manifest["prefix"]).absolute(), prefix)
             # Every installed directory (prefix included) is private 0700.
             self.assertEqual(stat.S_IMODE(prefix.stat().st_mode), 0o700, prefix)
@@ -524,7 +558,7 @@ class InstalledTierSuite(unittest.TestCase):
                     # exact committed blob: git hash-object of the installed
                     # bytes equals the committed blob id.
                     blob = _run(
-                        [gitutil.GIT_EXECUTABLE, "-C", str(ROOT), "hash-object",
+                        [gitutil.GIT_EXECUTABLE, "-C", str(self.install_source), "hash-object",
                          str(prefix / entry["path"])]
                     ).stdout.strip()
                     self.assertEqual(blob, entry["blob"], entry["path"])
@@ -536,6 +570,33 @@ class InstalledTierSuite(unittest.TestCase):
                 self.assertTrue(
                     first in footprint.HIDDEN_NAMESPACE_SET or first == "scripts",
                     entry["path"],
+                )
+            # Task 11: the installed copy carries the model-side Pi guard
+            # extension as an exact committed blob (the installed launch
+            # always loads it through ``--extension``).  While the extension
+            # is a new worktree file not yet part of the bound commit, the
+            # source working-tree file is bound instead; once committed the
+            # manifest entry must be blob-exact.
+            ext_rel = "scripts/pi-factory-guard-extension.mjs"
+            ext_manifest = next(
+                (e for e in manifest["files"] if e["path"] == ext_rel), None
+            )
+            if ext_manifest is not None:
+                self.assertTrue(SHA1.fullmatch(ext_manifest["blob"]), ext_manifest)
+                installed_ext = prefix / ext_rel
+                self.assertTrue(installed_ext.is_file())
+                self.assertEqual(
+                    _sha256(installed_ext.read_bytes()), ext_manifest["sha256"],
+                    "the installed guard extension bytes must match the manifest",
+                )
+            else:
+                # Not yet part of the bound commit: the source working-tree
+                # extension must exist so the next commit binds it into the
+                # installed surface (the installed copy is built from the
+                # bound commit).
+                self.assertTrue(
+                    (ROOT / ext_rel).is_file(),
+                    "the guard extension must be tracked for the installed copy",
                 )
             self.assertTrue(
                 str(prefix).startswith(str(self.tmp)),
@@ -723,6 +784,119 @@ class InstalledTierSuite(unittest.TestCase):
             self.assertEqual(after["errors"], [], after["errors"])
             self.assertEqual(after["count"], after["expected_count"])
 
+    def test_installed_production_preflight_is_clean_exact_and_fresh(self) -> None:
+        """Normal production preflight executes installed campaign bytes only.
+
+        It requires the explicit verifier, accepted clean HEAD, byte-exact
+        production manifest/install, and a new private campaign namespace;
+        dirty input and namespace reuse fail before any backend marker can run.
+        """
+        self.install(self.external, self.manifest_ext)
+        verify_install = _run(
+            [sys.executable, "-m", "factory.loop.installer", "verify",
+             "--root", str(self.install_source), "--commit", self.head,
+             "--prefix", str(self.external), "--manifest", str(self.manifest_ext)],
+            cwd=str(self.fixture), env=self.sanitized_env(),
+        )
+        self.assertIn("verified production install", verify_install.stdout)
+        backend_marker = self.tmp / "production-backend-ran"
+        backend = self.tmp / "backend-must-not-run"
+        backend.write_text(
+            "#!/bin/sh\nprintf ran > " + shlex.quote(str(backend_marker)) + "\n",
+            encoding="utf-8",
+        )
+        backend.chmod(0o755)
+        launcher = self.external / ".factory/bin/factory-campaign"
+
+        def argv(campaign_id: str, *extra: str) -> list[str]:
+            return [
+                str(launcher), "--root", str(self.install_source), "run",
+                "--campaign-id", campaign_id, "--rounds", "5",
+                "--branch", "develop", "--provider", "ollama",
+                "--model", "fixture-never-launched", "--backend", str(backend),
+                "--accepted-commit", self.head,
+                "--install-manifest", str(self.manifest_ext),
+                *extra,
+                "--preflight-only",
+            ]
+
+        state_root = self.install_source / ".factory-state"
+        state_root.mkdir(mode=0o700)
+        state_root.chmod(0o700)
+        foreign_state = state_root / "foreign-runtime.bin"
+        foreign_state.write_bytes(b"foreign-state\x00bytes\xff")
+        foreign_state.chmod(0o640)
+        os.utime(foreign_state, ns=(1_700_000_002_000_000_000,
+                                    1_700_000_003_000_000_000))
+        foreign_before = foreign_state.lstat()
+
+        required_gates = (
+            "--campaign-timeout", "21600",
+            "--verification-command", "./scripts/verify-project.sh",
+            "--capability-command", "./scripts/check-capability-evidence.py",
+            "--acceptance-command", "[\"./scripts/final-gate.sh\",\"--implementation\"]",
+        )
+        campaign_id = "installed-production-preflight"
+        completed = _run(
+            argv(campaign_id, *required_gates),
+            cwd=str(self.fixture), env=self.sanitized_env(),
+        )
+        summary = json.loads(completed.stdout)
+        self.assertEqual(summary["accepted_commit"], self.head)
+        self.assertEqual(Path(summary["installed_root"]), self.external)
+        namespace = self.install_source / summary["state_namespace"]
+        self.assertTrue(namespace.is_dir())
+        self.assertEqual(stat.S_IMODE(namespace.stat().st_mode), 0o700)
+        self.assertFalse(backend_marker.exists(), "preflight launched the backend")
+        self.assertEqual(
+            summary["state_namespace"],
+            ".factory-state/campaigns/installed-production-preflight",
+        )
+        self.assertEqual(foreign_state.read_bytes(), b"foreign-state\x00bytes\xff")
+        foreign_after = foreign_state.lstat()
+        self.assertEqual(stat.S_IMODE(foreign_after.st_mode),
+                         stat.S_IMODE(foreign_before.st_mode))
+        self.assertEqual(foreign_after.st_mtime_ns, foreign_before.st_mtime_ns)
+
+        planted = namespace / "foreign-marker"
+        planted.write_bytes(b"preserve-exact-bytes\x00\xff")
+        planted.chmod(0o600)
+        collision = _run(
+            argv(campaign_id, *required_gates),
+            cwd=str(self.fixture), env=self.sanitized_env(), check=False,
+        )
+        self.assertNotEqual(collision.returncode, 0)
+        self.assertIn("namespace collision", collision.stderr)
+        self.assertEqual(planted.read_bytes(), b"preserve-exact-bytes\x00\xff")
+        self.assertFalse(backend_marker.exists())
+
+        missing = _run(
+            argv("missing-verifier"), cwd=str(self.fixture),
+            env=self.sanitized_env(), check=False,
+        )
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn("explicit non-empty --verification-command", missing.stderr)
+        self.assertFalse(
+            (state_root / "campaigns/missing-verifier").exists()
+        )
+
+        dirty_path = self.install_source / ".factory/loop/campaign.py"
+        original = dirty_path.read_bytes()
+        dirty_path.write_bytes(original + b"\npreflight dirt\n")
+        try:
+            dirty = _run(
+                argv("dirty-preflight", *required_gates),
+                cwd=str(self.fixture), env=self.sanitized_env(), check=False,
+            )
+            self.assertNotEqual(dirty.returncode, 0)
+            self.assertIn("clean Git tree", dirty.stderr)
+            self.assertFalse(
+                (state_root / "campaigns/dirty-preflight").exists()
+            )
+            self.assertFalse(backend_marker.exists())
+        finally:
+            dirty_path.write_bytes(original)
+
     def test_no_pass_when_gate_skips_or_fails(self) -> None:
         self.install(self.external, self.manifest_ext)
         # A failing command mints a receipt with a non-zero exit; the suite
@@ -736,7 +910,9 @@ class InstalledTierSuite(unittest.TestCase):
         self.assertIn("[receipt: .factory-state/audit-receipts/gate-fail.json]",
                       fail_mint.stdout)
         fail_receipt = evidence_module.validate_receipt(
-            self.fixture, f"{RECEIPTS_DIR}/gate-fail.json"
+            self.fixture, f"{RECEIPTS_DIR}/gate-fail.json",
+            expected_round=1, expected_base=self.head,
+            expected_nonce=self.nonce,
         )
         self.assertNotEqual(fail_receipt["exit_code"], 0)
         with self.assertRaises(AssertionError):
@@ -777,7 +953,9 @@ class InstalledTierSuite(unittest.TestCase):
         skip_mint = self.mint("gate-skip", skip_argv)
         self.assertEqual(skip_mint.returncode, 0)
         skip_receipt = evidence_module.validate_receipt(
-            self.fixture, f"{RECEIPTS_DIR}/gate-skip.json"
+            self.fixture, f"{RECEIPTS_DIR}/gate-skip.json",
+            expected_round=1, expected_base=self.head,
+            expected_nonce=self.nonce,
         )
         self.assertEqual(skip_receipt["exit_code"], 0)
         with self.assertRaises(AssertionError):
@@ -1174,6 +1352,7 @@ class InstalledTierSuite(unittest.TestCase):
         # never double-staged into the committed bulk set.
         self.assertNotIn(".factory/bin/factory-launch", files)
         self.assertIn(".factory/bin/factory-launch", entrypoints)
+        self.assertIn(".factory/bin/factory-campaign", entrypoints)
         self.assertIn("scripts/machine-receipt.py", entrypoints)
         self.assertIn("scripts/factory_state_io.py", shared)
         self.assertTrue((prefix / ".factory/bin/factory-launch").is_file())
@@ -1197,6 +1376,7 @@ class InstalledTierSuite(unittest.TestCase):
             "--commit", commit,
             "--prefix", str(prefix),
             "--manifest-out", str(manifest_out),
+            "--reviewer-staging",
         ]
         # A stray untracked file under .factory/ is never staged.
         (fixture / ".factory" / "loop" / "rogue_file.py").write_text(
@@ -1228,6 +1408,43 @@ class InstalledTierSuite(unittest.TestCase):
             )
         self.assertFalse((self.tmp / "bad-shared-prefix").exists())
 
+    def test_production_rejects_pending_authority_and_reviewer_is_ineligible(self) -> None:
+        fixture = self.tmp / "pending-authority"
+        self._make_repo(fixture)
+        self._copy_surface(fixture)
+        commit = self._commit_all(fixture, "surface committed")
+        authority = fixture / ".factory" / "loop" / "launch.py"
+        authority.write_text(authority.read_text(encoding="utf-8") + "\n# review\n",
+                             encoding="utf-8")
+        production_prefix = self.tmp / "pending-production-prefix"
+        production_manifest = self.tmp / "pending-production.json"
+        base = [
+            sys.executable, str(INSTALLER), "install",
+            "--root", str(fixture), "--commit", commit,
+        ]
+        failed = _run(
+            [*base, "--prefix", str(production_prefix),
+             "--manifest-out", str(production_manifest)],
+            cwd=ROOT, env=self.base_env(), check=False,
+        )
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertIn("production install rejects pending", failed.stderr)
+        self.assertFalse(production_prefix.exists())
+
+        reviewer_prefix = self.tmp / "pending-reviewer-prefix"
+        reviewer_manifest = self.tmp / "pending-reviewer.json"
+        reviewed = _run(
+            [*base, "--prefix", str(reviewer_prefix),
+             "--manifest-out", str(reviewer_manifest), "--reviewer-staging"],
+            cwd=ROOT, env=self.base_env(), check=False,
+        )
+        self.assertEqual(reviewed.returncode, 0, reviewed.stderr)
+        data = json.loads(reviewer_manifest.read_text(encoding="utf-8"))
+        self.assertEqual(data["installation_mode"], "reviewer")
+        self.assertIs(data["acceptance_eligible"], False)
+        with self.assertRaises(footprint.FootprintError):
+            footprint.load_install_manifest(reviewer_manifest)
+
     def test_source_invocation_cannot_mint_equivalent(self) -> None:
         """A receipt argv/stdout must bind the installed prefix: running the
         same gate under a source-tree alias resolves a different module root,
@@ -1249,7 +1466,9 @@ class InstalledTierSuite(unittest.TestCase):
         minted = self.mint("gate-source-equiv", argv, check=False, env=env)
         self.assertEqual(minted.returncode, 90)
         receipt = evidence_module.validate_receipt(
-            self.fixture, f"{RECEIPTS_DIR}/gate-source-equiv.json"
+            self.fixture, f"{RECEIPTS_DIR}/gate-source-equiv.json",
+            expected_round=1, expected_base=self.head,
+            expected_nonce=self.nonce,
         )
         self.assertEqual(receipt["exit_code"], 90)
         with self.assertRaises(AssertionError):

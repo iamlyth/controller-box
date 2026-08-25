@@ -48,8 +48,14 @@ tool failure.
 
 ## Output contract
 
-Finish with a machine-readable findings report as your final output: the
-exact verification run, each check's command, exit status, and outcome, and
-every concrete finding with its evidence gap. Receipt publication for
-coordinator commands is performed by the control plane; your prose is never
-a receipt.
+Your fresh prompt contains a **Structured phase-result channel** section with
+one exact pre-created path and the complete `factory-phase-result/v1` field
+contract. You must write that exact JSON object to that exact path; you must
+not select or infer another path. The path is role-specific context, not a
+credential or ambient environment authority. Landlock permits writing only
+that one result file. Printing JSON or prose without filling it is an
+infrastructure failure.
+
+You may also summarize the exact verification run, each command, exit status,
+outcome, and evidence gap in final prose, but prose is never the structured
+handoff or a receipt. Receipt publication remains control-plane-owned.

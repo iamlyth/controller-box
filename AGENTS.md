@@ -38,7 +38,7 @@ nix-shell --run './scripts/verify-project.sh'
 ./scripts/check-factory-runner-evidence.py
 
 # Finite fresh-plan/implementation/audit campaign (role entries: .factory/bin/factory-launch)
-python3 .factory/loop/campaign.py run --campaign-id <id> --rounds <n> --branch develop
+"${INSTALL_PREFIX:?verified production install}/.factory/bin/factory-campaign" --root "$PWD" run --campaign-id "${CAMPAIGN_ID:?new unique id}" --rounds 5 --branch develop --provider ollama --model "${OLLAMA_MODEL:?set model}" --backend "$(command -v pi)" --accepted-commit "${ACCEPTED_COMMIT:?clean accepted HEAD}" --install-manifest "${INSTALL_MANIFEST:?verified manifest}" --campaign-timeout 21600 --verification-command ./scripts/verify-project.sh --capability-command ./scripts/check-capability-evidence.py --acceptance-command '["./scripts/final-gate.sh","--implementation"]'
 ```
 
 Run build/test commands serially. Do not dismiss an unrelated failure as pre-existing: determine its cause, fix it when safe, or append a remediation task with evidence.

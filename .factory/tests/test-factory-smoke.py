@@ -277,6 +277,22 @@ class SmokeWorkspace:
             "check-docs-sync.sh",
         ):
             shutil.copy2(ROOT / "scripts" / script, ws / "scripts" / script)
+        # Task 11: the fixture commits the exact model-side Pi guard
+        # extension so any launch authority can always load it through
+        # ``--extension`` in the child argv.
+        shutil.copy2(
+            ROOT / "scripts" / "pi-factory-guard-extension.mjs",
+            ws / "scripts" / "pi-factory-guard-extension.mjs",
+        )
+        shutil.copy2(
+            ROOT / "scripts" / "pi2-secure-exec.py",
+            ws / "scripts" / "pi2-secure-exec.py",
+        )
+        (ws / "scripts" / "pi-cli-shims").mkdir()
+        shutil.copy2(
+            ROOT / "scripts" / "pi-cli-shims" / "git",
+            ws / "scripts" / "pi-cli-shims" / "git",
+        )
         # The fixture installs the *real* tracked Git commit boundary: the
         # exact `git-commit-guard.sh` and its installer are committed and the
         # six launcher hooks are installed, so every campaign commit (and

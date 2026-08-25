@@ -24,11 +24,13 @@ NONCE=$(printf 'a%.0s' {1..64})
 
 setup_repo() {
     local dir=$1
-    mkdir -p "$dir/scripts" "$dir/.factory" "$dir/.factory/artifacts" "$dir/docs" \
+    mkdir -p "$dir/scripts" "$dir/.factory/loop" "$dir/.factory/artifacts" "$dir/docs" \
         "$dir/.factory-state/audit-receipts" \
         "$dir/.factory-state/runner-evidence"
-    chmod 700 "$dir/.factory-state"
+    chmod 700 "$dir/.factory-state" "$dir/.factory-state/audit-receipts"
     cp "$CHECKER" "$RUNNER_EVIDENCE" "$ENV_CHECKER" "$dir/scripts/"
+    cp "$PROJECT_ROOT/.factory/loop/evidence.py" \
+        "$PROJECT_ROOT/.factory/loop/gitutil.py" "$dir/.factory/loop/"
     chmod +x "$dir/scripts/"*.py
     cat > "$dir/.factory/environment.toml" <<'EOF'
 schema_version = 1
@@ -228,7 +230,7 @@ receipt() {
     local dir=$1 round=$2 tag=$3 exit_code=$4
     shift 4
     python3 - "$dir" "$round" "$tag" "$exit_code" "$@" <<'PY'
-import hashlib, json, subprocess, sys
+import hashlib, json, os, subprocess, sys
 root, round_number, tag, exit_code = sys.argv[1], int(sys.argv[2]), sys.argv[3], int(sys.argv[4])
 argv = sys.argv[5:]
 head = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=root, capture_output=True, text=True).stdout.strip()
@@ -243,7 +245,17 @@ data = {
     "coordinator_round": round_number,
     "coordinator_nonce": "a" * 64,
 }
-open(f"{root}/.factory-state/audit-receipts/{tag}.json", "w").write(json.dumps(data))
+receipt_path = f"{root}/.factory-state/audit-receipts/{tag}.json"
+paths = [
+    receipt_path,
+    f"{root}/.factory-state/audit-receipts/{tag}.stdout",
+    f"{root}/.factory-state/audit-receipts/{tag}.stderr",
+]
+open(paths[0], "w").write(json.dumps(data))
+open(paths[1], "wb").write(b"")
+open(paths[2], "wb").write(b"")
+for path in paths:
+    os.chmod(path, 0o600)
 PY
 }
 
@@ -525,13 +537,26 @@ rm -f "$tmp/no-policy/.factory/campaign-receipt-policy.json"
 mint_state "$tmp/no-policy" 1
 expect_rc "$tmp/no-policy" 1 "$head" 1 "missing receipt policy"
 
-# A round is required when neither --round nor the protected state supplies one.
+# Runtime receipts are coordinator-mandatory even when --round/--base are
+# supplied; there is no local/coordinator-optional authority.
 rm -f "$tmp/blessed/.factory-state/audit-coordinator.json"
-set +e
-(cd "$tmp/blessed" && env -u FACTORY_CAMPAIGN_AUDIT_ROUND \
-    ./scripts/check-campaign-objectives.py --base "$head" >/dev/null 2>&1)
-env_missing_rc=$?
-set -e
-[[ $env_missing_rc -eq 1 ]] || { echo "test: missing audit round was accepted" >&2; exit 1; }
+expect_rc "$tmp/blessed" 1 "$head" 1 "absent active coordinator"
+
+# Unsafe coordinator mode is rejected by the canonical evidence authority.
+mint_state "$tmp/blessed" 1
+chmod 666 "$tmp/blessed/.factory-state/audit-coordinator.json"
+expect_rc "$tmp/blessed" 1 "$head" 1 "unsafe coordinator mode"
+chmod 600 "$tmp/blessed/.factory-state/audit-coordinator.json"
+
+# Canonical transcript digest validation rejects a modified adjacent log.
+receipt "$tmp/blessed" 1 runner-evidence 0 ./scripts/run-factory-runners.py
+receipt "$tmp/blessed" 1 project-verify 0 ./scripts/verify-project.sh
+write_report "$tmp/blessed"
+printf 'tampered\n' > "$tmp/blessed/.factory-state/audit-receipts/project-verify.stdout"
+expect_rc "$tmp/blessed" 1 "$head" 1 "bad receipt transcript digest"
+
+# A fully bound but nonzero receipt cannot cover an objective category.
+receipt "$tmp/blessed" 1 project-verify 7 ./scripts/verify-project.sh
+expect_rc "$tmp/blessed" 1 "$head" 1 "nonzero runtime receipt"
 
 echo "test: campaign-objectives adversarial checks passed"

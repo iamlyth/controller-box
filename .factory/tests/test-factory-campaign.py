@@ -54,6 +54,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -199,6 +200,8 @@ class FixtureWorkspace:
         for rel in (
             "docs",
             "scripts",
+            "scripts/pi-cli-shims",
+            ".factory/loop",
             ".factory/prompts",
             ".factory/audit-objectives",
             ".factory/artifacts",
@@ -215,6 +218,26 @@ class FixtureWorkspace:
             ROOT / "scripts" / "credential-guard.py",
             ws / "scripts" / "credential-guard.py",
         )
+        # Task 11: every fixture repository commits the exact model-side Pi
+        # guard extension — the launch authority always loads it through
+        # ``--extension`` in the child argv.
+        shutil.copy2(
+            ROOT / "scripts" / "pi-factory-guard-extension.mjs",
+            ws / "scripts" / "pi-factory-guard-extension.mjs",
+        )
+        shutil.copy2(
+            ROOT / "scripts" / "pi-cli-shims" / "git",
+            ws / "scripts" / "pi-cli-shims" / "git",
+        )
+        shutil.copy2(
+            ROOT / "scripts" / "pi2-secure-exec.py",
+            ws / "scripts" / "pi2-secure-exec.py",
+        )
+        for module in ("usage.py", "usage_fetch.py"):
+            shutil.copy2(
+                ROOT / ".factory" / "loop" / module,
+                ws / ".factory" / "loop" / module,
+            )
         (ws / "AGENTS.md").write_text(
             "AGENTS.md operational policy\n", encoding="utf-8")
         (ws / "docs" / "SPEC.md").write_text(
@@ -593,6 +616,20 @@ class CampaignTerminals(_CampaignBase):
             record["phase"] == "planning" and record["outcome"] == "failed"
             for record in history))
 
+    def test_nonzero_planner_fails_despite_valid_changed_plan(self) -> None:
+        ws = self.make({
+            "planner": {"behavior": "planned-exit1"},
+            "developer": {"behavior": "complete"},
+            "tester": {"behavior": "pass"},
+            "auditor": {"behavior": "pass"},
+        })
+        rc, data = ws.run_cli()
+        self.assertEqual(rc, 3)
+        self.assertTrue(all(
+            record["phase"] == "planning" and record["outcome"] == "failed"
+            for record in data["phase_history"]
+        ))
+
     def test_planning_interruption_terminates_interrupted(self) -> None:
         ws = self.make({
             "planner": {"behavior": "crash"},
@@ -650,6 +687,30 @@ class CampaignTerminals(_CampaignBase):
         assert_terminal(self, data, terminal_phase="infrastructure_failure",
                         terminal_outcome="infrastructure_failure",
                         exit_code=5, rounds_completed=0)
+
+    def test_nonzero_tester_fails_despite_valid_pass_result(self) -> None:
+        ws = self.make({
+            "planner": {"behavior": "planned"},
+            "developer": {"behavior": "complete"},
+            "tester": {"behavior": "pass-exit1"},
+            "auditor": {"behavior": "pass"},
+        })
+        rc, data = ws.run_cli()
+        self.assertEqual(rc, 5)
+        self.assertEqual(data["phase_history"][-1]["outcome"],
+                         "infrastructure_failure")
+
+    def test_nonzero_auditor_fails_despite_valid_pass_result(self) -> None:
+        ws = self.make({
+            "planner": {"behavior": "planned"},
+            "developer": {"behavior": "complete"},
+            "tester": {"behavior": "pass"},
+            "auditor": {"behavior": "pass-exit1"},
+        })
+        rc, data = ws.run_cli()
+        self.assertEqual(rc, 5)
+        self.assertEqual(data["phase_history"][-1]["outcome"],
+                         "infrastructure_failure")
 
     def test_interrupted_audit_terminates_interrupted(self) -> None:
         ws = self.make({
@@ -979,6 +1040,31 @@ class EmptyWorkAndFindings(_CampaignBase):
         self.assertEqual(rc, 0)
         self.assertEqual(data["phase_history"][1]["outcome"], "task_failed")
 
+    def test_shell_command_verification_prose_is_not_treated_as_path(self) -> None:
+        ws = self.make({
+            "planner": {"behavior": "planned"},
+            "developer": {"behavior": "complete-no-file"},
+            "tester": {"behavior": "pass"},
+            "auditor": {"behavior": "pass"},
+        })
+        command = "`nix-shell --run 'ctest -R fixture'`"
+        for relative in (
+            "fixture/templates/planner-1.md",
+            "fixture/templates/dev-1.md",
+        ):
+            path = ws.root / relative
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("`src/work-1.md`", text)
+            path.write_text(
+                text.replace("`src/work-1.md`", command), encoding="utf-8"
+            )
+        _git(ws.root, "add", "fixture/templates/planner-1.md",
+             "fixture/templates/dev-1.md")
+        _git(ws.root, "commit", "-qm", "command verification prose fixture")
+        rc, data = ws.run_cli()
+        self.assertEqual(rc, 0)
+        self.assertEqual(data["phase_history"][1]["outcome"], "task_completed")
+
     def test_task_progress_retries_then_completes(self) -> None:
         ws = self.make({
             "planner": {"behavior": "planned"},
@@ -999,7 +1085,7 @@ class EmptyWorkAndFindings(_CampaignBase):
 
     def test_verification_gate_failure_is_findings(self) -> None:
         ws = self.make({
-            "planner": {"behavior": "planned"},
+            "planner": {"behavior": "planned-complete"},
             "developer": {"behavior": "complete"},
             "tester": {"behavior": "pass"},
             "auditor": {"behavior": "findings"},
@@ -1010,19 +1096,145 @@ class EmptyWorkAndFindings(_CampaignBase):
         self.assertEqual(data["phase_history"][2]["phase"], "verification")
         self.assertEqual(data["phase_history"][2]["outcome"], "findings")
 
-    def test_absent_verification_command_fails_closed(self) -> None:
-        # Task 9 review MED: verification requires an explicit deterministic
-        # verification command — the tester's structured result alone never
-        # gates.  A campaign without a verification command fails closed as
-        # infrastructure_failure even when the tester reports pass.
+    def test_campaign_deadline_is_finite_positive_and_bounded(self) -> None:
         ws = self.make(SUCCESS_SCENARIO)
+        config = ws.derive_config()
+        with self.assertRaises(campaign_module.CampaignConfigError):
+            dataclasses.replace(config, campaign_timeout=0)
+        with self.assertRaises(campaign_module.CampaignConfigError):
+            dataclasses.replace(
+                config,
+                campaign_timeout=campaign_module.MAX_CAMPAIGN_TIMEOUT + 1,
+            )
+
+    def test_absent_verification_command_fails_closed(self) -> None:
+        # Verification argv is a construction/preflight requirement.  Even a
+        # fixture cannot create a campaign contract without its explicit safe
+        # verifier, so no planner/tester role can run first.
+        ws = self.make(SUCCESS_SCENARIO)
+        with self.assertRaises(campaign_module.CampaignConfigError):
+            dataclasses.replace(ws.derive_config(), verification_command=())
+        self.assertFalse(
+            (ws.root / STATE_DIR / state_module.STATE_FILE_NAME).exists()
+        )
+
+    def test_fresh_campaign_namespace_never_reads_or_overwrites_foreign_state(self) -> None:
+        ws = self.make(SUCCESS_SCENARIO)
+        foreign_dir = ws.root / ".factory-state"
+        foreign_dir.mkdir(mode=0o700)
+        foreign = foreign_dir / "foreign-lifecycle.bin"
+        foreign.write_bytes(b"foreign\x00bytes\xff")
+        foreign.chmod(0o640)
+        os.utime(foreign, ns=(1_700_000_000_000_000_000,
+                              1_700_000_001_000_000_000))
+        foreign_before = foreign.lstat()
+        with unittest.mock.patch.object(
+            campaign_module.os, "listdir",
+            side_effect=AssertionError("campaign reservation enumerated state"),
+        ), unittest.mock.patch.object(
+            campaign_module.os, "scandir",
+            side_effect=AssertionError("campaign reservation enumerated state"),
+        ):
+            rel = campaign_module._reserve_campaign_namespace(
+                ws.root, "fresh-production-id"
+            )
+        namespace = ws.root / rel
+        self.assertTrue(namespace.is_dir())
+        self.assertEqual(stat.S_IMODE(namespace.stat().st_mode), 0o700)
+        self.assertEqual(rel, ".factory-state/campaigns/fresh-production-id")
+        self.assertEqual(foreign.read_bytes(), b"foreign\x00bytes\xff")
+        foreign_after = foreign.lstat()
+        self.assertEqual(stat.S_IMODE(foreign_after.st_mode),
+                         stat.S_IMODE(foreign_before.st_mode))
+        self.assertEqual(foreign_after.st_mtime_ns, foreign_before.st_mtime_ns)
+        planted = namespace / "planted"
+        planted.write_bytes(b"untouched")
+        planted.chmod(0o600)
+        with self.assertRaises(campaign_module.CampaignConfigError):
+            campaign_module._reserve_campaign_namespace(
+                ws.root, "fresh-production-id"
+            )
+        self.assertEqual(planted.read_bytes(), b"untouched")
+        self.assertEqual(foreign.read_bytes(), b"foreign\x00bytes\xff")
+
+        active_rel = campaign_module._reserve_campaign_namespace(
+            ws.root, "fixture-namespaced-run"
+        )
         config = dataclasses.replace(
-            ws.derive_config(), verification_command=())
+            ws.derive_config(campaign_id="fixture-namespaced-run"),
+            state_namespace=active_rel,
+            phase_result_path=f"{active_rel}/phase-result.json",
+            audit_result_path=f"{active_rel}/audit-result.json",
+        )
         result = campaign_module.Campaign(config).run()
-        self.assertEqual(result.terminal_phase, "infrastructure_failure")
-        outcomes = [(r.phase, r.outcome) for r in result.phase_history]
-        self.assertIn(("verification", "infrastructure_failure"), outcomes)
-        self.assertNotIn(("audit", "pass"), outcomes)
+        self.assertEqual(result.terminal_phase, "success")
+        active = ws.root / active_rel
+        self.assertTrue((active / state_module.STATE_FILE_NAME).is_file())
+        self.assertTrue(
+            (active / "campaign-result-fixture-namespaced-run.json").is_file()
+        )
+        self.assertEqual(foreign.read_bytes(), b"foreign\x00bytes\xff")
+
+    def test_namespaced_verifier_evidence_override_preserves_foreign_root_bytes(self) -> None:
+        ws = self.make(SUCCESS_SCENARIO)
+        state_root = ws.root / STATE_DIR
+        state_root.mkdir(mode=0o700)
+        foreign = state_root / "installed-functional-evidence.env"
+        foreign.write_bytes(b"foreign-root-evidence\x00bytes\xff")
+        foreign.chmod(0o640)
+        active_rel = campaign_module._reserve_campaign_namespace(
+            ws.root, "evidence-override"
+        )
+        code = (
+            "import os,pathlib; "
+            "p=pathlib.Path(os.environ['FACTORY_INSTALLED_FUNCTIONAL_EVIDENCE_PATH']); "
+            "assert p.as_posix().endswith('/.factory-state/campaigns/evidence-override/installed-functional-evidence.env'); "
+            "p.write_bytes(b'campaign-owned-evidence')"
+        )
+        config = dataclasses.replace(
+            ws.derive_config(campaign_id="evidence-override"),
+            state_namespace=active_rel,
+            phase_result_path=f"{active_rel}/phase-result.json",
+            audit_result_path=f"{active_rel}/audit-result.json",
+            verification_command=(sys.executable, "-c", code),
+        )
+        result = campaign_module.Campaign(config).run()
+        self.assertEqual(result.terminal_phase, "success")
+        self.assertEqual(foreign.read_bytes(), b"foreign-root-evidence\x00bytes\xff")
+        self.assertEqual(
+            (ws.root / active_rel / "installed-functional-evidence.env").read_bytes(),
+            b"campaign-owned-evidence",
+        )
+
+    def test_campaign_namespace_requires_safe_exact_state_components(self) -> None:
+        absent = self.make(SUCCESS_SCENARIO)
+        with self.assertRaises(campaign_module.CampaignConfigError):
+            campaign_module._reserve_campaign_namespace(absent.root, "absent-state")
+        self.assertFalse((absent.root / ".factory-state").exists())
+
+        unsafe_root = self.make(SUCCESS_SCENARIO)
+        state_root = unsafe_root.root / ".factory-state"
+        state_root.mkdir(mode=0o700)
+        state_root.chmod(0o750)
+        with self.assertRaises(campaign_module.CampaignConfigError):
+            campaign_module._reserve_campaign_namespace(unsafe_root.root, "bad-mode")
+        self.assertFalse((state_root / "campaigns").exists())
+        self.assertEqual(stat.S_IMODE(state_root.lstat().st_mode), 0o750)
+
+        unsafe_parent = self.make(SUCCESS_SCENARIO)
+        state_root = unsafe_parent.root / ".factory-state"
+        state_root.mkdir(mode=0o700)
+        outside = unsafe_parent.root / "foreign-target"
+        outside.mkdir(mode=0o700)
+        marker = outside / "marker"
+        marker.write_bytes(b"foreign-parent-bytes")
+        (state_root / "campaigns").symlink_to(outside, target_is_directory=True)
+        with self.assertRaises(campaign_module.CampaignConfigError):
+            campaign_module._reserve_campaign_namespace(
+                unsafe_parent.root, "symlink-parent"
+            )
+        self.assertEqual(marker.read_bytes(), b"foreign-parent-bytes")
+        self.assertEqual(os.readlink(state_root / "campaigns"), str(outside))
 
     def test_verification_blocked_requires_declared_capability(self) -> None:
         # A tester blocked result with exact references becomes a genuine
@@ -1241,6 +1453,47 @@ class LifecycleAndCli(_CampaignBase):
         self.assertEqual(result.returncode, 6)
         self.assertIn("factory-campaign:", result.stderr)
 
+    def test_production_cli_requires_all_commands_and_deadline(self) -> None:
+        ws = self.make(SUCCESS_SCENARIO)
+        result = run(
+            [sys.executable, str(LOOP / "campaign.py"),
+             "--root", str(ws.root), "run", "--campaign-id", "x",
+             "--rounds", "5", "--branch", BRANCH,
+             "--verification-command", str(TRUE_EXECUTABLE)],
+            root=ROOT, check=False,
+        )
+        self.assertEqual(result.returncode, 6)
+        self.assertIn("--capability-command", result.stderr)
+        self.assertIn("--acceptance-command", result.stderr)
+        self.assertFalse((ws.root / STATE_DIR / state_module.STATE_FILE_NAME).exists())
+
+        result = run(
+            [sys.executable, str(LOOP / "campaign.py"),
+             "--root", str(ws.root), "run", "--campaign-id", "x",
+             "--rounds", "5", "--branch", BRANCH,
+             "--verification-command", "./scripts/verify.sh",
+             "--capability-command", "./scripts/capability.sh",
+             "--acceptance-command", "./scripts/acceptance.sh"],
+            root=ROOT, check=False,
+        )
+        self.assertEqual(result.returncode, 6)
+        self.assertIn("--campaign-timeout", result.stderr)
+
+    def test_production_cli_requires_explicit_provider_model_backend(self) -> None:
+        ws = self.make(SUCCESS_SCENARIO)
+        result = run(
+            [sys.executable, str(LOOP / "campaign.py"),
+             "--root", str(ws.root), "run", "--campaign-id", "x",
+             "--rounds", "5", "--branch", BRANCH,
+             "--campaign-timeout", "60",
+             "--verification-command", "./scripts/verify.sh",
+             "--capability-command", "./scripts/capability.sh",
+             "--acceptance-command", "./scripts/acceptance.sh"],
+            root=ROOT, check=False,
+        )
+        self.assertEqual(result.returncode, 6)
+        self.assertIn("explicit --provider, --model, --backend", result.stderr)
+
     def test_cli_main_catches_git_boundary_error(self) -> None:
         # Task 9 review MED: a pinned-Git failure (timeout, missing binary,
         # broken pipe) during config derivation is a clean fail-closed
@@ -1259,6 +1512,9 @@ class LifecycleAndCli(_CampaignBase):
                     "--root", str(ws.root), "run",
                     "--campaign-id", "x", "--rounds", "1",
                     "--branch", BRANCH,
+                    "--provider", "synthetic", "--model", "test-model",
+                    "--role-driver", DRIVER_REL, "--scenario", "scenario.json",
+                    "--verification-command", str(TRUE_EXECUTABLE),
                 ])
         self.assertEqual(rc, 6)
         self.assertIn("pinned Git hung", stderr.getvalue())
@@ -1270,7 +1526,7 @@ class LifecycleAndCli(_CampaignBase):
              "--root", str(ws.root), "run",
              "--campaign-id", "x", "--rounds", "1",
              "--branch", BRANCH, "--provider", "ollama",
-             "--role-driver", DRIVER_REL],
+             "--role-driver", DRIVER_REL, "--scenario", "scenario.json"],
             root=ROOT, check=False)
         self.assertEqual(result.returncode, 6)
         self.assertIn("fixture surface", result.stderr)
@@ -1300,6 +1556,22 @@ class LifecycleAndCli(_CampaignBase):
         with self.assertRaises(campaign_module.CampaignResultError):
             campaign_module.read_phase_result(
                 ws.root, f"{STATE_DIR}/bad-result.json", "fixture")
+
+    def test_pass_phase_result_rejects_findings_and_blockers(self) -> None:
+        ws = self.make(SUCCESS_SCENARIO)
+        state = ws.root / STATE_DIR
+        state.mkdir(parents=True, exist_ok=True)
+        for name, field in (("findings", "findings"), ("blocked", "blocked_on")):
+            path = state / f"pass-with-{name}.json"
+            path.write_text(json.dumps({
+                "schema": "factory-phase-result/v1", "outcome": "pass",
+                field: ["must not accompany pass"],
+            }), encoding="utf-8")
+            with self.assertRaises(campaign_module.CampaignResultError):
+                campaign_module.read_phase_result(
+                    ws.root, f"{STATE_DIR}/{path.name}", "fixture"
+                )
+            self.assertFalse(path.exists())
 
     def test_malformed_secret_result_leaves_no_bytes_or_path(self) -> None:
         """Task 23: the transient raw result is secure-unlinked in a finally
@@ -1419,6 +1691,9 @@ class ClassificationUnits(_CampaignBase):
         self.assertEqual(campaign_module.classify_planning(
             role=planned, plan_changed=True, plan_valid=False, scope_ok=True),
             "failed")
+        self.assertEqual(campaign_module.classify_planning(
+            role=campaign_module.RoleOutcome("planner", 7),
+            plan_changed=True, plan_valid=True, scope_ok=True), "failed")
         interrupted = campaign_module.RoleOutcome(
             "planner", -9, interrupted=True, signal="SIGKILL")
         self.assertEqual(campaign_module.classify_planning(
@@ -1446,7 +1721,7 @@ class ClassificationUnits(_CampaignBase):
         ok = campaign_module.RoleOutcome("tester", 0)
         base = dict(role=ok, scope_ok=True, gate_ran=True, gate_exit=0,
                     tester_result_valid=True, tester_result_outcome="pass",
-                    blocked_refs=(), capability_available=True)
+                    findings=(), blocked_refs=(), capability_available=True)
         self.assertEqual(campaign_module.classify_verification(**base), "pass")
         self.assertEqual(campaign_module.classify_verification(
             **{**base, "gate_exit": 1}), "findings")
@@ -1471,6 +1746,13 @@ class ClassificationUnits(_CampaignBase):
         self.assertEqual(campaign_module.classify_verification(
             **{**base, "tester_result_valid": False}),
             "infrastructure_failure")
+        self.assertEqual(campaign_module.classify_verification(
+            **{**base, "role": campaign_module.RoleOutcome("tester", 9)}),
+            "infrastructure_failure")
+        self.assertEqual(campaign_module.classify_verification(
+            **{**base, "tester_result_outcome": "blocked",
+               "findings": ["higher precedence"], "blocked_refs": ["ext"],
+               "capability_available": False}), "findings")
 
     def test_audit_classification(self) -> None:
         ok = campaign_module.RoleOutcome("auditor", 0)
@@ -1491,6 +1773,10 @@ class ClassificationUnits(_CampaignBase):
         self.assertEqual(campaign_module.classify_audit(
             role=interrupted, scope_ok=True, result_valid=True,
             outcome=None, findings=(), blocked_refs=()), "interrupted")
+        self.assertEqual(campaign_module.classify_audit(
+            role=campaign_module.RoleOutcome("auditor", 4), scope_ok=True,
+            result_valid=True, outcome="pass", findings=(), blocked_refs=()),
+            "infrastructure_failure")
 
 
 class ReviewHardening(_CampaignBase):
@@ -1596,7 +1882,6 @@ class ReviewHardening(_CampaignBase):
         ):
             outcome = campaign_module.launch_role_attempt(
                 config, role="developer", head=head, task_id=1,
-                _confinement_proof=object(),
             )
         self.assertEqual(outcome.exit_status, 0)
         self.assertFalse(outcome.interrupted)
@@ -1648,11 +1933,78 @@ class ReviewHardening(_CampaignBase):
         ):
             outcome = campaign_module.launch_role_attempt(
                 config, role="auditor", head=head, round_number=2,
-                _confinement_proof=object(),
             )
         self.assertEqual(outcome.exit_status, 0)
         self.assertEqual(captured["audit_objective"], expected)
         self.assertEqual(captured["audit_objective_digest"], sha256(expected))
+
+    def test_real_ollama_tester_flow_writes_structured_result_from_prompt(self) -> None:
+        """The non-driver Ollama role receives and fills the exact safe channel.
+
+        Network quota transport alone is mocked; authorization, prompt
+        composition, sealed memfd transport, Landlock, wrapper/backend exec,
+        result-file write, and schema consumption are all real.
+        """
+        ws = self.make(SUCCESS_SCENARIO)
+        # The minimal campaign fixture omits the child-only launcher because
+        # driver tests do not need it; this regression exercises the real
+        # production launch and therefore commits the exact launcher too.
+        shutil.copy2(
+            ROOT / ".factory" / "loop" / "confine_launcher.py",
+            ws.root / ".factory" / "loop" / "confine_launcher.py",
+        )
+        backend = ws.root / "result-backend.py"
+        backend.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json, pathlib, sys\n"
+            "prompt = sys.stdin.read()\n"
+            "marker = 'Write the final machine result to this exact UTF-8 path: '\n"
+            "lines = [line for line in prompt.splitlines() if line.startswith(marker)]\n"
+            "if len(lines) != 1 or 'factory-phase-result/v1' not in prompt:\n"
+            "    raise SystemExit(31)\n"
+            "path = pathlib.Path(lines[0][len(marker):])\n"
+            "path.write_text(json.dumps({'schema':'factory-phase-result/v1',"
+            "'outcome':'pass'}) + '\\n', encoding='utf-8')\n",
+            encoding="utf-8",
+        )
+        backend.chmod(0o755)
+        _git(
+            ws.root, "add", "result-backend.py",
+            ".factory/loop/confine_launcher.py",
+        )
+        _git(ws.root, "commit", "-qm", "add real result backend")
+        head = _git(ws.root, "rev-parse", "HEAD").stdout.strip()
+        config = dataclasses.replace(
+            ws.derive_config(),
+            provider="ollama",
+            model="fixture-real-model",
+            backend=str(backend),
+            role_driver=None,
+            acceptance_command=("./scripts/credential-guard.py",),
+            capability_command=("./scripts/credential-guard.py",),
+            state_namespace=".factory-state/campaigns/campaign",
+            accepted_commit=head,
+            install_manifest=str(ws.root / "fixture-install-manifest.json"),
+            phase_result_path=".factory-state/campaigns/campaign/phase-result.json",
+            audit_result_path=".factory-state/campaigns/campaign/audit-result.json",
+        )
+        result_path = ws.root / config.phase_result_path
+        result_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        descriptor = os.open(result_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        os.close(descriptor)
+        with unittest.mock.patch.object(launch_module, "_gate_ollama_launch"):
+            outcome = campaign_module.launch_role_attempt(
+                config, role="tester", head=head, round_number=1,
+            )
+        self.assertEqual(outcome.exit_status, 0)
+        consumed = campaign_module.read_phase_result(
+            ws.root, config.phase_result_path, "verification"
+        )
+        self.assertIsNotNone(consumed)
+        self.assertEqual(consumed[0], {
+            "schema": "factory-phase-result/v1", "outcome": "pass",
+        })
+        self.assertFalse(result_path.exists(), "result handoff must be consumed")
 
     def test_production_launch_invocation_error_is_clean_campaign_error(
         self,
@@ -1670,7 +2022,6 @@ class ReviewHardening(_CampaignBase):
             with self.assertRaises(campaign_module.CampaignPhaseError) as cm:
                 campaign_module.launch_role_attempt(
                     config, role="developer", head=head, task_id=1,
-                    _confinement_proof=object(),
                 )
         self.assertIn("guard refusal", str(cm.exception))
         # A malformed invocation binding is a clean campaign error too.
@@ -1681,14 +2032,12 @@ class ReviewHardening(_CampaignBase):
             with self.assertRaises(campaign_module.CampaignPhaseError) as cm2:
                 campaign_module.launch_role_attempt(
                     config, role="developer", head=head, task_id=1,
-                    _confinement_proof=object(),
                 )
         self.assertIn("unbound bytes", str(cm2.exception))
         # A task id absent from the committed plan refuses the launch cleanly.
         with self.assertRaises(campaign_module.CampaignPhaseError) as cm3:
             campaign_module.launch_role_attempt(
                 config, role="developer", head=head, task_id=999,
-                _confinement_proof=object(),
             )
         self.assertIn("no Task 999", str(cm3.exception))
 
@@ -1916,20 +2265,17 @@ class ReviewHardening(_CampaignBase):
             "`src/../escape.md`",
             "`src//work.md`",
             "`src/./work.md`",
-            "`src/work file.md`",
         ):
             task.fields["Verification"] = unsafe
             ok, detail = campaign._acceptance_gate(1, plan)
             self.assertFalse(ok)
             self.assertIn("unsafe verification reference", detail)
-        # Task 9 review LOW: a whitespace-bearing reference is rejected as
-        # unsafe rather than silently skipped (it cannot name one exact
-        # repository-relative path).
-        task.fields["Verification"] = "`src/work file.md`"
+        # Verification is shell command prose by contract. Whitespace-bearing
+        # argv is owned by the trusted verifier and is never rejected as a
+        # purported pathname.
+        task.fields["Verification"] = "`nix-shell --run 'ctest -R task-1'`"
         ok, detail = campaign._acceptance_gate(1, plan)
-        self.assertFalse(ok)
-        self.assertIn("unsafe verification reference", detail)
-        self.assertIn("src/work file.md", detail)
+        self.assertTrue(ok, detail)
         for unsafe in (
             "/etc/passwd", "../escape.md", "a/../b", "a//b", "a/./b",
             "a\\b", "a\x00b", "",
@@ -2006,7 +2352,6 @@ class ReviewHardening(_CampaignBase):
             with self.assertRaises(campaign_module.CampaignPhaseError) as cm:
                 campaign_module.launch_role_attempt(
                     config, role="tester", head=head,
-                    _confinement_proof=object(),
                 )
         self.assertIn("no digest for 'tester'", str(cm.exception))
 

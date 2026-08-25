@@ -1359,6 +1359,36 @@ class PinnedGroupTermination(LockConformanceCase):
                 foreign.kill()
                 foreign.wait(timeout=10)
 
+    def test_live_identity_fails_closed_without_pidfd_signaling(self) -> None:
+        """A numeric ``os.kill`` is never a fallback for a live pinned PID."""
+        with unittest.mock.patch.object(
+            lock_module, "_is_live_with_identity", return_value=True
+        ), unittest.mock.patch.object(os, "pidfd_open", None, create=True):
+            with self.assertRaisesRegex(
+                RootLockUnsafeError, "pidfd signaling is unavailable"
+            ):
+                lock_module._signal_pid_pinned(424242, 101, signal.SIGKILL)
+
+    def test_pidfd_identity_is_revalidated_after_open(self) -> None:
+        """A PID recycled before pidfd_open is never signaled via its pidfd."""
+        descriptor = os.open("/dev/null", os.O_RDONLY)
+        send = unittest.mock.Mock()
+        with unittest.mock.patch.object(
+            lock_module,
+            "_is_live_with_identity",
+            side_effect=[True, False],
+        ), unittest.mock.patch.object(
+            os, "pidfd_open", return_value=descriptor, create=True
+        ), unittest.mock.patch.object(
+            signal, "pidfd_send_signal", send, create=True
+        ):
+            self.assertFalse(
+                lock_module._signal_pid_pinned(424243, 102, signal.SIGKILL)
+            )
+        send.assert_not_called()
+        with self.assertRaises(OSError):
+            os.fstat(descriptor)
+
     def test_fork_during_termination_is_captured_and_cleaned(self) -> None:
         """A member that forks a new descendant into the group while the TERM
         grace is pending is captured by the repeated ``/proc`` scan and

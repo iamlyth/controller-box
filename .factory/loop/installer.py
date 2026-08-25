@@ -17,16 +17,12 @@ installer/stager behind that tier:
   with a batched ``git hash-object --no-filters --stdin-paths``, so an
   installed file can never drift from the bound commit and no content
   filter can rewrite the hashed bytes;
-* Task-20-era additions that are not yet part of the bound commit are
-  staged from the working tree only when they appear on the **exact
-  reviewer allowlist** (``PENDING_ALLOWLIST`` — the known Task-20
-  authorities) and live under the installed surface (``.factory/``,
-  ``.pi/``); any other pending path under the surface fails closed, and a
-  secret/credential-looking path is never staged; they are recorded in the
-  manifest with ``pending: true`` so a reviewer sees exactly which
-  installed bytes are newer than the bound commit.  A visible-``scripts/``
-  worktree change that is not a declared shared authority or entrypoint is
-  never staged;
+* production installation rejects every pending executable/control-plane
+  byte and stages only the exact committed blobs; a distinct explicit
+  ``--reviewer-staging`` operation may stage the exact ``PENDING_ALLOWLIST``
+  for source review, but its manifest is marked non-production and cannot be
+  loaded as installed acceptance evidence. Any other pending path or any
+  secret/credential-looking path still fails closed;
 * the declared shared authorities and operator entrypoints must live under
   the allowlisted first segments (``.factory``/``.pi``/``scripts``), must
   be non-secret names, and are staged **exactly once** — they are excluded
@@ -97,11 +93,24 @@ SHA256 = re.compile(r"^[0-9a-f]{64}$")
 # path (``scripts/factory_state_io.py``) and the operator entrypoints.
 INSTALLED_SURFACE = (".factory", ".pi", "scripts")
 
+# Legacy synthetic-confinement proof code is retained only as historical test
+# source in this checkout.  It is not imported by production and must never be
+# copied into an installed harness: installed authorize APIs internally mint
+# only the real workspace-confinement proof.
+NON_INSTALLED_MODULES: frozenset = frozenset({
+    ".factory/loop/confinement.py",
+    ".factory/smoke/evidence_smoke_driver.py",
+})
+NON_INSTALLED_PREFIXES: Tuple[str, ...] = (
+    ".factory/tests/",
+)
+
 # The committed shared authority the hidden control plane imports at runtime
 # and the trusted operator entrypoints of the installed copy.
 DEFAULT_SHARED: Tuple[str, ...] = ("scripts/factory_state_io.py",)
 DEFAULT_ENTRYPOINTS: Tuple[str, ...] = (
     ".factory/bin/factory-launch",
+    ".factory/bin/factory-campaign",
     "scripts/machine-receipt.py",
 )
 
@@ -129,6 +138,7 @@ PENDING_ALLOWLIST: frozenset = frozenset({
     '.factory/artifacts/implementation-plan.md',
     '.factory/audit-objectives/registry.json',
     '.factory/bin/factory-launch',
+    '.factory/bin/factory-campaign',
     '.factory/bin/publish-generic-evidence',
     '.factory/campaign-receipt-policy.json',
     '.factory/generic-leak-allowlist',
@@ -607,6 +617,28 @@ def _validate_declared(rel: str) -> None:
         raise InstallerError(f"declared path is a secret name: {rel!r}")
 
 
+def _pending_is_production_authority(root: Path, rel: str) -> bool:
+    """Whether pending bytes could execute or control an installed harness."""
+    authority_prefixes = (
+        ".factory/bin/", ".factory/loop/", ".factory/prompts/",
+        ".factory/schemas/", ".pi/", "scripts/",
+    )
+    authority_exact = {
+        ".factory/__init__.py", ".factory/campaign-receipt-policy.json",
+        ".factory/capability-contracts.json", ".factory/environment.toml",
+        ".factory/generic-leak-allowlist", ".factory/ralph-freeze",
+    }
+    if rel in authority_exact or rel.startswith(authority_prefixes):
+        return True
+    try:
+        info = os.lstat(root / rel)
+    except OSError:
+        # A deleted authority cannot be safely distinguished by worktree mode;
+        # source-like installed bytes remain control-plane bytes.
+        return Path(rel).suffix in (".py", ".sh", ".mjs", ".js")
+    return bool(stat.S_IMODE(info.st_mode) & 0o111)
+
+
 def _validate_pending(rel: str) -> None:
     """Reviewer-mode pending staging takes only the exact allowlisted
     Task-20 authorities; a stray or secret-looking worktree file under the
@@ -955,6 +987,7 @@ def install_harness(
     shared: Sequence[str] = DEFAULT_SHARED,
     entrypoints: Sequence[str] = DEFAULT_ENTRYPOINTS,
     manifest_out: Optional[Path] = None,
+    reviewer_staging: bool = False,
 ) -> Dict[str, object]:
     """Stage the committed harness into a fresh test-owned prefix.
 
@@ -963,8 +996,9 @@ def install_harness(
     group/other-writable mode, pre-existing prefix entry, or prefix that is
     not absolute/outside the resolved repository; a declared shared
     authority/entrypoint outside the allowlisted first segments, a
-    secret-named path, or a pending worktree file outside the exact
-    reviewer allowlist also fails closed.  The created prefix is rolled
+    secret-named path, or (in production) pending executable/control-plane
+    bytes also fails closed. Reviewer staging remains allowlist-bound and is
+    acceptance-ineligible. The created prefix is rolled
     back identity-safely on any failure after its creation.
     """
     root = Path(root).absolute()
@@ -1000,7 +1034,20 @@ def install_harness(
         prefix_created = True
 
         committed = _ls_tree_surface(root, commit)
-        pending = _pending_paths(root, commit)
+        worktree_pending = _pending_paths(root, commit)
+        pending_authorities = sorted(
+            rel for rel in worktree_pending
+            if _pending_is_production_authority(root, rel)
+        )
+        if pending_authorities and not reviewer_staging:
+            raise InstallerError(
+                "production install rejects pending executable/control-plane "
+                f"bytes at the older bound commit: {pending_authorities[:8]}"
+            )
+        # Reviewer staging is a distinct non-production operation.  Production
+        # always stages committed blobs; benign pending docs/tests are ignored,
+        # never copied into or recorded as acceptance-eligible installed bytes.
+        pending = worktree_pending if reviewer_staging else set()
 
         manifest_files: List[Dict[str, object]] = []
 
@@ -1014,6 +1061,8 @@ def install_harness(
             if rel not in pending
             and (rel.startswith(".factory/") or rel.startswith(".pi/"))
             and rel not in declared
+            and rel not in NON_INSTALLED_MODULES
+            and not rel.startswith(NON_INSTALLED_PREFIXES)
         }
         blobs = _committed_blobs(
             root, [oid for _, oid in committed_only.values()]
@@ -1041,6 +1090,8 @@ def install_harness(
         #    visible-``scripts/`` worktree change that is not a declared
         #    authority is never an installed authority and is never staged.
         for rel in sorted(pending):
+            if rel in NON_INSTALLED_MODULES or rel.startswith(NON_INSTALLED_PREFIXES):
+                continue
             if rel in declared:
                 # Staged below as a shared authority or operator entrypoint.
                 continue
@@ -1113,6 +1164,8 @@ def install_harness(
         manifest: Dict[str, object] = {
             "schema": INSTALL_MANIFEST_SCHEMA,
             "installer": INSTALLER_VERSION,
+            "installation_mode": "reviewer" if reviewer_staging else "production",
+            "acceptance_eligible": not reviewer_staging,
             "commit": commit,
             "root": str(root),
             "prefix": str(prefix),
@@ -1396,6 +1449,60 @@ def verify_staged(root: Path, prefix: Path, manifest: Dict[str, object]) -> List
     return errors
 
 
+def load_production_manifest(path: Path) -> Dict[str, object]:
+    """Load one external no-follow mode-0600 production manifest."""
+    path = Path(path).absolute()
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise InstallerError(f"cannot open install manifest {path}: {exc}") from exc
+    try:
+        before = os.fstat(descriptor)
+        named = path.lstat()
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.getuid()
+            or before.st_nlink != 1
+            or stat.S_IMODE(before.st_mode) != 0o600
+            or before.st_size > MANIFEST_MAX
+            or (before.st_dev, before.st_ino) != (named.st_dev, named.st_ino)
+        ):
+            raise InstallerError("install manifest is not a safe mode-0600 file")
+        chunks: List[bytes] = []
+        remaining = MANIFEST_MAX + 1
+        while remaining:
+            chunk = os.read(descriptor, min(65536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        raw = b"".join(chunks)
+        after = os.fstat(descriptor)
+        named_after = path.lstat()
+        if (
+            len(raw) > MANIFEST_MAX
+            or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+            != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+            or (after.st_dev, after.st_ino) != (named_after.st_dev, named_after.st_ino)
+        ):
+            raise InstallerError("install manifest changed while being read")
+    finally:
+        os.close(descriptor)
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, ValueError) as exc:
+        raise InstallerError(f"install manifest is invalid JSON: {exc}") from exc
+    if (
+        not isinstance(data, dict)
+        or data.get("schema") != INSTALL_MANIFEST_SCHEMA
+        or data.get("installation_mode") != "production"
+        or data.get("acceptance_eligible") is not True
+    ):
+        raise InstallerError("install manifest is not production acceptance eligible")
+    return data
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -1411,24 +1518,59 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         ),
     )
     parser.add_argument(
-        "command", choices=("install",), help="the only installer operation"
+        "command", choices=("install", "verify"),
+        help="install a fresh prefix or verify an existing production prefix",
     )
     parser.add_argument("--root", required=True, metavar="ROOT")
     parser.add_argument("--commit", required=True, metavar="SHA")
     parser.add_argument("--prefix", required=True, metavar="PREFIX")
+    parser.add_argument(
+        "--manifest", metavar="FILE", default=None,
+        help="existing mode-0600 production manifest used by verify",
+    )
     parser.add_argument(
         "--manifest-out", metavar="FILE", default=None,
         help="write the install manifest JSON to FILE (outside the repo, "
         "never replacing an existing file)",
     )
     parser.add_argument("--json", action="store_true", help="print the manifest JSON")
+    parser.add_argument(
+        "--reviewer-staging",
+        action="store_true",
+        help=(
+            "NON-PRODUCTION: stage exact allowlisted pending bytes for source "
+            "review; resulting manifests are not installed acceptance evidence"
+        ),
+    )
     args = parser.parse_args(argv)
     try:
+        if args.command == "verify":
+            if not args.manifest or args.manifest_out or args.reviewer_staging:
+                raise InstallerError(
+                    "verify requires --manifest and rejects install-only options"
+                )
+            manifest = load_production_manifest(Path(args.manifest))
+            if manifest.get("commit") != args.commit:
+                raise InstallerError(
+                    "install manifest commit does not equal --commit"
+                )
+            errors = verify_staged(Path(args.root), Path(args.prefix), manifest)
+            if errors:
+                raise InstallerError(
+                    "installed production verification failed:\n  "
+                    + "\n  ".join(errors)
+                )
+            print(
+                f"factory-installer: verified production install at "
+                f"{args.prefix} bound to {args.commit[:12]}"
+            )
+            return 0
         manifest = install_harness(
             Path(args.root),
             Path(args.prefix),
             args.commit,
             manifest_out=Path(args.manifest_out) if args.manifest_out else None,
+            reviewer_staging=args.reviewer_staging,
         )
     except InstallerError as exc:
         print(f"factory-installer: {exc}", file=sys.stderr)

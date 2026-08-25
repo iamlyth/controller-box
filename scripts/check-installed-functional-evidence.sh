@@ -2,7 +2,33 @@
 set -euo pipefail
 
 root=$(git rev-parse --show-toplevel)
-evidence=$root/.factory-state/installed-functional-evidence.env
+evidence=$(python3 - "$root" "${FACTORY_INSTALLED_FUNCTIONAL_EVIDENCE_PATH:-}" <<'PY'
+import os, re, stat, sys
+from pathlib import Path
+root = Path(sys.argv[1]).absolute()
+override = sys.argv[2]
+if not override:
+    print(root / '.factory-state/installed-functional-evidence.env')
+    raise SystemExit(0)
+path = Path(override)
+if not path.is_absolute():
+    raise SystemExit('installed-functional-evidence: override must be absolute')
+try:
+    parts = path.relative_to(root).parts
+except ValueError:
+    raise SystemExit('installed-functional-evidence: override escapes repository')
+if (len(parts) != 4 or parts[:2] != ('.factory-state', 'campaigns')
+        or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,63}', parts[2])
+        or parts[3] != 'installed-functional-evidence.env'):
+    raise SystemExit('installed-functional-evidence: override is not campaign-owned')
+for directory in (root / parts[0], root / parts[0] / parts[1], path.parent):
+    info = directory.lstat()
+    if (not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode)
+            or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700):
+        raise SystemExit(f'installed-functional-evidence: unsafe override directory {directory}')
+print(path)
+PY
+) || exit $?
 [[ ! -L $evidence && -f $evidence ]] || {
     echo "installed-functional-evidence: missing or unsafe; run ./scripts/verify-project.sh" >&2
     exit 1

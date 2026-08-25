@@ -28,6 +28,7 @@ import http.client
 import ssl
 import sys
 import urllib.parse
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 # Bounded same-origin redirect policy (Task 7 review, obligation 6): the
@@ -40,12 +41,20 @@ from typing import List, Optional, Tuple
 # 4xx/5xx responses remain transient (network/server failure).
 MAX_REDIRECT_HOPS = 5
 
-# HTTPS-only with an explicit loopback test seam (Task 7 review, obligation
-# 9): the *requested* URL must be ``https://`` or the explicit
-# ``127.0.0.1``/``localhost`` loopback seam used exclusively by the hermetic
-# hidden suite.  Redirect targets must additionally stay same-origin, so a
-# redirect can never upgrade or downgrade the scheme.
+# Installed/staged runtime is exact-origin pinned. Alternate HTTPS and the
+# explicit 127.0.0.1/localhost HTTP seam are enabled only in the tracked
+# non-installed source checkout that owns the hidden hermetic suite. Redirect
+# targets must additionally stay same-origin.
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost")
+CANONICAL_SETTINGS_URL = "https://ollama.com/settings"
+
+
+def _noninstalled_test_transport_available() -> bool:
+    source_root = Path(__file__).resolve().parents[2]
+    return (
+        (source_root / ".git").is_dir()
+        and (source_root / ".factory" / "tests" / "test-factory-usage.py").is_file()
+    )
 
 try:  # package-import mode (the hidden control-plane package)
     from .usage import (
@@ -115,7 +124,7 @@ def _origin_of(url: str) -> Optional[Tuple[str, str, str]]:
 
 
 def _validate_request_url(url: str) -> None:
-    """HTTPS-only plus the explicit loopback seam (defense-in-depth).
+    """Exact installed origin or source-test-only alternate (defense in depth).
 
     Also rejects URL userinfo (``user:password@``): the requested URL is
     never a credential carrier, so a settings/redirect URL with embedded
@@ -133,6 +142,18 @@ def _validate_request_url(url: str) -> None:
         )
     scheme = (parsed.scheme or "").lower()
     host = (parsed.hostname or "").lower()
+    if not _noninstalled_test_transport_available():
+        if (
+            url == CANONICAL_SETTINGS_URL
+            and scheme == "https" and host == "ollama.com"
+            and (parsed.port is None or parsed.port == 443)
+            and parsed.path == "/settings" and not parsed.query
+            and not parsed.fragment
+        ):
+            return
+        raise ValueError(
+            "installed fetch transport is pinned to the canonical Ollama origin"
+        )
     if scheme == "https":
         return
     if scheme == "http" and host in LOOPBACK_HOSTS:

@@ -82,11 +82,14 @@ Durable, tracked state:
 - `.factory/environment.toml`, `.factory/config.toml`, `.factory/capability-contracts.json`: declarations
 - `.factory/ralph-freeze`: non-executable tombstone (see below)
 
-Volatile, ignored state (mode 0700):
+Volatile, ignored state:
 
-- `.factory-state/` — the single mutable control state
-  `.factory-state/factory-loop.json`, runner evidence, receipts, audit
-  receipts, campaign and operator state
+- `.factory-state/` — the current-user-owned mode-0700 runtime root for
+  coordinator/runner evidence, audit receipts, and production campaigns
+- `.factory-state/campaigns/<campaign-id>/` — one fresh mode-0700 private
+  production campaign state/result/receipt namespace, created no-replace and
+  never shared; reservation lstats only the exact state root and fixed parent
+  and never enumerates, reads, renames, removes, or overwrites foreign entries
 - `.bug-ledger.lock`, `.ollama-usage-env`, `logs/`, test fixtures
 
 **Retired Ralph control plane.** `.factory/ralph-freeze` is a tracked,
@@ -163,17 +166,32 @@ altered cycle base from running after the specification changes.
 A finite campaign drives planning, implementation attempts, verification, and
 audit rounds through one trusted orchestrator:
 
+The operator first accepts and commits the implementation on `develop`, then
+uses a clean exact commit, a fresh external production install, and a unique
+campaign ID:
+
 ```bash
-python3 .factory/loop/campaign.py run --campaign-id <id> --rounds <n> --branch develop
+ACCEPTED_COMMIT=$(git rev-parse HEAD)
+test -z "$(git status --porcelain --untracked-files=all)"
+INSTALL_PARENT=$(mktemp -d)
+INSTALL_PREFIX="$INSTALL_PARENT/controller-box-harness"
+INSTALL_MANIFEST="$INSTALL_PARENT/install-manifest.json"
+CAMPAIGN_ID="controller-box-$(date +%Y%m%dT%H%M%S)-$$"
+python3 .factory/loop/installer.py install --root "$PWD" --commit "$ACCEPTED_COMMIT" --prefix "$INSTALL_PREFIX" --manifest-out "$INSTALL_MANIFEST"
+python3 "$INSTALL_PREFIX/.factory/loop/installer.py" verify --root "$PWD" --commit "$ACCEPTED_COMMIT" --prefix "$INSTALL_PREFIX" --manifest "$INSTALL_MANIFEST"
+"$INSTALL_PREFIX/.factory/bin/factory-campaign" --root "$PWD" run --campaign-id "$CAMPAIGN_ID" --rounds 5 --branch develop --provider ollama --model "${OLLAMA_MODEL:?set OLLAMA_MODEL}" --backend "$(command -v pi)" --accepted-commit "$ACCEPTED_COMMIT" --install-manifest "$INSTALL_MANIFEST" --campaign-timeout 21600 --verification-command ./scripts/verify-project.sh --capability-command ./scripts/check-capability-evidence.py --acceptance-command '["./scripts/final-gate.sh","--implementation"]'
 ```
 
-`python3 .factory/loop/campaign.py show` prints the current control state and
-result. The installed operator entrypoint `.factory/bin/factory-launch` runs
-one supervised fresh-context role attempt with a strict invocation contract
-(role, model, provider, backend, prompt-set digest, bound commit, allowed
-tools, runtime/inactivity bounds) and derives the exact committed task-excerpt
-digest for the developer; it never runs an interactive model session itself and
-always reaps its child before exiting.
+Production has no synthetic provider/model/backend/gate/deadline defaults. Before
+any role, the installed campaign bytes prove their production manifest and
+accepted commit, bind the exact verification, capability-evidence, and final
+acceptance argv, recheck branch and clean status, and create the no-collision mode-0700
+`.factory-state/campaigns/$CAMPAIGN_ID/` namespace. The pre-existing
+`.factory-state` root must be a real current-user-owned mode-0700 directory;
+only the exact root/fixed parent components are lstat'ed, never enumerated.
+State, structured role results, receipts, and final result stay in the fresh
+child; foreign entries retain their bytes, mode, and mtime. `.factory/bin/factory-launch` remains the single-role
+supervisor; the installed `.factory/bin/factory-campaign` owns finite rounds.
 
 Each implementation iteration:
 
@@ -186,7 +204,14 @@ Each implementation iteration:
 7. exits so the next task receives fresh context.
 
 Outcomes are derived from plan state, Git state, exit status, and
-deterministic gates, never from model completion tokens:
+deterministic gates, never from model completion tokens. Planner, tester, or
+auditor nonzero exit is failing even if it left syntactically valid output.
+The 21600-second wall-clock deadline bounds the whole campaign, including
+quota waits. Per-task completion uses the exact verification command as its
+deterministic acceptance contract; final success additionally requires the
+capability-evidence command and `final-gate.sh --implementation` (which checks
+capability contracts/evidence, conformance, blocked facts, and final product
+acceptance) to exit zero without a skip marker:
 `task_completed`, `task_progress`, `task_failed`, `interrupted`,
 `work_exhausted`, or `blocked`. `work_exhausted` and `blocked` are not product
 acceptance. A failed or interrupted attempt retries the same task while its
@@ -218,7 +243,8 @@ Finite outcomes (documented in FACTORY-LOOP-SPEC §13–§15):
 - `interrupted`: dirty implementation-attempt exhaustion or operator/process interruption;
 - `infrastructure_failure`: untrusted verifier/control-plane failure (fails closed).
 
-One mutable control-state file, `.factory-state/factory-loop.json`, records
+One mutable control-state file,
+`.factory-state/campaigns/<campaign-id>/factory-loop.json`, records
 exactly the schema, repository identity, branch, campaign ID, rounds, current
 round, current phase, specification/plan/prompt-set digests, phase base
 commit, selected task ID, attempt counters, and a trusted `last_outcome` enum.
@@ -273,9 +299,11 @@ endpoint refuses to execute a candidate contract until the capability is
 declared, its contract is promoted to `declared`, and the runner-class
 allowlist grants it. Controller-Box's open hardware/GPU/system-bus/target
 boundaries — BUG-0015 and BUG-0018, and facts FACT-002 through FACT-007 — stay
-open and non-elevated until exact-commit signed receipts exist (Task 26);
-the current signed receipt at `26df6c0` is stale/unevidenced and is not
-claimed as current runner evidence.
+open and non-elevated until their requirement-specific real-system,
+target-hardware, signed current-commit runner, or human evidence exists. The
+legacy `26df6c0` receipt is unsigned/unevidenced. Valid signed evidence exists
+for the older `c45336a` commit, but it is historical and stale; neither is
+claimed as current runner evidence (Task 26).
 
 Validation:
 
@@ -384,7 +412,8 @@ OLLAMA_WAIT_MAX_SECONDS=0  # unlimited
 In the foreground, press `Ctrl+C`; the campaign forwards TERM/INT/HUP/QUIT to
 the current role child, bounds the reap, and leaves durable state for
 recovery. Do not use `kill -9` unless the process cannot terminate normally.
-For a headless campaign, read `.factory-state/factory-loop.json` to identify
+For a headless campaign, read the explicitly selected
+`.factory-state/campaigns/<campaign-id>/factory-loop.json` to identify
 the running campaign and phase, then send SIGINT to the orchestrator PID.
 Recovery is Git+plan+state derived (see above); there is no event stream or
 loop-lock file to repair.
@@ -451,7 +480,21 @@ tracked artifacts make acceptance machine-checked:
   auto-reclassified.
 - Audit reports must cite machine receipts: coordinator-executed commands are
   wrapped by `scripts/machine-receipt.py --tag <tag> -- <argv...>` and
-  recorded under `.factory-state/audit-receipts/`.
+  recorded under `.factory-state/audit-receipts/`. Each command runs below a
+  fresh command-only subreaper broker; the coordinator waits only for that
+  broker. A trusted direct-child stage stops before command exec and retains
+  only the read end of a private CLOEXEC authorization pipe. SIGSTOP is a
+  scheduling barrier, not authorization: after any resume the stage blocks
+  and accepts only the exact unpredictable one-shot token. The broker opens
+  and revalidates the stage pidfd, proves signal-0, revalidates the stopped
+  identity, resumes through that pidfd, and only then writes the token. A
+  pidfd support/resource failure closes the pipe without a token, kills and
+  reaps the retained stage, and starts no command. The capability descriptor
+  and token are consumed before exec and never reach command/model argv,
+  environment, descriptors, transcripts, or logs. Broker-proven identities
+  are pidfd-signaled and reaped before the retained leader status is consumed.
+  Unrelated coordinator children, their workers, and their wait statuses are
+  outside receipt ownership.
   `scripts/check-audit-receipts.py` requires every executable-evidence line to
   carry PASS/FAIL/BLOCKED plus a `[receipt: ...]`/`[manifest: ...]` reference,
   PASS requires exit 0, and any BLOCKED evidence forces `result: findings`.

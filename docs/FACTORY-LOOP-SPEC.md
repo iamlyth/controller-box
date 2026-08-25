@@ -299,6 +299,8 @@ The lock authority MUST NOT be inherited by untrusted model processes. Before ch
 
 After interruption, the supervisor verifies that the model process group is gone and that no escaped descendant retains the repository root/lock inode or a model workspace handle. A double-fork or `setsid` escape that survives bounded termination fails closed for operator inspection before recovery can reacquire the writer boundary.
 
+Every bounded model and receipt command MUST execute below a fresh dedicated child subreaper whose lineage contains no unrelated children. Ownership comes only from that broker's exact leader/descendant identities; the coordinator MUST NOT infer ownership by subtracting a pre-run direct-child baseline, because an unrelated baseline child can fork and exit during the run. Cleanup signals remain identity-pinned (pidfd or ptrace), and a numeric PGID never seeds ownership. The executable ptrace broker MAY forward to the target group only while ptrace still retains the target identity; it MUST disable numeric group forwarding at the target's exit stop before final exit can release that PID/PGID, after which signals name only still-ptrace-pinned tracees. Receipt supervision observes the leader exit without reaping it, pins and settles/kills/reaps the broker-proven lineage while that leader identity is retained, and only then consumes the leader status, preventing PID/PGID reuse from widening cleanup. Before a receipt command starts, a trusted direct-child stage MUST stop before exec while retaining only the read end of a private close-on-exec authorization pipe. The stop is a scheduling barrier, not authorization: after any unsolicited or broker-directed resume, the stage MUST block and validate an exact unpredictable one-shot token before exec. The broker MUST open and revalidate the leader pidfd, prove signal-0 through it, revalidate the stopped identity, resume through that pidfd, and only then write the token. If pidfd support, pidfd signaling, identity validation, resume, or token delivery fails, the broker MUST close the pipe without a token, kill and reap the retained wrapper, and MUST NOT execute the untrusted command. The authorization descriptors and token MUST be consumed before exec and MUST NOT reach command/model descriptors, argv, environment, transcripts, diagnostics, or logs.
+
 Only the developer role may modify product code. The planner may modify only the plan. The tester and auditor are read-only except for trusted receipt publication performed by the control plane. The control plane preserves the Git command-boundary guard: `--no-verify`, hook-path override, `GIT_CONFIG_*`, alternate git/work trees, amend/merge/rebase bypasses, and forged handoffs remain rejected.
 
 ## 13. Phase outcomes
@@ -312,6 +314,9 @@ Outcomes:
 - `planned`: valid fresh plan committed;
 - `failed`: no valid plan commit after the configured bounded planning attempts; campaign terminates nonzero `failed`;
 - `interrupted`: process ended before a valid checkpoint; retry while budget remains, otherwise terminate nonzero `interrupted`.
+
+A nonzero planner exit is `failed` regardless of a valid changed plan left in
+the worktree.
 
 ### 13.2 Implementation attempt
 
@@ -335,6 +340,10 @@ Outcomes:
 - `blocked` when a required declared capability cannot execute;
 - `infrastructure_failure` when the verifier itself cannot be trusted.
 
+A tester process exit other than zero is `infrastructure_failure` even if it
+left schema-valid JSON. A `pass` result may not carry nonempty `findings` or
+`blocked_on`; findings take precedence over blockers during verification.
+
 Verification `findings` or `blocked` do not prevent the independent audit from running. In a non-final round they advance to audit and then become next-round plan inputs. `blocked` means a required, correctly declared capability or human/external authority is unavailable while the verifier and binding remain trusted. `infrastructure_failure` means verifier identity, digest, execution, receipt publication, or control-plane trust is invalid; it fails closed and stops the campaign.
 
 ### 13.4 Audit
@@ -345,11 +354,14 @@ Outcomes:
 - `findings`;
 - `blocked` with exact unavailable-evidence references.
 
-An audit cannot pass with a failed receipt, fabricated command, unresolved mandatory finding, or evidence below the required tier. A non-final audit `blocked` advances to the next planner exactly like findings; the blocker remains explicit in the plan. A final audit `blocked` produces terminal `blocked` only when no software/test finding remains and every unresolved item requires unavailable external, hardware, capability, or human authority.
+An auditor process exit other than zero is `infrastructure_failure` even if it
+left schema-valid JSON. An audit cannot pass with a failed receipt, fabricated command, unresolved mandatory finding, or evidence below the required tier. A non-final audit `blocked` advances to the next planner exactly like findings; the blocker remains explicit in the plan. A final audit `blocked` produces terminal `blocked` only when no software/test finding remains and every unresolved item requires unavailable external, hardware, capability, or human authority.
 
 ## 14. Campaign semantics
 
-A campaign is a finite number of rounds. Each round consists of:
+A campaign is a finite number of rounds and has one required finite production
+wall-clock deadline (at most 86400 seconds) that includes quota waits, role
+supervision, and deterministic gates. Each round consists of:
 
 ```text
 planning -> implementation attempts -> verification -> audit
@@ -366,7 +378,7 @@ For non-final rounds:
 
 For the final round:
 
-- complete product acceptance and audit pass produce campaign `success`;
+- complete product acceptance and audit pass produce campaign `success` only after the exact-commit-bound capability/evidence and final Controller acceptance commands both run, exit zero, and report no skip;
 - any unresolved software, test, documentation, security, or audit defect produces terminal nonzero `findings`;
 - if there are no such defects and every unresolved mandatory item exclusively requires unavailable external, hardware, declared-capability, or human authority, the result is terminal nonzero `blocked`;
 - if both categories exist, `findings` takes precedence;
@@ -378,7 +390,7 @@ Planning-attempt exhaustion produces `failed`; dirty implementation-attempt exha
 
 The following predicates MUST remain distinct:
 
-1. **Task completion:** one plan task and its acceptance checks are complete.
+1. **Task completion:** one plan task and its acceptance checks are complete. Production uses the exact verification command as the coherent per-task acceptance contract; planner verification prose is never interpreted as a pathname.
 2. **Implementation work exhaustion:** no runnable plan task remains.
 3. **Verification pass:** deterministic checks at the exact commit passed.
 4. **Audit pass:** independent review found no acceptance finding within scope.
@@ -411,7 +423,7 @@ Existing credential protections remain mandatory at the actual Pi tool-call and 
 
 The control plane MUST preserve:
 
-- model workspace confinement that makes `.factory-state/`, `.ralph/`, legacy handoffs, task stores, and memory stores unavailable to model tools;
+- model workspace confinement that makes `.factory-state/`, `.ralph/`, legacy handoffs, task stores, and memory stores unavailable to model tools; every model-writable workspace/home/session directory lacks Landlock EXECUTE, executable access is exact-inode only, and a seccomp/ptrace exact-inode broker denies copied Git/helper ELF, direct `ld-linux <target>`, `clone(CLONE_UNTRACED)`, and all `clone3` calls while permitting approved interpreters to read workspace scripts and ordinary ptrace-traced thread/process creation;
 - immutable production credential-guard selection;
 - bounded command/path checks through stdin;
 - structured tool-result redaction;
@@ -439,7 +451,12 @@ These systems answer whether a claim is proven. They MUST NOT decide which imple
 
 Coordinator commands that support acceptance MUST run through the trusted receipt wrapper. PASS requires the bound command to exit 0; command, working identity, commit, digest, timestamps, and output digests are verified; any BLOCKED evidence forces an audit result of findings. Audits cite exact `[receipt: ...]` and `[manifest: ...]` references. A model assertion or free-text command transcript is not a receipt.
 
-The verifier entrypoint MUST be opened and bound to its committed blob and secure identity before untrusted execution; later pathname substitution fails closed.
+The verification, capability/evidence, and final acceptance entrypoints MUST be
+opened and bound to their committed blobs and secure identities before
+untrusted execution; later pathname substitution fails closed. Production
+requires explicit argv for all three. Campaign verification writes installed-
+functional evidence only to the campaign-owned namespace through the validated
+explicit override; normal operator verification retains the root evidence path.
 
 Missing evidence remains a finding. A receipt declaration is not a receipt; a model assertion is not evidence; private integration is not real-system acceptance; machine vision is not human approval.
 

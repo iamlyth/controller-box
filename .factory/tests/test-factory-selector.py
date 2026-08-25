@@ -70,7 +70,7 @@ class CanonicalPlanSelectionTest(unittest.TestCase):
         # Tasks 1-3 are complete; Tasks 5, 9, and 22 (pending, dependencies
         # 1-3 complete) are runnable, and the selector picks the minimum
         # priority (Task 5).  Task 4 and Task 6 are blocked, and the final
-        # audit Task 28 depends on every other task.
+        # audit Task 31 depends on every other task.
         statuses = {task.number: task.status for task in plan.tasks}
         runnable = sorted(
             task.number

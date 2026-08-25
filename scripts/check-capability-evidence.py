@@ -4,25 +4,29 @@
 A capability is evidenced only when all of these hold:
 - the capability is declared in `.factory/environment.toml`;
 - a tracked contract exists (see `check-capability-contracts.py`);
-- the commit-bound runner aggregate `.factory-state/runner-evidence.json`
-  lists the capability as evidenced (probe passed and verifier exit 0);
+- the canonical strong runner validator accepts the exact aggregate,
+  detached signatures, manifest/log digests, commit/tree/environment/archive/
+  verifier bindings, and complete declared-runner coverage;
+- that strongly validated aggregate lists the capability as evidenced;
 - the receipt logs do not contradict the contract: a must-not-skip token or a
   deny-simulated marker inside the contract's probe scope means the probe was
   skipped or simulated and the capability is unevidenced.
 
 Missing contract, missing receipt, or a skip never auto-reclassifies a row.
-The strong aggregate binding is enforced separately by
-`scripts/check-factory-runner-evidence.py`; this checker adds the
-contract-level probe/skip guards over the accepted aggregate.
+This checker invokes the canonical strong validator itself before inspecting
+contract probe logs; callers cannot accidentally accept the aggregate-only
+shape by omitting a separate gate.
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib.util
+import hashlib
 import json
 import os
 import re
-import subprocess
+import sys
 from pathlib import Path
 import tomllib
 
@@ -33,6 +37,51 @@ MAX_LOG_SCAN = 32 * 1024 * 1024
 
 def fail(message: str) -> None:
     raise SystemExit(f"capability-evidence: {message}")
+
+
+def no_duplicate_keys(pairs: list) -> dict:
+    """JSON object-pairs hook: reject duplicate object keys fail-closed."""
+    result: dict = {}
+    for key, value in pairs:
+        if key in result:
+            fail(f"duplicate JSON object key: {key!r}")
+        result[key] = value
+    return result
+
+
+def load_script_module(name: str, path: Path):
+    """Load a dashed-name factory script as an importable module."""
+    if not path.is_file() or path.is_symlink():
+        fail(f"factory script is unavailable: {path}")
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        fail(f"cannot load factory script: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_PINNED_GIT_CACHE: dict[str, object] = {}
+_STRONG_EVIDENCE_CACHE: dict[str, tuple[str, set[str]]] = {}
+
+
+def load_pinned_git(root: Path):
+    """Load the canonical pinned-Git authority (``.factory/loop/gitutil.py``).
+
+    The runner aggregate is bound to HEAD by a trusted Git call; that call runs
+    the PATH-pinned absolute executable with a sanitized environment,
+    ``GIT_NO_REPLACE_OBJECTS=1``, and a finite timeout — never an unqualified
+    ``git`` from a caller-controlled ``PATH``.
+    """
+    key = str(root)
+    if key not in _PINNED_GIT_CACHE:
+        try:
+            _PINNED_GIT_CACHE[key] = load_script_module(
+                "factory_gitutil", root / ".factory/loop/gitutil.py"
+            )
+        except Exception as exc:  # GitBoundaryError and import failures alike
+            fail(f"pinned Git authority is unavailable: {exc}")
+    return _PINNED_GIT_CACHE[key]
 
 
 def declared_capabilities(root: Path) -> set[str]:
@@ -59,7 +108,7 @@ def contract_for(root: Path, capability: str) -> dict:
     if path.is_symlink() or not path.is_file():
         fail(f"missing tracked capability contract file: {path}")
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=no_duplicate_keys)
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         fail(f"cannot parse {path}: {exc}")
     if not isinstance(data, dict) or data.get("schema") != "ralph-capability-contract/v1":
@@ -73,14 +122,45 @@ def contract_for(root: Path, capability: str) -> dict:
     fail(f"no tracked contract for declared capability {capability} (unevidenced)")
 
 
+def strong_runner_evidence(root: Path) -> tuple[str, set[str]]:
+    """Run the canonical full runner validator for this exact repository."""
+    key = str(root.resolve())
+    if key in _STRONG_EVIDENCE_CACHE:
+        return _STRONG_EVIDENCE_CACHE[key]
+    checker_path = root / "scripts/check-factory-runner-evidence.py"
+    try:
+        checker = load_script_module("factory_runner_evidence", checker_path)
+        if Path(checker.ROOT).resolve() != root.resolve():
+            fail("strong runner checker resolved a foreign repository root")
+        digest, capabilities = checker.validate(git_head(root))
+    except SystemExit as exc:
+        detail = str(exc) or "validation failed"
+        fail(f"strong runner evidence rejected: {detail}")
+    except Exception as exc:
+        fail(f"strong runner evidence checker is unavailable: {exc}")
+    if (
+        not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)
+        or not isinstance(capabilities, list)
+        or not all(isinstance(item, str) and NAME.fullmatch(item) for item in capabilities)
+    ):
+        fail("strong runner checker returned an invalid validation result")
+    result = digest, set(capabilities)
+    _STRONG_EVIDENCE_CACHE[key] = result
+    return result
+
+
 def aggregate_evidence(root: Path) -> tuple[set[str], list[Path]]:
+    strong_digest, strong_capabilities = strong_runner_evidence(root)
     aggregate = root / ".factory-state/runner-evidence.json"
     if aggregate.is_symlink() or not aggregate.is_file():
         fail(f"runner evidence aggregate is missing: {aggregate}")
     try:
-        data = json.loads(aggregate.read_text(encoding="utf-8"))
+        raw = aggregate.read_bytes()
+        data = json.loads(raw, object_pairs_hook=no_duplicate_keys)
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         fail(f"invalid runner evidence aggregate {aggregate}: {exc}")
+    if hashlib.sha256(raw).hexdigest() != strong_digest:
+        fail("runner evidence aggregate changed after strong validation")
     if not isinstance(data, dict) or data.get("schema") != "factory-runner-aggregate/v1":
         fail(f"runner evidence aggregate schema is invalid: {aggregate}")
     head = git_head(root)
@@ -108,13 +188,19 @@ def aggregate_evidence(root: Path) -> tuple[set[str], list[Path]]:
                 fail(f"runner manifest path escapes the repository: {relative}")
             if path.is_file() and not path.is_symlink():
                 manifests.append(path)
+    if evidenced != strong_capabilities:
+        fail("aggregate capabilities differ from the strongly validated runner set")
     return evidenced, manifests
 
 
 def git_head(root: Path) -> str:
-    result = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=root, text=True, capture_output=True,
-        env={**os.environ, "GIT_NO_REPLACE_OBJECTS": "1"},
+    git = load_pinned_git(root)
+    result = git.git_run(
+        ["-C", str(root), "rev-parse", "--verify", "HEAD"],
+        env=git.sanitize_git_environment(
+            {**os.environ, "GIT_NO_REPLACE_OBJECTS": "1"}
+        ),
+        timeout=git.GIT_TIMEOUT,
     )
     if result.returncode:
         fail(f"cannot resolve HEAD of {root}")
@@ -167,7 +253,10 @@ def verify_capability(root: Path, capability: str) -> None:
     marker_seen_any = False
     for manifest_path in manifests:
         try:
-            manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest_data = json.loads(
+                manifest_path.read_text(encoding="utf-8"),
+                object_pairs_hook=no_duplicate_keys,
+            )
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             fail(f"invalid runner manifest {manifest_path}: {exc}")
         if not isinstance(manifest_data, dict) or manifest_data.get("schema") != "factory-runner-receipt/v1":

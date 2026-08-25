@@ -16,12 +16,33 @@ VALIDATOR="$PROJECT_ROOT/scripts/validate-conformance.py"
 EVIDENCE_CHECKER="$PROJECT_ROOT/scripts/check-capability-evidence.py"
 CONTRACT_CHECKER="$PROJECT_ROOT/scripts/check-capability-contracts.py"
 FACTS_VALIDATOR="$PROJECT_ROOT/scripts/validate-blocked-facts.py"
+RUNNER_CHECKER="$PROJECT_ROOT/scripts/check-factory-runner-evidence.py"
+ENV_CHECKER="$PROJECT_ROOT/scripts/check-factory-environment.py"
 
 setup_repo() {
     local dir=$1
-    mkdir -p "$dir/scripts" "$dir/.factory/artifacts" "$dir/.factory-state/runner-evidence/probe-runner" \
+    mkdir -p "$dir/scripts" "$dir/.factory/artifacts" "$dir/.factory/loop" "$dir/.factory/schemas" "$dir/.factory-state/runner-evidence/probe-runner" \
         "$dir/tests/fixtures" "$dir/docs"
-    cp "$VALIDATOR" "$EVIDENCE_CHECKER" "$CONTRACT_CHECKER" "$FACTS_VALIDATOR" "$dir/scripts/"
+    cp "$VALIDATOR" "$EVIDENCE_CHECKER" "$CONTRACT_CHECKER" "$FACTS_VALIDATOR" \
+        "$RUNNER_CHECKER" "$ENV_CHECKER" "$dir/scripts/"
+    cp "$PROJECT_ROOT/.factory/loop/gitutil.py" "$dir/.factory/loop/gitutil.py"
+    if [[ ! -f "$tmp/conformance-signer-key" ]]; then
+        ssh-keygen -q -t ed25519 -N '' -f "$tmp/conformance-signer-key"
+    fi
+    local public_key
+    public_key=$(cut -d' ' -f1,2 "$tmp/conformance-signer-key.pub")
+    python3 - "$public_key" <<'PY' > "$dir/.factory/signer-trust.json"
+import json, sys
+print(json.dumps({
+    "schema": "ralph-runner-signer-trust/v1",
+    "description": "ephemeral conformance runner signer",
+    "require_signature": True,
+    "enabled": True,
+    "namespace": "factory-runner-receipt",
+    "public_keys": [{"principal": "factory-signer", "public_key": sys.argv[1]}],
+    "allowed_principals": ["factory-signer"],
+}))
+PY
     chmod +x "$dir/scripts/"*.py
     printf '#!/usr/bin/env bash\nexit 0\n' > "$dir/scripts/verify-project.sh"
     chmod +x "$dir/scripts/verify-project.sh"
@@ -78,24 +99,100 @@ POLICY
     git -C "$dir" add .factory/requirement-policy.json
     git -C "$dir" commit -qm policy
     head=$(git -C "$dir" rev-parse HEAD)
-    mkdir -p "$dir/.factory-state/runner-evidence/probe-runner/$head"
-    printf '%s\n' '{"schema":"factory-runner-receipt/v1","result":"pass","exit_code":0}' > \
-        "$dir/.factory-state/runner-evidence/probe-runner/$head/manifest.json"
-    cat > "$dir/.factory-state/runner-evidence/probe-runner/$head/stdout.log" <<'LOG'
---- probe-capability contract ---
-100% tests passed, 0 tests failed out of 1
-LOG
-    : > "$dir/.factory-state/runner-evidence/probe-runner/$head/stderr.log"
-    cat > "$dir/.factory-state/runner-evidence.json" <<AG
+    # The flat §24 registry mirrors the requirement-policy ID set in policy
+    # order (the validator fails closed on divergence).
+    cat > "$dir/.factory/schemas/factory-plan-v1.requirements.json" <<'REGISTRY'
 {
-  "schema": "factory-runner-aggregate/v1",
-  "commit": "$head",
-  "runners": [
-    {"name": "probe-runner", "manifest": ".factory-state/runner-evidence/probe-runner/$head/manifest.json", "capabilities": ["probe-capability"]}
-  ]
+  "schema": "factory-plan/v1/requirements",
+  "requirement_ids": ["REQ-01", "REQ-02", "REQ-03"]
 }
-AG
+REGISTRY
+    git -C "$dir" add .factory/schemas/factory-plan-v1.requirements.json
+    git -C "$dir" commit -qm registry
+    head=$(git -C "$dir" rev-parse HEAD)
     echo "$head"
+}
+
+# Produce a fully signed, aggregate-member runner manifest whose commit/tree,
+# environment blob, verifier argv, archive, logs, and signer bindings are all
+# real. Conformance must route this live ignored shape to --verify-manifest.
+write_signed_evidence() {
+    local dir=$1 head=$2
+    local public_key
+    public_key=$(cut -d' ' -f1,2 "$tmp/conformance-signer-key.pub")
+    mkdir -p "$dir/.factory-state/runner-evidence/probe-runner/$head"
+    python3 - "$dir" "$head" "$public_key" <<'PY'
+import hashlib, json, pathlib, subprocess, sys, tomllib
+root, head, public_key = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+
+def git(*args):
+    result = subprocess.run(["git", *args], cwd=root, text=True, capture_output=True)
+    if result.returncode:
+        raise SystemExit(result.stderr)
+    return result.stdout.strip()
+
+tree = git("rev-parse", f"{head}^{{tree}}")
+environment_blob = git("rev-parse", f"{head}:.factory/environment.toml")
+environment = tomllib.loads(git("show", f"{head}:.factory/environment.toml"))
+declared = environment["runners"][0]
+argv_sha = hashlib.sha256(json.dumps(declared["verify_argv"], separators=(",", ":")).encode()).hexdigest()
+archive_path = root / "conformance-commit.tar"
+result = subprocess.run(
+    ["git", "archive", "--format=tar", "--output", str(archive_path), head],
+    cwd=root, capture_output=True,
+)
+if result.returncode:
+    raise SystemExit("cannot archive conformance fixture")
+archive_sha = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+archive_path.unlink()
+stdout = b"--- probe-capability contract ---\n100% tests passed, 0 tests failed out of 1\n"
+stderr = b""
+key_sha = hashlib.sha256(public_key.encode()).hexdigest()
+manifest = {
+    "schema": "factory-runner-receipt/v1", "result": "pass",
+    "runner": "probe-runner", "commit": head, "tree": tree,
+    "environment_blob": environment_blob, "verify_argv_sha256": argv_sha,
+    "archive_sha256": archive_sha, "nonce": "0" * 64,
+    "capabilities": ["probe-capability"], "exit_code": 0,
+    "timed_out": False, "started_at": 1, "finished_at": 2,
+    "cleanup": True, "stdout_sha256": hashlib.sha256(stdout).hexdigest(),
+    "stderr_sha256": hashlib.sha256(stderr).hexdigest(),
+    "signer_principal": "factory-signer", "signer_key_sha256": key_sha,
+    "namespace": "factory-runner-receipt", "signature_algorithm": "ssh-ed25519",
+}
+raw = (json.dumps(manifest, sort_keys=True, indent=2) + "\n").encode()
+evidence = root / f".factory-state/runner-evidence/probe-runner/{head}"
+(evidence / "manifest.json").write_bytes(raw)
+(evidence / "stdout.log").write_bytes(stdout)
+(evidence / "stderr.log").write_bytes(stderr)
+aggregate = {
+    "schema": "factory-runner-aggregate/v1", "commit": head, "tree": tree,
+    "environment_blob": environment_blob,
+    "runners": [{
+        "name": "probe-runner",
+        "manifest": f".factory-state/runner-evidence/probe-runner/{head}/manifest.json",
+        "manifest_sha256": hashlib.sha256(raw).hexdigest(),
+        "capabilities": ["probe-capability"],
+        "signer": {"principal": "factory-signer", "key_sha256": key_sha,
+                   "algorithm": "ssh-ed25519", "signature_sha256": ""},
+    }],
+}
+(root / ".factory-state/runner-evidence.json").write_text(
+    json.dumps(aggregate, sort_keys=True, indent=2) + "\n"
+)
+PY
+    ssh-keygen -Y sign -f "$tmp/conformance-signer-key" \
+        -n factory-runner-receipt \
+        < "$dir/.factory-state/runner-evidence/probe-runner/$head/manifest.json" \
+        > "$dir/.factory-state/runner-evidence/probe-runner/$head/manifest.sig" 2>/dev/null
+    python3 - "$dir/.factory-state/runner-evidence/probe-runner/$head/manifest.sig" \
+        "$dir/.factory-state/runner-evidence.json" <<'PY'
+import hashlib, json, pathlib, sys
+signature, aggregate_path = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+aggregate = json.loads(aggregate_path.read_text())
+aggregate["runners"][0]["signer"]["signature_sha256"] = hashlib.sha256(signature.read_bytes()).hexdigest()
+aggregate_path.write_text(json.dumps(aggregate, sort_keys=True, indent=2) + "\n")
+PY
 }
 
 write_plan() {
@@ -110,7 +207,7 @@ status: active
 |----|--------|--------------|----------|------|
 | REQ-01 | §2 | verified | probe evidence | Task 1 |
 | REQ-02 | §2 | partial | probe evidence | Task 1 |
-| REQ-03 | §3 | partial | probe evidence | Task 1 |
+| REQ-03 | §3 | blocked | probe evidence | Task 1 |
 PLAN
 }
 
@@ -261,7 +358,7 @@ elif mode == 'tier-drift':
 open(path, 'w').write(json.dumps(data))
 PY
     sed -i -e 's/| REQ-02 | §2 | partial |/| REQ-02 | §2 | verified |/' \
-           -e 's/| REQ-03 | §3 | partial |/| REQ-03 | §3 | verified |/' \
+           -e 's/| REQ-03 | §3 | blocked |/| REQ-03 | §3 | verified |/' \
         "$dst/.factory/artifacts/implementation-plan.md"
     # All facts are resolved once every row is reclassified verified: an open
     # fact must stay referenced by a blocked/partial row, so the mutated
@@ -283,7 +380,8 @@ expect_fail() {
     [[ $rc -eq 1 ]] || { echo "test: conformance accepted $label (rc=$rc)" >&2; exit 1; }
 }
 
-# Blessed repo: planning valid, contract/receipt checkers pass.
+# Blessed planning remains valid with the capability explicitly blocked.
+# Its fabricated minimal aggregate must never elevate that blocked fact.
 head=$(setup_repo "$tmp/blessed")
 write_plan "$tmp/blessed"
 write_sidecar "$tmp/blessed" "$head"
@@ -292,7 +390,42 @@ write_facts "$tmp/blessed"
 (cd "$tmp/blessed" && ./scripts/validate-conformance.py planning .factory/artifacts/conformance.json --facts .factory/artifacts/blocked-facts.json >/dev/null)
 (cd "$tmp/blessed" && ./scripts/validate-blocked-facts.py planning .factory/artifacts/blocked-facts.json >/dev/null)
 (cd "$tmp/blessed" && ./scripts/check-capability-contracts.py >/dev/null)
-(cd "$tmp/blessed" && ./scripts/check-capability-evidence.py >/dev/null)
+set +e
+(cd "$tmp/blessed" && ./scripts/check-capability-evidence.py >/dev/null 2>&1)
+minimal_capability_rc=$?
+set -e
+[[ $minimal_capability_rc -eq 1 ]]
+
+# A valid live ignored runner shape is not an audit receipt or a Git blob.
+# Conformance must dispatch it to the strong runner checker with
+# --verify-manifest and the row commit; exact aggregate/signature bindings pass,
+# then byte tampering fails closed.
+mutate "$tmp/blessed" "$tmp/runner-route" runner-route
+runner_head=$(git -C "$tmp/runner-route" rev-parse HEAD)
+write_signed_evidence "$tmp/runner-route" "$runner_head"
+python3 - "$tmp/runner-route/.factory/artifacts/conformance.json" \
+    "$tmp/runner-route/.factory/requirement-policy.json" "$runner_head" <<'PY'
+import json, sys
+sidecar_path, policy_path, head = sys.argv[1:]
+sidecar = json.load(open(sidecar_path))
+for requirement in sidecar["requirements"]:
+    requirement["required_tier"] = "unit"
+    if requirement["id"] == "REQ-01":
+        requirement["receipts"] = [
+            f".factory-state/runner-evidence/probe-runner/{head}/manifest.json"
+        ]
+        requirement["artifacts"] = []
+open(sidecar_path, "w").write(json.dumps(sidecar) + "\n")
+policy = json.load(open(policy_path))
+for requirement in policy["requirements"]:
+    requirement["required_tier"] = "unit"
+open(policy_path, "w").write(json.dumps(policy) + "\n")
+PY
+(cd "$tmp/runner-route" && ./scripts/validate-conformance.py complete \
+    .factory/artifacts/conformance.json >/dev/null)
+printf 'tamper\n' >> \
+    "$tmp/runner-route/.factory-state/runner-evidence/probe-runner/$runner_head/manifest.json"
+expect_fail "$tmp/runner-route" "a tampered signed runtime runner manifest"
 
 # A complete state with a non-verified row must fail (blocked fails
 # implementation completion) and an open fact must keep completion failing.
@@ -321,6 +454,7 @@ expect_fail "$tmp/private-dbus" "private DBus evidence for a system capability"
 # the capability unevidenced.
 mutate "$tmp/blessed" "$tmp/skipped-probe" skipped-probe
 head2=$(git -C "$tmp/skipped-probe" rev-parse HEAD)
+write_signed_evidence "$tmp/skipped-probe" "$head2"
 cat > "$tmp/skipped-probe/.factory-state/runner-evidence/probe-runner/$head2/stdout.log" <<'LOG'
 --- probe-capability contract ---
 100% tests passed, 0 tests failed out of 1
@@ -410,6 +544,8 @@ for req in data['requirements']:
         req['reason'] = 'excluded by §12 out-of-scope boundary'
 open(path, 'w').write(json.dumps(data))
 PY
+sed -i 's/| REQ-02 | §2 | partial |/| REQ-02 | §2 | not_applicable |/' \
+    "$tmp/na-misuse/.factory/artifacts/implementation-plan.md"
 (cd "$tmp/na-misuse" && ./scripts/validate-conformance.py planning .factory/artifacts/conformance.json >/dev/null)
 
 # The sidecar and the plan matrix must agree on requirement IDs and claims.

@@ -49,6 +49,19 @@ cat > "$tmp/repo/.factory/capability-contracts.json" <<'EOF'
       "must_execute": true,
       "must_not_skip": ["Skipped", "Not Run", "skip"],
       "deny_simulated_markers": ["mock", "simulated"]
+    },
+    {
+      "name": "gpu-compositor",
+      "status": "candidate",
+      "runner_class": "gpurunner",
+      "probe_argv": ["/usr/bin/true"],
+      "probe_marker": "--- gpu-compositor capability contract ---",
+      "probe_stage": "post",
+      "probe_stdout_contains": ["gpu-compositor-probe: PASS"],
+      "probe_is_verify_run": false,
+      "must_execute": true,
+      "must_not_skip": ["Skipped", "Not Run", "skip"],
+      "deny_simulated_markers": ["mock", "simulated"]
     }
   ]
 }
@@ -195,6 +208,41 @@ sed -i 's/name = "fake-runner"/name = "other-runner"/' "$tmp/repo/.factory/envir
 git -C "$tmp/repo" add .factory/environment.toml
 git -C "$tmp/repo" commit -qm unrelated-environment
 (cd "$tmp/repo" && ./scripts/check-factory-runner-evidence.py --expected-commit "$base" >/dev/null)
+git -C "$tmp/repo" reset -q --hard "$base"
+
+# Optional runner_class metadata on an unrequested candidate was accepted by
+# the real endpoint above, but a candidate is never treated as declared merely
+# because it has a designed class. Even when the root class allowlist grants
+# the capability, execution fails until the contract is promoted to declared.
+write_policy '["remote-project-gate", "gpu-compositor"]'
+sed -i 's/\["remote-project-gate"\]/["remote-project-gate", "gpu-compositor"]/' \
+    "$tmp/repo/.factory/environment.toml"
+git -C "$tmp/repo" add .
+git -C "$tmp/repo" commit -qm candidate-runner-class-not-declared
+set +e
+(cd "$tmp/repo" && ./scripts/run-factory-runners.py >/dev/null 2>&1)
+candidate_rc=$?
+set -e
+[[ $candidate_rc -eq 1 ]]
+git -C "$tmp/repo" reset -q --hard "$base"
+write_policy '["remote-project-gate"]'
+
+# The endpoint validates runner_class syntax on every committed contract,
+# including unrequested candidates, instead of silently ignoring bad metadata.
+python3 - "$tmp/repo/.factory/capability-contracts.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path))
+next(c for c in data["capabilities"] if c["name"] == "gpu-compositor")["runner_class"] = "GPU Runner"
+open(path, "w").write(json.dumps(data, indent=2) + "\n")
+PY
+git -C "$tmp/repo" add .factory/capability-contracts.json
+git -C "$tmp/repo" commit -qm invalid-candidate-runner-class
+set +e
+(cd "$tmp/repo" && ./scripts/run-factory-runners.py >/dev/null 2>&1)
+invalid_class_rc=$?
+set -e
+[[ $invalid_class_rc -eq 1 ]]
 git -C "$tmp/repo" reset -q --hard "$base"
 
 # A resource name is not evidence: an unsupported hardware capability fails at

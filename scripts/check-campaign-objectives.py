@@ -44,7 +44,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -156,23 +156,36 @@ def resolve(root: Path, reference: str) -> Path:
     return resolved
 
 
-def receipt_record(root: Path, reference: str) -> dict:
-    path = resolve(root, reference)
-    if path.is_symlink() or not path.is_file():
-        fail(f"objective receipt is missing or unsafe: {reference}")
+def load_evidence_authority(root: Path):
+    """Load the canonical hidden receipt authority from this repository.
+
+    Runtime receipts are never parsed independently here: the shared authority
+    owns hardened coordinator, no-follow record/transcript, digest, and exact
+    round/base/nonce validation.  Runner manifests remain on their distinct
+    signed aggregate path below.
+    """
+    loop_dir = root / ".factory" / "loop"
+    source = loop_dir / "evidence.py"
+    if source.is_symlink() or not source.is_file():
+        fail("canonical runtime evidence authority is missing or unsafe")
+    module_name = "_factory_campaign_objective_evidence"
+    spec = importlib.util.spec_from_file_location(module_name, source)
+    if spec is None or spec.loader is None:
+        fail("cannot load the canonical runtime evidence authority")
+    module = importlib.util.module_from_spec(spec)
+    previous_path = list(sys.path)
+    sys.modules[module_name] = module
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        fail(f"invalid objective receipt {reference}: {exc}")
-    if not isinstance(data, dict):
-        fail(f"objective receipt must be an object: {reference}")
-    schema = data.get("schema")
-    if schema == "ralph-audit-receipt/v1":
-        return data
-    if schema == "factory-runner-receipt/v1":
-        return data
-    fail(f"objective evidence has an unknown schema: {reference}")
-    return {}
+        sys.path.insert(0, str(loop_dir))
+        spec.loader.exec_module(module)
+    except Exception as exc:
+        fail(f"cannot load the canonical runtime evidence authority: {exc}")
+    finally:
+        sys.path[:] = previous_path
+    for api in ("active_coordinator", "validate_receipt"):
+        if not callable(getattr(module, api, None)):
+            fail(f"canonical runtime evidence authority lacks {api}")
+    return module
 
 
 def manifest_capabilities(root: Path, reference: str) -> list[str]:
@@ -249,77 +262,38 @@ def capability_evidence(root: Path, policy: dict[str, dict]) -> dict[str, list[s
     return mapping
 
 
-def coordinator_state(root: Path) -> dict | None:
-    """Read and revalidate the protected audit coordinator state.
+def audit_binding(args: argparse.Namespace, root: Path) -> tuple[int, str, str, object]:
+    """Return the mandatory canonical coordinator binding and authority.
 
-    Mirrors `check-audit-receipts.py`: when the state exists it is authoritative
-    for the exact nonce/round/base binding, and receipts/manifests must match it.
+    Runtime receipt validation has no coordinator-optional mode.  CLI/env
+    claims may only repeat the hardened active state; they can never replace
+    it or supply a local nonce when the state is absent/unsafe.
     """
-    state = root / COORDINATOR_FILE
-    if not state.exists():
-        return None
-    if state.is_symlink() or not state.is_file():
-        fail("audit coordinator state is unsafe")
+    evidence = load_evidence_authority(root)
     try:
-        data = json.loads(state.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        fail(f"invalid audit coordinator state: {exc}")
-    expected = {"schema", "round", "base_commit", "nonce", "created_at"}
-    if (
-        not isinstance(data, dict)
-        or set(data) != expected
-        or data.get("schema") != "ralph-audit-coordinator/v1"
-        or type(data.get("round")) is not int
-        or data["round"] < 1
-        or not isinstance(data.get("base_commit"), str)
-        or not SHA1.fullmatch(data["base_commit"])
-        or not isinstance(data.get("nonce"), str)
-        or not SHA256.fullmatch(data["nonce"])
-    ):
-        fail("audit coordinator state is invalid")
-    return data
-
-
-def audit_binding(args: argparse.Namespace, root: Path) -> tuple[int, str, str | None]:
-    """Return (round, base, nonce) with the protected coordinator binding enforced.
-
-    The audit round and base must equal the protected
-    `.factory-state/audit-coordinator.json` state exactly (when it exists), the
-    receipts' coordinator nonce must equal the state nonce, and receipts reused
-    across rounds/base are rejected — matching `check-audit-receipts.py`.
-    """
+        state = evidence.active_coordinator(root)
+    except Exception as exc:
+        fail(f"runtime receipt objectives require the active coordinator: {exc}")
     env_round = os.environ.get("FACTORY_CAMPAIGN_AUDIT_ROUND", "")
     env_base = os.environ.get("FACTORY_CAMPAIGN_AUDIT_BASE", "")
     env_nonce = os.environ.get("FACTORY_CAMPAIGN_AUDIT_NONCE", "")
-    round_number = args.round
-    base = args.base
-    if round_number is None and env_round.isdigit() and int(env_round) >= 1:
-        round_number = int(env_round)
-    if base is None and SHA1.fullmatch(env_base or ""):
-        base = env_base
-    state = coordinator_state(root)
-    if state is not None:
-        if round_number is not None and round_number != state["round"]:
-            fail("audit round does not match the protected coordinator state")
-        if base is not None and base != state["base_commit"]:
-            fail("audit base does not match the protected coordinator state")
-        if env_nonce and env_nonce != state["nonce"]:
-            fail("audit nonce does not match the protected coordinator state")
-        round_number = state["round"]
-        base = state["base_commit"]
-        nonce: str | None = state["nonce"]
-    else:
-        nonce = env_nonce if SHA256.fullmatch(env_nonce or "") else None
-        if round_number is None or base is None:
-            fail(
-                "an audit round and base (--round/--base or the protected "
-                "audit coordinator state) are required"
-            )
-    if round_number < 1:
-        fail("audit round must be positive")
-    if not isinstance(base, str) or not SHA1.fullmatch(base):
-        fail("an audit base commit (--base or the protected state) is required")
-    return round_number, base, nonce
+    claimed_round = args.round
+    if claimed_round is None and env_round:
+        if not env_round.isdigit() or int(env_round) < 1:
+            fail("audit round environment binding is malformed")
+        claimed_round = int(env_round)
+    claimed_base = args.base
+    if claimed_base is None and env_base:
+        if not SHA1.fullmatch(env_base):
+            fail("audit base environment binding is malformed")
+        claimed_base = env_base
+    if claimed_round is not None and claimed_round != state["round"]:
+        fail("audit round does not match the protected coordinator state")
+    if claimed_base is not None and claimed_base != state["base_commit"]:
+        fail("audit base does not match the protected coordinator state")
+    if env_nonce and env_nonce != state["nonce"]:
+        fail("audit nonce does not match the protected coordinator state")
+    return state["round"], state["base_commit"], state["nonce"], evidence
 
 
 def strict_manifest(root: Path, reference: str, base: str) -> None:
@@ -348,15 +322,22 @@ def strict_manifest(root: Path, reference: str, base: str) -> None:
 
 
 def covered_categories(root: Path, lines: list[str], required: set[str],
-                       round_number: int, base: str, nonce: str | None,
-                       policy: dict[str, dict]) -> set[str]:
+                       round_number: int, base: str, nonce: str,
+                       policy: dict[str, dict], evidence: object) -> set[str]:
     covered: set[str] = set()
     capability_evidence_by_category = capability_evidence(root, policy)
     for line in lines:
         for receipt_ref in RECEIPT.findall(line):
-            data = receipt_record(root, receipt_ref)
-            if data.get("schema") != "ralph-audit-receipt/v1":
-                continue
+            try:
+                data = evidence.validate_receipt(
+                    root,
+                    receipt_ref,
+                    expected_round=round_number,
+                    expected_base=base,
+                    expected_nonce=nonce,
+                )
+            except Exception as exc:
+                fail(f"objective runtime receipt is invalid: {receipt_ref} ({exc})")
             tag = data.get("tag")
             if not isinstance(tag, str) or tag not in required:
                 continue
@@ -364,40 +345,15 @@ def covered_categories(root: Path, lines: list[str], required: set[str],
             if category is None:
                 fail(f"receipt tag {tag!r} has no tracked receipt-policy category")
             argv = data.get("argv")
-            argv_sha256 = data.get("argv_sha256")
-            if not isinstance(argv, list) or not all(isinstance(item, str) and item for item in argv):
-                fail(f"receipt {receipt_ref} has an invalid argv")
-            if not isinstance(argv_sha256, str) or not SHA256.fullmatch(argv_sha256):
-                fail(f"receipt {receipt_ref} has an invalid argv_sha256")
-            digest = hashlib.sha256(json.dumps(argv, separators=(",", ":")).encode()).hexdigest()
-            if argv_sha256 != digest:
-                fail(f"receipt {receipt_ref} argv digest mismatch")
             if argv not in category["argv"]:
                 fail(
                     f"receipt {receipt_ref} argv {argv!r} is not allowlisted for category "
                     f"{tag!r} (tag/path spoofing or arbitrary command rejected)"
                 )
-            evidence_commit = data.get("evidence_commit")
-            coordinator_round = data.get("coordinator_round")
-            coordinator_nonce = data.get("coordinator_nonce")
-            if not isinstance(evidence_commit, str) or not SHA1.fullmatch(evidence_commit):
-                fail(f"receipt {receipt_ref} has an invalid evidence_commit")
-            if evidence_commit != base:
+            if data.get("exit_code") != 0:
                 fail(
-                    f"receipt {receipt_ref} evidence_commit {evidence_commit[:12]} does not equal "
-                    f"the audit base {base[:12]} (stale or reused across rounds)"
-                )
-            if type(coordinator_round) is not int or coordinator_round != round_number:
-                fail(
-                    f"receipt {receipt_ref} round binding {coordinator_round!r} does not equal "
-                    f"the active round {round_number} (stale or reused across rounds)"
-                )
-            if not isinstance(coordinator_nonce, str) or not SHA256.fullmatch(coordinator_nonce):
-                fail(f"receipt {receipt_ref} has an invalid coordinator_nonce")
-            if nonce is not None and coordinator_nonce != nonce:
-                fail(
-                    f"receipt {receipt_ref} does not match the active audit "
-                    f"coordinator nonce (wrong or reused nonce)"
+                    f"receipt {receipt_ref} exited {data.get('exit_code')}; "
+                    "nonzero runtime evidence cannot satisfy an objective category"
                 )
             covered.add(tag)
         for manifest_ref in MANIFEST.findall(line):
@@ -440,7 +396,7 @@ def main() -> int:
     parser.add_argument("--root", default=str(ROOT))
     args = parser.parse_args()
     root = Path(args.root).resolve()
-    round_number, base, nonce = audit_binding(args, root)
+    round_number, base, nonce, evidence = audit_binding(args, root)
     data = load_objectives(root)
     objectives = data["objectives"]
     objective = objectives[(round_number - 1) % len(objectives)]
@@ -456,7 +412,9 @@ def main() -> int:
     if report_path.is_symlink() or not report_path.is_file():
         fail(f"audit report is missing: {report_path}")
     lines = parse_evidence_lines(report_path)
-    covered = covered_categories(root, lines, required, round_number, base, nonce, policy)
+    covered = covered_categories(
+        root, lines, required, round_number, base, nonce, policy, evidence
+    )
     missing = sorted(required - covered)
     if missing:
         fail(

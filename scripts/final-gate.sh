@@ -7,8 +7,19 @@
 # phase.
 set -euo pipefail
 
-SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+SCRIPT_SOURCE=${BASH_SOURCE[0]}
+if [[ "$SCRIPT_SOURCE" == /proc/self/fd/* ]]; then
+    SCRIPT_SOURCE=$(readlink -f -- "$SCRIPT_SOURCE") || {
+        echo "final-gate: cannot resolve retained descriptor script path" >&2
+        exit 2
+    }
+fi
+SCRIPT_DIR=$(cd -- "$(dirname -- "$SCRIPT_SOURCE")" && pwd)
 PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
+[[ -f "$PROJECT_ROOT/scripts/final-gate.sh" && -f "$PROJECT_ROOT/.factory/config.toml" ]] || {
+    echo "final-gate: cannot resolve canonical repository root" >&2
+    exit 2
+}
 MODE=${1:-}
 cd -- "$PROJECT_ROOT"
 ATTEST=false
@@ -68,6 +79,10 @@ PY
         ./scripts/validate-blocked-facts.py complete .factory/artifacts/blocked-facts.json
         ./scripts/check-golden-policy.py
         ./scripts/check-capability-contracts.py
+        # Capability acceptance is downstream of the canonical strong runner
+        # validator: aggregate shape alone never proves signatures, exact
+        # digests/tree/environment/archive/argv bindings, or probe execution.
+        ./scripts/check-factory-runner-evidence.py
         ./scripts/check-capability-evidence.py
         # Check-only: validates retained visual evidence and never captures or
         # invokes the vision model while the lifecycle lock is held.

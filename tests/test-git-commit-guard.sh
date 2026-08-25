@@ -30,6 +30,9 @@ git -C "$tmp" config user.email test@example.invalid
 git -C "$tmp" add .
 git -C "$tmp" commit -qm initial
 initial_head=$(git -C "$tmp" rev-parse HEAD)
+# The staged model shim accepts commit-producing commands only for the exact
+# launch workspace exported by the trusted control plane.
+export FACTORY_LOOP_LAUNCH_WORKSPACE="$tmp"
 
 # A side branch carrying only a scratchpad change, created before the boundary
 # is installed, feeds the merge vector that never runs pre-commit.
@@ -184,6 +187,35 @@ set +e
 rc=$?
 set -e
 [[ $rc -eq 1 ]]
+# Alternate repository/object/index environment and argv forms are rejected
+# by the shim itself even if an extension rewrite is bypassed.
+for variable in GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY \
+        GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_INDEX_FILE \
+        GIT_CONFIG GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM; do
+    set +e
+    (cd "$tmp" && env "$variable=$tmp/.git" "$SHIM" commit -m "alt-$variable" >/dev/null 2>&1)
+    rc=$?
+    set -e
+    [[ $rc -eq 1 ]] || { echo "test-git-commit-guard: shim accepted $variable" >&2; exit 1; }
+done
+for alternate in "-C $tmp commit -m alt-C" \
+        "--git-dir=$tmp/.git commit -m alt-git-dir" \
+        "--work-tree=$tmp commit -m alt-work-tree"; do
+    set +e
+    # shellcheck disable=SC2086 # intended adversarial argv fragments
+    (cd "$tmp" && "$SHIM" $alternate >/dev/null 2>&1)
+    rc=$?
+    set -e
+    [[ $rc -eq 1 ]] || { echo "test-git-commit-guard: shim accepted $alternate" >&2; exit 1; }
+done
+other_repo="$tmp/other-repo"
+mkdir "$other_repo"
+git -C "$other_repo" init -q
+set +e
+(cd "$other_repo" && "$SHIM" commit -m foreign-repo >/dev/null 2>&1)
+rc=$?
+set -e
+[[ $rc -eq 1 ]] || { echo "test-git-commit-guard: shim accepted foreign repository cwd" >&2; exit 1; }
 git -C "$tmp" config core.hooksPath /tmp/other-hooks
 set +e
 (cd "$tmp" && "$SHIM" commit -m hooked >/dev/null 2>&1)
@@ -206,7 +238,111 @@ rc=$?
 set -e
 [[ $rc -eq 0 ]]
 (cd "$tmp" && "$SHIM" status --porcelain >/dev/null)
-(cd "$tmp" && "$SHIM" log --oneline -1 >/dev/null)
+(cd "$tmp" && "$SHIM" rev-parse HEAD >/dev/null)
+
+# Every non-commit direct Git call is a genuinely read-only allowlisted verb.
+# Plumbing/object/ref mutators and output-writing/external-helper options are
+# refused before dispatch, leaving HEAD, refs, and the object inventory exact.
+readonly_head=$(git -C "$tmp" rev-parse HEAD)
+readonly_refs=$(git -C "$tmp" show-ref | sort)
+readonly_objects=$(git -C "$tmp" count-objects -v)
+tree=$(git -C "$tmp" rev-parse 'HEAD^{tree}')
+for mutator in \
+        "commit-tree $tree -m forged" \
+        "update-ref refs/heads/forged $readonly_head" \
+        "fast-import" \
+        "hash-object -w source.txt" \
+        "replace $readonly_head $readonly_head" \
+        "notes add -m forged $readonly_head" \
+        "branch forged $readonly_head" \
+        "diff --output=$tmp/forged.diff" \
+        "show --textconv HEAD"; do
+    set +e
+    # shellcheck disable=SC2086 # adversarial argv fragments are intentional
+    (cd "$tmp" && "$SHIM" $mutator </dev/null >/dev/null 2>&1)
+    rc=$?
+    set -e
+    [[ $rc -eq 1 ]] || { echo "test-git-commit-guard: shim accepted mutator $mutator" >&2; exit 1; }
+done
+[[ ! -e "$tmp/forged.diff" ]]
+[[ $(git -C "$tmp" rev-parse HEAD) == "$readonly_head" ]]
+[[ $(git -C "$tmp" show-ref | sort) == "$readonly_refs" ]]
+[[ $(git -C "$tmp" count-objects -v) == "$readonly_objects" ]]
+
+# Shell indirection cannot bypass the boundary.  Production places the exact
+# staged shim first in a sealed/sanitized child PATH; these adversarial forms
+# deliberately evade direct-text reduction but their eventual unqualified
+# `git` exec still reaches the shim and cannot mutate refs/history.
+sealed_bin="$tmp/sealed-bin"
+mkdir "$sealed_bin"
+cp "$SHIM" "$sealed_bin/git"
+chmod 500 "$sealed_bin" "$sealed_bin/git"
+source_vector="$tmp/indirect-source.sh"
+printf '%s\n' 'git update-ref refs/heads/indirect-source HEAD' > "$source_vector"
+# shellcheck disable=SC2016 # literal payloads expand only in the nested adversarial shell
+for vector in \
+    'g=git; "$g" update-ref refs/heads/indirect-variable HEAD' \
+    'a=g; b=it; "$a$b" update-ref refs/heads/indirect-concat HEAD' \
+    'shopt -s expand_aliases; alias g=git; eval "g update-ref refs/heads/indirect-alias HEAD"' \
+    'g(){ git "$@"; }; g update-ref refs/heads/indirect-function HEAD' \
+    'cmd="git update-ref refs/heads/indirect-eval HEAD"; eval "$cmd"' \
+    '. "$INDIRECT_SOURCE"'; do
+    set +e
+    (cd "$tmp" && PATH="$sealed_bin:$PATH" INDIRECT_SOURCE="$source_vector" \
+        bash -c "$vector" >/dev/null 2>&1)
+    rc=$?
+    set -e
+    [[ $rc -eq 1 ]] || {
+        echo "test-git-commit-guard: indirection vector escaped: $vector (rc=$rc)" >&2
+        exit 1
+    }
+done
+[[ -z $(git -C "$tmp" for-each-ref --format='%(refname)' 'refs/heads/indirect-*') ]]
+[[ $(git -C "$tmp" rev-parse HEAD) == "$readonly_head" ]]
+
+# Configured read helpers never execute.  Status runs with fsmonitor and
+# untracked-cache disabled under fixed system/global config, while the
+# diff/show/log/blame family is rejected rather than risking external diff or
+# textconv drivers.
+helper_marker="$tmp/helper.marker"
+helper="$tmp/helper.sh"
+printf '#!/usr/bin/env bash\nprintf helper > %q\nexit 0\n' "$helper_marker" > "$helper"
+chmod +x "$helper"
+git -C "$tmp" config core.fsmonitor "$helper"
+git -C "$tmp" config diff.evil.command "$helper"
+git -C "$tmp" config diff.evil.textconv "$helper"
+printf '*.txt diff=evil\n' > "$tmp/.gitattributes"
+(cd "$tmp" && "$SHIM" status --short >/dev/null)
+[[ ! -e "$helper_marker" ]] || {
+    echo "test-git-commit-guard: fsmonitor helper executed" >&2; exit 1; }
+for unsafe_read in 'diff HEAD' 'show HEAD' 'log -1' 'blame source.txt'; do
+    set +e
+    # shellcheck disable=SC2086 # intentional exact adversarial argv fragments
+    (cd "$tmp" && "$SHIM" $unsafe_read >/dev/null 2>&1)
+    rc=$?
+    set -e
+    [[ $rc -eq 1 ]] || {
+        echo "test-git-commit-guard: helper-capable read accepted: $unsafe_read" >&2
+        exit 1
+    }
+done
+[[ ! -e "$helper_marker" ]] || {
+    echo "test-git-commit-guard: diff/textconv helper executed" >&2; exit 1; }
+git -C "$tmp" config --unset core.fsmonitor
+git -C "$tmp" config --remove-section diff.evil
+rm -f "$tmp/.gitattributes" "$helper" "$source_vector"
+chmod 700 "$sealed_bin"
+
+# Empty-but-present repository/config/alternate environment variables are
+# still an attempted override and fail closed before dispatch.
+for variable in GIT_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES \
+        GIT_CONFIG GIT_CONFIG_COUNT GIT_EXEC_PATH GIT_SHALLOW_FILE; do
+    set +e
+    (cd "$tmp" && env "$variable=" "$SHIM" status --short >/dev/null 2>&1)
+    rc=$?
+    set -e
+    [[ $rc -eq 1 ]] || { echo "test-git-commit-guard: shim accepted empty $variable" >&2; exit 1; }
+done
 
 # The one permitted `.ralph` transition is removal from the index. This is a
 # substantive migration commit and cannot reintroduce bytes.

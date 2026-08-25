@@ -51,6 +51,7 @@ absolute Git executable.  It never provisions real runner keys, never touches
 from __future__ import annotations
 
 import dataclasses
+import errno
 import hashlib
 import importlib.util
 import io
@@ -60,6 +61,8 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 import shlex
 import shutil
+import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -1124,6 +1127,22 @@ class ReceiptValidationTests(unittest.TestCase):
         _mkdir(self.root)
         self.fixture = ReceiptFixture(self.root)
         self.ref = f"{STATE_DIR}/audit-receipts/probe.json"
+        # Bind artifact-shape checks through this fixture's active coordinator;
+        # the production API remains mandatory keyword-only.
+        original_validate = evidence_module.validate_receipt
+        def bound_validate(root, reference, **kwargs):
+            if not kwargs:
+                kwargs = {
+                    "expected_round": self.fixture.round,
+                    "expected_base": self.fixture.base,
+                    "expected_nonce": self.fixture.nonce,
+                }
+            return original_validate(root, reference, **kwargs)
+        patcher = unittest.mock.patch.object(
+            evidence_module, "validate_receipt", side_effect=bound_validate
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_valid_receipt_passes(self) -> None:
         data = self.fixture.write("probe")
@@ -1273,6 +1292,44 @@ class EvidenceLinesTests(unittest.TestCase):
         )
         self.assertEqual(count, 1)
 
+    def test_runtime_receipt_api_requires_complete_active_coordinator(self) -> None:
+        with self.assertRaises(TypeError):
+            evidence_module.validate_receipt(self.root, self.ref)
+        with self.assertRaises(evidence_module.ReceiptError):
+            evidence_module.validate_evidence_text(
+                self.lines("pass", self.fixture.line(ref=self.ref)),
+                root=self.root,
+                result="pass",
+                expected_round=1,
+                expected_base=self.fixture.base,
+                # nonce intentionally absent: partial binding is forbidden
+            )
+        coordinator = self.root / STATE_DIR / "audit-coordinator.json"
+        coordinator.unlink()
+        with self.assertRaises(evidence_module.ReceiptError) as caught:
+            evidence_module.validate_receipt(
+                self.root,
+                self.ref,
+                expected_round=1,
+                expected_base=self.fixture.base,
+                expected_nonce=self.fixture.nonce,
+            )
+        self.assertIn("active hardened", str(caught.exception))
+
+    def test_manifest_only_validation_is_coordinator_free(self) -> None:
+        ref = ".factory-state/runner-evidence/fake-runner/manifest.json"
+        (self.root / STATE_DIR / "audit-coordinator.json").unlink()
+        with unittest.mock.patch.object(
+            evidence_module, "validate_manifest_ref", return_value=None
+        ):
+            count = evidence_module.validate_evidence_text(
+                self.lines("pass", f"`cmd` PASS [manifest: {ref}]"),
+                root=self.root,
+                result="pass",
+                expected_base=self.fixture.base,
+            )
+        self.assertEqual(count, 1)
+
     def test_pass_requires_exit0(self) -> None:
         text = self.lines("pass", self.fixture.line(ref=self.failed_ref))
         with self.assertRaises(evidence_module.ReceiptError):
@@ -1285,7 +1342,8 @@ class EvidenceLinesTests(unittest.TestCase):
             marker="FAIL", ref=self.failed_ref))
         evidence_module.validate_evidence_text(
             text, root=self.root, result="findings",
-            expected_round=1, expected_base=self.fixture.base)
+            expected_round=1, expected_base=self.fixture.base,
+            expected_nonce=self.fixture.nonce)
         text2 = self.lines("findings", self.fixture.line(
             marker="FAIL", ref=self.ref))
         with self.assertRaises(evidence_module.ReceiptError):
@@ -1388,14 +1446,16 @@ class EvidenceLinesTests(unittest.TestCase):
             with self.assertRaises(evidence_module.TierError):
                 evidence_module.validate_evidence_text(
                     text, root=self.root, result="pass",
-                    expected_round=1, expected_base=self.fixture.base)
+                    expected_round=1, expected_base=self.fixture.base,
+                    expected_nonce=self.fixture.nonce)
 
     def test_unknown_tier_claim_fails(self) -> None:
         text = self.lines("pass", self.fixture.line(ref=self.ref, tier="bogus"))
         with self.assertRaises(evidence_module.TierError):
             evidence_module.validate_evidence_text(
                 text, root=self.root, result="pass",
-                expected_round=1, expected_base=self.fixture.base)
+                expected_round=1, expected_base=self.fixture.base,
+                expected_nonce=self.fixture.nonce)
 
     def test_manifest_tier_ceiling_with_patched_signer(self) -> None:
         # Without real signing keys the strict runner helper cannot accept a
@@ -1439,7 +1499,8 @@ class EvidenceLinesTests(unittest.TestCase):
         with self.assertRaises(evidence_module.TierError):
             evidence_module.validate_evidence_text(
                 text, root=self.root, result="pass",
-                expected_round=1, expected_base=self.fixture.base)
+                expected_round=1, expected_base=self.fixture.base,
+                expected_nonce=self.fixture.nonce)
         # On the manifest channel the strict signer acceptance is stubbed so
         # the tier-ceiling semantics (human is never machine-claimable) are
         # what is under test.
@@ -2072,11 +2133,33 @@ class MachineReceiptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         ref = f"{STATE_DIR}/audit-receipts/probe.json"
         self.assertIn(f"[receipt: {ref}]", result.stdout)
-        data = evidence_module.validate_receipt(self.root, ref)
+        data = evidence_module.validate_receipt(
+            self.root, ref, expected_round=1, expected_base=self.base,
+            expected_nonce=self.nonce,
+        )
         self.assertEqual(data["exit_code"], 0)
         self.assertEqual(data["coordinator_round"], 1)
         self.assertEqual(data["evidence_commit"], self.base)
         self.assertEqual(data["coordinator_nonce"], self.nonce)
+
+    def test_mint_rejects_and_does_not_repair_runtime_directory_mode(self) -> None:
+        runtime = self.root / STATE_DIR
+        os.chmod(runtime, 0o755)
+        result = self.mint("unsafe-dir", "true")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(stat.S_IMODE(runtime.lstat().st_mode), 0o755)
+        self.assertFalse((runtime / "audit-receipts").exists())
+
+    def test_mint_rejects_every_nonexact_coordinator_mode(self) -> None:
+        coordinator = self.root / STATE_DIR / "audit-coordinator.json"
+        original = coordinator.read_bytes()
+        for mode in (0o400, 0o644, 0o660):
+            os.chmod(coordinator, mode)
+            result = self.mint(f"unsafe-coordinator-{mode:o}", "true")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(stat.S_IMODE(coordinator.lstat().st_mode), mode)
+            self.assertEqual(coordinator.read_bytes(), original)
+        os.chmod(coordinator, 0o600)
 
     def test_same_tag_no_replace_fails_closed(self) -> None:
         first = self.mint("dup", "true")
@@ -2114,7 +2197,10 @@ class MachineReceiptTests(unittest.TestCase):
         codes = sorted(result.returncode for result in results)
         self.assertEqual(codes, [0, 1], codes)
         data = evidence_module.validate_receipt(
-            self.root, f"{STATE_DIR}/audit-receipts/race.json")
+            self.root, f"{STATE_DIR}/audit-receipts/race.json",
+            expected_round=1, expected_base=self.base,
+            expected_nonce=self.nonce,
+        )
         self.assertEqual(data["exit_code"], 0)
 
     def test_bare_mint_without_coordinator_binding_fails(self) -> None:
@@ -2265,6 +2351,223 @@ class MachineReceiptTests(unittest.TestCase):
                 f"a truncated run must never publish {name}",
             )
 
+    def test_early_sigcont_then_pidfd_failure_never_starts_command(self) -> None:
+        """An early external resume blocks on authorization and fails closed.
+
+        The injected pidfd_open seam sends SIGCONT, waits until /proc proves
+        the wrapper actually resumed out of its stop, and only then injects
+        EMFILE.  Thus the no-marker/no-descendant assertions cannot pass merely
+        because SIGKILL won a scheduler race against the external SIGCONT.
+        """
+        machine_receipt = _load_machine_receipt()
+        wrapper_pidfile = self.root / "staged-wrapper.pid"
+        resumed_barrier = self.root / "staged-wrapper.resumed"
+        marker = self.root / "untrusted-command.started"
+        descendant_pidfile = self.root / "untrusted-descendant.pid"
+        command = self.root / "must-not-start.py"
+        command.write_text(
+            "import os, pathlib, time\n"
+            f"pathlib.Path({str(marker)!r}).write_text('started')\n"
+            "child = os.fork()\n"
+            "if child == 0:\n"
+            "    time.sleep(120)\n"
+            "    os._exit(0)\n"
+            f"pathlib.Path({str(descendant_pidfile)!r}).write_text(str(child))\n"
+            "time.sleep(120)\n",
+            encoding="utf-8",
+        )
+
+        def deny_pidfd_after_external_resume(pid: int, _flags: int) -> int:
+            wrapper_pidfile.write_text(str(pid), encoding="ascii")
+            os.kill(pid, signal.SIGCONT)
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                fields = lock_module._proc_stat_fields(pid)
+                if fields is not None and fields[0] not in {"T", "t"}:
+                    resumed_barrier.write_text(fields[0], encoding="ascii")
+                    break
+                time.sleep(0.005)
+            else:
+                raise OSError(
+                    errno.ETIMEDOUT,
+                    "injected test never observed the externally resumed wrapper",
+                )
+            raise OSError(errno.EMFILE, "injected pidfd exhaustion")
+
+        descendant_pid: int | None = None
+        try:
+            with unittest.mock.patch.object(
+                machine_receipt.os,
+                "pidfd_open",
+                new=deny_pidfd_after_external_resume,
+            ):
+                with self.assertRaises(SystemExit) as raised:
+                    machine_receipt.run_bounded(
+                        [sys.executable, str(command)], self.root
+                    )
+            self.assertIn(
+                "cannot pidfd-pin stopped command wrapper", str(raised.exception)
+            )
+            self.assertTrue(wrapper_pidfile.is_file(), "the pidfd seam was not reached")
+            self.assertTrue(
+                resumed_barrier.is_file(),
+                "the external SIGCONT did not deterministically resume the wrapper",
+            )
+            self.assertNotIn(
+                resumed_barrier.read_text(encoding="ascii"), {"T", "t"}
+            )
+            wrapper_pid = int(wrapper_pidfile.read_text(encoding="ascii"))
+            self.assertFalse(marker.exists(), "the untrusted marker command executed")
+            self.assertFalse(
+                descendant_pidfile.exists(),
+                "the untrusted command spawned a descendant before pidfd proof",
+            )
+            self.assertFalse(
+                Path("/proc", str(wrapper_pid)).exists(),
+                "the retained wrapper survived pidfd setup failure",
+            )
+        finally:
+            if descendant_pidfile.is_file():
+                try:
+                    descendant_pid = int(
+                        descendant_pidfile.read_text(encoding="ascii").strip()
+                    )
+                except (OSError, ValueError):
+                    pass
+            _kill_pid(descendant_pid)
+
+    def test_exec_authorization_fd_is_never_inherited_by_command(self) -> None:
+        """The successful untrusted exec receives no authorization descriptor."""
+        machine_receipt = _load_machine_receipt()
+        probe = (
+            "import errno, os; "
+            "extra=[]; "
+            "exec('for fd in range(3, 256):\\n"
+            " try: os.fstat(fd)\\n"
+            " except OSError as exc:\\n"
+            "  if exc.errno != errno.EBADF: raise\\n"
+            " else: extra.append(fd)'); "
+            "print(extra)"
+        )
+        result = machine_receipt.run_bounded(
+            [sys.executable, "-c", probe], self.root
+        )
+        self.assertEqual(result, (0, b"[]\n", b"", False))
+
+    def test_leader_exit_observation_retains_wait_status(self) -> None:
+        """The broker's WNOWAIT probe never consumes leader status early."""
+        machine_receipt = _load_machine_receipt()
+        leader = os.fork()
+        if leader == 0:
+            os._exit(29)
+        try:
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                if machine_receipt._leader_exited_nonreaping(leader):
+                    break
+                time.sleep(0.01)
+            else:
+                self.fail("the non-reaping leader probe never observed exit")
+            fields = lock_module._proc_stat_fields(leader)
+            self.assertIsNotNone(fields)
+            self.assertEqual(fields[0], "Z", "WNOWAIT unexpectedly reaped the leader")
+            waited, status = os.waitpid(leader, 0)
+            self.assertEqual(waited, leader)
+            self.assertTrue(os.WIFEXITED(status))
+            self.assertEqual(os.WEXITSTATUS(status), 29)
+        finally:
+            try:
+                os.waitpid(leader, os.WNOHANG)
+            except ChildProcessError:
+                pass
+
+    def test_reused_numeric_pgid_never_seeds_broker_ownership(self) -> None:
+        """A foreign process sharing the old numeric PGID is excluded."""
+        machine_receipt = _load_machine_receipt()
+        # pid: (ppid, pgid, starttime, state).  PID 700 simulates a foreign
+        # session that acquired the leader's now-reusable numeric PGID.  It is
+        # not below the dedicated broker or exact retained leader identity.
+        snapshot = {
+            500: (400, 500, 10, "Z"),
+            501: (400, 900, 11, "S"),  # adopted owned escape
+            502: (501, 900, 12, "S"),  # owned escape child
+            700: (1, 500, 99, "S"),    # deterministic PGID-reuse foreigner
+        }
+        owned = machine_receipt._owned_lineage_from_snapshot(
+            snapshot,
+            broker_pid=400,
+            leader_pid=500,
+            leader_starttime=10,
+        )
+        self.assertEqual(set(owned), {500, 501, 502})
+        self.assertNotIn(700, owned)
+
+    def test_completed_nested_session_is_not_a_surviving_escape(self) -> None:
+        """A child session joined and reaped by the command remains valid."""
+        machine_receipt = _load_machine_receipt()
+        result = machine_receipt.run_bounded(
+            ["sh", "-c", "setsid sh -c 'exit 0'; exit 0"], self.root
+        )
+        self.assertEqual(result, (0, b"", b"", False))
+
+    def test_preexisting_child_fork_exit_preserves_worker_and_status(self) -> None:
+        """The receipt broker cannot adopt a sibling lineage mid-command."""
+        machine_receipt = _load_machine_receipt()
+        trigger = self.root / "unrelated-trigger"
+        worker_pidfile = self.root / "unrelated-worker.pid"
+        worker_status = self.root / "unrelated-worker.status"
+        helper = self.root / "unrelated-forker.py"
+        helper.write_text(
+            "import os, pathlib, sys, time\n"
+            "trigger, pidfile, status = map(pathlib.Path, sys.argv[1:])\n"
+            "deadline = time.monotonic() + 20\n"
+            "while not trigger.exists() and time.monotonic() < deadline:\n"
+            "    time.sleep(0.01)\n"
+            "if not trigger.exists(): os._exit(91)\n"
+            "worker = os.fork()\n"
+            "if worker:\n"
+            "    pidfile.write_text(str(worker), encoding='ascii')\n"
+            "    os._exit(37)\n"
+            "os.setsid()\n"
+            "time.sleep(0.1)\n"
+            "status.write_text('untouched', encoding='ascii')\n"
+            "time.sleep(120)\n",
+            encoding="utf-8",
+        )
+        preexisting = subprocess.Popen([
+            sys.executable, str(helper), str(trigger), str(worker_pidfile),
+            str(worker_status),
+        ])
+        command = (
+            "import pathlib,sys,time; "
+            "trigger=pathlib.Path(sys.argv[1]); "
+            "status=pathlib.Path(sys.argv[2]); "
+            "trigger.write_text('go'); "
+            "deadline=time.monotonic()+10; "
+            "exec('while not status.exists() and time.monotonic() < deadline:\\n"
+            " time.sleep(0.01)'); "
+            "sys.exit(0 if status.exists() else 92)"
+        )
+        worker_pid: int | None = None
+        try:
+            result = machine_receipt.run_bounded(
+                [sys.executable, "-c", command, str(trigger), str(worker_status)],
+                self.root,
+            )
+            self.assertEqual(result[0], 0)
+            self.assertEqual(preexisting.wait(timeout=5), 37)
+            self.assertTrue(worker_pidfile.is_file())
+            worker_pid = int(worker_pidfile.read_text(encoding="ascii"))
+            self.assertEqual(worker_status.read_text(encoding="ascii"), "untouched")
+            os.kill(worker_pid, 0)
+        finally:
+            if worker_pid is None and worker_pidfile.is_file():
+                worker_pid = int(worker_pidfile.read_text(encoding="ascii"))
+            _kill_pid(worker_pid)
+            if preexisting.poll() is None:
+                preexisting.kill()
+                preexisting.wait(timeout=5)
+
     def test_baseline_and_foreign_processes_are_never_touched(self) -> None:
         """Task 23: the bounded supervision is identity-pinned and
         scope-limited.  A baseline child (a pre-existing child of the
@@ -2332,6 +2635,14 @@ class MachineReceiptTests(unittest.TestCase):
                 )
         finally:
             _kill_pid(baseline_pid)
+            # ``baseline`` is this test process's direct Popen child; killing
+            # its PID is not enough. Reap the owned process and close the
+            # Popen lifecycle so -W ResourceWarning remains clean.
+            try:
+                baseline.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                baseline.kill()
+                baseline.wait(timeout=5)
             _kill_pid(foreign_pid)
             _kill_pid(escaped_pid if 'escaped_pid' in locals() else None)
 
@@ -2593,18 +2904,16 @@ class CampaignVerifierIntegrationTests(unittest.TestCase):
         })
         ws.commit_scenario()
         # The configured verifier path does not exist and is not tracked: the
-        # binding authority cannot open a committed blob, so the campaign
-        # fails closed as infrastructure_failure *before* the untrusted
-        # tester phase runs.
+        # binding authority cannot open a committed blob, so acquisition
+        # fails before the planner or any other untrusted role can run.
         config = dataclasses.replace(
             ws.derive_config(),
             verification_command=("./src/missing-verify.sh",))
-        result = campaign_module.Campaign(config).run()
-        self.assertEqual(result.terminal_phase, "infrastructure_failure")
-        self.assertEqual(self._exit_code(result), 5)
-        # No verification record reached a pass outcome.
-        self.assertFalse(any(r.phase == "verification" and r.outcome == "pass"
-                             for r in result.phase_history))
+        with self.assertRaises(campaign_module.CampaignBindingError):
+            campaign_module.Campaign(config).run()
+        self.assertFalse(
+            (ws.root / ".factory-state" / state_module.STATE_FILE_NAME).exists()
+        )
 
 
 if __name__ == "__main__":

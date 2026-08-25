@@ -92,6 +92,7 @@ MANIFEST_RE = re.compile(r"\[manifest:\s*([^\]]+)\]")
 TIER_CLAIM_RE = re.compile(r"\btier\s*=\s*([a-z_]+)")
 
 MANIFEST_CHECKER_REL = "scripts/check-factory-runner-evidence.py"
+COORDINATOR_REF = ".factory-state/audit-coordinator.json"
 
 
 class EvidenceError(RuntimeError):
@@ -116,14 +117,17 @@ class TierError(EvidenceError):
 
 
 def secure_read_bytes(
-    path: Path, *, maximum: int, what: str
+    path: Path, *, maximum: int, what: str,
+    required_mode: Optional[int] = None,
 ) -> Tuple[bytes, os.stat_result]:
     """Read ``path`` through one retained no-follow descriptor.
 
-    The file must be a regular single-link current-user-owned file that is
-    not group/other-writable, must not exceed ``maximum`` bytes, and the
-    descriptor's identity must match the pathname at both ends of the read
-    (a symlink, mode, owner, link-count, or inode substitution fails closed).
+    The file must be a regular single-link current-user-owned file, must not
+    exceed ``maximum`` bytes, and the descriptor's identity must match the
+    pathname at both ends of the read.  When ``required_mode`` is supplied,
+    the permission bits must equal it exactly; otherwise group/other-writable
+    files are rejected.  A symlink, mode, owner, link-count, or inode
+    substitution always fails closed.
     """
     absolute = path.absolute()
     try:
@@ -145,7 +149,11 @@ def secure_read_bytes(
             not stat.S_ISREG(before.st_mode)
             or before.st_uid != os.getuid()
             or before.st_nlink != 1
-            or before.st_mode & 0o022
+            or (
+                stat.S_IMODE(before.st_mode) != required_mode
+                if required_mode is not None
+                else bool(before.st_mode & 0o022)
+            )
             or (before.st_dev, before.st_ino) != (named.st_dev, named.st_ino)
             or before.st_size > maximum
         ):
@@ -232,7 +240,9 @@ def _resolve_evidence(root: Path, reference: str) -> Path:
 def secure_json(root: Path, reference: str, *, maximum: int = MAX_RECEIPT) -> Tuple[dict, bytes]:
     """Bounded, no-follow, identity-checked JSON read for a receipt record."""
     path = _resolve_evidence(root, reference)
-    raw, _ = secure_read_bytes(path, maximum=maximum, what="evidence record")
+    raw, _ = secure_read_bytes(
+        path, maximum=maximum, what="evidence record", required_mode=0o600
+    )
     try:
         data = json.loads(raw.decode("utf-8"))
     except (UnicodeError, json.JSONDecodeError) as exc:
@@ -245,7 +255,9 @@ def secure_json(root: Path, reference: str, *, maximum: int = MAX_RECEIPT) -> Tu
 def secure_artifact(root: Path, reference: str, *, maximum: int = MAX_ARTIFACT) -> bytes:
     """Bounded no-follow receipt-artifact read with identity checks."""
     path = _resolve_evidence(root, reference)
-    raw, _ = secure_read_bytes(path, maximum=maximum, what="receipt artifact")
+    raw, _ = secure_read_bytes(
+        path, maximum=maximum, what="receipt artifact", required_mode=0o600
+    )
     return raw
 
 
@@ -680,8 +692,8 @@ def revalidate_verifier(
 # ---------------------------------------------------------------------------
 
 
-def validate_receipt(root: Path, reference: str) -> Dict[str, object]:
-    """Validate one ``[receipt: …]`` record and its hardened adjacent logs.
+def _validate_receipt_record(root: Path, reference: str) -> Dict[str, object]:
+    """Validate one receipt record and logs without assigning it authority.
 
     Schema, argv digest, exit code, strict 40-hex evidence commit, positive
     coordinator round, 64-hex nonce, and the stdout/stderr digest artifacts
@@ -738,6 +750,111 @@ def validate_receipt(root: Path, reference: str) -> Dict[str, object]:
         raise ReceiptError(
             f"receipt evidence is unsafe or missing: {exc}"
         ) from exc
+
+
+def active_coordinator(root: Path) -> Dict[str, object]:
+    """Return the hardened active audit coordinator state.
+
+    Runtime receipts have no coordinator-free/local authority.  The runtime
+    directory must be a real current-user-owned mode-0700 directory and the
+    coordinator must be a mode-0600 regular single-link current-user-owned
+    file read through the retained no-follow descriptor authority.
+    """
+    state_dir = (Path(root).absolute() / ".factory-state")
+    try:
+        directory_info = state_dir.lstat()
+    except OSError as exc:
+        raise ReceiptError(
+            "runtime receipt evidence requires an active hardened audit "
+            f"coordinator: {exc}"
+        ) from exc
+    if (
+        not stat.S_ISDIR(directory_info.st_mode)
+        or stat.S_ISLNK(directory_info.st_mode)
+        or directory_info.st_uid != os.getuid()
+        or stat.S_IMODE(directory_info.st_mode) != 0o700
+    ):
+        raise ReceiptError(
+            "runtime receipt evidence requires an active hardened audit "
+            "coordinator in a current-user-owned mode-0700 .factory-state"
+        )
+    try:
+        data, _raw = secure_json(root, COORDINATOR_REF, maximum=16384)
+        coordinator_path = _resolve_evidence(root, COORDINATOR_REF)
+        info = coordinator_path.lstat()
+    except (VerifierBindingError, ReceiptError, OSError) as exc:
+        raise ReceiptError(
+            "runtime receipt evidence requires an active hardened audit "
+            f"coordinator: {exc}"
+        ) from exc
+    if stat.S_IMODE(info.st_mode) != 0o600:
+        raise ReceiptError(
+            "active audit coordinator must be a current-user-owned mode-0600 "
+            "single-link regular file"
+        )
+    expected = {"schema", "round", "base_commit", "nonce", "created_at"}
+    if (
+        set(data) != expected
+        or data.get("schema") != "ralph-audit-coordinator/v1"
+        or type(data.get("round")) is not int
+        or data["round"] < 1
+        or not isinstance(data.get("base_commit"), str)
+        or not SHA1.fullmatch(data["base_commit"])
+        or not isinstance(data.get("nonce"), str)
+        or not SHA256.fullmatch(data["nonce"])
+        or type(data.get("created_at")) is not int
+    ):
+        raise ReceiptError("active audit coordinator state is invalid")
+    return data
+
+
+def validate_receipt(
+    root: Path,
+    reference: str,
+    *,
+    expected_round: int,
+    expected_base: str,
+    expected_nonce: str,
+) -> Dict[str, object]:
+    """Validate a runtime receipt against the active coordinator authority.
+
+    Round, base, and nonce are mandatory API arguments.  They must be
+    well-formed, match the protected active coordinator exactly, and match the
+    receipt fields.  Callers needing signed runner-manifest validation use
+    :func:`validate_manifest_ref`, which is coordinator-free and never accepts
+    a runtime receipt.
+    """
+    if type(expected_round) is not int or expected_round < 1:
+        raise ReceiptError("runtime receipt expected_round is required and invalid")
+    if not isinstance(expected_base, str) or not SHA1.fullmatch(expected_base):
+        raise ReceiptError("runtime receipt expected_base is required and invalid")
+    if not isinstance(expected_nonce, str) or not SHA256.fullmatch(expected_nonce):
+        raise ReceiptError("runtime receipt expected_nonce is required and invalid")
+    coordinator = active_coordinator(root)
+    if (
+        coordinator["round"] != expected_round
+        or coordinator["base_commit"] != expected_base
+        or coordinator["nonce"] != expected_nonce
+    ):
+        raise ReceiptError(
+            "supplied runtime receipt binding does not match the active "
+            "hardened audit coordinator"
+        )
+    data = _validate_receipt_record(root, reference)
+    if data["coordinator_round"] != expected_round:
+        raise ReceiptError(
+            f"runtime receipt {reference} does not match the active coordinator round"
+        )
+    if data["evidence_commit"] != expected_base:
+        raise ReceiptError(
+            f"runtime receipt {reference} evidence_commit does not equal the "
+            "active coordinator base"
+        )
+    if data["coordinator_nonce"] != expected_nonce:
+        raise ReceiptError(
+            f"runtime receipt {reference} does not match the active coordinator nonce"
+        )
+    return data
 
 
 def validate_manifest_ref(
@@ -874,14 +991,23 @@ def validate_evidence_lines(
     - any BLOCKED evidence forces ``result: findings``;
     - a declared ``tier=…`` claim can never exceed its channel ceiling
       (evidence tiers are never elevated by a model claim);
-    - every receipt must match the active audit coordinator round/base/nonce
-      when supplied (stale or reused receipts fail closed).
+    - every receipt requires all active audit coordinator round/base/nonce
+      values and hardened state (stale, reused, or coordinator-free receipts
+      fail closed).
     """
     if result not in ("pass", "findings"):
         raise ReceiptError(f"unsupported evidence result: {result!r}")
     blocked_anywhere = any(entry.get("marker") == "BLOCKED" for entry in lines)
     if blocked_anywhere and result == "pass":
         raise ReceiptError("BLOCKED evidence forces result: findings")
+    receipt_cited = any(entry.get("receipt") for entry in lines)
+    if receipt_cited and (
+        expected_round is None or expected_base is None or expected_nonce is None
+    ):
+        raise ReceiptError(
+            "runtime receipt evidence requires all coordinator round/base/nonce "
+            "values; coordinator-free receipt validation is forbidden"
+        )
     for entry in lines:
         marker = str(entry["marker"])
         receipt_ref = entry.get("receipt")
@@ -896,7 +1022,15 @@ def validate_evidence_lines(
             )
         exit_code = 0
         if receipt_ref:
-            data = validate_receipt(root, receipt_ref)
+            # The pre-scan above makes these casts safe and ensures no receipt,
+            # including one attached to malformed evidence, is coordinator-free.
+            data = validate_receipt(
+                root,
+                str(receipt_ref),
+                expected_round=int(expected_round),
+                expected_base=str(expected_base),
+                expected_nonce=str(expected_nonce),
+            )
             # LOW5: the command the evidence line represents must exactly
             # equal the receipt's recorded argv — a line that cites a receipt
             # minted for a different command can never certify it (a model can
@@ -1079,9 +1213,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     audit.add_argument("report", help="audit report path")
     audit.add_argument("--root", default=str(Path.cwd()))
     audit.add_argument("--result", choices=("pass", "findings"), default=None)
-    audit.add_argument("--expected-round", type=int, default=None)
-    audit.add_argument("--expected-base", default=None)
-    audit.add_argument("--expected-nonce", default=None)
+    audit.add_argument("--expected-round", type=int, default=None,
+                       help="required when the report cites any runtime receipt")
+    audit.add_argument("--expected-base", default=None,
+                       help="required for manifests and runtime receipts")
+    audit.add_argument("--expected-nonce", default=None,
+                       help="required when the report cites any runtime receipt")
 
     args = parser.parse_args(argv)
     root = Path(args.root).absolute()
@@ -1126,6 +1263,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         result = match.group(1)
                 if result is None:
                     raise ReceiptError("audit report has no machine-readable result")
+            parsed_lines = parse_evidence_lines(text)
+            if any(line.get("receipt") for line in parsed_lines) and (
+                args.expected_round is None
+                or args.expected_base is None
+                or args.expected_nonce is None
+            ):
+                raise ReceiptError(
+                    "validate-audit receipt mode requires --expected-round, "
+                    "--expected-base, and --expected-nonce"
+                )
             count = validate_evidence_text(
                 text,
                 root=root,

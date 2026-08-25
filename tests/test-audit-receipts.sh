@@ -28,7 +28,8 @@ setup_repo() {
     # boundary (`.factory/loop/lock.py` and its pinned-Git sibling) for the
     # bounded descendant capture; the fixture must carry the exact fresh
     # authorities so the wrapper never degrades.
-    cp "$PROJECT_ROOT/.factory/loop/lock.py" "$PROJECT_ROOT/.factory/loop/gitutil.py" "$dir/.factory/loop/"
+    cp "$PROJECT_ROOT/.factory/loop/lock.py" "$PROJECT_ROOT/.factory/loop/gitutil.py" \
+       "$PROJECT_ROOT/.factory/loop/evidence.py" "$dir/.factory/loop/"
     chmod +x "$dir/scripts/"*.py
     printf '# Spec\n' > "$dir/docs/SPEC.md"
     printf '# Plan\n' > "$dir/.factory/artifacts/implementation-plan.md"
@@ -208,8 +209,45 @@ assert data['evidence_commit'] == head, data['evidence_commit']
 assert data['coordinator_round'] == 2
 assert len(data['coordinator_nonce']) == 64
 PY
-write_report "$tmp/audit" pass "\`sh -c 'printf ...'\` PASS [receipt: .factory-state/audit-receipts/probe.json]"
+write_report "$tmp/audit" pass "\`sh -c 'printf \"runtime output\\n\"'\` PASS [receipt: .factory-state/audit-receipts/probe.json]"
 (cd "$tmp/audit" && ./scripts/check-audit-receipts.py >/dev/null)
+# Minting and both validators require exact 0600 on the receipt JSON and each
+# transcript. Read-only, group-readable, world-readable, and executable files
+# are all rejected rather than accepted as merely "not writable".
+for artifact in probe.json probe.stdout probe.stderr; do
+    artifact_path="$tmp/audit/.factory-state/audit-receipts/$artifact"
+    [[ $(stat -c '%a' "$artifact_path") == 600 ]] \
+        || { echo "test: minted $artifact is not exact 0600" >&2; exit 1; }
+    for bad_mode in 0400 0640 0644 0700; do
+        chmod "$bad_mode" "$artifact_path"
+        must_fail "receipt artifact $artifact mode $bad_mode" \
+            "cd '$tmp/audit' && ./scripts/check-audit-receipts.py"
+        chmod 0600 "$artifact_path"
+    done
+done
+(cd "$tmp/audit" && ./scripts/check-audit-receipts.py >/dev/null)
+# The duplicate coordinator parser has the same exact metadata contract as
+# factory.loop.evidence.active_coordinator: neither merely read-only nor
+# permissive files/directories can authenticate runtime receipts.
+for bad_mode in 0644 0400 0660; do
+    chmod "$bad_mode" "$tmp/audit/.factory-state/audit-coordinator.json"
+    must_fail "coordinator mode $bad_mode" \
+        "cd '$tmp/audit' && ./scripts/check-audit-receipts.py"
+    chmod 0600 "$tmp/audit/.factory-state/audit-coordinator.json"
+done
+chmod 0755 "$tmp/audit/.factory-state"
+must_fail "coordinator directory mode 0755" \
+    "cd '$tmp/audit' && ./scripts/check-audit-receipts.py"
+chmod 0700 "$tmp/audit/.factory-state"
+(cd "$tmp/audit" && ./scripts/check-audit-receipts.py >/dev/null)
+# A structurally valid runtime receipt is not local/legacy evidence: without
+# the active hardened coordinator state the checker must reject it.
+mv "$tmp/audit/.factory-state/audit-coordinator.json" \
+   "$tmp/audit/.factory-state/audit-coordinator.saved"
+must_fail "runtime receipt without active coordinator" \
+    "cd '$tmp/audit' && ./scripts/check-audit-receipts.py"
+mv "$tmp/audit/.factory-state/audit-coordinator.saved" \
+   "$tmp/audit/.factory-state/audit-coordinator.json"
 
 # Fabricated command prose without a receipt cannot certify runtime.
 write_report "$tmp/audit" pass "\`./verify-project\` PASS with all checks green"
@@ -280,7 +318,7 @@ write_report "$tmp/audit" findings "\`real system probe\` BLOCKED (no real syste
 
 # A findings report citing a passing receipt is valid (runtime certified by
 # the machine receipt, not prose).
-write_report "$tmp/audit" findings "\`sh -c 'printf ...'\` PASS [receipt: .factory-state/audit-receipts/probe.json]"
+write_report "$tmp/audit" findings "\`sh -c 'printf \"runtime output\\n\"'\` PASS [receipt: .factory-state/audit-receipts/probe.json]"
 (cd "$tmp/audit" && ./scripts/check-audit-receipts.py >/dev/null)
 
 # A `[manifest:]` reference must be an exact signed record in the runner-

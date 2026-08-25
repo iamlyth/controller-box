@@ -54,7 +54,7 @@
         "MGR-02",
         "MGR-08"
       ],
-      "blocking_evidence": "inputplumber-system-dbus is undeclared in .factory/environment.toml with no tracked capability contract and no exact-commit receipt; no real org.shadowblip.InputPlumber bus owner/enumeration exists on the factory. Every row bound to this capability stays non-verified until a real system-bus probe receipt exists.",
+      "blocking_evidence": "inputplumber-system-dbus is undeclared and unprovisioned in .factory/environment.toml. A tracked candidate contract now defines the intended live probe, but candidate metadata is not a declared capability and is not evidence; no exact-commit passing receipt or real org.shadowblip.InputPlumber bus owner/enumeration exists on the factory. Every row bound to this capability stays non-verified until the capability is provisioned and its real system-bus probe passes in signed exact-commit runner evidence.",
       "resolution": null
     },
     {
@@ -113,7 +113,7 @@
     },
     {
       "id": "FACT-007",
-      "title": "Runner receipt evidence is not accepted: signed receipt is bound to an older commit and is not tracked as a Git blob",
+      "title": "Current signed exact-commit runner evidence is unavailable",
       "status": "open",
       "capabilities": [
         "remote-project-gate",
@@ -127,7 +127,7 @@
         "VRF-05",
         "DOD-06"
       ],
-      "blocking_evidence": "Rows MGR-03/PKG-01/VRF-05/DOD-06 require runner-trust capability evidence. The signer IS provisioned (.factory/signer-trust.json enabled=true, public key for dev-runner-vm committed at c45336a, signature verifies via ssh-keygen) and a valid signed, commit-bound dev-runner-vm receipt exists at c45336a. However, the runner-evidence aggregate is bound to c45336a, not the current implementation commit b66dbdb, so check-factory-runner-evidence.py reports the aggregate Git/environment binding as stale. The signed receipts live in untracked .factory-state/runner-evidence/ and are not Git blobs at any evidence commit, so they cannot satisfy complete-mode conformance. Resolving requires re-running the declared runner at the current HEAD to produce a signed commit-bound receipt tracked as a Git blob; the dev-runner-vm runner is not reachable from this environment.",
+      "blocking_evidence": "Rows MGR-03/PKG-01/VRF-05/DOD-06 require runner-trust capability evidence. The signer IS provisioned (.factory/signer-trust.json enabled=true, public key for dev-runner-vm committed at c45336a, signature verifies via ssh-keygen) and valid signed evidence exists for the older c45336a commit. That aggregate is stale relative to the current implementation, so it cannot prove the current tree. Live .factory-state/runner-evidence manifests need not be Git blobs: complete-mode conformance dispatches their exact runtime shape to check-factory-runner-evidence.py --verify-manifest for aggregate membership, signature, commit, tree, environment, archive, argv, and log validation. Resolving requires a fresh signed manifest bound to the current exact implementation commit, but the declared dev-runner-vm transport is not reachable from this environment.",
       "resolution": null
     },
     {

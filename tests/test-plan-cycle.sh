@@ -115,6 +115,13 @@ git commit -qm 'valid planning checkpoint'
 attested_head=$(git rev-parse HEAD)
 FACTORY_FINAL_GATE_ATTEST=1 FACTORY_PLANNING_BASE_COMMIT=$base \
     ./scripts/final-gate.sh --planning >/dev/null
+# Campaign verifier execution retains the script inode and invokes it through
+# /proc/self/fd/N. Root discovery must canonicalize that descriptor path just
+# like verify-project.sh rather than deriving /proc/self as the repository.
+exec {final_gate_fd}<./scripts/final-gate.sh
+FACTORY_PLANNING_BASE_COMMIT=$base \
+    bash "/proc/self/fd/$final_gate_fd" --planning >/dev/null
+exec {final_gate_fd}<&-
 [[ $(git rev-parse HEAD) == "$attested_head" ]]
 [[ -z $(git status --porcelain --untracked-files=normal) ]]
 cp .factory/artifacts/implementation-plan.md "$tmp/valid-plan.md"

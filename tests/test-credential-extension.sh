@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
-# Adversarial validation of the Pi tool-call extension credential guardrail
-# (scripts/pi-ralph-emit-extension.mjs) and its tracked sibling guard
+# Adversarial validation of the generic model-side Pi guard extension
+# (scripts/pi-factory-guard-extension.mjs) and its tracked sibling guard
 # (scripts/credential-guard.py). Only fake secrets are used: every value is a
 # clearly-labelled FAKE_* placeholder, so nothing here touches real credential
 # material. The node fixture imports the exported extension helpers and
 # simulates the registered tool_call/tool_result hooks to prove fail-closed
-# tool-input classification, guard failure behavior, tool-result redaction,
-# overflow-log sanitization, and guard-before-rewrite registration order.
+# tool-input classification, exact-commit digest binding, guard failure
+# behavior, tool-result redaction, overflow-log sanitization, the git
+# command-boundary rewrite, and the absence of any retired emit-rewrite
+# surface.
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
-EXTENSION="$PROJECT_ROOT/scripts/pi-ralph-emit-extension.mjs"
+EXTENSION="$PROJECT_ROOT/scripts/pi-factory-guard-extension.mjs"
 GUARD="$PROJECT_ROOT/scripts/credential-guard.py"
 
 if ! command -v node >/dev/null 2>&1; then
@@ -39,14 +41,24 @@ mkdir -p "$tmp/tmpdir"
 # The fixture runs against a hermetic TMPDIR so the fake overflow log stays
 # inside the test. Guard executables are swapped only through the explicit
 # options.guardPath helper (never through the environment), and the registered
-# hooks are proven to ignore hostile CREDENTIAL_GUARD and
-# RALPH_CREDENTIAL_GUARD_TESTING variables because the runtime resolver is
-# immutable.
+# hooks are proven to ignore hostile CREDENTIAL_GUARD variables because the
+# runtime resolver is immutable.
+#
+# The expected exact-commit guard digest is forwarded by the trusted
+# pre-spawn authority through the sanitized launch environment; the fixture
+# exports it so the registered runtime hooks (the production path) bind the
+# tracked guard to the exact committed bytes, and so every tracked-guard
+# helper call exercises the digest gate honestly.
+PI_FACTORY_GUARD_DIGEST=$(sha256sum "$GUARD" | awk '{print $1}')
+export PI_FACTORY_GUARD_DIGEST
+
 TMPDIR="$tmp/tmpdir" \
     node --input-type=module - "$EXTENSION" "$tmp" <<'EOF'
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import {
-  chmodSync, linkSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync,
+  chmodSync, linkSync, mkdirSync, readFileSync, renameSync, statSync,
+  symlinkSync, writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -58,21 +70,29 @@ const extension = await import(pathToFileURL(extensionUrl));
 
 // Every exported helper must exist so the harness can exercise it directly.
 for (const name of [
-  'rewriteRalphEmitCommand', 'rewriteGitCommitCommand', 'resolveGuardPath',
+  'rewriteGitCommitCommand', 'resolveGitShimPath', 'resolveTrustedBash', 'resolveGuardPath',
   'isOwnedRegularFile', 'parseBashOverflowPath', 'parseStrictGuardLine',
   'runGuardCheck', 'redactText', 'redactDeep', 'redactToolResultPatch',
   'failRedactedResult', 'guardToolCallInput', 'sanitizeBashOverflowPath',
-  'truncateOwnedOverflowFile',
+  'truncateOwnedOverflowFile', 'verifyGuardDigest', 'guardBindingStatus',
+  'resolveTrustedPython', 'immutableChainValid',
 ]) {
   assert.equal(typeof extension[name], 'function', `missing exported helper ${name}`);
 }
 assert.equal(typeof extension.default, 'function', 'missing default registration');
 
+// The generic extension carries no retired emit-rewrite surface: the
+// ralph emit rewrite helper must not exist and the source must not name the
+// retired protocol.
+assert.equal(typeof extension.rewriteRalphEmitCommand, 'undefined',
+             'the retired emit rewrite helper must not exist');
+assert.equal(extension.GUARD_DIGEST_ENV, 'PI_FACTORY_GUARD_DIGEST',
+             'the digest env must be the generic factory name');
+
 // TEST_ENV never carries guard overrides: the immutable resolver ignores them
 // and every helper swap below is expressed as an explicit guardPath option.
 const TEST_ENV = { ...process.env };
 delete TEST_ENV.CREDENTIAL_GUARD;
-delete TEST_ENV.RALPH_CREDENTIAL_GUARD_TESTING;
 const TMP = tmpdir();
 const trackedGuard = extension.resolveGuardPath();
 
@@ -158,7 +178,6 @@ for (const command of [
   'grep -rn "token" src/',
   'git status --short',
   "nix-shell --run 'cmake --build build-check'",
-  'ralph emit factory.implement done',
 ]) {
   allow({ toolName: 'bash', input: { command } }, { env: TEST_ENV });
 }
@@ -168,28 +187,95 @@ for (const tool of ['read', 'edit', 'write']) {
   }
 }
 
-// ralph emit and git guard rewrites are preserved once the guardrail allows.
-const ralph = extension.rewriteRalphEmitCommand('ralph emit factory.implement done');
-assert.equal(ralph.matched, true);
-assert.equal(ralph.command, './scripts/pi-cli-shims/ralph emit factory.implement done');
+// ---------------------------------------------------------------------------
+// 2. Git command boundary: direct commit verbs are routed through the
+//    argv-level shim; bypass/unguarded verbs are blocked before Git runs.
+// ---------------------------------------------------------------------------
+const stagedShim = extension.resolveGitShimPath();
+const trustedBash = extension.resolveTrustedBash();
+assert(trustedBash, 'immutable Bash is required for staged script execution');
+const shimCommand = `${trustedBash} ${stagedShim}`;
 const git = extension.rewriteGitCommitCommand('git commit -m "done"');
 assert.equal(git.matched, true);
-assert.equal(git.command, './scripts/pi-cli-shims/git commit -m "done"');
+assert.equal(git.command, `${shimCommand} commit -m done`);
 assert.equal(extension.rewriteGitCommitCommand('git commit --no-verify -m x').blocked, true);
 assert.equal(extension.rewriteGitCommitCommand('git cherry-pick abc').blocked, true);
-// Repeated -C is still routed through the argv-level shim; --git-dir and
-// --work-tree redirection of the commit boundary is blocked before Git runs.
-const multiC = extension.rewriteGitCommitCommand('git -C /a -C /b commit -m "x"');
-assert.equal(multiC.matched, true);
-assert.equal(multiC.command, './scripts/pi-cli-shims/git -C /a -C /b commit -m "x"');
+for (const mutator of [
+  'git commit-tree deadbeef -m forged', 'git update-ref refs/heads/x deadbeef',
+  'git fast-import', 'git hash-object -w payload', 'git replace a b',
+  'git notes add -m forged', 'git branch attacker',
+]) assert.equal(extension.rewriteGitCommitCommand(mutator).blocked, true, mutator);
+for (const reader of [
+  'git status --short', 'git rev-parse HEAD', 'git ls-files',
+  'git ls-tree HEAD', 'git cat-file -t HEAD', 'git merge-base HEAD HEAD',
+]) {
+  const verdict = extension.rewriteGitCommitCommand(reader);
+  assert.equal(verdict.matched, true, reader);
+  assert.equal(verdict.blocked, false, reader);
+  assert(verdict.command.startsWith(shimCommand), reader);
+}
+assert.equal(extension.rewriteGitCommitCommand('git diff --output=/tmp/leak').blocked, true);
+assert.equal(extension.rewriteGitCommitCommand('git show --textconv HEAD').blocked, true);
+for (const helperCapable of ['git diff HEAD', 'git show HEAD', 'git log -1', 'git blame source.c']) {
+  // The extension may reduce these to the shim; the argv-level shim owns the
+  // final rejection.  They must never be treated as an unmediated command.
+  const verdict = extension.rewriteGitCommitCommand(helperCapable);
+  assert.equal(verdict.blocked || verdict.matched, true, helperCapable);
+}
+// Alternate repositories/configuration are blocked, never merely rewritten.
+assert.equal(extension.rewriteGitCommitCommand('git -C /a -C /b commit -m "x"').blocked, true);
 assert.equal(extension.rewriteGitCommitCommand('git --git-dir=/tmp/fake-repo commit -m "x"').blocked, true);
 assert.equal(extension.rewriteGitCommitCommand('git --work-tree /tmp/fake commit -m "x"').blocked, true);
 assert.equal(extension.rewriteGitCommitCommand('git -c core.hookspath=/tmp/fake commit -m "x"').blocked, true);
 assert.equal(extension.rewriteGitCommitCommand('git --config core.HooksPath=/tmp/fake commit -m "x"').blocked, true);
 assert.equal(extension.rewriteGitCommitCommand('git --config-env CORE.HOOKSPATH=FAKE_ENV commit -m "x"').blocked, true);
+assert.equal(extension.rewriteGitCommitCommand('GIT_DIR=/tmp/repo git commit -m x').blocked, true);
+// Prefix assignments, `command git`, and safe global options are recognized;
+// shell-form, absolute, globbed, env-wrapper, and expansion forms fail closed.
+assert.equal(extension.rewriteGitCommitCommand('CI=1 git commit -m x').command,
+             `CI=1 ${shimCommand} commit -m x`);
+assert.equal(extension.rewriteGitCommitCommand('command git commit -m x').command,
+             `${shimCommand} commit -m x`);
+assert.equal(extension.rewriteGitCommitCommand('git --no-pager commit -m x').command,
+             `${shimCommand} --no-pager commit -m x`);
+for (const unsafe of [
+  "sh -c 'git commit -m x'", 'env git commit -m x',
+  '/usr/bin/git commit -m x', '/bin/git status',
+  'g?t commit -m x', '[g]it commit -m x',
+  '$(printf g)it commit -m x', 'git $(printf commit) -m x',
+  'true && git commit -m x',
+]) assert.equal(extension.rewriteGitCommitCommand(unsafe).blocked, true, unsafe);
+// cd && git commit is reduced to exact argv and routed through staged bytes.
+const cdGit = extension.rewriteGitCommitCommand('cd src && git commit -m "x"');
+assert.equal(cdGit.matched, true);
+assert.equal(cdGit.command, `cd src && ${shimCommand} commit -m x`);
 
 // ---------------------------------------------------------------------------
-// 2. Fail-closed guard failure: missing, crashing, timing-out, and invalid
+// 3. Exact-commit digest binding: the tracked guard fails closed on a
+//    missing, malformed, or mismatched digest; a fixture that explicitly
+//    swapped guardPath owns its own authority and bypasses the gate.
+// ---------------------------------------------------------------------------
+const realDigest = createHash('sha256').update(readFileSync(trackedGuard)).digest('hex');
+assert.equal(process.env[extension.GUARD_DIGEST_ENV], realDigest,
+             'fixture env must carry the exact committed guard digest');
+assert.equal(
+  extension.verifyGuardDigest({ [extension.GUARD_DIGEST_ENV]: realDigest }, trackedGuard).ok,
+  true,
+);
+assert.equal(extension.verifyGuardDigest({ [extension.GUARD_DIGEST_ENV]: '0'.repeat(64) }, trackedGuard).ok, false, 'mismatched digest accepted');
+assert.equal(extension.verifyGuardDigest({}, trackedGuard).ok, false, 'missing digest accepted');
+assert.equal(extension.verifyGuardDigest({ [extension.GUARD_DIGEST_ENV]: 'short' }, trackedGuard).ok, false, 'malformed digest accepted');
+// The tracked guard fails closed on a missing/mismatched digest; a fixture
+// guardPath swap bypasses the gate (the fixture owns its own authority).
+assert.equal(extension.runGuardCheck('check-command-stdin', 'echo hi', { env: {} }).reason, 'guard-digest-missing');
+assert.equal(extension.runGuardCheck('check-command-stdin', 'echo hi', { env: { [extension.GUARD_DIGEST_ENV]: '0'.repeat(64) } }).reason, 'guard-digest-mismatch');
+assert.equal(extension.guardBindingStatus({}, trackedGuard).ok, false);
+assert.equal(extension.guardBindingStatus({ [extension.GUARD_DIGEST_ENV]: realDigest }, trackedGuard).ok, true);
+assert.equal(extension.guardBindingStatus({}, join(work, 'fixture-guard.py')).ok, true,
+             'a fixture guardPath swap owns its own authority');
+
+// ---------------------------------------------------------------------------
+// 4. Fail-closed guard failure: missing, crashing, timing-out, and invalid
 //    guard executables never echo the input. Guard executables are swapped
 //    only through the explicit options.guardPath helper; the environment can
 //    never redirect the immutable runtime resolver.
@@ -206,7 +292,7 @@ writeFileSync(badSchemaGuard, "import sys\nsys.stdout.write('{\"verdict\":\"allo
 // resolveGuardPath is immutable: it takes no arguments, ignores any env
 // override, and always resolves to the tracked sibling guard.
 assert.equal(
-  extension.resolveGuardPath({ RALPH_CREDENTIAL_GUARD_TESTING: '1', CREDENTIAL_GUARD: '/override.py' }),
+  extension.resolveGuardPath({ CREDENTIAL_GUARD: '/override.py' }),
   trackedGuard,
 );
 assert.notEqual(trackedGuard, '/override.py');
@@ -245,7 +331,7 @@ for (const bad of ['', 'not json', '{"verdict":"allow"}', '{"schema":"credential
 }
 
 // ---------------------------------------------------------------------------
-// 3. Tool-result redaction: content items and nested details mask
+// 5. Tool-result redaction: content items and nested details mask
 //    assignments, JWTs, Bearer headers, and private-key blocks while
 //    preserving non-strings, non-text items, isError, and usage. Cyclic or
 //    guard-failure results fail closed to exactly [REDACTION FAILED] and
@@ -406,7 +492,7 @@ assert.deepEqual(nestedEvent.usage, { input: 1, output: 2 });
 assert(!JSON.stringify(nestedPatch.patch).includes(nestedSecret), 'nested fake secret leaked');
 
 // ---------------------------------------------------------------------------
-// 4. Overflow-log sanitization: only a canonical, owned, single-link regular
+// 6. Overflow-log sanitization: only a canonical, owned, single-link regular
 //    tmpdir()/pi-bash-<16 hex>.log is atomically sanitized. Symlink,
 //    non-canonical, hard-linked, and directory cases never touch the target
 //    and fail safe; a failing guard truncates the recognized owned file.
@@ -489,6 +575,27 @@ assert.equal(await extension.truncateOwnedOverflowFile(truncatePath), true);
 assert.equal(statSync(truncatePath).size, 0);
 assert.equal(await extension.truncateOwnedOverflowFile(join(work, 'pi-bash-0123456789abcde6.log')), false);
 
+// Pathname swap after the O_NOFOLLOW open cannot redirect chmod/read/truncate
+// onto the replacement target: failure truncates only the originally opened
+// inode and the foreign sentinel remains byte-identical.
+const racePath = join(TMP, 'pi-bash-0123456789abcde7.log');
+const movedRace = join(work, 'opened-overflow.log');
+const raceSentinel = join(work, 'race-sentinel.txt');
+const slowGuard = join(work, 'slow-guard.py');
+writeFileSync(racePath, 'RAW_RACE_SECRET='.repeat(65536));
+writeFileSync(raceSentinel, 'DO_NOT_TOUCH_SENTINEL');
+writeFileSync(slowGuard, "import sys,time\ndata=sys.stdin.buffer.read()\ntime.sleep(.25)\nsys.stdout.buffer.write(data.replace(b'RAW_RACE_SECRET', b'[REDACTED]'))\n");
+const racePromise = extension.sanitizeBashOverflowPath(
+  racePath, { env: TEST_ENV, guardPath: slowGuard },
+);
+await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
+renameSync(racePath, movedRace);
+symlinkSync(raceSentinel, racePath);
+const raceResult = await racePromise;
+assert.equal(raceResult.ok, false, 'pathname swap unexpectedly published');
+assert.equal(readFileSync(raceSentinel, 'utf8'), 'DO_NOT_TOUCH_SENTINEL');
+assert.equal(statSync(movedRace).size, 0, 'opened inode was not fail-closed truncated');
+
 // isOwnedRegularFile identity predicate.
 const myStats = { isFile: () => true, isSymbolicLink: () => false, nlink: 1, uid: process.getuid() };
 assert.equal(extension.isOwnedRegularFile(myStats), true);
@@ -499,12 +606,12 @@ assert.equal(extension.isOwnedRegularFile(null), false);
 assert.equal(extension.isOwnedRegularFile({ isFile: () => false }), false);
 
 // ---------------------------------------------------------------------------
-// 5. Registration order and immutable resolver semantics: the registered
+// 7. Registration order and immutable resolver semantics: the registered
 //    hooks resolve the tracked sibling guard via an immutable runtime
-//    resolver and ignore hostile CREDENTIAL_GUARD / RALPH_CREDENTIAL_GUARD_
-//    TESTING environment variables. The guard runs before any ralph/git
-//    rewrite (proven by a recording guard observing the exact pre-rewrite
-//    stdin), and the tool_result hook is async and fails results closed.
+//    resolver and ignore hostile CREDENTIAL_GUARD environment variables.
+//    The guard runs before the git rewrite (proven by a recording guard
+//    observing the exact pre-rewrite stdin), and the tool_result hook is
+//    async and fails results closed.
 // ---------------------------------------------------------------------------
 let toolCallHook = null;
 let toolResultHook = null;
@@ -520,7 +627,7 @@ assert.equal(toolResultHook.constructor.name, 'AsyncFunction');
 // Recording guard (swapped explicitly via guardPath): logs argv/stdin, allows
 // everything, so the fixture can observe exactly what the guard saw. The
 // guard classifies the pre-rewrite command on stdin, and only after it allows
-// does the ralph rewrite complete.
+// does the git rewrite complete.
 const stdinLog = join(work, 'guard-stdin.log');
 writeFileSync(stdinLog, '');
 const recordGuard = join(work, 'record-guard.py');
@@ -533,44 +640,37 @@ if mode == 'redact':
     sys.stdout.write(data)
 sys.stdout.write('{"schema":"credential-guard/v1","tool":"credential-guard","version":"1","verdict":"allow","reason":"ok","reasons":["ok"]}\n')
 `);
-const orderEvent = { toolName: 'bash', input: { command: 'ralph emit factory.implement done' } };
+const orderEvent = { toolName: 'bash', input: { command: 'git commit -m "done"' } };
 assert.equal(extension.guardToolCallInput(orderEvent, { env: TEST_ENV, guardPath: recordGuard }), null);
 const seen = readFileSync(stdinLog, 'utf8');
-assert(seen.includes('check-command-stdin\nralph emit factory.implement done\n---\n'), `guard did not see the pre-rewrite command: ${JSON.stringify(seen)}`);
-assert.equal(extension.rewriteRalphEmitCommand(orderEvent.input.command).command, './scripts/pi-cli-shims/ralph emit factory.implement done');
+assert(seen.includes('check-command-stdin\ngit commit -m "done"\n---\n'), `guard did not see the pre-rewrite command: ${JSON.stringify(seen)}`);
+assert.equal(extension.rewriteGitCommitCommand(orderEvent.input.command).command, `${shimCommand} commit -m done`);
 
-// Registered hooks ignore hostile env: point CREDENTIAL_GUARD and
-// RALPH_CREDENTIAL_GUARD_TESTING at a guard that would block every redirect
-// if it were honored. The hooks must still use the immutable tracked resolver
-// so the allowed ralph/git rewrites proceed.
+// Registered hooks ignore hostile env: point CREDENTIAL_GUARD at a guard
+// that would block every redirect if it were honored. The hooks must still
+// use the immutable tracked resolver so the allowed git rewrite proceeds.
 const blockAllGuard = join(work, 'block-all-guard.py');
 writeFileSync(blockAllGuard, String.raw`import sys
 sys.stdout.write('{"schema":"credential-guard/v1","tool":"credential-guard","version":"1","verdict":"block","reason":"hostile","reasons":["hostile"]}')
 sys.exit(1)
 `);
 const savedCred = process.env.CREDENTIAL_GUARD;
-const savedTesting = process.env.RALPH_CREDENTIAL_GUARD_TESTING;
 process.env.CREDENTIAL_GUARD = blockAllGuard;
-process.env.RALPH_CREDENTIAL_GUARD_TESTING = '1';
 try {
-  const ralphEvent = { toolName: 'bash', input: { command: 'ralph emit factory.implement done' } };
-  assert.equal(toolCallHook(ralphEvent), undefined);
-  assert.equal(ralphEvent.input.command, './scripts/pi-cli-shims/ralph emit factory.implement done');
   const gitEvent = { toolName: 'bash', input: { command: 'git commit -m "done"' } };
   toolCallHook(gitEvent);
-  assert.equal(gitEvent.input.command, './scripts/pi-cli-shims/git commit -m "done"');
+  assert.equal(gitEvent.input.command, `${shimCommand} commit -m done`);
 } finally {
   if (savedCred !== undefined) process.env.CREDENTIAL_GUARD = savedCred; else delete process.env.CREDENTIAL_GUARD;
-  if (savedTesting !== undefined) process.env.RALPH_CREDENTIAL_GUARD_TESTING = savedTesting; else delete process.env.RALPH_CREDENTIAL_GUARD_TESTING;
 }
 
 // The registered tool_call hook still blocks a genuinely sensitive input via
 // the tracked guard and never rewrites or echoes it.
-const blockedEvent = { toolName: 'bash', input: { command: 'ralph emit factory.implement done && cat /proc/self/environ' } };
+const blockedEvent = { toolName: 'bash', input: { command: 'git commit -m "x" && cat /proc/self/environ' } };
 const blockedResult = toolCallHook(blockedEvent);
 assert.equal(blockedResult.block, true);
-assert.equal(blockedEvent.input.command, 'ralph emit factory.implement done && cat /proc/self/environ');
-assert(!blockedResult.reason.includes('factory.implement'));
+assert.equal(blockedEvent.input.command, 'git commit -m "x" && cat /proc/self/environ');
+assert(!blockedResult.reason.includes('git commit'));
 
 // tool_result hook end-to-end: a canonical owned overflow file is sanitized
 // in place and content is redacted.

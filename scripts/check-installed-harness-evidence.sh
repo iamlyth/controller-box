@@ -404,9 +404,11 @@ def validate_namespace_record(
     try:
         record, evidence_commit = _validate_namespace_record(namespace)
         return record, evidence_commit, None
-    except SystemExit as exc:
+    except (SystemExit, evidence_module.EvidenceError) as exc:
         if strict:
-            raise
+            if isinstance(exc, SystemExit):
+                raise
+            fail(str(exc))
         return None, None, str(exc)
 
 
@@ -473,7 +475,13 @@ def _validate_namespace_record(namespace: Path) -> tuple[dict, str]:
         fail("generic evidence coordinator_nonce is invalid")
 
     # The matching installed-harness receipt.
-    receipt = evidence_module.validate_receipt(root, receipt_ref)
+    receipt = evidence_module.validate_receipt(
+        root,
+        receipt_ref,
+        expected_round=round_number,
+        expected_base=evidence_commit,
+        expected_nonce=coordinator_nonce,
+    )
     if receipt["exit_code"] != 0:
         fail("the installed-harness receipt did not exit 0")
     if receipt["evidence_commit"] != evidence_commit:

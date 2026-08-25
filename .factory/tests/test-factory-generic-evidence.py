@@ -154,7 +154,9 @@ class GenericEvidenceSuite(unittest.TestCase):
               "user.email", "factory@test"])
         _run([gitutil.GIT_EXECUTABLE, "-C", str(path), "config",
               "user.name", "factory"])
-        (path / ".gitignore").write_text(".factory-state/\n", encoding="utf-8")
+        (path / ".gitignore").write_text(
+            ".factory-state/\n", encoding="utf-8"
+        )
 
     def _copy_surface(self, target: Path) -> None:
         ignore = shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo")
@@ -292,8 +294,13 @@ class GenericEvidenceSuite(unittest.TestCase):
         self.assertEqual(proof["changed"], [])
         # The receipt is a genuine hardened machine receipt bound to the exact
         # commit and the bridged coordinator round/nonce.
+        coordinator = evidence_module.active_coordinator(self.fixture)
         receipt = evidence_module.validate_receipt(
-            self.fixture, ".factory-state/audit-receipts/installed-harness-smoke.json"
+            self.fixture,
+            ".factory-state/audit-receipts/installed-harness-smoke.json",
+            expected_round=coordinator["round"],
+            expected_base=coordinator["base_commit"],
+            expected_nonce=coordinator["nonce"],
         )
         self.assertEqual(receipt["argv"], ["./.factory/tests/test-factory-installed.sh"])
         self.assertEqual(receipt["exit_code"], 0)

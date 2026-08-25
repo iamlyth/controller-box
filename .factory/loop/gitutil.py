@@ -590,12 +590,39 @@ def _bounded_io_loop(
         read_set = list(streams)
         write_set = [write_fd] if stdin_open and view else []
         try:
-            ready_read, ready_write, _ = select.select(
-                read_set, write_set, [], remaining
-            )
+            # ``select.select`` rejects descriptors >= FD_SETSIZE (commonly
+            # 1024).  The confinement authority intentionally retains many
+            # descriptor anchors while exact-commit Git reads run, so use the
+            # Linux poll boundary, which is fd-number independent and keeps
+            # the same shared-deadline/fair-drain semantics.
+            poller = select.poll()
+            read_by_fd = {stream.fileno(): stream for stream in read_set}
+            for descriptor in read_by_fd:
+                poller.register(
+                    descriptor,
+                    select.POLLIN | select.POLLHUP | select.POLLERR,
+                )
+            if write_set:
+                poller.register(
+                    write_fd,
+                    select.POLLOUT | select.POLLHUP | select.POLLERR,
+                )
+            events = poller.poll(max(1, int(remaining * 1000)))
+            ready_read = [
+                read_by_fd[descriptor]
+                for descriptor, event in events
+                if descriptor in read_by_fd
+                and event & (select.POLLIN | select.POLLHUP | select.POLLERR)
+            ]
+            ready_write = [
+                descriptor
+                for descriptor, event in events
+                if write_fd is not None and descriptor == write_fd
+                and event & (select.POLLOUT | select.POLLHUP | select.POLLERR)
+            ]
         except (OSError, ValueError) as exc:
             raise GitBoundaryError(
-                f"cannot select the pinned Git executable pipes "
+                f"cannot poll the pinned Git executable pipes "
                 f"{GIT_EXECUTABLE!r}: {exc}"
             ) from exc
         if not ready_read and not ready_write:

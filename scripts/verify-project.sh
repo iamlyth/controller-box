@@ -18,6 +18,39 @@ PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 BUILD_DIR=${CBX_VERIFY_BUILD_DIR:-build-maintenance-verify}
 cd -- "$PROJECT_ROOT"
 
+# Normal operator verification retains the historical root evidence path.
+# A production campaign supplies one explicit absolute override inside its
+# already-reserved private namespace; no other override shape is accepted.
+INSTALLED_EVIDENCE_PATH=$(python3 - "$PROJECT_ROOT" "${FACTORY_INSTALLED_FUNCTIONAL_EVIDENCE_PATH:-}" <<'PY'
+import os, re, stat, sys
+from pathlib import Path
+root = Path(sys.argv[1]).absolute()
+override = sys.argv[2]
+if not override:
+    print(root / '.factory-state/installed-functional-evidence.env')
+    raise SystemExit(0)
+path = Path(override)
+if not path.is_absolute():
+    raise SystemExit('verify-project: installed-evidence override must be absolute')
+try:
+    relative = path.relative_to(root)
+except ValueError:
+    raise SystemExit('verify-project: installed-evidence override escapes the repository')
+parts = relative.parts
+if (len(parts) != 4 or parts[:2] != ('.factory-state', 'campaigns')
+        or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,63}', parts[2])
+        or parts[3] != 'installed-functional-evidence.env'):
+    raise SystemExit('verify-project: installed-evidence override must be the exact campaign-owned path')
+for directory in (root / parts[0], root / parts[0] / parts[1], path.parent):
+    info = directory.lstat()
+    if (not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode)
+            or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700):
+        raise SystemExit(f'verify-project: unsafe campaign evidence directory: {directory}')
+print(path)
+PY
+) || exit $?
+export FACTORY_INSTALLED_FUNCTIONAL_EVIDENCE_PATH="$INSTALLED_EVIDENCE_PATH"
+
 # The project gate is bound to the declared Nix environment (shell.nix). The
 # authenticated boundary (scripts/nix-gate.sh + scripts/nix-gate-exec.sh)
 # replaces the forgeable CBX_VERIFY_IN_NIX_SHELL / IN_NIX_SHELL trust: this
@@ -152,12 +185,37 @@ for gate in gates:
         elif result.returncode == 77:
             print(f'verify-project: gate {name} skipped (77)')
 PY
-mkdir -p .factory-state
-cat > .factory-state/installed-functional-evidence.env <<EOF
-schema=factory-installed-functional/v1
-commit=$(git rev-parse HEAD)
-test=test_installed_functional
-result=PASS
-skipped=0
-EOF
+python3 - "$PROJECT_ROOT" "$INSTALLED_EVIDENCE_PATH" "$(git rev-parse HEAD)" <<'PY'
+import os, stat, sys, tempfile
+from pathlib import Path
+root, target, commit = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+if target == root / '.factory-state/installed-functional-evidence.env':
+    target.parent.mkdir(mode=0o700, exist_ok=True)
+    info = target.parent.lstat()
+    if (not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode)
+            or info.st_uid != os.getuid()):
+        raise SystemExit('verify-project: unsafe default evidence directory')
+if target.is_symlink() or (target.exists() and not target.is_file()):
+    raise SystemExit('verify-project: unsafe installed-functional evidence target')
+body = (
+    'schema=factory-installed-functional/v1\n'
+    f'commit={commit}\n'
+    'test=test_installed_functional\n'
+    'result=PASS\n'
+    'skipped=0\n'
+).encode()
+fd, temporary = tempfile.mkstemp(prefix='.installed-functional-evidence.', dir=target.parent)
+try:
+    with os.fdopen(fd, 'wb') as stream:
+        stream.write(body)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, target)
+finally:
+    try:
+        os.unlink(temporary)
+    except FileNotFoundError:
+        pass
+PY
 echo "verify-project: Controller-Box build, tests, functional acceptance, smoke checks, and packaging passed"

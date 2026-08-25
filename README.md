@@ -203,7 +203,7 @@ A fail-closed Git commit boundary (`scripts/install-git-commit-guard.sh`, run on
 | 5. Installed production smoke | `test_installed_smoke` | Launches installed binary under Xvfb, sends keyboard + coordinate-based mouse clicks on body controls via xdotool, captures screenshots, verifies non-blank output and semantic outcomes (state change, file mutation) |
 | 5a. Installed functional acceptance | `test_installed_functional` | Links against production library; starts private native-signature DBus server, creates SDL virtual controller, exercises manager + overlay lifecycle through production poll path (InterceptMode PASS→ALL activation, framebuffer readback, B-close, assignment persistence) |
 | 5b. Installed binary acceptance | `test_installed_binary` | Launches installed binary as subprocess under Xvfb with private DBus server; verifies manager launch, tab navigation, settings persistence, target creation, profile load/save, overlay activation (InterceptMode→ALL, non-blank screenshot, clean close) |
-| 5c. Kernel-backed controller | `test_kernel_controller` | Creates a synthetic evdev gamepad via `/dev/uinput`, launches installed Manager binary with private DBus server, sends real kernel gamepad events (D-pad, A/B/Start) through production event loop, verifies semantic outcomes (manager survival, settings persistence). Skips (exit 77) when `/dev/uinput` is unavailable locally; the `kernel-uinput` runner capability IS declared in `.factory/environment.toml`. The legacy runner receipt at commit 26df6c0 is unsigned/unevidenced pending a signed commit-bound receipt (FACT-007). See SPEC §5.7 for controller acceptance requirements. |
+| 5c. Kernel-backed controller | `test_kernel_controller` | Creates a synthetic evdev gamepad via `/dev/uinput`, launches installed Manager binary with private DBus server, sends real kernel gamepad events (D-pad, A/B/Start) through production event loop, verifies semantic outcomes (manager survival, settings persistence). Skips (exit 77) when `/dev/uinput` is unavailable locally; the `kernel-uinput` runner capability IS declared in `.factory/environment.toml`. The `26df6c0` receipt is legacy unsigned/unevidenced; valid signed evidence at historical commit `c45336a` is stale, so neither proves the current tree (FACT-007). See SPEC §5.7 for controller acceptance requirements. |
 | 5d. Installed diagram semantic acceptance | `test_installed_diagram` | Drives the real installed `controller-box --manager` through a real X11 window to the profile editor and asserts recognizable controller-diagram content (outline, slot highlight, model label, binding list) via the production path — proves the production diagram rendering path (BUG-0014) |
 | 6. Backend smoke | `test_backend_smoke` | Exercises accelerated renderer (OpenGL/ES) with same invariants; skips (exit 77) in headless environments |
 | 7. Human release acceptance | (documented process) | Human reviews captures on target hardware for legibility, clipping, contrast, controller-only usability |
@@ -285,18 +285,17 @@ per SPEC §11.1.7:
 
 | Requirement | Spec § | Limitation | Verification approach |
 |-------------|--------|------------|----------------------|
-| Controller acceptance (kernel-backed) | §5.7 | `kernel-uinput` declared but skips locally without `/dev/uinput` | `test_kernel_controller.c` creates a uinput-backed evdev gamepad; passes on the runner but skips (exit 77) when `/dev/uinput` is unavailable locally. The legacy runner receipt at commit 26df6c0 is unsigned/unevidenced pending a signed commit-bound receipt (FACT-007). 52/60 interaction inventory entries verified through production SDL event dispatch with SDL virtual gamepads; 7 NOT_APPLICABLE (controller-only paths); 1 DEFERRED per §13. |
+| Controller acceptance (kernel-backed) | §5.7 | `kernel-uinput` declared but skips locally without `/dev/uinput` | `test_kernel_controller.c` creates a uinput-backed evdev gamepad; passes on the runner but skips (exit 77) when `/dev/uinput` is unavailable locally. The `26df6c0` receipt is legacy unsigned/unevidenced; valid signed evidence at historical commit `c45336a` is stale, so neither proves the current tree (FACT-007). 52/60 interaction inventory entries verified through production SDL event dispatch with SDL virtual gamepads; 7 NOT_APPLICABLE (controller-only paths); 1 DEFERRED per §13. |
 | aarch64 architecture | §3 | No aarch64 runner declared; `target-consumer` undeclared | Code is architecture-agnostic (no arch-specific code in `src/` or `CMakeLists.txt`); `cmake/aarch64-toolchain.cmake` + `cross-shell.nix` exist for `aarch64-unknown-linux-gnu`; cross-compile attempted but nix dependency build from source exceeds autonomous iteration timeout (>15 min). Flatpak manifest targets `org.freedesktop.Platform` 24.08 supporting both x86_64 and aarch64; x86_64 build and 100 CTest targets registered (98 pass, 2 skip with exit 77 in headless: `test_backend_smoke`, `test_kernel_controller`). Full cross-build deferred to human-approved release with cached nix environment. See OPERATIONS.md § Hardware-deferred capabilities. |
 | Wayland/Gamescope compositor | §3 | No Wayland runner declared | All rendering through SDL2 display abstraction — zero compositor-specific API calls in `src/`. Tested with X11 (Xvfb) and dummy drivers. SDL2 supports X11, Wayland, and Gamescope. |
 | GPU backend | §11.1 | No GPU runner declared (`gpu-compositor` undeclared) | `test_backend_smoke` skips (exit 77) in headless environments; software renderer smoke (`test_backend_smoke_sw`) passes with broad framebuffer invariants. Skip is explained and documented in OPERATIONS.md § Hardware-deferred capabilities. |
 | Pi 4 latency | §11 | No Pi 4 hardware declared (`target-consumer` undeclared) | Pre-built surface + 50ms poll architecture verified; `test_overlay_latency.c` measures x86_64 p50/p99/max over ≥200 iterations. Actual ≤75ms p99 latency measurement on Pi 4 is a human release gate per §11.1.7. See OPERATIONS.md § Hardware-deferred capabilities. |
 
-These limitations do not indicate missing implementation — the code is
-complete and tested through available paths. They indicate that certain
-hardware/kernel capabilities are not available in the declared runner
-environment for full production-path acceptance verification. Remaining
-hardware-specific verification is deferred to human release acceptance per
-SPEC §11.1.7.
+These limitations leave production acceptance incomplete even where code is
+tested through available private or simulated paths. Requirement-specific
+real InputPlumber system-bus, physical controller/target-consumer, GPU,
+current signed runner, Pi latency, and human release evidence remain open as
+recorded in `.factory/artifacts/blocked-facts.json` and `.factory/bugs/open.md`.
 
 ## Finite factory campaign
 
@@ -304,24 +303,49 @@ A predetermined, finite sequence of fresh-context rounds — planning,
 implementation, verification, and independent audit — runs through the fresh
 Python control plane (methodology: [docs/FACTORY-LOOP-SPEC.md](docs/FACTORY-LOOP-SPEC.md)):
 
+After the accepted implementation is committed on `develop`, use this exact
+production sequence (choose a new campaign ID; never reuse a state namespace):
+
 ```bash
-python3 .factory/loop/campaign.py run --campaign-id <id> --rounds 3 --branch develop
+ACCEPTED_COMMIT=$(git rev-parse HEAD)
+test -z "$(git status --porcelain --untracked-files=all)"
+INSTALL_PARENT=$(mktemp -d)
+INSTALL_PREFIX="$INSTALL_PARENT/controller-box-harness"
+INSTALL_MANIFEST="$INSTALL_PARENT/install-manifest.json"
+CAMPAIGN_ID="controller-box-$(date +%Y%m%dT%H%M%S)-$$"
+python3 .factory/loop/installer.py install --root "$PWD" --commit "$ACCEPTED_COMMIT" --prefix "$INSTALL_PREFIX" --manifest-out "$INSTALL_MANIFEST"
+python3 "$INSTALL_PREFIX/.factory/loop/installer.py" verify --root "$PWD" --commit "$ACCEPTED_COMMIT" --prefix "$INSTALL_PREFIX" --manifest "$INSTALL_MANIFEST"
+"$INSTALL_PREFIX/.factory/bin/factory-campaign" --root "$PWD" run --campaign-id "$CAMPAIGN_ID" --rounds 5 --branch develop --provider ollama --model "${OLLAMA_MODEL:?set OLLAMA_MODEL}" --backend "$(command -v pi)" --accepted-commit "$ACCEPTED_COMMIT" --install-manifest "$INSTALL_MANIFEST" --campaign-timeout 21600 --verification-command ./scripts/verify-project.sh --capability-command ./scripts/check-capability-evidence.py --acceptance-command '["./scripts/final-gate.sh","--implementation"]'
 ```
 
-`python3 .factory/loop/campaign.py show` prints the current phase and result.
-The installed operator entrypoint `.factory/bin/factory-launch` runs one
-supervised fresh-context role attempt (planner/developer/tester/auditor) with
-a strict invocation contract (role, model, provider, backend, prompt-set
-digest, bound commit, allowed tools, runtime/inactivity bounds).
+The launch executes installed control-plane bytes and re-verifies their
+manifest/commit identity before the planner starts. It also rechecks the clean
+Git tree and reserves `.factory-state/campaigns/$CAMPAIGN_ID/` mode 0700 with
+no-replace semantics. Tester/auditor results, canonical state, receipts, and
+the final result remain in that sole namespace. The pre-existing
+`.factory-state` root must be a real current-user-owned mode-0700 directory;
+reservation lstats only the exact root and fixed `campaigns` component and
+never enumerates, reads, renames, removes, or overwrites foreign entries.
+Their bytes, mode, and mtime remain unchanged. Production has no synthetic
+provider/model/backend/gate/deadline defaults. Per-task acceptance uses the
+exact verification command; final success requires the exact capability-
+evidence and Controller final-gate commands to exit zero without skips. The
+required whole-campaign deadline includes quota waits, and nonzero planner,
+tester, or auditor exits fail regardless of valid-looking output.
+
+The installed `.factory/bin/factory-launch` entrypoint runs one supervised
+fresh-context role attempt; `.factory/bin/factory-campaign` owns the finite
+five-round production lifecycle.
 
 Each round starts a fresh planner process, selects one deterministic task from
 the canonical plan (`factory-plan/v1`, parsed by `.factory/loop/plan_parser.py`)
 for a fresh developer process, runs the configured project verifier, and
 launches an independent auditor. Tester and auditor findings reach the next
 planner only through a revised plan, never through memory injection. One
-mutable control-state file (`.factory-state/factory-loop.json`) records the
-phase, round, attempt, and a trusted outcome enum; recovery is derived from
-Git, the canonical plan, that state file, and process liveness. A finite
+mutable control-state file
+(`.factory-state/campaigns/<campaign-id>/factory-loop.json`) records the phase,
+round, attempt, and a trusted outcome enum; recovery is derived from Git, the
+canonical plan, that campaign-owned state file, and process liveness. A finite
 campaign always terminates as `success`, `findings`, `blocked`, `failed`,
 `interrupted`, or `infrastructure_failure` — it never spins while no task is
 runnable. Available local tools and external runners are declared without

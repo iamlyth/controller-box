@@ -74,7 +74,7 @@ fi
 
 # -- 3. End-to-end launch through the committed fixture repo ------------------
 repo="$tmp/repo"
-mkdir -p "$repo/scripts"
+mkdir -p "$repo/scripts/pi-cli-shims"
 mkdir -p "$repo/.factory/loop"
 mkdir -p "$repo/.factory/schemas"
 cp scripts/pi2-secure-exec.py "$repo/scripts/"
@@ -82,7 +82,13 @@ cp scripts/pi2-secure-exec.py "$repo/scripts/"
 # launch authority can verify the guard source before any child output
 # channel is redacted.
 cp scripts/credential-guard.py "$repo/scripts/"
-cp .factory/loop/confine_launcher.py "$repo/.factory/loop/"
+# Task 11: every fixture repo commits the exact model-side Pi guard
+# extension so the launch authority can verify and always load it through
+# ``--extension`` in the child argv.
+cp scripts/pi-factory-guard-extension.mjs "$repo/scripts/"
+cp scripts/pi-cli-shims/git "$repo/scripts/pi-cli-shims/"
+cp .factory/loop/confine_launcher.py .factory/loop/usage.py \
+    .factory/loop/usage_fetch.py "$repo/.factory/loop/"
 cp .factory/schemas/factory-confinement-v1.schema.json "$repo/.factory/schemas/"
 cp .factory/tests/fixtures/plan-valid-base.md "$repo/plan.md"
 printf 'spec\n' > "$repo/spec.md"
