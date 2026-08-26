@@ -7,7 +7,7 @@ building blocks: the deterministic plan parser (``plan_parser.py``), the
 trusted selector (``selector.py``), the ``factory-state/v1`` control-state
 authority (``state.py``), the root-descriptor lock and Git writer boundary
 (``lock.py``/``gitutil.py``), the fresh-context launch/supervision authority
-(``launch.py``), the Ollama usage guard (``usage.py``), and the workspace
+(``launch.py``), pre-round policy hooks (``pre_round.py``), and the workspace
 confinement authority (``workspace_confinement.py``).  It is the only module
 that owns the *campaign loop*; every Git operation, repository-history read,
 staging step, and guarded commit of a campaign is performed here through the
@@ -90,7 +90,6 @@ try:  # package import (the hidden `.factory/loop/` package)
     from . import launch as launch_module
     from . import workspace_confinement as confinement_authority
     from . import redaction as output_redaction
-    from . import usage as usage_module
 except ImportError:  # flat import used by the hidden `.factory/tests/` suite
     import audit_objectives as audit_objectives_module  # type: ignore[no-redef]
     import evidence as evidence_module  # type: ignore[no-redef]
@@ -105,7 +104,6 @@ except ImportError:  # flat import used by the hidden `.factory/tests/` suite
     import launch as launch_module  # type: ignore[no-redef]
     import workspace_confinement as confinement_authority  # type: ignore[no-redef]
     import redaction as output_redaction  # type: ignore[no-redef]
-    import usage as usage_module  # type: ignore[no-redef]
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -1740,11 +1738,6 @@ def _derive_pre_round_binding(
             source + b"\x00" + blob(".factory/loop/campaign.py")
             + b"\x00" + blob(".factory/loop/state.py")
         ),
-        "ollama_usage_guard": plan_sha256(
-            source + b"\x00" + blob(".factory/loop/campaign.py")
-            + b"\x00" + blob(".factory/loop/usage.py")
-            + b"\x00" + blob(".factory/loop/usage_fetch.py")
-        ),
     }
     names = {hook.implementation for hook in registry.hooks}
     implementation_digests = {
@@ -3344,19 +3337,6 @@ class Campaign:
                         "descriptor-anchored branch guard failed"
                     ) from exc
                 return
-            if hook.implementation == "ollama_usage_guard":
-                if self._config.provider.lower() != "ollama":
-                    raise pre_round_module.PreRoundError(
-                        "the enabled Ollama hook requires the Ollama provider"
-                    )
-                remaining = self._remaining_time("pre-round Ollama usage hook")
-                reserve = 2.0 * float(usage_module.FETCH_TIMEOUT) + 1.0
-                if remaining <= reserve:
-                    raise pre_round_module.PreRoundError(
-                        "campaign deadline leaves no bounded check/wait/final-check budget"
-                    )
-                usage_module.require_quota(max_wait=max(1, int(remaining - reserve)))
-                return
             raise pre_round_module.PreRoundError(
                 f"unknown fixed hook implementation {hook.implementation!r}"
             )
@@ -4204,8 +4184,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         description=(
             "Trusted finite campaign orchestrator with exact-commit ordered "
             "pre-round hooks before every planner (FACTORY-LOOP-SPEC §10-§15). "
-            "The configured Ollama hook may be disabled; per-model launch never "
-            "runs quota policy. Never invoked by a model role."
+            "No Ollama quota hook is configured or executed. Never invoked by "
+            "a model role."
         ),
     )
     parser.add_argument(

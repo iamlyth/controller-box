@@ -385,25 +385,19 @@ Missing/expired cookies or an unparseable settings page return status 2 and requ
 source scripts/update-ollama-cookies.sh
 ```
 
-## Ordered pre-round hooks and quota
+## Ordered pre-round hooks
 
 `.factory/pre-round-hooks.json` is an exact-commit ordered registry of fixed,
 mandatory control-plane implementations. Every enabled hook runs once before
 each round's planner; planner retries do not rerun it. A durable started cursor
 prevents an ambiguous crash from causing duplicate execution, and canonical
 typed result digests are chained into `factory-loop.json` before planning.
-Removing or disabling the Ollama entry does not suppress the enabled branch
-guard.
-
-The Ollama hook is intentionally committed disabled. When enabled, its exact
-decision table (FACTORY-LOOP-SPEC §10) is: `--check` exit 0 passes; exit 1
-(quota) or 3 (transient) runs `--wait`, then one final `--check` that must exit
-0; exit 2 (fatal) or any undocumented exit fails the mandatory hook and the
-planner is not invoked. Per-model `authorize_launch` has no quota/cookie
-options and performs no usage check. The guard never exports cookies or
-credentials to child environments or argv, uses a bounded descriptor/file
-mechanism, erases owned temporary material, and exposes only redacted status.
-Useful settings live in the operator-owned `.ollama-usage-env`:
+The committed registry currently contains only the enabled mandatory branch
+guard. No Ollama quota hook is implemented or configured; adding one is a
+future explicit change. Per-model `authorize_launch` has no quota/cookie
+options and performs no usage check. Existing standalone operator usage tools
+remain separate from campaign hook execution. Their optional settings live in
+the operator-owned `.ollama-usage-env`:
 
 ```bash
 OLLAMA_THRESHOLD=80

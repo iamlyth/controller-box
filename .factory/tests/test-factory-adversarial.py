@@ -1520,9 +1520,8 @@ class CaseAdversarialSuite(_AdversarialBase):
         )
         self.assertEqual(waited.returncode, usage_module.EXIT_ALLOWED, waited.stderr)
         # Per-model authorization must not expose a quota-driver API or call
-        # the retired launch gate.  The committed registry owns the policy and
-        # currently records the Ollama hook as disabled without affecting the
-        # enabled branch hook.
+        # the retired launch gate. The committed pre-round registry contains
+        # only the enabled branch hook; Ollama policy is not implemented yet.
         ws = self.make(SUCCESS_SCENARIO)
         backend = ws.root / "backend-ollama.py"
         backend.write_text("#!/usr/bin/env python3\nprint('ok')\n",
@@ -1558,8 +1557,7 @@ class CaseAdversarialSuite(_AdversarialBase):
         self.assertIsInstance(authority, launch_module.LaunchAuthority)
         registry = json.loads((ws.root / ".factory/pre-round-hooks.json").read_text())
         enabled = {item["id"]: item["enabled"] for item in registry["hooks"]}
-        self.assertTrue(enabled["branch-guard"])
-        self.assertFalse(enabled["ollama-usage-guard"])
+        self.assertEqual(enabled, {"branch-guard": True})
 
     # -- case 14: credential tool-call blocking and redaction stay active ----
 

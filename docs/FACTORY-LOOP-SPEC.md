@@ -229,7 +229,7 @@ Every model attempt MUST:
 
 A selected task excerpt is derived from the plan and does not constitute another source of truth. Before launch, the harness re-derives its exact bytes from the committed plan blob, records the excerpt digest in the invocation binding, and fails closed if the delivered bytes differ, are paraphrased, or come from another plan revision.
 
-## 10. Ordered pre-round hooks and Ollama usage
+## 10. Ordered pre-round hooks
 
 The exact committed `.factory/pre-round-hooks.json` registry is an ordered
 array of fixed control-plane implementations. Every entry is mandatory; an
@@ -246,27 +246,13 @@ planner starts. Planner retries do not rerun hooks. A recovery that sees a
 started but uncompleted round is ambiguous and terminates
 `infrastructure_failure` without rerunning a possibly side-effecting hook.
 
-The existing `scripts/ollama-usage-guard.sh` check/wait decision table and its
-hardened Python implementation are retained as the fixed `ollama_usage_guard`
-pre-round implementation:
-
-- `--check` exit 0: the hook passes;
-- `--check` exit 1 (quota threshold) or 3 (transient status failure): run `--wait`;
-- `--wait` exit 0: run one final `--check`, which MUST exit 0 before the hook passes;
-- `--check` exit 2 (fatal), any undocumented exit, or any nonzero `--wait` exit: the mandatory hook fails and the planner is not invoked.
-
-The Ollama hook is intentionally committed **disabled**. Enabling or removing
-it changes the exact campaign configuration digest but never changes the
-execution of the enabled branch guard. Quota policy is absent from
-`authorize_launch`; model authorization cannot accept per-launch quota/cookie
-options and never opens a usage credential store.
-
-When enabled, the guard MUST NOT export cookies or credentials to child
-environments or place them in child argv. It uses bounded stdin or a secure
-mode-0600 descriptor/file mechanism, erases owned temporary material, and
-exposes only redacted status. A conformance test inspects a live synthetic
-child's `/proc/<pid>/cmdline` and `/proc/<pid>/environ` and fails if the
-synthetic cookie name or value appears.
+The committed registry currently contains only the enabled mandatory
+`branch_guard`. No Ollama quota hook is implemented, configured, or executed;
+adding one later requires an explicit specification and registry change with
+its own exact-commit implementation binding and tests. Quota policy remains
+absent from `authorize_launch`, which accepts no per-launch quota/cookie
+options and never opens a usage credential store. Existing standalone operator
+usage utilities are not campaign hooks.
 
 Hooks remain outside model context. Typed durable results contain only IDs,
 order, enabled/mandatory flags, implementation digests, and pass/failed/
@@ -563,7 +549,7 @@ The redesign is complete in the boilerplate when:
 - the implementation plan is the sole task authority;
 - each role demonstrably starts with a fresh context;
 - only one minimal control-state file exists;
-- the ordered exact-commit pre-round registry, intentionally disabled Ollama hook, and existing credential boundaries are retained;
+- the ordered exact-commit pre-round registry, mandatory branch hook, and existing credential boundaries are retained;
 - generic adversarial tests and `verify-boilerplate.sh` pass;
 - a five-round synthetic campaign completes with both success and final-findings fixtures;
 - no Ralph Orchestrator process, runtime task ledger, memory store, event protocol, or resumed loop identity is required;

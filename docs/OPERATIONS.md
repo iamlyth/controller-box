@@ -572,8 +572,9 @@ Every round first runs each enabled fixed hook from the exact-commit ordered
 `.factory/pre-round-hooks.json` registry once, then starts a fresh planner
 process and selects one deterministic task from the canonical plan for a fresh developer process. Hook
 start/completion cursors prevent planner retries or ambiguous recovery from
-rerunning a hook; the committed Ollama hook is disabled while the branch hook
-remains enabled and mandatory. The round then runs the configured
+rerunning a hook; the committed registry contains only the enabled mandatory
+branch hook, with no Ollama quota hook implemented or configured. The round
+then runs the configured
 project verification command, validates installed evidence and exact-tree
 verification on the declared runner, and launches a separate adversarial
 auditor in a fresh process. Tester and auditor findings reach the next

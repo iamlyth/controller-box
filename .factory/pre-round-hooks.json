@@ -6,12 +6,6 @@
       "implementation": "branch_guard",
       "enabled": true,
       "mandatory": true
-    },
-    {
-      "id": "ollama-usage-guard",
-      "implementation": "ollama_usage_guard",
-      "enabled": false,
-      "mandatory": true
     }
   ]
 }

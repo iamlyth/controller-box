@@ -340,11 +340,11 @@ five-round production lifecycle.
 Each round first runs every enabled fixed hook from the exact-commit ordered
 `.factory/pre-round-hooks.json` registry once, then starts a fresh planner
 process and selects one deterministic task from the canonical plan
-(`factory-plan/v1`, parsed by `.factory/loop/plan_parser.py`). The Ollama hook
-is intentionally committed disabled; removing or disabling it does not affect
-the enabled mandatory branch guard. Per-model authorization performs no quota
-check.
-for a fresh developer process, runs the configured project verifier, and
+(`factory-plan/v1`, parsed by `.factory/loop/plan_parser.py`). The committed
+registry currently contains only the enabled mandatory branch guard; no Ollama
+quota hook is implemented or configured. Per-model authorization performs no
+quota check. The campaign then starts a fresh developer process, runs the
+configured project verifier, and
 launches an independent auditor. Tester and auditor findings reach the next
 planner only through a revised plan, never through memory injection. One
 mutable control-state file

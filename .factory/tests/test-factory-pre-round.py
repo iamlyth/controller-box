@@ -19,41 +19,50 @@ SHA = "a" * 64
 COMMIT = "b" * 40
 
 
-def registry_bytes(*, ollama_enabled: bool = False) -> bytes:
+def registry_bytes() -> bytes:
     return json.dumps({
         "schema": pre_round.REGISTRY_SCHEMA,
         "hooks": [
             {"id": "first", "implementation": "branch_guard", "enabled": True,
              "mandatory": True},
-            {"id": "quota", "implementation": "ollama_usage_guard",
-             "enabled": ollama_enabled, "mandatory": True},
         ],
     }, separators=(",", ":")).encode()
 
 
+def two_hook_runtime_registry() -> pre_round.Registry:
+    """Exercise generic ordered execution without configuring quota policy."""
+    return pre_round.Registry(
+        (
+            pre_round.Hook("first", "branch_guard", True, True),
+            pre_round.Hook("second", "synthetic_test_guard", True, True),
+        ),
+        hashlib.sha256(b"runtime-test-registry").hexdigest(),
+    )
+
+
 class RegistryTest(unittest.TestCase):
-    def test_committed_registry_disables_only_ollama(self) -> None:
+    def test_committed_registry_contains_only_branch_guard(self) -> None:
         registry = pre_round.parse_registry(
             (ROOT / ".factory/pre-round-hooks.json").read_bytes()
         )
-        flags = {hook.implementation: hook.enabled for hook in registry.hooks}
-        self.assertEqual(flags, {"branch_guard": True, "ollama_usage_guard": False})
-        self.assertTrue(all(hook.mandatory for hook in registry.hooks))
+        self.assertEqual(
+            [(hook.implementation, hook.enabled, hook.mandatory)
+             for hook in registry.hooks],
+            [("branch_guard", True, True)],
+        )
 
-    def test_order_and_disabled_hook_are_independent(self) -> None:
+    def test_committed_hook_executes(self) -> None:
         registry = pre_round.parse_registry(registry_bytes())
         calls = []
         results, success = pre_round.run_hooks(
-            registry,
-            implementation_digests={"branch_guard": SHA, "ollama_usage_guard": SHA},
+            registry, implementation_digests={"branch_guard": SHA},
             execute=lambda hook: calls.append(hook.hook_id),
         )
         self.assertTrue(success)
         self.assertEqual(calls, ["first"])
-        self.assertEqual([r.hook_id for r in results], ["first", "quota"])
-        self.assertEqual([r.outcome for r in results], ["pass", "disabled"])
+        self.assertEqual([r.outcome for r in results], ["pass"])
 
-    def test_removing_ollama_does_not_disable_other_hooks(self) -> None:
+    def test_single_hook_registry_remains_valid(self) -> None:
         raw = json.dumps({
             "schema": pre_round.REGISTRY_SCHEMA,
             "hooks": [{"id": "first", "implementation": "branch_guard",
@@ -70,25 +79,25 @@ class RegistryTest(unittest.TestCase):
         self.assertEqual(results[0].outcome, "pass")
 
     def test_enabled_hooks_run_in_declared_order(self) -> None:
-        registry = pre_round.parse_registry(registry_bytes(ollama_enabled=True))
+        registry = two_hook_runtime_registry()
         calls = []
         _results, success = pre_round.run_hooks(
             registry,
-            implementation_digests={"branch_guard": SHA, "ollama_usage_guard": SHA},
+            implementation_digests={"branch_guard": SHA, "synthetic_test_guard": SHA},
             execute=lambda hook: calls.append(hook.implementation),
         )
         self.assertTrue(success)
-        self.assertEqual(calls, ["branch_guard", "ollama_usage_guard"])
+        self.assertEqual(calls, ["branch_guard", "synthetic_test_guard"])
 
     def test_mandatory_failure_blocks_later_hook(self) -> None:
-        registry = pre_round.parse_registry(registry_bytes(ollama_enabled=True))
+        registry = two_hook_runtime_registry()
         calls = []
         def execute(hook):
             calls.append(hook.hook_id)
             raise RuntimeError("synthetic secret must not enter result")
         results, success = pre_round.run_hooks(
             registry,
-            implementation_digests={"branch_guard": SHA, "ollama_usage_guard": SHA},
+            implementation_digests={"branch_guard": SHA, "synthetic_test_guard": SHA},
             execute=execute,
         )
         self.assertFalse(success)
@@ -122,13 +131,10 @@ class RegistryTest(unittest.TestCase):
     def test_config_and_result_chain_are_order_sensitive(self) -> None:
         registry = pre_round.parse_registry(registry_bytes())
         config = pre_round.configuration_digest(
-            registry,
-            {"branch_guard": SHA, "ollama_usage_guard": "c" * 64},
-            bound_commit=COMMIT,
+            registry, {"branch_guard": SHA}, bound_commit=COMMIT,
         )
         results, _ = pre_round.run_hooks(
-            registry,
-            implementation_digests={"branch_guard": SHA, "ollama_usage_guard": "c" * 64},
+            registry, implementation_digests={"branch_guard": SHA},
             execute=lambda _hook: None,
         )
         payload = pre_round.result_bytes(

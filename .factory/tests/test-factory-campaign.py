@@ -833,12 +833,6 @@ class CampaignRecovery(_CampaignBase):
 
     def test_failed_hook_crash_before_atomic_terminal_never_runs_planner(self) -> None:
         ws = self.make(SUCCESS_SCENARIO)
-        registry_path = ws.root / ".factory/pre-round-hooks.json"
-        registry = json.loads(registry_path.read_text(encoding="utf-8"))
-        registry["hooks"][1]["enabled"] = True
-        registry_path.write_text(json.dumps(registry), encoding="utf-8")
-        _git(ws.root, "add", ".factory/pre-round-hooks.json")
-        _git(ws.root, "commit", "-qm", "enable synthetic quota hook")
         config = ws.derive_config()
         real_write = state_module.write_state
 
@@ -848,8 +842,10 @@ class CampaignRecovery(_CampaignBase):
             return real_write(root, candidate)
 
         with unittest.mock.patch.object(
-            campaign_module.usage_module, "require_quota",
-            side_effect=campaign_module.usage_module.UsageQuotaBlocked("blocked"),
+            campaign_module.lock_module.RootLock, "validate_live_branch",
+            side_effect=campaign_module.lock_module.RootLockError(
+                "synthetic branch failure"
+            ),
         ), unittest.mock.patch.object(
             state_module, "write_state", side_effect=crash_before_terminal
         ), self.assertRaisesRegex(RuntimeError, "publication crash"):
@@ -965,7 +961,7 @@ class EmptyWorkAndFindings(_CampaignBase):
         self.assertEqual(result.terminal_phase, "success")
         self.assertEqual(len(observed), 5)
         self.assertTrue(all(
-            registry == ("branch-guard", "ollama-usage-guard")
+            registry == ("branch-guard",)
             and executed == ("branch-guard",)
             for registry, executed in observed
         ))

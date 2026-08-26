@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
-"""Hidden stdlib Ollama usage guard (Task 7; QUOTA-01, QUOTA-02, §10).
+"""Standalone stdlib Ollama operator utility (Task 7; QUOTA-01, QUOTA-02).
 
 This module is the hardened, standard-library implementation of the retained
-``scripts/ollama-usage-guard.sh`` ``--check``/``--wait`` contract
-(FACTORY-LOOP-SPEC §10).  It is the fixed implementation used only when the
-campaign's ordered pre-round Ollama hook is enabled (the committed registry
-currently disables it); per-model launch never calls it. It satisfies
-QUOTA-02:
+``scripts/ollama-usage-guard.sh`` ``--check``/``--wait`` operator contract.
+It is not a campaign pre-round hook and per-model launch never imports or calls
+it. It satisfies QUOTA-02:
 
 * **Credentials never appear in child argv.**  The settings fetch runs in a
   dedicated fetch child (``factory.loop.usage_fetch``) whose argv is fully
