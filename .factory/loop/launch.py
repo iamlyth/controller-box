@@ -78,14 +78,12 @@ import sys
 import tempfile
 import threading
 import time
-import types
 import urllib.parse
 from dataclasses import dataclass, field, replace
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 try:  # package-import mode (the hidden control-plane package)
     from . import workspace_confinement as real_confinement_authority
-    from . import usage as usage_guard
     from . import redaction as output_redaction
     from .gitutil import (
         GIT_ENV_STRIP,
@@ -111,7 +109,6 @@ try:  # package-import mode (the hidden control-plane package)
     from .plan_parser import Plan, PlanError, parse_plan
 except ImportError:  # flat-import mode used by the hidden harness test suite
     import workspace_confinement as real_confinement_authority  # type: ignore[no-redef]
-    import usage as usage_guard  # type: ignore[no-redef]
     import redaction as output_redaction  # type: ignore[no-redef]
     from gitutil import (  # type: ignore[no-redef]
         GIT_ENV_STRIP,
@@ -3293,6 +3290,36 @@ def _stage_launch_executables(
         raise
 
 
+class UsageConfigError(Exception):
+    """Inert confinement-adapter configuration error (no quota API)."""
+
+
+class _UsageConfinementAdapter:
+    """Only the non-credential path contract needed to mint a proof."""
+
+    DEFAULT_SETTINGS_URL = CANONICAL_OLLAMA_SETTINGS_URL
+
+    @staticmethod
+    def _default_env_file() -> str:
+        override = os.environ.get("OLLAMA_USAGE_ENV_FILE")
+        if override:
+            return override
+        base = Path(os.environ["XDG_CONFIG_HOME"]) if os.environ.get(
+            "XDG_CONFIG_HOME"
+        ) else Path.home() / ".config"
+        return str(base / "unattended-ralph" / "ollama-usage-env")
+
+    @staticmethod
+    def assert_store_outside_workspace(path_text: str, workspace: object) -> None:
+        try:
+            store = Path(path_text).resolve()
+            root = Path(str(workspace)).resolve()
+        except OSError as exc:
+            raise UsageConfigError("cannot resolve the operator usage store") from exc
+        if store == root or store.is_relative_to(root):
+            raise UsageConfigError("operator usage store is inside the model workspace")
+
+
 def _stage_committed_usage_guard(
     binding: "InvocationBinding", exec_dir: Path,
     staged_digests: Dict[str, str],
@@ -3318,25 +3345,16 @@ def _stage_committed_usage_guard(
         staged_digests[str(path)] = hashlib.sha256(data).hexdigest()
         staged.append(path)
         source_blobs.append(data)
-    module_name = (
-        f"_factory_committed_usage_{binding.bound_commit}_"
-        f"{hashlib.sha256(source_blobs[0]).hexdigest()[:12]}"
-    )
-    module = types.ModuleType(module_name)
-    module.__file__ = str(staged[0])
-    module.__package__ = None
-    sys.modules[module_name] = module
-    try:
-        exec(compile(source_blobs[0], str(staged[0]), "exec"), module.__dict__)
-    except BaseException:
-        sys.modules.pop(module_name, None)
-        raise
-    for api in ("require_quota", "DEFAULT_SETTINGS_URL", "UsageGuardError"):
-        if not hasattr(module, api):
-            raise InvocationError(
-                f"the committed usage guard is missing required API {api}"
-            )
-    return module, tuple(
+    if b'DEFAULT_SETTINGS_URL = "https://ollama.com/settings"' not in source_blobs[0].splitlines():
+        raise InvocationError(
+            "the committed usage guard does not carry the canonical Ollama settings endpoint"
+        )
+    # Never import or execute the staged quota implementation in the launch
+    # coordinator. The inert adapter carries only confinement path semantics;
+    # no cookie/quota callable can become reachable through globals,
+    # sys.modules, an authority token, or supervision state.
+    adapter = _UsageConfinementAdapter()
+    return adapter, tuple(
         hashlib.sha256(data).hexdigest() for data in source_blobs
     )  # type: ignore[return-value]
 
@@ -3495,12 +3513,6 @@ def authorize_launch(
             )
         _verify_input_digest("findings", findings, binding.findings_digest)
         blobs["findings"] = findings
-    # Pin the complete production origin before any credential file/stdin/store
-    # can be opened.  Alternate URL transports belong only to direct,
-    # non-installed usage-module tests and are unreachable from this API/CLI.
-    if binding.provider.lower() in PROVIDER_GUARD_REQUIRED:
-        _canonical_ollama_settings_url(usage_guard)
-
     # ---- staging/prompt/session creation FIRST (Task 8 reorder) ----
     # The private per-launch paths must exist before the confinement
     # specification is finalized, because the specification's
@@ -4018,18 +4030,6 @@ def _run_cli(args: argparse.Namespace) -> int:
     except SupervisionError as exc:
         print(f"factory-launch: supervision fail-closed: {exc}", file=sys.stderr)
         return EXIT_SUPERVISION
-    except usage_guard.WaitInterrupted as exc:
-        # A TERM/INT/HUP during the §10 guard (initial check, wait, or final
-        # check) already terminated and reaped the credential-holding fetch
-        # child; the machine-readable exit is 128 + signum (Task 7 review,
-        # obligation 12).
-        print(
-            f"factory-launch: ollama usage guard interrupted by "
-            f"{signal.Signals(exc.signum).name} after bounded termination "
-            "and reap",
-            file=sys.stderr,
-        )
-        return 128 + exc.signum
     except GitBoundaryError as exc:
         # Task 11 (Task 9 residual): a pinned Git failure during pre-flight
         # (HEAD resolution, committed-blob reads) is a clean fail-closed CLI

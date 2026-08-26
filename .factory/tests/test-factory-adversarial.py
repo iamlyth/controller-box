@@ -1546,10 +1546,8 @@ class CaseAdversarialSuite(_AdversarialBase):
             "usage_guard_cookie_file",
             inspect.signature(launch_module.authorize_launch).parameters,
         )
-        with unittest.mock.patch.object(
-            launch_module.usage_guard, "require_quota"
-        ) as quota:
-            authority = launch_module.authorize_launch(
+        self.assertFalse(hasattr(launch_module, "usage_guard"))
+        authority = launch_module.authorize_launch(
                 binding,
                 role_prompt=(ws.root / ".factory" / "prompts" /
                              "planner.md").read_bytes(),
@@ -1557,7 +1555,6 @@ class CaseAdversarialSuite(_AdversarialBase):
                 spec=(ws.root / "docs" / "SPEC.md").read_bytes(),
                 plan=(ws.root / PLAN_REL).read_bytes(),
             )
-        quota.assert_not_called()
         self.assertIsInstance(authority, launch_module.LaunchAuthority)
         registry = json.loads((ws.root / ".factory/pre-round-hooks.json").read_text())
         enabled = {item["id"]: item["enabled"] for item in registry["hooks"]}

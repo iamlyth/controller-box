@@ -47,11 +47,38 @@ import sys
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 try:  # package-import mode (the hidden control-plane package)
-    from . import usage as usage_guard
     from . import gitutil
 except ImportError:  # flat-import mode used by the hidden harness suite
-    import usage as usage_guard  # type: ignore[no-redef]
     import gitutil  # type: ignore[no-redef]
+
+
+class UsageConfigError(Exception):
+    """Inert credential-path configuration error; no quota implementation."""
+
+
+class _UsagePathAdapter:
+    @staticmethod
+    def _default_env_file() -> str:
+        override = os.environ.get("OLLAMA_USAGE_ENV_FILE")
+        if override:
+            return override
+        base = Path(os.environ["XDG_CONFIG_HOME"]) if os.environ.get(
+            "XDG_CONFIG_HOME"
+        ) else Path.home() / ".config"
+        return str(base / "unattended-ralph" / "ollama-usage-env")
+
+    @staticmethod
+    def assert_store_outside_workspace(path_text: str, workspace: object) -> None:
+        try:
+            store = Path(path_text).resolve()
+            root = Path(str(workspace)).resolve()
+        except OSError as exc:
+            raise UsageConfigError("cannot resolve operator usage store") from exc
+        if store == root or store.is_relative_to(root):
+            raise UsageConfigError("operator usage store is inside model workspace")
+
+
+_USAGE_PATHS = _UsagePathAdapter()
 
 # ---------------------------------------------------------------------------
 # Confinement specification (schema ``factory-confinement/v1``)
@@ -1659,7 +1686,7 @@ def _derive_credential_channels(
     cookie_file: Optional[str],
     cookie_stdin: bool,
     env_store: Optional[str],
-    guard_module: object = usage_guard,
+    guard_module: object = _USAGE_PATHS,
 ) -> Tuple[CredentialChannel, ...]:
     """The exact credential channels this guard invocation will consume.
 
@@ -1679,7 +1706,7 @@ def _derive_credential_channels(
 
 def _assert_channel_outside_workspace(
     channel: CredentialChannel, workspace: Path,
-    guard_module: object = usage_guard,
+    guard_module: object = _USAGE_PATHS,
 ) -> None:
     """Fail closed when a file channel is scoped inside the model workspace."""
     if channel.kind == "stdin":
@@ -1723,7 +1750,7 @@ def prove_confinement(
         )
     validate_confinement_spec(confinement_spec, binding)
     workspace = Path(binding.workspace).absolute()
-    guard_module = _usage_guard_module or usage_guard
+    guard_module = _usage_guard_module or _USAGE_PATHS
     channels = _derive_credential_channels(
         cookie_file=cookie_file, cookie_stdin=cookie_stdin,
         env_store=env_store, guard_module=guard_module,
@@ -1752,7 +1779,7 @@ def prove_confinement(
 
 
 def _assert_store_outside(
-    store: str, workspace: object, guard_module: object = usage_guard
+    store: str, workspace: object, guard_module: object = _USAGE_PATHS
 ) -> None:
     try:
         guard_module.assert_store_outside_workspace(store, workspace)
@@ -1816,7 +1843,7 @@ def validate_proof(
                 "never accepted"
             )
         workspace = Path(binding.workspace).absolute()
-        guard_module = _usage_guard_module or usage_guard
+        guard_module = _usage_guard_module or _USAGE_PATHS
         for channel in proof.credential_channels:
             _assert_channel_outside_workspace(channel, workspace, guard_module)
         if not proof.confinement_spec_digest:

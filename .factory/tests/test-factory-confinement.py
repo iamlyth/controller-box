@@ -2369,9 +2369,8 @@ class ProductionLaunchConfinementTests(_Base):
     def test_ollama_authorization_has_real_proof_without_quota_channel(self) -> None:
         """Ollama launch keeps real confinement but opens no quota channel."""
         binding = self.binding(role="planner", provider="ollama")
-        with mock.patch.object(launch.usage_guard, "require_quota") as quota:
-            authority = self._authorize(binding)
-        quota.assert_not_called()
+        self.assertFalse(hasattr(launch, "usage_guard"))
+        authority = self._authorize(binding)
         self.assertFalse(hasattr(authority._confinement_proof, "synthetic"))
         self.assertEqual(
             {c.to_tuple() for c in authority._confinement_proof.credential_channels},

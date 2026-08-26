@@ -1078,9 +1078,15 @@ class LaunchIntegrationTests(_Base):
         )
 
     def test_ollama_provider_authorization_never_runs_quota(self) -> None:
-        with mock.patch.object(launch.usage_guard, "require_quota") as quota:
-            authority = self._authorize(self._binding("ollama"))
-        quota.assert_not_called()
+        self.assertFalse(hasattr(launch, "usage_guard"))
+        before_modules = {
+            name for name in sys.modules if name.startswith("_factory_committed_usage_")
+        }
+        authority = self._authorize(self._binding("ollama"))
+        after_modules = {
+            name for name in sys.modules if name.startswith("_factory_committed_usage_")
+        }
+        self.assertEqual(after_modules, before_modules)
         self.assertIsInstance(authority, launch.LaunchAuthority)
         self.assertFalse(hasattr(authority, "_usage_guard_module"))
         staged_usage = authority._exec_dir / "usage.py"
@@ -1145,11 +1151,9 @@ class LaunchIntegrationTests(_Base):
             self._authorize(binding)
 
     def test_missing_cookie_is_not_consulted_by_per_model_authorization(self) -> None:
-        with _scrubbed_ollama_env(), mock.patch.object(
-            launch.usage_guard, "require_quota"
-        ) as quota:
+        with _scrubbed_ollama_env():
             authority = self._authorize(self._binding("ollama"))
-        quota.assert_not_called()
+        self.assertFalse(hasattr(launch, "usage_guard"))
         self.assertIsInstance(authority, launch.LaunchAuthority)
 
     def test_production_launch_has_no_settings_origin_override(self) -> None:
@@ -1165,13 +1169,12 @@ class LaunchIntegrationTests(_Base):
             )
         self.assertFalse(server.request_seen.is_set())
 
-    def test_canonical_origin_is_still_exact_commit_validated(self) -> None:
-        with mock.patch.object(
-            launch.usage_guard, "DEFAULT_SETTINGS_URL", "https://evil.invalid/settings"
-        ):
-            with self.assertRaises(launch.InvocationError) as caught:
-                self._authorize(self._binding("ollama"))
-        self.assertIn("canonical Ollama", str(caught.exception))
+    def test_launch_module_exposes_no_usage_guard_callable(self) -> None:
+        self.assertFalse(hasattr(launch, "usage_guard"))
+        self.assertFalse(any(
+            "quota" in name or "cookie" in name
+            for name, value in inspect.getmembers(launch, inspect.isfunction)
+        ))
 
     def test_loopback_test_transport_is_absent_from_authorize_api(self) -> None:
         """Installed callers cannot opt into loopback test transport."""
