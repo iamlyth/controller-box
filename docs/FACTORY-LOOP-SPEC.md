@@ -229,26 +229,52 @@ Every model attempt MUST:
 
 A selected task excerpt is derived from the plan and does not constitute another source of truth. Before launch, the harness re-derives its exact bytes from the committed plan blob, records the excerpt digest in the invocation binding, and fails closed if the delivered bytes differ, are paraphrased, or come from another plan revision.
 
-## 10. Ollama usage hook
+## 10. Ordered pre-round hooks and Ollama usage
 
-The existing `scripts/ollama-usage-guard.sh` contract MUST be retained.
+The exact committed `.factory/pre-round-hooks.json` registry is an ordered
+array of fixed control-plane implementations. Every entry is mandatory; an
+enabled entry runs once, in array order, before each campaign round's planner.
+A disabled or removed entry never suppresses another entry. The registry is
+not an arbitrary command surface: unknown implementations, optional failure
+policies, shell strings, paths, duplicate IDs/implementations, unknown fields,
+and non-boolean flags fail closed.
 
-Before every model invocation, the control plane runs:
+The registry bytes and fixed implementation bytes are digest-bound at campaign
+start. Before hook execution the sole control state durably records the round
+as started. Successful typed results are chained into the state before the
+planner starts. Planner retries do not rerun hooks. A recovery that sees a
+started but uncompleted round is ambiguous and terminates
+`infrastructure_failure` without rerunning a possibly side-effecting hook.
 
-```sh
-./scripts/ollama-usage-guard.sh --check
-```
+The existing `scripts/ollama-usage-guard.sh` check/wait decision table and its
+hardened Python implementation are retained as the fixed `ollama_usage_guard`
+pre-round implementation:
 
-The exact decision table is:
-
-- `--check` exit 0: invoke the model;
+- `--check` exit 0: the hook passes;
 - `--check` exit 1 (quota threshold) or 3 (transient status failure): run `--wait`;
-- `--wait` exit 0: run one final `--check`, which MUST exit 0 before invocation;
-- `--check` exit 2 (fatal), any undocumented exit, or any nonzero `--wait` exit: terminate the campaign without invoking the model.
+- `--wait` exit 0: run one final `--check`, which MUST exit 0 before the hook passes;
+- `--check` exit 2 (fatal), any undocumented exit, or any nonzero `--wait` exit: the mandatory hook fails and the planner is not invoked.
 
-The existing usage-status behavior is retained, but its credential transport MUST be hardened before the new loop is accepted. The guard MUST NOT export cookies or credentials to child environments or place them in child argv. It MUST use a bounded stdin or secure mode-0600 descriptor/file mechanism, erase owned temporary material, and expose only redacted status. A conformance test inspects a live synthetic child's `/proc/<pid>/cmdline` and `/proc/<pid>/environ` and fails if the synthetic cookie name or value appears.
+The Ollama hook is intentionally committed **disabled**. Enabling or removing
+it changes the exact campaign configuration digest but never changes the
+execution of the enabled branch guard. Quota policy is absent from
+`authorize_launch`; model authorization cannot accept per-launch quota/cookie
+options and never opens a usage credential store.
 
-The guard remains outside the model context. Credential material, cookies, private endpoints, and raw usage responses MUST NOT be added to prompts, logs, command arguments, child environments, or repository state. Signals received while waiting MUST terminate the wait and campaign cleanly.
+When enabled, the guard MUST NOT export cookies or credentials to child
+environments or place them in child argv. It uses bounded stdin or a secure
+mode-0600 descriptor/file mechanism, erases owned temporary material, and
+exposes only redacted status. A conformance test inspects a live synthetic
+child's `/proc/<pid>/cmdline` and `/proc/<pid>/environ` and fails if the
+synthetic cookie name or value appears.
+
+Hooks remain outside model context. Typed durable results contain only IDs,
+order, enabled/mandatory flags, implementation digests, and pass/failed/
+disabled/not-run classifications—never raw output. Credential material,
+cookies, private endpoints, raw usage responses, and hook diagnostics MUST
+NOT be added to prompts, logs, command arguments, child environments, or
+repository state. Signals received while waiting terminate the hook and
+campaign cleanly.
 
 ## 11. Minimal mutable control state
 
@@ -265,7 +291,8 @@ It contains exactly:
 - `current_phase`;
 - `specification_digest`;
 - `plan_digest`;
-- `role_prompt_digests` and `audit_objectives_digest` bound at campaign start;
+- `role_prompt_digests`, `audit_objectives_digest`, `pre_round_hook_configuration_digest`, and `pre_round_hook_commit` bound at campaign start;
+- `pre_round_hook_results_digest`, `pre_round_hook_started_round`, and `pre_round_hook_completed_round`;
 - `phase_base_commit`;
 - `selected_task_id`, if any;
 - `attempt_number` (monotonic within the current task and reset to zero only on a trusted task/phase transition);
@@ -364,7 +391,7 @@ wall-clock deadline (at most 86400 seconds) that includes quota waits, role
 supervision, and deterministic gates. Each round consists of:
 
 ```text
-planning -> implementation attempts -> verification -> audit
+ordered enabled pre-round hooks -> planning -> implementation attempts -> verification -> audit
 ```
 
 The campaign MUST NOT remain indefinitely in implementation merely because external acceptance is unavailable.
@@ -511,7 +538,7 @@ The generic implementation is not acceptable until tests prove:
 10. TERM, INT, and HUP reach and reap the full model process group;
 11. timeout and crash recovery preserve dirty work;
 12. stale, forged, symlinked, oversized, wrong-owner, wrong-mode, or mismatched state fails closed;
-13. Ollama `--check` and `--wait` run before every model invocation and quota-guard errors prevent launch;
+13. exact-commit enabled hooks run once in order before every round planner; Ollama check/wait follows the decision table only when its configured hook is enabled, and removing/disabling it never suppresses other hooks;
 14. credential tool-call blocking and tool-result redaction remain active;
 15. exact-commit runner, visual, installed, and audit receipts retain their existing trust semantics;
 16. no model completion token can bypass deterministic gates;
@@ -536,7 +563,7 @@ The redesign is complete in the boilerplate when:
 - the implementation plan is the sole task authority;
 - each role demonstrably starts with a fresh context;
 - only one minimal control-state file exists;
-- the existing Ollama usage guard and security boundaries are retained;
+- the ordered exact-commit pre-round registry, intentionally disabled Ollama hook, and existing credential boundaries are retained;
 - generic adversarial tests and `verify-boilerplate.sh` pass;
 - a five-round synthetic campaign completes with both success and final-findings fixtures;
 - no Ralph Orchestrator process, runtime task ledger, memory store, event protocol, or resumed loop identity is required;
@@ -558,7 +585,7 @@ The stable IDs below are the conformance authority for this specification. Secti
 | PLAN-01 | §7 | `factory-plan/v1` binds spec/base/tasks/requirements/interactions/conformance and parses unambiguously | unit |
 | TASK-01 | §7, §8 | Task transitions and deterministic priority-plus-ID selection are trusted and plan-derived | unit |
 | TASK-02 | §9, §20 | Delivered task bytes and digest exactly match the committed plan | installed |
-| QUOTA-01 | §10 | Ollama check/wait behavior runs before each invocation and fails closed by documented exit table | private_integration |
+| QUOTA-01 | §10 | Ordered exact-commit hooks run once before each round planner; enabled Ollama check/wait fails closed by its decision table and disabling/removing it does not suppress other hooks | private_integration |
 | QUOTA-02 | §10 | Ollama credentials appear in no child argv/environment/log and owned material is securely removed | private_integration |
 | STATE-01 | §11, §17 | One minimal atomic state file enforces the explicit monotonic transition table and detects tampering | unit |
 | LOCK-01 | §12 | Canonical root-descriptor lock enforces one writer and is not inherited or unlockable by untrusted children | private_integration |

@@ -572,6 +572,19 @@ class RootLock:
             raise RootLockUnsafeError("live branch was not resolved")
         return self._branch
 
+    def validate_live_branch(self, expected: str) -> str:
+        """Re-read the named branch through the held descriptor authority."""
+        self._require_locked()
+        result = self._git_run(["rev-parse", "--abbrev-ref", "HEAD"])
+        if result.returncode != 0:
+            raise RootLockUnsafeError("cannot revalidate the live Git branch")
+        branch = result.stdout.strip()
+        if not branch or branch == "HEAD" or branch != expected:
+            raise RootLockBindingError(
+                f"live branch {branch!r} does not match required branch {expected!r}"
+            )
+        return branch
+
     def lock_metadata(self, *, fd: bool = True) -> Dict[str, str]:
         """The trusted holder's lock-metadata environment (stripped in children)."""
         return lock_environment(

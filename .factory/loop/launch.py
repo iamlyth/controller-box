@@ -199,18 +199,15 @@ MAX_CONFINEMENT_SPEC_BYTES = 1024 * 1024
 
 # Strict known-provider registry (Task 7 review, obligation 5):
 # ``verify_invocation`` rejects any provider outside this set, so an unknown
-# or caller-claimed provider fails closed and can never bypass the per-policy
-# guard.  ``ollama`` is the retained §10 provider (guard + Task 8
-# confinement proof required before invocation); ``synthetic`` is the
-# hermetic test provider used only by the hidden suite (no network, no
-# guard, no real model backend).
+# or caller-claimed provider fails closed and can never bypass fixed provider
+# policy. ``ollama`` retains the Task 8 confinement/source proof; its quota
+# decision belongs to the campaign pre-round registry. ``synthetic`` is the
+# hermetic hidden-suite provider (no network or real model backend).
 SUPPORTED_PROVIDERS = frozenset({"ollama", "synthetic"})
 
-# Per-provider guard policy: every supported provider/model pair is gated
-# per this table — no provider/model can bypass the guard by relabeling.
-# ``ollama``: the §10 decision table runs inside ``authorize_launch`` and
-# the invocation fails closed without a Task 8 confinement proof.
-# ``synthetic``: hermetic test provider; the guard is not applicable.
+# Providers that require the exact staged usage-source and credential-store
+# confinement proof. This is not a quota-decision table: quota is never run
+# inside ``authorize_launch``.
 PROVIDER_GUARD_REQUIRED = frozenset({"ollama"})
 CANONICAL_OLLAMA_SETTINGS_URL = "https://ollama.com/settings"
 
@@ -452,7 +449,7 @@ def verify_invocation(binding: InvocationBinding) -> None:
         raise InvocationError(
             f"provider must be one of {sorted(SUPPORTED_PROVIDERS)!r}, got "
             f"{binding.provider!r}; an unknown provider fails closed and can "
-            "never bypass the per-policy guard (Task 7 review, obligation 5)"
+            "never bypass the fixed provider policy (Task 32)"
         )
     for name, value in (
         ("model", binding.model),
@@ -1671,7 +1668,6 @@ class LaunchSupervision:
         self._confinement_rule_fds: Tuple[int, ...] = ()
         self._confinement_status_fd: Optional[int] = None
         self._usage_guard_digests: Optional[Tuple[str, str]] = None
-        self._usage_guard_module: Optional[object] = None
         # Task 11: the verified credential-guard redactor, built by :meth:`run`
         # before the child is spawned so no launch can capture child output
         # without a verified redaction authority (fail closed).  ``_guard_digest``
@@ -1921,7 +1917,6 @@ class LaunchSupervision:
                     confinement_spec=self._confinement_spec,
                     _strict_channels=False,
                     _executing_guard_digests=self._usage_guard_digests,
-                    _usage_guard_module=self._usage_guard_module,
                 )
             except real_confinement_authority.ConfinementError as exc:
                 raise SupervisionError(
@@ -2407,7 +2402,6 @@ class LaunchSupervision:
         self.prompt_fd = authority._prompt_fd
         authority._prompt_fd = -1
         self._usage_guard_digests = authority._usage_guard_digests
-        self._usage_guard_module = authority._usage_guard_module
         # The session path is proof-bound; the prompt is the already-consumed
         # anonymous sealed descriptor and is never represented by a pathname.
         if authority._session_dir is None:
@@ -2760,34 +2754,8 @@ def _add_common_binding(parser: argparse.ArgumentParser) -> None:
         help="(optional, planner only) claimed findings-payload digest; "
         "verified against the re-derived payload bytes, never authoritative",
     )
-    # Ollama usage-guard driver knobs (QUOTA-01/QUOTA-02, §10): for a
-    # guard-gated provider the §10 decision table runs inside the mint
-    # (authorize_launch) before any model invocation.  These options only
-    # *drive* the guard (cookie store/stdin, settings URL); they can never
-    # bypass it.  ``html-file`` is intentionally *absent* from the
-    # production launch CLI/API.  Every provider uses the internally minted
-    # real Landlock proof; there is no synthetic proof or usage-transport
-    # test seam in installed code.
-    parser.add_argument(
-        "--usage-guard-cookie-file", metavar="FILE", default=None,
-        help="mode-0600 owned cookie store for the Ollama usage guard",
-    )
-    parser.add_argument(
-        "--usage-guard-cookie-stdin", action="store_true",
-        help="read the Ollama usage-guard cookie from stdin (private channel)",
-    )
-    parser.add_argument(
-        "--usage-guard-poll-interval", type=int, default=None, metavar="SECONDS",
-        help="Ollama usage-guard wait poll interval (bounds the wait)",
-    )
-    parser.add_argument(
-        "--usage-guard-max-wait", type=int, default=None, metavar="SECONDS",
-        help="Ollama usage-guard maximum total wait",
-    )
-    parser.add_argument(
-        "--usage-guard-max-polls", type=int, default=None, metavar="N",
-        help="Ollama usage-guard maximum polls before failing closed",
-    )
+    # Quota policy is deliberately absent from this per-model interface.
+    # The campaign's exact-commit ordered pre-round registry owns it.
 
 
 def _read_blob_anchored(path_text: str, label: str, maximum: int) -> bytes:
@@ -3049,7 +3017,6 @@ class LaunchAuthority:
         "_confined_launcher",
         "_confinement_rule_fds",
         "_usage_guard_digests",
-        "_usage_guard_module",
         "_mint",
     )
 
@@ -3072,7 +3039,6 @@ class LaunchAuthority:
         confined_launcher: Optional[Path] = None,
         confinement_rule_fds: Sequence[int] = (),
         usage_guard_digests: Optional[Sequence[str]] = None,
-        usage_guard_module: Optional[object] = None,
         _mint: object,
     ) -> None:
         if _mint is not _MINT_SECRET:
@@ -3113,7 +3079,6 @@ class LaunchAuthority:
         self._usage_guard_digests = (
             tuple(usage_guard_digests) if usage_guard_digests is not None else None
         )
-        self._usage_guard_module = usage_guard_module
         self._mint = _mint
 
 
@@ -3438,70 +3403,6 @@ def _canonical_ollama_settings_url(guard: object) -> str:
     return CANONICAL_OLLAMA_SETTINGS_URL
 
 
-def _gate_ollama_launch(
-    binding: "InvocationBinding",
-    *,
-    _usage_guard: object,
-    _executing_guard_digests: Sequence[str],
-    confinement_proof: object,
-    cookie_file: Optional[str] = None,
-    cookie_stdin: bool = False,
-    poll_interval: Optional[int] = None,
-    max_wait: Optional[int] = None,
-    max_polls: Optional[int] = None,
-) -> None:
-    """The Task 7 production gate for guard-gated providers.
-
-    An ``ollama``-provider invocation reaches the §10 guard only after the
-    production authority has internally minted the real Task 8 proof that
-    binds the exact invocation, descriptor-anchored specification, executing
-    guard source, and credential channels.  No synthetic proof, saved-HTML
-    transport, or loopback opt-in exists in this installed module.
-
-    After the confinement gate, the §10 decision table runs inside the
-    mint.  The operator store is never scoped into the model workspace: the
-    guard resolves its canonical operator-owned store itself and the
-    launch authority passes no workspace-scoped ``env_file`` (Task 7
-    review, obligation 1).
-    """
-    guard = _usage_guard
-    # Re-check immediately at the gate as defense in depth.  The first check
-    # happened before any credential/store access in ``authorize_launch``.
-    effective_settings_url = _canonical_ollama_settings_url(guard)
-    try:
-        real_confinement_authority.validate_proof(
-            confinement_proof,
-            binding,
-            cookie_file=cookie_file,
-            cookie_stdin=cookie_stdin,
-            _executing_guard_digests=_executing_guard_digests,
-            _usage_guard_module=guard,
-        )
-    except real_confinement_authority.ConfinementError as exc:
-        raise InvocationError(
-            "ollama-provider launch fails closed: the internally minted real "
-            f"confinement proof does not bind this invocation ({exc})"
-        ) from exc
-    try:
-        guard.require_quota(
-            cookie_file=cookie_file,
-            cookie_stdin=cookie_stdin,
-            settings_url=effective_settings_url,
-            poll_interval=poll_interval,
-            max_wait=max_wait,
-            max_polls=max_polls,
-        )
-    except guard.WaitInterrupted:
-        # A TERM/INT/HUP during the initial check, the wait, or the final
-        # check already terminated and reaped the fetch child; propagate so
-        # the CLI exits 128+signum (Task 7 review, obligation 12).
-        raise
-    except guard.UsageGuardError as exc:
-        raise InvocationError(
-            f"ollama usage guard blocked the invocation: {exc}"
-        ) from exc
-
-
 def authorize_launch(
     binding: "InvocationBinding",
     *,
@@ -3512,11 +3413,6 @@ def authorize_launch(
     audit_objective: Optional[bytes] = None,
     task_excerpt: Optional[bytes] = None,
     findings: Optional[bytes] = None,
-    usage_guard_cookie_file: Optional[str] = None,
-    usage_guard_cookie_stdin: bool = False,
-    usage_guard_poll_interval: Optional[int] = None,
-    usage_guard_max_wait: Optional[int] = None,
-    usage_guard_max_polls: Optional[int] = None,
 ) -> LaunchAuthority:
     """Mint the unforgeable verified-committed authority token (F2/F5).
 
@@ -3545,30 +3441,13 @@ def authorize_launch(
     the prompt directory, the session directory, and the sanitized home —
     so no private or credential material survives a failed authorization.
 
-    **Ollama production gate (Task 7 review, obligation 2).**  An
-    ``ollama``-provider invocation does not reach the model until the Task
-    8 confinement authority *proves* that ``.factory/`` and the operator
-    credential store(s) are inaccessible/read-only to model tools and the
-    guard source is exact-commit bound.  Only the real proof minted inside
-    this function is accepted by the guard gate.
-
-    **Ollama usage guard (QUOTA-01, QUOTA-02; §10).**  For a guard-gated
-    provider the §10 decision table runs *inside* the mint (after the real
-    confinement proof binds the augmented specification): ``--check`` exit 0
-    proceeds; exit 1 or 3 runs ``--wait`` and then one final ``--check``
-    that must exit 0; any fatal or nonzero ``--wait`` outcome raises
-    :class:`InvocationError` so the campaign terminates without invoking the
-    model.  The guard's cookie never appears in a child argv or child
-    environment (private stdin channel, built child environment, bounded
-    mode-0600/no-follow owned stores outside the model workspace,
-    zeroization, redacted output), and the ``--usage-guard-*`` options are
-    the operator diagnostics/driver knobs (cookie store/stdin, settings
-    URL) — a caller can never bypass the guard for a guard-gated provider.
-    Saved-page and loopback transports are absent from this installed API.
-    A TERM/INT/HUP
-    during the guard propagates :class:`usage_guard.WaitInterrupted` so the
-    CLI exits ``128 + signum`` after reaping the credential-holding fetch
-    child.
+    **Ollama confinement, not quota policy.**  An ``ollama`` provider still
+    receives the same exact-commit staged usage-source and Task 8 proof that
+    keeps operator credential stores inaccessible to model tools.  The
+    decision table itself is absent from this mint and from its public API:
+    the campaign's ordered pre-round registry owns that policy once per
+    round.  No ``--usage-guard-*`` launch option exists, and authorization
+    neither opens a cookie store nor invokes ``require_quota``.
     """
     verify_invocation(binding)
     _verify_input_digest("role prompt", role_prompt, binding.role_prompt_digest)
@@ -3715,8 +3594,8 @@ def authorize_launch(
             real_proof = real_confinement_authority.prove_confinement(
                 binding,
                 confinement_spec=confinement_spec,
-                cookie_file=usage_guard_cookie_file,
-                cookie_stdin=usage_guard_cookie_stdin,
+                cookie_file=None,
+                cookie_stdin=False,
                 _executing_guard_digests=usage_guard_digests,
                 _usage_guard_module=committed_usage_guard,
             )
@@ -3724,8 +3603,8 @@ def authorize_launch(
                 real_proof,
                 binding,
                 confinement_spec=confinement_spec,
-                cookie_file=usage_guard_cookie_file,
-                cookie_stdin=usage_guard_cookie_stdin,
+                cookie_file=None,
+                cookie_stdin=False,
                 _executing_guard_digests=usage_guard_digests,
                 _usage_guard_module=committed_usage_guard,
             )
@@ -3739,18 +3618,8 @@ def authorize_launch(
                 "the production launch fails closed: the real confinement "
                 f"proof/rule anchor cannot bind this invocation ({exc})"
             ) from exc
-        if binding.provider.lower() in PROVIDER_GUARD_REQUIRED:
-            _gate_ollama_launch(
-                binding,
-                _usage_guard=committed_usage_guard,
-                _executing_guard_digests=usage_guard_digests,
-                confinement_proof=real_proof,
-                cookie_file=usage_guard_cookie_file,
-                cookie_stdin=usage_guard_cookie_stdin,
-                poll_interval=usage_guard_poll_interval,
-                max_wait=usage_guard_max_wait,
-                max_polls=usage_guard_max_polls,
-            )
+        # Per-model authorization never executes quota policy.  The ordered
+        # campaign pre-round registry owns that decision once per round.
         verified = replace(binding, backend=backend)
         return LaunchAuthority(
             verified,
@@ -3769,7 +3638,6 @@ def authorize_launch(
             confined_launcher=confined_launcher,
             confinement_rule_fds=rule_fds,
             usage_guard_digests=usage_guard_digests,
-            usage_guard_module=committed_usage_guard,
             _mint=_MINT_SECRET,
         )
     except BaseException:
@@ -4126,11 +3994,6 @@ def _run_cli(args: argparse.Namespace) -> int:
             audit_objective=audit_objective,
             task_excerpt=task_excerpt,
             findings=findings,
-            usage_guard_cookie_file=args.usage_guard_cookie_file,
-            usage_guard_cookie_stdin=args.usage_guard_cookie_stdin,
-            usage_guard_poll_interval=args.usage_guard_poll_interval,
-            usage_guard_max_wait=args.usage_guard_max_wait,
-            usage_guard_max_polls=args.usage_guard_max_polls,
         )
         supervisor = LaunchSupervision(binding)
         result = supervisor.run(authority)

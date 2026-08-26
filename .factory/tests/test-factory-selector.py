@@ -67,10 +67,9 @@ class CanonicalPlanSelectionTest(unittest.TestCase):
         self.assertTrue(selection.selected)
         self.assertEqual(selection.classification, "selected")
         self.assertEqual(selection.task_id, 5)
-        # Tasks 1-3 are complete; Tasks 5, 9, and 22 (pending, dependencies
-        # 1-3 complete) are runnable, and the selector picks the minimum
-        # priority (Task 5).  Task 4 and Task 6 are blocked, and the final
-        # audit Task 31 depends on every other task.
+        # Tasks 5 and 9 are runnable and considered by priority. Task 4 and
+        # Task 6 are blocked, Task 32 is complete, and final audit Task 33
+        # depends on every other task.
         statuses = {task.number: task.status for task in plan.tasks}
         runnable = sorted(
             task.number

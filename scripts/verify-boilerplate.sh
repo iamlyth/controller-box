@@ -148,7 +148,8 @@ required = [
     '.factory/loop/gitutil.py', '.factory/loop/footprint.py',
     '.factory/loop/lock.py', '.factory/loop/launch.py',
     '.factory/loop/campaign.py', '.factory/loop/confine_launcher.py',
-    '.factory/loop/findings.py',
+    '.factory/loop/pre_round.py', '.factory/pre-round-hooks.json',
+    '.factory/tests/test-factory-pre-round.py', '.factory/loop/findings.py',
     '.factory/loop/audit_objectives.py', '.factory/loop/usage.py',
     '.factory/loop/usage_fetch.py', '.factory/loop/redaction.py',
     '.factory/loop/promptset.py', '.factory/loop/workspace_confinement.py',
@@ -347,6 +348,7 @@ for hidden_suite in \
         test-factory-launch \
         test-factory-lock \
         test-factory-plan-parser \
+        test-factory-pre-round \
         test-factory-redaction \
         test-factory-selector \
         test-factory-state \

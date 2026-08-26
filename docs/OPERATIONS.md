@@ -568,8 +568,12 @@ final acceptance chain) to exit zero with no skip marker. A nonzero planner,
 tester, or auditor is failing regardless of valid-looking output. The required
 wall-clock deadline includes quota waits.
 
-Every round starts a fresh planner process, selects one deterministic task
-from the canonical plan for a fresh developer process, runs the configured
+Every round first runs each enabled fixed hook from the exact-commit ordered
+`.factory/pre-round-hooks.json` registry once, then starts a fresh planner
+process and selects one deterministic task from the canonical plan for a fresh developer process. Hook
+start/completion cursors prevent planner retries or ambiguous recovery from
+rerunning a hook; the committed Ollama hook is disabled while the branch hook
+remains enabled and mandatory. The round then runs the configured
 project verification command, validates installed evidence and exact-tree
 verification on the declared runner, and launches a separate adversarial
 auditor in a fresh process. Tester and auditor findings reach the next
@@ -577,8 +581,10 @@ planner only through a revised canonical plan, never through memory injection.
 
 One mutable control-state file,
 `.factory-state/campaigns/<campaign-id>/factory-loop.json`
-(schema `factory-state/v1`), records the phase, round, attempt, digests, and a
-trusted outcome enum; it contains no model prose or evidence claims. All
+(schema `factory-state/v1`), records the phase, round, attempt, campaign hook
+configuration digest and exact source commit, chained typed hook-result digest, hook start/completion
+cursors, and a trusted outcome enum; it contains no model prose, raw hook
+output, or evidence claims. All
 writes are atomic, no-follow, ownership/mode/link-count checked, and
 validated against the documented transition table
 (`planning -> implementation -> verification -> audit`). The lifecycle lock

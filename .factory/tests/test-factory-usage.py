@@ -1000,7 +1000,7 @@ def _work(args, cwd, check=True):
 
 
 class LaunchIntegrationTests(_Base):
-    """The guard is part of the launch authority for ``ollama`` providers."""
+    """Per-model launch is confinement-only; quota belongs to pre-round hooks."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -1077,58 +1077,27 @@ class LaunchIntegrationTests(_Base):
             **guard_kwargs,
         )
 
-    def test_ollama_provider_ok_proceeds(self) -> None:
-        """An Ollama launch receives an internally minted real proof first.
-
-        The guard call itself is mocked only to avoid external transport; the
-        authority has already constructed, anchored, minted, and validated the
-        real production confinement before reaching that call.
-        """
-        cookie = self.make_cookie_file()
-        with mock.patch.object(launch, "_gate_ollama_launch") as gate:
-            authority = self._authorize(
-                self._binding("ollama"),
-                usage_guard_cookie_file=str(cookie),
-            )
-        gate.assert_called_once()
+    def test_ollama_provider_authorization_never_runs_quota(self) -> None:
+        with mock.patch.object(launch.usage_guard, "require_quota") as quota:
+            authority = self._authorize(self._binding("ollama"))
+        quota.assert_not_called()
         self.assertIsInstance(authority, launch.LaunchAuthority)
-        staged_usage = Path(authority._usage_guard_module.__file__)
-        self.assertTrue(staged_usage.is_relative_to(authority._exec_dir))
-        fetch_argv = authority._usage_guard_module.fetch_child_argv(
-            "https://ollama.com/settings"
-        )
-        self.assertEqual(
-            Path(fetch_argv[1]), authority._exec_dir / "usage_fetch.py"
-        )
-        for path in (staged_usage, Path(fetch_argv[1])):
+        self.assertFalse(hasattr(authority, "_usage_guard_module"))
+        staged_usage = authority._exec_dir / "usage.py"
+        staged_fetch = authority._exec_dir / "usage_fetch.py"
+        for path in (staged_usage, staged_fetch):
             self.assertIn(str(path), authority._staged_digests)
 
-    def test_ollama_provider_blocked_fails_closed(self) -> None:
-        cookie = self.make_cookie_file()
-        with self.assertRaises(launch.InvocationError) as caught:
-            with mock.patch.object(
-                launch, "_gate_ollama_launch",
-                side_effect=launch.InvocationError("ollama usage guard blocked"),
-            ):
-                self._authorize(
-                    self._binding("ollama"),
-                    usage_guard_cookie_file=str(cookie),
-                    usage_guard_max_polls=1,
-                    usage_guard_poll_interval=0,
-                )
-        self.assertIn("ollama usage guard", str(caught.exception))
-
-    def test_ollama_provider_fatal_fails_closed(self) -> None:
-        cookie = self.make_cookie_file()
-        with self.assertRaises(launch.InvocationError):
-            with mock.patch.object(
-                launch, "_gate_ollama_launch",
-                side_effect=launch.InvocationError("ollama usage guard fatal"),
-            ):
-                self._authorize(
-                    self._binding("ollama"),
-                    usage_guard_cookie_file=str(cookie),
-                )
+    def test_per_model_usage_driver_parameters_are_absent(self) -> None:
+        parameters = inspect.signature(launch.authorize_launch).parameters
+        for name in (
+            "usage_guard_cookie_file", "usage_guard_cookie_stdin",
+            "usage_guard_poll_interval", "usage_guard_max_wait",
+            "usage_guard_max_polls", "usage_guard_settings_url",
+        ):
+            self.assertNotIn(name, parameters)
+            with self.assertRaises(TypeError):
+                self._authorize(self._binding("ollama"), **{name: "x"})
 
     def test_non_ollama_provider_never_runs_the_guard(self) -> None:
         binding = self._binding("synthetic")
@@ -1151,14 +1120,11 @@ class LaunchIntegrationTests(_Base):
         self.head = _work(
             ["rev-parse", "HEAD"], self.workspace
         ).stdout.decode().strip()
-        cookie = self.make_cookie_file()
         with mock.patch.object(
             launch.real_confinement_authority, "prove_confinement"
         ) as prove:
             with self.assertRaises(launch.InvocationError) as caught:
-                self._authorize(
-                    self._binding("ollama"), usage_guard_cookie_file=str(cookie)
-                )
+                self._authorize(self._binding("ollama"))
         self.assertIn("canonical Ollama", str(caught.exception))
         prove.assert_not_called()
 
@@ -1178,15 +1144,13 @@ class LaunchIntegrationTests(_Base):
         with self.assertRaises(launch.InvocationError):
             self._authorize(binding)
 
-    def test_guard_cannot_be_bypassed_for_ollama(self) -> None:
-        # No cookie store and a network settings URL: the guard must fail
-        # closed (fatal missing-cookie, before any fetch) even though the
-        # caller asked for a completely open invocation.  The ambient
-        # environment is scrubbed so no real credential can ever satisfy
-        # the guard inside this test.
-        with _scrubbed_ollama_env():
-            with self.assertRaises(launch.InvocationError):
-                self._authorize(self._binding("ollama"))
+    def test_missing_cookie_is_not_consulted_by_per_model_authorization(self) -> None:
+        with _scrubbed_ollama_env(), mock.patch.object(
+            launch.usage_guard, "require_quota"
+        ) as quota:
+            authority = self._authorize(self._binding("ollama"))
+        quota.assert_not_called()
+        self.assertIsInstance(authority, launch.LaunchAuthority)
 
     def test_production_launch_has_no_settings_origin_override(self) -> None:
         """Caller-selected origins are absent before any credential can be read."""
@@ -1201,20 +1165,13 @@ class LaunchIntegrationTests(_Base):
             )
         self.assertFalse(server.request_seen.is_set())
 
-    def test_canonical_origin_is_validated_before_cookie_read(self) -> None:
-        cookie = self.make_cookie_file()
+    def test_canonical_origin_is_still_exact_commit_validated(self) -> None:
         with mock.patch.object(
             launch.usage_guard, "DEFAULT_SETTINGS_URL", "https://evil.invalid/settings"
-        ), mock.patch.object(launch.os, "open", wraps=os.open) as opened:
+        ):
             with self.assertRaises(launch.InvocationError) as caught:
-                self._authorize(
-                    self._binding("ollama"), usage_guard_cookie_file=str(cookie)
-                )
+                self._authorize(self._binding("ollama"))
         self.assertIn("canonical Ollama", str(caught.exception))
-        self.assertFalse(
-            any(call.args and call.args[0] == str(cookie) for call in opened.mock_calls),
-            "credential file was opened before canonical origin validation",
-        )
 
     def test_loopback_test_transport_is_absent_from_authorize_api(self) -> None:
         """Installed callers cannot opt into loopback test transport."""
@@ -1226,7 +1183,7 @@ class LaunchIntegrationTests(_Base):
 
 
 # ---------------------------------------------------------------------------
-# Strict known-provider registry and per-policy gating (obligation 5)
+# Strict known-provider registry and fixed launch policy
 # ---------------------------------------------------------------------------
 
 class ProviderRegistryTests(_Base):
@@ -1836,7 +1793,8 @@ class ProductionSurfaceTests(_Base):
         self.assertEqual(caught.exception.code, 0)
         help_text = out.getvalue()
         self.assertNotIn("--usage-guard-html-file", help_text)
-        self.assertIn("--usage-guard-cookie-file", help_text)
+        self.assertNotIn("--usage-guard-cookie-file", help_text)
+        self.assertNotIn("--usage-guard-max-wait", help_text)
 
     def test_guard_cli_html_file_is_diagnostics_only(self) -> None:
         """The *guard* CLI keeps its diagnostics fixture, the launch surface does not."""

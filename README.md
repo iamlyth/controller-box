@@ -337,14 +337,20 @@ The installed `.factory/bin/factory-launch` entrypoint runs one supervised
 fresh-context role attempt; `.factory/bin/factory-campaign` owns the finite
 five-round production lifecycle.
 
-Each round starts a fresh planner process, selects one deterministic task from
-the canonical plan (`factory-plan/v1`, parsed by `.factory/loop/plan_parser.py`)
+Each round first runs every enabled fixed hook from the exact-commit ordered
+`.factory/pre-round-hooks.json` registry once, then starts a fresh planner
+process and selects one deterministic task from the canonical plan
+(`factory-plan/v1`, parsed by `.factory/loop/plan_parser.py`). The Ollama hook
+is intentionally committed disabled; removing or disabling it does not affect
+the enabled mandatory branch guard. Per-model authorization performs no quota
+check.
 for a fresh developer process, runs the configured project verifier, and
 launches an independent auditor. Tester and auditor findings reach the next
 planner only through a revised plan, never through memory injection. One
 mutable control-state file
 (`.factory-state/campaigns/<campaign-id>/factory-loop.json`) records the phase,
-round, attempt, and a trusted outcome enum; recovery is derived from Git, the
+round, attempt, exact hook-configuration digest/source commit, chained typed hook-result
+digest, hook start/completion cursors, and a trusted outcome enum; recovery is derived from Git, the
 canonical plan, that campaign-owned state file, and process liveness. A finite
 campaign always terminates as `success`, `findings`, `blocked`, `failed`,
 `interrupted`, or `infrastructure_failure` — it never spins while no task is

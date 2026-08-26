@@ -186,6 +186,10 @@ class SmokeWorkspace:
             ROOT / ".factory" / "audit-objectives" / "registry.json",
             ws / ".factory" / "audit-objectives" / "registry.json",
         )
+        shutil.copy2(
+            ROOT / ".factory" / "pre-round-hooks.json",
+            ws / ".factory" / "pre-round-hooks.json",
+        )
         for role in ("planner", "developer", "tester", "auditor"):
             (ws / ".factory" / "prompts" / f"{role}.md").write_text(
                 f"# {role} fixture role prompt\n", encoding="utf-8"
@@ -516,6 +520,8 @@ class EvidenceSmokeUnit(_SmokeBase):
                 current = int(match.group(1))
                 continue
             if current is not None and current < 22 and line == "- Status: pending":
+                lines[index] = "- Status: complete"
+            if current is not None and current != 22 and line == "- Status: in_progress":
                 lines[index] = "- Status: complete"
         return ("\n".join(lines)).encode("utf-8")
 

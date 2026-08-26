@@ -193,10 +193,10 @@ State, structured role results, receipts, and final result stay in the fresh
 child; foreign entries retain their bytes, mode, and mtime. `.factory/bin/factory-launch` remains the single-role
 supervisor; the installed `.factory/bin/factory-campaign` owns finite rounds.
 
-Each implementation iteration:
+Each campaign round:
 
 1. validates branch, plan freshness, and the single control-state file;
-2. waits for Ollama quota when necessary;
+2. runs every enabled exact-commit pre-round hook once, in registry order, before the planner;
 3. selects one ready task deterministically (priority, then task ID) from the committed plan;
 4. launches one fresh developer process for that task, with a byte-bound task excerpt;
 5. implements and tests one task with one writer;
@@ -385,21 +385,25 @@ Missing/expired cookies or an unparseable settings page return status 2 and requ
 source scripts/update-ollama-cookies.sh
 ```
 
-## Quota waiting
+## Ordered pre-round hooks and quota
 
-Every model invocation runs:
+`.factory/pre-round-hooks.json` is an exact-commit ordered registry of fixed,
+mandatory control-plane implementations. Every enabled hook runs once before
+each round's planner; planner retries do not rerun it. A durable started cursor
+prevents an ambiguous crash from causing duplicate execution, and canonical
+typed result digests are chained into `factory-loop.json` before planning.
+Removing or disabling the Ollama entry does not suppress the enabled branch
+guard.
 
-```bash
-./scripts/ollama-usage-guard.sh --check
-```
-
-The exact decision table (FACTORY-LOOP-SPEC §10): `--check` exit 0 invokes the
-model; exit 1 (quota) or 3 (transient) runs `--wait`, then one final `--check`
-that must exit 0; exit 2 (fatal) or any undocumented exit terminates the
-campaign without invoking the model. The guard never exports cookies or
+The Ollama hook is intentionally committed disabled. When enabled, its exact
+decision table (FACTORY-LOOP-SPEC §10) is: `--check` exit 0 passes; exit 1
+(quota) or 3 (transient) runs `--wait`, then one final `--check` that must exit
+0; exit 2 (fatal) or any undocumented exit fails the mandatory hook and the
+planner is not invoked. Per-model `authorize_launch` has no quota/cookie
+options and performs no usage check. The guard never exports cookies or
 credentials to child environments or argv, uses a bounded descriptor/file
 mechanism, erases owned temporary material, and exposes only redacted status.
-Useful settings live in `.ollama-usage-env`:
+Useful settings live in the operator-owned `.ollama-usage-env`:
 
 ```bash
 OLLAMA_THRESHOLD=80
