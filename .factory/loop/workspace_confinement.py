@@ -912,17 +912,24 @@ def _external_backend_closure(backend: str) -> List[str]:
 
 
 def _pi2_host_home(backend: Path) -> Optional[Path]:
-    """Return the immutable Pi2 wrapper's declared host home, if present."""
+    """Return an immutable Pi/Pi2 wrapper's declared host home."""
     try:
         data = Path(backend).read_bytes()
     except OSError:
         return None
     match = re.search(rb"^export PI_JAIL_HOST_HOME=([^\r\n]+)$", data, re.MULTILINE)
-    if match is None or Path(backend).name != "pi2":
-        return None
-    value = match.group(1).decode("utf-8", "strict").strip('"\'')
-    path = Path(value)
-    return path if path.is_absolute() else None
+    if match is not None and Path(backend).name == "pi2":
+        value = match.group(1).decode("utf-8", "strict").strip('"\'')
+        path = Path(value)
+        return path if path.is_absolute() else None
+    agent = re.search(
+        rb"^export PI_CODING_AGENT_DIR=([^\r\n]+)/\.pi/agent2$",
+        data, re.MULTILINE,
+    )
+    if agent is not None and Path(backend).name == "pi":
+        path = Path(agent.group(1).decode("utf-8", "strict").strip('"\''))
+        return path if path.is_absolute() else None
+    return None
 
 
 def _backend_paths(backend: Path, workspace: Path) -> Tuple[List[str], List[str]]:
@@ -1056,7 +1063,7 @@ def confinement_spec(
         host_home = _pi2_host_home(Path(binding.backend))
         if host_home is None:
             raise ConfinementError(
-                "openai-codex requires the immutable Pi2 credential broker wrapper"
+                "openai-codex requires an immutable Pi/Pi2 credential broker wrapper"
             )
         agent_dir = host_home / ".pi" / "agent2"
         ssh_config = host_home / ".config" / "pi2-ssh-runner"
