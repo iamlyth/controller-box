@@ -22,7 +22,15 @@
 
 set -euo pipefail
 
-SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+# Resolve the script directory without invoking dirname.  This keeps the
+# installed-path acceptance runnable in the minimal verifier environment,
+# where coreutils may be unavailable while Bash itself is present.
+SCRIPT_PATH=${BASH_SOURCE[0]}
+SCRIPT_DIR=${SCRIPT_PATH%/*}
+if [ "$SCRIPT_DIR" = "$SCRIPT_PATH" ]; then
+    SCRIPT_DIR=.
+fi
+SCRIPT_DIR=$(cd -- "$SCRIPT_DIR" && pwd)
 PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 cd -- "$PROJECT_ROOT"
 
