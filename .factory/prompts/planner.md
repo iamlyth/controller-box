@@ -38,9 +38,13 @@ and task bytes to the exact bound commit; treat any mismatch as fatal.
    `blocked` task rows with exact fact references; never let a blocked task
    become passing merely because no model can execute it.
 6. The uniquely titled `Final documentation and specification audit` task must
-   remain the final task in the file and depend on every other task. Insert any
-   new remediation task immediately before it, then update the final task's
-   dependencies. Never append a task after the final audit.
+   remain the final task in the file and depend on every other task. Task
+   numbers must stay unique, increasing, and contiguous. When adding a task,
+   assign the new remediation the current final task number, increment the
+   final audit's number by one, and update its dependencies and any references
+   accordingly. Insert the remediation immediately before the renumbered final
+   audit; never place a higher-numbered task before a lower-numbered task or
+   append anything after the final audit.
 
 ## Workspace confinement
 

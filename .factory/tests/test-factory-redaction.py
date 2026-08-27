@@ -684,6 +684,16 @@ class SanitizedGateEnvironmentTests(unittest.TestCase):
                 campaign_module.sanitized_gate_environment(
                     {"PATH": "/usr/bin", "NIX_PATH": value}
                 )
+        with self.assertRaises(campaign_module.CampaignError):
+            campaign_module.sanitized_gate_environment(
+                {"PATH": "/usr/bin", "NIX_REMOTE": "local"}
+            )
+        self.assertEqual(
+            campaign_module.sanitized_gate_environment(
+                {"PATH": "/usr/bin", "NIX_REMOTE": "daemon"}
+            )["NIX_REMOTE"],
+            "daemon",
+        )
         value = os.environ.get("NIX_PATH", "")
         if value:
             env = campaign_module.sanitized_gate_environment(

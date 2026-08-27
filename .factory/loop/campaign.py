@@ -220,7 +220,7 @@ GATE_ENV_ALLOWLIST = (
     "LC_COLLATE", "LC_MESSAGES", "LC_MONETARY", "LC_NUMERIC", "LC_TIME",
     "TERM", "TZ", "SHELL", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME",
     "XDG_CACHE_HOME", "XDG_DATA_HOME", "NO_COLOR", "CLICOLOR",
-    "CLICOLOR_FORCE", "NIX_PATH",
+    "CLICOLOR_FORCE", "NIX_PATH", "NIX_REMOTE",
 )
 
 # Gate output is bounded to this many bytes before redaction (the same
@@ -1204,6 +1204,9 @@ def sanitized_gate_environment(
     for key in GATE_ENV_ALLOWLIST:
         if key in parent:
             environment[key] = parent[key]
+    nix_remote = environment.get("NIX_REMOTE")
+    if nix_remote is not None and nix_remote != "daemon":
+        raise CampaignError("deterministic gates require NIX_REMOTE=daemon")
     nix_path = environment.get("NIX_PATH")
     if nix_path is not None:
         match = re.fullmatch(r"nixpkgs=(/nix/store/[0-9a-z]{32}-[^:]+)", nix_path)
