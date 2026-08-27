@@ -167,6 +167,9 @@ SYSTEM_READ = (
     "/etc/passwd", "/etc/group", "/etc/ssl/certs",
     "/dev/null", "/dev/urandom", "/dev/random", "/dev/zero", "/dev/tty",
 )
+NETWORK_CONFIG_LINKS = (
+    "/etc/resolv.conf", "/etc/hosts", "/etc/nsswitch.conf",
+)
 
 # The ``.factory/`` inputs each role may read (the plan, policy, and
 # evidence sidecars; never the control-plane source, harness tests,
@@ -763,6 +766,23 @@ def _tool_read_paths() -> List[str]:
         _no_symlink_components(existing, "system read path")
         _resolved_is_self(existing, "system read path")
         paths.append(existing)
+    for link in NETWORK_CONFIG_LINKS:
+        resolved = os.path.realpath(link)
+        try:
+            info = os.stat(resolved)
+        except OSError:
+            continue
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid == os.getuid()
+            or info.st_mode & 0o022
+        ):
+            raise ConfinementError(
+                f"network configuration target {resolved!r} is not trusted read-only data"
+            )
+        _no_symlink_components(resolved, "network configuration target")
+        if resolved not in paths:
+            paths.append(resolved)
     return paths
 
 
