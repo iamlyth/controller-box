@@ -462,6 +462,49 @@ static void test_init_with_svg_nonexistent(void **state)
     cbx_profile_diagram_shutdown(&diag);
 }
 
+/* The SVG must contribute opaque outline pixels to the final framebuffer.
+ * This specifically guards the nanosvg/SDL pixel-format boundary: a texture
+ * can be non-NULL and still render invisible when its alpha byte is decoded
+ * incorrectly.  Keep this assertion on the production SVG path rather than
+ * testing texture metadata alone. */
+static void test_svg_outline_reaches_framebuffer(void **state)
+{
+    pd_fixture *f = *state;
+    char svg_path[PATH_MAX];
+    snprintf(svg_path, sizeof(svg_path), "%s/svg/generic-gamepad.svg",
+             cbx_icon_dir());
+
+    cbx_profile_diagram diag;
+    cbx_theme theme;
+    cbx_theme_default(&theme);
+    assert_int_equal(cbx_profile_diagram_init(&diag, f->sdl.renderer,
+                                              svg_path, &theme), 0);
+    assert_non_null(diag.base_texture);
+
+    SDL_Rect rect = {0, 0, 300, 180};
+    cbx_widget_set_rect(&diag.base, &rect);
+    diag_clear(f->sdl.renderer, 255);
+    cbx_widget_draw(&diag.base, f->sdl.renderer);
+
+    int w, h;
+    uint8_t *pixels = diag_read_fb(f->sdl.renderer, &w, &h);
+    int black = 0;
+    for (int y = rect.y; y < rect.y + rect.h && y < h; y++) {
+        for (int x = rect.x; x < rect.x + rect.w && x < w; x++) {
+            size_t offset = ((size_t)y * (size_t)w + (size_t)x) * 4;
+            if (pixels[offset] < 20 && pixels[offset + 1] < 20 &&
+                pixels[offset + 2] < 20)
+                black++;
+        }
+    }
+    free(pixels);
+    cbx_profile_diagram_shutdown(&diag);
+
+    /* The installed generic silhouette has a substantial opaque outline;
+     * a transparent/byte-swapped texture produces zero such pixels. */
+    assert_true(black >= 5000);
+}
+
 /* ------------------------------------------------------------------ */
 /*  Geometry tests (BUG-0018)                                         */
 /* ------------------------------------------------------------------ */
@@ -885,6 +928,10 @@ int main(void)
 
         /* SVG loading */
         cmocka_unit_test_setup_teardown(test_init_with_svg_nonexistent,
+                                          setup, teardown),
+
+        /* SVG framebuffer visibility (BUG-0014) */
+        cmocka_unit_test_setup_teardown(test_svg_outline_reaches_framebuffer,
                                           setup, teardown),
 
         /* Geometry (BUG-0018) */
