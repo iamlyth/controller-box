@@ -32,11 +32,15 @@ plan; if they differ from the plan section, stop and report.
    callback tests are supplemental only. Proxy evidence (offscreen pixels,
    private/session-scoped services, synthetic consumers, asserted receipts)
    never marks a production requirement verified.
-5. Update the selected task's status and evidence in the plan
-   (`.factory/artifacts/implementation-plan.md`): record the exact commands,
-   results, production paths exercised, and semantic outcomes. The
-   machine-readable conformance sidecar and exact-commit receipts remain the
-   acceptance authority; prose never is.
+5. Update only the selected task's existing status/evidence fields in the plan
+   (`.factory/artifacts/implementation-plan.md`): record exact commands,
+   results, production paths, and semantic outcomes. Every task-body line must
+   remain parser-unambiguous: use canonical `- Evidence:`/`- Status:` fields,
+   and indent all multiline evidence continuation text and sub-bullets by two
+   spaces. Never insert a bare paragraph, a new level-two heading, or an
+   unindented sentence into a task body. The machine-readable conformance
+   sidecar and exact-commit receipts remain the acceptance authority; prose
+   never is.
 6. Leave one coherent working-tree change for the trusted orchestrator to
    verify and commit. Git metadata and commit authority are outside the model
    sandbox. Never claim final product acceptance; verification and audit are
