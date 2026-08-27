@@ -159,7 +159,12 @@ for c in \
     if [ -f "$c" ]; then FONT_FOUND="$c"; break; fi
 done
 if [ -z "$FONT_FOUND" ]; then
-    FONT_FOUND=$(find /nix/store -name "DejaVuSans.ttf" 2>/dev/null | head -1 || true)
+    # Avoid a find/head pipeline here: shell globbing is sufficient for the
+    # Nix store fallback and keeps this acceptance test independent of helper
+    # subprocess permissions.
+    for c in /nix/store/*/share/X11/fonts/DejaVuSans.ttf; do
+        if [ -f "$c" ]; then FONT_FOUND="$c"; break; fi
+    done
 fi
 if [ -n "$FONT_FOUND" ]; then
     cp "$FONT_FOUND" "$FONT_HOME/.local/share/fonts/DejaVuSans.ttf"
@@ -260,7 +265,11 @@ for f in "$USER_PROFILES_DIR"/*.yaml; do
     order=0
     meta="$SIDECAR_DIR/$base.meta.yaml"
     if [ -f "$meta" ]; then
-        order=$(sed -n 's/^[[:space:]]*display_order:[[:space:]]*\(-\{0,1\}[0-9][0-9]*\).*/\1/p' "$meta" | head -1)
+        # The sidecar has one display_order entry.  Read it directly rather
+        # than piping through `head`: this acceptance test must remain usable
+        # in the minimal installed verifier environment, where an otherwise
+        # available coreutils executable may be denied by the sandbox.
+        order=$(sed -n 's/^[[:space:]]*display_order:[[:space:]]*\(-\{0,1\}[0-9][0-9]*\).*/\1/p' "$meta")
         order=${order:-0}
     fi
     if [ "$order" -lt "$TEST_ORDER" ]; then
