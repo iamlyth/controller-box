@@ -1478,7 +1478,9 @@ class ScopeAndGit(_CampaignBase):
         self.assertEqual(rc, 4)
         work = ws.root / "src" / "work-1.md"
         self.assertTrue(work.exists())
-        self.assertIn("dirty fixture work", work.read_text(encoding="utf-8"))
+        # The fixture's crash behavior appends one crash-attempt marker per
+        # developer attempt; the dirty work must survive byte-identically.
+        self.assertIn("crash-attempt-1\n", work.read_text(encoding="utf-8"))
 
     def test_every_campaign_commit_is_orchestrator_authored(self) -> None:
         ws = self.make(SUCCESS_SCENARIO)
