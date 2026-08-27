@@ -590,6 +590,47 @@ static void test_geometry_pixelation_and_stretch(void **state)
     cbx_profile_diagram_shutdown(&diag);
 }
 
+/* A square editor widget must letterbox the landscape asset rather than
+ * stretching it.  This is the production editor geometry, and specifically
+ * guards the installed 300x300 diagram region. */
+static void test_geometry_square_widget_letterboxes(void **state)
+{
+    pd_fixture *f = *state;
+    char svg_path[PATH_MAX];
+    snprintf(svg_path, sizeof(svg_path), "%s/svg/generic-gamepad.svg",
+             cbx_icon_dir());
+
+    cbx_profile_diagram diag;
+    cbx_theme theme;
+    cbx_theme_default(&theme);
+    assert_int_equal(cbx_profile_diagram_init(&diag, f->sdl.renderer,
+                                              svg_path, &theme), 0);
+    assert_non_null(diag.base_texture);
+
+    SDL_Rect widget = {16, 88, 300, 300};
+    SDL_Rect content;
+    assert_true(cbx_profile_diagram_content_rect(&diag, &widget, &content));
+
+    /* generic-gamepad.svg is 5:3.  The square widget therefore gets a
+     * centred 300x180 content box; using 300x300 here would stretch the
+     * controller and would also move all mapped-button markers. */
+    assert_int_equal(content.x, 16);
+    assert_int_equal(content.y, 148);
+    assert_int_equal(content.w, 300);
+    assert_int_equal(content.h, 180);
+
+    int tw, th;
+    assert_true(cbx_profile_diagram_base_texture_size(&diag, &tw, &th));
+    assert_true(tw >= content.w);
+    assert_true(th >= content.h);
+    assert_true((long long)tw * content.h -
+                (long long)th * content.w <= content.w);
+    assert_true((long long)th * content.w -
+                (long long)tw * content.h <= content.w);
+
+    cbx_profile_diagram_shutdown(&diag);
+}
+
 static void test_geometry_marker_control_alignment(void **state)
 {
     pd_fixture *f = *state;
@@ -936,6 +977,8 @@ int main(void)
 
         /* Geometry (BUG-0018) */
         cmocka_unit_test_setup_teardown(test_geometry_pixelation_and_stretch,
+                                          setup, teardown),
+        cmocka_unit_test_setup_teardown(test_geometry_square_widget_letterboxes,
                                           setup, teardown),
         cmocka_unit_test_setup_teardown(test_geometry_marker_control_alignment,
                                           setup, teardown),
