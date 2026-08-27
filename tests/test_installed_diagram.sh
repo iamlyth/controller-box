@@ -284,8 +284,17 @@ for f in "$USER_PROFILES_DIR"/*.yaml; do
         # than piping through `head`: this acceptance test must remain usable
         # in the minimal installed verifier environment, where an otherwise
         # available coreutils executable may be denied by the sandbox.
-        order=$(sed -n 's/^[[:space:]]*display_order:[[:space:]]*\(-\{0,1\}[0-9][0-9]*\).*/\1/p' "$meta")
-        order=${order:-0}
+        # Parse the single scalar with Bash so the installed-path acceptance
+        # does not depend on a separately executable sed from the host/Nix
+        # environment.  Reject malformed values by retaining the neutral
+        # order; the test-owned profile still remains selected by its
+        # explicitly valid sidecar.
+        while IFS= read -r meta_line; do
+            if [[ "$meta_line" =~ ^[[:space:]]*display_order:[[:space:]]*(-?[0-9]+)[[:space:]]*$ ]]; then
+                order="${BASH_REMATCH[1]}"
+                break
+            fi
+        done < "$meta"
     fi
     if [ "$order" -lt "$TEST_ORDER" ]; then
         TEST_INDEX=$((TEST_INDEX + 1))
