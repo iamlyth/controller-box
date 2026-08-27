@@ -106,8 +106,11 @@ fi
 # data layout.  If it is missing, the binary would fall back to the source
 # tree, which the acceptance must reject.
 INSTALLED_SVG="$STAGING_DIR/share/controller-box/icons/svg/generic-gamepad.svg"
-if [ ! -f "$INSTALLED_SVG" ]; then
-    fail "installed layout missing controller SVG: $INSTALLED_SVG"
+# Require the asset to be a real installed regular file.  Accepting a symlink
+# here could silently reintroduce a source-tree asset and make this test pass
+# without exercising the installed layout.
+if [ ! -f "$INSTALLED_SVG" ] || [ -L "$INSTALLED_SVG" ]; then
+    fail "installed layout missing non-symlink controller SVG: $INSTALLED_SVG"
     exit 1
 fi
 INSTALLED_BIN="$STAGING_DIR/bin/controller-box"
