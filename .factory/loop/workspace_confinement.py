@@ -42,6 +42,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import sys
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
@@ -878,6 +879,52 @@ def _tool_execute_paths() -> List[str]:
     return sorted(set(paths))
 
 
+_NIX_EXEC_RE = re.compile(rb"/nix/store/[A-Za-z0-9._+/-]+")
+
+
+def _external_backend_closure(backend: str) -> List[str]:
+    """Bounded exact-file executable closure of an immutable script backend."""
+    pending = [os.path.realpath(backend)]
+    found: List[str] = []
+    while pending:
+        path = pending.pop(0)
+        if path in found:
+            continue
+        if len(found) >= 128:
+            raise ConfinementError("external backend executable closure is too large")
+        try:
+            gitutil.require_trusted_executable(path)
+            data = Path(path).read_bytes()
+        except (OSError, gitutil.GitBoundaryError) as exc:
+            raise ConfinementError(
+                f"external backend closure is not immutable and executable: {exc}"
+            ) from exc
+        found.append(path)
+        if len(data) > (1 << 20) or b"\x00" in data[:4096]:
+            continue
+        for raw in _NIX_EXEC_RE.findall(data):
+            candidate = raw.decode("utf-8", "strict").rstrip(")]}>,;:")
+            resolved = os.path.realpath(candidate)
+            if os.path.isfile(resolved) and os.access(resolved, os.X_OK):
+                if resolved not in found and resolved not in pending:
+                    pending.append(resolved)
+    return found
+
+
+def _pi2_host_home(backend: Path) -> Optional[Path]:
+    """Return the immutable Pi2 wrapper's declared host home, if present."""
+    try:
+        data = Path(backend).read_bytes()
+    except OSError:
+        return None
+    match = re.search(rb"^export PI_JAIL_HOST_HOME=([^\r\n]+)$", data, re.MULTILINE)
+    if match is None or Path(backend).name != "pi2":
+        return None
+    value = match.group(1).decode("utf-8", "strict").strip('"\'')
+    path = Path(value)
+    return path if path.is_absolute() else None
+
+
 def _backend_paths(backend: Path, workspace: Path) -> Tuple[List[str], List[str]]:
     """Read/execute allowlist for the model backend.
 
@@ -904,9 +951,11 @@ def _backend_paths(backend: Path, workspace: Path) -> Tuple[List[str], List[str]
             raise ConfinementError(
                 f"external backend is not an immutable trusted executable: {exc}"
             ) from exc
-        # Exact file only. Granting EXECUTE on its parent/install root would
-        # reopen absolute host executables (including Git) behind the broker.
-        return [resolved], [resolved]
+        # Exact immutable executable files only. Script backends such as Pi2
+        # may exec a bounded statically named Nix closure; no directory-wide
+        # execute grant is introduced.
+        closure = _external_backend_closure(resolved)
+        return closure, closure
     return [], []
 
 
@@ -1003,6 +1052,18 @@ def confinement_spec(
         add_rule(path, (ACCESS_READ,))
     for path in backend_execute:
         add_rule(path, (ACCESS_READ, ACCESS_EXECUTE))
+    if str(binding.provider).lower() == "openai-codex":
+        host_home = _pi2_host_home(Path(binding.backend))
+        if host_home is None:
+            raise ConfinementError(
+                "openai-codex requires the immutable Pi2 credential broker wrapper"
+            )
+        agent_dir = host_home / ".pi" / "agent2"
+        ssh_config = host_home / ".config" / "pi2-ssh-runner"
+        if agent_dir.is_dir():
+            add_rule(str(agent_dir), (ACCESS_READ, ACCESS_WRITE))
+        if ssh_config.exists():
+            add_rule(str(ssh_config), (ACCESS_READ,))
     for path in extra_read:
         # Task 10 review (REQ 4): every extra allowlist entry is validated
         # exactly like the role allowlists (no symlink in any component,
