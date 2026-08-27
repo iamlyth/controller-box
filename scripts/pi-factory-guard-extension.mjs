@@ -275,7 +275,8 @@ const REDACTION_FAILED = "[REDACTION FAILED]";
 // ---------------------------------------------------------------------------
 
 const GUARD_DIGEST_ENV = "PI_FACTORY_GUARD_DIGEST";
-export { GUARD_DIGEST_ENV };
+const GUARD_PYTHON_ENV = "PI_FACTORY_GUARD_PYTHON";
+export { GUARD_DIGEST_ENV, GUARD_PYTHON_ENV };
 const GUARD_DIGEST_RE = /^[0-9a-f]{64}$/;
 
 // Fixed absolute trusted interpreter candidates (mirrors the control plane's
@@ -383,6 +384,15 @@ function storePythonCandidates() {
 export function resolveTrustedPython() {
   if (currentUid() === 0) return null;
   if (_trustedPython !== undefined) return _trustedPython;
+  const pinned = process.env[GUARD_PYTHON_ENV];
+  if (typeof pinned === "string" && pinned.startsWith("/")) {
+    if (isTrustedRegularExecutable(pinned) && immutableChainValid(pinned)) {
+      _trustedPython = realpathSync(pinned);
+      return _trustedPython;
+    }
+    _trustedPython = null;
+    return null;
+  }
   let chosen = null;
   for (const candidate of TRUSTED_PYTHON_CANDIDATES) {
     if (isTrustedRegularExecutable(candidate) && immutableChainValid(candidate)) {

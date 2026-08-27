@@ -291,6 +291,7 @@ INVOCATION_ENV_PREFIX = "FACTORY_LOOP_LAUNCH_"
 # re-hashes that staged sibling and compares this transported digest before
 # any guard invocation (it has no Git access inside the model Landlock).
 PI_FACTORY_GUARD_DIGEST_ENV = "PI_FACTORY_GUARD_DIGEST"
+PI_FACTORY_GUARD_PYTHON_ENV = "PI_FACTORY_GUARD_PYTHON"
 
 # The committed model-side Pi extension (Task 11 review): the generic
 # factory guard extension loaded by the model backend through ``--extension``
@@ -1026,6 +1027,7 @@ def child_environment(
                 "SHA-256 of the exact committed guard blob"
             )
         environment[PI_FACTORY_GUARD_DIGEST_ENV] = guard_digest
+        environment[PI_FACTORY_GUARD_PYTHON_ENV] = require_trusted_interpreter()
     prefix = INVOCATION_ENV_PREFIX
     environment[prefix + "ROLE"] = binding.role
     environment[prefix + "MODEL"] = binding.model
