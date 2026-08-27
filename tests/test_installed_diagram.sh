@@ -42,7 +42,7 @@ STAGING_DIR="$PROJECT_ROOT/.test-install-diagram"
 # ICON_DIR resolve to the installed share tree at runtime instead of falling
 # back to SOURCE_ICON_DIR (which would be a production-path bypass).
 PREFIX_BUILD_DIR="$PROJECT_ROOT/.build-install-diagram"
-XVFB_DISPLAY=":93"
+XVFB_DISPLAY=""
 XVFB_PID=""
 MANAGER_PID=""
 FAILURES=0
@@ -131,8 +131,23 @@ if [ ! -f "$INSTALLED_BIN" ]; then
 fi
 
 # --- Step 2: start Xvfb ------------------------------------------------------
-pkill -f "Xvfb $XVFB_DISPLAY" 2>/dev/null || true
-sleep 0.5
+# Pick an unused display instead of killing a process by a global pattern.  A
+# fixed display can belong to another test (or another user's session), and a
+# global pkill can terminate unrelated work.  Xvfb creates both the socket and
+# lock below, so reject either one before starting our owned server.
+display_number=90
+while [ "$display_number" -le 199 ]; do
+    if [ ! -e "/tmp/.X11-unix/X${display_number}" ] &&
+       [ ! -e "/tmp/.X${display_number}-lock" ]; then
+        XVFB_DISPLAY=":${display_number}"
+        break
+    fi
+    display_number=$((display_number + 1))
+done
+if [ -z "$XVFB_DISPLAY" ]; then
+    fail "no unused X11 display is available"
+    exit 1
+fi
 Xvfb "$XVFB_DISPLAY" -screen 0 1280x720x24 &
 XVFB_PID=$!
 sleep 1.0
