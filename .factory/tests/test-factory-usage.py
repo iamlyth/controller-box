@@ -1245,13 +1245,25 @@ class ProviderRegistryTests(_Base):
             path.chmod(0o600)
         private = self.tmp / "private-home"
         private.mkdir(mode=0o700)
+        auth_fd = -1
         with mock.patch.object(Path, "home", return_value=operator):
-            launch._prepare_private_pi2_home(private)
+            auth_fd = launch._prepare_private_pi2_home(private)
+        self.addCleanup(lambda: os.close(auth_fd) if auth_fd >= 0 else None)
         copied = private / ".pi" / "agent2"
-        self.assertEqual((copied / "auth.json").read_bytes(), b'{"token":"synthetic"}\n')
+        # B1 security review: the credential is never materialised in any
+        # model/tool-readable path; only the non-secret catalog and an empty
+        # settings file live in the private home.
+        self.assertFalse((copied / "auth.json").exists())
+        self.assertFalse((copied / "auth.json").is_symlink())
         self.assertEqual((copied / "models.json").read_bytes(), b'{"models":[]}\n')
         self.assertEqual((copied / "settings.json").read_bytes(), b"{}\n")
         self.assertTrue(all(stat.S_IMODE(p.stat().st_mode) == 0o600 for p in copied.iterdir()))
+        # The credential travels only as an anonymous memfd descriptor.
+        self.assertGreaterEqual(auth_fd, 0)
+        os.lseek(auth_fd, 0, os.SEEK_SET)
+        self.assertEqual(
+            os.read(auth_fd, 1 << 20), b'{"token":"synthetic"}\n'
+        )
 
     def test_pi2_private_copy_rejects_loose_operator_credentials(self) -> None:
         operator = self.tmp / "operator-loose"

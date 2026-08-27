@@ -874,6 +874,10 @@ const TOOL_CALL_GUARDED_INPUTS = {
   read: (input) => (input && typeof input === "object" ? input.path : undefined),
   write: (input) => (input && typeof input === "object" ? input.path : undefined),
   edit: (input) => (input && typeof input === "object" ? input.path : undefined),
+  // B1 security review: grep reads file contents in-process, so its path is
+  // guarded exactly like read/write/edit (a /proc/.../fd reference could
+  // otherwise dereference the inherited credential descriptor).
+  grep: (input) => (input && typeof input === "object" ? input.path : undefined),
 };
 
 /** Guard one tool call before any rewrite: bash commands through

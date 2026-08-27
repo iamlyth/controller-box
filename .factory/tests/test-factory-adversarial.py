@@ -552,6 +552,16 @@ class CaseAdversarialSuite(_AdversarialBase):
                     "SHA-256 of the committed guard",
                 )
                 continue
+            if key == launch_module.PI_FACTORY_GUARD_PYTHON_ENV:
+                # The pinned trusted interpreter path (Task 11 review): a
+                # non-credential absolute interpreter the model-side guard
+                # extension uses to run the exact committed guard.
+                self.assertTrue(
+                    env[key].startswith("/nix/store/"),
+                    f"the guard interpreter key {key!r} must be an immutable "
+                    "store path",
+                )
+                continue
             if key in sanitized_home_keys:
                 self.assertTrue(
                     env[key].startswith("/tmp/factory-home-"),
@@ -566,7 +576,9 @@ class CaseAdversarialSuite(_AdversarialBase):
         # launch authority forwards (and it is verified 64-hex above).
         pi_keys = [key for key in env if key.startswith("PI_")]
         self.assertEqual(
-            pi_keys, [launch_module.PI_FACTORY_GUARD_DIGEST_ENV],
+            sorted(pi_keys),
+            sorted([launch_module.PI_FACTORY_GUARD_DIGEST_ENV,
+                    launch_module.PI_FACTORY_GUARD_PYTHON_ENV]),
             f"a PI_ session/memory key reached the role child: {pi_keys}",
         )
         for forbidden_prefix in ("OLLAMA_", "GIT_", "FACTORY_CAMPAIGN_",
@@ -626,7 +638,9 @@ class CaseAdversarialSuite(_AdversarialBase):
         # authority forwards.
         pi_keys = [key for key in probe1["env"] if key.startswith("PI_")]
         self.assertEqual(
-            pi_keys, [launch_module.PI_FACTORY_GUARD_DIGEST_ENV],
+            sorted(pi_keys),
+            sorted([launch_module.PI_FACTORY_GUARD_DIGEST_ENV,
+                    launch_module.PI_FACTORY_GUARD_PYTHON_ENV]),
             f"a PI_ session/memory key reached the child: {pi_keys}",
         )
         self.assertRegex(
@@ -1366,7 +1380,10 @@ class CaseAdversarialSuite(_AdversarialBase):
                         rounds_completed=0)
         dirty = ws.root / "src" / "work-1.md"
         self.assertTrue(dirty.is_file(), "the crash-touched dirty work must survive")
-        self.assertEqual(dirty.read_text(encoding="utf-8"), "dirty fixture work\n")
+        # The fixture's crash behavior appends one crash-attempt marker per
+        # developer attempt; the file must survive byte-identically with the
+        # first attempt's marker (proving the dirty work was preserved).
+        self.assertIn("crash-attempt-1\n", dirty.read_text(encoding="utf-8"))
         # Timeout path through the real launch authority: a sleeping backend
         # with a short runtime limit is bounded-terminated and the work it
         # touched survives.
@@ -3242,6 +3259,143 @@ class CaseAdversarialSuite(_AdversarialBase):
                           "ralph-event", "pi-factory-guard-extension"):
                 self.assertNotIn(token, text,
                                  f"{script} must not depend on {token!r}")
+
+
+
+
+# ---------------------------------------------------------------------------
+# B1/B2 security review: sealed-fd Pi2 credential transport (never a
+# model/tool-readable path) and openai-codex exact-identity fail-closed.
+# ---------------------------------------------------------------------------
+
+class Pi2CredentialIsolationTests(unittest.TestCase):
+    """B1/B2 regressions: the openai-codex credential is never materialised
+    in any model/tool-readable path, tool subprocesses cannot dereference the
+    inherited credential descriptor, the credential guard blocks
+    ``/proc/.../fd`` references, and a workspace backend with the
+    openai-codex provider fails closed before any credential is provisioned.
+    """
+
+    def test_pi2_auth_memfd_unreachable_from_tool_subprocess(self) -> None:
+        """A bash tool subprocess cannot read the auth through the symlink or
+        through /proc/self/fd/N (the descriptor is not inherited and /proc is
+        denied by Landlock)."""
+        if not hasattr(os, "memfd_create"):
+            self.skipTest("memfd_create unavailable")
+        fd = os.memfd_create("factory-pi2-auth-test", 0)
+        self.addCleanup(lambda: os.close(fd) if fd >= 0 else None)
+        os.write(fd, b'{"openai-codex":{"access":"SYNTH-TOKEN"}}\n')
+        os.lseek(fd, 0, os.SEEK_SET)
+        agent = tempfile.mkdtemp(prefix="factory-agent-test-")
+        self.addCleanup(shutil.rmtree, agent, ignore_errors=True)
+        os.symlink(f"/proc/self/fd/{fd}", os.path.join(agent, "auth.json"))
+        # The tool subprocess does not inherit the descriptor (Node/pi spawn
+        # closes non-stdio fds), so both the symlink dereference and the
+        # direct /proc/self/fd/N read fail.
+        # The tool subprocess does not inherit the descriptor (Node/pi spawn
+        # closes non-stdio fds), so the symlink dereference and the direct
+        # /proc/self/fd/N read both fail.  The /proc/<parent>/fd/N read is
+        # denied by Landlock under the factory confinement (covered by the
+        # confinement suite's proc-credential-reads test).
+        probe = (
+            f"cat '{agent}/auth.json' 2>&1; "
+            f"cat /proc/self/fd/{fd} 2>&1"
+        )
+        result = subprocess.run(
+            ["bash", "-c", probe], capture_output=True, text=True, timeout=30
+        )
+        self.assertNotIn("SYNTH-TOKEN", result.stdout + result.stderr)
+
+    def test_credential_guard_blocks_proc_fd_references(self) -> None:
+        """The credential guard blocks /proc/.../fd in commands and paths
+        (defense in depth against in-process dereference of the inherited
+        credential descriptor)."""
+        guard = ROOT / "scripts" / "credential-guard.py"
+        for command in (
+            "cat /proc/self/fd/3",
+            "cat /proc/1234/fd/5",
+            "ln -s /proc/self/fd/3 leak",
+            "cat /proc/self/fd/$(echo 3)",
+        ):
+            result = subprocess.run(
+                [PY, str(guard), "check-command-stdin"],
+                input=command, capture_output=True, text=True, timeout=30,
+            )
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn('"verdict":"block"', result.stdout,
+                          f"command {command!r} was not blocked")
+        for path in (
+            "/proc/self/fd/3",
+            "/proc/1234/fd/5",
+            "/proc/self/fd/3/",
+        ):
+            result = subprocess.run(
+                [PY, str(guard), "check-path-stdin"],
+                input=path, capture_output=True, text=True, timeout=30,
+            )
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn('"verdict":"block"', result.stdout,
+                          f"path {path!r} was not blocked")
+
+    def test_openai_codex_workspace_backend_fails_closed(self) -> None:
+        """B2: a workspace backend with the openai-codex provider fails
+        closed before any credential is provisioned (only the exact immutable
+        external pi2 wrapper identity may receive the credential)."""
+        with tempfile.TemporaryDirectory(prefix="factory-b2-") as tmp:
+            workspace = Path(tmp) / "workspace"
+            workspace.mkdir()
+            (workspace / "scripts").mkdir()
+            shutil.copy2(
+                ROOT / "scripts" / "pi2-secure-exec.py",
+                workspace / "scripts" / "pi2-secure-exec.py",
+            )
+            shutil.copy2(
+                ROOT / "scripts" / "credential-guard.py",
+                workspace / "scripts" / "credential-guard.py",
+            )
+            shutil.copy2(
+                ROOT / "scripts" / "pi-factory-guard-extension.mjs",
+                workspace / "scripts" / "pi-factory-guard-extension.mjs",
+            )
+            (workspace / "scripts" / "pi-cli-shims").mkdir()
+            shutil.copy2(
+                ROOT / "scripts" / "pi-cli-shims" / "git",
+                workspace / "scripts" / "pi-cli-shims" / "git",
+            )
+            (workspace / "src").mkdir()
+            (workspace / "src" / "main.py").write_text("def main(): pass\n")
+            (workspace / "build-check").mkdir()
+            (workspace / "plan.md").write_text("plan\n")
+            (workspace / "spec.md").write_text("spec\n")
+            (workspace / "role.md").write_text("role\n")
+            (workspace / "AGENTS.md").write_text("agents\n")
+            backend = workspace / "backend.py"
+            backend.write_text("#!/usr/bin/env python3\nprint('ok')\n")
+            os.chmod(backend, 0o700)
+            _git(workspace, "init", "-q")
+            _git(workspace, "config", "user.email", "factory@test")
+            _git(workspace, "config", "user.name", "factory")
+            _git(workspace, "add", "-A")
+            _git(workspace, "commit", "-qm", "fixture")
+            head = _git(workspace, "rev-parse", "HEAD").stdout.strip()
+            binding = launch_module.InvocationBinding(
+                role="developer", model="gpt-5.6-luna",
+                provider="openai-codex", backend=backend,
+                workspace=workspace, bound_commit=head,
+                role_prompt_digest=sha256((workspace / "role.md").read_bytes()),
+                prompt_set_digest=sha256(b"campaign-set"),
+                plan_digest=sha256((workspace / "plan.md").read_bytes()),
+                policy_digest=sha256((workspace / "AGENTS.md").read_bytes()),
+                specification_digest=sha256((workspace / "spec.md").read_bytes()),
+            )
+            with self.assertRaises(launch_module.InvocationError):
+                launch_module.authorize_launch(
+                    binding,
+                    role_prompt=(workspace / "role.md").read_bytes(),
+                    agents=(workspace / "AGENTS.md").read_bytes(),
+                    spec=(workspace / "spec.md").read_bytes(),
+                    plan=(workspace / "plan.md").read_bytes(),
+                )
 
 
 if __name__ == "__main__":

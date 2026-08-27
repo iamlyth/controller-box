@@ -1092,6 +1092,7 @@ def child_argv(
     secure_wrapper: Optional[Path] = None,
     guard_extension: Optional[Path] = None,
     prompt_digest: Optional[str] = None,
+    auth_fd: int = -1,
 ) -> List[str]:
     """Build the exact one-shot argv for the secure wrapper.
 
@@ -1163,6 +1164,15 @@ def child_argv(
         "--no-context-files",
         "--tools", tools,
     ])
+    if auth_fd >= 0:
+        # B1 security review: the openai-codex credential descriptor number
+        # travels only in the backend adapter's transient argv (never an env
+        # var the model could read, never a pathname).  The adapter consumes
+        # it before exec'ing the model CLI, so the number is absent from the
+        # model process argv/environment.
+        if type(auth_fd) is not int:
+            raise InvocationError("the auth descriptor must be an integer")
+        argv.extend(["--auth-fd", str(auth_fd)])
     for flag in FORBIDDEN_BACKEND_FLAGS:
         if flag in argv:
             raise InvocationError(
@@ -1586,6 +1596,12 @@ def _dispose_launch_authority(authority: object) -> None:
         except OSError:
             pass
         authority._prompt_fd = -1
+    if authority._auth_fd >= 0:
+        try:
+            os.close(authority._auth_fd)
+        except OSError:
+            pass
+        authority._auth_fd = -1
     _remove_private_directories(_authority_private_directories(authority))
 
 
@@ -1655,6 +1671,7 @@ class LaunchSupervision:
         self._staged_wrapper: Optional[Path] = None
         self._guard_extension: Optional[Path] = None
         self._prompt_digest: Optional[str] = None
+        self._auth_fd: int = -1
         self._staged_digests: Dict[str, str] = {}
         self._external_paths: Tuple[str, ...] = ()
         self._exec_dir: Optional[Path] = None
@@ -1886,6 +1903,7 @@ class LaunchSupervision:
             secure_wrapper=self._staged_wrapper,
             guard_extension=self._guard_extension,
             prompt_digest=self._prompt_digest,
+            auth_fd=self._auth_fd,
         )
         # Task 8 confined launch: when the verified authority carries the
         # exact confinement specification and a real proof, the model child is
@@ -1960,6 +1978,9 @@ class LaunchSupervision:
                 extra_fds: Tuple[int, ...] = (
                     (supervision_write,) if supervision_write is not None else ()
                 )
+                auth_pass: Tuple[int, ...] = (
+                    (self._auth_fd,) if self._auth_fd >= 0 else ()
+                )
                 process = subprocess.Popen(
                     argv,
                     cwd=str(self.binding.workspace),
@@ -1967,7 +1988,8 @@ class LaunchSupervision:
                     start_new_session=True,
                     close_fds=True,
                     pass_fds=(
-                        *self._confinement_rule_fds, self.prompt_fd, *extra_fds
+                        *self._confinement_rule_fds, self.prompt_fd,
+                        *auth_pass, *extra_fds,
                     ),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
@@ -2401,6 +2423,12 @@ class LaunchSupervision:
             )
         self.prompt_fd = authority._prompt_fd
         authority._prompt_fd = -1
+        if type(authority._auth_fd) is not int or authority._auth_fd < -1:
+            raise SupervisionError(
+                "the verified authority carries an invalid auth descriptor"
+            )
+        self._auth_fd = authority._auth_fd
+        authority._auth_fd = -1
         self._usage_guard_digests = authority._usage_guard_digests
         # The session path is proof-bound; the prompt is the already-consumed
         # anonymous sealed descriptor and is never represented by a pathname.
@@ -3010,6 +3038,7 @@ class LaunchAuthority:
         "_external_paths",
         "_exec_dir",
         "_prompt_fd",
+        "_auth_fd",
         "_session_dir",
         "_confinement_spec",
         "_confinement_proof",
@@ -3032,6 +3061,7 @@ class LaunchAuthority:
         external_paths: Sequence[str],
         exec_dir: Path,
         prompt_fd: int,
+        auth_fd: int = -1,
         session_dir: Path,
         confinement_spec: Optional[Mapping[str, object]] = None,
         confinement_proof: Optional[object] = None,
@@ -3062,6 +3092,9 @@ class LaunchAuthority:
         if type(prompt_fd) is not int or prompt_fd < 0:
             raise LaunchError("the launch authority prompt memfd is invalid")
         self._prompt_fd = prompt_fd
+        if type(auth_fd) is not int or auth_fd < -1:
+            raise LaunchError("the launch authority auth descriptor is invalid")
+        self._auth_fd = auth_fd
         self._session_dir = Path(session_dir)
         # Task 8 confinement binding: the exact ``factory-confinement/v1``
         # specification the confined child applies, the real (never synthetic)
@@ -3238,12 +3271,24 @@ def _resolve_pi2_runtime(wrapper: str) -> Tuple[str, str]:
     return node, cli
 
 
-def _prepare_private_pi2_home(sanitized_home: Path) -> None:
-    """Copy only bounded operator auth/catalog inputs into one private launch."""
+def _prepare_private_pi2_home(sanitized_home: Path) -> int:
+    """Prepare the private Pi2 agent directory and return the sealed auth fd.
+
+    The operator's ``auth.json`` credential is **never** written to any
+    model/tool-readable path (B1 security review).  Only the non-secret
+    catalog (``models.json``) and an empty ``settings.json`` are materialised
+    in the per-launch sanitized home; the credential bytes are carried in one
+    anonymous writable memfd whose descriptor is inherited by the model
+    process and referenced by the backend adapter through a symlink
+    ``auth.json -> /proc/self/fd/<N>``.  Tool subprocesses never inherit the
+    descriptor (Node closes non-stdio fds) and Landlock denies ``/proc``, so
+    the credential is unreachable from any model tool path; the in-process
+    guard additionally blocks ``/proc/.../fd`` reads (defense in depth).
+    """
     source = Path.home() / ".pi" / "agent2"
     target = sanitized_home / ".pi" / "agent2"
     target.mkdir(mode=0o700, parents=True, exist_ok=False)
-    for name, maximum in (("auth.json", 1 << 20), ("models.json", 4 << 20)):
+    for name, maximum in (("models.json", 4 << 20),):
         src = source / name
         info = os.lstat(src)
         if (
@@ -3274,6 +3319,54 @@ def _prepare_private_pi2_home(sanitized_home: Path) -> None:
         os.fsync(fd)
     finally:
         os.close(fd)
+    # The credential travels only as an anonymous writable memfd (token
+    # refresh writes back through the symlink).  The descriptor is inherited
+    # by the model process; the backend adapter sets no CLOEXEC so the
+    # adapter->node exec keeps it, and Node's spawn closes it for every tool
+    # subprocess.  Landlock denies /proc, so no tool can dereference it.
+    auth_source = source / "auth.json"
+    info = os.lstat(auth_source)
+    if (
+        not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+        or info.st_nlink != 1 or info.st_mode & 0o077
+        or info.st_size > (1 << 20)
+    ):
+        raise InvocationError(
+            f"operator Pi2 auth.json has unsafe ownership or mode"
+        )
+    if not hasattr(os, "memfd_create"):
+        raise InvocationError(
+            "openai-codex requires memfd credential transport, which is "
+            "unavailable on this host (fail closed)"
+        )
+    auth_fd = -1
+    try:
+        auth_fd = os.memfd_create("factory-pi2-auth", 0)
+        source_fd = os.open(
+            auth_source, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+        )
+        try:
+            while True:
+                chunk = os.read(source_fd, 65536)
+                if not chunk:
+                    break
+                os.write(auth_fd, chunk)
+        finally:
+            os.close(source_fd)
+        os.lseek(auth_fd, 0, os.SEEK_SET)
+        after = os.fstat(auth_fd)
+        if not stat.S_ISREG(after.st_mode) or after.st_size != info.st_size:
+            raise InvocationError(
+                "operator Pi2 auth.json memfd transport failed verification"
+            )
+        return auth_fd
+    except BaseException:
+        if auth_fd >= 0:
+            try:
+                os.close(auth_fd)
+            except OSError:
+                pass
+        raise
 
 
 def _stage_launch_executables(
@@ -3363,7 +3456,8 @@ def _stage_launch_executables(
                     ) from exc
                 trusted_backend = bind_external_backend(resolved)
                 return (wrapper, trusted_backend, extension, guard_digest,
-                        staged_digests, external_paths, exec_dir)
+                        staged_digests, external_paths, exec_dir,
+                        binding.provider.lower() == "openai-codex")
             backend_bytes = _read_committed_blob(
                 resolved, workspace, bound_commit,
                 "model backend", PROMPT_INPUT_MAX,
@@ -3383,7 +3477,8 @@ def _stage_launch_executables(
                     ) from exc
                 trusted_backend = bind_external_backend(resolved)
                 return (wrapper, trusted_backend, extension, guard_digest,
-                        staged_digests, external_paths, exec_dir)
+                        staged_digests, external_paths, exec_dir,
+                        binding.provider.lower() == "openai-codex")
             backend_bytes = _read_committed_blob(
                 str(backend_path), workspace, bound_commit,
                 "model backend", PROMPT_INPUT_MAX,
@@ -3406,7 +3501,7 @@ def _stage_launch_executables(
             backend_bytes
         ).hexdigest()
         return (wrapper, staged_backend, extension, guard_digest,
-                staged_digests, external_paths, exec_dir)
+                staged_digests, external_paths, exec_dir, False)
     except BaseException:
         shutil.rmtree(exec_dir, ignore_errors=True)
         raise
@@ -3650,9 +3745,11 @@ def authorize_launch(
         staged_digests,
         external_paths,
         exec_dir,
+        pi2_verified,
     ) = _stage_launch_executables(binding)
     private_dirs: List[Path] = [exec_dir]
     prompt_fd = -1
+    auth_fd = -1
     rule_fd_list: List[int] = []
     rule_fds: Tuple[int, ...] = ()
     try:
@@ -3661,7 +3758,19 @@ def authorize_launch(
         sanitized_home = real_confinement_authority.sanitized_home_directory()
         private_dirs.append(sanitized_home)
         if binding.provider.lower() == "openai-codex":
-            _prepare_private_pi2_home(sanitized_home)
+            # B2 security review: the openai-codex credential is provisioned
+            # only after the exact immutable external pi2 wrapper identity is
+            # verified.  A workspace backend (or any other backend) with the
+            # openai-codex provider fails closed and never receives the
+            # credential.
+            if not pi2_verified:
+                raise InvocationError(
+                    "openai-codex requires the exact immutable external pi2 "
+                    "wrapper as the model backend; a workspace or other "
+                    "backend fails closed before any credential is "
+                    "provisioned (B2)"
+                )
+            auth_fd = _prepare_private_pi2_home(sanitized_home)
         try:
             base_spec = real_confinement_authority.confinement_spec(
                 binding,
@@ -3767,6 +3876,7 @@ def authorize_launch(
             external_paths=external_paths,
             exec_dir=exec_dir,
             prompt_fd=prompt_fd,
+            auth_fd=auth_fd,
             session_dir=session_dir,
             confinement_spec=confinement_spec,
             confinement_proof=real_proof,
@@ -3790,6 +3900,11 @@ def authorize_launch(
         if prompt_fd >= 0:
             try:
                 os.close(prompt_fd)
+            except OSError:
+                pass
+        if auth_fd >= 0:
+            try:
+                os.close(auth_fd)
             except OSError:
                 pass
         _remove_private_directories(private_dirs)
