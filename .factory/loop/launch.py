@@ -200,7 +200,7 @@ MAX_CONFINEMENT_SPEC_BYTES = 1024 * 1024
 # policy. ``ollama`` retains the Task 8 confinement/source proof; its quota
 # decision belongs to the campaign pre-round registry. ``synthetic`` is the
 # hermetic hidden-suite provider (no network or real model backend).
-SUPPORTED_PROVIDERS = frozenset({"ollama", "openai-codex", "synthetic"})
+SUPPORTED_PROVIDERS = frozenset({"ollama", "synthetic"})
 
 # Providers that require the exact staged usage-source and credential-store
 # confinement proof. This is not a quota-decision table: quota is never run

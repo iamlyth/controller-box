@@ -442,9 +442,8 @@ class CampaignConfig:
     campaign's initial bound base (the commit the first planning phase works
     from).  ``planning_attempts`` and ``implementation_attempts`` bound each
     round/task; the campaign never exceeds them. Production requires explicit
-    provider/model/backend. Production providers are fixed by the launch
-    authority (currently ``ollama`` and ``openai-codex``); ``synthetic`` is
-    explicit and test-only;
+    provider/model/backend. ``provider`` is ``ollama`` (the §10 usage guard
+    runs inside the launch mint) or an explicit test-only ``synthetic``;
     ``role_driver`` is the explicit deterministic embedded/fixture role seam
     (a committed repository-relative executable) or ``None`` for the real
     launch path.
@@ -591,14 +590,15 @@ class CampaignConfig:
         if not isinstance(self.backend, str):
             raise CampaignConfigError("campaign backend must be a string")
         provider = self.provider.lower()
-        if provider not in launch_module.SUPPORTED_PROVIDERS:
+        if provider not in ("ollama", "synthetic"):
             raise CampaignConfigError(
-                "unknown provider; the fixed launch-provider policy fails closed"
+                "provider must be `ollama` or `synthetic`; an unknown provider "
+                "fails closed and can never bypass the fixed provider policy"
             )
-        if provider != "synthetic" and self.role_driver is not None:
+        if provider == "ollama" and self.role_driver is not None:
             raise CampaignConfigError(
                 "the embedded role-driver seam is the explicit fixture surface; "
-                "a production provider must use the real launch path"
+                "an `ollama` provider must use the real launch path"
             )
         if self.role_driver is None and not self.backend:
             raise CampaignConfigError(
@@ -4607,10 +4607,9 @@ def _production_preflight(
             raise CampaignConfigError(
                 f"production {label} command must use a canonical repository-relative ./path"
             )
-    provider = str(getattr(args, "provider", "")).lower()
-    if provider not in launch_module.SUPPORTED_PROVIDERS or provider == "synthetic":
+    if str(getattr(args, "provider", "")).lower() != "ollama":
         raise CampaignConfigError(
-            "normal production campaigns require a fixed real-model provider; "
+            "normal production campaigns require the ollama provider; "
             "synthetic is confined to explicit fixture/role-driver lanes"
         )
     accepted = getattr(args, "accepted_commit", "")

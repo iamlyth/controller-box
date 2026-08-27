@@ -1211,9 +1211,7 @@ class ProviderRegistryTests(_Base):
                     launch.verify_invocation(binding)
 
     def test_known_providers_accepted_case_insensitively(self) -> None:
-        for provider in (
-            "ollama", "OLLAMA", "openai-codex", "OPENAI-CODEX", "synthetic"
-        ):
+        for provider in ("ollama", "OLLAMA", "synthetic"):
             binding = launch.InvocationBinding(
                 role="planner",
                 model="m",
@@ -1232,7 +1230,6 @@ class ProviderRegistryTests(_Base):
     def test_ollama_is_the_only_guard_required_provider(self) -> None:
         self.assertEqual(launch.PROVIDER_GUARD_REQUIRED, frozenset({"ollama"}))
         self.assertIn("ollama", launch.SUPPORTED_PROVIDERS)
-        self.assertIn("openai-codex", launch.SUPPORTED_PROVIDERS)
         self.assertIn("synthetic", launch.SUPPORTED_PROVIDERS)
 
 
