@@ -711,7 +711,7 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 ## Task 33: Final documentation and specification audit
 
 - Status: pending
-- Dependencies: Task 1, Task 2, Task 3, Task 4, Task 5, Task 6, Task 7, Task 8, Task 9, Task 10, Task 11, Task 12, Task 13, Task 14, Task 15, Task 16, Task 17, Task 18, Task 19, Task 20, Task 21, Task 22, Task 23, Task 24, Task 25, Task 26, Task 27, Task 28, Task 29, Task 30, Task 31, Task 32
+- Dependencies: Task 1, Task 2, Task 3, Task 4, Task 5, Task 6, Task 7, Task 8, Task 9, Task 10, Task 11, Task 12, Task 13, Task 14, Task 15, Task 16, Task 17, Task 18, Task 19, Task 20, Task 21, Task 22, Task 23, Task 24, Task 25, Task 26, Task 27, Task 28, Task 29, Task 30, Task 31, Task 32, Task 34, Task 35
 - Scope: Final reconciliation of the conformance matrix, interaction inventory, open findings, facts ledger, and clean tree; the single gate that marks the cycle complete. Definition of done (§11.2) all 9 criteria satisfied or explicitly deferred with human approval; conformance matrix, sidecar, and facts ledger agree with no drift; every open fact resolved by exact receipt/artifact or explicit human decision; interaction inventory exhaustive with production-path controller and pointer evidence per §5.7; independent adversarial review finds no blocking issues; `git status` clean on `develop`.
   ## Remediation rule
 
@@ -739,3 +739,30 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
   - Semantic tests: `tests/test_profile_diagram.c` gained device-mapped tests (geometry_known registry, borrowed-base adoption, device-mapped resolution pixelation/stretch guards, marker-to-control alignment through the production icon-cache path, and `cbx_icon_lookup` resolution); `tests/test_editor_list_mode.c` gained editor-level production-cache-resolution tests. The real installed `test_installed_diagram.sh` (custom-prefix installed ICON_DIR, real X11 window, semantic assertions) passes with the new resolution path.
   - Evidence run: full `ctest --test-dir build-check` 99/100 pass — the only failure is the pre-existing `test_golden` three-editor-baseline mismatch (goldens encode the old diagram; regeneration is out-of-band under `.factory/golden-policy.json`, not performed). Two hardware skips (test_kernel_controller, test_backend_smoke). `test_manager_visual`, `test_installed_diagram`, `test_installed_smoke`, `test_installed_binary` all pass. `./scripts/verify-boilerplate.sh` exit 0. Build clean under Debug -Werror.
   - Constraints honoured: no golden regenerated/closed, no evidence tier elevated, BUG-0015/BUG-0018 left open. Per-device marker calibration for licensed Controllercons SVGs whose control geometry is not machine-verifiable remains out-of-band (visual/human). Human review required before any acceptance claim; completion token withheld (Task 4 + FACT-002..007 remain open).
+
+## Task 34: Resolve installed-functional evidence override escape finding
+- Status: pending
+- Dependencies: Task 22, Task 23, Task 24, Task 25, Task 32
+- Source: Task 32 project-gate evidence: `test_installed_functional_evidence` still reports an escaping or otherwise invalid `FACTORY_INSTALLED_FUNCTIONAL_EVIDENCE_PATH` override. This is a factory/project verification finding, not evidence that product acceptance passed.
+- Scope: `scripts/verify-project.sh`, the installed-functional evidence test and its focused adversarial coverage, verifier-acceptance bindings, and synchronized operations documentation if the accepted path contract changes. Preserve the authenticated Nix boundary, campaign-owned namespace, symlink/ownership/mode checks, exact-commit binding, and fail-closed behavior.
+- Acceptance criteria:
+  - A valid campaign-owned override is accepted only under the exact intended path shape and safe directory contract; repository-external, traversal, symlinked, wrong-owner, wrong-mode, non-regular, and pre-existing unsafe targets are rejected without writing evidence.
+  - The production/default evidence path and the campaign override both produce an exact-commit, schema-valid receipt, and the installed functional gate cannot pass by supplying an escaping or forged override.
+  - A regression reproduces the reported escaping override failure and passes after the fix; no test weakens the rejection or blesses skipped/early-exit installed acceptance.
+  - The fresh factory tests, installed functional evidence tests, and complete project gate pass without changing Controller conformance classifications or resolving FACT-002..007.
+- Verification: `nix-shell --run 'bash tests/test-installed-functional-evidence.sh'`; `nix-shell --run './scripts/verify-project.sh'`; `./scripts/verify-boilerplate.sh`; plan/docs validators. Record the exact failing input and resulting receipt/artifact.
+- Documentation impact: update `docs/OPERATIONS.md` only if the verified override contract differs from its current description; otherwise record the security boundary in the existing verifier notes.
+
+## Task 35: Human approval or governed update of BUG-0018 editor goldens
+- Status: blocked
+- Blocked on: FACT-006 — the current production change leaves three `test_golden` editor comparisons failing because the baselines encode the prior diagram. The golden policy requires out-of-band human review/approval; automated framebuffer evidence and a passing semantic installed test cannot resolve this human release decision.
+- Dependencies: Task 15, Task 16, Task 17, Task 18, Task 19, Task 20, Task 21
+- Source: Task 33 evidence and the current verification result: `ctest` has the three editor-golden failures while installed semantic diagram checks pass. This is intentionally not treated as a harmless pre-existing failure for completion.
+- Scope: human review of representative BUG-0018 manager/profile-editor captures and the protected golden-policy workflow; if approved, update only the three reviewed editor baselines and their documented tolerance/metadata, then rerun all visual and project gates. If rejected, append a bounded software remediation task instead. Do not alter conformance claims or resolve hardware/system-bus facts by rationale.
+- Acceptance criteria:
+  - A human reviewer records approval against the exact implementation commit, captures, renderer metadata, and the three affected baseline states, or records rejection with actionable findings.
+  - No automatic or unreviewed golden regeneration is used; unrelated baselines remain unchanged and visual diffs are retained.
+  - If approved and updated, `test_golden`, installed diagram/editor semantic tests, and the complete project gate pass with documented tolerance; if rejected, the task remains blocked and a new remediation task is appended.
+  - FACT-006 is resolved only by the permitted human artifact, not by this plan row or by software test output.
+- Verification: human release artifact under the committed golden policy; `nix-shell --run 'ctest --test-dir build-check -R test_golden --output-on-failure'`; `nix-shell --run './scripts/verify-project.sh'`; `./scripts/final-gate.sh --implementation` only after every other fact and gate is independently resolved.
+- Documentation impact: update `docs/OPERATIONS.md` and the golden-policy evidence record with the reviewed states, exact commit, renderer, tolerance, and decision; never claim target-hardware acceptance from this desktop review alone.
