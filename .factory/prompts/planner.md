@@ -44,7 +44,11 @@ and task bytes to the exact bound commit; treat any mismatch as fatal.
    final audit's number by one, and update its dependencies and any references
    accordingly. Insert the remediation immediately before the renumbered final
    audit; never place a higher-numbered task before a lower-numbered task or
-   append anything after the final audit.
+   append anything after the final audit. Once the first `## Task` heading has
+   appeared, every later level-two heading must be another `## Task N:`
+   heading—never add `## Findings`, `## Blockers`, notes, or any other section
+   among the task ledger. Put new evidence and blockers inside a task's
+   `Source`, `Scope`, or `Blocked on` fields.
 
 ## Workspace confinement
 
