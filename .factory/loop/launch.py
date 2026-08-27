@@ -200,7 +200,7 @@ MAX_CONFINEMENT_SPEC_BYTES = 1024 * 1024
 # policy. ``ollama`` retains the Task 8 confinement/source proof; its quota
 # decision belongs to the campaign pre-round registry. ``synthetic`` is the
 # hermetic hidden-suite provider (no network or real model backend).
-SUPPORTED_PROVIDERS = frozenset({"ollama", "synthetic"})
+SUPPORTED_PROVIDERS = frozenset({"ollama", "openai-codex", "synthetic"})
 
 # Providers that require the exact staged usage-source and credential-store
 # confinement proof. This is not a quota-decision table: quota is never run
@@ -210,6 +210,7 @@ CANONICAL_OLLAMA_SETTINGS_URL = "https://ollama.com/settings"
 
 # The existing secure wrapper — invoked, never reimplemented (§18).
 SECURE_WRAPPER = "scripts/pi2-secure-exec.py"
+PI2_BACKEND_ADAPTER = ".factory/loop/pi2_backend.py"
 
 # Hard bounds: the wrapper itself caps the prompt at 4 MiB; the composition
 # layer enforces a smaller bound so the assembled prompt can never approach
@@ -3176,6 +3177,103 @@ def _exec_staging_dir() -> Path:
     return directory
 
 
+_NIX_LITERAL_RE = re.compile(rb"/nix/store/[A-Za-z0-9._+/@=-]+")
+
+
+def _resolve_pi2_runtime(wrapper: str) -> Tuple[str, str]:
+    """Resolve immutable Node/CLI files named by the exact Pi2 wrapper chain."""
+    wrapper = os.path.realpath(wrapper)
+    if Path(wrapper).name != "pi2":
+        raise InvocationError("openai-codex requires the trusted pi2 executable")
+    pending = [wrapper]
+    seen: set[str] = set()
+    cli_candidates: set[str] = set()
+    while pending:
+        path = pending.pop(0)
+        if path in seen:
+            continue
+        if len(seen) >= 64:
+            raise InvocationError("pi2 immutable wrapper chain exceeds its bound")
+        try:
+            require_trusted_executable(path)
+            data = Path(path).read_bytes()
+        except (OSError, GitBoundaryError) as exc:
+            raise InvocationError(f"cannot bind the immutable pi2 runtime: {exc}") from exc
+        seen.add(path)
+        if len(data) > (1 << 20) or b"\x00" in data[:4096]:
+            continue
+        for raw in _NIX_LITERAL_RE.findall(data):
+            candidate = raw.decode("utf-8", "strict").rstrip("),;:")
+            if candidate.endswith("/dist/cli.js") and os.path.isfile(candidate):
+                cli_candidates.add(candidate)
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                resolved = os.path.realpath(candidate)
+                try:
+                    first = Path(resolved).read_bytes()[:2]
+                except OSError:
+                    continue
+                if first == b"#!" and resolved not in seen and resolved not in pending:
+                    pending.append(resolved)
+    node_link = Path.home() / ".pi" / "agent2" / "bin" / "node"
+    node = os.path.realpath(str(node_link))
+    try:
+        require_trusted_executable(node)
+    except GitBoundaryError as exc:
+        raise InvocationError(f"cannot bind the immutable pi2 Node runtime: {exc}") from exc
+    if len(cli_candidates) != 1:
+        raise InvocationError(
+            f"pi2 wrapper chain must identify exactly one Pi CLI, found {len(cli_candidates)}"
+        )
+    cli = next(iter(cli_candidates))
+    info = os.stat(cli, follow_symlinks=False)
+    if (
+        not cli.startswith("/nix/store/")
+        or not stat.S_ISREG(info.st_mode)
+        or info.st_nlink != 1
+        or info.st_mode & 0o022
+    ):
+        raise InvocationError("the Pi CLI module is not immutable Nix-store data")
+    return node, cli
+
+
+def _prepare_private_pi2_home(sanitized_home: Path) -> None:
+    """Copy only bounded operator auth/catalog inputs into one private launch."""
+    source = Path.home() / ".pi" / "agent2"
+    target = sanitized_home / ".pi" / "agent2"
+    target.mkdir(mode=0o700, parents=True, exist_ok=False)
+    for name, maximum in (("auth.json", 1 << 20), ("models.json", 4 << 20)):
+        src = source / name
+        info = os.lstat(src)
+        if (
+            not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+            or info.st_nlink != 1 or info.st_mode & 0o077
+            or info.st_size > maximum
+        ):
+            raise InvocationError(f"operator Pi2 {name} has unsafe ownership or mode")
+        source_fd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        dest = target / name
+        dest_fd = os.open(
+            dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o600
+        )
+        try:
+            while True:
+                chunk = os.read(source_fd, 65536)
+                if not chunk:
+                    break
+                os.write(dest_fd, chunk)
+            os.fsync(dest_fd)
+        finally:
+            os.close(source_fd)
+            os.close(dest_fd)
+    settings = target / "settings.json"
+    fd = os.open(settings, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o600)
+    try:
+        os.write(fd, b"{}\n")
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def _stage_launch_executables(
     binding: "InvocationBinding",
 ) -> Tuple[Path, Path, Path, str, Dict[str, str], List[str], Path]:
@@ -3224,6 +3322,28 @@ def _stage_launch_executables(
         )
         guard_digest = hashlib.sha256(guard_bytes).hexdigest()
 
+        def bind_external_backend(resolved: str) -> Path:
+            external_paths.append(resolved)
+            if binding.provider.lower() != "openai-codex":
+                return Path(resolved)
+            node, cli = _resolve_pi2_runtime(resolved)
+            adapter_source = _read_committed_blob(
+                str(workspace / PI2_BACKEND_ADAPTER), workspace, bound_commit,
+                "Pi2 factory adapter", PROMPT_INPUT_MAX,
+            )
+            if (
+                adapter_source.count(b"@@FACTORY_PI2_NODE@@") != 1
+                or adapter_source.count(b"@@FACTORY_PI2_CLI@@") != 1
+            ):
+                raise InvocationError("the committed Pi2 adapter markers are ambiguous")
+            adapter_source = adapter_source.replace(
+                b"@@FACTORY_PI2_NODE@@", node.encode("utf-8")
+            ).replace(b"@@FACTORY_PI2_CLI@@", cli.encode("utf-8"))
+            staged = _stage_bytes(exec_dir, STAGED_BACKEND_NAME, adapter_source)
+            staged_digests[str(staged)] = hashlib.sha256(adapter_source).hexdigest()
+            external_paths.append(node)
+            return staged
+
         backend_path = Path(binding.backend).absolute()
         backend_is_symlink = os.path.islink(str(backend_path))
         if backend_is_symlink:
@@ -3239,8 +3359,8 @@ def _stage_launch_executables(
                         f"target {resolved} is not a trusted immutable executable: "
                         f"{exc} (F2)"
                     ) from exc
-                external_paths.append(resolved)
-                return (wrapper, Path(resolved), extension, guard_digest,
+                trusted_backend = bind_external_backend(resolved)
+                return (wrapper, trusted_backend, extension, guard_digest,
                         staged_digests, external_paths, exec_dir)
             backend_bytes = _read_committed_blob(
                 resolved, workspace, bound_commit,
@@ -3259,8 +3379,8 @@ def _stage_launch_executables(
                         f"workspace blob nor an external trusted executable: "
                         f"{exc} (F2)"
                     ) from exc
-                external_paths.append(resolved)
-                return (wrapper, Path(resolved), extension, guard_digest,
+                trusted_backend = bind_external_backend(resolved)
+                return (wrapper, trusted_backend, extension, guard_digest,
                         staged_digests, external_paths, exec_dir)
             backend_bytes = _read_committed_blob(
                 str(backend_path), workspace, bound_commit,
@@ -3538,6 +3658,8 @@ def authorize_launch(
         # neither inject a proof/spec/home nor opt into a synthetic transport.
         sanitized_home = real_confinement_authority.sanitized_home_directory()
         private_dirs.append(sanitized_home)
+        if binding.provider.lower() == "openai-codex":
+            _prepare_private_pi2_home(sanitized_home)
         try:
             base_spec = real_confinement_authority.confinement_spec(
                 binding,

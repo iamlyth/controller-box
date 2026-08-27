@@ -1211,7 +1211,9 @@ class ProviderRegistryTests(_Base):
                     launch.verify_invocation(binding)
 
     def test_known_providers_accepted_case_insensitively(self) -> None:
-        for provider in ("ollama", "OLLAMA", "synthetic"):
+        for provider in (
+            "ollama", "OLLAMA", "openai-codex", "OPENAI-CODEX", "synthetic"
+        ):
             binding = launch.InvocationBinding(
                 role="planner",
                 model="m",
@@ -1230,7 +1232,44 @@ class ProviderRegistryTests(_Base):
     def test_ollama_is_the_only_guard_required_provider(self) -> None:
         self.assertEqual(launch.PROVIDER_GUARD_REQUIRED, frozenset({"ollama"}))
         self.assertIn("ollama", launch.SUPPORTED_PROVIDERS)
+        self.assertIn("openai-codex", launch.SUPPORTED_PROVIDERS)
         self.assertIn("synthetic", launch.SUPPORTED_PROVIDERS)
+
+    def test_pi2_credentials_are_copied_only_to_private_launch_home(self) -> None:
+        operator = self.tmp / "operator"
+        source = operator / ".pi" / "agent2"
+        source.mkdir(parents=True)
+        (source / "auth.json").write_bytes(b'{"token":"synthetic"}\n')
+        (source / "models.json").write_bytes(b'{"models":[]}\n')
+        for path in source.iterdir():
+            path.chmod(0o600)
+        private = self.tmp / "private-home"
+        private.mkdir(mode=0o700)
+        with mock.patch.object(Path, "home", return_value=operator):
+            launch._prepare_private_pi2_home(private)
+        copied = private / ".pi" / "agent2"
+        self.assertEqual((copied / "auth.json").read_bytes(), b'{"token":"synthetic"}\n')
+        self.assertEqual((copied / "models.json").read_bytes(), b'{"models":[]}\n')
+        self.assertEqual((copied / "settings.json").read_bytes(), b"{}\n")
+        self.assertTrue(all(stat.S_IMODE(p.stat().st_mode) == 0o600 for p in copied.iterdir()))
+
+    def test_pi2_private_copy_rejects_loose_operator_credentials(self) -> None:
+        operator = self.tmp / "operator-loose"
+        source = operator / ".pi" / "agent2"
+        source.mkdir(parents=True)
+        for name in ("auth.json", "models.json"):
+            (source / name).write_text("{}\n", encoding="utf-8")
+            (source / name).chmod(0o644)
+        private = self.tmp / "private-loose"
+        private.mkdir(mode=0o700)
+        with mock.patch.object(Path, "home", return_value=operator):
+            with self.assertRaises(launch.InvocationError):
+                launch._prepare_private_pi2_home(private)
+
+    def test_committed_pi2_adapter_has_single_runtime_markers(self) -> None:
+        source = (LOOP / "pi2_backend.py").read_bytes()
+        self.assertEqual(source.count(b"@@FACTORY_PI2_NODE@@"), 1)
+        self.assertEqual(source.count(b"@@FACTORY_PI2_CLI@@"), 1)
 
 
 # ---------------------------------------------------------------------------

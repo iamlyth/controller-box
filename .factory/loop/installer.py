@@ -158,6 +158,7 @@ PENDING_ALLOWLIST: frozenset = frozenset({
     '.factory/loop/lock.py',
     '.factory/loop/migration.py',
     '.factory/loop/plan_parser.py',
+    '.factory/loop/pi2_backend.py',
     '.factory/loop/pre_round.py',
     '.factory/loop/promptset.py',
     '.factory/loop/redaction.py',
