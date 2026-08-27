@@ -125,8 +125,8 @@ INSTALLED_BIN="$STAGING_DIR/bin/controller-box"
 if [ ! -f "$INSTALLED_BIN" ]; then
     INSTALLED_BIN="$STAGING_DIR/usr/bin/controller-box"
 fi
-if [ ! -f "$INSTALLED_BIN" ]; then
-    fail "installed binary not found in staging prefix"
+if [ ! -f "$INSTALLED_BIN" ] || [ -L "$INSTALLED_BIN" ]; then
+    fail "installed binary is missing or is not a regular non-symlink file: $INSTALLED_BIN"
     exit 1
 fi
 
