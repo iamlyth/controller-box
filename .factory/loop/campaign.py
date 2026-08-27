@@ -220,7 +220,7 @@ GATE_ENV_ALLOWLIST = (
     "LC_COLLATE", "LC_MESSAGES", "LC_MONETARY", "LC_NUMERIC", "LC_TIME",
     "TERM", "TZ", "SHELL", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME",
     "XDG_CACHE_HOME", "XDG_DATA_HOME", "NO_COLOR", "CLICOLOR",
-    "CLICOLOR_FORCE",
+    "CLICOLOR_FORCE", "NIX_PATH",
 )
 
 # Gate output is bounded to this many bytes before redaction (the same
@@ -1204,6 +1204,23 @@ def sanitized_gate_environment(
     for key in GATE_ENV_ALLOWLIST:
         if key in parent:
             environment[key] = parent[key]
+    nix_path = environment.get("NIX_PATH")
+    if nix_path is not None:
+        match = re.fullmatch(r"nixpkgs=(/nix/store/[0-9a-z]{32}-[^:]+)", nix_path)
+        if match is None:
+            raise CampaignError("refusing a non-canonical deterministic gate NIX_PATH")
+        source = match.group(1)
+        try:
+            info = os.stat(source, follow_symlinks=False)
+        except OSError as exc:
+            raise CampaignError("cannot validate deterministic gate NIX_PATH") from exc
+        if (
+            not stat.S_ISDIR(info.st_mode)
+            or info.st_uid == os.getuid()
+            or info.st_mode & 0o022
+            or os.path.realpath(source) != source
+        ):
+            raise CampaignError("deterministic gate NIX_PATH is not immutable store data")
     environment = lock_module.stripped_child_env(environment)
     environment = gitutil.sanitize_git_environment(environment)
     for key in environment:

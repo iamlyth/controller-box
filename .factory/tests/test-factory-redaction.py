@@ -676,6 +676,21 @@ class SanitizedGateEnvironmentTests(unittest.TestCase):
                 )
             self.assertIn("FAKE_COOKIE", str(caught.exception))
 
+    def test_gate_nix_path_must_be_one_immutable_store_source(self) -> None:
+        for value in (".", "nixpkgs=.", "nixpkgs=/tmp/evil", "a=/nix/store/x"):
+            with self.subTest(value=value), self.assertRaises(
+                campaign_module.CampaignError
+            ):
+                campaign_module.sanitized_gate_environment(
+                    {"PATH": "/usr/bin", "NIX_PATH": value}
+                )
+        value = os.environ.get("NIX_PATH", "")
+        if value:
+            env = campaign_module.sanitized_gate_environment(
+                {"PATH": "/usr/bin", "NIX_PATH": value}
+            )
+            self.assertEqual(env["NIX_PATH"], value)
+
     def test_sanitized_gate_environment_defaults_to_os_environ(self) -> None:
         with unittest.mock.patch.dict(
             os.environ,
