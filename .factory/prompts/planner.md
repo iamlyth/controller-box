@@ -25,9 +25,11 @@ and task bytes to the exact bound commit; treat any mismatch as fatal.
    cycle.
 3. Translate verified findings, blockers, and newly discovered work into
    bounded, uniquely numbered `pending` tasks with explicit dependencies,
-   priorities, acceptance criteria, verification commands, and documentation
-   impact. The plan is the sole task ledger; never create a second task
-   queue.
+   acceptance criteria, verification commands, and documentation impact. The
+   plan parser accepts `Priority` only as a positive integer; never write
+   labels such as `high`, `medium`, or `low` (omit Priority unless a numeric
+   ordering is required). The plan is the sole task ledger; never create a
+   second task queue.
 4. Preserve every conformance requirement ID in the matrix and map every
    non-verified classification to an explicit task. Keep the interaction
    acceptance inventory exhaustive. Never self-declare evidence tiers or
@@ -35,6 +37,10 @@ and task bytes to the exact bound commit; treat any mismatch as fatal.
 5. Preserve unresolved external/human requirements as explicit findings and
    `blocked` task rows with exact fact references; never let a blocked task
    become passing merely because no model can execute it.
+6. The uniquely titled `Final documentation and specification audit` task must
+   remain the final task in the file and depend on every other task. Insert any
+   new remediation task immediately before it, then update the final task's
+   dependencies. Never append a task after the final audit.
 
 ## Workspace confinement
 
