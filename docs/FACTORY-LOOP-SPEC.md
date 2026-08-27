@@ -239,8 +239,11 @@ not an arbitrary command surface: unknown implementations, optional failure
 policies, shell strings, paths, duplicate IDs/implementations, unknown fields,
 and non-boolean flags fail closed.
 
-The registry bytes and fixed implementation bytes are digest-bound at campaign
-start. Before hook execution the sole control state durably records the round
+The registry bytes and complete fixed implementation path are digest-bound at
+campaign start. For `branch_guard` this includes the registry executor, campaign
+and state integration, descriptor lock, and pinned Git runner. Every branch
+probe is bounded by both the Git timeout and remaining campaign deadline.
+Before hook execution the sole control state durably records the round
 as started. Successful typed results are chained into the state before the
 planner starts. Planner retries do not rerun hooks. A recovery that sees a
 started but uncompleted round is ambiguous and terminates

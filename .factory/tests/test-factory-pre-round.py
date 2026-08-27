@@ -12,6 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / ".factory" / "loop"))
 
+import campaign as campaign_module  # noqa: E402
 import pre_round  # noqa: E402
 import state  # noqa: E402
 
@@ -127,6 +128,27 @@ class RegistryTest(unittest.TestCase):
             with self.subTest(raw=raw[:40]):
                 with self.assertRaises(pre_round.PreRoundError):
                     pre_round.parse_registry(raw)
+
+    def test_branch_binding_covers_lock_and_git_implementation(self) -> None:
+        class Blobs:
+            def __init__(self, altered: str = "") -> None:
+                self.altered = altered
+
+            def blob_at(self, commit: str, relpath: str) -> bytes:
+                if commit != COMMIT:
+                    raise AssertionError("binding read escaped the selected commit")
+                data = (ROOT / relpath).read_bytes()
+                return data + (b"\n# altered\n" if relpath == self.altered else b"")
+
+        _registry, _digests, baseline = campaign_module._derive_pre_round_binding(
+            ROOT, bound_commit=COMMIT, git=Blobs()
+        )
+        for relpath in (".factory/loop/lock.py", ".factory/loop/gitutil.py"):
+            with self.subTest(relpath=relpath):
+                _registry, _digests, changed = campaign_module._derive_pre_round_binding(
+                    ROOT, bound_commit=COMMIT, git=Blobs(relpath)
+                )
+                self.assertNotEqual(changed, baseline)
 
     def test_config_and_result_chain_are_order_sensitive(self) -> None:
         registry = pre_round.parse_registry(registry_bytes())

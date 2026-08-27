@@ -1737,6 +1737,8 @@ def _derive_pre_round_binding(
         "branch_guard": plan_sha256(
             source + b"\x00" + blob(".factory/loop/campaign.py")
             + b"\x00" + blob(".factory/loop/state.py")
+            + b"\x00" + blob(".factory/loop/lock.py")
+            + b"\x00" + blob(".factory/loop/gitutil.py")
         ),
     }
     names = {hook.implementation for hook in registry.hooks}
@@ -3331,7 +3333,13 @@ class Campaign:
         def execute(hook: pre_round_module.Hook) -> None:
             if hook.implementation == "branch_guard":
                 try:
-                    self._lock.validate_live_branch(self._config.branch)
+                    self._lock.validate_live_branch(
+                        self._config.branch,
+                        timeout=min(
+                            gitutil.GIT_TIMEOUT,
+                            self._remaining_time("pre-round branch guard"),
+                        ),
+                    )
                 except lock_module.RootLockError as exc:
                     raise pre_round_module.PreRoundError(
                         "descriptor-anchored branch guard failed"

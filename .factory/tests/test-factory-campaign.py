@@ -235,7 +235,8 @@ class FixtureWorkspace:
             ws / "scripts" / "pi2-secure-exec.py",
         )
         for module in (
-            "usage.py", "usage_fetch.py", "pre_round.py", "campaign.py", "state.py"
+            "usage.py", "usage_fetch.py", "pre_round.py", "campaign.py", "state.py",
+            "lock.py", "gitutil.py",
         ):
             shutil.copy2(
                 ROOT / ".factory" / "loop" / module,

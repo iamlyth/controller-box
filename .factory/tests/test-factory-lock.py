@@ -254,6 +254,22 @@ class RootDescriptorLockCase(LockConformanceCase):
         with self.acquire(root):
             pass
 
+    def test_live_branch_revalidation_forwards_a_finite_timeout(self) -> None:
+        root = self.make_repo()
+        with self.acquire(root) as held:
+            with unittest.mock.patch.object(
+                held, "_git_run", wraps=held._git_run
+            ) as git_run:
+                self.assertEqual(
+                    held.validate_live_branch("develop", timeout=0.5), "develop"
+                )
+            self.assertEqual(git_run.call_args.kwargs["timeout"], 0.5)
+            for invalid in (None, 0, -1, float("inf"), float("nan"), True):
+                with self.subTest(invalid=invalid), self.assertRaises(
+                    RootLockUnsafeError
+                ):
+                    held.validate_live_branch("develop", timeout=invalid)
+
     def test_no_replaceable_lock_pathname_is_created(self) -> None:
         root = self.make_repo()
         before = sorted(p.name for p in root.iterdir())
