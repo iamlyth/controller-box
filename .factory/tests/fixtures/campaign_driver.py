@@ -286,7 +286,12 @@ def main() -> int:
             with open(evidence_path, "w", encoding="utf-8") as stream:
                 json.dump(evidence, stream, sort_keys=True, separators=(",", ":"))
         if behavior == "crash":
-            touch(root, f"src/work-{task_id}.md")
+            crash_path = os.path.join(root, f"src/work-{task_id}.md")
+            os.makedirs(os.path.dirname(crash_path), exist_ok=True)
+            with open(crash_path, "a", encoding="utf-8") as stream:
+                stream.write(f"crash-attempt-{attempt}\n")
+            os.kill(os.getpid(), signal.SIGKILL)
+        if behavior == "clean-crash":
             os.kill(os.getpid(), signal.SIGKILL)
         if behavior == "crash-once":
             if attempt == 1:

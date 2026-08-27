@@ -675,6 +675,24 @@ class CampaignTerminals(_CampaignBase):
         self.assertTrue(all(r["phase"] != "verification"
                             for r in data["phase_history"]))
 
+    def test_clean_implementation_timeout_exhaustion_reaches_verification(self) -> None:
+        ws = self.make({
+            "planner": {"behavior": "planned"},
+            "developer": {"behavior": "clean-crash"},
+            "tester": {"behavior": "pass"},
+            "auditor": {"behavior": "pass"},
+        })
+        rc, data = ws.run_cli()
+        self.assertEqual(rc, 0)
+        self.assertEqual(data["rounds_completed"], 1)
+        self.assertTrue(any(
+            r["phase"] == "implementation" and r["outcome"] == "task_failed"
+            for r in data["phase_history"]
+        ))
+        self.assertTrue(any(
+            r["phase"] == "verification" for r in data["phase_history"]
+        ))
+
     def test_untrusted_verifier_terminates_infrastructure_failure(self) -> None:
         ws = self.make({
             "planner": {"behavior": "planned"},

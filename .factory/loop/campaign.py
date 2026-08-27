@@ -3710,10 +3710,20 @@ class Campaign:
         budget_exhausted = attempt >= self._config.implementation_attempts
         if outcome == "interrupted":
             if budget_exhausted:
-                state2 = state_module.advance(state, "interrupted")
+                if dirty_work or self._preservable_dirty_paths():
+                    state2 = state_module.advance(state, "interrupted")
+                    state_module.write_state(self._root, state2)
+                    return _Step(
+                        self._record(state, attempt, "interrupted", detail), state=state2
+                    )
+                # A bounded model timeout with no uncommitted work is a clean
+                # exhausted attempt, not an operator interruption. Preserve
+                # campaign liveness by recording task failure and proceeding
+                # to independent verification/audit at the coherent HEAD.
+                state2 = state_module.advance(state, "task_failed")
                 state_module.write_state(self._root, state2)
                 return _Step(
-                    self._record(state, attempt, "interrupted", detail), state=state2
+                    self._record(state, attempt, "task_failed", detail), state=state2
                 )
             state2 = state_module.record_retry(state, "interrupted")
             state_module.write_state(self._root, state2)
