@@ -763,6 +763,7 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
   - The fresh factory tests, installed functional evidence tests, and complete project gate pass without changing Controller conformance classifications or resolving FACT-002..007.
 - Verification: `nix-shell --run 'bash tests/test-installed-functional-evidence.sh'`; `nix-shell --run './scripts/verify-project.sh'`; `./scripts/verify-boilerplate.sh`; plan/docs validators. Record the exact failing input and resulting receipt/artifact, and prove the race regression reaches the publication operation rather than only a preflight check.
 - Documentation impact: update `docs/OPERATIONS.md` only if the verified override contract differs from its current description; otherwise record the security boundary in the existing verifier notes.
+- Evidence: Implementation was blocked in this role because the workspace enforcement denied writes to the selected production verifier files `scripts/verify-project.sh` and `scripts/check-installed-functional-evidence.sh` (EACCES), while allowing unrelated test paths. No product or verifier change, test pass, or acceptance claim was made.
 
 ## Task 35: Resolve installed-functional evidence publication and verifier trust gaps
 - Status: pending
