@@ -1875,6 +1875,7 @@ def launch_role_attempt(
             plan_digest=plan_sha256(plan_blob),
             policy_digest=plan_sha256(_blob_at(root, "AGENTS.md")),
             specification_digest=config.specification_digest,
+            allowed_tools=launch_module.DEFAULT_ALLOWED_TOOLS[role],
             task_id=task_id,
             task_excerpt_digest=(
                 plan_sha256(task_excerpt) if task_excerpt is not None else None
