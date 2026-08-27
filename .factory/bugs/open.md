@@ -53,6 +53,22 @@ Schema: `ralph-bug-ledger/v1`
     "resolution": "",
     "verification": "",
     "closed": null
+  },
+  {
+    "id": "BUG-0019",
+    "title": "Production factory confinement cannot execute the authenticated Pi2 backend",
+    "status": "open",
+    "severity": "high",
+    "reported": "2026-08-27",
+    "external": [],
+    "contract_change": true,
+    "reproduction": "Run an exact-commit installed five-round campaign with the authenticated /nix/store Pi2 wrapper, provider openai-codex, and model gpt-5.6-luna. Pi2 itself lists the model and a direct one-shot returns READY, but factory-launch terminates every planner attempt with exit 1. Direct installed factory-launch diagnostics show Landlock denying exec of the Pi2 wrapper; attempts to admit its immutable script closure proceed only to further denials for shebang interpreters, coreutils, and /dev/null. Campaign luna-production-02cb7b0-1 terminated failed after three planner attempts and completed zero rounds.",
+    "expected": "The production harness securely launches the authenticated Pi2 backend for a fixed real-model provider while preserving fresh context, exact-commit binding, credential isolation, Git-command mediation, Landlock or an equivalently strong verified confinement boundary, bounded supervision, and no synthetic fallback.",
+    "actual": "The factory documents Pi as the production backend but its file-granular Landlock policy is incompatible with the jailed Pi2 bootstrap. Broad Nix-store execution or exposing the host agent directory would weaken existing security boundaries, so experimental provider/closure changes were reverted rather than committed as a bypass.",
+    "acceptance": "Design and security-review a Pi2 backend adapter that composes the factory boundary with Pi2's jail without broad executable grants or model-readable host credentials; add adversarial tests for absolute Git bypass, credential exfiltration, script/interpreter closure, /dev devices, fresh sessions, and exact backend identity; pass full boilerplate gates; then complete an installed monitored five-round gpt-5.6-luna campaign without intervention. Synthetic campaigns are not acceptance evidence.",
+    "resolution": "",
+    "verification": "",
+    "closed": null
   }
 ]
 ```
