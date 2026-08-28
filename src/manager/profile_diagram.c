@@ -14,7 +14,9 @@
 #include <SDL2/SDL.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <math.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -181,8 +183,18 @@ load_svg_texture(SDL_Renderer *renderer, const char *svg_path, int size)
     if (!image)
         return NULL;
 
-    int w = image->width > 0 ? (int)image->width : size;
-    int h = image->height > 0 ? (int)image->height : size;
+    /* nanosvg accepts SVG dimensions as floats.  Reject non-finite or
+     * unreasonably large values before converting to int; otherwise a
+     * malformed installed asset could wrap the raster dimensions and either
+     * produce a distorted diagram or overflow the pixel allocation. */
+    if (!isfinite(image->width) || !isfinite(image->height) ||
+        image->width < 1.0f || image->height < 1.0f ||
+        image->width > 1000000.0f || image->height > 1000000.0f) {
+        nsvgDelete(image);
+        return NULL;
+    }
+    int w = (int)image->width;
+    int h = (int)image->height;
 
     /* Scale to fit within `size` while preserving aspect ratio.  This scales
      * UP as well as down: a small source SVG (e.g. 100x60) is rasterised at
@@ -203,7 +215,13 @@ load_svg_texture(SDL_Renderer *renderer, const char *svg_path, int size)
         return NULL;
     }
 
-    unsigned char *pixels = (unsigned char *)malloc((size_t)tw * th * 4);
+    size_t pixel_count = (size_t)tw * (size_t)th;
+    if (pixel_count > SIZE_MAX / 4) {
+        nsvgDeleteRasterizer(rast);
+        nsvgDelete(image);
+        return NULL;
+    }
+    unsigned char *pixels = (unsigned char *)malloc(pixel_count * 4);
     if (!pixels) {
         nsvgDeleteRasterizer(rast);
         nsvgDelete(image);
@@ -445,7 +463,8 @@ cbx_profile_diagram_content_rect(const cbx_profile_diagram *diag,
         return false;
 
     int tw, th;
-    SDL_QueryTexture(diag->base_texture, NULL, NULL, &tw, &th);
+    if (SDL_QueryTexture(diag->base_texture, NULL, NULL, &tw, &th) != 0)
+        return false;
     if (tw <= 0 || th <= 0)
         return false;
 
