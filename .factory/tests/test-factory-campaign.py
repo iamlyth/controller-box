@@ -2033,6 +2033,34 @@ class ReviewHardening(_CampaignBase):
         self.assertEqual(captured["plan_digest"], sha256(plan_blob))
         self.assertEqual(captured["bound_commit"], head)
 
+    def test_nonzero_role_preserves_only_bounded_redacted_diagnostic(self) -> None:
+        ws = self.make(SUCCESS_SCENARIO)
+        config = self._production_config(ws)
+        head = _git(ws.root, "rev-parse", "HEAD").stdout.strip()
+
+        class _Supervisor:
+            def __init__(self, binding):
+                self.binding = binding
+
+            def run(self, authority):
+                stream = type("_Stream", (), {"tail": "  Provider not\n configured  "})()
+                return type("_Result", (), {
+                    "outcome": "completed", "returncode": 1, "reason": None,
+                    "signal": None, "stderr": stream,
+                    "stdout": type("_Stream", (), {"tail": "ignored"})(),
+                })()
+
+        with unittest.mock.patch.object(
+            campaign_module.launch_module, "authorize_launch", return_value=object(),
+        ), unittest.mock.patch.object(
+            campaign_module.launch_module, "LaunchSupervision", side_effect=_Supervisor,
+        ):
+            outcome = campaign_module.launch_role_attempt(
+                config, role="developer", head=head, task_id=1,
+            )
+        self.assertEqual(outcome.exit_status, 1)
+        self.assertEqual(outcome.diagnostic, "Provider not configured")
+
     def test_production_auditor_derives_exact_committed_objective_bytes(
         self,
     ) -> None:

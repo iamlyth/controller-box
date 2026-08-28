@@ -15,6 +15,7 @@ number is consumed here and is absent from the model process argv after exec.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import resource
@@ -48,6 +49,69 @@ def _parse_auth_fd(argv: list) -> tuple:
         remaining.append(token)
         index += 1
     return auth_fd, remaining
+
+
+def _runtime_binding(argv: list) -> tuple[str, str]:
+    """Extract the one trusted provider/model pair from generated Pi argv."""
+    values = {}
+    index = 0
+    while index < len(argv):
+        token = argv[index]
+        if token in ("--provider", "--model"):
+            if token in values or index + 1 >= len(argv):
+                raise SystemExit(f"factory-pi2-backend: malformed {token} binding")
+            value = argv[index + 1]
+            if not value or len(value) > 256 or any(ord(char) < 0x20 for char in value):
+                raise SystemExit(f"factory-pi2-backend: unsafe {token} binding")
+            values[token] = value
+            index += 2
+            continue
+        index += 1
+    if values.get("--provider") != "openai-codex" or "--model" not in values:
+        raise SystemExit("factory-pi2-backend: openai-codex provider/model binding missing")
+    return values["--provider"], values["--model"].removeprefix("openai-codex/")
+
+
+def _write_runtime_settings(agent_dir: Path, provider: str, model: str) -> None:
+    """Write the minimal non-secret provider registration Pi requires.
+
+    Pi 0.84 does not register the built-in openai-codex provider when its
+    private ``settings.json`` is an empty object, even when both CLI flags are
+    explicit. Packages, sessions, themes, and every operator preference stay
+    excluded; only the exact trusted argv binding is persisted in this
+    launch-owned home.
+    """
+    settings = agent_dir / "settings.json"
+    payload = json.dumps(
+        {"defaultProvider": provider, "defaultModel": model},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8") + b"\n"
+    fd = -1
+    try:
+        fd = os.open(
+            settings, os.O_WRONLY | os.O_TRUNC | os.O_NOFOLLOW | os.O_CLOEXEC
+        )
+        info = os.fstat(fd)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or stat.S_IMODE(info.st_mode) != 0o600
+            or info.st_uid != os.getuid()
+            or info.st_nlink != 1
+        ):
+            raise OSError("private settings.json failed identity verification")
+        view = memoryview(payload)
+        while view:
+            written = os.write(fd, view)
+            if written <= 0:
+                raise OSError("short settings.json write")
+            view = view[written:]
+        os.fsync(fd)
+    except OSError as exc:
+        raise SystemExit(f"factory-pi2-backend: cannot bind runtime settings: {exc}")
+    finally:
+        if fd >= 0:
+            os.close(fd)
 
 
 def _materialize_auth_file(agent_dir: Path, auth_fd: int) -> os.stat_result:
@@ -122,6 +186,8 @@ def main() -> None:
     if not node.is_absolute() or not cli.is_absolute():
         raise SystemExit("factory-pi2-backend: runtime binding is not absolute")
     auth_fd, remaining = _parse_auth_fd(sys.argv[1:])
+    provider, model = _runtime_binding(remaining)
+    _write_runtime_settings(agent_dir, provider, model)
     auth_file_identity = _materialize_auth_file(agent_dir, auth_fd)
     env = dict(os.environ)
     env["PI_CODING_AGENT_DIR"] = str(agent_dir)

@@ -80,6 +80,7 @@ sys.path.insert(0, str(LOOP))
 import usage  # noqa: E402
 import usage_fetch  # noqa: E402
 import launch  # noqa: E402
+import pi2_backend  # noqa: E402
 
 PY = sys.executable
 GUARD = LOOP / "usage.py"
@@ -1366,6 +1367,24 @@ class ProviderRegistryTests(_Base):
         self.assertEqual(source.count(b"@@FACTORY_PI2_NODE@@"), 1)
         self.assertEqual(source.count(b"@@FACTORY_PI2_CLI@@"), 1)
 
+    def test_pi2_adapter_runtime_binding_is_exact_and_fail_closed(self) -> None:
+        self.assertEqual(
+            pi2_backend._runtime_binding([
+                "--provider", "openai-codex", "--model",
+                "openai-codex/gpt-5.6-luna",
+            ]),
+            ("openai-codex", "gpt-5.6-luna"),
+        )
+        for argv in (
+            ["--model", "gpt-5.6-luna"],
+            ["--provider", "ollama", "--model", "gpt-5.6-luna"],
+            ["--provider", "openai-codex", "--provider", "openai-codex",
+             "--model", "gpt-5.6-luna"],
+        ):
+            with self.subTest(argv=argv):
+                with self.assertRaises(SystemExit):
+                    pi2_backend._runtime_binding(argv)
+
     def test_staged_pi2_adapter_materializes_bound_file_and_alias_limit(self) -> None:
         """The confined adapter gives Pi a private regular credential file
         while binding its inode and the complete descriptor scan range."""
@@ -1399,14 +1418,19 @@ class ProviderRegistryTests(_Base):
         adapter = self.tmp / "staged-pi2-adapter.py"
         adapter.write_bytes(adapter_data)
         private_home = self.tmp / "adapter-home"
-        (private_home / ".pi" / "agent2").mkdir(parents=True)
+        private_agent = private_home / ".pi" / "agent2"
+        private_agent.mkdir(parents=True)
+        (private_agent / "settings.json").write_text("{}\n", encoding="utf-8")
+        (private_agent / "settings.json").chmod(0o600)
         auth_fd = os.memfd_create("factory-adapter-hard-limit", 0)
         try:
             os.write(auth_fd, b'{"synthetic":"auth"}\n')
             env = dict(os.environ)
             env["HOME"] = str(private_home)
             result = subprocess.run(
-                [sys.executable, str(adapter), "--auth-fd", str(auth_fd)],
+                [sys.executable, str(adapter), "--auth-fd", str(auth_fd),
+                 "--provider", "openai-codex", "--model",
+                 "openai-codex/gpt-5.6-luna"],
                 pass_fds=(auth_fd,), env=env, capture_output=True, text=True,
                 timeout=30,
             )
@@ -1419,6 +1443,10 @@ class ProviderRegistryTests(_Base):
         self.assertFalse(auth_file.is_symlink())
         self.assertEqual(stat.S_IMODE(auth_file.stat().st_mode), 0o600)
         self.assertEqual(auth_file.read_bytes(), b'{"synthetic":"auth"}\n')
+        self.assertEqual(
+            json.loads((private_home / ".pi" / "agent2" / "settings.json").read_text()),
+            {"defaultModel": "gpt-5.6-luna", "defaultProvider": "openai-codex"},
+        )
 
 
 # ---------------------------------------------------------------------------

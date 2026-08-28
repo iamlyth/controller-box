@@ -294,16 +294,18 @@ class RoleOutcome:
 
     ``exit_status`` is the process exit code; ``interrupted`` is true when
     the role ended on a bounded signal/timeout (never the model's choice);
-    ``signal`` names the terminating signal when known.  The orchestrator
-    never interprets role prose as control protocol — only this enum
-    surface, the plan state, the Git state, and deterministic gates decide a
-    phase outcome.
+    ``signal`` names the terminating signal when known. ``diagnostic`` is one
+    bounded redacted process-tail line for operator diagnosis only. The
+    orchestrator never interprets it or any other role prose as control
+    protocol — only this enum surface, the plan state, the Git state, and
+    deterministic gates decide a phase outcome.
     """
 
     role: str
     exit_status: int
     interrupted: bool = False
     signal: Optional[str] = None
+    diagnostic: str = ""
 
 
 @dataclass(frozen=True)
@@ -1939,11 +1941,22 @@ def launch_role_attempt(
         raise CampaignPhaseError(
             f"supervision fail-closed for {role}: {exc}"
         ) from exc
+    stderr = getattr(getattr(result, "stderr", None), "tail", "") or ""
+    stdout = getattr(getattr(result, "stdout", None), "tail", "") or ""
+    reason = getattr(result, "reason", "") or ""
+    # Stream tails have already crossed LaunchSupervision's exact-commit
+    # redaction boundary. Preserve only one bounded single-line diagnostic so
+    # an infrastructure exit is actionable without treating model prose as
+    # control protocol or publishing raw process output.
+    diagnostic = " ".join((reason or stderr or stdout).split())[:512]
     if result.outcome == "terminated":
         return RoleOutcome(
-            role, result.returncode, interrupted=True, signal=result.signal
+            role, result.returncode, interrupted=True, signal=result.signal,
+            diagnostic=diagnostic,
         )
-    return RoleOutcome(role, result.returncode or 0, interrupted=False)
+    return RoleOutcome(
+        role, result.returncode or 0, interrupted=False, diagnostic=diagnostic
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -3490,6 +3503,7 @@ class Campaign:
             f"planner exit={role.exit_status}"
             + (" (interrupted)" if role.interrupted else "")
             + (f" scope={violation}" if violation else "")
+            + (f" diagnostic={role.diagnostic}" if role.diagnostic else "")
         )
         if outcome == "interrupted":
             if attempt < self._config.planning_attempts:
@@ -3694,7 +3708,10 @@ class Campaign:
             )
         return self._implementation_outcome(
             state, attempt, outcome,
-            reason or f"developer exit={role.exit_status}",
+            reason or (
+                f"developer exit={role.exit_status}"
+                + (f" diagnostic={role.diagnostic}" if role.diagnostic else "")
+            ),
             dirty_work=bool(self._preservable_dirty_paths()),
         )
 
@@ -3860,7 +3877,12 @@ class Campaign:
             # phase-result bytes the orchestrator consumed (or the honest
             # zero marker when no result file was produced).
             record_result_digest = result_digest or ("0" * 64)
-        detail = violation or gate_detail or ""
+        detail = (
+            violation
+            or (role.diagnostic if role.exit_status != 0 else "")
+            or gate_detail
+            or ""
+        )
         state2 = state_module.advance(state, outcome)
         state_module.write_state(self._root, state2)
         return _Step(
@@ -3986,8 +4008,11 @@ class Campaign:
             # The final round completed: its audit ended the campaign, so the
             # completed-round counter reaches the current round.
             self._rounds_completed = state2.current_round
+        audit_detail = (
+            role.diagnostic if role.exit_status != 0 else final_gate_detail
+        )
         return _Step(
-            self._record(state, 1, outcome, final_gate_detail,
+            self._record(state, 1, outcome, audit_detail,
                          result_digest=record_result_digest),
             state=state2,
         )
