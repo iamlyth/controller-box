@@ -522,7 +522,7 @@ function validCredentialFile(path, expectedDev, expectedIno) {
 /** Detach auth.json and close every inherited descriptor before a tool runs. */
 export function closeToolCredentialBoundary(env = process.env) {
   if (toolCredentialState?.status === "detached") {
-    return { ok: false, reason: "tool-credential-already-detached" };
+    return { ok: true, reason: "already-detached" };
   }
   if (toolCredentialState?.status === "attached") {
     try {
@@ -625,6 +625,24 @@ export function restoreToolCredentialBoundary() {
   if (saved.status !== "detached") return { ok: false, reason: "tool-file-still-attached" };
   let targetFd = -1;
   try {
+    // Pi's credential store may publish an empty-object placeholder before
+    // extension shutdown after observing the deliberately detached path.
+    // Replace only that exact safe placeholder; any other pre-existing inode
+    // is a fail-closed collision.
+    try {
+      const placeholder = lstatSync(saved.filePath, { bigint: true });
+      const document = JSON.parse(readFileSync(saved.filePath, "utf8"));
+      if (!placeholder.isFile() || placeholder.isSymbolicLink()
+          || placeholder.nlink !== 1n || placeholder.uid !== BigInt(currentUid())
+          || (placeholder.mode & 0o77n) !== 0n
+          || !document || typeof document !== "object" || Array.isArray(document)
+          || Object.keys(document).length !== 0) {
+        return { ok: false, reason: "tool-credential-restore-collision" };
+      }
+      unlinkSync(saved.filePath);
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
     targetFd = openSync(
       saved.filePath,
       fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL
@@ -1107,6 +1125,44 @@ export function failRedactedResult(event) {
 }
 
 export default function registerFactoryGuard(pi) {
+  let providerAuthReady = false;
+
+  pi.on("session_start", async () => {
+    if (process.env[TOOL_FD_ENV] === undefined) return;
+    const filePath = process.env[TOOL_FILE_ENV];
+    const expectedDev = process.env[TOOL_FILE_DEV_ENV];
+    const expectedIno = process.env[TOOL_FILE_INO_ENV];
+    if (!filePath || !DECIMAL_IDENTITY_RE.test(expectedDev ?? "")
+        || !DECIMAL_IDENTITY_RE.test(expectedIno ?? "")
+        || !validCredentialFile(filePath, BigInt(expectedDev), BigInt(expectedIno))) {
+      throw new Error("factory guard could not validate openai-codex runtime auth");
+    }
+    const document = JSON.parse(readFileSync(filePath, "utf8"));
+    const credential = document?.["openai-codex"];
+    if (credential?.type !== "oauth" || typeof credential.access !== "string"
+        || credential.access.length < 16 || credential.access.length > 16_384
+        || typeof credential.refresh !== "string" || credential.refresh.length < 16
+        || typeof credential.expires !== "number" || !Number.isFinite(credential.expires)
+        || credential.expires <= Date.now() + 300_000) {
+      throw new Error("factory guard could not pin openai-codex runtime auth");
+    }
+    // Override only request authentication; Pi keeps the exact built-in
+    // provider, model catalogue, API implementation, and base URL.
+    pi.registerProvider("openai-codex", { apiKey: credential.access });
+    providerAuthReady = true;
+  });
+
+  pi.on("before_agent_start", () => {
+    if (process.env[TOOL_FD_ENV] === undefined) return;
+    if (!providerAuthReady) {
+      throw new Error("factory guard refuses to detach unpinned provider auth");
+    }
+    const detached = closeToolCredentialBoundary();
+    if (!detached.ok) {
+      throw new Error(`${TOOLCALL_BLOCK_PREFIX}${detached.reason}`);
+    }
+  });
+
   pi.on("tool_call", (event) => {
     // This is deliberately first and applies to every tool name. The private
     // credential pathname is detached before any in-process/tool subprocess
@@ -1133,10 +1189,6 @@ export default function registerFactoryGuard(pi) {
   });
 
   pi.on("tool_result", async (event) => {
-    const restored = restoreToolCredentialBoundary();
-    if (!restored.ok) {
-      return failRedactedResult(event);
-    }
     if (
       event.toolName === "bash"
       && event.details
@@ -1153,5 +1205,12 @@ export default function registerFactoryGuard(pi) {
       return failRedactedResult(event);
     }
     return redacted.patch;
+  });
+
+  pi.on("session_shutdown", () => {
+    const restored = restoreToolCredentialBoundary();
+    if (!restored.ok) {
+      throw new Error(`${TOOLCALL_BLOCK_PREFIX}${restored.reason}`);
+    }
   });
 }

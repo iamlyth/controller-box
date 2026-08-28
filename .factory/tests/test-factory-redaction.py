@@ -65,6 +65,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import unittest.mock
 
@@ -960,7 +961,7 @@ class CredentialGuardCliTests(unittest.TestCase):
 
 TOOL_FD_FIXTURE = r'''
 import assert from 'node:assert/strict';
-import { existsSync, fstatSync, readFileSync, readSync } from 'node:fs';
+import { existsSync, fstatSync, readFileSync, readSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
@@ -976,8 +977,17 @@ for (const inherited of [fd, alias]) {
 }
 assert(readFileSync(authFile).includes(Buffer.from(secret)));
 const handlers = {};
+const registrations = [];
 const extension = await import(pathToFileURL(extensionPath));
-extension.default({ on(name, callback) { handlers[name] = callback; } });
+extension.default({
+  on(name, callback) { handlers[name] = callback; },
+  registerProvider(name, config) { registrations.push({ name, config }); },
+});
+await handlers.session_start({}, {});
+assert.equal(registrations.length, 1);
+assert.equal(registrations[0].name, 'openai-codex');
+assert.equal(registrations[0].config.apiKey, secret);
+await handlers.before_agent_start({});
 const input = toolName === 'bash' ? { command: 'printf safe' } : { path: 'README.md' };
 const verdict = await handlers.tool_call({ toolName, input });
 assert.equal(verdict ?? null, null, `tool ${toolName} unexpectedly blocked`);
@@ -995,7 +1005,7 @@ const restored = await handlers.tool_result({
   toolName, content: [{ type: 'text', text: 'safe' }], details: {}, isError: false,
 });
 assert(restored !== undefined);
-assert(readFileSync(authFile).includes(Buffer.from(secret)));
+assert.equal(existsSync(authFile), false, 'auth file restored before session shutdown');
 const verdict2 = await handlers.tool_call({ toolName, input });
 assert.equal(verdict2 ?? null, null, `second tool ${toolName} unexpectedly blocked`);
 assert.equal(existsSync(authFile), false, 'auth file survived second tool boundary');
@@ -1003,6 +1013,9 @@ const restored2 = await handlers.tool_result({
   toolName, content: [{ type: 'text', text: 'safe-2' }], details: {}, isError: false,
 });
 assert(restored2 !== undefined);
+assert.equal(existsSync(authFile), false, 'auth file restored during tool execution');
+writeFileSync(authFile, '{}\n', { mode: 0o600 });
+await handlers.session_shutdown({ reason: 'quit' }, {});
 assert(readFileSync(authFile).includes(Buffer.from(secret)));
 console.log(`TOOL_CREDENTIAL_CYCLED:${toolName}`);
 '''
@@ -1126,14 +1139,21 @@ class NodeExtensionRedactionTests(unittest.TestCase):
                 os.close(raw_fd)
                 fd_limit = 4096
                 try:
-                    secret = f"SYNTHETIC-AUTH-{tool_name}"
-                    os.write(fd, secret.encode())
+                    secret = f"SYNTHETIC-AUTH-{tool_name}-VALUE"
+                    auth_payload = json.dumps({
+                        "openai-codex": {
+                            "type": "oauth", "access": secret,
+                            "refresh": "SYNTHETIC-REFRESH-VALUE",
+                            "expires": int(time.time() * 1000) + 3_600_000,
+                        },
+                    }).encode("utf-8")
+                    os.write(fd, auth_payload)
                     os.lseek(fd, 0, os.SEEK_SET)
                     identity = os.fstat(fd)
                     agent_dir = self.tmp / f"agent-{tool_name}"
                     agent_dir.mkdir()
                     auth_file = agent_dir / "auth.json"
-                    auth_file.write_text(secret, encoding="utf-8")
+                    auth_file.write_bytes(auth_payload)
                     auth_file.chmod(0o600)
                     file_identity = auth_file.stat()
                     env = dict(os.environ)
