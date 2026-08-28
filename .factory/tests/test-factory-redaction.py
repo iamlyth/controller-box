@@ -991,7 +991,20 @@ for (const [program, scanner] of [[process.argv[0], nodeScanner], [process.env.F
   assert.equal(probe.status, 0, probe.stderr);
   assert.equal(probe.stdout.trim(), 'EBADF');
 }
-console.log(`TOOL_FD_CLOSED:${toolName}`);
+const restored = await handlers.tool_result({
+  toolName, content: [{ type: 'text', text: 'safe' }], details: {}, isError: false,
+});
+assert(restored !== undefined);
+assert(readFileSync(authFile).includes(Buffer.from(secret)));
+const verdict2 = await handlers.tool_call({ toolName, input });
+assert.equal(verdict2 ?? null, null, `second tool ${toolName} unexpectedly blocked`);
+assert.equal(existsSync(authFile), false, 'auth file survived second tool boundary');
+const restored2 = await handlers.tool_result({
+  toolName, content: [{ type: 'text', text: 'safe-2' }], details: {}, isError: false,
+});
+assert(restored2 !== undefined);
+assert(readFileSync(authFile).includes(Buffer.from(secret)));
+console.log(`TOOL_CREDENTIAL_CYCLED:${toolName}`);
 '''
 
 NODE_FIXTURE = r'''
@@ -1058,9 +1071,9 @@ class NodeExtensionRedactionTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def test_exact_pi_common_tool_boundary_closes_auth_fd_for_every_enabled_tool(self) -> None:
-        """Every enabled Pi tool reaches one closure-first hook; generated
-        Python/Node numeric-fd scanners observe EBADF without using /proc."""
+    def test_exact_pi_common_tool_boundary_cycles_auth_for_every_enabled_tool(self) -> None:
+        """Every Pi tool detaches the credential file; child scanners cannot
+        inherit the retained memfd, and tool_result restores the next turn."""
         if not hasattr(os, "memfd_create"):
             self.skipTest("memfd_create is unavailable")
         python_scanner = self.tmp / "numeric-fd-scanner.py"
@@ -1149,7 +1162,7 @@ class NodeExtensionRedactionTests(unittest.TestCase):
                     os.close(fd)
                     os.close(alias_fd)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn(f"TOOL_FD_CLOSED:{tool_name}", result.stdout)
+                self.assertIn(f"TOOL_CREDENTIAL_CYCLED:{tool_name}", result.stdout)
                 self.assertNotIn(secret, result.stdout + result.stderr)
 
     def test_exported_tool_call_and_result_redaction(self) -> None:

@@ -3383,15 +3383,13 @@ def _prepare_private_pi2_home(sanitized_home: Path) -> int:
     """Prepare the private Pi2 agent directory and return the sealed auth fd.
 
     The operator's ``auth.json`` credential is **never** written to any
-    model/tool-readable path (B1 security review).  Only the non-secret
-    catalog (``models.json``) and an empty ``settings.json`` are materialised
-    in the per-launch sanitized home; the credential bytes are carried in one
-    anonymous writable memfd whose descriptor is inherited by the model
-    process and referenced by the backend adapter through a symlink
-    ``auth.json -> /proc/self/fd/<N>``.  Tool subprocesses never inherit the
-    descriptor (Node closes non-stdio fds) and Landlock denies ``/proc``, so
-    the credential is unreachable from any model tool path; the in-process
-    guard additionally blocks ``/proc/.../fd`` reads (defense in depth).
+    model/tool-readable path before confinement (B1 security review). Only the
+    non-secret catalog and empty settings are initially materialised; the
+    credential bytes travel in one anonymous writable memfd. After Landlock,
+    the exact adapter creates Pi's private mode-0600 auth file. The guard
+    extension identity-checks and detaches that file around each tool, closes
+    every descriptor alias, then restores it from extension-owned memory for
+    the next authenticated turn. Landlock also denies ``/proc``.
     """
     source = Path.home() / ".pi" / "agent2"
     target = sanitized_home / ".pi" / "agent2"
@@ -3427,11 +3425,10 @@ def _prepare_private_pi2_home(sanitized_home: Path) -> int:
         os.fsync(fd)
     finally:
         os.close(fd)
-    # The credential travels only as an anonymous writable memfd (token
-    # refresh writes back through the symlink).  The descriptor is inherited
-    # by the model process; the backend adapter sets no CLOEXEC so the
-    # adapter->node exec keeps it, and Node's spawn closes it for every tool
-    # subprocess.  Landlock denies /proc, so no tool can dereference it.
+    # The credential crosses the pre-confinement boundary only in an anonymous
+    # writable memfd. The exact adapter/extension own its post-confinement
+    # detach/restore cycle; tool subprocesses do not inherit it and Landlock
+    # denies /proc.
     auth_source = source / "auth.json"
     info = os.lstat(auth_source)
     if (

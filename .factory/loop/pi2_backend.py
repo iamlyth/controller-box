@@ -7,10 +7,11 @@ in one anonymous memfd whose descriptor number arrives in this adapter's
 transient argv (``--auth-fd N``). After Landlock is active, this adapter
 materialises a private mode-0600 credential file in the launch-owned home so
 the model CLI can initialize without dereferencing the deliberately denied
-``/proc`` tree. The exact-commit extension verifies and unlinks that file and
-closes every descriptor alias synchronously at Pi's common ``tool_call``
-boundary before any enabled in-process or subprocess tool runs. The descriptor
-number is consumed here and is absent from the model process argv after exec.
+``/proc`` tree. Around every common ``tool_call`` boundary, the exact-commit
+extension verifies and detaches that file before tool execution, closes every
+inherited descriptor alias, then restores the private file from extension-owned
+memory before Pi's next authenticated turn. Landlock also denies ``/proc``.
+The descriptor number is consumed here and is absent from model argv.
 """
 
 from __future__ import annotations
@@ -193,10 +194,10 @@ def main() -> None:
     env["PI_CODING_AGENT_DIR"] = str(agent_dir)
     env["PI_PACKAGE_DIR"] = str(cli.parents[1])
     env["NODE_PATH"] = str(cli.parents[3])
-    # Non-secret identity metadata tells the exact-commit extension which one
-    # inherited descriptor to close at the common tool boundary. The extension
-    # fstats and matches all three values before close; malformed/missing or
-    # reused descriptor identity blocks the tool without touching another fd.
+    # Non-secret identity metadata tells the exact-commit extension which
+    # descriptor/file pair to detach around each common tool boundary. The
+    # extension fstats and matches the identities first; malformed/missing or
+    # reused bindings block the tool without touching another inode.
     identity = os.fstat(auth_fd)
     # Bound the exact Node/tool process descriptor table so the extension can
     # synchronously inspect every possible numeric alias before a tool runs.

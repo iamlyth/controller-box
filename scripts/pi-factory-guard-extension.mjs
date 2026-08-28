@@ -5,12 +5,15 @@ import { once } from "node:events";
 import {
   closeSync,
   constants as fsConstants,
+  fsyncSync,
   fstatSync,
   lstatSync,
+  openSync,
   readdirSync,
   readFileSync,
   realpathSync,
   unlinkSync,
+  writeSync,
 } from "node:fs";
 import { lstat, open, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -491,10 +494,11 @@ function currentUid() {
   return typeof process.getuid === "function" ? process.getuid() : -1;
 }
 
-// Pi2 retains its anonymous auth descriptor only long enough for the model
-// CLI to initialize. These non-secret identity fields are set by the staged
-// exact-commit adapter; the first tool_call closes the descriptor before any
-// enabled tool implementation (including in-process read/edit/write) runs.
+// Pi2 keeps its anonymous auth descriptor for authenticated turns while the
+// exact-commit extension detaches the private auth file around every tool.
+// Tool subprocesses do not inherit the descriptor, /proc is denied, and the
+// allowlisted in-process tools have no numeric-descriptor API. The file is
+// restored before Pi starts the next authenticated model turn.
 const TOOL_FD_ENV = "PI_FACTORY_TOOL_FD";
 const TOOL_FD_DEV_ENV = "PI_FACTORY_TOOL_FD_DEV";
 const TOOL_FD_INO_ENV = "PI_FACTORY_TOOL_FD_INO";
@@ -504,10 +508,40 @@ const TOOL_FILE_DEV_ENV = "PI_FACTORY_TOOL_FILE_DEV";
 const TOOL_FILE_INO_ENV = "PI_FACTORY_TOOL_FILE_INO";
 const DECIMAL_IDENTITY_RE = /^(?:0|[1-9][0-9]{0,30})$/;
 
-/** Trusted common tool-exec boundary for Pi2's inherited auth descriptor.
- * Absence of all fields is the non-Pi2 case. A partial/malformed/reused
- * identity blocks the tool and never closes an unrelated descriptor. */
+/** Credential bytes and exact file identity held only by this extension. */
+let toolCredentialState = null;
+
+function validCredentialFile(path, expectedDev, expectedIno) {
+  const identity = lstatSync(path, { bigint: true });
+  return identity.isFile() && !identity.isSymbolicLink()
+    && identity.dev === expectedDev && identity.ino === expectedIno
+    && identity.nlink === 1n && identity.uid === BigInt(currentUid())
+    && (identity.mode & 0o77n) === 0n && identity.size <= 1_048_576n;
+}
+
+/** Detach auth.json and close every inherited descriptor before a tool runs. */
 export function closeToolCredentialBoundary(env = process.env) {
+  if (toolCredentialState?.status === "detached") {
+    return { ok: false, reason: "tool-credential-already-detached" };
+  }
+  if (toolCredentialState?.status === "attached") {
+    try {
+      if (!validCredentialFile(
+        toolCredentialState.filePath,
+        toolCredentialState.expectedFileDev,
+        toolCredentialState.expectedFileIno,
+      )) return { ok: false, reason: "tool-file-binding-mismatch" };
+      const refreshed = readFileSync(toolCredentialState.filePath);
+      toolCredentialState.bytes.fill(0);
+      toolCredentialState.bytes = refreshed;
+      unlinkSync(toolCredentialState.filePath);
+      toolCredentialState.status = "detached";
+      return { ok: true, reason: "detached" };
+    } catch {
+      return { ok: false, reason: "tool-credential-removal-failed" };
+    }
+  }
+
   const numericValues = [
     env?.[TOOL_FD_ENV], env?.[TOOL_FD_DEV_ENV], env?.[TOOL_FD_INO_ENV],
     env?.[TOOL_FD_LIMIT_ENV], env?.[TOOL_FILE_DEV_ENV], env?.[TOOL_FILE_INO_ENV],
@@ -516,12 +550,9 @@ export function closeToolCredentialBoundary(env = process.env) {
   if (numericValues.every((value) => value === undefined) && filePath === undefined) {
     return { ok: true, reason: "not-provisioned" };
   }
-  if (
-    numericValues.some(
-      (value) => typeof value !== "string" || !DECIMAL_IDENTITY_RE.test(value)
-    )
-    || typeof filePath !== "string"
-  ) {
+  if (numericValues.some(
+    (value) => typeof value !== "string" || !DECIMAL_IDENTITY_RE.test(value)
+  ) || typeof filePath !== "string") {
     return { ok: false, reason: "tool-credential-binding-malformed" };
   }
   let fd;
@@ -542,23 +573,17 @@ export function closeToolCredentialBoundary(env = process.env) {
   }
   const agentDir = env?.PI_CODING_AGENT_DIR;
   const expectedFilePath = typeof agentDir === "string" ? join(agentDir, "auth.json") : "";
-  if (
-    !Number.isSafeInteger(fd) || fd < 3
-    || !Number.isSafeInteger(fdLimit) || fdLimit < 64 || fdLimit > 65_536
-    || fd >= fdLimit || filePath !== expectedFilePath
-  ) {
+  if (!Number.isSafeInteger(fd) || fd < 3
+      || !Number.isSafeInteger(fdLimit) || fdLimit < 64 || fdLimit > 65_536
+      || fd >= fdLimit || filePath !== expectedFilePath) {
     return { ok: false, reason: "tool-credential-binding-malformed" };
   }
+  let fileBytes;
   try {
-    const fileIdentity = lstatSync(filePath, { bigint: true });
-    if (
-      !fileIdentity.isFile() || fileIdentity.isSymbolicLink()
-      || fileIdentity.dev !== expectedFileDev || fileIdentity.ino !== expectedFileIno
-      || fileIdentity.nlink !== 1n || fileIdentity.uid !== BigInt(currentUid())
-      || (fileIdentity.mode & 0o77n) !== 0n
-    ) {
+    if (!validCredentialFile(filePath, expectedFileDev, expectedFileIno)) {
       return { ok: false, reason: "tool-file-binding-mismatch" };
     }
+    fileBytes = readFileSync(filePath);
   } catch {
     return { ok: false, reason: "tool-file-binding-mismatch" };
   }
@@ -571,10 +596,7 @@ export function closeToolCredentialBoundary(env = process.env) {
         aliases.push(candidate);
         if (candidate === fd) originalMatched = true;
       }
-    } catch {
-      // EBADF is the ordinary closed slot; other fstat failures fail closed
-      // through the required original identity check below.
-    }
+    } catch { /* EBADF is ordinary; the original check fails closed. */ }
   }
   if (!originalMatched || aliases.length === 0) {
     return { ok: false, reason: "tool-fd-binding-mismatch" };
@@ -585,14 +607,57 @@ export function closeToolCredentialBoundary(env = process.env) {
   } catch {
     return { ok: false, reason: "tool-credential-removal-failed" };
   }
-  delete env[TOOL_FD_ENV];
-  delete env[TOOL_FD_DEV_ENV];
-  delete env[TOOL_FD_INO_ENV];
-  delete env[TOOL_FD_LIMIT_ENV];
-  delete env[TOOL_FILE_ENV];
-  delete env[TOOL_FILE_DEV_ENV];
-  delete env[TOOL_FILE_INO_ENV];
-  return { ok: true, reason: "removed" };
+  toolCredentialState = {
+    status: "detached", filePath, bytes: fileBytes,
+    expectedFileDev, expectedFileIno,
+  };
+  for (const name of [
+    TOOL_FD_ENV, TOOL_FD_DEV_ENV, TOOL_FD_INO_ENV, TOOL_FD_LIMIT_ENV,
+    TOOL_FILE_ENV, TOOL_FILE_DEV_ENV, TOOL_FILE_INO_ENV,
+  ]) delete env[name];
+  return { ok: true, reason: "detached" };
+}
+
+/** Restore auth.json after the tool result and before Pi's next model turn. */
+export function restoreToolCredentialBoundary() {
+  const saved = toolCredentialState;
+  if (saved === null) return { ok: true, reason: "not-detached" };
+  if (saved.status !== "detached") return { ok: false, reason: "tool-file-still-attached" };
+  let targetFd = -1;
+  try {
+    targetFd = openSync(
+      saved.filePath,
+      fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL
+        | fsConstants.O_NOFOLLOW | fsConstants.O_CLOEXEC,
+      0o600,
+    );
+    let offset = 0;
+    while (offset < saved.bytes.length) {
+      offset += writeSync(
+        targetFd, saved.bytes, offset, saved.bytes.length - offset, offset
+      );
+    }
+    fsyncSync(targetFd);
+    const fileIdentity = fstatSync(targetFd, { bigint: true });
+    if (!fileIdentity.isFile() || fileIdentity.nlink !== 1n
+        || fileIdentity.uid !== BigInt(currentUid())
+        || (fileIdentity.mode & 0o77n) !== 0n
+        || fileIdentity.size !== BigInt(saved.bytes.length)) {
+      throw new Error("restored credential identity mismatch");
+    }
+    closeSync(targetFd);
+    targetFd = -1;
+    saved.expectedFileDev = fileIdentity.dev;
+    saved.expectedFileIno = fileIdentity.ino;
+    saved.status = "attached";
+    return { ok: true, reason: "restored" };
+  } catch {
+    if (targetFd >= 0) {
+      try { closeSync(targetFd); } catch { /* fail closed below */ }
+    }
+    try { unlinkSync(saved.filePath); } catch { /* absent is safe */ }
+    return { ok: false, reason: "tool-credential-restore-failed" };
+  }
 }
 
 /** Identity predicate for the overflow log: not a symlink, a regular file,
@@ -1043,14 +1108,14 @@ export function failRedactedResult(event) {
 
 export default function registerFactoryGuard(pi) {
   pi.on("tool_call", (event) => {
-    // This is deliberately first and applies to every tool name, not only the
-    // credential guard's path-aware subset. Closure, rather than command-text
-    // classification or Node spawn defaults, is the security boundary.
-    const closed = closeToolCredentialBoundary();
-    if (!closed.ok) {
+    // This is deliberately first and applies to every tool name. The private
+    // credential pathname is detached before any in-process/tool subprocess
+    // implementation and restored only from the inaccessible memfd afterward.
+    const detached = closeToolCredentialBoundary();
+    if (!detached.ok) {
       return {
         block: true,
-        reason: `${TOOLCALL_BLOCK_PREFIX}${closed.reason}`,
+        reason: `${TOOLCALL_BLOCK_PREFIX}${detached.reason}`,
       };
     }
     const guarded = guardToolCallInput(event);
@@ -1068,6 +1133,10 @@ export default function registerFactoryGuard(pi) {
   });
 
   pi.on("tool_result", async (event) => {
+    const restored = restoreToolCredentialBoundary();
+    if (!restored.ok) {
+      return failRedactedResult(event);
+    }
     if (
       event.toolName === "bash"
       && event.details
