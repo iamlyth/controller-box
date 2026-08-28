@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import resource
 import stat
 import sys
 
@@ -101,9 +102,21 @@ def main() -> None:
     # fstats and matches all three values before close; malformed/missing or
     # reused descriptor identity blocks the tool without touching another fd.
     identity = os.fstat(auth_fd)
+    # Bound the exact Node/tool process descriptor table so the extension can
+    # synchronously inspect every possible numeric alias before a tool runs.
+    # 4096 is ample for Pi/build tooling while making all-alias closure finite;
+    # preserve an already-lower operator hard/soft limit.
+    soft_limit, hard_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
+    finite_soft = 4096 if soft_limit == resource.RLIM_INFINITY else soft_limit
+    finite_hard = 4096 if hard_limit == resource.RLIM_INFINITY else hard_limit
+    fd_limit = min(4096, finite_soft, finite_hard)
+    if fd_limit <= auth_fd or fd_limit < 64:
+        raise SystemExit("factory-pi2-backend: descriptor limit cannot bound auth aliases")
+    resource.setrlimit(resource.RLIMIT_NOFILE, (fd_limit, hard_limit))
     env["PI_FACTORY_TOOL_FD"] = str(auth_fd)
     env["PI_FACTORY_TOOL_FD_DEV"] = str(identity.st_dev)
     env["PI_FACTORY_TOOL_FD_INO"] = str(identity.st_ino)
+    env["PI_FACTORY_TOOL_FD_LIMIT"] = str(fd_limit)
     os.execve(str(node), [str(node), str(cli), *remaining], env)
 
 

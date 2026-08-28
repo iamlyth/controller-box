@@ -960,15 +960,20 @@ class CredentialGuardCliTests(unittest.TestCase):
 
 TOOL_FD_FIXTURE = r'''
 import assert from 'node:assert/strict';
-import { fstatSync, readFileSync } from 'node:fs';
+import { fstatSync, readSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
-const [extensionPath, toolName, fdText, secret, pythonScanner, nodeScanner] = process.argv.slice(2);
+const [extensionPath, toolName, fdText, aliasText, limitText, secret, pythonScanner, nodeScanner] = process.argv.slice(2);
 const fd = Number(fdText);
+const alias = Number(aliasText);
 // Non-vacuity: exact Pi/Node parent really inherited and can read the memfd
 // before the trusted common tool boundary runs.
-assert(readFileSync(fd, { encoding: 'utf8' }).includes(secret));
+for (const inherited of [fd, alias]) {
+  const probe = Buffer.alloc(4096);
+  const count = readSync(inherited, probe, 0, probe.length, 0);
+  assert(probe.subarray(0, count).includes(Buffer.from(secret)));
+}
 const handlers = {};
 const extension = await import(pathToFileURL(extensionPath));
 extension.default({ on(name, callback) { handlers[name] = callback; } });
@@ -976,10 +981,11 @@ const input = toolName === 'bash' ? { command: 'printf safe' } : { path: 'README
 const verdict = await handlers.tool_call({ toolName, input });
 assert.equal(verdict ?? null, null, `tool ${toolName} unexpectedly blocked`);
 assert.throws(() => fstatSync(fd), (error) => error?.code === 'EBADF');
+assert.throws(() => fstatSync(alias), (error) => error?.code === 'EBADF');
 // These generated scanners use numeric syscalls only (never /proc). They are
 // the real child-process shape reached by bash and Node-backed Pi tools.
 for (const [program, scanner] of [[process.argv[0], nodeScanner], [process.env.FACTORY_TEST_PYTHON, pythonScanner]]) {
-  const probe = spawnSync(program, [scanner, fdText, secret], { encoding: 'utf8' });
+  const probe = spawnSync(program, [scanner, fdText, aliasText, limitText, secret], { encoding: 'utf8' });
   assert.equal(probe.status, 0, probe.stderr);
   assert.equal(probe.stdout.trim(), 'EBADF');
 }
@@ -1058,11 +1064,14 @@ class NodeExtensionRedactionTests(unittest.TestCase):
         python_scanner = self.tmp / "numeric-fd-scanner.py"
         python_scanner.write_text(
             "import errno,os,sys\n"
-            "fd=int(sys.argv[1]); secret=sys.argv[2].encode()\n"
+            "fd=int(sys.argv[1]); alias=int(sys.argv[2]); limit=int(sys.argv[3]); secret=sys.argv[4].encode()\n"
             "try: os.fstat(fd)\n"
             "except OSError as e: assert e.errno==errno.EBADF\n"
             "else: raise SystemExit('original descriptor remained open')\n"
-            "for candidate in range(3,1024):\n"
+            "try: os.fstat(alias)\n"
+            "except OSError as e: assert e.errno==errno.EBADF\n"
+            "else: raise SystemExit('high alias remained open')\n"
+            "for candidate in range(3,limit):\n"
             " try: data=os.pread(candidate,4096,0)\n"
             " except OSError: continue\n"
             " if secret in data: raise SystemExit(f'alias leaked at {candidate}')\n"
@@ -1072,10 +1081,13 @@ class NodeExtensionRedactionTests(unittest.TestCase):
         node_scanner = self.tmp / "numeric-fd-scanner.mjs"
         node_scanner.write_text(
             "import { closeSync, fstatSync, readSync } from 'node:fs';\n"
-            "const fd=Number(process.argv[2]), secret=process.argv[3];\n"
+            "const fd=Number(process.argv[2]), alias=Number(process.argv[3]);\n"
+            "const limit=Number(process.argv[4]), secret=process.argv[5];\n"
             "try { fstatSync(fd); throw new Error('original descriptor remained open'); }\n"
             "catch (e) { if (e?.code !== 'EBADF') throw e; }\n"
-            "for (let candidate=3; candidate<1024; candidate++) {\n"
+            "try { fstatSync(alias); throw new Error('high alias remained open'); }\n"
+            "catch (e) { if (e?.code !== 'EBADF') throw e; }\n"
+            "for (let candidate=3; candidate<limit; candidate++) {\n"
             " const buffer=Buffer.alloc(4096);\n"
             " try { const count=readSync(candidate,buffer,0,buffer.length,0);"
             " if (buffer.subarray(0,count).includes(Buffer.from(secret)))"
@@ -1095,7 +1107,9 @@ class NodeExtensionRedactionTests(unittest.TestCase):
             with self.subTest(tool=tool_name):
                 raw_fd = os.memfd_create("factory-pi2-auth-regression", 0)
                 fd = fcntl.fcntl(raw_fd, fcntl.F_DUPFD, 200)
+                alias_fd = fcntl.fcntl(raw_fd, fcntl.F_DUPFD, 1500)
                 os.close(raw_fd)
+                fd_limit = 4096
                 try:
                     secret = f"SYNTHETIC-AUTH-{tool_name}"
                     os.write(fd, secret.encode())
@@ -1109,16 +1123,19 @@ class NodeExtensionRedactionTests(unittest.TestCase):
                         "PI_FACTORY_TOOL_FD": str(fd),
                         "PI_FACTORY_TOOL_FD_DEV": str(identity.st_dev),
                         "PI_FACTORY_TOOL_FD_INO": str(identity.st_ino),
+                        "PI_FACTORY_TOOL_FD_LIMIT": str(fd_limit),
                         "FACTORY_TEST_PYTHON": sys.executable,
                     })
                     result = subprocess.run(
                         ["node", str(fixture), str(extension), tool_name, str(fd),
-                         secret, str(python_scanner), str(node_scanner)],
-                        pass_fds=(fd,), env=env, capture_output=True, text=True,
+                         str(alias_fd), str(fd_limit), secret,
+                         str(python_scanner), str(node_scanner)],
+                        pass_fds=(fd, alias_fd), env=env, capture_output=True, text=True,
                         timeout=30,
                     )
                 finally:
                     os.close(fd)
+                    os.close(alias_fd)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn(f"TOOL_FD_CLOSED:{tool_name}", result.stdout)
                 self.assertNotIn(secret, result.stdout + result.stderr)

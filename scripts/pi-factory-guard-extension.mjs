@@ -497,13 +497,17 @@ function currentUid() {
 const TOOL_FD_ENV = "PI_FACTORY_TOOL_FD";
 const TOOL_FD_DEV_ENV = "PI_FACTORY_TOOL_FD_DEV";
 const TOOL_FD_INO_ENV = "PI_FACTORY_TOOL_FD_INO";
+const TOOL_FD_LIMIT_ENV = "PI_FACTORY_TOOL_FD_LIMIT";
 const DECIMAL_IDENTITY_RE = /^(?:0|[1-9][0-9]{0,30})$/;
 
 /** Trusted common tool-exec boundary for Pi2's inherited auth descriptor.
  * Absence of all fields is the non-Pi2 case. A partial/malformed/reused
  * identity blocks the tool and never closes an unrelated descriptor. */
 export function closeToolCredentialBoundary(env = process.env) {
-  const values = [env?.[TOOL_FD_ENV], env?.[TOOL_FD_DEV_ENV], env?.[TOOL_FD_INO_ENV]];
+  const values = [
+    env?.[TOOL_FD_ENV], env?.[TOOL_FD_DEV_ENV], env?.[TOOL_FD_INO_ENV],
+    env?.[TOOL_FD_LIMIT_ENV],
+  ];
   if (values.every((value) => value === undefined)) {
     return { ok: true, reason: "not-provisioned" };
   }
@@ -515,28 +519,48 @@ export function closeToolCredentialBoundary(env = process.env) {
   let fd;
   let expectedDev;
   let expectedIno;
+  let fdLimit;
   try {
     fd = Number(values[0]);
     expectedDev = BigInt(values[1]);
     expectedIno = BigInt(values[2]);
+    fdLimit = Number(values[3]);
   } catch {
     return { ok: false, reason: "tool-fd-binding-malformed" };
   }
-  if (!Number.isSafeInteger(fd) || fd < 3 || fd > 1_048_576) {
+  if (
+    !Number.isSafeInteger(fd) || fd < 3
+    || !Number.isSafeInteger(fdLimit) || fdLimit < 64 || fdLimit > 65_536
+    || fd >= fdLimit
+  ) {
     return { ok: false, reason: "tool-fd-binding-malformed" };
   }
-  try {
-    const identity = fstatSync(fd, { bigint: true });
-    if (identity.dev !== expectedDev || identity.ino !== expectedIno) {
-      return { ok: false, reason: "tool-fd-binding-mismatch" };
+  const aliases = [];
+  let originalMatched = false;
+  for (let candidate = 3; candidate < fdLimit; candidate += 1) {
+    try {
+      const identity = fstatSync(candidate, { bigint: true });
+      if (identity.dev === expectedDev && identity.ino === expectedIno) {
+        aliases.push(candidate);
+        if (candidate === fd) originalMatched = true;
+      }
+    } catch {
+      // EBADF is the ordinary closed slot; other fstat failures fail closed
+      // through the required original identity check below.
     }
-    closeSync(fd);
+  }
+  if (!originalMatched || aliases.length === 0) {
+    return { ok: false, reason: "tool-fd-binding-mismatch" };
+  }
+  try {
+    for (const alias of aliases) closeSync(alias);
   } catch {
     return { ok: false, reason: "tool-fd-close-failed" };
   }
   delete env[TOOL_FD_ENV];
   delete env[TOOL_FD_DEV_ENV];
   delete env[TOOL_FD_INO_ENV];
+  delete env[TOOL_FD_LIMIT_ENV];
   return { ok: true, reason: "closed" };
 }
 

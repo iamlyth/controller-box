@@ -2439,10 +2439,11 @@ class AuthorityTokenTests(_Base):
 
     def test_auth_fd_parent_copy_closes_and_resets_immediately_after_spawn(self) -> None:
         """Authority transfer leaves no parent-readable auth descriptor."""
-        if not hasattr(os, "memfd_create"):
-            self.skipTest("memfd_create unavailable")
-        self.set_behavior("record")
-        binding, role, agents, spec, plan = self.make_binding()
+        self.assertTrue(hasattr(os, "memfd_create"), "Linux memfd is mandatory")
+        self.set_behavior("trap-term")
+        binding, role, agents, spec, plan = self.make_binding(
+            runtime_limit=5.0, inactivity_limit=0.5
+        )
         authority = self.authorize(binding, role, agents, spec, plan)
         auth_fd = os.memfd_create("factory-parent-lifecycle", 0)
         os.write(auth_fd, b"synthetic-auth")
@@ -2459,6 +2460,21 @@ class AuthorityTokenTests(_Base):
             with self.assertRaises(OSError) as caught:
                 os.fstat(auth_fd)
             self.assertEqual(caught.exception.errno, errno.EBADF)
+            # Target-side readiness barrier: the backend has exec'd, written
+            # its PID, and is sleeping before any simulated tool call.
+            target_marker = self.marker_dir / "pid"
+            deadline = time.monotonic() + 2.0
+            while not target_marker.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue(target_marker.exists(), "target readiness marker missing")
+            target_pid = int(target_marker.read_text(encoding="utf-8"))
+            broker_fields = launch._proc_stat_fields(pid)
+            target_fields = launch._proc_stat_fields(target_pid)
+            self.assertIsNotNone(broker_fields)
+            self.assertIsNotNone(target_fields)
+            self.assertNotEqual(broker_fields[0], "Z")
+            self.assertNotEqual(target_fields[0], "Z")
+
             auth_identity = (identity.st_dev, identity.st_ino)
             deadline = time.monotonic() + 2.0
             while True:
@@ -2483,15 +2499,14 @@ class AuthorityTokenTests(_Base):
             launch, "verify_child_invariants", side_effect=assert_live_parent_and_broker_closed
         ):
             result = supervisor.run(authority)
-        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.outcome, "terminated")
         self.assertTrue(observed_live)
         self.assertEqual(authority._auth_fd, -1)
         self.assertEqual(supervisor._auth_fd, -1)
 
     def test_spawn_failure_closes_auth_fd_after_authority_transfer(self) -> None:
         """Popen failure is covered by outer cleanup, including auth."""
-        if not hasattr(os, "memfd_create"):
-            self.skipTest("memfd_create unavailable")
+        self.assertTrue(hasattr(os, "memfd_create"), "Linux memfd is mandatory")
         binding, role, agents, spec, plan = self.make_binding()
         authority = self.authorize(binding, role, agents, spec, plan)
         auth_fd = os.memfd_create("factory-parent-failure", 0)
