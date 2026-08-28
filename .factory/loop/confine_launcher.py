@@ -1562,6 +1562,7 @@ def _install_dedicated_subreaper() -> None:
 def _launch_with_exec_broker(
     spec: Mapping[str, object], rule_fds: Sequence[int],
     command: Sequence[str], supervision_fd: int | None = None,
+    target_only_fds: Sequence[int] = (),
 ) -> Tuple[int, bool]:
     """Fork a confined session leader under a dedicated atomic exec broker.
 
@@ -1612,6 +1613,15 @@ def _launch_with_exec_broker(
             print(f"confine-launcher: {exc}", file=sys.stderr)
         os._exit(1)
 
+    # Credential and similar launch descriptors belong only to the target.
+    # The fork duplicates them into the child; close the broker copies before
+    # its first wait/ptrace operation so a long-lived trusted broker never
+    # retains model credential authority.
+    for descriptor in target_only_fds:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
     for descriptor in rule_fds:
         try:
             os.close(descriptor)
@@ -1714,13 +1724,24 @@ def _write_supervision_status(descriptor: int | None, value: bytes) -> None:
 def main(argv: Sequence[str]) -> int:
     usage = (
         "usage: confine_launcher.py --spec-file <spec> --rule-fds <fd,fd,...> "
-        "[--supervision-fd <fd>] -- <command...>"
+        "[--target-only-fds <fd,fd,...>] [--supervision-fd <fd>] -- <command...>"
     )
     if len(argv) < 6 or argv[0] != "--spec-file" or argv[2] != "--rule-fds":
         die(usage)
     spec_path = argv[1]
     fd_text = argv[3]
     index = 4
+    target_only_fds: Tuple[int, ...] = ()
+    if index < len(argv) and argv[index] == "--target-only-fds":
+        if index + 1 >= len(argv):
+            die(usage)
+        target_fd_text = argv[index + 1]
+        if not target_fd_text or any(
+            not item.isdigit() for item in target_fd_text.split(",")
+        ):
+            die(usage)
+        target_only_fds = tuple(int(item) for item in target_fd_text.split(","))
+        index += 2
     supervision_fd: int | None = None
     if index < len(argv) and argv[index] == "--supervision-fd":
         if index + 1 >= len(argv) or not argv[index + 1].isdigit():
@@ -1737,15 +1758,25 @@ def main(argv: Sequence[str]) -> int:
         if not fd_text or any(not item.isdigit() for item in fd_text.split(",")):
             raise ConfineLaunchError("the inherited rule descriptor list is invalid")
         rule_fds = tuple(int(item) for item in fd_text.split(","))
+        if (
+            len(set(target_only_fds)) != len(target_only_fds)
+            or any(fd < 3 for fd in target_only_fds)
+            or set(target_only_fds) & set(rule_fds)
+        ):
+            raise ConfineLaunchError(
+                "the target-only descriptor list is invalid or overlaps a rule descriptor"
+            )
+        for descriptor in target_only_fds:
+            os.fstat(descriptor)
         if supervision_fd is not None:
-            if supervision_fd in rule_fds:
+            if supervision_fd in rule_fds or supervision_fd in target_only_fds:
                 raise ConfineLaunchError(
-                    "the supervision descriptor overlaps a confinement rule descriptor"
+                    "the supervision descriptor overlaps another inherited descriptor"
                 )
             os.fstat(supervision_fd)
         spec = _read_spec(spec_path)
         status, escaped = _launch_with_exec_broker(
-            spec, rule_fds, command, supervision_fd
+            spec, rule_fds, command, supervision_fd, target_only_fds
         )
         _write_supervision_status(
             supervision_fd,
@@ -1767,6 +1798,11 @@ def main(argv: Sequence[str]) -> int:
                 pass
         die(str(exc))
     finally:
+        for descriptor in target_only_fds:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
         if supervision_fd is not None:
             try:
                 os.close(supervision_fd)

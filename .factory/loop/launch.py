@@ -1976,6 +1976,10 @@ class LaunchSupervision:
                 str(spec_path),
                 "--rule-fds",
                 ",".join(str(fd) for fd in self._confinement_rule_fds),
+                *(
+                    ["--target-only-fds", str(self._auth_fd)]
+                    if self._auth_fd >= 0 else []
+                ),
                 "--supervision-fd",
                 str(supervision_write),
                 "--",

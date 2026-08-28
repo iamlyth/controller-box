@@ -2447,14 +2447,46 @@ class AuthorityTokenTests(_Base):
         auth_fd = os.memfd_create("factory-parent-lifecycle", 0)
         os.write(auth_fd, b"synthetic-auth")
         authority._auth_fd = auth_fd
+        identity = os.fstat(auth_fd)
         supervisor = LaunchSupervision(binding, kill_grace=0.3)
-        result = supervisor.run(authority)
+        real_invariants = launch.verify_child_invariants
+        observed_live = []
+
+        def assert_live_parent_and_broker_closed(pid, workspace, child_binding):
+            # This callback runs immediately after Popen while the confinement
+            # broker/target are live, not after run() cleanup.
+            self.assertEqual(supervisor._auth_fd, -1)
+            with self.assertRaises(OSError) as caught:
+                os.fstat(auth_fd)
+            self.assertEqual(caught.exception.errno, errno.EBADF)
+            auth_identity = (identity.st_dev, identity.st_ino)
+            deadline = time.monotonic() + 2.0
+            while True:
+                broker_identities = set()
+                for name in os.listdir(f"/proc/{pid}/fd"):
+                    try:
+                        info = os.stat(f"/proc/{pid}/fd/{name}")
+                    except OSError:
+                        continue
+                    broker_identities.add((info.st_dev, info.st_ino))
+                if auth_identity not in broker_identities or time.monotonic() >= deadline:
+                    break
+                time.sleep(0.01)
+            self.assertNotIn(
+                auth_identity, broker_identities,
+                "the long-lived confinement broker retained the auth memfd",
+            )
+            observed_live.append(pid)
+            return real_invariants(pid, workspace, child_binding)
+
+        with unittest.mock.patch.object(
+            launch, "verify_child_invariants", side_effect=assert_live_parent_and_broker_closed
+        ):
+            result = supervisor.run(authority)
         self.assertEqual(result.returncode, 0)
+        self.assertTrue(observed_live)
         self.assertEqual(authority._auth_fd, -1)
         self.assertEqual(supervisor._auth_fd, -1)
-        with self.assertRaises(OSError) as caught:
-            os.fstat(auth_fd)
-        self.assertEqual(caught.exception.errno, errno.EBADF)
 
     def test_spawn_failure_closes_auth_fd_after_authority_transfer(self) -> None:
         """Popen failure is covered by outer cleanup, including auth."""

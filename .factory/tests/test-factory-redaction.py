@@ -1057,21 +1057,31 @@ class NodeExtensionRedactionTests(unittest.TestCase):
             self.skipTest("memfd_create is unavailable")
         python_scanner = self.tmp / "numeric-fd-scanner.py"
         python_scanner.write_text(
-            "import os,sys\n"
+            "import errno,os,sys\n"
             "fd=int(sys.argv[1]); secret=sys.argv[2].encode()\n"
-            "try:\n"
-            " os.fstat(fd)\n"
-            "except OSError as e:\n"
-            " assert e.errno==9; print('EBADF'); raise SystemExit(0)\n"
-            "raise SystemExit('descriptor remained open')\n",
+            "try: os.fstat(fd)\n"
+            "except OSError as e: assert e.errno==errno.EBADF\n"
+            "else: raise SystemExit('original descriptor remained open')\n"
+            "for candidate in range(3,1024):\n"
+            " try: data=os.pread(candidate,4096,0)\n"
+            " except OSError: continue\n"
+            " if secret in data: raise SystemExit(f'alias leaked at {candidate}')\n"
+            "print('EBADF')\n",
             encoding="utf-8",
         )
         node_scanner = self.tmp / "numeric-fd-scanner.mjs"
         node_scanner.write_text(
-            "import { fstatSync } from 'node:fs';\n"
-            "const fd=Number(process.argv[2]);\n"
-            "try { fstatSync(fd); throw new Error('descriptor remained open'); }\n"
-            "catch (e) { if (e?.code !== 'EBADF') throw e; console.log('EBADF'); }\n",
+            "import { closeSync, fstatSync, readSync } from 'node:fs';\n"
+            "const fd=Number(process.argv[2]), secret=process.argv[3];\n"
+            "try { fstatSync(fd); throw new Error('original descriptor remained open'); }\n"
+            "catch (e) { if (e?.code !== 'EBADF') throw e; }\n"
+            "for (let candidate=3; candidate<1024; candidate++) {\n"
+            " const buffer=Buffer.alloc(4096);\n"
+            " try { const count=readSync(candidate,buffer,0,buffer.length,0);"
+            " if (buffer.subarray(0,count).includes(Buffer.from(secret)))"
+            " throw new Error(`alias leaked at ${candidate}`); }\n"
+            " catch (e) { if (String(e?.message).startsWith('alias leaked')) throw e; }\n"
+            "}\nconsole.log('EBADF');\n",
             encoding="utf-8",
         )
         fixture = self.tmp / "tool-fd-fixture.mjs"

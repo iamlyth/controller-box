@@ -1127,16 +1127,44 @@ class LaunchIntegrationTests(_Base):
                 self._authorize(binding)
         provision.assert_not_called()
 
-    def test_pi2_cli_identity_is_in_external_paths_and_mutation_fails_revalidation(self) -> None:
+    def test_pi2_cli_authority_inclusion_and_pre_auth_pre_exec_revalidation(self) -> None:
+        """A positive exact-Pi mint carries wrapper/Node/CLI identities; the
+        revalidation happens before provisioning and a CLI mutation blocks
+        the live supervisor before Popen."""
         pi2 = shutil.which("pi2")
-        if pi2 is None:
-            self.skipTest("the production pi2 wrapper is unavailable")
-        wrapper_path = os.path.realpath(pi2)
-        wrapper = launch._bind_external_runtime(wrapper_path, executable=True)
-        node, cli = launch._resolve_pi2_runtime(wrapper_path)
+        self.assertIsNotNone(pi2, "the production exact-Pi regression requires pi2")
+        assert pi2 is not None
+        binding = dataclasses.replace(
+            self._binding("openai-codex"), backend=Path(pi2).absolute()
+        )
+        events = []
+        real_revalidate = launch._revalidate_external_runtimes
+
+        def record_revalidation(bindings):
+            events.append("revalidate")
+            return real_revalidate(bindings)
+
+        def synthetic_provision(_home):
+            events.append("provision")
+            fd = os.memfd_create("factory-positive-pi2-auth", 0)
+            os.write(fd, b'{"synthetic":"auth"}\n')
+            os.lseek(fd, 0, os.SEEK_SET)
+            return fd
+
+        with mock.patch.object(
+            launch, "_revalidate_external_runtimes", side_effect=record_revalidation
+        ), mock.patch.object(
+            launch, "_prepare_private_pi2_home", side_effect=synthetic_provision
+        ):
+            authority = self._authorize(binding)
+        self.assertEqual(events[:2], ["revalidate", "provision"])
+        paths = tuple(authority._external_paths)
+        identities = tuple(authority._external_runtime_bindings)
+        self.assertEqual(paths, tuple(item.path for item in identities))
+        self.assertEqual(len(paths), 3)
+        wrapper, node, cli = identities
         self.assertEqual(cli.path, os.path.realpath(cli.path))
         self.assertTrue(cli.path.startswith("/nix/store/"))
-        paths = [item.path for item in (wrapper, node, cli)]
         self.assertIn(cli.path, paths)
         self.assertRegex(cli.sha256, r"^[0-9a-f]{64}$")
         self.assertGreater(cli.device, 0)
@@ -1150,13 +1178,20 @@ class LaunchIntegrationTests(_Base):
                 return dataclasses.replace(current, sha256="0" * 64)
             return current
 
+        supervisor = launch.LaunchSupervision(binding, kill_grace=0.1)
+        redactor = launch.output_redaction.redactor_for(
+            binding.workspace, binding.bound_commit
+        )
         with mock.patch.object(
             launch, "_bind_external_runtime", side_effect=mutate_cli
-        ):
+        ), mock.patch.object(
+            launch.output_redaction, "redactor_for", return_value=redactor
+        ), mock.patch.object(launch.subprocess, "Popen") as popen:
             with self.assertRaisesRegex(
-                launch.InvocationError, "identity changed"
+                launch.SupervisionError, "immediately before exec"
             ):
-                launch._revalidate_external_runtimes((wrapper, node, cli))
+                supervisor.run(authority)
+        popen.assert_not_called()
 
     def test_bound_commit_origin_is_checked_before_channel_proof(self) -> None:
         usage_source = self.workspace / ".factory" / "loop" / "usage.py"
