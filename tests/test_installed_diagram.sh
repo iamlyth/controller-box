@@ -45,6 +45,7 @@ PREFIX_BUILD_DIR="$PROJECT_ROOT/.build-install-diagram"
 XVFB_DISPLAY=""
 XVFB_PID=""
 MANAGER_PID=""
+MANAGER_WINDOW=""
 FAILURES=0
 TMPDIR=""
 
@@ -327,6 +328,29 @@ if ! kill -0 "$MANAGER_PID" 2>/dev/null; then
     exit 1
 fi
 
+# Acquire the exact production manager window before sending coordinates.  A
+# root capture can otherwise make an unrelated window look like evidence, and
+# an unbounded xdotool --sync search can hang forever when startup fails.  Keep
+# this bounded and use the discovered window for the final framebuffer capture.
+for ((poll = 0; poll < 50; poll++)); do
+    MANAGER_WINDOW=$(xdotool search --name '^Controller-Box Manager$' 2>/dev/null | while IFS= read -r candidate; do
+        [ -n "$candidate" ] || continue
+        title=$(xdotool getwindowname "$candidate" 2>/dev/null || true)
+        if [ "$title" = "Controller-Box Manager" ]; then
+            printf '%s\\n' "$candidate"
+            break
+        fi
+    done)
+    if [ -n "$MANAGER_WINDOW" ]; then
+        break
+    fi
+    sleep 0.1
+done
+if [ -z "$MANAGER_WINDOW" ]; then
+    fail "could not acquire exact Controller-Box Manager window"
+    exit 1
+fi
+
 # Controllers tab is the default.  Click the Profiles tab (middle of 3 tabs).
 xdotool mousemove 550 24 click 1
 sleep 0.6
@@ -341,7 +365,29 @@ xdotool mousemove 302 522 click 1
 sleep 0.7
 
 EDITOR_CAPTURE="$TMPDIR/editor.png"
-import -window root "$EDITOR_CAPTURE" 2>/dev/null
+# Re-acquire after navigation: SDL may recreate the production window during
+# a mode transition, and using the stale/root handle would weaken the semantic
+# assertion.  The bounded search also verifies the exact title.
+MANAGER_WINDOW=""
+for ((poll = 0; poll < 50; poll++)); do
+    MANAGER_WINDOW=$(xdotool search --name '^Controller-Box Manager$' 2>/dev/null | while IFS= read -r candidate; do
+        [ -n "$candidate" ] || continue
+        title=$(xdotool getwindowname "$candidate" 2>/dev/null || true)
+        if [ "$title" = "Controller-Box Manager" ]; then
+            printf '%s\\n' "$candidate"
+            break
+        fi
+    done)
+    if [ -n "$MANAGER_WINDOW" ]; then
+        break
+    fi
+    sleep 0.1
+done
+if [ -z "$MANAGER_WINDOW" ]; then
+    fail "manager window disappeared before editor capture"
+    exit 1
+fi
+import -window "$MANAGER_WINDOW" "$EDITOR_CAPTURE" 2>/dev/null
 if [ ! -f "$EDITOR_CAPTURE" ]; then
     fail "failed to capture the editor window"
     exit 1
