@@ -214,12 +214,18 @@ load_svg_texture(SDL_Renderer *renderer, const char *svg_path, int size)
     nsvgDeleteRasterizer(rast);
     nsvgDelete(image);
 
-    /* nsvgRasterize() outputs RGBA byte order; SDL_PIXELFORMAT_ABGR8888
-     * is the matching native-endian mapping so opaque pixels keep their
-     * alpha (RGBA8888 would be byte-swapped on little-endian, turning the
-     * black controller outline fully transparent — BUG-0014). */
+    /* nsvgRasterize() outputs RGBA byte order.  SDL's packed pixel formats
+     * describe the native-endian word, so ABGR8888 is the matching format on
+     * the little-endian x86_64/aarch64 targets (RGBA8888 would be laid out as
+     * A,B,G,R there, turning the opaque outline fully transparent — BUG-0014).
+     * Keep the big-endian branch correct as well for portability. */
+#if SDL_BYTEORDER == SDL_LIL_ENDIAN
+    const Uint32 pixel_format = SDL_PIXELFORMAT_ABGR8888;
+#else
+    const Uint32 pixel_format = SDL_PIXELFORMAT_RGBA8888;
+#endif
     SDL_Texture *tex = SDL_CreateTexture(renderer,
-                                            SDL_PIXELFORMAT_ABGR8888,
+                                            pixel_format,
                                             SDL_TEXTUREACCESS_STATIC,
                                             tw, th);
     if (!tex) {
