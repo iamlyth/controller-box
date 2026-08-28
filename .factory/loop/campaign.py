@@ -3499,6 +3499,12 @@ class Campaign:
             state_module.write_state(self._root, state2)
             self._planning_attempts_used = 0
             return _Step(self._record(state, attempt, "planned", ""), state=state2)
+        # A planner retry is a fresh attempt against the committed canonical
+        # plan, never against another attempt's partial/invalid worktree bytes.
+        # Planner output is regenerable ledger state (not product work), so
+        # every non-planned outcome restores it before retry or terminal exit.
+        if plan_changed:
+            self._restore_plan_worktree()
         detail = reason or (
             f"planner exit={role.exit_status}"
             + (" (interrupted)" if role.interrupted else "")

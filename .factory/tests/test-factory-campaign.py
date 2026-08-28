@@ -629,6 +629,25 @@ class CampaignTerminals(_CampaignBase):
             record["phase"] == "planning" and record["outcome"] == "failed"
             for record in history))
 
+    def test_invalid_planner_retry_restores_committed_plan(self) -> None:
+        ws = self.make({
+            "planner": {"behavior": {
+                "1.1": "invalid", "1.2": "no-change", "default": "no-change",
+            }},
+            "developer": {"behavior": "complete"},
+            "tester": {"behavior": "pass"},
+            "auditor": {"behavior": "pass"},
+        })
+        rc, data = ws.run_cli()
+        self.assertEqual(rc, 3)
+        history = data["phase_history"]
+        self.assertIn("does not parse", history[0]["detail"])
+        self.assertNotIn("does not parse", history[1]["detail"])
+        self.assertNotIn("does not parse", history[2]["detail"])
+        self.assertEqual(
+            _git(ws.root, "status", "--short", "--", PLAN_REL).stdout, ""
+        )
+
     def test_nonzero_planner_fails_despite_valid_changed_plan(self) -> None:
         ws = self.make({
             "planner": {"behavior": "planned-exit1"},
