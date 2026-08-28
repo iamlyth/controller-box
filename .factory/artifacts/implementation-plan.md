@@ -916,7 +916,7 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 - Documentation impact: update `docs/FACTORY.md`, `docs/FACTORY-LOOP-SPEC.md`, or `docs/OPERATIONS.md` only if the canonical audit-receipt binding differs from the documented contract; otherwise record AUD-03 and FACT-007 as unresolved evidence boundaries.
 
 ## Task 43: Re-establish factory state-integrity audit evidence
-- Status: pending
+- Status: blocked
 - Priority: 1
 - Dependencies: Task 22, Task 23, Task 24, Task 25, Task 28, Task 29, Task 30, Task 31, Task 32, Task 34, Task 35, Task 36, Task 37, Task 38, Task 39, Task 40, Task 41, Task 42
 - Blocked on: AUD-04 and FACT-007 — the auditor-visible inputs contain no qualifying exact-commit receipt or manifest proving the fresh factory state implementation and its tamper/transition regressions; the prior audit was unable to inspect enforced `.factory/loop` and `.factory/tests` paths, and denied tooling cannot be promoted to evidence.
