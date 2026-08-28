@@ -1366,6 +1366,49 @@ class ProviderRegistryTests(_Base):
         self.assertEqual(source.count(b"@@FACTORY_PI2_NODE@@"), 1)
         self.assertEqual(source.count(b"@@FACTORY_PI2_CLI@@"), 1)
 
+    def test_staged_pi2_adapter_enforces_soft_and_hard_alias_bound(self) -> None:
+        """The adapter->Node exec cannot raise its descriptor range above
+        what the common tool boundary scans."""
+        self.assertTrue(hasattr(os, "memfd_create"), "Linux memfd is mandatory")
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "the exact-Pi adapter test requires Node")
+        assert node is not None
+        runtime = self.tmp / "runtime" / "a" / "b" / "c"
+        runtime.mkdir(parents=True)
+        cli = runtime / "cli.mjs"
+        cli.write_text(
+            "import { fstatSync, readFileSync } from 'node:fs';\n"
+            "const fd=Number(process.env.PI_FACTORY_TOOL_FD); fstatSync(fd);\n"
+            "const line=readFileSync('/proc/self/limits','utf8').split('\\n')"
+            ".find((item)=>item.startsWith('Max open files'));\n"
+            "const match=/Max open files\\s+(\\d+)\\s+(\\d+)/.exec(line);\n"
+            "if (!match || match[1] !== '4096' || match[2] !== '4096' || "
+            "process.env.PI_FACTORY_TOOL_FD_LIMIT !== '4096') process.exit(9);\n"
+            "console.log(`BOUND:${match[1]}:${match[2]}`);\n",
+            encoding="utf-8",
+        )
+        adapter_data = (LOOP / "pi2_backend.py").read_bytes().replace(
+            b"@@FACTORY_PI2_NODE@@", os.path.realpath(node).encode()
+        ).replace(b"@@FACTORY_PI2_CLI@@", str(cli).encode())
+        adapter = self.tmp / "staged-pi2-adapter.py"
+        adapter.write_bytes(adapter_data)
+        private_home = self.tmp / "adapter-home"
+        (private_home / ".pi" / "agent2").mkdir(parents=True)
+        auth_fd = os.memfd_create("factory-adapter-hard-limit", 0)
+        try:
+            os.write(auth_fd, b'{"synthetic":"auth"}\n')
+            env = dict(os.environ)
+            env["HOME"] = str(private_home)
+            result = subprocess.run(
+                [sys.executable, str(adapter), "--auth-fd", str(auth_fd)],
+                pass_fds=(auth_fd,), env=env, capture_output=True, text=True,
+                timeout=30,
+            )
+        finally:
+            os.close(auth_fd)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "BOUND:4096:4096")
+
 
 # ---------------------------------------------------------------------------
 # Task 8 confinement proof seam (obligations 2, 3, and store location)

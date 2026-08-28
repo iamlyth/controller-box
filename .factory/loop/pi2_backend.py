@@ -112,7 +112,12 @@ def main() -> None:
     fd_limit = min(4096, finite_soft, finite_hard)
     if fd_limit <= auth_fd or fd_limit < 64:
         raise SystemExit("factory-pi2-backend: descriptor limit cannot bound auth aliases")
-    resource.setrlimit(resource.RLIMIT_NOFILE, (fd_limit, hard_limit))
+    # Lower the hard limit too: untrusted model code must be unable to raise
+    # the soft limit and duplicate the credential above the scanned range.
+    resource.setrlimit(resource.RLIMIT_NOFILE, (fd_limit, fd_limit))
+    enforced_soft, enforced_hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if (enforced_soft, enforced_hard) != (fd_limit, fd_limit):
+        raise SystemExit("factory-pi2-backend: descriptor alias bound was not enforced")
     env["PI_FACTORY_TOOL_FD"] = str(auth_fd)
     env["PI_FACTORY_TOOL_FD_DEV"] = str(identity.st_dev)
     env["PI_FACTORY_TOOL_FD_INO"] = str(identity.st_ino)
