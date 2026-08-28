@@ -31,8 +31,8 @@ and task bytes to the exact bound commit; treat any mismatch as fatal.
    ordering is required). Before adding anything, search every existing task
    title, source, and scope for equivalent work. Task titles must be unique;
    revise the existing task when the finding is already represented rather
-   than creating a duplicate under a new number. The plan is the sole task
-   ledger; never create a second task queue.
+   than creating a duplicate under a new number.
+   The plan is the sole task ledger; never create a second task queue.
 4. Preserve every conformance requirement ID in the matrix and map every
    non-verified classification to an explicit task. Keep the interaction
    acceptance inventory exhaustive. Never self-declare evidence tiers or

@@ -3,7 +3,9 @@ import { randomBytes } from "node:crypto";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import {
+  closeSync,
   constants as fsConstants,
+  fstatSync,
   lstatSync,
   readdirSync,
   readFileSync,
@@ -488,6 +490,56 @@ function currentUid() {
   return typeof process.getuid === "function" ? process.getuid() : -1;
 }
 
+// Pi2 retains its anonymous auth descriptor only long enough for the model
+// CLI to initialize. These non-secret identity fields are set by the staged
+// exact-commit adapter; the first tool_call closes the descriptor before any
+// enabled tool implementation (including in-process read/edit/write) runs.
+const TOOL_FD_ENV = "PI_FACTORY_TOOL_FD";
+const TOOL_FD_DEV_ENV = "PI_FACTORY_TOOL_FD_DEV";
+const TOOL_FD_INO_ENV = "PI_FACTORY_TOOL_FD_INO";
+const DECIMAL_IDENTITY_RE = /^(?:0|[1-9][0-9]{0,30})$/;
+
+/** Trusted common tool-exec boundary for Pi2's inherited auth descriptor.
+ * Absence of all fields is the non-Pi2 case. A partial/malformed/reused
+ * identity blocks the tool and never closes an unrelated descriptor. */
+export function closeToolCredentialBoundary(env = process.env) {
+  const values = [env?.[TOOL_FD_ENV], env?.[TOOL_FD_DEV_ENV], env?.[TOOL_FD_INO_ENV]];
+  if (values.every((value) => value === undefined)) {
+    return { ok: true, reason: "not-provisioned" };
+  }
+  if (
+    values.some((value) => typeof value !== "string" || !DECIMAL_IDENTITY_RE.test(value))
+  ) {
+    return { ok: false, reason: "tool-fd-binding-malformed" };
+  }
+  let fd;
+  let expectedDev;
+  let expectedIno;
+  try {
+    fd = Number(values[0]);
+    expectedDev = BigInt(values[1]);
+    expectedIno = BigInt(values[2]);
+  } catch {
+    return { ok: false, reason: "tool-fd-binding-malformed" };
+  }
+  if (!Number.isSafeInteger(fd) || fd < 3 || fd > 1_048_576) {
+    return { ok: false, reason: "tool-fd-binding-malformed" };
+  }
+  try {
+    const identity = fstatSync(fd, { bigint: true });
+    if (identity.dev !== expectedDev || identity.ino !== expectedIno) {
+      return { ok: false, reason: "tool-fd-binding-mismatch" };
+    }
+    closeSync(fd);
+  } catch {
+    return { ok: false, reason: "tool-fd-close-failed" };
+  }
+  delete env[TOOL_FD_ENV];
+  delete env[TOOL_FD_DEV_ENV];
+  delete env[TOOL_FD_INO_ENV];
+  return { ok: true, reason: "closed" };
+}
+
 /** Identity predicate for the overflow log: not a symlink, a regular file,
  * owned by the current user, with exactly one hard link. */
 export function isOwnedRegularFile(stats) {
@@ -936,6 +988,16 @@ export function failRedactedResult(event) {
 
 export default function registerFactoryGuard(pi) {
   pi.on("tool_call", (event) => {
+    // This is deliberately first and applies to every tool name, not only the
+    // credential guard's path-aware subset. Closure, rather than command-text
+    // classification or Node spawn defaults, is the security boundary.
+    const closed = closeToolCredentialBoundary();
+    if (!closed.ok) {
+      return {
+        block: true,
+        reason: `${TOOLCALL_BLOCK_PREFIX}${closed.reason}`,
+      };
+    }
     const guarded = guardToolCallInput(event);
     if (guarded) {
       return guarded;

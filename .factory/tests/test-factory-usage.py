@@ -50,6 +50,7 @@ Coverage:
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import hashlib
 import http.server
 import inspect
@@ -1019,7 +1020,9 @@ class LaunchIntegrationTests(_Base):
                      scripts / "pi-cli-shims" / "git")
         loop = self.workspace / ".factory" / "loop"
         loop.mkdir(parents=True)
-        for module in ("confine_launcher.py", "usage.py", "usage_fetch.py"):
+        for module in (
+            "confine_launcher.py", "usage.py", "usage_fetch.py", "pi2_backend.py",
+        ):
             shutil.copy2(ROOT / ".factory" / "loop" / module, loop / module)
         backend = self.workspace / "backend.py"
         backend.write_text("#!/usr/bin/env python3\nprint('ok')\n", encoding="utf-8")
@@ -1109,6 +1112,51 @@ class LaunchIntegrationTests(_Base):
         binding = self._binding("synthetic")
         authority = self._authorize(binding)
         self.assertIsInstance(authority, launch.LaunchAuthority)
+
+    def test_valid_openai_workspace_backend_never_provisions_auth(self) -> None:
+        """A structurally valid committed backend still cannot satisfy the
+        complete external pi2/Node/CLI identity, and auth is never opened."""
+        binding = self._binding("openai-codex")
+        launch.verify_invocation(binding)  # prove this is not an invalid-binding test
+        with mock.patch.object(
+            launch, "_prepare_private_pi2_home"
+        ) as provision:
+            with self.assertRaisesRegex(
+                launch.InvocationError, "exact immutable external pi2"
+            ):
+                self._authorize(binding)
+        provision.assert_not_called()
+
+    def test_pi2_cli_identity_is_in_external_paths_and_mutation_fails_revalidation(self) -> None:
+        pi2 = shutil.which("pi2")
+        if pi2 is None:
+            self.skipTest("the production pi2 wrapper is unavailable")
+        wrapper_path = os.path.realpath(pi2)
+        wrapper = launch._bind_external_runtime(wrapper_path, executable=True)
+        node, cli = launch._resolve_pi2_runtime(wrapper_path)
+        self.assertEqual(cli.path, os.path.realpath(cli.path))
+        self.assertTrue(cli.path.startswith("/nix/store/"))
+        paths = [item.path for item in (wrapper, node, cli)]
+        self.assertIn(cli.path, paths)
+        self.assertRegex(cli.sha256, r"^[0-9a-f]{64}$")
+        self.assertGreater(cli.device, 0)
+        self.assertGreater(cli.inode, 0)
+
+        real_bind = launch._bind_external_runtime
+
+        def mutate_cli(path: str, *, executable: bool):
+            current = real_bind(path, executable=executable)
+            if path == cli.path:
+                return dataclasses.replace(current, sha256="0" * 64)
+            return current
+
+        with mock.patch.object(
+            launch, "_bind_external_runtime", side_effect=mutate_cli
+        ):
+            with self.assertRaisesRegex(
+                launch.InvocationError, "identity changed"
+            ):
+                launch._revalidate_external_runtimes((wrapper, node, cli))
 
     def test_bound_commit_origin_is_checked_before_channel_proof(self) -> None:
         usage_source = self.workspace / ".factory" / "loop" / "usage.py"

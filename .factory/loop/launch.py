@@ -90,6 +90,7 @@ try:  # package-import mode (the hidden control-plane package)
         GitBoundaryError,
         git_bytes,
         require_trusted_executable,
+        require_trusted_regular_file,
         resolve_head,
         sanitize_git_environment,
     )
@@ -115,6 +116,7 @@ except ImportError:  # flat-import mode used by the hidden harness test suite
         GitBoundaryError,
         git_bytes,
         require_trusted_executable,
+        require_trusted_regular_file,
         resolve_head,
         sanitize_git_environment,
     )
@@ -292,6 +294,13 @@ INVOCATION_ENV_PREFIX = "FACTORY_LOOP_LAUNCH_"
 # any guard invocation (it has no Git access inside the model Landlock).
 PI_FACTORY_GUARD_DIGEST_ENV = "PI_FACTORY_GUARD_DIGEST"
 PI_FACTORY_GUARD_PYTHON_ENV = "PI_FACTORY_GUARD_PYTHON"
+# The Pi2 adapter publishes only descriptor identity metadata, never
+# credential bytes, for the exact-commit extension to consume synchronously
+# at the common ``tool_call`` boundary. Names deliberately avoid credential-
+# shaped words so the generic child-environment rejection remains useful.
+PI_FACTORY_TOOL_FD_ENV = "PI_FACTORY_TOOL_FD"
+PI_FACTORY_TOOL_FD_DEV_ENV = "PI_FACTORY_TOOL_FD_DEV"
+PI_FACTORY_TOOL_FD_INO_ENV = "PI_FACTORY_TOOL_FD_INO"
 
 # The committed model-side Pi extension (Task 11 review): the generic
 # factory guard extension loaded by the model backend through ``--extension``
@@ -1674,6 +1683,7 @@ class LaunchSupervision:
         self._auth_fd: int = -1
         self._staged_digests: Dict[str, str] = {}
         self._external_paths: Tuple[str, ...] = ()
+        self._external_runtime_bindings: Tuple[_ExternalRuntimeBinding, ...] = ()
         self._exec_dir: Optional[Path] = None
         # Task 8 confinement binding carried by the verified authority (the
         # exact specification, the real proof, the sanitized home, and the
@@ -1885,14 +1895,13 @@ class LaunchSupervision:
                     f"staged script/module {staged_path} changed since "
                     "verification; refusing interpreter launch (F2)"
                 )
-        for external in self._external_paths:
-            try:
-                require_trusted_executable(external)
-            except GitBoundaryError as exc:
-                raise SupervisionError(
-                    f"external trusted executable {external} changed or is "
-                    f"no longer immutable before exec: {exc} (F2)"
-                ) from exc
+        try:
+            _revalidate_external_runtimes(self._external_runtime_bindings)
+        except InvocationError as exc:
+            raise SupervisionError(
+                "an external Pi/runtime path changed in digest, device, inode, "
+                f"or immutable identity immediately before exec: {exc} (F2)"
+            ) from exc
         env = child_environment(
             self.binding,
             guard_digest=self._guard_digest,
@@ -2024,6 +2033,15 @@ class LaunchSupervision:
             except OSError:
                 pass
             self.prompt_fd = None
+            # Authority has transferred to the child. The parent must not keep
+            # a second readable copy for the entire model lifetime: close and
+            # reset it immediately after successful Popen, before monitoring.
+            if self._auth_fd >= 0:
+                try:
+                    os.close(self._auth_fd)
+                except OSError:
+                    pass
+                self._auth_fd = -1
             # F4: pin the leader's starttime at spawn; every later group
             # signal re-verifies it so a reused PID is never signaled or
             # reaped.  The identity is recorded *before* the mask is
@@ -2352,6 +2370,12 @@ class LaunchSupervision:
                     except OSError:
                         pass
                     authority._prompt_fd = -1
+                if authority._auth_fd >= 0:
+                    try:
+                        os.close(authority._auth_fd)
+                    except OSError:
+                        pass
+                    authority._auth_fd = -1
                 _remove_private_directories(
                     _authority_private_directories(authority)
                 )
@@ -2404,6 +2428,7 @@ class LaunchSupervision:
         self._guard_digest = authority._guard_digest
         self._staged_digests = dict(authority._staged_digests)
         self._external_paths = tuple(authority._external_paths)
+        self._external_runtime_bindings = tuple(authority._external_runtime_bindings)
         self._exec_dir = Path(authority._exec_dir)
         self._confinement_spec = dict(authority._confinement_spec) \
             if authority._confinement_spec else None
@@ -2687,6 +2712,12 @@ class LaunchSupervision:
             except OSError:
                 pass
             self.prompt_fd = None
+        if self._auth_fd >= 0:
+            try:
+                os.close(self._auth_fd)
+            except OSError:
+                pass
+            self._auth_fd = -1
         directories: List[Optional[Path]] = [
             self.session_dir, self._exec_dir, self._sanitized_home,
         ]
@@ -3036,6 +3067,7 @@ class LaunchAuthority:
         "_guard_digest",
         "_staged_digests",
         "_external_paths",
+        "_external_runtime_bindings",
         "_exec_dir",
         "_prompt_fd",
         "_auth_fd",
@@ -3059,6 +3091,7 @@ class LaunchAuthority:
         guard_digest: str,
         staged_digests: Mapping[str, str],
         external_paths: Sequence[str],
+        external_runtime_bindings: Sequence["_ExternalRuntimeBinding"],
         exec_dir: Path,
         prompt_fd: int,
         auth_fd: int = -1,
@@ -3086,6 +3119,9 @@ class LaunchAuthority:
         self._guard_digest = guard_digest
         self._staged_digests = dict(staged_digests)
         self._external_paths = tuple(external_paths)
+        self._external_runtime_bindings = tuple(external_runtime_bindings)
+        if tuple(item.path for item in self._external_runtime_bindings) != self._external_paths:
+            raise LaunchError("external runtime path and identity bindings differ")
         self._exec_dir = Path(exec_dir)
         # The composed prompt is carried only by this sealed anonymous memfd;
         # it has no pathname and is inherited by the wrapper exactly once.
@@ -3215,7 +3251,80 @@ def _exec_staging_dir() -> Path:
 _NIX_LITERAL_RE = re.compile(rb"/nix/store/[A-Za-z0-9._+/@=-]+")
 
 
-def _resolve_pi2_runtime(wrapper: str) -> Tuple[str, str]:
+@dataclass(frozen=True)
+class _ExternalRuntimeBinding:
+    """Exact immutable external runtime identity retained to exec."""
+
+    path: str
+    sha256: str
+    device: int
+    inode: int
+    executable: bool
+
+
+def _bind_external_runtime(path: str, *, executable: bool) -> _ExternalRuntimeBinding:
+    """Bind canonical path, immutable chain, bytes, device, and inode."""
+    canonical = os.path.realpath(path)
+    if not canonical or canonical != path:
+        raise InvocationError(
+            f"external runtime path is not canonical: {path!r} -> {canonical!r}"
+        )
+    try:
+        if executable:
+            require_trusted_executable(canonical)
+        else:
+            require_trusted_regular_file(canonical)
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+        descriptor = os.open(canonical, flags)
+        try:
+            before = os.fstat(descriptor)
+            digest = hashlib.sha256()
+            offset = 0
+            while True:
+                chunk = os.pread(descriptor, 65536, offset)
+                if not chunk:
+                    break
+                digest.update(chunk)
+                offset += len(chunk)
+            after = os.fstat(descriptor)
+            named = os.lstat(canonical)
+        finally:
+            os.close(descriptor)
+    except (OSError, GitBoundaryError) as exc:
+        raise InvocationError(
+            f"cannot bind immutable external runtime {canonical}: {exc}"
+        ) from exc
+    identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+    if identity != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+        raise InvocationError(
+            f"immutable external runtime changed while binding: {canonical}"
+        )
+    if (named.st_dev, named.st_ino) != (before.st_dev, before.st_ino):
+        raise InvocationError(
+            f"immutable external runtime pathname changed while binding: {canonical}"
+        )
+    return _ExternalRuntimeBinding(
+        canonical, digest.hexdigest(), before.st_dev, before.st_ino, executable
+    )
+
+
+def _revalidate_external_runtime(binding: _ExternalRuntimeBinding) -> None:
+    """Re-derive a retained external identity immediately at a trust edge."""
+    current = _bind_external_runtime(binding.path, executable=binding.executable)
+    if current != binding:
+        raise InvocationError(
+            f"immutable external runtime identity changed: {binding.path}"
+        )
+
+
+def _revalidate_external_runtimes(
+    bindings: Sequence[_ExternalRuntimeBinding],
+) -> None:
+    for binding in bindings:
+        _revalidate_external_runtime(binding)
+
+
+def _resolve_pi2_runtime(wrapper: str) -> Tuple[_ExternalRuntimeBinding, _ExternalRuntimeBinding]:
     """Resolve immutable Node/CLI files named by the exact Pi2 wrapper chain."""
     wrapper = os.path.realpath(wrapper)
     if Path(wrapper).name != "pi2":
@@ -3251,24 +3360,19 @@ def _resolve_pi2_runtime(wrapper: str) -> Tuple[str, str]:
                     pending.append(resolved)
     node_link = Path.home() / ".pi" / "agent2" / "bin" / "node"
     node = os.path.realpath(str(node_link))
-    try:
-        require_trusted_executable(node)
-    except GitBoundaryError as exc:
-        raise InvocationError(f"cannot bind the immutable pi2 Node runtime: {exc}") from exc
     if len(cli_candidates) != 1:
         raise InvocationError(
             f"pi2 wrapper chain must identify exactly one Pi CLI, found {len(cli_candidates)}"
         )
-    cli = next(iter(cli_candidates))
-    info = os.stat(cli, follow_symlinks=False)
-    if (
-        not cli.startswith("/nix/store/")
-        or not stat.S_ISREG(info.st_mode)
-        or info.st_nlink != 1
-        or info.st_mode & 0o022
-    ):
-        raise InvocationError("the Pi CLI module is not immutable Nix-store data")
-    return node, cli
+    # CLI data is as security-sensitive as Node: the adapter invokes this exact
+    # module directly, so bind its canonical immutable chain and byte/inode
+    # identity even though it has no execute bit.
+    cli = os.path.realpath(next(iter(cli_candidates)))
+    if not cli.startswith("/nix/store/"):
+        raise InvocationError("the Pi CLI module is not canonical Nix-store data")
+    node_binding = _bind_external_runtime(node, executable=True)
+    cli_binding = _bind_external_runtime(cli, executable=False)
+    return node_binding, cli_binding
 
 
 def _prepare_private_pi2_home(sanitized_home: Path) -> int:
@@ -3371,7 +3475,10 @@ def _prepare_private_pi2_home(sanitized_home: Path) -> int:
 
 def _stage_launch_executables(
     binding: "InvocationBinding",
-) -> Tuple[Path, Path, Path, str, Dict[str, str], List[str], Path]:
+) -> Tuple[
+    Path, Path, Path, str, Dict[str, str], List[str],
+    List[_ExternalRuntimeBinding], Path, bool,
+]:
     """Stage every committed byte that will execute in the model process.
 
     The wrapper, Pi guard extension, credential guard, Git shim, and an
@@ -3385,6 +3492,7 @@ def _stage_launch_executables(
     bound_commit = binding.bound_commit
     staged_digests: Dict[str, str] = {}
     external_paths: List[str] = []
+    external_runtime_bindings: List[_ExternalRuntimeBinding] = []
     exec_dir = _exec_staging_dir()
 
     def stage_committed(relpath: str, name: str, label: str,
@@ -3418,10 +3526,13 @@ def _stage_launch_executables(
         guard_digest = hashlib.sha256(guard_bytes).hexdigest()
 
         def bind_external_backend(resolved: str) -> Path:
-            external_paths.append(resolved)
+            resolved = os.path.realpath(resolved)
+            wrapper_binding = _bind_external_runtime(resolved, executable=True)
+            external_paths.append(wrapper_binding.path)
+            external_runtime_bindings.append(wrapper_binding)
             if binding.provider.lower() != "openai-codex":
                 return Path(resolved)
-            node, cli = _resolve_pi2_runtime(resolved)
+            node_binding, cli_binding = _resolve_pi2_runtime(resolved)
             adapter_source = _read_committed_blob(
                 str(workspace / PI2_BACKEND_ADAPTER), workspace, bound_commit,
                 "Pi2 factory adapter", PROMPT_INPUT_MAX,
@@ -3432,11 +3543,13 @@ def _stage_launch_executables(
             ):
                 raise InvocationError("the committed Pi2 adapter markers are ambiguous")
             adapter_source = adapter_source.replace(
-                b"@@FACTORY_PI2_NODE@@", node.encode("utf-8")
-            ).replace(b"@@FACTORY_PI2_CLI@@", cli.encode("utf-8"))
+                b"@@FACTORY_PI2_NODE@@", node_binding.path.encode("utf-8")
+            ).replace(b"@@FACTORY_PI2_CLI@@", cli_binding.path.encode("utf-8"))
             staged = _stage_bytes(exec_dir, STAGED_BACKEND_NAME, adapter_source)
             staged_digests[str(staged)] = hashlib.sha256(adapter_source).hexdigest()
-            external_paths.append(node)
+            for runtime in (node_binding, cli_binding):
+                external_paths.append(runtime.path)
+                external_runtime_bindings.append(runtime)
             return staged
 
         backend_path = Path(binding.backend).absolute()
@@ -3456,8 +3569,8 @@ def _stage_launch_executables(
                     ) from exc
                 trusted_backend = bind_external_backend(resolved)
                 return (wrapper, trusted_backend, extension, guard_digest,
-                        staged_digests, external_paths, exec_dir,
-                        binding.provider.lower() == "openai-codex")
+                        staged_digests, external_paths, external_runtime_bindings,
+                        exec_dir, binding.provider.lower() == "openai-codex")
             backend_bytes = _read_committed_blob(
                 resolved, workspace, bound_commit,
                 "model backend", PROMPT_INPUT_MAX,
@@ -3477,8 +3590,8 @@ def _stage_launch_executables(
                     ) from exc
                 trusted_backend = bind_external_backend(resolved)
                 return (wrapper, trusted_backend, extension, guard_digest,
-                        staged_digests, external_paths, exec_dir,
-                        binding.provider.lower() == "openai-codex")
+                        staged_digests, external_paths, external_runtime_bindings,
+                        exec_dir, binding.provider.lower() == "openai-codex")
             backend_bytes = _read_committed_blob(
                 str(backend_path), workspace, bound_commit,
                 "model backend", PROMPT_INPUT_MAX,
@@ -3501,7 +3614,8 @@ def _stage_launch_executables(
             backend_bytes
         ).hexdigest()
         return (wrapper, staged_backend, extension, guard_digest,
-                staged_digests, external_paths, exec_dir, False)
+                staged_digests, external_paths, external_runtime_bindings,
+                exec_dir, False)
     except BaseException:
         shutil.rmtree(exec_dir, ignore_errors=True)
         raise
@@ -3744,6 +3858,7 @@ def authorize_launch(
         guard_digest,
         staged_digests,
         external_paths,
+        external_runtime_bindings,
         exec_dir,
         pi2_verified,
     ) = _stage_launch_executables(binding)
@@ -3770,6 +3885,10 @@ def authorize_launch(
                     "backend fails closed before any credential is "
                     "provisioned (B2)"
                 )
+            # The initial discovery is not enough: immediately before opening
+            # operator auth bytes, revalidate the canonical pi2 wrapper, Node,
+            # and CLI digest/dev/inode bindings as one complete identity.
+            _revalidate_external_runtimes(external_runtime_bindings)
             auth_fd = _prepare_private_pi2_home(sanitized_home)
         try:
             base_spec = real_confinement_authority.confinement_spec(
@@ -3874,6 +3993,7 @@ def authorize_launch(
             guard_digest=guard_digest,
             staged_digests=staged_digests,
             external_paths=external_paths,
+            external_runtime_bindings=external_runtime_bindings,
             exec_dir=exec_dir,
             prompt_fd=prompt_fd,
             auth_fd=auth_fd,

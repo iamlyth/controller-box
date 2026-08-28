@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import errno
 import hashlib
 import io
 import json
@@ -2435,6 +2436,45 @@ class AuthorityTokenTests(_Base):
         result = supervisor.run(authority)
         self.assertEqual(result.returncode, 0)
         self.assertTrue((self.marker_dir / "prompt.digest").exists())
+
+    def test_auth_fd_parent_copy_closes_and_resets_immediately_after_spawn(self) -> None:
+        """Authority transfer leaves no parent-readable auth descriptor."""
+        if not hasattr(os, "memfd_create"):
+            self.skipTest("memfd_create unavailable")
+        self.set_behavior("record")
+        binding, role, agents, spec, plan = self.make_binding()
+        authority = self.authorize(binding, role, agents, spec, plan)
+        auth_fd = os.memfd_create("factory-parent-lifecycle", 0)
+        os.write(auth_fd, b"synthetic-auth")
+        authority._auth_fd = auth_fd
+        supervisor = LaunchSupervision(binding, kill_grace=0.3)
+        result = supervisor.run(authority)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(authority._auth_fd, -1)
+        self.assertEqual(supervisor._auth_fd, -1)
+        with self.assertRaises(OSError) as caught:
+            os.fstat(auth_fd)
+        self.assertEqual(caught.exception.errno, errno.EBADF)
+
+    def test_spawn_failure_closes_auth_fd_after_authority_transfer(self) -> None:
+        """Popen failure is covered by outer cleanup, including auth."""
+        if not hasattr(os, "memfd_create"):
+            self.skipTest("memfd_create unavailable")
+        binding, role, agents, spec, plan = self.make_binding()
+        authority = self.authorize(binding, role, agents, spec, plan)
+        auth_fd = os.memfd_create("factory-parent-failure", 0)
+        authority._auth_fd = auth_fd
+        supervisor = LaunchSupervision(binding, kill_grace=0.3)
+        with unittest.mock.patch.object(
+            launch.subprocess, "Popen", side_effect=OSError(errno.EMFILE, "synthetic")
+        ):
+            with self.assertRaises(launch.LaunchError):
+                supervisor.run(authority)
+        self.assertEqual(authority._auth_fd, -1)
+        self.assertEqual(supervisor._auth_fd, -1)
+        with self.assertRaises(OSError) as caught:
+            os.fstat(auth_fd)
+        self.assertEqual(caught.exception.errno, errno.EBADF)
 
     def test_prompt_preflight_failure_closes_fds_and_private_dirs(self) -> None:
         """Outer run cleanup covers composition failure after descriptor transfer."""

@@ -259,6 +259,36 @@ def require_trusted_executable(path: str) -> None:
     _require_absolute_executable(path)
 
 
+def require_trusted_regular_file(path: str) -> None:
+    """Fail closed unless ``path`` is canonical immutable regular data.
+
+    Runtime modules such as Pi's ``dist/cli.js`` are interpreter input rather
+    than executable files.  They still require the same immutable naming
+    chain as an executable and must be addressed by their canonical path;
+    accepting a symlink spelling would leave the final interpreter open
+    vulnerable to a post-verification link retarget.
+    """
+    if not path or not path.startswith("/") or os.path.realpath(path) != path:
+        raise GitBoundaryError(
+            f"trusted runtime data path is not canonical and absolute: {path!r}"
+        )
+    _immutable_chain(path)
+    try:
+        info = os.lstat(path)
+    except OSError as exc:
+        raise GitBoundaryError(
+            f"cannot stat trusted runtime data {path!r}: {exc}"
+        ) from exc
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        raise GitBoundaryError(
+            f"trusted runtime data is not a single-link regular file: {path!r}"
+        )
+    if info.st_mode & 0o022:
+        raise GitBoundaryError(
+            f"trusted runtime data is group/other writable: {path!r}"
+        )
+
+
 def _validate_candidate(candidate: str) -> None:
     """Validate one fixed absolute candidate (testable seam)."""
     _require_absolute_executable(candidate)

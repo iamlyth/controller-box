@@ -50,7 +50,7 @@ PY
 # Evidence-file invariants (Task 34/35): the target must be a current-user
 # owned regular single-link file with safe mode 0600.  A symlink, hardlink,
 # wrong owner, or loose mode fails closed.
-python3 - "$evidence" <<'PY'
+if ! python3 - "$evidence" <<'PY'
 import os, stat, sys
 from pathlib import Path
 path = Path(sys.argv[1])
@@ -63,7 +63,7 @@ if (stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode)
         'current-user-owned single-link regular file with mode 0600'
     )
 PY
-if [[ $? -ne 0 ]]; then
+then
     exit 1
 fi
 mapfile -d '' -t EVIDENCE_FIELDS < <(python3 - "$evidence" <<'PY'

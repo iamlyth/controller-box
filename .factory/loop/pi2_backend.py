@@ -8,9 +8,10 @@ model/tool-readable path (B1 security review): the trusted parent carries the
 this adapter's transient argv (``--auth-fd N``).  This adapter creates the
 per-launch agent directory symlink ``auth.json -> /proc/self/fd/N`` so the
 model CLI reads/writes the credential only through the inherited descriptor;
-tool subprocesses never inherit the descriptor and Landlock denies ``/proc``,
-so no model tool can dereference it.  The descriptor number is consumed here
-and is absent from the model process argv/environment after exec.
+the exact-commit extension closes the descriptor synchronously at Pi's common
+``tool_call`` boundary before any enabled in-process or subprocess tool runs,
+so no model tool can dereference it. The descriptor number is consumed here
+and is absent from the model process argv after exec.
 """
 
 from __future__ import annotations
@@ -32,6 +33,8 @@ def _parse_auth_fd(argv: list) -> tuple:
     while index < len(argv):
         token = argv[index]
         if token == "--auth-fd":
+            if auth_fd >= 0:
+                raise SystemExit("factory-pi2-backend: --auth-fd was supplied twice")
             if index + 1 >= len(argv):
                 raise SystemExit("factory-pi2-backend: --auth-fd requires a value")
             try:
@@ -93,6 +96,14 @@ def main() -> None:
     env["PI_CODING_AGENT_DIR"] = str(agent_dir)
     env["PI_PACKAGE_DIR"] = str(cli.parents[1])
     env["NODE_PATH"] = str(cli.parents[3])
+    # Non-secret identity metadata tells the exact-commit extension which one
+    # inherited descriptor to close at the common tool boundary. The extension
+    # fstats and matches all three values before close; malformed/missing or
+    # reused descriptor identity blocks the tool without touching another fd.
+    identity = os.fstat(auth_fd)
+    env["PI_FACTORY_TOOL_FD"] = str(auth_fd)
+    env["PI_FACTORY_TOOL_FD_DEV"] = str(identity.st_dev)
+    env["PI_FACTORY_TOOL_FD_INO"] = str(identity.st_ino)
     os.execve(str(node), [str(node), str(cli), *remaining], env)
 
 

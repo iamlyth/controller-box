@@ -121,7 +121,7 @@ result=PASS
 skipped=0
 EOF
 chmod 600 .factory-state/installed-functional-evidence.env
-python3 - "$root" "$root/.factory-state/installed-functional-evidence.env" "$commit" <<'PY'
+if ! python3 - "$root" "$root/.factory-state/installed-functional-evidence.env" "$commit" <<'PY'
 import os, stat, sys, tempfile
 from pathlib import Path
 root, target, commit = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
@@ -155,7 +155,7 @@ finally:
     except FileNotFoundError:
         pass
 PY
-if [[ $? -ne 0 ]]; then
+then
     echo 'evidence publication overwrote an existing destination' >&2
     exit 1
 fi

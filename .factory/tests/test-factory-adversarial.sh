@@ -166,12 +166,18 @@ if skip_decorated:
 method_blocks = {}
 current = None
 start = None
-for index, line in enumerate(suite.splitlines()):
-    match = re.match(r"^    def (test_case_\d\d_[A-Za-z0-9_]+)\(", line)
-    if match:
-        if current is not None:
-            method_blocks[current] = suite.splitlines()[start:index]
-        current = match.group(1)
+lines = suite.splitlines()
+for index, line in enumerate(lines):
+    any_method = re.match(r"^    def ([A-Za-z_][A-Za-z0-9_]*)\(", line)
+    if not any_method:
+        continue
+    if current is not None:
+        method_blocks[current] = lines[start:index]
+        current = None
+        start = None
+    name = any_method.group(1)
+    if re.fullmatch(r"test_case_\d\d_[A-Za-z0-9_]+", name):
+        current = name
         start = index
 if current is not None:
     method_blocks[current] = suite.splitlines()[start:]

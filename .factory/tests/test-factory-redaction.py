@@ -55,6 +55,7 @@ Coverage:
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import importlib.util
 import json
@@ -957,6 +958,34 @@ class CredentialGuardCliTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
+TOOL_FD_FIXTURE = r'''
+import assert from 'node:assert/strict';
+import { fstatSync, readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
+
+const [extensionPath, toolName, fdText, secret, pythonScanner, nodeScanner] = process.argv.slice(2);
+const fd = Number(fdText);
+// Non-vacuity: exact Pi/Node parent really inherited and can read the memfd
+// before the trusted common tool boundary runs.
+assert(readFileSync(fd, { encoding: 'utf8' }).includes(secret));
+const handlers = {};
+const extension = await import(pathToFileURL(extensionPath));
+extension.default({ on(name, callback) { handlers[name] = callback; } });
+const input = toolName === 'bash' ? { command: 'printf safe' } : { path: 'README.md' };
+const verdict = await handlers.tool_call({ toolName, input });
+assert.equal(verdict ?? null, null, `tool ${toolName} unexpectedly blocked`);
+assert.throws(() => fstatSync(fd), (error) => error?.code === 'EBADF');
+// These generated scanners use numeric syscalls only (never /proc). They are
+// the real child-process shape reached by bash and Node-backed Pi tools.
+for (const [program, scanner] of [[process.argv[0], nodeScanner], [process.env.FACTORY_TEST_PYTHON, pythonScanner]]) {
+  const probe = spawnSync(program, [scanner, fdText, secret], { encoding: 'utf8' });
+  assert.equal(probe.status, 0, probe.stderr);
+  assert.equal(probe.stdout.trim(), 'EBADF');
+}
+console.log(`TOOL_FD_CLOSED:${toolName}`);
+'''
+
 NODE_FIXTURE = r'''
 import assert from 'node:assert/strict';
 import { pathToFileURL } from 'node:url';
@@ -1020,6 +1049,69 @@ class NodeExtensionRedactionTests(unittest.TestCase):
             NODE_FIXTURE.replace("__NODE_SECRET__", NODE_SECRET),
             encoding="utf-8",
         )
+
+    def test_exact_pi_common_tool_boundary_closes_auth_fd_for_every_enabled_tool(self) -> None:
+        """Every enabled Pi tool reaches one closure-first hook; generated
+        Python/Node numeric-fd scanners observe EBADF without using /proc."""
+        if not hasattr(os, "memfd_create"):
+            self.skipTest("memfd_create is unavailable")
+        python_scanner = self.tmp / "numeric-fd-scanner.py"
+        python_scanner.write_text(
+            "import os,sys\n"
+            "fd=int(sys.argv[1]); secret=sys.argv[2].encode()\n"
+            "try:\n"
+            " os.fstat(fd)\n"
+            "except OSError as e:\n"
+            " assert e.errno==9; print('EBADF'); raise SystemExit(0)\n"
+            "raise SystemExit('descriptor remained open')\n",
+            encoding="utf-8",
+        )
+        node_scanner = self.tmp / "numeric-fd-scanner.mjs"
+        node_scanner.write_text(
+            "import { fstatSync } from 'node:fs';\n"
+            "const fd=Number(process.argv[2]);\n"
+            "try { fstatSync(fd); throw new Error('descriptor remained open'); }\n"
+            "catch (e) { if (e?.code !== 'EBADF') throw e; console.log('EBADF'); }\n",
+            encoding="utf-8",
+        )
+        fixture = self.tmp / "tool-fd-fixture.mjs"
+        fixture.write_text(TOOL_FD_FIXTURE, encoding="utf-8")
+        extension = ROOT / "scripts" / "pi-factory-guard-extension.mjs"
+        guard_digest = hashlib.sha256(REAL_GUARD.read_bytes()).hexdigest()
+        for tool_name in sorted({
+            tool for tools in launch_module.DEFAULT_ALLOWED_TOOLS.values()
+            for tool in tools
+        }):
+            with self.subTest(tool=tool_name):
+                raw_fd = os.memfd_create("factory-pi2-auth-regression", 0)
+                fd = fcntl.fcntl(raw_fd, fcntl.F_DUPFD, 200)
+                os.close(raw_fd)
+                try:
+                    secret = f"SYNTHETIC-AUTH-{tool_name}"
+                    os.write(fd, secret.encode())
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    identity = os.fstat(fd)
+                    env = dict(os.environ)
+                    env.update({
+                        launch_module.PI_FACTORY_GUARD_DIGEST_ENV: guard_digest,
+                        launch_module.PI_FACTORY_GUARD_PYTHON_ENV:
+                            launch_module.require_trusted_interpreter(),
+                        "PI_FACTORY_TOOL_FD": str(fd),
+                        "PI_FACTORY_TOOL_FD_DEV": str(identity.st_dev),
+                        "PI_FACTORY_TOOL_FD_INO": str(identity.st_ino),
+                        "FACTORY_TEST_PYTHON": sys.executable,
+                    })
+                    result = subprocess.run(
+                        ["node", str(fixture), str(extension), tool_name, str(fd),
+                         secret, str(python_scanner), str(node_scanner)],
+                        pass_fds=(fd,), env=env, capture_output=True, text=True,
+                        timeout=30,
+                    )
+                finally:
+                    os.close(fd)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(f"TOOL_FD_CLOSED:{tool_name}", result.stdout)
+                self.assertNotIn(secret, result.stdout + result.stderr)
 
     def test_exported_tool_call_and_result_redaction(self) -> None:
         # ``--input-type=module`` applies to stdin input only; the fixture
