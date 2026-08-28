@@ -39,10 +39,14 @@ evidence.
 Affected rows reclassified `verified` -> `partial` in the conformance matrix below:
 ARCH-04, SYS-06, DBUS-02, DBUS-05, OVL-10, MGR-02, MGR-07, MGR-08,
 DOD-01, DOD-09. Task 4 (final audit) is returned to `blocked`.
-With BUG-0014 resolved (Task 5), OVL-10 and MGR-07 are reclassified back to
-`verified` with installed-window evidence; FACT-001 is resolved. Remaining
-`partial` rows are bound to BUG-0015 and hardware/capability facts (FACT-002
-through FACT-007).
+BUG-0014's historical implementation remains present, but OVL-10 and MGR-07
+are reclassified back to `partial`: the genuine campaign skipped the installed
+X11 test and could not execute the offscreen profile test, and the cited
+installed evidence predates both campaign/post-campaign heads. FACT-009 now
+requires a fresh exact-head no-skip installed X11 run including the fractional
+highlight assertion. The offscreen `test_profile_diagram` remains simulated
+only. Other `partial` rows remain bound to BUG-0015 and hardware/capability
+facts (FACT-002 through FACT-007).
 
 ### Machine-readable migration (BUG-0016 hardening stage B)
 
@@ -60,7 +64,9 @@ open entry in the append-only `.factory/artifacts/blocked-facts.json` ledger
   aarch64/Pi 4 runtime);
 - FACT-005 — missing `gpu-compositor` capability;
 - FACT-006 — missing target-Pi latency measurement and human release
-  acceptance (SPEC §11.1.7).
+  acceptance (SPEC §11.1.7);
+- FACT-009 — fresh exact-head installed X11 diagram/fractional-highlight
+  evidence after campaign tool-permission failures.
 
 Facts resolve only with an exact receipt/artifact at an evidence commit or an
 explicit human decision where the specification permits it (SPEC §11.2.6);
@@ -138,14 +144,14 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 | OVL-07 | §4.7 | verified | `dynamic_columns.c` scales with target count; `test_dynamic_columns.c` | |
 | OVL-08 | §4.8 | verified | `grid_render.c` model name + slot, no nicknames | |
 | OVL-09 | §4.9 | partial | Pre-built surface architecture (surface_build.c) and 50 ms poll cycle (ip_intercept_poll.c) verified; x86_64 latency measured by test_overlay_latency.c over 200+ iterations; Pi 4 latency bound requires physical target hardware and real target consumer (FACT-004, FACT-006) | Task 4 |
-| OVL-10 | §4.10 | verified | `tests/test_installed_diagram.sh` drives the installed binary through a real X11 window to the profile editor and asserts recognizable diagram content (outline/slot highlight/title/binding list) via the production path; ABGR8888 byte-order fix in `profile_diagram.c`; BUG-0014 fixed (28154 outline px). Task 8 made it environment-independent: it selects a test-owned profile by its computed row (display_order sidecar) instead of a first-row click, so it passes with or without host InputPlumber profiles. Evidence commit `3ddefae` | |
+| OVL-10 | §4.10 | partial | Historical installed evidence at `3ddefae` is stale for the current/campaign heads. The genuine campaign skipped `test_installed_diagram` and `test_profile_diagram` was BAD_COMMAND/permission denied. Offscreen/fractional pixel evidence is simulated only; fresh exact-head installed X11 execution is required (FACT-009). | Task 4, Task 5 |
 | MGR-01 | §5.1 | verified | `manager.c` tab bar, 3 tabs, controller + pointer; `test_manager_tabs.c`, `test_manager_native.c` | |
 | MGR-02 | §5.2 | partial | `controllers_tab.c` add/remove/type-change, topology reconcile; production launch reports 0/4 virtual controllers active (BUG-0015, FACT-002/FACT-003) | Task 6 |
 | MGR-03 | §5.3 | partial | `profiles_tab.c` browse/create/edit/delete, built-in Default; `test_profiles_tab.c`, `test_installed_functional.c`; BUG-0017 resolved (commit `04e2b37`): editor tests now select the profile they wrote by filename, so the four profile-editor tests pass with or without host/system InputPlumber profiles. Remaining `partial` is FACT-007: the signer is provisioned, but only stale historical signed runner evidence exists and no fresh manifest is bound to the current exact implementation commit | Task 4 |
 | MGR-04 | §5.4 | verified | `profile_editor_list.c`, `profile_editor_seq.c` both modes; `test_editor_list_mode.c`, `test_editor_seq_mode.c` | |
 | MGR-05 | §5.4 | verified | `profile_validate.c` NES minimum (A/B/D-pad); `test_profile_validate.c`; `profile_save.c` enforces before write | |
 | MGR-06 | §5.5 | verified | `settings_tab.c` all settings; `test_settings_tab.c`, `test_manager_native.c` M21–M26 | |
-| MGR-07 | §5.6 | verified | `tests/test_installed_diagram.sh` drives the real installed binary through a real X11 window to the profile editor and asserts recognizable diagram content (outline, slot highlight, model label, binding list) via the production path; BUG-0014 fixed. Task 8 made it environment-independent: it selects a test-owned profile by its computed row (display_order sidecar) instead of a first-row click, so it passes with or without host InputPlumber profiles. Evidence commit `3ddefae` | |
+| MGR-07 | §5.6 | partial | Historical installed evidence at `3ddefae` is stale for the current/campaign heads. The genuine campaign skipped `test_installed_diagram` and `test_profile_diagram` was BAD_COMMAND/permission denied. The fractional highlight must run through the real installed X11 manager at the exact verified head (FACT-009). | Task 4, Task 5 |
 | MGR-08 | §5.7 | partial | 52/60 inventory claimed verified with controller-transport evidence via ctrl_press and keyboard relabels; premise contradicted by 0/4 virtual controllers active (BUG-0015, FACT-002/FACT-003/FACT-004) | Task 6 |
 | ID-01 | §6.2 | verified | `identity.c` 4-layer auto-assignment; `test_identity.c` | |
 | ID-02 | §6.3 | verified | `identity.c` BT:/USB:/USB:phys:/ORDER: prefixes; `config_assignments.c` validation | |
@@ -185,7 +191,7 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 | VRF-05 | §11.1.5 | partial | `test_installed_functional.c` (4 tests), `test_installed_smoke.sh`, `test_installed_binary.sh`; runner receipt 26df6c0 all pass | Task 4 |
 | VRF-06 | §11.1.6 | partial | Software-renderer smoke test_backend_smoke_sw.c passes (non-blank framebuffer, region content assertions); GPU backend test_backend_smoke.c exits 77 in headless, gpu-compositor undeclared (FACT-005) | Task 4 |
 | VRF-07 | §11.1.7 | partial | Human release acceptance checklist documented with procedure, criteria, and evidence storage; requires human reviewer on target hardware per §11.1.7 (FACT-004, FACT-006) | Task 4 |
-| DOD-01 | §11.2.1 | partial | Not all matrix rows verified: 19 of 76 rows partial (ARCH-04, SYS-01, SYS-02, SYS-06, OVL-09, MGR-02, MGR-03, MGR-08, PKG-01, DBUS-02, DBUS-05, PERF-01, VRF-05, VRF-06, VRF-07, DOD-01, DOD-05, DOD-06, DOD-09) pending BUG-0015, fresh exact-commit runner evidence (FACT-007), and hardware/capability facts | Task 4 |
+| DOD-01 | §11.2.1 | partial | Not all matrix rows verified: 21 of 76 rows partial (ARCH-04, SYS-01, SYS-02, SYS-06, OVL-09, OVL-10, MGR-02, MGR-03, MGR-07, MGR-08, PKG-01, DBUS-02, DBUS-05, PERF-01, VRF-05, VRF-06, VRF-07, DOD-01, DOD-05, DOD-06, DOD-09) pending BUG-0015, fresh exact-head installed diagram evidence (FACT-009), fresh exact-commit runner evidence (FACT-007), and hardware/capability facts | Task 4 |
 | DOD-02 | §11.2.2 | verified | Tests use production dispatch; native DBus preserves signatures | |
 | DOD-03 | §11.2.3 | verified | M39 added to inventory (Task 1); M28–M38 controller-transport evidence via ctrl_press in test_manager_native_prof.c (Task 2); keyboard tests in test_manager_interaction_prof.c relabeled to _keyboard per §5.7 | Task 1, Task 2 |
 | DOD-04 | §11.2.4 | verified | `test_overlay_visual.c`, `test_manager_visual.c` cover degraded/error/recovery states | |

@@ -905,6 +905,64 @@ def _open_immutable_exec(path: str) -> Tuple[int, Tuple[int, int]]:
     return descriptor, (int(info.st_dev), int(info.st_ino))
 
 
+def _immutable_exec_alias_target(path: str) -> str | None:
+    """Resolve one immutable Nix-store alias to a canonical approved target.
+
+    PATH-facing Nix commands are frequently symlinks (for example nix-shell ->
+    nix). The alias is only a selector: every lexical component from the store
+    root through the alias must be privileged-owned and non-writable, the
+    resolved target must stay in the store, and execution still uses the
+    pre-opened descriptor of an already approved canonical inode. Mutable,
+    relative, proc-fd, escaping, or non-store aliases are never resolved.
+    """
+    import stat as stat_module
+
+    store = Path("/nix/store")
+    if (
+        not path.startswith(str(store) + os.sep) or "\x00" in path
+        or os.path.normpath(path) != path
+    ):
+        return None
+    try:
+        store_info = store.lstat()
+        store_uid = int(store_info.st_uid)
+    except OSError:
+        return None
+    if (
+        not stat_module.S_ISDIR(store_info.st_mode)
+        or store_uid == os.getuid()
+        or (store_info.st_mode & 0o022
+            and not bool(store_info.st_mode & stat_module.S_ISVTX))
+    ):
+        return None
+    allowed_uids = {0, store_uid}
+    current = store
+    relative = Path(path).relative_to(store)
+    try:
+        for part in relative.parts:
+            current = current / part
+            info = current.lstat()
+            if info.st_uid not in allowed_uids:
+                return None
+            # Symlink permission bits are not consulted by Linux and are
+            # conventionally 0777; immutability comes from the non-writable
+            # privileged-owned parent plus the validated target chain.
+            if not stat_module.S_ISLNK(info.st_mode) and info.st_mode & 0o022:
+                return None
+            if not (
+                stat_module.S_ISDIR(info.st_mode)
+                or stat_module.S_ISREG(info.st_mode)
+                or stat_module.S_ISLNK(info.st_mode)
+            ):
+                return None
+        resolved = os.path.realpath(path, strict=True)
+    except (OSError, TypeError, ValueError):
+        return None
+    if not resolved.startswith(str(store) + os.sep) or resolved == path:
+        return None
+    return resolved
+
+
 def _approved_exec_targets(
     spec: Mapping[str, object], rule_fds: Sequence[int]
 ) -> Dict[Tuple[int, int], Tuple[str, int]]:
@@ -1202,6 +1260,15 @@ def _handle_seccomp_stop(
              if approved_path == path),
             None,
         )
+        if selected is None:
+            alias_target = _immutable_exec_alias_target(path)
+            if alias_target is not None:
+                selected = next(
+                    ((identity, descriptor)
+                     for identity, (approved_path, descriptor) in approved.items()
+                     if approved_path == alias_target),
+                    None,
+                )
         if selected is None:
             _deny_tracee_syscall(pid, registers)
             return

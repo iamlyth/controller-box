@@ -42,7 +42,10 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
+import shutil
 import stat
+import subprocess
 import sys
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -122,10 +125,13 @@ FORBIDDEN_FACTORY_SUB = frozenset({
 
 # The narrow explicit system-path allowlist (Task 8 review, findings 3/7).
 # The model has no broad ``/proc``, ``/tmp``, ``/etc``, ``/dev``, ``/run``,
-# or ``/var`` grant.  ``SYSTEM_READ_ROOTS`` are readable runtime/library
-# roots but are deliberately *not executable as directories*: executable
-# files are granted one by one by :func:`_tool_execute_paths`, excluding every
-# real Git entrypoint.  ``SYSTEM_READ`` is the narrowest explicit set of host files
+# or ``/var`` grant.  ``SYSTEM_READ_ROOTS`` are non-Nix runtime/library roots.
+# The Nix store root is deliberately absent: :func:`_toolchain_closure_paths`
+# resolves only the immutable transitive closures of exact approved tools and
+# backend runtimes, and each closure member receives its own read-only rule.
+# Executable files are granted one by one by :func:`_tool_execute_paths`,
+# excluding every real Git entrypoint. ``SYSTEM_READ`` is the narrowest
+# explicit set of host files
 # the tooling actually needs, each entry justified:
 #
 # * ``/etc/passwd``, ``/etc/group`` — uid/gid lookups (git, python, tools);
@@ -142,8 +148,11 @@ FORBIDDEN_FACTORY_SUB = frozenset({
 # a symlink (for example a NixOS ``/etc/ssl/certs`` link), the confinement
 # fails closed and the entry is removed from the allowlist.
 SYSTEM_READ_ROOTS = (
-    "/nix/store", "/usr", "/bin", "/lib", "/lib64", "/sbin",
+    "/usr", "/bin", "/lib", "/lib64", "/sbin",
 )
+NIX_STORE_ROOT_RE = re.compile(r"^/nix/store/[0-9a-z]{32}-[^/]+$")
+MAX_TOOLCHAIN_CLOSURE_PATHS = 2048
+MAX_TOOLCHAIN_QUERY_BYTES = 256 * 1024
 SYSTEM_EXECUTABLE_DIRS = (
     "/usr/bin", "/usr/sbin", "/bin", "/sbin",
 )
@@ -156,6 +165,7 @@ ALLOWED_SYSTEM_EXECUTABLE_NAMES = frozenset({
     "cmake", "ctest", "ninja", "make", "meson", "nix", "nix-shell",
     "cc", "c++", "gcc", "g++", "clang", "clang++", "ld", "ar", "ranlib",
     "pkg-config", "xvfb-run", "Xvfb", "xauth", "xdotool",
+    "import", "convert", "magick", "compare", "identify",
     "awk", "sed", "grep", "egrep", "fgrep", "find", "cat", "head", "tail",
     "cp", "mv", "rm", "mkdir", "rmdir", "ln", "chmod", "touch", "tee",
     "sort", "uniq", "cut", "tr", "wc", "xargs", "printf", "date", "sleep",
@@ -166,6 +176,9 @@ ALLOWED_SYSTEM_EXECUTABLE_NAMES = frozenset({
 SYSTEM_READ = (
     "/etc/passwd", "/etc/group", "/etc/ssl/certs",
     "/dev/null", "/dev/urandom", "/dev/random", "/dev/zero", "/dev/tty",
+    # Exact daemon endpoint directory required by NIX_REMOTE=daemon. No other
+    # /nix/var state is visible; store data remains closure-granular above.
+    "/nix/var/nix/daemon-socket",
 )
 NETWORK_CONFIG_LINKS = (
     "/etc/resolv.conf", "/etc/hosts", "/etc/nsswitch.conf",
@@ -750,13 +763,137 @@ def _role_write_paths(role: str, workspace: Path) -> List[Path]:
     return []
 
 
-def _tool_read_paths() -> List[str]:
+def _canonical_nix_path() -> Optional[str]:
+    value = os.environ.get("NIX_PATH")
+    if not value:
+        return None
+    match = re.fullmatch(r"nixpkgs=(/nix/store/[0-9a-z]{32}-[^:]+)", value)
+    if match is None:
+        raise ConfinementError("refusing a non-canonical model NIX_PATH")
+    _validate_immutable_store_root(match.group(1))
+    return value
+
+
+def _nix_store_root(path_text: str) -> Optional[str]:
+    """Return the canonical immutable store item containing ``path_text``."""
+    resolved = os.path.realpath(path_text)
+    if not resolved.startswith("/nix/store/"):
+        return None
+    parts = resolved.split("/")
+    if len(parts) < 4:
+        raise ConfinementError(f"malformed Nix-store tool path {resolved!r}")
+    root = "/".join(parts[:4])
+    if not NIX_STORE_ROOT_RE.fullmatch(root):
+        raise ConfinementError(f"non-canonical Nix-store tool root {root!r}")
+    return root
+
+
+def _validate_immutable_store_root(path_text: str) -> str:
+    if not NIX_STORE_ROOT_RE.fullmatch(path_text):
+        raise ConfinementError(
+            f"Nix closure query returned a path outside the store: {path_text!r}"
+        )
+    try:
+        info = os.lstat(path_text)
+    except OSError as exc:
+        raise ConfinementError(
+            f"Nix closure item is unavailable: {path_text}: {exc}"
+        ) from exc
+    if (
+        not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode))
+        or stat.S_ISLNK(info.st_mode)
+        or info.st_uid == os.getuid() or info.st_mode & 0o022
+        or os.path.realpath(path_text) != path_text
+    ):
+        raise ConfinementError(
+            f"Nix closure item is not immutable canonical store data: {path_text}"
+        )
+    return path_text
+
+
+def _toolchain_closure_paths(seed_paths: Sequence[str]) -> List[str]:
+    """Resolve a bounded exact immutable Nix closure for approved runtimes.
+
+    The trusted parent queries only store items containing already selected
+    exact executable/backend paths. Caller PATH text cannot add a mutable root:
+    every seed is canonicalized, every query result must be one canonical
+    foreign-owned non-writable store directory, output is byte/count bounded,
+    and no ``/nix/store`` ancestor rule is ever granted.
+    """
+    roots = sorted({
+        root for path in seed_paths
+        if (root := _nix_store_root(path)) is not None
+    })
+    if not roots:
+        return []
+    nix_store_argv0 = shutil.which("nix-store")
+    if not nix_store_argv0:
+        raise ConfinementUnavailable(
+            "nix-store is unavailable for exact toolchain closure binding"
+        )
+    nix_store = os.path.realpath(nix_store_argv0)
+    try:
+        gitutil.require_trusted_executable(nix_store)
+    except gitutil.GitBoundaryError as exc:
+        raise ConfinementUnavailable(
+            f"nix-store closure authority is not immutable: {exc}"
+        ) from exc
+    environment = {
+        "HOME": "/",
+        "LANG": os.environ.get("LANG", "C.UTF-8"),
+        "PATH": os.path.dirname(nix_store),
+    }
+    if os.environ.get("NIX_REMOTE") == "daemon":
+        environment["NIX_REMOTE"] = "daemon"
+    try:
+        # Nix installs nix-store as a multicall symlink to ``nix``; retain the
+        # validated real executable but preserve the trusted nix-store argv[0]
+        # so the intended legacy query interface is selected.
+        result = subprocess.run(
+            [nix_store_argv0, "-qR", *roots],
+            executable=nix_store,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+            timeout=30.0,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ConfinementUnavailable(
+            f"exact Nix toolchain closure query failed: {exc}"
+        ) from exc
+    if result.returncode != 0:
+        raise ConfinementUnavailable(
+            "exact Nix toolchain closure query returned nonzero"
+        )
+    if len(result.stdout) > MAX_TOOLCHAIN_QUERY_BYTES:
+        raise ConfinementError("exact Nix toolchain closure output is oversized")
+    try:
+        lines = result.stdout.decode("utf-8", "strict").splitlines()
+    except UnicodeDecodeError as exc:
+        raise ConfinementError("Nix toolchain closure output is not UTF-8") from exc
+    if not lines or len(lines) > MAX_TOOLCHAIN_CLOSURE_PATHS:
+        raise ConfinementError("Nix toolchain closure count is empty or oversized")
+    closure = sorted(set(lines))
+    if len(closure) != len(lines):
+        raise ConfinementError("Nix toolchain closure output contains duplicates")
+    for root in roots:
+        if root not in closure:
+            raise ConfinementError(
+                f"Nix toolchain closure omitted its seed root {root}"
+            )
+    return [_validate_immutable_store_root(path) for path in closure]
+
+
+def _tool_read_paths(toolchain_closure: Sequence[str] = ()) -> List[str]:
     """Existing system/tool read paths (deny-by-default keeps the rest out).
 
     Each entry is validated with the no-symlink-component check: the narrow
     explicit enumeration (findings 3/7) is the containment contract, and a
     host where an entry resolves through a symlink fails closed (the entry
-    is dropped only when it does not exist at all).
+    is dropped only when it does not exist at all). Nix reads are exact
+    immutable closure items, never the broad store root.
     """
     paths: List[str] = []
     for path in SYSTEM_READ + SYSTEM_READ_ROOTS:
@@ -783,7 +920,41 @@ def _tool_read_paths() -> List[str]:
         _no_symlink_components(resolved, "network configuration target")
         if resolved not in paths:
             paths.append(resolved)
+    for path in toolchain_closure:
+        validated = _validate_immutable_store_root(path)
+        if validated not in paths:
+            paths.append(validated)
     return paths
+
+
+def _tool_alias_seed_paths() -> List[str]:
+    """Immutable PATH spellings for selected tool names (including symlinks)."""
+    paths: List[str] = []
+    for directory in os.environ.get("PATH", "").split(os.pathsep):
+        if not directory or not os.path.isabs(directory):
+            continue
+        resolved_dir = os.path.realpath(directory)
+        if not os.path.isdir(resolved_dir):
+            continue
+        try:
+            names = sorted(os.listdir(resolved_dir))
+        except OSError:
+            continue
+        for name in names:
+            lowered = name.lower()
+            if not (
+                name in ALLOWED_SYSTEM_EXECUTABLE_NAMES
+                or lowered.startswith(("python", "node"))
+            ) or lowered == "git" or lowered.startswith("git-"):
+                continue
+            candidate = os.path.join(resolved_dir, name)
+            try:
+                info = os.stat(candidate)
+            except OSError:
+                continue
+            if stat.S_ISREG(info.st_mode) and info.st_mode & 0o111:
+                paths.append(candidate)
+    return sorted(set(paths))
 
 
 def _tool_execute_paths() -> List[str]:
@@ -955,14 +1126,20 @@ def home_environment(home: Path) -> Dict[str, str]:
     caches, or credentials through the environment either.
     """
     home = Path(home).absolute()
-    return {
+    environment = {
         "HOME": str(home),
         "XDG_CONFIG_HOME": str(home / ".config"),
         "XDG_CACHE_HOME": str(home / ".cache"),
         "XDG_DATA_HOME": str(home / ".local" / "share"),
         "XDG_STATE_HOME": str(home / ".local" / "state"),
         "XDG_RUNTIME_DIR": str(home / "run"),
+        "TMPDIR": str(home / "run"),
+        "NIX_REMOTE": "daemon",
     }
+    nix_path = _canonical_nix_path()
+    if nix_path is not None:
+        environment["NIX_PATH"] = nix_path
+    return environment
 
 
 def confinement_spec(
@@ -1012,13 +1189,25 @@ def confinement_spec(
         # Model-writable workspace paths are never executable. Scripts remain
         # usable as data through an exact approved interpreter.
         add_rule(str(path), (ACCESS_READ, ACCESS_WRITE))
-    for path in _tool_read_paths():
-        add_rule(path, (ACCESS_READ,))
-    for path in _tool_execute_paths():
-        add_rule(path, (ACCESS_READ, ACCESS_EXECUTE))
+    tool_execute = _tool_execute_paths()
     backend_read, backend_execute = _backend_paths(
         Path(binding.backend), workspace
     )
+    # Include immutable PATH package roots as closure seeds as well as the
+    # resolved targets. Nix exposes multicall tools such as nix-shell through
+    # immutable store symlinks; the broker validates those alias components
+    # and resolves them only to an already approved exact inode.
+    nix_path = _canonical_nix_path()
+    nixpkgs_source = nix_path.split("=", 1)[1] if nix_path is not None else ""
+    toolchain_closure = _toolchain_closure_paths([
+        *tool_execute, *backend_read, *backend_execute,
+        *_tool_alias_seed_paths(),
+        *([nixpkgs_source] if nixpkgs_source else []),
+    ])
+    for path in _tool_read_paths(toolchain_closure):
+        add_rule(path, (ACCESS_READ,))
+    for path in tool_execute:
+        add_rule(path, (ACCESS_READ, ACCESS_EXECUTE))
     for path in backend_read:
         add_rule(path, (ACCESS_READ,))
     for path in backend_execute:

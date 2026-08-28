@@ -147,6 +147,18 @@
         "resolved_at": "2026-08-21",
         "reason": "Task 8 made the installed diagram acceptance environment-independent: tests/test_installed_diagram.sh creates a test-owned profile (cbx-diagram-test) in the isolated user profiles dir with a display_order sidecar that forces a deterministic sort position, computes that profile's row from the sorted list (never a hardcoded first-row click), and asserts the outline/slot-highlight/title/binding-list content. Verified passing both without (row 0) and with CBX_DIAGRAM_STAGE_HOST=1 staging a zero-binding profile that sorts ahead (row 1); forcing selection of the staged first-row profile fails the slot-highlight and binding-list assertions, reproducing the operator's exit-8 failure. OVL-10 and MGR-07 reclassified verified."
       }
+    },
+    {
+      "id": "FACT-009",
+      "title": "Fresh exact-head installed X11 diagram and fractional highlight evidence",
+      "status": "open",
+      "capabilities": [],
+      "requirements": [
+        "OVL-10",
+        "MGR-07"
+      ],
+      "blocking_evidence": "The last genuine five-round campaign bound stale heads and every tester attempt lacked qualifying installed-window evidence: test_installed_diagram skipped for unavailable display tools and test_profile_diagram was BAD_COMMAND/permission denied. Historical commit 3ddefae and coordinator prose at 6fc6c86 do not prove campaign head 6fc6c86, post-campaign head 2d01ebb, or the current implementation. The fractional highlight threshold is an installed-tier claim only when the real installed controller-box manager is driven through X11 at the exact verified head; tests/test_profile_diagram.c remains simulated/offscreen. Resolve only with a fresh exact-commit no-skip machine receipt for tests/test_installed_diagram.sh (including its fractional highlight assertion) and the exact installed artifact identity.",
+      "resolution": null
     }
   ]
 }

@@ -399,18 +399,21 @@
       "spec_sections": [
         "\u00a74.10"
       ],
-      "classification": "verified",
-      "evidence_tier": "installed",
+      "classification": "partial",
+      "evidence_tier": "simulated",
       "required_tier": "installed",
       "required_capabilities": [],
       "evidence_commit": "3ddefae0c9d2f56aa89d414306481645b38f5e02",
       "receipts": [],
       "artifacts": [
         "tests/test_installed_diagram.sh",
-        "src/manager/profile_diagram.c"
+        "src/manager/profile_diagram.c",
+        "tests/test_profile_diagram.c"
       ],
-      "fact_refs": [],
-      "reason": "Environment-independent installed-window diagram semantic acceptance (Task 8): tests/test_installed_diagram.sh creates a test-owned profile with a display_order sidecar forcing a deterministic sort position and selects it by its computed row (never a hardcoded first-row click), so the outline/slot-highlight/title/binding-list assertions are deterministic with or without host/system InputPlumber profiles. Verified passing both without and with a staged host profile that sorts first (CBX_DIAGRAM_STAGE_HOST=1). FACT-008 resolved."
+      "fact_refs": [
+        "FACT-009"
+      ],
+      "reason": "Historical installed-window evidence predates the current implementation and campaign heads. The latest genuine campaign skipped test_installed_diagram and could not execute test_profile_diagram (BAD_COMMAND/permission denied); its fractional highlight claim is therefore simulated/offscreen only and cannot sustain installed-tier OVL-10. Fresh exact-head installed X11 execution with no skip is required (FACT-009)."
     },
     {
       "id": "MGR-01",
@@ -544,8 +547,8 @@
       "spec_sections": [
         "\u00a75.6"
       ],
-      "classification": "verified",
-      "evidence_tier": "installed",
+      "classification": "partial",
+      "evidence_tier": "simulated",
       "required_tier": "installed",
       "required_capabilities": [],
       "evidence_commit": "3ddefae0c9d2f56aa89d414306481645b38f5e02",
@@ -553,10 +556,13 @@
       "artifacts": [
         "tests/test_installed_diagram.sh",
         "src/manager/profile_diagram.c",
+        "tests/test_profile_diagram.c",
         "tests/test_manager_visual.c"
       ],
-      "fact_refs": [],
-      "reason": "Environment-independent installed production-window diagram semantic acceptance (Task 8): tests/test_installed_diagram.sh selects a test-owned profile by its computed row (not a first-row click) with deterministic sort position via a display_order sidecar, so the outline/slot-highlight/title/binding-list assertions pass with or without host/system InputPlumber profiles. FACT-008 resolved."
+      "fact_refs": [
+        "FACT-009"
+      ],
+      "reason": "Historical installed-window evidence predates the current implementation and campaign heads. The latest genuine campaign skipped test_installed_diagram and could not execute test_profile_diagram (BAD_COMMAND/permission denied); offscreen profile-diagram geometry and fractional pixel thresholds are simulated only. Fresh exact-head installed X11 execution with the fractional highlight assertion and no skip is required (FACT-009)."
     },
     {
       "id": "MGR-08",
@@ -1326,7 +1332,7 @@
         "FACT-005",
         "FACT-006"
       ],
-      "reason": "Not all matrix rows verified: 19 of 76 rows partial (ARCH-04, SYS-01, SYS-02, SYS-06, OVL-09, MGR-02, MGR-03, MGR-08, PKG-01, DBUS-02, DBUS-05, PERF-01, VRF-05, VRF-06, VRF-07, DOD-01, DOD-05, DOD-06, DOD-09) pending BUG-0015, fresh exact-commit runner evidence (FACT-007), and hardware/capability facts"
+      "reason": "Not all matrix rows verified: 21 of 76 rows partial (ARCH-04, SYS-01, SYS-02, SYS-06, OVL-09, OVL-10, MGR-02, MGR-03, MGR-07, MGR-08, PKG-01, DBUS-02, DBUS-05, PERF-01, VRF-05, VRF-06, VRF-07, DOD-01, DOD-05, DOD-06, DOD-09) pending BUG-0015, fresh exact-head installed diagram evidence (FACT-009), fresh exact-commit runner evidence (FACT-007), and hardware/capability facts"
     },
     {
       "id": "DOD-02",

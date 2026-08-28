@@ -2298,7 +2298,7 @@ class ProductionLaunchConfinementTests(_Base):
             )
 
     def _authorize(self, binding, **kwargs):
-        return launch.authorize_launch(
+        authority = launch.authorize_launch(
             binding,
             role_prompt=(self.workspace / "role.md").read_bytes(),
             agents=(self.workspace / "AGENTS.md").read_bytes(),
@@ -2306,6 +2306,28 @@ class ProductionLaunchConfinementTests(_Base):
             plan=(self.workspace / "plan.md").read_bytes(),
             **kwargs,
         )
+
+        def cleanup() -> None:
+            for descriptor in (
+                *getattr(authority, "_confinement_rule_fds", ()),
+                getattr(authority, "_prompt_fd", -1),
+                getattr(authority, "_auth_fd", -1),
+            ):
+                if descriptor is not None and descriptor >= 0:
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        pass
+            for path in (
+                getattr(authority, "_exec_dir", None),
+                getattr(authority, "_session_dir", None),
+                getattr(authority, "_sanitized_home", None),
+            ):
+                if path is not None:
+                    shutil.rmtree(path, ignore_errors=True)
+
+        self.addCleanup(cleanup)
+        return authority
 
     def test_authorize_with_real_spec_mints_real_proof(self) -> None:
         binding = self.binding(role="planner")
@@ -2328,6 +2350,22 @@ class ProductionLaunchConfinementTests(_Base):
         staged_git = authority._exec_dir / launch.STAGED_GIT_SHIM_NAME
         self.assertTrue(staged_git.is_file())
         self.assertEqual(staged_git.stat().st_mode & 0o111, 0)
+        self.assertFalse(
+            any(rule["path"] == "/nix/store"
+                for rule in authority._confinement_spec["rules"]),
+            "the broad Nix store root must never enter the model read view",
+        )
+        closure_rules = [
+            rule for rule in authority._confinement_spec["rules"]
+            if str(rule["path"]).startswith("/nix/store/")
+            and wc.ACCESS_EXECUTE not in rule["access"]
+        ]
+        self.assertTrue(closure_rules, "the exact immutable toolchain closure is absent")
+        for rule in closure_rules:
+            root = str(rule["path"])
+            self.assertRegex(root, wc.NIX_STORE_ROOT_RE)
+            self.assertIn(wc.ACCESS_READ, rule["access"])
+            self.assertNotIn(wc.ACCESS_WRITE, rule["access"])
         executable_rules = {
             rule["path"]
             for rule in authority._confinement_spec["rules"]
@@ -2360,6 +2398,44 @@ class ProductionLaunchConfinementTests(_Base):
         for loader in loaders:
             info = os.stat(loader)
             self.assertNotIn((info.st_dev, info.st_ino), approved_identities)
+
+    def test_nix_closure_query_rejects_path_escape_and_environment_injection(self) -> None:
+        seed = wc._nix_store_root(PY)
+        self.assertIsNotNone(seed)
+        assert seed is not None
+        observed: dict = {}
+
+        def escaped(argv, **kwargs):
+            observed.update(kwargs)
+            return subprocess.CompletedProcess(
+                argv, 0, f"{seed}\n/tmp/attacker-closure\n".encode(), b""
+            )
+
+        trusted_nix_store = shutil.which("nix-store")
+        self.assertIsNotNone(trusted_nix_store)
+        hostile = dict(os.environ)
+        hostile.update({
+            "TOKEN": "must-not-leak", "NIX_CONFIG": "extra-access-tokens = leak",
+            "GIT_CONFIG_COUNT": "1",
+        })
+        with mock.patch.dict(os.environ, hostile, clear=True), \
+             mock.patch.object(wc.shutil, "which", return_value=trusted_nix_store), \
+             mock.patch.object(wc.subprocess, "run", side_effect=escaped):
+            with self.assertRaises(wc.ConfinementError):
+                wc._toolchain_closure_paths([PY])
+        child_env = observed["env"]
+        self.assertEqual(child_env["HOME"], "/")
+        self.assertNotIn("TOKEN", child_env)
+        self.assertNotIn("NIX_CONFIG", child_env)
+        self.assertNotIn("GIT_CONFIG_COUNT", child_env)
+
+    def test_mutable_path_cannot_substitute_nix_closure_authority(self) -> None:
+        fake = self.diag / "nix-store"
+        fake.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        fake.chmod(0o755)
+        with mock.patch.dict(os.environ, {"PATH": str(self.diag)}, clear=False):
+            with self.assertRaises(wc.ConfinementUnavailable):
+                wc._toolchain_closure_paths([PY])
 
     def test_caller_sanitized_home_keyword_is_rejected(self) -> None:
         binding = self.binding(role="planner")
@@ -2416,11 +2492,6 @@ class ProductionLaunchConfinementTests(_Base):
             authority_a._session_dir,
             home_a,
         ]
-        for path in sibling_dirs:
-            self.addCleanup(shutil.rmtree, path, ignore_errors=True)
-        self.addCleanup(os.close, authority_a._prompt_fd)
-        for descriptor in authority_a._confinement_rule_fds:
-            self.addCleanup(os.close, descriptor)
         # B gets its own private home and spec; B's allowlist never grants A's
         # paths, and there is no broad /tmp grant (finding 4).
         home_b = wc.sanitized_home_directory()
@@ -2684,6 +2755,65 @@ class ProductionLaunchConfinementTests(_Base):
                     os.waitpid(survivor_pid, 0)
                 except ChildProcessError:
                     pass
+
+    def test_confined_leaf_executes_exact_nix_python_and_display_toolchain(self) -> None:
+        """The real broker executes the project Nix/display closure, not 126.
+
+        This runs below the full Landlock+seccomp launch path. The nested
+        nix-shell must start its immutable Bash/Python and execute real xdotool
+        and ImageMagick binaries; a mere command lookup or simulated marker is
+        insufficient. The broad /nix/store root remains absent from the spec.
+        """
+        backend = self.workspace / "backend.py"
+        marker = self.workspace / "src" / ".factory-test-output" / "toolchain.txt"
+        backend.write_text(
+            "#!/usr/bin/env python3\n"
+            "import os, pathlib, subprocess, sys\n"
+            "sys.stdin.buffer.read()\n"
+            "root = os.environ['FACTORY_LOOP_LAUNCH_WORKSPACE']\n"
+            "commands = [['nix-shell','--version'], ['python3','-c','print(123)'], "
+            "['xdotool','version'], ['convert','-version']]\n"
+            "runs = [subprocess.run(item, cwd=root, capture_output=True, text=True, timeout=30) for item in commands]\n"
+            "result = type('Result', (), {'returncode': next((r.returncode for r in runs if r.returncode), 0), "
+            "'stdout': ''.join(r.stdout for r in runs), 'stderr': ''.join(r.stderr for r in runs)})()\n"
+            f"path = pathlib.Path({str(marker)!r})\n"
+            "path.parent.mkdir(parents=True, exist_ok=True)\n"
+            "path.write_text(f'{result.returncode}\\nSTDOUT:\\n{result.stdout}\\nSTDERR:\\n{result.stderr}', encoding='utf-8')\n"
+            "raise SystemExit(result.returncode)\n",
+            encoding="utf-8",
+        )
+        os.chmod(backend, 0o700)
+        _git("add", "backend.py", cwd=self.workspace)
+        _git("commit", "-qm", "add exact toolchain probe", cwd=self.workspace)
+        self.head = _git("rev-parse", "HEAD", cwd=self.workspace).stdout.strip()
+        plan = self.workspace / "plan.md"
+        _, excerpt_digest = launch.derive_task_excerpt(plan.read_bytes(), 1)
+        argv = [
+            "launch", "--root", str(self.workspace), "--role", "developer",
+            "--model", "synthetic-model", "--provider", "synthetic",
+            "--backend", str(backend), "--role-prompt",
+            str(self.workspace / "role.md"), "--role-prompt-digest", sha256(b"role\n"),
+            "--prompt-set-digest", sha256(b"set"), "--policy",
+            str(self.workspace / "AGENTS.md"), "--policy-digest", sha256(b"agents\n"),
+            "--spec", str(self.workspace / "spec.md"), "--spec-digest", sha256(b"spec\n"),
+            "--plan", str(plan), "--plan-digest", sha256(plan.read_bytes()),
+            "--bound-commit", self.head, "--allowed-tools", "read,bash",
+            "--runtime-limit", "180", "--inactivity-limit", "150", "--task-id", "1",
+            "--task-excerpt-digest", excerpt_digest,
+        ]
+        out = io.StringIO()
+        err = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            status = launch.main(argv)
+        payload = marker.read_text(encoding="utf-8") if marker.exists() else "missing marker"
+        self.assertEqual(
+            status, launch.EXIT_COMPLETED,
+            (err.getvalue() + "\n" + out.getvalue() + "\n" + payload)[-6000:],
+        )
+        self.assertTrue(payload.startswith("0\n"), payload[-2000:])
+        self.assertIn("123", payload)
+        self.assertIn("xdotool version", payload)
+        self.assertIn("ImageMagick", payload)
 
     def test_cli_runs_leaf_through_staged_confine_launcher(self) -> None:
         """The full CLI runs the model child through the confine launcher.

@@ -324,7 +324,7 @@ ENV_ALLOWLIST = (
     "LC_COLLATE", "LC_MESSAGES", "LC_MONETARY", "LC_NUMERIC", "LC_TIME",
     "TERM", "TZ", "SHELL", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME",
     "XDG_CACHE_HOME", "XDG_DATA_HOME", "NO_COLOR", "CLICOLOR",
-    "CLICOLOR_FORCE",
+    "CLICOLOR_FORCE", "TMPDIR", "NIX_PATH", "NIX_REMOTE",
 )
 
 # Model backend flags that must *never* appear in the constructed argv: they

@@ -1883,6 +1883,33 @@ class ClassificationUnits(_CampaignBase):
         self.assertEqual(campaign_module.classify_verification(**base), "pass")
         self.assertEqual(campaign_module.classify_verification(
             **{**base, "gate_exit": 1}), "findings")
+        for command_failure in (-1, 126, 127):
+            with self.subTest(gate_command_failure=command_failure):
+                self.assertEqual(campaign_module.classify_verification(
+                    **{**base, "gate_exit": command_failure}),
+                    "infrastructure_failure")
+        self.assertEqual(campaign_module.classify_verification(
+            **{**base, "capability_ran": True, "capability_exit": 126,
+               "capability_available": False,
+               "tester_result_outcome": "blocked", "blocked_refs": ["ext"]}),
+            "infrastructure_failure")
+        self.assertEqual(campaign_module.classify_verification(
+            **{**base, "capability_ran": True, "capability_exit": 1,
+               "capability_available": False,
+               "tester_result_outcome": "blocked", "blocked_refs": ["ext"]}),
+            "blocked")
+        self.assertEqual(campaign_module.classify_verification(
+            **{**base, "gate_skipped": True}), "findings")
+        self.assertEqual(campaign_module.classify_verification(
+            **{**base, "gate_ran": False, "gate_skipped": True}), "findings")
+        self.assertEqual(campaign_module.classify_verification(
+            **{**base, "capability_skipped": True,
+               "capability_available": False}), "findings")
+        self.assertEqual(campaign_module.classify_verification(
+            **{**base, "capability_skipped": True,
+               "capability_available": False,
+               "tester_result_outcome": "blocked", "blocked_refs": ["ext"]}),
+            "blocked")
         self.assertEqual(campaign_module.classify_verification(
             **{**base, "tester_result_outcome": "findings"}), "findings")
         # Task 9 review MED: an absent deterministic verification command is

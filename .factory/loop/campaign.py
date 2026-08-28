@@ -1394,6 +1394,10 @@ def classify_verification(
     findings: Sequence[str],
     blocked_refs: Sequence[str],
     capability_available: bool,
+    capability_ran: bool = True,
+    capability_exit: int = 0,
+    gate_skipped: bool = False,
+    capability_skipped: bool = False,
 ) -> str:
     """Pure verification classification (§13.3).
 
@@ -1414,10 +1418,37 @@ def classify_verification(
         return "infrastructure_failure"
     if not scope_ok:
         return "infrastructure_failure"
+    # A trusted command that explicitly reports a skip did run but did not
+    # exercise acceptance. It is a finding even if a contradictory caller
+    # also marks gate_ran false; no skip can become pass or retryable command
+    # infrastructure merely through flag composition.
+    if gate_skipped:
+        return "findings"
     if not gate_ran:
+        return "infrastructure_failure"
+    # 126/127 and the supervisor's negative timeout/binding statuses mean the
+    # fixed verifier/toolchain did not execute. They are infrastructure, never
+    # product findings, capability blockers, or fake skips. A genuine verifier
+    # exit 1 remains a software/acceptance finding.
+    if gate_exit < 0 or gate_exit in (126, 127):
+        return "infrastructure_failure"
+    if capability_ran and (
+        capability_exit < 0 or capability_exit in (126, 127)
+    ):
         return "infrastructure_failure"
     if not tester_result_valid:
         return "infrastructure_failure"
+    if capability_skipped:
+        # A skipped capability probe never supports pass. It is an honest
+        # external blocker only when the tester also supplied exact blocker
+        # references and no higher-precedence finding; every other composition
+        # is a verification finding.
+        if (
+            tester_result_outcome == "blocked" and blocked_refs
+            and not findings and gate_exit == 0
+        ):
+            return "blocked"
+        return "findings"
     if gate_exit != 0:
         return "findings"
     # Findings always win over blockers and over the role's claimed outcome.
@@ -1428,6 +1459,10 @@ def classify_verification(
     if tester_result_outcome == "blocked":
         if not blocked_refs:
             return "infrastructure_failure"
+        # A capability probe that executed and returned an ordinary nonzero
+        # status is an honest unavailable external capability. A skipped probe
+        # is never passing evidence but remains an explicit blocker rather than
+        # being confused with command-not-found/permission infrastructure.
         if not capability_available:
             return "blocked"
         return "findings"
@@ -3844,6 +3879,10 @@ class Campaign:
             findings=findings,
             blocked_refs=blocked_refs,
             capability_available=capability_available,
+            capability_ran=capability_ran,
+            capability_exit=capability_exit,
+            gate_skipped=verification_skipped,
+            capability_skipped=capability_skipped,
         )
         self._end_untrusted(tag)
         if outcome in ("findings", "blocked"):
