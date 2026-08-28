@@ -144,7 +144,7 @@ static const cbx_widget_vtable s_diag_vt = {
 static SDL_Texture *
 load_svg_texture(SDL_Renderer *renderer, const char *svg_path, int size)
 {
-    if (!renderer || !svg_path)
+    if (!renderer || !svg_path || size <= 0)
         return NULL;
 
     int fd = open(svg_path, O_RDONLY | O_NOFOLLOW);
@@ -156,12 +156,16 @@ load_svg_texture(SDL_Renderer *renderer, const char *svg_path, int size)
         return NULL;
     }
 
-    /* Read file contents */
-    fseek(f, 0, SEEK_END);
+    /* Read file contents.  Treat positioning failures as a load failure;
+     * parsing a partial/unknown-length asset could otherwise produce a
+     * seemingly valid but blank production texture. */
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        return NULL;
+    }
     long fsize = ftell(f);
-    fseek(f, 0, SEEK_SET);
-
-    if (fsize <= 0 || fsize > 4 * 1024 * 1024) {  /* 4 MB max */
+    if (fsize <= 0 || fsize > 4 * 1024 * 1024 ||
+        fseek(f, 0, SEEK_SET) != 0) {  /* 4 MB max */
         fclose(f);
         return NULL;
     }
@@ -173,7 +177,12 @@ load_svg_texture(SDL_Renderer *renderer, const char *svg_path, int size)
     }
 
     size_t rd = fread(buf, 1, (size_t)fsize, f);
+    int read_error = ferror(f);
     fclose(f);
+    if (read_error || rd != (size_t)fsize) {
+        free(buf);
+        return NULL;
+    }
     buf[rd] = '\0';
 
     /* nanosvg mutates its input — buf is malloc'd, so that's fine */
