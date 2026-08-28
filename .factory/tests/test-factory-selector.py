@@ -70,7 +70,7 @@ class CanonicalPlanSelectionTest(unittest.TestCase):
         # Tasks 5 and 9 are runnable and both carry priority 1; the selector's
         # priority-then-lexicographic tie-break picks identifier "5" before
         # "9". Task 34 is now complete, Tasks 4 and 6 are blocked, and the
-        # final audit Task 42 depends on every other task.
+        # final audit Task 44 depends on every other task.
         statuses = {task.number: task.status for task in plan.tasks}
         runnable = sorted(
             task.number
