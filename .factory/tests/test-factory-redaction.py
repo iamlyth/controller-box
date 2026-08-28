@@ -1036,13 +1036,20 @@ assert(readFileSync(authFile).includes(Buffer.from(secret)),
 const detachedAgain = extension.closeToolCredentialBoundary();
 assert.equal(detachedAgain.ok, true);
 assert.equal(existsSync(authFile), false);
+// Pi's legitimate single-link recreation is transition-validated, captured,
+// and removed synchronously before the next tool is allowed.
+writeFileSync(authFile, rotatedPayload, { mode: 0o600 });
+const rebound = await handlers.tool_call({ toolName, input });
+assert.equal(rebound ?? null, null, `legitimate detached refresh blocked ${toolName}`);
+assert.equal(existsSync(authFile), false, 'rebound auth file survived tool boundary');
+// The same pathname with a hardlink alias must fail closed.
 writeFileSync(authFile, rotatedPayload, { mode: 0o600 });
 const aliasPath = `${authFile}.hardlink`;
 linkSync(authFile, aliasPath);
 const recreated = await handlers.tool_call({ toolName, input });
 assert.equal(recreated?.block, true,
   `recreated hardlinked auth file did not block ${toolName}`);
-assert.match(recreated.reason, /tool-file-recreated-while-detached/);
+assert.match(recreated.reason, /tool-file-binding-mismatch/);
 unlinkSync(aliasPath);
 unlinkSync(authFile);
 await handlers.session_shutdown({ reason: 'quit' }, {});

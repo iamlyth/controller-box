@@ -629,19 +629,22 @@ function captureAttachedCredential(saved) {
 /** Detach auth.json and close every inherited descriptor before a tool runs. */
 export function closeToolCredentialBoundary(env = process.env) {
   if (toolCredentialState?.status === "detached") {
-    // This synchronous absence check is mandatory on every tool_call. Pi, an
-    // OAuth helper, or hostile code recreating auth.json while detached must
-    // never gain one tool dispatch. Any inode type, including a hardlinked
-    // regular file, is a collision and fails closed.
+    // This synchronous check is mandatory on every tool_call. Pi may
+    // legitimately recreate auth.json while preparing an authenticated turn;
+    // in that case captureAttachedCredential performs the complete no-follow,
+    // single-link, owner/mode, account/provider, OAuth-transition, and
+    // pre-unlink identity checks before detaching the refreshed file again.
+    // Any hardlink, symlink, malformed/substituted credential, or other inode
+    // fails closed before the tool-specific implementation can run.
     try {
       lstatSync(toolCredentialState.filePath, { bigint: true });
-      return { ok: false, reason: "tool-file-recreated-while-detached" };
     } catch (error) {
-      if (error?.code !== "ENOENT") {
-        return { ok: false, reason: "tool-file-absence-unverifiable" };
+      if (error?.code === "ENOENT") {
+        return { ok: true, reason: "already-detached" };
       }
+      return { ok: false, reason: "tool-file-absence-unverifiable" };
     }
-    return { ok: true, reason: "already-detached" };
+    return captureAttachedCredential(toolCredentialState);
   }
   if (toolCredentialState?.status === "attached") {
     return captureAttachedCredential(toolCredentialState);
