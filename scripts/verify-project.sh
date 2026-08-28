@@ -211,11 +211,27 @@ try:
         stream.flush()
         os.fsync(stream.fileno())
     os.chmod(temporary, 0o600)
-    os.replace(temporary, target)
-finally:
+    # Atomic no-replace publication (Task 34/35): os.link fails with
+    # FileExistsError if the destination was created or swapped after the
+    # preflight (including a symlink or hardlink), so a destination
+    # replacement can never overwrite the sentinel.  The temporary bytes are
+    # fsynced before publication; the containing directory is fsynced after.
     try:
-        os.unlink(temporary)
-    except FileNotFoundError:
-        pass
+        os.link(temporary, target)
+    except FileExistsError:
+        raise SystemExit(
+            'verify-project: installed-functional evidence destination '
+            'already exists; refusing to overwrite (atomic no-replace)'
+        )
+    finally:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+    dir_fd = os.open(target.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
 PY
 echo "verify-project: Controller-Box build, tests, functional acceptance, smoke checks, and packaging passed"

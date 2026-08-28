@@ -21,11 +21,25 @@ if (len(parts) != 4 or parts[:2] != ('.factory-state', 'campaigns')
         or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,63}', parts[2])
         or parts[3] != 'installed-functional-evidence.env'):
     raise SystemExit('installed-functional-evidence: override is not campaign-owned')
-for directory in (root / parts[0], root / parts[0] / parts[1], path.parent):
-    info = directory.lstat()
+# Complete canonical-ancestor validation (Task 34/35): every ancestor from
+# the repository root to the evidence file must be a canonical non-symlink
+# directory owned by the current user; the campaign namespace directories
+# must be mode 0700.  A symlinked or wrong-owner ancestor anywhere in the
+# chain fails closed.
+current = root
+for part in parts[:-1]:
+    current = current / part
+    info = current.lstat()
     if (not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode)
-            or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700):
-        raise SystemExit(f'installed-functional-evidence: unsafe override directory {directory}')
+            or info.st_uid != os.getuid()):
+        raise SystemExit(
+            f'installed-functional-evidence: unsafe ancestor {current}'
+        )
+    if current in (root / parts[0], root / parts[0] / parts[1], path.parent):
+        if stat.S_IMODE(info.st_mode) != 0o700:
+            raise SystemExit(
+                f'installed-functional-evidence: unsafe override directory {current}'
+            )
 print(path)
 PY
 ) || exit $?
@@ -33,6 +47,25 @@ PY
     echo "installed-functional-evidence: missing or unsafe; run ./scripts/verify-project.sh" >&2
     exit 1
 }
+# Evidence-file invariants (Task 34/35): the target must be a current-user
+# owned regular single-link file with safe mode 0600.  A symlink, hardlink,
+# wrong owner, or loose mode fails closed.
+python3 - "$evidence" <<'PY'
+import os, stat, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+info = path.lstat()
+if (stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode)
+        or info.st_uid != os.getuid() or info.st_nlink != 1
+        or stat.S_IMODE(info.st_mode) != 0o600):
+    raise SystemExit(
+        'installed-functional-evidence: evidence file is not a '
+        'current-user-owned single-link regular file with mode 0600'
+    )
+PY
+if [[ $? -ne 0 ]]; then
+    exit 1
+fi
 mapfile -d '' -t EVIDENCE_FIELDS < <(python3 - "$evidence" <<'PY'
 import os, re, sys
 from pathlib import Path
