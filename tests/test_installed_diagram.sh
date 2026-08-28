@@ -58,10 +58,19 @@ cleanup() {
         sleep 0.3
         kill -KILL "$MANAGER_PID" 2>/dev/null || true
     fi
+    # Reap each owned child after termination.  Besides avoiding zombies in
+    # repeated installed-path runs, this ensures a failed semantic assertion
+    # cannot leave the manager alive while its temporary HOME is removed.
+    if [ -n "$MANAGER_PID" ]; then
+        wait "$MANAGER_PID" 2>/dev/null || true
+    fi
     if [ -n "$XVFB_PID" ] && kill -0 "$XVFB_PID" 2>/dev/null; then
         kill -TERM "$XVFB_PID" 2>/dev/null || true
         sleep 0.5
         kill -KILL "$XVFB_PID" 2>/dev/null || true
+    fi
+    if [ -n "$XVFB_PID" ]; then
+        wait "$XVFB_PID" 2>/dev/null || true
     fi
     if [ -n "$TMPDIR" ] && [ -d "$TMPDIR" ]; then
         rm -rf "$TMPDIR"
