@@ -1036,6 +1036,12 @@ assert(readFileSync(authFile).includes(Buffer.from(secret)),
 const detachedAgain = extension.closeToolCredentialBoundary();
 assert.equal(detachedAgain.ok, true);
 assert.equal(existsSync(authFile), false);
+// Pi may first publish its exact safe empty-object placeholder after observing
+// the detached path. It contains no credential and is removed before dispatch.
+writeFileSync(authFile, '{}\n', { mode: 0o600 });
+const placeholder = await handlers.tool_call({ toolName, input });
+assert.equal(placeholder ?? null, null, `safe placeholder blocked ${toolName}`);
+assert.equal(existsSync(authFile), false, 'safe placeholder survived tool boundary');
 // Pi's legitimate single-link recreation is transition-validated, captured,
 // and removed synchronously before the next tool is allowed.
 writeFileSync(authFile, rotatedPayload, { mode: 0o600 });

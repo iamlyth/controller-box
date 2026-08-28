@@ -626,6 +626,34 @@ function captureAttachedCredential(saved) {
   }
 }
 
+function removeSafeEmptyCredentialPlaceholder(path) {
+  let descriptor = -1;
+  try {
+    const named = lstatSync(path, { bigint: true });
+    if (!validCredentialIdentity(named)) return false;
+    descriptor = openSync(
+      path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_CLOEXEC,
+    );
+    const opened = fstatSync(descriptor, { bigint: true });
+    if (!validCredentialIdentity(opened)
+        || opened.dev !== named.dev || opened.ino !== named.ino) return false;
+    const document = JSON.parse(readFileSync(descriptor, "utf8"));
+    if (!document || typeof document !== "object" || Array.isArray(document)
+        || Object.keys(document).length !== 0) return false;
+    const beforeUnlink = lstatSync(path, { bigint: true });
+    if (!validCredentialIdentity(beforeUnlink)
+        || beforeUnlink.dev !== opened.dev || beforeUnlink.ino !== opened.ino) return false;
+    unlinkSync(path);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (descriptor >= 0) {
+      try { closeSync(descriptor); } catch { /* caller rechecks before dispatch */ }
+    }
+  }
+}
+
 /** Detach auth.json and close every inherited descriptor before a tool runs. */
 export function closeToolCredentialBoundary(env = process.env) {
   if (toolCredentialState?.status === "detached") {
@@ -643,6 +671,12 @@ export function closeToolCredentialBoundary(env = process.env) {
         return { ok: true, reason: "already-detached" };
       }
       return { ok: false, reason: "tool-file-absence-unverifiable" };
+    }
+    // Pi's credential store may publish an exact empty-object placeholder
+    // after observing the deliberately detached path. It carries no secret;
+    // remove only a no-follow, single-link, private, identity-stable `{}`.
+    if (removeSafeEmptyCredentialPlaceholder(toolCredentialState.filePath)) {
+      return { ok: true, reason: "empty-placeholder-detached" };
     }
     return captureAttachedCredential(toolCredentialState);
   }
