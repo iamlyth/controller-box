@@ -1362,6 +1362,36 @@ class ProviderRegistryTests(_Base):
             with self.assertRaises(launch.InvocationError):
                 launch._prepare_private_pi2_home(private)
 
+    def test_pi2_refresh_persistence_is_atomic_and_rejects_symlinks(self) -> None:
+        operator = self.tmp / "refresh-operator"
+        target_dir = operator / ".pi" / "agent2"
+        target_dir.mkdir(parents=True, mode=0o700)
+        target = target_dir / "auth.json"
+        target.write_text(
+            '{"openai-codex":{"type":"oauth","refresh":"old"}}\n',
+            encoding="utf-8",
+        )
+        target.chmod(0o600)
+        private = self.tmp / "refresh-private"
+        source = private / ".pi" / "agent2" / "auth.json"
+        source.parent.mkdir(parents=True, mode=0o700)
+        refreshed = b'{"openai-codex":{"type":"oauth","refresh":"new"}}\n'
+        source.write_bytes(refreshed)
+        source.chmod(0o600)
+        self.assertTrue(
+            launch._persist_private_pi2_auth(private, operator_home=operator)
+        )
+        self.assertEqual(target.read_bytes(), refreshed)
+        self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
+
+        sentinel = self.tmp / "refresh-sentinel"
+        sentinel.write_text("unchanged", encoding="utf-8")
+        target.unlink()
+        target.symlink_to(sentinel)
+        with self.assertRaises(launch.SupervisionError):
+            launch._persist_private_pi2_auth(private, operator_home=operator)
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "unchanged")
+
     def test_committed_pi2_adapter_has_single_runtime_markers(self) -> None:
         source = (LOOP / "pi2_backend.py").read_bytes()
         self.assertEqual(source.count(b"@@FACTORY_PI2_NODE@@"), 1)

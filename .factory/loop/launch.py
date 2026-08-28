@@ -2549,6 +2549,12 @@ class LaunchSupervision:
                         or (returncode is not None and returncode < 0)
                     )
                 )
+                if binding.provider.lower() == "openai-codex" and outcome == "completed":
+                    if self._sanitized_home is None:
+                        raise SupervisionError(
+                            "openai-codex launch has no private home for credential refresh"
+                        )
+                    _persist_private_pi2_auth(Path(self._sanitized_home))
                 elapsed = time.monotonic() - started
                 result = LaunchResult(
                     role=binding.role,
@@ -3472,6 +3478,109 @@ def _prepare_private_pi2_home(sanitized_home: Path) -> int:
             except OSError:
                 pass
         raise
+
+
+def _persist_private_pi2_auth(
+    sanitized_home: Path, *, operator_home: Optional[Path] = None
+) -> bool:
+    """Atomically persist a Pi2 OAuth refresh from one trusted role process.
+
+    Fresh roles must not reuse model context, but rotating OAuth refresh tokens
+    are provider state rather than model memory. Pi writes a refreshed token to
+    the launch-private ``auth.json``; after the child is fully reaped, this
+    trusted parent validates that file and atomically replaces the operator's
+    existing mode-0600 store. No model/tool path can select either endpoint.
+    """
+    source = Path(sanitized_home) / ".pi" / "agent2" / "auth.json"
+    target_dir = (operator_home or Path.home()) / ".pi" / "agent2"
+    target = target_dir / "auth.json"
+    try:
+        source_info = os.lstat(source)
+        target_dir_info = os.lstat(target_dir)
+        target_info = os.lstat(target)
+    except OSError as exc:
+        raise SupervisionError(f"Pi2 credential refresh path is unavailable: {exc}") from exc
+    uid = os.getuid()
+    if (
+        not stat.S_ISREG(source_info.st_mode) or stat.S_ISLNK(source_info.st_mode)
+        or source_info.st_uid != uid or source_info.st_nlink != 1
+        or stat.S_IMODE(source_info.st_mode) != 0o600
+        or source_info.st_size <= 0 or source_info.st_size > (1 << 20)
+        or not stat.S_ISDIR(target_dir_info.st_mode)
+        or stat.S_ISLNK(target_dir_info.st_mode) or target_dir_info.st_uid != uid
+        or target_dir_info.st_mode & 0o022
+        or not stat.S_ISREG(target_info.st_mode) or stat.S_ISLNK(target_info.st_mode)
+        or target_info.st_uid != uid or target_info.st_nlink != 1
+        or stat.S_IMODE(target_info.st_mode) != 0o600
+        or target_info.st_size <= 0 or target_info.st_size > (1 << 20)
+    ):
+        raise SupervisionError("Pi2 credential refresh path has unsafe identity or mode")
+    source_fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        opened = os.fstat(source_fd)
+        if (opened.st_dev, opened.st_ino) != (source_info.st_dev, source_info.st_ino):
+            raise SupervisionError("Pi2 private auth identity changed before refresh")
+        data = bytearray()
+        while len(data) <= (1 << 20):
+            chunk = os.read(source_fd, min(65536, (1 << 20) + 1 - len(data)))
+            if not chunk:
+                break
+            data.extend(chunk)
+        if not data or len(data) > (1 << 20):
+            raise SupervisionError("Pi2 private auth refresh bytes are empty or oversized")
+    finally:
+        os.close(source_fd)
+    try:
+        parsed = json.loads(data)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise SupervisionError("Pi2 private auth refresh is malformed JSON") from exc
+    codex = parsed.get("openai-codex") if isinstance(parsed, dict) else None
+    if not isinstance(codex, dict) or codex.get("type") != "oauth":
+        raise SupervisionError("Pi2 private auth refresh lacks the openai-codex OAuth binding")
+    directory_fd = os.open(
+        target_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    )
+    temp_path = None
+    temp_fd = -1
+    try:
+        anchored = os.fstat(directory_fd)
+        if (anchored.st_dev, anchored.st_ino) != (
+            target_dir_info.st_dev, target_dir_info.st_ino
+        ):
+            raise SupervisionError("Pi2 operator auth directory identity changed")
+        temp_fd, temp_name = tempfile.mkstemp(prefix=".auth-refresh-", dir=target_dir)
+        temp_path = Path(temp_name)
+        os.fchmod(temp_fd, 0o600)
+        view = memoryview(data)
+        while view:
+            written = os.write(temp_fd, view)
+            if written <= 0:
+                raise OSError("short Pi2 auth refresh write")
+            view = view[written:]
+        os.fsync(temp_fd)
+        os.close(temp_fd)
+        temp_fd = -1
+        before_replace = os.lstat(target)
+        if (before_replace.st_dev, before_replace.st_ino) != (
+            target_info.st_dev, target_info.st_ino
+        ):
+            raise SupervisionError("Pi2 operator auth identity changed before replace")
+        os.replace(temp_path, target)
+        temp_path = None
+        os.fsync(directory_fd)
+        return True
+    except OSError as exc:
+        raise SupervisionError(f"cannot persist Pi2 credential refresh: {exc}") from exc
+    finally:
+        data[:] = b"\x00" * len(data)
+        if temp_fd >= 0:
+            os.close(temp_fd)
+        if temp_path is not None:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+        os.close(directory_fd)
 
 
 def _stage_launch_executables(
