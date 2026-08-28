@@ -202,19 +202,25 @@ load_svg_texture(SDL_Renderer *renderer, const char *svg_path, int size)
         nsvgDelete(image);
         return NULL;
     }
-    int w = (int)image->width;
-    int h = (int)image->height;
+    /* Keep the parsed floating-point dimensions until raster sizing.  The
+     * SVG viewBox may describe a non-integer size; truncating it before
+     * scaling can introduce an avoidable aspect-ratio error and shift the
+     * fitted marker box by a pixel. */
+    float source_w = image->width;
+    float source_h = image->height;
 
     /* Scale to fit within `size` while preserving aspect ratio.  This scales
      * UP as well as down: a small source SVG (e.g. 100x60) is rasterised at
      * the requested resolution so the on-screen diagram is sharp and
-     * aspect-correct rather than blown up from the native pixels (BUG-0018). */
-    float denom = w > h ? (float)w : (float)h;
+     * aspect-correct rather than blown up from the native pixels (BUG-0018).
+     * Round both axes together so rasterisation does not bias one dimension
+     * through truncation. */
+    float denom = source_w > source_h ? source_w : source_h;
     if (denom <= 0.0f)
         denom = 1.0f;
     float scale = (float)size / denom;
-    int tw = (int)((float)w * scale);
-    int th = (int)((float)h * scale);
+    int tw = (int)lroundf(source_w * scale);
+    int th = (int)lroundf(source_h * scale);
     if (tw < 1) tw = 1;
     if (th < 1) th = 1;
 
