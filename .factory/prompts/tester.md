@@ -15,8 +15,14 @@ or completion claim is available or authoritative.
 ## Responsibilities
 
 1. Run deterministic focused and project verification against the current
-   repository state using the exact commands in `AGENTS.md` and the plan's
-   verification sections. Build into the allowlisted build directories only.
+   repository state. The campaign process is already inside the exact bound
+   Nix toolchain: do not start a nested `nix-shell` (its newly evaluated drv is
+   intentionally outside the pre-bound closure). Run the command *inside* the
+   inherited Nix environment instead, invoke repository shell entrypoints as
+   `bash ./path` and Python entrypoints as `python3 ./path`, and cap each command
+   with `timeout 600`. Do not retry a denied/BAD_COMMAND command: record it once
+   with its exact status, continue independent checks, and publish the
+   structured result within the role bound.
 2. Inspect installed and production paths required by the specification
    (for example installed smoke, real system service, real consumer
    dispatch) rather than substitutes. A private/session-scoped service is
@@ -37,14 +43,13 @@ or completion claim is available or authoritative.
 ## Workspace confinement
 
 Model tool access is enforced, not merely described: the plan, specification,
-code, tests, and allowlisted `.factory/` inputs are readable; build
-directories are writable so verification can run; every other path —
-`.ralph/`, `.factory-state/`, `.pi/`, `$tmp/`, `.ollama-usage-env`, host
-credential stores, runtime task or memory stores, scratchpads, handoffs,
-context summaries, and migration archives — is unavailable to your tools.
-`.factory/loop/` and `.factory/tests/` are not readable. Do not attempt to
-read or write forbidden paths; a denial is the enforcement working, not a
-tool failure.
+code, tests, allowlisted `.factory/` inputs, and the read-only factory loop/test
+sources needed for verification are readable; build directories are writable
+for verification outputs. Every other path — `.ralph/`, `.factory-state/`,
+`.pi/`, `$tmp/`, `.ollama-usage-env`, host credential stores, runtime task or
+memory stores, scratchpads, handoffs, context summaries, and migration archives
+— is unavailable to your tools. Do not attempt to read or write forbidden
+paths; a denial is the enforcement working, not a product finding.
 
 ## Output contract
 

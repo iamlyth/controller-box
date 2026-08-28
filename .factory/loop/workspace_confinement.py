@@ -116,8 +116,9 @@ FORBIDDEN_WORKSPACE_TOP = frozenset({
 # configuration).  Everything else starting with ``.`` is denied.
 ALLOWED_HIDDEN_TOP = frozenset({".github", ".forgejo", ".gitignore"})
 
-# ``.factory/`` control-plane namespaces that are *never* readable by any
-# role (the allowlisted plan/policy/evidence sidecars live outside them).
+# ``.factory/`` control-plane namespaces denied by default. Tester/auditor
+# receive explicit read-only loop/test grants below so verifier and state
+# integrity can be inspected; no role receives runtime-state or prompt bytes.
 FORBIDDEN_FACTORY_SUB = frozenset({
     ".factory/loop", ".factory/tests", ".factory/prompts",
     ".factory/state", ".factory/ralph",
@@ -204,12 +205,16 @@ ROLE_FACTORY_READS: Mapping[str, frozenset] = {
     }),
     "developer": frozenset({".factory/bugs/open.md"}),
     "tester": frozenset({
+        ".factory/loop",
+        ".factory/tests",
         ".factory/artifacts/conformance.json",
         ".factory/requirement-policy.json",
         ".factory/capability-contracts.json",
         ".factory/bugs/open.md",
     }),
     "auditor": frozenset({
+        ".factory/loop",
+        ".factory/tests",
         ".factory/artifacts/campaign-audit.md",
         ".factory/artifacts/conformance.json",
         ".factory/requirement-policy.json",

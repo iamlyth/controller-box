@@ -394,6 +394,9 @@ class _Base(unittest.TestCase):
         loop_dir.mkdir()
         for module in ("confine_launcher.py", "usage.py", "usage_fetch.py"):
             shutil.copy2(LOOP / module, loop_dir / module)
+        factory_tests = factory / "tests"
+        factory_tests.mkdir()
+        (factory_tests / "__init__.py").write_text("# verifier fixture\n", encoding="utf-8")
         prompts_dir = factory / "prompts"
         prompts_dir.mkdir()
         for role in promptset.ROLES:
@@ -707,6 +710,32 @@ class LandlockSubprocessMatrixTests(_Base):
                 result.get(f"write:{path}"), "ok",
                 f"the planner wrote {path} outside the plan allowlist",
             )
+
+    def test_tester_auditor_read_factory_implementation_without_write(self) -> None:
+        ws = str(self.workspace)
+        for role in ("tester", "auditor"):
+            with self.subTest(role=role):
+                result = self.run_confined(role, _probe_targets(
+                    f"read:{ws}/.factory/loop/confine_launcher.py",
+                    f"read:{ws}/.factory/tests/__init__.py",
+                    f"write:{ws}/.factory/loop/confine_launcher.py",
+                    f"write:{ws}/.factory/tests/__init__.py",
+                ))
+                self.assertProbe(
+                    result, "read",
+                    f"{ws}/.factory/loop/confine_launcher.py", "ok",
+                )
+                self.assertProbe(
+                    result, "read", f"{ws}/.factory/tests/__init__.py", "ok",
+                )
+                self.assertProbe(
+                    result, "write",
+                    f"{ws}/.factory/loop/confine_launcher.py", "PermissionError",
+                )
+                self.assertProbe(
+                    result, "write", f"{ws}/.factory/tests/__init__.py",
+                    "PermissionError",
+                )
 
     def test_developer_write_allowlist(self) -> None:
         ws = str(self.workspace)
@@ -1791,17 +1820,26 @@ class ConfinementSpecTests(_Base):
                             f"rule {path} grants a forbidden namespace "
                             f"({forbidden}) for role {role}",
                         )
-                    # Only the documented ``.factory/`` inputs are granted:
-                    # the control-plane source, harness tests, prompts, and
-                    # runtime state are never allowlisted.
-                    for denied in (".factory/loop", ".factory/tests",
-                                   ".factory/prompts", ".factory/state",
-                                   ".factory/ralph"):
+                    # Tester/auditor receive read-only loop/test source for
+                    # executable verifier and audit inspection. Prompts and
+                    # runtime/legacy state remain denied to every role; planner
+                    # and developer also cannot read control-plane source.
+                    denied_paths = [
+                        ".factory/prompts", ".factory/state", ".factory/ralph",
+                    ]
+                    if role not in ("tester", "auditor"):
+                        denied_paths.extend([".factory/loop", ".factory/tests"])
+                    for denied in denied_paths:
                         self.assertFalse(
                             str(relative).startswith(denied),
                             f"rule {path} grants a control-plane source "
                             f"({denied}) for role {role}",
                         )
+                if role in ("tester", "auditor"):
+                    rule_paths = {str(Path(r["path"]).absolute())
+                                  for r in spec["rules"]}
+                    self.assertIn(str(self.workspace / ".factory" / "loop"), rule_paths)
+                    self.assertIn(str(self.workspace / ".factory" / "tests"), rule_paths)
                 # The plan/spec/product entries and allowlisted factory
                 # inputs are present for every role.
                 rule_paths = {str(Path(r["path"]).absolute())

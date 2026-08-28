@@ -40,13 +40,13 @@ authoritative.
 ## Workspace confinement
 
 Model tool access is enforced, not merely described: the plan, specification,
-code, tests, and allowlisted `.factory/` inputs are readable; you have no
-write allowlist. `.ralph/`, `.factory-state/`, `.pi/`, `$tmp/`,
+code, tests, allowlisted `.factory/` inputs, and the read-only factory loop/test
+sources needed to falsify the selected audit objective are readable; you have
+no write allowlist. `.ralph/`, `.factory-state/`, `.pi/`, `$tmp/`,
 `.ollama-usage-env`, host credential stores, runtime task or memory stores,
 scratchpads, handoffs, context summaries, and migration archives are
-unavailable to your tools. `.factory/loop/` and `.factory/tests/` are not
-readable. Do not attempt to read or write forbidden paths; a denial is the
-enforcement working, not a tool failure.
+unavailable to your tools. Do not attempt to read or write forbidden paths; a
+denial is the enforcement working, not acceptance evidence.
 
 ## Output contract
 
