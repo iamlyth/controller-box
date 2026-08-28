@@ -961,7 +961,7 @@ class CredentialGuardCliTests(unittest.TestCase):
 
 TOOL_FD_FIXTURE = r'''
 import assert from 'node:assert/strict';
-import { existsSync, fstatSync, readFileSync, readSync, writeFileSync } from 'node:fs';
+import { existsSync, fstatSync, linkSync, readFileSync, readSync, unlinkSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
@@ -1005,7 +1005,20 @@ const restored = await handlers.tool_result({
   toolName, content: [{ type: 'text', text: 'safe' }], details: {}, isError: false,
 });
 assert(restored !== undefined);
-assert.equal(existsSync(authFile), false, 'auth file restored before session shutdown');
+assert(readFileSync(authFile).includes(Buffer.from(secret)),
+  'auth file was not restored after the redacted tool result');
+// Simulate Pi's legitimate provider refresh between turns. The next common
+// tool boundary must accept only this coherent same-account transition,
+// retain it in extension-owned memory, and detach it before dispatch.
+const rotatedSecret = `${secret}-ROTATED`;
+const rotatedRefresh = 'SYNTHETIC-ROTATED-REFRESH-VALUE';
+const rotatedPayload = Buffer.from(JSON.stringify({
+  'openai-codex': {
+    type: 'oauth', access: rotatedSecret, refresh: rotatedRefresh,
+    accountId: 'synthetic-account', expires: Date.now() + 7_200_000,
+  },
+}));
+writeFileSync(authFile, rotatedPayload, { mode: 0o600 });
 const verdict2 = await handlers.tool_call({ toolName, input });
 assert.equal(verdict2 ?? null, null, `second tool ${toolName} unexpectedly blocked`);
 assert.equal(existsSync(authFile), false, 'auth file survived second tool boundary');
@@ -1013,10 +1026,27 @@ const restored2 = await handlers.tool_result({
   toolName, content: [{ type: 'text', text: 'safe-2' }], details: {}, isError: false,
 });
 assert(restored2 !== undefined);
-assert.equal(existsSync(authFile), false, 'auth file restored during tool execution');
-writeFileSync(authFile, '{}\n', { mode: 0o600 });
+assert(readFileSync(authFile).includes(Buffer.from(secret)),
+  'auth file was not restored for the next authenticated turn');
+
+// Reproduce the reviewed B1 race for every enabled tool: after a completed
+// tool/result cycle, detach the credential, recreate auth.json, and add a
+// hardlink alias before the next tool_call. The common synchronous boundary
+// must reject the call before any tool-specific implementation can run.
+const detachedAgain = extension.closeToolCredentialBoundary();
+assert.equal(detachedAgain.ok, true);
+assert.equal(existsSync(authFile), false);
+writeFileSync(authFile, rotatedPayload, { mode: 0o600 });
+const aliasPath = `${authFile}.hardlink`;
+linkSync(authFile, aliasPath);
+const recreated = await handlers.tool_call({ toolName, input });
+assert.equal(recreated?.block, true,
+  `recreated hardlinked auth file did not block ${toolName}`);
+assert.match(recreated.reason, /tool-file-recreated-while-detached/);
+unlinkSync(aliasPath);
+unlinkSync(authFile);
 await handlers.session_shutdown({ reason: 'quit' }, {});
-assert(readFileSync(authFile).includes(Buffer.from(secret)));
+assert(readFileSync(authFile).includes(Buffer.from(rotatedSecret)));
 console.log(`TOOL_CREDENTIAL_CYCLED:${toolName}`);
 '''
 
@@ -1144,6 +1174,7 @@ class NodeExtensionRedactionTests(unittest.TestCase):
                         "openai-codex": {
                             "type": "oauth", "access": secret,
                             "refresh": "SYNTHETIC-REFRESH-VALUE",
+                            "accountId": "synthetic-account",
                             "expires": int(time.time() * 1000) + 3_600_000,
                         },
                     }).encode("utf-8")

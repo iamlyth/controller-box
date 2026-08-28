@@ -3515,28 +3515,108 @@ def _persist_private_pi2_auth(
         or target_info.st_size <= 0 or target_info.st_size > (1 << 20)
     ):
         raise SupervisionError("Pi2 credential refresh path has unsafe identity or mode")
-    source_fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    def read_bound_auth(path: Path, expected: os.stat_result, label: str) -> bytearray:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            opened = os.fstat(descriptor)
+            if (
+                (opened.st_dev, opened.st_ino) != (expected.st_dev, expected.st_ino)
+                or not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1
+                or opened.st_uid != uid or stat.S_IMODE(opened.st_mode) != 0o600
+            ):
+                raise SupervisionError(f"Pi2 {label} auth identity changed before refresh")
+            payload = bytearray()
+            while len(payload) <= (1 << 20):
+                chunk = os.read(
+                    descriptor, min(65536, (1 << 20) + 1 - len(payload))
+                )
+                if not chunk:
+                    break
+                payload.extend(chunk)
+            if not payload or len(payload) > (1 << 20):
+                raise SupervisionError(
+                    f"Pi2 {label} auth bytes are empty or oversized"
+                )
+            return payload
+        finally:
+            os.close(descriptor)
+
+    data = read_bound_auth(source, source_info, "private")
     try:
-        opened = os.fstat(source_fd)
-        if (opened.st_dev, opened.st_ino) != (source_info.st_dev, source_info.st_ino):
-            raise SupervisionError("Pi2 private auth identity changed before refresh")
-        data = bytearray()
-        while len(data) <= (1 << 20):
-            chunk = os.read(source_fd, min(65536, (1 << 20) + 1 - len(data)))
-            if not chunk:
-                break
-            data.extend(chunk)
-        if not data or len(data) > (1 << 20):
-            raise SupervisionError("Pi2 private auth refresh bytes are empty or oversized")
+        original_data = read_bound_auth(target, target_info, "operator")
+    except BaseException:
+        data[:] = b"\x00" * len(data)
+        raise
+    try:
+        try:
+            parsed = json.loads(data)
+            original = json.loads(original_data)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise SupervisionError("Pi2 auth refresh is malformed JSON") from exc
+        codex = parsed.get("openai-codex") if isinstance(parsed, dict) else None
+        original_codex = (
+            original.get("openai-codex") if isinstance(original, dict) else None
+        )
+        if (
+            not isinstance(codex, dict)
+            or not isinstance(original_codex, dict)
+            or codex.get("type") != "oauth"
+            or original_codex.get("type") != "oauth"
+        ):
+            raise SupervisionError(
+                "Pi2 auth refresh lacks the original openai-codex OAuth binding"
+            )
+        access = codex.get("access")
+        refresh = codex.get("refresh")
+        account = codex.get("accountId")
+        expires = codex.get("expires")
+        original_refresh = original_codex.get("refresh")
+        original_account = original_codex.get("accountId")
+        original_access = original_codex.get("access")
+        original_expires = original_codex.get("expires")
+        if (
+            not isinstance(access, str) or not (16 <= len(access) <= 16_384)
+            or not isinstance(refresh, str) or not (16 <= len(refresh) <= 16_384)
+            or not isinstance(original_refresh, str)
+            or not (16 <= len(original_refresh) <= 16_384)
+            or not isinstance(account, str) or not account or len(account) > 1024
+            or account != original_account
+            or isinstance(expires, bool) or not isinstance(expires, (int, float))
+            or not math.isfinite(float(expires))
+            or float(expires) <= time.time() * 1000.0 + 300_000.0
+        ):
+            raise SupervisionError(
+                "Pi2 auth refresh has invalid access/refresh/account/expiry binding"
+            )
+        # The provider may rotate its refresh token, but an arbitrary new
+        # refresh string is not accepted by shape alone. It must form one
+        # coherent transition from the exact operator credential: same account
+        # and unrelated providers, a new access token, and a strictly later
+        # finite expiry. An unchanged refresh remains a legitimate access-token
+        # refresh and is accepted.
+        if refresh != original_refresh and (
+            access == original_access
+            or isinstance(original_expires, bool)
+            or not isinstance(original_expires, (int, float))
+            or not math.isfinite(float(original_expires))
+            or float(expires) <= float(original_expires)
+        ):
+            raise SupervisionError(
+                "Pi2 rotating refresh token is not bound to a coherent provider transition"
+            )
+        if set(parsed) != set(original) or any(
+            parsed[key] != original[key]
+            for key in original
+            if key != "openai-codex"
+        ):
+            raise SupervisionError(
+                "Pi2 auth refresh changed an unrelated operator credential binding"
+            )
+    except BaseException:
+        data[:] = b"\x00" * len(data)
+        raise
     finally:
-        os.close(source_fd)
-    try:
-        parsed = json.loads(data)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise SupervisionError("Pi2 private auth refresh is malformed JSON") from exc
-    codex = parsed.get("openai-codex") if isinstance(parsed, dict) else None
-    if not isinstance(codex, dict) or codex.get("type") != "oauth":
-        raise SupervisionError("Pi2 private auth refresh lacks the openai-codex OAuth binding")
+        original_data[:] = b"\x00" * len(original_data)
     directory_fd = os.open(
         target_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
     )

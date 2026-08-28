@@ -1362,30 +1362,73 @@ class ProviderRegistryTests(_Base):
             with self.assertRaises(launch.InvocationError):
                 launch._prepare_private_pi2_home(private)
 
-    def test_pi2_refresh_persistence_is_atomic_and_rejects_symlinks(self) -> None:
+    def test_pi2_refresh_persistence_is_identity_bound_atomic_and_strict(self) -> None:
         operator = self.tmp / "refresh-operator"
         target_dir = operator / ".pi" / "agent2"
         target_dir.mkdir(parents=True, mode=0o700)
         target = target_dir / "auth.json"
-        target.write_text(
-            '{"openai-codex":{"type":"oauth","refresh":"old"}}\n',
-            encoding="utf-8",
-        )
-        target.chmod(0o600)
         private = self.tmp / "refresh-private"
         source = private / ".pi" / "agent2" / "auth.json"
         source.parent.mkdir(parents=True, mode=0o700)
-        refreshed = b'{"openai-codex":{"type":"oauth","refresh":"new"}}\n'
-        source.write_bytes(refreshed)
-        source.chmod(0o600)
+        now = int(time.time() * 1000)
+        original = {
+            "openai-codex": {
+                "type": "oauth", "access": "A" * 32,
+                "refresh": "R" * 32, "accountId": "account-123",
+                "expires": now + 3_600_000,
+            },
+            "ollama": {"type": "api_key", "key": "unchanged-provider"},
+        }
+
+        def publish(path: Path, document: object) -> bytes:
+            raw = (json.dumps(document, sort_keys=True) + "\n").encode()
+            path.write_bytes(raw)
+            path.chmod(0o600)
+            return raw
+
+        publish(target, original)
+        rotated = json.loads(json.dumps(original))
+        rotated["openai-codex"].update({
+            "access": "B" * 32, "refresh": "S" * 32,
+            "expires": now + 7_200_000,
+        })
+        refreshed = publish(source, rotated)
         self.assertTrue(
             launch._persist_private_pi2_auth(private, operator_home=operator)
         )
         self.assertEqual(target.read_bytes(), refreshed)
         self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
 
+        # Shape-only OAuth documents and incoherent refresh rotation never
+        # replace the exact operator credential. Each case starts from the same
+        # bound account/refresh/provider identity and must leave it byte-exact.
+        invalid_cases = []
+        for field, value in (
+            ("access", ""), ("refresh", ""), ("accountId", "other-account"),
+            ("expires", now - 1), ("expires", float("inf")),
+        ):
+            candidate = json.loads(json.dumps(original))
+            candidate["openai-codex"][field] = value
+            invalid_cases.append((field, candidate))
+        incoherent = json.loads(json.dumps(original))
+        incoherent["openai-codex"]["refresh"] = "T" * 32
+        invalid_cases.append(("refresh-without-provider-rotation", incoherent))
+        foreign = json.loads(json.dumps(original))
+        foreign["ollama"]["key"] = "substituted-provider"
+        invalid_cases.append(("unrelated-provider", foreign))
+        for label, candidate in invalid_cases:
+            with self.subTest(label=label):
+                expected = publish(target, original)
+                publish(source, candidate)
+                with self.assertRaises(launch.SupervisionError):
+                    launch._persist_private_pi2_auth(
+                        private, operator_home=operator
+                    )
+                self.assertEqual(target.read_bytes(), expected)
+
         sentinel = self.tmp / "refresh-sentinel"
         sentinel.write_text("unchanged", encoding="utf-8")
+        publish(source, rotated)
         target.unlink()
         target.symlink_to(sentinel)
         with self.assertRaises(launch.SupervisionError):

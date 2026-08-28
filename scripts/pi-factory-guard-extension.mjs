@@ -494,11 +494,14 @@ function currentUid() {
   return typeof process.getuid === "function" ? process.getuid() : -1;
 }
 
-// Pi2 keeps its anonymous auth descriptor for authenticated turns while the
-// exact-commit extension detaches the private auth file around every tool.
-// Tool subprocesses do not inherit the descriptor, /proc is denied, and the
-// allowlisted in-process tools have no numeric-descriptor API. The file is
-// restored before Pi starts the next authenticated model turn.
+// Pi2 starts with an anonymous auth descriptor. The exact-commit extension
+// captures that credential into extension-owned memory and detaches the private
+// auth file before every tool. Tool subprocesses do not inherit the descriptor,
+// /proc is denied, and the allowlisted in-process tools have no numeric-
+// descriptor API. After each tool result is fully redacted, the extension
+// recreates the private mode-0600 file for Pi's next authenticated model turn;
+// the next tool call synchronously captures any legitimate OAuth rotation and
+// detaches it again before dispatch.
 const TOOL_FD_ENV = "PI_FACTORY_TOOL_FD";
 const TOOL_FD_DEV_ENV = "PI_FACTORY_TOOL_FD_DEV";
 const TOOL_FD_INO_ENV = "PI_FACTORY_TOOL_FD_INO";
@@ -511,35 +514,137 @@ const DECIMAL_IDENTITY_RE = /^(?:0|[1-9][0-9]{0,30})$/;
 /** Credential bytes and exact file identity held only by this extension. */
 let toolCredentialState = null;
 
-function validCredentialFile(path, expectedDev, expectedIno) {
-  const identity = lstatSync(path, { bigint: true });
+function validCredentialIdentity(identity, expectedDev = null, expectedIno = null) {
   return identity.isFile() && !identity.isSymbolicLink()
-    && identity.dev === expectedDev && identity.ino === expectedIno
+    && (expectedDev === null || identity.dev === expectedDev)
+    && (expectedIno === null || identity.ino === expectedIno)
     && identity.nlink === 1n && identity.uid === BigInt(currentUid())
-    && (identity.mode & 0o77n) === 0n && identity.size <= 1_048_576n;
+    && (identity.mode & 0o77n) === 0n
+    && identity.size > 0n && identity.size <= 1_048_576n;
+}
+
+function validCredentialFile(path, expectedDev, expectedIno) {
+  return validCredentialIdentity(
+    lstatSync(path, { bigint: true }), expectedDev, expectedIno,
+  );
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map(
+      (key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`,
+    ).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/** Validate a provider-produced OAuth state transition without exposing any
+ * credential value. Account and all unrelated provider records are immutable.
+ * A refresh-token rotation is accepted only together with a new access token
+ * and a strictly later finite expiry; an unchanged refresh remains valid. */
+function validCredentialTransition(previousBytes, candidateBytes) {
+  let previous;
+  let candidate;
+  try {
+    previous = JSON.parse(previousBytes.toString("utf8"));
+    candidate = JSON.parse(candidateBytes.toString("utf8"));
+  } catch {
+    return false;
+  }
+  if (!previous || typeof previous !== "object" || Array.isArray(previous)
+      || !candidate || typeof candidate !== "object" || Array.isArray(candidate)
+      || canonicalJson(Object.keys(previous).sort())
+        !== canonicalJson(Object.keys(candidate).sort())) return false;
+  const oldAuth = previous["openai-codex"];
+  const newAuth = candidate["openai-codex"];
+  if (!oldAuth || typeof oldAuth !== "object" || Array.isArray(oldAuth)
+      || !newAuth || typeof newAuth !== "object" || Array.isArray(newAuth)
+      || oldAuth.type !== "oauth" || newAuth.type !== "oauth"
+      || typeof oldAuth.accountId !== "string" || oldAuth.accountId.length === 0
+      || newAuth.accountId !== oldAuth.accountId
+      || typeof newAuth.access !== "string" || newAuth.access.length < 16
+      || newAuth.access.length > 16_384
+      || typeof newAuth.refresh !== "string" || newAuth.refresh.length < 16
+      || newAuth.refresh.length > 16_384
+      || typeof newAuth.expires !== "number" || !Number.isFinite(newAuth.expires)
+      || newAuth.expires <= Date.now() + 300_000) return false;
+  for (const key of Object.keys(previous)) {
+    if (key !== "openai-codex"
+        && canonicalJson(previous[key]) !== canonicalJson(candidate[key])) return false;
+  }
+  if (newAuth.refresh !== oldAuth.refresh
+      && (newAuth.access === oldAuth.access
+          || typeof oldAuth.expires !== "number"
+          || !Number.isFinite(oldAuth.expires)
+          || newAuth.expires <= oldAuth.expires)) return false;
+  return true;
+}
+
+/** Open, identity-check, read, and unlink one attached auth file synchronously.
+ * A provider may atomically replace the restored inode while refreshing OAuth;
+ * the replacement is rebound only after the transition validator accepts it.
+ * The single-link check rejects every hardlink alias. */
+function captureAttachedCredential(saved) {
+  let descriptor = -1;
+  try {
+    const named = lstatSync(saved.filePath, { bigint: true });
+    if (!validCredentialIdentity(named)) {
+      return { ok: false, reason: "tool-file-binding-mismatch" };
+    }
+    descriptor = openSync(
+      saved.filePath,
+      fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_CLOEXEC,
+    );
+    const opened = fstatSync(descriptor, { bigint: true });
+    if (!validCredentialIdentity(opened)
+        || opened.dev !== named.dev || opened.ino !== named.ino) {
+      return { ok: false, reason: "tool-file-binding-mismatch" };
+    }
+    const refreshed = readFileSync(descriptor);
+    if (!validCredentialTransition(saved.bytes, refreshed)) {
+      return { ok: false, reason: "tool-credential-transition-invalid" };
+    }
+    const beforeUnlink = lstatSync(saved.filePath, { bigint: true });
+    if (beforeUnlink.dev !== opened.dev || beforeUnlink.ino !== opened.ino
+        || !validCredentialIdentity(beforeUnlink)) {
+      return { ok: false, reason: "tool-file-binding-mismatch" };
+    }
+    unlinkSync(saved.filePath);
+    saved.bytes.fill(0);
+    saved.bytes = refreshed;
+    saved.expectedFileDev = opened.dev;
+    saved.expectedFileIno = opened.ino;
+    saved.status = "detached";
+    return { ok: true, reason: "detached" };
+  } catch {
+    return { ok: false, reason: "tool-credential-removal-failed" };
+  } finally {
+    if (descriptor >= 0) {
+      try { closeSync(descriptor); } catch { /* fail-closed result already chosen */ }
+    }
+  }
 }
 
 /** Detach auth.json and close every inherited descriptor before a tool runs. */
 export function closeToolCredentialBoundary(env = process.env) {
   if (toolCredentialState?.status === "detached") {
+    // This synchronous absence check is mandatory on every tool_call. Pi, an
+    // OAuth helper, or hostile code recreating auth.json while detached must
+    // never gain one tool dispatch. Any inode type, including a hardlinked
+    // regular file, is a collision and fails closed.
+    try {
+      lstatSync(toolCredentialState.filePath, { bigint: true });
+      return { ok: false, reason: "tool-file-recreated-while-detached" };
+    } catch (error) {
+      if (error?.code !== "ENOENT") {
+        return { ok: false, reason: "tool-file-absence-unverifiable" };
+      }
+    }
     return { ok: true, reason: "already-detached" };
   }
   if (toolCredentialState?.status === "attached") {
-    try {
-      if (!validCredentialFile(
-        toolCredentialState.filePath,
-        toolCredentialState.expectedFileDev,
-        toolCredentialState.expectedFileIno,
-      )) return { ok: false, reason: "tool-file-binding-mismatch" };
-      const refreshed = readFileSync(toolCredentialState.filePath);
-      toolCredentialState.bytes.fill(0);
-      toolCredentialState.bytes = refreshed;
-      unlinkSync(toolCredentialState.filePath);
-      toolCredentialState.status = "detached";
-      return { ok: true, reason: "detached" };
-    } catch {
-      return { ok: false, reason: "tool-credential-removal-failed" };
-    }
+    return captureAttachedCredential(toolCredentialState);
   }
 
   const numericValues = [
@@ -618,10 +723,16 @@ export function closeToolCredentialBoundary(env = process.env) {
   return { ok: true, reason: "detached" };
 }
 
-/** Restore auth.json after the tool result and before Pi's next model turn. */
+/** Restore auth.json after the redacted tool result and before Pi's next
+ * authenticated model turn. An already-attached file is first captured and
+ * transition-validated so shutdown also preserves a legitimate late refresh. */
 export function restoreToolCredentialBoundary() {
   const saved = toolCredentialState;
   if (saved === null) return { ok: true, reason: "not-detached" };
+  if (saved.status === "attached") {
+    const captured = captureAttachedCredential(saved);
+    if (!captured.ok) return captured;
+  }
   if (saved.status !== "detached") return { ok: false, reason: "tool-file-still-attached" };
   let targetFd = -1;
   try {
@@ -1142,6 +1253,9 @@ export default function registerFactoryGuard(pi) {
     if (credential?.type !== "oauth" || typeof credential.access !== "string"
         || credential.access.length < 16 || credential.access.length > 16_384
         || typeof credential.refresh !== "string" || credential.refresh.length < 16
+        || credential.refresh.length > 16_384
+        || typeof credential.accountId !== "string" || credential.accountId.length === 0
+        || credential.accountId.length > 1024
         || typeof credential.expires !== "number" || !Number.isFinite(credential.expires)
         || credential.expires <= Date.now() + 300_000) {
       throw new Error("factory guard could not pin openai-codex runtime auth");
@@ -1166,7 +1280,8 @@ export default function registerFactoryGuard(pi) {
   pi.on("tool_call", (event) => {
     // This is deliberately first and applies to every tool name. The private
     // credential pathname is detached before any in-process/tool subprocess
-    // implementation and restored only from the inaccessible memfd afterward.
+    // implementation and restored only from extension-owned bytes after the
+    // corresponding tool result has been redacted.
     const detached = closeToolCredentialBoundary();
     if (!detached.ok) {
       return {
@@ -1189,6 +1304,7 @@ export default function registerFactoryGuard(pi) {
   });
 
   pi.on("tool_result", async (event) => {
+    let result;
     if (
       event.toolName === "bash"
       && event.details
@@ -1197,14 +1313,21 @@ export default function registerFactoryGuard(pi) {
     ) {
       const sanitized = await sanitizeBashOverflowPath(event.details.fullOutputPath);
       if (!sanitized.ok) {
-        return failRedactedResult(event);
+        result = failRedactedResult(event);
       }
     }
-    const redacted = redactToolResultPatch(event);
-    if (redacted.failed) {
-      return failRedactedResult(event);
+    if (result === undefined) {
+      const redacted = redactToolResultPatch(event);
+      result = redacted.failed ? failRedactedResult(event) : redacted.patch;
     }
-    return redacted.patch;
+    // Restoration happens only after every raw result/overflow byte has been
+    // sanitized. The private file is then available to Pi's provider code for
+    // the next model turn, never to the just-completed tool implementation.
+    const restored = restoreToolCredentialBoundary();
+    if (!restored.ok) {
+      throw new Error(`${TOOLCALL_BLOCK_PREFIX}${restored.reason}`);
+    }
+    return result;
   });
 
   pi.on("session_shutdown", () => {
