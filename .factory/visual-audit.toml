@@ -1,15 +1,16 @@
 # Optional machine visual-audit methodology (Controller-Box).
 #
 # See the generic boilerplate .factory/visual-audit.toml for the full
-# description. Controller enables the feature only after
-# scripts/visual-audit-probe.sh proves a real non-skipping image round-trip
-# to the configured vision model. Captures are exact-commit installed
+# description. Controller's production reviewer is fixed to the authenticated
+# Pi2 vision authority and exact model identity below. The feature remains
+# disabled until a genuine image-byte probe and the complete independently
+# accepted calibration set both pass. Captures are exact-commit installed
 # production windows, serial and isolated, under the dedicated lease.
 schema_version = 1
 
 [visual-audit]
 enabled = false
-vision_model = "ollama/kimi-k2.7-code"
+vision_model = "ollama/kimi-k2.6"
 sdk_driver = "scripts/visual-audit-review-sdk.mjs"
 lease_file = ".factory-state/visual-audit.lease"
 review_parallelism = 4

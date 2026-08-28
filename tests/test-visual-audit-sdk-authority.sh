@@ -40,7 +40,7 @@ export class ModelRuntime {
     record({runtime:{...options, hasModelsStore: Boolean(options.modelsStore)}});
     return new ModelRuntime();
   }
-  getModel(provider, model) { return provider === "synthetic" && model === "vision" ? {provider, id:model} : undefined; }
+  getModel(provider, model) { return provider === "ollama" && model === "kimi-k2.6" ? {provider, id:model} : undefined; }
   dispose() {}
 }
 export class SessionManager { static inMemory() { return {kind:"memory"}; } }
@@ -101,7 +101,7 @@ sdk_command() {
       --state-id probe --role probe --prompt-file "$tmp/prompt.md" \
       --expected-description-base64 "$expected_b64" --calibration-expectation none \
       --prompt-sha256 "$prompt_hash" --schema-sha256 "$schema_hash" --request-nonce "$nonce" \
-      --model synthetic/vision --out-dir "$tmp/out"
+      --model ollama/kimi-k2.6 --out-dir "$tmp/out"
 }
 
 sdk_command >"$tmp/pass.out"
@@ -127,7 +127,7 @@ assert all(loader[k] is True for k in
 finding_bytes = pathlib.Path(finding_path).read_bytes()
 finding = json.loads(finding_bytes)
 receipt = json.load(open(receipt_path))
-assert finding["model"] == receipt["model"] == "synthetic/vision"
+assert finding["model"] == receipt["model"] == "ollama/kimi-k2.6"
 assert finding["image_sha256"] == receipt["image_sha256"] == image_sha
 assert finding["request_nonce"] == receipt["request_nonce"] == nonce
 assert finding["prompt_sha256"] == receipt["prompt_sha256"] == prompt_sha
@@ -135,6 +135,19 @@ prompt = next(r["prompt"] for r in records if "prompt" in r)
 assert prompt["expectedDescription"] == pathlib.Path(expected_path).read_text()
 assert receipt["finding_sha256"] == hashlib.sha256(finding_bytes).hexdigest()
 PY
+
+# The production SDK treats --model only as an exact sealed assertion. A
+# caller cannot select another registered/provider model, even with a safe Pi
+# authority; rejection happens before ModelRuntime/model invocation.
+rm -rf "$tmp/out"; : > "$tmp/sdk.log"
+expect_failure "production model override" "caller model override refused" env \
+    PI_PACKAGE_DIR="$tmp/sdk" PI_CODING_AGENT_DIR="$authority" FAKE_SDK_LOG="$tmp/sdk.log" \
+    node "$DRIVER" --image "$tmp/image.png" --expected-sha256 "$image_sha" \
+    --state-id probe --role probe --prompt-file "$tmp/prompt.md" \
+    --expected-description-base64 "$expected_b64" --calibration-expectation none \
+    --prompt-sha256 "$prompt_hash" --schema-sha256 "$schema_hash" --request-nonce "$nonce" \
+    --model ollama/kimi-k2.7-code --out-dir "$tmp/out"
+[[ ! -s "$tmp/sdk.log" ]] || fail "model override reached the SDK runtime"
 
 # A model response cannot borrow or alter the nonce; the real driver rejects it
 # before producing receipt evidence.
@@ -145,7 +158,7 @@ expect_failure "model nonce drift" "model-returned request_nonce" env FAKE_BAD_N
     --state-id probe --role probe --prompt-file "$tmp/prompt.md" \
     --expected-description-base64 "$expected_b64" --calibration-expectation none \
     --prompt-sha256 "$prompt_hash" --schema-sha256 "$schema_hash" --request-nonce "$nonce" \
-    --model synthetic/vision --out-dir "$tmp/out"
+    --model ollama/kimi-k2.6 --out-dir "$tmp/out"
 
 # Expected criteria are mandatory and sealed before any model call. Omission,
 # malformed/tampered encoding, and a stale digest for changed criteria fail.
@@ -154,14 +167,14 @@ expect_failure "expected omission" "missing option --expected-description-base64
     node "$DRIVER" --image "$tmp/image.png" --expected-sha256 "$image_sha" \
     --state-id probe --role probe --prompt-file "$tmp/prompt.md" \
     --calibration-expectation none --prompt-sha256 "$prompt_hash" \
-    --schema-sha256 "$schema_hash" --request-nonce "$nonce" --model synthetic/vision --out-dir "$tmp/out"
+    --schema-sha256 "$schema_hash" --request-nonce "$nonce" --model ollama/kimi-k2.6 --out-dir "$tmp/out"
 expect_failure "expected tamper" "expected description must be canonical base64" env \
     PI_PACKAGE_DIR="$tmp/sdk" PI_CODING_AGENT_DIR="$authority" FAKE_SDK_LOG="$tmp/sdk.log" \
     node "$DRIVER" --image "$tmp/image.png" --expected-sha256 "$image_sha" \
     --state-id probe --role probe --prompt-file "$tmp/prompt.md" \
     --expected-description-base64 '%%%tampered%%%' --calibration-expectation none \
     --prompt-sha256 "$prompt_hash" --schema-sha256 "$schema_hash" \
-    --request-nonce "$nonce" --model synthetic/vision --out-dir "$tmp/out"
+    --request-nonce "$nonce" --model ollama/kimi-k2.6 --out-dir "$tmp/out"
 stale_b64=$(printf '%s' 'changed expected state' | base64 -w0)
 expect_failure "stale expected" "task prompt/expected-description binding mismatch" env \
     PI_PACKAGE_DIR="$tmp/sdk" PI_CODING_AGENT_DIR="$authority" FAKE_SDK_LOG="$tmp/sdk.log" \
@@ -169,7 +182,7 @@ expect_failure "stale expected" "task prompt/expected-description binding mismat
     --state-id probe --role probe --prompt-file "$tmp/prompt.md" \
     --expected-description-base64 "$stale_b64" --calibration-expectation none \
     --prompt-sha256 "$prompt_hash" --schema-sha256 "$schema_hash" \
-    --request-nonce "$nonce" --model synthetic/vision --out-dir "$tmp/out"
+    --request-nonce "$nonce" --model ollama/kimi-k2.6 --out-dir "$tmp/out"
 [[ ! -e "$tmp/out/receipt-probe-probe.json" ]] || fail "nonce drift produced a receipt"
 
 # Authority selection and filesystem trust fail closed before SDK/model use.

@@ -272,12 +272,15 @@ for name in .factory/smoke/evidence_smoke_driver.py \
         exit 1
     }
 done
-# Machine visual-audit scaffold invariants: the generic scaffold is disabled by
-# default and keeps every mutable capture/review/calibration/probe path under
-# the ignored .factory-state/visual-audit/ or .factory/artifacts/visual-audit/
-# directories (Controller's capture/review dirs live under the artifacts
-# namespace; the lease stays under the runtime state namespace).
+# Machine visual-audit production invariants. Controller stays disabled until
+# its genuine authenticated Pi2 probe and independently accepted calibration
+# controls pass, but its configured and SDK-enforced identity is already fixed:
+# callers cannot select a production reviewer model. Mutable artifacts remain
+# under ignored factory paths.
 grep -q '^enabled = false' .factory/visual-audit.toml
+grep -q '^vision_model = "ollama/kimi-k2.6"$' .factory/visual-audit.toml
+grep -q '^const PRODUCTION_VISION_MODEL = "ollama/kimi-k2.6";$' scripts/visual-audit-review-sdk.mjs
+grep -q 'caller model override refused' scripts/visual-audit-review-sdk.mjs
 grep -q '^lease_file = ".factory-state/visual-audit' .factory/visual-audit.toml
 grep -q '^capture_dir = ".factory/artifacts/visual-audit/' .factory/visual-audit.toml
 grep -q '^review_dir = ".factory/artifacts/visual-audit/' .factory/visual-audit.toml

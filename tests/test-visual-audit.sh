@@ -230,7 +230,7 @@ write_mock_driver
 
 # Config override for the temp repo (enabled, temp dirs, mock driver).
 sed -e 's/enabled = false/enabled = true/' \
-    -e 's|vision_model = "ollama/kimi-k2.7-code"|vision_model = "test-model"|' \
+    -e 's|vision_model = "ollama/kimi-k2.6"|vision_model = "test-model"|' \
     -e "s|capture_dir = \".factory/artifacts/visual-audit/captures\"|capture_dir = \"$tmp/captures\"|" \
     -e "s|review_dir = \".factory/artifacts/visual-audit/reviews\"|review_dir = \"$tmp/reviews\"|" \
     -e "s|lease_file = \".factory-state/visual-audit.lease\"|lease_file = \"$tmp/lease\"|" \
@@ -593,7 +593,7 @@ CAL_RECEIPT="$tmp/.factory-state/visual-audit/calibration-receipt.json"
 # Rebuild the enabled review config from the tracked template (restore point).
 write_va_config() {
     sed -e 's/enabled = false/enabled = true/' \
-        -e 's|vision_model = "ollama/kimi-k2.7-code"|vision_model = "test-model"|' \
+        -e 's|vision_model = "ollama/kimi-k2.6"|vision_model = "test-model"|' \
         -e "s|capture_dir = \".factory/artifacts/visual-audit/captures\"|capture_dir = \"$tmp/captures\"|" \
         -e "s|review_dir = \".factory/artifacts/visual-audit/reviews\"|review_dir = \"$tmp/reviews\"|" \
         -e "s|lease_file = \".factory-state/visual-audit.lease\"|lease_file = \"$tmp/lease\"|" \
@@ -976,8 +976,8 @@ grep -q '^review_dir = ".factory/artifacts/visual-audit/reviews"' "$tmp/.factory
     || fail "config review_dir must retain Controller artifact path"
 grep -q '^lease_file = ".factory-state/visual-audit.lease"' "$tmp/.factory/visual-audit.toml" \
     || fail "config lease_file must retain Controller state path"
-grep -q '^enabled = false' "$tmp/.factory/visual-audit.toml" || fail "config must default disabled"
-grep -q '^vision_model = "ollama/kimi-k2.7-code"' "$tmp/.factory/visual-audit.toml" || fail "config vision_model must retain configured Kimi model"
+grep -q '^enabled = false' "$tmp/.factory/visual-audit.toml" || fail "config must remain disabled until genuine calibration passes"
+grep -q '^vision_model = "ollama/kimi-k2.6"' "$tmp/.factory/visual-audit.toml" || fail "config vision_model must retain exact authenticated Pi2 Kimi model"
 git check-ignore -q .factory-state/visual-audit/captures/good-main.png \
     || fail "capture dir is not git-ignored"
 git check-ignore -q .factory-state/visual-audit/reviews/report.json \
@@ -2634,12 +2634,12 @@ expect_rc 1 $rc "capture grace ceiling enforced"
 grep -q "capture_cleanup_grace_seconds" "$tmp/cap-badgrace.out" || fail "capture must report the grace ceiling"
 
 # --- 20. probe: model-less fails closed; hard timeout and pass paths ----------
-sed -i 's|vision_model = "ollama/kimi-k2.7-code"|vision_model = ""|' "$tmp/.factory/visual-audit.toml"
+sed -i 's|vision_model = "ollama/kimi-k2.6"|vision_model = ""|' "$tmp/.factory/visual-audit.toml"
 set +e
 VISUAL_AUDIT_VISION_MODEL="" "$PROBE" >"$tmp/probe-nomodel.out" 2>&1
 rc=$?
 set -e
-sed -i 's|vision_model = ""|vision_model = "ollama/kimi-k2.7-code"|' "$tmp/.factory/visual-audit.toml"
+sed -i 's|vision_model = ""|vision_model = "ollama/kimi-k2.6"|' "$tmp/.factory/visual-audit.toml"
 expect_rc 64 $rc "probe without a model fails closed"
 grep -q "VISUAL_AUDIT_VISION_MODEL" "$tmp/probe-nomodel.out" || fail "probe must name the model requirement"
 cat > "$tmp/pass-sdk.sh" <<'EOF'
@@ -2768,7 +2768,7 @@ exec "$tmp/scripts/mock-driver.sh" "\$@"
 EOF
 chmod +x "$tmp/scripts/counting-driver.sh"
 sed -e 's/enabled = false/enabled = true/' \
-    -e 's|vision_model = "ollama/kimi-k2.7-code"|vision_model = "test-model"|' \
+    -e 's|vision_model = "ollama/kimi-k2.6"|vision_model = "test-model"|' \
     -e 's|sdk_driver = "scripts/visual-audit-review-sdk.mjs"|sdk_driver = "scripts/counting-driver.sh"|' \
     -e 's|capture_dir = ".factory/artifacts/visual-audit/captures"|capture_dir = ".factory-state/visual-audit/captures"|' \
     -e 's|review_dir = ".factory/artifacts/visual-audit/reviews"|review_dir = ".factory-state/visual-audit/reviews"|' \

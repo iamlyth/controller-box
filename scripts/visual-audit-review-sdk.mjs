@@ -25,12 +25,13 @@
 // an evidence tier. The nonce proves invocation freshness only; supplemental
 // authority (prompt/schema/calibration/gate policy) stays in the docs.
 //
-// The vision model is never a writer/Ralph model. Model selection is
-// configurable and credential-free. Production requires PI_CODING_AGENT_DIR
-// to name the same trusted Pi authority used by pi2; auth.json and models.json
-// are passed explicitly to ModelRuntime so SDK defaults cannot silently fall
-// back to a different agent directory. No visual-audit-specific credential or
-// config path override exists.
+// The vision model is never a writer/factory model. Controller production is
+// fixed to ollama/kimi-k2.6; --model is only an exact binding assertion and
+// cannot select another production model. PI_CODING_AGENT_DIR must name the
+// same trusted Pi authority used by pi2; auth.json and models.json are passed
+// explicitly to ModelRuntime so SDK defaults cannot silently fall back to a
+// different agent directory. No visual-audit-specific credential or config
+// path override exists.
 //
 // Usage:
 //   node visual-audit-review-sdk.mjs \
@@ -41,9 +42,9 @@
 //     --request-nonce NONCE --model <consumer-configured-vision-model> \
 //     --out-dir DIR
 //
-// The vision model is consumer-configured (`.factory/visual-audit.toml`
-// `vision_model` / `VISUAL_AUDIT_VISION_MODEL`); the generic scaffold
-// provides no default model and enables nothing until the consumer sets one.
+// Controller's tracked config carries the same fixed production identity.
+// Test-only orchestration may replace the complete SDK driver, but this
+// production driver itself never accepts a caller-selected model.
 
 import { createHash } from "node:crypto";
 import {
@@ -60,6 +61,7 @@ const SHA256_RE = /^[0-9a-f]{64}$/;
 const BASE64_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 const TASK_PROMPT_BINDING_SCHEMA = "ralph-visual-audit-task-prompt/v1";
 const MAX_EXPECTED_DESCRIPTION_BYTES = 16384;
+const PRODUCTION_VISION_MODEL = "ollama/kimi-k2.6";
 
 // Resolve the pi-coding-agent package without hardcoding a store path. The
 // pi2 wrapper exports PI_PACKAGE_DIR; failing that, resolve relative to the
@@ -188,6 +190,15 @@ const requestNonce = opt("--request-nonce");
 const modelName = opt("--model");
 const outDir = resolve(opt("--out-dir"));
 
+// The CLI argument is a sealed assertion supplied by the tracked
+// orchestrator, not a selection surface. Reject drift before prompt creation,
+// model lookup, credential use, or network activity.
+if (modelName !== PRODUCTION_VISION_MODEL) {
+  console.error(
+    `visual-audit-sdk: production model must be exactly ${PRODUCTION_VISION_MODEL}; caller model override refused`,
+  );
+  process.exit(2);
+}
 if (!NONCE_RE.test(requestNonce)) {
   console.error("visual-audit-sdk: request nonce must be 32 lowercase hex chars (>=128 bits)");
   process.exit(2);

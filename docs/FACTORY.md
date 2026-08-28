@@ -550,10 +550,22 @@ for human acceptance. Completion runs `scripts/visual-audit-gate.sh`, which
 only validates an existing report and never captures or invokes a model under
 the lifecycle lock.
 
-Controller-Box keeps the framework disabled until its product capture
-adapter, real probe, calibration, and installed state inventory are ready.
+Controller-Box fixes production machine review to the authenticated Pi2
+identity `ollama/kimi-k2.6`; the SDK treats its `--model` argument only as an
+exact binding assertion and refuses caller-selected production models. The
+framework remains disabled. A genuine non-skipping image-byte probe is
+required at the exact framework commit, and activation is currently blocked
+because the tracked calibration declarations have no accepted image SHA-256
+bindings and the required known-bad/current-bad/human-reviewed-good calibration
+PNGs are absent. These controls must be independently supplied and calibrated
+before `enabled = true`; no synthetic fixture or machine verdict may stand in
+for the human-reviewed-good prerequisite.
+
 Mutable captures, receipts, leases, and reports remain ignored factory state;
-tracked configuration contains no credentials.
+tracked configuration contains no credentials. Machine review can only add
+supplemental falsification findings: it cannot approve a golden, raise an
+evidence tier, satisfy FACT-006, or establish hardware, real-system-service,
+target-consumer, or runner claims.
 
 ## Credential boundary guard
 
