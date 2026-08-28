@@ -233,7 +233,15 @@ load_svg_texture(SDL_Renderer *renderer, const char *svg_path, int size)
         return NULL;
     }
 
-    SDL_UpdateTexture(tex, NULL, pixels, tw * 4);
+    /* Treat an upload failure as a load failure.  Returning a non-NULL
+     * texture after SDL_UpdateTexture() fails would make callers believe the
+     * installed diagram is available while rendering an uninitialised/blank
+     * texture, defeating the perceptible-content acceptance. */
+    if (SDL_UpdateTexture(tex, NULL, pixels, tw * 4) != 0) {
+        SDL_DestroyTexture(tex);
+        free(pixels);
+        return NULL;
+    }
     SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
     free(pixels);
 
