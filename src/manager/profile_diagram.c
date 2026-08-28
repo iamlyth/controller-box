@@ -489,8 +489,14 @@ cbx_profile_diagram_content_rect(const cbx_profile_diagram *diag,
      * is offset by a row and the diagram looks stretched. */
     dst.w = (int)((float)tw * scale + 0.5f);
     dst.h = (int)((float)th * scale + 0.5f);
+    /* Rounding must never let the fitted texture escape its widget.  This
+     * matters for dimensions whose ideal scale lands within half a pixel of
+     * an edge: an escaped row/column would both clip the SVG and invalidate
+     * the marker/content-box correspondence. */
     if (dst.w < 1) dst.w = 1;
     if (dst.h < 1) dst.h = 1;
+    if (dst.w > rect->w) dst.w = rect->w;
+    if (dst.h > rect->h) dst.h = rect->h;
     dst.x = rect->x + (rect->w - dst.w) / 2;
     dst.y = rect->y + (rect->h - dst.h) / 2;
     *out = dst;
