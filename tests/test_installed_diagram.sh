@@ -382,8 +382,10 @@ fi
 TITLE_PX=$(convert "$EDITOR_CAPTURE" -crop "$TITLE" +repage -colorspace gray \
         -threshold 60% -format "%[fx:mean*w*h]" info: 2>/dev/null)
 echo "    title text pixels: $TITLE_PX"
-if [ "${TITLE_PX:-0}" -lt 50 ]; then
-    fail "editor model/title label not rendered ($TITLE_PX px)"
+if ! awk -v pixels="${TITLE_PX:-}" 'BEGIN {
+        exit !(pixels ~ /^[0-9]+([.][0-9]+)?$/ && (pixels + 0) >= 50)
+    }'; then
+    fail "editor model/title label not rendered (${TITLE_PX:-invalid} px)"
 else
     pass "editor title/model label rendered ($TITLE_PX px)"
 fi
@@ -392,8 +394,10 @@ fi
 LIST_PX=$(convert "$EDITOR_CAPTURE" -crop "$LIST" +repage -colorspace gray \
         -threshold 60% -format "%[fx:mean*w*h]" info: 2>/dev/null)
 echo "    binding list text pixels: $LIST_PX"
-if [ "${LIST_PX:-0}" -lt 100 ]; then
-    fail "binding list not rendered ($LIST_PX px)"
+if ! awk -v pixels="${LIST_PX:-}" 'BEGIN {
+        exit !(pixels ~ /^[0-9]+([.][0-9]+)?$/ && (pixels + 0) >= 100)
+    }'; then
+    fail "binding list not rendered (${LIST_PX:-invalid} px)"
 else
     pass "binding list rendered ($LIST_PX px)"
 fi
