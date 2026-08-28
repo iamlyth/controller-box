@@ -232,7 +232,7 @@ DEFAULT_RUNTIME_LIMIT = 3600.0
 # Complete Nix/project verification can remain silent while a tool buffers a
 # bounded subprocess result. Keep the inactivity bound below the one-hour hard
 # runtime while allowing one complete 20+ minute clean gate inside a role.
-DEFAULT_INACTIVITY_LIMIT = 1800.0
+DEFAULT_INACTIVITY_LIMIT = 3500.0
 
 # Termination sequence: TERM, INT, and HUP are each delivered to the *full
 # process group* before the bounded grace expires and KILL escalates (§9).
