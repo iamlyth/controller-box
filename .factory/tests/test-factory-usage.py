@@ -1366,9 +1366,9 @@ class ProviderRegistryTests(_Base):
         self.assertEqual(source.count(b"@@FACTORY_PI2_NODE@@"), 1)
         self.assertEqual(source.count(b"@@FACTORY_PI2_CLI@@"), 1)
 
-    def test_staged_pi2_adapter_enforces_soft_and_hard_alias_bound(self) -> None:
-        """The adapter->Node exec cannot raise its descriptor range above
-        what the common tool boundary scans."""
+    def test_staged_pi2_adapter_materializes_bound_file_and_alias_limit(self) -> None:
+        """The confined adapter gives Pi a private regular credential file
+        while binding its inode and the complete descriptor scan range."""
         self.assertTrue(hasattr(os, "memfd_create"), "Linux memfd is mandatory")
         node = shutil.which("node")
         self.assertIsNotNone(node, "the exact-Pi adapter test requires Node")
@@ -1377,8 +1377,14 @@ class ProviderRegistryTests(_Base):
         runtime.mkdir(parents=True)
         cli = runtime / "cli.mjs"
         cli.write_text(
-            "import { fstatSync, readFileSync } from 'node:fs';\n"
+            "import { fstatSync, lstatSync, readFileSync } from 'node:fs';\n"
             "const fd=Number(process.env.PI_FACTORY_TOOL_FD); fstatSync(fd);\n"
+            "const auth=process.env.PI_FACTORY_TOOL_FILE;\n"
+            "const identity=lstatSync(auth,{bigint:true});\n"
+            "if (!identity.isFile() || identity.isSymbolicLink() || "
+            "String(identity.dev)!==process.env.PI_FACTORY_TOOL_FILE_DEV || "
+            "String(identity.ino)!==process.env.PI_FACTORY_TOOL_FILE_INO || "
+            "readFileSync(auth,'utf8')!=='{\\\"synthetic\\\":\\\"auth\\\"}\\n') process.exit(8);\n"
             "const line=readFileSync('/proc/self/limits','utf8').split('\\n')"
             ".find((item)=>item.startsWith('Max open files'));\n"
             "const match=/Max open files\\s+(\\d+)\\s+(\\d+)/.exec(line);\n"
@@ -1408,6 +1414,11 @@ class ProviderRegistryTests(_Base):
             os.close(auth_fd)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "BOUND:4096:4096")
+        auth_file = private_home / ".pi" / "agent2" / "auth.json"
+        self.assertTrue(auth_file.is_file())
+        self.assertFalse(auth_file.is_symlink())
+        self.assertEqual(stat.S_IMODE(auth_file.stat().st_mode), 0o600)
+        self.assertEqual(auth_file.read_bytes(), b'{"synthetic":"auth"}\n')
 
 
 # ---------------------------------------------------------------------------

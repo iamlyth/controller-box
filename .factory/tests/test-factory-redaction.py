@@ -960,11 +960,11 @@ class CredentialGuardCliTests(unittest.TestCase):
 
 TOOL_FD_FIXTURE = r'''
 import assert from 'node:assert/strict';
-import { fstatSync, readSync } from 'node:fs';
+import { existsSync, fstatSync, readFileSync, readSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
-const [extensionPath, toolName, fdText, aliasText, limitText, secret, pythonScanner, nodeScanner] = process.argv.slice(2);
+const [extensionPath, toolName, fdText, aliasText, limitText, secret, pythonScanner, nodeScanner, authFile] = process.argv.slice(2);
 const fd = Number(fdText);
 const alias = Number(aliasText);
 // Non-vacuity: exact Pi/Node parent really inherited and can read the memfd
@@ -974,6 +974,7 @@ for (const inherited of [fd, alias]) {
   const count = readSync(inherited, probe, 0, probe.length, 0);
   assert(probe.subarray(0, count).includes(Buffer.from(secret)));
 }
+assert(readFileSync(authFile).includes(Buffer.from(secret)));
 const handlers = {};
 const extension = await import(pathToFileURL(extensionPath));
 extension.default({ on(name, callback) { handlers[name] = callback; } });
@@ -982,6 +983,7 @@ const verdict = await handlers.tool_call({ toolName, input });
 assert.equal(verdict ?? null, null, `tool ${toolName} unexpectedly blocked`);
 assert.throws(() => fstatSync(fd), (error) => error?.code === 'EBADF');
 assert.throws(() => fstatSync(alias), (error) => error?.code === 'EBADF');
+assert.equal(existsSync(authFile), false, 'private auth file survived tool boundary');
 // These generated scanners use numeric syscalls only (never /proc). They are
 // the real child-process shape reached by bash and Node-backed Pi tools.
 for (const [program, scanner] of [[process.argv[0], nodeScanner], [process.env.FACTORY_TEST_PYTHON, pythonScanner]]) {
@@ -1115,6 +1117,12 @@ class NodeExtensionRedactionTests(unittest.TestCase):
                     os.write(fd, secret.encode())
                     os.lseek(fd, 0, os.SEEK_SET)
                     identity = os.fstat(fd)
+                    agent_dir = self.tmp / f"agent-{tool_name}"
+                    agent_dir.mkdir()
+                    auth_file = agent_dir / "auth.json"
+                    auth_file.write_text(secret, encoding="utf-8")
+                    auth_file.chmod(0o600)
+                    file_identity = auth_file.stat()
                     env = dict(os.environ)
                     env.update({
                         launch_module.PI_FACTORY_GUARD_DIGEST_ENV: guard_digest,
@@ -1124,12 +1132,16 @@ class NodeExtensionRedactionTests(unittest.TestCase):
                         "PI_FACTORY_TOOL_FD_DEV": str(identity.st_dev),
                         "PI_FACTORY_TOOL_FD_INO": str(identity.st_ino),
                         "PI_FACTORY_TOOL_FD_LIMIT": str(fd_limit),
+                        "PI_FACTORY_TOOL_FILE": str(auth_file),
+                        "PI_FACTORY_TOOL_FILE_DEV": str(file_identity.st_dev),
+                        "PI_FACTORY_TOOL_FILE_INO": str(file_identity.st_ino),
+                        "PI_CODING_AGENT_DIR": str(agent_dir),
                         "FACTORY_TEST_PYTHON": sys.executable,
                     })
                     result = subprocess.run(
                         ["node", str(fixture), str(extension), tool_name, str(fd),
                          str(alias_fd), str(fd_limit), secret,
-                         str(python_scanner), str(node_scanner)],
+                         str(python_scanner), str(node_scanner), str(auth_file)],
                         pass_fds=(fd, alias_fd), env=env, capture_output=True, text=True,
                         timeout=30,
                     )

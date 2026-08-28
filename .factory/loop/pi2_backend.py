@@ -2,16 +2,15 @@
 """Exact-commit Pi2 adapter executed inside the factory confinement boundary.
 
 The control plane replaces the two immutable runtime markers while staging this
-committed source.  The operator credential is never materialised in any
-model/tool-readable path (B1 security review): the trusted parent carries the
-``auth.json`` bytes in one anonymous memfd whose descriptor number arrives in
-this adapter's transient argv (``--auth-fd N``).  This adapter creates the
-per-launch agent directory symlink ``auth.json -> /proc/self/fd/N`` so the
-model CLI reads/writes the credential only through the inherited descriptor;
-the exact-commit extension closes the descriptor synchronously at Pi's common
-``tool_call`` boundary before any enabled in-process or subprocess tool runs,
-so no model tool can dereference it. The descriptor number is consumed here
-and is absent from the model process argv after exec.
+committed source. The trusted parent carries the operator ``auth.json`` bytes
+in one anonymous memfd whose descriptor number arrives in this adapter's
+transient argv (``--auth-fd N``). After Landlock is active, this adapter
+materialises a private mode-0600 credential file in the launch-owned home so
+the model CLI can initialize without dereferencing the deliberately denied
+``/proc`` tree. The exact-commit extension verifies and unlinks that file and
+closes every descriptor alias synchronously at Pi's common ``tool_call``
+boundary before any enabled in-process or subprocess tool runs. The descriptor
+number is consumed here and is absent from the model process argv after exec.
 """
 
 from __future__ import annotations
@@ -51,15 +50,13 @@ def _parse_auth_fd(argv: list) -> tuple:
     return auth_fd, remaining
 
 
-def _link_auth_descriptor(agent_dir: Path, auth_fd: int) -> None:
-    """Bind ``auth.json`` to the inherited credential descriptor.
+def _materialize_auth_file(agent_dir: Path, auth_fd: int) -> os.stat_result:
+    """Create the launch-private credential file and return its identity.
 
-    The symlink target is the descriptor path of *this* process; a tool
-    subprocess that dereferences the same path resolves its own (closed)
-    descriptor slot and fails, and Landlock denies ``/proc`` entirely, so the
-    credential is unreachable from any model tool.  The descriptor is left
-    non-CLOEXEC so the adapter->node exec keeps it; Node's spawn closes it
-    for every tool subprocess.
+    A ``/proc/self/fd/N`` symlink is unusable because production Landlock
+    correctly denies that credential channel. The regular file is reachable
+    only in the private home and is removed by the common tool boundary before
+    any model-selected tool implementation runs.
     """
     if auth_fd < 0:
         raise SystemExit("factory-pi2-backend: no credential descriptor was supplied")
@@ -74,12 +71,45 @@ def _link_auth_descriptor(agent_dir: Path, auth_fd: int) -> None:
     target = agent_dir / "auth.json"
     if target.is_symlink() or target.exists():
         raise SystemExit("factory-pi2-backend: auth.json already exists in the agent dir")
+    target_fd = -1
     try:
-        os.symlink(f"/proc/self/fd/{auth_fd}", target)
-    except OSError as exc:
-        raise SystemExit(
-            f"factory-pi2-backend: cannot bind the credential descriptor: {exc}"
+        target_fd = os.open(
+            target,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+            0o600,
         )
+        os.lseek(auth_fd, 0, os.SEEK_SET)
+        while True:
+            chunk = os.read(auth_fd, 65536)
+            if not chunk:
+                break
+            view = memoryview(chunk)
+            while view:
+                written = os.write(target_fd, view)
+                if written <= 0:
+                    raise OSError("short auth.json write")
+                view = view[written:]
+        os.fsync(target_fd)
+        os.lseek(auth_fd, 0, os.SEEK_SET)
+        file_info = os.fstat(target_fd)
+        if (
+            not stat.S_ISREG(file_info.st_mode)
+            or stat.S_IMODE(file_info.st_mode) != 0o600
+            or file_info.st_uid != os.getuid()
+            or file_info.st_nlink != 1
+            or file_info.st_size != info.st_size
+        ):
+            raise OSError("materialised auth.json failed identity verification")
+        return file_info
+    except OSError as exc:
+        try:
+            os.unlink(target)
+        except OSError:
+            pass
+        raise SystemExit(f"factory-pi2-backend: cannot materialise auth.json: {exc}")
+    finally:
+        if target_fd >= 0:
+            os.close(target_fd)
 
 
 def main() -> None:
@@ -92,7 +122,7 @@ def main() -> None:
     if not node.is_absolute() or not cli.is_absolute():
         raise SystemExit("factory-pi2-backend: runtime binding is not absolute")
     auth_fd, remaining = _parse_auth_fd(sys.argv[1:])
-    _link_auth_descriptor(agent_dir, auth_fd)
+    auth_file_identity = _materialize_auth_file(agent_dir, auth_fd)
     env = dict(os.environ)
     env["PI_CODING_AGENT_DIR"] = str(agent_dir)
     env["PI_PACKAGE_DIR"] = str(cli.parents[1])
@@ -122,6 +152,9 @@ def main() -> None:
     env["PI_FACTORY_TOOL_FD_DEV"] = str(identity.st_dev)
     env["PI_FACTORY_TOOL_FD_INO"] = str(identity.st_ino)
     env["PI_FACTORY_TOOL_FD_LIMIT"] = str(fd_limit)
+    env["PI_FACTORY_TOOL_FILE"] = str(agent_dir / "auth.json")
+    env["PI_FACTORY_TOOL_FILE_DEV"] = str(auth_file_identity.st_dev)
+    env["PI_FACTORY_TOOL_FILE_INO"] = str(auth_file_identity.st_ino)
     os.execve(str(node), [str(node), str(cli), *remaining], env)
 
 

@@ -10,6 +10,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  unlinkSync,
 } from "node:fs";
 import { lstat, open, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -498,42 +499,68 @@ const TOOL_FD_ENV = "PI_FACTORY_TOOL_FD";
 const TOOL_FD_DEV_ENV = "PI_FACTORY_TOOL_FD_DEV";
 const TOOL_FD_INO_ENV = "PI_FACTORY_TOOL_FD_INO";
 const TOOL_FD_LIMIT_ENV = "PI_FACTORY_TOOL_FD_LIMIT";
+const TOOL_FILE_ENV = "PI_FACTORY_TOOL_FILE";
+const TOOL_FILE_DEV_ENV = "PI_FACTORY_TOOL_FILE_DEV";
+const TOOL_FILE_INO_ENV = "PI_FACTORY_TOOL_FILE_INO";
 const DECIMAL_IDENTITY_RE = /^(?:0|[1-9][0-9]{0,30})$/;
 
 /** Trusted common tool-exec boundary for Pi2's inherited auth descriptor.
  * Absence of all fields is the non-Pi2 case. A partial/malformed/reused
  * identity blocks the tool and never closes an unrelated descriptor. */
 export function closeToolCredentialBoundary(env = process.env) {
-  const values = [
+  const numericValues = [
     env?.[TOOL_FD_ENV], env?.[TOOL_FD_DEV_ENV], env?.[TOOL_FD_INO_ENV],
-    env?.[TOOL_FD_LIMIT_ENV],
+    env?.[TOOL_FD_LIMIT_ENV], env?.[TOOL_FILE_DEV_ENV], env?.[TOOL_FILE_INO_ENV],
   ];
-  if (values.every((value) => value === undefined)) {
+  const filePath = env?.[TOOL_FILE_ENV];
+  if (numericValues.every((value) => value === undefined) && filePath === undefined) {
     return { ok: true, reason: "not-provisioned" };
   }
   if (
-    values.some((value) => typeof value !== "string" || !DECIMAL_IDENTITY_RE.test(value))
+    numericValues.some(
+      (value) => typeof value !== "string" || !DECIMAL_IDENTITY_RE.test(value)
+    )
+    || typeof filePath !== "string"
   ) {
-    return { ok: false, reason: "tool-fd-binding-malformed" };
+    return { ok: false, reason: "tool-credential-binding-malformed" };
   }
   let fd;
   let expectedDev;
   let expectedIno;
   let fdLimit;
+  let expectedFileDev;
+  let expectedFileIno;
   try {
-    fd = Number(values[0]);
-    expectedDev = BigInt(values[1]);
-    expectedIno = BigInt(values[2]);
-    fdLimit = Number(values[3]);
+    fd = Number(numericValues[0]);
+    expectedDev = BigInt(numericValues[1]);
+    expectedIno = BigInt(numericValues[2]);
+    fdLimit = Number(numericValues[3]);
+    expectedFileDev = BigInt(numericValues[4]);
+    expectedFileIno = BigInt(numericValues[5]);
   } catch {
-    return { ok: false, reason: "tool-fd-binding-malformed" };
+    return { ok: false, reason: "tool-credential-binding-malformed" };
   }
+  const agentDir = env?.PI_CODING_AGENT_DIR;
+  const expectedFilePath = typeof agentDir === "string" ? join(agentDir, "auth.json") : "";
   if (
     !Number.isSafeInteger(fd) || fd < 3
     || !Number.isSafeInteger(fdLimit) || fdLimit < 64 || fdLimit > 65_536
-    || fd >= fdLimit
+    || fd >= fdLimit || filePath !== expectedFilePath
   ) {
-    return { ok: false, reason: "tool-fd-binding-malformed" };
+    return { ok: false, reason: "tool-credential-binding-malformed" };
+  }
+  try {
+    const fileIdentity = lstatSync(filePath, { bigint: true });
+    if (
+      !fileIdentity.isFile() || fileIdentity.isSymbolicLink()
+      || fileIdentity.dev !== expectedFileDev || fileIdentity.ino !== expectedFileIno
+      || fileIdentity.nlink !== 1n || fileIdentity.uid !== BigInt(currentUid())
+      || (fileIdentity.mode & 0o77n) !== 0n
+    ) {
+      return { ok: false, reason: "tool-file-binding-mismatch" };
+    }
+  } catch {
+    return { ok: false, reason: "tool-file-binding-mismatch" };
   }
   const aliases = [];
   let originalMatched = false;
@@ -554,14 +581,18 @@ export function closeToolCredentialBoundary(env = process.env) {
   }
   try {
     for (const alias of aliases) closeSync(alias);
+    unlinkSync(filePath);
   } catch {
-    return { ok: false, reason: "tool-fd-close-failed" };
+    return { ok: false, reason: "tool-credential-removal-failed" };
   }
   delete env[TOOL_FD_ENV];
   delete env[TOOL_FD_DEV_ENV];
   delete env[TOOL_FD_INO_ENV];
   delete env[TOOL_FD_LIMIT_ENV];
-  return { ok: true, reason: "closed" };
+  delete env[TOOL_FILE_ENV];
+  delete env[TOOL_FILE_DEV_ENV];
+  delete env[TOOL_FILE_INO_ENV];
+  return { ok: true, reason: "removed" };
 }
 
 /** Identity predicate for the overflow log: not a symlink, a regular file,
