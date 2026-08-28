@@ -365,8 +365,10 @@ HIGHLIGHT2=$(convert "$EDITOR_CAPTURE" -crop "$DIAG" +repage \
         -fuzz 25% -fill white -opaque "srgb(79,136,192)" -fill black +opaque white \
         -colorspace gray -format "%[fx:mean*w*h]" info: 2>/dev/null)
 echo "    diagram highlight pixels: $HIGHLIGHT2"
-if [ "${HIGHLIGHT2:-0}" -lt 100 ]; then
-    fail "controller slot highlight not rendered in diagram region (blue px $HIGHLIGHT2 < 100)"
+if ! awk -v pixels="${HIGHLIGHT2:-}" 'BEGIN {
+        exit !(pixels ~ /^[0-9]+([.][0-9]+)?$/ && (pixels + 0) >= 100)
+    }'; then
+    fail "controller slot highlight not rendered in diagram region (blue px ${HIGHLIGHT2:-invalid} < 100 or invalid)"
 else
     pass "slot highlight rendered in diagram region ($HIGHLIGHT2 px)"
 fi
