@@ -580,12 +580,15 @@ _diag_draw_content(cbx_profile_diagram *diag, SDL_Renderer *r,
         }
     }
     if (content_out) {
-        /* Do not let a marker make a failed texture draw look like a
-         * successful diagram.  In particular, a texture owned by another
-         * renderer can pass metadata checks but make SDL_RenderCopy fail;
-         * suppressing the marker is fail-closed for the perceptible-content
-         * contract and leaves the caller's panel/error state visible. */
-        *content_out = base_rendered ? content : (SDL_Rect){0, 0, 0, 0};
+        /* A headless diagram intentionally has no base texture; retain the
+         * historical full-widget marker behavior for that mode.  A texture
+         * that exists but cannot be rendered is different: suppress its
+         * marker so a failed installed asset cannot masquerade as a
+         * perceptible diagram. */
+        if (base_rendered || !diag->base_texture)
+            *content_out = content;
+        else
+            *content_out = (SDL_Rect){0, 0, 0, 0};
     }
 }
 
