@@ -601,8 +601,6 @@ static void test_geometry_pixelation_and_stretch(void **state)
 
     int tw, th;
     assert_true(cbx_profile_diagram_base_texture_size(&diag, &tw, &th));
-    fprintf(stderr, "DBG tw=%d th=%d content=%dx%d\n", tw, th, content.w, content.h);
-
     /* Pixelation guard: raster resolution >= displayed content size, so the
      * texture is never up-scaled (BUG-0018). */
     assert_true(tw >= content.w);
