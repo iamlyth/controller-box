@@ -19,7 +19,9 @@
 
 #include <errno.h>
 #include <stdbool.h>
+#include <limits.h>
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -119,10 +121,27 @@ static int rasterize_svg(cbx_icon_cache *cache, const char *icon_name)
     /* Scale to fit within target_size, preserving aspect ratio. */
     float scale = (float)cache->target_size /
                   (image->width > image->height ? image->width : image->height);
-    int tex_w = (int)(image->width  * scale + 0.5f);
-    int tex_h = (int)(image->height * scale + 0.5f);
+    float raster_w = image->width * scale;
+    float raster_h = image->height * scale;
+    /* Keep malformed or unexpectedly large installed assets from reaching
+     * the float-to-int conversion or wrapping the pixel allocation.  This
+     * path is used by the profile editor's production diagram, so a valid
+     * texture must be both safely allocatable and renderable. */
+    if (!isfinite(raster_w) || !isfinite(raster_h) ||
+        raster_w < 1.0f || raster_h < 1.0f ||
+        raster_w >= (float)INT_MAX || raster_h >= (float)INT_MAX) {
+        nsvgDelete(image);
+        return -EINVAL;
+    }
+    int tex_w = (int)lroundf(raster_w);
+    int tex_h = (int)lroundf(raster_h);
     if (tex_w < 1) tex_w = 1;
     if (tex_h < 1) tex_h = 1;
+    if (tex_w > INT_MAX / 4 || (size_t)tex_h > SIZE_MAX / (size_t)tex_w ||
+        (size_t)tex_w * (size_t)tex_h > SIZE_MAX / 4) {
+        nsvgDelete(image);
+        return -EOVERFLOW;
+    }
 
     /* Allocate pixel buffer (RGBA, 4 bytes/pixel). */
     size_t buf_size = (size_t)tex_w * (size_t)tex_h * 4;
