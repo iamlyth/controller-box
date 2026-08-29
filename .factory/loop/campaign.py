@@ -3967,22 +3967,45 @@ class Campaign:
         )
 
     def _step_audit(self, state: state_module.FactoryState) -> _Step:
-        tag = self._begin_untrusted(state, 1)
         head = self._git.head()
-        self._prepare_phase_result_file(
-            self._config.audit_result_path, "audit"
-        )
-        role = self._run_role("auditor", state, head, attempt=1)
-        dirty = self._git.role_dirty_paths()
-        allow_paths = [self._config.audit_result_path] if self._config.audit_result_path else []
-        violation = scope_violation(
-            dirty, phase="audit",
-            plan_path=self._config.plan_path, spec_path=self._config.spec_path,
-            allow_paths=allow_paths,
-        )
-        result = read_phase_result(
-            self._root, self._config.audit_result_path, "audit"
-        )
+        # One fresh retry absorbs a transient/malformed/missing auditor process
+        # without weakening the read-only scope. A dirty audit never retries;
+        # the second failure remains the terminal fail-closed audit outcome.
+        attempt = 1
+        while True:
+            tag = self._begin_untrusted(state, attempt)
+            self._prepare_phase_result_file(
+                self._config.audit_result_path, "audit"
+            )
+            role = self._run_role("auditor", state, head, attempt=attempt)
+            dirty = self._git.role_dirty_paths()
+            allow_paths = (
+                [self._config.audit_result_path]
+                if self._config.audit_result_path else []
+            )
+            violation = scope_violation(
+                dirty, phase="audit",
+                plan_path=self._config.plan_path, spec_path=self._config.spec_path,
+                allow_paths=allow_paths,
+            )
+            result_error: Optional[CampaignResultError] = None
+            try:
+                result = read_phase_result(
+                    self._root, self._config.audit_result_path, "audit"
+                )
+            except CampaignResultError as exc:
+                result = None
+                result_error = exc
+            self._end_untrusted(tag)
+            trusted_handoff = (
+                result is not None and role.exit_status == 0
+                and not role.interrupted and violation is None
+            )
+            if trusted_handoff or attempt >= 2 or violation is not None:
+                if result_error is not None and attempt >= 2:
+                    raise result_error
+                break
+            attempt += 1
         result_data = result[0] if result is not None else None
         result_digest = result[1] if result is not None else ""
         result_bytes = result[2] if result is not None else b""
@@ -4027,7 +4050,6 @@ class Campaign:
             findings=list(result_data.get("findings", [])) if result_data else [],
             blocked_refs=list(result_data.get("blocked_on", [])) if result_data else [],
         )
-        self._end_untrusted(tag)
         if outcome in ("findings", "blocked"):
             # Task 10 §16: audit findings/blocked become next-round planner
             # input through an orchestrator-minted receipt; a non-final
@@ -4071,7 +4093,7 @@ class Campaign:
             state2 = state_module.advance(state, outcome)
             state_module.write_state(self._root, state2)
             return _Step(
-                self._record(state, 1, outcome, violation or "audit untrusted"),
+                self._record(state, attempt, outcome, violation or "audit untrusted"),
                 state=state2, terminal=outcome,
             )
         state2 = state_module.advance(state, outcome)
@@ -4087,7 +4109,7 @@ class Campaign:
             role.diagnostic if role.exit_status != 0 else final_gate_detail
         )
         return _Step(
-            self._record(state, 1, outcome, audit_detail,
+            self._record(state, attempt, outcome, audit_detail,
                          result_digest=record_result_digest),
             state=state2,
         )

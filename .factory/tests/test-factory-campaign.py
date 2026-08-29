@@ -594,6 +594,21 @@ class CampaignTerminals(_CampaignBase):
         self.assertEqual(verification["attempt"], 2)
         self.assertNotEqual(verification["result_digest"], "0" * 64)
 
+    def test_transient_auditor_interruption_retries_once(self) -> None:
+        scenario = json.loads(json.dumps(SUCCESS_SCENARIO))
+        scenario["auditor"] = {
+            "behavior": {"1.1": "crash", "1.2": "pass"}
+        }
+        ws = self.make(scenario)
+        rc, data = ws.run_cli()
+        self.assertEqual(rc, 0)
+        audit = next(
+            record for record in data["phase_history"]
+            if record["phase"] == "audit"
+        )
+        self.assertEqual(audit["attempt"], 2)
+        self.assertEqual(audit["outcome"], "pass")
+
     def test_final_findings(self) -> None:
         ws = self.make({
             "planner": {"behavior": "planned"},
