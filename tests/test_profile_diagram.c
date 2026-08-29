@@ -13,6 +13,8 @@
 #include <SDL2/SDL.h>
 #include <string.h>
 #include <errno.h>
+#include <stdio.h>
+#include <unistd.h>
 
 #include "manager/profile_diagram.h"
 #include "config/config_paths.h"
@@ -527,6 +529,31 @@ static void test_svg_outline_reaches_framebuffer(void **state)
  * alignment assertion below.
  */
 
+/* A valid but empty SVG must fail closed rather than becoming a blank
+ * production diagram.  This guards the installed-asset acceptance against
+ * an apparently successful texture load with no visible framebuffer output. */
+static void test_transparent_svg_rejected(void **state)
+{
+    pd_fixture *f = *state;
+    char path[PATH_MAX];
+    snprintf(path, sizeof(path), "/tmp/cbx-profile-diagram-transparent-%ld.svg",
+             (long)getpid());
+    FILE *svg = fopen(path, "wb");
+    assert_non_null(svg);
+    assert_true(fputs("<svg xmlns=\"http://www.w3.org/2000/svg\" "
+                      "width=\"100\" height=\"60\"></svg>", svg) >= 0);
+    assert_int_equal(fclose(svg), 0);
+
+    cbx_profile_diagram diag;
+    cbx_theme theme;
+    cbx_theme_default(&theme);
+    assert_int_equal(cbx_profile_diagram_init(&diag, f->sdl.renderer,
+                                               path, &theme), 0);
+    assert_null(diag.base_texture);
+    cbx_profile_diagram_shutdown(&diag);
+    assert_int_equal(unlink(path), 0);
+}
+
 /* Light-grey control fill used by the production generic-gamepad.svg. */
 static const uint8_t s_control_rgb[3] = {221, 221, 221};
 
@@ -991,6 +1018,8 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_render_with_rect,
                                           setup, teardown),
         cmocka_unit_test(test_render_null_safe),
+        cmocka_unit_test_setup_teardown(test_transparent_svg_rejected,
+                                          setup, teardown),
 
         /* SVG loading */
         cmocka_unit_test_setup_teardown(test_init_with_svg_nonexistent,

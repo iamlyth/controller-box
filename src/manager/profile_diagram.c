@@ -268,6 +268,24 @@ load_svg_texture(SDL_Renderer *renderer, const char *svg_path, int size)
     nsvgDeleteRasterizer(rast);
     nsvgDelete(image);
 
+    /* A syntactically valid SVG can still rasterise to a completely
+     * transparent image (for example, an empty or fully clipped installed
+     * asset).  Do not expose that as a usable diagram: the manager would
+     * otherwise render a blank panel while all texture-level checks pass.
+     * nanosvg's output is RGBA, so alpha is byte 3 here, before the SDL
+     * pixel-format conversion below. */
+    bool has_visible_pixel = false;
+    for (size_t i = 3; i < pixel_count * 4; i += 4) {
+        if (pixels[i] != 0) {
+            has_visible_pixel = true;
+            break;
+        }
+    }
+    if (!has_visible_pixel) {
+        free(pixels);
+        return NULL;
+    }
+
     /* nsvgRasterize() outputs RGBA byte order.  SDL's packed pixel formats
      * describe the native-endian word, so ABGR8888 is the matching format on
      * the little-endian x86_64/aarch64 targets (RGBA8888 would be laid out as
