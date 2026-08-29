@@ -22,10 +22,15 @@ plan; if they differ from the plan section, stop and report.
 2. Investigate within the selected task: search existing `src/` utilities
    before reimplementing; trace real initialization, dispatch, rendering,
    backend, persistence, and shutdown paths.
-3. Run focused backpressure first, then the relevant regression suite.
-   Follow the exact build/test commands in `AGENTS.md`. A test that fails,
-   including one apparently unrelated to the task, must be investigated;
-   fix it when safe or record a finding — never dismiss it.
+3. Run bounded focused backpressure, not a duplicate complete gate. The
+   campaign already runs inside the exact Nix environment, and the trusted
+   orchestrator runs the full verifier when a task claims completion: do not
+   start nested `nix-shell`, `verify-project.sh`, `verify-boilerplate.sh`, or
+   `final-gate.sh` inside this ptrace-confined turn. Run at most three focused
+   commands under `timeout 120`, invoke repository scripts through explicit
+   `bash`/`python3`, and then leave the coherent change promptly. A focused
+   failure must be investigated, fixed when safe, or recorded — never
+   dismissed or retried indefinitely.
 4. Derive tests from specification acceptance criteria: observable
    behavior, performance boundaries, failure modes, and edge cases. Tests
    must use the real production path and assert semantic outcomes; direct

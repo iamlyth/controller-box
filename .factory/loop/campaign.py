@@ -1358,7 +1358,7 @@ def classify_implementation(
     rejected completion claim, no usable work, or a scope violation — is
     ``task_failed`` (Task 9 review L3).
     """
-    if role.interrupted:
+    if role.interrupted or role.exit_status < 0:
         return "interrupted"
     if role.exit_status != 0:
         # §13: the harness derives outcomes from the machine-readable exit
@@ -1984,7 +1984,9 @@ def launch_role_attempt(
     # an infrastructure exit is actionable without treating model prose as
     # control protocol or publishing raw process output.
     diagnostic = " ".join((reason or stderr or stdout).split())[:512]
-    if result.outcome == "terminated":
+    if result.outcome == "terminated" or (
+        result.returncode is not None and result.returncode < 0
+    ):
         return RoleOutcome(
             role, result.returncode, interrupted=True, signal=result.signal,
             diagnostic=diagnostic,

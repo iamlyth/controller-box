@@ -1874,6 +1874,9 @@ class ClassificationUnits(_CampaignBase):
             **{**base, "had_changes": False}), "task_failed")
         self.assertEqual(campaign_module.classify_implementation(
             **{**base, "scope_ok": False}), "task_failed")
+        self.assertEqual(campaign_module.classify_implementation(
+            **{**base, "role": campaign_module.RoleOutcome("developer", -9)}),
+            "interrupted")
 
     def test_verification_classification(self) -> None:
         ok = campaign_module.RoleOutcome("tester", 0)
