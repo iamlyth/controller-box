@@ -226,15 +226,23 @@ load_svg_texture(SDL_Renderer *renderer, const char *svg_path, int size)
      * dimensions are bounded above, but the caller-supplied raster size can
      * still be near INT_MAX; converting a non-finite or out-of-range float
      * first would make the subsequent allocation guards ineffective. */
-    if (!isfinite(raster_w) || !isfinite(raster_h) ||
-        raster_w >= (float)INT_MAX || raster_h >= (float)INT_MAX) {
+    if (!isfinite(raster_w) || !isfinite(raster_h)) {
         nsvgDelete(image);
         return NULL;
     }
-    int tw = (int)lroundf(raster_w);
-    int th = (int)lroundf(raster_h);
-    if (tw < 1) tw = 1;
-    if (th < 1) th = 1;
+    /* Validate the rounded long result before narrowing it to int.  A
+     * floating-point value just below INT_MAX can still round to INT_MAX;
+     * checking the unrounded float alone is not sufficient and would make
+     * the conversion implementation-defined on a malformed asset. */
+    long rounded_w = lroundf(raster_w);
+    long rounded_h = lroundf(raster_h);
+    if (rounded_w < 1 || rounded_h < 1 ||
+        rounded_w > INT_MAX || rounded_h > INT_MAX) {
+        nsvgDelete(image);
+        return NULL;
+    }
+    int tw = (int)rounded_w;
+    int th = (int)rounded_h;
 
     NSVGrasterizer *rast = nsvgCreateRasterizer();
     if (!rast) {
