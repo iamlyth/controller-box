@@ -570,15 +570,23 @@ _diag_draw_content(cbx_profile_diagram *diag, SDL_Renderer *r,
                    const SDL_Rect *rect, SDL_Rect *content_out)
 {
     SDL_Rect content = *rect;
+    bool base_rendered = false;
     if (diag->base_texture) {
         SDL_Rect dst;
-        if (cbx_profile_diagram_content_rect(diag, rect, &dst)) {
+        if (cbx_profile_diagram_content_rect(diag, rect, &dst) &&
+            SDL_RenderCopy(r, diag->base_texture, NULL, &dst) == 0) {
             content = dst;
-            SDL_RenderCopy(r, diag->base_texture, NULL, &dst);
+            base_rendered = true;
         }
     }
-    if (content_out)
-        *content_out = content;
+    if (content_out) {
+        /* Do not let a marker make a failed texture draw look like a
+         * successful diagram.  In particular, a texture owned by another
+         * renderer can pass metadata checks but make SDL_RenderCopy fail;
+         * suppressing the marker is fail-closed for the perceptible-content
+         * contract and leaves the caller's panel/error state visible. */
+        *content_out = base_rendered ? content : (SDL_Rect){0, 0, 0, 0};
+    }
 }
 
 static void
