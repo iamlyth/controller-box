@@ -20,11 +20,16 @@ or completion claim is available or authoritative.
    `verify-boilerplate.sh`, `final-gate.sh`, a full CTest suite, or a nested
    `nix-shell` inside this ptrace-confined role. Run at most three focused
    commands, each under `timeout 120`, inside the inherited exact Nix
-   environment. Invoke repository shell entrypoints as `bash ./path` and Python
-   entrypoints as `python3 ./path`. Do not retry denied/BAD_COMMAND commands:
-   record the exact status once, continue source/semantic inspection, and write
-   the structured result promptly. The subsequent trusted gate — not a claim
-   in your prose — supplies complete command execution.
+   environment. Permitted focused commands are syntax/compile checks that do
+   not dispatch another executable (for example `bash -n file.sh` and
+   `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile file.py`) plus source
+   inspection. Do **not** execute repository test scripts, validators, CTest,
+   `mktemp`, or any shebang entrypoint: their dynamic helpers/build artifacts
+   are deliberately outside the model-exec table and the trusted gate runs
+   them immediately afterward. Do not retry a denial/BAD_COMMAND: record it
+   once, continue semantic inspection, and write the structured result
+   promptly. The subsequent trusted gate — not a claim in your prose — supplies
+   complete command execution.
 2. Inspect installed and production paths required by the specification
    (for example installed smoke, real system service, real consumer
    dispatch) rather than substitutes. A private/session-scoped service is
