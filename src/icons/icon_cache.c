@@ -18,6 +18,7 @@
 #include <nanosvgrast.h>
 
 #include <errno.h>
+#include <stdbool.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -136,6 +137,24 @@ static int rasterize_svg(cbx_icon_cache *cache, const char *icon_name)
     nsvgRasterize(cache->rasterizer, image, 0.0f, 0.0f, scale,
                   pixels, tex_w, tex_h, tex_w * 4);
     nsvgDelete(image);
+
+    /* Do not cache an apparently valid but completely transparent asset.
+     * The profile editor adopts icon-cache textures directly for its diagram;
+     * accepting such an asset would produce a blank production diagram while
+     * all texture metadata (dimensions and non-NULL pointer) still looked
+     * healthy.  nanosvg writes RGBA bytes, so alpha is byte three. */
+    bool has_visible_pixel = false;
+    for (size_t i = 3; i < buf_size; i += 4) {
+        if (pixels[i] != 0) {
+            has_visible_pixel = true;
+            break;
+        }
+    }
+    if (!has_visible_pixel) {
+        fprintf(stderr, "icon_cache: rejecting transparent asset %s\n", path);
+        free(pixels);
+        return -EINVAL;
+    }
 
     /* Create SDL2 texture. */
     SDL_Texture *tex = SDL_CreateTexture(
