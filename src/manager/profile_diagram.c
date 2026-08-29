@@ -14,6 +14,7 @@
 #include <SDL2/SDL.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -230,6 +231,15 @@ load_svg_texture(SDL_Renderer *renderer, const char *svg_path, int size)
         return NULL;
     }
 
+    /* Check the products before evaluating them.  The raster dimensions are
+     * derived from an installed SVG and the requested size; a very large
+     * caller-provided size must not wrap either the allocation or nanosvg's
+     * int stride. */
+    if (tw > INT_MAX / 4 || (size_t)th > SIZE_MAX / (size_t)tw) {
+        nsvgDeleteRasterizer(rast);
+        nsvgDelete(image);
+        return NULL;
+    }
     size_t pixel_count = (size_t)tw * (size_t)th;
     if (pixel_count > SIZE_MAX / 4) {
         nsvgDeleteRasterizer(rast);
