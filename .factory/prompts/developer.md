@@ -40,9 +40,10 @@ plan; if they differ from the plan section, stop and report.
 5. Update only the selected task's existing status/evidence fields in the plan
    (`.factory/artifacts/implementation-plan.md`): record exact commands,
    results, production paths, and semantic outcomes. Every task-body line must
-   remain parser-unambiguous: use canonical `- Evidence:`/`- Status:` fields,
-   and indent all multiline evidence continuation text and sub-bullets by two
-   spaces. Never insert a bare paragraph, a new level-two heading, or an
+   remain parser-unambiguous. A task may contain only one `- Evidence:` field:
+   never add a second one; append new evidence as a two-space-indented
+   continuation bullet beneath the existing field. Likewise update the sole
+   `- Status:` field in place. Never insert a bare paragraph, a new level-two heading, or an
    unindented sentence into a task body.
    The machine-readable conformance sidecar and exact-commit receipts remain the
    acceptance authority; prose

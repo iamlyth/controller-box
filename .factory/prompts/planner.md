@@ -50,8 +50,10 @@ and task bytes to the exact bound commit; treat any mismatch as fatal.
    append anything after the final audit. Once the first `## Task` heading has
    appeared, every later level-two heading must be another `## Task N:`
    heading—never add `## Findings`, `## Blockers`, notes, or any other section
-   among the task ledger. Put new evidence and blockers inside a task's
-   `Source`, `Scope`, or `Blocked on` fields.
+   among the task ledger. Every task field is unique: update an existing
+   `Evidence`, `Source`, `Scope`, `Blocked on`, or `Status` field in place and
+   never add a second field with the same name. Put continuation evidence as
+   two-space-indented text beneath the sole field.
 
 ## Workspace confinement
 
