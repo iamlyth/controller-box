@@ -666,7 +666,6 @@ static void test_geometry_marker_control_alignment(void **state)
         }
         int bcnt=0,bminx=999,bminy=999,bmaxx=-1,bmaxy=-1;
         for(int y=0;y<h;y++)for(int x=0;x<w;x++){int i=(y*w+x)*4;if(buf[i+0]<20&&buf[i+1]<20&&buf[i+2]<20){bcnt++;if(x<bminx)bminx=x;if(y<bminy)bminy=y;if(x>bmaxx)bmaxx=x;if(y>bmaxy)bmaxy=y;}}
-        fprintf(stderr,"DBG gray cnt=%d bbox=%d,%d - %d,%d | black cnt=%d bbox=%d,%d - %d,%d\n",cnt,minx,miny,maxx,maxy,bcnt,bminx,bminy,bmaxx,bmaxy);
     }
 
     for (int i = 0; i < CBX_DIAG_BTN_COUNT; i++) {
