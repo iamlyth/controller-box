@@ -350,6 +350,11 @@ def main() -> int:
             return 0
         if behavior == "no-result":
             return 0
+        if behavior == "malformed-result":
+            path = os.path.join(root, result_file)
+            with open(path, "w", encoding="utf-8") as stream:
+                stream.write('{"schema":"factory-phase-result/v1","outcome":')
+            return 0
         if behavior == "findings":
             write_result_file(result_file, root, "findings", findings=["fixture finding"])
             return 0
@@ -384,8 +389,6 @@ def main() -> int:
         if behavior == "dirty":
             touch(root, "src/tester-touched.py")
             return 1
-        if behavior == "no-result":
-            return 0
         raise SystemExit(f"campaign driver: unknown tester behavior {behavior!r}")
 
     if role == "auditor":

@@ -3834,9 +3834,9 @@ class Campaign:
             )
         # A successful tester process can still omit its mandatory handoff.
         # Retry that one infrastructure-only case once in a fresh role process
-        # before running the expensive trusted gates. Scope violations,
-        # nonzero/interrupted roles, and malformed (rather than absent) JSON do
-        # not retry. Each attempt has its own state-digest tag and exact empty
+        # before running the expensive trusted gates. Scope violations and
+        # nonzero/interrupted roles do not retry; absent or malformed JSON gets
+        # one fresh serialization attempt. Each attempt has its own state-digest tag and exact empty
         # pre-created channel; no prior prose/session is carried forward.
         attempt = 1
         while True:
@@ -3855,10 +3855,21 @@ class Campaign:
                 plan_path=self._config.plan_path, spec_path=self._config.spec_path,
                 allow_paths=allow_paths,
             )
-            result = read_phase_result(
-                self._root, self._config.phase_result_path, "verification"
-            )
+            result_error: Optional[CampaignResultError] = None
+            try:
+                result = read_phase_result(
+                    self._root, self._config.phase_result_path, "verification"
+                )
+            except CampaignResultError as exc:
+                # The secure reader already removed the malformed channel.
+                # One fresh retry may replace model serialization corruption;
+                # a second malformed result remains a fail-closed campaign
+                # error and is never interpreted or preserved as evidence.
+                result = None
+                result_error = exc
             self._end_untrusted(tag)
+            if result_error is not None and attempt >= 2:
+                raise result_error
             if (
                 result is not None or attempt >= 2 or violation is not None
                 or role.interrupted or role.exit_status != 0
