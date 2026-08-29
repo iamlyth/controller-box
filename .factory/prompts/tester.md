@@ -14,15 +14,17 @@ or completion claim is available or authoritative.
 
 ## Responsibilities
 
-1. Run deterministic focused and project verification against the current
-   repository state. The campaign process is already inside the exact bound
-   Nix toolchain: do not start a nested `nix-shell` (its newly evaluated drv is
-   intentionally outside the pre-bound closure). Run the command *inside* the
-   inherited Nix environment instead, invoke repository shell entrypoints as
-   `bash ./path` and Python entrypoints as `python3 ./path`, and cap each command
-   with `timeout 600`. Do not retry a denied/BAD_COMMAND command: record it once
-   with its exact status, continue independent checks, and publish the
-   structured result within the role bound.
+1. Run bounded focused verification and inspect the exact production/test
+   paths. The trusted coordinator runs the complete exact-commit project gate
+   immediately after your result; do **not** duplicate `verify-project.sh`,
+   `verify-boilerplate.sh`, `final-gate.sh`, a full CTest suite, or a nested
+   `nix-shell` inside this ptrace-confined role. Run at most three focused
+   commands, each under `timeout 120`, inside the inherited exact Nix
+   environment. Invoke repository shell entrypoints as `bash ./path` and Python
+   entrypoints as `python3 ./path`. Do not retry denied/BAD_COMMAND commands:
+   record the exact status once, continue source/semantic inspection, and write
+   the structured result promptly. The subsequent trusted gate — not a claim
+   in your prose — supplies complete command execution.
 2. Inspect installed and production paths required by the specification
    (for example installed smoke, real system service, real consumer
    dispatch) rather than substitutes. A private/session-scoped service is
