@@ -1111,6 +1111,8 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
   - Evidence: This implementation attempt again received `EACCES: permission denied` reading `.factory/loop/plan_parser.py` and `.factory/loop/selector.py`, so the required parser/selector implementation and tests could not be inspected or modified. The bounded planning validator command exited 0; it validates plan structure only. No focused selector/parser run, exact-commit receipt, or acceptance/evidence elevation was produced; Task 47 remains pending.
   - Evidence: Fresh bounded verification in this attempt: reading `.factory/loop/plan_parser.py` was denied with `EACCES: permission denied` before inspection. `timeout 120 python3 scripts/validate-implementation-plan.py planning .factory/artifacts/implementation-plan.md` exited 0 and validated plan structure only. Because the selected parser/selector implementation and `.factory/tests` paths are unavailable under the enforced workspace boundary, no implementation change, focused regression, or exact-commit selector receipt could be produced; Task 47 remains pending with no acceptance or evidence elevation.
 
+  - Evidence: Fresh implementation attempt: the required `.factory/loop/plan_parser.py` path returned `EACCES: permission denied` before inspection, preventing implementation or test changes. `timeout 120 python3 scripts/validate-implementation-plan.py planning .factory/artifacts/implementation-plan.md` exited 0, validating plan structure only. No selector/parser acceptance evidence or exact-commit receipt was produced; Task 47 remains pending.
+
 ## Task 48: Close blocked-facts audit and runner receipt authority bypass
 - Status: pending
 - Priority: 1
