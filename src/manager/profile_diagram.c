@@ -220,8 +220,19 @@ load_svg_texture(SDL_Renderer *renderer, const char *svg_path, int size)
     if (denom <= 0.0f)
         denom = 1.0f;
     float scale = (float)size / denom;
-    int tw = (int)lroundf(source_w * scale);
-    int th = (int)lroundf(source_h * scale);
+    float raster_w = source_w * scale;
+    float raster_h = source_h * scale;
+    /* Check the rounded dimensions before converting to int.  The parsed
+     * dimensions are bounded above, but the caller-supplied raster size can
+     * still be near INT_MAX; converting a non-finite or out-of-range float
+     * first would make the subsequent allocation guards ineffective. */
+    if (!isfinite(raster_w) || !isfinite(raster_h) ||
+        raster_w >= (float)INT_MAX || raster_h >= (float)INT_MAX) {
+        nsvgDelete(image);
+        return NULL;
+    }
+    int tw = (int)lroundf(raster_w);
+    int th = (int)lroundf(raster_h);
     if (tw < 1) tw = 1;
     if (th < 1) th = 1;
 
@@ -525,7 +536,8 @@ cbx_profile_diagram_base_texture_size(const cbx_profile_diagram *diag,
 {
     if (!diag || !diag->base_texture || !w || !h)
         return false;
-    SDL_QueryTexture(diag->base_texture, NULL, NULL, w, h);
+    if (SDL_QueryTexture(diag->base_texture, NULL, NULL, w, h) != 0)
+        return false;
     return (*w > 0 && *h > 0);
 }
 
