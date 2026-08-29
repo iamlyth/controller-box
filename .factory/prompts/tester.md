@@ -61,7 +61,10 @@ contract. You must write that exact JSON object to that exact path; you must
 not select or infer another path. The path is role-specific context, not a
 credential or ambient environment authority. Landlock permits writing only
 that one result file. Printing JSON or prose without filling it is an
-infrastructure failure.
+infrastructure failure. Write one final JSON document exactly once: truncate
+or overwrite the pre-created file (`>` or an overwrite-mode writer), never
+append (`>>`), never emit a draft followed by a second object, and do not touch
+the channel after the final write.
 
 You may also summarize the exact verification run, each command, exit status,
 outcome, and evidence gap in final prose, but prose is never the structured
