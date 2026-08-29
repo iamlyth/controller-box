@@ -400,6 +400,8 @@ cbx_profile_diagram_set_base_image(cbx_profile_diagram *diag,
         return;
     if (!tex)
         return;                       /* keep whatever base we have */
+    if (tex == diag->base_texture)
+        return;                       /* do not destroy then re-adopt the same texture */
 
     /* Free any texture we own before adopting a borrowed cache texture. */
     if (diag->owns_base_texture && diag->base_texture) {

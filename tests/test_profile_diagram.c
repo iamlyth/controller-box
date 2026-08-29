@@ -784,6 +784,32 @@ static void test_set_device_default_layout(void **state)
         cbx_profile_diagram_get_button_pos(CBX_DIAG_BTN_START));
 }
 
+static void test_set_base_image_same_owned_is_noop(void **state)
+{
+    pd_fixture *f = *state;
+    char svg_path[PATH_MAX];
+    snprintf(svg_path, sizeof(svg_path), "%s/svg/generic-gamepad.svg",
+             cbx_icon_dir());
+
+    cbx_theme theme;
+    cbx_theme_default(&theme);
+    cbx_profile_diagram diag;
+    assert_int_equal(cbx_profile_diagram_init(&diag, f->sdl.renderer,
+                                              svg_path, &theme), 0);
+    SDL_Texture *owned = diag.base_texture;
+    assert_non_null(owned);
+    assert_true(diag.owns_base_texture);
+
+    /* Re-applying the current texture must not destroy it and leave a
+     * dangling pointer.  This is a valid no-op when an icon lookup resolves
+     * to the already-installed diagram texture. */
+    cbx_profile_diagram_set_base_image(&diag, owned);
+    assert_ptr_equal(diag.base_texture, owned);
+    assert_true(diag.owns_base_texture);
+
+    cbx_profile_diagram_shutdown(&diag);
+}
+
 static void test_set_base_image_borrowed(void **state)
 {
     pd_fixture *f = *state;
@@ -986,6 +1012,8 @@ int main(void)
         /* Device-mapped base & marker layout (BUG-0018) */
         cmocka_unit_test(test_device_geometry_known),
         cmocka_unit_test_setup_teardown(test_set_device_default_layout,
+                                          setup, teardown),
+        cmocka_unit_test_setup_teardown(test_set_base_image_same_owned_is_noop,
                                           setup, teardown),
         cmocka_unit_test_setup_teardown(test_set_base_image_borrowed,
                                           setup, teardown),
