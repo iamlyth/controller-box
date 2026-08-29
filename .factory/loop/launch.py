@@ -228,11 +228,13 @@ OUTPUT_DIGEST_CAP = 1024 * 1024
 
 # Default bounds (§9: "run under a hard runtime limit").  The control plane
 # binds these per invocation; the defaults are conservative and documented.
-DEFAULT_RUNTIME_LIMIT = 3600.0
-# Complete Nix/project verification can remain silent while a tool buffers a
-# bounded subprocess result. Keep the inactivity bound below the one-hour hard
-# runtime while allowing one complete 20+ minute clean gate inside a role.
-DEFAULT_INACTIVITY_LIMIT = 3500.0
+DEFAULT_RUNTIME_LIMIT = 7200.0
+# Pi emits no supervisor-visible bytes while its tool loop is active. A full
+# serial project/factory verification turn can therefore be externally silent
+# for close to an hour even though every inner command is independently
+# bounded. Keep a finite inactivity bound below the two-hour hard role limit;
+# the six-hour campaign deadline remains the stronger whole-campaign bound.
+DEFAULT_INACTIVITY_LIMIT = 7000.0
 
 # Termination sequence: TERM, INT, and HUP are each delivered to the *full
 # process group* before the bounded grace expires and KILL escalates (§9).
