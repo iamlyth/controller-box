@@ -3832,27 +3832,45 @@ class Campaign:
                 "the explicit verification command is not held at the "
                 "pre-planning exact-commit boundary"
             )
-        tag = self._begin_untrusted(state, 1)
-        self._prepare_phase_result_file(
-            self._config.phase_result_path, "verification"
-        )
-        role = self._run_role("tester", state, head, attempt=1)
-        dirty = self._git.role_dirty_paths()
-        allow_paths = [self._config.phase_result_path] if self._config.phase_result_path else []
-        violation = scope_violation(
-            dirty, phase="verification",
-            plan_path=self._config.plan_path, spec_path=self._config.spec_path,
-            allow_paths=allow_paths,
-        )
+        # A successful tester process can still omit its mandatory handoff.
+        # Retry that one infrastructure-only case once in a fresh role process
+        # before running the expensive trusted gates. Scope violations,
+        # nonzero/interrupted roles, and malformed (rather than absent) JSON do
+        # not retry. Each attempt has its own state-digest tag and exact empty
+        # pre-created channel; no prior prose/session is carried forward.
+        attempt = 1
+        while True:
+            tag = self._begin_untrusted(state, attempt)
+            self._prepare_phase_result_file(
+                self._config.phase_result_path, "verification"
+            )
+            role = self._run_role("tester", state, head, attempt=attempt)
+            dirty = self._git.role_dirty_paths()
+            allow_paths = (
+                [self._config.phase_result_path]
+                if self._config.phase_result_path else []
+            )
+            violation = scope_violation(
+                dirty, phase="verification",
+                plan_path=self._config.plan_path, spec_path=self._config.spec_path,
+                allow_paths=allow_paths,
+            )
+            result = read_phase_result(
+                self._root, self._config.phase_result_path, "verification"
+            )
+            self._end_untrusted(tag)
+            if (
+                result is not None or attempt >= 2 or violation is not None
+                or role.interrupted or role.exit_status != 0
+            ):
+                break
+            attempt += 1
         gate_ran, gate_exit, gate_detail, verification_skipped = self._run_gate(
             self._config.verification_command, "verification"
         )
         if verification_skipped and gate_exit == 0:
             gate_exit = 1
             gate_detail = gate_detail or "verification gate reported a skip"
-        result = read_phase_result(
-            self._root, self._config.phase_result_path, "verification"
-        )
         result_data = result[0] if result is not None else None
         result_digest = result[1] if result is not None else ""
         result_bytes = result[2] if result is not None else b""
@@ -3886,7 +3904,6 @@ class Campaign:
             gate_skipped=verification_skipped,
             capability_skipped=capability_skipped,
         )
-        self._end_untrusted(tag)
         if outcome in ("findings", "blocked"):
             # Task 10 §16: verification findings/blocked become next-round
             # planner input through an orchestrator-minted receipt that binds
@@ -3933,7 +3950,7 @@ class Campaign:
         state2 = state_module.advance(state, outcome)
         state_module.write_state(self._root, state2)
         return _Step(
-            self._record(state, 1, outcome, detail,
+            self._record(state, attempt, outcome, detail,
                          result_digest=record_result_digest),
             state=state2,
         )

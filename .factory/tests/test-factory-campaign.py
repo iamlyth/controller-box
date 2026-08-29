@@ -561,6 +561,24 @@ class CampaignTerminals(_CampaignBase):
         self.assertEqual(state.current_phase, "success")
         self.assertEqual(state.last_outcome, "success")
 
+    def test_missing_tester_handoff_retries_once_before_gates(self) -> None:
+        scenario = json.loads(json.dumps(SUCCESS_SCENARIO))
+        scenario["tester"] = {
+            "behavior": {"1.1": "no-result", "1.2": "pass"}
+        }
+        ws = self.make(scenario)
+        rc, data = ws.run_cli()
+        self.assertEqual(rc, 0)
+        assert_terminal(self, data, terminal_phase="success",
+                        terminal_outcome="pass", exit_code=0,
+                        rounds_completed=1)
+        verification = next(
+            record for record in data["phase_history"]
+            if record["phase"] == "verification"
+        )
+        self.assertEqual(verification["attempt"], 2)
+        self.assertNotEqual(verification["result_digest"], "0" * 64)
+
     def test_final_findings(self) -> None:
         ws = self.make({
             "planner": {"behavior": "planned"},

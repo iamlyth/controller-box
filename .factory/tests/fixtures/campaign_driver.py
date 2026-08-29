@@ -348,6 +348,8 @@ def main() -> int:
         if behavior == "pass":
             write_result_file(result_file, root, "pass")
             return 0
+        if behavior == "no-result":
+            return 0
         if behavior == "findings":
             write_result_file(result_file, root, "findings", findings=["fixture finding"])
             return 0
