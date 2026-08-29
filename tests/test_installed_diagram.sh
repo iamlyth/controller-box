@@ -49,6 +49,30 @@ MANAGER_WINDOW=""
 FAILURES=0
 TMPDIR=""
 
+# An installed file can be a regular non-symlink while an ancestor redirects
+# the staging tree back into the source checkout. Walk every existing
+# component so this acceptance cannot prove a source-tree asset through an
+# installed-looking path.
+reject_symlink_components() {
+    local path="$1"
+    local prefix="/"
+    local component
+    local old_ifs="$IFS"
+    local -a components
+    IFS=/ read -r -a components <<< "${path#/}"
+    IFS="$old_ifs"
+    for component in "${components[@]}"; do
+        [ -n "$component" ] || continue
+        prefix="${prefix}${component}"
+        if [ -L "$prefix" ]; then
+            fail "installed path contains symlink component: $prefix"
+            return 1
+        fi
+        prefix="${prefix}/"
+    done
+    return 0
+}
+
 pass() { echo "PASS: $*"; }
 fail() { echo "FAIL: $*" >&2; FAILURES=$((FAILURES + 1)); }
 
@@ -122,7 +146,11 @@ if [ "$INSTALL_OK" -ne 1 ]; then
 fi
 # The custom-prefix install must deliver the diagram asset to the installed
 # data layout.  If it is missing, the binary would fall back to the source
-# tree, which the acceptance must reject.
+# tree, which the acceptance must reject.  Also reject a redirected staging
+# ancestor before inspecting individual files.
+if ! reject_symlink_components "$STAGING_DIR"; then
+    exit 1
+fi
 INSTALLED_SVG="$STAGING_DIR/share/controller-box/icons/svg/generic-gamepad.svg"
 # Require the asset to be a real installed regular file.  Accepting a symlink
 # here could silently reintroduce a source-tree asset and make this test pass
@@ -135,6 +163,9 @@ fi
 # require that map to be installed as a real file too, so a source-tree asset
 # cannot satisfy this acceptance while the production mapping data is absent.
 INSTALLED_ICON_MAP="$STAGING_DIR/share/controller-box/controller-icons.yaml"
+if ! reject_symlink_components "$INSTALLED_ICON_MAP"; then
+    exit 1
+fi
 if [ ! -f "$INSTALLED_ICON_MAP" ] || [ -L "$INSTALLED_ICON_MAP" ]; then
     fail "installed layout missing non-symlink controller icon map: $INSTALLED_ICON_MAP"
     exit 1
@@ -142,6 +173,9 @@ fi
 INSTALLED_BIN="$STAGING_DIR/bin/controller-box"
 if [ ! -f "$INSTALLED_BIN" ]; then
     INSTALLED_BIN="$STAGING_DIR/usr/bin/controller-box"
+fi
+if ! reject_symlink_components "$INSTALLED_BIN"; then
+    exit 1
 fi
 if [ ! -f "$INSTALLED_BIN" ] || [ -L "$INSTALLED_BIN" ] || [ ! -x "$INSTALLED_BIN" ]; then
     fail "installed binary is missing, non-executable, or is not a regular non-symlink file: $INSTALLED_BIN"
