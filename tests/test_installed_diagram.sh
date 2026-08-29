@@ -131,6 +131,14 @@ if [ ! -f "$INSTALLED_SVG" ] || [ -L "$INSTALLED_SVG" ]; then
     fail "installed layout missing non-symlink controller SVG: $INSTALLED_SVG"
     exit 1
 fi
+# The production editor resolves the diagram through the installed icon map;
+# require that map to be installed as a real file too, so a source-tree asset
+# cannot satisfy this acceptance while the production mapping data is absent.
+INSTALLED_ICON_MAP="$STAGING_DIR/share/controller-box/controller-icons.yaml"
+if [ ! -f "$INSTALLED_ICON_MAP" ] || [ -L "$INSTALLED_ICON_MAP" ]; then
+    fail "installed layout missing non-symlink controller icon map: $INSTALLED_ICON_MAP"
+    exit 1
+fi
 INSTALLED_BIN="$STAGING_DIR/bin/controller-box"
 if [ ! -f "$INSTALLED_BIN" ]; then
     INSTALLED_BIN="$STAGING_DIR/usr/bin/controller-box"
