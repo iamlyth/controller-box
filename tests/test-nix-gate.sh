@@ -35,6 +35,19 @@ for f in scripts/verify-project.sh scripts/verify-sanitizers.sh tests/test-visua
 done
 ok "forgeable CBX_VERIFY_IN_NIX_SHELL is retired from the verifier scripts"
 
+# The normal installed-evidence default must not be exported before the Nix
+# wrapper re-exec. Otherwise the authenticated child mistakes that default for
+# a caller-supplied campaign override and rejects its non-campaign path.
+python3 - scripts/verify-project.sh <<'PY' || fail "installed-evidence export precedes authenticated Nix re-exec"
+import sys
+text = open(sys.argv[1], encoding="utf-8").read()
+reexec = text.index('if ! nix_gate_require full; then')
+export = text.index('export FACTORY_INSTALLED_FUNCTIONAL_EVIDENCE_PATH=')
+if export <= reexec:
+    raise SystemExit(1)
+PY
+ok "normal installed-evidence default survives authenticated Nix re-exec"
+
 # --- shared runner: source the gate and call nix_gate_require <mode> ---------
 run_gate() { # <mode> ...(env vars already set in the subprocess env)
     local mode=$1

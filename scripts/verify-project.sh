@@ -49,7 +49,6 @@ for directory in (root / parts[0], root / parts[0] / parts[1], path.parent):
 print(path)
 PY
 ) || exit $?
-export FACTORY_INSTALLED_FUNCTIONAL_EVIDENCE_PATH="$INSTALLED_EVIDENCE_PATH"
 
 # The project gate is bound to the declared Nix environment (shell.nix). The
 # authenticated boundary (scripts/nix-gate.sh + scripts/nix-gate-exec.sh)
@@ -63,6 +62,10 @@ if ! nix_gate_require full; then
     exec "$PROJECT_ROOT/scripts/nix-gate-exec.sh" \
         "$PROJECT_ROOT/scripts/verify-project.sh" "$@"
 fi
+# Export only after authenticated Nix re-exec. Exporting the normal operator
+# default before re-exec makes the child misclassify it as a caller-supplied
+# campaign override and reject its non-campaign path.
+export FACTORY_INSTALLED_FUNCTIONAL_EVIDENCE_PATH="$INSTALLED_EVIDENCE_PATH"
 
 required=(sdl2 SDL2_ttf SDL2_image libsystemd yaml-0.1 cmocka)
 if ! pkg-config --exists "${required[@]}"; then
