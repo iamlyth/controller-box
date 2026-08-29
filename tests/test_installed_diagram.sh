@@ -152,6 +152,9 @@ if ! reject_symlink_components "$STAGING_DIR"; then
     exit 1
 fi
 INSTALLED_SVG="$STAGING_DIR/share/controller-box/icons/svg/generic-gamepad.svg"
+if ! reject_symlink_components "$INSTALLED_SVG"; then
+    exit 1
+fi
 # Require the asset to be a real installed regular file.  Accepting a symlink
 # here could silently reintroduce a source-tree asset and make this test pass
 # without exercising the installed layout.
