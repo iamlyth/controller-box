@@ -345,7 +345,7 @@ for ((poll = 0; poll < 50; poll++)); do
         [ -n "$candidate" ] || continue
         title=$(xdotool getwindowname "$candidate" 2>/dev/null || true)
         if [ "$title" = "Controller-Box Manager" ]; then
-            printf '%s\\n' "$candidate"
+            printf '%s\n' "$candidate"
             break
         fi
     done)
@@ -382,7 +382,7 @@ for ((poll = 0; poll < 50; poll++)); do
         [ -n "$candidate" ] || continue
         title=$(xdotool getwindowname "$candidate" 2>/dev/null || true)
         if [ "$title" = "Controller-Box Manager" ]; then
-            printf '%s\\n' "$candidate"
+            printf '%s\n' "$candidate"
             break
         fi
     done)
