@@ -26,8 +26,9 @@ or completion claim is available or authoritative.
    `nix-shell` inside this ptrace-confined role. Run at most three focused
    commands, each under `timeout 120`, inside the inherited exact Nix
    environment. Permitted focused commands are syntax/compile checks that do
-   not dispatch another executable (for example `bash -n file.sh` and
-   `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile file.py`) plus source
+   not dispatch another executable or write caches (for example `bash -n
+   file.sh` and `python3 -c 'import ast; ast.parse(open("file.py").read())'`)
+   plus source
    inspection. Do **not** execute repository test scripts, validators, CTest,
    `mktemp`, or any shebang entrypoint: their dynamic helpers/build artifacts
    are deliberately outside the model-exec table and the trusted gate runs
