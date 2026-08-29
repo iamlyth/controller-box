@@ -1418,12 +1418,6 @@ def classify_verification(
         return "infrastructure_failure"
     if not scope_ok:
         return "infrastructure_failure"
-    # A trusted command that explicitly reports a skip did run but did not
-    # exercise acceptance. It is a finding even if a contradictory caller
-    # also marks gate_ran false; no skip can become pass or retryable command
-    # infrastructure merely through flag composition.
-    if gate_skipped:
-        return "findings"
     if not gate_ran:
         return "infrastructure_failure"
     # 126/127 and the supervisor's negative timeout/binding statuses mean the
@@ -1438,6 +1432,12 @@ def classify_verification(
         return "infrastructure_failure"
     if not tester_result_valid:
         return "infrastructure_failure"
+    # A trusted command that reports a skip did run but did not exercise
+    # acceptance. It is a finding only after the tester handoff is valid; a
+    # missing/malformed handoff remains infrastructure and can never reach
+    # findings redaction with a null result object.
+    if gate_skipped:
+        return "findings"
     if capability_skipped:
         # A skipped capability probe never supports pass. It is an honest
         # external blocker only when the tester also supplied exact blocker

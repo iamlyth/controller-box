@@ -1901,7 +1901,11 @@ class ClassificationUnits(_CampaignBase):
         self.assertEqual(campaign_module.classify_verification(
             **{**base, "gate_skipped": True}), "findings")
         self.assertEqual(campaign_module.classify_verification(
-            **{**base, "gate_ran": False, "gate_skipped": True}), "findings")
+            **{**base, "gate_ran": False, "gate_skipped": True}),
+            "infrastructure_failure")
+        self.assertEqual(campaign_module.classify_verification(
+            **{**base, "gate_skipped": True, "tester_result_valid": False}),
+            "infrastructure_failure")
         self.assertEqual(campaign_module.classify_verification(
             **{**base, "capability_skipped": True,
                "capability_available": False}), "findings")
