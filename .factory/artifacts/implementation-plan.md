@@ -1211,6 +1211,8 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 
   - Evidence: Fresh implementation attempt was blocked before inspection: reading the required `.factory/loop/plan_parser.py` path returned `EACCES: permission denied`, so the explicit-priority parser/selector implementation and `.factory/tests` regressions could not be safely modified or run. `timeout 120 python3 scripts/validate-implementation-plan.py planning .factory/artifacts/implementation-plan.md` completed with exit 0 and validated plan structure only. No implementation change, focused selector/parser result, exact-commit receipt, or acceptance/evidence elevation was produced; Task 47 remains pending.
 
+  - Evidence: Current bounded verification ran `timeout 120 python3 scripts/validate-implementation-plan.py planning .factory/artifacts/implementation-plan.md` and exited 0, validating plan structure only. The selected `.factory/loop` and `.factory/tests` paths remain inaccessible under the enforced workspace boundary, so the parser/selector implementation and load-bearing regressions could not be inspected, modified, or run. No exact-commit selector receipt or acceptance/evidence elevation was produced; Task 47 remains pending.
+
 ## Task 48: Final documentation and specification audit
 - Status: blocked
 - Priority: 1
