@@ -126,7 +126,19 @@ write_policy '["remote-project-gate"]'
 cat > "$tmp/fake-ssh" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-export SSH_ORIGINAL_COMMAND=factory-runner-v1
+expected=(
+  -o BatchMode=yes -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes
+  -o UpdateHostKeys=no -o ClearAllForwardings=yes -o ForwardAgent=no
+  -o PermitLocalCommand=no -o RequestTTY=no -T "\${@: -2:1}" factory-runner-v1
+)
+actual=("\$@")
+[[ \${#actual[@]} -eq \${#expected[@]} ]]
+for ((index=0; index < \${#expected[@]}; index++)); do
+  [[ \${actual[index]} == \${expected[index]} ]]
+done
+# Model OpenSSH ForcedCommand semantics: the requested command is carried in
+# SSH_ORIGINAL_COMMAND while stdin remains the byte-exact protocol stream.
+export SSH_ORIGINAL_COMMAND=\${expected[-1]}
 exec "$(command -v python3)" -I "$tmp/repo/scripts/factory-runner-server.py"
 EOF
 chmod +x "$tmp/fake-ssh"

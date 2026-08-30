@@ -952,6 +952,7 @@ def child_environment(
     *,
     guard_digest: Optional[str] = None,
     staged_path: Optional[Path] = None,
+    approved_path_dirs: Sequence[str] = (),
 ) -> Dict[str, str]:
     """The exact child environment: allowlist plus the invocation fields.
 
@@ -1014,6 +1015,18 @@ def child_environment(
                     current = current.parent
             except OSError:
                 continue
+            trusted_dirs.append(resolved)
+        for candidate in approved_path_dirs:
+            resolved = os.path.realpath(candidate)
+            if (
+                resolved != candidate or not resolved.startswith("/nix/store/")
+                or not os.path.isdir(resolved) or resolved in trusted_dirs
+            ):
+                continue
+            # These directories come only from exact executable-file rules in
+            # the already validated confinement specification. PATH visibility
+            # does not grant execution: Landlock and the inode broker still
+            # authorize only each named file, never this directory broadly.
             trusted_dirs.append(resolved)
         environment["PATH"] = os.pathsep.join([str(staged), *trusted_dirs])
     else:
@@ -1907,10 +1920,18 @@ class LaunchSupervision:
                 "an external Pi/runtime path changed in digest, device, inode, "
                 f"or immutable identity immediately before exec: {exc} (F2)"
             ) from exc
+        approved_path_dirs = sorted({
+            str(Path(str(rule["path"])).parent)
+            for rule in (self._confinement_spec or {}).get("rules", [])
+            if isinstance(rule, dict)
+            and "execute" in rule.get("access", [])
+            and str(rule.get("path", "")).startswith("/nix/store/")
+        })
         env = child_environment(
             self.binding,
             guard_digest=self._guard_digest,
             staged_path=self._exec_dir,
+            approved_path_dirs=approved_path_dirs,
         )
         argv = child_argv(
             self.binding, self.prompt_fd, self.session_dir,

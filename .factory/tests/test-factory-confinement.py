@@ -352,6 +352,11 @@ class _Base(unittest.TestCase):
         (ws / "spec.md").write_text("spec\n", encoding="utf-8")
         (ws / "role.md").write_text("role\n", encoding="utf-8")
         (ws / "AGENTS.md").write_text("agents\n", encoding="utf-8")
+        # The production toolchain probe must resolve the fixture's own exact
+        # committed shell expression. Without this copy, ``nix-shell`` walks
+        # upward into the adopting repository and makes the result depend on
+        # the parent process/order rather than this fixture's bound commit.
+        shutil.copy2(ROOT / "shell.nix", ws / "shell.nix")
         backend = ws / "backend.py"
         backend.write_text("#!/usr/bin/env python3\nprint('ok')\n", encoding="utf-8")
         os.chmod(backend, 0o700)
@@ -490,15 +495,20 @@ class _Base(unittest.TestCase):
                     "/dev/null", os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
                 )
                 try:
+                    # Leave room for every approved source descriptor that
+                    # the fresh launcher opens before reserving its protected
+                    # table. A fixed +64 leaked the previous executable-set
+                    # size into this fixture and became order-dependent when
+                    # the exact project-shell closure admitted more tools.
                     contract_fd = fcntl.fcntl(
                         source_fd,
                         fcntl.F_DUPFD,
-                        max([127, *descriptors]) + 64,
+                        max([127, *descriptors]) + len(approved_paths) + 64,
                     )
                 finally:
                     os.close(source_fd)
-                # ``contract_fd`` is the highest inherited descriptor.  The
-                # production table starts 32 slots above that exact number.
+                # ``contract_fd`` is the highest inherited/open descriptor.
+                # The production table starts 32 slots above that exact number.
                 slots = {
                     path: contract_fd + 32 + index
                     for index, path in enumerate(approved_paths)

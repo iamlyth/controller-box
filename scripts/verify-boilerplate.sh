@@ -142,6 +142,7 @@ required = [
     '.factory/smoke/evidence_smoke.py',
     '.factory/tests/test-factory-smoke.py',
     '.factory/tests/test-factory-smoke.sh',
+    '.factory/tests/test-factory-confinement-order.sh',
     '.factory/tests/test-factory-supervision.sh',
     '.factory/loop/plan_parser.py', '.factory/loop/selector.py',
     '.factory/loop/state.py', '.factory/loop/evidence.py',
@@ -334,6 +335,7 @@ PY
 ./.factory/tests/test-factory-migration.sh
 ./.factory/tests/test-factory-adversarial.sh
 ./.factory/tests/test-factory-smoke.sh
+./.factory/tests/test-factory-confinement-order.sh
 
 # -- hidden fresh factory Python suites (deterministic serial order) ---------
 # Every hidden Python suite that is not already driven by a shell wrapper

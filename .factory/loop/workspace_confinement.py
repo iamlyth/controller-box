@@ -154,6 +154,8 @@ SYSTEM_READ_ROOTS = (
 NIX_STORE_ROOT_RE = re.compile(r"^/nix/store/[0-9a-z]{32}-[^/]+$")
 MAX_TOOLCHAIN_CLOSURE_PATHS = 2048
 MAX_TOOLCHAIN_QUERY_BYTES = 256 * 1024
+MAX_PROJECT_SHELL_INPUTS = 256
+MAX_PROJECT_SHELL_OUTPUTS = 512
 SYSTEM_EXECUTABLE_DIRS = (
     "/usr/bin", "/usr/sbin", "/bin", "/sbin",
 )
@@ -816,6 +818,143 @@ def _validate_immutable_store_root(path_text: str) -> str:
     return path_text
 
 
+def _trusted_nix_command(name: str) -> Tuple[str, str]:
+    """Return the immutable PATH spelling and real executable for one Nix CLI."""
+    argv0 = shutil.which(name)
+    if not argv0:
+        raise ConfinementUnavailable(f"{name} is unavailable for exact Nix binding")
+    executable = os.path.realpath(argv0)
+    try:
+        gitutil.require_trusted_executable(executable)
+    except gitutil.GitBoundaryError as exc:
+        raise ConfinementUnavailable(
+            f"{name} authority is not immutable: {exc}"
+        ) from exc
+    return argv0, executable
+
+
+def _nix_query_environment(executable: str) -> Dict[str, str]:
+    environment = {
+        "HOME": "/",
+        "LANG": os.environ.get("LANG", "C.UTF-8"),
+        "PATH": os.path.dirname(executable),
+    }
+    if os.environ.get("NIX_REMOTE") == "daemon":
+        environment["NIX_REMOTE"] = "daemon"
+    nix_path = _canonical_nix_path()
+    if nix_path is not None:
+        environment["NIX_PATH"] = nix_path
+    return environment
+
+
+def _run_nix_query(
+    argv: Sequence[str], *, argv0: str, executable: str, cwd: Path
+) -> bytes:
+    """Run one immutable Nix metadata query with bounded, credential-free I/O."""
+    try:
+        result = subprocess.run(
+            [argv0, *argv], executable=executable, cwd=cwd,
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, env=_nix_query_environment(executable),
+            timeout=30.0, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ConfinementUnavailable(f"exact Nix metadata query failed: {exc}") from exc
+    if result.returncode != 0:
+        raise ConfinementUnavailable("exact Nix metadata query returned nonzero")
+    if len(result.stdout) > MAX_TOOLCHAIN_QUERY_BYTES:
+        raise ConfinementError("exact Nix metadata query output is oversized")
+    return result.stdout
+
+
+def _project_shell_input_paths(workspace: Path) -> List[str]:
+    """Resolve the exact direct input outputs of committed ``shell.nix``.
+
+    A nested ``nix-shell`` changes PATH only after Landlock is active. Binding
+    executable policy to the parent's ambient PATH therefore made display
+    tools such as xdotool order-dependent: a focused test entered Nix first,
+    while the complete boilerplate process did not. The trusted parent now
+    evaluates the clean, commit-bound ``shell.nix`` as Nix metadata, extracts
+    only its selected direct input outputs, and later grants only allowlisted
+    executable *files* from their bounded immutable closure. It never grants
+    ``/nix/store`` or EXECUTE on a package directory.
+    """
+    shell = workspace / "shell.nix"
+    if not os.path.lexists(shell):
+        return []
+    _validate_allowlist_path(str(shell), workspace, "project shell expression")
+    _assert_single_link_allowlisted_file(str(shell))
+    if not stat.S_ISREG(os.lstat(shell).st_mode):
+        raise ConfinementError("project shell expression is not a regular file")
+
+    instantiate_argv0, instantiate = _trusted_nix_command("nix-instantiate")
+    raw_drv = _run_nix_query(
+        ["--readonly-mode", str(shell)], argv0=instantiate_argv0,
+        executable=instantiate, cwd=workspace,
+    )
+    try:
+        drv_lines = raw_drv.decode("utf-8", "strict").splitlines()
+    except UnicodeDecodeError as exc:
+        raise ConfinementError("project shell derivation output is not UTF-8") from exc
+    if len(drv_lines) != 1:
+        raise ConfinementError("project shell did not produce exactly one derivation")
+    drv = drv_lines[0]
+    if not NIX_STORE_ROOT_RE.fullmatch(drv) or not drv.endswith(".drv"):
+        raise ConfinementError("project shell produced a non-canonical derivation")
+
+    nix_argv0, nix = _trusted_nix_command("nix")
+    metadata_raw = _run_nix_query(
+        ["--extra-experimental-features", "nix-command",
+         "derivation", "show", drv],
+        argv0=nix_argv0, executable=nix, cwd=workspace,
+    )
+    try:
+        metadata = json.loads(metadata_raw)
+        derivations = metadata["derivations"]
+        if not isinstance(derivations, dict) or len(derivations) != 1:
+            raise ValueError
+        shell_meta = next(iter(derivations.values()))
+        input_drvs = shell_meta["inputs"]["drvs"]
+    except (UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        raise ConfinementError("project shell derivation metadata is malformed") from exc
+    if not isinstance(input_drvs, dict) or not 0 < len(input_drvs) <= MAX_PROJECT_SHELL_INPUTS:
+        raise ConfinementError("project shell input derivation count is invalid")
+
+    store_argv0, store = _trusted_nix_command("nix-store")
+    outputs: List[str] = []
+    for drv_name, selection in sorted(input_drvs.items()):
+        input_drv = f"/nix/store/{drv_name}"
+        if not NIX_STORE_ROOT_RE.fullmatch(input_drv) or not input_drv.endswith(".drv"):
+            raise ConfinementError("project shell input derivation is non-canonical")
+        if not isinstance(selection, dict) or set(selection) != {"dynamicOutputs", "outputs"}:
+            raise ConfinementError("project shell input selection is malformed")
+        if selection["dynamicOutputs"] not in ({}, []):
+            raise ConfinementError("dynamic project shell outputs are unsupported")
+        names = selection["outputs"]
+        if not isinstance(names, list) or not names or not all(
+            isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9+._?-]+", name)
+            for name in names
+        ):
+            raise ConfinementError("project shell selected output names are invalid")
+        for name in sorted(names):
+            raw_output = _run_nix_query(
+                ["-q", "--binding", name, input_drv], argv0=store_argv0,
+                executable=store, cwd=workspace,
+            )
+            try:
+                lines = raw_output.decode("utf-8", "strict").splitlines()
+            except UnicodeDecodeError as exc:
+                raise ConfinementError("project shell output path is not UTF-8") from exc
+            if len(lines) != 1:
+                raise ConfinementError("project shell output binding is malformed")
+            outputs.append(_validate_immutable_store_root(lines[0]))
+            if len(outputs) > MAX_PROJECT_SHELL_OUTPUTS:
+                raise ConfinementError("project shell selected too many outputs")
+    if len(set(outputs)) != len(outputs):
+        raise ConfinementError("project shell selected duplicate outputs")
+    return sorted(outputs)
+
+
 def _toolchain_closure_paths(seed_paths: Sequence[str]) -> List[str]:
     """Resolve a bounded exact immutable Nix closure for approved runtimes.
 
@@ -831,51 +970,13 @@ def _toolchain_closure_paths(seed_paths: Sequence[str]) -> List[str]:
     })
     if not roots:
         return []
-    nix_store_argv0 = shutil.which("nix-store")
-    if not nix_store_argv0:
-        raise ConfinementUnavailable(
-            "nix-store is unavailable for exact toolchain closure binding"
-        )
-    nix_store = os.path.realpath(nix_store_argv0)
+    nix_store_argv0, nix_store = _trusted_nix_command("nix-store")
+    raw = _run_nix_query(
+        ["-qR", *roots], argv0=nix_store_argv0,
+        executable=nix_store, cwd=Path("/"),
+    )
     try:
-        gitutil.require_trusted_executable(nix_store)
-    except gitutil.GitBoundaryError as exc:
-        raise ConfinementUnavailable(
-            f"nix-store closure authority is not immutable: {exc}"
-        ) from exc
-    environment = {
-        "HOME": "/",
-        "LANG": os.environ.get("LANG", "C.UTF-8"),
-        "PATH": os.path.dirname(nix_store),
-    }
-    if os.environ.get("NIX_REMOTE") == "daemon":
-        environment["NIX_REMOTE"] = "daemon"
-    try:
-        # Nix installs nix-store as a multicall symlink to ``nix``; retain the
-        # validated real executable but preserve the trusted nix-store argv[0]
-        # so the intended legacy query interface is selected.
-        result = subprocess.run(
-            [nix_store_argv0, "-qR", *roots],
-            executable=nix_store,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=environment,
-            timeout=30.0,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise ConfinementUnavailable(
-            f"exact Nix toolchain closure query failed: {exc}"
-        ) from exc
-    if result.returncode != 0:
-        raise ConfinementUnavailable(
-            "exact Nix toolchain closure query returned nonzero"
-        )
-    if len(result.stdout) > MAX_TOOLCHAIN_QUERY_BYTES:
-        raise ConfinementError("exact Nix toolchain closure output is oversized")
-    try:
-        lines = result.stdout.decode("utf-8", "strict").splitlines()
+        lines = raw.decode("utf-8", "strict").splitlines()
     except UnicodeDecodeError as exc:
         raise ConfinementError("Nix toolchain closure output is not UTF-8") from exc
     if not lines or len(lines) > MAX_TOOLCHAIN_CLOSURE_PATHS:
@@ -962,7 +1063,7 @@ def _tool_alias_seed_paths() -> List[str]:
     return sorted(set(paths))
 
 
-def _tool_execute_paths() -> List[str]:
+def _tool_execute_paths(toolchain_closure: Sequence[str] = ()) -> List[str]:
     """Exact executable files available to model subprocesses, never Git.
 
     Granting EXECUTE on ``/usr`` or ``/nix/store`` lets a generated/sourced
@@ -977,8 +1078,12 @@ def _tool_execute_paths() -> List[str]:
     only executable named ``git``: the exact-commit shim/broker.
     """
     directories: List[str] = []
+    closure_bin_dirs = [
+        os.path.join(root, "bin") for root in toolchain_closure
+        if NIX_STORE_ROOT_RE.fullmatch(root)
+    ]
     for candidate in [*os.environ.get("PATH", "").split(os.pathsep),
-                      *SYSTEM_EXECUTABLE_DIRS]:
+                      *SYSTEM_EXECUTABLE_DIRS, *closure_bin_dirs]:
         if not candidate or not os.path.isabs(candidate):
             continue
         resolved_dir = os.path.realpath(candidate)
@@ -1194,21 +1299,23 @@ def confinement_spec(
         # Model-writable workspace paths are never executable. Scripts remain
         # usable as data through an exact approved interpreter.
         add_rule(str(path), (ACCESS_READ, ACCESS_WRITE))
-    tool_execute = _tool_execute_paths()
+    ambient_tool_execute = _tool_execute_paths()
     backend_read, backend_execute = _backend_paths(
         Path(binding.backend), workspace
     )
-    # Include immutable PATH package roots as closure seeds as well as the
-    # resolved targets. Nix exposes multicall tools such as nix-shell through
-    # immutable store symlinks; the broker validates those alias components
-    # and resolves them only to an already approved exact inode.
+    # Include immutable PATH package roots and the exact selected inputs of the
+    # commit-bound project shell. Nix exposes multicall tools such as nix-shell
+    # through immutable store symlinks; the broker validates those aliases and
+    # resolves them only to already approved exact inodes.
     nix_path = _canonical_nix_path()
     nixpkgs_source = nix_path.split("=", 1)[1] if nix_path is not None else ""
+    project_shell_inputs = _project_shell_input_paths(workspace)
     toolchain_closure = _toolchain_closure_paths([
-        *tool_execute, *backend_read, *backend_execute,
-        *_tool_alias_seed_paths(),
+        *ambient_tool_execute, *backend_read, *backend_execute,
+        *_tool_alias_seed_paths(), *project_shell_inputs,
         *([nixpkgs_source] if nixpkgs_source else []),
     ])
+    tool_execute = _tool_execute_paths(toolchain_closure)
     for path in _tool_read_paths(toolchain_closure):
         add_rule(path, (ACCESS_READ,))
     for path in tool_execute:
