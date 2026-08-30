@@ -1290,6 +1290,43 @@ class SupervisionTerminationTests(_Base):
         self.assertNotIn("environ", result.to_dict())
         self.assertEqual(result.outcome, "completed")
 
+    def test_output_monitor_accepts_pipes_above_fd_setsize(self) -> None:
+        """Exact rule-anchor FDs must not make natural completion fail.
+
+        The project-shell closure can retain more than 1024 per-inode/path
+        anchors before Popen creates stdout/stderr. ``select.select`` rejects
+        those high pipe descriptors even when RLIMIT_NOFILE permits them; the
+        production monitor must use a scalable Linux selector instead.
+        """
+        held: list[int] = []
+        try:
+            while not held or held[-1] < 1100:
+                held.append(os.open(os.devnull, os.O_RDONLY | os.O_CLOEXEC))
+        except OSError as exc:
+            for descriptor in held:
+                os.close(descriptor)
+            self.skipTest(f"host cannot allocate a descriptor above 1100: {exc}")
+        try:
+            self.set_behavior("record")
+            binding, role, agents, spec, plan = self.make_binding()
+            supervisor = LaunchSupervision(binding, kill_grace=0.3)
+            real_spawn = supervisor.spawn
+            pipe_fds: list[int] = []
+
+            def record_spawn():
+                child = real_spawn()
+                pipe_fds.extend((child.stdout.fileno(), child.stderr.fileno()))
+                return child
+
+            with unittest.mock.patch.object(supervisor, "spawn", record_spawn):
+                result = supervisor.run(self.authorize(binding, role, agents, spec, plan))
+            self.assertTrue(all(descriptor > 1023 for descriptor in pipe_fds))
+            self.assertEqual(result.outcome, "completed")
+            self.assertEqual(result.returncode, 0)
+        finally:
+            for descriptor in held:
+                os.close(descriptor)
+
     def test_exception_in_invariants_still_bounded_terminates(self) -> None:
         """F1: an invariant failure after spawn kills and reaps the live child."""
         self.set_behavior("sleep")

@@ -69,7 +69,7 @@ import math
 import os
 from pathlib import Path
 import re
-import select
+import selectors
 import shutil
 import signal
 import stat
@@ -2106,6 +2106,15 @@ class LaunchSupervision:
             except OSError:
                 continue
         open_fds = set(streams)
+        # ``select.select`` is capped by FD_SETSIZE even when the process
+        # soft limit is much higher.  Exact per-inode confinement can retain
+        # enough descriptor anchors that the two output pipes are numbered
+        # above that cap.  Use the platform's scalable selector (epoll on the
+        # supported Linux hosts), so monitor correctness is independent of
+        # how many exact rule anchors precede the pipes.
+        selector = selectors.DefaultSelector()
+        for descriptor in open_fds:
+            selector.register(descriptor, selectors.EVENT_READ)
         last_activity = time.monotonic()
         reason: Optional[str] = None
         try:
@@ -2129,14 +2138,17 @@ class LaunchSupervision:
                     time.sleep(0.05)
                     continue
                 try:
-                    readable, _, _ = select.select(list(open_fds), [], [], 0.2)
+                    events = selector.select(0.2)
                 except InterruptedError:
-                    # A caught TERM/INT/HUP woke the select: re-check the
+                    # A caught TERM/INT/HUP woke the selector: re-check the
                     # pending-signal flag and the deadline immediately.
                     continue
-                except (OSError, ValueError):
-                    break
-                for descriptor in readable:
+                except (OSError, ValueError) as exc:
+                    raise SupervisionError(
+                        "model output selector failed before process exit"
+                    ) from exc
+                for key, _mask in events:
+                    descriptor = key.fd
                     try:
                         chunk = os.read(descriptor, 65536)
                     except (BlockingIOError, InterruptedError):
@@ -2145,6 +2157,10 @@ class LaunchSupervision:
                         chunk = b""
                     if not chunk:
                         open_fds.discard(descriptor)
+                        try:
+                            selector.unregister(descriptor)
+                        except (KeyError, OSError, ValueError):
+                            pass
                         try:
                             files[descriptor].close()
                         except OSError:
@@ -2155,6 +2171,7 @@ class LaunchSupervision:
                 if self._leader_exited(child) and not open_fds:
                     break
         finally:
+            selector.close()
             for descriptor in tuple(open_fds):
                 try:
                     files[descriptor].close()
