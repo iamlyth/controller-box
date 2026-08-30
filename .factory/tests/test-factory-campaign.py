@@ -1672,6 +1672,7 @@ class LifecycleAndCli(_CampaignBase):
         self.assertEqual(result.returncode, 6)
         self.assertIn("--capability-command", result.stderr)
         self.assertIn("--acceptance-command", result.stderr)
+        self.assertIn("--runner-command", result.stderr)
         self.assertFalse((ws.root / STATE_DIR / state_module.STATE_FILE_NAME).exists())
 
         result = run(
@@ -1680,6 +1681,7 @@ class LifecycleAndCli(_CampaignBase):
              "--rounds", "5", "--branch", BRANCH,
              "--verification-command", "./scripts/verify.sh",
              "--capability-command", "./scripts/capability.sh",
+             "--runner-command", "./scripts/run-factory-runners.py",
              "--acceptance-command", "./scripts/acceptance.sh"],
             root=ROOT, check=False,
         )
@@ -1695,6 +1697,7 @@ class LifecycleAndCli(_CampaignBase):
              "--campaign-timeout", "60",
              "--verification-command", "./scripts/verify.sh",
              "--capability-command", "./scripts/capability.sh",
+             "--runner-command", "./scripts/run-factory-runners.py",
              "--acceptance-command", "./scripts/acceptance.sh"],
             root=ROOT, check=False,
         )
@@ -2252,6 +2255,7 @@ class ReviewHardening(_CampaignBase):
             role_driver=None,
             acceptance_command=("./scripts/credential-guard.py",),
             capability_command=("./scripts/credential-guard.py",),
+            runner_command=campaign_module.RUNNER_COMMAND,
             state_namespace=".factory-state/campaigns/campaign",
             accepted_commit=head,
             install_manifest=str(ws.root / "fixture-install-manifest.json"),
@@ -2732,6 +2736,222 @@ class ReviewHardening(_CampaignBase):
             self.assertIsNotNone(timeout)
             self.assertGreater(timeout, 0)
             self.assertLessEqual(timeout, campaign_module.GIT_TIMEOUT)
+
+
+class RunnerAcquisitionLifecycleTests(_CampaignBase):
+    """Coordinator-owned exact-HEAD runner acquisition regressions."""
+
+    def _authority(self, *, timeout: float = 2.0):
+        ws = self.make(SUCCESS_SCENARIO)
+        (ws.root / ".factory" / "environment.toml").write_text(
+            "schema_version = 1\n", encoding="utf-8",
+        )
+        runner = ws.root / "scripts" / "run-factory-runners.py"
+        runner.write_text(
+            "#!/usr/bin/env python3\n"
+            "import hashlib,json,pathlib,subprocess,sys,time\n"
+            "root=pathlib.Path(__file__).resolve().parent.parent\n"
+            "state=root/'.factory-state'; state.mkdir(mode=0o700,exist_ok=True)\n"
+            "mode=(state/'runner-mode').read_text().strip() if (state/'runner-mode').exists() else 'pass'\n"
+            "if mode=='timeout': time.sleep(5)\n"
+            "if mode=='transport': raise SystemExit(20)\n"
+            "if mode=='findings': raise SystemExit(21)\n"
+            "if mode=='integrity': raise SystemExit(22)\n"
+            "head=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()\n"
+            "counter=state/'runner-count'; n=int(counter.read_text())+1 if counter.exists() else 1\n"
+            "counter.write_text(str(n))\n"
+            "raw=(json.dumps({'commit':head,'attempt':n},sort_keys=True)+'\\n').encode()\n"
+            "tmp=state/'.runner-evidence.tmp'; tmp.write_bytes(raw); tmp.replace(state/'runner-evidence.json')\n",
+            encoding="utf-8",
+        )
+        checker = ws.root / "scripts" / "check-factory-runner-evidence.py"
+        checker.write_text(
+            "#!/usr/bin/env python3\n"
+            "import argparse,hashlib,json,pathlib,subprocess,sys\n"
+            "p=argparse.ArgumentParser(); p.add_argument('--expected-commit',required=True); p.add_argument('--print-digest',action='store_true'); a=p.parse_args()\n"
+            "root=pathlib.Path(__file__).resolve().parent.parent; path=root/'.factory-state/runner-evidence.json'\n"
+            "if path.is_symlink() or not path.is_file(): raise SystemExit(22)\n"
+            "raw=path.read_bytes()\n"
+            "try: data=json.loads(raw)\n"
+            "except Exception: raise SystemExit(22)\n"
+            "head=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()\n"
+            "if data.get('commit')!=a.expected_commit or head!=a.expected_commit: raise SystemExit(22)\n"
+            "print(hashlib.sha256(raw).hexdigest())\n",
+            encoding="utf-8",
+        )
+        runner.chmod(0o755); checker.chmod(0o755)
+        _git(ws.root, "add", ".factory/environment.toml", "scripts/run-factory-runners.py",
+             "scripts/check-factory-runner-evidence.py")
+        _git(ws.root, "commit", "-qm", "add declared runner acquisition fixtures")
+        config = dataclasses.replace(
+            ws.derive_config(), runner_command=campaign_module.RUNNER_COMMAND,
+            runner_timeout=timeout,
+        )
+        authority = campaign_module.Campaign(config)
+        authority._acquire()
+        return ws, authority
+
+    def _close(self, authority) -> None:
+        for name in (
+            "_held_verifier", "_held_capability", "_held_acceptance",
+            "_held_runner", "_held_runner_checker", "_held_driver",
+        ):
+            held = getattr(authority, name, None)
+            if held is not None:
+                held.close()
+                setattr(authority, name, None)
+        if authority._lock is not None:
+            authority._lock.release()
+            authority._lock = None
+
+    def test_commit_refreshes_and_unchanged_valid_aggregate_reuses(self) -> None:
+        ws, authority = self._authority()
+        try:
+            acquired = authority._ensure_runner_evidence()
+            self.assertEqual(acquired[1], 0, acquired)
+            self.assertEqual((ws.root / ".factory-state/runner-count").read_text(), "1")
+            self.assertIn("reused", authority._ensure_runner_evidence()[2])
+            self.assertEqual((ws.root / ".factory-state/runner-count").read_text(), "1")
+            for role in ("planner", "developer", "audit"):
+                path = ws.root / "src" / f"{role}-commit.txt"
+                path.write_text(role, encoding="utf-8")
+                _git(ws.root, "add", str(path.relative_to(ws.root)))
+                _git(ws.root, "commit", "-qm", f"{role} authored commit")
+                self.assertEqual(authority._ensure_runner_evidence()[1], 0)
+            self.assertEqual((ws.root / ".factory-state/runner-count").read_text(), "4")
+            metadata = json.loads(
+                (ws.root / ".factory-state/runner-acquisition.json").read_text()
+            )
+            self.assertEqual(metadata["head"], _git(ws.root, "rev-parse", "HEAD").stdout.strip())
+            self.assertEqual(metadata["status"], "complete")
+            self.assertEqual(metadata["attempt"], 4)
+        finally:
+            self._close(authority)
+
+    def test_current_head_forged_partial_or_symlinked_aggregate_is_integrity_failure(self) -> None:
+        for kind in ("forged", "partial", "symlink"):
+            with self.subTest(kind=kind):
+                ws, authority = self._authority()
+                try:
+                    acquired = authority._ensure_runner_evidence()
+                    self.assertEqual(acquired[1], 0, acquired)
+                    aggregate = ws.root / ".factory-state/runner-evidence.json"
+                    if kind == "forged":
+                        aggregate.write_text('{"commit":"' + ('0' * 40) + '"}\n')
+                    elif kind == "partial":
+                        aggregate.write_text('{"commit":')
+                    else:
+                        aggregate.unlink()
+                        aggregate.symlink_to("runner-count")
+                    ran, code, detail = authority._ensure_runner_evidence()
+                    self.assertTrue(ran)
+                    self.assertEqual(code, -1)
+                    self.assertIn("integrity", detail)
+                    self.assertEqual((ws.root / ".factory-state/runner-count").read_text(), "1")
+                    # The durable integrity marker is never reused as success;
+                    # the next same-HEAD boundary reacquires and strongly
+                    # checks a replacement aggregate.
+                    self.assertEqual(authority._ensure_runner_evidence()[1], 0)
+                    metadata = json.loads(
+                        (ws.root / ".factory-state/runner-acquisition.json").read_text()
+                    )
+                    self.assertEqual(metadata["status"], "complete")
+                    self.assertEqual(metadata["attempt"], 2)
+                finally:
+                    self._close(authority)
+
+    def test_transport_timeout_and_crash_recovery_are_finite_and_honest(self) -> None:
+        for mode in ("transport", "findings", "timeout"):
+            with self.subTest(mode=mode):
+                ws, authority = self._authority(timeout=0.1)
+                try:
+                    (ws.root / ".factory-state").mkdir(mode=0o700, exist_ok=True)
+                    (ws.root / ".factory-state/runner-mode").write_text(mode)
+                    ran, code, detail = authority._ensure_runner_evidence()
+                    self.assertTrue(ran)
+                    expected = (
+                        campaign_module.RUNNER_FINDINGS_EXIT
+                        if mode == "findings"
+                        else campaign_module.RUNNER_TRANSPORT_EXIT
+                    )
+                    self.assertEqual(code, expected)
+                    self.assertIn(
+                        "verification" if mode == "findings" else "transport",
+                        detail,
+                    )
+                    metadata = json.loads(
+                        (ws.root / ".factory-state/runner-acquisition.json").read_text()
+                    )
+                    self.assertEqual(
+                        metadata["status"],
+                        "findings" if mode == "findings" else "transport_failure",
+                    )
+                    (ws.root / ".factory-state/runner-mode").unlink()
+                    self.assertEqual(authority._ensure_runner_evidence()[1], 0)
+                    recovered = json.loads(
+                        (ws.root / ".factory-state/runner-acquisition.json").read_text()
+                    )
+                    self.assertEqual(recovered["attempt"], 2)
+                    self.assertEqual(recovered["status"], "complete")
+                finally:
+                    self._close(authority)
+        ws, authority = self._authority()
+        try:
+            head, tree, environment_blob = authority._runner_bindings()
+            authority._write_runner_acquisition(
+                attempt=1, status="acquiring", head=head, tree=tree,
+                environment_blob=environment_blob,
+                diagnostic="runner acquisition started",
+            )
+            self.assertEqual(authority._ensure_runner_evidence()[1], 0)
+            metadata = json.loads(
+                (ws.root / ".factory-state/runner-acquisition.json").read_text()
+            )
+            self.assertEqual(metadata["attempt"], 2)
+            self.assertEqual(metadata["status"], "complete")
+        finally:
+            self._close(authority)
+
+    def test_transport_unavailable_cannot_be_elevated_by_tester_pass(self) -> None:
+        outcome = campaign_module.classify_verification(
+            role=campaign_module.RoleOutcome("tester", 0),
+            scope_ok=True, gate_ran=True, gate_exit=0,
+            tester_result_valid=True, tester_result_outcome="pass",
+            findings=[], blocked_refs=[], capability_available=False,
+            capability_ran=True,
+            capability_exit=campaign_module.RUNNER_TRANSPORT_EXIT,
+        )
+        self.assertEqual(outcome, "findings")
+        blocked = campaign_module.classify_verification(
+            role=campaign_module.RoleOutcome("tester", 0),
+            scope_ok=True, gate_ran=True, gate_exit=0,
+            tester_result_valid=True, tester_result_outcome="blocked",
+            findings=[], blocked_refs=["FACT-007"], capability_available=False,
+            capability_ran=True,
+            capability_exit=campaign_module.RUNNER_TRANSPORT_EXIT,
+        )
+        self.assertEqual(blocked, "blocked")
+
+    def test_runner_argv_refuses_arguments_shell_and_substitution(self) -> None:
+        ws = self.make(SUCCESS_SCENARIO)
+        base = ws.derive_config()
+        for command in (
+            ("./scripts/run-factory-runners.py", "--candidate"),
+            ("sh", "-c", "./scripts/run-factory-runners.py"),
+            ("./scripts/model-owned-runner.py",),
+            ("./scripts/run-factory-runners.py;touch",),
+        ):
+            with self.subTest(command=command):
+                with self.assertRaises(campaign_module.CampaignConfigError):
+                    dataclasses.replace(
+                        base, role_driver=None, backend="/trusted/backend",
+                        acceptance_command=("./scripts/credential-guard.py",),
+                        capability_command=("./scripts/credential-guard.py",),
+                        runner_command=command,
+                        state_namespace=".factory-state/campaigns/campaign",
+                        accepted_commit=base.phase_base_commit,
+                        install_manifest="/trusted/manifest.json",
+                    )
 
 
 if __name__ == "__main__":

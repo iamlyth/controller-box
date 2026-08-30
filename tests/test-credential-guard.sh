@@ -79,6 +79,28 @@ expect_allow() {
 # check-command: adversarial block matrix (fake secrets / paths only)
 # ---------------------------------------------------------------------------
 
+expect_block coordinator-runner "coordinator-only-runner" './scripts/run-factory-runners.py'
+expect_block coordinator-runner-shell "coordinator-only-runner" './scripts/run-factory-runners.py; true'
+expect_block coordinator-runner-comment "coordinator-only-runner" './scripts/run-factory-runners.py#comment'
+expect_block coordinator-runner-python "coordinator-only-runner" 'python3 scripts/run-factory-runners.py'
+expect_block coordinator-runner-absolute "coordinator-only-runner" '/workspace/controller-box/scripts/run-factory-runners.py'
+expect_block coordinator-runner-sh-c "interpreter-bypass" 'sh -c ./scripts/run-factory-runners.py'
+expect_block coordinator-runner-single-quoted "coordinator-only-runner" "'./scripts/run-factory-runners.py'"
+expect_block coordinator-runner-double-quoted "coordinator-only-runner" '"./scripts/run-factory-runners.py"'
+expect_block coordinator-runner-leading-backslash "coordinator-only-runner" '\run-factory-runners.py'
+expect_block coordinator-runner-split-quote "coordinator-only-runner" "./scripts/run-factory-runners.p''y"
+expect_block coordinator-runner-glob "coordinator-only-runner" './scripts/run-factory-runners.*'
+# Literal hostile command text, not test-shell expansion.
+# shellcheck disable=SC2016
+expect_block coordinator-runner-variable "coordinator-only-runner" 'EXT=py; ./scripts/run-factory-runners.$EXT'
+expect_block coordinator-runner-brace "coordinator-only-runner" './scripts/run-factory-runners.{py,sh}'
+# Literal hostile command text, not test-shell expansion.
+# shellcheck disable=SC2016
+expect_block coordinator-runner-variable-split "coordinator-only-runner" 'X=run-factory; $X-runners.py'
+expect_block coordinator-runner-ansi "coordinator-only-runner" '$'"'"'run-factory-\x72unners.py'"'"''
+# Literal hostile command text, not test-shell expansion.
+# shellcheck disable=SC2016
+expect_block coordinator-runner-command-substitution "coordinator-only-runner" '$(echo run-factory)-runners.py'
 expect_block proc-environ-dump "procfs-environ-cmdline" 'cat /proc/self/environ'
 expect_block proc-cmdline-dump "procfs-environ-cmdline" 'head /proc/1234/cmdline'
 expect_block proc-chained "procfs-environ-cmdline" 'true && tail -c 64 /proc/self/environ'

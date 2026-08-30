@@ -687,6 +687,18 @@ def classify_command(command: str) -> dict:
     text = command.strip()
     reasons: List[str] = []
 
+    # Runner transport is a coordinator-only authority. Model tool calls pass
+    # through this classifier, while the trusted campaign coordinator executes
+    # its retained descriptor directly outside model confinement. Block every
+    # shell spelling that names the entrypoint; no model may probe transport,
+    # mint evidence, or race the one-writer aggregate.
+    runner_spelling = re.sub(r"\\\r?\n", "", text)
+    runner_spelling = runner_spelling.translate(
+        str.maketrans("", "", "'\"\\")
+    )
+    if "run-factory" in runner_spelling:
+        reasons.append("coordinator-only-runner")
+
     # Whole-text sensitive-path scan. Search-tool regex patterns inside quotes
     # are ordinary project grep patterns, never paths.
     quote_spans = _quoted_spans(text)

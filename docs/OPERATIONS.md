@@ -545,12 +545,17 @@ INSTALL_MANIFEST="$INSTALL_PARENT/install-manifest.json"
 CAMPAIGN_ID="controller-box-$(date +%Y%m%dT%H%M%S)-$$"
 python3 .factory/loop/installer.py install --root "$PWD" --commit "$ACCEPTED_COMMIT" --prefix "$INSTALL_PREFIX" --manifest-out "$INSTALL_MANIFEST"
 python3 "$INSTALL_PREFIX/.factory/loop/installer.py" verify --root "$PWD" --commit "$ACCEPTED_COMMIT" --prefix "$INSTALL_PREFIX" --manifest "$INSTALL_MANIFEST"
-"$INSTALL_PREFIX/.factory/bin/factory-campaign" --root "$PWD" run --campaign-id "$CAMPAIGN_ID" --rounds 5 --branch develop --provider "${PI_PROVIDER:?set provider}" --model "${PI_MODEL:?set model}" --backend "${PI2_BACKEND:?set trusted pi2 executable}" --accepted-commit "$ACCEPTED_COMMIT" --install-manifest "$INSTALL_MANIFEST" --campaign-timeout 21600 --verification-command ./scripts/verify-project.sh --capability-command ./scripts/check-capability-evidence.py --acceptance-command '["./scripts/final-gate.sh","--implementation"]'
+"$INSTALL_PREFIX/.factory/bin/factory-campaign" --root "$PWD" run --campaign-id "$CAMPAIGN_ID" --rounds 5 --branch develop --provider "${PI_PROVIDER:?set provider}" --model "${PI_MODEL:?set model}" --backend "${PI2_BACKEND:?set trusted pi2 executable}" --accepted-commit "$ACCEPTED_COMMIT" --install-manifest "$INSTALL_MANIFEST" --campaign-timeout 21600 --verification-command ./scripts/verify-project.sh --runner-command ./scripts/run-factory-runners.py --capability-command ./scripts/check-capability-evidence.py --acceptance-command '["./scripts/final-gate.sh","--implementation"]'
 ```
 
 Sequence invariants are: accepted commit, clean `develop`, exact-commit
 production install verification, unique fresh mode-0700 campaign namespace,
-and an installed-copy five-round launch with explicit provider/model/backend,
+and coordinator-owned runner acquisition after the last commit relevant to each
+verification boundary. Models never invoke runner transport. The coordinator
+reuses an unchanged-HEAD aggregate only when its durable completed acquisition
+record and the strong signed checker agree exactly; interrupted, stale, forged,
+partial, or symlinked state cannot authorize capability acceptance. The sequence
+ends with an installed-copy five-round launch with explicit provider/model/backend,
 a bounded whole-campaign deadline, and exact verification, capability-evidence,
 and final-acceptance argv. The production launcher
 proves the executing installed bytes/manifest/commit and binds the verifier
@@ -624,15 +629,16 @@ publishing credentials or endpoints. The single declared runner
 five more (`inputplumber-system-dbus`, `physical-controller`,
 `target-consumer`, `controller-production-routing`, `gpu-compositor`) are
 candidate contracts that the root endpoint refuses until declared and
-provisioned. Validate and exercise declarations with:
+provisioned. Models validate declarations and existing evidence only:
 
 ```bash
 ./scripts/check-factory-environment.py
-./scripts/run-factory-runners.py
 ./scripts/check-factory-runner-evidence.py
 ```
 
-The run requires a clean committed `develop` tree containing only regular
+The installed campaign's required `--runner-command` is the sole routine
+acquisition path; it needs no post-commit human refresh. Acquisition requires a
+clean committed `develop` tree containing only regular
 tracked files/directories with ordinary executable modes; symlinks, gitlinks,
 and special Git modes fail closed. Evidence and bounded logs are stored under
 `.factory-state/runner-evidence/`; they bind the commit, tree, environment
@@ -910,18 +916,17 @@ echo 'KERNEL=="uinput", MODE="0660", GROUP="input"' > /etc/udev/rules.d/80-uinpu
 
 ### Factory runner evidence
 
-When the runner is provisioned, generate factory runner evidence for
-the `kernel-uinput` capability:
+When the runner is provisioned, the trusted installed campaign automatically
+generates factory runner evidence for `kernel-uinput` immediately before its
+capability gate through the exact launch-time `--runner-command`. A model role
+must not run that command directly.
 
-```sh
-./scripts/run-factory-runners.py
-```
-
-This SSH-deploys the current Git tree to each declared runner in
+The coordinator SSH-deploys the current Git tree to each declared runner in
 `.factory/environment.toml`, executes `verify_argv`, and records a
 signed receipt (manifest + logs) in `.factory-state/runner-evidence/`.
 
-After evidence is generated, validate it:
+The coordinator runs the strong validator after acquisition; operators may
+also validate the ignored aggregate read-only:
 
 ```sh
 python3 scripts/check-factory-runner-evidence.py --print-capabilities

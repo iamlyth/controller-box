@@ -4,12 +4,13 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/scripts" "$tmp/.ralph/agent" "$tmp/.factory/artifacts"
+mkdir -p "$tmp/scripts" "$tmp/.ralph/agent" "$tmp/.factory/artifacts" "$tmp/.factory/loop"
 cp "$PROJECT_ROOT/scripts/initialize-campaign-audit.py" \
    "$PROJECT_ROOT/scripts/validate-campaign-audit.py" \
    "$PROJECT_ROOT/scripts/run-factory-runners.py" \
    "$PROJECT_ROOT/scripts/check-factory-runner-evidence.py" \
    "$PROJECT_ROOT/scripts/check-factory-environment.py" "$tmp/scripts/"
+cp "$PROJECT_ROOT/.factory/loop/gitutil.py" "$tmp/.factory/loop/gitutil.py"
 chmod +x "$tmp/scripts/"*
 cat > "$tmp/.factory/environment.toml" <<'EOF'
 schema_version = 1

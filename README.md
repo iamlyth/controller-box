@@ -315,11 +315,15 @@ INSTALL_MANIFEST="$INSTALL_PARENT/install-manifest.json"
 CAMPAIGN_ID="controller-box-$(date +%Y%m%dT%H%M%S)-$$"
 python3 .factory/loop/installer.py install --root "$PWD" --commit "$ACCEPTED_COMMIT" --prefix "$INSTALL_PREFIX" --manifest-out "$INSTALL_MANIFEST"
 python3 "$INSTALL_PREFIX/.factory/loop/installer.py" verify --root "$PWD" --commit "$ACCEPTED_COMMIT" --prefix "$INSTALL_PREFIX" --manifest "$INSTALL_MANIFEST"
-"$INSTALL_PREFIX/.factory/bin/factory-campaign" --root "$PWD" run --campaign-id "$CAMPAIGN_ID" --rounds 5 --branch develop --provider "${PI_PROVIDER:?set provider}" --model "${PI_MODEL:?set model}" --backend "${PI2_BACKEND:?set trusted pi2 executable}" --accepted-commit "$ACCEPTED_COMMIT" --install-manifest "$INSTALL_MANIFEST" --campaign-timeout 21600 --verification-command ./scripts/verify-project.sh --capability-command ./scripts/check-capability-evidence.py --acceptance-command '["./scripts/final-gate.sh","--implementation"]'
+"$INSTALL_PREFIX/.factory/bin/factory-campaign" --root "$PWD" run --campaign-id "$CAMPAIGN_ID" --rounds 5 --branch develop --provider "${PI_PROVIDER:?set provider}" --model "${PI_MODEL:?set model}" --backend "${PI2_BACKEND:?set trusted pi2 executable}" --accepted-commit "$ACCEPTED_COMMIT" --install-manifest "$INSTALL_MANIFEST" --campaign-timeout 21600 --verification-command ./scripts/verify-project.sh --runner-command ./scripts/run-factory-runners.py --capability-command ./scripts/check-capability-evidence.py --acceptance-command '["./scripts/final-gate.sh","--implementation"]'
 ```
 
 The launch executes installed control-plane bytes and re-verifies their
-manifest/commit identity before the planner starts. It also rechecks the clean
+manifest/commit identity before the planner starts. The trusted coordinator,
+not a model role, runs the exact `--runner-command` after model-authored commits
+and immediately before capability validation; an unchanged HEAD reuses evidence
+only after the signed aggregate passes strong exact-commit validation.
+It also rechecks the clean
 Git tree and reserves `.factory-state/campaigns/$CAMPAIGN_ID/` mode 0700 with
 no-replace semantics. Tester/auditor results, canonical state, receipts, and
 the final result remain in that sole namespace. The pre-existing

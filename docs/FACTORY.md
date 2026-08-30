@@ -179,10 +179,15 @@ INSTALL_MANIFEST="$INSTALL_PARENT/install-manifest.json"
 CAMPAIGN_ID="controller-box-$(date +%Y%m%dT%H%M%S)-$$"
 python3 .factory/loop/installer.py install --root "$PWD" --commit "$ACCEPTED_COMMIT" --prefix "$INSTALL_PREFIX" --manifest-out "$INSTALL_MANIFEST"
 python3 "$INSTALL_PREFIX/.factory/loop/installer.py" verify --root "$PWD" --commit "$ACCEPTED_COMMIT" --prefix "$INSTALL_PREFIX" --manifest "$INSTALL_MANIFEST"
-"$INSTALL_PREFIX/.factory/bin/factory-campaign" --root "$PWD" run --campaign-id "$CAMPAIGN_ID" --rounds 5 --branch develop --provider "${PI_PROVIDER:?set provider}" --model "${PI_MODEL:?set model}" --backend "${PI2_BACKEND:?set trusted pi2 executable}" --accepted-commit "$ACCEPTED_COMMIT" --install-manifest "$INSTALL_MANIFEST" --campaign-timeout 21600 --verification-command ./scripts/verify-project.sh --capability-command ./scripts/check-capability-evidence.py --acceptance-command '["./scripts/final-gate.sh","--implementation"]'
+"$INSTALL_PREFIX/.factory/bin/factory-campaign" --root "$PWD" run --campaign-id "$CAMPAIGN_ID" --rounds 5 --branch develop --provider "${PI_PROVIDER:?set provider}" --model "${PI_MODEL:?set model}" --backend "${PI2_BACKEND:?set trusted pi2 executable}" --accepted-commit "$ACCEPTED_COMMIT" --install-manifest "$INSTALL_MANIFEST" --campaign-timeout 21600 --verification-command ./scripts/verify-project.sh --runner-command ./scripts/run-factory-runners.py --capability-command ./scripts/check-capability-evidence.py --acceptance-command '["./scripts/final-gate.sh","--implementation"]'
 ```
 
-Production has no synthetic provider/model/backend/gate/deadline defaults. Before
+Production has no synthetic provider/model/backend/gate/deadline defaults. Runner
+acquisition is an explicit coordinator-only phase: the exact no-shell argv is
+bound before roles launch, rerun after every HEAD change, and followed by the
+strong signed aggregate checker immediately before capability validation.
+Transport unavailability is retained as an honest finding/blocker; command,
+protocol, or aggregate-integrity failures are infrastructure failures. Before
 any role, the installed campaign bytes prove their production manifest and
 accepted commit, bind the exact verification, capability-evidence, and final
 acceptance argv, recheck branch and clean status, and create the no-collision mode-0700
@@ -311,16 +316,18 @@ Validation:
 ./scripts/check-factory-environment.py
 ```
 
-During verification, `scripts/run-factory-runners.py` creates a history-free
+During verification, the installed campaign coordinator invokes its bound
+`scripts/run-factory-runners.py` descriptor (never a model role) to create a history-free
 `git archive` of the exact clean commit, rejects tracked symlinks, gitlinks,
 or special modes that this protocol cannot reproduce safely, sends the
 archive through the pinned SSH alias, verifies the extracted Git tree
 remotely, runs the fixed argv without reusing a checkout or HOME, and cleans
 the remote workspace. Local receipts and bounded logs are written beneath
 `.factory-state/runner-evidence/` and validated by
-`scripts/check-factory-runner-evidence.py`. A failed transport, tree binding,
-probe, verifier, cleanup receipt, signer, or evidence digest stops the
-campaign.
+`scripts/check-factory-runner-evidence.py`. Transport or remote-verification
+unavailability becomes honest findings/blocked capability evidence; a command,
+tree, protocol, signer, or aggregate-integrity failure becomes campaign
+infrastructure failure.
 
 Runner receipts are signed by a root-owned signer on the disposable runner VM
 (`scripts/factory-runner-signer.py`, installed root-owned and reached only

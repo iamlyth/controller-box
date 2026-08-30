@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import stat
 import subprocess
+import sys
 import tempfile
 import tomllib
 
@@ -420,7 +421,7 @@ def validate(expected_commit: str | None = None) -> tuple[str, list[str]]:
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".toml") as environment_file:
         environment_file.write(environment_text); environment_file.flush()
         if subprocess.run(
-            [str(ROOT / "scripts/check-factory-environment.py"), environment_file.name],
+            [sys.executable, str(ROOT / "scripts/check-factory-environment.py"), environment_file.name],
             cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         ).returncode:
             fail("commit-bound factory environment fails policy validation")

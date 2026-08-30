@@ -4,13 +4,14 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/repo/scripts" "$tmp/repo/docs" "$tmp/repo/.factory" \
+mkdir -p "$tmp/repo/scripts" "$tmp/repo/docs" "$tmp/repo/.factory/loop" \
     "$tmp/runner/workspaces/fake-project"
 chmod 0700 "$tmp/runner/workspaces/fake-project"
 cp "$PROJECT_ROOT/scripts/run-factory-runners.py" \
    "$PROJECT_ROOT/scripts/check-factory-runner-evidence.py" \
    "$PROJECT_ROOT/scripts/factory-runner-server.py" \
    "$PROJECT_ROOT/scripts/factory_runner_policy.py" "$tmp/repo/scripts/"
+cp "$PROJECT_ROOT/.factory/loop/gitutil.py" "$tmp/repo/.factory/loop/gitutil.py"
 chmod +x "$tmp/repo/scripts/"*.py
 cat > "$tmp/repo/.factory/environment.toml" <<EOF
 schema_version = 1
@@ -223,7 +224,7 @@ set +e
 (cd "$tmp/repo" && ./scripts/run-factory-runners.py >/dev/null 2>&1)
 candidate_rc=$?
 set -e
-[[ $candidate_rc -eq 1 ]]
+[[ $candidate_rc -eq 21 ]]
 git -C "$tmp/repo" reset -q --hard "$base"
 write_policy '["remote-project-gate"]'
 
@@ -242,7 +243,7 @@ set +e
 (cd "$tmp/repo" && ./scripts/run-factory-runners.py >/dev/null 2>&1)
 invalid_class_rc=$?
 set -e
-[[ $invalid_class_rc -eq 1 ]]
+[[ $invalid_class_rc -eq 21 ]]
 git -C "$tmp/repo" reset -q --hard "$base"
 
 # A resource name is not evidence: an unsupported hardware capability fails at
@@ -255,7 +256,7 @@ set +e
 (cd "$tmp/repo" && ./scripts/run-factory-runners.py >/dev/null 2>&1)
 unsupported_capability_rc=$?
 set -e
-[[ $unsupported_capability_rc -eq 1 ]]
+[[ $unsupported_capability_rc -eq 21 ]]
 git -C "$tmp/repo" reset -q --hard "$base"
 
 # A fabricated alias (request runner/class not bound to the executing UID) is
@@ -269,7 +270,7 @@ set +e
 (cd "$tmp/repo" && ./scripts/run-factory-runners.py >/dev/null 2>&1)
 alias_rc=$?
 set -e
-[[ $alias_rc -eq 1 ]]
+[[ $alias_rc -eq 21 ]]
 git -C "$tmp/repo" reset -q --hard "$base"
 
 # The exact requested set rule: a runner may not claim fewer capabilities than
@@ -280,7 +281,7 @@ set +e
 (cd "$tmp/repo" && ./scripts/run-factory-runners.py >/dev/null 2>&1)
 subset_rc=$?
 set -e
-[[ $subset_rc -eq 1 ]]
+[[ $subset_rc -eq 21 ]]
 git -C "$tmp/repo" reset -q --hard "$base"
 write_policy '["remote-project-gate"]'
 
@@ -290,7 +291,7 @@ set +e
 (cd "$tmp/repo" && ./scripts/run-factory-runners.py >/dev/null 2>&1)
 argv_rc=$?
 set -e
-[[ $argv_rc -eq 1 ]]
+[[ $argv_rc -eq 21 ]]
 git -C "$tmp/repo" reset -q --hard "$base"
 write_policy '["remote-project-gate"]'
 
@@ -305,7 +306,7 @@ set +e
 (cd "$tmp/repo" && ./scripts/run-factory-runners.py >/dev/null 2>&1)
 kernel_contract_rc=$?
 set -e
-[[ $kernel_contract_rc -eq 1 ]]
+[[ $kernel_contract_rc -eq 21 ]]
 git -C "$tmp/repo" reset -q --hard "$base"
 write_policy '["remote-project-gate"]'
 
@@ -328,7 +329,7 @@ set +e
 (cd "$tmp/repo" && ./scripts/run-factory-runners.py >/dev/null 2>&1)
 skip_probe_rc=$?
 set -e
-[[ $skip_probe_rc -eq 1 ]]
+[[ $skip_probe_rc -eq 21 ]]
 git -C "$tmp/repo" reset -q --hard "$base"
 write_policy '["remote-project-gate"]'
 
@@ -354,7 +355,7 @@ set +e
 (cd "$tmp/repo" && ./scripts/run-factory-runners.py >/dev/null 2>&1)
 fixture_probe_rc=$?
 set -e
-[[ $fixture_probe_rc -eq 1 ]]
+[[ $fixture_probe_rc -eq 21 ]]
 [[ ! -e "$tmp/runner/workspaces/fake-project/job" ]]
 git -C "$tmp/repo" reset -q --hard "$base"
 write_policy '["remote-project-gate"]'
@@ -392,7 +393,7 @@ set +e
 (cd "$tmp/repo" && ./scripts/run-factory-runners.py >/dev/null 2>&1)
 dirty_rc=$?
 set -e
-[[ $dirty_rc -eq 1 ]]
+[[ $dirty_rc -eq 22 ]]
 rm -f "$tmp/repo/untracked"
 
 # Unsupported tracked modes fail locally instead of claiming exact transfer.
@@ -403,7 +404,7 @@ set +e
 (cd "$tmp/repo" && ./scripts/run-factory-runners.py >/dev/null 2>&1)
 symlink_rc=$?
 set -e
-[[ $symlink_rc -eq 1 ]]
+[[ $symlink_rc -eq 22 ]]
 git -C "$tmp/repo" reset -q --hard HEAD^
 
 # Excessive verifier output is terminated without unbounded buffering.
@@ -418,7 +419,7 @@ set +e
 (cd "$tmp/repo" && ./scripts/run-factory-runners.py >/dev/null 2>&1)
 output_rc=$?
 set -e
-[[ $output_rc -eq 1 ]]
+[[ $output_rc -eq 21 ]]
 [[ ! -e "$tmp/runner/workspaces/fake-project/job" ]]
 git -C "$tmp/repo" reset -q --hard HEAD^
 
@@ -432,7 +433,7 @@ set +e
 (cd "$tmp/repo" && ./scripts/run-factory-runners.py >/dev/null 2>&1)
 remote_rc=$?
 set -e
-[[ $remote_rc -eq 1 ]]
+[[ $remote_rc -eq 21 ]]
 [[ ! -e "$tmp/runner/workspaces/fake-project/job" ]]
 
 # A signer failure is fail-closed: with the private key unavailable the
@@ -445,7 +446,7 @@ set +e
 (cd "$tmp/repo" && ./scripts/run-factory-runners.py >/dev/null 2>&1)
 signer_unavailable_rc=$?
 set -e
-[[ $signer_unavailable_rc -eq 1 ]]
+[[ $signer_unavailable_rc -eq 21 ]]
 [[ ! -e "$tmp/runner/workspaces/fake-project/job" ]]
 
 echo "test: factory runner transfer and evidence checks passed"

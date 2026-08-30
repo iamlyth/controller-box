@@ -189,6 +189,13 @@ CAMPAIGN_STATE_PARENT_NAME = "campaigns"
 CAMPAIGN_STATE_PARENT_REL = f"{CAMPAIGN_STATE_ROOT_REL}/{CAMPAIGN_STATE_PARENT_NAME}"
 CAMPAIGN_PHASE_RESULT_NAME = "factory-phase-result.json"
 CAMPAIGN_AUDIT_RESULT_NAME = "factory-audit-result.json"
+RUNNER_ACQUISITION_NAME = "runner-acquisition.json"
+RUNNER_ACQUISITION_SCHEMA = "factory-runner-acquisition/v1"
+RUNNER_COMMAND = ("./scripts/run-factory-runners.py",)
+RUNNER_CHECKER_COMMAND = ("./scripts/check-factory-runner-evidence.py",)
+RUNNER_TRANSPORT_EXIT = 20
+RUNNER_FINDINGS_EXIT = 21
+RUNNER_INTEGRITY_EXIT = 22
 INSTALL_MANIFEST_MAX = 64 * 1024 * 1024
 
 # The orchestration layer's own commit identity: every campaign commit is
@@ -201,6 +208,8 @@ MAX_RESULT_FILE = 256 * 1024
 STATUS_PORCELAIN_MAX = 4 * 1024 * 1024
 DEFAULT_ROLE_TIMEOUT = 900.0
 DEFAULT_GATE_TIMEOUT = 1800.0
+DEFAULT_RUNNER_TIMEOUT = 7800.0
+MAX_RUNNER_TIMEOUT = 10800.0
 DEFAULT_CAMPAIGN_TIMEOUT = 21600.0
 MAX_CAMPAIGN_TIMEOUT = 86400.0
 INSTALLED_EVIDENCE_OVERRIDE = "FACTORY_INSTALLED_FUNCTIONAL_EVIDENCE_PATH"
@@ -481,6 +490,7 @@ class CampaignConfig:
     acceptance_command: Tuple[str, ...] = ()
     verification_command: Tuple[str, ...] = ()
     capability_command: Tuple[str, ...] = ()
+    runner_command: Tuple[str, ...] = ()
     phase_result_path: str = ""
     audit_result_path: str = ""
     state_namespace: str = ""
@@ -488,6 +498,7 @@ class CampaignConfig:
     install_manifest: str = ""
     role_timeout: float = DEFAULT_ROLE_TIMEOUT
     gate_timeout: float = DEFAULT_GATE_TIMEOUT
+    runner_timeout: float = DEFAULT_RUNNER_TIMEOUT
     campaign_timeout: float = DEFAULT_CAMPAIGN_TIMEOUT
     runtime_limit: float = launch_module.DEFAULT_RUNTIME_LIMIT
     inactivity_limit: float = launch_module.DEFAULT_INACTIVITY_LIMIT
@@ -611,13 +622,22 @@ class CampaignConfig:
                 "campaign requires an explicit non-empty verification_command "
                 "before any role can launch (fixtures must supply their safe verifier)"
             )
-        for name in ("verification_command", "acceptance_command", "capability_command"):
+        for name in (
+            "verification_command", "acceptance_command", "capability_command",
+            "runner_command",
+        ):
             command = getattr(self, name)
             if any(not isinstance(item, str) or not item for item in command):
                 raise CampaignConfigError(
                     f"{name} must be an argv of non-empty strings"
                 )
         if self.role_driver is None:
+            if tuple(self.runner_command) != RUNNER_COMMAND:
+                raise CampaignConfigError(
+                    "production runner_command must be exactly the declared "
+                    "coordinator entrypoint ./scripts/run-factory-runners.py "
+                    "with no arguments or shell"
+                )
             for name in ("acceptance_command", "capability_command"):
                 command = getattr(self, name)
                 if not command:
@@ -717,8 +737,8 @@ class CampaignConfig:
                 "tester and auditor structured result paths must be distinct"
             )
         for name in (
-            "role_timeout", "gate_timeout", "campaign_timeout", "runtime_limit",
-            "inactivity_limit",
+            "role_timeout", "gate_timeout", "runner_timeout", "campaign_timeout",
+            "runtime_limit", "inactivity_limit",
         ):
             value = getattr(self, name)
             if (
@@ -731,6 +751,10 @@ class CampaignConfig:
                 raise CampaignConfigError(
                     f"`{name}` must be a finite positive number of seconds"
                 )
+        if self.runner_timeout > MAX_RUNNER_TIMEOUT:
+            raise CampaignConfigError(
+                f"runner_timeout must not exceed {MAX_RUNNER_TIMEOUT:g} seconds"
+            )
         if self.campaign_timeout > MAX_CAMPAIGN_TIMEOUT:
             raise CampaignConfigError(
                 f"campaign_timeout must not exceed {MAX_CAMPAIGN_TIMEOUT:g} seconds"
@@ -778,8 +802,16 @@ class TrustedGit:
         if result.returncode != 0:
             raise CampaignGitError("cannot resolve HEAD of the canonical repository")
         value = result.stdout.strip()
-        if len(value) != 40:
+        if not SHA40_RE.fullmatch(value):
             raise CampaignGitError("resolved HEAD is not a 40-hex commit hash")
+        return value
+
+    def object_id(self, revision: str) -> str:
+        """Resolve one commit-bound object id through the locked Git authority."""
+        result = self._run(["rev-parse", "--verify", revision])
+        value = result.stdout.strip()
+        if result.returncode != 0 or not SHA40_RE.fullmatch(value):
+            raise CampaignGitError(f"cannot resolve exact Git object {revision!r}")
         return value
 
     def is_ancestor(self, ancestor: str, descendant: str) -> bool:
@@ -1451,6 +1483,14 @@ def classify_verification(
         return "findings"
     if gate_exit != 0:
         return "findings"
+    if not capability_available or (capability_ran and capability_exit != 0):
+        # An unavailable/failed declared capability can never disappear behind
+        # a tester's optimistic pass. Exact blockers stay blocked only when
+        # the tester supplied their machine-readable references; otherwise the
+        # failed acquisition/check is an honest verification finding.
+        if tester_result_outcome == "blocked" and blocked_refs and not findings:
+            return "blocked"
+        return "findings"
     # Findings always win over blockers and over the role's claimed outcome.
     # A contradictory pass is rejected by the conditional schema before this
     # classifier, while a blocked result carrying findings remains findings.
@@ -2048,9 +2088,12 @@ class Campaign:
         # every gate execution re-validates it and fails closed on any
         # pathname/content/committed-tree substitution.
         self._held_verifier: Optional[evidence_module.HeldVerifier] = None
-        # Production capability acceptance is independently exact-commit
-        # bound; it never falls back to the verification descriptor.
+        # Production capability acceptance and coordinator-owned runner
+        # acquisition are independently exact-commit bound; neither falls
+        # back to the verification descriptor or a workspace-resolved command.
         self._held_capability: Optional[evidence_module.HeldVerifier] = None
+        self._held_runner: Optional[evidence_module.HeldVerifier] = None
+        self._held_runner_checker: Optional[evidence_module.HeldVerifier] = None
         # Task 22 (B1): the role driver is bound to its exact committed
         # blob/identity/inode descriptor *before* planning and every role
         # execution re-validates it, then executes the pinned interpreter
@@ -2169,6 +2212,12 @@ class Campaign:
         for label, command_value, attribute in (
             ("capability", config.capability_command, "_held_capability"),
             ("acceptance", config.acceptance_command, "_held_acceptance"),
+            ("runner acquisition", config.runner_command, "_held_runner"),
+            (
+                "runner evidence checker",
+                RUNNER_CHECKER_COMMAND if config.runner_command else (),
+                "_held_runner_checker",
+            ),
         ):
             command = tuple(command_value)
             if command and command[0].startswith("./"):
@@ -3096,6 +3145,243 @@ class Campaign:
             return False, f"missing verification references: {', '.join(missing)}"
         return True, "all verification references exist"
 
+    def _runner_bindings(self) -> Tuple[str, str, str]:
+        """Re-prove the clean exact Git/environment identity for acquisition."""
+        if self._git.role_dirty_paths():
+            raise CampaignBindingError(
+                "runner acquisition requires a clean tracked/untracked product tree"
+            )
+        head = self._git.head()
+        tree = self._git.object_id(f"{head}^{{tree}}")
+        environment_blob = self._git.object_id(
+            f"{head}:.factory/environment.toml"
+        )
+        return head, tree, environment_blob
+
+    def _read_runner_acquisition(self) -> Optional[Dict[str, object]]:
+        state_directory = self._state_directory()
+        if not state_directory.exists() and not state_directory.is_symlink():
+            return None
+        try:
+            value = state_module.read_json(
+                self._root, RUNNER_ACQUISITION_NAME,
+                maximum=MAX_RESULT_FILE, missing_ok=True,
+            )
+        except state_module.StateIOError as exc:
+            raise CampaignBindingError(
+                f"runner acquisition metadata is unsafe or partial: {exc}"
+            ) from exc
+        if value is None:
+            return None
+        expected = {
+            "schema", "attempt", "status", "head", "tree",
+            "environment_blob", "command_sha256", "command",
+            "aggregate_sha256", "checker_exit", "runner_exit",
+            "diagnostic",
+        }
+        command_sha = plan_sha256(
+            json.dumps(list(RUNNER_COMMAND), separators=(",", ":")).encode()
+        )
+        if (
+            not isinstance(value, dict) or set(value) != expected
+            or value.get("schema") != RUNNER_ACQUISITION_SCHEMA
+            or type(value.get("attempt")) is not int or value["attempt"] < 1
+            or value.get("status") not in {
+                "acquiring", "complete", "transport_failure",
+                "findings", "integrity_failure",
+            }
+            or value.get("command") != list(RUNNER_COMMAND)
+            or value.get("command_sha256") != command_sha
+            or not all(
+                SHA40_RE.fullmatch(str(value.get(name, "")))
+                for name in ("head", "tree", "environment_blob")
+            )
+            or not isinstance(value.get("aggregate_sha256"), str)
+            or value.get("aggregate_sha256")
+            and not SHA256_RE.fullmatch(str(value["aggregate_sha256"]))
+            or type(value.get("checker_exit")) is not int
+            or type(value.get("runner_exit")) is not int
+            or not isinstance(value.get("diagnostic"), str)
+            or (
+                value.get("status") == "complete"
+                and (
+                    not SHA256_RE.fullmatch(str(value.get("aggregate_sha256", "")))
+                    or value.get("checker_exit") != 0
+                    or value.get("runner_exit") != 0
+                )
+            )
+        ):
+            raise CampaignBindingError(
+                "runner acquisition metadata schema/binding is invalid"
+            )
+        return value
+
+    def _write_runner_acquisition(
+        self, *, attempt: int, status: str, head: str, tree: str,
+        environment_blob: str, aggregate_sha256: str = "",
+        checker_exit: int = -1, runner_exit: int = -1,
+        diagnostic: str = "",
+    ) -> None:
+        command_sha = plan_sha256(
+            json.dumps(list(RUNNER_COMMAND), separators=(",", ":")).encode()
+        )
+        state_module.atomic_write_json(self._root, RUNNER_ACQUISITION_NAME, {
+            "schema": RUNNER_ACQUISITION_SCHEMA,
+            "attempt": attempt,
+            "status": status,
+            "head": head,
+            "tree": tree,
+            "environment_blob": environment_blob,
+            "command_sha256": command_sha,
+            "command": list(RUNNER_COMMAND),
+            "aggregate_sha256": aggregate_sha256,
+            "checker_exit": checker_exit,
+            "runner_exit": runner_exit,
+            # Fixed coordinator classifications only: child output, hostnames,
+            # transport bytes, environment values, and credentials never enter
+            # durable acquisition state or campaign findings.
+            "diagnostic": diagnostic,
+        })
+
+    def _spawn_runner_authority(
+        self, held: evidence_module.HeldVerifier, tail: Sequence[str],
+        timeout: float,
+    ):
+        try:
+            argv, executable, pass_fds = self._spawn_held_script(held, tail)
+        except evidence_module.VerifierBindingError as exc:
+            raise CampaignBindingError(
+                f"runner authority binding failed closed: {exc}"
+            ) from exc
+        return self._lock.spawn_child(
+            argv, executable=executable, pass_fds=pass_fds,
+            env=self._gate_environment(),
+            timeout=min(timeout, self._remaining_time("runner evidence acquisition")),
+            stdout_limit=GATE_DETAIL_MAX, stderr_limit=GATE_DETAIL_MAX,
+        )
+
+    def _check_runner_aggregate(self, head: str) -> Tuple[int, str]:
+        """Run the strong signed aggregate checker and return its exact digest."""
+        if self._held_runner_checker is None:
+            return -1, ""
+        try:
+            result = self._spawn_runner_authority(
+                self._held_runner_checker,
+                ("--expected-commit", head, "--print-digest"),
+                min(self._config.gate_timeout, self._config.runner_timeout),
+            )
+        except (lock_module.RootLockTimeoutError, CampaignBindingError):
+            return -1, ""
+        digest = (result.stdout or "").strip()
+        if result.returncode != 0 or not SHA256_RE.fullmatch(digest):
+            return result.returncode, ""
+        return 0, digest
+
+    def _ensure_runner_evidence(self) -> Tuple[bool, int, str]:
+        """Acquire fresh signed runner evidence under the trusted campaign lock.
+
+        Reuse is permitted only for this campaign's unambiguous completed
+        acquisition at the unchanged clean HEAD/tree/environment and only
+        after the strong checker revalidates the exact aggregate. Any changed
+        HEAD, interrupted/acquiring marker, transport failure, or stale
+        aggregate causes a new bounded acquisition; current-head tampering
+        after a completed acquisition is an integrity failure, never silently
+        overwritten.
+        """
+        if not self._config.runner_command:
+            return False, 0, ""
+        if (
+            tuple(self._config.runner_command) != RUNNER_COMMAND
+            or self._held_runner is None
+            or self._held_runner_checker is None
+        ):
+            return False, -1, "runner acquisition authority is not exactly bound"
+        try:
+            head, tree, environment_blob = self._runner_bindings()
+            prior = self._read_runner_acquisition()
+        except (CampaignBindingError, CampaignGitError):
+            return False, -1, "runner acquisition prerequisite failed integrity validation"
+        same = bool(prior) and all(
+            prior.get(name) == value for name, value in (
+                ("head", head), ("tree", tree),
+                ("environment_blob", environment_blob),
+            )
+        )
+        if same and prior.get("status") == "complete":
+            checker_exit, digest = self._check_runner_aggregate(head)
+            if checker_exit == 0 and digest == prior.get("aggregate_sha256"):
+                return True, 0, "runner evidence reused after exact validation"
+            self._write_runner_acquisition(
+                attempt=int(prior["attempt"]), status="integrity_failure",
+                head=head, tree=tree, environment_blob=environment_blob,
+                checker_exit=checker_exit, runner_exit=RUNNER_INTEGRITY_EXIT,
+                diagnostic="completed runner aggregate failed integrity validation",
+            )
+            return True, -1, "completed runner aggregate failed integrity validation"
+        attempt = int(prior["attempt"]) + 1 if prior else 1
+        self._write_runner_acquisition(
+            attempt=attempt, status="acquiring", head=head, tree=tree,
+            environment_blob=environment_blob,
+            diagnostic="runner acquisition started",
+        )
+        # The metadata publication is not authority by itself. Revalidate the
+        # command inode/bytes and clean Git bindings again in the final
+        # pre-exec window, while retaining the sole campaign/root lock.
+        try:
+            binding_unchanged = (
+                self._runner_bindings() == (head, tree, environment_blob)
+            )
+        except (CampaignBindingError, CampaignGitError):
+            binding_unchanged = False
+        if not binding_unchanged:
+            self._write_runner_acquisition(
+                attempt=attempt, status="integrity_failure", head=head,
+                tree=tree, environment_blob=environment_blob,
+                diagnostic="Git binding changed before runner invocation",
+            )
+            return False, -1, "Git binding changed before runner invocation"
+        try:
+            result = self._spawn_runner_authority(
+                self._held_runner, (), self._config.runner_timeout,
+            )
+            runner_exit = result.returncode
+        except lock_module.RootLockTimeoutError:
+            runner_exit = RUNNER_TRANSPORT_EXIT
+        except CampaignBindingError:
+            runner_exit = RUNNER_INTEGRITY_EXIT
+        checker_exit, digest = self._check_runner_aggregate(head)
+        if runner_exit == 0 and checker_exit == 0:
+            self._write_runner_acquisition(
+                attempt=attempt, status="complete", head=head, tree=tree,
+                environment_blob=environment_blob, aggregate_sha256=digest,
+                checker_exit=0, runner_exit=0,
+                diagnostic="runner acquisition and strong validation passed",
+            )
+            return True, 0, "runner evidence acquired and strongly validated"
+        if runner_exit in (RUNNER_TRANSPORT_EXIT, RUNNER_FINDINGS_EXIT):
+            status = (
+                "transport_failure" if runner_exit == RUNNER_TRANSPORT_EXIT
+                else "findings"
+            )
+            diagnostic = (
+                "runner transport unavailable"
+                if status == "transport_failure"
+                else "declared runner verification did not pass"
+            )
+            self._write_runner_acquisition(
+                attempt=attempt, status=status, head=head, tree=tree,
+                environment_blob=environment_blob, checker_exit=checker_exit,
+                runner_exit=runner_exit, diagnostic=diagnostic,
+            )
+            return True, runner_exit, diagnostic
+        self._write_runner_acquisition(
+            attempt=attempt, status="integrity_failure", head=head, tree=tree,
+            environment_blob=environment_blob, checker_exit=checker_exit,
+            runner_exit=runner_exit,
+            diagnostic="runner protocol or aggregate integrity failure",
+        )
+        return True, -1, "runner protocol or aggregate integrity failure"
+
     def _run_gate(
         self, command: Sequence[str], label: str
     ) -> Tuple[bool, int, str, bool]:
@@ -3891,9 +4177,16 @@ class Campaign:
         blocked_refs = (
             list(result_data.get("blocked_on", [])) if result_data else []
         )
+        acquisition_ran, acquisition_exit, acquisition_detail = (
+            self._ensure_runner_evidence()
+        )
         capability_ran, capability_exit, capability_detail, capability_skipped = self._run_gate(
             self._config.capability_command, "capability"
         )
+        if acquisition_exit != 0:
+            capability_ran = acquisition_ran
+            capability_exit = acquisition_exit
+            capability_detail = acquisition_detail
         capability_available = (
             self._config.role_driver is not None
             and not self._config.capability_command
@@ -3915,6 +4208,20 @@ class Campaign:
             gate_skipped=verification_skipped,
             capability_skipped=capability_skipped,
         )
+        if (
+            outcome == "findings" and result_data is not None
+            and result_data.get("outcome") == "pass" and not findings
+        ):
+            # Deterministic verifier/acquisition failures override an
+            # optimistic tester pass. Mint one fixed, non-child-derived
+            # finding so the preserved structured handoff remains schema-
+            # coherent and cannot leak transport diagnostics.
+            result_data = dict(result_data)
+            result_data["outcome"] = "findings"
+            result_data["findings"] = [
+                "trusted verification or runner capability evidence did not pass"
+            ]
+            findings = list(result_data["findings"])
         if outcome in ("findings", "blocked"):
             # Task 10 §16: verification findings/blocked become next-round
             # planner input through an orchestrator-minted receipt that binds
@@ -4024,9 +4331,16 @@ class Campaign:
             # commit-bound production commands and reject nonzero, unrun, or
             # skip-marked output.  Deterministic failures become findings;
             # unavailable facts/capabilities therefore cannot be elevated.
+            acquisition_ran, acquisition_exit, acquisition_detail = (
+                self._ensure_runner_evidence()
+            )
             cap_ran, cap_exit, cap_detail, cap_skipped = self._run_gate(
                 self._config.capability_command, "final capability"
             )
+            if acquisition_exit != 0:
+                cap_ran = acquisition_ran
+                cap_exit = acquisition_exit
+                cap_detail = acquisition_detail
             acc_ran, acc_exit, acc_detail, acc_skipped = self._run_gate(
                 self._config.acceptance_command, "final acceptance"
             )
@@ -4042,6 +4356,14 @@ class Campaign:
                     *list(result_data.get("findings", [])), *failures
                 ]
                 final_gate_detail = "; ".join(failures)
+            if acquisition_exit < 0:
+                # A command/checker binding or signed-protocol integrity
+                # failure is control-plane infrastructure, not an ordinary
+                # capability finding. Preserve the structured terminal class.
+                role = replace(
+                    role, exit_status=-1,
+                    diagnostic="runner evidence integrity failure",
+                )
         outcome = classify_audit(
             role=role,
             scope_ok=violation is None,
@@ -4129,6 +4451,7 @@ class Campaign:
                 self._config.verification_command,
                 acceptance_command=self._config.acceptance_command,
                 capability_command=self._config.capability_command,
+                runner_command=self._config.runner_command,
                 reserve_namespace=False,
             )
         if self._config.state_namespace:
@@ -4210,6 +4533,12 @@ class Campaign:
             if self._held_capability is not None:
                 self._held_capability.close()
                 self._held_capability = None
+            if self._held_runner is not None:
+                self._held_runner.close()
+                self._held_runner = None
+            if self._held_runner_checker is not None:
+                self._held_runner_checker.close()
+                self._held_runner_checker = None
             if self._held_acceptance is not None:
                 self._held_acceptance.close()
                 self._held_acceptance = None
@@ -4249,6 +4578,8 @@ def derive_campaign_config(
     audit_result_path: str,
     role_timeout: float,
     gate_timeout: float,
+    runner_command: Sequence[str] = (),
+    runner_timeout: float = DEFAULT_RUNNER_TIMEOUT,
     campaign_timeout: float = DEFAULT_CAMPAIGN_TIMEOUT,
     state_namespace: str = "",
     accepted_commit: str = "",
@@ -4317,6 +4648,7 @@ def derive_campaign_config(
         acceptance_command=tuple(acceptance_command),
         verification_command=tuple(verification_command),
         capability_command=tuple(capability_command),
+        runner_command=tuple(runner_command),
         phase_result_path=phase_result_path,
         audit_result_path=audit_result_path,
         state_namespace=state_namespace,
@@ -4324,6 +4656,7 @@ def derive_campaign_config(
         install_manifest=install_manifest,
         role_timeout=role_timeout,
         gate_timeout=gate_timeout,
+        runner_timeout=runner_timeout,
         campaign_timeout=campaign_timeout,
     )
 
@@ -4419,10 +4752,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p_run.add_argument("--verification-command", action="append", default=[])
     p_run.add_argument("--capability-command", action="append", default=[])
     p_run.add_argument(
+        "--runner-command", action="append", default=[],
+        help=(
+            "exact coordinator-owned runner acquisition argv; production "
+            "requires ./scripts/run-factory-runners.py with no shell/arguments"
+        ),
+    )
+    p_run.add_argument(
         "--preflight-only", action="store_true", help=argparse.SUPPRESS,
     )
     p_run.add_argument("--role-timeout", type=float, default=DEFAULT_ROLE_TIMEOUT)
     p_run.add_argument("--gate-timeout", type=float, default=DEFAULT_GATE_TIMEOUT)
+    p_run.add_argument(
+        "--runner-timeout", type=float, default=DEFAULT_RUNNER_TIMEOUT,
+        help=f"bounded runner acquisition timeout (maximum {MAX_RUNNER_TIMEOUT:g}s)",
+    )
     p_run.add_argument(
         "--campaign-timeout", type=float, default=None, metavar="SECONDS",
         help=(
@@ -4438,12 +4782,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             verification_command = _flatten(args.verification_command)
             acceptance_command = _flatten(args.acceptance_command)
             capability_command = _flatten(args.capability_command)
+            runner_command = _flatten(args.runner_command)
             if not args.role_driver:
                 missing_commands = [
                     option for option, command in (
                         ("--verification-command", verification_command),
                         ("--capability-command", capability_command),
                         ("--acceptance-command", acceptance_command),
+                        ("--runner-command", runner_command),
                     ) if not command
                 ]
                 if missing_commands:
@@ -4456,6 +4802,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     raise CampaignConfigError(
                         "production campaign requires --campaign-timeout so "
                         "quota waits and the full campaign are wall-clock bounded"
+                    )
+                if (
+                    args.runner_timeout <= 0
+                    or args.runner_timeout > MAX_RUNNER_TIMEOUT
+                    or args.runner_timeout != args.runner_timeout
+                    or args.runner_timeout == float("inf")
+                ):
+                    raise CampaignConfigError(
+                        f"--runner-timeout must be finite, positive, and at "
+                        f"most {MAX_RUNNER_TIMEOUT:g} seconds"
                     )
                 if (
                     args.campaign_timeout <= 0
@@ -4502,6 +4858,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     root, args, verification_command,
                     acceptance_command=acceptance_command,
                     capability_command=capability_command,
+                    runner_command=runner_command,
                 )
             if args.preflight_only:
                 if args.role_driver or not state_namespace:
@@ -4543,10 +4900,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 acceptance_command=acceptance_command,
                 verification_command=verification_command,
                 capability_command=capability_command,
+                runner_command=runner_command,
                 phase_result_path=phase_result,
                 audit_result_path=audit_result,
                 role_timeout=args.role_timeout,
                 gate_timeout=args.gate_timeout,
+                runner_timeout=args.runner_timeout,
                 campaign_timeout=(
                     args.campaign_timeout
                     if args.campaign_timeout is not None
@@ -4736,6 +5095,7 @@ def _production_preflight(
     *,
     acceptance_command: Sequence[str] = (),
     capability_command: Sequence[str] = (),
+    runner_command: Sequence[str] = (),
     reserve_namespace: bool = True,
 ) -> str:
     """Validate a normal production campaign before any role launch.
@@ -4751,6 +5111,7 @@ def _production_preflight(
         ("verification", verification_command),
         ("capability", capability_command),
         ("acceptance", acceptance_command),
+        ("runner acquisition", runner_command),
     ):
         if not command:
             raise CampaignConfigError(
@@ -4760,6 +5121,11 @@ def _production_preflight(
             raise CampaignConfigError(
                 f"production {label} command must use a canonical repository-relative ./path"
             )
+    if tuple(runner_command) != RUNNER_COMMAND:
+        raise CampaignConfigError(
+            "production runner acquisition command must be exactly "
+            "./scripts/run-factory-runners.py with no shell or arguments"
+        )
     provider = str(getattr(args, "provider", "")).lower()
     if provider not in launch_module.SUPPORTED_PROVIDERS or provider == "synthetic":
         raise CampaignConfigError(
@@ -4812,6 +5178,7 @@ def _production_preflight(
     try:
         for command in (
             verification_command, capability_command, acceptance_command,
+            runner_command, RUNNER_CHECKER_COMMAND,
         ):
             held = evidence_module.HeldVerifier(
                 root,

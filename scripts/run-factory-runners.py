@@ -12,20 +12,36 @@ import re
 import resource
 import signal
 import subprocess
+import sys
 import tempfile
 import tomllib
 
 ROOT = Path(__file__).resolve().parent.parent
+# Importing the pinned Git authority must not dirty a clean evidence tree.
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(ROOT / ".factory" / "loop"))
+import gitutil  # noqa: E402
+
+GIT = gitutil.GIT_EXECUTABLE
+EXIT_TRANSPORT = 20
+EXIT_FINDINGS = 21
+EXIT_INTEGRITY = 22
 STATE_ROOT = ROOT / ".factory-state" / "runner-evidence"
 MAX_RESPONSE = 16 * 1024 * 1024
 
 
-def fail(message: str) -> None:
-    raise SystemExit(f"factory-runner: {message}")
+def fail(message: str, code: int = EXIT_INTEGRITY) -> None:
+    # Diagnostics are deliberately structural and bounded. Callers must never
+    # pass remote bytes, environment values, hostnames, or credentials here.
+    print(f"factory-runner: {message}", file=sys.stderr)
+    raise SystemExit(code)
 
 
 def git(*args: str) -> str:
-    result = subprocess.run(["git", *args], cwd=ROOT, text=True, capture_output=True)
+    result = subprocess.run(
+        [GIT, *args], cwd=ROOT, text=True, capture_output=True,
+        env=gitutil.sanitize_git_environment(os.environ), timeout=120,
+    )
     if result.returncode:
         fail(f"Git command failed: {' '.join(args)}")
     return result.stdout.strip()
@@ -77,7 +93,7 @@ def load_runners(commit: str) -> list[dict]:
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".toml") as environment_file:
         environment_file.write(environment_text); environment_file.flush()
         if subprocess.run(
-            [str(ROOT / "scripts/check-factory-environment.py"), environment_file.name],
+            [sys.executable, str(ROOT / "scripts/check-factory-environment.py"), environment_file.name],
             cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         ).returncode:
             fail("committed factory environment fails policy validation")
@@ -94,13 +110,16 @@ def limit_transport_output() -> None:
 def ssh_binary() -> str:
     launcher = Path.home() / ".ssh/factory-ssh"
     if not launcher.is_symlink():
-        fail("trusted SSH launcher must be the externally provisioned ~/.ssh/factory-ssh symlink")
+        fail(
+            "trusted SSH launcher is not provisioned",
+            EXIT_TRANSPORT,
+        )
     try:
         target = launcher.resolve(strict=True)
     except OSError:
-        fail("trusted SSH launcher target is unavailable")
+        fail("trusted SSH launcher target is unavailable", EXIT_TRANSPORT)
     if not target.is_file() or not os.access(target, os.X_OK):
-        fail("trusted SSH launcher target is not executable")
+        fail("trusted SSH launcher target is not executable", EXIT_TRANSPORT)
     return str(launcher)
 
 
@@ -111,7 +130,10 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
     argv_sha = digest_json(argv)
     archive_sha = hashlib.sha256(archive).hexdigest()
     nonce = hashlib.sha256(os.urandom(32)).hexdigest()
-    commit_object = subprocess.check_output(["git", "cat-file", "commit", commit], cwd=ROOT)
+    commit_object = subprocess.check_output(
+        [GIT, "cat-file", "commit", commit], cwd=ROOT,
+        env=gitutil.sanitize_git_environment(os.environ), timeout=120,
+    )
     if len(commit_object) > 65_536:
         fail("commit object exceeds protocol limit")
     request = {
@@ -149,7 +171,10 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
             if 'process' in locals() and process.poll() is None:
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait()
-            fail(f"runner {name} transport failed: {type(exc).__name__}")
+            fail(
+                f"runner {name} transport failed: {type(exc).__name__}",
+                EXIT_TRANSPORT,
+            )
         stdout_file.seek(0); stderr_file.seek(0)
         transport_stdout = stdout_file.read(MAX_RESPONSE + 1)
         transport_stderr = stderr_file.read(MAX_RESPONSE + 1)
@@ -160,7 +185,8 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
         fail(
             f"runner {name} transport exited without a protocol response "
             f"(rc={returncode}, stderr_bytes={len(transport_stderr)}, "
-            f"stderr_sha256={hashlib.sha256(transport_stderr).hexdigest()})"
+            f"stderr_sha256={hashlib.sha256(transport_stderr).hexdigest()})",
+            EXIT_TRANSPORT,
         )
     try:
         receipt = json.loads(transport_stdout)
@@ -176,8 +202,9 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
             f"stderr_sha256={hashlib.sha256(transport_stderr).hexdigest()})"
         )
     if returncode != 0 or not isinstance(receipt, dict) or receipt.get("result") != "pass":
-        error = receipt.get("error", "remote verification failed") if isinstance(receipt, dict) else "remote verification failed"
-        fail(f"runner {name} failed: {error}")
+        # Remote verification is an honest product/capability finding. Do not
+        # expose the runner-provided error text: it is untrusted transport data.
+        fail(f"runner {name} verification did not pass", EXIT_FINDINGS)
     expected = {
         "schema", "result", "runner", "commit", "tree", "environment_blob",
         "verify_argv_sha256", "archive_sha256", "nonce", "capabilities",
@@ -307,8 +334,9 @@ def main() -> int:
     runners = load_runners(commit)
     with tempfile.NamedTemporaryFile(prefix="factory-source-", suffix=".tar") as archive_file:
         subprocess.run(
-            ["git", "archive", "--format=tar", "--output", archive_file.name, commit],
+            [GIT, "archive", "--format=tar", "--output", archive_file.name, commit],
             cwd=ROOT, check=True,
+            env=gitutil.sanitize_git_environment(os.environ), timeout=120,
         )
         archive = Path(archive_file.name).read_bytes()
     records = [run_runner(runner, commit, tree, environment_blob, archive) for runner in runners]

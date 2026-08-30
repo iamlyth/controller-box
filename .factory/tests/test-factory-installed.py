@@ -833,6 +833,7 @@ class InstalledTierSuite(unittest.TestCase):
         required_gates = (
             "--campaign-timeout", "21600",
             "--verification-command", "./scripts/verify-project.sh",
+            "--runner-command", "./scripts/run-factory-runners.py",
             "--capability-command", "./scripts/check-capability-evidence.py",
             "--acceptance-command", "[\"./scripts/final-gate.sh\",\"--implementation\"]",
         )
