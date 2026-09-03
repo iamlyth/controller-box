@@ -61,6 +61,27 @@ def no_duplicate_keys(pairs: list) -> dict:
     return result
 
 
+def runner_names(environment_path: Path) -> list[str]:
+    """Return the declared runner names from the environment declaration."""
+    if environment_path.is_symlink() or not environment_path.is_file():
+        fail(f"environment declaration must be a regular tracked file: {environment_path}")
+    try:
+        data = tomllib.loads(environment_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
+        fail(f"cannot parse {environment_path}: {exc}")
+    names: list[str] = []
+    for entry in data.get("runners", []):
+        if not isinstance(entry, dict):
+            fail("runners entries must be tables")
+        name = entry.get("name")
+        if not isinstance(name, str) or not NAME.fullmatch(name):
+            fail("runner name must be a lowercase runner class name")
+        names.append(name)
+    if len(names) != len(set(names)):
+        fail("runner names must be unique")
+    return names
+
+
 def declared_capabilities(environment_path: Path) -> list[str]:
     if environment_path.is_symlink() or not environment_path.is_file():
         fail(f"environment declaration must be a regular tracked file: {environment_path}")
@@ -77,6 +98,31 @@ def declared_capabilities(environment_path: Path) -> list[str]:
             fail("capabilities must be a non-empty array of strings per entry")
         capabilities.extend(items)
     return capabilities
+
+
+def required_capabilities(config_path: Path) -> list[str]:
+    """Return the campaign required-capabilities list from ``config.toml``.
+
+    The required-capabilities validation is fail-closed: a missing
+    ``config.toml``, a missing ``[campaign]`` table, or a missing/
+    malformed ``required_capabilities`` array is rejected so a drifted or
+    deleted config can never silently waive a required capability.
+    """
+    if config_path.is_symlink() or not config_path.is_file():
+        fail(f"config must be a regular tracked file: {config_path}")
+    try:
+        data = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
+        fail(f"cannot parse {config_path}: {exc}")
+    campaign = data.get("campaign")
+    if not isinstance(campaign, dict):
+        fail("config.toml must declare a [campaign] table")
+    required = campaign.get("required_capabilities")
+    if not isinstance(required, list) or not all(
+        isinstance(item, str) and item for item in required
+    ):
+        fail("[campaign].required_capabilities must be an array of non-empty strings")
+    return required
 
 
 def load_contracts(path: Path) -> list[dict]:
@@ -188,6 +234,38 @@ def main() -> int:
     for name in candidates:
         if name in declared:
             fail(f"capability {name} is declared but its contract is still candidate")
+    # A declared contract's runner_class must name a runner that is actually
+    # declared in .factory/environment.toml: a declared contract bound to an
+    # undeclared runner class claims a capability against a runner the factory
+    # cannot execute, which is unevidenced and rejected.
+    runners = runner_names(ROOT / ".factory/environment.toml")
+    runner_set = set(runners)
+    undeclared_class = sorted(
+        {
+            contract["runner_class"]
+            for contract in contracts
+            if contract.get("status", "declared") == "declared"
+            and contract.get("runner_class")
+            and contract["runner_class"] not in runner_set
+        }
+    )
+    if undeclared_class:
+        fail(
+            f"declared contracts bind to runner classes not declared in "
+            f"environment.toml: {undeclared_class}"
+        )
+    # Every capability required by the campaign must be provided by at least
+    # one declared runner; a required capability that no declared runner
+    # provides can never be evidenced and is rejected rather than silently
+    # waived by a drifted or deleted config.
+    required = required_capabilities(ROOT / ".factory/config.toml")
+    provided = set(declared)
+    missing_required = sorted(set(required) - provided)
+    if missing_required:
+        fail(
+            f"required capabilities have no declared runner providing them: "
+            f"{missing_required}"
+        )
     classes = sorted(
         {
             contract.get("runner_class")
@@ -197,7 +275,7 @@ def main() -> int:
     )
     print(
         f"capability-contracts: valid ({len(named)} contracts, {len(declared)} declared capabilities, "
-        f"{len(candidates)} candidates, runner classes {classes})"
+        f"{len(candidates)} candidates, runner classes {classes}, declared runners {runners})"
     )
     return 0
 

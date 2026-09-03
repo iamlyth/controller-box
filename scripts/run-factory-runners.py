@@ -306,6 +306,41 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
     }
 
 
+def run_every_runner(
+    runners: list[dict],
+    commit: str,
+    tree: str,
+    environment_blob: str,
+    archive: bytes,
+    *,
+    invoke=run_runner,
+) -> tuple[list[dict], list[tuple[str, int]]]:
+    """Attempt every declared runner, never short-circuiting on failure.
+
+    Each runner is invoked independently. A runner that fails (transport,
+    findings, or integrity) is recorded as a ``(name, exit_code)`` failure
+    and the remaining runners are still attempted, so a single unavailable
+    runner can never mask the evidence state of the others. Returns the
+    successful runner records and the ordered list of failures.
+
+    ``invoke`` defaults to the production :func:`run_runner`; tests substitute
+    a no-network mock so the no-short-circuit contract is provable without
+    SSH transport.
+    """
+    records: list[dict] = []
+    failures: list[tuple[str, int]] = []
+    for runner in runners:
+        name = runner["name"]
+        try:
+            records.append(invoke(runner, commit, tree, environment_blob, archive))
+        except SystemExit as exc:
+            code = exc.code if isinstance(exc.code, int) else EXIT_INTEGRITY
+            failures.append((name, code))
+        except Exception:  # pragma: no cover - defensive: any failure is integrity
+            failures.append((name, EXIT_INTEGRITY))
+    return records, failures
+
+
 def main() -> int:
     os.environ["GIT_NO_REPLACE_OBJECTS"] = "1"
     if git("branch", "--show-current") != "develop":
@@ -339,7 +374,15 @@ def main() -> int:
             env=gitutil.sanitize_git_environment(os.environ), timeout=120,
         )
         archive = Path(archive_file.name).read_bytes()
-    records = [run_runner(runner, commit, tree, environment_blob, archive) for runner in runners]
+    records, failures = run_every_runner(runners, commit, tree, environment_blob, archive)
+    if failures:
+        # Report the first failure's category as the dominant exit code so the
+        # campaign can classify the outcome (transport / findings / integrity),
+        # while still having attempted every runner.
+        dominant = failures[0][1]
+        names = ", ".join(name for name, _ in failures)
+        print(f"factory-runner: {len(failures)} runner(s) failed for {commit[:12]}: {names}", file=sys.stderr)
+        return dominant
     aggregate = {
         "schema": "factory-runner-aggregate/v1",
         "commit": commit,

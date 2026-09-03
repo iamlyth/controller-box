@@ -21,3 +21,30 @@ working_directory = "/srv/dev-runner/workspaces/controller-box"
 # the runner provisioning have produced a matching non-skipped receipt.
 capabilities = ["remote-project-gate", "systemd-user", "kernel-uinput", "installed-package"]
 verify_argv = ["./scripts/verify-project.sh"]
+
+# iprunner is the dedicated class for the physical InputPlumber system-bus,
+# physical-controller, target-consumer, and controller-production-routing
+# capabilities. Historical class-bound probes exist for these capabilities;
+# the class is declared here so the runner-class binding is explicit, while
+# provisioning, SSH policy, and credentials remain outside this repository.
+# A declared class is not provisioned or evidenced evidence: a capability is
+# evidenced only by an exact-commit, non-skipped, signed runner receipt.
+[[runners]]
+name = "iprunner"
+transport = "ssh"
+ssh_config_alias = "iprunner"
+working_directory = "/srv/dev-runner/workspaces/iprunner"
+capabilities = ["inputplumber-system-dbus", "physical-controller", "target-consumer", "controller-production-routing"]
+verify_argv = ["./scripts/verify-project.sh"]
+
+# gpurunner is the dedicated class for the gpu-compositor capability. As with
+# iprunner, declaring the class makes the runner-class binding explicit;
+# it is not a provisioned/evidenced claim until a matching signed receipt
+# exists. Hostnames, keys, and credentials stay out of Git.
+[[runners]]
+name = "gpurunner"
+transport = "ssh"
+ssh_config_alias = "gpurunner"
+working_directory = "/srv/dev-runner/workspaces/gpurunner"
+capabilities = ["gpu-compositor"]
+verify_argv = ["./scripts/verify-project.sh"]

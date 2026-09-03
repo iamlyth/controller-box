@@ -5,115 +5,275 @@
     {
       "name": "remote-project-gate",
       "status": "declared",
-      "probe_argv": ["./scripts/verify-project.sh"],
+      "probe_argv": [
+        "./scripts/verify-project.sh"
+      ],
       "probe_marker": "",
       "probe_stage": "post",
       "probe_stdout_contains": [],
       "probe_is_verify_run": true,
       "must_execute": true,
-      "must_not_skip": ["SKIP:"],
-      "deny_simulated_markers": ["simulated", "synthetic", "staged", "fixture-only"]
+      "must_not_skip": [
+        "SKIP:"
+      ],
+      "deny_simulated_markers": [
+        "simulated",
+        "synthetic",
+        "staged",
+        "fixture-only"
+      ]
     },
     {
       "name": "systemd-user",
       "status": "declared",
-      "probe_argv": ["/usr/bin/systemd-run", "--user", "--quiet", "--wait", "--pipe", "--collect", "--service-type=exec", "/usr/bin/printf", "factory-systemd-user-ok"],
+      "probe_argv": [
+        "/usr/bin/systemd-run",
+        "--user",
+        "--quiet",
+        "--wait",
+        "--pipe",
+        "--collect",
+        "--service-type=exec",
+        "/usr/bin/printf",
+        "factory-systemd-user-ok"
+      ],
       "probe_marker": "",
       "probe_stage": "env",
-      "probe_stdout_contains": ["factory-systemd-user-ok"],
+      "probe_stdout_contains": [
+        "factory-systemd-user-ok"
+      ],
       "probe_is_verify_run": false,
       "must_execute": true,
-      "must_not_skip": ["SKIP:"],
-      "deny_simulated_markers": ["simulated", "private session", "synthetic"]
+      "must_not_skip": [
+        "SKIP:"
+      ],
+      "deny_simulated_markers": [
+        "simulated",
+        "private session",
+        "synthetic"
+      ]
     },
     {
       "name": "kernel-uinput",
       "status": "declared",
-      "probe_argv": ["nix-shell", "--run", "ctest --test-dir build-maintenance-verify --no-tests=error -R '^test_kernel_controller$' --output-on-failure"],
+      "probe_argv": [
+        "nix-shell",
+        "--run",
+        "ctest --test-dir build-maintenance-verify --no-tests=error -R '^test_kernel_controller$' --output-on-failure"
+      ],
       "probe_marker": "--- kernel-uinput capability contract ---",
       "probe_stage": "post",
-      "probe_stdout_contains": ["100% tests passed", "test_kernel_controller"],
+      "probe_stdout_contains": [
+        "100% tests passed",
+        "test_kernel_controller"
+      ],
       "probe_is_verify_run": false,
       "must_execute": true,
-      "must_not_skip": ["Skipped", "Not Run", "skip"],
-      "deny_simulated_markers": ["mock", "private service", "simulated", "synthetic", "staged", "fixture-only"]
+      "must_not_skip": [
+        "Skipped",
+        "Not Run",
+        "skip"
+      ],
+      "deny_simulated_markers": [
+        "mock",
+        "private service",
+        "simulated",
+        "synthetic",
+        "staged",
+        "fixture-only"
+      ]
     },
     {
       "name": "installed-package",
       "status": "declared",
-      "probe_argv": ["nix-shell", "--run", "CBX_REQUIRE_FLATPAK=1 ./tests/test_packaging.sh build-maintenance-verify"],
+      "probe_argv": [
+        "nix-shell",
+        "--run",
+        "CBX_REQUIRE_FLATPAK=1 ./tests/test_packaging.sh build-maintenance-verify"
+      ],
       "probe_marker": "--- installed-package capability contract ---",
       "probe_stage": "post",
-      "probe_stdout_contains": ["PASS: flatpak --version:"],
+      "probe_stdout_contains": [
+        "PASS: flatpak --version:"
+      ],
       "probe_is_verify_run": false,
       "must_execute": true,
-      "must_not_skip": ["OPTIONAL: flatpak-builder build failed"],
-      "deny_simulated_markers": ["simulated", "synthetic", "staged", "fixture-only"]
+      "must_not_skip": [
+        "OPTIONAL: flatpak-builder build failed"
+      ],
+      "deny_simulated_markers": [
+        "simulated",
+        "synthetic",
+        "staged",
+        "fixture-only"
+      ]
     },
     {
       "name": "inputplumber-system-dbus",
-      "status": "candidate",
+      "status": "declared",
       "runner_class": "iprunner",
-      "probe_argv": ["nix-shell", "--run", "bash scripts/probe-inputplumber-system-dbus.sh"],
+      "probe_argv": [
+        "nix-shell",
+        "--run",
+        "bash scripts/probe-inputplumber-system-dbus.sh"
+      ],
       "probe_marker": "--- inputplumber-system-dbus capability contract ---",
       "probe_stage": "post",
-      "probe_stdout_contains": ["inputplumber-system-dbus-probe: PASS"],
+      "probe_stdout_contains": [
+        "inputplumber-system-dbus-probe: PASS"
+      ],
       "probe_is_verify_run": false,
       "must_execute": true,
-      "must_not_skip": ["Skipped", "Not Run", "skip", "OPTIONAL"],
-      "deny_simulated_markers": ["private bus", "mock", "simulated", "synthetic", "staged", "fixture-only", "fixture"]
+      "must_not_skip": [
+        "Skipped",
+        "Not Run",
+        "skip",
+        "OPTIONAL"
+      ],
+      "deny_simulated_markers": [
+        "private bus",
+        "mock",
+        "simulated",
+        "synthetic",
+        "staged",
+        "fixture-only",
+        "fixture"
+      ]
     },
     {
       "name": "physical-controller",
-      "status": "candidate",
+      "status": "declared",
       "runner_class": "iprunner",
-      "probe_argv": ["nix-shell", "--run", "bash scripts/probe-physical-controller.sh"],
+      "probe_argv": [
+        "nix-shell",
+        "--run",
+        "bash scripts/probe-physical-controller.sh"
+      ],
       "probe_marker": "--- physical-controller capability contract ---",
       "probe_stage": "post",
-      "probe_stdout_contains": ["physical-controller-probe: PASS"],
+      "probe_stdout_contains": [
+        "physical-controller-probe: PASS"
+      ],
       "probe_is_verify_run": false,
       "must_execute": true,
-      "must_not_skip": ["Skipped", "Not Run", "skip", "OPTIONAL"],
-      "deny_simulated_markers": ["fixture-only", "simulated", "synthetic", "staged", "injected device"]
+      "must_not_skip": [
+        "Skipped",
+        "Not Run",
+        "skip",
+        "OPTIONAL"
+      ],
+      "deny_simulated_markers": [
+        "fixture-only",
+        "simulated",
+        "synthetic",
+        "staged",
+        "injected device"
+      ]
     },
     {
       "name": "target-consumer",
-      "status": "candidate",
+      "status": "declared",
       "runner_class": "iprunner",
-      "probe_argv": ["nix-shell", "--run", "bash scripts/probe-target-consumer.sh"],
+      "probe_argv": [
+        "nix-shell",
+        "--run",
+        "bash scripts/probe-target-consumer.sh"
+      ],
       "probe_marker": "--- target-consumer capability contract (candidate) ---",
       "probe_stage": "post",
-      "probe_stdout_contains": ["target-consumer-probe: PASS"],
+      "probe_stdout_contains": [
+        "target-consumer-probe: PASS"
+      ],
       "probe_is_verify_run": false,
       "must_execute": true,
-      "must_not_skip": ["Skipped", "Not Run", "skip", "OPTIONAL", "consumer skipped"],
-      "deny_simulated_markers": ["private bus", "fixture-only", "simulated", "synthetic", "staged"]
+      "must_not_skip": [
+        "Skipped",
+        "Not Run",
+        "skip",
+        "OPTIONAL",
+        "consumer skipped"
+      ],
+      "deny_simulated_markers": [
+        "private bus",
+        "fixture-only",
+        "simulated",
+        "synthetic",
+        "staged"
+      ]
     },
     {
       "name": "controller-production-routing",
-      "status": "candidate",
+      "status": "declared",
       "runner_class": "iprunner",
-      "probe_argv": ["nix-shell", "--run", "bash scripts/probe-controller-production-routing.sh"],
+      "probe_argv": [
+        "nix-shell",
+        "--run",
+        "bash scripts/probe-controller-production-routing.sh"
+      ],
       "probe_marker": "--- controller-production-routing capability contract ---",
       "probe_stage": "post",
-      "probe_stdout_contains": ["production-routing-probe: PASS"],
+      "probe_stdout_contains": [
+        "production-routing-probe: PASS"
+      ],
       "probe_is_verify_run": false,
       "must_execute": true,
-      "must_not_skip": ["Skipped", "Not Run", "skip", "OPTIONAL"],
-      "deny_simulated_markers": ["--fixture", "--fixture=", "--fixture-dir", "--fixture-facts", "fixture-only", "fixture", "simulated", "synthetic", "staged", "private bus", "DBUS_SYSTEM_BUS_ADDRESS", "source fallback", "asset fallback", "SOURCE_PROFILE_DIR", "SOURCE_ICON_DIR", "production-topology-incomplete", "BUG-0015-negative-control", "topology incomplete", "no routing evidence", "direct injection"]
+      "must_not_skip": [
+        "Skipped",
+        "Not Run",
+        "skip",
+        "OPTIONAL"
+      ],
+      "deny_simulated_markers": [
+        "--fixture",
+        "--fixture=",
+        "--fixture-dir",
+        "--fixture-facts",
+        "fixture-only",
+        "fixture",
+        "simulated",
+        "synthetic",
+        "staged",
+        "private bus",
+        "DBUS_SYSTEM_BUS_ADDRESS",
+        "source fallback",
+        "asset fallback",
+        "SOURCE_PROFILE_DIR",
+        "SOURCE_ICON_DIR",
+        "production-topology-incomplete",
+        "BUG-0015-negative-control",
+        "topology incomplete",
+        "no routing evidence",
+        "direct injection"
+      ]
     },
     {
       "name": "gpu-compositor",
-      "status": "candidate",
+      "status": "declared",
       "runner_class": "gpurunner",
-      "probe_argv": ["nix-shell", "--run", "bash scripts/probe-gpu-compositor.sh"],
+      "probe_argv": [
+        "nix-shell",
+        "--run",
+        "bash scripts/probe-gpu-compositor.sh"
+      ],
       "probe_marker": "--- gpu-compositor capability contract ---",
       "probe_stage": "post",
-      "probe_stdout_contains": ["gpu-compositor-probe: PASS"],
+      "probe_stdout_contains": [
+        "gpu-compositor-probe: PASS"
+      ],
       "probe_is_verify_run": false,
       "must_execute": true,
-      "must_not_skip": ["Skipped", "Not Run", "skip", "OPTIONAL"],
-      "deny_simulated_markers": ["mock", "private service", "simulated", "staged"]
+      "must_not_skip": [
+        "Skipped",
+        "Not Run",
+        "skip",
+        "OPTIONAL"
+      ],
+      "deny_simulated_markers": [
+        "mock",
+        "private service",
+        "simulated",
+        "staged"
+      ]
     }
   ]
 }

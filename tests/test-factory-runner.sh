@@ -461,4 +461,34 @@ set -e
 [[ $signer_unavailable_rc -eq 21 ]]
 [[ ! -e "$tmp/runner/workspaces/fake-project/job" ]]
 
+python3 - "$PROJECT_ROOT/scripts/run-factory-runners.py" <<'PY'
+import importlib.util, sys
+path = sys.argv[1]
+spec = importlib.util.spec_from_file_location("run_factory_runners", path)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+EXIT_TRANSPORT = mod.EXIT_TRANSPORT
+EXIT_FINDINGS = mod.EXIT_FINDINGS
+
+order = []
+
+def mock_invoke(runner, commit, tree, environment_blob, archive):
+    name = runner["name"]
+    order.append(name)
+    if name == "first":
+        raise SystemExit(EXIT_TRANSPORT)
+    if name == "second":
+        raise SystemExit(EXIT_FINDINGS)
+    return {"name": name}
+
+runners = [{"name": "first"}, {"name": "second"}, {"name": "third"}]
+records, failures = mod.run_every_runner(
+    runners, "commit", "tree", "env-blob", b"archive", invoke=mock_invoke
+)
+assert order == ["first", "second", "third"], order
+assert records == [{"name": "third"}], records
+assert failures == [("first", EXIT_TRANSPORT), ("second", EXIT_FINDINGS)], failures
+print("test: run_every_runner no-short-circuit contract passed")
+PY
+
 echo "test: factory runner transfer and evidence checks passed"

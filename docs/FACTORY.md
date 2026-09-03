@@ -294,21 +294,32 @@ hardware, GPU/controller coverage, or external evidence. Hostnames,
 usernames, ports, private-key paths, passwords, tokens, and secrets remain
 outside Git.
 
-The single declared runner `dev-runner-vm` (SSH transport) declares exactly
-four capabilities: `remote-project-gate`, `systemd-user`, `kernel-uinput`,
-`installed-package`. Five more are designed as candidate contracts in
-`.factory/capability-contracts.json` but are not declared or provisioned:
-`inputplumber-system-dbus`, `physical-controller`, `target-consumer`,
-`controller-production-routing`, and `gpu-compositor`. The root runner
-endpoint refuses to execute a candidate contract until the capability is
-declared, its contract is promoted to `declared`, and the runner-class
-allowlist grants it. Controller-Box's open hardware/GPU/system-bus/target
-boundaries — BUG-0015 and BUG-0018, and facts FACT-002 through FACT-007 — stay
-open and non-elevated until their requirement-specific real-system,
-target-hardware, signed current-commit runner, or human evidence exists. The
-legacy `26df6c0` receipt is unsigned/unevidenced. Valid signed evidence exists
-for the older `c45336a` commit, but it is historical and stale; neither is
-claimed as current runner evidence (Task 26).
+The declared runner classes in `.factory/environment.toml` are:
+
+- `dev-runner-vm` (SSH transport) declares `remote-project-gate`,
+  `systemd-user`, `kernel-uinput`, and `installed-package`.
+- `iprunner` (SSH transport) declares `inputplumber-system-dbus`,
+  `physical-controller`, `target-consumer`, and
+  `controller-production-routing`.
+- `gpurunner` (SSH transport) declares `gpu-compositor`.
+
+The five `iprunner`/`gpurunner` capabilities that were previously
+designed-only `candidate` contracts are now `declared` contracts in
+`.factory/capability-contracts.json`, each with a `runner_class` matching a
+declared runner. The root runner endpoint refuses to execute a contract
+until the capability is declared, its contract is promoted to `declared`,
+and the runner-class allowlist grants it. Declared is distinct from
+provisioned/evidenced: a declared runner class makes the runner-class
+binding explicit, but a capability is evidenced only by an exact-commit,
+non-skipped, signed runner receipt. No such receipt exists yet for the
+`iprunner`/`gpurunner` capabilities, so Controller-Box's open
+hardware/GPU/system-bus/target boundaries — BUG-0015 and BUG-0018, and facts
+FACT-002 through FACT-007 — stay open and non-elevated until their
+requirement-specific real-system, target-hardware, signed current-commit
+runner, or human evidence exists. The legacy `26df6c0` receipt is
+unsigned/unevidenced. Valid signed evidence exists for the older `c45336a`
+commit, but it is historical and stale; neither is claimed as current runner
+evidence (Task 26).
 
 Validation:
 

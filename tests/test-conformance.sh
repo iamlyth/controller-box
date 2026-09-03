@@ -72,6 +72,10 @@ EOF
 }
 CONTRACT
     printf '# Spec\n' > "$dir/docs/SPEC.md"
+    cat > "$dir/.factory/config.toml" <<'EOF'
+[campaign]
+required_capabilities = []
+EOF
     printf '# Plan\n' > "$dir/.factory/artifacts/implementation-plan.md"
     printf '%s\n' ".factory-state/" > "$dir/.gitignore"
     git -C "$dir" init -q -b develop

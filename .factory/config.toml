@@ -24,6 +24,7 @@ required_capabilities = [
   "systemd-user",
   "installed-package",
   "target-consumer",
+  "controller-production-routing",
 ]
 
 [quota]

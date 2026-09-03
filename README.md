@@ -273,9 +273,14 @@ nix-shell --run "ctest --test-dir build-maintenance-verify -R 'test_manager_inte
 
 ### Known environment limitations
 
-The factory runner environment (`.factory/environment.toml`) declares one SSH
-runner with `remote-project-gate`, `systemd-user`, `kernel-uinput`, and
-`installed-package` capabilities. The
+The factory runner environment (`.factory/environment.toml`) declares three SSH
+runner classes: `dev-runner-vm` (`remote-project-gate`, `systemd-user`,
+`kernel-uinput`, `installed-package`), `iprunner` (`inputplumber-system-dbus`,
+`physical-controller`, `target-consumer`, `controller-production-routing`),
+and `gpurunner` (`gpu-compositor`). Declaring a runner class makes the
+runner-class binding explicit; it is not provisioned or evidenced evidence —
+a capability is evidenced only by an exact-commit, non-skipped, signed
+runner receipt. The
 following spec requirements have environment limitations that affect full
 hardware-specific acceptance; they are classified `partial` (not `verified`)
 in `.factory/artifacts/conformance.json` based on code portability,
@@ -359,8 +364,9 @@ canonical plan, that campaign-owned state file, and process liveness. A finite
 campaign always terminates as `success`, `findings`, `blocked`, `failed`,
 `interrupted`, or `infrastructure_failure` — it never spins while no task is
 runnable. Available local tools and external runners are declared without
-credentials in `.factory/environment.toml`; the same runner `dev-runner-vm`
-and its four declared capabilities are unchanged. Verification validates
+credentials in `.factory/environment.toml`; the declared runner classes
+`dev-runner-vm`, `iprunner`, and `gpurunner` and their declared capabilities
+are unchanged. Verification validates
 exact-commit runner receipts; required capabilities without accepted
 production evidence remain findings rather than fabricated completion.
 

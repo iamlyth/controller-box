@@ -623,13 +623,20 @@ for human/operator review. Dirty work is never reset, discarded, or silently
 overwritten.
 
 `.factory/environment.toml` declares available tools and runners without
-publishing credentials or endpoints. The single declared runner
-`dev-runner-vm` carries exactly four declared capabilities:
-`remote-project-gate`, `systemd-user`, `kernel-uinput`, `installed-package`;
-five more (`inputplumber-system-dbus`, `physical-controller`,
-`target-consumer`, `controller-production-routing`, `gpu-compositor`) are
-candidate contracts that the root endpoint refuses until declared and
-provisioned. Models validate declarations and existing evidence only:
+publishing credentials or endpoints. The declared runner classes are
+`dev-runner-vm` (carrying `remote-project-gate`, `systemd-user`,
+`kernel-uinput`, `installed-package`), `iprunner` (carrying
+`inputplumber-system-dbus`, `physical-controller`, `target-consumer`,
+`controller-production-routing`), and `gpurunner` (carrying
+`gpu-compositor`). The five `iprunner`/`gpurunner` capabilities are now
+declared contracts with a `runner_class` matching a declared runner; the
+root endpoint refuses to execute a contract until the capability is
+declared, its contract is promoted to `declared`, and the runner-class
+allowlist grants it. Declaring a runner class is not provisioning or
+evidence: each capability is evidenced only by an exact-commit,
+non-skipped, signed runner receipt, and none exists yet for the
+`iprunner`/`gpurunner` capabilities. Models validate declarations and
+existing evidence only:
 
 ```bash
 ./scripts/check-factory-environment.py

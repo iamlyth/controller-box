@@ -507,11 +507,15 @@ class EvidenceSmokeUnit(_SmokeBase):
         block = text[start:end]
         block = block.replace("- Status: complete", "- Status: pending", 1)
         text = text[:start] + block + text[end:]
-        # Force every pending task before the evidence task to ``complete`` so
+        # Force every non-evidence pending/in_progress task to ``complete`` so
         # the selector's deterministic order picks Task 22 (the canonical
-        # plan's pending set changes as the product advances; this is a
-        # fixture-only assumption about the derived pre-round plan, never a
-        # change to the production selector or the committed plan).
+        # plan's pending set changes as the product advances and now spans
+        # high-numbered appended tasks 48-51; forcing only tasks *before*
+        # Task 22 would leave those later tasks pending and could disturb the
+        # deterministic Task 22 selection, so every task whose number is not
+        # 22 is normalized instead. This is a fixture-only assumption about
+        # the derived pre-round plan, never a change to the production
+        # selector or the committed plan).
         lines = text.split("\n")
         current = None
         for index, line in enumerate(lines):
@@ -519,7 +523,7 @@ class EvidenceSmokeUnit(_SmokeBase):
             if match:
                 current = int(match.group(1))
                 continue
-            if current is not None and current < 22 and line == "- Status: pending":
+            if current is not None and current != 22 and line == "- Status: pending":
                 lines[index] = "- Status: complete"
             if current is not None and current != 22 and line == "- Status: in_progress":
                 lines[index] = "- Status: complete"

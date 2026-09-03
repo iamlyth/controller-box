@@ -105,6 +105,9 @@ class ConformanceFixture:
         (root / ".factory" / "environment.toml").write_text(
             "schema_version = 1\n", encoding="utf-8"
         )
+        (root / ".factory" / "config.toml").write_text(
+            "[campaign]\nrequired_capabilities = []\n", encoding="utf-8"
+        )
         (root / ".factory" / "schemas" / "factory-plan-v1.requirements.json").write_text(
             json.dumps({"schema": "factory-plan/v1/requirements",
                         "requirement_ids": ["REQ-01", "REQ-02", "REQ-03"]}),

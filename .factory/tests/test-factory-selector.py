@@ -66,11 +66,11 @@ class CanonicalPlanSelectionTest(unittest.TestCase):
         selection = select_task(plan)
         self.assertTrue(selection.selected)
         self.assertEqual(selection.classification, "selected")
-        self.assertEqual(selection.task_id, 47)
-        # Tasks 5, 9, and 47 are runnable at priority 1; the selector's
-        # documented priority-then-lexicographic tie-break picks identifier
-        # "47" before "5" and "9". The final audit Task 48 depends on every
-        # other task.
+        self.assertEqual(selection.task_id, 48)
+        # Task 48 (runner-class restoration) is the sole `in_progress` task, so
+        # the trusted selector resumes it. Tasks 5 and 9 are the runnable
+        # `pending` tasks at priority 1; the final audit Task 51 depends on
+        # every other task.
         statuses = {task.number: task.status for task in plan.tasks}
         runnable = sorted(
             task.number
@@ -78,7 +78,7 @@ class CanonicalPlanSelectionTest(unittest.TestCase):
             if task.status == "pending"
             and all(statuses[dep] == "complete" for dep in task.dependencies)
         )
-        self.assertEqual(runnable, [5, 9, 47])
+        self.assertEqual(runnable, [5, 9])
         self.assertEqual(plan.tasks[0].status, "complete")
         self.assertEqual(plan.tasks[1].status, "complete")
         self.assertEqual(plan.tasks[2].status, "complete")
@@ -89,7 +89,7 @@ class CanonicalPlanSelectionTest(unittest.TestCase):
         plan = Plan.from_file(CANONICAL_PLAN)
         selection = select_task(plan, bound_base_commit=plan.base_commit)
         self.assertEqual(selection.classification, "selected")
-        self.assertEqual(selection.task_id, 47)
+        self.assertEqual(selection.task_id, 48)
 
     def test_bound_base_commit_mismatch_is_stale(self) -> None:
         plan = Plan.from_file(CANONICAL_PLAN)
@@ -350,7 +350,7 @@ class PurityAndLedgerBoundaryTest(unittest.TestCase):
             self.assertNotIn(forbidden, source, forbidden)
         plan = Plan.from_file(CANONICAL_PLAN)
         self.assertEqual(select_task(plan).classification, "selected")
-        self.assertEqual(select_task(plan).task_id, 47)
+        self.assertEqual(select_task(plan).task_id, 48)
 
     def test_selection_result_is_immutable(self) -> None:
         plan = parse_fixture("plan-select-priority-order.md")
@@ -378,7 +378,7 @@ class TrustedCliTest(unittest.TestCase):
     def test_cli_reports_canonical_selection(self) -> None:
         result = self._run("select", str(CANONICAL_PLAN))
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "selected=47")
+        self.assertEqual(result.stdout.strip(), "selected=48")
 
     def test_cli_reports_blocked(self) -> None:
         result = self._run("select", str(FIXTURES / "plan-select-blocked.md"))

@@ -5,6 +5,19 @@ PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 CHECK="$PROJECT_ROOT/scripts/check-factory-environment.py"
 
 "$CHECK" "$PROJECT_ROOT/.factory/environment.toml" >/dev/null
+python3 - "$PROJECT_ROOT/.factory/environment.toml" <<'PY'
+import sys, tomllib
+with open(sys.argv[1], "rb") as f:
+    data = tomllib.load(f)
+runners = {r["name"]: r for r in data.get("runners", [])}
+assert set(runners) == {"dev-runner-vm", "iprunner", "gpurunner"}, set(runners)
+assert set(runners["iprunner"]["capabilities"]) == {
+    "inputplumber-system-dbus", "physical-controller",
+    "target-consumer", "controller-production-routing",
+}, runners["iprunner"]["capabilities"]
+assert set(runners["gpurunner"]["capabilities"]) == {"gpu-compositor"}, \
+    runners["gpurunner"]["capabilities"]
+PY
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 cat > "$tmp/valid.toml" <<'EOF'

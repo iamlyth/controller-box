@@ -44,6 +44,10 @@ working_directory = "/srv/dev-runner/workspaces/probe"
 capabilities = ["$capability"]
 verify_argv = ["./scripts/verify-project.sh"]
 EOF
+    cat > "$dir/.factory/config.toml" <<'EOF'
+[campaign]
+required_capabilities = []
+EOF
     printf '# Spec\n' > "$dir/docs/SPEC.md"
     printf '# Plan\n' > "$dir/.factory/artifacts/implementation-plan.md"
     printf '%s\n' ".factory-state/" > "$dir/.gitignore"
@@ -151,16 +155,17 @@ PY
 must_fail "empty must_not_skip marker list" \
     "cd '$tmp/empty-skip-markers' && ./scripts/check-capability-contracts.py"
 
-# runner_class is optional candidate metadata (the gpu-compositor candidate
-# binds itself to the root-configured gpurunner class before provisioning):
-# a valid lowercase class name passes, an invalid one is rejected.
+# runner_class is optional candidate metadata: a valid lowercase class
+# name that matches a declared runner passes, an invalid one is rejected.
+# (The fixture declares only `probe-runner`; the real production runner
+# classes dev-runner-vm/iprunner/gpurunner are not declared here.)
 setup_repo "$tmp/runner-class-ok" probe-capability
 write_contract "$tmp/runner-class-ok" probe-capability "--- probe-capability contract ---"
 python3 - "$tmp/runner-class-ok/.factory/capability-contracts.json" <<'PY'
 import json, sys
 path = sys.argv[1]
 data = json.load(open(path, encoding="utf-8"))
-data['capabilities'][0]['runner_class'] = 'gpurunner'
+data['capabilities'][0]['runner_class'] = 'probe-runner'
 open(path, 'w', encoding="utf-8").write(json.dumps(data, indent=2))
 PY
 (cd "$tmp/runner-class-ok" && ./scripts/check-capability-contracts.py >/dev/null)
@@ -205,6 +210,29 @@ data['capabilities'].append({
 open(path, "w", encoding="utf-8").write(json.dumps(data, indent=2))
 CONTRACT
 (cd "$tmp/iprunner-candidate" && ./scripts/check-capability-contracts.py >/dev/null)
+
+# A declared contract whose runner_class names a runner that is not declared
+# in environment.toml claims a capability against a runner the factory cannot
+# execute; the checker must reject it.
+cp -a "$tmp/valid" "$tmp/undeclared-runner-class"
+python3 - "$tmp/undeclared-runner-class/.factory/capability-contracts.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path, encoding="utf-8"))
+data["capabilities"][0]["runner_class"] = "gpurunner"
+open(path, "w", encoding="utf-8").write(json.dumps(data, indent=2))
+PY
+must_fail "declared contract bound to an undeclared runner class" \
+    "cd '$tmp/undeclared-runner-class' && ./scripts/check-capability-contracts.py"
+
+# A required capability that no declared runner provides can never be
+# evidenced; the checker must reject a drifted config rather than silently
+# waiving the requirement.
+cp -a "$tmp/valid" "$tmp/missing-required-capability"
+printf '[campaign]\nrequired_capabilities = ["no-such-capability"]\n' > \
+    "$tmp/missing-required-capability/.factory/config.toml"
+must_fail "required capability with no declared runner providing it" \
+    "cd '$tmp/missing-required-capability' && ./scripts/check-capability-contracts.py"
 
 # Structural fail-closed: a committed contract probe argv may never carry a
 # token that equals or is prefixed by a fixture/simulation option, because the
