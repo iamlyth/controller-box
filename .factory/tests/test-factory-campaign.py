@@ -2021,6 +2021,108 @@ class ClassificationUnits(_CampaignBase):
             result_valid=True, outcome="pass", findings=(), blocked_refs=()),
             "infrastructure_failure")
 
+    # -- Phase 3: conformance sidecar consultation --------------------------
+
+    def _write_conformance(self, rows):
+        import json as _json
+        path = Path(tempfile.mkdtemp(prefix="conformance.")) / "conformance.json"
+        path.write_text(_json.dumps({
+            "schema": "ralph-conformance/v1",
+            "requirements": rows,
+        }), encoding="utf-8")
+        return path
+
+    def test_conformance_partial_rows_produce_findings(self) -> None:
+        # When conformance.json carries partial rows, the conformance
+        # consultation yields explicit findings even when the deterministic
+        # verify-project.sh gate passed and the tester claimed pass. The
+        # campaign therefore classifies verification as ``findings`` instead
+        # of silently accepting partial conformance.
+        path = self._write_conformance([
+            {"id": "ARCH-01", "classification": "verified", "reason": ""},
+            {"id": "MGR-02", "classification": "partial",
+             "reason": "Real InputPlumber system-bus acceptance pending."},
+            {"id": "DOD-05", "classification": "partial",
+             "reason": "Licensed diagram selection unverified."},
+        ])
+        findings = campaign_module._read_conformance_findings(path)
+        self.assertEqual(len(findings), 2)
+        self.assertTrue(
+            all(f.startswith("conformance ") and "status=partial" in f
+                for f in findings),
+            findings,
+        )
+        self.assertTrue(
+            any("conformance MGR-02 status=partial" in f for f in findings),
+            findings,
+        )
+        # Fed into the pure classifier with a passing gate and an
+        # optimistic tester pass, conformance findings must yield findings.
+        ok = campaign_module.RoleOutcome("tester", 0)
+        self.assertEqual(
+            campaign_module.classify_verification(
+                role=ok, scope_ok=True, gate_ran=True, gate_exit=0,
+                tester_result_valid=True, tester_result_outcome="pass",
+                findings=findings, blocked_refs=[],
+                capability_available=True,
+            ),
+            "findings",
+        )
+
+    def test_conformance_all_verified_allows_pass(self) -> None:
+        # When every conformance row is verified, the consultation adds no
+        # findings, so a passing gate + tester pass still classifies pass.
+        path = self._write_conformance([
+            {"id": "ARCH-01", "classification": "verified", "reason": ""},
+            {"id": "MGR-02", "classification": "verified", "reason": ""},
+            {"id": "DOD-05", "classification": "verified", "reason": ""},
+        ])
+        self.assertEqual(campaign_module._read_conformance_findings(path), [])
+        ok = campaign_module.RoleOutcome("tester", 0)
+        self.assertEqual(
+            campaign_module.classify_verification(
+                role=ok, scope_ok=True, gate_ran=True, gate_exit=0,
+                tester_result_valid=True, tester_result_outcome="pass",
+                findings=[], blocked_refs=[], capability_available=True,
+            ),
+            "pass",
+        )
+
+    def test_missing_conformance_json_does_not_fail(self) -> None:
+        # The sidecar is optional: a missing conformance.json contributes no
+        # findings and never fails the verification phase.
+        missing = Path(tempfile.mkdtemp(prefix="no-conformance.")) / "missing.json"
+        self.assertFalse(missing.exists())
+        self.assertEqual(
+            campaign_module._read_conformance_findings(missing), [],
+        )
+        ok = campaign_module.RoleOutcome("tester", 0)
+        self.assertEqual(
+            campaign_module.classify_verification(
+                role=ok, scope_ok=True, gate_ran=True, gate_exit=0,
+                tester_result_valid=True, tester_result_outcome="pass",
+                findings=[], blocked_refs=[], capability_available=True,
+            ),
+            "pass",
+        )
+
+    def test_malformed_conformance_json_is_infrastructure_failure(self) -> None:
+        # A malformed conformance sidecar means the verifier itself is
+        # broken: the helper raises ConformanceParseError and the campaign
+        # wiring maps that to ``infrastructure_failure`` (never a silent
+        # acceptance and never a product finding).
+        import json as _json
+        bad = Path(tempfile.mkdtemp(prefix="bad-conformance.")) / "conformance.json"
+        bad.write_text("{ this is not valid json ", encoding="utf-8")
+        with self.assertRaises(campaign_module.ConformanceParseError):
+            campaign_module._read_conformance_findings(bad)
+        # A document missing the requirements array is also malformed.
+        bad2 = Path(tempfile.mkdtemp(prefix="bad2-conformance.")) / "conformance.json"
+        bad2.write_text(_json.dumps({"schema": "ralph-conformance/v1"}),
+                        encoding="utf-8")
+        with self.assertRaises(campaign_module.ConformanceParseError):
+            campaign_module._read_conformance_findings(bad2)
+
 
 class ReviewHardening(_CampaignBase):
     """Task 9 review remediation adversarial tests (B1/B2/M1/M2/L1/L2/L3/L4)."""
@@ -2912,7 +3014,12 @@ class RunnerAcquisitionLifecycleTests(_CampaignBase):
         finally:
             self._close(authority)
 
-    def test_transport_unavailable_cannot_be_elevated_by_tester_pass(self) -> None:
+    def test_transport_unavailable_is_terminal_infrastructure_failure(self) -> None:
+        # Phase 5: a runner transport failure (exit 20, endpoint unreachable)
+        # is terminal infrastructure, never a product finding and never a
+        # blockable external capability. The campaign must stop attempting
+        # model rounds to "fix" product code when the real problem is an
+        # unreachable runner endpoint.
         outcome = campaign_module.classify_verification(
             role=campaign_module.RoleOutcome("tester", 0),
             scope_ok=True, gate_ran=True, gate_exit=0,
@@ -2921,7 +3028,7 @@ class RunnerAcquisitionLifecycleTests(_CampaignBase):
             capability_ran=True,
             capability_exit=campaign_module.RUNNER_TRANSPORT_EXIT,
         )
-        self.assertEqual(outcome, "findings")
+        self.assertEqual(outcome, "infrastructure_failure")
         blocked = campaign_module.classify_verification(
             role=campaign_module.RoleOutcome("tester", 0),
             scope_ok=True, gate_ran=True, gate_exit=0,
@@ -2930,7 +3037,42 @@ class RunnerAcquisitionLifecycleTests(_CampaignBase):
             capability_ran=True,
             capability_exit=campaign_module.RUNNER_TRANSPORT_EXIT,
         )
-        self.assertEqual(blocked, "blocked")
+        self.assertEqual(blocked, "infrastructure_failure")
+
+    def test_integrity_exit_is_infrastructure_failure(self) -> None:
+        # Phase 5: a runner integrity failure (exit 22, invalid signed
+        # evidence) is terminal infrastructure, never a product finding.
+        for tester_outcome in ("pass", "blocked", "findings"):
+            with self.subTest(tester_outcome=tester_outcome):
+                self.assertEqual(
+                    campaign_module.classify_verification(
+                        role=campaign_module.RoleOutcome("tester", 0),
+                        scope_ok=True, gate_ran=True, gate_exit=0,
+                        tester_result_valid=True,
+                        tester_result_outcome=tester_outcome,
+                        findings=[], blocked_refs=["FACT-007"],
+                        capability_available=False,
+                        capability_ran=True,
+                        capability_exit=campaign_module.RUNNER_INTEGRITY_EXIT,
+                    ),
+                    "infrastructure_failure",
+                )
+
+    def test_findings_exit_remains_findings(self) -> None:
+        # Phase 5: exit 21 (runner executed but reported product findings) is
+        # a genuine product finding, NOT infrastructure. Only transport (20)
+        # and integrity (22) are terminal infrastructure.
+        self.assertEqual(
+            campaign_module.classify_verification(
+                role=campaign_module.RoleOutcome("tester", 0),
+                scope_ok=True, gate_ran=True, gate_exit=0,
+                tester_result_valid=True, tester_result_outcome="pass",
+                findings=[], blocked_refs=[], capability_available=False,
+                capability_ran=True,
+                capability_exit=campaign_module.RUNNER_FINDINGS_EXIT,
+            ),
+            "findings",
+        )
 
     def test_runner_argv_refuses_arguments_shell_and_substitution(self) -> None:
         ws = self.make(SUCCESS_SCENARIO)

@@ -196,6 +196,16 @@ RUNNER_CHECKER_COMMAND = ("./scripts/check-factory-runner-evidence.py",)
 RUNNER_TRANSPORT_EXIT = 20
 RUNNER_FINDINGS_EXIT = 21
 RUNNER_INTEGRITY_EXIT = 22
+# Phase 3: the conformance sidecar (``.factory/artifacts/conformance.json``)
+# is the deterministic record of which requirement rows are ``verified``. The
+# campaign consults it after the ``verify-project.sh`` gate passes so partial
+# rows cannot be silently accepted behind a passing deterministic gate.
+DEFAULT_CONFORMANCE_PATH = ".factory/artifacts/conformance.json"
+# Phase 4: the mandatory core acceptance probe is a fixed committed script
+# resolved the same way as ``verify-project.sh`` (relative to the campaign
+# root). It DETECTS broken core behaviors (BUG-0015 virtual controllers,
+# BUG-0018 licensed diagram fallback) and never uses the silent skip exit.
+CORE_ACCEPTANCE_COMMAND = ("./scripts/check-core-acceptance.sh",)
 INSTALL_MANIFEST_MAX = 64 * 1024 * 1024
 
 # The orchestration layer's own commit identity: every campaign commit is
@@ -1415,6 +1425,86 @@ def classify_implementation(
     return "task_failed"
 
 
+class ConformanceParseError(Exception):
+    """The conformance sidecar exists but is malformed.
+
+    Raised by :func:`_read_conformance_findings` when
+    ``.factory/artifacts/conformance.json`` exists but cannot be parsed as
+    a ``ralph-conformance/v1`` document with a ``requirements`` array. A
+    malformed sidecar means the verifier itself is broken, so the campaign
+    classifies the verification phase as ``infrastructure_failure``
+    (never a product finding and never a silent acceptance).
+    """
+
+
+def _read_conformance_findings(conformance_path) -> List[str]:
+    """Read the conformance sidecar and return finding strings (Phase 3).
+
+    Reads ``conformance_path`` (default
+    ``.factory/artifacts/conformance.json``) and, for every requirement row
+    whose ``classification`` (or legacy ``status``) is not ``"verified"``,
+    returns a deterministic finding string of the form::
+
+        conformance REQ-XX status=partial: <reason/summary>
+
+    * If the file does not exist, an empty list is returned — the sidecar
+      is optional and may be absent in some contexts (the campaign skips
+      the consultation rather than failing).
+    * If the file exists but is malformed, :class:`ConformanceParseError` is
+      raised so the caller can classify the verification phase as
+      ``infrastructure_failure`` (the verifier/sidecar is broken).
+    * Rows whose status is exactly ``"verified"`` contribute no finding.
+    """
+    path = Path(conformance_path)
+    try:
+        if not path.exists():
+            return []
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ConformanceParseError(
+            f"cannot read conformance sidecar at {path}: {exc}"
+        ) from exc
+    try:
+        data = json.loads(raw)
+    except ValueError as exc:
+        raise ConformanceParseError(
+            f"malformed conformance sidecar at {path}: {exc}"
+        ) from exc
+    if not isinstance(data, dict):
+        raise ConformanceParseError(
+            f"malformed conformance sidecar at {path}: top-level value is not "
+            f"an object (got {type(data).__name__})"
+        )
+    requirements = data.get("requirements")
+    if not isinstance(requirements, list):
+        raise ConformanceParseError(
+            f"malformed conformance sidecar at {path}: missing or non-list "
+            f"'requirements' array"
+        )
+    findings: List[str] = []
+    for row in requirements:
+        if not isinstance(row, dict):
+            raise ConformanceParseError(
+                f"malformed conformance sidecar at {path}: non-object "
+                f"requirement row"
+            )
+        status = row.get("classification")
+        if status is None:
+            status = row.get("status")
+        if status is None:
+            raise ConformanceParseError(
+                f"malformed conformance sidecar at {path}: requirement row "
+                f"{row.get('id')!r} has no classification/status field"
+            )
+        if status == "verified":
+            continue
+        req_id = str(row.get("id", "?"))
+        summary = str(row.get("reason") or row.get("summary") or "").strip()
+        line = f"conformance {req_id} status={status}: {summary}".rstrip(": ")
+        findings.append(line)
+    return findings
+
+
 def classify_verification(
     *,
     role: RoleOutcome,
@@ -1459,7 +1549,10 @@ def classify_verification(
     if gate_exit < 0 or gate_exit in (126, 127):
         return "infrastructure_failure"
     if capability_ran and (
-        capability_exit < 0 or capability_exit in (126, 127)
+        capability_exit < 0
+        or capability_exit in (
+            RUNNER_TRANSPORT_EXIT, RUNNER_INTEGRITY_EXIT, 126, 127,
+        )
     ):
         return "infrastructure_failure"
     if not tester_result_valid:
@@ -4177,6 +4270,64 @@ class Campaign:
         blocked_refs = (
             list(result_data.get("blocked_on", [])) if result_data else []
         )
+        # Phase 3 (conformance sidecar) + Phase 4 (core acceptance):
+        # When the deterministic ``verify-project.sh`` gate passed, consult
+        # the conformance sidecar and the mandatory core acceptance probe
+        # *before* classifying. Partial/unverified conformance rows and
+        # broken core behaviors (BUG-0015/BUG-0018) become explicit
+        # verification findings so ``classify_verification`` yields
+        # ``findings`` (never a silent acceptance) instead of ``pass``. A
+        # malformed sidecar or a core acceptance probe that could not
+        # execute is ``infrastructure_failure`` (the verifier itself is
+        # broken), never a product finding and never a silent skip.
+        conformance_infrastructure = False
+        if gate_ran and gate_exit == 0:
+            try:
+                conformance_findings = _read_conformance_findings(
+                    self._root / DEFAULT_CONFORMANCE_PATH
+                )
+            except ConformanceParseError as exc:
+                conformance_infrastructure = True
+                gate_detail = gate_detail or str(exc)
+                conformance_findings = []
+            else:
+                if conformance_findings:
+                    findings.extend(conformance_findings)
+                    if result_data is not None:
+                        result_data = dict(result_data)
+                        result_data["findings"] = list(findings)
+            # Phase 4: the mandatory core acceptance probe is resolved the
+            # same way as ``verify-project.sh`` (relative to the campaign
+            # root). When the script is not deployed in this context it is
+            # skipped; when present, exit 1 is a core-behavior finding and
+            # any other non-zero/missing execution is infrastructure.
+            core_path = self._root / CORE_ACCEPTANCE_COMMAND[0]
+            if core_path.exists():
+                (
+                    core_ran, core_exit, core_detail, _core_skipped,
+                ) = self._run_gate(
+                    CORE_ACCEPTANCE_COMMAND, "core acceptance"
+                )
+                if core_ran and core_exit == 1:
+                    core_message = (
+                        core_detail.strip()
+                        or "core acceptance check reported findings"
+                    )
+                    findings.append(core_message)
+                    if result_data is not None:
+                        result_data = dict(result_data)
+                        result_data["findings"] = list(findings)
+                elif core_ran and core_exit != 0:
+                    conformance_infrastructure = True
+                    gate_detail = gate_detail or (
+                        f"core acceptance probe failed closed "
+                        f"(exit {core_exit})"
+                    )
+                elif not core_ran:
+                    conformance_infrastructure = True
+                    gate_detail = gate_detail or (
+                        "core acceptance probe did not run"
+                    )
         acquisition_ran, acquisition_exit, acquisition_detail = (
             self._ensure_runner_evidence()
         )
@@ -4208,6 +4359,13 @@ class Campaign:
             gate_skipped=verification_skipped,
             capability_skipped=capability_skipped,
         )
+        if conformance_infrastructure:
+            # A malformed conformance sidecar or an unexecutable core
+            # acceptance probe means the verifier itself cannot be trusted:
+            # override the pure classification to ``infrastructure_failure``
+            # so the campaign terminates closed for operator inspection
+            # rather than silently accepting or looping on product fixes.
+            outcome = "infrastructure_failure"
         if (
             outcome == "findings" and result_data is not None
             and result_data.get("outcome") == "pass" and not findings
