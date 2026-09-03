@@ -32,7 +32,7 @@
 set -u
 
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-cd "$REPO_ROOT"
+cd "$REPO_ROOT" || exit 1
 
 findings=()
 
