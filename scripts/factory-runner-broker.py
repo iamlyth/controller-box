@@ -73,8 +73,11 @@ def caller_uid():
  if uid<=0 or os.getuid()!=0 or os.geteuid()!=0: fail("broker must run as root for a non-root sudo caller")
  return uid
 
+ACCOUNT_CLASS={"devrunner":"dev-runner-vm","iprunner":"iprunner","gpurunner":"gpurunner"}
 def verify_runner_groups(entry):
- account=pwd.getpwuid(entry["uid"]);actual={grp.getgrgid(g).gr_name for g in os.getgrouplist(account.pw_name,account.pw_gid)}
+ account=pwd.getpwuid(entry["uid"])
+ if ACCOUNT_CLASS.get(account.pw_name)!=entry["name"]:raise BrokerError("runner numeric UID does not match the exact OS-account/class map")
+ actual={grp.getgrgid(g).gr_name for g in os.getgrouplist(account.pw_name,account.pw_gid)}
  approved=set(entry["approved_groups"])
  if actual!=approved or grp.getgrgid(account.pw_gid).gr_name not in approved:raise BrokerError("runner primary/supplementary groups differ from exact approved set")
 
@@ -415,7 +418,10 @@ def verify_authority_pins(policy,entry,authority):
   if licensed!=authority_pin(policy,entry["name"],"installed-licensed-diagram") or oracle!=authority_pin(policy,entry["name"],"gpu-compositor-layout-oracle"): raise BrokerError("licensed authority/oracle exact bytes differ from root enrollment")
   try: licensed_doc=json.loads(licensed_bytes);oracle_doc=json.loads(oracle_bytes)
   except ValueError: raise BrokerError("licensed authority/oracle is malformed")
-  if licensed_doc.get("status")!="accepted-machine-authority" or oracle_doc.get("authority_status") not in {"approved","enrolled"}:
+  # machine-enforced is the immutable geometric oracle, not human approval.
+  # Its exact digest must still be independently enrolled above; final human
+  # graphics approval remains a separate external campaign gate.
+  if licensed_doc.get("status")!="accepted-machine-authority" or oracle_doc.get("authority_status") not in {"machine-enforced","approved","enrolled"}:
    raise BrokerError("licensed authority/oracle status is pending or unapproved")
 
 def host_cleanup_snapshot(capability):
@@ -433,16 +439,65 @@ def host_cleanup_snapshot(capability):
  return fact
 
 
-def inputplumber_provenance(parent):
- """Privileged host-PID fact, gathered outside PrivatePIDs."""
- busctl=shutil.which("busctl",path="/usr/bin:/bin")
- if not busctl:return None
- try:
-  r=subprocess.run([busctl,"--system","call","org.freedesktop.DBus","/org/freedesktop/DBus","org.freedesktop.DBus","GetConnectionUnixProcessID","s","org.shadowblip.InputPlumber"],capture_output=True,text=True,timeout=10)
-  pid=int(r.stdout.split()[-1]);exe=os.readlink(f"/proc/{pid}/exe");st=os.stat(exe)
-  fact={"schema":"factory-host-inputplumber-provenance/v1","pid":pid,"exe":exe,"exe_dev":st.st_dev,"exe_ino":st.st_ino,"exe_sha256":hashlib.sha256(Path(exe).read_bytes()).hexdigest(),"verified_by":"root-broker-outside-private-pids"}
- except Exception:return None
- p=parent/"inputplumber-provenance.json";p.write_text(json.dumps(fact,sort_keys=True)+"\n");p.chmod(0o400);return p
+class InputPlumberProvenance:
+ """Held host-namespace identity for the real D-Bus owner across routing."""
+ def __init__(self,parent):
+  self.busctl=TrustedExecutable("/usr/bin/busctl")
+  self.owner,self.pid=self._resolve()
+  self.starttime=self._starttime(self.pid)
+  self.exe_link=os.readlink(f"/proc/{self.pid}/exe")
+  self.fd=os.open(f"/proc/{self.pid}/exe",os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC)
+  st=os.fstat(self.fd)
+  if not stat.S_ISREG(st.st_mode):raise BrokerError("InputPlumber owner executable is not regular")
+  self.dev,self.ino,self.size=st.st_dev,st.st_ino,st.st_size
+  self.digest=self._digest()
+  self.fact={"schema":"factory-host-inputplumber-provenance/v2","unique_owner":self.owner,"pid":self.pid,"starttime":self.starttime,"exe":self.exe_link,"exe_dev":self.dev,"exe_ino":self.ino,"exe_size":self.size,"exe_sha256":self.digest,"verified_by":"root-broker-held-proc-exe-outside-private-pids"}
+  self.path=parent/"inputplumber-provenance.json"
+  fd=os.open(self.path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC,0o400)
+  try:os.write(fd,(json.dumps(self.fact,sort_keys=True,separators=(",",":"))+"\n").encode());os.fsync(fd)
+  finally:os.close(fd)
+  self.verify()
+ def _call(self,*args):
+  self.busctl.verify();r=subprocess.run([str(self.busctl.path),"--system","call",*args],capture_output=True,text=True,timeout=10)
+  self.busctl.verify()
+  if r.returncode:raise BrokerError("cannot resolve live InputPlumber D-Bus owner")
+  fields=r.stdout.strip().split(maxsplit=1)
+  if len(fields)!=2:return ""
+  value=fields[1].strip()
+  return value[1:-1] if len(value)>=2 and value[0]=='"' and value[-1]=='"' else value
+ def _resolve(self):
+  owner=self._call("org.freedesktop.DBus","/org/freedesktop/DBus","org.freedesktop.DBus","GetNameOwner","s","org.shadowblip.InputPlumber")
+  if not re.fullmatch(r":[0-9]+\.[0-9]+",owner):raise BrokerError("InputPlumber has no valid unique D-Bus owner")
+  raw=self._call("org.freedesktop.DBus","/org/freedesktop/DBus","org.freedesktop.DBus","GetConnectionUnixProcessID","s",owner)
+  try:pid=int(raw)
+  except ValueError:raise BrokerError("InputPlumber owner PID is invalid")
+  return owner,pid
+ @staticmethod
+ def _starttime(pid):
+  raw=Path(f"/proc/{pid}/stat").read_text()
+  end=raw.rfind(")")
+  if end<0:raise BrokerError("InputPlumber proc stat is malformed")
+  fields=raw[end+2:].split()
+  if len(fields)<20:return 0
+  value=int(fields[19])
+  if value<=0:raise BrokerError("InputPlumber starttime is invalid")
+  return value
+ def _digest(self):
+  h=hashlib.sha256();off=0
+  while True:
+   b=os.pread(self.fd,65536,off)
+   if not b:return h.hexdigest()
+   h.update(b);off+=len(b)
+ def verify(self):
+  owner,pid=self._resolve()
+  try:start=self._starttime(pid);link=os.readlink(f"/proc/{pid}/exe");live=os.stat(f"/proc/{pid}/exe");held=os.fstat(self.fd)
+  except OSError as exc:raise BrokerError("InputPlumber exited during provenance verification") from exc
+  if (owner,pid,start)!=(self.owner,self.pid,self.starttime):raise BrokerError("InputPlumber D-Bus owner restarted or changed during routing")
+  if link!=self.exe_link or (live.st_dev,live.st_ino)!=(self.dev,self.ino) or (held.st_dev,held.st_ino,held.st_size)!=(self.dev,self.ino,self.size) or self._digest()!=self.digest:
+   raise BrokerError("InputPlumber executable identity changed during routing")
+ def close(self):
+  if getattr(self,"fd",None) is not None:os.close(self.fd);self.fd=None
+  self.busctl.close()
 
 def sign(evidence,entry):
  token=os.urandom(32);rfd,wfd=os.pipe();os.write(wfd,token);os.close(wfd)
@@ -481,7 +536,8 @@ def main():
   contract=authority.class_contract(entry["name"])
   if sorted(contract["capabilities"])!=req["capabilities"]:raise BrokerError("probe authority capability set differs from root policy")
   workroot=Path(entry["workspace_root"]);_safe_chain(workroot,leaf="dir");request_dir=Path(tempfile.mkdtemp(prefix=f"request-{req['nonce']}-",dir=workroot));request_dir.chmod(0o700)
-  provenance=inputplumber_provenance(request_dir) if entry["name"]=="iprunner" else None
+  provenance_identity=InputPlumberProvenance(request_dir) if entry["name"]=="iprunner" else None
+  provenance=provenance_identity.path if provenance_identity else None
   proxy=DbusProxy(entry,request_dir) if any(c in DBUS_CAPS for c in req["capabilities"]) else None
   started=int(time.time());allout=b"";allerr=b"";payload=[];descriptors=[]
   for index,(name,descriptor) in enumerate([("gate",contract["gate"]),*sorted(contract["capabilities"].items())]):
@@ -496,7 +552,9 @@ def main():
    finally:git.close()
    source_before=source_digest(product)
    unit=f"factory-runner-{entry['name']}-{req['nonce'][:20]}-{index}.service";host_before=host_cleanup_snapshot(name)
+   if name in DBUS_CAPS:provenance_identity.verify()
    rc,out,err=run_contained(entry,authority,descriptor,product,build,home,artifacts,env,unit,name,provenance,proxy)
+   if name in DBUS_CAPS:provenance_identity.verify()
    if len(allout)+len(out)>MAX_LOG or len(allerr)+len(err)>MAX_LOG:raise BrokerError("aggregate contained output exceeds bound")
    allout+=out;allerr+=err
    if host_cleanup_snapshot(name)!=host_before:raise BrokerError(f"{name} capability-specific host cleanup not proven")
@@ -516,6 +574,7 @@ def main():
  finally:
   for held in held_all:held.close()
   if authority:authority.close()
+  if 'provenance_identity' in locals() and provenance_identity:provenance_identity.close()
   if 'proxy' in locals() and proxy:proxy.close()
   if request_dir:shutil.rmtree(request_dir,ignore_errors=True)
   if admission is not None:os.close(admission)

@@ -753,18 +753,30 @@ after capability semantics, exact held-byte analysis, nonce consumption, and
 cleanup are proven, so failures, skips, simulations, cross-class claims, and
 caller-supplied manifests are never certified.
 
-Install or migrate with `sudo scripts/install-factory-runner-v2.sh
-APPROVED-POLICY.json`. Preflight requires root-owned approved policy bytes,
-`enrolled` probe-authority status for every class, exact committed deployment
-bytes, safe absolute host executables, transient-systemd property support,
-private root workspace/ledger parents, and canonical fixed-command
-`authorized_keys`. Deployment stages a non-nested authority and versioned
-helper bundle, validates sudoers before cutover, uses same-filesystem atomic
-renames with backups and a signal/error rollback trap, switches the broker grant
-before removing the obsolete signer grant, and derives sudoers account names
-from policy UIDs rather than class names. Policy also pins the exact primary and
-supplementary group-name set and `/usr/bin/xdg-dbus-proxy`; installation rejects
-missing proxy support and dangerous or extraneous groups. The coordinator SSH
+Root installation accepts no implicit checkout authority. The operator supplies
+an independently protected `factory-runner-install-manifest/v1` containing the
+explicit commit, tree, base64 commit-object bytes, complete `{path:
+{sha256,mode}}` install closure, root executable `{sha256,dev,ino}` pins, and
+per-class `host_requirements` (`required_paths` plus an empty
+`allowed_absent_until_evidence` array). It also supplies an approved
+`factory-runner-policy/v2`, a `factory-runner-transport/v1` manifest, and exactly
+one protected newline-terminated ed25519 public-key file for each OS account.
+The transport entries are `{class,sha256,fingerprint,principal}` keyed exactly
+by `devrunner`, `iprunner`, and `gpurunner`.
+
+The installer opens every descriptor and source file once with no-follow,
+checks inode stability and complete per-file digests, snapshots it into
+root-private staging, verifies the commit-object/tree binding, then imports and
+copies exclusively from that snapshot. Preflight checks exact executable pins,
+unified cgroup v2 and a disposable systemd unit with every containment property,
+class resources, real InputPlumber/version/system bus/uinput, GPU DRM, exact
+UID/account/class/group maps, enrolled authority, transport fingerprints, and
+sudoers. The transaction journals non-nested authority, helper bundle, policy,
+transport descriptor, broker/server/signer links, old/new sudoers, all three
+`authorized_keys`, and principals, using no-replace/exchange renames and fsync.
+Signals roll back; after power interruption the operator must run the explicit
+rollback command before retrying. `verify` checks the complete installed key,
+principal, account/group, ownership, mode, and generation invariants. The coordinator SSH
 launcher is an external root-owned enrollment (`factory-ssh-launcher/v1`) naming
 an immutable absolute executable by SHA-256 and device/inode. Production reads
 `/etc/controller-box/factory-ssh-launcher.json` (an alternate manifest is only
@@ -1072,10 +1084,28 @@ acquisition cannot overwrite prior evidence.
 Root migration is deliberately out-of-band and pending approval:
 
 ```sh
-python3 scripts/build-runner-probe-authority.py
-sudo scripts/install-factory-runner-v2.sh /root/approved-runner-policy-v2.json
-# atomically replace authorized_keys with the template in:
-# deploy/factory-runner-authority-v1/forced-command-v2.txt
+COMMIT=$(git rev-parse HEAD)
+TREE=$(git rev-parse 'HEAD^{tree}')
+python3 scripts/build-runner-probe-authority.py \
+  --source "$PWD" --git "$(command -v git)" \
+  --expected-commit "$COMMIT" --expected-tree "$TREE" \
+  --output "$PWD/deploy/factory-runner-authority-v1"
+
+# All material paths below must be root-owned, non-symlink, non-group/world
+# writable protected files. INSTALL-MANIFEST.json has the format documented
+# above; TRANSPORT.json is factory-runner-transport/v1 and pins each key.
+sudo scripts/install-factory-runner-v2.sh install \
+  --source-root "$PWD" --install-manifest /root/INSTALL-MANIFEST.json \
+  --commit "$COMMIT" --tree "$TREE" \
+  --policy /root/approved-runner-policy-v2.json \
+  --transport-manifest /root/TRANSPORT.json \
+  --ssh-launcher-manifest /root/factory-ssh-launcher.json \
+  --key devrunner=/root/devrunner.pub \
+  --key iprunner=/root/iprunner.pub \
+  --key gpurunner=/root/gpurunner.pub
+sudo scripts/install-factory-runner-v2.sh verify
+# Recovery after interruption, before any retry:
+sudo scripts/install-factory-runner-v2.sh rollback
 ```
 
 The host must provide unified cgroup v2 and a systemd version supporting

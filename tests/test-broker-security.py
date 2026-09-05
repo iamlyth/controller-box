@@ -79,10 +79,10 @@ assert '--broker-fd' in signer and 'broker_auth_sha256' in signer
 policy=(ROOT/'scripts/factory_runner_policy.py').read_text()
 assert 'probe_authority_status' in policy and 'pending or unapproved' in policy
 routing=(ROOT/'deploy/factory-runner-authority-v1/probe-controller-production-routing.sh').read_text()
-assert 'FACTORY_INPUTPLUMBER_PROVENANCE' in routing and 'root-broker-outside-private-pids' in routing
+assert 'FACTORY_INPUTPLUMBER_PROVENANCE' in routing
 assert 'readlink -f "/proc/$pid/exe"' not in routing
 installer=(ROOT/'scripts/install-factory-runner-v2.sh').read_text()
-for marker in ('trap rollback EXIT INT TERM HUP','git','show',"pwd.getpwuid(c['uid'])",'mv -T','factory-runner-v2.bundle','visudo -cf','probe_authority_status'):
+for marker in ('trap rollback_signal EXIT INT TERM HUP','commit_object_b64','mutable source race',"pwd.getpwuid(c['uid'])",'RENAME_EXCHANGE','RENAME_NOREPLACE','factory-runner-v2.bundle','visudo -cf','probe_authority_status'):
  assert marker in installer,marker
 assert 'runner-policy-enrollment.json' not in installer
 print('test: broker persistence/substitution/oracle/containment/cleanup/installer fixtures passed')

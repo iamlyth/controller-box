@@ -7,7 +7,7 @@
   "properties": {
     "schema": {"const": "factory-runner-policy/v2"},
     "namespace": {"const": "factory-runner-receipt"},
-    "classes": {"type": "array", "minItems": 1, "items": {"type":"object", "additionalProperties":false,
+    "classes": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type":"object", "additionalProperties":false,
       "required":["name","uid","workspace_root","allowed_capabilities","broker_helper","probe_authority","probe_authority_sha256","probe_authority_status","signer_key","signer_principal_file","nonce_ledger","systemd_run","systemctl","cgroup_root","dbus_proxy","approved_groups"],
       "properties": {
         "name":{"type":"string","pattern":"^[a-z0-9][a-z0-9._-]*$"}, "uid":{"type":"integer","minimum":1},

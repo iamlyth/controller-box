@@ -532,7 +532,7 @@
     }
   },
   "files": {
-    "forced-command-v2.txt": "841324ec277e4728bca41737ef12e4fd499fd73c49dc6687a5b793e81a5e29b5",
+    "forced-command-v2.txt": "b149e1bdf6cefdc156aa07a7e3657b6d2a6693088fcfd1d80541d06881540c02",
     "gpurunner-probes/analyze-gpu-compositor.py": "064d10c88ef6b0fb4c819e46e03aaf06092110cba405392e766966c3465ec4a1",
     "gpurunner-probes/egl_renderer_probe.c": "3cb76210be08dc01dd248320af7e4edebc30f9f60ca50495b113e4d5b703d278",
     "iprunner-probes/extract_om_targets.py": "9de8d5edf6fa5c8467c4abf8d5a44781e5d9d4b7d088d119cd08d6f66493319f",
@@ -557,7 +557,7 @@
     "product-gate.py": "2ced1f696e94d37a3704db79e94c5057e6ae78e45ff0ac23ad54555bf1fdb968",
     "validate-capability-semantics.py": "c45daf3571452ed28df95ccdfdacefbb6cd5ef1f1bfdf4d25e75510561d8f85c",
     "validate-no-artifacts.py": "9ca5c6cd86eb2274d6f44a1d42ff7f31236dbf47a19fc4773cd4ca048c6348fe",
-    "validate-retained-artifacts.py": "34324772c0bf4032545f15f18700e69d0083b8f29e6aafe371aaf4b1ac766627"
+    "validate-retained-artifacts.py": "fa92005de16f6c0541a07b56aceeb9054786df7c75b2145b9b6d4697e087cb4a"
   },
   "licensed_oracle": {
     "path": "licensed-diagram-oracle.json",

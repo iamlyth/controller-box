@@ -6,8 +6,22 @@ then copied read-only to /opt/factory-runner/authority/v1 and its printed
 manifest digest enrolled in root runner policy.  It is not candidate authority
 until that out-of-band enrollment occurs.
 """
-import hashlib,json,pathlib
-root=pathlib.Path(__file__).resolve().parents[1]/'deploy/factory-runner-authority-v1'
+import argparse,hashlib,json,pathlib,subprocess
+ap=argparse.ArgumentParser()
+ap.add_argument('--source',required=True,help='trusted clean Git snapshot root')
+ap.add_argument('--git',required=True,help='absolute trusted Git executable')
+ap.add_argument('--expected-commit',required=True)
+ap.add_argument('--expected-tree',required=True)
+ap.add_argument('--output',required=True,help='authority directory inside the trusted snapshot or an exact copy')
+a=ap.parse_args(); source=pathlib.Path(a.source).resolve();root=pathlib.Path(a.output).resolve();git_exe=pathlib.Path(a.git)
+if not git_exe.is_absolute() or not git_exe.is_file():raise SystemExit('authority builder: --git must be an absolute executable')
+def git(*args):return subprocess.check_output([str(git_exe),'-C',str(source),*args],text=True).strip()
+if git('rev-parse','HEAD')!=a.expected_commit or git('rev-parse','HEAD^{tree}')!=a.expected_tree:
+ raise SystemExit('authority builder: explicit commit/tree does not match source snapshot')
+if subprocess.run([str(git_exe),'-C',str(source),'diff','--quiet','--ignore-submodules','HEAD','--']).returncode or subprocess.run([str(git_exe),'-C',str(source),'diff','--cached','--quiet','--ignore-submodules','HEAD','--']).returncode:
+ raise SystemExit('authority builder: source snapshot is dirty')
+expected=(source/'deploy/factory-runner-authority-v1').resolve()
+if root!=expected:raise SystemExit('authority builder: output must be the authority directory in the exact trusted snapshot')
 files={p.relative_to(root).as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(root.rglob('*')) if p.is_file() and p.name!='authority.json' and '__pycache__' not in p.parts and p.suffix!='.pyc'}
 empty={"required":[],"files":{}}
 def desc(argv,artifacts=empty,semantic=False,cap='',runner=''):

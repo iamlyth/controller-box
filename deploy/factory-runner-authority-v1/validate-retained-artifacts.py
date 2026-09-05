@@ -76,7 +76,16 @@ def routing(root):
  phase_names=['om-before.json','om-after-create.json','om-after-clear.json','om-cleanup.json']+[f'om-assignment-{i}.json' for i in range(4)]
  phases={n:json.loads(read(cap/n)) for n in phase_names}
  provenance_before=read(cap/'provenance-before-routing.json');provenance_after=read(cap/'provenance-after-routing.json')
- if provenance_before!=provenance_after or json.loads(provenance_before).get('schema')!='factory-host-inputplumber-provenance/v1':die('InputPlumber provenance boundary changed or is invalid')
+ try: provenance=json.loads(provenance_before)
+ except ValueError:die('InputPlumber provenance fact is malformed')
+ expected_provenance={'schema','unique_owner','pid','starttime','exe','exe_dev','exe_ino','exe_size','exe_sha256','verified_by'}
+ if (provenance_before!=provenance_after or set(provenance)!=expected_provenance
+     or provenance.get('schema')!='factory-host-inputplumber-provenance/v2'
+     or not re.fullmatch(r':[0-9]+\.[0-9]+',str(provenance.get('unique_owner','')))
+     or any(type(provenance.get(k)) is not int or provenance[k]<=0 for k in ('pid','starttime','exe_dev','exe_ino','exe_size'))
+     or provenance.get('exe')!='/usr/bin/inputplumber' or not H.fullmatch(str(provenance.get('exe_sha256','')))
+     or provenance.get('verified_by')!='root-broker-held-proc-exe-outside-private-pids'):
+  die('InputPlumber held executable provenance boundary changed or is invalid')
  for n in ('dbus-unique-owner.json','dbus-owner-pid.json'):json.loads(read(cap/n))
  before_nodes=set(read(cap/'dev-input-before.txt').decode().splitlines());created_nodes=set(read(cap/'dev-input-after-create.txt').decode().splitlines());cleanup_nodes=set(read(cap/'dev-input-after-cleanup.txt').decode().splitlines())
  sysfs_facts=read(cap/'sysfs-targets.txt').decode('utf-8',errors='strict')

@@ -6,6 +6,26 @@ base_commit: 860922af39ed7e2aef9b95705705f7ed90344e87
 status: active
 ---
 
+**Deployment/installer/provenance hardening checkpoint (current checkout)**
+
+The root installer now requires an explicit commit/tree/commit-object-bound
+complete source manifest, exact executable inode/digest pins, independently
+protected policy/transport descriptors, and one fingerprint-pinned transport
+key for each exact OS account. It snapshots every no-follow source descriptor
+once before importing only snapshot modules, runs deep cgroup-v2/systemd and
+class hardware/service preflight, and journals authority, helper/link, policy,
+sudoers, key, and principal cutovers with exchange/no-replace, fsync, verify,
+and rollback commands. Account/class/group mapping is exactly
+`devrunner` -> `dev-runner-vm`, `iprunner` -> `iprunner`, and `gpurunner` ->
+`gpurunner`. The broker now holds `/proc/PID/exe`, starttime, owner, inode, and
+digest across every InputPlumber capability and the retained analyzer validates
+the complete read-only v2 fact. The regenerated pending authority digest is
+`845d7337d3399e600cda3c4af30d8805d609b6365e8e92339e3736f6e3cbdb21`; the
+authority builder requires an explicit clean trusted source commit/tree.
+External policy, transport keys, signer
+principals/keys, host installation, hardware execution, and human oracle
+approval remain operator-owned and were not performed or claimed here.
+
 **Hardware/GPU acceptance-mechanism hardening checkpoint (current checkout)**
 
 The immutable root probe authority now gives every class/capability descriptor

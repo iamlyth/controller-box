@@ -33,6 +33,7 @@ TOKEN = re.compile(r"^[^\x00-\x1f\x7f]{1,128}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 PIN_SCOPES = {"installed-licensed-diagram", "gpu-compositor-layout-oracle"}
 POLICY_SCHEMA = "factory-runner-policy/v2"
+REQUIRED_CLASSES = {"dev-runner-vm", "iprunner", "gpurunner"}
 
 
 class PolicyError(Exception):
@@ -202,6 +203,8 @@ def load_policy() -> dict:
                 raise PolicyError(f"runner class {name} licensed authority enrollment is pending human review")
         seen_names.add(name)
         seen_uids.add(uid)
+    if seen_names != REQUIRED_CLASSES:
+        raise PolicyError("runner policy must declare exactly dev-runner-vm, iprunner, and gpurunner")
     if any(class_name not in seen_names for class_name, _ in seen_pins):
         raise PolicyError("runner policy authority pin references an undeclared class")
     return data

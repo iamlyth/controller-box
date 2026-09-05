@@ -29,7 +29,7 @@ for required in ('PrivatePIDs=yes','PrivateMounts=yes','NoNewPrivileges=yes','Ca
  'ProtectSystem=strict','ProtectHome=yes','DevicePolicy=closed','IPAddressDeny=any','SystemCallFilter=',
  'TasksMax=512','MemoryMax=4G','KillMode=control-group','cgroup.procs',
  'nonce was not issued or was already consumed','NONCE_OUTSTANDING','os.rename(',
- 'exact_tree(product','freeze_tree(product)','expected_uid=uid','hold(d,p','inputplumber_provenance'):
+ 'exact_tree(product','freeze_tree(product)','expected_uid=uid','hold(d,p','InputPlumberProvenance','starttime','/proc/{self.pid}/exe'):
  assert required in broker,required
 assert 'os.chown(product,uid' not in broker and 'FACTORY_BROKER_SIGNING' not in broker
 assert 'licensed authority/oracle status is pending or unapproved' in broker

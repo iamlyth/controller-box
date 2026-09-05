@@ -252,6 +252,13 @@ class RunnerPolicyAuthorityTests(unittest.TestCase):
                         "nonce_ledger":"/var/lib/factory-runner/nonces", "systemd_run":"/usr/bin/systemd-run",
                         "systemctl":"/usr/bin/systemctl", "cgroup_root":"/sys/fs/cgroup",
                         "dbus_proxy":"/usr/bin/xdg-dbus-proxy", "approved_groups":["users"]}]}
+            for offset,name,caps in ((1,"dev-runner-vm",["remote-project-gate"]),(2,"iprunner",["inputplumber-system-dbus"])):
+                entry=json.loads(json.dumps(base["classes"][0]));entry.update(
+                    name=name,uid=(os.getuid() or 1)+offset,
+                    workspace_root=f"/var/lib/factory-{name}",allowed_capabilities=caps,
+                    signer_key=f"/etc/factory/{name}.key",signer_principal_file=f"/etc/factory/{name}.principal",
+                    nonce_ledger=f"/var/lib/factory-runner/{name}-nonces")
+                base["classes"].append(entry)
             prior = factory_runner_policy.DEFAULT_POLICY_PATH
             prior_env = os.environ.get("FACTORY_RUNNER_POLICY")
             os.environ["FACTORY_RUNNER_POLICY"] = str(path)

@@ -1,3 +1,4 @@
-command="/usr/local/libexec/factory-runner-server",restrict,no-agent-forwarding,no-port-forwarding,no-pty,no-user-rc,no-X11-forwarding ssh-ed25519 REPLACE_WITH_CLASS_PUBLIC_KEY
+Installer-generated exact line (one per account; never edit authorized_keys manually):
+command="/usr/local/libexec/factory-runner-server",restrict,no-agent-forwarding,no-port-forwarding,no-pty,no-user-rc,no-X11-forwarding ssh-ed25519 <operator-supplied-class-key>
 
-Migration: replace the old factory-runner-v1 ForcedCommand line atomically after installing the v2 broker and its single sudoers rule. Never grant the SSH UID access to factory-runner-signer.
+The key bytes, SHA-256 fingerprint, account, class, and signer principal are supplied in the protected factory-runner-transport/v1 descriptor and installed in the same rollback journal as the broker. The unprivileged server executes only the exact argument-free `sudo -n /usr/local/libexec/factory-runner-broker` trampoline. Missing, duplicate, additional, multi-line, non-ed25519, or unpinned keys fail installation.
