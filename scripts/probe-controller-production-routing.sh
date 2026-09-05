@@ -437,8 +437,9 @@ extract_new_xb360_targets() {
 # names (identical name sets, exact count, no extra nodes). Reads EVIOCGNAME
 # via the observer's identity-only mode; rejects uinput/unrelated nodes.
 NODE_NAMES=()
+NODE_PATHS=()
 verify_node_identities() {
-    local -a node_names=()
+    local -a input_nodes=("$@") node_names=()
     local node name
     for node in "$@"; do
         name=$("$OBSERVER" --name-only "/dev/input/$node" 2>/dev/null) || {
@@ -447,10 +448,17 @@ verify_node_identities() {
         }
         node_names+=("$name")
     done
-    NODE_NAMES=("${node_names[@]}")
     local -a st sn
     mapfile -t st < <(printf '%s\n' "${TARGET_NAMES[@]}" | sort)
     mapfile -t sn < <(printf '%s\n' "${node_names[@]}" | sort)
+    # A matching multiset of identical names cannot identify which DBus
+    # target owns which kernel node.  Until InputPlumber/udev exposes a
+    # stable per-target link (or creation is externally correlated one at a
+    # time), fail closed rather than index-pairing independently sorted lists.
+    if [[ $(printf '%s\n' "${st[@]}" | uniq -d | wc -l) -ne 0 ]]; then
+        echo "production-routing-probe: FAIL: ambiguous identical target names; no authoritative DBus-target-to-kernel-node identity is exposed (requires udev/sysfs identity or controlled per-target create observation)" >&2
+        return 1
+    fi
     if [[ "${#st[@]}" -ne "${#sn[@]}" ]]; then
         echo "production-routing-probe: FAIL: target/kernel node identity counts differ (targets=${#st[@]} nodes=${#sn[@]})" >&2
         return 1
@@ -461,7 +469,25 @@ verify_node_identities() {
             return 1
         fi
     done
-    echo "production-routing-probe: all ${#node_names[@]} kernel nodes match the ${#TARGET_NAMES[@]} counted xb360 target identities"
+    # Bind each DBus target to the unique kernel node with the same stable
+    # InputPlumber Target.Name / EVIOCGNAME identity; do not retain either
+    # list's independent index order.
+    NODE_NAMES=(); NODE_PATHS=()
+    local target matches found
+    for target in "${TARGET_NAMES[@]}"; do
+        matches=0; found=""
+        for ((i = 0; i < ${#node_names[@]}; i++)); do
+            if [[ "${node_names[$i]}" == "$target" ]]; then
+                matches=$((matches + 1)); found="${input_nodes[$i]}"
+            fi
+        done
+        if [[ $matches -ne 1 ]]; then
+            echo "production-routing-probe: FAIL: target identity '$target' maps to $matches kernel nodes" >&2
+            return 1
+        fi
+        NODE_NAMES+=("$target"); NODE_PATHS+=("$found")
+    done
+    echo "production-routing-probe: all ${#node_names[@]} kernel nodes have authoritative unique-name bindings to counted xb360 targets"
     return 0
 }
 
@@ -758,6 +784,7 @@ PY
         cleanup_live
         return 1
     fi
+    new_nodes=("${NODE_PATHS[@]}")
 
     # 10. Observe a separate fresh human event on every target. Presence-only
     #     targets are never evidence. A single physical 045e:028e source is
@@ -791,18 +818,34 @@ PY
             echo "production-routing-probe: FAIL: target-$slot has no kernel char node" >&2
             cleanup_live; return 1
         }
-        if ! busctl --system call "$BUS_NAME" "$MANAGER_PATH" "$MANAGER_IFACE" \
-            AttachTargetDevice ss "${new_targets[$slot]}" "$composite" >/dev/null 2>&1; then
-            echo "production-routing-probe: FAIL: target-$slot could not be assigned to physical composite" >&2
+        # Assignment proof must traverse Controller-Box's production overlay:
+        # the operator activates Select+A on the real controller, navigates
+        # that row to P(slot+1), and closes with B.  Never call assignment
+        # DBus here; DBus is only an independent postcondition observer.
+        local assignments_file="$HOME/.config/controller-box/assignments.yaml"
+        local before_mtime=0 assign_deadline
+        [[ -e "$assignments_file" ]] && before_mtime=$(stat -c %Y "$assignments_file" 2>/dev/null || echo 0)
+        echo "production-routing-probe: ACTION: use physical 045e:028e through the overlay production event path; assign it to P$((slot+1)) and close with B"
+        assign_deadline=$(( $(date +%s) + 90 ))
+        local assignment_ok=false
+        while [[ $(date +%s) -lt $assign_deadline ]]; do
+            local now_mtime=0
+            [[ -e "$assignments_file" ]] && now_mtime=$(stat -c %Y "$assignments_file" 2>/dev/null || echo 0)
+            if [[ "$now_mtime" -ge "$before_mtime" ]] && \
+               busctl --system --json=short get-property "$BUS_NAME" "$composite" \
+                 org.shadowblip.Input.CompositeDevice TargetDevices 2>/dev/null | \
+               python3 "$SCRIPT_DIR/iprunner-probes/unwrap_variant.py" --property-as | \
+               python3 -c 'import json,sys; a=json.load(sys.stdin); raise SystemExit(0 if a == [sys.argv[1]] else 1)' "${new_targets[$slot]}"; then
+                assignment_ok=true
+                break
+            fi
+            sleep 1
+        done
+        if [[ "$assignment_ok" != true ]]; then
+            echo "production-routing-probe: FAIL: production overlay dispatch/save did not produce an exact singleton TargetDevices assignment for target-$slot; InputPlumber may retain old targets without a detach/transfer operation" >&2
             cleanup_live; return 1
         fi
-        if ! busctl --system --json=short get-property "$BUS_NAME" "$composite" \
-            org.shadowblip.Input.CompositeDevice TargetDevices | \
-            python3 "$SCRIPT_DIR/iprunner-probes/unwrap_variant.py" --property-as | \
-            python3 -c 'import json,sys; a=json.load(sys.stdin); raise SystemExit(0 if sys.argv[1] in a else 1)' "${new_targets[$slot]}"; then
-            echo "production-routing-probe: FAIL: target-$slot TargetDevices assignment not observable" >&2
-            cleanup_live; return 1
-        fi
+        echo "production-routing-probe: target-$slot production-dispatch verified controller-box-overlay save-persisted=true direct-assignment-dbus=false"
         echo "production-routing-probe: target-$slot mapping dbus=${new_targets[$slot]} kernel=/dev/input/$target_node composite=$composite source=$source_path" | tee -a "$tmp/observer.log"
         echo "production-routing-probe: target-$slot assignment verified dbus-path+kernel-node+composite+source unique"
         if ! "$OBSERVER" --physical-device "$physical" --target-device "/dev/input/$target_node" \
@@ -833,7 +876,8 @@ for line in open(sys.argv[1],encoding='utf-8'):
  s,p,n,c,src,st,tt=line.rstrip().split('\t')
  rows.append({'slot':int(s),'dbus_path':p,'kernel_node':n,'composite_path':c,'source_path':src,
               'source_vidpid':'045e:028e','source_event_us':int(st),'target_event_us':int(tt),
-              'consumer':'read-only-evdev','human_generated':True})
+              'consumer':'read-only-evdev','human_generated':True,'selected_only':True,
+              'production_dispatch':True,'production_save':True,'direct_assignment_dbus':False})
 if len(rows)!=4: raise SystemExit(1)
 json.dump({'schema':'controller-production-routing-results/v1','targets':rows},open(sys.argv[2],'w'),indent=2); open(sys.argv[2],'a').write('\n')
 PY

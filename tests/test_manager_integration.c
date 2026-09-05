@@ -262,14 +262,14 @@ static void test_add_controller(void **state)
 
     /* DeviceType must match the requested type for confirmation. */
     ip_dbus_mock_expect_ok(&f->mock,
-        IP_IFACE_TARGET, "DeviceType", "evdev-gamepad");
+        IP_IFACE_TARGET, "DeviceType", "xb360");
 
     /* Also need SupportedTargetDeviceIds for refresh. */
     ip_dbus_mock_expect_ok(&f->mock,
         IP_IFACE_MANAGER, "SupportedTargetDeviceIds",
-        "evdev,evdev-gamepad,evdev-keyboard,evdev-mouse");
+        "xb360,ds5,deck,gamepad");
 
-    int rc = cbx_controllers_tab_add(f->ct, "evdev-gamepad");
+    int rc = cbx_controllers_tab_add(f->ct, "xb360");
     assert_int_equal(rc, 0);
 }
 

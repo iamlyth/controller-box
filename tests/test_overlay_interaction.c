@@ -573,6 +573,10 @@ test_o10_close_saves_and_sets_pass(void **state)
     /* No assignments yet. */
     assert_int_equal(f->svc->assignments.assignment_count, 0);
 
+    /* Exact post-attach TargetDevices confirmation. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE, "TargetDevices",
+        "/org/shadowblip/InputPlumber/devices/target/gamepad0");
+
     /* Press B to close overlay. */
     push_keydown(SDLK_b);
     cbx_overlay_service_step(f->svc);
@@ -808,6 +812,10 @@ test_o10c_close_via_dbus_b(void **state)
     inject_input(f, EXP_SENDER, DEV_PATH_0, "Right", 1.0);
     cbx_overlay_service_step(f->svc);
     assert_int_equal(cbx_select_grid_get_cur_col(&f->svc->grid, 0), 1);
+
+    /* Exact post-attach TargetDevices confirmation. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE, "TargetDevices",
+        "/org/shadowblip/InputPlumber/devices/target/gamepad0");
 
     /* Press B via DBus → close overlay. */
     inject_input(f, EXP_SENDER, DEV_PATH_0, "B", 1.0);

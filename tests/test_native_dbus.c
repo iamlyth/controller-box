@@ -675,7 +675,7 @@ static void test_native_startup_reconciliation_prod_path(void **state)
         char *td = NULL;
         assert_int_equal(ip_composite_get_target_devices(
             backend, bus, comp, &td), 0);
-        assert_string_equal(td, svc.model.targets[slot].path);
+        assert_string_equal(td, "");
         free(td);
     }
 
@@ -703,7 +703,7 @@ static void test_native_startup_reconciliation_prod_path(void **state)
     char *td2 = NULL;
     assert_int_equal(ip_composite_get_target_devices(
         backend, bus, comp0, &td2), 0);
-    assert_true(strstr(td2, svc.model.targets[0].path) != NULL);
+    assert_string_equal(td2, "");
     free(td2);
 
     for (int i = svc.model.target_count - 1; i >= 0; i--)
@@ -761,10 +761,10 @@ static void test_native_reconcile_failure_boundaries(void **state)
     (void)state;
     const ip_dbus_backend *backend = ip_dbus_sd_backend();
 
-    /* Missing composites fail before any destructive/create operation. */
+    /* Virtual slots are reconciled independently with zero composites. */
     nip_server_handle sh;
-    nip_server_config cfg = { .num_composites = 1, .version = "9.8.7" };
-    nip_reset_server_state(1);
+    nip_server_config cfg = { .num_composites = 0, .version = "9.8.7" };
+    nip_reset_server_state(0);
     assert_int_equal(nip_start_server(&sh, &cfg), 0);
     ip_bus_handle bus = NULL;
     assert_int_equal(backend->connect(&bus), 0);
@@ -772,10 +772,11 @@ static void test_native_reconcile_failure_boundaries(void **state)
     cbx_overlay_service_ctx svc = {0};
     svc.conn.backend = backend; svc.conn.bus = bus;
     cbx_settings_defaults(&svc.settings);
-    svc.settings.virtual_controllers.count = 2;
+    svc.settings.virtual_controllers.count = 4;
     assert_int_equal(cbx_objectmanager_enumerate(backend, bus, &svc.model), 0);
-    assert_int_equal(cbx_reconcile_startup_targets(&svc), -ENODEV);
-    assert_string_equal(svc.reconcile_status.phase, "attachment");
+    assert_int_equal(cbx_reconcile_startup_targets(&svc), 0);
+    assert_int_equal(svc.model.target_count, 4);
+    assert_int_equal(svc.model.composite_count, 0);
     assert_false(svc.reconcile_status.originals_stopped);
     backend->disconnect(bus); nip_stop_server(&sh);
 
@@ -804,6 +805,10 @@ static void test_native_reconcile_failure_boundaries(void **state)
     assert_int_equal(wait_for_server(backend, bus, NULL), 0);
     memset(&svc, 0, sizeof(svc)); svc.conn.backend = backend; svc.conn.bus = bus;
     cbx_settings_defaults(&svc.settings); svc.settings.virtual_controllers.count = 1;
+    cbx_assignments_init(&svc.assignments);
+    svc.assignments.assignment_count = 1;
+    snprintf(svc.assignments.assignments[0].id, CBX_MAX_ID_LEN, "ORDER:0");
+    svc.assignments.assignments[0].slot = 0;
     svc.reconcile_timeout_ms = 50;
     assert_int_equal(cbx_objectmanager_enumerate(backend, bus, &svc.model), 0);
     assert_true(cbx_reconcile_startup_targets(&svc) < 0);
@@ -830,10 +835,16 @@ static void test_native_reconcile_verifies_every_attachment(void **state)
     cbx_overlay_service_ctx svc = {0};
     svc.conn.backend = backend; svc.conn.bus = bus;
     cbx_settings_defaults(&svc.settings); svc.settings.virtual_controllers.count = 2;
+    cbx_assignments_init(&svc.assignments);
+    svc.assignments.assignment_count = 2;
+    snprintf(svc.assignments.assignments[0].id, CBX_MAX_ID_LEN, "ORDER:0");
+    svc.assignments.assignments[0].slot = 0;
+    snprintf(svc.assignments.assignments[1].id, CBX_MAX_ID_LEN, "ORDER:1");
+    svc.assignments.assignments[1].slot = 1;
     svc.reconcile_timeout_ms = 40; svc.reconcile_poll_ms = 2;
     assert_int_equal(cbx_objectmanager_enumerate(backend, bus, &svc.model), 0);
     assert_int_equal(cbx_reconcile_startup_targets(&svc), -ETIMEDOUT);
-    assert_string_equal(svc.reconcile_status.operation, "verify-TargetDevices");
+    assert_string_equal(svc.reconcile_status.operation, "verify-exact-TargetDevices");
     backend->disconnect(bus); nip_stop_server(&sh);
 }
 

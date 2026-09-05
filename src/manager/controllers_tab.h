@@ -8,7 +8,7 @@
  * DBus calls:
  *   Add         → ip_manager_create_target_device (Manager iface)
  *   Remove      → ip_manager_stop_target_device   (Manager iface)
- *   Change type → ip_composite_set_target_devices  (CompositeDevice iface)
+ *   Change type → create exact replacement, attach if assigned, stop old
  *
  * All DBus access goes through the ip_dbus_backend vtable so the module
  * is fully unit-testable with the mock backend.
@@ -85,6 +85,7 @@ typedef struct {
 
     /* --- Topology validation --------------------------------------- */
     int            expected_target_count;  /* from settings.virtual_controllers.count, 0 = unset */
+    cbx_settings  *settings;               /* borrowed authoritative topology */
 
     /* --- UI state --------------------------------------------------- */
     cbx_ct_mode    mode;
@@ -181,9 +182,10 @@ int cbx_controllers_tab_add(cbx_controllers_tab *tab, const char *type);
 int cbx_controllers_tab_remove(cbx_controllers_tab *tab, int device_index);
 
 /*
- * Change the type of the virtual controller at the given index.
- * Calls ip_composite_set_target_devices on the corresponding composite
- * device with the updated types CSV.  SPEC §5.2: mixed types allowed.
+ * Change the type of the virtual controller at the given stable slot index.
+ * Publishes an exact replacement target before stopping the old path and
+ * attaches it only when that slot has a persisted physical assignment.
+ * SPEC §5.2: mixed types and unassigned virtual slots are allowed.
  * Returns 0 on success, negative errno on error.
  */
 int cbx_controllers_tab_change_type(cbx_controllers_tab *tab,

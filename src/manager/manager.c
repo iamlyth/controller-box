@@ -499,6 +499,7 @@ cbx_manager_init_with_dbus(cbx_manager *mgr, const char *font_path,
     /* SPEC §5.2: wire expected target count from settings so the
      * controllers tab can detect orphan-columns (fewer targets than
      * configured) and show an error state. */
+    mgr->ct.settings = &mgr->settings;
     cbx_controllers_tab_set_expected_count(&mgr->ct,
         mgr->settings.virtual_controllers.count);
 

@@ -237,9 +237,12 @@ void cbx_overlay_rearm_polls(cbx_overlay_service_ctx *svc);
  * Every CreateTargetDevice return path is retained immediately and polled
  * with a monotonic finite deadline until that exact object is published with
  * the expected Target interface and DeviceType.  Every stop is similarly
- * confirmed by exact-path disappearance.  Stable composite indexes and
- * retained target paths define slots; ObjectManager reply order is not used.
- * Every required attachment is verified against parsed TargetDevices values.
+ * confirmed by exact-path disappearance.  Retained create paths define slots;
+ * ObjectManager reply order is never identity.  On a fresh process, where
+ * InputPlumber exposes no intrinsic target-slot property, lexical object-path
+ * order is the deterministic fallback and exact returned paths take over for
+ * mutations.  Physical composites are optional and attached only by persisted
+ * PersistentId assignment.  Exact singleton TargetDevices sets are required.
  *
  * On failure, all paths created by this call are stopped with bounded exact-
  * path confirmation.  Originals stopped by type correction/shrink are not

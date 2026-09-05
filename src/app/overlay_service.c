@@ -151,6 +151,10 @@ on_intercept_error(int error_code, void *userdata)
             "controller-box: intercept poll error: %d\n", error_code);
 }
 
+/* Exact attachment confirmation is shared with startup reconciliation. */
+static int wait_for_attachment(cbx_overlay_service_ctx *svc,
+                               const char *composite, const char *target);
+
 /* ================================================================== */
 /*  Lifecycle on_save callback: conflict resolution + assignment save */
 /* ================================================================== */
@@ -219,6 +223,14 @@ cbx_overlay_on_save(void *userdata)
             svc->model.targets[slot].path, row->composite_path);
         if (attach_rc != 0)
             return attach_rc;
+        attach_rc = wait_for_attachment(svc, row->composite_path,
+                                         svc->model.targets[slot].path);
+        if (attach_rc != 0) {
+            fprintf(stderr,
+                "controller-box: assignment not exact after AttachTargetDevice; InputPlumber detach/transfer semantics may not support safe reassignment (slot=%d composite=%s target=%s)\n",
+                slot, row->composite_path, svc->model.targets[slot].path);
+            return attach_rc;
+        }
     }
 
     /* --- Phase 2: Set GamepadOrder on the engine --- */
@@ -449,22 +461,60 @@ reconcile_diag(cbx_overlay_service_ctx *svc, const char *phase,
              reconcile_error_category(rc), rc);
 }
 
-static bool
-csv_has_exact_path(const char *csv, const char *path)
+static int
+csv_exact_path_count(const char *csv, const char *path)
 {
     if (!csv || !path)
-        return false;
+        return 0;
+    int count = 0;
     size_t plen = strlen(path);
     for (const char *p = csv; *p;) {
         while (*p == ' ' || *p == '\t' || *p == ',') p++;
+        if (!*p) break;
         const char *end = strchr(p, ',');
         if (!end) end = p + strlen(p);
         while (end > p && (end[-1] == ' ' || end[-1] == '\t')) end--;
         if ((size_t)(end - p) == plen && memcmp(p, path, plen) == 0)
-            return true;
+            count++;
         p = *end ? end + 1 : end;
     }
-    return false;
+    return count;
+}
+
+static bool
+csv_is_exact_singleton(const char *csv, const char *path)
+{
+    int tokens = 0;
+    if (!csv) return false;
+    for (const char *p = csv; *p;) {
+        while (*p == ' ' || *p == '\t' || *p == ',') p++;
+        if (!*p) break;
+        tokens++;
+        const char *end = strchr(p, ',');
+        p = end ? end + 1 : p + strlen(p);
+    }
+    return tokens == 1 && csv_exact_path_count(csv, path) == 1;
+}
+
+/* Resolve a persisted physical assignment by stable composite PersistentId.
+ * Virtual slots do not imply physical composites: an absent assignment is a
+ * valid ready-but-unassigned slot. */
+static const char *
+assigned_composite_for_slot(cbx_overlay_service_ctx *svc, int slot)
+{
+    for (int ai = 0; ai < svc->assignments.assignment_count; ai++) {
+        const cbx_assignment *a = &svc->assignments.assignments[ai];
+        if (a->slot != slot) continue;
+        for (int ci = 0; ci < svc->model.composite_count; ci++) {
+            char *id = NULL;
+            int rc = ip_composite_get_persistent_id(svc->conn.backend,
+                svc->conn.bus, svc->model.composites[ci].path, &id);
+            bool match = rc == 0 && id && strcmp(id, a->id) == 0;
+            free(id);
+            if (match) return svc->model.composites[ci].path;
+        }
+    }
+    return NULL;
 }
 
 static int
@@ -563,7 +613,10 @@ wait_for_attachment(cbx_overlay_service_ctx *svc, const char *composite,
         last_rc = ip_composite_get_target_devices(svc->conn.backend,
                                                     svc->conn.bus,
                                                     composite, &paths);
-        bool found = last_rc == 0 && csv_has_exact_path(paths, target);
+        /* Assignment is accepted only when the selected target is the exact
+         * singleton set.  This detects stale/cross-slot targets after a
+         * reassignment instead of treating a substring match as routing. */
+        bool found = last_rc == 0 && csv_is_exact_singleton(paths, target);
         free(paths);
         if (found)
             return 0;
@@ -599,14 +652,9 @@ cbx_reconcile_startup_targets(cbx_overlay_service_ctx *svc)
     const char *kind = "";
     char path[CBX_MAX_PATH_LEN] = "";
 
-    /* Refuse to mutate when cardinality cannot make every required target
-     * routable.  Composite indexes are sorted by ObjectManager parsing. */
-    if (svc->model.composite_count < desired) {
-        rc = -ENODEV;
-        phase = "attachment";
-        operation = "require-composites";
-        goto fail;
-    }
+    /* Targets are persistent virtual player slots, independent of physical
+     * composite cardinality.  Zero composites is a normal ready topology;
+     * only persisted, identity-matched assignments are attached below. */
 
     /* Grow using retained return paths, never count deltas or reply order. */
     for (int slot = orig_count; slot < desired; slot++) {
@@ -668,13 +716,16 @@ cbx_reconcile_startup_targets(cbx_overlay_service_ctx *svc)
         operation = "confirm-replacement-publication";
         rc = wait_for_exact_target(svc, path, kind, true);
         if (rc != 0) goto fail;
-        phase = "attachment"; operation = "AttachTargetDevice";
-        rc = ip_manager_attach_target_device(svc->conn.backend, svc->conn.bus,
-            path, svc->model.composites[slot].path);
-        if (rc != 0) goto fail;
-        operation = "verify-TargetDevices";
-        rc = wait_for_attachment(svc, svc->model.composites[slot].path, path);
-        if (rc != 0) goto fail;
+        const char *assigned = assigned_composite_for_slot(svc, slot);
+        if (assigned) {
+            phase = "attachment"; operation = "AttachTargetDevice";
+            rc = ip_manager_attach_target_device(svc->conn.backend, svc->conn.bus,
+                path, assigned);
+            if (rc != 0) goto fail;
+            operation = "verify-exact-TargetDevices";
+            rc = wait_for_attachment(svc, assigned, path);
+            if (rc != 0) goto fail;
+        }
         phase = "type-correction"; operation = "StopTargetDevice";
         snprintf(path, sizeof(path), "%s", old_path);
         rc = ip_manager_stop_target_device(svc->conn.backend, svc->conn.bus,
@@ -686,16 +737,19 @@ cbx_reconcile_startup_targets(cbx_overlay_service_ctx *svc)
         if (rc != 0) goto fail;
     }
 
-    /* Attach and verify every required slot using exact parsed array members. */
+    /* Attach only explicitly persisted physical assignments.  Unassigned
+     * virtual slots remain created and ready without a composite. */
     for (int slot = 0; slot < desired; slot++) {
+        const char *assigned = assigned_composite_for_slot(svc, slot);
+        if (!assigned) continue;
         memcpy(path, slots[slot], sizeof(path));
         path[sizeof(path) - 1] = '\0';
         phase = "attachment"; operation = "AttachTargetDevice";
         rc = ip_manager_attach_target_device(svc->conn.backend, svc->conn.bus,
-            path, svc->model.composites[slot].path);
+            path, assigned);
         if (rc != 0) goto fail;
-        operation = "verify-TargetDevices";
-        rc = wait_for_attachment(svc, svc->model.composites[slot].path, path);
+        operation = "verify-exact-TargetDevices";
+        rc = wait_for_attachment(svc, assigned, path);
         if (rc != 0) goto fail;
     }
 

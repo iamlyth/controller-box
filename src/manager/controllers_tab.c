@@ -31,6 +31,8 @@
 #define CBX_CT_BTN_H     44
 #define CBX_CT_BTN_GAP   16
 #define CBX_CT_LIST_Y    16
+#define CBX_CT_OPERATION_TIMEOUT_MS 2000u
+#define CBX_CT_OPERATION_POLL_MS      10u
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -312,6 +314,122 @@ cbx_controllers_tab_shutdown(cbx_controllers_tab *tab)
     memset(tab, 0, sizeof(*tab));
 }
 
+static bool
+csv_is_exact_singleton_path(const char *csv, const char *path)
+{
+    if (!csv || !path) return false;
+    int tokens = 0, matches = 0;
+    size_t plen = strlen(path);
+    for (const char *p = csv; *p;) {
+        while (*p == ' ' || *p == '\t' || *p == ',') p++;
+        if (!*p) break;
+        const char *end = strchr(p, ',');
+        if (!end) end = p + strlen(p);
+        while (end > p && (end[-1] == ' ' || end[-1] == '\t')) end--;
+        tokens++;
+        if ((size_t)(end - p) == plen && memcmp(p, path, plen) == 0)
+            matches++;
+        p = *end ? end + 1 : end;
+    }
+    return tokens == 1 && matches == 1;
+}
+
+/* Preserve already-established slot identities across unordered/reordered
+ * ObjectManager dictionaries.  Newly returned CreateTargetDevice paths are
+ * inserted explicitly by the operation that created them.  Across a fresh
+ * process, ObjectManager parsing's lexical path order is the deterministic
+ * fail-closed fallback because InputPlumber exposes no intrinsic slot ID. */
+static void
+preserve_target_order(cbx_device_model *next, const cbx_device_model *prior)
+{
+    cbx_device_entry ordered[CBX_MAX_DEVICES];
+    bool used[CBX_MAX_DEVICES] = {false};
+    int n = 0;
+    for (int p = 0; p < prior->target_count; p++)
+        for (int i = 0; i < next->target_count; i++)
+            if (!used[i] && strcmp(prior->targets[p].path,
+                                    next->targets[i].path) == 0) {
+                ordered[n++] = next->targets[i]; used[i] = true; break;
+            }
+    for (int i = 0; i < next->target_count; i++)
+        if (!used[i]) ordered[n++] = next->targets[i];
+    memcpy(next->targets, ordered,
+           (size_t)next->target_count * sizeof(next->targets[0]));
+}
+
+static int
+refresh_until_path(cbx_controllers_tab *tab, const char *path, bool present,
+                   const char *type)
+{
+    uint32_t started = SDL_GetTicks();
+    for (;;) {
+        int rc = cbx_controllers_tab_refresh(tab);
+        if (rc == 0) {
+            int found = -1;
+            for (int i = 0; i < tab->model.target_count; i++)
+                if (strcmp(tab->model.targets[i].path, path) == 0) {
+                    found = i; break;
+                }
+            if ((found >= 0) == present) {
+                if (!present || (!type || (found < tab->device_type_count &&
+                    strcmp(tab->device_types[found], type) == 0)))
+                    return 0;
+            }
+        }
+        if ((uint32_t)(SDL_GetTicks() - started) >=
+            CBX_CT_OPERATION_TIMEOUT_MS)
+            return -EIO;
+        if (tab->backend->process) tab->backend->process(tab->bus);
+        SDL_Delay(CBX_CT_OPERATION_POLL_MS);
+    }
+}
+
+static int
+wait_exact_attachment(cbx_controllers_tab *tab, const char *composite,
+                      const char *target)
+{
+    uint32_t started = SDL_GetTicks();
+    for (;;) {
+        char *csv = NULL;
+        int rc = ip_composite_get_target_devices(tab->backend, tab->bus,
+                                                   composite, &csv);
+        bool exact = rc == 0 && csv_is_exact_singleton_path(csv, target);
+        free(csv);
+        if (exact) return 0;
+        if ((uint32_t)(SDL_GetTicks() - started) >=
+            CBX_CT_OPERATION_TIMEOUT_MS)
+            return -EIO;
+        if (tab->backend->process) tab->backend->process(tab->bus);
+        SDL_Delay(CBX_CT_OPERATION_POLL_MS);
+    }
+}
+
+static int
+assigned_composite_for_slot(cbx_controllers_tab *tab, int slot,
+                            char out[CBX_MAX_PATH_LEN])
+{
+    cbx_assignments asgn;
+    cbx_assignments_init(&asgn);
+    if (cbx_assignments_load(&asgn) != 0) return 0;
+    for (int ai = 0; ai < asgn.assignment_count; ai++) {
+        if (asgn.assignments[ai].slot != slot) continue;
+        for (int ci = 0; ci < tab->model.composite_count; ci++) {
+            char *id = NULL;
+            int rc = ip_composite_get_persistent_id(tab->backend, tab->bus,
+                tab->model.composites[ci].path, &id);
+            bool match = rc == 0 && id &&
+                strcmp(id, asgn.assignments[ai].id) == 0;
+            free(id);
+            if (match) {
+                snprintf(out, CBX_MAX_PATH_LEN, "%s",
+                         tab->model.composites[ci].path);
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
 /* ------------------------------------------------------------------ */
 /*  Refresh                                                            */
 /* ------------------------------------------------------------------ */
@@ -420,10 +538,14 @@ cbx_controllers_tab_refresh(cbx_controllers_tab *tab)
     if (!tab || !tab->backend)
         return -EINVAL;
 
-    /* Re-enumerate devices. */
-    int rc = cbx_objectmanager_enumerate(tab->backend, tab->bus, &tab->model);
+    /* Re-enumerate devices without letting dictionary order redefine slots. */
+    cbx_device_model prior = tab->model;
+    cbx_device_model next;
+    int rc = cbx_objectmanager_enumerate(tab->backend, tab->bus, &next);
     if (rc != 0)
         return rc;
+    preserve_target_order(&next, &prior);
+    tab->model = next;
 
     /* Query each target's DeviceType.  A connected bus is not available
      * state when required typed properties cannot be read (SPEC §2.4). */
@@ -465,9 +587,23 @@ cbx_controllers_tab_refresh(cbx_controllers_tab *tab)
         tab->selected_device = 0;
     cbx_list_set_selected(&tab->device_list, tab->selected_device);
 
-    /* SPEC §5.2: Columns without InputPlumber targets = error, not
-     * success.  Check after every refresh. */
+    /* SPEC §5.2: missing targets are an error; zero physical composites is
+     * instead a valid ready-but-unassigned virtual topology. */
     check_orphan_columns(tab);
+    if (type_rc == 0 && tab->model.target_count > 0 &&
+        tab->model.composite_count == 0 &&
+        !cbx_widget_is_visible(&tab->status_lbl.base)) {
+        char msg[CBX_LABEL_TEXT_LEN];
+        snprintf(msg, sizeof(msg),
+                 "%d virtual slots ready; no physical controllers assigned",
+                 tab->model.target_count);
+        cbx_label_set_text(&tab->status_lbl, msg);
+        cbx_widget_set_visible(&tab->status_lbl.base, true);
+    } else if (tab->model.composite_count > 0 &&
+               strstr(tab->status_lbl.text, "virtual slots ready;") != NULL) {
+        cbx_label_set_text(&tab->status_lbl, "");
+        cbx_widget_set_visible(&tab->status_lbl.base, false);
+    }
 
     return type_rc;
 }
@@ -504,57 +640,42 @@ cbx_controllers_tab_add(cbx_controllers_tab *tab, const char *type)
     if (!tab || !tab->backend || !type)
         return -EINVAL;
 
-    int previous_count = tab->model.target_count;
     char *out_path = NULL;
     int rc = ip_manager_create_target_device(tab->backend, tab->bus,
                                                type, &out_path);
     if (rc != 0)
         return rc;
-
-    rc = cbx_controllers_tab_refresh(tab);
-    if (rc == 0 && tab->model.target_count != previous_count + 1)
-        rc = -EIO;
-    bool found = false;
-    int found_index = -1;
-    if (rc == 0 && out_path) {
-        for (int i = 0; i < tab->model.target_count; i++) {
-            if (strcmp(tab->model.targets[i].path, out_path) == 0) {
-                found = true;
-                found_index = i;
-                break;
-            }
-        }
-        if (!found)
-            rc = -EIO;
+    if (!out_path || !out_path[0]) {
+        free(out_path);
+        return -EIO;
     }
-    /* SPEC §5.2: Add succeeds only after ObjectManager exposes one
-     * additional target of the selected type. */
-    if (rc == 0 && found_index >= 0 &&
-        found_index < tab->device_type_count &&
-        strcmp(tab->device_types[found_index], type) != 0)
-        rc = -EIO;
 
-    /* SPEC §5.2 / CT-05: Add succeeds only after the target is confirmed
-     * attached/routable to its corresponding composite.  Check the
-     * composite's TargetDevices property; if the new target is not yet
-     * listed, attach it.  If attachment fails, the add is not confirmed. */
-    if (rc == 0 && found_index >= 0 && out_path &&
-        found_index < tab->model.composite_count) {
-        const char *comp_path = tab->model.composites[found_index].path;
-        char *td_csv = NULL;
-        int td_rc = ip_composite_get_target_devices(tab->backend,
-                                                       tab->bus,
-                                                       comp_path, &td_csv);
-        bool is_attached = false;
-        if (td_rc == 0 && td_csv) {
-            is_attached = (strstr(td_csv, out_path) != NULL);
-            free(td_csv);
-        }
-        if (!is_attached) {
-            int attach_rc = ip_manager_attach_target_device(
-                tab->backend, tab->bus, out_path, comp_path);
-            if (attach_rc != 0)
-                rc = attach_rc;
+    /* A virtual slot is valid without a physical controller.  Confirm the
+     * exact returned path and type asynchronously; never infer success from
+     * one immediate count refresh or attach it to an unrelated composite. */
+    rc = refresh_until_path(tab, out_path, true, type);
+    if (rc != 0) {
+        int cleanup = ip_manager_stop_target_device(tab->backend, tab->bus,
+                                                     out_path);
+        if (cleanup == 0)
+            cleanup = refresh_until_path(tab, out_path, false, NULL);
+        if (cleanup != 0)
+            fprintf(stderr,
+                "controller-box: Add cleanup failed for delayed target %s: rc=%d\n",
+                out_path, cleanup);
+    }
+    if (rc == 0 && tab->settings) {
+        int n = tab->settings->virtual_controllers.count;
+        if (n >= CBX_MAX_CONTROLLERS) rc = -ENOSPC;
+        else {
+            snprintf(tab->settings->virtual_controllers.types[n],
+                     CBX_MAX_TYPE_LEN, "%s", type);
+            tab->settings->virtual_controllers.count = n + 1;
+            rc = cbx_settings_save(tab->settings);
+            if (rc == 0) {
+                tab->expected_target_count = n + 1;
+                check_orphan_columns(tab);
+            }
         }
     }
     free(out_path);
@@ -569,22 +690,15 @@ cbx_controllers_tab_remove(cbx_controllers_tab *tab, int device_index)
     if (device_index < 0 || device_index >= tab->model.target_count)
         return -EINVAL;
 
-    int previous_count = tab->model.target_count;
     char path[CBX_MAX_PATH_LEN];
     snprintf(path, sizeof(path), "%s", tab->model.targets[device_index].path);
     int rc = ip_manager_stop_target_device(tab->backend, tab->bus, path);
     if (rc != 0)
         return rc;
 
-    rc = cbx_controllers_tab_refresh(tab);
+    rc = refresh_until_path(tab, path, false, NULL);
     if (rc != 0)
         return rc;
-    if (tab->model.target_count != previous_count - 1)
-        return -EIO;
-    for (int i = 0; i < tab->model.target_count; i++) {
-        if (strcmp(tab->model.targets[i].path, path) == 0)
-            return -EIO;
-    }
 
     /* SPEC §5.2 / CT-02: physical controller auto-Unassigned.
      * Load the persisted assignments, remove any assignment whose slot
@@ -604,7 +718,22 @@ cbx_controllers_tab_remove(cbx_controllers_tab *tab, int device_index)
                 asgn.assignments[i].slot--;
             }
         }
-        cbx_assignments_save(&asgn);
+        rc = cbx_assignments_save(&asgn);
+        if (rc != 0) return rc;
+    }
+    if (tab->settings) {
+        int n = tab->settings->virtual_controllers.count;
+        if (device_index < n) {
+            if (device_index < n - 1)
+                memmove(&tab->settings->virtual_controllers.types[device_index],
+                        &tab->settings->virtual_controllers.types[device_index + 1],
+                        (size_t)(n - device_index - 1) * CBX_MAX_TYPE_LEN);
+            tab->settings->virtual_controllers.types[n - 1][0] = '\0';
+            tab->settings->virtual_controllers.count = n - 1;
+            rc = cbx_settings_save(tab->settings);
+            if (rc != 0) return rc;
+            tab->expected_target_count = n - 1;
+        }
     }
 
     return 0;
@@ -620,37 +749,61 @@ cbx_controllers_tab_change_type(cbx_controllers_tab *tab,
     if (device_index < 0 || device_index >= tab->model.target_count)
         return -EINVAL;
 
-    /* Find the composite for this target.  In the common case,
-     * composite index = target list index. */
-    if (device_index >= tab->model.composite_count)
-        return -EINVAL;
+    char old_path[CBX_MAX_PATH_LEN];
+    snprintf(old_path, sizeof(old_path), "%s",
+             tab->model.targets[device_index].path);
+    char *replacement = NULL;
+    int rc = ip_manager_create_target_device(tab->backend, tab->bus,
+                                               new_type, &replacement);
+    if (rc != 0) return rc;
+    if (!replacement || !replacement[0]) { free(replacement); return -EIO; }
 
-    const char *composite_path = tab->model.composites[device_index].path;
-
-    /* SPEC §5.2: "Type change replaces only the selected slot and
-     * preserves all other topology."
-     *
-     * SetTargetDevices is the CompositeDevice interface method that
-     * REPLACES ALL target devices on a single composite.  Under the slot
-     * model enforced by reconcile Phase 1/4 (target[i]↔composite[i], one
-     * virtual controller per composite), the composite for device_index
-     * owns exactly one target, so the requested type-change CSV is just
-     * the new type for that slot.  Passing a CSV assembled from every
-     * model target's type would make the selected composite instantiate
-     * all N target types at once, corrupting the other slots' topology.
-     */
-    int rc = ip_composite_set_target_devices(tab->backend, tab->bus,
-                                                composite_path, new_type);
-    if (rc != 0)
-        return rc;
-
-    rc = cbx_controllers_tab_refresh(tab);
-    if (rc != 0)
-        return rc;
-    if (device_index >= tab->device_type_count ||
-        strcmp(tab->device_types[device_index], new_type) != 0)
-        return -EIO;
-    return 0;
+    rc = refresh_until_path(tab, replacement, true, new_type);
+    char composite[CBX_MAX_PATH_LEN] = "";
+    if (rc == 0 && assigned_composite_for_slot(tab, device_index, composite)) {
+        rc = ip_manager_attach_target_device(tab->backend, tab->bus,
+                                               replacement, composite);
+        if (rc == 0)
+            rc = wait_exact_attachment(tab, composite, replacement);
+    }
+    if (rc == 0) {
+        /* Establish replacement as this slot before the old path vanishes,
+         * so later unordered refreshes cannot move unrelated indices. */
+        snprintf(tab->model.targets[device_index].path,
+                 sizeof(tab->model.targets[device_index].path), "%s",
+                 replacement);
+        const char *slash = strrchr(replacement, '/');
+        snprintf(tab->model.targets[device_index].name,
+                 sizeof(tab->model.targets[device_index].name), "%s",
+                 slash ? slash + 1 : replacement);
+        rc = ip_manager_stop_target_device(tab->backend, tab->bus, old_path);
+        if (rc == 0)
+            rc = refresh_until_path(tab, old_path, false, NULL);
+    }
+    if (rc != 0) {
+        int cleanup = ip_manager_stop_target_device(tab->backend, tab->bus,
+                                                     replacement);
+        if (cleanup == 0)
+            cleanup = refresh_until_path(tab, replacement, false, NULL);
+        if (cleanup != 0)
+            fprintf(stderr,
+                "controller-box: Change type cleanup failed for %s: rc=%d\n",
+                replacement, cleanup);
+    }
+    if (rc == 0 && tab->settings &&
+        device_index < tab->settings->virtual_controllers.count) {
+        char prior[CBX_MAX_TYPE_LEN];
+        snprintf(prior, sizeof(prior), "%s",
+                 tab->settings->virtual_controllers.types[device_index]);
+        snprintf(tab->settings->virtual_controllers.types[device_index],
+                 CBX_MAX_TYPE_LEN, "%s", new_type);
+        rc = cbx_settings_save(tab->settings);
+        if (rc != 0)
+            snprintf(tab->settings->virtual_controllers.types[device_index],
+                     CBX_MAX_TYPE_LEN, "%s", prior);
+    }
+    free(replacement);
+    return rc;
 }
 
 int

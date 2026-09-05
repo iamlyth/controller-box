@@ -10,7 +10,7 @@ from __future__ import annotations
 import argparse, hashlib, json, re, sys
 from pathlib import Path
 
-SCHEMA = "iprunner-controller-production-routing-facts/v2"
+SCHEMA = "iprunner-controller-production-routing-facts/v3"
 PINNED = "/usr/bin/inputplumber"
 OBJ = re.compile(r"^/org/shadowblip/InputPlumber/[A-Za-z0-9_/]+$")
 NODE = re.compile(r"^/dev/input/event[0-9]+$")
@@ -46,6 +46,12 @@ def validate(d: dict, base: Path) -> None:
         "real root-owned system bus is required")
     req(type(bus.get("owner_pid")) is int and bus.get("owner_exe_pinned") is True and bus.get("owner_exe")==PINNED,
         "bus owner executable must be pinned")
+    production=d.get("production_assignment",{})
+    req(production.get("path")=="controller-box-overlay" and
+        production.get("normal_event_dispatch") is True and
+        production.get("save_persisted") is True and
+        production.get("direct_assignment_dbus") is False,
+        "routing must use Controller-Box overlay dispatch and persisted save, not direct assignment DBus")
     topo=d.get("topology",{})
     for key in ("expected","observed","target_paths","kernel_nodes"):
         req(type(topo.get(key)) is int, f"{key} targets must be int")
@@ -53,6 +59,9 @@ def validate(d: dict, base: Path) -> None:
         "topology counts are out of range")
     req(topo.get("cardinality") in ("exact","ambiguous") and type(topo.get("identities_match")) is bool,
         "topology cardinality/identity fields malformed")
+    req(topo.get("identity_method") in ("udev-sysfs", "controlled-create-observe") and
+        topo.get("one_to_one") is True,
+        "DBus target to kernel node identity is not authoritative one-to-one")
     physical=d.get("physical",{})
     req(physical.get("vidpid")=="045e:028e" and physical.get("transport")=="usb",
         "physical source must be real USB 045e:028e")
@@ -72,7 +81,9 @@ def validate(d: dict, base: Path) -> None:
         req(t.get("device_type")=="xb360" and isinstance(t.get("name"),str) and t["name"], f"target{i} wrong type/name")
         req(t.get("source_path")==physical["source_path"] and t.get("source_vidpid")=="045e:028e",
             f"target{i} is unrouted or assigned to the wrong physical source")
-        req(t.get("assignment_verified") is True and t.get("consumer_read_only") is True,
+        req(t.get("assignment_verified") is True and t.get("consumer_read_only") is True and
+            t.get("selected_only") is True and t.get("production_dispatch") is True and
+            t.get("production_save") is True and t.get("direct_assignment_dbus") is False,
             f"target{i} assignment/consumer/source evidence invalid")
         st=t.get("source_event_us"); tt=t.get("target_event_us"); oid=t.get("observation_id")
         req(type(st) is int and type(tt) is int and st>last_source and tt>=st and tt-st<=2_000_000,

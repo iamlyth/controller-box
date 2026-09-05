@@ -702,7 +702,7 @@ void nip_reset_server_state(int num_composites)
     g_nip_manage_all_devices = 0;
 
     /* Initialize composite names and persistent IDs. */
-    int n = num_composites > 0 ? num_composites : 1;
+    int n = num_composites >= 0 ? num_composites : 1;
     if (n > NIP_MAX_COMPOSITES) n = NIP_MAX_COMPOSITES;
     for (int i = 0; i < n; i++) {
         g_nip_intercept_mode[i] = 0;  /* NONE */
@@ -745,7 +745,7 @@ int nip_start_private_bus(char *address, size_t address_len, pid_t *bus_pid)
 pid_t nip_fork_server(const char *address, const nip_server_config *cfg)
 {
     /* Set server configuration (copied so child inherits via fork). */
-    s_num_composites = (cfg && cfg->num_composites > 0) ? cfg->num_composites : 1;
+    s_num_composites = (cfg && cfg->num_composites >= 0) ? cfg->num_composites : 1;
     if (cfg && cfg->version)
         snprintf(s_version, sizeof(s_version), "%s", cfg->version);
     else

@@ -111,6 +111,10 @@ for i in range(4):
         "source_vidpid": scenario.get("source_vidpid", "045e:028e"),
         "assignment_verified": True,
         "consumer_read_only": True,
+        "selected_only": not bool(scenario.get("cross_target_leakage", 0)),
+        "production_dispatch": not bool(scenario.get("missing_production_dispatch", 0)),
+        "production_save": not bool(scenario.get("missing_production_save", 0)),
+        "direct_assignment_dbus": bool(scenario.get("direct_assignment_dbus", 0)),
         "direct_injection": bool(scenario.get("direct_injection", 0)),
         "source_event_us": base_source_times[i],
         "target_event_us": base_source_times[i] + 100,
@@ -127,7 +131,13 @@ if scenario.get("reused_observation"):
     targets[1]["observation_id"] = targets[0]["observation_id"]
 
 facts = {
-    "schema": "iprunner-controller-production-routing-facts/v2",
+    "schema": "iprunner-controller-production-routing-facts/v3",
+    "production_assignment": {
+        "path": "direct-busctl" if scenario.get("direct_assignment_dbus", 0) else "controller-box-overlay",
+        "normal_event_dispatch": not bool(scenario.get("missing_production_dispatch", 0)),
+        "save_persisted": not bool(scenario.get("missing_production_save", 0)),
+        "direct_assignment_dbus": bool(scenario.get("direct_assignment_dbus", 0)),
+    },
     "home": {
         "isolated": True,
         "virtual_controllers": {"count": 4, "types": ["xb360"] * 4},
@@ -144,6 +154,8 @@ facts = {
         "kernel_nodes": scenario.get("kernel_nodes", 4),
         "cardinality": scenario.get("cardinality", "exact"),
         "identities_match": bool(scenario.get("identities_match", 1)),
+        "identity_method": scenario.get("identity_method", "controlled-create-observe"),
+        "one_to_one": not bool(scenario.get("ambiguous_node_pairing", 0)),
     },
     "physical": {
         "vidpid": scenario.get("physical_vidpid", "045e:028e"),
@@ -221,6 +233,11 @@ unrouted_slot() { build_fixture "$1" "$(scen_json unroutedslot "{\"target_mutati
 duplicate_mapping() { build_fixture "$1" "$(scen_json dupmap "{\"duplicate_mapping\":true,\"event_stream\":\"$four_events\"}")"; }
 reused_observation() { build_fixture "$1" "$(scen_json reused "{\"reused_observation\":true,\"event_stream\":\"$four_events\"}")"; }
 event_only_target0() { build_fixture "$1" "$(scen_json only0 "{\"event_only_target0\":true,\"event_stream\":\"physical0 event 1 304 1 ts 1500\\ntarget0 event 1 304 1 ts 1600\\n\"}")"; }
+direct_assignment_dbus() { build_fixture "$1" "$(scen_json directdbus "{\"direct_assignment_dbus\":true,\"event_stream\":\"$four_events\"}")"; }
+ambiguous_node_pairing() { build_fixture "$1" "$(scen_json nodepair "{\"ambiguous_node_pairing\":true,\"identity_method\":\"name-sort\",\"event_stream\":\"$four_events\"}")"; }
+cross_target_leakage() { build_fixture "$1" "$(scen_json leakage "{\"cross_target_leakage\":true,\"event_stream\":\"$four_events\"}")"; }
+missing_production_dispatch() { build_fixture "$1" "$(scen_json nodispatch "{\"missing_production_dispatch\":true,\"event_stream\":\"$four_events\"}")"; }
+missing_production_save() { build_fixture "$1" "$(scen_json nosave "{\"missing_production_save\":true,\"event_stream\":\"$four_events\"}")"; }
 
 
 # ---------------------------------------------------------------------------
@@ -420,6 +437,16 @@ reused_observation "$tmp/reused-observation"
 must_fail "reused stale observation rejected" bash "$PROBE" --fixture "$tmp/reused-observation"
 event_only_target0 "$tmp/target0-only"
 must_fail "event only on target0 rejected" bash "$PROBE" --fixture "$tmp/target0-only"
+direct_assignment_dbus "$tmp/direct-dbus"
+must_fail "direct assignment DBus substitute rejected" bash "$PROBE" --fixture "$tmp/direct-dbus"
+ambiguous_node_pairing "$tmp/ambiguous-node-pairing"
+must_fail "index/name-sorted ambiguous nodes rejected" bash "$PROBE" --fixture "$tmp/ambiguous-node-pairing"
+cross_target_leakage "$tmp/cross-target-leakage"
+must_fail "cross-target event leakage rejected" bash "$PROBE" --fixture "$tmp/cross-target-leakage"
+missing_production_dispatch "$tmp/missing-production-dispatch"
+must_fail "missing production dispatch artifact rejected" bash "$PROBE" --fixture "$tmp/missing-production-dispatch"
+missing_production_save "$tmp/missing-production-save"
+must_fail "missing production save artifact rejected" bash "$PROBE" --fixture "$tmp/missing-production-save"
 
 # ---------------------------------------------------------------------------
 # Unknown argument and validator safety.

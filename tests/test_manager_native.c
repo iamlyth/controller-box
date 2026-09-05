@@ -955,6 +955,33 @@ test_d06_dbus_failure_pointer(void **state)
     cbx_manager_shutdown(&mgr);
 }
 
+/* Native async-capable backend: exact-path standalone add/type/remove with
+ * no physical-composite cardinality assumption. */
+static void
+test_native_manager_exact_path_lifecycle(void **state)
+{
+    (void)state;
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+    cbx_controllers_tab *ct = cbx_manager_controllers_tab(&mgr);
+    assert_int_equal(cbx_controllers_tab_device_count(ct), 0);
+
+    assert_int_equal(cbx_controllers_tab_add(ct, "xb360"), 0);
+    assert_int_equal(cbx_controllers_tab_device_count(ct), 1);
+    char original[CBX_MAX_PATH_LEN];
+    snprintf(original, sizeof(original), "%s",
+             cbx_controllers_tab_device_path(ct, 0));
+
+    assert_int_equal(cbx_controllers_tab_change_type(ct, 0, "ds5"), 0);
+    assert_int_equal(cbx_controllers_tab_device_count(ct), 1);
+    assert_string_equal(cbx_controllers_tab_device_type(ct, 0), "ds5");
+    assert_string_not_equal(cbx_controllers_tab_device_path(ct, 0), original);
+
+    assert_int_equal(cbx_controllers_tab_remove(ct, 0), 0);
+    assert_int_equal(cbx_controllers_tab_device_count(ct), 0);
+    cbx_manager_shutdown(&mgr);
+}
+
 /* ================================================================== */
 /*  Test registration                                                  */
 /* ================================================================== */
@@ -993,6 +1020,8 @@ main(void)
         cmocka_unit_test_setup_teardown(test_m26_cancel_edit_controller,
                                         mn_setup, mn_teardown),
         cmocka_unit_test_setup_teardown(test_m26_cancel_edit_pointer,
+                                        mn_setup, mn_teardown),
+        cmocka_unit_test_setup_teardown(test_native_manager_exact_path_lifecycle,
                                         mn_setup, mn_teardown),
         /* MG-04 — Topology failure */
         cmocka_unit_test_setup_teardown(test_mg04_topology_failure,

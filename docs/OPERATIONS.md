@@ -369,7 +369,21 @@ count is lower than the configured `virtual_controllers.count` (e.g., target
 creation failed during reconciliation), the Controllers tab displays a
 **topology-incomplete** error in the status label rather than presenting the
 reduced topology as success.  This alerts the user that some virtual
-controllers are missing.
+controllers are missing.  This is distinct from physical assignment: four
+active targets with zero composites is a healthy **ready, unassigned** topology,
+not an error.  Targets are created independently; only an assignment matched by
+composite `PersistentId` is attached.
+
+InputPlumber currently exposes no intrinsic player-slot property on standalone
+targets.  Controller-Box therefore retains every `CreateTargetDevice` return
+path as the slot identity during mutations and preserves those exact paths
+across unordered ObjectManager refreshes.  On a fresh process it falls back to
+lexical object-path order.  This is deterministic but depends on InputPlumber
+keeping target object paths stable; missing/duplicate paths and non-singleton
+`TargetDevices` sets fail closed rather than silently rebind a slot.  Live
+routing acceptance likewise rejects identical-name DBus/kernel lists unless a
+stable udev/sysfs identity or controlled create-and-observe correlation proves
+the one-to-one mapping.
 
 **Identity ID prefixes:**
 
