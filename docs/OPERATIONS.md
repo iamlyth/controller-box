@@ -607,10 +607,19 @@ partial, or symlinked state cannot authorize capability acceptance. An
 `acquiring` marker is an ambiguous physical side effect and requires operator
 reconciliation; it is never automatically rerun. The canonical `readiness-result.json` is an atomically published,
 unauthoritative crash cache in campaign-private state. Presence, a known nonce,
-or nonzero digest-shaped claims never authorize a role. Before every real-model
-mint the coordinator reopens no-follow v2 state and source authorities, reruns
-the signed aggregate/capability/core/conformance/human validators, and derives
-the accepted and current invocation commit/tree bindings. Legacy v1 state is
+or nonzero digest-shaped claims never authorize a role. Before every real-model mint, the Campaign-only mint walks the state namespace
+from the coordinator-held root dirfd with no-follow component opens, proves the
+exclusive lock and exact phase/round/attempt/task, and reruns the signed
+aggregate/capability/core/conformance/human validators. Hardware, conformance,
+and human evidence remain validated against the immutable accepted readiness
+commit. A planner or implementation commit may advance current HEAD only as an
+authorized descendant with permitted candidate scope; changing conformance,
+capability/environment/runner policy, or graphics-approval authority invalidates
+readiness and requires a new accepted commit. The full product verifier always
+runs against current HEAD before the next role; accepted hardware/core receipts
+are never silently reinterpreted as current-HEAD receipts. The complete invocation descriptor
+and both accepted/current commit trees are token-bound, and token consumption is
+fsync-durable before exec. Legacy v1 state and unsigned crash-cache results are
 never production-resumable.
 Use the same command with `--readiness-only` to collect/publish readiness and
 terminate before planner 1; blocked/findings/infrastructure outcomes remain

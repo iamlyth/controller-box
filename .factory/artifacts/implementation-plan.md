@@ -6,6 +6,22 @@ base_commit: 860922af39ed7e2aef9b95705705f7ed90344e87
 status: active
 ---
 
+**Campaign launch/state-path closure checkpoint (current checkout)**
+
+Production role authorization is now Campaign-only: standalone launch and the
+public role-attempt function reject real providers, while the private mint
+requires the live exclusive root lock, exact canonical phase/round/attempt/task,
+and canonical model/provider/backend/prompt/tools/time bindings. The mint itself
+reruns accepted-commit runner, capability, core, conformance, and human
+authorities plus full current-HEAD product verification. Its complete immutable descriptor and accepted/current
+commit/tree are bound into a durable one-use authorization; state, descriptor,
+and ledger reads/updates use retained no-follow campaign dirfds. Authorized
+planner/developer descendants retain immutable hardware evidence only when they
+do not change evidence/policy authorities; current-HEAD core verification remains
+mandatory. Synthetic launch and campaign suites plus boilerplate verification
+provide local evidence only; no external runner, model, campaign, approval,
+specification, or golden operation was performed.
+
 **Deployment/installer/provenance hardening checkpoint (current checkout)**
 
 The root installer now requires an explicit commit/tree/commit-object-bound

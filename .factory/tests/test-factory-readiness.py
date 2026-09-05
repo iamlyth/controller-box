@@ -181,7 +181,7 @@ class ReadinessTests(unittest.TestCase):
         import inspect
         self.assertEqual(
             set(inspect.signature(launch.authorize_readiness_launch).parameters),
-            {"campaign_id", "invocation", "workspace"})
+            {"campaign_id", "invocation", "workspace", "_campaign_permit"})
 
     def test_result_exact_bindings_status_and_nonzero_pass_digests(self):
         bindings = {"accepted_commit":"a"*40,"tree":"b"*40,"environment_blob":"c"*40,

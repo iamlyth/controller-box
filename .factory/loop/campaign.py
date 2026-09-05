@@ -2064,6 +2064,7 @@ def launch_role_attempt(
     audit_objective: Optional[bytes] = None,
     findings_payload: Optional[bytes] = None,
     readiness_result: Optional[bytes] = None,
+    _campaign_permit: Optional[object] = None,
 ) -> RoleOutcome:
     """Run one fresh role attempt through the committed launch authority.
 
@@ -2096,6 +2097,10 @@ def launch_role_attempt(
     and real proof for every role/provider.
     """
     root = Path(config.root).absolute()
+    if config.provider != "synthetic" and _campaign_permit is None:
+        raise CampaignPhaseError(
+            "readiness authorization for a real-provider launch is private to the exclusively locked Campaign state machine"
+        )
     if config.backend:
         backend = Path(config.backend)
     else:
@@ -2178,6 +2183,7 @@ def launch_role_attempt(
                     campaign_id=config.campaign_id,
                     invocation=binding,
                     workspace=root,
+                    _campaign_permit=_campaign_permit,
                 )
                 if config.provider != "synthetic"
                 else None
@@ -2630,7 +2636,14 @@ class Campaign:
         core_ran, core_exit, _, core_skipped = self._run_gate(CORE_ACCEPTANCE_COMMAND, "core acceptance")
         core = plan_sha256(json.dumps({"ran": core_ran, "exit": core_exit, "skipped": core_skipped}, sort_keys=True).encode())
         if not core_ran or core_skipped or core_exit != 0 or core != state.readiness["core_result_sha256"]:
-            raise CampaignBindingError("untrusted launch denied: core acceptance is stale")
+            raise CampaignBindingError("untrusted launch denied: accepted-commit core authority is stale")
+        # Hardware/core readiness above deliberately remains bound to the
+        # immutable accepted commit. Independently, every role boundary runs
+        # the complete product verifier against the authorized current HEAD.
+        product_ran, product_exit, _, product_skipped = self._run_gate(
+            self._config.verification_command, "current product verification")
+        if not product_ran or product_skipped or product_exit != 0:
+            raise CampaignBindingError("untrusted launch denied: current-HEAD product verification failed")
         conf_ran, conf_exit, _, conf_skipped = self._run_gate(CONFORMANCE_VALIDATOR_COMMAND, "conformance validator")
         try:
             conformance_raw = self._git.blob_at(accepted, DEFAULT_CONFORMANCE_PATH)
@@ -2774,10 +2787,11 @@ class Campaign:
             )
         return remaining
 
-    def _gate_environment(self) -> Dict[str, str]:
+    def _gate_environment(self, *, current_product: bool = False) -> Dict[str, str]:
+        execution_root = self._root if current_product else (self._command_closure_root or self._root)
         environment = {
             **sanitized_gate_environment(),
-            "FACTORY_VERIFIER_ROOT": str(self._command_closure_root or self._root),
+            "FACTORY_VERIFIER_ROOT": str(execution_root),
             "PYTHONNOUSERSITE": "1",
         }
         # Production lookup never falls back to candidate-worktree helpers.
@@ -3282,6 +3296,67 @@ class Campaign:
 
     # -- role execution -----------------------------------------------------------
 
+    def _authorize_campaign_mint(self, invocation, expected_phase, permit) -> Tuple[str, str]:
+        """Validate live lock/state and rerun readiness inside the sole mint."""
+        if self._lock is None or self._git is None:
+            raise launch_module.InvocationError("campaign lock is not held")
+        try:
+            if permit.root_fd != self._lock.fd:
+                raise launch_module.InvocationError("campaign permit is not bound to the held root lock")
+            locked = os.fstat(self._lock.fd)
+            named = os.stat(self._root, follow_symlinks=False)
+            if ((locked.st_dev, locked.st_ino) != (named.st_dev, named.st_ino)
+                    or not stat.S_ISDIR(locked.st_mode)):
+                raise launch_module.InvocationError("campaign root inode changed under the held lock")
+            self._lock.validate_live_branch()
+            state = state_module.load_state(
+                self._root, expected_branch=self._config.branch,
+                expected_campaign_id=self._config.campaign_id,
+                expected_rounds_requested=self._config.rounds_requested,
+                expected_readiness_required=True,
+            )
+        except (OSError, lock_module.RootLockError, state_module.StateError) as exc:
+            raise launch_module.InvocationError(f"campaign lock/state authority failed: {exc}") from exc
+        if (state.current_phase != expected_phase
+                or state.current_round != permit.round
+                or permit.role != invocation.role
+                or permit.task_id != invocation.task_id
+                or (invocation.role == "developer" and (
+                    state.selected_task_id != permit.task_id
+                    or state.attempt_number != permit.attempt))
+                or (invocation.role != "developer" and state.selected_task_id is not None)
+                or self._git.head() != invocation.bound_commit):
+            raise launch_module.InvocationError(
+                "requested role/round/attempt/task does not exactly map to canonical campaign phase"
+            )
+        if (invocation.model != self._config.model
+                or invocation.provider != self._config.provider
+                or Path(invocation.backend).absolute() != Path(self._config.backend).absolute()
+                or invocation.allowed_tools != launch_module.DEFAULT_ALLOWED_TOOLS[invocation.role]
+                or invocation.runtime_limit > self._config.runtime_limit
+                or invocation.inactivity_limit > self._config.inactivity_limit):
+            raise launch_module.InvocationError("invocation differs from canonical campaign configuration")
+        accepted = str(state.readiness.get("accepted_commit", ""))
+        if not self._git.is_ancestor(accepted, invocation.bound_commit):
+            raise launch_module.InvocationError(
+                "current HEAD is not an authorized descendant of accepted readiness commit"
+            )
+        changed = set(self._git.diff_paths(accepted, invocation.bound_commit))
+        invalidating = {
+            DEFAULT_CONFORMANCE_PATH, ".factory/requirement-policy.json",
+            ".factory/capability-contracts.json", ".factory/environment.toml",
+            readiness_module.APPROVAL_PATH,
+        }
+        if changed & invalidating or any(
+                path.startswith((".factory/runner-authorities/",
+                                 ".factory/runner-policy")) for path in changed):
+            raise launch_module.InvocationError(
+                "candidate changed readiness evidence/policy; a new accepted readiness commit is required"
+            )
+        self._revalidate_readiness_authorities(state)
+        current = self._git.head()
+        return current, self._git.object_id(f"{current}^{{tree}}")
+
     def _run_role(
         self,
         role: str,
@@ -3312,9 +3387,15 @@ class Campaign:
                 float(self._config.inactivity_limit), runtime_budget
             ),
         )
-        # The launch mint reopens canonical state and readiness evidence.  The
-        # published readiness result is an unauthoritative crash cache and is
-        # never transported as caller-supplied authority.
+        # This private one-call permit binds the mint to the still-held root
+        # lock.  Its callback executes inside the mint and reloads state plus
+        # every readiness authority; cached result bytes cannot authorize.
+        permit = launch_module._mint_campaign_launch_permit(
+            campaign_id=self._config.campaign_id, role=role,
+            round_number=state.current_round, attempt_number=attempt,
+            task_id=task_id, root_fd=self._lock.fd,
+            revalidate=self._authorize_campaign_mint,
+        )
         return launch_role_attempt(
             bounded,
             role=role,
@@ -3323,6 +3404,7 @@ class Campaign:
             round_number=state.current_round,
             attempt_number=attempt,
             findings_payload=findings_payload,
+            _campaign_permit=permit,
         )
 
     def _run_driver(
@@ -4010,6 +4092,7 @@ class Campaign:
             "final core acceptance": self._held_core_acceptance,
             "conformance validator": self._held_conformance_validator,
             "final acceptance": self._held_acceptance,
+            "current product verification": self._held_verifier,
         }.get(label, self._held_verifier)
         spawn_argv = list(command)
         spawn_executable = None
@@ -4047,7 +4130,14 @@ class Campaign:
                         self._spawn_held_script(held, list(command)[1:])
                     )
                 else:
-                    if self._config.role_driver is not None:
+                    if label == "current product verification":
+                        if self._held_shell is None:
+                            raise CampaignBindingError("pinned Bash authority is unavailable")
+                        self._held_shell.revalidate(git=self._git, current_commit=self._git.head())
+                        shell = self._held_shell.binding.executable
+                        spawn_argv = [shell, f"/proc/self/fd/{held.fd}", *list(command)[1:]]
+                        spawn_executable, spawn_pass_fds = shell, (held.fd,)
+                    elif self._config.role_driver is not None:
                         # Explicit synthetic fixtures retain the established
                         # descriptor execution seam; they are never production.
                         spawn_argv, spawn_executable, spawn_pass_fds = held.spawn(list(command))
@@ -4077,8 +4167,9 @@ class Campaign:
                 spawn_argv,
                 executable=spawn_executable,
                 pass_fds=spawn_pass_fds,
-                env=self._gate_environment(),
-                cwd=self._command_closure_root or self._root,
+                env=self._gate_environment(current_product=label == "current product verification"),
+                cwd=(self._root if label == "current product verification"
+                     else (self._command_closure_root or self._root)),
                 timeout=min(
                     self._config.gate_timeout,
                     self._remaining_time(f"{label} gate"),
