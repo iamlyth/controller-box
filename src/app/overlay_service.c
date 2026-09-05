@@ -691,6 +691,9 @@ cbx_reconcile_startup_targets(cbx_overlay_service_ctx *svc)
         rc = wait_for_exact_target(svc, path, kind, true);
         if (rc != 0)
             goto fail;
+        fprintf(stderr,
+                "controller-box: target-created slot=%d path=%s device-type=%s\n",
+                slot, path, kind);
     }
 
     /* Correct types without destroying the old slot until its replacement

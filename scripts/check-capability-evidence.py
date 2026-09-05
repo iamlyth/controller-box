@@ -62,7 +62,7 @@ def load_script_module(name: str, path: Path):
 
 
 _PINNED_GIT_CACHE: dict[str, object] = {}
-_STRONG_EVIDENCE_CACHE: dict[str, tuple[str, set[str]]] = {}
+_STRONG_EVIDENCE_CACHE: dict[tuple[str, str, str, str], tuple[str, set[str]]] = {}
 
 
 def load_pinned_git(root: Path):
@@ -124,7 +124,10 @@ def contract_for(root: Path, capability: str) -> dict:
 
 def strong_runner_evidence(root: Path) -> tuple[str, set[str]]:
     """Run the canonical full runner validator for this exact repository."""
-    key = str(root.resolve())
+    campaign_id = os.environ.get("FACTORY_CAMPAIGN_ID", "")
+    readiness_nonce = os.environ.get("FACTORY_READINESS_NONCE", "")
+    head = git_head(root)
+    key = (str(root.resolve()), campaign_id, readiness_nonce, head)
     if key in _STRONG_EVIDENCE_CACHE:
         return _STRONG_EVIDENCE_CACHE[key]
     checker_path = root / "scripts/check-factory-runner-evidence.py"
@@ -133,9 +136,9 @@ def strong_runner_evidence(root: Path) -> tuple[str, set[str]]:
         if Path(checker.ROOT).resolve() != root.resolve():
             fail("strong runner checker resolved a foreign repository root")
         digest, capabilities = checker.validate(
-            git_head(root),
-            expected_campaign_id=os.environ.get("FACTORY_CAMPAIGN_ID"),
-            expected_readiness_nonce=os.environ.get("FACTORY_READINESS_NONCE"),
+            head,
+            expected_campaign_id=campaign_id,
+            expected_readiness_nonce=readiness_nonce,
         )
     except SystemExit as exc:
         detail = str(exc) or "validation failed"
@@ -154,8 +157,14 @@ def strong_runner_evidence(root: Path) -> tuple[str, set[str]]:
 
 
 def aggregate_evidence(root: Path) -> tuple[set[str], dict[str, list[tuple[str, Path]]]]:
+    """Read only the canonical v4 aggregate in the explicit readiness namespace."""
     strong_digest, strong_capabilities = strong_runner_evidence(root)
-    aggregate = root / ".factory-state/runner-evidence.json"
+    campaign_id = os.environ.get("FACTORY_CAMPAIGN_ID", "")
+    readiness_nonce = os.environ.get("FACTORY_READINESS_NONCE", "")
+    if not NAME.fullmatch(campaign_id) or not re.fullmatch(r"[0-9a-f]{64}", readiness_nonce):
+        fail("explicit campaign/readiness namespace is required")
+    aggregate = (root / ".factory-state" / "runner-evidence" /
+                 campaign_id / readiness_nonce / "aggregate.json")
     if aggregate.is_symlink() or not aggregate.is_file():
         fail(f"runner evidence aggregate is missing: {aggregate}")
     try:
@@ -165,9 +174,11 @@ def aggregate_evidence(root: Path) -> tuple[set[str], dict[str, list[tuple[str, 
         fail(f"invalid runner evidence aggregate {aggregate}: {exc}")
     if hashlib.sha256(raw).hexdigest() != strong_digest:
         fail("runner evidence aggregate changed after strong validation")
-    if not isinstance(data, dict) or data.get("schema") != "factory-runner-aggregate/v3":
+    if (not isinstance(data, dict)
+            or set(data) != {"schema", "campaign_id", "readiness_nonce", "commit", "tree", "environment_blob", "runners"}
+            or data.get("schema") != "factory-runner-aggregate/v4"):
         fail(f"runner evidence aggregate schema is invalid: {aggregate}")
-    if data.get("campaign_id") != os.environ.get("FACTORY_CAMPAIGN_ID") or data.get("readiness_nonce") != os.environ.get("FACTORY_READINESS_NONCE"):
+    if data.get("campaign_id") != campaign_id or data.get("readiness_nonce") != readiness_nonce:
         fail("runner evidence aggregate campaign/readiness binding is stale or replayed")
     head = git_head(root)
     if data.get("commit") != head:
@@ -258,7 +269,7 @@ def validate_structured_artifacts(manifest_path: Path, manifest: dict, contract:
     if capability=="controller-production-routing":
         result=load("routing-results.json")
         targets=result.get("targets") if isinstance(result,dict) else None
-        if result.get("schema")!="controller-production-routing-results/v2" or not isinstance(targets,list) or len(targets)!=4:
+        if result.get("schema")!="controller-production-routing-results/v3" or not isinstance(targets,list) or len(targets)!=4:
             fail("routing result artifact schema/cardinality is invalid")
         if {t.get("slot") for t in targets}!={0,1,2,3}: fail("routing artifact does not cover all four slots")
         identities=set()
@@ -331,7 +342,7 @@ def verify_capability(root: Path, capability: str) -> None:
             )
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             fail(f"invalid runner manifest {manifest_path}: {exc}")
-        if not isinstance(manifest_data, dict) or manifest_data.get("schema") != "factory-runner-receipt/v2":
+        if not isinstance(manifest_data, dict) or manifest_data.get("schema") != "factory-runner-receipt/v3":
             fail(f"runner manifest schema is invalid: {manifest_path}")
         if manifest_data.get("result") != "pass" or manifest_data.get("exit_code") != 0:
             fail(f"runner manifest does not prove a clean pass: {manifest_path}")

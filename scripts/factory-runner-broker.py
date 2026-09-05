@@ -23,7 +23,7 @@ SIGNER="/usr/local/libexec/factory-runner-signer"
 class BrokerError(RuntimeError): pass
 
 def fail(msg):
- print(json.dumps({"schema":"factory-runner-receipt/v2","result":"fail","error":msg},sort_keys=True,separators=(",",":")))
+ print(json.dumps({"schema":"factory-runner-error/v1","result":"fail","error":msg},sort_keys=True,separators=(",",":")))
  raise SystemExit(1)
 def emit(v): print(json.dumps(v,sort_keys=True,separators=(",",":")),flush=True)
 def caller_uid():

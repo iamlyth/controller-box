@@ -1073,10 +1073,26 @@ class LaunchIntegrationTests(_Base):
         spec_bytes = (self.workspace / "spec.md").read_bytes()
         plan_bytes = (self.workspace / "plan.md").read_bytes()
         if binding.provider != "synthetic" and "readiness_authorization" not in guard_kwargs:
+            tree = _work(["rev-parse", "HEAD^{tree}"], self.workspace).stdout.decode().strip()
+            bindings = {"accepted_commit":binding.bound_commit,"tree":tree,
+                "environment_blob":binding.bound_commit,
+                "specification_sha256":"b"*64,"plan_sha256":"c"*64,
+                "conformance_sha256":"d"*64,"policy_sha256":"e"*64,
+                "contracts_sha256":"f"*64,"install_manifest_sha256":"1"*64,
+                "command_authority_sha256":"2"*64,"human_authority_sha256":"3"*64,
+                "trust_authority_sha256":"4"*64}
+            results = {"aggregate_sha256":"5"*64,"capability_result_sha256":"6"*64,
+                "core_result_sha256":"7"*64,"conformance_result_sha256":"8"*64,
+                "human_result_sha256":"9"*64}
+            readiness_nonce = hashlib.sha256(json.dumps(sorted(guard_kwargs)).encode()).hexdigest()
             raw=json.dumps({"schema":"factory-readiness-result/v2","campaign_id":"usage-test",
-                "nonce":"a"*64,"status":"complete","terminal_outcome":"pass",
-                "bindings":{"accepted_commit":binding.bound_commit},"results":{}}).encode()
-            guard_kwargs["readiness_authorization"]=launch.authorize_readiness_launch(raw)
+                "nonce":readiness_nonce,"status":"complete","terminal_outcome":"pass",
+                "bindings":bindings,"results":results},sort_keys=True,separators=(",",":")).encode()
+            guard_kwargs["readiness_authorization"]=launch.authorize_readiness_launch(
+                raw,expected_campaign_id="usage-test",expected_nonce=readiness_nonce,
+                expected_bindings=bindings,expected_results=results,
+                launch_descriptor_sha256=launch.launch_descriptor_digest(binding),
+                workspace=self.workspace)
         return launch.authorize_launch(
             binding,
             role_prompt=role_bytes,

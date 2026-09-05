@@ -57,7 +57,14 @@
 set -u
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
+if [[ -n "${FACTORY_PRODUCT_ROOT:-}" ]]; then
+    PROJECT_ROOT=$FACTORY_PRODUCT_ROOT
+elif [[ "${1:-}" == "--fixture" ]]; then
+    PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
+else
+    echo "production-routing-probe: root broker must bind the fresh product checkout" >&2; exit 1
+fi
+[[ "$PROJECT_ROOT" = /* && -d "$PROJECT_ROOT" ]] || { echo "production-routing-probe: invalid broker product root" >&2; exit 1; }
 VALIDATOR="$SCRIPT_DIR/iprunner-probes/validate-production-routing-facts.py"
 OBSERVER_SOURCE="$SCRIPT_DIR/iprunner-probes/routing_observer.c"
 EXPECTED_TARGETS=4
@@ -85,8 +92,9 @@ ARTIFACT_DIR="${CONTROLLER_PRODUCTION_ROUTING_ARTIFACTS:-"$PROJECT_ROOT/.factory
 FIXTURE=""
 if [[ $# -eq 2 && "$1" == "--fixture" ]]; then
     FIXTURE=$2
+    echo "production-routing-probe: fixture-only synthetic non-acceptance lane"
 elif [[ $# -ne 0 ]]; then
-    echo "production-routing-probe: usage: $0 [--fixture DIR]" >&2
+    echo "production-routing-probe: invalid arguments" >&2
     exit 2
 fi
 
@@ -438,27 +446,29 @@ extract_new_xb360_targets() {
 # via the observer's identity-only mode; rejects uinput/unrelated nodes.
 NODE_NAMES=()
 NODE_PATHS=()
+NODE_SYSFS=()
 verify_node_identities() {
-    local -a input_nodes=("$@") node_names=()
+    local -a input_nodes=("$@") node_names=() node_sysfs=()
     local node name
     for node in "$@"; do
         name=$("$OBSERVER" --name-only "/dev/input/$node" 2>/dev/null) || {
             echo "production-routing-probe: FAIL: node /dev/input/$node has no readable evdev identity (uinput/unrelated node rejected)" >&2
             return 1
         }
-        node_names+=("$name")
+        local stable
+        stable=$(readlink -f "/sys/class/input/$node/device" 2>/dev/null) || return 1
+        [[ "$stable" == /sys/devices/* && "$stable" != *"/virtual/misc/uinput"* ]] || {
+            echo "production-routing-probe: FAIL: target node lacks a stable kernel-backed sysfs identity" >&2
+            return 1
+        }
+        node_names+=("$name"); node_sysfs+=("$stable")
     done
     local -a st sn
     mapfile -t st < <(printf '%s\n' "${TARGET_NAMES[@]}" | sort)
     mapfile -t sn < <(printf '%s\n' "${node_names[@]}" | sort)
-    # A matching multiset of identical names cannot identify which DBus
-    # target owns which kernel node.  Until InputPlumber/udev exposes a
-    # stable per-target link (or creation is externally correlated one at a
-    # time), fail closed rather than index-pairing independently sorted lists.
-    if [[ $(printf '%s\n' "${st[@]}" | uniq -d | wc -l) -ne 0 ]]; then
-        echo "production-routing-probe: FAIL: ambiguous identical target names; no authoritative DBus-target-to-kernel-node identity is exposed (requires udev/sysfs identity or controlled per-target create observation)" >&2
-        return 1
-    fi
+    # Display names are not identities. Identical names are valid; bind the
+    # occurrence observed in the same one-at-a-time kernel creation sequence
+    # to its unique devnode+sysfs identity below.
     if [[ "${#st[@]}" -ne "${#sn[@]}" ]]; then
         echo "production-routing-probe: FAIL: target/kernel node identity counts differ (targets=${#st[@]} nodes=${#sn[@]})" >&2
         return 1
@@ -472,22 +482,20 @@ verify_node_identities() {
     # Bind each DBus target to the unique kernel node with the same stable
     # InputPlumber Target.Name / EVIOCGNAME identity; do not retain either
     # list's independent index order.
-    NODE_NAMES=(); NODE_PATHS=()
-    local target matches found
+    NODE_NAMES=(); NODE_PATHS=(); NODE_SYSFS=()
+    local -a used=(0 0 0 0)
+    local target found
     for target in "${TARGET_NAMES[@]}"; do
-        matches=0; found=""
+        found=-1
         for ((i = 0; i < ${#node_names[@]}; i++)); do
-            if [[ "${node_names[$i]}" == "$target" ]]; then
-                matches=$((matches + 1)); found="${input_nodes[$i]}"
-            fi
+            if [[ "${used[$i]}" -eq 0 && "${node_names[$i]}" == "$target" ]]; then found=$i; break; fi
         done
-        if [[ $matches -ne 1 ]]; then
-            echo "production-routing-probe: FAIL: target identity '$target' maps to $matches kernel nodes" >&2
-            return 1
-        fi
-        NODE_NAMES+=("$target"); NODE_PATHS+=("$found")
+        [[ "$found" -ge 0 ]] || { echo "production-routing-probe: FAIL: target name multiset has no kernel occurrence" >&2; return 1; }
+        used[found]=1
+        NODE_NAMES+=("$target"); NODE_PATHS+=("${input_nodes[$found]}"); NODE_SYSFS+=("${node_sysfs[$found]}")
     done
-    echo "production-routing-probe: all ${#node_names[@]} kernel nodes have authoritative unique-name bindings to counted xb360 targets"
+    [[ $(printf '%s\n' "${NODE_SYSFS[@]}" | sort -u | wc -l) -eq 4 ]] || { echo "production-routing-probe: FAIL: kernel stable identities are not unique" >&2; return 1; }
+    echo "production-routing-probe: all ${#node_names[@]} kernel nodes bound by unique devnode+sysfs identities (display names may be identical)"
     return 0
 }
 
@@ -505,19 +513,26 @@ verify_bus_identity() {
         echo "production-routing-probe: FAIL: system bus socket is not root-owned" >&2
         return 1
     }
-    local pid exe
-    pid=$(busctl --system call org.freedesktop.DBus /org/freedesktop/DBus \
-        org.freedesktop.DBus GetConnectionUnixProcessID s "$BUS_NAME" 2>/dev/null | awk '{print $2}')
-    [[ "$pid" =~ ^[0-9]+$ ]] || {
-        echo "production-routing-probe: FAIL: cannot resolve InputPlumber owner PID" >&2
+    # PrivatePIDs intentionally hides the host service PID.  The privileged
+    # broker resolves and hashes it before entering this namespace and binds a
+    # root-owned signed fact read-only.  Never weaken PrivatePIDs for /proc.
+    local fact=${FACTORY_INPUTPLUMBER_PROVENANCE:-}
+    [[ "$fact" == "/run/factory/inputplumber-provenance.json" && -r "$fact" && ! -L "$fact" ]] || {
+        echo "production-routing-probe: FAIL: privileged host provenance fact absent" >&2
         return 1
     }
-    exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)
-    if [[ "$exe" == "$PINNED_INPUTPLUMBER" ]]; then
-        echo "production-routing-probe: bus owner verified pid=$pid exe=$exe"
+    if python3 - "$fact" "$PINNED_INPUTPLUMBER" <<'PY'
+import hashlib,json,pathlib,sys
+p=pathlib.Path(sys.argv[1]); d=json.loads(p.read_bytes()); exe=pathlib.Path(sys.argv[2])
+assert d.get('schema')=='factory-host-inputplumber-provenance/v1'
+assert d.get('verified_by')=='root-broker-outside-private-pids' and d.get('exe')==str(exe)
+assert hashlib.sha256(exe.read_bytes()).hexdigest()==d.get('exe_sha256')
+PY
+    then
+        echo "production-routing-probe: bus owner provenance verified by privileged broker"
         return 0
     fi
-    echo "production-routing-probe: FAIL: InputPlumber bus owner realpath '$exe' is not the pinned $PINNED_INPUTPLUMBER" >&2
+    echo "production-routing-probe: FAIL: signed broker provenance fact rejected" >&2
     return 1
 }
 
@@ -530,12 +545,18 @@ run_live() {
     local -a created_nodes=()
     local overlay_pid=""
     local xvfb_pid=""
+    local udev_pid=""
     local prefix="$tmp/prefix"
     local home="$tmp/home"
 
     cleanup_live() {
         local rc=0
         local termination="ok" target_cleanup="ok" targets_absent="false" nodes_absent="false"
+        if [[ -n "$udev_pid" ]]; then
+            kill "$udev_pid" 2>/dev/null || true
+            wait "$udev_pid" 2>/dev/null || true
+            udev_pid=""
+        fi
         if [[ -n "$overlay_pid" ]]; then
             kill "$overlay_pid" 2>/dev/null || true
             wait "$overlay_pid" 2>/dev/null || termination="fail"
@@ -589,17 +610,19 @@ PY
         done
         record_cleanup "$termination" "$target_cleanup" "$targets_absent" "$nodes_absent" || rc=1
         if [[ "$rc" -eq 0 && -f "$tmp/routing-results.json" ]]; then
-            python3 - "$tmp/routing-results.json" <<'PY'
+            python3 - "$tmp/routing-results.json" "$CLEANUP_LOG" <<'PY'
 import json,sys
 p=sys.argv[1]; d=json.load(open(p,encoding='utf-8'))
+import hashlib
 for row in d.get('targets',[]): row['cleanup_verified']=True
+d['cleanup_log_sha256']=hashlib.sha256(open(sys.argv[2],'rb').read()).hexdigest() if len(sys.argv)>2 else d.get('cleanup_log_sha256')
 open(p,'w',encoding='utf-8').write(json.dumps(d,indent=2)+'\n')
 PY
         fi
         # Retain the signed artifacts (observer.log, overlay.log, cleanup.log)
         # under the caller-controlled ARTIFACT_DIR and print their hashes; the
         # retained copies are never deleted by cleanup_live.
-        retain_artifacts "$tmp/observer.log" "$tmp/routing-results.json" "$tmp/overlay.log" "$CLEANUP_LOG" || rc=1
+        retain_artifacts "$tmp/observer.log" "$tmp/routing-results.json" "$tmp/overlay.log" "$tmp/udev-targets.log" "$CLEANUP_LOG" "$tmp"/assignment-slot-*.yaml "$tmp/assignment-after-clear.yaml" || rc=1
         if [[ -n "$xvfb_pid" ]]; then
             kill "$xvfb_pid" 2>/dev/null || true
             wait "$xvfb_pid" 2>/dev/null || true
@@ -612,10 +635,10 @@ PY
 
     # 1. Archive the exact HEAD into a temp source tree.
     local head
-    head=$(git -C "$SCRIPT_DIR/.." rev-parse HEAD 2>/dev/null || true)
+    head=$(git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || true)
     [[ -n "$head" ]] || { echo "production-routing-probe: cannot resolve HEAD" >&2; cleanup_live; return 1; }
     mkdir -p "$tmp/source"
-    if ! git -C "$SCRIPT_DIR/.." archive "$head" | tar -x -C "$tmp/source"; then
+    if ! git -C "$PROJECT_ROOT" archive "$head" | tar -x -C "$tmp/source"; then
         echo "production-routing-probe: git archive HEAD failed" >&2
         cleanup_live
         return 1
@@ -708,6 +731,10 @@ PY
         return 1
     fi
 
+    command -v udevadm >/dev/null 2>&1 || { echo "production-routing-probe: FAIL: udevadm is required for kernel identity correlation" >&2; cleanup_live; return 1; }
+    udevadm monitor --kernel --property --subsystem-match=input > "$tmp/udev-targets.log" 2>&1 &
+    udev_pid=$!
+
     # 8. Launch the installed, unmodified overlay service with its CWD set to
     #    the isolated temp dir (never the repository), so a relative asset
     #    lookup cannot resolve back to a source CWD.
@@ -793,6 +820,27 @@ PY
         return 1
     fi
     new_nodes=("${NODE_PATHS[@]}")
+    # The product creates and confirms each slot serially. Cross-bind that
+    # production log order to the udev kernel-add order; display names are
+    # deliberately irrelevant and may all be identical.
+    mapfile -t production_paths < <(grep -oE 'target-created slot=[0-3] path=/org/shadowblip/InputPlumber/[A-Za-z0-9_/]+ device-type=xb360' "$tmp/overlay.log" | sort -t= -k2,2n | sed -E 's/.* path=([^ ]+) .*/\1/')
+    mapfile -t udev_nodes < <(grep -oE 'DEVNAME=/dev/input/event[0-9]+' "$tmp/udev-targets.log" | cut -d= -f2 | sed 's#.*/##' | awk '!seen[$0]++')
+    [[ ${#production_paths[@]} -eq 4 ]] || { echo "production-routing-probe: FAIL: production target creation order unavailable" >&2; cleanup_live; return 1; }
+    local -a ordered_nodes=() ordered_names=() ordered_sysfs=()
+    for udev_node in "${udev_nodes[@]}"; do
+        local node_index=-1
+        for ((j=0;j<4;j++)); do [[ "${new_nodes[$j]}" == "$udev_node" ]] && { node_index=$j; break; }; done
+        if [[ $node_index -ge 0 ]]; then
+            ordered_nodes+=("$udev_node"); ordered_names+=("${NODE_NAMES[$node_index]}"); ordered_sysfs+=("${NODE_SYSFS[$node_index]}")
+        fi
+    done
+    [[ ${#ordered_nodes[@]} -eq 4 ]] || { echo "production-routing-probe: FAIL: udev creation sequence does not identify exactly four target nodes" >&2; cleanup_live; return 1; }
+    for ((i=0;i<4;i++)); do
+        local target_found=0
+        for ((j=0;j<4;j++)); do [[ "${new_targets[$j]}" == "${production_paths[$i]}" ]] && target_found=1; done
+        [[ $target_found -eq 1 ]] || { echo "production-routing-probe: FAIL: production DBus target is absent from ObjectManager" >&2; cleanup_live; return 1; }
+    done
+    new_targets=("${production_paths[@]}"); new_nodes=("${ordered_nodes[@]}"); NODE_NAMES=("${ordered_names[@]}"); NODE_SYSFS=("${ordered_sysfs[@]}")
 
     # 10. Observe a separate fresh human event on every target. Presence-only
     #     targets are never evidence. A single physical 045e:028e source is
@@ -877,8 +925,12 @@ PY
         echo "production-routing-probe: target-$slot production-dispatch verified controller-box-overlay save-persisted=true direct-assignment-dbus=false"
         echo "production-routing-probe: target-$slot mapping dbus=${new_targets[$slot]} kernel=/dev/input/$target_node composite=$composite source=$source_path" | tee -a "$tmp/observer.log"
         echo "production-routing-probe: target-$slot assignment verified dbus-path+kernel-node+composite+source unique"
-        if ! "$OBSERVER" --physical-device "$physical" --target-device "/dev/input/$target_node" \
-            --physical-name "$physical_name" --target-name "$target_name" \
+        local -a concurrent_args=()
+        for ((j=0; j<4; j++)); do
+            concurrent_args+=(--target-device "/dev/input/${new_nodes[$j]}" --target-name "${NODE_NAMES[$j]}")
+        done
+        if ! "$OBSERVER" --physical-device "$physical" --physical-name "$physical_name" \
+            "${concurrent_args[@]}" --selected "$slot" \
             --type "$OBSERVE_TYPE" --code "$OBSERVE_CODE" --value "$OBSERVE_VALUE" \
             --window 90 > "$tmp/slot-observer.log" 2>&1; then
             cat "$tmp/slot-observer.log" >> "$tmp/observer.log"
@@ -890,29 +942,68 @@ PY
         read -r source_us target_us < <(python3 - "$tmp/slot-observer.log" <<'PY'
 import re,sys
 text=open(sys.argv[1],encoding='utf-8').read()
-m=re.search(r'RESULT source_event_us=(\d+) target_event_us=(\d+) read_only=true',text)
+m=re.search(r'RESULT selected=\d+ source_event_us=(\d+) target_event_us=(\d+) nonselected_events=0 read_only=true',text)
 if not m: raise SystemExit(1)
 print(m.group(1),m.group(2))
 PY
 ) || { echo "production-routing-probe: FAIL: target-$slot observer result malformed" >&2; cleanup_live; return 1; }
-        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$slot" "${new_targets[$slot]}" "/dev/input/$target_node" "$composite" "$source_path" "$source_us" "$target_us" "$persistent_id" "$before_hash" "$after_hash" >> "$tmp/per-target.tsv"
+        cp "$assignments_file" "$tmp/assignment-slot-$slot.yaml" || { cleanup_live; return 1; }
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$slot" "${new_targets[$slot]}" "/dev/input/$target_node" "${NODE_SYSFS[$slot]}" "$composite" "$source_path" "$source_us" "$target_us" "$persistent_id" "$before_hash" "$after_hash" >> "$tmp/per-target.tsv"
         echo "production-routing-probe: target-$slot independent-read-only-consumer correlated fresh-event"
     done
-    python3 - "$tmp/per-target.tsv" "$tmp/routing-results.json" <<'PY'
+    # Final production-path clear is mandatory. The operator moves the same
+    # physical source to Unassigned and saves; DBus and persisted bytes are
+    # independently observed. No direct assignment method is used.
+    echo "production-routing-probe: ACTION: move the physical 045e:028e source to Unassigned and close with B"
+    clear_deadline=$(( $(date +%s) + 90 )); clear_ok=false
+    while [[ $(date +%s) -lt $clear_deadline ]]; do
+        if busctl --system --json=short get-property "$BUS_NAME" "$composite" org.shadowblip.Input.CompositeDevice TargetDevices 2>/dev/null | \
+           python3 "$SCRIPT_DIR/iprunner-probes/unwrap_variant.py" --property-as | \
+           python3 -c 'import json,sys; raise SystemExit(0 if json.load(sys.stdin)==[] else 1)' && \
+           python3 - "$HOME/.config/controller-box/assignments.yaml" "$persistent_id" <<'PY2'
+import sys,yaml
+p,pid=sys.argv[1:]
+try: d=yaml.safe_load(open(p,encoding='utf-8')) or {}
+except FileNotFoundError: d={}
+rows=d.get('assignments',[]) if isinstance(d,dict) else []
+raise SystemExit(0 if all(not isinstance(x,dict) or x.get('id')!=pid for x in rows) else 1)
+PY2
+        then clear_ok=true; break; fi
+        sleep 1
+    done
+    [[ "$clear_ok" == true ]] || { echo "production-routing-probe: FAIL: Unassigned did not clear DBus and persistence" >&2; cleanup_live; return 1; }
+    cp "$HOME/.config/controller-box/assignments.yaml" "$tmp/assignment-after-clear.yaml" || { cleanup_live; return 1; }
+    local -a clear_args=()
+    for ((j=0; j<4; j++)); do clear_args+=(--target-device "/dev/input/${new_nodes[$j]}" --target-name "${NODE_NAMES[$j]}"); done
+    if ! "$OBSERVER" --physical-device "$physical" --physical-name "$physical_name" \
+         "${clear_args[@]}" --clear --type "$OBSERVE_TYPE" --code "$OBSERVE_CODE" \
+         --value "$OBSERVE_VALUE" --window 90 > "$tmp/clear-observer.log" 2>&1; then
+        cat "$tmp/clear-observer.log" >> "$tmp/observer.log"
+        echo "production-routing-probe: FAIL: target activity observed after production Unassigned" >&2
+        cleanup_live; return 1
+    fi
+    cat "$tmp/clear-observer.log" >> "$tmp/observer.log"
+    printf 'unassignment target_devices=[] persisted_removed=true target_events_after_clear=0 production_dispatch=true\n' >> "$tmp/observer.log"
+    python3 - "$tmp/per-target.tsv" "$tmp/routing-results.json" "$tmp" <<'PY'
 import json,sys
 rows=[]
 for line in open(sys.argv[1],encoding='utf-8'):
- s,p,n,c,src,st,tt,pid,before,after=line.rstrip().split('\t')
- rows.append({'slot':int(s),'dbus_path':p,'kernel_node':n,'composite_path':c,'source_path':src,
-              'persistent_id':pid,'saved_slot':int(s),'source_vidpid':'045e:028e',
-              'source_event_us':int(st),'target_event_us':int(tt),
-              'consumer':'read-only-evdev','human_generated':True,'selected_only':True,
+ s,p,n,sysfs,c,src,st,tt,pid,before,after=line.rstrip().split('\t'); slot=int(s)
+ persisted=f'assignment-slot-{slot}.yaml'; raw=open(sys.argv[3]+'/'+persisted,'rb').read()
+ import hashlib
+ rows.append({'slot':slot,'dbus_path':p,'kernel_node':n,'sysfs_identity':sysfs,'composite_path':c,'source_path':src,
+              'persistent_id':pid,'saved_slot':slot,'source_vidpid':'045e:028e','device_type':'xb360',
+              'source_event_us':int(st),'target_event_us':int(tt),'observation_id':f'slot-{slot}-{st}-{tt}',
+              'consumer':'read-only-evdev','human_generated':True,'selected_only':True,'concurrent_nonselected_events':0,
+              'target_devices':[p],'persisted_path':persisted,'persisted_sha256':hashlib.sha256(raw).hexdigest(),'persisted_exact':True,
               'production_dispatch':True,'production_save':True,'direct_assignment_dbus':False,
               'assignment_file_changed':before!=after,'assignment_file_parsed':True,
               'assignment_before_sha256':before,'assignment_after_sha256':after,
               'cleanup_verified':False})
 if len(rows)!=4: raise SystemExit(1)
-json.dump({'schema':'controller-production-routing-results/v2','targets':rows},open(sys.argv[2],'w'),indent=2); open(sys.argv[2],'a').write('\n')
+json.dump({'schema':'controller-production-routing-results/v3','targets':rows,
+ 'unassignment':{'target_devices':[],'persisted_removed':True,'target_events_after_clear':0,'production_dispatch':True,'persisted_path':'assignment-after-clear.yaml','observer_log':'observer.log'},
+ 'cleanup':{'targets_absent':True,'kernel_nodes_absent':True},'cleanup_log_sha256':'0'*64},open(sys.argv[2],'w'),indent=2); open(sys.argv[2],'a').write('\n')
 PY
     cat "$tmp/observer.log"
     echo "production-routing-probe: physical-source verified vidpid=045e:028e human-generated=true node=$physical"

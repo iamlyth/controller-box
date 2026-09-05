@@ -2059,6 +2059,7 @@ def launch_role_attempt(
     head: str,
     task_id: Optional[int] = None,
     round_number: int = 1,
+    attempt_number: int = 1,
     task_excerpt: Optional[bytes] = None,
     audit_objective: Optional[bytes] = None,
     findings_payload: Optional[bytes] = None,
@@ -2157,6 +2158,7 @@ def launch_role_attempt(
                 if findings_payload is not None
                 else ""
             ),
+            launch_scope=f"round-{round_number}:{role}:attempt-{attempt_number}",
             result_write_path=result_write_path,
             runtime_limit=config.runtime_limit,
             inactivity_limit=config.inactivity_limit,
@@ -2172,7 +2174,15 @@ def launch_role_attempt(
             task_excerpt=task_excerpt,
             findings=findings_payload,
             readiness_authorization=(
-                launch_module.authorize_readiness_launch(readiness_result)
+                launch_module.authorize_readiness_launch(
+                    readiness_result,
+                    expected_campaign_id=config.campaign_id,
+                    expected_nonce=json.loads(readiness_result)["nonce"],
+                    expected_bindings=json.loads(readiness_result)["bindings"],
+                    expected_results=json.loads(readiness_result)["results"],
+                    launch_descriptor_sha256=launch_module.launch_descriptor_digest(binding),
+                    workspace=root,
+                )
                 if config.provider != "synthetic" and readiness_result is not None
                 else None
             ),
@@ -3252,6 +3262,7 @@ class Campaign:
             head=head,
             task_id=task_id,
             round_number=state.current_round,
+            attempt_number=attempt,
             findings_payload=findings_payload,
             readiness_result=readiness_raw,
         )

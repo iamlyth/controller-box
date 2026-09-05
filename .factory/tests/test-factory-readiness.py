@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / ".factory/loop"))
 sys.path.insert(0, str(ROOT / "scripts"))
 import readiness
+import launch
 import state
 import campaign
 import factory_runner_policy
@@ -159,6 +160,32 @@ class ReadinessTests(unittest.TestCase):
                 changed=json.loads(json.dumps(side)); mutate(changed)
                 with self.assertRaises(readiness.ReadinessError):
                     readiness.validate_core_mapping(json.dumps(changed).encode(), json.dumps(policy).encode())
+
+    def test_launch_authorization_requires_complete_bindings_and_is_restart_durable(self):
+        bindings={"accepted_commit":self.candidate,"tree":self.tree,"environment_blob":self.candidate,
+            "specification_sha256":"1"*64,"plan_sha256":"2"*64,"conformance_sha256":"3"*64,
+            "policy_sha256":"4"*64,"contracts_sha256":"5"*64,"install_manifest_sha256":"6"*64,
+            "command_authority_sha256":"7"*64,"human_authority_sha256":"8"*64,"trust_authority_sha256":"9"*64}
+        results={"aggregate_sha256":"a"*64,"capability_result_sha256":"b"*64,"core_result_sha256":"c"*64,
+            "conformance_result_sha256":"d"*64,"human_result_sha256":"e"*64}
+        value=readiness.result_document(campaign_id="auth-test",nonce="f"*64,status="complete",
+            terminal_outcome="pass",bindings=bindings,results=results)
+        raw=json.dumps(value,sort_keys=True,separators=(",",":")).encode(); descriptor="a"*64
+        token=launch.authorize_readiness_launch(raw,expected_campaign_id="auth-test",expected_nonce="f"*64,
+            expected_bindings=bindings,expected_results=results,launch_descriptor_sha256=descriptor,workspace=self.root)
+        self.assertEqual(token.accepted_commit,self.candidate)
+        with self.assertRaises(launch.InvocationError):
+            launch.authorize_readiness_launch(raw,expected_campaign_id="auth-test",expected_nonce="f"*64,
+                expected_bindings=bindings,expected_results=results,launch_descriptor_sha256=descriptor,workspace=self.root)
+        altered=dict(bindings);altered["tree"]="0"*40
+        with self.assertRaises(launch.InvocationError):
+            launch.authorize_readiness_launch(raw,expected_campaign_id="auth-test",expected_nonce="f"*64,
+                expected_bindings=altered,expected_results=results,launch_descriptor_sha256="b"*64,workspace=self.root)
+        code="""import json,pathlib,sys;sys.path.insert(0,sys.argv[1]);import launch\nraw=pathlib.Path(sys.argv[2]).read_bytes();kw=json.loads(pathlib.Path(sys.argv[3]).read_text());kw['workspace']=pathlib.Path(sys.argv[4]);launch.authorize_readiness_launch(raw,**kw)"""
+        raw_path=self.root/'result.json';raw_path.write_bytes(raw)
+        kw_path=self.root/'args.json';kw_path.write_text(json.dumps({"expected_campaign_id":"auth-test","expected_nonce":"f"*64,"expected_bindings":bindings,"expected_results":results,"launch_descriptor_sha256":descriptor}))
+        proc=subprocess.run([sys.executable,"-c",code,str(ROOT/'.factory/loop'),str(raw_path),str(kw_path),str(self.root)],capture_output=True)
+        self.assertNotEqual(proc.returncode,0,"a new process must not replay the same readiness authorization")
 
     def test_result_exact_bindings_status_and_nonzero_pass_digests(self):
         bindings = {"accepted_commit":"a"*40,"tree":"b"*40,"environment_blob":"c"*40,

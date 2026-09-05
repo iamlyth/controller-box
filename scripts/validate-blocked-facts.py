@@ -48,7 +48,7 @@ ROOT = Path(__file__).resolve().parent.parent
 FACT_ID = re.compile(r"^FACT-[0-9]{3,}$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
 SAFE_PREFIXES = ("src", "tests", "scripts", "data", "docs", "cmake", "packaging", "third_party", ".github", ".forgejo", ".factory")
-RECEIPT_SCHEMAS = {"ralph-audit-receipt/v1", "factory-runner-receipt/v1", "factory-runner-receipt/v2"}
+RECEIPT_SCHEMAS = {"ralph-audit-receipt/v1", "factory-runner-receipt/v3"}
 LEDGER_DEFAULT = ROOT / ".factory/artifacts/blocked-facts.json"
 
 
@@ -206,7 +206,7 @@ def validate_receipt_ref(root: Path, fact_id: str, ref: str, commit: str, *, blo
     schema = data.get("schema")
     if schema not in RECEIPT_SCHEMAS:
         fail(f"fact {fact_id} receipt {ref} has an unknown schema {schema!r}")
-    if schema in {"factory-runner-receipt/v1", "factory-runner-receipt/v2"}:
+    if schema == "factory-runner-receipt/v3":
         if data.get("result") != "pass" or data.get("exit_code") != 0:
             fail(f"fact {fact_id} receipt {ref} does not prove a clean pass")
     else:

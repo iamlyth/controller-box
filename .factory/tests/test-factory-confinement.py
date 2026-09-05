@@ -2347,10 +2347,20 @@ class ProductionLaunchConfinementTests(_Base):
 
     def _authorize(self, binding, **kwargs):
         if binding.provider != "synthetic" and "readiness_authorization" not in kwargs:
+            tree = _git("rev-parse", "HEAD^{tree}", cwd=self.workspace).stdout.strip()
+            bindings={"accepted_commit":binding.bound_commit,"tree":tree,"environment_blob":binding.bound_commit,
+                "specification_sha256":"b"*64,"plan_sha256":"c"*64,"conformance_sha256":"d"*64,
+                "policy_sha256":"e"*64,"contracts_sha256":"f"*64,"install_manifest_sha256":"1"*64,
+                "command_authority_sha256":"2"*64,"human_authority_sha256":"3"*64,"trust_authority_sha256":"4"*64}
+            results={"aggregate_sha256":"5"*64,"capability_result_sha256":"6"*64,"core_result_sha256":"7"*64,
+                "conformance_result_sha256":"8"*64,"human_result_sha256":"9"*64}
             raw=json.dumps({"schema":"factory-readiness-result/v2","campaign_id":"confinement-test",
                 "nonce":"a"*64,"status":"complete","terminal_outcome":"pass",
-                "bindings":{"accepted_commit":binding.bound_commit},"results":{}}).encode()
-            kwargs["readiness_authorization"]=launch.authorize_readiness_launch(raw)
+                "bindings":bindings,"results":results},sort_keys=True,separators=(",",":")).encode()
+            kwargs["readiness_authorization"]=launch.authorize_readiness_launch(
+                raw,expected_campaign_id="confinement-test",expected_nonce="a"*64,
+                expected_bindings=bindings,expected_results=results,
+                launch_descriptor_sha256=launch.launch_descriptor_digest(binding),workspace=self.workspace)
         authority = launch.authorize_launch(
             binding,
             role_prompt=(self.workspace / "role.md").read_bytes(),

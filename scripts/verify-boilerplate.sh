@@ -173,6 +173,8 @@ required = [
     '.factory/schemas/factory-state-v2.schema.md',
     '.factory/schemas/factory-campaign-result-v1.schema.json',
     '.factory/schemas/factory-readiness-result-v2.schema.json',
+    '.factory/schemas/factory-runner-receipt-v3.schema.json',
+    '.factory/schemas/factory-runner-aggregate-v4.schema.json',
     '.factory/schemas/factory-phase-result-v1.schema.json',
     '.factory/schemas/factory-launch-result-v1.schema.json',
     '.factory/schemas/factory-confinement-v1.schema.json',

@@ -85,6 +85,7 @@ from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 try:  # package-import mode (the hidden control-plane package)
     from . import workspace_confinement as real_confinement_authority
     from . import redaction as output_redaction
+    from . import readiness as readiness_authority
     from .gitutil import (
         GIT_ENV_STRIP,
         GitBoundaryError,
@@ -111,6 +112,7 @@ try:  # package-import mode (the hidden control-plane package)
 except ImportError:  # flat-import mode used by the hidden harness test suite
     import workspace_confinement as real_confinement_authority  # type: ignore[no-redef]
     import redaction as output_redaction  # type: ignore[no-redef]
+    import readiness as readiness_authority  # type: ignore[no-redef]
     from gitutil import (  # type: ignore[no-redef]
         GIT_ENV_STRIP,
         GitBoundaryError,
@@ -150,6 +152,7 @@ __all__ = [
     "LaunchAuthority",
     "ReadinessLaunchAuthorization",
     "authorize_readiness_launch",
+    "launch_descriptor_digest",
     "LaunchError",
     "LaunchResult",
     "LaunchSupervision",
@@ -446,6 +449,9 @@ class InvocationBinding:
     task_excerpt_digest: Optional[str] = None
     audit_objective_digest: str = ""
     findings_digest: str = ""
+    # Trusted coordinator attempt scope; distinguishes legitimate retries
+    # while copied authorizations for one attempt remain one-use.
+    launch_scope: str = ""
     # Exact transient result channel bound into the canonical confinement
     # specification. Empty for roles/attempts with no structured handoff.
     result_write_path: str = ""
@@ -503,6 +509,8 @@ def verify_invocation(binding: InvocationBinding) -> None:
         raise InvocationError(
             "`findings_digest` is allowed only for the planner role"
         )
+    if binding.launch_scope and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", binding.launch_scope):
+        raise InvocationError("`launch_scope` is not a safe coordinator attempt identifier")
     if binding.result_write_path:
         if binding.role not in ("tester", "auditor"):
             raise InvocationError(
@@ -3094,28 +3102,152 @@ _MINT_SECRET = object()
 _READINESS_MINT_SECRET = object()
 
 
+def launch_descriptor_digest(binding: "InvocationBinding") -> str:
+    """Digest every caller-visible field of one exact model invocation."""
+    verify_invocation(binding)
+    value = {
+        "role": binding.role, "model": binding.model, "provider": binding.provider,
+        "backend": str(Path(binding.backend).absolute()),
+        "workspace": str(Path(binding.workspace).absolute()),
+        "bound_commit": binding.bound_commit,
+        "role_prompt_digest": binding.role_prompt_digest,
+        "prompt_set_digest": binding.prompt_set_digest,
+        "plan_digest": binding.plan_digest, "policy_digest": binding.policy_digest,
+        "specification_digest": binding.specification_digest,
+        "allowed_tools": list(binding.allowed_tools), "task_id": binding.task_id,
+        "task_excerpt_digest": binding.task_excerpt_digest,
+        "audit_objective_digest": binding.audit_objective_digest,
+        "findings_digest": binding.findings_digest,
+        "launch_scope": binding.launch_scope,
+        "result_write_path": binding.result_write_path,
+        "runtime_limit": binding.runtime_limit,
+        "inactivity_limit": binding.inactivity_limit,
+    }
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _readiness_ledger_path(workspace: Path, campaign_id: str) -> Path:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", campaign_id):
+        raise InvocationError("readiness campaign namespace is invalid")
+    root = Path(workspace).absolute()
+    state_root = root / ".factory-state"
+    if state_root.is_symlink() or (state_root.exists() and not state_root.is_dir()):
+        raise InvocationError("readiness state root is unsafe")
+    state_root.mkdir(mode=0o700, exist_ok=True)
+    ledger_root = state_root / "readiness-launch-ledger"
+    if ledger_root.is_symlink() or (ledger_root.exists() and not ledger_root.is_dir()):
+        raise InvocationError("readiness launch ledger root is unsafe")
+    ledger_root.mkdir(mode=0o700, exist_ok=True)
+    return ledger_root / f"{campaign_id}.json"
+
+
+def _readiness_ledger_transition(path: Path, scope: str, expected: str, replacement: str) -> None:
+    """Atomically reserve/consume a launch scope under a durable flock."""
+    parent = path.parent
+    parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if parent.is_symlink() or path.is_symlink():
+        raise InvocationError("readiness launch ledger path is unsafe")
+    lock_path = parent / f".{path.name}.lock"
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        ledger = {"schema": "factory-readiness-launch-ledger/v1", "entries": {}}
+        if path.exists():
+            try:
+                read_fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0))
+                try:
+                    info = os.fstat(read_fd)
+                    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > 4 * 1024 * 1024:
+                        raise InvocationError("readiness launch ledger metadata is unsafe")
+                    chunks=[]
+                    while True:
+                        chunk=os.read(read_fd,65536)
+                        if not chunk: break
+                        chunks.append(chunk)
+                    ledger=json.loads(b"".join(chunks).decode("utf-8"))
+                finally: os.close(read_fd)
+            except (OSError, UnicodeError, ValueError) as exc:
+                raise InvocationError("readiness launch ledger is malformed") from exc
+        if (not isinstance(ledger, dict)
+                or set(ledger) != {"schema", "entries"}
+                or ledger.get("schema") != "factory-readiness-launch-ledger/v1"
+                or not isinstance(ledger.get("entries"), dict)):
+            raise InvocationError("readiness launch ledger is malformed")
+        current = ledger["entries"].get(scope, "absent")
+        if current != expected:
+            raise InvocationError("readiness authorization was replayed or already consumed")
+        ledger["entries"][scope] = replacement
+        raw = (json.dumps(ledger, sort_keys=True, separators=(",", ":")) + "\n").encode()
+        temporary = parent / f".{path.name}.{os.getpid()}.{threading.get_ident()}"
+        out = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o600)
+        try:
+            os.write(out, raw); os.fsync(out)
+        finally:
+            os.close(out)
+        os.replace(temporary, path)
+        directory_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        try: os.fsync(directory_fd)
+        finally: os.close(directory_fd)
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN); os.close(fd)
+
+
 class ReadinessLaunchAuthorization:
-    __slots__=("digest","campaign_id","accepted_commit","used","_mint")
-    def __init__(self,digest,campaign_id,accepted_commit,*,_mint):
+    __slots__ = ("digest", "campaign_id", "nonce", "accepted_commit", "tree",
+                 "descriptor_digest", "binding_digest", "bindings", "result_digests",
+                 "scope", "ledger_path", "used", "_mint")
+    def __init__(self, *, digest, campaign_id, nonce, accepted_commit, tree,
+                 descriptor_digest, binding_digest, bindings, result_digests, scope,
+                 ledger_path, _mint):
         if _mint is not _READINESS_MINT_SECRET:
             raise LaunchError("readiness launch token cannot be forged")
-        self.digest=digest; self.campaign_id=campaign_id
-        self.accepted_commit=accepted_commit; self.used=False; self._mint=_mint
+        self.digest=digest; self.campaign_id=campaign_id; self.nonce=nonce
+        self.accepted_commit=accepted_commit; self.tree=tree
+        self.descriptor_digest=descriptor_digest; self.binding_digest=binding_digest
+        self.bindings=dict(bindings); self.result_digests=dict(result_digests); self.scope=scope
+        self.ledger_path=Path(ledger_path); self.used=False; self._mint=_mint
 
 
-def authorize_readiness_launch(raw: bytes) -> ReadinessLaunchAuthorization:
-    """Validate exact readiness-result bytes and mint a real-provider token."""
-    try: value=json.loads(raw)
-    except (UnicodeError,ValueError) as exc:
-        raise InvocationError("readiness authorization is malformed") from exc
-    if (not isinstance(value,dict) or value.get("schema")!="factory-readiness-result/v2"
-            or value.get("status")!="complete" or value.get("terminal_outcome")!="pass"
-            or not SHA256_RE.fullmatch(str(value.get("nonce","")))):
-        raise InvocationError("real-provider launch requires passing readiness authorization")
-    bindings=value.get("bindings",{}); commit=bindings.get("accepted_commit") if isinstance(bindings,dict) else None
-    if not isinstance(commit,str) or not re.fullmatch(r"[0-9a-f]{40}",commit):
-        raise InvocationError("readiness authorization commit binding is invalid")
-    return ReadinessLaunchAuthorization(hashlib.sha256(raw).hexdigest(),value.get("campaign_id"),commit,_mint=_READINESS_MINT_SECRET)
+def authorize_readiness_launch(
+    raw: bytes, *, expected_campaign_id: str, expected_nonce: str,
+    expected_bindings: Mapping[str, object], expected_results: Mapping[str, object],
+    launch_descriptor_sha256: str, workspace: Path,
+) -> ReadinessLaunchAuthorization:
+    """Mint only from the complete canonical, exactly expected readiness result.
+
+    Reservation is durable and descriptor-scoped: a copied token or a second
+    process replaying the same result for the same launch can never produce a
+    second usable authorization.
+    """
+    try:
+        value = json.loads(raw.decode("utf-8"))
+        readiness_authority.validate_result(
+            value, expected_campaign_id=expected_campaign_id,
+            expected_nonce=expected_nonce, expected_bindings=expected_bindings,
+        )
+    except (UnicodeError, ValueError, readiness_authority.ReadinessError) as exc:
+        raise InvocationError("readiness authorization is malformed or not canonical") from exc
+    canonical = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    if raw != canonical:
+        raise InvocationError("readiness authorization bytes are not canonical")
+    if value.get("status") != "complete" or value.get("terminal_outcome") != "pass":
+        raise InvocationError("real-provider launch requires complete passing readiness")
+    if dict(value["results"]) != dict(expected_results):
+        raise InvocationError("readiness result digests do not exactly match expected results")
+    if not SHA256_RE.fullmatch(launch_descriptor_sha256):
+        raise InvocationError("launch descriptor digest is invalid")
+    digest = hashlib.sha256(raw).hexdigest()
+    binding_digest = hashlib.sha256(json.dumps(value["bindings"], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    scope = hashlib.sha256((digest + "\0" + launch_descriptor_sha256).encode()).hexdigest()
+    ledger_path = _readiness_ledger_path(Path(workspace), expected_campaign_id)
+    _readiness_ledger_transition(ledger_path, scope, "absent", "minted")
+    return ReadinessLaunchAuthorization(
+        digest=digest, campaign_id=expected_campaign_id, nonce=expected_nonce,
+        accepted_commit=value["bindings"]["accepted_commit"], tree=value["bindings"]["tree"],
+        descriptor_digest=launch_descriptor_sha256, binding_digest=binding_digest,
+        bindings=value["bindings"], result_digests=value["results"], scope=scope, ledger_path=ledger_path,
+        _mint=_READINESS_MINT_SECRET,
+    )
 
 
 class LaunchAuthority:
@@ -4061,13 +4193,42 @@ def authorize_launch(
     """
     verify_invocation(binding)
     if binding.provider != "synthetic":
+        descriptor_digest = launch_descriptor_digest(binding)
         if (not isinstance(readiness_authorization, ReadinessLaunchAuthorization)
                 or readiness_authorization._mint is not _READINESS_MINT_SECRET
                 or readiness_authorization.used
-                or not SHA256_RE.fullmatch(readiness_authorization.digest)):
+                or not SHA256_RE.fullmatch(readiness_authorization.digest)
+                or readiness_authorization.descriptor_digest != descriptor_digest
+                or readiness_authorization.ledger_path != _readiness_ledger_path(
+                    Path(binding.workspace), readiness_authorization.campaign_id)
+                or not SHA40_RE.fullmatch(readiness_authorization.accepted_commit)
+                or not SHA40_RE.fullmatch(readiness_authorization.tree)
+                or readiness_authorization.binding_digest != hashlib.sha256(
+                    json.dumps(readiness_authorization.bindings, sort_keys=True,
+                               separators=(",", ":")).encode()).hexdigest()
+                or readiness_authorization.bindings.get("accepted_commit") != readiness_authorization.accepted_commit
+                or readiness_authorization.bindings.get("tree") != readiness_authorization.tree
+                or set(readiness_authorization.bindings) != {
+                    "accepted_commit", "tree", "environment_blob", "specification_sha256",
+                    "plan_sha256", "conformance_sha256", "policy_sha256", "contracts_sha256",
+                    "install_manifest_sha256", "command_authority_sha256",
+                    "human_authority_sha256", "trust_authority_sha256"}
+                or any((not SHA40_RE.fullmatch(str(v))) if k in {"accepted_commit", "tree", "environment_blob"}
+                       else (not SHA256_RE.fullmatch(str(v)))
+                       for k, v in readiness_authorization.bindings.items())
+                or set(readiness_authorization.result_digests) != {
+                    "aggregate_sha256", "capability_result_sha256", "core_result_sha256",
+                    "conformance_result_sha256", "human_result_sha256"}
+                or any(not SHA256_RE.fullmatch(str(v)) or v == "0" * 64
+                       for v in readiness_authorization.result_digests.values())):
             raise InvocationError(
-                "standalone real-provider launch lacks descriptor/digest-bound readiness authorization"
+                "standalone real-provider launch lacks exact descriptor-bound readiness authorization"
             )
+        # The durable transition, not the mutable in-memory flag, is the
+        # authority. It rejects copied objects and survives process restart.
+        _readiness_ledger_transition(
+            readiness_authorization.ledger_path,
+            readiness_authorization.scope, "minted", "consumed")
         readiness_authorization.used = True
     _verify_input_digest("role prompt", role_prompt, binding.role_prompt_digest)
     _verify_input_digest("operational policy", agents, binding.policy_digest)

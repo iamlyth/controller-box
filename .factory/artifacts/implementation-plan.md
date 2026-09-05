@@ -6,6 +6,50 @@ base_commit: 860922af39ed7e2aef9b95705705f7ed90344e87
 status: active
 ---
 
+**Control-plane/core acceptance closure checkpoint (current checkout)**
+
+Readiness launch authorization now delegates to the canonical readiness-result
+validator with exact campaign, nonce, commit/tree, authority, policy, trust,
+and all five result-digest bindings. Canonical result bytes are reserved and
+consumed through an fsync-backed, flock-serialized per-campaign ledger scoped
+to the exact launch descriptor; copied tokens, same-attempt replay, and
+process-restart replay fail closed. Real-provider standalone launches have no
+readiness-free path, while synthetic provider mechanics remain explicitly
+non-acceptance.
+
+Runner consumption is v3 receipt/v4 aggregate only at the namespaced
+campaign/readiness/runner/commit/acquisition paths. Transfer now verifies the
+detached signature, issuance/current-revocation trust, principal/class, and
+critical root semantics over held bytes before a no-replace publication.
+Capability checking no longer reads the legacy root aggregate or accepts v2
+manifests/routing. Routing observation opens the physical source and all four
+target event nodes concurrently for each selected window, records exact evdev
+bytes and timestamps, rejects non-selected activity, and repeats a physical
+window after production Unassigned to prove all targets silent. Persisted
+assignment bytes before/after clear and kernel sysfs identities are retained;
+display names are not treated as unique identities. The independent validator
+parses those bytes rather than candidate booleans and fixes the prior set
+bookkeeping error.
+
+The GPU candidate no longer writes a profile icon override. It requires the
+normal selected-target DeviceType path (`xb360` -> installed `xbox-360.svg`),
+retains DeviceType provenance plus installed licensed asset/oracle bytes, and
+the coordinator/root validator strictly decodes the held PNG stream and
+reruns all 17 independent difference-region centroid/minimum-pixel checks.
+Root authority and pending enrollment-request digests were updated; enrollment
+remains `pending-human-review`/`pending-root-install`. No external runner,
+probe, deployment, campaign, protected golden update, human approval, or
+acceptance promotion occurred. Local readiness, launch, campaign, usage,
+confinement, routing, authority, artifact, capability-contract, and complete
+boilerplate suites pass. Real physical routing, accelerated installed captures,
+root enrollment/deployment, and human graphics approval remain blocked
+external work. The diagnostic project gate reached all 97 CTest targets with
+96 targets passing or taking the two declared environment skips; only the
+protected `test_golden` target failed its three pre-existing manager-editor
+comparisons. After the production target-identity log was added, a clean
+incremental Nix rebuild and the manager-production/overlay-reconcile/native-
+DBus focused set passed. Protected goldens were not changed.
+
 **Runner broker/deployment security hardening (current checkout)**
 
 The v2 broker now keeps archive/request/source parents root-owned and freezes

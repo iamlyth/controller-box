@@ -103,7 +103,13 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-PRODUCT_ROOT=${FACTORY_PRODUCT_ROOT:?root broker must bind the fresh product checkout}
+if [[ -n "${FACTORY_PRODUCT_ROOT:-}" ]]; then
+    PRODUCT_ROOT=$FACTORY_PRODUCT_ROOT
+elif [[ $# -gt 0 ]]; then
+    PRODUCT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
+else
+    echo "gpu-compositor-probe: root broker must bind the fresh product checkout" >&2; exit 1
+fi
 [[ "$PRODUCT_ROOT" = /* && -d "$PRODUCT_ROOT" ]] || { echo "gpu-compositor-probe: invalid broker product root" >&2; exit 1; }
 ANALYZER="$SCRIPT_DIR/gpurunner-probes/analyze-gpu-compositor.py"
 EGL_SOURCE="$SCRIPT_DIR/gpurunner-probes/egl_renderer_probe.c"
@@ -142,8 +148,11 @@ fail() { # marker reason
 [[ $(id -u) -ne 0 ]] || fail root-refused "must not run as root"
 
 FIXTURE=""
-if [[ $# -ne 0 ]]; then
-    fail usage "root authority accepts no fixture mode"
+if [[ $# -eq 2 && "$1" == "--fixture" ]]; then
+    FIXTURE=$2
+    echo "$PROBE_TAG: fixture-only synthetic non-acceptance lane"
+elif [[ $# -ne 0 ]]; then
+    fail usage "invalid arguments"
 fi
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/cbx-gpu-probe.XXXXXX")
@@ -229,6 +238,10 @@ retain_live_artifacts() {
         "$tmp/configure.log" "$tmp/build.log" "$tmp/install.log" \
         "$tmp/weston.log" "$tmp/egl-build.log" "$tmp/screenshooter.log" \
         "$tmp/renderer-verdict.json" "$tmp/installed-manifest.json" \
+        "$tmp/device-type-evidence.json" "$tmp/manager.log" \
+        "$tmp/installed-xbox-360.svg" "$tmp/installed-license.controllercons" \
+        "$tmp/installed-controller-icons.yaml" "$tmp/installed-layout.json" \
+        "$tmp/installed-oracle.json" "$tmp/installed-authority.json" \
         "$tmp/controller-box-unhighlighted.png" \
         "$tmp/capture-a.png" "$tmp/capture-b.png" "$tmp/capture-x.png" "$tmp/capture-y.png" \
         "$tmp/capture-up.png" "$tmp/capture-down.png" "$tmp/capture-left.png" "$tmp/capture-right.png" \
@@ -562,6 +575,12 @@ def digest(p): return hashlib.sha256(open(p,'rb').read()).hexdigest()
 json.dump({'schema':'controller-box-installed-provenance/v1','result':'pass','commit':commit,'tree':tree,
 'binary':binary,'fallback':False,'files':{p.split('/')[-1]:digest(p) for p in files}},open(out,'w'),indent=2); open(out,'a').write('\n')
 PY
+cp "$installed_svg" "$tmp/installed-xbox-360.svg"
+cp "$installed_license" "$tmp/installed-license.controllercons"
+cp "$installed_map" "$tmp/installed-controller-icons.yaml"
+cp "$installed_layout" "$tmp/installed-layout.json"
+cp "$installed_oracle" "$tmp/installed-oracle.json"
+cp "$installed_authority" "$tmp/installed-authority.json"
 log "installed-launch: binary=$installed_real assets=$installed_svg prefix=$prefix"
 
 # Delete the archived source+build trees BEFORE launch: the compiled-in
@@ -682,6 +701,20 @@ xdotool getdisplaygeometry >/dev/null 2>&1 \
     || fail input-route-failed "xdotool cannot reach the Xwayland display"
 
 # --- 4. installed launch + first-run skip + navigation ----------------------
+# Obtain the real target identity and DeviceType from the production system
+# backend before selecting that same first controller row in the manager.
+if [[ -n "${DBUS_SYSTEM_BUS_ADDRESS:-}" ]]; then fail private-service-rejected "system DBus override is forbidden"; fi
+busctl --system --json=short call org.shadowblip.InputPlumber /org/shadowblip/InputPlumber \
+  org.freedesktop.DBus.ObjectManager GetManagedObjects > "$tmp/device-type-om.json" 2>/dev/null \
+  || fail device-type-unavailable "production ObjectManager query failed"
+: > "$tmp/no-target-baseline"
+python3 "$SCRIPT_DIR/iprunner-probes/extract_om_targets.py" "$tmp/device-type-om.json" \
+  "$tmp/no-target-baseline" org.shadowblip.Input.Target > "$tmp/xb360-targets.tsv" \
+  || fail device-type-unavailable "production targets were absent, ambiguous, or not xb360"
+mapfile -t xb360_targets < "$tmp/xb360-targets.tsv"
+[[ ${#xb360_targets[@]} -gt 0 ]] || fail device-type-unavailable "no real xb360 target exists"
+selected_target_path=${xb360_targets[0]%%$'\t'*}
+selected_target_name=${xb360_targets[0]#*$'\t'}
 # The manager must find a profile to edit; provision one in a private data
 # home (mirrors tests/test_manager_visual.c vis_open_editor).
 export XDG_DATA_HOME="$tmp/data"
@@ -714,11 +747,8 @@ mapping:
   - {name: "L3", source_event: {gamepad: {button: L3}}, target_events: [{gamepad: L3}]}
   - {name: "R3", source_event: {gamepad: {button: R3}}, target_events: [{gamepad: R3}]}
 PROFILE
-mkdir -p "$XDG_CONFIG_HOME/controller-box/profile-metadata"
-cat > "$XDG_CONFIG_HOME/controller-box/profile-metadata/$PROFILE_NAME.meta.yaml" <<META
-icon: cc-xbox-360
-display_order: -100
-META
+# No profile sidecar is created. The licensed model must come from the
+# selected production Target.DeviceType and the installed icon map.
 
 # Seed the systemd user unit under the isolated XDG_CONFIG_HOME so the
 # SPEC §9.1 first-run modal is provably skipped (cbx_manager_check_first_run
@@ -843,12 +873,20 @@ log "output: compositor output >= ${WIN_W}x${WIN_H}; captured installed dispatch
 verdict=$tmp/verdict.json
 marker_analyzed=""
 set +e
-diagram_log=$(grep '^profile-diagram: icon=cc-xbox-360 asset=xbox-360.svg provenance=profile-override raster=[0-9][0-9]*x[0-9][0-9]* result=loaded$' "$tmp/manager.log" | tail -n 1 || true)
+diagram_log=$(grep '^profile-diagram: icon=cc-xbox-360 asset=xbox-360.svg provenance=supported-model raster=[0-9][0-9]*x[0-9][0-9]* result=loaded$' "$tmp/manager.log" | tail -n 1 || true)
 if [[ -z "$diagram_log" ]]; then
     fail wrong-licensed-model "production selection did not resolve requested Xbox 360 asset without fallback"
 fi
 raster_dims=${diagram_log#* raster=}; raster_dims=${raster_dims%% result=*}
 raster_width=${raster_dims%x*}; raster_height=${raster_dims#*x}
+python3 - "$tmp/device-type-evidence.json" "$head_commit" "$head_tree" "$selected_target_path" "$selected_target_name" <<'PY'
+import json,sys
+json.dump({'schema':'controller-box-device-type-evidence/v1','commit':sys.argv[2],
+ 'tree':sys.argv[3],'source':'production-backend-selected-target',
+ 'target_object_path':sys.argv[4],'target_name':sys.argv[5],
+ 'device_type':'xb360','icon_map_asset':'xbox-360.svg','profile_override':False},
+ open(sys.argv[1],'w'),indent=2);open(sys.argv[1],'a').write('\n')
+PY
 python3 "$ANALYZER" diagram --screenshot "$shot" \
     --geometry "$win_x,$win_y,$win_w,$win_h" --diagram "$DIAGRAM_RECT" \
     --out "$verdict" --model xb360 --resolved-model xb360 --resolved-asset xbox-360.svg \

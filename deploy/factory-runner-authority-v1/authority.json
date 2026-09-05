@@ -177,7 +177,15 @@
               "installed-manifest.json": "application/json",
               "probe.log": "text/plain",
               "renderer-verdict.json": "application/json",
-              "verdict.json": "application/json"
+              "verdict.json": "application/json",
+              "device-type-evidence.json": "application/json",
+              "manager.log": "text/plain",
+              "installed-xbox-360.svg": "image/svg+xml",
+              "installed-license.controllercons": "text/plain",
+              "installed-controller-icons.yaml": "application/yaml",
+              "installed-layout.json": "application/json",
+              "installed-oracle.json": "application/json",
+              "installed-authority.json": "application/json"
             },
             "required": [
               "artifact-manifest.json",
@@ -202,7 +210,15 @@
               "capture-l2.png",
               "capture-r2.png",
               "capture-l3.png",
-              "capture-r3.png"
+              "capture-r3.png",
+              "device-type-evidence.json",
+              "manager.log",
+              "installed-xbox-360.svg",
+              "installed-license.controllercons",
+              "installed-controller-icons.yaml",
+              "installed-layout.json",
+              "installed-oracle.json",
+              "installed-authority.json"
             ]
           }
         },
@@ -247,7 +263,15 @@
               "installed-manifest.json": "application/json",
               "probe.log": "text/plain",
               "renderer-verdict.json": "application/json",
-              "verdict.json": "application/json"
+              "verdict.json": "application/json",
+              "device-type-evidence.json": "application/json",
+              "manager.log": "text/plain",
+              "installed-xbox-360.svg": "image/svg+xml",
+              "installed-license.controllercons": "text/plain",
+              "installed-controller-icons.yaml": "application/yaml",
+              "installed-layout.json": "application/json",
+              "installed-oracle.json": "application/json",
+              "installed-authority.json": "application/json"
             },
             "required": [
               "artifact-manifest.json",
@@ -272,7 +296,15 @@
               "capture-l2.png",
               "capture-r2.png",
               "capture-l3.png",
-              "capture-r3.png"
+              "capture-r3.png",
+              "device-type-evidence.json",
+              "manager.log",
+              "installed-xbox-360.svg",
+              "installed-license.controllercons",
+              "installed-controller-icons.yaml",
+              "installed-layout.json",
+              "installed-oracle.json",
+              "installed-authority.json"
             ]
           }
         }
@@ -325,10 +357,12 @@
               "assignment-slot-1.yaml": "application/yaml",
               "assignment-slot-2.yaml": "application/yaml",
               "assignment-slot-3.yaml": "application/yaml",
+              "assignment-after-clear.yaml": "application/yaml",
               "cleanup.log": "text/plain",
               "observer.log": "text/plain",
               "overlay.log": "text/plain",
-              "routing-results.json": "application/json"
+              "routing-results.json": "application/json",
+              "udev-targets.log": "text/plain"
             },
             "required": [
               "routing-results.json",
@@ -338,7 +372,9 @@
               "assignment-slot-0.yaml",
               "assignment-slot-1.yaml",
               "assignment-slot-2.yaml",
-              "assignment-slot-3.yaml"
+              "assignment-slot-3.yaml",
+              "assignment-after-clear.yaml",
+              "udev-targets.log"
             ]
           }
         },
@@ -441,7 +477,7 @@
     "iprunner-probes/find_source_composite.py": "03401fd814448ae798b447f4bf1fc4c56e70529e6d09e1accb8a833d1694a9c2",
     "iprunner-probes/inputplumber-expectations.json": "ebc530295aabf7251cd3032955c833ed087245e41b6eee65ac2894b9a846faa4",
     "iprunner-probes/physical_controller_probe.c": "36a05edfee34cc349358eaa1f656fe1d6932982b866a44f78b01db2c061d3e4d",
-    "iprunner-probes/routing_observer.c": "a45628f24ad59018e9655a2f91d9fb5a7d3358312a2bd30de22ec7c91a813be4",
+    "iprunner-probes/routing_observer.c": "093c1727e94f3a2997c070669397987c173f903013d4badd23bc777018d4055b",
     "iprunner-probes/target-consumer-expectations.json": "53f79308b0ad31e53b18f42f4a1f34e7dea601c41937efa52d2331689e6587d4",
     "iprunner-probes/target_consumer_observer.c": "bee1beca9b073c501c833555e299ce1564dfb520251b8a943bfcfe9afed9b92d",
     "iprunner-probes/unwrap_variant.py": "9ab3e6b22ff293bb2733c4253a9dfd01e8f23b229ef87df5cce9eb9a5e8eb53b",
@@ -450,16 +486,16 @@
     "iprunner-probes/validate_name_sets.py": "5881a28fee65fabd97ea58f8420d30a00067b9fe3346b64de6f2ff6879955949",
     "licensed-diagram-authority.json": "23cb0a91cdcde1ab7bb179b4fe5f6afc340dd9f2061b9d1222be94a3341c298d",
     "licensed-diagram-oracle.json": "15fe1b33754e7b08840a7e8e87f194f51d3f5aa18bd24ce57aa599614458d54b",
-    "probe-controller-production-routing.sh": "4240b45ac76c94be57b3c76a74c160687ab75d85b54f3806c47b66389e423830",
+    "probe-controller-production-routing.sh": "60caaafe90bfa4ce25fc0a2475bf78ab0fb1ccc3977edf5b5581d3549b1cb363",
     "probe-dev-capability.py": "4aebc9ad681f5a106e1d6356a6c393741a347f27e4e588801000aa625eabc9ec",
-    "probe-gpu-compositor.sh": "b0ac2e05d70d7b5a5cc527c61e1d03b67c3185ecb1278b99b9d78ed04948280e",
+    "probe-gpu-compositor.sh": "357b1dd4a9cda913a536ff3806a031fd7423bc8d87eb8e5d5270a4446867150f",
     "probe-inputplumber-system-dbus.sh": "6352d3f6e0dbb305bb1d98d0b77bdc58e8471cf5a99f8511393c28d8fa7d153a",
     "probe-physical-controller.sh": "63b2182501cb720e67217cdf72c9d6da5b41cfba5f4164e455ef6a3b7631ea20",
     "probe-target-consumer.sh": "540ba142b3c2976f3f4f07739a939a71559d8fd8e2a6f8f3e48d124ed20426dd",
     "product-gate.py": "c2f57b48f487de33581b01f29e0014aab78338b43abd8898e5ebc79d85e1798a",
     "validate-capability-semantics.py": "c52a1bc827c1561895f1bc355b4af9da8fc198066aebb6af458e07bb33e26d5e",
     "validate-no-artifacts.py": "9ca5c6cd86eb2274d6f44a1d42ff7f31236dbf47a19fc4773cd4ca048c6348fe",
-    "validate-retained-artifacts.py": "cdf3accc7306474f2a822886ac637e2f4f996175b8427dfa444369a66975e9df"
+    "validate-retained-artifacts.py": "2b6006bf3d6c26d3c400bccd254320681fcbadc60e0bd32e78bd43d7efacd05c"
   },
   "licensed_oracle": {
     "path": "licensed-diagram-oracle.json",

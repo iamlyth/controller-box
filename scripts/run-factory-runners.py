@@ -7,6 +7,7 @@ import base64
 import ctypes
 import errno
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -178,6 +179,39 @@ def _obtain_broker_nonce(runner: dict, campaign_id: str, readiness_nonce: str) -
     if result.returncode or not isinstance(response,dict) or set(response)!={"schema","nonce","runner","campaign_id","readiness_nonce"} or response.get("schema")!="factory-runner-nonce/v1" or response.get("runner")!=runner["name"] or response.get("campaign_id")!=campaign_id or response.get("readiness_nonce")!=readiness_nonce or not re.fullmatch(r"[0-9a-f]{64}",str(response.get("nonce",""))):
         fail("runner broker refused nonce issuance",EXIT_TRANSPORT)
     return response["nonce"]
+
+
+def _verify_before_publication(staging: Path, manifest: dict, manifest_bytes: bytes,
+                               commit: str, tree: str, capabilities: list[str]) -> None:
+    """Apply current+issuance signature trust and root semantics to held bytes."""
+    checker_path = ROOT / "scripts" / "check-factory-runner-evidence.py"
+    spec = importlib.util.spec_from_file_location("factory_transfer_evidence_checker", checker_path)
+    if spec is None or spec.loader is None:
+        fail("canonical signature checker cannot be loaded")
+    checker = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(checker)
+        issuance = checker.load_signer_trust(commit, "issuance")
+        current = checker.load_signer_trust(git("rev-parse", "HEAD"), "current revocation")
+        checker.verify_manifest_signature(
+            issuance, current, manifest, staging / "manifest.json", manifest_bytes)
+    except SystemExit:
+        fail("runner detached signature/principal/key/revocation validation failed")
+    except Exception:
+        fail("canonical signature checker failed before publication")
+    analyzer = ROOT / "scripts" / "validate-runner-artifacts-semantic.py"
+    for capability in capabilities:
+        if capability not in {"controller-production-routing", "gpu-compositor", "installed-licensed-diagram"}:
+            continue
+        result = subprocess.run(
+            [sys.executable, str(analyzer), "--capability", capability,
+             "--artifacts", str(staging / "artifacts"),
+             "--commit", commit, "--tree", tree],
+            cwd="/", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=300,
+        )
+        if result.returncode != 0:
+            fail(f"runner {capability} root semantics failed before publication")
 
 
 def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, archive: bytes,
@@ -352,7 +386,10 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
     runner_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     if evidence_dir.is_symlink() or evidence_dir.exists():
         fail(f"runner evidence publication collision for {name}")
-    staging = runner_dir / f".publish-{nonce}"
+    staging_parent = ROOT / ".factory-state" / ".runner-transfer-staging"
+    if staging_parent.is_symlink(): fail("runner transfer staging root is unsafe")
+    staging_parent.mkdir(mode=0o700, exist_ok=True)
+    staging = staging_parent / f"{campaign_id}-{readiness_nonce}-{name}-{commit}-{nonce}"
     if staging.exists() or staging.is_symlink(): fail(f"runner evidence staging collision for {name}")
     staging.mkdir(mode=0o700)
     try:
@@ -364,6 +401,10 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
         atomic_write(staging / "manifest.sig", signature)
         for descriptor, data in decoded_artifacts:
             atomic_write(staging / "artifacts" / Path(descriptor["path"]), data)
+        _verify_before_publication(
+            staging, manifest, manifest_bytes, commit, tree,
+            list(receipt["capabilities"]),
+        )
         if evidence_dir.exists() or evidence_dir.is_symlink():
             fail(f"runner evidence publication collision for {name}")
         rename_noreplace(staging, evidence_dir)

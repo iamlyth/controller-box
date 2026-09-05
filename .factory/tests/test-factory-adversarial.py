@@ -1563,10 +1563,17 @@ class CaseAdversarialSuite(_AdversarialBase):
             inspect.signature(launch_module.authorize_launch).parameters,
         )
         self.assertFalse(hasattr(launch_module, "usage_guard"))
+        tree=_git(ws.root,"rev-parse","HEAD^{tree}").stdout.strip()
+        readiness_bindings={"accepted_commit":head,"tree":tree,"environment_blob":head,
+            "specification_sha256":"1"*64,"plan_sha256":"2"*64,"conformance_sha256":"3"*64,
+            "policy_sha256":"4"*64,"contracts_sha256":"5"*64,"install_manifest_sha256":"6"*64,
+            "command_authority_sha256":"7"*64,"human_authority_sha256":"8"*64,"trust_authority_sha256":"9"*64}
+        readiness_results={"aggregate_sha256":"a"*64,"capability_result_sha256":"b"*64,
+            "core_result_sha256":"c"*64,"conformance_result_sha256":"d"*64,"human_result_sha256":"e"*64}
         readiness_raw=json.dumps({"schema":"factory-readiness-result/v2",
             "campaign_id":"adversarial", "nonce":"a"*64, "status":"complete",
-            "terminal_outcome":"pass", "bindings":{"accepted_commit":head},
-            "results":{}}).encode()
+            "terminal_outcome":"pass", "bindings":readiness_bindings,
+            "results":readiness_results},sort_keys=True,separators=(",",":")).encode()
         authority = launch_module.authorize_launch(
                 binding,
                 role_prompt=(ws.root / ".factory" / "prompts" /
@@ -1574,7 +1581,10 @@ class CaseAdversarialSuite(_AdversarialBase):
                 agents=(ws.root / "AGENTS.md").read_bytes(),
                 spec=(ws.root / "docs" / "SPEC.md").read_bytes(),
                 plan=(ws.root / PLAN_REL).read_bytes(),
-                readiness_authorization=launch_module.authorize_readiness_launch(readiness_raw),
+                readiness_authorization=launch_module.authorize_readiness_launch(
+                    readiness_raw,expected_campaign_id="adversarial",expected_nonce="a"*64,
+                    expected_bindings=readiness_bindings,expected_results=readiness_results,
+                    launch_descriptor_sha256=launch_module.launch_descriptor_digest(binding),workspace=ws.root),
             )
         self.assertIsInstance(authority, launch_module.LaunchAuthority)
         registry = json.loads((ws.root / ".factory/pre-round-hooks.json").read_text())
