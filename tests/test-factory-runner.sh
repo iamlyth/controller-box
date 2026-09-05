@@ -109,6 +109,7 @@ tmp, capabilities, verify_argv = sys.argv[1], json.loads(sys.argv[2]), json.load
 print(json.dumps({
     "schema": "factory-runner-policy/v1",
     "namespace": "factory-runner-receipt",
+    "authority_pins": [],
     "classes": [
         {
             "name": "fake-runner",

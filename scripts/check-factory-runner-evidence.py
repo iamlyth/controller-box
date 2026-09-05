@@ -396,7 +396,7 @@ def validate_record(declared: dict, record: dict, commit: str, tree: str,
         fail("manifest digest mismatch")
     expected_fields = {
         "schema", "result", "runner", "commit", "tree", "environment_blob",
-        "verify_argv_sha256", "archive_sha256", "campaign_id", "readiness_nonce", "nonce", "capabilities",
+        "verify_argv_sha256", "archive_sha256", "campaign_id", "readiness_nonce", "authority_pins_sha256", "nonce", "capabilities",
         "exit_code", "timed_out", "started_at", "finished_at", "cleanup",
         "stdout_sha256", "stderr_sha256",
         "signer_principal", "signer_key_sha256", "namespace", "signature_algorithm",
@@ -428,7 +428,7 @@ def validate_record(declared: dict, record: dict, commit: str, tree: str,
         fail("runner manifest verifier/archive binding mismatch")
     if manifest["capabilities"] != record["capabilities"] or manifest["exit_code"] != 0 or manifest["timed_out"] is not False or manifest["cleanup"] is not True:
         fail("runner manifest does not prove a clean pass")
-    for field in ("verify_argv_sha256", "archive_sha256", "readiness_nonce", "nonce", "stdout_sha256", "stderr_sha256", "signer_key_sha256"):
+    for field in ("verify_argv_sha256", "archive_sha256", "readiness_nonce", "authority_pins_sha256", "nonce", "stdout_sha256", "stderr_sha256", "signer_key_sha256"):
         if not isinstance(manifest[field], str) or not SHA256.fullmatch(manifest[field]):
             fail(f"runner manifest has invalid {field}")
     for field in ("signer_principal", "signature_algorithm"):

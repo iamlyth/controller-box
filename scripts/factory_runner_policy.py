@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 from pathlib import Path
 
 DEFAULT_POLICY_PATH = Path(
@@ -29,6 +30,8 @@ DEFAULT_POLICY_PATH = Path(
 )
 NAME = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 TOKEN = re.compile(r"^[^\x00-\x1f\x7f]{1,128}$")
+SHA256 = re.compile(r"^[0-9a-f]{64}$")
+PIN_SCOPES = {"installed-licensed-diagram", "gpu-compositor-layout-oracle"}
 
 
 class PolicyError(Exception):
@@ -80,16 +83,28 @@ def load_policy() -> dict:
     a malformed or tampered policy fails closed everywhere it is consumed.
     """
     path = policy_path()
-    if path.is_symlink():
-        raise PolicyError(f"runner policy must not be a symlink: {path}")
     try:
-        raw = path.read_text(encoding="utf-8")
+        named = os.lstat(path)
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0))
+        opened = os.fstat(fd)
+        fixture_owner = os.getuid() if "FACTORY_RUNNER_POLICY" in os.environ else 0
+        if ((named.st_dev, named.st_ino) != (opened.st_dev, opened.st_ino)
+                or not stat.S_ISREG(opened.st_mode) or opened.st_uid != fixture_owner
+                or opened.st_nlink != 1 or stat.S_IMODE(opened.st_mode) not in (0o400, 0o440, 0o444, 0o600, 0o640, 0o644)
+                or (opened.st_mode & 0o022)):
+            os.close(fd)
+            raise PolicyError(f"runner policy ownership/mode/inode is unsafe: {path}")
+        with os.fdopen(fd, "r", encoding="utf-8") as stream:
+            raw = stream.read(1024 * 1024 + 1)
+        final = os.lstat(path)
+        if len(raw) > 1024 * 1024 or (final.st_dev, final.st_ino) != (opened.st_dev, opened.st_ino):
+            raise PolicyError(f"runner policy changed or exceeded bounds: {path}")
         data = json.loads(raw)
     except OSError as exc:
         raise PolicyError(f"cannot read runner policy {path}: {type(exc).__name__}") from exc
     except (UnicodeError, json.JSONDecodeError) as exc:
         raise PolicyError(f"runner policy is invalid JSON: {path}") from exc
-    expected = {"schema", "namespace", "classes"}
+    expected = {"schema", "namespace", "classes", "authority_pins"}
     if not isinstance(data, dict) or set(data) != expected:
         raise PolicyError("runner policy top-level fields are invalid")
     if data.get("schema") != "factory-runner-policy/v1":
@@ -100,6 +115,21 @@ def load_policy() -> dict:
     classes = data.get("classes")
     if not isinstance(classes, list) or not classes:
         raise PolicyError("runner policy must declare at least one class")
+    pins = data.get("authority_pins")
+    if not isinstance(pins, list):
+        raise PolicyError("runner policy authority_pins must be an array")
+    seen_pins: set[tuple[str, str]] = set()
+    for index, pin in enumerate(pins):
+        if (not isinstance(pin, dict) or set(pin) != {"class", "scope", "authority_sha256", "status"}
+                or not isinstance(pin.get("class"), str) or not NAME.fullmatch(pin["class"])
+                or pin.get("scope") not in PIN_SCOPES
+                or not isinstance(pin.get("authority_sha256"), str) or not SHA256.fullmatch(pin["authority_sha256"])
+                or pin.get("status") not in {"enrolled", "pending-human-review"}):
+            raise PolicyError(f"runner policy authority_pins[{index}] is invalid")
+        identity = (pin["class"], pin["scope"])
+        if identity in seen_pins:
+            raise PolicyError("runner policy authority pin is duplicated")
+        seen_pins.add(identity)
     seen_names: set[str] = set()
     seen_uids: set[int] = set()
     for index, entry in enumerate(classes):
@@ -137,9 +167,26 @@ def load_policy() -> dict:
                 or ".." in Path(value).parts
             ):
                 raise PolicyError(f"runner policy classes[{index}].{field} is invalid")
+        if name == "gpurunner" or any(cap in {"gpu-compositor", "installed-licensed-diagram"} for cap in entry["allowed_capabilities"]):
+            required = {(name, scope) for scope in PIN_SCOPES}
+            present = {identity for identity in seen_pins if identity[0] == name}
+            if present != required:
+                raise PolicyError(f"runner class {name} lacks exact licensed authority pins")
+            class_pins = [pin for pin in pins if pin["class"] == name]
+            if any(pin["status"] != "enrolled" for pin in class_pins):
+                raise PolicyError(f"runner class {name} licensed authority enrollment is pending human review")
         seen_names.add(name)
         seen_uids.add(uid)
+    if any(class_name not in seen_names for class_name, _ in seen_pins):
+        raise PolicyError("runner policy authority pin references an undeclared class")
     return data
+
+
+def authority_pin(policy: dict, class_name: str, scope: str) -> str:
+    matches = [p for p in policy["authority_pins"] if p["class"] == class_name and p["scope"] == scope and p["status"] == "enrolled"]
+    if len(matches) != 1:
+        raise PolicyError(f"no unique enrolled {scope} authority pin for {class_name}")
+    return matches[0]["authority_sha256"]
 
 
 def class_for_uid(policy: dict, uid: int) -> dict:

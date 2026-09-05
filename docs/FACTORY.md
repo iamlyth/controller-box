@@ -95,12 +95,20 @@ Volatile, ignored state:
   precedes coordinator-only runner acquisition; campaign and readiness nonces bind
   every request, signed manifest, aggregate, and checker invocation. Capability,
   core, conformance, and detached-signature human review all precede planner 1.
-  Human trust is intentionally pending until an operator commits an allowlisted
-  key; no model-authored `human: true` assertion is accepted. The supported
-  non-self-referential workflow reviews a candidate, then permits an accepted
-  approval-only descendant changing exactly the approval JSON and detached
-  signature. `--readiness-only` performs this identical gate and stops before a
-  planner. Interrupted acquisition is ambiguous and is never rerun.
+  Human trust is intentionally external and pending: candidate Git is never
+  its own reviewer-key authority. Production requires
+  `--human-trust-anchor ABSOLUTE_FILE --human-trust-anchor-sha256 SHA256`; the
+  anchor is an offline root-owned, single-link, non-writable regular file with
+  a safe root-owned ancestor chain and is descriptor/inode/digest revalidated.
+  The tracked `.factory/human-review-trust.json` is enrollment data only. The
+  supported workflow reviews a candidate, then permits exactly one direct
+  approval-only child changing only the approval JSON and detached signature.
+  Captures must be complete, distinct PNG blobs. `--readiness-only` performs
+  this identical gate and stops before a planner. Interrupted acquisition is
+  ambiguous and is never rerun. Gpurunner also requires two enrolled,
+  class-scoped pins in root policy `/etc/factory-runner/runner-policy.json` for
+  the licensed-diagram and layout/oracle scopes. The tracked enrollment file
+  carries only the current candidate digest and remains pending human review.
 - `.bug-ledger.lock`, `.ollama-usage-env`, `logs/`, test fixtures
 
 **Retired Ralph control plane.** `.factory/ralph-freeze` is a tracked,

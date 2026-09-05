@@ -159,7 +159,7 @@ manifest = {
     "runner": "probe-runner", "commit": head, "tree": tree,
     "environment_blob": environment_blob, "verify_argv_sha256": argv_sha,
     "archive_sha256": archive_sha, "campaign_id": "synthetic-conformance",
-    "readiness_nonce": "e" * 64, "nonce": "0" * 64,
+    "readiness_nonce": "e" * 64, "authority_pins_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945", "nonce": "0" * 64,
     "capabilities": ["probe-capability"], "exit_code": 0,
     "timed_out": False, "started_at": 1, "finished_at": 2,
     "cleanup": True, "stdout_sha256": hashlib.sha256(stdout).hexdigest(),

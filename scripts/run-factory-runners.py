@@ -123,6 +123,24 @@ def ssh_binary() -> str:
     return str(launcher)
 
 
+def _requested_authority_pins_digest(name: str) -> str:
+    enrollment = ROOT / ".factory" / "runner-policy-enrollment.json"
+    pins = []
+    if name == "gpurunner" and enrollment.is_file() and not enrollment.is_symlink():
+        try:
+            data = json.loads(enrollment.read_text())
+            if (data.get("schema") == "controller-box-runner-policy-enrollment/v1"
+                    and data.get("runner_class") == name
+                    and re.fullmatch(r"[0-9a-f]{64}", str(data.get("authority_sha256", "")))
+                    and isinstance(data.get("scopes"), list)):
+                pins = [{"class": name, "scope": scope,
+                         "authority_sha256": data["authority_sha256"]}
+                        for scope in sorted(data["scopes"])]
+        except (OSError, ValueError):
+            pins = []
+    return hashlib.sha256(json.dumps(pins, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
 def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, archive: bytes,
                campaign_id: str | None = None, readiness_nonce: str | None = None) -> dict:
     name = runner["name"]
@@ -157,6 +175,7 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
         "capabilities": capabilities,
         "campaign_id": campaign_id,
         "readiness_nonce": readiness_nonce,
+        "authority_pins_sha256": _requested_authority_pins_digest(name),
         "nonce": nonce,
     }
     payload = json.dumps(request, separators=(",", ":")).encode() + b"\n" + archive
@@ -214,7 +233,7 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
         fail(f"runner {name} verification did not pass", EXIT_FINDINGS)
     expected = {
         "schema", "result", "runner", "commit", "tree", "environment_blob",
-        "verify_argv_sha256", "archive_sha256", "campaign_id", "readiness_nonce", "nonce", "capabilities",
+        "verify_argv_sha256", "archive_sha256", "campaign_id", "readiness_nonce", "authority_pins_sha256", "nonce", "capabilities",
         "exit_code", "timed_out", "stdout_b64", "stderr_b64", "started_at",
         "finished_at", "cleanup", "manifest_b64", "signature_b64",
         "signer_principal", "signer_key_sha256", "signature_algorithm",
@@ -230,7 +249,7 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
         "verify_argv_sha256": argv_sha,
         "archive_sha256": archive_sha,
         "campaign_id": campaign_id, "readiness_nonce": readiness_nonce,
-        "nonce": nonce,
+        "authority_pins_sha256": request["authority_pins_sha256"], "nonce": nonce,
     }
     if any(receipt.get(key) != value for key, value in bindings.items()):
         fail(f"runner {name} receipt binding mismatch")
@@ -267,7 +286,8 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
         "tree": receipt["tree"], "environment_blob": receipt["environment_blob"],
         "verify_argv_sha256": receipt["verify_argv_sha256"],
         "archive_sha256": receipt["archive_sha256"], "campaign_id": receipt["campaign_id"],
-        "readiness_nonce": receipt["readiness_nonce"], "nonce": receipt["nonce"],
+        "readiness_nonce": receipt["readiness_nonce"],
+        "authority_pins_sha256": receipt["authority_pins_sha256"], "nonce": receipt["nonce"],
         "capabilities": receipt["capabilities"], "exit_code": receipt["exit_code"],
         "timed_out": receipt["timed_out"], "started_at": receipt["started_at"],
         "finished_at": receipt["finished_at"], "cleanup": receipt["cleanup"],

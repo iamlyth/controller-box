@@ -42,7 +42,8 @@ import time
 # one directory, and the disposable harness runs them with python -I.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from factory_runner_policy import PolicyError, class_for_uid, load_policy, validate_argv
+from factory_runner_policy import (PolicyError, authority_pin, class_for_uid,
+                                  load_policy, validate_argv)
 
 SHA1 = re.compile(r"^[0-9a-f]{40}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -374,7 +375,7 @@ def main() -> int:
         "schema", "runner", "class", "commit", "commit_object_b64", "tree",
         "environment_blob", "verify_argv", "verify_argv_sha256",
         "archive_sha256", "archive_size", "working_directory",
-        "capabilities", "campaign_id", "readiness_nonce", "nonce",
+        "capabilities", "campaign_id", "readiness_nonce", "authority_pins_sha256", "nonce",
     }
     if not isinstance(request, dict) or set(request) != expected or request.get("schema") != "factory-runner-request/v1":
         fail("request schema or fields are invalid")
@@ -382,6 +383,14 @@ def main() -> int:
         fail("invalid runner")
     if request["runner"] != runner_class["name"] or request["class"] != runner_class["name"]:
         fail("request runner/class does not match the executing runner class")
+    policy_pins = [{"class": pin["class"], "scope": pin["scope"],
+                    "authority_sha256": pin["authority_sha256"]}
+                   for pin in policy["authority_pins"] if pin["class"] == runner_class["name"]]
+    policy_pins.sort(key=lambda item: item["scope"])
+    policy_pins_sha256 = hashlib.sha256(json.dumps(
+        policy_pins, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    if request.get("authority_pins_sha256") != policy_pins_sha256:
+        fail("request authority pins do not match root runner policy")
     if (not isinstance(request["nonce"], str) or not SHA256.fullmatch(request["nonce"])
             or not isinstance(request["readiness_nonce"], str) or not SHA256.fullmatch(request["readiness_nonce"])
             or not isinstance(request["campaign_id"], str) or not NAME.fullmatch(request["campaign_id"])):
@@ -512,6 +521,20 @@ def main() -> int:
                 fail("remote checkout is not clean after exact commit reconstruction")
 
             contracts = load_contracts(job)
+            # Licensed/GPU evidence is authorized by root policy, not by a
+            # digest stored beside candidate data.  Check both class-scoped
+            # pins before any verifier or capability probe executes.
+            if any(cap in {"gpu-compositor", "installed-licensed-diagram"} for cap in capabilities):
+                authority_path = job / "data" / "licensed-diagram-authority.json"
+                try:
+                    authority_raw = authority_path.read_bytes()
+                    licensed_pin = authority_pin(policy, runner_class["name"], "installed-licensed-diagram")
+                    oracle_pin = authority_pin(policy, runner_class["name"], "gpu-compositor-layout-oracle")
+                except (OSError, PolicyError) as exc:
+                    fail(f"external licensed authority pin unavailable: {exc}")
+                actual_authority = hashlib.sha256(authority_raw).hexdigest()
+                if actual_authority != licensed_pin or actual_authority != oracle_pin:
+                    fail("candidate licensed authority does not match root policy pins")
             missing = [capability for capability in capabilities if capability not in contracts]
             if missing:
                 fail(f"requested capability lacks a committed contract: {missing}")
@@ -570,7 +593,8 @@ def main() -> int:
                     "tree": tree, "environment_blob": request["environment_blob"],
                     "verify_argv_sha256": request["verify_argv_sha256"],
                     "archive_sha256": request["archive_sha256"], "campaign_id": request["campaign_id"],
-                    "readiness_nonce": request["readiness_nonce"], "nonce": request["nonce"],
+                    "readiness_nonce": request["readiness_nonce"],
+                    "authority_pins_sha256": policy_pins_sha256, "nonce": request["nonce"],
                     "capabilities": evidenced, "exit_code": returncode,
                     "timed_out": False, "stdout_b64": base64.b64encode(stdout).decode(),
                     "stderr_b64": base64.b64encode(stderr).decode(),
@@ -583,7 +607,8 @@ def main() -> int:
                 "tree": tree, "environment_blob": request["environment_blob"],
                 "verify_argv_sha256": request["verify_argv_sha256"],
                 "archive_sha256": request["archive_sha256"], "campaign_id": request["campaign_id"],
-                "readiness_nonce": request["readiness_nonce"], "nonce": request["nonce"],
+                "readiness_nonce": request["readiness_nonce"],
+                "authority_pins_sha256": policy_pins_sha256, "nonce": request["nonce"],
                 "capabilities": evidenced, "exit_code": 0,
                 "timed_out": False, "started_at": started, "finished_at": finished_at,
                 "cleanup": True,
@@ -599,7 +624,8 @@ def main() -> int:
                 "tree": tree, "environment_blob": request["environment_blob"],
                 "verify_argv_sha256": request["verify_argv_sha256"],
                 "archive_sha256": request["archive_sha256"], "campaign_id": request["campaign_id"],
-                "readiness_nonce": request["readiness_nonce"], "nonce": request["nonce"],
+                "readiness_nonce": request["readiness_nonce"],
+                "authority_pins_sha256": policy_pins_sha256, "nonce": request["nonce"],
                 "capabilities": evidenced, "exit_code": 0,
                 "timed_out": False, "stdout_b64": base64.b64encode(stdout).decode(),
                 "stderr_b64": base64.b64encode(stderr).decode(),

@@ -1,13 +1,23 @@
 #!/usr/bin/env python3
 """Fail-before-model conformance for the production round-zero authority."""
 from __future__ import annotations
-import hashlib, json, subprocess, sys, tempfile, unittest
+import hashlib, json, os, subprocess, sys, tempfile, unittest, zlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / ".factory/loop"))
+sys.path.insert(0, str(ROOT / "scripts"))
 import readiness
 import state
+import factory_runner_policy
+
+def png(label: str) -> bytes:
+    def chunk(kind: bytes, payload: bytes) -> bytes:
+        return len(payload).to_bytes(4, "big") + kind + payload + zlib.crc32(kind + payload).to_bytes(4, "big")
+    pixel = bytes((len(label) % 255, 20, 30, 255))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", (1).to_bytes(4,"big") * 2 + b"\x08\x06\x00\x00\x00")
+            + chunk(b"IDAT", zlib.compress(b"\x00" + pixel)) + chunk(b"IEND", b""))
+
 
 class ReadinessTests(unittest.TestCase):
     def setUp(self):
@@ -18,15 +28,16 @@ class ReadinessTests(unittest.TestCase):
         subprocess.run(["git", "-C", self.root, "config", "user.name", "fixture"], check=True)
         (self.root / "captures").mkdir()
         for name in readiness.PROTECTED_STATES:
-            (self.root / "captures" / f"{name}.png").write_bytes((name + " nonblank licensed xb360").encode())
+            (self.root / "captures" / f"{name}.png").write_bytes(png(name))
         subprocess.run(["git", "-C", self.root, "add", "."], check=True)
         subprocess.run(["git", "-C", self.root, "commit", "-qm", "candidate"], check=True)
         self.candidate = self.git("rev-parse", "HEAD")
         self.tree = self.git("rev-parse", "HEAD^{tree}")
         self.key = self.root / "human-key"
         subprocess.run([readiness.SSH_KEYGEN, "-q", "-t", "ed25519", "-N", "", "-f", self.key], check=True)
-        self.public_key = (self.root / "human-key.pub").read_text().strip()
+        self.public_key = " ".join((self.root / "human-key.pub").read_text().split()[:2])
         self.trust = {"schema": readiness.TRUST_SCHEMA, "status": "active", "namespace": readiness.SIGNATURE_NAMESPACE,
+                      "scope": "production-human-review",
                       "keys": [{"key_id": "review-key", "reviewer": "reviewer@example", "public_key": self.public_key}]}
 
     def tearDown(self): self.tmp.cleanup()
@@ -40,7 +51,7 @@ class ReadinessTests(unittest.TestCase):
                 "candidate_tree": self.tree, "accepted_relationship": "approval-only-descendant", "states": [
             {"id": name, "model": model, "capture": f"captures/{name}.png",
              "capture_blob": self.oid(f"{self.candidate}:captures/{name}.png"),
-             "capture_sha256": hashlib.sha256((name + " nonblank licensed xb360").encode()).hexdigest(),
+             "capture_sha256": hashlib.sha256(png(name)).hexdigest(),
              "assessment": {"recognizable": True, "sharp": True, "contrast": True,
                             "marker_aligned": True}}
             for name, model in zip(readiness.PROTECTED_STATES, ("xb360", "xbox-series", "ds5"))],
@@ -78,6 +89,7 @@ class ReadinessTests(unittest.TestCase):
             "model-prose": lambda d: d["reviewer"].update(identity="model"),
             "not-approved": lambda d: d.update(decision="pending"),
             "stale-tree": lambda d: d.update(candidate_tree="0"*40),
+            "self-reviewed": lambda d: d.update(candidate_commit=accepted),
         }
         for label, mutate in mutations.items():
             with self.subTest(label=label):
@@ -87,6 +99,36 @@ class ReadinessTests(unittest.TestCase):
                         accepted_commit=accepted, trust_raw=readiness.canonical_bytes(self.trust),
                         blob_at=self.blob, object_id=self.oid,
                         is_ancestor=lambda a,b: True, diff_paths=lambda a,b: [readiness.APPROVAL_PATH, valid["signature_path"]])
+
+    def test_external_trust_anchor_requires_root_owned_immutable_exact_digest(self):
+        authority = self.root / "review-anchor.json"
+        raw = readiness.canonical_bytes(self.trust)
+        authority.write_bytes(raw); authority.chmod(0o444)
+        digest = hashlib.sha256(raw).hexdigest()
+        loaded, info = readiness.read_external_authority(authority, digest, expected_uid=os.getuid())
+        self.assertEqual(loaded, raw); self.assertEqual(info.st_uid, os.getuid())
+        authority.chmod(0o644)
+        with self.assertRaises(readiness.HumanApprovalBlocked):
+            readiness.read_external_authority(authority, digest, expected_uid=os.getuid())
+        authority.chmod(0o444)
+        with self.assertRaises(readiness.HumanApprovalBlocked):
+            readiness.read_external_authority(authority, "0" * 64, expected_uid=os.getuid())
+        authority.unlink()
+
+    def test_rejects_text_named_png(self):
+        with self.assertRaises(readiness.HumanApprovalBlocked):
+            readiness._validate_png(b"not a png")
+
+    def test_human_tier_is_final_conformance_authority(self):
+        side={"requirements":[{"id":"VRF-07","classification":"verified",
+              "evidence_tier":"human","required_tier":"human",
+              "evidence_commit":self.candidate,
+              "artifacts":[readiness.APPROVAL_PATH]}]}
+        self.assertRegex(readiness.validate_human_conformance(
+            json.dumps(side).encode(), candidate_commit=self.candidate), r"^[0-9a-f]{64}$")
+        side["requirements"][0]["classification"]="partial"
+        with self.assertRaises(readiness.HumanApprovalBlocked):
+            readiness.validate_human_conformance(json.dumps(side).encode(), candidate_commit=self.candidate)
 
     def test_core_mapping_requires_every_explicit_policy_row(self):
         requirements=[]; policies=[]
@@ -149,5 +191,42 @@ class ReadinessTests(unittest.TestCase):
         self.assertEqual((advanced.current_phase, advanced.current_round), ("planning",1))
         mutated=dict(advanced.readiness); mutated["result_sha256"]="3"*64
         self.assertNotEqual(state.state_digest(advanced), state.state_digest(state.FactoryState(**{**advanced.__dict__,"readiness":mutated})))
+
+
+class RunnerPolicyAuthorityTests(unittest.TestCase):
+    def test_gpurunner_requires_two_enrolled_exact_class_pins(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "policy.json"
+            base = {"schema":"factory-runner-policy/v1", "namespace":"factory-runner-receipt",
+                    "authority_pins":[], "classes":[{
+                        "name":"gpurunner", "uid":os.getuid() or 1,
+                        "workspace_root":"/var/lib/factory-gpurunner",
+                        "verify_argv":["./scripts/verify-project.sh"],
+                        "allowed_capabilities":["gpu-compositor","installed-licensed-diagram"],
+                        "signer_helper":"/usr/lib/factory/signer", "signer_key":"/etc/factory/key",
+                        "signer_principal_file":"/etc/factory/principal"}]}
+            prior = factory_runner_policy.DEFAULT_POLICY_PATH
+            prior_env = os.environ.get("FACTORY_RUNNER_POLICY")
+            os.environ["FACTORY_RUNNER_POLICY"] = str(path)
+            factory_runner_policy.DEFAULT_POLICY_PATH = path
+            try:
+                for status, accepted in (("pending-human-review", False), ("enrolled", True)):
+                    value=json.loads(json.dumps(base)); value["authority_pins"]=[
+                        {"class":"gpurunner","scope":scope,"authority_sha256":"a"*64,"status":status}
+                        for scope in sorted(factory_runner_policy.PIN_SCOPES)]
+                    path.write_text(json.dumps(value)); path.chmod(0o444)
+                    if accepted:
+                        policy=factory_runner_policy.load_policy()
+                        self.assertEqual(factory_runner_policy.authority_pin(policy,"gpurunner","installed-licensed-diagram"),"a"*64)
+                    else:
+                        with self.assertRaises(factory_runner_policy.PolicyError): factory_runner_policy.load_policy()
+                    path.chmod(0o644)
+                value=json.loads(json.dumps(base)); value["authority_pins"]=[]
+                path.write_text(json.dumps(value)); path.chmod(0o444)
+                with self.assertRaises(factory_runner_policy.PolicyError): factory_runner_policy.load_policy()
+            finally:
+                factory_runner_policy.DEFAULT_POLICY_PATH = prior
+                if prior_env is None: os.environ.pop("FACTORY_RUNNER_POLICY", None)
+                else: os.environ["FACTORY_RUNNER_POLICY"] = prior_env
 
 if __name__ == "__main__": unittest.main(verbosity=2)

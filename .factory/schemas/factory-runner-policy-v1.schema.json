@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory-runner-policy/v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "namespace", "classes", "authority_pins"],
+  "properties": {
+    "schema": {"const": "factory-runner-policy/v1"},
+    "namespace": {"type": "string", "minLength": 1},
+    "classes": {"type": "array", "minItems": 1},
+    "authority_pins": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["class", "scope", "authority_sha256", "status"],
+        "properties": {
+          "class": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+          "scope": {"enum": ["installed-licensed-diagram", "gpu-compositor-layout-oracle"]},
+          "authority_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "status": {"enum": ["enrolled", "pending-human-review"]}
+        }
+      }
+    }
+  }
+}

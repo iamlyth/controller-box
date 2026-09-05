@@ -386,6 +386,7 @@ class CampaignResult:
     head_commit: str
     phase_history: Tuple[PhaseRecord, ...] = ()
     readiness_result_digest: str = "0" * 64
+    trust_authority_sha256: str = "0" * 64
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -399,6 +400,7 @@ class CampaignResult:
             "exit_code": TERMINAL_EXIT_CODES[self.terminal_phase],
             "phase_history": [record.to_dict() for record in self.phase_history],
             "readiness_result_digest": self.readiness_result_digest,
+            "trust_authority_sha256": self.trust_authority_sha256,
         }
 
     def validate(self) -> None:
@@ -432,6 +434,8 @@ class CampaignResult:
             )
         if not SHA256_RE.fullmatch(self.readiness_result_digest):
             raise CampaignResultError("readiness_result_digest must be SHA-256")
+        if not SHA256_RE.fullmatch(self.trust_authority_sha256):
+            raise CampaignResultError("trust_authority_sha256 must be SHA-256")
         for record in self.phase_history:
             if record.round < 1 or record.round > self.rounds_requested:
                 raise CampaignResultError(
@@ -541,6 +545,8 @@ class CampaignConfig:
     state_namespace: str = ""
     accepted_commit: str = ""
     install_manifest: str = ""
+    human_trust_anchor: str = ""
+    human_trust_anchor_sha256: str = ""
     role_timeout: float = DEFAULT_ROLE_TIMEOUT
     gate_timeout: float = DEFAULT_GATE_TIMEOUT
     runner_timeout: float = DEFAULT_RUNNER_TIMEOUT
@@ -2263,7 +2269,9 @@ class Campaign:
         # modes execute through the same retained-fd authority — no pathname
         # asymmetry between the two gate lanes.
         self._held_acceptance: Optional[evidence_module.HeldVerifier] = None
+        self._held_shell: Optional[evidence_module.HeldVerifier] = None
         self._command_closure: Dict[str, str] = {}
+        self._command_closure_root: Optional[Path] = None
         # Task 10 §16: the phase records of THIS run, consumed by the findings
         # authority to bind every previous-round receipt to a phase that
         # actually ran and classified findings/blocked.
@@ -2329,15 +2337,27 @@ class Campaign:
         """Stage and bind the complete committed local command dependency surface."""
         if self._config.role_driver is not None:
             return
-        result = self._git._bytes(["ls-tree", "-r", "--name-only", "-z", self._config.accepted_commit])
+        result = self._git._bytes(["ls-tree", "-r", "-z", self._config.accepted_commit])
         if result.returncode != 0:
             raise CampaignBindingError("cannot enumerate committed command closure")
-        paths = [p.decode("utf-8") for p in result.stdout.split(b"\0") if p]
-        selected = sorted(p for p in paths if p.startswith(("scripts/", ".factory/loop/", ".factory/schemas/")) or p in {
-            ".factory/config.toml", ".factory/environment.toml", ".factory/capability-contracts.json",
-            ".factory/requirement-policy.json", ".factory/signer-trust.json",
-            readiness_module.APPROVAL_PATH, readiness_module.TRUST_PATH,
-        })
+        entries: Dict[str, str] = {}
+        try:
+            for record in result.stdout.split(b"\0"):
+                if not record:
+                    continue
+                metadata, encoded = record.split(b"\t", 1)
+                mode, kind, _oid = metadata.decode("ascii").split(" ")
+                rel = encoded.decode("utf-8")
+                if kind != "blob" or mode not in {"100644", "100755"}:
+                    raise ValueError("unsupported committed entry")
+                entries[rel] = mode
+        except (UnicodeError, ValueError) as exc:
+            raise CampaignBindingError("committed command closure inventory is malformed") from exc
+        paths = list(entries)
+        # Stage the complete accepted tree. Shell gates intentionally consume
+        # product files as well as executable helpers; selecting only scripts
+        # left those transitive reads pointed at the mutable checkout.
+        selected = sorted(paths)
         if not selected:
             raise CampaignBindingError("committed command closure is empty")
         closure_root = self._state_directory() / "command-closure"
@@ -2353,8 +2373,33 @@ class Campaign:
                 os.write(fd, raw); os.fsync(fd)
             finally:
                 os.close(fd)
-        os.chmod(closure_root, 0o500)
+            os.chmod(target, 0o500 if entries[rel] == "100755" else 0o400)
+        # Materialize a private exact-commit Git database so intentional Git
+        # reads by gates resolve against the staged tree, never the checkout.
+        for argv in (("init", "-q"), ("add", "-f", "--all")):
+            completed = gitutil.git_run(["-C", str(closure_root), *argv], timeout=GIT_TIMEOUT)
+            if completed.returncode != 0:
+                raise CampaignBindingError("cannot construct immutable closure Git authority")
+        tree_result = gitutil.git_run(["-C", str(closure_root), "write-tree"], timeout=GIT_TIMEOUT)
+        expected_tree = self._git.object_id(f"{self._config.accepted_commit}^{{tree}}")
+        if tree_result.returncode != 0 or tree_result.stdout.strip() != expected_tree:
+            raise CampaignBindingError("staged closure tree differs from accepted Git tree")
+        commit_object = self._git._bytes(["cat-file", "commit", self._config.accepted_commit])
+        if commit_object.returncode != 0:
+            raise CampaignBindingError("cannot read accepted commit object for closure")
+        imported = subprocess.run(
+            [gitutil.GIT_EXECUTABLE, "-C", str(closure_root), "hash-object", "-t", "commit", "-w", "--stdin"],
+            input=commit_object.stdout, capture_output=True, timeout=GIT_TIMEOUT)
+        if imported.returncode != 0 or imported.stdout.decode().strip() != self._config.accepted_commit:
+            raise CampaignBindingError("cannot import accepted commit into staged closure")
+        updated = gitutil.git_run(["-C", str(closure_root), "update-ref", "HEAD", self._config.accepted_commit], timeout=GIT_TIMEOUT)
+        if updated.returncode != 0:
+            raise CampaignBindingError("cannot bind staged closure HEAD")
+        # Gates need private scratch/build outputs, but accepted files remain
+        # read/execute-only and are digest-checked before every invocation.
+        os.chmod(closure_root, 0o700)
         self._command_closure = mapping
+        self._command_closure_root = closure_root
 
     def _verify_command_closure(self) -> None:
         if self._config.role_driver is not None:
@@ -2362,7 +2407,7 @@ class Campaign:
         for rel, digest in self._command_closure.items():
             try:
                 raw, _ = evidence_module.secure_read_bytes(
-                    self._root / rel, maximum=PLAN_BLOB_MAX,
+                    (self._command_closure_root or self._root) / rel, maximum=PLAN_BLOB_MAX,
                     what=f"command closure {rel}",
                 )
             except evidence_module.VerifierBindingError as exc:
@@ -2383,6 +2428,16 @@ class Campaign:
         """
         config = self._config
         self._bind_command_closure()
+        if config.role_driver is None:
+            shell = shutil.which("bash")
+            if not shell or not Path(shell).is_absolute():
+                raise CampaignBindingError("trusted Bash executable is unavailable")
+            try:
+                shell_binding = evidence_module.bind_verifier(
+                    self._root, (shell,), commit=self._git.head(), git=self._git)
+                self._held_shell = evidence_module.HeldVerifier(self._root, shell_binding)
+            except evidence_module.VerifierBindingError as exc:
+                raise CampaignBindingError(f"Bash executable cannot be pinned: {exc}") from exc
         if config.role_driver:
             canonical = "./" + config.role_driver
             try:
@@ -2466,6 +2521,7 @@ class Campaign:
             raise CampaignBindingError("a mandatory readiness command authority is not held")
         payload = {
             "entrypoints": {name: value.binding.digest() for name, value in held.items()},
+            "shell": self._held_shell.binding.digest() if self._held_shell is not None else "",
             "closure": dict(sorted(self._command_closure.items())),
         }
         return plan_sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode())
@@ -2495,7 +2551,7 @@ class Campaign:
             "install_manifest_sha256": plan_sha256(manifest_raw),
             "command_authority_sha256": self._readiness_authority_digest(),
             "human_authority_sha256": digest_blob(readiness_module.APPROVAL_PATH),
-            "trust_authority_sha256": digest_blob(readiness_module.TRUST_PATH),
+            "trust_authority_sha256": self._config.human_trust_anchor_sha256,
         })
         return value
 
@@ -2636,11 +2692,17 @@ class Campaign:
             return self._publish_readiness(state, status="findings", outcome="findings", aggregate=aggregate, capability=evidence_digest, core=core_digest, conformance=mapping_digest, human="0"*64), "findings"
         try:
             approval_raw = self._git.blob_at(self._git.head(), readiness_module.APPROVAL_PATH)
-            trust_raw = self._git.blob_at(self._git.head(), readiness_module.TRUST_PATH)
+            trust_raw, _ = readiness_module.read_external_authority(
+                Path(self._config.human_trust_anchor), self._config.human_trust_anchor_sha256)
             human_digest = readiness_module.validate_human_approval(
                 approval_raw, accepted_commit=self._git.head(), trust_raw=trust_raw,
                 blob_at=self._git.blob_at, object_id=self._git.object_id,
                 is_ancestor=self._git.is_ancestor, diff_paths=self._git.diff_paths)
+            approval_data = json.loads(approval_raw)
+            conformance_human = readiness_module.validate_human_conformance(
+                self._git.blob_at(self._git.head(), DEFAULT_CONFORMANCE_PATH),
+                candidate_commit=str(approval_data["candidate_commit"]))
+            human_digest = plan_sha256((human_digest + conformance_human).encode())
         except readiness_module.HumanApprovalBlocked:
             return self._publish_readiness(state, status="human_blocked", outcome="blocked", aggregate=aggregate, capability=evidence_digest, core=core_digest, conformance=mapping_digest, human="0"*64), "blocked"
         state = self._publish_readiness(state, status="complete", outcome="pass",
@@ -2662,8 +2724,11 @@ class Campaign:
     def _gate_environment(self) -> Dict[str, str]:
         environment = {
             **sanitized_gate_environment(),
-            "FACTORY_VERIFIER_ROOT": str(self._root),
+            "FACTORY_VERIFIER_ROOT": str(self._command_closure_root or self._root),
+            "PYTHONNOUSERSITE": "1",
         }
+        # Production lookup never falls back to candidate-worktree helpers.
+        environment["PYTHONPATH"] = str((self._command_closure_root or self._root) / ".factory" / "loop")
         if self._config.role_driver is None:
             environment["FACTORY_CAMPAIGN_ID"] = self._config.campaign_id
             if self._state_file_exists():
@@ -3665,7 +3730,7 @@ class Campaign:
                 readiness_nonce = str(state_module.load_state(self._root).readiness.get("nonce", readiness_nonce))
             except state_module.StateError:
                 pass
-        state_module.atomic_write_json(self._root, RUNNER_ACQUISITION_NAME, {
+        document = {
             "schema": RUNNER_ACQUISITION_SCHEMA,
             "attempt": attempt,
             "status": status,
@@ -3682,7 +3747,13 @@ class Campaign:
             # transport bytes, environment values, and credentials never enter
             # durable acquisition state or campaign findings.
             "diagnostic": diagnostic,
-        })
+        }
+        state_module.atomic_write_json(self._root, RUNNER_ACQUISITION_NAME, document)
+        persisted = self._read_runner_acquisition()
+        if persisted != document:
+            raise CampaignRecoveryError(
+                "runner acquisition transition was not atomically persisted and reread"
+            )
 
     def _spawn_runner_authority(
         self, held: evidence_module.HeldVerifier, tail: Sequence[str],
@@ -3883,11 +3954,24 @@ class Campaign:
                         self._spawn_held_script(held, list(command)[1:])
                     )
                 else:
-                    # Non-Python scripts keep the kernel-shebang dispatch on
-                    # the retained descriptor (existing Task 12 contract).
-                    spawn_argv, spawn_executable, spawn_pass_fds = held.spawn(
-                        list(command)
-                    )
+                    if self._config.role_driver is not None:
+                        # Explicit synthetic fixtures retain the established
+                        # descriptor execution seam; they are never production.
+                        spawn_argv, spawn_executable, spawn_pass_fds = held.spawn(list(command))
+                    else:
+                        if self._command_closure_root is None:
+                            raise CampaignBindingError("immutable command closure is unavailable")
+                        rel = held.binding.executable[2:] if held.binding.executable.startswith("./") else held.binding.executable
+                        staged = self._command_closure_root / rel
+                        # Bash reads the immutable staged entrypoint by pathname;
+                        # all relative helper/product lookup is rooted in the same
+                        # private accepted-tree closure.
+                        if self._held_shell is None:
+                            raise CampaignBindingError("pinned Bash authority is unavailable")
+                        self._held_shell.revalidate(git=self._git, current_commit=self._git.head())
+                        shell = self._held_shell.binding.executable
+                        spawn_argv = [shell, str(staged), *list(command)[1:]]
+                        spawn_executable, spawn_pass_fds = shell, ()
                 spawn_pass_fds = tuple(spawn_pass_fds)
             except evidence_module.VerifierBindingError as exc:
                 # The gate must report that it did NOT run: the substituted
@@ -3901,6 +3985,7 @@ class Campaign:
                 executable=spawn_executable,
                 pass_fds=spawn_pass_fds,
                 env=self._gate_environment(),
+                cwd=self._command_closure_root or self._root,
                 timeout=min(
                     self._config.gate_timeout,
                     self._remaining_time(f"{label} gate"),
@@ -5083,6 +5168,7 @@ class Campaign:
                 head_commit=head,
                 phase_history=tuple(history),
                 readiness_result_digest=str(state.readiness.get("result_sha256", "0" * 64)),
+                trust_authority_sha256=str(state.readiness.get("trust_authority_sha256", "0" * 64)),
             )
             result.validate()
             validate_campaign_result(result)
@@ -5113,13 +5199,24 @@ class Campaign:
             if self._held_acceptance is not None:
                 self._held_acceptance.close()
                 self._held_acceptance = None
+            if self._held_shell is not None:
+                self._held_shell.close()
+                self._held_shell = None
             if self._lock is not None:
                 self._lock.release()
 
     def _publish_result(self, result: CampaignResult) -> None:
         """Publish the machine result under the ignored evidence namespace."""
         name = f"campaign-result-{self._config.campaign_id}.json"
-        state_module.atomic_write_json(self._root, name, result.to_dict())
+        document = result.to_dict()
+        state_module.atomic_write_json(self._root, name, document)
+        persisted = state_module.read_json(
+            self._root, name, maximum=MAX_RESULT_FILE, missing_ok=False)
+        if persisted != document:
+            raise CampaignRecoveryError(
+                "campaign result publication was not atomically persisted and reread"
+            )
+        validate_campaign_result(persisted)
 
 
 # ---------------------------------------------------------------------------
@@ -5155,6 +5252,8 @@ def derive_campaign_config(
     state_namespace: str = "",
     accepted_commit: str = "",
     install_manifest: str = "",
+    human_trust_anchor: str = "",
+    human_trust_anchor_sha256: str = "",
     readiness_only: bool = False,
 ) -> CampaignConfig:
     """Derive every binding from the committed state at the current HEAD.
@@ -5226,6 +5325,8 @@ def derive_campaign_config(
         state_namespace=state_namespace,
         accepted_commit=accepted_commit,
         install_manifest=install_manifest,
+        human_trust_anchor=human_trust_anchor,
+        human_trust_anchor_sha256=human_trust_anchor_sha256,
         role_timeout=role_timeout,
         gate_timeout=gate_timeout,
         runner_timeout=runner_timeout,
@@ -5285,6 +5386,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "absolute production install manifest; the executing installed "
             "control plane must verify byte-exactly at --accepted-commit"
         ),
+    )
+    p_run.add_argument(
+        "--human-trust-anchor", default="", metavar="ABSOLUTE_FILE",
+        help="root/operator-owned immutable offline reviewer trust anchor",
+    )
+    p_run.add_argument(
+        "--human-trust-anchor-sha256", default="", metavar="SHA256",
+        help="coordinator-approved exact digest of --human-trust-anchor",
     )
     p_run.add_argument("--role-driver", default=None, metavar="RELPATH")
     p_run.add_argument(
@@ -5491,6 +5600,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 state_namespace=state_namespace,
                 accepted_commit=args.accepted_commit,
                 install_manifest=args.install_manifest,
+                human_trust_anchor=args.human_trust_anchor,
+                human_trust_anchor_sha256=args.human_trust_anchor_sha256,
                 readiness_only=args.readiness_only,
             )
         except (CampaignError, gitutil.GitBoundaryError) as exc:
@@ -5746,6 +5857,17 @@ def _production_preflight(
             "production campaign requires a clean Git tree before planning; "
             "the planner may never absorb pre-existing changes"
         )
+    # External/offline reviewer trust is a coordinator prerequisite, never a
+    # candidate-tree authority. Validate it before reserving state or running
+    # any acquisition/probe/model process.
+    trust_path = Path(str(getattr(args, "human_trust_anchor", "")))
+    trust_digest = str(getattr(args, "human_trust_anchor_sha256", ""))
+    try:
+        trust_raw, _ = readiness_module.read_external_authority(trust_path, trust_digest)
+        readiness_module.validate_trust_anchor(trust_raw)
+    except readiness_module.HumanApprovalBlocked as exc:
+        raise CampaignConfigError(f"external human trust anchor is unavailable: {exc}") from exc
+
     manifest_path = getattr(args, "install_manifest", "")
     manifest = _secure_install_manifest(manifest_path)
     if (

@@ -812,6 +812,17 @@ class InstalledTierSuite(unittest.TestCase):
         )
         backend.chmod(0o755)
         launcher = self.external / ".factory/bin/factory-campaign"
+        trust_anchor = self.tmp / "offline-human-review-anchor.json"
+        trust_raw = json.dumps({
+            "schema": "controller-human-review-trust-anchor/v2", "status": "active",
+            "namespace": "controller-box-production-graphics-approval",
+            "scope": "production-human-review", "keys": [{
+                "key_id": "fixture-only", "reviewer": "fixture@example.invalid",
+                "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKCkkRbD/mDyDA22vY/FJXeqflxhinFfPkknEWHGES9e"
+            }]
+        }, sort_keys=True).encode() + b"\n"
+        trust_anchor.write_bytes(trust_raw); trust_anchor.chmod(0o444)
+        trust_digest = hashlib.sha256(trust_raw).hexdigest()
 
         def argv(campaign_id: str, *extra: str) -> list[str]:
             return [
@@ -821,6 +832,8 @@ class InstalledTierSuite(unittest.TestCase):
                 "--model", "fixture-never-launched", "--backend", str(backend),
                 "--accepted-commit", self.head,
                 "--install-manifest", str(self.manifest_ext),
+                "--human-trust-anchor", str(trust_anchor),
+                "--human-trust-anchor-sha256", trust_digest,
                 *extra,
                 "--preflight-only",
             ]

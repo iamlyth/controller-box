@@ -111,7 +111,7 @@ manifest = {
     "schema": "factory-runner-receipt/v1", "result": "pass", "runner": "fake-runner",
     "commit": head, "tree": tree, "environment_blob": environment_blob,
     "verify_argv_sha256": argv_digest, "archive_sha256": archive_sha256,
-    "campaign_id": "synthetic-signer-protocol", "readiness_nonce": "b" * 64, "nonce": "0" * 64,
+    "campaign_id": "synthetic-signer-protocol", "readiness_nonce": "b" * 64, "authority_pins_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945", "nonce": "0" * 64,
     "capabilities": ["remote-project-gate"], "exit_code": 0, "timed_out": False,
     "started_at": 1, "finished_at": 2, "cleanup": True,
     "stdout_sha256": empty, "stderr_sha256": empty,
@@ -448,6 +448,7 @@ import json, os, sys
 print(json.dumps({
     "schema": "factory-runner-policy/v1",
     "namespace": "factory-runner-receipt",
+    "authority_pins": [],
     "classes": [
         {
             "name": "fake-runner",
@@ -472,7 +473,7 @@ manifest = {
     "verify_argv_sha256": hashlib.sha256(b"x").hexdigest(),
     "archive_sha256": hashlib.sha256(b"y").hexdigest(),
     "campaign_id": "synthetic-signer-protocol", "readiness_nonce": "b" * 64,
-    "nonce": "0" * 64,
+    "authority_pins_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945", "nonce": "0" * 64,
     "capabilities": ["remote-project-gate"], "exit_code": 0, "timed_out": False,
     "started_at": 1, "finished_at": 2, "cleanup": True,
     "stdout_sha256": hashlib.sha256(b"").hexdigest(),

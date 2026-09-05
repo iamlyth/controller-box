@@ -561,7 +561,7 @@ INSTALL_MANIFEST="$INSTALL_PARENT/install-manifest.json"
 CAMPAIGN_ID="controller-box-$(date +%Y%m%dT%H%M%S)-$$"
 python3 .factory/loop/installer.py install --root "$PWD" --commit "$ACCEPTED_COMMIT" --prefix "$INSTALL_PREFIX" --manifest-out "$INSTALL_MANIFEST"
 python3 "$INSTALL_PREFIX/.factory/loop/installer.py" verify --root "$PWD" --commit "$ACCEPTED_COMMIT" --prefix "$INSTALL_PREFIX" --manifest "$INSTALL_MANIFEST"
-"$INSTALL_PREFIX/.factory/bin/factory-campaign" --root "$PWD" run --campaign-id "$CAMPAIGN_ID" --rounds 5 --branch develop --provider "${PI_PROVIDER:?set provider}" --model "${PI_MODEL:?set model}" --backend "${PI2_BACKEND:?set trusted pi2 executable}" --accepted-commit "$ACCEPTED_COMMIT" --install-manifest "$INSTALL_MANIFEST" --campaign-timeout 21600 --verification-command ./scripts/verify-project.sh --runner-command ./scripts/run-factory-runners.py --capability-command ./scripts/check-capability-evidence.py --acceptance-command '["./scripts/final-gate.sh","--implementation"]'
+"$INSTALL_PREFIX/.factory/bin/factory-campaign" --root "$PWD" run --campaign-id "$CAMPAIGN_ID" --rounds 5 --branch develop --provider "${PI_PROVIDER:?set provider}" --model "${PI_MODEL:?set model}" --backend "${PI2_BACKEND:?set trusted pi2 executable}" --accepted-commit "$ACCEPTED_COMMIT" --install-manifest "$INSTALL_MANIFEST" --human-trust-anchor "${HUMAN_TRUST_ANCHOR:?operator-provisioned absolute file}" --human-trust-anchor-sha256 "${HUMAN_TRUST_ANCHOR_SHA256:?offline approved digest}" --campaign-timeout 21600 --verification-command ./scripts/verify-project.sh --runner-command ./scripts/run-factory-runners.py --capability-command ./scripts/check-capability-evidence.py --acceptance-command '["./scripts/final-gate.sh","--implementation"]'
 ```
 
 Sequence invariants are: accepted commit, clean `develop`, exact-commit
@@ -575,12 +575,25 @@ conformance plus explicit core-row mappings, and finally validates the committed
 `.factory/production-graphics-approval.json` for the list, sequential, and
 validation-error editor captures. The approval must bind three distinct committed
 capture blob IDs and hashes, accelerated renderer provenance, the fixed checklist,
-reviewer identity, and a detached OpenSSH signature from a key in committed
-`.factory/human-review-trust.json`. Trust is currently `pending` with no key, so
-readiness honestly blocks until an operator provisions one. Review the candidate,
-sign the canonical approval, then commit only the approval JSON and detached
-signature as an approval-only descendant; unrelated product, test, or factory
-changes invalidate the relationship. Models never invoke runner transport. The coordinator
+reviewer identity, and a detached OpenSSH signature from a key in the external
+`controller-human-review-trust-anchor/v2` authority. Candidate Git cannot add or
+rotate reviewer trust: `.factory/human-review-trust.json` is pending enrollment
+information only. The external file must be root/operator-owned, single-link,
+non-writable, non-symlinked, below a safe root-owned ancestor chain, and supplied
+with its independently approved SHA-256. No real key is currently provisioned,
+so readiness remains blocked. Review the candidate, sign the canonical approval,
+then commit exactly one direct child containing only the approval JSON and
+signature; unrelated or later product/test/factory changes invalidate it.
+
+Before deploying gpurunner, add exactly two `enrolled` class-scoped
+`authority_pins` to root-owned `/etc/factory-runner/runner-policy.json` using
+`.factory/schemas/factory-runner-policy-v1.schema.json`: scopes
+`installed-licensed-diagram` and `gpu-compositor-layout-oracle`. The candidate
+request `.factory/runner-policy-enrollment.json` records digest
+`23cb0a91cdcde1ab7bb179b4fe5f6afc340dd9f2061b9d1222be94a3341c298d`, but is
+explicitly pending human review and is not authority. Missing, pending, duplicate,
+or mismatched pins fail before verifier/probe execution. Models never invoke
+runner transport. The coordinator
 reuses an unchanged-HEAD aggregate only when its durable completed acquisition
 record and the strong signed checker agree exactly; interrupted, stale, forged,
 partial, or symlinked state cannot authorize capability acceptance. An

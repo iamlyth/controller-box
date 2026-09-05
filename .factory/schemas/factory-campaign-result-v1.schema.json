@@ -15,7 +15,8 @@
     "head_commit",
     "exit_code",
     "phase_history",
-    "readiness_result_digest"
+    "readiness_result_digest",
+    "trust_authority_sha256"
   ],
   "properties": {
     "schema": {
@@ -56,6 +57,7 @@
     "head_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
     "exit_code": { "type": "integer" },
     "readiness_result_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "trust_authority_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "phase_history": {
       "type": "array",
       "items": {
