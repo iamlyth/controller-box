@@ -114,7 +114,7 @@ required = [
     '.factory/golden-review.json', '.factory/schemas/blocked-facts.schema.json',
     '.factory/schemas/golden-review.schema.json',
     'tests/test-conformance.sh', 'tests/test-capability-contracts.sh',
-    'tests/test-audit-receipts.sh',
+    'tests/test-core-acceptance.sh', 'tests/test-audit-receipts.sh',
     'tests/test-blocked-facts.sh', 'tests/test-campaign-objectives.sh',
     'tests/test-golden-policy.sh',
     'tests/test-runner-signer.sh', 'scripts/check-spec-provided.sh',
@@ -373,6 +373,7 @@ done
 ./tests/test-production-path-bypass.sh
 ./tests/test-conformance.sh
 ./tests/test-capability-contracts.sh
+./tests/test-core-acceptance.sh
 ./tests/test-audit-receipts.sh
 ./tests/test-blocked-facts.sh
 ./tests/test-campaign-objectives.sh

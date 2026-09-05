@@ -161,6 +161,10 @@
       "required_tier": "real_system",
       "spec_sections": [
         "\u00a75.2"
+      ],
+      "required_capabilities": [
+        "inputplumber-system-dbus",
+        "controller-production-routing"
       ]
     },
     {
@@ -203,6 +207,10 @@
       "required_tier": "real_system",
       "spec_sections": [
         "\u00a75.7"
+      ],
+      "required_capabilities": [
+        "inputplumber-system-dbus",
+        "controller-production-routing"
       ]
     },
     {

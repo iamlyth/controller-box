@@ -443,7 +443,8 @@
       "evidence_tier": "simulated",
       "required_tier": "real_system",
       "required_capabilities": [
-        "inputplumber-system-dbus"
+        "inputplumber-system-dbus",
+        "controller-production-routing"
       ],
       "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
       "receipts": [],
@@ -455,7 +456,7 @@
         "FACT-002",
         "FACT-003"
       ],
-      "reason": "Topology reconcile shows 0/4 virtual controllers active in production (BUG-0015); real system-bus acceptance required."
+      "reason": "Production routing remains unevidenced: signed exact-commit controller-production-routing evidence must prove exactly four xb360 targets and their corresponding kernel nodes, then a fresh physical 045e:028e input observed by an independent target consumer through production dispatch, followed by cleanup of every created target and node. System-bus reachability alone is only a prerequisite."
     },
     {
       "id": "MGR-03",
@@ -573,7 +574,8 @@
       "evidence_tier": "simulated",
       "required_tier": "real_system",
       "required_capabilities": [
-        "inputplumber-system-dbus"
+        "inputplumber-system-dbus",
+        "controller-production-routing"
       ],
       "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
       "receipts": [],
@@ -587,7 +589,7 @@
         "FACT-003",
         "FACT-004"
       ],
-      "reason": "Inventory claims contradicted by 0/4 virtual controllers active (BUG-0015); real four-target InputPlumber routing acceptance required."
+      "reason": "End-to-end manager interaction remains unevidenced: signed exact-commit controller-production-routing evidence must prove exactly four xb360 targets and their corresponding kernel nodes, then a fresh physical 045e:028e input observed by an independent target consumer through production dispatch, followed by cleanup of every created target and node. System-bus reachability alone is only a prerequisite."
     },
     {
       "id": "ID-01",

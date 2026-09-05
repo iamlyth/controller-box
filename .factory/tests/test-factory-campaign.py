@@ -2088,23 +2088,11 @@ class ClassificationUnits(_CampaignBase):
             "pass",
         )
 
-    def test_missing_conformance_json_does_not_fail(self) -> None:
-        # The sidecar is optional: a missing conformance.json contributes no
-        # findings and never fails the verification phase.
+    def test_missing_conformance_json_fails_closed(self) -> None:
         missing = Path(tempfile.mkdtemp(prefix="no-conformance.")) / "missing.json"
         self.assertFalse(missing.exists())
-        self.assertEqual(
-            campaign_module._read_conformance_findings(missing), [],
-        )
-        ok = campaign_module.RoleOutcome("tester", 0)
-        self.assertEqual(
-            campaign_module.classify_verification(
-                role=ok, scope_ok=True, gate_ran=True, gate_exit=0,
-                tester_result_valid=True, tester_result_outcome="pass",
-                findings=[], blocked_refs=[], capability_available=True,
-            ),
-            "pass",
-        )
+        with self.assertRaises(campaign_module.ConformanceParseError):
+            campaign_module._read_conformance_findings(missing)
 
     def test_malformed_conformance_json_is_infrastructure_failure(self) -> None:
         # A malformed conformance sidecar means the verifier itself is
@@ -2122,6 +2110,19 @@ class ClassificationUnits(_CampaignBase):
                         encoding="utf-8")
         with self.assertRaises(campaign_module.ConformanceParseError):
             campaign_module._read_conformance_findings(bad2)
+        for payload in (
+            {"schema": "wrong", "requirements": [{"id": "A-01", "classification": "verified"}]},
+            {"schema": "ralph-conformance/v1", "requirements": []},
+            {"schema": "ralph-conformance/v1", "requirements": [{"id": "A-01", "status": "verified"}]},
+            {"schema": "ralph-conformance/v1", "requirements": [
+                {"id": "A-01", "classification": "verified"},
+                {"id": "A-01", "classification": "partial"},
+            ]},
+        ):
+            path = self._write_conformance(payload.get("requirements", []))
+            path.write_text(_json.dumps(payload), encoding="utf-8")
+            with self.assertRaises(campaign_module.ConformanceParseError):
+                campaign_module._read_conformance_findings(path)
 
 
 class ReviewHardening(_CampaignBase):
@@ -2355,8 +2356,8 @@ class ReviewHardening(_CampaignBase):
             model="fixture-real-model",
             backend=str(backend),
             role_driver=None,
-            acceptance_command=("./scripts/credential-guard.py",),
-            capability_command=("./scripts/credential-guard.py",),
+            acceptance_command=campaign_module.CANONICAL_FINAL_ACCEPTANCE_COMMAND,
+            capability_command=campaign_module.CANONICAL_CAPABILITY_COMMAND,
             runner_command=campaign_module.RUNNER_COMMAND,
             state_namespace=".factory-state/campaigns/campaign",
             accepted_commit=head,
@@ -2895,8 +2896,9 @@ class RunnerAcquisitionLifecycleTests(_CampaignBase):
 
     def _close(self, authority) -> None:
         for name in (
-            "_held_verifier", "_held_capability", "_held_acceptance",
-            "_held_runner", "_held_runner_checker", "_held_driver",
+            "_held_verifier", "_held_capability", "_held_core_acceptance",
+            "_held_conformance_validator", "_held_acceptance", "_held_runner",
+            "_held_runner_checker", "_held_driver",
         ):
             held = getattr(authority, name, None)
             if held is not None:

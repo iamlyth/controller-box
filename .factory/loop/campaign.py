@@ -201,6 +201,13 @@ RUNNER_INTEGRITY_EXIT = 22
 # campaign consults it after the ``verify-project.sh`` gate passes so partial
 # rows cannot be silently accepted behind a passing deterministic gate.
 DEFAULT_CONFORMANCE_PATH = ".factory/artifacts/conformance.json"
+CONFORMANCE_VALIDATOR_COMMAND = (
+    "./scripts/validate-conformance.py", "planning", DEFAULT_CONFORMANCE_PATH,
+)
+CANONICAL_CAPABILITY_COMMAND = ("./scripts/check-capability-evidence.py",)
+CANONICAL_FINAL_ACCEPTANCE_COMMAND = (
+    "./scripts/final-gate.sh", "--implementation",
+)
 # Phase 4: the mandatory core acceptance probe is a fixed committed script
 # resolved the same way as ``verify-project.sh`` (relative to the campaign
 # root). It DETECTS broken core behaviors (BUG-0015 virtual controllers,
@@ -648,15 +655,15 @@ class CampaignConfig:
                     "coordinator entrypoint ./scripts/run-factory-runners.py "
                     "with no arguments or shell"
                 )
-            for name in ("acceptance_command", "capability_command"):
-                command = getattr(self, name)
-                if not command:
+            canonical_commands = (
+                ("capability_command", tuple(self.capability_command), CANONICAL_CAPABILITY_COMMAND),
+                ("acceptance_command", tuple(self.acceptance_command), CANONICAL_FINAL_ACCEPTANCE_COMMAND),
+            )
+            for name, command, expected in canonical_commands:
+                if command != expected:
                     raise CampaignConfigError(
-                        f"production campaign requires an explicit non-empty {name}"
-                    )
-                if not command[0].startswith("./"):
-                    raise CampaignConfigError(
-                        f"production {name} must use a canonical repository-relative ./path"
+                        f"production {name} must be exactly {list(expected)!r}; "
+                        "caller-selected acceptance scripts are forbidden"
                     )
             expected_namespace = (
                 f"{CAMPAIGN_STATE_PARENT_REL}/{self.campaign_id}"
@@ -1426,7 +1433,7 @@ def classify_implementation(
 
 
 class ConformanceParseError(Exception):
-    """The conformance sidecar exists but is malformed.
+    """The conformance sidecar is missing or malformed.
 
     Raised by :func:`_read_conformance_findings` when
     ``.factory/artifacts/conformance.json`` exists but cannot be parsed as
@@ -1447,25 +1454,33 @@ def _read_conformance_findings(conformance_path) -> List[str]:
 
         conformance REQ-XX status=partial: <reason/summary>
 
-    * If the file does not exist, an empty list is returned — the sidecar
-      is optional and may be absent in some contexts (the campaign skips
-      the consultation rather than failing).
-    * If the file exists but is malformed, :class:`ConformanceParseError` is
+    * A missing file is invalid; only an explicit synthetic role-driver
+      campaign may bypass the committed Controller validator integration.
+    * If the file is malformed, :class:`ConformanceParseError` is
       raised so the caller can classify the verification phase as
       ``infrastructure_failure`` (the verifier/sidecar is broken).
     * Rows whose status is exactly ``"verified"`` contribute no finding.
     """
     path = Path(conformance_path)
     try:
-        if not path.exists():
-            return []
+        if not path.is_file() or path.is_symlink():
+            raise ConformanceParseError(
+                f"conformance sidecar is missing or unsafe at {path}"
+            )
         raw = path.read_text(encoding="utf-8")
     except OSError as exc:
         raise ConformanceParseError(
             f"cannot read conformance sidecar at {path}: {exc}"
         ) from exc
     try:
-        data = json.loads(raw)
+        def reject_duplicates(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError(f"duplicate JSON object key: {key!r}")
+                result[key] = value
+            return result
+        data = json.loads(raw, object_pairs_hook=reject_duplicates)
     except ValueError as exc:
         raise ConformanceParseError(
             f"malformed conformance sidecar at {path}: {exc}"
@@ -1475,30 +1490,42 @@ def _read_conformance_findings(conformance_path) -> List[str]:
             f"malformed conformance sidecar at {path}: top-level value is not "
             f"an object (got {type(data).__name__})"
         )
+    if data.get("schema") != "ralph-conformance/v1":
+        raise ConformanceParseError(
+            f"malformed conformance sidecar at {path}: wrong schema"
+        )
     requirements = data.get("requirements")
-    if not isinstance(requirements, list):
+    if not isinstance(requirements, list) or not requirements:
         raise ConformanceParseError(
             f"malformed conformance sidecar at {path}: missing or non-list "
             f"'requirements' array"
         )
     findings: List[str] = []
+    seen_ids: set[str] = set()
     for row in requirements:
         if not isinstance(row, dict):
             raise ConformanceParseError(
                 f"malformed conformance sidecar at {path}: non-object "
                 f"requirement row"
             )
+        req_id = row.get("id")
         status = row.get("classification")
-        if status is None:
-            status = row.get("status")
-        if status is None:
+        if not isinstance(req_id, str) or not req_id:
+            raise ConformanceParseError(
+                f"malformed conformance sidecar at {path}: invalid requirement id"
+            )
+        if req_id in seen_ids:
+            raise ConformanceParseError(
+                f"malformed conformance sidecar at {path}: duplicate requirement id {req_id}"
+            )
+        seen_ids.add(req_id)
+        if status not in {"verified", "partial", "missing", "ambiguous", "blocked", "not_applicable"}:
             raise ConformanceParseError(
                 f"malformed conformance sidecar at {path}: requirement row "
-                f"{row.get('id')!r} has no classification/status field"
+                f"{req_id!r} has invalid classification {status!r}"
             )
         if status == "verified":
             continue
-        req_id = str(row.get("id", "?"))
         summary = str(row.get("reason") or row.get("summary") or "").strip()
         line = f"conformance {req_id} status={status}: {summary}".rstrip(": ")
         findings.append(line)
@@ -2185,6 +2212,8 @@ class Campaign:
         # acquisition are independently exact-commit bound; neither falls
         # back to the verification descriptor or a workspace-resolved command.
         self._held_capability: Optional[evidence_module.HeldVerifier] = None
+        self._held_core_acceptance: Optional[evidence_module.HeldVerifier] = None
+        self._held_conformance_validator: Optional[evidence_module.HeldVerifier] = None
         self._held_runner: Optional[evidence_module.HeldVerifier] = None
         self._held_runner_checker: Optional[evidence_module.HeldVerifier] = None
         # Task 22 (B1): the role driver is bound to its exact committed
@@ -2304,6 +2333,8 @@ class Campaign:
                 ) from exc
         for label, command_value, attribute in (
             ("capability", config.capability_command, "_held_capability"),
+            ("core acceptance", CORE_ACCEPTANCE_COMMAND if config.role_driver is None else (), "_held_core_acceptance"),
+            ("conformance validator", CONFORMANCE_VALIDATOR_COMMAND if config.role_driver is None else (), "_held_conformance_validator"),
             ("acceptance", config.acceptance_command, "_held_acceptance"),
             ("runner acquisition", config.runner_command, "_held_runner"),
             (
@@ -3483,6 +3514,9 @@ class Campaign:
         held = {
             "capability": self._held_capability,
             "final capability": self._held_capability,
+            "core acceptance": self._held_core_acceptance,
+            "final core acceptance": self._held_core_acceptance,
+            "conformance validator": self._held_conformance_validator,
             "final acceptance": self._held_acceptance,
         }.get(label, self._held_verifier)
         spawn_argv = list(command)
@@ -4281,53 +4315,62 @@ class Campaign:
         # execute is ``infrastructure_failure`` (the verifier itself is
         # broken), never a product finding and never a silent skip.
         conformance_infrastructure = False
-        if gate_ran and gate_exit == 0:
-            try:
-                conformance_findings = _read_conformance_findings(
-                    self._root / DEFAULT_CONFORMANCE_PATH
-                )
-            except ConformanceParseError as exc:
+        if (
+            gate_ran and gate_exit == 0
+            and self._config.role_driver is None
+        ):
+            # Controller production mode first executes the complete committed
+            # planning validator through its held descriptor.  Extraction is
+            # deliberately second: the helper is not an alternate schema
+            # authority and can only summarize a sidecar already accepted by
+            # the canonical validator.
+            conf_ran, conf_exit, conf_detail, conf_skipped = self._run_gate(
+                CONFORMANCE_VALIDATOR_COMMAND, "conformance validator"
+            )
+            if (
+                not conf_ran or conf_exit != 0 or conf_skipped
+                or self._held_conformance_validator is None
+            ):
                 conformance_infrastructure = True
-                gate_detail = gate_detail or str(exc)
-                conformance_findings = []
-            else:
-                if conformance_findings:
-                    findings.extend(conformance_findings)
-                    if result_data is not None:
-                        result_data = dict(result_data)
-                        result_data["findings"] = list(findings)
-            # Phase 4: the mandatory core acceptance probe is resolved the
-            # same way as ``verify-project.sh`` (relative to the campaign
-            # root). When the script is not deployed in this context it is
-            # skipped; when present, exit 1 is a core-behavior finding and
-            # any other non-zero/missing execution is infrastructure.
-            core_path = self._root / CORE_ACCEPTANCE_COMMAND[0]
-            if core_path.exists():
-                (
-                    core_ran, core_exit, core_detail, _core_skipped,
-                ) = self._run_gate(
-                    CORE_ACCEPTANCE_COMMAND, "core acceptance"
+                gate_detail = gate_detail or conf_detail or (
+                    "authoritative conformance validator did not pass without skips"
                 )
-                if core_ran and core_exit == 1:
-                    core_message = (
-                        core_detail.strip()
-                        or "core acceptance check reported findings"
+            else:
+                try:
+                    conformance_findings = _read_conformance_findings(
+                        self._root / DEFAULT_CONFORMANCE_PATH
                     )
-                    findings.append(core_message)
-                    if result_data is not None:
-                        result_data = dict(result_data)
-                        result_data["findings"] = list(findings)
-                elif core_ran and core_exit != 0:
+                except ConformanceParseError as exc:
                     conformance_infrastructure = True
-                    gate_detail = gate_detail or (
-                        f"core acceptance probe failed closed "
-                        f"(exit {core_exit})"
-                    )
-                elif not core_ran:
-                    conformance_infrastructure = True
-                    gate_detail = gate_detail or (
-                        "core acceptance probe did not run"
-                    )
+                    gate_detail = gate_detail or str(exc)
+                else:
+                    findings.extend(conformance_findings)
+
+            core_ran, core_exit, core_detail, core_skipped = self._run_gate(
+                CORE_ACCEPTANCE_COMMAND, "core acceptance"
+            )
+            if (
+                not core_ran or core_exit < 0 or core_exit not in (0, 1)
+                or self._held_core_acceptance is None
+            ):
+                conformance_infrastructure = True
+                gate_detail = gate_detail or core_detail or (
+                    "core acceptance authority did not execute"
+                )
+            elif core_exit != 0 or core_skipped:
+                findings.append(
+                    core_detail.strip()
+                    or "core acceptance command did not pass without skips"
+                )
+
+            # Trusted conformance/core findings override optimistic tester
+            # prose before schema validation, redaction, preservation, digest,
+            # and receipt publication.  A pass carrying findings is invalid.
+            if findings and result_data is not None:
+                result_data = dict(result_data)
+                result_data["outcome"] = "findings"
+                result_data["findings"] = list(findings)
+                result_outcome = "findings"
         acquisition_ran, acquisition_exit, acquisition_detail = (
             self._ensure_runner_evidence()
         )
@@ -4368,18 +4411,20 @@ class Campaign:
             outcome = "infrastructure_failure"
         if (
             outcome == "findings" and result_data is not None
-            and result_data.get("outcome") == "pass" and not findings
+            and result_data.get("outcome") == "pass"
         ):
-            # Deterministic verifier/acquisition failures override an
-            # optimistic tester pass. Mint one fixed, non-child-derived
-            # finding so the preserved structured handoff remains schema-
-            # coherent and cannot leak transport diagnostics.
+            # Every trusted finding overrides optimistic tester prose before
+            # schema validation and preservation.  Use the concrete trusted
+            # findings when present; otherwise mint one non-child-derived
+            # semantic finding without leaking transport diagnostics.
             result_data = dict(result_data)
             result_data["outcome"] = "findings"
-            result_data["findings"] = [
+            result_data["findings"] = list(findings) or [
                 "trusted verification or runner capability evidence did not pass"
             ]
             findings = list(result_data["findings"])
+        if result_data is not None:
+            _schema_check(result_data, phase_result_schema(), "")
         if outcome in ("findings", "blocked"):
             # Task 10 §16: verification findings/blocked become next-round
             # planner input through an orchestrator-minted receipt that binds
@@ -4499,12 +4544,17 @@ class Campaign:
                 cap_ran = acquisition_ran
                 cap_exit = acquisition_exit
                 cap_detail = acquisition_detail
+            core_ran, core_exit, core_detail, core_skipped = self._run_gate(
+                CORE_ACCEPTANCE_COMMAND, "final core acceptance"
+            )
             acc_ran, acc_exit, acc_detail, acc_skipped = self._run_gate(
                 self._config.acceptance_command, "final acceptance"
             )
             failures: List[str] = []
             if not cap_ran or cap_exit != 0 or cap_skipped:
                 failures.append("final capability/evidence command did not pass without skips")
+            if not core_ran or core_exit != 0 or core_skipped:
+                failures.append("final core acceptance command did not pass without skips")
             if not acc_ran or acc_exit != 0 or acc_skipped:
                 failures.append("final Controller acceptance command did not pass without skips")
             if failures:
@@ -4514,13 +4564,25 @@ class Campaign:
                     *list(result_data.get("findings", [])), *failures
                 ]
                 final_gate_detail = "; ".join(failures)
-            if acquisition_exit < 0:
-                # A command/checker binding or signed-protocol integrity
-                # failure is control-plane infrastructure, not an ordinary
-                # capability finding. Preserve the structured terminal class.
+            authority_failure = (
+                acquisition_exit < 0
+                or any(
+                    (not ran) or code < 0 or code in (126, 127)
+                    for ran, code in (
+                        (cap_ran, cap_exit), (acc_ran, acc_exit),
+                    )
+                )
+                or not core_ran or core_exit < 0 or core_exit not in (0, 1)
+            )
+            # The core authority has an intentionally narrow exit contract:
+            # 0 pass, 1 acceptance findings, everything else infrastructure.
+            if authority_failure:
+                # Missing/substituted/unexecuted/command-not-found/timeout or
+                # signed-protocol integrity failures are control-plane
+                # infrastructure, never ordinary product findings.
                 role = replace(
                     role, exit_status=-1,
-                    diagnostic="runner evidence integrity failure",
+                    diagnostic="final acceptance authority failure",
                 )
         outcome = classify_audit(
             role=role,
@@ -4691,6 +4753,12 @@ class Campaign:
             if self._held_capability is not None:
                 self._held_capability.close()
                 self._held_capability = None
+            if self._held_core_acceptance is not None:
+                self._held_core_acceptance.close()
+                self._held_core_acceptance = None
+            if self._held_conformance_validator is not None:
+                self._held_conformance_validator.close()
+                self._held_conformance_validator = None
             if self._held_runner is not None:
                 self._held_runner.close()
                 self._held_runner = None
