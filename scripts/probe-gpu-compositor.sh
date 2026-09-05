@@ -241,9 +241,9 @@ retain_live_artifacts() {
         sha256sum_file "$tmp/controller-box-compositor.png" \
             > "$ARTIFACTS/controller-box-compositor.sha256" 2>/dev/null || true
     fi
-    python3 - "$ARTIFACTS" "$PROBE_MARKER" <<'PY'
+    python3 - "$ARTIFACTS" "$PROBE_MARKER" "${head_commit:-}" "${head_tree:-}" <<'PY'
 import hashlib, json, os, sys
-adir, marker = sys.argv[1], sys.argv[2]
+adir, marker, commit, tree = sys.argv[1:5]
 entries = []
 for name in sorted(os.listdir(adir)):
     if name == "artifact-manifest.json":
@@ -253,9 +253,13 @@ for name in sorted(os.listdir(adir)):
         with open(path, "rb") as f:
             entries.append({"filename": name, "sha256": hashlib.sha256(f.read()).hexdigest()})
 manifest = {
-    "schema": "gpu-compositor-artifacts/v1",
+    "schema": "gpu-compositor-artifacts/v2",
     "probe": "gpu-compositor-probe",
     "marker": marker or "unknown",
+    "candidate_commit": commit,
+    "candidate_tree": tree,
+    "licensed_authority_sha256": "23cb0a91cdcde1ab7bb179b4fe5f6afc340dd9f2061b9d1222be94a3341c298d",
+    "signature_scope": "enclosing-gpurunner-signed-receipt",
     "artifacts": entries,
 }
 with open(os.path.join(adir, "artifact-manifest.json"), "w", encoding="utf-8") as f:
@@ -478,7 +482,8 @@ log() { # msg
 # source tree, which is deleted before launch so the installed prefix assets
 # must win.
 head_commit=$(git -C "$SCRIPT_DIR/.." rev-parse HEAD 2>/dev/null || true)
-[[ -n "$head_commit" ]] || fail exact-commit-unresolved "cannot resolve HEAD in $SCRIPT_DIR/.."
+head_tree=$(git -C "$SCRIPT_DIR/.." rev-parse HEAD^{tree} 2>/dev/null || true)
+[[ "$head_commit" =~ ^[0-9a-f]{40}$ && "$head_tree" =~ ^[0-9a-f]{40}$ ]] || fail exact-commit-unresolved "cannot resolve HEAD in $SCRIPT_DIR/.."
 mkdir -p "$tmp/source"
 if ! git -C "$SCRIPT_DIR/.." archive "$head_commit" | tar -x -C "$tmp/source"; then
     fail git-archive-failed "git archive of exact HEAD $head_commit failed"
