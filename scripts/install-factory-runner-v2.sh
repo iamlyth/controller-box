@@ -131,7 +131,7 @@ for name,d in m['executables'].items():
  if set(d)!={'sha256','dev','ino'} or hashlib.sha256(data).hexdigest()!=d['sha256'] or [i.st_dev,i.st_ino]!=[d['dev'],d['ino']] or not i.st_mode&0o111:die(f'executable pin mismatch: {name}')
 try:launcher=json.loads(launcher_raw)
 except Exception:die('SSH launcher manifest invalid JSON')
-if set(launcher)!={'schema','path','sha256','dev','ino'} or launcher['schema']!='factory-ssh-launcher/v1' or launcher['path'] not in m['executables'] or m['executables'][launcher['path']]!={k:launcher[k] for k in ('sha256','dev','ino')}:die('trusted SSH launcher is not exactly executable-pinned')
+if set(launcher)!={'schema','path','sha256','device','inode'} or launcher['schema']!='factory-ssh-launcher/v1' or launcher['path'] not in m['executables'] or m['executables'][launcher['path']]!={'sha256':launcher['sha256'],'dev':launcher['device'],'ino':launcher['inode']}:die('trusted SSH launcher is not exactly executable-pinned')
 # cgroup v2 must be the actual unified mount and expose cleanup state.
 mounts=pathlib.Path('/proc/self/mountinfo').read_text().splitlines()
 if not any(' - cgroup2 ' in x and ' /sys/fs/cgroup ' in x for x in mounts):die('unified cgroup v2 is not mounted at /sys/fs/cgroup')

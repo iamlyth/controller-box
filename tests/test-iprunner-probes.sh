@@ -52,8 +52,8 @@ import json, sys
 exp = json.load(open(sys.argv[1], encoding="utf-8"))
 facts = {
     "schema": "iprunner-inputplumber-facts/v1",
-    "dbus_system_bus_address_env": None,
-    "bus_address_effective": "unix:path=/run/dbus/system_bus_socket",
+    "dbus_system_bus_address_env": "unix:path=/run/factory/dbus/system_bus_socket",
+    "bus_address_effective": "unix:path=/run/factory/dbus/system_bus_socket",
     "package": {"name": "inputplumber", "version": "0.78.0-1", "installed": True},
     "binary": {"path": "/usr/bin/inputplumber", "exists": True, "executable": True, "owned_by_package": True},
     "service": {"unit": "inputplumber.service", "active": True, "type": "dbus", "exec_start_binary": "/usr/bin/inputplumber"},
@@ -115,7 +115,8 @@ must_fail "relative ExecStart" bash -c \
 good_facts > "$tmp/good-facts.json"
 must_pass "pinned inputplumber facts" python3 "$IP_VALIDATOR" --facts "$tmp/good-facts.json"
 
-# A private bus is rejected: env override and effective-address mismatch.
+# A real/direct or unapproved private bus is rejected: only the broker proxy
+# endpoint is accepted.
 good_facts | python3 -c 'import json,sys; d=json.load(sys.stdin); d["dbus_system_bus_address_env"]="unix:path=/tmp/private"; print(json.dumps(d))' > "$tmp/private-env.json"
 must_fail "private bus via env override" python3 "$IP_VALIDATOR" --facts "$tmp/private-env.json"
 good_facts | python3 -c 'import json,sys; d=json.load(sys.stdin); d["bus_address_effective"]="unix:path=/tmp/private"; print(json.dumps(d))' > "$tmp/private-addr.json"

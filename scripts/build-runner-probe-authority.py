@@ -34,9 +34,9 @@ def gate_for(runner): return desc(["/usr/bin/python3","@/product-gate.py"],cap='
 routing_required=["routing-results.json","observer.log","overlay.log","udev-targets.log","cleanup.log","assignment-after-clear.yaml",
  "om-before.json","om-after-create.json","om-after-clear.json","om-cleanup.json",
  "dbus-unique-owner.json","dbus-owner-pid.json","provenance-before-routing.json","provenance-after-routing.json",
- "dev-input-before.txt","dev-input-after-create.txt","dev-input-after-cleanup.txt","sysfs-targets.txt"]+[f"assignment-slot-{i}.yaml" for i in range(4)]+[f"om-assignment-{i}.json" for i in range(4)]
+ "dev-input-before.txt","dev-input-after-create.txt","dev-input-after-cleanup.txt","sysfs-targets.txt","physical-source-sysfs.txt"]+[f"assignment-slot-{i}.yaml" for i in range(4)]+[f"om-assignment-{i}.json" for i in range(4)]
 routing_art={"required":routing_required,"files":{n:("application/json" if n.endswith(".json") else "application/yaml" if n.endswith(".yaml") else "text/plain") for n in routing_required}}
-gpu_names=['artifact-manifest.json','renderer-verdict.json','verdict.json','installed-manifest.json','device-type-evidence.json','profile-selection-evidence.json','selected-profile.yaml','probe.log','manager.log','installed-xbox-360.svg','installed-license.controllercons','installed-controller-icons.yaml','installed-layout.json','installed-oracle.json','controller-box-unhighlighted.png']+[f'capture-{x}.png' for x in ('a','b','x','y','up','down','left','right','start','select','guide','l1','r1','l2','r2','l3','r3')]
+gpu_names=['artifact-manifest.json','renderer-verdict.json','verdict.json','installed-manifest.json','installed-authority.json','device-type-evidence.json','device-type-om.json','egl-renderer-output.txt','profile-selection-evidence.json','selected-profile.yaml','probe.log','manager.log','configure.log','build.log','install.log','weston.log','egl-build.log','screenshooter.log','installed-xbox-360.svg','installed-license.controllercons','installed-controller-icons.yaml','installed-layout.json','installed-oracle.json','controller-box-unhighlighted.png']+[f'capture-{x}.png' for x in ('a','b','x','y','up','down','left','right','start','select','guide','l1','r1','l2','r2','l3','r3')]
 def gpu_media(name):
  if name.endswith('.png'):return 'image/png'
  if name.endswith('.svg'):return 'image/svg+xml'

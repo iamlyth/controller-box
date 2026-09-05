@@ -30,7 +30,8 @@ BUS_NAME="org.shadowblip.InputPlumber"
 MANAGER_PATH="/org/shadowblip/InputPlumber/Manager"
 MANAGER_IFACE="org.shadowblip.InputManager"
 OM_PATH="/org/shadowblip/InputPlumber"
-SOCKET="/run/dbus/system_bus_socket"
+SOCKET="/run/factory/dbus/system_bus_socket"
+EXPECTED_BUS="unix:path=$SOCKET"
 
 [[ -x "$VALIDATOR" && -x "$DECODER" && -f "$EXPECTATIONS" ]] || {
     echo "inputplumber-probe: validator, decoder, or expectations missing" >&2
@@ -50,9 +51,14 @@ if [[ $(id -u) -eq 0 ]]; then
     exit 1
 fi
 
-if [[ -n "${DBUS_SYSTEM_BUS_ADDRESS:-}" ]]; then
-    echo "inputplumber-probe: DBUS_SYSTEM_BUS_ADDRESS is set; refusing a private bus" >&2
-    exit 1
+echo "--- inputplumber-system-dbus capability contract ---"
+if [[ -z "$FIXTURE_FACTS" ]]; then
+    [[ "${DBUS_SYSTEM_BUS_ADDRESS:-}" == "$EXPECTED_BUS" ]] || {
+        echo "inputplumber-probe: exact broker D-Bus proxy is required" >&2; exit 1;
+    }
+    [[ "${FACTORY_INPUTPLUMBER_PROVENANCE:-}" == "/run/factory/inputplumber-provenance.json" ]] || {
+        echo "inputplumber-probe: broker-held provenance is required" >&2; exit 1;
+    }
 fi
 
 tmp=$(mktemp -d)
@@ -67,48 +73,25 @@ collect_facts() {
         BUS_ADDRESS=""
     fi
 
-    # Package facts.
-    PKG_NAME=""; PKG_VERSION=""; PKG_INSTALLED="false"
-    if dpkg-query -W -f='${Package} ${Version} ${Status}' "$(python3 -c "import json;print(json.load(open('$EXPECTATIONS'))['package']['name'])")" \
-        >"$tmp/pkg" 2>/dev/null; then
-        read -r PKG_NAME PKG_VERSION PKG_STATUS < "$tmp/pkg" || true
-        if [[ "$PKG_STATUS" == *installed* ]]; then
-            PKG_INSTALLED="true"
-        fi
-    fi
-
-    # Service facts. ExecStart is decoded before selecting the binary: the
-    # service command, not an arbitrary first executable in dpkg -L, is the
-    # identity whose package provenance must be established.
-    SVC_ACTIVE="false"; SVC_TYPE=""; SVC_UNIT=""; SVC_EXEC=""
-    SVC_UNIT=$(systemctl show -p Id --value "inputplumber.service" 2>/dev/null || true)
-    if [[ -n "$SVC_UNIT" ]]; then
-        [[ "$(systemctl is-active "inputplumber.service" 2>/dev/null || true)" == "active" ]] && SVC_ACTIVE="true"
-        SVC_TYPE=$(systemctl show -p Type --value "inputplumber.service" 2>/dev/null || true)
-        SVC_EXEC=$(systemctl show -p ExecStart --value "inputplumber.service" 2>/dev/null || true)
-    fi
-    SVC_EXEC_BIN=""; BIN_PATH=""; BIN_EXISTS="false"; BIN_EXECUTABLE="false"; BIN_OWNED="false"
-    if [[ -n "$SVC_EXEC" ]]; then
-        SVC_EXEC_BIN=$(printf '%s\n' "$SVC_EXEC" | python3 "$DECODER" --exec-start 2>/dev/null | \
-            python3 -c 'import json,sys; v=json.load(sys.stdin); print(v if isinstance(v,str) else "")' 2>/dev/null || true)
-    fi
-    if [[ -n "$SVC_EXEC_BIN" && -f "$SVC_EXEC_BIN" && ! -L "$SVC_EXEC_BIN" ]]; then
-        BIN_EXISTS="true"
-        [[ -x "$SVC_EXEC_BIN" ]] && BIN_EXECUTABLE="true"
-        BIN_PATH=$(readlink -f "$SVC_EXEC_BIN" 2>/dev/null || true)
-        if [[ -n "$BIN_PATH" ]] && dpkg-query -S "$BIN_PATH" >"$tmp/bin-owner" 2>/dev/null; then
-            if python3 - "$tmp/bin-owner" "$PKG_NAME" "$BIN_PATH" <<'PY'
-import sys
-owner_file, package, path = sys.argv[1:]
-lines = open(owner_file, encoding="utf-8", errors="strict").read().splitlines()
-matches = [line for line in lines if line.endswith(": " + path)]
-raise SystemExit(0 if len(matches) == 1 and matches[0].split(":", 1)[0] == package else 1)
+    # Package/service/executable provenance is gathered and held by the root
+    # broker outside PrivatePIDs.  The candidate never invokes host systemctl
+    # or accepts package facts from its own namespace.
+    readarray -t HELD < <(python3 - "$FACTORY_INPUTPLUMBER_PROVENANCE" <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1],encoding='utf-8'))
+assert p.get('schema')=='factory-host-inputplumber-provenance/v2'
+for k in ('package_name','package_version','service_unit','service_type','exe'):
+ print(p[k])
+for k in ('package_installed','service_active','exe_owned_by_package'):
+ print('true' if p[k] is True else 'false')
 PY
-            then
-                BIN_OWNED="true"
-            fi
-        fi
-    fi
+)
+    [[ ${#HELD[@]} -eq 8 ]] || { echo "inputplumber-probe: held provenance malformed" >&2; return 1; }
+    PKG_NAME=${HELD[0]}; PKG_VERSION=${HELD[1]}; SVC_UNIT=${HELD[2]}; SVC_TYPE=${HELD[3]}; BIN_PATH=${HELD[4]}
+    PKG_INSTALLED=${HELD[5]}; SVC_ACTIVE=${HELD[6]}; BIN_OWNED=${HELD[7]}
+    SVC_EXEC_BIN=$BIN_PATH; BIN_EXISTS="false"; BIN_EXECUTABLE="false"
+    [[ -f "$BIN_PATH" && ! -L "$BIN_PATH" ]] && BIN_EXISTS="true"
+    [[ -x "$BIN_PATH" ]] && BIN_EXECUTABLE="true"
 
     # Bus facts via busctl (real system bus).
     HAS_OWNER="false"; UNIQUE_OWNER=""
@@ -189,7 +172,7 @@ import json, sys
 out, args = sys.argv[1], sys.argv[2:]
 facts = {
     "schema": "iprunner-inputplumber-facts/v1",
-    "dbus_system_bus_address_env": None,
+    "dbus_system_bus_address_env": "unix:path=/run/factory/dbus/system_bus_socket",
     "bus_address_effective": args[0],
     "package": {
         "name": args[1],

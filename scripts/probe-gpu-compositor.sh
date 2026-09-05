@@ -114,7 +114,10 @@ fi
 ANALYZER="$SCRIPT_DIR/gpurunner-probes/analyze-gpu-compositor.py"
 EGL_SOURCE="$SCRIPT_DIR/gpurunner-probes/egl_renderer_probe.c"
 
-MARKER="--- gpu-compositor capability contract ---"
+case "${FACTORY_CAPABILITY:-gpu-compositor}" in
+  gpu-compositor|installed-licensed-diagram) MARKER="--- ${FACTORY_CAPABILITY:-gpu-compositor} capability contract ---" ;;
+  *) echo "gpu-compositor-probe: invalid broker capability" >&2; exit 1 ;;
+esac
 PROBE_TAG="gpu-compositor-probe"
 WIN_TITLE="Controller-Box"
 WIN_W=1280
@@ -237,6 +240,7 @@ retain_live_artifacts() {
     for f in \
         "$tmp/configure.log" "$tmp/build.log" "$tmp/install.log" \
         "$tmp/weston.log" "$tmp/egl-build.log" "$tmp/screenshooter.log" \
+        "$tmp/egl-renderer-output.txt" "$tmp/device-type-om.json" \
         "$tmp/renderer-verdict.json" "$tmp/installed-manifest.json" \
         "$tmp/device-type-evidence.json" "$tmp/profile-selection-evidence.json" \
         "$tmp/selected-profile.yaml" "$tmp/manager.log" \
@@ -253,10 +257,6 @@ retain_live_artifacts() {
         cp -f "$f" "$ARTIFACTS/$(basename "$f")" 2>/dev/null || continue
         echo "$PROBE_TAG: artifact hash $(sha256sum "$ARTIFACTS/$(basename "$f")" | awk '{print $1}') $ARTIFACTS/$(basename "$f")"
     done
-    if [[ -f "$tmp/controller-box-compositor.png" && ! -L "$tmp/controller-box-compositor.png" ]]; then
-        sha256sum_file "$tmp/controller-box-compositor.png" \
-            > "$ARTIFACTS/controller-box-compositor.sha256" 2>/dev/null || true
-    fi
     python3 - "$ARTIFACTS" "$PROBE_MARKER" "${head_commit:-}" "${head_tree:-}" <<'PY'
 import hashlib, json, os, sys
 adir, marker, commit, tree = sys.argv[1:5]
@@ -692,6 +692,7 @@ set -e
 if [[ $egl_rc -ne 0 ]]; then
     fail renderer-unverified "EGL renderer probe failed on the private compositor"
 fi
+printf '%s\n' "$egl_out" > "$tmp/egl-renderer-output.txt"
 renderer_line=$(printf '%s\n' "$egl_out" | sed -n 's/^GL_RENDERER=//p' | head -n 1)
 [[ -n "$renderer_line" ]] || fail renderer-unverified "no GL_RENDERER reported"
 check_renderer "$renderer_line"
@@ -704,7 +705,8 @@ xdotool getdisplaygeometry >/dev/null 2>&1 \
 # --- 4. installed launch + first-run skip + navigation ----------------------
 # Obtain the real target identity and DeviceType from the production system
 # backend before selecting that same first controller row in the manager.
-if [[ -n "${DBUS_SYSTEM_BUS_ADDRESS:-}" ]]; then fail private-service-rejected "system DBus override is forbidden"; fi
+[[ "${DBUS_SYSTEM_BUS_ADDRESS:-}" == "unix:path=/run/factory/dbus/system_bus_socket" ]] \
+  || fail private-service-rejected "exact broker D-Bus proxy is required"
 busctl --system --json=short call org.shadowblip.InputPlumber /org/shadowblip/InputPlumber \
   org.freedesktop.DBus.ObjectManager GetManagedObjects > "$tmp/device-type-om.json" 2>/dev/null \
   || fail device-type-unavailable "production ObjectManager query failed"
@@ -780,7 +782,7 @@ UNIT
 if [[ ! -f "$unit" || -L "$unit" || ! -s "$unit" ]] || ! grep -qF "ExecStart=$installed_real" "$unit"; then
     fail first-run-modal-not-seeded "seeded systemd user unit missing or malformed"
 fi
-log "modal: first-run skipped (unit $unit -> $installed_real)"
+log "modal: first-run state satisfied (unit $unit -> $installed_real)"
 
 # The binary's relative data/profiles fallback ("data/profiles" relative to
 # the launch CWD) must not resolve — checked AFTER all XDG dirs exist so a

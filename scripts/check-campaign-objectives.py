@@ -231,7 +231,9 @@ def capability_evidence(root: Path, policy: dict[str, dict]) -> dict[str, list[s
         data = json.loads(contracts_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         fail(f"cannot parse capability-contracts: {exc}")
-    if not isinstance(data, dict) or data.get("schema") != "ralph-capability-contract/v1":
+    if not isinstance(data, dict) or data.get("schema") not in {
+        "ralph-capability-contract/v1", "ralph-capability-contract/v2"
+    }:
         fail("capability-contracts schema is invalid; manifest evidence cannot be category-matched")
     contracts = data.get("capabilities", [])
     if not isinstance(contracts, list):
@@ -241,7 +243,7 @@ def capability_evidence(root: Path, policy: dict[str, dict]) -> dict[str, list[s
         if not isinstance(contract, dict):
             continue
         name = contract.get("name")
-        argv = contract.get("probe_argv")
+        argv = contract.get("candidate_probe_argv") if "authority_probe" in contract else contract.get("probe_argv")
         if not isinstance(name, str) or not name or not isinstance(argv, list) or not argv or not all(
             isinstance(item, str) for item in argv
         ):

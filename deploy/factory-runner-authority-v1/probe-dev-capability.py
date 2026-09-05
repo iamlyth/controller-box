@@ -15,10 +15,16 @@ elif cap=="kernel-uinput":
 elif cap=="installed-package":
  commands=[["/usr/bin/nix-shell","--run",f"cmake -S . -B {build}/package -DCMAKE_BUILD_TYPE=Debug && cmake --build {build}/package --parallel && CBX_REQUIRE_FLATPAK=1 ./tests/test_packaging.sh {build}/package && ctest --test-dir {build}/package --no-tests=error -R '^test_installed_smoke$' --output-on-failure"]]
 else: raise SystemExit("unapproved dev capability")
+print(f"--- {cap} capability contract ---",flush=True)
+skipped=False
 for command in commands:
- r=subprocess.run(command,env=env,cwd=root)
+ r=subprocess.run(command,env=env,cwd=root,capture_output=True,text=True)
+ sys.stdout.write(r.stdout);sys.stderr.write(r.stderr)
  if r.returncode: raise SystemExit(r.returncode)
+ if cap=="kernel-uinput" and __import__('re').search(r"(?i)\b(?:skipped|not run)\b",r.stdout+r.stderr):
+  skipped=True
+  raise SystemExit("kernel-uinput authority rejects CTest skip/non-run")
 out=pathlib.Path(os.environ["FACTORY_RUNNER_ARTIFACT_DIR"]);out.mkdir(mode=0o700,parents=True,exist_ok=True)
-marker={"schema":"factory-capability-semantics/v2","capability":cap,"must_execute":True,"executed":True,"must_not_skip":True,"skipped":False,"deny_simulated":True,"simulated":False,"complete_project_gate":cap=="remote-project-gate","command_sha256":hashlib.sha256(json.dumps(commands,separators=(",",":" )).encode()).hexdigest()}
+marker={"schema":"factory-capability-semantics/v2","capability":cap,"must_execute":True,"executed":True,"must_not_skip":True,"skipped":skipped,"deny_simulated":True,"simulated":False,"complete_project_gate":cap=="remote-project-gate","command_sha256":hashlib.sha256(json.dumps(commands,separators=(",",":" )).encode()).hexdigest()}
 (out/"authority-result.json").write_text(json.dumps(marker,sort_keys=True)+"\n");(out/"authority-result.json").chmod(0o600)
 print(f"root-authority-{cap}: EXECUTED NONSKIP NONSIMULATED PASS")

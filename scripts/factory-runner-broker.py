@@ -337,7 +337,7 @@ def _analyzer_limits():
  resource.setrlimit(resource.RLIMIT_CPU,(120,120));resource.setrlimit(resource.RLIMIT_AS,(768*1024*1024,768*1024*1024))
  resource.setrlimit(resource.RLIMIT_FSIZE,(MAX_LOG,MAX_LOG));resource.setrlimit(resource.RLIMIT_NPROC,(32,32));resource.setrlimit(resource.RLIMIT_NOFILE,(64,64))
 
-DBUS_CAPS={"inputplumber-system-dbus","target-consumer","controller-production-routing"}
+DBUS_CAPS={"inputplumber-system-dbus","target-consumer","controller-production-routing","gpu-compositor","installed-licensed-diagram"}
 DBUS_CALLS=(
  "org.freedesktop.DBus.ObjectManager.GetManagedObjects",
  "org.freedesktop.DBus.Properties.Get","org.freedesktop.DBus.Properties.GetAll","org.freedesktop.DBus.Properties.Set",
@@ -368,23 +368,70 @@ class DbusProxy:
   if getattr(self,"exe",None):self.exe.close();self.exe=None
   shutil.rmtree(getattr(self,"root",Path("/nonexistent")),ignore_errors=True)
 
-def run_contained(entry,authority,descriptor,host_product,host_build,host_home,host_artifacts,env,unit,capability,provenance=None,proxy=None):
+class UdevMonitor:
+ """Root-held raw kernel udev stream; candidate receives only a read-only file."""
+ def __init__(self,parent):
+  self.udev=TrustedExecutable("/usr/bin/udevadm");self.stdbuf=TrustedExecutable("/usr/bin/stdbuf")
+  self.path=parent/"udev-snapshot.log";self.fd=os.open(self.path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC,0o444)
+  self.udev.verify();self.stdbuf.verify()
+  self.proc=subprocess.Popen([str(self.stdbuf.path),"-oL",str(self.udev.path),"monitor","--kernel","--property","--subsystem-match=input"],cwd="/",env={"PATH":"/usr/bin:/bin","LANG":"C.UTF-8"},stdin=subprocess.DEVNULL,stdout=self.fd,stderr=self.fd,start_new_session=True)
+  time.sleep(.2)
+  if self.proc.poll() is not None:self.close();raise BrokerError("root-held udev monitor failed")
+ def close(self):
+  if getattr(self,"proc",None) and self.proc.poll() is None:
+   try:os.killpg(self.proc.pid,signal.SIGTERM);self.proc.wait(timeout=3)
+   except Exception:
+    try:os.killpg(self.proc.pid,signal.SIGKILL)
+    except ProcessLookupError:pass
+    self.proc.wait()
+  if getattr(self,"fd",None) is not None:os.fsync(self.fd);os.close(self.fd);self.fd=None
+  for name in ("udev","stdbuf"):
+   exe=getattr(self,name,None)
+   if exe:exe.close();setattr(self,name,None)
+
+class UserManagerProxy(DbusProxy):
+ """Capability-private endpoint for exactly the caller's user-manager bus."""
+ def __init__(self,entry,parent):
+  self.exe=TrustedExecutable(entry["dbus_proxy"]);self.root=parent/"user-dbus-proxy";self.root.mkdir(mode=0o700);os.chown(self.root,0,0)
+  upstream=f"unix:path=/run/user/{entry['uid']}/bus";self.socket=self.root/"user_bus_socket"
+  argv=[str(self.exe.path),upstream,str(self.socket),"--filter","--talk=org.freedesktop.systemd1","--talk=org.freedesktop.DBus"]
+  self.exe.verify();self.proc=subprocess.Popen(argv,cwd="/",env={"PATH":"/usr/bin:/bin","LANG":"C.UTF-8"},stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True,preexec_fn=_analyzer_limits)
+  deadline=time.monotonic()+5
+  while time.monotonic()<deadline and not self.socket.exists() and self.proc.poll() is None:time.sleep(.02)
+  if not self.socket.exists() or self.proc.poll() is not None:self.close();raise BrokerError("user-manager D-Bus proxy failed closed")
+  si=os.lstat(self.socket)
+  if not stat.S_ISSOCK(si.st_mode) or si.st_uid!=0:self.close();raise BrokerError("user-manager proxy socket is unsafe")
+  os.chown(self.socket,0,pwd.getpwuid(entry["uid"]).pw_gid);os.chmod(self.socket,0o660)
+
+def run_contained(entry,authority,descriptor,host_product,host_build,host_home,host_artifacts,env,unit,capability,provenance=None,proxy=None,udev=None):
  systemd=TrustedExecutable(entry["systemd_run"]);systemctl=TrustedExecutable(entry["systemctl"])
  sandbox_product=Path("/run/factory/product");sandbox_build=Path("/run/factory/build");sandbox_home=Path("/run/factory/home");sandbox_output=Path("/run/factory/output")
  senv=clean_env(sandbox_home,authority,sandbox_product,sandbox_build,sandbox_output)
  if capability!="gate":
+  senv["FACTORY_CAPABILITY"]=capability
   senv["FACTORY_RUNNER_ARTIFACT_DIR"]=str(sandbox_output/capability)
   senv["CONTROLLER_PRODUCTION_ROUTING_ARTIFACTS"]=str(sandbox_output/capability)
   senv["CBX_GPU_PROBE_ARTIFACTS"]=str(sandbox_output/capability)
  argv=argv_for(authority,descriptor["argv"],sandbox_product,sandbox_output);command_exe=TrustedExecutable(argv[0])
  blocked_paths=["/root","/home","/run","/var/run","/etc/ssh","/etc/sudoers","/etc/sudoers.d","/etc/factory-runner","/opt/factory-runner","/workspace"]
  blocked=" ".join(x for x in blocked_paths if Path(x).exists())
- props=["NoNewPrivileges=yes","CapabilityBoundingSet=","AmbientCapabilities=","ProtectSystem=strict","ProtectHome=yes",f"InaccessiblePaths={blocked}","PrivateTmp=yes","PrivateMounts=yes","PrivatePIDs=yes","PrivateIPC=yes","ProtectKernelTunables=yes","ProtectKernelModules=yes","ProtectKernelLogs=yes","ProtectControlGroups=yes","ProtectClock=yes","LockPersonality=yes","RestrictSUIDSGID=yes","RestrictRealtime=yes","RestrictNamespaces=yes","SystemCallArchitectures=native","SystemCallFilter=@system-service @resources","SystemCallErrorNumber=EPERM","RestrictAddressFamilies=AF_UNIX","IPAddressDeny=any","KillMode=control-group","TasksMax=512","MemoryMax=4G","CPUQuota=400%","RuntimeMaxSec=7200","TimeoutStopSec=10","LimitFSIZE=50331648",f"BindReadOnlyPaths={host_product}:{sandbox_product}",f"BindPaths={host_build}:{sandbox_build}",f"BindPaths={host_home}:{sandbox_home}",f"BindPaths={host_artifacts}:{sandbox_output}",f"WorkingDirectory={sandbox_product}",*_device_properties(capability)]
+ # The parent stays hidden.  This one immutable root-owned authority is
+ # over-mounted read-only at the exact path used by every @/ argv.
+ authority_mount=f"BindReadOnlyPaths={authority.root}:{authority.root}"
+ props=["NoNewPrivileges=yes","CapabilityBoundingSet=","AmbientCapabilities=","ProtectSystem=strict","ProtectHome=yes",f"InaccessiblePaths={blocked}","PrivateTmp=yes","PrivateMounts=yes","PrivatePIDs=yes","PrivateIPC=yes","ProtectKernelTunables=yes","ProtectKernelModules=yes","ProtectKernelLogs=yes","ProtectControlGroups=yes","ProtectClock=yes","LockPersonality=yes","RestrictSUIDSGID=yes","RestrictRealtime=yes","RestrictNamespaces=yes","SystemCallArchitectures=native","SystemCallFilter=@system-service @resources","SystemCallErrorNumber=EPERM","RestrictAddressFamilies=AF_UNIX","IPAddressDeny=any","KillMode=control-group","TasksMax=512","MemoryMax=4G","CPUQuota=400%","RuntimeMaxSec=7200","TimeoutStopSec=10","LimitFSIZE=50331648",f"BindReadOnlyPaths={host_product}:{sandbox_product}",f"BindPaths={host_build}:{sandbox_build}",f"BindPaths={host_home}:{sandbox_home}",f"BindPaths={host_artifacts}:{sandbox_output}",f"WorkingDirectory={sandbox_product}",authority_mount,*_device_properties(capability)]
  if provenance: props.append(f"BindReadOnlyPaths={provenance}:/run/factory/inputplumber-provenance.json");senv["FACTORY_INPUTPLUMBER_PROVENANCE"]="/run/factory/inputplumber-provenance.json"
+ if capability=="controller-production-routing":
+  if udev is None:raise BrokerError("routing requires root-held udev facts")
+  props.append(f"BindReadOnlyPaths={udev.path}:/run/factory/udev-snapshot.log");senv["FACTORY_UDEV_SNAPSHOT"]="/run/factory/udev-snapshot.log"
  if capability in DBUS_CAPS:
   if proxy is None:raise BrokerError("InputPlumber authority requires a private allowlisting D-Bus proxy")
   props.append(f"BindReadOnlyPaths={proxy.socket}:/run/factory/dbus/system_bus_socket")
   senv["DBUS_SYSTEM_BUS_ADDRESS"]="unix:path=/run/factory/dbus/system_bus_socket"
+ if capability=="systemd-user":
+  if proxy is None:raise BrokerError("user-manager authority requires a private D-Bus proxy")
+  props.append(f"BindReadOnlyPaths={proxy.socket}:/run/factory/user/bus")
+  senv["XDG_RUNTIME_DIR"]="/run/factory/user"
+  senv["DBUS_SESSION_BUS_ADDRESS"]="unix:path=/run/factory/user/bus"
  cmd=[str(systemd.path),"--quiet","--wait","--pipe","--collect","--unit",unit,"--service-type=exec",f"--uid={entry['uid']}",*[f"--property={p}" for p in props],*[f"--setenv={k}={v}" for k,v in sorted(senv.items())],*argv]
  # systemd-run receives a scrubbed environment; candidate-controlled variables never cross.
  logroot=host_artifacts.parent;stdout_path=logroot/"candidate.stdout";stderr_path=logroot/"candidate.stderr"
@@ -443,6 +490,8 @@ class InputPlumberProvenance:
  """Held host-namespace identity for the real D-Bus owner across routing."""
  def __init__(self,parent):
   self.busctl=TrustedExecutable("/usr/bin/busctl")
+  self.systemctl=TrustedExecutable("/usr/bin/systemctl")
+  self.dpkg=TrustedExecutable("/usr/bin/dpkg-query")
   self.owner,self.pid=self._resolve()
   self.starttime=self._starttime(self.pid)
   self.exe_link=os.readlink(f"/proc/{self.pid}/exe")
@@ -451,12 +500,21 @@ class InputPlumberProvenance:
   if not stat.S_ISREG(st.st_mode):raise BrokerError("InputPlumber owner executable is not regular")
   self.dev,self.ino,self.size=st.st_dev,st.st_ino,st.st_size
   self.digest=self._digest()
-  self.fact={"schema":"factory-host-inputplumber-provenance/v2","unique_owner":self.owner,"pid":self.pid,"starttime":self.starttime,"exe":self.exe_link,"exe_dev":self.dev,"exe_ino":self.ino,"exe_size":self.size,"exe_sha256":self.digest,"verified_by":"root-broker-held-proc-exe-outside-private-pids"}
+  package=self._host_command(self.dpkg,"-W","-f=${Package}\t${Version}\t${Status}","inputplumber").split("\t")
+  service=self._host_command(self.systemctl,"show","inputplumber.service","--property=Id","--property=Type","--property=ActiveState","--value").splitlines()
+  owned=self._host_command(self.dpkg,"-S",self.exe_link)
+  if len(package)!=3 or package[0]!="inputplumber" or package[2]!="install ok installed" or service!=["inputplumber.service","dbus","active"]:
+   raise BrokerError("InputPlumber package/service provenance is not exact")
+  self.fact={"schema":"factory-host-inputplumber-provenance/v2","unique_owner":self.owner,"pid":self.pid,"starttime":self.starttime,"exe":self.exe_link,"exe_dev":self.dev,"exe_ino":self.ino,"exe_size":self.size,"exe_sha256":self.digest,"package_name":package[0],"package_version":package[1],"package_installed":True,"service_unit":service[0],"service_type":service[1],"service_active":True,"exe_owned_by_package":owned.startswith("inputplumber: "),"verified_by":"root-broker-held-proc-exe-outside-private-pids"}
   self.path=parent/"inputplumber-provenance.json"
-  fd=os.open(self.path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC,0o400)
+  fd=os.open(self.path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC,0o444)
   try:os.write(fd,(json.dumps(self.fact,sort_keys=True,separators=(",",":"))+"\n").encode());os.fsync(fd)
   finally:os.close(fd)
   self.verify()
+ def _host_command(self,exe,*args):
+  exe.verify();r=subprocess.run([str(exe.path),*args],capture_output=True,text=True,timeout=10);exe.verify()
+  if r.returncode:raise BrokerError("cannot gather held InputPlumber host provenance")
+  return r.stdout.strip()
  def _call(self,*args):
   self.busctl.verify();r=subprocess.run([str(self.busctl.path),"--system","call",*args],capture_output=True,text=True,timeout=10)
   self.busctl.verify()
@@ -497,7 +555,7 @@ class InputPlumberProvenance:
    raise BrokerError("InputPlumber executable identity changed during routing")
  def close(self):
   if getattr(self,"fd",None) is not None:os.close(self.fd);self.fd=None
-  self.busctl.close()
+  self.busctl.close();self.systemctl.close();self.dpkg.close()
 
 def sign(evidence,entry):
  token=os.urandom(32);rfd,wfd=os.pipe();os.write(wfd,token);os.close(wfd)
@@ -539,6 +597,7 @@ def main():
   provenance_identity=InputPlumberProvenance(request_dir) if entry["name"]=="iprunner" else None
   provenance=provenance_identity.path if provenance_identity else None
   proxy=DbusProxy(entry,request_dir) if any(c in DBUS_CAPS for c in req["capabilities"]) else None
+  user_proxy=UserManagerProxy(entry,request_dir) if "systemd-user" in req["capabilities"] else None
   started=int(time.time());allout=b"";allerr=b"";payload=[];descriptors=[]
   for index,(name,descriptor) in enumerate([("gate",contract["gate"]),*sorted(contract["capabilities"].items())]):
    runroot=request_dir/f"run-{index}";product=runroot/"source";build=runroot/"build";home=runroot/"home";artifacts=runroot/"output"
@@ -553,7 +612,11 @@ def main():
    source_before=source_digest(product)
    unit=f"factory-runner-{entry['name']}-{req['nonce'][:20]}-{index}.service";host_before=host_cleanup_snapshot(name)
    if name in DBUS_CAPS:provenance_identity.verify()
-   rc,out,err=run_contained(entry,authority,descriptor,product,build,home,artifacts,env,unit,name,provenance,proxy)
+   capability_proxy=user_proxy if name=="systemd-user" else proxy
+   udev=UdevMonitor(request_dir) if name=="controller-production-routing" else None
+   try:rc,out,err=run_contained(entry,authority,descriptor,product,build,home,artifacts,env,unit,name,provenance,capability_proxy,udev)
+   finally:
+    if udev:udev.close()
    if name in DBUS_CAPS:provenance_identity.verify()
    if len(allout)+len(out)>MAX_LOG or len(allerr)+len(err)>MAX_LOG:raise BrokerError("aggregate contained output exceeds bound")
    allout+=out;allerr+=err
@@ -576,6 +639,7 @@ def main():
   if authority:authority.close()
   if 'provenance_identity' in locals() and provenance_identity:provenance_identity.close()
   if 'proxy' in locals() and proxy:proxy.close()
+  if 'user_proxy' in locals() and user_proxy:user_proxy.close()
   if request_dir:shutil.rmtree(request_dir,ignore_errors=True)
   if admission is not None:os.close(admission)
  return 0

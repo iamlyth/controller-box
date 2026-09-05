@@ -228,16 +228,19 @@ def git_head(root: Path) -> str:
 def probe_scope(lines: list[str], marker: str) -> tuple[list[str], bool]:
     """Return the contract's probe scope and whether the marker was seen.
 
-    With a marker, the scope is the log text after the marker line to EOF; the
-    marker must be present (must-execute). Without a marker the scope is the
-    whole log.
+    A marker is an exact capability delimiter.  Scope ends at the next
+    capability delimiter, so output from a later gate/probe can never satisfy
+    or poison this capability's contract.
     """
     if not marker:
         return lines, True
-    for index, line in enumerate(lines):
-        if marker in line:
-            return lines[index + 1:], True
-    return [], False
+    delimiter = re.compile(r"^--- [a-z0-9][a-z0-9._-]* capability contract(?: \(candidate\))? ---$")
+    matches = [index for index, line in enumerate(lines) if line == marker]
+    if len(matches) != 1:
+        return [], False
+    start = matches[0] + 1
+    end = next((index for index in range(start, len(lines)) if delimiter.fullmatch(lines[index])), len(lines))
+    return lines[start:end], True
 
 
 def scan_tokens(scope: list[str], tokens: list[str]) -> list[str]:

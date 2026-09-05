@@ -344,7 +344,7 @@ def validate_ref_safety(ref: str, where: str) -> None:
         fail(f"{where} first component must be a tracked refs prefix: {ref!r}")
 
 
-def validate_requirement(requirement: dict, index: int) -> None:
+def validate_requirement(requirement: dict, index: int, *, human_approved: bool = False) -> None:
     if not isinstance(requirement, dict):
         fail(f"requirements[{index}] must be an object")
     expected = {
@@ -401,11 +401,8 @@ def validate_requirement(requirement: dict, index: int) -> None:
     if classification == "not_applicable" and not (re.search(r"[§][0-9]", reason) or "SPEC.md" in reason):
         fail(f"requirements[{index}] not_applicable requires a spec-scoped reason (a §section or docs/SPEC.md)")
     # No self-attested human evidence anywhere: human approval is out-of-band.
-    if requirement["evidence_tier"] == "human":
-        fail(
-            f"requirements[{index}] claims human-tier evidence, which cannot be "
-            f"self-attested by an unattended gate; force a finding"
-        )
+    if requirement["evidence_tier"] == "human" and not human_approved:
+        fail(f"requirements[{index}] claims human-tier evidence without an externally signed approval receipt")
     # A missing, ambiguous, or excluded behavior may never carry evidence refs
     # and must not claim an evidence tier above the base: a stub row cannot be
     # proxied into apparent acceptance.
@@ -607,19 +604,15 @@ def check_capability_evidence(root: Path, capabilities: list[str]) -> None:
         checker.verify_capability(root, capability)
 
 
-def validate_verified_claim(root: Path, requirement: dict) -> None:
+def validate_verified_claim(root: Path, requirement: dict, *, human_approved: bool = False) -> None:
     """Acceptance checks that must hold for a `verified` claim in ANY mode."""
     requirement_id = requirement["id"]
     evidence_tier = requirement["evidence_tier"]
     required_tier = requirement["required_tier"]
     if requirement["fact_refs"]:
         fail(f"requirement {requirement_id} claims verified but still references facts")
-    if required_tier == "human":
-        fail(
-            f"requirement {requirement_id} requires the human evidence tier, which is "
-            f"out-of-band and non-automatable; keep the row as a finding until a "
-            f"verifiable external attestation mechanism exists"
-        )
+    if required_tier == "human" and not human_approved:
+        fail(f"requirement {requirement_id} lacks verified external human approval")
     if TIER_INDEX[evidence_tier] < TIER_INDEX[required_tier]:
         fail(f"requirement {requirement_id} claims verified at tier {evidence_tier} below required tier {required_tier}")
     if required_tier in {"real_system", "human"} and not requirement["required_capabilities"]:
@@ -765,19 +758,56 @@ def cross_check_facts(data: dict, facts: dict) -> None:
             fail(f"open fact {fact_id} is not referenced by any blocked/partial requirement")
 
 
+def validate_external_human(root: Path, data: dict, anchor: str | None, digest: str | None) -> bool:
+    rows = [r for r in data.get("requirements", []) if isinstance(r, dict) and r.get("evidence_tier") == "human"]
+    if not rows:
+        return False
+    if not anchor or not digest:
+        fail("human-tier conformance requires an external trust-anchor receipt descriptor")
+    try:
+        readiness = load_script_module("factory_readiness_for_conformance", root / ".factory/loop/readiness.py")
+        git = load_pinned_git(root); env = trusted_git_env(git); accepted = git_head(root)
+        trust_raw, _ = readiness.read_external_authority(Path(anchor), digest)
+        def run(*argv):
+            result = git.git_run(["-C", str(root), *argv], env=env, timeout=git.GIT_TIMEOUT)
+            if result.returncode: raise RuntimeError("trusted Git human binding failed")
+            return result.stdout
+        def blob_at(commit, path):
+            result = git.git_bytes(["-C", str(root), "show", f"{commit}:{path}"], env=env, timeout=git.GIT_TIMEOUT)
+            if result.returncode: raise RuntimeError("trusted Git human blob binding failed")
+            return result.stdout
+        approval_raw = blob_at(accepted, readiness.APPROVAL_PATH)
+        approval = json.loads(approval_raw)
+        readiness.validate_human_approval(approval_raw, accepted_commit=accepted, trust_raw=trust_raw,
+            blob_at=blob_at, object_id=lambda spec:run("rev-parse", spec).strip(),
+            is_ancestor=lambda a,b:git.git_run(["-C",str(root),"merge-base","--is-ancestor",a,b],env=env,timeout=git.GIT_TIMEOUT).returncode==0,
+            diff_paths=lambda a,b:run("diff","--name-only",a,b,"--").splitlines())
+        readiness.validate_human_conformance(canonical_sidecar_bytes(data), candidate_commit=approval["candidate_commit"])
+    except Exception as exc:
+        fail(f"external human approval rejected: {exc}")
+    return True
+
+
+def canonical_sidecar_bytes(data: dict) -> bytes:
+    return (json.dumps(data, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=("planning", "complete"))
     parser.add_argument("path", nargs="?", default=str(SIDECAR_DEFAULT))
     parser.add_argument("--facts", default=str(FACTS_DEFAULT))
     parser.add_argument("--root", default=str(ROOT))
+    parser.add_argument("--human-trust-anchor", default=os.environ.get("HUMAN_TRUST_ANCHOR"))
+    parser.add_argument("--human-trust-anchor-sha256", default=os.environ.get("HUMAN_TRUST_ANCHOR_SHA256"))
     args = parser.parse_args()
     root = Path(args.root).resolve()
     data = load_sidecar(root / args.path if not Path(args.path).is_absolute() else Path(args.path))
+    human_approved = validate_external_human(root, data, args.human_trust_anchor, args.human_trust_anchor_sha256)
     facts_path = root / args.facts if not Path(args.facts).is_absolute() else Path(args.facts)
     facts = load_facts(root, facts_path)
     for index, requirement in enumerate(data["requirements"]):
-        validate_requirement(requirement, index)
+        validate_requirement(requirement, index, human_approved=human_approved)
         if any(
             other["id"] == requirement["id"]
             for other in data["requirements"][:index]
@@ -802,7 +832,7 @@ def main() -> int:
     cross_check_facts(data, facts)
     for requirement in data["requirements"]:
         if requirement["classification"] == "verified":
-            validate_verified_claim(root, requirement)
+            validate_verified_claim(root, requirement, human_approved=human_approved)
             # Capability evidence is a real acceptance gate in planning mode
             # too: a `verified` row whose required capability is undeclared or
             # lacks an accepted exact-commit runner receipt fails now, not only

@@ -81,7 +81,16 @@ assert 'probe_authority_status' in policy and 'pending or unapproved' in policy
 routing=(ROOT/'deploy/factory-runner-authority-v1/probe-controller-production-routing.sh').read_text()
 assert 'FACTORY_INPUTPLUMBER_PROVENANCE' in routing
 assert 'readlink -f "/proc/$pid/exe"' not in routing
+assert 'factory-host-inputplumber-provenance/v2' in routing
+assert 'unix:path=/run/factory/dbus/system_bus_socket' in routing
+input_probe=(ROOT/'deploy/factory-runner-authority-v1/probe-inputplumber-system-dbus.sh').read_text()
+assert 'systemctl show' not in input_probe and 'dpkg-query -W' not in input_probe
+assert 'exact broker D-Bus proxy is required' in input_probe
+gpu=(ROOT/'deploy/factory-runner-authority-v1/probe-gpu-compositor.sh').read_text()
+assert 'device-type-om.json' in gpu and 'egl-renderer-output.txt' in gpu
+assert 'first-run skipped' not in gpu
 installer=(ROOT/'scripts/install-factory-runner-v2.sh').read_text()
+assert "{'schema','path','sha256','device','inode'}" in installer
 for marker in ('trap rollback_signal EXIT INT TERM HUP','commit_object_b64','mutable source race',"pwd.getpwuid(c['uid'])",'RENAME_EXCHANGE','RENAME_NOREPLACE','factory-runner-v2.bundle','visudo -cf','probe_authority_status'):
  assert marker in installer,marker
 assert 'runner-policy-enrollment.json' not in installer

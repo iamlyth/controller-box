@@ -17,10 +17,13 @@ class hardware/service preflight, and journals authority, helper/link, policy,
 sudoers, key, and principal cutovers with exchange/no-replace, fsync, verify,
 and rollback commands. Account/class/group mapping is exactly
 `devrunner` -> `dev-runner-vm`, `iprunner` -> `iprunner`, and `gpurunner` ->
-`gpurunner`. The broker now holds `/proc/PID/exe`, starttime, owner, inode, and
-digest across every InputPlumber capability and the retained analyzer validates
-the complete read-only v2 fact. The regenerated pending authority digest is
-`845d7337d3399e600cda3c4af30d8805d609b6365e8e92339e3736f6e3cbdb21`; the
+`gpurunner`. The broker now holds `/proc/PID/exe`, starttime, owner, inode, digest, package,
+and service facts across every InputPlumber capability and the retained analyzer
+validates the complete read-only v2 fact. Candidate D-Bus access is confined to
+capability-specific proxies, and only the exact authority directory is remounted
+read-only through the hidden `/opt/factory-runner` parent. The regenerated
+pending authority digest is
+`d9df58fe6b0fbbec3b8ea2b7ea4ea9cb713d600b9f2ef59ab6c26c9aba18d128`; the
 authority builder requires an explicit clean trusted source commit/tree.
 External policy, transport keys, signer
 principals/keys, host installation, hardware execution, and human oracle

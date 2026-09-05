@@ -66,9 +66,18 @@ def png(path):
   rows.append(row);prev=row
  return hashlib.sha256(raw).hexdigest(),w,h,channels,rows
 def yaml_slot(raw,pid,slot=None):
- text=raw.decode('utf-8'); ids=re.findall(r'^\s*(?:id|PersistentId):\s*["\']?([^"\'\s]+)',text,re.M);slots=[int(x) for x in re.findall(r'^\s*slot:\s*(\d+)\s*$',text,re.M)]
- if slot is None:return pid not in ids
- return ids.count(pid)==1 and slot in slots
+ text=raw.decode('utf-8',errors='strict');rows=[];current=None
+ for line in text.splitlines():
+  m=re.fullmatch(r'\s*-\s+id:\s*["\']?([^"\'\s]+)["\']?\s*',line)
+  if m:
+   if current is not None:rows.append(current)
+   current={'id':m.group(1)};continue
+  m=re.fullmatch(r'\s+(slot|profile):\s*["\']?([^"\']*?)["\']?\s*',line)
+  if m and current is not None:current[m.group(1)]=m.group(2)
+ if current is not None:rows.append(current)
+ matches=[r for r in rows if r.get('id')==pid]
+ if slot is None:return not matches
+ return len(matches)==1 and matches[0].get('slot')==str(slot)
 def routing(root):
  cap=root/'controller-production-routing';d=json.loads(read(cap/'routing-results.json'));rows=d.get('targets')
  if d.get('schema')!='controller-production-routing-results/v3' or not isinstance(rows,list) or len(rows)!=4:die('routing v3/cardinality invalid')
@@ -78,17 +87,23 @@ def routing(root):
  provenance_before=read(cap/'provenance-before-routing.json');provenance_after=read(cap/'provenance-after-routing.json')
  try: provenance=json.loads(provenance_before)
  except ValueError:die('InputPlumber provenance fact is malformed')
- expected_provenance={'schema','unique_owner','pid','starttime','exe','exe_dev','exe_ino','exe_size','exe_sha256','verified_by'}
+ expected_provenance={'schema','unique_owner','pid','starttime','exe','exe_dev','exe_ino','exe_size','exe_sha256','package_name','package_version','package_installed','service_unit','service_type','service_active','exe_owned_by_package','verified_by'}
  if (provenance_before!=provenance_after or set(provenance)!=expected_provenance
      or provenance.get('schema')!='factory-host-inputplumber-provenance/v2'
      or not re.fullmatch(r':[0-9]+\.[0-9]+',str(provenance.get('unique_owner','')))
      or any(type(provenance.get(k)) is not int or provenance[k]<=0 for k in ('pid','starttime','exe_dev','exe_ino','exe_size'))
      or provenance.get('exe')!='/usr/bin/inputplumber' or not H.fullmatch(str(provenance.get('exe_sha256','')))
+     or provenance.get('package_name')!='inputplumber' or not isinstance(provenance.get('package_version'),str)
+     or provenance.get('service_unit')!='inputplumber.service' or provenance.get('service_type')!='dbus'
+     or any(provenance.get(k) is not True for k in ('package_installed','service_active','exe_owned_by_package'))
      or provenance.get('verified_by')!='root-broker-held-proc-exe-outside-private-pids'):
   die('InputPlumber held executable provenance boundary changed or is invalid')
  for n in ('dbus-unique-owner.json','dbus-owner-pid.json'):json.loads(read(cap/n))
  before_nodes=set(read(cap/'dev-input-before.txt').decode().splitlines());created_nodes=set(read(cap/'dev-input-after-create.txt').decode().splitlines());cleanup_nodes=set(read(cap/'dev-input-after-cleanup.txt').decode().splitlines())
  sysfs_facts=read(cap/'sysfs-targets.txt').decode('utf-8',errors='strict')
+ physical=read(cap/'physical-source-sysfs.txt').decode('utf-8',errors='strict')
+ if (not re.search(r'(?m)^sysfs=/sys/devices/.*usb',physical) or not re.search(r'(?m)^vendor=(?:0x)?045e$',physical)
+     or not re.search(r'(?m)^product=(?:0x)?028e$',physical)):die('retained physical USB 045e:028e sysfs identity invalid')
  log=read(cap/'observer.log').decode('utf-8');windows=list(re.finditer(r'WINDOW baseline=(\d+) selected=(-?\d+) clear=(true|false)',log))
  if len(windows)!=5:die('raw observer must contain four selection windows and one clear window')
  overlay=read(cap/'overlay.log').decode('utf-8',errors='replace')
@@ -101,8 +116,21 @@ def routing(root):
  for i,r in enumerate(rows):
   if r.get('slot')!=i or not OBJ.fullmatch(str(r.get('dbus_path',''))) or not NODE.fullmatch(str(r.get('kernel_node',''))) or not OBJ.fullmatch(str(r.get('composite_path',''))):die('routing identity malformed')
   if created[i][1]!=r['dbus_path']:die('DBus path is not bound to production creation order')
-  encoded_path=r['dbus_path'].encode()
-  if encoded_path not in read(cap/'om-after-create.json') or encoded_path not in read(cap/f'om-assignment-{i}.json'):die('raw ObjectManager phase omits target identity')
+  def om_strings(name):
+   try:value=json.loads(read(cap/name).decode('utf-8'))
+   except (ValueError,UnicodeError):die('raw ObjectManager phase is malformed')
+   found=[]
+   def walk(v):
+    if isinstance(v,str):found.append(v)
+    elif isinstance(v,list):
+     for x in v:walk(x)
+    elif isinstance(v,dict):
+     for k,x in v.items():found.append(str(k));walk(x)
+   walk(value);return found
+  created_raw=om_strings('om-after-create.json');assigned_raw=om_strings(f'om-assignment-{i}.json')
+  if r['dbus_path'] not in created_raw or r['dbus_path'] not in assigned_raw or 'xb360' not in created_raw:
+   die('decoded raw ObjectManager phase omits exact target DeviceType/identity')
+  if assigned_raw.count(r['dbus_path'])<1:die('decoded raw assignment omits exact TargetDevices member')
   for value,seen in ((r['dbus_path'],paths),(r['kernel_node'],nodes),(r.get('sysfs_identity'),sysfs)):
    if not isinstance(value,str) or value in seen:die('routing stable identity reused')
    seen.add(value)
@@ -163,10 +191,11 @@ def gpu(root,commit,tree,capability):
  expected_selection=b'profile-selection: filename=gpu-xbox-360-oracle.yaml name=GPU Xbox 360 Oracle mappings=18 icon_override=false device_type=xb360 source=production-ui'
  if expected_selection not in manager or b'provenance=profile-override' in manager or b'provenance=supported-model' not in manager:die('profile/DeviceType production selection path invalid')
  ad=authority_dir();authority_raw=read(ad/'licensed-diagram-authority.json');authority=json.loads(authority_raw);oracle_raw=read(ad/'licensed-diagram-oracle.json');oracle=json.loads(oracle_raw)['models']['xb360']
- held={'icons/svg/xbox-360.svg':'installed-xbox-360.svg','icons/svg/LICENSE.controllercons':'installed-license.controllercons','controller-icons.yaml':'installed-controller-icons.yaml','controller-layouts/xbox-360.json':'installed-layout.json','licensed-diagram-oracle.json':'installed-oracle.json'}
+ held={'icons/svg/xbox-360.svg':'installed-xbox-360.svg','icons/svg/LICENSE.controllercons':'installed-license.controllercons','controller-icons.yaml':'installed-controller-icons.yaml','controller-layouts/xbox-360.json':'installed-layout.json','licensed-diagram-oracle.json':'installed-oracle.json','licensed-diagram-authority.json':'installed-authority.json'}
  for rel,name in held.items():
   raw=read(cap/name)
-  if hashlib.sha256(raw).hexdigest()!=authority['files'][rel]:die('held installed licensed bytes differ from pin')
+  expected=hashlib.sha256(authority_raw).hexdigest() if rel=='licensed-diagram-authority.json' else authority['files'][rel]
+  if hashlib.sha256(raw).hexdigest()!=expected:die('held installed licensed bytes differ from pin')
  installed=json.loads(read(cap/'installed-manifest.json'))
  if installed.get('commit')!=commit or installed.get('tree')!=tree or installed.get('fallback') is not False:die('installed provenance invalid')
  controls=oracle['required_controls'];slugs=('a','b','x','y','up','down','left','right','start','select','guide','l1','r1','l2','r2','l3','r3')
@@ -184,7 +213,22 @@ def gpu(root,commit,tree,capability):
   cx=sum(x for x,_ in points)/len(points);cy=sum(y for _,y in points)/len(points)
   if not(spec['centroid_x'][0]<=cx<=spec['centroid_x'][1] and spec['centroid_y'][0]<=cy<=spec['centroid_y'][1]):die('independent oracle marker misaligned')
  renderer=json.loads(read(cap/'renderer-verdict.json'))
- if renderer.get('result')!='pass' or re.search(r'(?i)llvmpipe|softpipe|software|swrast',str(renderer.get('renderer',''))):die('renderer evidence invalid')
+ raw_renderer=read(cap/'egl-renderer-output.txt').decode('utf-8',errors='strict').splitlines()
+ renderer_lines=[line[12:] for line in raw_renderer if line.startswith('GL_RENDERER=')]
+ accelerated=re.compile(r'(?i)(virgl|virtio|nvidia|amd|radeon|intel|iris|nouveau)')
+ if (renderer.get('result')!='pass' or len(renderer_lines)!=1 or renderer_lines[0]!=renderer.get('renderer')
+     or not accelerated.search(renderer_lines[0]) or re.search(r'(?i)llvmpipe|softpipe|software|swrast',renderer_lines[0])):die('raw accelerated renderer evidence invalid')
+ try: om=json.loads(read(cap/'device-type-om.json').decode('utf-8'))
+ except (ValueError,UnicodeError):die('raw ObjectManager DeviceType reply malformed')
+ strings=[]
+ def walk(v):
+  if isinstance(v,str):strings.append(v)
+  elif isinstance(v,list):
+   for x in v:walk(x)
+  elif isinstance(v,dict):
+   for k,x in v.items():strings.append(str(k));walk(x)
+ walk(om)
+ if ev['target_object_path'] not in strings or 'xb360' not in strings:die('raw ObjectManager bytes do not bind selected xb360 DeviceType')
 def main():
  a=argparse.ArgumentParser();a.add_argument('--capability',required=True);a.add_argument('--artifacts',required=True);a.add_argument('--commit',required=True);a.add_argument('--tree',required=True);x=a.parse_args();root=pathlib.Path(x.artifacts)
  if x.capability=='controller-production-routing':routing(root)

@@ -42,6 +42,7 @@ done
 [[ -f "$HELPER_SOURCE" ]] || { echo "physical-controller-probe: helper source missing" >&2; exit 1; }
 [[ "$WINDOW" =~ ^[0-9]+$ && "$WINDOW" -ge 1 ]] || { echo "physical-controller-probe: invalid window" >&2; exit 2; }
 
+echo "--- physical-controller capability contract ---"
 if [[ $(id -u) -eq 0 ]]; then
     echo "physical-controller-probe: must not run as root" >&2
     exit 1

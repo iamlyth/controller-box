@@ -5,7 +5,7 @@
     {
       "name": "remote-project-gate",
       "status": "declared",
-      "probe_marker": "",
+      "probe_marker": "--- remote-project-gate capability contract ---",
       "probe_stage": "post",
       "probe_stdout_contains": [],
       "probe_is_verify_run": true,
@@ -23,7 +23,7 @@
       "authority_probe": {
         "probe_id": "factory-root-probe:dev-runner-vm:remote-project-gate:v1",
         "descriptor_sha256": "0693356703faf9e4f0882a1dbf2fb0f1f079ab4a311e06f687932026110bf67a",
-        "authority_sha256": "845d7337d3399e600cda3c4af30d8805d609b6365e8e92339e3736f6e3cbdb21",
+        "authority_sha256": "d9df58fe6b0fbbec3b8ea2b7ea4ea9cb713d600b9f2ef59ab6c26c9aba18d128",
         "expected_semantics": "capability-specific-root-authority",
         "must_execute": true,
         "must_not_skip": true,
@@ -31,12 +31,20 @@
       },
       "candidate_probe_argv": [
         "./scripts/verify-project.sh"
-      ]
+      ],
+      "artifact_requirements": {
+        "files": {
+          "authority-result.json": "application/json"
+        },
+        "required": [
+          "authority-result.json"
+        ]
+      }
     },
     {
       "name": "systemd-user",
       "status": "declared",
-      "probe_marker": "",
+      "probe_marker": "--- systemd-user capability contract ---",
       "probe_stage": "env",
       "probe_stdout_contains": [
         "factory-systemd-user-ok"
@@ -55,7 +63,7 @@
       "authority_probe": {
         "probe_id": "factory-root-probe:dev-runner-vm:systemd-user:v1",
         "descriptor_sha256": "8c47effe468972a0362d7ca2f36e3a6a95cc1ae2e2f261234b295d19f09accbf",
-        "authority_sha256": "845d7337d3399e600cda3c4af30d8805d609b6365e8e92339e3736f6e3cbdb21",
+        "authority_sha256": "d9df58fe6b0fbbec3b8ea2b7ea4ea9cb713d600b9f2ef59ab6c26c9aba18d128",
         "expected_semantics": "capability-specific-root-authority",
         "must_execute": true,
         "must_not_skip": true,
@@ -71,7 +79,15 @@
         "--service-type=exec",
         "/usr/bin/printf",
         "factory-systemd-user-ok"
-      ]
+      ],
+      "artifact_requirements": {
+        "files": {
+          "authority-result.json": "application/json"
+        },
+        "required": [
+          "authority-result.json"
+        ]
+      }
     },
     {
       "name": "kernel-uinput",
@@ -101,7 +117,7 @@
       "authority_probe": {
         "probe_id": "factory-root-probe:dev-runner-vm:kernel-uinput:v1",
         "descriptor_sha256": "4b37428c51800112565f7f20e0161d7efe5e4f62b7b6cfcd1178f1005a912a96",
-        "authority_sha256": "845d7337d3399e600cda3c4af30d8805d609b6365e8e92339e3736f6e3cbdb21",
+        "authority_sha256": "d9df58fe6b0fbbec3b8ea2b7ea4ea9cb713d600b9f2ef59ab6c26c9aba18d128",
         "expected_semantics": "capability-specific-root-authority",
         "must_execute": true,
         "must_not_skip": true,
@@ -111,7 +127,15 @@
         "nix-shell",
         "--run",
         "ctest --test-dir build-maintenance-verify --no-tests=error -R '^test_kernel_controller$' --output-on-failure"
-      ]
+      ],
+      "artifact_requirements": {
+        "files": {
+          "authority-result.json": "application/json"
+        },
+        "required": [
+          "authority-result.json"
+        ]
+      }
     },
     {
       "name": "installed-package",
@@ -136,7 +160,7 @@
       "authority_probe": {
         "probe_id": "factory-root-probe:dev-runner-vm:installed-package:v1",
         "descriptor_sha256": "2ed8a0195401d9ced92855159cd53bcfad395f7836dcf7ac2227c3c63121cb21",
-        "authority_sha256": "845d7337d3399e600cda3c4af30d8805d609b6365e8e92339e3736f6e3cbdb21",
+        "authority_sha256": "d9df58fe6b0fbbec3b8ea2b7ea4ea9cb713d600b9f2ef59ab6c26c9aba18d128",
         "expected_semantics": "capability-specific-root-authority",
         "must_execute": true,
         "must_not_skip": true,
@@ -146,7 +170,15 @@
         "nix-shell",
         "--run",
         "CBX_REQUIRE_FLATPAK=1 ./tests/test_packaging.sh build-maintenance-verify"
-      ]
+      ],
+      "artifact_requirements": {
+        "files": {
+          "authority-result.json": "application/json"
+        },
+        "required": [
+          "authority-result.json"
+        ]
+      }
     },
     {
       "name": "inputplumber-system-dbus",
@@ -177,7 +209,7 @@
       "authority_probe": {
         "probe_id": "factory-root-probe:iprunner:inputplumber-system-dbus:v1",
         "descriptor_sha256": "95b9f4e3d815ddd402d0b827be312e6bd224299c402cf40fc9d6bba64dc7fe61",
-        "authority_sha256": "845d7337d3399e600cda3c4af30d8805d609b6365e8e92339e3736f6e3cbdb21",
+        "authority_sha256": "d9df58fe6b0fbbec3b8ea2b7ea4ea9cb713d600b9f2ef59ab6c26c9aba18d128",
         "expected_semantics": "capability-specific-root-authority",
         "must_execute": true,
         "must_not_skip": true,
@@ -216,7 +248,7 @@
       "authority_probe": {
         "probe_id": "factory-root-probe:iprunner:physical-controller:v1",
         "descriptor_sha256": "ac5bccc1ec296d7965523659fee4d0ce9be5cb96757995bf997935a828fd9674",
-        "authority_sha256": "845d7337d3399e600cda3c4af30d8805d609b6365e8e92339e3736f6e3cbdb21",
+        "authority_sha256": "d9df58fe6b0fbbec3b8ea2b7ea4ea9cb713d600b9f2ef59ab6c26c9aba18d128",
         "expected_semantics": "capability-specific-root-authority",
         "must_execute": true,
         "must_not_skip": true,
@@ -232,7 +264,7 @@
       "name": "target-consumer",
       "status": "declared",
       "runner_class": "iprunner",
-      "probe_marker": "--- target-consumer capability contract (candidate) ---",
+      "probe_marker": "--- target-consumer capability contract ---",
       "probe_stage": "post",
       "probe_stdout_contains": [
         "target-consumer-probe: PASS"
@@ -256,7 +288,7 @@
       "authority_probe": {
         "probe_id": "factory-root-probe:iprunner:target-consumer:v1",
         "descriptor_sha256": "b001de026986ab0314d9f6f205a7eaaa7132cf3ff84685b7b3ff6d2f57c226c3",
-        "authority_sha256": "845d7337d3399e600cda3c4af30d8805d609b6365e8e92339e3736f6e3cbdb21",
+        "authority_sha256": "d9df58fe6b0fbbec3b8ea2b7ea4ea9cb713d600b9f2ef59ab6c26c9aba18d128",
         "expected_semantics": "capability-specific-root-authority",
         "must_execute": true,
         "must_not_skip": true,
@@ -295,6 +327,7 @@
           "om-before.json": "application/json",
           "om-cleanup.json": "application/json",
           "overlay.log": "text/plain",
+          "physical-source-sysfs.txt": "text/plain",
           "provenance-after-routing.json": "application/json",
           "provenance-before-routing.json": "application/json",
           "routing-results.json": "application/json",
@@ -320,6 +353,7 @@
           "dev-input-after-create.txt",
           "dev-input-after-cleanup.txt",
           "sysfs-targets.txt",
+          "physical-source-sysfs.txt",
           "assignment-slot-0.yaml",
           "assignment-slot-1.yaml",
           "assignment-slot-2.yaml",
@@ -377,8 +411,8 @@
       ],
       "authority_probe": {
         "probe_id": "factory-root-probe:iprunner:controller-production-routing:v1",
-        "descriptor_sha256": "f4ffc1006b0287d329882a2dbbaa1c85eb36df6f79f4e45463635363e489d36a",
-        "authority_sha256": "845d7337d3399e600cda3c4af30d8805d609b6365e8e92339e3736f6e3cbdb21",
+        "descriptor_sha256": "72af959ec9629c0da417ab72151a8b5738abe9df42b0ce65e24d71f7b83907f3",
+        "authority_sha256": "d9df58fe6b0fbbec3b8ea2b7ea4ea9cb713d600b9f2ef59ab6c26c9aba18d128",
         "expected_semantics": "capability-specific-root-authority",
         "must_execute": true,
         "must_not_skip": true,
@@ -395,12 +429,73 @@
       "status": "declared",
       "runner_class": "gpurunner",
       "artifact_requirements": {
+        "files": {
+          "artifact-manifest.json": "application/json",
+          "build.log": "text/plain",
+          "capture-a.png": "image/png",
+          "capture-b.png": "image/png",
+          "capture-down.png": "image/png",
+          "capture-guide.png": "image/png",
+          "capture-l1.png": "image/png",
+          "capture-l2.png": "image/png",
+          "capture-l3.png": "image/png",
+          "capture-left.png": "image/png",
+          "capture-r1.png": "image/png",
+          "capture-r2.png": "image/png",
+          "capture-r3.png": "image/png",
+          "capture-right.png": "image/png",
+          "capture-select.png": "image/png",
+          "capture-start.png": "image/png",
+          "capture-up.png": "image/png",
+          "capture-x.png": "image/png",
+          "capture-y.png": "image/png",
+          "configure.log": "text/plain",
+          "controller-box-unhighlighted.png": "image/png",
+          "device-type-evidence.json": "application/json",
+          "device-type-om.json": "application/json",
+          "egl-build.log": "text/plain",
+          "egl-renderer-output.txt": "application/json",
+          "install.log": "text/plain",
+          "installed-authority.json": "application/json",
+          "installed-controller-icons.yaml": "application/yaml",
+          "installed-layout.json": "application/json",
+          "installed-license.controllercons": "text/plain",
+          "installed-manifest.json": "application/json",
+          "installed-oracle.json": "application/json",
+          "installed-xbox-360.svg": "image/svg+xml",
+          "manager.log": "text/plain",
+          "probe.log": "text/plain",
+          "profile-selection-evidence.json": "application/json",
+          "renderer-verdict.json": "application/json",
+          "screenshooter.log": "text/plain",
+          "selected-profile.yaml": "application/yaml",
+          "verdict.json": "application/json",
+          "weston.log": "text/plain"
+        },
         "required": [
           "artifact-manifest.json",
           "renderer-verdict.json",
           "verdict.json",
+          "installed-manifest.json",
+          "installed-authority.json",
+          "device-type-evidence.json",
+          "device-type-om.json",
+          "egl-renderer-output.txt",
           "profile-selection-evidence.json",
           "selected-profile.yaml",
+          "probe.log",
+          "manager.log",
+          "configure.log",
+          "build.log",
+          "install.log",
+          "weston.log",
+          "egl-build.log",
+          "screenshooter.log",
+          "installed-xbox-360.svg",
+          "installed-license.controllercons",
+          "installed-controller-icons.yaml",
+          "installed-layout.json",
+          "installed-oracle.json",
           "controller-box-unhighlighted.png",
           "capture-a.png",
           "capture-b.png",
@@ -418,53 +513,8 @@
           "capture-l2.png",
           "capture-r2.png",
           "capture-l3.png",
-          "capture-r3.png",
-          "installed-manifest.json",
-          "probe.log",
-          "device-type-evidence.json",
-          "manager.log",
-          "installed-xbox-360.svg",
-          "installed-license.controllercons",
-          "installed-controller-icons.yaml",
-          "installed-layout.json",
-          "installed-oracle.json",
-          "installed-authority.json"
-        ],
-        "files": {
-          "artifact-manifest.json": "application/json",
-          "renderer-verdict.json": "application/json",
-          "verdict.json": "application/json",
-          "installed-manifest.json": "application/json",
-          "probe.log": "text/plain",
-          "controller-box-unhighlighted.png": "image/png",
-          "capture-a.png": "image/png",
-          "capture-b.png": "image/png",
-          "capture-x.png": "image/png",
-          "capture-y.png": "image/png",
-          "capture-up.png": "image/png",
-          "capture-down.png": "image/png",
-          "capture-left.png": "image/png",
-          "capture-right.png": "image/png",
-          "capture-start.png": "image/png",
-          "capture-select.png": "image/png",
-          "capture-guide.png": "image/png",
-          "capture-l1.png": "image/png",
-          "capture-r1.png": "image/png",
-          "capture-l2.png": "image/png",
-          "capture-r2.png": "image/png",
-          "capture-l3.png": "image/png",
-          "capture-r3.png": "image/png",
-          "device-type-evidence.json": "application/json",
-          "manager.log": "text/plain",
-          "installed-xbox-360.svg": "image/svg+xml",
-          "installed-license.controllercons": "text/plain",
-          "installed-controller-icons.yaml": "application/yaml",
-          "installed-layout.json": "application/json",
-          "installed-oracle.json": "application/json",
-          "installed-authority.json": "application/json",
-          "profile-selection-evidence.json": "application/json",
-          "selected-profile.yaml": "application/yaml"
-        }
+          "capture-r3.png"
+        ]
       },
       "probe_marker": "--- gpu-compositor capability contract ---",
       "probe_stage": "post",
@@ -497,8 +547,8 @@
       ],
       "authority_probe": {
         "probe_id": "factory-root-probe:gpurunner:gpu-compositor:v1",
-        "descriptor_sha256": "166cfc9593c7c46442068f1888cb24a6385de0a000ff413fdc5a995a07674a39",
-        "authority_sha256": "845d7337d3399e600cda3c4af30d8805d609b6365e8e92339e3736f6e3cbdb21",
+        "descriptor_sha256": "d8175649b906088a33ddee9e76d510b85a130479ee70a368d845f643d5596411",
+        "authority_sha256": "d9df58fe6b0fbbec3b8ea2b7ea4ea9cb713d600b9f2ef59ab6c26c9aba18d128",
         "expected_semantics": "capability-specific-root-authority",
         "must_execute": true,
         "must_not_skip": true,
@@ -515,12 +565,73 @@
       "status": "declared",
       "runner_class": "gpurunner",
       "artifact_requirements": {
+        "files": {
+          "artifact-manifest.json": "application/json",
+          "build.log": "text/plain",
+          "capture-a.png": "image/png",
+          "capture-b.png": "image/png",
+          "capture-down.png": "image/png",
+          "capture-guide.png": "image/png",
+          "capture-l1.png": "image/png",
+          "capture-l2.png": "image/png",
+          "capture-l3.png": "image/png",
+          "capture-left.png": "image/png",
+          "capture-r1.png": "image/png",
+          "capture-r2.png": "image/png",
+          "capture-r3.png": "image/png",
+          "capture-right.png": "image/png",
+          "capture-select.png": "image/png",
+          "capture-start.png": "image/png",
+          "capture-up.png": "image/png",
+          "capture-x.png": "image/png",
+          "capture-y.png": "image/png",
+          "configure.log": "text/plain",
+          "controller-box-unhighlighted.png": "image/png",
+          "device-type-evidence.json": "application/json",
+          "device-type-om.json": "application/json",
+          "egl-build.log": "text/plain",
+          "egl-renderer-output.txt": "application/json",
+          "install.log": "text/plain",
+          "installed-authority.json": "application/json",
+          "installed-controller-icons.yaml": "application/yaml",
+          "installed-layout.json": "application/json",
+          "installed-license.controllercons": "text/plain",
+          "installed-manifest.json": "application/json",
+          "installed-oracle.json": "application/json",
+          "installed-xbox-360.svg": "image/svg+xml",
+          "manager.log": "text/plain",
+          "probe.log": "text/plain",
+          "profile-selection-evidence.json": "application/json",
+          "renderer-verdict.json": "application/json",
+          "screenshooter.log": "text/plain",
+          "selected-profile.yaml": "application/yaml",
+          "verdict.json": "application/json",
+          "weston.log": "text/plain"
+        },
         "required": [
           "artifact-manifest.json",
           "renderer-verdict.json",
           "verdict.json",
+          "installed-manifest.json",
+          "installed-authority.json",
+          "device-type-evidence.json",
+          "device-type-om.json",
+          "egl-renderer-output.txt",
           "profile-selection-evidence.json",
           "selected-profile.yaml",
+          "probe.log",
+          "manager.log",
+          "configure.log",
+          "build.log",
+          "install.log",
+          "weston.log",
+          "egl-build.log",
+          "screenshooter.log",
+          "installed-xbox-360.svg",
+          "installed-license.controllercons",
+          "installed-controller-icons.yaml",
+          "installed-layout.json",
+          "installed-oracle.json",
           "controller-box-unhighlighted.png",
           "capture-a.png",
           "capture-b.png",
@@ -538,55 +649,10 @@
           "capture-l2.png",
           "capture-r2.png",
           "capture-l3.png",
-          "capture-r3.png",
-          "installed-manifest.json",
-          "probe.log",
-          "device-type-evidence.json",
-          "manager.log",
-          "installed-xbox-360.svg",
-          "installed-license.controllercons",
-          "installed-controller-icons.yaml",
-          "installed-layout.json",
-          "installed-oracle.json",
-          "installed-authority.json"
-        ],
-        "files": {
-          "artifact-manifest.json": "application/json",
-          "renderer-verdict.json": "application/json",
-          "verdict.json": "application/json",
-          "installed-manifest.json": "application/json",
-          "probe.log": "text/plain",
-          "controller-box-unhighlighted.png": "image/png",
-          "capture-a.png": "image/png",
-          "capture-b.png": "image/png",
-          "capture-x.png": "image/png",
-          "capture-y.png": "image/png",
-          "capture-up.png": "image/png",
-          "capture-down.png": "image/png",
-          "capture-left.png": "image/png",
-          "capture-right.png": "image/png",
-          "capture-start.png": "image/png",
-          "capture-select.png": "image/png",
-          "capture-guide.png": "image/png",
-          "capture-l1.png": "image/png",
-          "capture-r1.png": "image/png",
-          "capture-l2.png": "image/png",
-          "capture-r2.png": "image/png",
-          "capture-l3.png": "image/png",
-          "capture-r3.png": "image/png",
-          "device-type-evidence.json": "application/json",
-          "manager.log": "text/plain",
-          "installed-xbox-360.svg": "image/svg+xml",
-          "installed-license.controllercons": "text/plain",
-          "installed-controller-icons.yaml": "application/yaml",
-          "installed-layout.json": "application/json",
-          "installed-oracle.json": "application/json",
-          "installed-authority.json": "application/json",
-          "profile-selection-evidence.json": "application/json",
-          "selected-profile.yaml": "application/yaml"
-        }
+          "capture-r3.png"
+        ]
       },
-      "probe_marker": "--- gpu-compositor capability contract ---",
+      "probe_marker": "--- installed-licensed-diagram capability contract ---",
       "probe_stage": "post",
       "probe_stdout_contains": [
         "gpu-compositor-probe: installed-assets hash-verified asset+license+map+layout",
@@ -617,8 +683,8 @@
       ],
       "authority_probe": {
         "probe_id": "factory-root-probe:gpurunner:installed-licensed-diagram:v1",
-        "descriptor_sha256": "425a01efbf19ad27b3c3c12d94517e8eda69da0ce0f6fa68b0ab9049f52ab69a",
-        "authority_sha256": "845d7337d3399e600cda3c4af30d8805d609b6365e8e92339e3736f6e3cbdb21",
+        "descriptor_sha256": "788cd968f1980745b64c01562810b85e865f8b8695ef08f1952e99ec0e845a01",
+        "authority_sha256": "d9df58fe6b0fbbec3b8ea2b7ea4ea9cb713d600b9f2ef59ab6c26c9aba18d128",
         "expected_semantics": "capability-specific-root-authority",
         "must_execute": true,
         "must_not_skip": true,

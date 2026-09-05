@@ -2784,6 +2784,8 @@ class Campaign:
         environment["PYTHONPATH"] = str((self._command_closure_root or self._root) / ".factory" / "loop")
         if self._config.role_driver is None:
             environment["FACTORY_CAMPAIGN_ID"] = self._config.campaign_id
+            environment["HUMAN_TRUST_ANCHOR"] = self._config.human_trust_anchor
+            environment["HUMAN_TRUST_ANCHOR_SHA256"] = self._config.human_trust_anchor_sha256
             if self._state_file_exists():
                 bound = state_module.load_state(
                     self._root, expected_campaign_id=self._config.campaign_id,

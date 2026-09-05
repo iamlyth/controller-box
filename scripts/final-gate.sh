@@ -24,6 +24,13 @@ MODE=${1:-}
 cd -- "$PROJECT_ROOT"
 ATTEST=false
 ATTEST_HEAD=
+CONFORMANCE_HUMAN_ARGS=()
+if [[ -n ${HUMAN_TRUST_ANCHOR:-} || -n ${HUMAN_TRUST_ANCHOR_SHA256:-} ]]; then
+    [[ -n ${HUMAN_TRUST_ANCHOR:-} && -n ${HUMAN_TRUST_ANCHOR_SHA256:-} ]] || {
+        echo "final-gate: incomplete human trust-anchor descriptor" >&2; exit 1;
+    }
+    CONFORMANCE_HUMAN_ARGS=(--human-trust-anchor "$HUMAN_TRUST_ANCHOR" --human-trust-anchor-sha256 "$HUMAN_TRUST_ANCHOR_SHA256")
+fi
 if [[ ${FACTORY_FINAL_GATE_ATTEST:-0} == 1 ]]; then
     ATTEST=true
     ATTEST_HEAD=$(git rev-parse HEAD)
@@ -41,7 +48,7 @@ case "$MODE" in
             ./scripts/validate-blocked-facts.py planning .factory/artifacts/blocked-facts.json
         fi
         if [[ -f .factory/artifacts/conformance.json ]]; then
-            ./scripts/validate-conformance.py planning .factory/artifacts/conformance.json
+            ./scripts/validate-conformance.py planning .factory/artifacts/conformance.json "${CONFORMANCE_HUMAN_ARGS[@]}"
         fi
         echo "final-gate: planning completion accepted"
         ;;
@@ -75,7 +82,7 @@ PY
         # Blocked/unevidenced requirements fail implementation completion,
         # and every blocked-facts entry must be resolved by an exact
         # receipt/artifact or an explicit human decision.
-        ./scripts/validate-conformance.py complete .factory/artifacts/conformance.json
+        ./scripts/validate-conformance.py complete .factory/artifacts/conformance.json "${CONFORMANCE_HUMAN_ARGS[@]}"
         ./scripts/validate-blocked-facts.py complete .factory/artifacts/blocked-facts.json
         ./scripts/check-golden-policy.py
         ./scripts/check-capability-contracts.py
@@ -103,7 +110,7 @@ PY
         ./scripts/check-plan-freshness.sh
         ./scripts/validate-implementation-plan.py complete .factory/artifacts/implementation-plan.md
         if [[ -f .factory/artifacts/conformance.json ]]; then
-            ./scripts/validate-conformance.py complete .factory/artifacts/conformance.json
+            ./scripts/validate-conformance.py complete .factory/artifacts/conformance.json "${CONFORMANCE_HUMAN_ARGS[@]}"
         fi
         if [[ -f .factory/artifacts/blocked-facts.json ]]; then
             ./scripts/validate-blocked-facts.py complete .factory/artifacts/blocked-facts.json

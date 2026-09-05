@@ -57,12 +57,13 @@ def validate(facts: dict, expectations: dict) -> None:
     # address must be the system socket).
     bus_expectations = expectations["bus"]
     require(
-        facts.get("dbus_system_bus_address_env") is None,
-        "DBUS_SYSTEM_BUS_ADDRESS must not be set (private-bus override rejected)",
+        facts.get("dbus_system_bus_address_env") == "unix:path=/run/factory/dbus/system_bus_socket",
+        "DBUS_SYSTEM_BUS_ADDRESS is not the exact broker private proxy",
     )
     require(
-        facts.get("bus_address_effective") == "unix:path=" + bus_expectations["system_socket"],
-        "effective system bus address is not the default system socket",
+        facts.get("bus_address_effective") == "unix:path=/run/factory/dbus/system_bus_socket"
+        and bus_expectations["system_socket"] == "/run/factory/dbus/system_bus_socket",
+        "effective bus address is not the approved broker proxy",
     )
     require(
         facts.get("name_owner", {}).get("has_owner") is True,

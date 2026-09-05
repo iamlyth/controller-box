@@ -109,6 +109,13 @@ Volatile, ignored state:
   class-scoped pins in root policy `/etc/factory-runner/runner-policy.json` for
   the licensed-diagram and layout/oracle scopes. The tracked enrollment file
   carries only the current candidate digest and remains pending human review.
+  The canonical conformance validator accepts a human-tier row only when this
+  same external trust-anchor descriptor verifies the detached approval and its
+  exact retained captures; readiness and final gates forward that descriptor.
+  Runner D-Bus probes receive only capability-private broker proxy sockets,
+  routing receives broker-held raw udev/provenance facts, and the hidden
+  `/opt/factory-runner` parent exposes only its exact immutable authority path
+  read-only inside candidate containment.
 - `.bug-ledger.lock`, `.ollama-usage-env`, `logs/`, test fixtures
 
 **Retired Ralph control plane.** `.factory/ralph-freeze` is a tracked,

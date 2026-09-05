@@ -108,8 +108,8 @@ if [[ $(id -u) -eq 0 ]]; then
     echo "production-routing-probe: must not run as root" >&2
     exit 1
 fi
-if [[ -n "${DBUS_SYSTEM_BUS_ADDRESS:-}" ]]; then
-    echo "production-routing-probe: DBUS_SYSTEM_BUS_ADDRESS is set; refusing a private bus" >&2
+if [[ -z "$FIXTURE" && "${DBUS_SYSTEM_BUS_ADDRESS:-}" != "unix:path=/run/factory/dbus/system_bus_socket" ]]; then
+    echo "production-routing-probe: exact broker D-Bus proxy is required" >&2
     exit 1
 fi
 
@@ -508,12 +508,12 @@ verify_node_identities() {
 # The InputPlumber bus-owner process executable's REALPATH must equal the
 # pinned /usr/bin/inputplumber exactly; no loose dpkg alternative is accepted.
 verify_bus_identity() {
-    [[ -S /run/dbus/system_bus_socket ]] || {
-        echo "production-routing-probe: FAIL: system bus socket missing" >&2
+    [[ -S /run/factory/dbus/system_bus_socket ]] || {
+        echo "production-routing-probe: FAIL: broker proxy socket missing" >&2
         return 1
     }
     local sowner
-    sowner=$(stat -c %U /run/dbus/system_bus_socket 2>/dev/null || true)
+    sowner=$(stat -c %U /run/factory/dbus/system_bus_socket 2>/dev/null || true)
     [[ "$sowner" == "root" ]] || {
         echo "production-routing-probe: FAIL: system bus socket is not root-owned" >&2
         return 1
@@ -529,9 +529,12 @@ verify_bus_identity() {
     if python3 - "$fact" "$PINNED_INPUTPLUMBER" <<'PY'
 import hashlib,json,pathlib,sys
 p=pathlib.Path(sys.argv[1]); d=json.loads(p.read_bytes()); exe=pathlib.Path(sys.argv[2])
-assert d.get('schema')=='factory-host-inputplumber-provenance/v1'
-assert d.get('verified_by')=='root-broker-outside-private-pids' and d.get('exe')==str(exe)
-assert hashlib.sha256(exe.read_bytes()).hexdigest()==d.get('exe_sha256')
+assert set(d)=={'schema','unique_owner','pid','starttime','exe','exe_dev','exe_ino','exe_size','exe_sha256','package_name','package_version','package_installed','service_unit','service_type','service_active','exe_owned_by_package','verified_by'}
+assert d['schema']=='factory-host-inputplumber-provenance/v2'
+assert d['verified_by']=='root-broker-held-proc-exe-outside-private-pids' and d['exe']==str(exe)
+assert d['package_name']=='inputplumber' and d['service_unit']=='inputplumber.service' and d['service_type']=='dbus'
+assert all(d[k] is True for k in ('package_installed','service_active','exe_owned_by_package'))
+assert hashlib.sha256(exe.read_bytes()).hexdigest()==d['exe_sha256']
 PY
     then
         echo "production-routing-probe: bus owner provenance verified by privileged broker"
@@ -550,18 +553,12 @@ run_live() {
     local -a created_nodes=()
     local overlay_pid=""
     local xvfb_pid=""
-    local udev_pid=""
     local prefix="$tmp/prefix"
     local home="$tmp/home"
 
     cleanup_live() {
         local rc=0
         local termination="ok" target_cleanup="ok" targets_absent="false" nodes_absent="false"
-        if [[ -n "$udev_pid" ]]; then
-            kill "$udev_pid" 2>/dev/null || true
-            wait "$udev_pid" 2>/dev/null || true
-            udev_pid=""
-        fi
         if [[ -n "$overlay_pid" ]]; then
             kill "$overlay_pid" 2>/dev/null || true
             wait "$overlay_pid" 2>/dev/null || termination="fail"
@@ -631,7 +628,7 @@ PY
         retain_artifacts "$tmp/observer.log" "$tmp/routing-results.json" "$tmp/overlay.log" "$tmp/udev-targets.log" "$CLEANUP_LOG" \
             "$tmp"/assignment-slot-*.yaml "$tmp/assignment-after-clear.yaml" \
             "$tmp"/om-*.json "$tmp"/dbus-*.json "$tmp"/provenance-*.json \
-            "$tmp"/dev-input-*.txt "$tmp"/sysfs-targets.txt || rc=1
+            "$tmp"/dev-input-*.txt "$tmp"/sysfs-targets.txt "$tmp"/physical-source-sysfs.txt || rc=1
         if [[ -n "$xvfb_pid" ]]; then
             kill "$xvfb_pid" 2>/dev/null || true
             wait "$xvfb_pid" 2>/dev/null || true
@@ -745,9 +742,10 @@ PY
         return 1
     fi
 
-    command -v udevadm >/dev/null 2>&1 || { echo "production-routing-probe: FAIL: udevadm is required for kernel identity correlation" >&2; cleanup_live; return 1; }
-    udevadm monitor --kernel --property --subsystem-match=input > "$tmp/udev-targets.log" 2>&1 &
-    udev_pid=$!
+    [[ "${FACTORY_UDEV_SNAPSHOT:-}" == "/run/factory/udev-snapshot.log" && -r "$FACTORY_UDEV_SNAPSHOT" ]] || {
+        echo "production-routing-probe: FAIL: broker-held raw udev snapshot is required" >&2; cleanup_live; return 1;
+    }
+    : > "$tmp/udev-targets.log"
 
     # 8. Launch the installed, unmodified overlay service with its CWD set to
     #    the isolated temp dir (never the repository), so a relative asset
@@ -839,6 +837,7 @@ PY
     # production log order to the udev kernel-add order; display names are
     # deliberately irrelevant and may all be identical.
     mapfile -t production_paths < <(grep -oE 'target-created slot=[0-3] path=/org/shadowblip/InputPlumber/[A-Za-z0-9_/]+ device-type=xb360' "$tmp/overlay.log" | sort -t= -k2,2n | sed -E 's/.* path=([^ ]+) .*/\1/')
+    cp -- "$FACTORY_UDEV_SNAPSHOT" "$tmp/udev-targets.log" || { cleanup_live; return 1; }
     mapfile -t udev_nodes < <(grep -oE 'DEVNAME=/dev/input/event[0-9]+' "$tmp/udev-targets.log" | cut -d= -f2 | sed 's#.*/##' | awk '!seen[$0]++')
     [[ ${#production_paths[@]} -eq 4 ]] || { echo "production-routing-probe: FAIL: production target creation order unavailable" >&2; cleanup_live; return 1; }
     local -a ordered_nodes=() ordered_names=() ordered_sysfs=()
@@ -872,7 +871,15 @@ PY
         cleanup_live
         return 1
     }
-    local physical_name target_node target_name slot composite source_path
+    local physical_name target_node target_name slot composite source_path physical_sysfs
+    physical_sysfs=$(readlink -f "/sys/class/input/${physical##*/}/device") || { cleanup_live; return 1; }
+    case "$physical_sysfs" in /sys/devices/*usb*) ;; *) echo "production-routing-probe: FAIL: physical source is not USB sysfs" >&2; cleanup_live; return 1;; esac
+    {
+        printf 'devnode=%s\nsysfs=%s\n' "$physical" "$physical_sysfs"
+        printf 'vendor='; cat "$physical_sysfs/id/vendor"
+        printf 'product='; cat "$physical_sysfs/id/product"
+        [[ -r "$physical_sysfs/uevent" ]] && cat "$physical_sysfs/uevent"
+    } > "$tmp/physical-source-sysfs.txt"
     source_path="$OM_PATH/devices/source/${physical##*/}"
     if ! busctl --system --json=short call "$BUS_NAME" "$OM_PATH" \
         org.freedesktop.DBus.ObjectManager GetManagedObjects > "$tmp/routing-om.json" 2>/dev/null; then

@@ -54,8 +54,13 @@ done
     exit 1
 }
 
+echo "--- target-consumer capability contract ---"
 if [[ $(id -u) -eq 0 ]]; then
     echo "target-consumer-probe: must not run as root" >&2
+    exit 1
+fi
+if [[ -z "$FIXTURE" && "${DBUS_SYSTEM_BUS_ADDRESS:-}" != "unix:path=/run/factory/dbus/system_bus_socket" ]]; then
+    echo "target-consumer-probe: exact broker D-Bus proxy is required" >&2
     exit 1
 fi
 

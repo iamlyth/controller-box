@@ -33,9 +33,25 @@ for required in ('PrivatePIDs=yes','PrivateMounts=yes','NoNewPrivileges=yes','Ca
  assert required in broker,required
 assert 'os.chown(product,uid' not in broker and 'FACTORY_BROKER_SIGNING' not in broker
 assert 'licensed authority/oracle status is pending or unapproved' in broker
-# Dev classes execute distinct authority semantics and emit non-skip/non-simulated markers.
-doc=json.loads((source/'authority.json').read_text())
+# Every capability has a reachable immutable authority executable and an exact
+# delimiter; @/ paths resolve beneath the one read-only authority mount.
+doc=json.loads((source/'authority.json').read_text()); caps=[]
+for runner,klass in doc['classes'].items():
+ for cap,contract in klass['capabilities'].items():
+  caps.append(cap)
+  for argv_name in ('argv','analyzer_argv'):
+   argv=contract[argv_name]
+   for token in argv:
+    if token.startswith('@/'): assert (source/token[2:]).is_file(),(cap,token)
+  probe=(source/contract['argv'][1][2:]).read_text()
+  assert (f'--- {cap} capability contract ---' in probe
+          or 'probe-dev-capability.py' in contract['argv'][1]
+          or ('FACTORY_CAPABILITY' in probe and cap in ('gpu-compositor','installed-licensed-diagram')))
+assert len(caps)==10 and len(set(caps))==10
 for cap,contract in doc['classes']['dev-runner-vm']['capabilities'].items():
  assert any('probe-dev-capability.py' in x for x in contract['argv']) and contract['argv'][-1]==cap
  assert contract['artifacts']['required']==['authority-result.json']
+broker=(ROOT/'scripts/factory-runner-broker.py').read_text()
+assert 'authority_mount=f"BindReadOnlyPaths={authority.root}:{authority.root}"' in broker
+assert 'blocked_paths=["/root","/home","/run","/var/run","/etc/ssh","/etc/sudoers","/etc/sudoers.d","/etc/factory-runner","/opt/factory-runner"' in broker
 print('test: v2 root probe authority/broker adversarial checks passed')

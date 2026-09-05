@@ -3,7 +3,7 @@
   "description": "Exact pins for the inputplumber-system-dbus capability probe. Every field is verified against live facts collected by scripts/probe-inputplumber-system-dbus.sh; a mismatch fails the probe (non-skipping). Pins were derived from the real provisioned VM (Debian 13 amd64, pinned InputPlumber 0.78.0-1) and from the production DBus client constants (src/dbus/dbus_interface.h, src/dbus/ip_manager.c). Do not weaken a pin to make a probe pass; re-verify against the live system first.",
   "bus": {
     "name": "org.shadowblip.InputPlumber",
-    "system_socket": "/run/dbus/system_bus_socket"
+    "system_socket": "/run/factory/dbus/system_bus_socket"
   },
   "package": {
     "name": "inputplumber",
