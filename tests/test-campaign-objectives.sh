@@ -30,7 +30,8 @@ setup_repo() {
         "$dir/.factory-state/audit-receipts" \
         "$dir/.factory-state/runner-evidence"
     chmod 700 "$dir/.factory-state" "$dir/.factory-state/audit-receipts"
-    cp "$CHECKER" "$RUNNER_EVIDENCE" "$ENV_CHECKER" "$dir/scripts/"
+    cp "$CHECKER" "$RUNNER_EVIDENCE" "$ENV_CHECKER" \
+        "$PROJECT_ROOT/scripts/factory_runner_artifacts.py" "$dir/scripts/"
     cp "$PROJECT_ROOT/.factory/loop/evidence.py" \
         "$PROJECT_ROOT/.factory/loop/gitutil.py" "$dir/.factory/loop/"
     chmod +x "$dir/scripts/"*.py
@@ -175,13 +176,16 @@ empty = hashlib.sha256(b"").hexdigest()
 capabilities = sorted(declared["capabilities"])
 key_sha256 = hashlib.sha256(public_key.encode()).hexdigest()
 manifest = {
-    "schema": "factory-runner-receipt/v1", "result": "pass", "runner": runner,
+    "schema": "factory-runner-receipt/v2", "result": "pass", "runner": runner,
     "commit": head, "tree": tree, "environment_blob": environment_blob,
     "verify_argv_sha256": argv_digest, "archive_sha256": archive_sha256,
     "campaign_id": "synthetic-campaign-objectives", "readiness_nonce": "2" * 64, "authority_pins_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945", "nonce": "0" * 64,
     "capabilities": capabilities, "exit_code": 0, "timed_out": False,
     "started_at": 1, "finished_at": 2, "cleanup": True,
     "stdout_sha256": empty, "stderr_sha256": empty,
+    "artifact_protocol":"factory-runner-artifacts/v1","artifact_limits":{"count":64,"file_bytes":8388608,"aggregate_bytes":50331648},
+    "artifact_count":0,"artifact_bytes":0,"artifact_manifest_sha256":hashlib.sha256(b"[]\n").hexdigest(),
+    "artifact_scope_sha256":hashlib.sha256(json.dumps({"campaign_id":"synthetic-campaign-objectives","readiness_nonce":"2"*64,"nonce":"0"*64,"artifact_manifest_sha256":hashlib.sha256(b"[]\n").hexdigest()},sort_keys=True,separators=(",",":")).encode()).hexdigest(),"artifacts":[],
     "signer_principal": runner, "signer_key_sha256": key_sha256,
     "namespace": "factory-runner-receipt", "signature_algorithm": "ssh-ed25519",
 }
@@ -192,12 +196,13 @@ aggregate_path = root / ".factory-state/runner-evidence.json"
 if aggregate_path.exists():
     aggregate = json.loads(aggregate_path.read_text())
 else:
-    aggregate = {"schema": "factory-runner-aggregate/v2", "campaign_id": "synthetic-campaign-objectives", "readiness_nonce": "2" * 64, "commit": head,
+    aggregate = {"schema": "factory-runner-aggregate/v3", "campaign_id": "synthetic-campaign-objectives", "readiness_nonce": "2" * 64, "commit": head,
                  "tree": tree, "environment_blob": environment_blob, "runners": []}
 aggregate["runners"] = [
     item for item in aggregate["runners"] if item["name"] != runner
 ] + [{"name": runner, "manifest": f".factory-state/runner-evidence/{runner}/{head}/manifest.json",
       "manifest_sha256": hashlib.sha256(raw).hexdigest(), "capabilities": capabilities,
+      "artifact_manifest_sha256":hashlib.sha256(b"[]\n").hexdigest(),"artifact_count":0,"artifact_bytes":0,
       "signer": {"principal": runner, "key_sha256": key_sha256,
                   "algorithm": "ssh-ed25519", "signature_sha256": ""}}]
 aggregate_path.write_text(json.dumps(aggregate, sort_keys=True, indent=2) + "\n")

@@ -94,6 +94,9 @@ if(BASH_EXECUTABLE)
     add_test(NAME test_factory_runner
         COMMAND ${BASH_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test-factory-runner.sh)
+    add_test(NAME test_runner_artifacts
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test-runner-artifacts.py)
     add_test(NAME test_campaign_audit
         COMMAND ${BASH_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test-campaign-audit.sh)

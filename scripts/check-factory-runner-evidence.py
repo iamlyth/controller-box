@@ -9,7 +9,7 @@ import glob
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import stat
 import struct
@@ -17,6 +17,10 @@ import subprocess
 import sys
 import tempfile
 import tomllib
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from factory_runner_artifacts import (ArtifactError, PROTOCOL as ARTIFACT_PROTOCOL,
+    MAX_ARTIFACTS, MAX_ARTIFACT_FILE, MAX_ARTIFACT_BYTES, validate_descriptors)
 
 ROOT = Path(__file__).resolve().parent.parent
 AGGREGATE = ROOT / ".factory-state/runner-evidence.json"
@@ -155,6 +159,17 @@ def git(*args: str) -> str:
     if result.returncode:
         fail(f"Git binding failed: {' '.join(args)}")
     return result.stdout.strip()
+
+
+def require_no_symlink_chain(path: Path, boundary: Path) -> None:
+    try: relative=path.relative_to(boundary)
+    except ValueError: fail(f"evidence path escapes boundary: {path}")
+    current=boundary
+    for part in relative.parts:
+        current=current/part
+        try: info=current.lstat()
+        except OSError: fail(f"evidence path component is missing: {current}")
+        if stat.S_ISLNK(info.st_mode): fail(f"evidence path component is a symlink: {current}")
 
 
 def regular_json(path: Path) -> tuple[dict, bytes]:
@@ -350,6 +365,18 @@ def verify_manifest_signature(issuance_trust: dict, current_trust: dict,
             pass
 
 
+def expected_authority_pins_digest(commit: str, runner: str) -> str:
+    pins=[]
+    if runner=="gpurunner":
+        try: data=json.loads(git("show",f"{commit}:.factory/runner-policy-enrollment.json"))
+        except (SystemExit,json.JSONDecodeError): fail("commit-bound runner authority enrollment is unavailable")
+        if (data.get("schema")!="controller-box-runner-policy-enrollment/v1" or data.get("runner_class")!=runner
+                or not SHA256.fullmatch(str(data.get("authority_sha256",""))) or not isinstance(data.get("scopes"),list)):
+            fail("commit-bound runner authority enrollment is invalid")
+        pins=[{"class":runner,"scope":scope,"authority_sha256":data["authority_sha256"]} for scope in sorted(data["scopes"])]
+    return hashlib.sha256(json.dumps(pins,sort_keys=True,separators=(",",":")).encode()).hexdigest()
+
+
 def validate_record(declared: dict, record: dict, commit: str, tree: str,
                     environment_blob: str, archive_sha256: str,
                     issuance_trust: dict, current_trust: dict,
@@ -361,7 +388,7 @@ def validate_record(declared: dict, record: dict, commit: str, tree: str,
     aggregate's commit/tree/environment/blob/archive, argv-faithful to the
     commit-bound declaration, and signed by a provisioned trust principal.
     """
-    if not isinstance(record, dict) or set(record) != {"name", "manifest", "manifest_sha256", "capabilities", "signer"}:
+    if not isinstance(record, dict) or set(record) != {"name", "manifest", "manifest_sha256", "capabilities", "artifact_manifest_sha256", "artifact_count", "artifact_bytes", "signer"}:
         fail("runner aggregate record is invalid")
     if record["name"] != declared.get("name") or record["capabilities"] != sorted(declared.get("capabilities", [])):
         fail("runner declaration/evidence mismatch")
@@ -391,6 +418,7 @@ def validate_record(declared: dict, record: dict, commit: str, tree: str,
         fail("manifest parent is missing")
     if evidence_root not in (resolved_parent, *resolved_parent.parents):
         fail("manifest is outside the evidence root")
+    require_no_symlink_chain(manifest_path, ROOT / ".factory-state")
     manifest, raw = regular_json(manifest_path)
     if hashlib.sha256(raw).hexdigest() != record["manifest_sha256"]:
         fail("manifest digest mismatch")
@@ -398,10 +426,12 @@ def validate_record(declared: dict, record: dict, commit: str, tree: str,
         "schema", "result", "runner", "commit", "tree", "environment_blob",
         "verify_argv_sha256", "archive_sha256", "campaign_id", "readiness_nonce", "authority_pins_sha256", "nonce", "capabilities",
         "exit_code", "timed_out", "started_at", "finished_at", "cleanup",
-        "stdout_sha256", "stderr_sha256",
+        "stdout_sha256", "stderr_sha256", "artifact_protocol", "artifact_limits",
+        "artifact_count", "artifact_bytes", "artifact_manifest_sha256",
+        "artifact_scope_sha256", "artifacts",
         "signer_principal", "signer_key_sha256", "namespace", "signature_algorithm",
     }
-    if set(manifest) != expected_fields or manifest.get("schema") != "factory-runner-receipt/v1" or manifest.get("result") != "pass":
+    if set(manifest) != expected_fields or manifest.get("schema") != "factory-runner-receipt/v2" or manifest.get("result") != "pass":
         fail("runner manifest schema/result is invalid")
     if (
         manifest["runner"] != record["name"]
@@ -411,6 +441,7 @@ def validate_record(declared: dict, record: dict, commit: str, tree: str,
         or manifest["environment_blob"] != environment_blob
         or manifest["campaign_id"] != campaign_id
         or manifest["readiness_nonce"] != readiness_nonce
+        or manifest["authority_pins_sha256"] != expected_authority_pins_digest(commit, record["name"])
     ):
         fail("runner manifest binding or signer class isolation mismatch")
     if (
@@ -440,6 +471,56 @@ def validate_record(declared: dict, record: dict, commit: str, tree: str,
             fail(f"runner log validation failed: {log_name}")
         if hashlib.sha256(log_path.read_bytes()).hexdigest() != manifest[digest_field]:
             fail(f"runner log validation failed: {log_name}")
+    try:
+        artifact_total, artifact_digest = validate_descriptors(manifest["artifacts"], manifest["capabilities"])
+    except ArtifactError as exc:
+        fail(f"runner artifact descriptors are invalid: {exc}")
+    scope_digest = hashlib.sha256(json.dumps({"campaign_id": campaign_id,
+        "readiness_nonce": readiness_nonce, "nonce": manifest["nonce"],
+        "artifact_manifest_sha256": artifact_digest}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    if (manifest["artifact_protocol"] != ARTIFACT_PROTOCOL
+            or manifest["artifact_limits"] != {"count":MAX_ARTIFACTS,"file_bytes":MAX_ARTIFACT_FILE,"aggregate_bytes":MAX_ARTIFACT_BYTES}
+            or manifest["artifact_count"] != len(manifest["artifacts"])
+            or manifest["artifact_bytes"] != artifact_total
+            or manifest["artifact_manifest_sha256"] != artifact_digest
+            or manifest["artifact_scope_sha256"] != scope_digest
+            or record["artifact_manifest_sha256"] != artifact_digest
+            or record["artifact_count"] != len(manifest["artifacts"])
+            or record["artifact_bytes"] != artifact_total):
+        fail("runner artifact summary/binding mismatch")
+    artifact_root = manifest_path.parent / "artifacts"
+    expected_paths=set()
+    for descriptor in manifest["artifacts"]:
+        parts=PurePosixPath(descriptor["path"]).parts
+        artifact_path=artifact_root.joinpath(*parts)
+        expected_paths.add(artifact_path.relative_to(artifact_root).as_posix())
+        try:
+            parent_fd=os.open(artifact_root,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC)
+            try:
+                for component in parts[:-1]:
+                    next_fd=os.open(component,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC,dir_fd=parent_fd)
+                    os.close(parent_fd); parent_fd=next_fd
+                fd=os.open(parts[-1], os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC,dir_fd=parent_fd)
+            finally: os.close(parent_fd)
+        except OSError: fail(f"retained artifact is absent or unsafe: {descriptor['path']}")
+        try:
+            info=os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode)!=descriptor["mode"] or info.st_nlink!=1 or info.st_size!=descriptor["size"]:
+                fail(f"retained artifact metadata mismatch: {descriptor['path']}")
+            digest=hashlib.sha256()
+            while True:
+                chunk=os.read(fd,65536)
+                if not chunk: break
+                digest.update(chunk)
+            if digest.hexdigest()!=descriptor["sha256"]: fail(f"retained artifact digest mismatch: {descriptor['path']}")
+        finally: os.close(fd)
+    actual_paths=set()
+    if artifact_root.exists():
+        if artifact_root.is_symlink() or not artifact_root.is_dir(): fail("retained artifact root is unsafe")
+        for current, dirs, files in os.walk(artifact_root, followlinks=False):
+            if any((Path(current)/d).is_symlink() for d in dirs): fail("retained artifact directory symlink is forbidden")
+            for filename in files: actual_paths.add((Path(current)/filename).relative_to(artifact_root).as_posix())
+    if actual_paths != expected_paths: fail("retained artifact set has missing or extra files")
     signature_path = manifest_path.parent / f"{manifest_path.stem}.sig"
     if signature_path.is_symlink() or not signature_path.is_file() or signature_path.stat().st_size > MAX_EVIDENCE_FILE:
         fail("runner detached signature is missing or unsafe")
@@ -512,7 +593,7 @@ def validate(expected_commit: str | None = None, *, expected_campaign_id: str | 
     ):
         fail("every declared runner must have distinct issuance/current signer trust coverage")
     aggregate, aggregate_raw = regular_json(AGGREGATE)
-    if set(aggregate) != {"schema", "campaign_id", "readiness_nonce", "commit", "tree", "environment_blob", "runners"} or aggregate.get("schema") != "factory-runner-aggregate/v2":
+    if set(aggregate) != {"schema", "campaign_id", "readiness_nonce", "commit", "tree", "environment_blob", "runners"} or aggregate.get("schema") != "factory-runner-aggregate/v3":
         fail("aggregate schema is invalid")
     if expected_campaign_id is None or aggregate["campaign_id"] != expected_campaign_id:
         fail("aggregate campaign binding is stale or absent")

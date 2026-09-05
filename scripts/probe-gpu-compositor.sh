@@ -228,11 +228,13 @@ retain_live_artifacts() {
     for f in \
         "$tmp/configure.log" "$tmp/build.log" "$tmp/install.log" \
         "$tmp/weston.log" "$tmp/egl-build.log" "$tmp/screenshooter.log" \
-        "$tmp/manager.log" "$tmp/diagram.out" \
-        "$tmp/controller-box-before-input.png" \
-        "$tmp/controller-box-after-input.png" \
-        "$tmp/controller-box-compositor.png" \
-        "$tmp/verdict.json"; do
+        "$tmp/renderer-verdict.json" "$tmp/installed-manifest.json" \
+        "$tmp/controller-box-unhighlighted.png" \
+        "$tmp/capture-a.png" "$tmp/capture-b.png" "$tmp/capture-x.png" "$tmp/capture-y.png" \
+        "$tmp/capture-up.png" "$tmp/capture-down.png" "$tmp/capture-left.png" "$tmp/capture-right.png" \
+        "$tmp/capture-start.png" "$tmp/capture-select.png" "$tmp/capture-guide.png" \
+        "$tmp/capture-l1.png" "$tmp/capture-r1.png" "$tmp/capture-l2.png" "$tmp/capture-r2.png" \
+        "$tmp/capture-l3.png" "$tmp/capture-r3.png" "$tmp/verdict.json"; do
         [[ -f "$f" && ! -L "$f" ]] || continue
         cp -f "$f" "$ARTIFACTS/$(basename "$f")" 2>/dev/null || continue
         echo "$PROBE_TAG: artifact hash $(sha256sum "$ARTIFACTS/$(basename "$f")" | awk '{print $1}') $ARTIFACTS/$(basename "$f")"
@@ -553,6 +555,13 @@ for asset in \
 done
 [[ "$asset_ok" -eq 1 ]] || fail installed-assets-missing "required installed assets missing or outside the prefix"
 [[ -n "$installed_svg" ]] || fail installed-assets-missing "installed xbox-360.svg not found in prefix"
+python3 - "$tmp/installed-manifest.json" "$head_commit" "$head_tree" "$installed_real" "$installed_svg" "$installed_license" "$installed_map" "$installed_layout" "$installed_oracle" "$installed_authority" <<'PY'
+import hashlib,json,sys
+out,commit,tree,binary,*files=sys.argv[1:]
+def digest(p): return hashlib.sha256(open(p,'rb').read()).hexdigest()
+json.dump({'schema':'controller-box-installed-provenance/v1','result':'pass','commit':commit,'tree':tree,
+'binary':binary,'fallback':False,'files':{p.split('/')[-1]:digest(p) for p in files}},open(out,'w'),indent=2); open(out,'a').write('\n')
+PY
 log "installed-launch: binary=$installed_real assets=$installed_svg prefix=$prefix"
 
 # Delete the archived source+build trees BEFORE launch: the compiled-in
@@ -684,9 +693,26 @@ kind: DeviceProfile
 name: "GPU Xbox 360 Oracle"
 description: "exact model-specific GPU probe profile"
 mapping:
-  - name: "A"
-    source_event: {gamepad: {button: A}}
-    target_events: [{gamepad: A}]
+  - name: "Unhighlighted control"
+    source_event: {keyboard: {key: KEY_A}}
+    target_events: [{keyboard: KEY_A}]
+  - {name: "A", source_event: {gamepad: {button: A}}, target_events: [{gamepad: A}]}
+  - {name: "B", source_event: {gamepad: {button: B}}, target_events: [{gamepad: B}]}
+  - {name: "X", source_event: {gamepad: {button: X}}, target_events: [{gamepad: X}]}
+  - {name: "Y", source_event: {gamepad: {button: Y}}, target_events: [{gamepad: Y}]}
+  - {name: "Up", source_event: {gamepad: {button: Up}}, target_events: [{gamepad: Up}]}
+  - {name: "Down", source_event: {gamepad: {button: Down}}, target_events: [{gamepad: Down}]}
+  - {name: "Left", source_event: {gamepad: {button: Left}}, target_events: [{gamepad: Left}]}
+  - {name: "Right", source_event: {gamepad: {button: Right}}, target_events: [{gamepad: Right}]}
+  - {name: "Start", source_event: {gamepad: {button: Start}}, target_events: [{gamepad: Start}]}
+  - {name: "Select", source_event: {gamepad: {button: Select}}, target_events: [{gamepad: Select}]}
+  - {name: "Guide", source_event: {gamepad: {button: Guide}}, target_events: [{gamepad: Guide}]}
+  - {name: "L1", source_event: {gamepad: {button: L1}}, target_events: [{gamepad: L1}]}
+  - {name: "R1", source_event: {gamepad: {button: R1}}, target_events: [{gamepad: R1}]}
+  - {name: "L2", source_event: {gamepad: {button: L2}}, target_events: [{gamepad: L2}]}
+  - {name: "R2", source_event: {gamepad: {button: R2}}, target_events: [{gamepad: R2}]}
+  - {name: "L3", source_event: {gamepad: {button: L3}}, target_events: [{gamepad: L3}]}
+  - {name: "R3", source_event: {gamepad: {button: R3}}, target_events: [{gamepad: R3}]}
 PROFILE
 mkdir -p "$XDG_CONFIG_HOME/controller-box/profile-metadata"
 cat > "$XDG_CONFIG_HOME/controller-box/profile-metadata/$PROFILE_NAME.meta.yaml" <<META
@@ -800,15 +826,18 @@ xdotool click 1
 sleep 1.0
 
 # Capture the compositor output (includes the Xwayland surface).
-shot=$tmp/controller-box-compositor.png
-weston-screenshooter "$shot" >>"$tmp/screenshooter.log" 2>&1 \
-    || fail screenshot-missing "weston-screenshooter failed"
-[[ -f "$shot" && -s "$shot" ]] || fail screenshot-missing "compositor screenshot is empty"
-
-# The headless output must be at least the production window size — a
-# clipped/smaller output is a hard fail (output-too-small).
-require_output_size "$shot"
-log "output: compositor output >= ${WIN_W}x${WIN_H}"
+unhighlighted=$tmp/controller-box-unhighlighted.png
+weston-screenshooter "$unhighlighted" >>"$tmp/screenshooter.log" 2>&1 || fail screenshot-missing "unhighlighted capture failed"
+require_output_size "$unhighlighted"
+controls=(a b x y up down left right start select guide l1 r1 l2 r2 l3 r3)
+for control in "${controls[@]}"; do
+    xdotool key Down
+    sleep 0.25
+    weston-screenshooter "$tmp/capture-$control.png" >>"$tmp/screenshooter.log" 2>&1 || fail screenshot-missing "capture-$control failed"
+    require_output_size "$tmp/capture-$control.png"
+done
+shot=$tmp/capture-a.png
+log "output: compositor output >= ${WIN_W}x${WIN_H}; captured installed dispatch controls 17/17"
 
 # --- 5. semantic diagram analysis -------------------------------------------
 verdict=$tmp/verdict.json
@@ -847,19 +876,12 @@ log "requested-model=xb360 resolved-model=xb360 asset=xbox-360.svg fallback=fals
 log "aspect-preserved raster-density-adequate highlight-oracle-aligned"
 echo "$PROBE_TAG: installed-licensed-diagram verified"
 
-# Bind the retained screenshot's relative filename + sha256 into the verdict
-# itself so later negative-control evidence can tie pixels to the file.
+# Replace the single-control structural verdict with independent 17/17
+# difference-mask observations against the externally pinned oracle.
+python3 "$ANALYZER" series --captures-dir "$tmp" --geometry "$win_x,$win_y,$win_w,$win_h" \
+    --diagram "$DIAGRAM_RECT" --oracle "$installed_oracle" --authority "$installed_authority" \
+    --out "$verdict" || fail control-series-incomplete "not every installed production-dispatch control matched the oracle"
 shot_sha=$(sha256sum_file "$shot" | awk '{print $1}')
-python3 - "$verdict" "controller-box-compositor.png" "$shot_sha" <<'PY'
-import json, sys
-path, name, h = sys.argv[1], sys.argv[2], sys.argv[3]
-with open(path, encoding="utf-8") as f:
-    data = json.load(f)
-data["retained_screenshot"] = {"filename": name, "sha256": h}
-with open(path, "w", encoding="utf-8") as f:
-    json.dump(data, f, indent=2)
-    f.write("\n")
-PY
 
 # Every artifact (logs, before/after input screens, screenshot, verdict) is
 # retained with its hash by retain_live_artifacts on the EXIT trap (every

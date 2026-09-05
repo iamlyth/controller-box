@@ -205,6 +205,15 @@
       "name": "controller-production-routing",
       "status": "declared",
       "runner_class": "iprunner",
+      "artifact_requirements": {
+        "required": ["routing-results.json", "observer.log", "overlay.log", "cleanup.log"],
+        "files": {
+          "routing-results.json": "application/json",
+          "observer.log": "text/plain",
+          "overlay.log": "text/plain",
+          "cleanup.log": "text/plain"
+        }
+      },
       "probe_argv": [
         "nix-shell",
         "--run",
@@ -260,6 +269,13 @@
       "name": "gpu-compositor",
       "status": "declared",
       "runner_class": "gpurunner",
+      "artifact_requirements": {
+        "required": ["artifact-manifest.json", "renderer-verdict.json", "verdict.json", "controller-box-unhighlighted.png", "capture-a.png", "capture-b.png", "capture-x.png", "capture-y.png", "capture-up.png", "capture-down.png", "capture-left.png", "capture-right.png", "capture-start.png", "capture-select.png", "capture-guide.png", "capture-l1.png", "capture-r1.png", "capture-l2.png", "capture-r2.png", "capture-l3.png", "capture-r3.png", "installed-manifest.json", "probe.log"],
+        "files": {
+          "artifact-manifest.json": "application/json", "renderer-verdict.json": "application/json", "verdict.json": "application/json", "installed-manifest.json": "application/json", "probe.log": "text/plain",
+          "controller-box-unhighlighted.png": "image/png", "capture-a.png": "image/png", "capture-b.png": "image/png", "capture-x.png": "image/png", "capture-y.png": "image/png", "capture-up.png": "image/png", "capture-down.png": "image/png", "capture-left.png": "image/png", "capture-right.png": "image/png", "capture-start.png": "image/png", "capture-select.png": "image/png", "capture-guide.png": "image/png", "capture-l1.png": "image/png", "capture-r1.png": "image/png", "capture-l2.png": "image/png", "capture-r2.png": "image/png", "capture-l3.png": "image/png", "capture-r3.png": "image/png"
+        }
+      },
       "probe_argv": [
         "nix-shell",
         "--run",
@@ -299,6 +315,13 @@
       "name": "installed-licensed-diagram",
       "status": "declared",
       "runner_class": "gpurunner",
+      "artifact_requirements": {
+        "required": ["artifact-manifest.json", "renderer-verdict.json", "verdict.json", "controller-box-unhighlighted.png", "capture-a.png", "capture-b.png", "capture-x.png", "capture-y.png", "capture-up.png", "capture-down.png", "capture-left.png", "capture-right.png", "capture-start.png", "capture-select.png", "capture-guide.png", "capture-l1.png", "capture-r1.png", "capture-l2.png", "capture-r2.png", "capture-l3.png", "capture-r3.png", "installed-manifest.json", "probe.log"],
+        "files": {
+          "artifact-manifest.json": "application/json", "renderer-verdict.json": "application/json", "verdict.json": "application/json", "installed-manifest.json": "application/json", "probe.log": "text/plain",
+          "controller-box-unhighlighted.png": "image/png", "capture-a.png": "image/png", "capture-b.png": "image/png", "capture-x.png": "image/png", "capture-y.png": "image/png", "capture-up.png": "image/png", "capture-down.png": "image/png", "capture-left.png": "image/png", "capture-right.png": "image/png", "capture-start.png": "image/png", "capture-select.png": "image/png", "capture-guide.png": "image/png", "capture-l1.png": "image/png", "capture-r1.png": "image/png", "capture-l2.png": "image/png", "capture-r2.png": "image/png", "capture-l3.png": "image/png", "capture-r3.png": "image/png"
+        }
+      },
       "probe_argv": ["nix-shell", "--run", "bash scripts/probe-gpu-compositor.sh"],
       "probe_marker": "--- gpu-compositor capability contract ---",
       "probe_stage": "post",

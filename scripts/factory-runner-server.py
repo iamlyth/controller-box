@@ -44,6 +44,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from factory_runner_policy import (PolicyError, authority_pin, class_for_uid,
                                   load_policy, validate_argv)
+from factory_runner_artifacts import (ArtifactError, PROTOCOL as ARTIFACT_PROTOCOL,
+    MAX_ARTIFACTS, MAX_ARTIFACT_FILE, MAX_ARTIFACT_BYTES, collect as collect_artifacts,
+    descriptors_digest)
 
 SHA1 = re.compile(r"^[0-9a-f]{40}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -62,7 +65,7 @@ CONTRACT_FIELDS = {
     "name", "status", "probe_argv", "probe_marker", "probe_stage",
     "probe_stdout_contains", "probe_is_verify_run",
     "must_execute", "must_not_skip", "deny_simulated_markers",
-    "runner_class",
+    "runner_class", "artifact_requirements",
 }
 CONTRACT_REQUIRED = {
     "name", "probe_argv", "probe_marker", "must_execute",
@@ -231,6 +234,15 @@ def load_contracts(job: Path) -> dict[str, dict]:
                 isinstance(item, str) and item for item in value
             ):
                 fail(f"committed contract {name} {field} is invalid")
+        artifact_requirements = contract.get("artifact_requirements", {"required": [], "files": {}})
+        if (not isinstance(artifact_requirements, dict)
+                or set(artifact_requirements) != {"required", "files"}
+                or not isinstance(artifact_requirements["required"], list)
+                or not isinstance(artifact_requirements["files"], dict)
+                or not set(artifact_requirements["required"]).issubset(artifact_requirements["files"])
+                or not all(isinstance(k, str) and isinstance(v, str)
+                           for k, v in artifact_requirements["files"].items())):
+            fail(f"committed contract {name} artifact_requirements is invalid")
         loaded[name] = contract
     return loaded
 
@@ -490,6 +502,9 @@ def main() -> int:
             home = work / f".factory-home-{request['nonce']}"
             remove_workspace(home)
             home.mkdir(mode=0o700)
+            artifact_root = work / f".factory-artifacts-{request['nonce']}"
+            remove_workspace(artifact_root)
+            artifact_root.mkdir(mode=0o700)
             env = clean_env(home)
             subprocess.run(
                 ["/usr/bin/git", "init", "-q"], cwd=job, env=env, check=True,
@@ -577,7 +592,15 @@ def main() -> int:
                 if returncode != 0:
                     probes[capability] = False
                     continue
-                passed, probe_stdout, probe_stderr = run_contract_probe(contract, job, env)
+                capability_artifacts = artifact_root / capability
+                capability_artifacts.mkdir(mode=0o700)
+                probe_env = dict(env)
+                probe_env["FACTORY_RUNNER_ARTIFACT_DIR"] = str(capability_artifacts)
+                if capability == "controller-production-routing":
+                    probe_env["CONTROLLER_PRODUCTION_ROUTING_ARTIFACTS"] = str(capability_artifacts)
+                if capability in {"gpu-compositor", "installed-licensed-diagram"}:
+                    probe_env["CBX_GPU_PROBE_ARTIFACTS"] = str(capability_artifacts)
+                passed, probe_stdout, probe_stderr = run_contract_probe(contract, job, probe_env)
                 probes[capability] = passed
                 if len(stdout) + len(stderr) + len(probe_stdout) + len(probe_stderr) > MAX_LOG:
                     fail("combined runner verification output exceeded limits")
@@ -601,8 +624,24 @@ def main() -> int:
                     "started_at": started, "finished_at": finished_at, "cleanup": True,
                 })
                 return 0
+            requirements = {capability: contracts[capability].get(
+                "artifact_requirements", {"required": [], "files": {}}
+            ) for capability in capabilities}
+            try:
+                artifact_descriptors, artifact_payload = collect_artifacts(
+                    artifact_root, capabilities, requirements
+                )
+            except ArtifactError as exc:
+                fail(f"runner artifact validation failed: {exc}")
+            artifact_bytes = sum(item["size"] for item in artifact_descriptors)
+            artifact_manifest_sha256 = descriptors_digest(artifact_descriptors)
+            artifact_scope_sha256 = hashlib.sha256(json.dumps({
+                "campaign_id": request["campaign_id"],
+                "readiness_nonce": request["readiness_nonce"], "nonce": request["nonce"],
+                "artifact_manifest_sha256": artifact_manifest_sha256,
+            }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
             evidence = {
-                "schema": "factory-runner-receipt/v1", "result": "pass",
+                "schema": "factory-runner-receipt/v2", "result": "pass",
                 "runner": request["runner"], "commit": request["commit"],
                 "tree": tree, "environment_blob": request["environment_blob"],
                 "verify_argv_sha256": request["verify_argv_sha256"],
@@ -614,12 +653,19 @@ def main() -> int:
                 "cleanup": True,
                 "stdout_sha256": hashlib.sha256(stdout).hexdigest(),
                 "stderr_sha256": hashlib.sha256(stderr).hexdigest(),
+                "artifact_protocol": ARTIFACT_PROTOCOL,
+                "artifact_limits": {"count": MAX_ARTIFACTS, "file_bytes": MAX_ARTIFACT_FILE,
+                                    "aggregate_bytes": MAX_ARTIFACT_BYTES},
+                "artifact_count": len(artifact_descriptors), "artifact_bytes": artifact_bytes,
+                "artifact_manifest_sha256": artifact_manifest_sha256,
+                "artifact_scope_sha256": artifact_scope_sha256,
+                "artifacts": artifact_descriptors,
             }
             signed = sign_manifest(evidence, runner_class["signer_helper"])
             if signed.get("namespace") != namespace:
                 fail("runner signer namespace does not match the runner policy")
             emit({
-                "schema": "factory-runner-receipt/v1", "result": "pass",
+                "schema": "factory-runner-receipt/v2", "result": "pass",
                 "runner": request["runner"], "commit": request["commit"],
                 "tree": tree, "environment_blob": request["environment_blob"],
                 "verify_argv_sha256": request["verify_argv_sha256"],
@@ -637,6 +683,11 @@ def main() -> int:
                 "signature_algorithm": signed["signature_algorithm"],
                 "namespace": signed["namespace"],
                 "signature_sha256": signed["signature_sha256"],
+                "artifact_protocol": ARTIFACT_PROTOCOL, "artifact_limits": evidence["artifact_limits"],
+                "artifact_count": evidence["artifact_count"], "artifact_bytes": evidence["artifact_bytes"],
+                "artifact_manifest_sha256": artifact_manifest_sha256,
+                "artifact_scope_sha256": artifact_scope_sha256,
+                "artifacts": artifact_descriptors, "artifact_payload": artifact_payload,
             })
         except subprocess.TimeoutExpired:
             fail("runner verification timed out")
@@ -648,6 +699,8 @@ def main() -> int:
             remove_workspace(job)
             if 'home' in locals() and home.parent == work:
                 remove_workspace(home)
+            if 'artifact_root' in locals() and artifact_root.parent == work:
+                remove_workspace(artifact_root)
     return 0
 
 

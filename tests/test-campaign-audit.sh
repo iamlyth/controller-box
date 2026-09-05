@@ -11,6 +11,7 @@ cp "$PROJECT_ROOT/scripts/initialize-campaign-audit.py" \
    "$PROJECT_ROOT/scripts/validate-campaign-audit.py" \
    "$PROJECT_ROOT/scripts/run-factory-runners.py" \
    "$PROJECT_ROOT/scripts/check-factory-runner-evidence.py" \
+   "$PROJECT_ROOT/scripts/factory_runner_artifacts.py" \
    "$PROJECT_ROOT/scripts/check-factory-environment.py" "$tmp/scripts/"
 cp "$PROJECT_ROOT/.factory/loop/gitutil.py" "$tmp/.factory/loop/gitutil.py"
 chmod +x "$tmp/scripts/"*

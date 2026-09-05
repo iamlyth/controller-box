@@ -55,6 +55,7 @@ FACTS_VALIDATOR = SCRIPTS / "validate-blocked-facts.py"
 CAPABILITY_CHECKER = SCRIPTS / "check-capability-evidence.py"
 CONTRACT_CHECKER = SCRIPTS / "check-capability-contracts.py"
 RUNNER_CHECKER = SCRIPTS / "check-factory-runner-evidence.py"
+ARTIFACT_HELPER = SCRIPTS / "factory_runner_artifacts.py"
 ENVIRONMENT_CHECKER = SCRIPTS / "check-factory-environment.py"
 
 
@@ -80,7 +81,7 @@ class ConformanceFixture:
             (root / rel).mkdir(parents=True, exist_ok=True)
         for script in (
             VALIDATOR, FACTS_VALIDATOR, CAPABILITY_CHECKER, CONTRACT_CHECKER,
-            RUNNER_CHECKER, ENVIRONMENT_CHECKER,
+            RUNNER_CHECKER, ARTIFACT_HELPER, ENVIRONMENT_CHECKER,
         ):
             shutil.copy2(script, root / "scripts" / script.name)
         shutil.copy2(

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory-runner-aggregate-v3.schema.json",
+  "title": "Exact-commit signed runner aggregate with retained artifacts",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "campaign_id", "readiness_nonce", "commit", "tree", "environment_blob", "runners"],
+  "properties": {
+    "schema": {"const": "factory-runner-aggregate/v3"},
+    "campaign_id": {"type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$"},
+    "readiness_nonce": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "tree": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "environment_blob": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "runners": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "manifest", "manifest_sha256", "capabilities", "artifact_manifest_sha256", "artifact_count", "artifact_bytes", "signer"],
+        "properties": {
+          "artifact_manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "artifact_count": {"type": "integer", "minimum": 0, "maximum": 64},
+          "artifact_bytes": {"type": "integer", "minimum": 0, "maximum": 50331648}
+        }
+      }
+    }
+  }
+}

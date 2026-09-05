@@ -378,6 +378,17 @@ caller-supplied class name; `devrunner` is therefore bound by policy to class
 opens the key, principal, and a fixed absolute root-owned `ssh-keygen` through
 validated non-symlink chains and uses descriptor-bound inodes.
 
+Receipt v2 embeds `factory-runner-artifacts/v1`: at most 64 approved regular
+files, 8 MiB per file and 48 MiB aggregate. Canonical lowercase relative paths,
+capability ownership, media type, retained mode 0600, size, and SHA-256 are
+signed together with a descriptor-manifest digest scoped to campaign,
+readiness, and request nonces. The endpoint opens files no-follow, rejects
+links, special/sparse/unstable files and unapproved names, and exports bytes
+before deleting the disposable workspace. The client validates strict ordered
+base64 framing and atomically publishes a new commit directory without
+replacement; the strong checker rejects missing, extra, or altered retained
+bytes. Aggregate schema v3 records the signed artifact summary.
+
 This repository carries only canonical two-field ed25519 public keys in
 `.factory/signer-trust.json`, exactly one distinct key per declared principal.
 The checker reads issuance trust from the exact evidence commit and revocation

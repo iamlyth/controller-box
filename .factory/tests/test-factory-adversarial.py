@@ -1640,6 +1640,7 @@ class CaseAdversarialSuite(_AdversarialBase):
         for script in (
             "machine-receipt.py", "check-audit-receipts.py",
             "check-factory-runner-evidence.py", "check-factory-environment.py",
+            "factory_runner_artifacts.py",
             "visual-audit-provenance.py", "check-installed-harness-evidence.sh",
         ):
             shutil.copy2(ROOT / "scripts" / script, root / "scripts" / script)
@@ -1741,7 +1742,7 @@ class CaseAdversarialSuite(_AdversarialBase):
             archive.unlink()
             empty = sha256(b"")
             manifest = {
-                "schema": "factory-runner-receipt/v1", "result": "pass",
+                "schema": "factory-runner-receipt/v2", "result": "pass",
                 "runner": "fixture-runner", "commit": head, "tree": tree,
                 "environment_blob": environment_blob,
                 "verify_argv_sha256": argv_digest,
@@ -1753,7 +1754,13 @@ class CaseAdversarialSuite(_AdversarialBase):
                 "capabilities": ["project-gate"], "exit_code": 0,
                 "timed_out": False, "started_at": 1, "finished_at": 2,
                 "cleanup": True, "stdout_sha256": empty,
-                "stderr_sha256": empty, "signer_principal": "fixture-runner",
+                "stderr_sha256": empty,
+                "artifact_protocol": "factory-runner-artifacts/v1",
+                "artifact_limits": {"count":64,"file_bytes":8388608,"aggregate_bytes":50331648},
+                "artifact_count":0,"artifact_bytes":0,
+                "artifact_manifest_sha256":sha256(b"[]\n"),
+                "artifact_scope_sha256":sha256(json.dumps({"campaign_id":"synthetic-adversarial","readiness_nonce":"d"*64,"nonce":"0"*64,"artifact_manifest_sha256":sha256(b"[]\n")},sort_keys=True,separators=(",",":")).encode()),
+                "artifacts":[], "signer_principal": "fixture-runner",
                 "signer_key_sha256": key_sha256,
                 "namespace": "factory-runner-receipt",
                 "signature_algorithm": "ssh-ed25519",
@@ -1771,7 +1778,7 @@ class CaseAdversarialSuite(_AdversarialBase):
             )
             (manifest_dir / "manifest.sig").write_bytes(signed.stdout)
             aggregate = {
-                "schema": "factory-runner-aggregate/v2",
+                "schema": "factory-runner-aggregate/v3",
                 "campaign_id": "synthetic-adversarial", "readiness_nonce": "d" * 64,
                 "commit": head,
                 "tree": tree, "environment_blob": environment_blob,
@@ -1780,6 +1787,7 @@ class CaseAdversarialSuite(_AdversarialBase):
                     "manifest": f".factory-state/runner-evidence/fixture-runner/{head}/manifest.json",
                     "manifest_sha256": sha256(raw),
                     "capabilities": ["project-gate"],
+                    "artifact_manifest_sha256":sha256(b"[]\n"),"artifact_count":0,"artifact_bytes":0,
                     "signer": {
                         "principal": "fixture-runner",
                         "key_sha256": key_sha256,

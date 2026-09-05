@@ -88,6 +88,7 @@ TRUE_EXECUTABLE = Path(shutil.which("true"))
 MACHINE_RECEIPT = ROOT / "scripts" / "machine-receipt.py"
 CHECK_AUDIT_RECEIPTS = ROOT / "scripts" / "check-audit-receipts.py"
 CHECK_RUNNER_EVIDENCE = ROOT / "scripts" / "check-factory-runner-evidence.py"
+RUNNER_ARTIFACTS = ROOT / "scripts" / "factory_runner_artifacts.py"
 INITIALIZE_CAMPAIGN_AUDIT = ROOT / "scripts" / "initialize-campaign-audit.py"
 VALIDATE_CAMPAIGN_AUDIT = ROOT / "scripts" / "validate-campaign-audit.py"
 CHECK_ENV = ROOT / "scripts" / "check-factory-environment.py"
@@ -416,6 +417,7 @@ class ManifestFixture:
     def commit(self, message: str = "runner fixture") -> str:
         shutil.copy2(CHECK_RUNNER_EVIDENCE, self.root / "scripts" /
                      "check-factory-runner-evidence.py")
+        shutil.copy2(RUNNER_ARTIFACTS, self.root / "scripts" / "factory_runner_artifacts.py")
         shutil.copy2(CHECK_ENV, self.root / "scripts" / "check-factory-environment.py")
         _write(self.root / ".factory" / "environment.toml", self.environment)
         _write(self.root / ".factory" / "signer-trust.json",
@@ -454,7 +456,7 @@ class ManifestFixture:
         _mkdir(manifest_dir)
         manifest_path = manifest_dir / "manifest.json"
         manifest = {
-            "schema": "factory-runner-receipt/v1",
+            "schema": "factory-runner-receipt/v2",
             "result": "pass",
             "runner": "fake-runner",
             "commit": head,
@@ -474,6 +476,10 @@ class ManifestFixture:
             "cleanup": True,
             "stdout_sha256": empty,
             "stderr_sha256": empty,
+            "artifact_protocol":"factory-runner-artifacts/v1",
+            "artifact_limits":{"count":64,"file_bytes":8388608,"aggregate_bytes":50331648},
+            "artifact_count":0,"artifact_bytes":0,"artifact_manifest_sha256":sha256(b"[]\n"),
+            "artifact_scope_sha256":sha256(json.dumps({"campaign_id":"synthetic-evidence","readiness_nonce":"4"*64,"nonce":"0"*64,"artifact_manifest_sha256":sha256(b"[]\n")},sort_keys=True,separators=(",",":")).encode()),"artifacts":[],
             "signer_principal": "factory-signer",
             "signer_key_sha256": self.FAKE_KEY_SHA256,
             "namespace": "factory-runner-receipt",
@@ -486,7 +492,7 @@ class ManifestFixture:
         _write(manifest_dir / "manifest.sig", b"not-a-real-signature\n")
         signature_sha256 = sha256(b"not-a-real-signature\n")
         aggregate = {
-            "schema": "factory-runner-aggregate/v2",
+            "schema": "factory-runner-aggregate/v3",
             "campaign_id": "synthetic-evidence",
             "readiness_nonce": "4" * 64,
             "commit": head,
@@ -498,6 +504,7 @@ class ManifestFixture:
                     "manifest": f".factory-state/runner-evidence/fake-runner/{head}/manifest.json",
                     "manifest_sha256": sha256(raw),
                     "capabilities": ["project-gate"],
+                    "artifact_manifest_sha256":sha256(b"[]\n"),"artifact_count":0,"artifact_bytes":0,
                     "signer": {
                         "principal": "factory-signer",
                         "key_sha256": self.FAKE_KEY_SHA256,

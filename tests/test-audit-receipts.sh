@@ -25,7 +25,8 @@ setup_repo() {
     mkdir -p "$dir/scripts" "$dir/.factory" "$dir/.factory/artifacts" "$dir/.ralph/agent" \
         "$dir/.factory-state/runner-evidence" "$dir/docs" "$dir/.factory/loop"
     chmod 700 "$dir/.factory-state"
-    cp "$RECORDER" "$CHECKER" "$RUNNER_EVIDENCE" "$ENV_CHECKER" "$dir/scripts/"
+    cp "$RECORDER" "$CHECKER" "$RUNNER_EVIDENCE" "$ENV_CHECKER" \
+       "$PROJECT_ROOT/scripts/factory_runner_artifacts.py" "$dir/scripts/"
     # The receipt wrapper reuses the hidden control plane's supervised process
     # boundary (`.factory/loop/lock.py` and its pinned-Git sibling) for the
     # bounded descendant capture; the fixture must carry the exact fresh
@@ -111,7 +112,7 @@ empty = hashlib.sha256(b"").hexdigest()
 capabilities = sorted(declared["capabilities"])
 key_sha256 = hashlib.sha256(public_key.encode()).hexdigest()
 manifest = {
-    "schema": "factory-runner-receipt/v1", "result": "pass", "runner": "fake-runner",
+    "schema": "factory-runner-receipt/v2", "result": "pass", "runner": "fake-runner",
     "commit": head, "tree": tree, "environment_blob": environment_blob,
     "verify_argv_sha256": argv_digest, "archive_sha256": archive_sha256,
     "campaign_id": "synthetic-audit-receipts", "readiness_nonce": "f" * 64,
@@ -119,6 +120,9 @@ manifest = {
     "capabilities": capabilities, "exit_code": 0, "timed_out": False,
     "started_at": 1, "finished_at": 2, "cleanup": True,
     "stdout_sha256": empty, "stderr_sha256": empty,
+    "artifact_protocol":"factory-runner-artifacts/v1","artifact_limits":{"count":64,"file_bytes":8388608,"aggregate_bytes":50331648},
+    "artifact_count":0,"artifact_bytes":0,"artifact_manifest_sha256":hashlib.sha256(b"[]\n").hexdigest(),
+    "artifact_scope_sha256":hashlib.sha256(json.dumps({"campaign_id":"synthetic-audit-receipts","readiness_nonce":"f"*64,"nonce":"0"*64,"artifact_manifest_sha256":hashlib.sha256(b"[]\n").hexdigest()},sort_keys=True,separators=(",",":")).encode()).hexdigest(),"artifacts":[],
     "signer_principal": "fake-runner", "signer_key_sha256": key_sha256,
     "namespace": "factory-runner-receipt", "signature_algorithm": "ssh-ed25519",
 }
@@ -126,7 +130,7 @@ raw = (json.dumps(manifest, sort_keys=True, indent=2) + "\n").encode()
 manifest_path = root / f".factory-state/runner-evidence/fake-runner/{head}/manifest.json"
 manifest_path.write_bytes(raw)
 aggregate = {
-    "schema": "factory-runner-aggregate/v2",
+    "schema": "factory-runner-aggregate/v3",
     "campaign_id": "synthetic-audit-receipts",
     "readiness_nonce": "f" * 64,
     "commit": head,
@@ -135,6 +139,7 @@ aggregate = {
     "runners": [
         {"name": "fake-runner", "manifest": f".factory-state/runner-evidence/fake-runner/{head}/manifest.json",
          "manifest_sha256": hashlib.sha256(raw).hexdigest(), "capabilities": capabilities,
+         "artifact_manifest_sha256":hashlib.sha256(b"[]\n").hexdigest(),"artifact_count":0,"artifact_bytes":0,
          "signer": {"principal": "fake-runner", "key_sha256": key_sha256,
                      "algorithm": "ssh-ed25519", "signature_sha256": ""}}
     ],

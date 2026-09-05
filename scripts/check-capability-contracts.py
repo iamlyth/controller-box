@@ -144,7 +144,7 @@ def validate_contract(contract: dict, index: int) -> tuple[str, str]:
     required = {
         "name", "probe_argv", "probe_marker", "must_execute", "must_not_skip", "deny_simulated_markers",
     }
-    optional = {"status", "probe_stage", "probe_stdout_contains", "probe_is_verify_run", "runner_class"}
+    optional = {"status", "probe_stage", "probe_stdout_contains", "probe_is_verify_run", "runner_class", "artifact_requirements"}
     if not isinstance(contract, dict):
         fail(f"contracts[{index}] must be an object")
     if not required.issubset(set(contract)) or not set(contract).issubset(required | optional):
@@ -189,6 +189,14 @@ def validate_contract(contract: dict, index: int) -> tuple[str, str]:
         fail(f"contracts[{index}].probe_stage must be env or post")
     if contract.get("probe_is_verify_run") not in (None, True, False):
         fail(f"contracts[{index}].probe_is_verify_run must be a boolean")
+    artifact_requirements = contract.get("artifact_requirements", {"required": [], "files": {}})
+    if (not isinstance(artifact_requirements, dict) or set(artifact_requirements) != {"required", "files"}
+            or not isinstance(artifact_requirements["required"], list)
+            or not isinstance(artifact_requirements["files"], dict)
+            or not set(artifact_requirements["required"]).issubset(artifact_requirements["files"])
+            or not all(isinstance(k,str) and k and "/" not in k and isinstance(v,str) and v
+                       for k,v in artifact_requirements["files"].items())):
+        fail(f"contracts[{index}].artifact_requirements is invalid")
     runner_class = contract.get("runner_class")
     if runner_class is not None and (
         not isinstance(runner_class, str) or not NAME.fullmatch(runner_class)

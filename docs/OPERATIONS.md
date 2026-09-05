@@ -689,7 +689,13 @@ non-skipped, signed runner receipt, and none exists yet for the
 independently consumable xb360 targets driven by fresh human events from the
 real USB 045e:028e source; the licensed-diagram contract requires installed
 Controllercons hashes, no fallback, accelerated capture, and independent-oracle
-alignment. Private/headless Weston is technical GPU execution, not human or
+alignment for an unhighlighted state plus all 17 Xbox 360 controls. Those
+capabilities cannot pass from stdout: receipt-v2 retained artifacts must include
+routing results/observer/topology/cleanup data or installed provenance,
+accelerated-renderer verdict, captures, and analyzer verdict. Artifact protocol
+v1 limits are 64 files, 8 MiB each, 48 MiB total; deployment must install
+`factory_runner_artifacts.py` beside both endpoint and signer. Private/headless
+Weston is technical GPU execution, not human or
 real-seat approval. Do not start another five-round campaign until both signed
 contracts and separate human installed-graphics approval exist. Models validate
 declarations and existing evidence only:

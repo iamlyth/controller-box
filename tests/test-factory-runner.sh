@@ -12,7 +12,8 @@ chmod 0700 "$tmp/runner/workspaces/fake-project"
 cp "$PROJECT_ROOT/scripts/run-factory-runners.py" \
    "$PROJECT_ROOT/scripts/check-factory-runner-evidence.py" \
    "$PROJECT_ROOT/scripts/factory-runner-server.py" \
-   "$PROJECT_ROOT/scripts/factory_runner_policy.py" "$tmp/repo/scripts/"
+   "$PROJECT_ROOT/scripts/factory_runner_policy.py" \
+   "$PROJECT_ROOT/scripts/factory_runner_artifacts.py" "$tmp/repo/scripts/"
 cp "$PROJECT_ROOT/.factory/loop/gitutil.py" "$tmp/repo/.factory/loop/gitutil.py"
 chmod +x "$tmp/repo/scripts/"*.py
 cat > "$tmp/repo/.factory/environment.toml" <<EOF
@@ -200,6 +201,9 @@ manifest_path, sig_path, aggregate_path = map(pathlib.Path, sys.argv[1:4])
 public_key = sys.argv[4]
 manifest = json.loads(manifest_path.read_bytes())
 assert manifest["result"] == "pass"
+assert manifest["schema"] == "factory-runner-receipt/v2"
+assert manifest["artifact_protocol"] == "factory-runner-artifacts/v1"
+assert manifest["artifacts"] == []
 assert manifest["signer_principal"] == "fake-runner"
 assert manifest["namespace"] == "factory-runner-receipt"
 assert manifest["signature_algorithm"] == "ssh-ed25519"
@@ -397,6 +401,7 @@ set +e
 archive_binding_rc=$?
 set -e
 [[ $archive_binding_rc -eq 1 ]]
+rm -rf "$tmp/repo/.factory-state/runner-evidence/fake-runner/$base"
 (cd "$tmp/repo" && ./scripts/run-factory-runners.py >/dev/null)
 
 # Evidence tampering must fail closed.

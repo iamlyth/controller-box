@@ -26,7 +26,7 @@ setup_repo() {
     mkdir -p "$dir/scripts" "$dir/.factory/artifacts" "$dir/.factory/loop" "$dir/.factory/schemas" "$dir/.factory-state/runner-evidence/probe-runner" \
         "$dir/tests/fixtures" "$dir/docs"
     cp "$VALIDATOR" "$EVIDENCE_CHECKER" "$CONTRACT_CHECKER" "$FACTS_VALIDATOR" \
-        "$RUNNER_CHECKER" "$ENV_CHECKER" "$dir/scripts/"
+        "$RUNNER_CHECKER" "$ENV_CHECKER" "$PROJECT_ROOT/scripts/factory_runner_artifacts.py" "$dir/scripts/"
     cp "$PROJECT_ROOT/.factory/loop/gitutil.py" "$dir/.factory/loop/gitutil.py"
     if [[ ! -f "$tmp/conformance-signer-key" ]]; then
         ssh-keygen -q -t ed25519 -N '' -f "$tmp/conformance-signer-key"
@@ -155,7 +155,7 @@ stdout = b"--- probe-capability contract ---\n100% tests passed, 0 tests failed 
 stderr = b""
 key_sha = hashlib.sha256(public_key.encode()).hexdigest()
 manifest = {
-    "schema": "factory-runner-receipt/v1", "result": "pass",
+    "schema": "factory-runner-receipt/v2", "result": "pass",
     "runner": "probe-runner", "commit": head, "tree": tree,
     "environment_blob": environment_blob, "verify_argv_sha256": argv_sha,
     "archive_sha256": archive_sha, "campaign_id": "synthetic-conformance",
@@ -164,6 +164,9 @@ manifest = {
     "timed_out": False, "started_at": 1, "finished_at": 2,
     "cleanup": True, "stdout_sha256": hashlib.sha256(stdout).hexdigest(),
     "stderr_sha256": hashlib.sha256(stderr).hexdigest(),
+    "artifact_protocol":"factory-runner-artifacts/v1","artifact_limits":{"count":64,"file_bytes":8388608,"aggregate_bytes":50331648},
+    "artifact_count":0,"artifact_bytes":0,"artifact_manifest_sha256":hashlib.sha256(b"[]\n").hexdigest(),
+    "artifact_scope_sha256":hashlib.sha256(json.dumps({"campaign_id":"synthetic-conformance","readiness_nonce":"e"*64,"nonce":"0"*64,"artifact_manifest_sha256":hashlib.sha256(b"[]\n").hexdigest()},sort_keys=True,separators=(",",":")).encode()).hexdigest(),"artifacts":[],
     "signer_principal": "probe-runner", "signer_key_sha256": key_sha,
     "namespace": "factory-runner-receipt", "signature_algorithm": "ssh-ed25519",
 }
@@ -173,7 +176,7 @@ evidence = root / f".factory-state/runner-evidence/probe-runner/{head}"
 (evidence / "stdout.log").write_bytes(stdout)
 (evidence / "stderr.log").write_bytes(stderr)
 aggregate = {
-    "schema": "factory-runner-aggregate/v2", "campaign_id": "synthetic-conformance",
+    "schema": "factory-runner-aggregate/v3", "campaign_id": "synthetic-conformance",
     "readiness_nonce": "e" * 64, "commit": head, "tree": tree,
     "environment_blob": environment_blob,
     "runners": [{
@@ -181,6 +184,7 @@ aggregate = {
         "manifest": f".factory-state/runner-evidence/probe-runner/{head}/manifest.json",
         "manifest_sha256": hashlib.sha256(raw).hexdigest(),
         "capabilities": ["probe-capability"],
+        "artifact_manifest_sha256":hashlib.sha256(b"[]\n").hexdigest(),"artifact_count":0,"artifact_bytes":0,
         "signer": {"principal": "probe-runner", "key_sha256": key_sha,
                    "algorithm": "ssh-ed25519", "signature_sha256": ""},
     }],

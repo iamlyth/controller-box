@@ -52,6 +52,8 @@ import subprocess
 from pathlib import Path
 
 SCHEMA = "gpu-compositor-analysis/v2"
+SERIES_SCHEMA = "gpu-compositor-analysis/v3"
+CONTROL_SLUGS = {"A":"a","B":"b","X":"x","Y":"y","Up":"up","Down":"down","Left":"left","Right":"right","Start":"start","Select":"select","Guide":"guide","L1":"l1","R1":"r1","L2":"l2","R2":"r2","L3":"l3","R3":"r3"}
 PASS_MARKER = "controller-recognized"
 # Digest of data/licensed-diagram-authority.json accepted by independent
 # review.  Runtime files and fixture-provided self-hashes cannot alter it.
@@ -561,6 +563,14 @@ def main() -> int:
     renderer.add_argument("--renderer", required=True, help="GL_RENDERER string")
     renderer.add_argument("--out", help="write verdict JSON here")
 
+    series = sub.add_parser("series", help="independently validate every licensed control capture")
+    series.add_argument("--captures-dir", required=True)
+    series.add_argument("--geometry", required=True)
+    series.add_argument("--diagram", default="16,88,300,300")
+    series.add_argument("--out", required=True)
+    series.add_argument("--oracle", required=True)
+    series.add_argument("--authority", required=True)
+
     diagram = sub.add_parser("diagram", help="analyze the diagram region of a screenshot")
     diagram.add_argument("--screenshot", required=True, help="compositor-level PNG")
     diagram.add_argument("--geometry", required=True, help="window rect X,Y,W,H in output coords")
@@ -589,6 +599,46 @@ def main() -> int:
             Path(args.out).write_text(json.dumps(verdict, indent=2) + "\n", encoding="utf-8")
         print(f"gpu-compositor-analysis: renderer marker {marker}")
         return 0 if ok else 1
+
+    if args.command == "series":
+        captures=Path(args.captures_dir); out=Path(args.out)
+        try:
+            geometry=tuple(int(x) for x in args.geometry.split(',')); diagram_rect=tuple(int(x) for x in args.diagram.split(','))
+            oracle_doc=json.loads(Path(args.oracle).read_text()); authority=Path(args.authority)
+            oracle=oracle_doc['models']['xb360']; required=oracle['required_controls']
+        except Exception:
+            fail("licensed capture series metadata is malformed")
+        result={"schema":SERIES_SCHEMA,"result":"fail","model":"xb360","observations":{},"authority_sha256":sha256(authority) if authority.is_file() else ""}
+        if result["authority_sha256"] != PINNED_AUTHORITY_SHA256 or required != list(CONTROL_SLUGS):
+            out.write_text(json.dumps(result,indent=2)+'\n'); return 1
+        base=captures/'controller-box-unhighlighted.png'
+        if not base.is_file() or base.is_symlink(): out.write_text(json.dumps(result,indent=2)+'\n'); return 1
+        gx,gy,_,_=geometry; dx,dy,dw,dh=diagram_rect
+        base_rows=read_crop_rgb(base,gx+dx,gy+dy,dw,dh); seen={sha256(base)}; ok=True
+        for control in required:
+            shot=captures/f"capture-{CONTROL_SLUGS[control]}.png"
+            observation={"result":"fail"}
+            if shot.is_file() and not shot.is_symlink():
+                digest=sha256(shot); rows=read_crop_rgb(shot,gx+dx,gy+dy,dw,dh)
+                points=[]; changed=0
+                for y,(before,after) in enumerate(zip(base_rows,rows)):
+                    for x in range(dw):
+                        b=before[x*3:x*3+3]; a=after[x*3:x*3+3]
+                        if max(abs(a[i]-b[i]) for i in range(3))>=20: changed+=1; points.append((x,y))
+                spec=oracle['controls'][control]
+                if points:
+                    cx=sum(x for x,_ in points)/len(points); cy=sum(y for _,y in points)/len(points)
+                    passed=(digest not in seen and changed>=spec['minimum_pixels'] and spec['centroid_x'][0]<=cx<=spec['centroid_x'][1] and spec['centroid_y'][0]<=cy<=spec['centroid_y'][1])
+                    observation={"result":"pass" if passed else "fail","capture_sha256":digest,"difference_pixels":changed,"centroid":[round(cx,2),round(cy,2)],"region":"independent-oracle"}
+                    ok &= passed
+                else: ok=False
+                seen.add(digest)
+            else: ok=False
+            result['observations'][control]=observation
+        result['result']='pass' if ok and len(result['observations'])==17 else 'fail'
+        result['marker']='installed-licensed-diagram-verified' if result['result']=='pass' else 'control-series-incomplete'
+        out.write_text(json.dumps(result,indent=2)+'\n')
+        return 0 if result['result']=='pass' else 1
 
     try:
         geometry = tuple(int(part) for part in args.geometry.split(","))

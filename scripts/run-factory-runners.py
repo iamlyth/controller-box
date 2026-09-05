@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import base64
+import ctypes
+import errno
 import hashlib
 import json
 import os
@@ -16,9 +18,14 @@ import sys
 import tempfile
 import tomllib
 
-ROOT = Path(__file__).resolve().parent.parent
-# Importing the pinned Git authority must not dirty a clean evidence tree.
 sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from factory_runner_artifacts import (ArtifactError, PROTOCOL as ARTIFACT_PROTOCOL,
+    MAX_ARTIFACTS, MAX_ARTIFACT_FILE, MAX_ARTIFACT_BYTES, decode_payload,
+    descriptors_digest, validate_descriptors)
+
+ROOT = Path(__file__).resolve().parent.parent
+# Importing protocol and pinned Git authority must not dirty a clean evidence tree.
 sys.path.insert(0, str(ROOT / ".factory" / "loop"))
 import gitutil  # noqa: E402
 
@@ -27,7 +34,7 @@ EXIT_TRANSPORT = 20
 EXIT_FINDINGS = 21
 EXIT_INTEGRITY = 22
 STATE_ROOT = ROOT / ".factory-state" / "runner-evidence"
-MAX_RESPONSE = 16 * 1024 * 1024
+MAX_RESPONSE = 80 * 1024 * 1024
 
 
 def fail(message: str, code: int = EXIT_INTEGRITY) -> None:
@@ -49,6 +56,19 @@ def git(*args: str) -> str:
 
 def digest_json(value: object) -> str:
     return hashlib.sha256(json.dumps(value, separators=(",", ":"), sort_keys=False).encode()).hexdigest()
+
+
+def rename_noreplace(source: Path, destination: Path) -> None:
+    """Atomically publish a directory without replacing an existing name."""
+    libc=ctypes.CDLL(None,use_errno=True)
+    renameat2=getattr(libc,"renameat2",None)
+    if renameat2 is None: fail("renameat2 is unavailable; cannot publish evidence race-free")
+    renameat2.argtypes=[ctypes.c_int,ctypes.c_char_p,ctypes.c_int,ctypes.c_char_p,ctypes.c_uint]
+    renameat2.restype=ctypes.c_int
+    if renameat2(-100,os.fsencode(source),-100,os.fsencode(destination),1)!=0:
+        code=ctypes.get_errno()
+        if code==errno.EEXIST: fail("runner evidence publication collision")
+        fail(f"runner evidence publication failed with errno {code}")
 
 
 def atomic_write(path: Path, data: bytes) -> None:
@@ -237,9 +257,11 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
         "exit_code", "timed_out", "stdout_b64", "stderr_b64", "started_at",
         "finished_at", "cleanup", "manifest_b64", "signature_b64",
         "signer_principal", "signer_key_sha256", "signature_algorithm",
-        "namespace", "signature_sha256",
+        "namespace", "signature_sha256", "artifact_protocol", "artifact_limits",
+        "artifact_count", "artifact_bytes", "artifact_manifest_sha256",
+        "artifact_scope_sha256", "artifacts", "artifact_payload",
     }
-    if set(receipt) != expected or receipt["schema"] != "factory-runner-receipt/v1":
+    if set(receipt) != expected or receipt["schema"] != "factory-runner-receipt/v2":
         fail(f"runner {name} receipt fields are invalid")
     bindings = {
         "runner": name,
@@ -272,6 +294,7 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
         remote_stderr = base64.b64decode(receipt.pop("stderr_b64"), validate=True)
         manifest_bytes = base64.b64decode(receipt.pop("manifest_b64"), validate=True)
         signature = base64.b64decode(receipt.pop("signature_b64"), validate=True)
+        artifact_payload = receipt.pop("artifact_payload")
     except Exception:
         fail(f"runner {name} returned invalid log or signature encoding")
     if not signature.startswith(b"-----BEGIN SSH SIGNATURE-----"):
@@ -280,24 +303,10 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
         manifest = json.loads(manifest_bytes)
     except (UnicodeError, json.JSONDecodeError):
         fail(f"runner {name} returned an invalid signed manifest")
-    expected_manifest = {
-        "schema": receipt["schema"], "result": receipt["result"],
-        "runner": receipt["runner"], "commit": receipt["commit"],
-        "tree": receipt["tree"], "environment_blob": receipt["environment_blob"],
-        "verify_argv_sha256": receipt["verify_argv_sha256"],
-        "archive_sha256": receipt["archive_sha256"], "campaign_id": receipt["campaign_id"],
-        "readiness_nonce": receipt["readiness_nonce"],
-        "authority_pins_sha256": receipt["authority_pins_sha256"], "nonce": receipt["nonce"],
-        "capabilities": receipt["capabilities"], "exit_code": receipt["exit_code"],
-        "timed_out": receipt["timed_out"], "started_at": receipt["started_at"],
-        "finished_at": receipt["finished_at"], "cleanup": receipt["cleanup"],
-        "stdout_sha256": hashlib.sha256(stdout).hexdigest(),
-        "stderr_sha256": hashlib.sha256(remote_stderr).hexdigest(),
-        "signer_principal": receipt["signer_principal"],
-        "signer_key_sha256": receipt["signer_key_sha256"],
-        "namespace": receipt["namespace"],
-        "signature_algorithm": receipt["signature_algorithm"],
-    }
+    expected_manifest = dict(receipt)
+    expected_manifest.update({"stdout_sha256": hashlib.sha256(stdout).hexdigest(),
+                              "stderr_sha256": hashlib.sha256(remote_stderr).hexdigest()})
+    expected_manifest.pop("signature_sha256", None)
     expected_manifest_bytes = (json.dumps(expected_manifest, sort_keys=True, indent=2) + "\n").encode()
     if manifest_bytes != expected_manifest_bytes or manifest != expected_manifest:
         fail(f"runner {name} signed manifest does not match the receipt")
@@ -309,23 +318,54 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
         or manifest["signature_algorithm"] != receipt["signature_algorithm"]
     ):
         fail(f"runner {name} signed manifest signer binding mismatch")
+    try:
+        total, artifact_digest = validate_descriptors(receipt["artifacts"], receipt["capabilities"])
+        decoded_artifacts = decode_payload(artifact_payload, receipt["artifacts"])
+    except ArtifactError as exc:
+        fail(f"runner {name} artifact framing is invalid: {exc}")
+    expected_scope = hashlib.sha256(json.dumps({"campaign_id": campaign_id,
+        "readiness_nonce": readiness_nonce, "nonce": nonce,
+        "artifact_manifest_sha256": artifact_digest}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    if (receipt["artifact_protocol"] != ARTIFACT_PROTOCOL
+            or receipt["artifact_limits"] != {"count":MAX_ARTIFACTS,"file_bytes":MAX_ARTIFACT_FILE,"aggregate_bytes":MAX_ARTIFACT_BYTES}
+            or receipt["artifact_count"] != len(receipt["artifacts"])
+            or receipt["artifact_bytes"] != total
+            or receipt["artifact_manifest_sha256"] != artifact_digest
+            or receipt["artifact_scope_sha256"] != expected_scope):
+        fail(f"runner {name} signed artifact summary is invalid")
     evidence_dir = STATE_ROOT / name / commit
-    if evidence_dir.is_symlink() or (evidence_dir.exists() and not evidence_dir.is_dir()):
-        fail(f"unsafe evidence directory for {name}")
-    atomic_write(evidence_dir / "stdout.log", stdout)
-    # The signed manifest covers exactly the remote logs; the SSH transport's
-    # own stderr (host-key / connectivity diagnostics) is kept separate and is
-    # not part of the signed evidence.
-    atomic_write(evidence_dir / "stderr.log", remote_stderr)
-    if transport_stderr:
-        atomic_write(evidence_dir / "transport.stderr", transport_stderr)
-    atomic_write(evidence_dir / "manifest.json", manifest_bytes)
-    atomic_write(evidence_dir / "manifest.sig", signature)
+    runner_dir = evidence_dir.parent
+    if runner_dir.is_symlink(): fail(f"unsafe runner evidence parent for {name}")
+    runner_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if evidence_dir.is_symlink() or evidence_dir.exists():
+        fail(f"runner evidence publication collision for {name}")
+    staging = runner_dir / f".publish-{commit}-{nonce}"
+    if staging.exists() or staging.is_symlink(): fail(f"runner evidence staging collision for {name}")
+    staging.mkdir(mode=0o700)
+    try:
+        atomic_write(staging / "stdout.log", stdout)
+        # SSH diagnostics are deliberately outside the signed artifact set.
+        atomic_write(staging / "stderr.log", remote_stderr)
+        if transport_stderr: atomic_write(staging / "transport.stderr", transport_stderr)
+        atomic_write(staging / "manifest.json", manifest_bytes)
+        atomic_write(staging / "manifest.sig", signature)
+        for descriptor, data in decoded_artifacts:
+            atomic_write(staging / "artifacts" / Path(descriptor["path"]), data)
+        if evidence_dir.exists() or evidence_dir.is_symlink():
+            fail(f"runner evidence publication collision for {name}")
+        rename_noreplace(staging, evidence_dir)
+    finally:
+        if staging.exists():
+            import shutil
+            shutil.rmtree(staging)
     return {
         "name": name,
         "manifest": str((evidence_dir / "manifest.json").relative_to(ROOT)),
         "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
         "capabilities": receipt["capabilities"],
+        "artifact_manifest_sha256": artifact_digest,
+        "artifact_count": len(decoded_artifacts),
+        "artifact_bytes": total,
         "signer": {
             "principal": receipt["signer_principal"],
             "key_sha256": receipt["signer_key_sha256"],
@@ -430,7 +470,7 @@ def main() -> int:
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", campaign_id) or not re.fullmatch(r"[0-9a-f]{64}", readiness_nonce):
         fail("campaign/readiness anti-replay binding is missing")
     aggregate = {
-        "schema": "factory-runner-aggregate/v2",
+        "schema": "factory-runner-aggregate/v3",
         "campaign_id": campaign_id,
         "readiness_nonce": readiness_nonce,
         "commit": commit,

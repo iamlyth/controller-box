@@ -165,7 +165,7 @@ def aggregate_evidence(root: Path) -> tuple[set[str], dict[str, list[tuple[str, 
         fail(f"invalid runner evidence aggregate {aggregate}: {exc}")
     if hashlib.sha256(raw).hexdigest() != strong_digest:
         fail("runner evidence aggregate changed after strong validation")
-    if not isinstance(data, dict) or data.get("schema") != "factory-runner-aggregate/v2":
+    if not isinstance(data, dict) or data.get("schema") != "factory-runner-aggregate/v3":
         fail(f"runner evidence aggregate schema is invalid: {aggregate}")
     if data.get("campaign_id") != os.environ.get("FACTORY_CAMPAIGN_ID") or data.get("readiness_nonce") != os.environ.get("FACTORY_READINESS_NONCE"):
         fail("runner evidence aggregate campaign/readiness binding is stale or replayed")
@@ -240,6 +240,60 @@ def scan_tokens(scope: list[str], tokens: list[str]) -> list[str]:
     return sorted(hits)
 
 
+def validate_structured_artifacts(manifest_path: Path, manifest: dict, contract: dict, capability: str) -> None:
+    requirements=contract.get("artifact_requirements", {"required":[],"files":{}})
+    required=requirements.get("required",[]); files=requirements.get("files",{})
+    descriptors={item.get("path"):item for item in manifest.get("artifacts",[]) if isinstance(item,dict)}
+    expected={f"{capability}/{name}" for name in required}
+    if not expected.issubset(descriptors): fail(f"receipt for {capability} omits required signed artifacts")
+    for name,media in files.items():
+        path=f"{capability}/{name}"
+        if path in descriptors and descriptors[path].get("media_type") != media:
+            fail(f"receipt for {capability} has wrong artifact media type: {name}")
+    artifact_dir=manifest_path.parent/"artifacts"/capability
+    def load(name):
+        path=artifact_dir/name
+        try: return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=no_duplicate_keys)
+        except (OSError,UnicodeError,json.JSONDecodeError) as exc: fail(f"invalid structured artifact {name}: {exc}")
+    if capability=="controller-production-routing":
+        result=load("routing-results.json")
+        targets=result.get("targets") if isinstance(result,dict) else None
+        if result.get("schema")!="controller-production-routing-results/v2" or not isinstance(targets,list) or len(targets)!=4:
+            fail("routing result artifact schema/cardinality is invalid")
+        if {t.get("slot") for t in targets}!={0,1,2,3}: fail("routing artifact does not cover all four slots")
+        identities=set()
+        for target in targets:
+            required_true=("human_generated","selected_only","production_dispatch","production_save","assignment_file_changed","assignment_file_parsed","cleanup_verified")
+            if any(target.get(k) is not True for k in required_true) or target.get("direct_assignment_dbus") is not False:
+                fail("routing artifact does not prove production assignment/save/cleanup")
+            if not isinstance(target.get("persistent_id"),str) or not target["persistent_id"] or target.get("saved_slot") != target.get("slot") or not isinstance(target.get("source_path"),str):
+                fail("routing artifact saved assignment does not parse exact PersistentId/slot")
+            if not isinstance(target.get("assignment_before_sha256"),str) or target.get("assignment_before_sha256")==target.get("assignment_after_sha256"):
+                fail("routing artifact assignment file was unchanged")
+            identity=(target.get("dbus_path"),target.get("kernel_node"))
+            if None in identity or identity in identities: fail("routing artifact has ambiguous target/node mapping")
+            identities.add(identity)
+            if target.get("consumer")!="read-only-evdev" or target.get("target_event_us",0)<target.get("source_event_us",1):
+                fail("routing artifact event correlation is invalid")
+        cleanup=(artifact_dir/"cleanup.log").read_text(encoding="utf-8")
+        if "targets-absent=true kernel-nodes-absent=true" not in cleanup: fail("routing cleanup artifact is incomplete")
+    if capability in {"gpu-compositor","installed-licensed-diagram"}:
+        verdict=load("verdict.json"); installed=load("installed-manifest.json"); renderer=load("renderer-verdict.json")
+        controls=["A","B","X","Y","Up","Down","Left","Right","Start","Select","Guide","L1","R1","L2","R2","L3","R3"]
+        observations=verdict.get("observations",{}) if isinstance(verdict,dict) else {}
+        if verdict.get("schema")!="gpu-compositor-analysis/v3" or verdict.get("result")!="pass" or set(observations)!=set(controls):
+            fail("licensed diagram verdict does not prove 17/17 controls")
+        digests=[observations[c].get("capture_sha256") for c in controls]
+        if len(set(digests))!=17 or any(observations[c].get("result")!="pass" for c in controls):
+            fail("licensed diagram captures are reused or have failing observations")
+        if renderer.get("result")!="pass" or renderer.get("marker")!="renderer-accepted": fail("renderer artifact is not accelerated")
+        authority="23cb0a91cdcde1ab7bb179b4fe5f6afc340dd9f2061b9d1222be94a3341c298d"
+        if (installed.get("schema")!="controller-box-installed-provenance/v1" or installed.get("result")!="pass"
+                or installed.get("fallback") is not False or verdict.get("authority_sha256")!=authority
+                or installed.get("files",{}).get("licensed-diagram-authority.json")!=authority):
+            fail("installed provenance/root authority artifact is invalid")
+
+
 def verify_capability(root: Path, capability: str) -> None:
     declared = declared_capabilities(root)
     if capability not in declared:
@@ -277,10 +331,11 @@ def verify_capability(root: Path, capability: str) -> None:
             )
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             fail(f"invalid runner manifest {manifest_path}: {exc}")
-        if not isinstance(manifest_data, dict) or manifest_data.get("schema") != "factory-runner-receipt/v1":
+        if not isinstance(manifest_data, dict) or manifest_data.get("schema") != "factory-runner-receipt/v2":
             fail(f"runner manifest schema is invalid: {manifest_path}")
         if manifest_data.get("result") != "pass" or manifest_data.get("exit_code") != 0:
             fail(f"runner manifest does not prove a clean pass: {manifest_path}")
+        validate_structured_artifacts(manifest_path, manifest_data, contract, capability)
         manifest_dir = manifest_path.parent
         for log_name in ("stdout.log", "stderr.log"):
             log_path = manifest_dir / log_name

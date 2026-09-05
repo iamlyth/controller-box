@@ -588,6 +588,14 @@ PY
             sleep 0.25
         done
         record_cleanup "$termination" "$target_cleanup" "$targets_absent" "$nodes_absent" || rc=1
+        if [[ "$rc" -eq 0 && -f "$tmp/routing-results.json" ]]; then
+            python3 - "$tmp/routing-results.json" <<'PY'
+import json,sys
+p=sys.argv[1]; d=json.load(open(p,encoding='utf-8'))
+for row in d.get('targets',[]): row['cleanup_verified']=True
+open(p,'w',encoding='utf-8').write(json.dumps(d,indent=2)+'\n')
+PY
+        fi
         # Retain the signed artifacts (observer.log, overlay.log, cleanup.log)
         # under the caller-controlled ARTIFACT_DIR and print their hashes; the
         # retained copies are never deleted by cleanup_live.
@@ -823,21 +831,42 @@ PY
         # that row to P(slot+1), and closes with B.  Never call assignment
         # DBus here; DBus is only an independent postcondition observer.
         local assignments_file="$HOME/.config/controller-box/assignments.yaml"
-        local before_mtime=0 assign_deadline
+        local before_mtime=0 before_hash="missing" after_hash="" persistent_id="" assign_deadline
         [[ -e "$assignments_file" ]] && before_mtime=$(stat -c %Y "$assignments_file" 2>/dev/null || echo 0)
+        [[ -f "$assignments_file" && ! -L "$assignments_file" ]] && before_hash=$(sha256sum "$assignments_file" | cut -d' ' -f1)
+        persistent_id=$(busctl --system --json=short get-property "$BUS_NAME" "$composite" \
+            org.shadowblip.Input.CompositeDevice PersistentId 2>/dev/null | \
+            python3 "$SCRIPT_DIR/iprunner-probes/unwrap_variant.py" --property-s) || {
+            echo "production-routing-probe: FAIL: composite PersistentId unavailable" >&2
+            cleanup_live; return 1
+        }
         echo "production-routing-probe: ACTION: use physical 045e:028e through the overlay production event path; assign it to P$((slot+1)) and close with B"
         assign_deadline=$(( $(date +%s) + 90 ))
         local assignment_ok=false
         while [[ $(date +%s) -lt $assign_deadline ]]; do
             local now_mtime=0
             [[ -e "$assignments_file" ]] && now_mtime=$(stat -c %Y "$assignments_file" 2>/dev/null || echo 0)
-            if [[ "$now_mtime" -ge "$before_mtime" ]] && \
-               busctl --system --json=short get-property "$BUS_NAME" "$composite" \
-                 org.shadowblip.Input.CompositeDevice TargetDevices 2>/dev/null | \
-               python3 "$SCRIPT_DIR/iprunner-probes/unwrap_variant.py" --property-as | \
-               python3 -c 'import json,sys; a=json.load(sys.stdin); raise SystemExit(0 if a == [sys.argv[1]] else 1)' "${new_targets[$slot]}"; then
-                assignment_ok=true
-                break
+            if [[ -f "$assignments_file" && ! -L "$assignments_file" && "$now_mtime" -gt "$before_mtime" ]]; then
+                after_hash=$(sha256sum "$assignments_file" | cut -d' ' -f1)
+                if [[ "$after_hash" != "$before_hash" ]] && \
+                   python3 - "$assignments_file" "$persistent_id" "$slot" <<'PY'
+import sys,yaml
+path,pid,slot=sys.argv[1],sys.argv[2],int(sys.argv[3])
+with open(path,encoding='utf-8') as f: doc=yaml.safe_load(f)
+rows=doc.get('assignments',[]) if isinstance(doc,dict) else []
+assert isinstance(rows,list)
+matches=[r for r in rows if isinstance(r,dict) and r.get('id')==pid]
+raise SystemExit(0 if len(matches)==1 and matches[0].get('slot')==slot else 1)
+PY
+                then
+                    if busctl --system --json=short get-property "$BUS_NAME" "$composite" \
+                         org.shadowblip.Input.CompositeDevice TargetDevices 2>/dev/null | \
+                       python3 "$SCRIPT_DIR/iprunner-probes/unwrap_variant.py" --property-as | \
+                       python3 -c 'import json,sys; a=json.load(sys.stdin); raise SystemExit(0 if a == [sys.argv[1]] else 1)' "${new_targets[$slot]}"; then
+                        assignment_ok=true
+                        break
+                    fi
+                fi
             fi
             sleep 1
         done
@@ -866,20 +895,24 @@ if not m: raise SystemExit(1)
 print(m.group(1),m.group(2))
 PY
 ) || { echo "production-routing-probe: FAIL: target-$slot observer result malformed" >&2; cleanup_live; return 1; }
-        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$slot" "${new_targets[$slot]}" "/dev/input/$target_node" "$composite" "$source_path" "$source_us" "$target_us" >> "$tmp/per-target.tsv"
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$slot" "${new_targets[$slot]}" "/dev/input/$target_node" "$composite" "$source_path" "$source_us" "$target_us" "$persistent_id" "$before_hash" "$after_hash" >> "$tmp/per-target.tsv"
         echo "production-routing-probe: target-$slot independent-read-only-consumer correlated fresh-event"
     done
     python3 - "$tmp/per-target.tsv" "$tmp/routing-results.json" <<'PY'
 import json,sys
 rows=[]
 for line in open(sys.argv[1],encoding='utf-8'):
- s,p,n,c,src,st,tt=line.rstrip().split('\t')
+ s,p,n,c,src,st,tt,pid,before,after=line.rstrip().split('\t')
  rows.append({'slot':int(s),'dbus_path':p,'kernel_node':n,'composite_path':c,'source_path':src,
-              'source_vidpid':'045e:028e','source_event_us':int(st),'target_event_us':int(tt),
+              'persistent_id':pid,'saved_slot':int(s),'source_vidpid':'045e:028e',
+              'source_event_us':int(st),'target_event_us':int(tt),
               'consumer':'read-only-evdev','human_generated':True,'selected_only':True,
-              'production_dispatch':True,'production_save':True,'direct_assignment_dbus':False})
+              'production_dispatch':True,'production_save':True,'direct_assignment_dbus':False,
+              'assignment_file_changed':before!=after,'assignment_file_parsed':True,
+              'assignment_before_sha256':before,'assignment_after_sha256':after,
+              'cleanup_verified':False})
 if len(rows)!=4: raise SystemExit(1)
-json.dump({'schema':'controller-production-routing-results/v1','targets':rows},open(sys.argv[2],'w'),indent=2); open(sys.argv[2],'a').write('\n')
+json.dump({'schema':'controller-production-routing-results/v2','targets':rows},open(sys.argv[2],'w'),indent=2); open(sys.argv[2],'a').write('\n')
 PY
     cat "$tmp/observer.log"
     echo "production-routing-probe: physical-source verified vidpid=045e:028e human-generated=true node=$physical"

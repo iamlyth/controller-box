@@ -244,10 +244,10 @@ def validate_manifest(raw: bytes, runner_class: dict | None) -> dict:
     if not isinstance(request, dict) or set(request) != {"schema", "manifest"} or request.get("schema") != "factory-runner-sign-request/v1":
         fail("signing request schema is invalid")
     manifest = request["manifest"]
-    fields = {"schema", "result", "runner", "commit", "tree", "environment_blob", "verify_argv_sha256", "archive_sha256", "campaign_id", "readiness_nonce", "authority_pins_sha256", "nonce", "capabilities", "exit_code", "timed_out", "started_at", "finished_at", "cleanup", "stdout_sha256", "stderr_sha256"}
+    fields = {"schema", "result", "runner", "commit", "tree", "environment_blob", "verify_argv_sha256", "archive_sha256", "campaign_id", "readiness_nonce", "authority_pins_sha256", "nonce", "capabilities", "exit_code", "timed_out", "started_at", "finished_at", "cleanup", "stdout_sha256", "stderr_sha256", "artifact_protocol", "artifact_limits", "artifact_count", "artifact_bytes", "artifact_manifest_sha256", "artifact_scope_sha256", "artifacts"}
     if not isinstance(manifest, dict) or set(manifest) != fields:
         fail("signing request manifest fields are invalid")
-    if manifest.get("schema") != "factory-runner-receipt/v1" or manifest.get("result") != "pass":
+    if manifest.get("schema") != "factory-runner-receipt/v2" or manifest.get("result") != "pass":
         fail("only passing runner receipts can be signed")
     if not isinstance(manifest["runner"], str) or not NAME.fullmatch(manifest["runner"]):
         fail("signing request runner is invalid")
@@ -270,6 +270,23 @@ def validate_manifest(raw: bytes, runner_class: dict | None) -> dict:
         fail("signing request capabilities are invalid")
     if runner_class is not None and sorted(capabilities) != sorted(runner_class["allowed_capabilities"]):
         fail("signing request capabilities do not equal the runner class allowlist")
+    try:
+        from factory_runner_artifacts import (PROTOCOL, MAX_ARTIFACTS, MAX_ARTIFACT_FILE,
+            MAX_ARTIFACT_BYTES, validate_descriptors, descriptors_digest)
+        total, digest = validate_descriptors(manifest["artifacts"], capabilities)
+    except (ImportError, ValueError) as exc:
+        fail(f"signing request artifacts are invalid: {exc}")
+    if (manifest["artifact_protocol"] != PROTOCOL
+            or manifest["artifact_limits"] != {"count": MAX_ARTIFACTS, "file_bytes": MAX_ARTIFACT_FILE, "aggregate_bytes": MAX_ARTIFACT_BYTES}
+            or manifest["artifact_count"] != len(manifest["artifacts"])
+            or manifest["artifact_bytes"] != total
+            or manifest["artifact_manifest_sha256"] != digest):
+        fail("signing request artifact summary is invalid")
+    scope = hashlib.sha256(json.dumps({"campaign_id": manifest["campaign_id"],
+        "readiness_nonce": manifest["readiness_nonce"], "nonce": manifest["nonce"],
+        "artifact_manifest_sha256": digest}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    if manifest["artifact_scope_sha256"] != scope:
+        fail("signing request artifact nonce scope is invalid")
     return manifest
 
 

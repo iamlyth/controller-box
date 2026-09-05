@@ -55,7 +55,7 @@ ROTATED_BOTH=$(trust_json "[{\"principal\":\"fake-runner\",\"public_key\":\"$PUB
 setup_repo() {
     local dir=$1 trust=$2
     mkdir -p "$dir/scripts" "$dir/docs" "$dir/.factory" "$dir/.factory-state"
-    cp "$CHECKER" "$dir/scripts/"
+    cp "$CHECKER" "$PROJECT_ROOT/scripts/factory_runner_artifacts.py" "$dir/scripts/"
     cp "$PROJECT_ROOT/scripts/check-factory-environment.py" "$dir/scripts/"
     chmod +x "$dir/scripts/"*.py
     cat > "$dir/.factory/environment.toml" <<'EOF'
@@ -108,13 +108,18 @@ archive_sha256 = hashlib.sha256((root / "commit-archive.tar").read_bytes()).hexd
 (root / "commit-archive.tar").unlink()
 empty = hashlib.sha256(b"").hexdigest()
 manifest = {
-    "schema": "factory-runner-receipt/v1", "result": "pass", "runner": "fake-runner",
+    "schema": "factory-runner-receipt/v2", "result": "pass", "runner": "fake-runner",
     "commit": head, "tree": tree, "environment_blob": environment_blob,
     "verify_argv_sha256": argv_digest, "archive_sha256": archive_sha256,
     "campaign_id": "synthetic-signer-protocol", "readiness_nonce": "b" * 64, "authority_pins_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945", "nonce": "0" * 64,
     "capabilities": ["remote-project-gate"], "exit_code": 0, "timed_out": False,
     "started_at": 1, "finished_at": 2, "cleanup": True,
     "stdout_sha256": empty, "stderr_sha256": empty,
+    "artifact_protocol":"factory-runner-artifacts/v1",
+    "artifact_limits":{"count":64,"file_bytes":8388608,"aggregate_bytes":50331648},
+    "artifact_count":0,"artifact_bytes":0,
+    "artifact_manifest_sha256":hashlib.sha256(b"[]\n").hexdigest(),
+    "artifact_scope_sha256":hashlib.sha256(json.dumps({"campaign_id":"synthetic-signer-protocol","readiness_nonce":"b"*64,"nonce":"0"*64,"artifact_manifest_sha256":hashlib.sha256(b"[]\n").hexdigest()},sort_keys=True,separators=(",",":")).encode()).hexdigest(),"artifacts":[],
     "signer_principal": "fake-runner", "signer_key_sha256": key_sha256,
     "namespace": "factory-runner-receipt", "signature_algorithm": "ssh-ed25519",
 }
@@ -122,7 +127,7 @@ raw = (json.dumps(manifest, sort_keys=True, indent=2) + "\n").encode()
 manifest_path = root / f".factory-state/runner-evidence/fake-runner/{head}/manifest.json"
 manifest_path.write_bytes(raw)
 aggregate = {
-    "schema": "factory-runner-aggregate/v2",
+    "schema": "factory-runner-aggregate/v3",
     "campaign_id": "synthetic-signer-protocol",
     "readiness_nonce": "b" * 64,
     "commit": head,
@@ -131,6 +136,7 @@ aggregate = {
     "runners": [
         {"name": "fake-runner", "manifest": f".factory-state/runner-evidence/fake-runner/{head}/manifest.json",
          "manifest_sha256": hashlib.sha256(raw).hexdigest(), "capabilities": ["remote-project-gate"],
+         "artifact_manifest_sha256":hashlib.sha256(b"[]\n").hexdigest(),"artifact_count":0,"artifact_bytes":0,
          "signer": {"principal": "fake-runner", "key_sha256": key_sha256,
                     "algorithm": "ssh-ed25519", "signature_sha256": ""}}
     ],
@@ -421,7 +427,7 @@ expect "$tmp/signed" 0 "valid signed runner manifest"
 helper_dir="$tmp/helper"
 mkdir -p "$helper_dir"
 cp "$SIGNER" "$helper_dir/factory-runner-signer.py"
-cp "$PROJECT_ROOT/scripts/factory_runner_policy.py" "$helper_dir/"
+cp "$PROJECT_ROOT/scripts/factory_runner_policy.py" "$PROJECT_ROOT/scripts/factory_runner_artifacts.py" "$helper_dir/"
 chmod +x "$helper_dir/factory-runner-signer.py"
 # The disposable copied harness substitutes its immutable tool-store path and
 # test UID/boundary. Production has no environment override for either.
@@ -468,7 +474,7 @@ valid_request() {
     python3 - "$PUBKEY_SHA256" <<'PY'
 import hashlib, json, sys
 manifest = {
-    "schema": "factory-runner-receipt/v1", "result": "pass", "runner": "fake-runner",
+    "schema": "factory-runner-receipt/v2", "result": "pass", "runner": "fake-runner",
     "commit": "a" * 40, "tree": "b" * 40, "environment_blob": "c" * 40,
     "verify_argv_sha256": hashlib.sha256(b"x").hexdigest(),
     "archive_sha256": hashlib.sha256(b"y").hexdigest(),
@@ -478,7 +484,12 @@ manifest = {
     "started_at": 1, "finished_at": 2, "cleanup": True,
     "stdout_sha256": hashlib.sha256(b"").hexdigest(),
     "stderr_sha256": hashlib.sha256(b"").hexdigest(),
+    "artifact_protocol":"factory-runner-artifacts/v1",
+    "artifact_limits":{"count":64,"file_bytes":8388608,"aggregate_bytes":50331648},
+    "artifact_count":0,"artifact_bytes":0,
+    "artifact_manifest_sha256":hashlib.sha256(b"[]\n").hexdigest(),"artifacts":[],
 }
+manifest["artifact_scope_sha256"]=hashlib.sha256(json.dumps({"campaign_id":manifest["campaign_id"],"readiness_nonce":manifest["readiness_nonce"],"nonce":manifest["nonce"],"artifact_manifest_sha256":manifest["artifact_manifest_sha256"]},sort_keys=True,separators=(",",":")).encode()).hexdigest()
 print(json.dumps({"schema": "factory-runner-sign-request/v1", "manifest": manifest}))
 PY
 }

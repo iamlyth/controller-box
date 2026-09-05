@@ -203,7 +203,7 @@ def manifest_capabilities(root: Path, reference: str) -> list[str]:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         fail(f"invalid objective manifest {reference}: {exc}")
-    if not isinstance(data, dict) or data.get("schema") != "factory-runner-receipt/v1":
+    if not isinstance(data, dict) or data.get("schema") != "factory-runner-receipt/v2":
         fail(f"objective manifest schema is invalid: {reference}")
     capabilities = data.get("capabilities")
     if not isinstance(capabilities, list) or not all(
