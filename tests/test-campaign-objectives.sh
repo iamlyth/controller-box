@@ -111,19 +111,20 @@ OBJECTIVES
   ]
 }
 POLICY
-    # Ephemeral signer for fixture runner-receipt trust (never committed).
-    ssh-keygen -q -t ed25519 -N '' -f "$tmp/signer-key"
-    PUBLIC_KEY=$(cut -d' ' -f1,2 "$tmp/signer-key.pub")
-    python3 - "$PUBLIC_KEY" <<'PY' > "$dir/.factory/signer-trust.json"
-import json, sys
+    # Distinct ephemeral class-bound signers (private keys never committed).
+    for signer_class in fake-runner real-system-service verify-runner; do
+        ssh-keygen -q -t ed25519 -N '' -f "$tmp/signer-key-$signer_class"
+    done
+    python3 - "$tmp" <<'PY' > "$dir/.factory/signer-trust.json"
+import json, pathlib, sys
+root=pathlib.Path(sys.argv[1]); principals=["fake-runner","real-system-service","verify-runner"]
+keys=[]
+for principal in principals:
+    keys.append({"principal":principal,"public_key":" ".join((root/f"signer-key-{principal}.pub").read_text().split()[:2])})
 print(json.dumps({
-    "schema": "ralph-runner-signer-trust/v1",
-    "description": "ephemeral test fixture signer",
-    "require_signature": True,
-    "enabled": True,
-    "namespace": "factory-runner-receipt",
-    "public_keys": [{"principal": "factory-signer", "public_key": sys.argv[1]}],
-    "allowed_principals": ["factory-signer"],
+    "schema": "ralph-runner-signer-trust/v1", "description": "ephemeral class-bound fixture signers",
+    "require_signature": True, "enabled": True, "namespace": "factory-runner-receipt",
+    "public_keys": keys, "allowed_principals": principals,
 }))
 PY
     printf '# Spec\n' > "$dir/docs/SPEC.md"
@@ -143,7 +144,9 @@ write_evidence() {
     local head
     head=$(git -C "$dir" rev-parse HEAD)
     mkdir -p "$dir/.factory-state/runner-evidence/$runner/$head"
-    python3 - "$dir" "$runner" "$head" "$PUBLIC_KEY" <<'PY'
+    local public_key
+    public_key=$(cut -d' ' -f1,2 "$tmp/signer-key-$runner.pub")
+    python3 - "$dir" "$runner" "$head" "$public_key" <<'PY'
 import hashlib, json, pathlib, subprocess, sys, tomllib
 root, runner, head, public_key = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
 
@@ -176,7 +179,7 @@ manifest = {
     "capabilities": capabilities, "exit_code": 0, "timed_out": False,
     "started_at": 1, "finished_at": 2, "cleanup": True,
     "stdout_sha256": empty, "stderr_sha256": empty,
-    "signer_principal": "factory-signer", "signer_key_sha256": key_sha256,
+    "signer_principal": runner, "signer_key_sha256": key_sha256,
     "namespace": "factory-runner-receipt", "signature_algorithm": "ssh-ed25519",
 }
 raw = (json.dumps(manifest, sort_keys=True, indent=2) + "\n").encode()
@@ -192,14 +195,14 @@ aggregate["runners"] = [
     item for item in aggregate["runners"] if item["name"] != runner
 ] + [{"name": runner, "manifest": f".factory-state/runner-evidence/{runner}/{head}/manifest.json",
       "manifest_sha256": hashlib.sha256(raw).hexdigest(), "capabilities": capabilities,
-      "signer": {"principal": "factory-signer", "key_sha256": key_sha256,
+      "signer": {"principal": runner, "key_sha256": key_sha256,
                   "algorithm": "ssh-ed25519", "signature_sha256": ""}}]
 aggregate_path.write_text(json.dumps(aggregate, sort_keys=True, indent=2) + "\n")
 (root / f".factory-state/runner-evidence/{runner}/{head}/stdout.log").write_bytes(b"")
 (root / f".factory-state/runner-evidence/{runner}/{head}/stderr.log").write_bytes(b"")
 PY
     cat "$dir/.factory-state/runner-evidence/$runner/$head/manifest.json" \
-        | ssh-keygen -Y sign -f "$tmp/signer-key" -n factory-runner-receipt \
+        | ssh-keygen -Y sign -f "$tmp/signer-key-$runner" -n factory-runner-receipt \
             > "$dir/.factory-state/runner-evidence/$runner/$head/manifest.sig" 2>/dev/null
     python3 - "$dir/.factory-state/runner-evidence/$runner/$head/manifest.sig" \
         "$dir/.factory-state/runner-evidence.json" "$runner" <<'PY'

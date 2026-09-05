@@ -341,6 +341,19 @@ def run_every_runner(
     return records, failures
 
 
+def dominant_failure_code(failures: list[tuple[str, int]]) -> int:
+    """Return safe order-independent failure precedence.
+
+    Integrity outranks transport, which outranks product findings. Unknown
+    categories are treated as integrity failures.
+    """
+    priority = {EXIT_FINDINGS: 1, EXIT_TRANSPORT: 2, EXIT_INTEGRITY: 3}
+    return max(
+        (code if code in priority else EXIT_INTEGRITY for _, code in failures),
+        key=lambda code: priority[code],
+    )
+
+
 def main() -> int:
     os.environ["GIT_NO_REPLACE_OBJECTS"] = "1"
     if git("branch", "--show-current") != "develop":
@@ -376,10 +389,10 @@ def main() -> int:
         archive = Path(archive_file.name).read_bytes()
     records, failures = run_every_runner(runners, commit, tree, environment_blob, archive)
     if failures:
-        # Report the first failure's category as the dominant exit code so the
-        # campaign can classify the outcome (transport / findings / integrity),
-        # while still having attempted every runner.
-        dominant = failures[0][1]
+        # Infrastructure/integrity cannot be hidden by declaration order or an
+        # earlier product finding: integrity outranks transport, which outranks
+        # product findings. Unknown exit categories fail closed as integrity.
+        dominant = dominant_failure_code(failures)
         names = ", ".join(name for name, _ in failures)
         print(f"factory-runner: {len(failures)} runner(s) failed for {commit[:12]}: {names}", file=sys.stderr)
         return dominant

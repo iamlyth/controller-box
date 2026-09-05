@@ -348,10 +348,21 @@ root signer re-validates every manifest field (clean pass only, supported
 capabilities, bound digests, no caller-supplied signer identity), rebuilds the
 canonical signed manifest itself, and returns the detached signature plus
 aggregate signer metadata. The private signing key is root-owned mode 0600 on
-the runner, never printed or copied into Git; this repository carries only the
-public keys and trust policy in `.factory/signer-trust.json`. Signer rotation
-is fail-closed: a receipt signed by a key no longer in the trust store is
-rejected.
+the runner, never printed or copied into Git. The signer resolves authorization
+from sudo's numeric caller UID (with NSS name/UID consistency), not from a
+caller-supplied class name; `devrunner` is therefore bound by policy to class
+`dev-runner-vm`, while `iprunner` and `gpurunner` remain isolated classes. It
+opens the key, principal, and a fixed absolute root-owned `ssh-keygen` through
+validated non-symlink chains and uses descriptor-bound inodes.
+
+This repository carries only canonical two-field ed25519 public keys in
+`.factory/signer-trust.json`, exactly one distinct key per declared principal.
+The checker reads issuance trust from the exact evidence commit and revocation
+trust from committed `HEAD`, never from mutable worktree bytes, and requires
+the same exact principal/key pair in both. Schema v1 has no explicit rotation
+window, so multiple keys for one principal fail closed; commit the replacement
+only when old receipts are intentionally revoked. Signer principal, aggregate
+runner, manifest runner, and declared runner class must all be identical.
 
 `.factory/config.toml` lists product-specific capabilities required for a
 clean audit. Only capabilities covered by accepted exact-commit evidence

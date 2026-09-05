@@ -45,10 +45,10 @@ PY
 }
 
 DISABLED=$(trust_json '[]' '[]' false)
-ENABLED=$(trust_json "[{\"principal\":\"factory-signer\",\"public_key\":\"$PUBLIC_KEY\"}]" '["factory-signer"]' true)
-UNKNOWN=$(trust_json "[{\"principal\":\"factory-signer\",\"public_key\":\"$OTHER_PUBLIC_KEY\"}]" '["factory-signer"]' true)
-WRONG_PRINCIPAL=$(trust_json "[{\"principal\":\"factory-signer\",\"public_key\":\"$PUBLIC_KEY\"}]" '["other-signer"]' true)
-ROTATED_BOTH=$(trust_json "[{\"principal\":\"factory-signer\",\"public_key\":\"$PUBLIC_KEY\"},{\"principal\":\"factory-signer\",\"public_key\":\"$OTHER_PUBLIC_KEY\"}]" '["factory-signer"]' true)
+ENABLED=$(trust_json "[{\"principal\":\"fake-runner\",\"public_key\":\"$PUBLIC_KEY\"}]" '["fake-runner"]' true)
+UNKNOWN=$(trust_json "[{\"principal\":\"fake-runner\",\"public_key\":\"$OTHER_PUBLIC_KEY\"}]" '["fake-runner"]' true)
+WRONG_PRINCIPAL=$ENABLED
+ROTATED_BOTH=$(trust_json "[{\"principal\":\"fake-runner\",\"public_key\":\"$PUBLIC_KEY\"},{\"principal\":\"fake-runner\",\"public_key\":\"$OTHER_PUBLIC_KEY\"}]" '["fake-runner"]' true)
 
 setup_repo() {
     local dir=$1 trust=$2
@@ -112,7 +112,7 @@ manifest = {
     "capabilities": ["remote-project-gate"], "exit_code": 0, "timed_out": False,
     "started_at": 1, "finished_at": 2, "cleanup": True,
     "stdout_sha256": empty, "stderr_sha256": empty,
-    "signer_principal": "factory-signer", "signer_key_sha256": key_sha256,
+    "signer_principal": "fake-runner", "signer_key_sha256": key_sha256,
     "namespace": "factory-runner-receipt", "signature_algorithm": "ssh-ed25519",
 }
 raw = (json.dumps(manifest, sort_keys=True, indent=2) + "\n").encode()
@@ -126,7 +126,7 @@ aggregate = {
     "runners": [
         {"name": "fake-runner", "manifest": f".factory-state/runner-evidence/fake-runner/{head}/manifest.json",
          "manifest_sha256": hashlib.sha256(raw).hexdigest(), "capabilities": ["remote-project-gate"],
-         "signer": {"principal": "factory-signer", "key_sha256": key_sha256,
+         "signer": {"principal": "fake-runner", "key_sha256": key_sha256,
                     "algorithm": "ssh-ed25519", "signature_sha256": ""}}
     ],
 }
@@ -154,9 +154,11 @@ PY
 }
 
 expect() {
-    local dir=$1 expected=$2 label=$3
+    local dir=$1 expected=$2 label=$3 expected_commit=${4:-}
+    local args=()
+    [[ -z $expected_commit ]] || args=(--expected-commit "$expected_commit")
     set +e
-    (cd "$dir" && ./scripts/check-factory-runner-evidence.py >/dev/null 2>&1)
+    (cd "$dir" && ./scripts/check-factory-runner-evidence.py "${args[@]}" >/dev/null 2>&1)
     local rc=$?
     set -e
     [[ $rc -eq $expected ]] || {
@@ -304,23 +306,103 @@ PY
     expect "$tmp/$variant" 1 "failure/skip variant $variant cannot be evidence"
 done
 
-# Signer rotation is fail-closed: a key still in the trust store verifies;
-# once rotated out, the same receipt is rejected.
+# Schema v1 has no explicit rotation window, so multiple keys for one
+# principal are ambiguous and rejected. A later committed revocation also
+# rejects a historical receipt whose issuance commit trusted the old key.
 setup_repo "$tmp/rotation-old" "$ROTATED_BOTH"
 head=$(git -C "$tmp/rotation-old" rev-parse HEAD)
 write_evidence "$tmp/rotation-old" "$head"
 sign "$tmp/rotation-old" "$head" "$tmp/signer-key"
-expect "$tmp/rotation-old" 0 "old key while rotation window is open"
-python3 - "$tmp/rotation-old" "$PUBLIC_KEY" <<'PY'
+expect "$tmp/rotation-old" 1 "ambiguous rotation is rejected"
+setup_repo "$tmp/revoked" "$ENABLED"
+head=$(git -C "$tmp/revoked" rev-parse HEAD)
+write_evidence "$tmp/revoked" "$head"
+sign "$tmp/revoked" "$head" "$tmp/signer-key"
+python3 - "$tmp/revoked/.factory/signer-trust.json" "$OTHER_PUBLIC_KEY" <<'PY'
 import json, pathlib, sys
-root = pathlib.Path(sys.argv[1])
-public_key = sys.argv[2]
-path = root / ".factory/signer-trust.json"
-trust = json.loads(path.read_text())
-trust["public_keys"] = [entry for entry in trust["public_keys"] if entry["public_key"] != public_key]
+path = pathlib.Path(sys.argv[1]); trust = json.loads(path.read_text())
+trust["public_keys"] = [{"principal": "fake-runner", "public_key": sys.argv[2]}]
 path.write_text(json.dumps(trust, sort_keys=True, indent=2) + "\n")
 PY
-expect "$tmp/rotation-old" 1 "rotated-out key is rejected"
+git -C "$tmp/revoked" add .factory/signer-trust.json
+git -C "$tmp/revoked" commit -qm revoke-old-key
+expect "$tmp/revoked" 1 "committed revocation rejects historical evidence" "$head"
+
+# Dirty worktree trust injection is not authority: both issuance and current
+# trust are loaded from commits, so adding a key only to the checkout fails.
+setup_repo "$tmp/uncommitted-injection" "$DISABLED"
+head=$(git -C "$tmp/uncommitted-injection" rev-parse HEAD)
+printf '%s\n' "$ENABLED" > "$tmp/uncommitted-injection/.factory/signer-trust.json"
+write_evidence "$tmp/uncommitted-injection" "$head"
+sign "$tmp/uncommitted-injection" "$head" "$tmp/signer-key"
+expect "$tmp/uncommitted-injection" 1 "uncommitted trust injection"
+
+# Strict trust parser regressions, including field, principal, key, duplicate,
+# cross-principal, unsupported algorithm, malformed wire, and ambiguous v1
+# rotation states.
+python3 - "$CHECKER" "$PUBLIC_KEY" "$OTHER_PUBLIC_KEY" <<'PY'
+import copy, importlib.util, json, sys
+path, public, other = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("checker", path)
+mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+base = {"schema":"ralph-runner-signer-trust/v1", "description":"fixture",
+        "require_signature":True, "enabled":True, "namespace":"factory-runner-receipt",
+        "public_keys":[{"principal":"fake-runner","public_key":public}],
+        "allowed_principals":["fake-runner"]}
+def accepted(value):
+    mod.git = lambda *args: json.dumps(value)
+    try: mod.load_signer_trust("a" * 40, "test")
+    except SystemExit: return False
+    return True
+assert accepted(base)
+mod.git=lambda *args: '{"schema":"ralph-runner-signer-trust/v1","schema":"ralph-runner-signer-trust/v1"}'
+try: mod.load_signer_trust("a"*40,"test")
+except SystemExit: pass
+else: raise AssertionError('duplicate JSON object field accepted')
+variants=[]
+def changed(fn):
+    value=copy.deepcopy(base); fn(value); variants.append(value)
+changed(lambda x: x.update(extra=True))
+changed(lambda x: x["allowed_principals"].append("fake-runner"))
+changed(lambda x: x["allowed_principals"].__setitem__(0, "Bad Name"))
+changed(lambda x: x["public_keys"].append(copy.deepcopy(x["public_keys"][0])))
+changed(lambda x: x["public_keys"].append({"principal":"fake-runner","public_key":other}))
+changed(lambda x: x["public_keys"].clear())
+changed(lambda x: x["allowed_principals"].append("orphan"))
+changed(lambda x: x["public_keys"][0].update(extra="field"))
+changed(lambda x: x["public_keys"][0].update(principal="orphan"))
+changed(lambda x: x["public_keys"][0].update(public_key=public + " comment"))
+changed(lambda x: x["public_keys"][0].update(public_key=" " + public))
+changed(lambda x: x["public_keys"][0].update(public_key="ssh-rsa " + public.split(" ",1)[1]))
+changed(lambda x: x["public_keys"][0].update(public_key="ssh-ed25519 !!!"))
+changed(lambda x: x["public_keys"][0].update(public_key="ssh-ed25519 AAAA"))
+def shared(x):
+    x["allowed_principals"].append("other-runner")
+    x["public_keys"].append({"principal":"other-runner","public_key":public})
+changed(shared)
+assert all(not accepted(value) for value in variants)
+print("test: strict signer trust parser negatives passed")
+PY
+
+# The committed production trust has exactly one distinct canonical key for
+# every declared class, including the exact enrolled production values.
+python3 - "$PROJECT_ROOT" <<'PY'
+import base64, hashlib, json, pathlib, tomllib, sys
+root=pathlib.Path(sys.argv[1])
+env=tomllib.loads((root/'.factory/environment.toml').read_text())
+trust=json.loads((root/'.factory/signer-trust.json').read_text())
+expected={
+'dev-runner-vm':'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH1aM5OOElPaP30GHR9P/hiz3lJkil/TIQi7lc3Wd8Su',
+'iprunner':'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEHWU31Sso29CXbjKE/erN1FOq3Dz0hx2cF6Mh497TXX',
+'gpurunner':'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKCkkRbD/mDyDA22vY/FJXeqflxhinFfPkknEWHGES9e'}
+actual={entry['principal']:entry['public_key'] for entry in trust['public_keys']}
+assert actual == expected
+assert set(trust['allowed_principals']) == {runner['name'] for runner in env['runners']} == set(expected)
+assert len(set(actual.values())) == len(expected)
+fingerprints={name:'SHA256:'+base64.b64encode(hashlib.sha256(base64.b64decode(key.split()[1])).digest()).decode().rstrip('=') for name,key in actual.items()}
+assert fingerprints['iprunner'] == 'SHA256:/hl+xb+EMEr2bHsij90I3IvTI7rGzEuxTLuvT1yhOOE'
+assert fingerprints['gpurunner'] == 'SHA256:h+Zy8/y3kPv25eP2Ov3pkwuEG9Vl6IaHba7pIMvPTGg'
+PY
 
 # Valid signed manifest with the provisioned ephemeral key: accepted.
 setup_repo "$tmp/signed" "$ENABLED"
@@ -336,16 +418,21 @@ mkdir -p "$helper_dir"
 cp "$SIGNER" "$helper_dir/factory-runner-signer.py"
 cp "$PROJECT_ROOT/scripts/factory_runner_policy.py" "$helper_dir/"
 chmod +x "$helper_dir/factory-runner-signer.py"
-# The disposable harness relaxes only the root-identity checks (the fixture
-# runs unprivileged) and points the private key/principal paths at ephemeral
-# out-of-tree state. Mode/symlink/missing fail-closed checks stay verbatim.
-sed -i \
-    -e 's/if os.getuid() != os.geteuid() or os.geteuid() != 0:/if False:/' \
-    -e 's/if key_stat.st_uid != 0 or key_stat.st_mode & 0o077:/if key_stat.st_mode \& 0o077:/' \
-    -e 's/if principal_stat.st_uid != 0 or principal_stat.st_mode & 0o077:/if principal_stat.st_mode \& 0o077:/' \
-    "$helper_dir/factory-runner-signer.py"
+# The disposable copied harness substitutes its immutable tool-store path and
+# test UID/boundary. Production has no environment override for either.
+SSH_KEYGEN_BIN=$(command -v ssh-keygen)
+python3 - "$helper_dir/factory-runner-signer.py" "$SSH_KEYGEN_BIN" "$tmp" <<'PY'
+import pathlib, sys
+path, keygen, boundary = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+text = path.read_text()
+text = text.replace('SSH_KEYGEN_PATH = "/usr/bin/ssh-keygen"', f'SSH_KEYGEN_PATH = {keygen!r}')
+text = text.replace('ROOT_UID = 0', 'ROOT_UID = os.getuid()')
+text = text.replace('STATE_CHAIN_BOUNDARY = Path("/")', f'STATE_CHAIN_BOUNDARY = Path({boundary!r})')
+text = text.replace('VALIDATE_EXECUTABLE_CHAIN = True', 'VALIDATE_EXECUTABLE_CHAIN = False')
+path.write_text(text)
+PY
 
-printf 'factory-signer\n' > "$tmp/signer-principal"
+printf 'fake-runner\n' > "$tmp/signer-principal"
 chmod 0600 "$tmp/signer-principal"
 chmod 0600 "$tmp/signer-key"
 # The signer's capability policy is root-configured: the harness installs a
@@ -358,7 +445,7 @@ print(json.dumps({
     "namespace": "factory-runner-receipt",
     "classes": [
         {
-            "name": "factory-signer",
+            "name": "fake-runner",
             "uid": os.getuid(),
             "workspace_root": "/srv/dev-runner/workspaces",
             "verify_argv": ["./scripts/verify-project.sh"],
@@ -375,7 +462,7 @@ valid_request() {
     python3 - "$PUBKEY_SHA256" <<'PY'
 import hashlib, json, sys
 manifest = {
-    "schema": "factory-runner-receipt/v1", "result": "pass", "runner": "factory-signer",
+    "schema": "factory-runner-receipt/v1", "result": "pass", "runner": "fake-runner",
     "commit": "a" * 40, "tree": "b" * 40, "environment_blob": "c" * 40,
     "verify_argv_sha256": hashlib.sha256(b"x").hexdigest(),
     "archive_sha256": hashlib.sha256(b"y").hexdigest(), "nonce": "0" * 64,
@@ -393,7 +480,7 @@ helper_run() {
     shift 2
     set +e
     FACTORY_SIGNER_KEY="$key_path" FACTORY_SIGNER_PRINCIPAL_FILE="$principal_path" \
-        FACTORY_SIGNER_CLASS=factory-signer FACTORY_RUNNER_POLICY="$tmp/policy.json" \
+        FACTORY_SIGNER_CLASS=fake-runner FACTORY_RUNNER_POLICY="$tmp/policy.json" \
         python3 -I "$helper_dir/factory-runner-signer.py" \
         >"$tmp/helper-out" 2>"$tmp/helper-err"
     local rc=$?
@@ -405,27 +492,58 @@ helper_run() {
 # detached signature verifies under the provisioned public key and the signed
 # manifest carries the signer identity binding. The private key never appears
 # in the response.
-rc=$(valid_request | helper_run "$tmp/signer-key" "$tmp/signer-principal")
-[[ $rc -eq 0 ]] || { echo "test: runner-signer helper rejected a valid request (rc=$rc)" >&2; exit 1; }
+mkdir -p "$tmp/hostile-bin"
+printf '#!/bin/sh\nexit 99\n' > "$tmp/hostile-bin/ssh-keygen"
+chmod +x "$tmp/hostile-bin/ssh-keygen"
+rc=$(valid_request | PATH="$tmp/hostile-bin:$PATH" helper_run "$tmp/signer-key" "$tmp/signer-principal")
+[[ $rc -eq 0 ]] || { echo "test: runner-signer helper rejected a valid request or trusted hostile PATH (rc=$rc)" >&2; exit 1; }
+# Numeric sudo identity selects policy UID, not class text or an unrelated
+# account name. This covers devrunner -> dev-runner-vm and forged/mismatched/
+# ambiguous identity failures without requiring those production accounts in
+# the disposable test host NSS database.
+python3 - "$helper_dir/factory-runner-signer.py" <<'PY'
+import importlib.util, os, types, sys
+path=sys.argv[1]; spec=importlib.util.spec_from_file_location('signer', path)
+mod=importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+classes=[{'name':'dev-runner-vm','uid':4101,'signer_key':'/k','signer_principal_file':'/p'}]
+mod.load_policy=lambda: {'classes':classes}
+mod._validate_chain=lambda *args, **kwargs: None
+mod.pwd.getpwuid=lambda uid: types.SimpleNamespace(pw_name='devrunner', pw_uid=4101)
+mod.pwd.getpwnam=lambda name: types.SimpleNamespace(pw_name='devrunner', pw_uid=4101)
+os.environ.update(SUDO_UID='4101', SUDO_USER='devrunner')
+assert mod.resolve_signing_state()[2]['name'] == 'dev-runner-vm'
+for uid,user in [('4102','devrunner'),('4101','gpurunner'),('4101','dev-runner-vm')]:
+    os.environ.update(SUDO_UID=uid,SUDO_USER=user)
+    try: mod.resolve_signing_state()
+    except SystemExit: pass
+    else: raise AssertionError((uid,user))
+os.environ.update(SUDO_UID='4101',SUDO_USER='devrunner')
+classes.append({'name':'other','uid':4101,'signer_key':'/x','signer_principal_file':'/y'})
+try: mod.resolve_signing_state()
+except SystemExit: pass
+else: raise AssertionError('ambiguous uid accepted')
+print('test: numeric sudo caller/class resolution passed')
+PY
+
 python3 - "$PUBLIC_KEY" "$tmp/helper-out" <<'PY'
 import base64, hashlib, json, pathlib, subprocess, sys
 public_key, out_path = sys.argv[1], pathlib.Path(sys.argv[2])
 response = json.loads(out_path.read_text())
 assert response["result"] == "signed"
 manifest = json.loads(base64.b64decode(response["manifest_b64"]))
-assert manifest["signer_principal"] == "factory-signer"
+assert manifest["signer_principal"] == "fake-runner"
 assert manifest["signer_key_sha256"] == hashlib.sha256(public_key.encode()).hexdigest()
 assert manifest["namespace"] == "factory-runner-receipt"
 assert manifest["signature_algorithm"] == "ssh-ed25519"
 assert response["signature_sha256"] == hashlib.sha256(base64.b64decode(response["signature_b64"])).hexdigest()
 allowed = pathlib.Path(out_path.parent) / "allowed-signers"
-allowed.write_text(f"factory-signer {public_key}\n")
+allowed.write_text(f"fake-runner {public_key}\n")
 with open(out_path.parent / "signature.sig", "wb") as stream:
     stream.write(base64.b64decode(response["signature_b64"]))
 with open(out_path.parent / "manifest.json", "wb") as stream:
     stream.write(base64.b64decode(response["manifest_b64"]))
 verified = subprocess.run(
-    ["ssh-keygen", "-Y", "verify", "-f", str(allowed), "-I", "factory-signer",
+    ["ssh-keygen", "-Y", "verify", "-f", str(allowed), "-I", "fake-runner",
      "-n", "factory-runner-receipt", "-s", str(out_path.parent / "signature.sig")],
     input=base64.b64decode(response["manifest_b64"]), capture_output=True,
 )
@@ -480,6 +598,28 @@ chmod 0644 "$tmp/signer-principal"
 rc=$(valid_request | helper_run "$tmp/signer-key" "$tmp/signer-principal")
 [[ $rc -eq 1 ]] || { echo "test: signer accepted a world-readable principal" >&2; exit 1; }
 chmod 0600 "$tmp/signer-principal"
+ssh-keygen -q -t rsa -b 2048 -N '' -f "$tmp/rsa-key"
+chmod 0600 "$tmp/rsa-key"
+rc=$(valid_request | helper_run "$tmp/rsa-key" "$tmp/signer-principal")
+[[ $rc -eq 1 ]] || { echo "test: signer accepted a non-ed25519 key" >&2; exit 1; }
+mkdir "$tmp/insecure-parent"
+cp "$tmp/signer-key" "$tmp/insecure-parent/key"
+cp "$tmp/signer-principal" "$tmp/insecure-parent/principal"
+chmod 0600 "$tmp/insecure-parent/key" "$tmp/insecure-parent/principal"
+chmod 0770 "$tmp/insecure-parent"
+rc=$(valid_request | helper_run "$tmp/insecure-parent/key" "$tmp/insecure-parent/principal")
+[[ $rc -eq 1 ]] || { echo "test: signer accepted writable signer-state parent" >&2; exit 1; }
+chmod 0700 "$tmp/insecure-parent"
+python3 - "$helper_dir/factory-runner-signer.py" "$tmp/insecure-parent/key" <<'PY'
+import importlib.util, os, pathlib, sys
+spec=importlib.util.spec_from_file_location('signer_mutation',sys.argv[1])
+mod=importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+path=pathlib.Path(sys.argv[2]); original=path.read_bytes(); fd=mod._open_bound(path,private=True)
+replacement=path.with_name('replacement'); replacement.write_bytes(b'mutated'); replacement.chmod(0o600); replacement.replace(path)
+assert os.pread(fd,len(original),0)==original
+os.close(fd)
+print('test: signer state descriptor remains inode-bound across substitution')
+PY
 if grep -q 'OPENSSH PRIVATE KEY' "$tmp/helper-out" "$tmp/helper-err" 2>/dev/null; then
     echo "test: signer leaked private key material" >&2
     exit 1

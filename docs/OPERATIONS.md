@@ -652,12 +652,23 @@ and special Git modes fail closed. Evidence and bounded logs are stored under
 declaration, verifier argv, archive, runner, nonce, capabilities, exit status,
 cleanup result, and the provisioned signer identity. The detached signature
 (`manifest.sig`) and aggregate signer metadata are validated by
-`check-factory-runner-evidence.py` with `ssh-keygen -Y verify` against
-`.factory/signer-trust.json` (public keys only). The root-owned signer helper
-on the runner signs only manifests it rebuilds from a clean pass, so failures,
-skips, unsupported claims, and caller-supplied bytes are never certified;
-rotation is fail-closed (removed keys are rejected). The signer is provisioned
-and enabled. The `26df6c0` receipt is legacy unsigned/unevidenced; valid signed
+`check-factory-runner-evidence.py` with `ssh-keygen -Y verify`. Issuance trust
+comes from the exact evidence commit's `.factory/signer-trust.json`; current
+revocation trust comes from committed `HEAD`, so dirty worktree trust injection
+cannot authorize evidence and removal at HEAD revokes historical receipts. The
+three enrolled values are signer public-key identities, not SSH transport host
+keys or host-key fingerprints. Trust v1 permits exactly one distinct canonical
+ed25519 key for each of `dev-runner-vm`, `iprunner`, and `gpurunner`; it has no
+multi-key rotation representation.
+
+The root-owned signer helper resolves the numeric sudo caller UID through the
+root policy (`devrunner` maps to `dev-runner-vm`), requires consistent NSS
+account lookup, and pins a root-owned absolute `ssh-keygen`. Complete executable
+and signer-state ancestor chains and descriptor-bound files are checked before
+use. It signs only manifests it rebuilds from a clean pass, so failures, skips,
+unsupported claims, cross-class claims, and caller-supplied bytes are never
+certified. Signer trust is provisioned and enabled for all three declared
+classes; this is not runner execution evidence. The `26df6c0` receipt is legacy unsigned/unevidenced; valid signed
 evidence exists for historical commit `c45336a`, but it is stale. Neither is
 claimed as current evidence, and Task 26 remains blocked until runner transport
 is authorized and a fresh exact-commit signed manifest is obtained. Runner

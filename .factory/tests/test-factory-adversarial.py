@@ -1679,9 +1679,9 @@ class CaseAdversarialSuite(_AdversarialBase):
                 "require_signature": True,
                 "enabled": True,
                 "namespace": "factory-runner-receipt",
-                "public_keys": [{"principal": "factory-signer",
+                "public_keys": [{"principal": "fixture-runner",
                                   "public_key": public_key}],
-                "allowed_principals": ["factory-signer"],
+                "allowed_principals": ["fixture-runner"],
             }, sort_keys=True, indent=2) + "\n",
             encoding="utf-8")
         # The generic installed-functional checker needs the hidden evidence
@@ -1747,7 +1747,7 @@ class CaseAdversarialSuite(_AdversarialBase):
                 "capabilities": ["project-gate"], "exit_code": 0,
                 "timed_out": False, "started_at": 1, "finished_at": 2,
                 "cleanup": True, "stdout_sha256": empty,
-                "stderr_sha256": empty, "signer_principal": "factory-signer",
+                "stderr_sha256": empty, "signer_principal": "fixture-runner",
                 "signer_key_sha256": key_sha256,
                 "namespace": "factory-runner-receipt",
                 "signature_algorithm": "ssh-ed25519",
@@ -1773,7 +1773,7 @@ class CaseAdversarialSuite(_AdversarialBase):
                     "manifest_sha256": sha256(raw),
                     "capabilities": ["project-gate"],
                     "signer": {
-                        "principal": "factory-signer",
+                        "principal": "fixture-runner",
                         "key_sha256": key_sha256,
                         "algorithm": "ssh-ed25519",
                         "signature_sha256": sha256(signed.stdout),

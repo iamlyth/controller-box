@@ -56,8 +56,8 @@ print(json.dumps({
     "require_signature": True,
     "enabled": True,
     "namespace": "factory-runner-receipt",
-    "public_keys": [{"principal": "factory-signer", "public_key": sys.argv[1]}],
-    "allowed_principals": ["factory-signer"],
+    "public_keys": [{"principal": "fake-runner", "public_key": sys.argv[1]}],
+    "allowed_principals": ["fake-runner"],
 }))
 PY
     git -C "$dir" init -q -b develop
@@ -115,7 +115,7 @@ manifest = {
     "capabilities": capabilities, "exit_code": 0, "timed_out": False,
     "started_at": 1, "finished_at": 2, "cleanup": True,
     "stdout_sha256": empty, "stderr_sha256": empty,
-    "signer_principal": "factory-signer", "signer_key_sha256": key_sha256,
+    "signer_principal": "fake-runner", "signer_key_sha256": key_sha256,
     "namespace": "factory-runner-receipt", "signature_algorithm": "ssh-ed25519",
 }
 raw = (json.dumps(manifest, sort_keys=True, indent=2) + "\n").encode()
@@ -129,7 +129,7 @@ aggregate = {
     "runners": [
         {"name": "fake-runner", "manifest": f".factory-state/runner-evidence/fake-runner/{head}/manifest.json",
          "manifest_sha256": hashlib.sha256(raw).hexdigest(), "capabilities": capabilities,
-         "signer": {"principal": "factory-signer", "key_sha256": key_sha256,
+         "signer": {"principal": "fake-runner", "key_sha256": key_sha256,
                      "algorithm": "ssh-ed25519", "signature_sha256": ""}}
     ],
 }

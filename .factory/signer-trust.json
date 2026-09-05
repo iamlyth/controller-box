@@ -1,6 +1,6 @@
 {
   "schema": "ralph-runner-signer-trust/v1",
-  "description": "Runner receipt signer trust. The trusted public key identifies the out-of-tree, root-owned mode-0600 signer on the disposable runner VM; the private key is never printed, copied into Git, or readable by runner identities. The unprivileged endpoint never signs, and the root-owned signer rebuilds and signs only manifests whose fields prove a clean pass after exact archive/tree/environment/verifier/probes passed. Signer rotation is fail-closed: a manifest signed by a key that is no longer in public_keys, or claiming a foreign principal/namespace, is rejected.",
+  "description": "Exact class-bound public keys for root-owned runner receipt signers. Issuance trust is read from the evidence commit and revocation trust from committed HEAD; uncommitted worktree changes are never authority. Schema v1 permits exactly one canonical ssh-ed25519 key per allowed principal and has no ambiguous rotation window.",
   "require_signature": true,
   "enabled": true,
   "namespace": "factory-runner-receipt",
@@ -8,9 +8,19 @@
     {
       "principal": "dev-runner-vm",
       "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH1aM5OOElPaP30GHR9P/hiz3lJkil/TIQi7lc3Wd8Su"
+    },
+    {
+      "principal": "iprunner",
+      "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEHWU31Sso29CXbjKE/erN1FOq3Dz0hx2cF6Mh497TXX"
+    },
+    {
+      "principal": "gpurunner",
+      "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKCkkRbD/mDyDA22vY/FJXeqflxhinFfPkknEWHGES9e"
     }
   ],
   "allowed_principals": [
-    "dev-runner-vm"
+    "dev-runner-vm",
+    "iprunner",
+    "gpurunner"
   ]
 }

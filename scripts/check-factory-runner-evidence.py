@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import glob
 import hashlib
 import json
@@ -11,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -18,9 +20,10 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parent.parent
 AGGREGATE = ROOT / ".factory-state/runner-evidence.json"
-SIGNER_TRUST = ROOT / ".factory/signer-trust.json"
+SIGNER_TRUST_PATH = ".factory/signer-trust.json"
 SHA1 = re.compile(r"^[0-9a-f]{40}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
+NAME = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 MAX_EVIDENCE_FILE = 16 * 1024 * 1024
 # Finite bound for every trusted Git read (MED2): the pinned absolute Git
 # executable can never wait forever behind the evidence boundary.
@@ -169,56 +172,120 @@ def regular_json(path: Path) -> tuple[dict, bytes]:
     return data, raw
 
 
-def load_signer_trust() -> dict:
-    """Load the tracked runner signer trust policy (public keys only).
+class DuplicateTrustField(ValueError):
+    pass
 
-    Private signing stays out-of-tree and root-owned; this repository carries
-    only the policy and public keys. While no signer is provisioned
-    (`enabled: false`, empty public_keys), runner manifests cannot certify
-    capability evidence and are rejected as unsigned legacy/local manifests.
-    """
-    if SIGNER_TRUST.is_symlink() or not SIGNER_TRUST.is_file():
-        fail("signer trust policy is missing: .factory/signer-trust.json")
-    if SIGNER_TRUST.stat().st_size > MAX_EVIDENCE_FILE:
-        fail("signer trust policy exceeds the size limit")
+
+def _unique_object(pairs: list[tuple[str, object]]) -> dict:
+    result: dict = {}
+    for key, value in pairs:
+        if key in result:
+            raise DuplicateTrustField(key)
+        result[key] = value
+    return result
+
+
+def _canonical_ed25519_key(value: object) -> str:
+    """Validate canonical two-field OpenSSH ed25519 public-key text and wire."""
+    if not isinstance(value, str) or value.count(" ") != 1 or value.strip() != value:
+        fail("signer trust public key must be canonical two-field text")
+    if any(character.isspace() and character != " " for character in value):
+        fail("signer trust public key contains unsupported whitespace")
+    algorithm, encoded = value.split(" ")
+    if algorithm != "ssh-ed25519":
+        fail("signer trust public key algorithm must be ssh-ed25519")
     try:
-        data = json.loads(SIGNER_TRUST.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        fail(f"invalid signer trust policy: {exc}")
-    expected = {
-        "schema", "description", "require_signature", "enabled",
-        "namespace", "public_keys", "allowed_principals",
-    }
+        wire = base64.b64decode(encoded, validate=True)
+    except Exception:
+        fail("signer trust public key base64 is invalid")
+    if base64.b64encode(wire).decode("ascii") != encoded:
+        fail("signer trust public key base64 is not canonical")
+    try:
+        algorithm_size = struct.unpack(">I", wire[:4])[0]
+        offset = 4
+        wire_algorithm = wire[offset:offset + algorithm_size]
+        offset += algorithm_size
+        key_size = struct.unpack(">I", wire[offset:offset + 4])[0]
+        offset += 4
+        key = wire[offset:offset + key_size]
+        offset += key_size
+    except (struct.error, ValueError):
+        fail("signer trust public key wire encoding is invalid")
+    if wire_algorithm != b"ssh-ed25519" or key_size != 32 or len(key) != 32 or offset != len(wire):
+        fail("signer trust public key wire encoding is invalid")
+    return value
+
+
+def load_signer_trust(commit: str, label: str) -> dict:
+    """Load trust from a pinned committed Git object, never the worktree."""
+    try:
+        text = git("show", f"{commit}:{SIGNER_TRUST_PATH}")
+    except SystemExit:
+        fail(f"{label} signer trust policy is missing from commit {commit}")
+    if len(text.encode("utf-8")) > MAX_EVIDENCE_FILE:
+        fail(f"{label} signer trust policy exceeds the size limit")
+    try:
+        data = json.loads(text, object_pairs_hook=_unique_object)
+    except (UnicodeError, json.JSONDecodeError, DuplicateTrustField) as exc:
+        fail(f"invalid {label} signer trust policy: {exc}")
+    expected = {"schema", "description", "require_signature", "enabled", "namespace", "public_keys", "allowed_principals"}
     if not isinstance(data, dict) or set(data) != expected or data.get("schema") != "ralph-runner-signer-trust/v1":
-        fail("signer trust policy schema is invalid")
-    if data.get("require_signature") is not True:
-        fail("signer trust policy must require_signature=true")
-    if type(data.get("enabled")) is not bool:
-        fail("signer trust policy enabled flag is invalid")
+        fail(f"{label} signer trust policy schema is invalid")
+    if not isinstance(data["description"], str):
+        fail(f"{label} signer trust policy description is invalid")
+    if data.get("require_signature") is not True or type(data.get("enabled")) is not bool:
+        fail(f"{label} signer trust must require signatures and have a boolean enabled flag")
     namespace = data.get("namespace")
-    if not isinstance(namespace, str) or not namespace or "\n" in namespace:
-        fail("signer trust policy namespace is invalid")
-    keys = data.get("public_keys")
+    if not isinstance(namespace, str) or not namespace or any(character.isspace() for character in namespace):
+        fail(f"{label} signer trust namespace is invalid")
     principals = data.get("allowed_principals")
+    keys = data.get("public_keys")
+    if not isinstance(principals, list) or not all(isinstance(item, str) and NAME.fullmatch(item) for item in principals):
+        fail(f"{label} signer trust allowed_principals is invalid")
+    if len(principals) != len(set(principals)):
+        fail(f"{label} signer trust contains duplicate allowed principals")
     if not isinstance(keys, list):
-        fail("signer trust policy public_keys must be an array")
-    if not isinstance(principals, list) or not all(isinstance(item, str) and item and "\n" not in item for item in principals):
-        fail("signer trust policy allowed_principals is invalid")
-    for key in keys:
-        if not isinstance(key, dict):
-            fail("signer trust policy public key entries must be objects")
-        principal = key.get("principal")
-        public_key = key.get("public_key")
-        if (
-            not isinstance(principal, str) or not principal or "\n" in principal
-            or not isinstance(public_key, str) or not public_key.startswith("ssh-")
-            or "\n" in public_key
-        ):
-            fail("signer trust policy public key entry is invalid")
+        fail(f"{label} signer trust public_keys must be an array")
+    if data["enabled"] is False:
+        if principals or keys:
+            fail(f"{label} disabled signer trust must have no principals or keys")
+        return data
+    if not principals or not keys:
+        fail(f"{label} enabled signer trust requires principals and keys")
+    seen_pairs: set[tuple[str, str]] = set()
+    seen_keys: set[str] = set()
+    principal_counts = {principal: 0 for principal in principals}
+    for index, entry in enumerate(keys):
+        if not isinstance(entry, dict) or set(entry) != {"principal", "public_key"}:
+            fail(f"{label} signer trust public_keys[{index}] fields are invalid")
+        principal = entry["principal"]
+        if not isinstance(principal, str) or not NAME.fullmatch(principal) or principal not in principal_counts:
+            fail(f"{label} signer trust public key has an unallowed principal")
+        public_key = _canonical_ed25519_key(entry["public_key"])
+        pair = (principal, public_key)
+        if pair in seen_pairs:
+            fail(f"{label} signer trust contains a duplicate key entry")
+        if public_key in seen_keys:
+            fail(f"{label} signer trust assigns one key across principals")
+        seen_pairs.add(pair)
+        seen_keys.add(public_key)
+        principal_counts[principal] += 1
+    # v1 has no explicit rotation-window representation, so exactly one key
+    # per principal is the only unambiguous currently-supported state.
+    if any(count != 1 for count in principal_counts.values()):
+        fail(f"{label} signer trust requires exactly one key per allowed principal")
     return data
 
 
-def verify_manifest_signature(signer: dict, manifest: dict, manifest_path: Path, raw: bytes) -> None:
+def require_trusted_pair(trust: dict, principal: str, key_sha256: str, label: str) -> dict:
+    matches = [entry for entry in trust["public_keys"] if entry["principal"] == principal and hashlib.sha256(entry["public_key"].encode("ascii")).hexdigest() == key_sha256]
+    if len(matches) != 1:
+        fail(f"runner signer principal/key pair is absent from {label} trust")
+    return matches[0]
+
+
+def verify_manifest_signature(issuance_trust: dict, current_trust: dict,
+                              manifest: dict, manifest_path: Path, raw: bytes) -> None:
     """Verify a runner manifest's detached signature with ssh-keygen -Y verify.
 
     The signature is anchored to the provisioned trust: the manifest must
@@ -229,37 +296,26 @@ def verify_manifest_signature(signer: dict, manifest: dict, manifest_path: Path,
     key that was removed from the trust store, or a manifest that claims an
     unknown/foreign principal or key, is rejected.
     """
-    if not signer["enabled"] or not signer["public_keys"]:
-        fail(
-            "runner trust is not provisioned: no signer is configured, so unsigned "
-            "legacy/local runner manifests are rejected and runner-evidenced "
-            "capabilities stay unevidenced"
-        )
     namespace = manifest.get("namespace")
     principal = manifest.get("signer_principal")
     key_sha256 = manifest.get("signer_key_sha256")
     algorithm = manifest.get("signature_algorithm")
-    if not isinstance(namespace, str) or namespace != signer["namespace"]:
-        fail("runner manifest namespace does not match signer trust")
-    if not isinstance(principal, str) or principal not in signer["allowed_principals"]:
-        fail("runner manifest signer principal is not trusted")
-    if algorithm not in ("ssh-ed25519", "ssh-rsa"):
+    if not isinstance(namespace, str) or namespace != issuance_trust["namespace"] or namespace != current_trust["namespace"]:
+        fail("runner manifest namespace does not match issuance/current signer trust")
+    if not isinstance(principal, str) or not NAME.fullmatch(principal):
+        fail("runner manifest signer principal is invalid")
+    if algorithm != "ssh-ed25519":
         fail("runner manifest signature algorithm is unsupported")
-    matches = [
-        key for key in signer["public_keys"]
-        if key.get("principal") == principal
-        and hashlib.sha256(key["public_key"].encode("utf-8")).hexdigest() == key_sha256
-    ]
-    if len(matches) != 1:
-        fail("runner manifest signer key is not provisioned (rotation or substitution)")
+    issuance_key = require_trusted_pair(issuance_trust, principal, key_sha256, "issuance")
+    require_trusted_pair(current_trust, principal, key_sha256, "current revocation")
     signature_path = manifest_path.parent / f"{manifest_path.stem}.sig"
     if signature_path.is_symlink() or not signature_path.is_file():
         fail(f"runner manifest has no detached signature: {signature_path}")
     if signature_path.stat().st_size > MAX_EVIDENCE_FILE:
         fail(f"runner signature exceeds the size limit: {signature_path}")
-    allowed_signers: list[str] = []
-    for key in signer["public_keys"]:
-        allowed_signers.append(f"{key['principal']} {key['public_key']}")
+    # Verify against exactly the pair declared by and bound into this manifest;
+    # unrelated trusted classes cannot satisfy ssh-keygen principal matching.
+    allowed_signers = [f"{principal} {issuance_key['public_key']}"]
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix="-allowed-signers", delete=False) as allowed:
         allowed.write("\n".join(allowed_signers) + "\n")
         allowed_path = Path(allowed.name)
@@ -295,7 +351,8 @@ def verify_manifest_signature(signer: dict, manifest: dict, manifest_path: Path,
 
 
 def validate_record(declared: dict, record: dict, commit: str, tree: str,
-                    environment_blob: str, archive_sha256: str, signer: dict) -> set[str]:
+                    environment_blob: str, archive_sha256: str,
+                    issuance_trust: dict, current_trust: dict) -> set[str]:
     """Strictly validate one aggregate record and its runner manifest.
 
     This is the shared canonical per-record validation: an accepted manifest
@@ -313,8 +370,12 @@ def validate_record(declared: dict, record: dict, commit: str, tree: str,
         or set(signer_meta) != {"principal", "key_sha256", "algorithm", "signature_sha256"}
     ):
         fail("runner aggregate signer metadata is invalid")
-    if not isinstance(signer_meta["principal"], str) or not signer_meta["principal"]:
-        fail("runner aggregate signer principal is invalid")
+    if (
+        not isinstance(signer_meta["principal"], str)
+        or signer_meta["principal"] != record["name"]
+        or signer_meta["principal"] != declared.get("name")
+    ):
+        fail("runner aggregate signer principal is not isolated to its declared runner class")
     for field in ("key_sha256", "signature_sha256"):
         if not isinstance(signer_meta[field], str) or not SHA256.fullmatch(signer_meta[field]):
             fail(f"runner aggregate signer {field} is invalid")
@@ -341,8 +402,14 @@ def validate_record(declared: dict, record: dict, commit: str, tree: str,
     }
     if set(manifest) != expected_fields or manifest.get("schema") != "factory-runner-receipt/v1" or manifest.get("result") != "pass":
         fail("runner manifest schema/result is invalid")
-    if manifest["runner"] != record["name"] or manifest["commit"] != commit or manifest["tree"] != tree or manifest["environment_blob"] != environment_blob:
-        fail("runner manifest binding mismatch")
+    if (
+        manifest["runner"] != record["name"]
+        or manifest["runner"] != declared.get("name")
+        or manifest["signer_principal"] != manifest["runner"]
+        or manifest["commit"] != commit or manifest["tree"] != tree
+        or manifest["environment_blob"] != environment_blob
+    ):
+        fail("runner manifest binding or signer class isolation mismatch")
     if (
         manifest["signer_principal"] != signer_meta["principal"]
         or manifest["signer_key_sha256"] != signer_meta["key_sha256"]
@@ -375,7 +442,7 @@ def validate_record(declared: dict, record: dict, commit: str, tree: str,
         fail("runner detached signature is missing or unsafe")
     if hashlib.sha256(signature_path.read_bytes()).hexdigest() != signer_meta["signature_sha256"]:
         fail("runner signature digest does not match the aggregate metadata")
-    verify_manifest_signature(signer, manifest, manifest_path, raw)
+    verify_manifest_signature(issuance_trust, current_trust, manifest, manifest_path, raw)
     return set(record["capabilities"])
 
 
@@ -400,7 +467,6 @@ def verify_manifest_reference(reference: str, expected_commit: str) -> dict:
 
 def validate(expected_commit: str | None = None) -> tuple[str, list[str]]:
     os.environ["GIT_NO_REPLACE_OBJECTS"] = "1"
-    signer = load_signer_trust()
     runtime = ROOT / ".factory-state"
     evidence_directory = runtime / "runner-evidence"
     if runtime.is_symlink() or not runtime.is_dir() or evidence_directory.is_symlink():
@@ -411,6 +477,9 @@ def validate(expected_commit: str | None = None) -> tuple[str, list[str]]:
     if not SHA1.fullmatch(commit):
         fail("expected commit is invalid")
     git("cat-file", "-e", f"{commit}^{{commit}}")
+    head = git("rev-parse", "HEAD")
+    issuance_trust = load_signer_trust(commit, "issuance")
+    current_trust = load_signer_trust(head, "current revocation")
     tree = git("rev-parse", f"{commit}^{{tree}}")
     environment_blob = git("rev-parse", f"{commit}:.factory/environment.toml")
     environment_text = git("show", f"{commit}:.factory/environment.toml")
@@ -428,6 +497,14 @@ def validate(expected_commit: str | None = None) -> tuple[str, list[str]]:
     declared = environment.get("runners", [])
     if not isinstance(declared, list):
         fail("runner declaration is invalid")
+    declared_names = [entry.get("name") for entry in declared if isinstance(entry, dict)]
+    if (
+        len(declared_names) != len(declared)
+        or len(declared_names) != len(set(declared_names))
+        or set(issuance_trust["allowed_principals"]) != set(declared_names)
+        or not set(declared_names).issubset(set(current_trust["allowed_principals"]))
+    ):
+        fail("every declared runner must have distinct issuance/current signer trust coverage")
     aggregate, aggregate_raw = regular_json(AGGREGATE)
     if set(aggregate) != {"schema", "commit", "tree", "environment_blob", "runners"} or aggregate.get("schema") != "factory-runner-aggregate/v1":
         fail("aggregate schema is invalid")
@@ -448,7 +525,7 @@ def validate(expected_commit: str | None = None) -> tuple[str, list[str]]:
     for declaration, record in zip(declared, records):
         evidenced.update(
             validate_record(declaration, record, commit, tree, environment_blob,
-                            archive_sha256, signer)
+                            archive_sha256, issuance_trust, current_trust)
         )
     return hashlib.sha256(aggregate_raw).hexdigest(), sorted(evidenced)
 

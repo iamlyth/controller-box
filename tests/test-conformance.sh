@@ -39,8 +39,8 @@ print(json.dumps({
     "require_signature": True,
     "enabled": True,
     "namespace": "factory-runner-receipt",
-    "public_keys": [{"principal": "factory-signer", "public_key": sys.argv[1]}],
-    "allowed_principals": ["factory-signer"],
+    "public_keys": [{"principal": "probe-runner", "public_key": sys.argv[1]}],
+    "allowed_principals": ["probe-runner"],
 }))
 PY
     chmod +x "$dir/scripts/"*.py
@@ -161,7 +161,7 @@ manifest = {
     "timed_out": False, "started_at": 1, "finished_at": 2,
     "cleanup": True, "stdout_sha256": hashlib.sha256(stdout).hexdigest(),
     "stderr_sha256": hashlib.sha256(stderr).hexdigest(),
-    "signer_principal": "factory-signer", "signer_key_sha256": key_sha,
+    "signer_principal": "probe-runner", "signer_key_sha256": key_sha,
     "namespace": "factory-runner-receipt", "signature_algorithm": "ssh-ed25519",
 }
 raw = (json.dumps(manifest, sort_keys=True, indent=2) + "\n").encode()
@@ -177,7 +177,7 @@ aggregate = {
         "manifest": f".factory-state/runner-evidence/probe-runner/{head}/manifest.json",
         "manifest_sha256": hashlib.sha256(raw).hexdigest(),
         "capabilities": ["probe-capability"],
-        "signer": {"principal": "factory-signer", "key_sha256": key_sha,
+        "signer": {"principal": "probe-runner", "key_sha256": key_sha,
                    "algorithm": "ssh-ed25519", "signature_sha256": ""},
     }],
 }

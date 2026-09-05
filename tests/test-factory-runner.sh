@@ -150,11 +150,16 @@ export HOME="$tmp/client-home"
 # copied helper, exactly as the workspace-root checks are relaxed below.
 cp "$PROJECT_ROOT/scripts/factory-runner-signer.py" "$tmp/repo/scripts/factory-runner-signer.py"
 chmod +x "$tmp/repo/scripts/factory-runner-signer.py"
-sed -i \
-    -e 's/if os.getuid() != os.geteuid() or os.geteuid() != 0:/if False:/' \
-    -e 's/if key_stat.st_uid != 0 or key_stat.st_mode & 0o077:/if key_stat.st_mode \& 0o077:/' \
-    -e 's/if principal_stat.st_uid != 0 or principal_stat.st_mode & 0o077:/if principal_stat.st_mode \& 0o077:/' \
-    "$tmp/repo/scripts/factory-runner-signer.py"
+python3 - "$tmp/repo/scripts/factory-runner-signer.py" "$(command -v ssh-keygen)" "$tmp" <<'PY'
+import pathlib, sys
+path, keygen, boundary = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+text = path.read_text()
+text = text.replace('SSH_KEYGEN_PATH = "/usr/bin/ssh-keygen"', f'SSH_KEYGEN_PATH = {keygen!r}')
+text = text.replace('ROOT_UID = 0', 'ROOT_UID = os.getuid()')
+text = text.replace('STATE_CHAIN_BOUNDARY = Path("/")', f'STATE_CHAIN_BOUNDARY = Path({boundary!r})')
+text = text.replace('VALIDATE_EXECUTABLE_CHAIN = True', 'VALIDATE_EXECUTABLE_CHAIN = False')
+path.write_text(text)
+PY
 printf 'fake-runner\n' > "$tmp/signer-principal"
 chmod 0600 "$tmp/signer-principal" "$tmp/signer-key"
 export FACTORY_SIGNER_KEY="$tmp/signer-key"
@@ -469,6 +474,7 @@ mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 EXIT_TRANSPORT = mod.EXIT_TRANSPORT
 EXIT_FINDINGS = mod.EXIT_FINDINGS
+EXIT_INTEGRITY = mod.EXIT_INTEGRITY
 
 order = []
 
@@ -488,7 +494,17 @@ records, failures = mod.run_every_runner(
 assert order == ["first", "second", "third"], order
 assert records == [{"name": "third"}], records
 assert failures == [("first", EXIT_TRANSPORT), ("second", EXIT_FINDINGS)], failures
-print("test: run_every_runner no-short-circuit contract passed")
+
+# Dominance is order-independent: integrity > transport > product findings.
+for failures_case, expected in [
+    ([('a', EXIT_FINDINGS), ('b', EXIT_TRANSPORT)], EXIT_TRANSPORT),
+    ([('a', EXIT_TRANSPORT), ('b', EXIT_FINDINGS)], EXIT_TRANSPORT),
+    ([('a', EXIT_FINDINGS), ('b', EXIT_INTEGRITY), ('c', EXIT_TRANSPORT)], EXIT_INTEGRITY),
+    ([('a', EXIT_TRANSPORT), ('b', EXIT_INTEGRITY), ('c', EXIT_FINDINGS)], EXIT_INTEGRITY),
+]:
+    dominant = mod.dominant_failure_code(failures_case)
+    assert dominant == expected, (failures_case, dominant, expected)
+print("test: run_every_runner no-short-circuit and failure-dominance contracts passed")
 PY
 
 echo "test: factory runner transfer and evidence checks passed"
