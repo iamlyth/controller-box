@@ -460,9 +460,7 @@ def validate_licensed(result: dict, screenshot: Path, geometry: tuple[int,int,in
         return False,"installed-authority-hash-mismatch"
     try:
         authority=json.loads(required["authority"].read_text())
-        oracle_doc=json.loads(required["oracle"].read_text())
-        layout=json.loads(required["layout"].read_text())
-    except (OSError,json.JSONDecodeError): return False,"licensed-metadata-malformed"
+    except (OSError,json.JSONDecodeError): return False,"licensed-authority-malformed"
     if (authority.get("schema") != "controller-box-licensed-diagram-authority/v1" or
         authority.get("status") != "accepted-machine-authority"):
         return False,"licensed-authority-malformed"
@@ -480,6 +478,10 @@ def validate_licensed(result: dict, screenshot: Path, geometry: tuple[int,int,in
             return False,"licensed-authority-malformed"
         if sha256(required[label]) != expected:
             return False,f"installed-{label}-hash-mismatch"
+    try:
+        oracle_doc=json.loads(required["oracle"].read_text())
+        layout=json.loads(required["layout"].read_text())
+    except (OSError,json.JSONDecodeError): return False,"licensed-metadata-malformed"
     if args.model!="xb360" or args.resolved_model!="xb360" or args.resolved_asset!="xbox-360.svg":
         return False,"wrong-licensed-model"
     if args.fallback_used!="no": return False,"generic-fallback-rejected"
