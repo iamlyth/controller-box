@@ -402,7 +402,7 @@
       "classification": "partial",
       "evidence_tier": "simulated",
       "required_tier": "installed",
-      "required_capabilities": [],
+      "required_capabilities": ["installed-licensed-diagram"],
       "evidence_commit": "3ddefae0c9d2f56aa89d414306481645b38f5e02",
       "receipts": [],
       "artifacts": [
@@ -551,7 +551,7 @@
       "classification": "partial",
       "evidence_tier": "simulated",
       "required_tier": "installed",
-      "required_capabilities": [],
+      "required_capabilities": ["installed-licensed-diagram"],
       "evidence_commit": "3ddefae0c9d2f56aa89d414306481645b38f5e02",
       "receipts": [],
       "artifacts": [
@@ -1275,7 +1275,8 @@
       "evidence_tier": "simulated",
       "required_tier": "real_system",
       "required_capabilities": [
-        "gpu-compositor"
+        "gpu-compositor",
+        "installed-licensed-diagram"
       ],
       "evidence_commit": "4bdfd1d7336b5f580412b1b13b3dadb76474a9ad",
       "receipts": [],

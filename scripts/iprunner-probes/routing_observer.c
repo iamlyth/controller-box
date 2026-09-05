@@ -5,8 +5,9 @@
  * Opens TWO kernel event devices on separate read-only file descriptors:
  *  1. the physical USB Xbox 360 pad (VID 045e / PID 028e) that the human
  *     presses, and
- *  2. one of the virtual xb360 target event nodes that InputPlumber created
- *     (the node the physical event must be routed to through a composite).
+ *  2. each of four virtual xb360 target event nodes that InputPlumber created.
+ * Fixture replay requires four independent physicalN -> targetN correlations;
+ * one event copied to several targets, or target0-only activity, cannot pass.
  *
  * It NEVER writes to either device, never uses uinput, never injects
  * events, and never touches InputEvent / a private DBus. It only observes.
@@ -193,68 +194,44 @@ static int run_fixture(void)
     if (!stream)
         fail_observer("cannot open fixture event stream");
     char line[512];
-    long long baseline = 1000;
-    int physical_seen = 0;
-    int physical_matched = 0;
-    long long physical_ts = -1;
+    long long baseline = 1000, physical_ts[4] = {-1,-1,-1,-1};
+    long long previous_physical_ts = -1;
+    int matched[4] = {0,0,0,0};
     while (fgets(line, sizeof(line), stream)) {
         long long ts = 0;
-        int type = 0, code = 0, value = 0;
+        int type = 0, code = 0, value = 0, slot = -1;
         char device[64] = {0};
-        if (sscanf(line, "baseline %lld", &baseline) == 1) {
+        if (sscanf(line, "baseline %lld", &baseline) == 1)
             continue;
-        }
         if (sscanf(line, "%63s event %d %d %d ts %lld", device, &type, &code,
-                   &value, &ts) == 5) {
-            printf("routing-observer: %s event type=%d code=%d value=%d ts=%lld\n",
-                   device, type, code, value, ts);
-            if (strcmp(device, "physical") == 0) {
-                if (ts < baseline) {
-                    printf("routing-observer: physical event ts=%lld before baseline %lld (stale)\n",
-                           ts, baseline);
-                    continue;
-                }
-                physical_seen = 1;
-                if (code_matches(type, code, value)) {
-                    physical_matched = 1;
-                    physical_ts = ts;
-                } else {
-                    printf("routing-observer: physical event does not match expected type/code/value\n");
-                }
-            } else if (strcmp(device, "target") == 0) {
-                if (!physical_seen) {
-                    fprintf(stderr,
-                            "routing-observer: target event without a preceding fresh "
-                            "physical event (direct injection/synthetic routing rejected)\n");
-                    fclose(stream);
-                    return 1;
-                }
-                if (!physical_matched || ts < physical_ts || ts < baseline) {
-                    printf("routing-observer: target event cannot be correlated to a "
-                           "fresh matching physical event (ts=%lld physical_ts=%lld)\n",
-                           ts, physical_ts);
-                    fclose(stream);
-                    return 1;
-                }
-                if (code_matches(type, code, value)) {
-                    printf("routing-observer: target FRESH MATCH type=%d code=%d value=%d\n",
-                           type, code, value);
-                    fclose(stream);
-                    printf("routing-observer: PASS (physical->target routed event observed)\n");
-                    return 0;
-                }
-            }
+                   &value, &ts) != 5)
+            continue;
+        if (sscanf(device, "physical%d", &slot) == 1) {
+            if (slot < 0 || slot >= 4 || ts < baseline)
+                continue;
+            if (!code_matches(type, code, value))
+                fail_observer("physical event does not match expected type/code/value");
+            if (ts <= previous_physical_ts)
+                fail_observer("fresh physical event timestamp was reused or not increasing");
+            physical_ts[slot] = ts;
+            previous_physical_ts = ts;
+            printf("routing-observer: slot=%d fresh physical ts=%lld\n", slot, ts);
+        } else if (sscanf(device, "target%d", &slot) == 1) {
+            if (slot < 0 || slot >= 4 || physical_ts[slot] < baseline)
+                fail_observer("target event without its own preceding fresh physical event (direct injection/synthetic routing rejected)");
+            if (!code_matches(type, code, value) || ts < physical_ts[slot])
+                fail_observer("target event cannot be correlated to its slot's fresh physical event");
+            matched[slot] = 1;
+            printf("routing-observer: slot=%d target correlated physical_ts=%lld target_ts=%lld\n",
+                   slot, physical_ts[slot], ts);
         }
     }
     fclose(stream);
-    if (!physical_seen) {
-        fail_observer("no fresh physical event observed (presence alone cannot pass)");
-    }
-    if (!physical_matched) {
-        fail_observer("physical event present but did not match expected type/code/value");
-    }
-    fail_observer("no routed target event observed after the fresh matching physical event");
-    return 1;
+    for (int i = 0; i < 4; i++)
+        if (!matched[i])
+            fail_observer("all four targets did not receive independently correlated events");
+    printf("routing-observer: PASS (4/4 independently consumable targets)\n");
+    return 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -343,6 +320,8 @@ static int run_live(void)
                 }
                 close(physical_fd);
                 close(target_fd);
+                printf("routing-observer: RESULT source_event_us=%lld target_event_us=%lld read_only=true\n",
+                       physical_matched_ts, mts);
                 printf("routing-observer: PASS (physical->target routed event observed)\n");
                 return 0;
             }

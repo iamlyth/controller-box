@@ -87,6 +87,14 @@ four-target InputPlumber routing acceptance). Task 4 (final audit) remains
 
 # Implementation Plan
 
+**Core-evidence hardening checkpoint (current)**
+
+- Routing evidence now requires four unique xb360 DBus targets and kernel nodes, one unambiguous real USB `045e:028e` source/composite, and four sequential fresh human presses observed by independent read-only evdev consumers. A target0 event plus three presence-only targets fails; fixture bundles are schema-v2 synthetic non-evidence.
+- GPU evidence now has the distinct declared `installed-licensed-diagram` contract on `gpurunner`. It requires exact installed Xbox 360 Controllercons asset/license/map/layout hashes, no source fallback or generic substitution, accelerated compositor capture, 512x512 raster density, preserved aspect, and A-highlight alignment against a committed independent oracle.
+- `check-core-acceptance.sh` requires signed exact-HEAD evidence for `controller-production-routing`, `gpu-compositor`, and `installed-licensed-diagram`; local pixels and prose cannot pass it.
+- **Blocked:** no current signed iprunner/gpurunner receipts and no current human installed-graphics/golden approval exist. All affected conformance rows remain partial. Per the operator requirement, no future five-round campaign may begin until all-four routing, licensed installed graphics, and real physical-to-virtual mapping have been demonstrated.
+- Validation: routing, GPU adversarial, core acceptance, factory environment and capability-contract tests pass; clean Nix configure/build passes; installed diagram/profile focused tests pass. Diagnostic `test_golden` remains blocked on human review: the three manager editor baselines fail after the prior model-specific diagram change; no goldens were regenerated or modified.
+
 ## Goal and non-goals
 
 **Goal.** Close all remaining implementation gaps against `docs/SPEC.md` so the

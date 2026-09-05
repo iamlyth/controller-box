@@ -23,10 +23,11 @@
 #      ``controller-production-routing`` evidence.  A reachable system bus or
 #      manager prose is never routing evidence.
 #
-#   2. Licensed diagram selection (BUG-0018) requires executable local
-#      semantic tests.  Source strings/tables are never acceptance evidence.
-#      Signed installed real-window/GPU evidence and human review remain the
-#      external completion blocker even when this deterministic gate passes.
+#   2. Licensed diagram selection (BUG-0018) requires signed exact-HEAD
+#      installed-licensed-diagram AND gpu-compositor evidence. Local pixels,
+#      broad silhouettes, source declarations and prose are never evidence.
+#      Human golden approval remains a separate policy input if a protected
+#      baseline changes; this checker never manufactures that approval.
 #
 set -u
 
@@ -50,22 +51,10 @@ if [ ! -f "$capability_checker" ] || [ -L "$capability_checker" ]; then
 fi
 if ! python3 "$capability_checker" \
     --root "$REPO_ROOT" \
-    --capabilities controller-production-routing >/dev/null
+    --capabilities controller-production-routing,gpu-compositor,installed-licensed-diagram >/dev/null
 then
     findings+=(
-        "core-acceptance: controller-production-routing lacks accepted signed exact-HEAD non-skipped capability evidence (BUG-0015)"
-    )
-fi
-
-# ---------------------------------------------------------------------------
-# 2. Licensed diagram deterministic semantics (BUG-0018 software gate).
-# ---------------------------------------------------------------------------
-if ! ctest --test-dir "$REPO_ROOT/build-check" \
-    -R '^(test_profile_diagram|test_editor_list_mode|test_profiles_tab)$' \
-    --output-on-failure >/dev/null
-then
-    findings+=(
-        "core-acceptance: licensed diagram semantic production-path tests failed or are unavailable (BUG-0018)"
+        "core-acceptance: all-four routing and/or installed licensed GPU diagram lacks accepted signed exact-HEAD non-skipped evidence (BUG-0015/BUG-0018)"
     )
 fi
 
@@ -79,5 +68,5 @@ if [ "${#findings[@]}" -gt 0 ]; then
     exit 1
 fi
 
-echo "core-acceptance: production routing evidenced; licensed diagram deterministic semantics passed (external GPU/human acceptance still required)"
+echo "core-acceptance: signed exact-HEAD all-four routing and installed licensed accelerated diagram evidence accepted"
 exit 0

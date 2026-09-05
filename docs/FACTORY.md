@@ -301,9 +301,13 @@ The declared runner classes in `.factory/environment.toml` are:
 - `iprunner` (SSH transport) declares `inputplumber-system-dbus`,
   `physical-controller`, `target-consumer`, and
   `controller-production-routing`.
-- `gpurunner` (SSH transport) declares `gpu-compositor`.
+- `gpurunner` (SSH transport) declares `gpu-compositor` and
+  `installed-licensed-diagram`.
 
-The five `iprunner`/`gpurunner` capabilities that were previously
+The six `iprunner`/`gpurunner` capabilities are declared contracts. Routing
+requires four independently consumed real-source events; installed diagram
+evidence requires licensed hashes, exact model/no fallback, accelerated capture,
+and independent-oracle alignment. The previously
 designed-only `candidate` contracts are now `declared` contracts in
 `.factory/capability-contracts.json`, each with a `runner_class` matching a
 declared runner. The root runner endpoint refuses to execute a contract

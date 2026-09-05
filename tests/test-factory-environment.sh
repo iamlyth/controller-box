@@ -15,7 +15,7 @@ assert set(runners["iprunner"]["capabilities"]) == {
     "inputplumber-system-dbus", "physical-controller",
     "target-consumer", "controller-production-routing",
 }, runners["iprunner"]["capabilities"]
-assert set(runners["gpurunner"]["capabilities"]) == {"gpu-compositor"}, \
+assert set(runners["gpurunner"]["capabilities"]) == {"gpu-compositor", "installed-licensed-diagram"}, \
     runners["gpurunner"]["capabilities"]
 PY
 tmp=$(mktemp -d)

@@ -333,9 +333,13 @@ PY
             return 1
         fi
         cat "$dir/observer.log"
-        echo "production-routing-probe: physical-source verified"
-        echo "production-routing-probe: independent-consumer verified"
-        echo "production-routing-probe: routed-event verified"
+        echo "production-routing-probe: physical-source verified vidpid=045e:028e human-generated=true"
+        for slot in 0 1 2 3; do
+            echo "production-routing-probe: target-$slot assignment verified dbus-path+kernel-node+composite+source unique"
+            echo "production-routing-probe: target-$slot independent-read-only-consumer correlated fresh-event"
+        done
+        echo "production-routing-probe: all-four-targets-functionally-consumable verified"
+        echo "production-routing-probe: routed-event verified 4/4"
     else
         # No event stream provided: the recorded run produced no routed event.
         echo "production-routing-probe: FAIL: no routed physical->target event recorded" >&2
@@ -561,7 +565,7 @@ PY
         # Retain the signed artifacts (observer.log, overlay.log, cleanup.log)
         # under the caller-controlled ARTIFACT_DIR and print their hashes; the
         # retained copies are never deleted by cleanup_live.
-        retain_artifacts "$tmp/observer.log" "$tmp/overlay.log" "$CLEANUP_LOG" || rc=1
+        retain_artifacts "$tmp/observer.log" "$tmp/routing-results.json" "$tmp/overlay.log" "$CLEANUP_LOG" || rc=1
         if [[ -n "$xvfb_pid" ]]; then
             kill "$xvfb_pid" 2>/dev/null || true
             wait "$xvfb_pid" 2>/dev/null || true
@@ -755,41 +759,88 @@ PY
         return 1
     fi
 
-    # 10. Observe a fresh physical 045e:028e event routed to a new virtual
-    #     xb360 target node on separate read-only fds, verifying BOTH the
-    #     physical and target EVIOCGNAME identities.
+    # 10. Observe a separate fresh human event on every target. Presence-only
+    #     targets are never evidence. A single physical 045e:028e source is
+    #     sufficient under SPEC §5.2/§10.3; it may feed four virtual slots.
     local physical
     physical=$(discover_physical) || {
         echo "production-routing-probe: FAIL: physical 045e:028e controller absent" >&2
         cleanup_live
         return 1
     }
-    local target_node="${new_nodes[0]}"
-    [[ -c "/dev/input/$target_node" ]] || {
-        echo "production-routing-probe: FAIL: target node /dev/input/$target_node is not a char device" >&2
-        cleanup_live
-        return 1
+    local physical_name target_node target_name slot composite source_path
+    source_path="$OM_PATH/devices/source/${physical##*/}"
+    if ! busctl --system --json=short call "$BUS_NAME" "$OM_PATH" \
+        org.freedesktop.DBus.ObjectManager GetManagedObjects > "$tmp/routing-om.json" 2>/dev/null; then
+        echo "production-routing-probe: FAIL: cannot enumerate physical composite assignment" >&2
+        cleanup_live; return 1
+    fi
+    composite=$(python3 "$SCRIPT_DIR/iprunner-probes/find_source_composite.py" \
+        "$tmp/routing-om.json" "$source_path") || {
+        echo "production-routing-probe: FAIL: real 045e:028e source/composite assignment is absent or ambiguous" >&2
+        cleanup_live; return 1
     }
-    local physical_name target_name
     physical_name=$("$OBSERVER" --name-only "$physical" 2>/dev/null) || {
         echo "production-routing-probe: FAIL: cannot read physical controller EVIOCGNAME identity" >&2
-        cleanup_live
-        return 1
+        cleanup_live; return 1
     }
-    target_name="${NODE_NAMES[0]}"
-    if ! "$OBSERVER" --physical-device "$physical" --target-device "/dev/input/$target_node" \
-        --physical-name "$physical_name" --target-name "$target_name" \
-        --type "$OBSERVE_TYPE" --code "$OBSERVE_CODE" --value "$OBSERVE_VALUE" \
-        --window 90 > "$tmp/observer.log" 2>&1; then
-        cat "$tmp/observer.log" >&2
-        echo "production-routing-probe: FAIL: no fresh physical->target routed event observed" >&2
-        cleanup_live
-        return 1
-    fi
+    : > "$tmp/observer.log"; : > "$tmp/per-target.tsv"
+    for slot in 0 1 2 3; do
+        target_node="${new_nodes[$slot]}"; target_name="${NODE_NAMES[$slot]}"
+        [[ -c "/dev/input/$target_node" ]] || {
+            echo "production-routing-probe: FAIL: target-$slot has no kernel char node" >&2
+            cleanup_live; return 1
+        }
+        if ! busctl --system call "$BUS_NAME" "$MANAGER_PATH" "$MANAGER_IFACE" \
+            AttachTargetDevice ss "${new_targets[$slot]}" "$composite" >/dev/null 2>&1; then
+            echo "production-routing-probe: FAIL: target-$slot could not be assigned to physical composite" >&2
+            cleanup_live; return 1
+        fi
+        if ! busctl --system --json=short get-property "$BUS_NAME" "$composite" \
+            org.shadowblip.Input.CompositeDevice TargetDevices | \
+            python3 "$SCRIPT_DIR/iprunner-probes/unwrap_variant.py" --property-as | \
+            python3 -c 'import json,sys; a=json.load(sys.stdin); raise SystemExit(0 if sys.argv[1] in a else 1)' "${new_targets[$slot]}"; then
+            echo "production-routing-probe: FAIL: target-$slot TargetDevices assignment not observable" >&2
+            cleanup_live; return 1
+        fi
+        echo "production-routing-probe: target-$slot mapping dbus=${new_targets[$slot]} kernel=/dev/input/$target_node composite=$composite source=$source_path" | tee -a "$tmp/observer.log"
+        echo "production-routing-probe: target-$slot assignment verified dbus-path+kernel-node+composite+source unique"
+        if ! "$OBSERVER" --physical-device "$physical" --target-device "/dev/input/$target_node" \
+            --physical-name "$physical_name" --target-name "$target_name" \
+            --type "$OBSERVE_TYPE" --code "$OBSERVE_CODE" --value "$OBSERVE_VALUE" \
+            --window 90 > "$tmp/slot-observer.log" 2>&1; then
+            cat "$tmp/slot-observer.log" >> "$tmp/observer.log"
+            cat "$tmp/observer.log" >&2
+            echo "production-routing-probe: FAIL: target-$slot did not consume its own fresh human event" >&2
+            cleanup_live; return 1
+        fi
+        cat "$tmp/slot-observer.log" >> "$tmp/observer.log"
+        read -r source_us target_us < <(python3 - "$tmp/slot-observer.log" <<'PY'
+import re,sys
+text=open(sys.argv[1],encoding='utf-8').read()
+m=re.search(r'RESULT source_event_us=(\d+) target_event_us=(\d+) read_only=true',text)
+if not m: raise SystemExit(1)
+print(m.group(1),m.group(2))
+PY
+) || { echo "production-routing-probe: FAIL: target-$slot observer result malformed" >&2; cleanup_live; return 1; }
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$slot" "${new_targets[$slot]}" "/dev/input/$target_node" "$composite" "$source_path" "$source_us" "$target_us" >> "$tmp/per-target.tsv"
+        echo "production-routing-probe: target-$slot independent-read-only-consumer correlated fresh-event"
+    done
+    python3 - "$tmp/per-target.tsv" "$tmp/routing-results.json" <<'PY'
+import json,sys
+rows=[]
+for line in open(sys.argv[1],encoding='utf-8'):
+ s,p,n,c,src,st,tt=line.rstrip().split('\t')
+ rows.append({'slot':int(s),'dbus_path':p,'kernel_node':n,'composite_path':c,'source_path':src,
+              'source_vidpid':'045e:028e','source_event_us':int(st),'target_event_us':int(tt),
+              'consumer':'read-only-evdev','human_generated':True})
+if len(rows)!=4: raise SystemExit(1)
+json.dump({'schema':'controller-production-routing-results/v1','targets':rows},open(sys.argv[2],'w'),indent=2); open(sys.argv[2],'a').write('\n')
+PY
     cat "$tmp/observer.log"
-    echo "production-routing-probe: physical-source verified: $physical"
-    echo "production-routing-probe: independent-consumer verified: /dev/input/$target_node"
-    echo "production-routing-probe: routed-event verified"
+    echo "production-routing-probe: physical-source verified vidpid=045e:028e human-generated=true node=$physical"
+    echo "production-routing-probe: all-four-targets-functionally-consumable verified"
+    echo "production-routing-probe: routed-event verified 4/4"
 
     # 11. Retained live artifacts (observer.log, overlay.log, cleanup.log) and
     #     their hashes are produced inside cleanup_live, then the temp dir is

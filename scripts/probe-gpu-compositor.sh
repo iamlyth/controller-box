@@ -418,8 +418,19 @@ PY
     verdict=$tmp/fixture-verdict.json
     marker_analyzed=""
     set +e
+    for required in installed-asset installed-license installed-map installed-layout oracle; do
+        [[ -f "$FIXTURE/$required" && ! -L "$FIXTURE/$required" ]] || fail "${required}-missing" "fixture: licensed diagram artifact absent"
+    done
     python3 "$ANALYZER" diagram --screenshot "$local_shot" --geometry "$geom" \
-        --diagram "$diag" --out "$verdict" \
+        --diagram "$diag" --out "$verdict" --model "$(cat_fixture requested-model)" \
+        --resolved-model "$(cat_fixture resolved-model)" --resolved-asset "$(cat_fixture resolved-asset)" \
+        --fallback-used "$(cat_fixture fallback-used)" --raster-width "$(cat_fixture raster-width)" \
+        --raster-height "$(cat_fixture raster-height)" \
+        --asset "$FIXTURE/installed-asset" --asset-sha256 "$(cat_fixture asset-sha256)" \
+        --license "$FIXTURE/installed-license" --license-sha256 "$(cat_fixture license-sha256)" \
+        --icon-map "$FIXTURE/installed-map" --icon-map-sha256 "$(cat_fixture map-sha256)" \
+        --layout "$FIXTURE/installed-layout" --layout-sha256 "$(cat_fixture layout-sha256)" \
+        --oracle "$FIXTURE/oracle" --oracle-sha256 "$(cat_fixture oracle-sha256)" \
         >"$tmp/diagram.out" 2>&1
     rc=$?
     set -e
@@ -435,6 +446,9 @@ PY
         fail "$marker_analyzed" "fixture: diagram analysis did not recognize a controller silhouette"
     fi
     echo "$PROBE_TAG: diagram analysis marker=$marker_analyzed"
+    echo "$PROBE_TAG: installed-assets hash-verified asset+license+map+layout"
+    echo "$PROBE_TAG: requested-model=xb360 resolved-model=xb360 asset=xbox-360.svg fallback=false"
+    echo "$PROBE_TAG: aspect-preserved raster-density-adequate highlight-oracle-aligned"
 
     # Preserve hashes/markers for the fixture (owned by the test).
     sha256sum_file "$local_shot" > "$FIXTURE/screenshot.sha256" 2>/dev/null || true
@@ -476,8 +490,10 @@ log "install: archived exact HEAD $head_commit"
 mkdir -p "$tmp/runtime"
 cp "$ANALYZER" "$tmp/runtime/analyze-gpu-compositor.py"
 cp "$EGL_SOURCE" "$tmp/runtime/egl_renderer_probe.c"
+cp "$SCRIPT_DIR/gpurunner-probes/xbox360-visual-oracle.json" "$tmp/runtime/xbox360-visual-oracle.json"
 ANALYZER="$tmp/runtime/analyze-gpu-compositor.py"
 EGL_SOURCE="$tmp/runtime/egl_renderer_probe.c"
+ORACLE="$tmp/runtime/xbox360-visual-oracle.json"
 
 prefix="$tmp/prefix"
 prefix_real=$(readlink -f "$prefix")
@@ -511,26 +527,26 @@ case "$installed_real" in
 esac
 installed_svg=""
 asset_ok=1
+installed_svg="$prefix/share/controller-box/icons/svg/xbox-360.svg"
+installed_license="$prefix/share/controller-box/icons/svg/LICENSE.controllercons"
+installed_map="$prefix/share/controller-box/controller-icons.yaml"
+installed_layout="$prefix/share/controller-box/controller-layouts/xbox-360.json"
 for asset in \
-    "$prefix/share/controller-box/icons/svg/generic-gamepad.svg" \
-    "$prefix/share/controller-box/profiles/default.yaml" \
-    "$prefix/share/controller-box/controller-icons.yaml"; do
+    "$installed_svg" "$installed_license" "$installed_map" "$installed_layout" \
+    "$prefix/share/controller-box/profiles/default.yaml"; do
     if [[ -f "$asset" && ! -L "$asset" ]]; then
         asset_real=$(readlink -f "$asset")
         case "$asset_real" in
             "$prefix_real"/*) ;;
             *) asset_ok=0 ;;
         esac
-        if [[ -z "$installed_svg" && "$asset" == *generic-gamepad.svg ]]; then
-            installed_svg=$asset
-        fi
     else
         asset_ok=0
     fi
     [[ "$asset_ok" -eq 1 ]] || break
 done
 [[ "$asset_ok" -eq 1 ]] || fail installed-assets-missing "required installed assets missing or outside the prefix"
-[[ -n "$installed_svg" ]] || fail installed-assets-missing "installed generic-gamepad.svg not found in prefix"
+[[ -n "$installed_svg" ]] || fail installed-assets-missing "installed xbox-360.svg not found in prefix"
 log "installed-launch: binary=$installed_real assets=$installed_svg prefix=$prefix"
 
 # Delete the archived source+build trees BEFORE launch: the compiled-in
@@ -656,29 +672,21 @@ xdotool getdisplaygeometry >/dev/null 2>&1 \
 export XDG_DATA_HOME="$tmp/data"
 profile_dir="$XDG_DATA_HOME/inputplumber/profiles"
 mkdir -p "$profile_dir"
-cat > "$profile_dir/$PROFILE_NAME.yml" <<PROFILE
-name: nes-gamepad
-schema_version: 1
-bindings:
-  - name: A
-    type: button
-    source: "0:16"
-  - name: B
-    type: button
-    source: "0:15"
-  - name: X
-    type: button
-    source: "0:13"
-  - name: Y
-    type: button
-    source: "0:14"
-  - name: Start
-    type: button
-    source: "0:6"
-  - name: Select
-    type: button
-    source: "0:5"
+cat > "$profile_dir/$PROFILE_NAME.yaml" <<PROFILE
+version: 1
+kind: DeviceProfile
+name: "GPU Xbox 360 Oracle"
+description: "exact model-specific GPU probe profile"
+mapping:
+  - name: "A"
+    source_event: {gamepad: {button: A}}
+    target_events: [{gamepad: A}]
 PROFILE
+mkdir -p "$XDG_CONFIG_HOME/controller-box/profile-metadata"
+cat > "$XDG_CONFIG_HOME/controller-box/profile-metadata/$PROFILE_NAME.meta.yaml" <<META
+icon: cc-xbox-360
+display_order: -100
+META
 
 # Seed the systemd user unit under the isolated XDG_CONFIG_HOME so the
 # SPEC §9.1 first-run modal is provably skipped (cbx_manager_check_first_run
@@ -800,9 +808,19 @@ log "output: compositor output >= ${WIN_W}x${WIN_H}"
 verdict=$tmp/verdict.json
 marker_analyzed=""
 set +e
+if ! grep -q '^profile-diagram: icon=cc-xbox-360 asset=xbox-360.svg provenance=profile-override raster=512x512 result=loaded$' "$tmp/manager.log"; then
+    fail wrong-licensed-model "production selection did not resolve requested Xbox 360 asset without fallback"
+fi
 python3 "$ANALYZER" diagram --screenshot "$shot" \
     --geometry "$win_x,$win_y,$win_w,$win_h" --diagram "$DIAGRAM_RECT" \
-    --out "$verdict" >"$tmp/diagram.out" 2>&1
+    --out "$verdict" --model xb360 --resolved-model xb360 --resolved-asset xbox-360.svg \
+    --fallback-used no --raster-width 512 --raster-height 512 \
+    --asset "$installed_svg" --asset-sha256 "$(sha256sum_file "$installed_svg" | awk '{print $1}')" \
+    --license "$installed_license" --license-sha256 "$(sha256sum_file "$installed_license" | awk '{print $1}')" \
+    --icon-map "$installed_map" --icon-map-sha256 "$(sha256sum_file "$installed_map" | awk '{print $1}')" \
+    --layout "$installed_layout" --layout-sha256 "$(sha256sum_file "$installed_layout" | awk '{print $1}')" \
+    --oracle "$ORACLE" --oracle-sha256 "$(sha256sum_file "$ORACLE" | awk '{print $1}')" \
+    >"$tmp/diagram.out" 2>&1
 analyzer_rc=$?
 set -e
 if [[ -f "$verdict" ]]; then
@@ -817,6 +835,10 @@ if [[ $analyzer_rc -ne 0 ]]; then
     fail "$marker_analyzed" "diagram region does not show a recognizable controller silhouette (BUG-0014 negative control)"
 fi
 log "diagram analysis marker=$marker_analyzed"
+log "installed-assets hash-verified asset+license+map+layout"
+log "requested-model=xb360 resolved-model=xb360 asset=xbox-360.svg fallback=false"
+log "aspect-preserved raster-density-adequate highlight-oracle-aligned"
+echo "$PROBE_TAG: installed-licensed-diagram verified"
 
 # Bind the retained screenshot's relative filename + sha256 into the verdict
 # itself so later negative-control evidence can tie pixels to the file.

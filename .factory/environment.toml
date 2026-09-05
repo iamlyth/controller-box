@@ -46,5 +46,5 @@ name = "gpurunner"
 transport = "ssh"
 ssh_config_alias = "gpurunner"
 working_directory = "/srv/dev-runner/workspaces/gpurunner"
-capabilities = ["gpu-compositor"]
+capabilities = ["gpu-compositor", "installed-licensed-diagram"]
 verify_argv = ["./scripts/verify-project.sh"]

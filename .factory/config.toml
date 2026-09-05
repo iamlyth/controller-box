@@ -21,6 +21,7 @@ required_capabilities = [
   "kernel-uinput",
   "inputplumber-system-dbus",
   "gpu-compositor",
+  "installed-licensed-diagram",
   "systemd-user",
   "installed-package",
   "target-consumer",

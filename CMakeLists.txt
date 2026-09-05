@@ -298,6 +298,8 @@ install(FILES data/icons/svg/LICENSE.controllercons
     DESTINATION "${CBX_ICON_INSTALL_DIR}/svg")
 install(FILES data/controller-icons.yaml
     DESTINATION "${CBX_DATA_INSTALL_DIR}")
+install(DIRECTORY data/controller-layouts/ DESTINATION "${CBX_DATA_INSTALL_DIR}/controller-layouts"
+    FILES_MATCHING PATTERN "*.json")
 
 # Bundled font directory (Task 1, maintenance BUG-0001).  Created empty with
 # a .gitkeep so future bundled fonts are installed automatically.

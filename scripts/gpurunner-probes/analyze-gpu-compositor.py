@@ -44,6 +44,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import re
@@ -439,6 +440,50 @@ def analyze_diagram(screenshot: Path, geometry: tuple[int, int, int, int],
     return result
 
 
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def validate_licensed(result: dict, screenshot: Path, geometry: tuple[int,int,int,int],
+                      diagram: tuple[int,int,int,int], args) -> tuple[bool,str]:
+    """Validate installed licensed identity and independent highlight oracle."""
+    required={"asset":Path(args.asset),"license":Path(args.license),
+              "map":Path(args.icon_map),"layout":Path(args.layout),"oracle":Path(args.oracle)}
+    for label,path in required.items():
+        if not path.is_file() or path.is_symlink(): return False, f"installed-{label}-missing"
+        expected=getattr(args, "icon_map_sha256" if label=="map" else f"{label}_sha256")
+        if not re.fullmatch(r"[0-9a-f]{64}", expected or "") or sha256(path)!=expected:
+            return False, f"installed-{label}-hash-mismatch"
+    try:
+        oracle=json.loads(required["oracle"].read_text()); layout=json.loads(required["layout"].read_text())
+    except (OSError,json.JSONDecodeError): return False,"licensed-metadata-malformed"
+    if args.model!="xb360" or args.resolved_model!="xb360" or args.resolved_asset!="xbox-360.svg":
+        return False,"wrong-licensed-model"
+    if args.fallback_used!="no": return False,"generic-fallback-rejected"
+    if layout.get("model")!="xb360" or layout.get("asset")!="xbox-360.svg" or oracle.get("model")!="xb360":
+        return False,"licensed-metadata-model-mismatch"
+    if args.raster_width < oracle["minimum_raster"][0] or args.raster_height < oracle["minimum_raster"][1]:
+        return False,"raster-density-insufficient"
+    dw,dh=diagram[2],diagram[3]
+    if abs(dw/dh-float(oracle["source_aspect"])) > float(oracle["aspect_tolerance"]):
+        return False,"diagram-aspect-distorted"
+    rows=read_crop_rgb(screenshot,geometry[0]+diagram[0],geometry[1]+diagram[1],dw,dh)
+    pts=[]
+    for y,row in enumerate(rows):
+        for x in range(dw):
+            r,g,b=row[x*3:x*3+3]
+            if b >= 110 and b-r >= 35 and b-g >= 15: pts.append((x,y))
+    spec=oracle["controls"]["A"]
+    if len(pts)<spec["minimum_pixels"]: return False,"highlight-missing"
+    cx=sum(x for x,_ in pts)/len(pts); cy=sum(y for _,y in pts)/len(pts)
+    if not (spec["centroid_x"][0] <= cx <= spec["centroid_x"][1] and spec["centroid_y"][0] <= cy <= spec["centroid_y"][1]):
+        return False,"highlight-oracle-misaligned"
+    result["licensed"]={"model":"xb360","asset":"xbox-360.svg","fallback":False,
+        "hashes":{k:sha256(v) for k,v in required.items()},"raster":[args.raster_width,args.raster_height],
+        "highlight":{"control":"A","centroid":[round(cx,2),round(cy,2)],"pixels":len(pts),"oracle":"independent"}}
+    return True,"installed-licensed-diagram-verified"
+
+
 def validate_renderer(renderer: str) -> tuple[str, bool]:
     if not renderer or not renderer.strip():
         return "renderer-unverified", False
@@ -462,6 +507,15 @@ def main() -> int:
     diagram.add_argument("--geometry", required=True, help="window rect X,Y,W,H in output coords")
     diagram.add_argument("--diagram", default="16,88,300,300", help="diagram rect relative to window")
     diagram.add_argument("--out", help="write verdict JSON here")
+    diagram.add_argument("--model", default="")
+    diagram.add_argument("--resolved-model", default="")
+    diagram.add_argument("--resolved-asset", default="")
+    diagram.add_argument("--fallback-used", default="yes")
+    diagram.add_argument("--raster-width", type=int, default=0)
+    diagram.add_argument("--raster-height", type=int, default=0)
+    for name in ("asset","license","icon-map","layout","oracle"):
+        diagram.add_argument(f"--{name}")
+        diagram.add_argument(f"--{name}-sha256")
 
     args = parser.parse_args()
     if args.command == "renderer":
@@ -486,7 +540,16 @@ def main() -> int:
     if len(geometry) != 4 or len(diagram_rect) != 4:
         fail("geometry/diagram must be X,Y,W,H integers")
     out = Path(args.out) if args.out else None
-    result = analyze_diagram(Path(args.screenshot), geometry, diagram_rect, out)
+    result = analyze_diagram(Path(args.screenshot), geometry, diagram_rect, None)
+    licensed_requested = bool(args.model)
+    if result["result"] == "pass" and licensed_requested:
+        if not all((args.asset,args.license,args.icon_map,args.layout,args.oracle)):
+            result["result"]="fail"; result["marker"]="licensed-artifacts-missing"
+        else:
+            ok,marker=validate_licensed(result,Path(args.screenshot),geometry,diagram_rect,args)
+            result["result"]="pass" if ok else "fail"; result["marker"]=marker
+    if out:
+        out.write_text(json.dumps(result,indent=2)+"\n",encoding="utf-8")
     print(
         f"gpu-compositor-analysis: diagram marker {result['marker']} "
         f"(contrast={result['assertions']['contrast']}, "

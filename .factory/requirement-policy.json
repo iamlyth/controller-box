@@ -147,7 +147,8 @@
       "required_tier": "installed",
       "spec_sections": [
         "\u00a74.10"
-      ]
+      ],
+      "required_capabilities": ["installed-licensed-diagram"]
     },
     {
       "id": "MGR-01",
@@ -200,7 +201,8 @@
       "required_tier": "installed",
       "spec_sections": [
         "\u00a75.6"
-      ]
+      ],
+      "required_capabilities": ["installed-licensed-diagram"]
     },
     {
       "id": "MGR-08",
@@ -470,7 +472,8 @@
       "required_tier": "real_system",
       "spec_sections": [
         "\u00a711.1.6"
-      ]
+      ],
+      "required_capabilities": ["gpu-compositor", "installed-licensed-diagram"]
     },
     {
       "id": "VRF-07",

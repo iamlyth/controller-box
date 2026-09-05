@@ -630,15 +630,21 @@ publishing credentials or endpoints. The declared runner classes are
 `kernel-uinput`, `installed-package`), `iprunner` (carrying
 `inputplumber-system-dbus`, `physical-controller`, `target-consumer`,
 `controller-production-routing`), and `gpurunner` (carrying
-`gpu-compositor`). The five `iprunner`/`gpurunner` capabilities are now
+`gpu-compositor`, `installed-licensed-diagram`). The six `iprunner`/`gpurunner` capabilities are now
 declared contracts with a `runner_class` matching a declared runner; the
 root endpoint refuses to execute a contract until the capability is
 declared, its contract is promoted to `declared`, and the runner-class
 allowlist grants it. Declaring a runner class is not provisioning or
 evidence: each capability is evidenced only by an exact-commit,
 non-skipped, signed runner receipt, and none exists yet for the
-`iprunner`/`gpurunner` capabilities. Models validate declarations and
-existing evidence only:
+`iprunner`/`gpurunner` capabilities. The routing contract requires four
+independently consumable xb360 targets driven by fresh human events from the
+real USB 045e:028e source; the licensed-diagram contract requires installed
+Controllercons hashes, no fallback, accelerated capture, and independent-oracle
+alignment. Private/headless Weston is technical GPU execution, not human or
+real-seat approval. Do not start another five-round campaign until both signed
+contracts and separate human installed-graphics approval exist. Models validate
+declarations and existing evidence only:
 
 ```bash
 ./scripts/check-factory-environment.py

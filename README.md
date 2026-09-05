@@ -283,7 +283,10 @@ The factory runner environment (`.factory/environment.toml`) declares three SSH
 runner classes: `dev-runner-vm` (`remote-project-gate`, `systemd-user`,
 `kernel-uinput`, `installed-package`), `iprunner` (`inputplumber-system-dbus`,
 `physical-controller`, `target-consumer`, `controller-production-routing`),
-and `gpurunner` (`gpu-compositor`). Declaring a runner class makes the
+and `gpurunner` (`gpu-compositor`, `installed-licensed-diagram`). The latter
+requires installed Controllercons asset/license/map/layout hashes, exact Xbox
+360 resolution without fallback, accelerated capture, and independent-oracle
+highlight alignment. Declaring a runner class makes the
 runner-class binding explicit; it is not provisioned or evidenced evidence —
 a capability is evidenced only by an exact-commit, non-skipped, signed
 runner receipt. The

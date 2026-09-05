@@ -63,6 +63,7 @@ check_file "binary"          "${PREFIX}/usr/bin/controller-box"
 # --- Data files --------------------------------------------------------------
 check_dir  "icons directory" "${PREFIX}/usr/share/controller-box/icons/svg"
 check_file "icon mapping"    "${PREFIX}/usr/share/controller-box/controller-icons.yaml"
+check_file "Xbox 360 layout" "${PREFIX}/usr/share/controller-box/controller-layouts/xbox-360.json"
 check_file "service file"    "${PREFIX}/usr/share/controller-box/controller-box.service"
 
 # --- Desktop entry -----------------------------------------------------------

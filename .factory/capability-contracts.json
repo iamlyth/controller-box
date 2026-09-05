@@ -215,8 +215,13 @@
       "probe_stdout_contains": [
         "production-routing-probe: exact-topology verified",
         "production-routing-probe: physical-source verified",
-        "production-routing-probe: independent-consumer verified",
-        "production-routing-probe: routed-event verified",
+        "production-routing-probe: target-0 independent-read-only-consumer correlated fresh-event",
+        "production-routing-probe: target-1 independent-read-only-consumer correlated fresh-event",
+        "production-routing-probe: target-2 independent-read-only-consumer correlated fresh-event",
+        "production-routing-probe: target-3 independent-read-only-consumer correlated fresh-event",
+        "production-routing-probe: all-four-targets-functionally-consumable verified",
+        "routing-results.json",
+        "production-routing-probe: routed-event verified 4/4",
         "production-routing-probe: cleanup-postcondition verified: dbus-targets-absent kernel-event-nodes-absent",
         "production-routing-probe: PASS"
       ],
@@ -263,6 +268,10 @@
       "probe_marker": "--- gpu-compositor capability contract ---",
       "probe_stage": "post",
       "probe_stdout_contains": [
+        "gpu-compositor-probe: installed-assets hash-verified asset+license+map+layout",
+        "gpu-compositor-probe: requested-model=xb360 resolved-model=xb360 asset=xbox-360.svg fallback=false",
+        "gpu-compositor-probe: aspect-preserved raster-density-adequate highlight-oracle-aligned",
+        "gpu-compositor-probe: installed-licensed-diagram verified",
         "gpu-compositor-probe: PASS"
       ],
       "probe_is_verify_run": false,
@@ -277,8 +286,33 @@
         "mock",
         "private service",
         "simulated",
-        "staged"
+        "staged",
+        "fixture",
+        "generic-gamepad",
+        "fallback=true",
+        "llvmpipe",
+        "softpipe",
+        "skip"
       ]
+    },
+    {
+      "name": "installed-licensed-diagram",
+      "status": "declared",
+      "runner_class": "gpurunner",
+      "probe_argv": ["nix-shell", "--run", "bash scripts/probe-gpu-compositor.sh"],
+      "probe_marker": "--- gpu-compositor capability contract ---",
+      "probe_stage": "post",
+      "probe_stdout_contains": [
+        "gpu-compositor-probe: installed-assets hash-verified asset+license+map+layout",
+        "gpu-compositor-probe: requested-model=xb360 resolved-model=xb360 asset=xbox-360.svg fallback=false",
+        "gpu-compositor-probe: aspect-preserved raster-density-adequate highlight-oracle-aligned",
+        "gpu-compositor-probe: installed-licensed-diagram verified",
+        "gpu-compositor-probe: PASS"
+      ],
+      "probe_is_verify_run": false,
+      "must_execute": true,
+      "must_not_skip": ["Skipped", "Not Run", "skip", "OPTIONAL"],
+      "deny_simulated_markers": ["mock", "simulated", "staged", "fixture", "generic-gamepad", "fallback=true", "llvmpipe", "softpipe", "source fallback", "screenshot-missing"]
     }
   ]
 }

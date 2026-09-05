@@ -96,8 +96,38 @@ with open(os.path.join(base, "event-stream"), "w", encoding="utf-8") as f:
     f.write("baseline 1000\n")
     f.write(event_stream)
 
+source_path = scenario.get("source_path", "/org/shadowblip/InputPlumber/devices/source/event12")
+base_source_times = scenario.get("source_times", [1500, 2500, 3500, 4500])
+targets = []
+for i in range(4):
+    target = {
+        "slot": i,
+        "dbus_path": f"/org/shadowblip/InputPlumber/devices/target/gamepad{i}",
+        "kernel_node": f"/dev/input/event{20+i}",
+        "device_type": "xb360",
+        "name": f"Xbox 360 Controller {i}",
+        "composite_path": "/org/shadowblip/InputPlumber/CompositeDevice0",
+        "source_path": source_path,
+        "source_vidpid": scenario.get("source_vidpid", "045e:028e"),
+        "assignment_verified": True,
+        "consumer_read_only": True,
+        "direct_injection": bool(scenario.get("direct_injection", 0)),
+        "source_event_us": base_source_times[i],
+        "target_event_us": base_source_times[i] + 100,
+        "observation_id": f"human-press-{i}",
+    }
+    targets.append(target)
+if "target_mutation" in scenario:
+    m=scenario["target_mutation"]; targets[m.get("slot",3)].update(m.get("values",{}))
+if scenario.get("duplicate_mapping"):
+    targets[3]["dbus_path"] = targets[0]["dbus_path"]
+if scenario.get("event_only_target0"):
+    targets[1]["target_event_us"] = targets[0]["target_event_us"]
+if scenario.get("reused_observation"):
+    targets[1]["observation_id"] = targets[0]["observation_id"]
+
 facts = {
-    "schema": "iprunner-controller-production-routing-facts/v1",
+    "schema": "iprunner-controller-production-routing-facts/v2",
     "home": {
         "isolated": True,
         "virtual_controllers": {"count": 4, "types": ["xb360"] * 4},
@@ -115,11 +145,18 @@ facts = {
         "cardinality": scenario.get("cardinality", "exact"),
         "identities_match": bool(scenario.get("identities_match", 1)),
     },
+    "physical": {
+        "vidpid": scenario.get("physical_vidpid", "045e:028e"),
+        "transport": "usb", "node": "/dev/input/event12", "source_path": source_path,
+    },
+    "targets": targets,
     "observer": {
-        "event_stream": "event-stream",
+        "event_stream": "event-stream", "mode": "read-only-evdev",
+        "human_generated": not bool(scenario.get("direct_injection", 0)),
+        "synthetic": bool(scenario.get("direct_injection", 0)),
         "direct_injection": bool(scenario.get("direct_injection", 0)),
-        "physical_name": scenario.get("physical_name", ""),
-        "target_name": scenario.get("target_name", ""),
+        "physical_name": scenario.get("physical_name", "Xbox 360 Controller"),
+        "target_name": scenario.get("target_name", "Xbox 360 Controller 0"),
     },
     "bus": {
         "system_socket": "/run/dbus/system_bus_socket",
@@ -134,6 +171,7 @@ facts = {
         "target_cleanup": scenario.get("target_cleanup", "ok"),
         "targets_absent": bool(scenario.get("targets_absent", 1)),
         "kernel_nodes_absent": bool(scenario.get("kernel_nodes_absent", 1)),
+        "deadline_ms": scenario.get("cleanup_deadline_ms", 15000),
     },
 }
 with open(os.path.join(base, "facts.json"), "w", encoding="utf-8") as f:
@@ -145,23 +183,24 @@ PY
 # Fixture builders for each scenario. The default is the full pass.
 scen_json() { local s=$1; shift; printf '%s' "$1" > "$tmp/$s.json"; echo "$tmp/$s.json"; }
 
-full_pass() { build_fixture "$1" "$(scen_json pass "{\"event_stream\": \"physical event 1 304 1 ts 1500\\ntarget event 1 304 1 ts 1600\\n\"}")"; }
+four_events='physical0 event 1 304 1 ts 1500\ntarget0 event 1 304 1 ts 1600\nphysical1 event 1 304 1 ts 2500\ntarget1 event 1 304 1 ts 2600\nphysical2 event 1 304 1 ts 3500\ntarget2 event 1 304 1 ts 3600\nphysical3 event 1 304 1 ts 4500\ntarget3 event 1 304 1 ts 4600\n'
+full_pass() { build_fixture "$1" "$(scen_json pass "{\"event_stream\": \"$four_events\"}")"; }
 zero_targets() { build_fixture "$1" "$(scen_json zero "{\"observed\": 0, \"target_paths\": 0, \"kernel_nodes\": 0, \"event_stream\": \"\"}")"; }
 partial_targets() { build_fixture "$1" "$(scen_json partial "{\"observed\": $2, \"target_paths\": $2, \"kernel_nodes\": $2, \"event_stream\": \"\"}")"; }
 ambiguous() { build_fixture "$1" "$(scen_json ambiguous "{\"observed\": 4, \"target_paths\": 4, \"kernel_nodes\": 4, \"cardinality\": \"ambiguous\", \"event_stream\": \"\"}")"; }
 wrong_cardinality() { build_fixture "$1" "$(scen_json wrong "{\"observed\": 4, \"target_paths\": 4, \"kernel_nodes\": 3, \"cardinality\": \"exact\", \"event_stream\": \"\"}")"; }
 source_fallback() { build_fixture "$1" "$(scen_json source "{\"realpath_inside\": 0, \"assets_inside\": 1, \"event_stream\": \"\"}")"; }
 direct_injection() { build_fixture "$1" "$(scen_json injection "{\"direct_injection\": 1, \"event_stream\": \"target event 1 304 1 ts 1600\\n\"}")"; }
-stale_event() { build_fixture "$1" "$(scen_json stale "{\"event_stream\": \"physical event 1 304 1 ts 500\\ntarget event 1 304 1 ts 600\\n\"}")"; }
+stale_event() { build_fixture "$1" "$(scen_json stale "{\"event_stream\": \"physical0 event 1 304 1 ts 500\\ntarget0 event 1 304 1 ts 600\\n\"}")"; }
 unrouted_event() { build_fixture "$1" "$(scen_json unrouted "{\"event_stream\": \"physical event 1 304 1 ts 1500\\n\"}")"; }
 cleanup_failure() { build_fixture "$1" "$(scen_json cleanup "{\"target_cleanup\": \"fail\", \"event_stream\": \"physical event 1 304 1 ts 1500\\ntarget event 1 304 1 ts 1600\\n\"}")"; }
 missing_artifact() { build_fixture "$1" "$(scen_json missart "{\"omit_artifact\": \"screenshot\", \"event_stream\": \"physical event 1 304 1 ts 1500\\ntarget event 1 304 1 ts 1600\\n\"}")"; }
 corrupt_hash() { build_fixture "$1" "$(scen_json corrupt "{\"corrupt_hash\": \"log\", \"event_stream\": \"physical event 1 304 1 ts 1500\\ntarget event 1 304 1 ts 1600\\n\"}")"; }
 # Physical event present but does NOT match the expected type/code/value, then
 # a matching target event: correlation must fail.
-mismatched_physical() { build_fixture "$1" "$(scen_json misphys "{\"event_stream\": \"physical event 1 999 1 ts 1500\\ntarget event 1 304 1 ts 1600\\n\"}")"; }
+mismatched_physical() { build_fixture "$1" "$(scen_json misphys "{\"event_stream\": \"physical0 event 1 999 1 ts 1500\\ntarget0 event 1 304 1 ts 1600\\n\"}")"; }
 # Target event arrives BEFORE any fresh physical event.
-target_before_physical() { build_fixture "$1" "$(scen_json tbph "{\"event_stream\": \"target event 1 304 1 ts 1500\\nphysical event 1 304 1 ts 1600\\n\"}")"; }
+target_before_physical() { build_fixture "$1" "$(scen_json tbph "{\"event_stream\": \"target0 event 1 304 1 ts 1500\\nphysical0 event 1 304 1 ts 1600\\n\"}")"; }
 # Counted target identities do not match (wrong target name/type).
 wrong_target_identity() { build_fixture "$1" "$(scen_json wrongid "{\"identities_match\": 0, \"event_stream\": \"physical event 1 304 1 ts 1500\\ntarget event 1 304 1 ts 1600\\n\"}")"; }
 # Targets were created but left over (never all stopped): cleanup must fail
@@ -177,6 +216,11 @@ artifact_traversal() { build_fixture "$1" "$(scen_json trav "{\"artifact_travers
 artifact_symlink() { build_fixture "$1" "$(scen_json symlink "{\"artifact_symlink\": 1, \"event_stream\": \"physical event 1 304 1 ts 1500\\ntarget event 1 304 1 ts 1600\\n\"}")"; }
 # Boolean-typed topology count (bool is not an int).
 bool_counts() { build_fixture "$1" "$(scen_json boolc "{\"observed\": true, \"target_paths\": true, \"kernel_nodes\": true, \"event_stream\": \"\"}")"; }
+wrong_physical_vidpid() { build_fixture "$1" "$(scen_json badvid "{\"physical_vidpid\":\"1234:5678\",\"event_stream\":\"$four_events\"}")"; }
+unrouted_slot() { build_fixture "$1" "$(scen_json unroutedslot "{\"target_mutation\":{\"slot\":2,\"values\":{\"assignment_verified\":false}},\"event_stream\":\"$four_events\"}")"; }
+duplicate_mapping() { build_fixture "$1" "$(scen_json dupmap "{\"duplicate_mapping\":true,\"event_stream\":\"$four_events\"}")"; }
+reused_observation() { build_fixture "$1" "$(scen_json reused "{\"reused_observation\":true,\"event_stream\":\"$four_events\"}")"; }
+event_only_target0() { build_fixture "$1" "$(scen_json only0 "{\"event_only_target0\":true,\"event_stream\":\"physical0 event 1 304 1 ts 1500\\ntarget0 event 1 304 1 ts 1600\\n\"}")"; }
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +239,8 @@ must_pass "full 4+fresh physical+routed event pass" \
     env CONTROLLER_PRODUCTION_ROUTING_ARTIFACTS="$tmp/artifacts" bash "$PROBE" --fixture "$tmp/pass"
 grep -q 'production-routing-probe: PASS' "$tmp/last.out"
 grep -q 'topology confirmed: 4 of 4' "$tmp/last.out"
+grep -q 'all-four-targets-functionally-consumable verified' "$tmp/last.out"
+for slot in 0 1 2 3; do grep -q "target-$slot independent-read-only-consumer correlated fresh-event" "$tmp/last.out"; done
 grep -q 'cleanup: termination=ok target-cleanup=ok targets-absent=true kernel-nodes-absent=true' "$tmp/pass/cleanup.log"
 grep -q 'cleanup-postcondition verified: dbus-targets-absent kernel-event-nodes-absent' "$tmp/last.out"
 # cleanup.log must be retained as a signed/hash-printed artifact.
@@ -359,6 +405,21 @@ grep -q 'escapes the fixture directory' "$tmp/last.out"
 bool_counts "$tmp/boolc"
 must_fail "bool-typed topology counts rejected" bash "$PROBE" --fixture "$tmp/boolc"
 grep -q 'must be int' "$tmp/last.out"
+
+# ---------------------------------------------------------------------------
+# Per-target adversarial evidence: every slot needs a unique assignment,
+# observation and fresh event from the exact physical source.
+# ---------------------------------------------------------------------------
+wrong_physical_vidpid "$tmp/badvid"
+must_fail "wrong physical VID:PID rejected" bash "$PROBE" --fixture "$tmp/badvid"
+unrouted_slot "$tmp/unrouted-slot"
+must_fail "one unrouted target rejected" bash "$PROBE" --fixture "$tmp/unrouted-slot"
+duplicate_mapping "$tmp/duplicate-map"
+must_fail "ambiguous duplicate target mapping rejected" bash "$PROBE" --fixture "$tmp/duplicate-map"
+reused_observation "$tmp/reused-observation"
+must_fail "reused stale observation rejected" bash "$PROBE" --fixture "$tmp/reused-observation"
+event_only_target0 "$tmp/target0-only"
+must_fail "event only on target0 rejected" bash "$PROBE" --fixture "$tmp/target0-only"
 
 # ---------------------------------------------------------------------------
 # Unknown argument and validator safety.

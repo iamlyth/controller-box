@@ -21,7 +21,11 @@ trap 'rm -rf "$tmp"' EXIT
 
 ANALYZER="$PROJECT_ROOT/scripts/gpurunner-probes/analyze-gpu-compositor.py"
 PROBE="$PROJECT_ROOT/scripts/probe-gpu-compositor.sh"
-SVG="$PROJECT_ROOT/data/icons/svg/generic-gamepad.svg"
+SVG="$PROJECT_ROOT/data/icons/svg/xbox-360.svg"
+LICENSE="$PROJECT_ROOT/data/icons/svg/LICENSE.controllercons"
+ICON_MAP="$PROJECT_ROOT/data/controller-icons.yaml"
+LAYOUT="$PROJECT_ROOT/data/controller-layouts/xbox-360.json"
+ORACLE="$PROJECT_ROOT/scripts/gpurunner-probes/xbox360-visual-oracle.json"
 
 command -v nix-shell >/dev/null || {
     echo "test: nix-shell required for the gpu-compositor probe fixtures" >&2
@@ -81,7 +85,8 @@ compose_shot() { # out.png diagram.png|"blank"|"dark"|"noise"
             ;;
         *)
             convert "$out" -fill "#1e1e2a" -draw "rectangle 116,168 415,467" "$out"
-            convert "$out" "$diagram" -geometry +116+168 -composite "$out"
+            convert "$out" "$diagram" -geometry +116+168 -composite \
+                -fill "rgb(79,136,192)" -draw "circle 352,298 360,298" "$out"
             ;;
     esac
     # Record the retained screenshot's exact sha256 as a fixture fact so the
@@ -194,8 +199,10 @@ case "\$(readlink -f "\$SM/prefix/bin/controller-box")" in
 esac
 for asset in \
     "\$SM/prefix/share/controller-box/profiles/default.yaml" \
-    "\$SM/prefix/share/controller-box/icons/svg/generic-gamepad.svg" \
-    "\$SM/prefix/share/controller-box/controller-icons.yaml"; do
+    "\$SM/prefix/share/controller-box/icons/svg/xbox-360.svg" \
+    "\$SM/prefix/share/controller-box/icons/svg/LICENSE.controllercons" \
+    "\$SM/prefix/share/controller-box/controller-icons.yaml" \
+    "\$SM/prefix/share/controller-box/controller-layouts/xbox-360.json"; do
     test -f "\$asset" && test ! -L "\$asset" || { echo "smoke: missing asset \$asset" >&2; exit 1; }
     case "\$(readlink -f "\$asset")" in
         "\$(readlink -f "\$SM/prefix")"/*) ;;
@@ -259,6 +266,19 @@ make_base_fixture() { # dir
     printf 'yes\n' > "$dir/modal-seeded"
     printf 'yes\n' > "$dir/display-bound"
     printf 'yes\n' > "$dir/tab-change-observed"
+    printf 'xb360\n' > "$dir/requested-model"
+    printf 'xb360\n' > "$dir/resolved-model"
+    printf 'xbox-360.svg\n' > "$dir/resolved-asset"
+    printf 'no\n' > "$dir/fallback-used"
+    printf '512\n' > "$dir/raster-width"
+    printf '512\n' > "$dir/raster-height"
+    cp "$SVG" "$dir/installed-asset"; cp "$LICENSE" "$dir/installed-license"
+    cp "$ICON_MAP" "$dir/installed-map"; cp "$LAYOUT" "$dir/installed-layout"; cp "$ORACLE" "$dir/oracle"
+    sha256sum "$dir/installed-asset" | awk '{print $1}' > "$dir/asset-sha256"
+    sha256sum "$dir/installed-license" | awk '{print $1}' > "$dir/license-sha256"
+    sha256sum "$dir/installed-map" | awk '{print $1}' > "$dir/map-sha256"
+    sha256sum "$dir/installed-layout" | awk '{print $1}' > "$dir/layout-sha256"
+    sha256sum "$dir/oracle" | awk '{print $1}' > "$dir/oracle-sha256"
 }
 
 # Pass fixture 1: the production SVG rendered through ImageMagick.
@@ -266,7 +286,7 @@ make_base_fixture "$tmp/pass"
 compose_shot "$tmp/pass/screenshot.png" "$tmp/diagram-svg.png"
 must_pass "production-svg diagram pass" run_probe "$tmp/pass"
 grep -q "gpu-compositor-probe: PASS" "$tmp/out.log"
-grep -qF "controller-recognized" "$tmp/pass/verdict.json"
+grep -qF "installed-licensed-diagram-verified" "$tmp/pass/verdict.json"
 [[ -s "$tmp/pass/screenshot.sha256" ]] || { echo "test: screenshot.sha256 missing" >&2; exit 1; }
 grep -q "diagram-not-recognizable" "$tmp/pass/verdict.json" && {
     echo "test: pass fixture verdict is negative" >&2
@@ -283,12 +303,49 @@ PY
 make_base_fixture "$tmp/synthetic-pass"
 compose_shot "$tmp/synthetic-pass/screenshot.png" "$tmp/gamepad.ppm"
 must_pass "synthetic controller silhouette pass" run_probe "$tmp/synthetic-pass"
-grep -qF "controller-recognized" "$tmp/synthetic-pass/verdict.json"
+grep -qF "installed-licensed-diagram-verified" "$tmp/synthetic-pass/verdict.json"
 
 # ---------------------------------------------------------------------------
 # Adversarial fixtures: every negative path must fail closed with its exact
 # marker (deterministic, no false pass).
 # ---------------------------------------------------------------------------
+make_base_fixture "$tmp/generic-substitution"
+printf 'generic-gamepad.svg\n' > "$tmp/generic-substitution/resolved-asset"
+compose_shot "$tmp/generic-substitution/screenshot.png" "$tmp/diagram-svg.png"
+must_fail "generic substitution rejected" "wrong-licensed-model" run_probe "$tmp/generic-substitution"
+
+make_base_fixture "$tmp/wrong-model"
+printf 'ds5\n' > "$tmp/wrong-model/resolved-model"
+compose_shot "$tmp/wrong-model/screenshot.png" "$tmp/diagram-svg.png"
+must_fail "wrong licensed model rejected" "wrong-licensed-model" run_probe "$tmp/wrong-model"
+
+make_base_fixture "$tmp/missing-license"
+rm "$tmp/missing-license/installed-license"
+compose_shot "$tmp/missing-license/screenshot.png" "$tmp/diagram-svg.png"
+must_fail "missing installed license rejected" "installed-license-missing" run_probe "$tmp/missing-license"
+
+make_base_fixture "$tmp/tampered-map"
+printf '#tamper\n' >> "$tmp/tampered-map/installed-map"
+compose_shot "$tmp/tampered-map/screenshot.png" "$tmp/diagram-svg.png"
+must_fail "tampered map hash rejected" "installed-map-hash-mismatch" run_probe "$tmp/tampered-map"
+
+make_base_fixture "$tmp/low-raster"
+printf '128\n' > "$tmp/low-raster/raster-width"
+compose_shot "$tmp/low-raster/screenshot.png" "$tmp/diagram-svg.png"
+must_fail "low resolution upscale rejected" "raster-density-insufficient" run_probe "$tmp/low-raster"
+
+make_base_fixture "$tmp/stretched"
+printf '16,88,300,180\n' > "$tmp/stretched/diagram-rect"
+compose_shot "$tmp/stretched/screenshot.png" "$tmp/diagram-svg.png"
+must_fail "anisotropic stretch rejected" "" run_probe "$tmp/stretched"
+
+make_base_fixture "$tmp/shifted-marker"
+compose_shot "$tmp/shifted-marker/screenshot.png" "$tmp/diagram-svg.png"
+convert "$tmp/shifted-marker/screenshot.png" -fill '#1e1e2a' -draw 'rectangle 330,275 375,325' \
+  -fill 'rgb(79,136,192)' -draw 'circle 160,200 168,200' "$tmp/shifted-marker/screenshot.png"
+sha256sum "$tmp/shifted-marker/screenshot.png" | awk '{print $1}' > "$tmp/shifted-marker/screenshot-hash"
+must_fail "shifted marker rejected by independent oracle" "highlight-oracle-misaligned" run_probe "$tmp/shifted-marker"
+
 make_base_fixture "$tmp/software-renderer"
 printf 'llvmpipe (LLVM 15.0.7, 128 bits)\n' > "$tmp/software-renderer/renderer"
 compose_shot "$tmp/software-renderer/screenshot.png" "$tmp/diagram-svg.png"

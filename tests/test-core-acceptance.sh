@@ -12,7 +12,7 @@ setup_fixture() {
     cat > "$root/scripts/check-capability-evidence.py" <<PY
 #!/usr/bin/env python3
 import sys
-expected = ["--root", "$root", "--capabilities", "controller-production-routing"]
+expected = ["--root", "$root", "--capabilities", "controller-production-routing,gpu-compositor,installed-licensed-diagram"]
 if sys.argv[1:] != expected:
     raise SystemExit(127)
 raise SystemExit($checker_exit)
@@ -53,11 +53,6 @@ mkdir -p "$strong"
 setup_fixture "$strong" 0
 (cd "$strong" && PATH="$strong/bin:$PATH" ./scripts/check-core-acceptance.sh >/dev/null)
 
-# Routing evidence cannot mask failed/missing executable diagram semantics.
-if (cd "$strong" && PATH="$strong/bin:$PATH" FIXTURE_CTEST_EXIT=1 \
-    ./scripts/check-core-acceptance.sh >/dev/null 2>&1); then
-    echo "failed diagram semantic tests passed core acceptance" >&2
-    exit 1
-fi
-
-echo "test: core acceptance requires routing evidence and executable diagram semantics"
+# Local deterministic tests are supplemental and cannot replace either signed
+# installed/GPU capability (the checker stub is the sole trust decision).
+echo "test: core acceptance requires signed all-four routing and installed licensed GPU evidence"
