@@ -51,8 +51,11 @@ import re
 import subprocess
 from pathlib import Path
 
-SCHEMA = "gpu-compositor-analysis/v1"
+SCHEMA = "gpu-compositor-analysis/v2"
 PASS_MARKER = "controller-recognized"
+# Digest of data/licensed-diagram-authority.json accepted by independent
+# review.  Runtime files and fixture-provided self-hashes cannot alter it.
+PINNED_AUTHORITY_SHA256 = "23cb0a91cdcde1ab7bb179b4fe5f6afc340dd9f2061b9d1222be94a3341c298d"
 FAIL_MARKER = "diagram-not-recognizable"
 
 # Renderer classification ----------------------------------------------------
@@ -446,28 +449,79 @@ def sha256(path: Path) -> str:
 
 def validate_licensed(result: dict, screenshot: Path, geometry: tuple[int,int,int,int],
                       diagram: tuple[int,int,int,int], args) -> tuple[bool,str]:
-    """Validate installed licensed identity and independent highlight oracle."""
+    """Validate installed bytes against the pinned, committed authority."""
     required={"asset":Path(args.asset),"license":Path(args.license),
-              "map":Path(args.icon_map),"layout":Path(args.layout),"oracle":Path(args.oracle)}
+              "map":Path(args.icon_map),"layout":Path(args.layout),
+              "oracle":Path(args.oracle),"authority":Path(args.authority)}
     for label,path in required.items():
-        if not path.is_file() or path.is_symlink(): return False, f"installed-{label}-missing"
-        expected=getattr(args, "icon_map_sha256" if label=="map" else f"{label}_sha256")
-        if not re.fullmatch(r"[0-9a-f]{64}", expected or "") or sha256(path)!=expected:
-            return False, f"installed-{label}-hash-mismatch"
+        if not path.is_file() or path.is_symlink():
+            return False, f"installed-{label}-missing"
+    if sha256(required["authority"]) != PINNED_AUTHORITY_SHA256:
+        return False,"installed-authority-hash-mismatch"
     try:
-        oracle=json.loads(required["oracle"].read_text()); layout=json.loads(required["layout"].read_text())
+        authority=json.loads(required["authority"].read_text())
+        oracle_doc=json.loads(required["oracle"].read_text())
+        layout=json.loads(required["layout"].read_text())
     except (OSError,json.JSONDecodeError): return False,"licensed-metadata-malformed"
+    if (authority.get("schema") != "controller-box-licensed-diagram-authority/v1" or
+        authority.get("status") != "accepted-machine-authority"):
+        return False,"licensed-authority-malformed"
+    expected_files=authority.get("files")
+    names={"asset":"icons/svg/xbox-360.svg",
+           "license":"icons/svg/LICENSE.controllercons",
+           "map":"controller-icons.yaml",
+           "layout":"controller-layouts/xbox-360.json",
+           "oracle":"licensed-diagram-oracle.json"}
+    if not isinstance(expected_files,dict) or set(expected_files) != set(names.values()):
+        return False,"licensed-authority-incomplete"
+    for label,rel in names.items():
+        expected=expected_files.get(rel)
+        if not isinstance(expected,str) or not re.fullmatch(r"[0-9a-f]{64}",expected):
+            return False,"licensed-authority-malformed"
+        if sha256(required[label]) != expected:
+            return False,f"installed-{label}-hash-mismatch"
     if args.model!="xb360" or args.resolved_model!="xb360" or args.resolved_asset!="xbox-360.svg":
         return False,"wrong-licensed-model"
     if args.fallback_used!="no": return False,"generic-fallback-rejected"
-    if layout.get("model")!="xb360" or layout.get("asset")!="xbox-360.svg" or oracle.get("model")!="xb360":
+    if layout.get("model")!="xb360" or layout.get("asset")!="xbox-360.svg":
         return False,"licensed-metadata-model-mismatch"
-    if args.raster_width < oracle["minimum_raster"][0] or args.raster_height < oracle["minimum_raster"][1]:
+    try:
+        oracle=oracle_doc["models"]["xb360"]
+        required_controls=oracle["required_controls"]
+        if set(required_controls) != set(oracle["controls"]) or len(required_controls) != 17:
+            return False,"oracle-control-coverage-incomplete"
+    except (KeyError,TypeError): return False,"licensed-metadata-model-mismatch"
+    # The actual logged texture dimensions, not a fixture-declared ideal,
+    # must cover both the authority floor and the current drawable need.
+    need_w=max(oracle["minimum_raster"][0],diagram[2])
+    need_h=max(oracle["minimum_raster"][1],diagram[3])
+    if args.raster_width < need_w or args.raster_height < need_h:
         return False,"raster-density-insufficient"
     dw,dh=diagram[2],diagram[3]
     if abs(dw/dh-float(oracle["source_aspect"])) > float(oracle["aspect_tolerance"]):
         return False,"diagram-aspect-distorted"
     rows=read_crop_rgb(screenshot,geometry[0]+diagram[0],geometry[1]+diagram[1],dw,dh)
+    # Correlate compositor pixels to the independently pinned canonical asset.
+    # Generic/synthetic controller-like polygons may exercise the structural
+    # analyzer, but can never satisfy installed-licensed-diagram.
+    bg=background_color(rows,dw,dh)
+    rendered=subprocess.run(
+        ["convert","-background",f"rgb({bg[0]},{bg[1]},{bg[2]})",
+         "-size",f"{dw}x{dh}",str(required["asset"]),"-depth","8","rgb:-"],
+        stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=False)
+    if rendered.returncode != 0 or len(rendered.stdout) != dw*dh*3:
+        return False,"canonical-silhouette-unavailable"
+    canonical=[rendered.stdout[o:o+dw*3] for o in range(0,len(rendered.stdout),dw*3)]
+    observed_mask=foreground_mask(rows,bg)
+    canonical_mask=foreground_mask(canonical,bg)
+    intersection=union=0
+    for y in range(dh):
+        for x in range(dw):
+            a=bool(observed_mask[y][x]); b=bool(canonical_mask[y][x])
+            intersection += int(a and b); union += int(a or b)
+    silhouette_iou=intersection/union if union else 0.0
+    if silhouette_iou < 0.80:
+        return False,"canonical-silhouette-mismatch"
     pts=[]
     for y,row in enumerate(rows):
         for x in range(dw):
@@ -479,7 +533,10 @@ def validate_licensed(result: dict, screenshot: Path, geometry: tuple[int,int,in
     if not (spec["centroid_x"][0] <= cx <= spec["centroid_x"][1] and spec["centroid_y"][0] <= cy <= spec["centroid_y"][1]):
         return False,"highlight-oracle-misaligned"
     result["licensed"]={"model":"xb360","asset":"xbox-360.svg","fallback":False,
+        "authority_sha256":PINNED_AUTHORITY_SHA256,
         "hashes":{k:sha256(v) for k,v in required.items()},"raster":[args.raster_width,args.raster_height],
+        "raster_need":[need_w,need_h],"canonical_silhouette_iou":round(silhouette_iou,4),
+        "oracle_controls":required_controls,
         "highlight":{"control":"A","centroid":[round(cx,2),round(cy,2)],"pixels":len(pts),"oracle":"independent"}}
     return True,"installed-licensed-diagram-verified"
 
@@ -513,9 +570,8 @@ def main() -> int:
     diagram.add_argument("--fallback-used", default="yes")
     diagram.add_argument("--raster-width", type=int, default=0)
     diagram.add_argument("--raster-height", type=int, default=0)
-    for name in ("asset","license","icon-map","layout","oracle"):
+    for name in ("asset","license","icon-map","layout","oracle","authority"):
         diagram.add_argument(f"--{name}")
-        diagram.add_argument(f"--{name}-sha256")
 
     args = parser.parse_args()
     if args.command == "renderer":
@@ -543,7 +599,7 @@ def main() -> int:
     result = analyze_diagram(Path(args.screenshot), geometry, diagram_rect, None)
     licensed_requested = bool(args.model)
     if result["result"] == "pass" and licensed_requested:
-        if not all((args.asset,args.license,args.icon_map,args.layout,args.oracle)):
+        if not all((args.asset,args.license,args.icon_map,args.layout,args.oracle,args.authority)):
             result["result"]="fail"; result["marker"]="licensed-artifacts-missing"
         else:
             ok,marker=validate_licensed(result,Path(args.screenshot),geometry,diagram_rect,args)

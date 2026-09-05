@@ -418,7 +418,7 @@ PY
     verdict=$tmp/fixture-verdict.json
     marker_analyzed=""
     set +e
-    for required in installed-asset installed-license installed-map installed-layout oracle; do
+    for required in installed-asset installed-license installed-map installed-layout oracle authority; do
         [[ -f "$FIXTURE/$required" && ! -L "$FIXTURE/$required" ]] || fail "${required}-missing" "fixture: licensed diagram artifact absent"
     done
     python3 "$ANALYZER" diagram --screenshot "$local_shot" --geometry "$geom" \
@@ -426,11 +426,11 @@ PY
         --resolved-model "$(cat_fixture resolved-model)" --resolved-asset "$(cat_fixture resolved-asset)" \
         --fallback-used "$(cat_fixture fallback-used)" --raster-width "$(cat_fixture raster-width)" \
         --raster-height "$(cat_fixture raster-height)" \
-        --asset "$FIXTURE/installed-asset" --asset-sha256 "$(cat_fixture asset-sha256)" \
-        --license "$FIXTURE/installed-license" --license-sha256 "$(cat_fixture license-sha256)" \
-        --icon-map "$FIXTURE/installed-map" --icon-map-sha256 "$(cat_fixture map-sha256)" \
-        --layout "$FIXTURE/installed-layout" --layout-sha256 "$(cat_fixture layout-sha256)" \
-        --oracle "$FIXTURE/oracle" --oracle-sha256 "$(cat_fixture oracle-sha256)" \
+        --asset "$FIXTURE/installed-asset" \
+        --license "$FIXTURE/installed-license" \
+        --icon-map "$FIXTURE/installed-map" \
+        --layout "$FIXTURE/installed-layout" \
+        --oracle "$FIXTURE/oracle" --authority "$FIXTURE/authority" \
         >"$tmp/diagram.out" 2>&1
     rc=$?
     set -e
@@ -490,10 +490,8 @@ log "install: archived exact HEAD $head_commit"
 mkdir -p "$tmp/runtime"
 cp "$ANALYZER" "$tmp/runtime/analyze-gpu-compositor.py"
 cp "$EGL_SOURCE" "$tmp/runtime/egl_renderer_probe.c"
-cp "$SCRIPT_DIR/gpurunner-probes/xbox360-visual-oracle.json" "$tmp/runtime/xbox360-visual-oracle.json"
 ANALYZER="$tmp/runtime/analyze-gpu-compositor.py"
 EGL_SOURCE="$tmp/runtime/egl_renderer_probe.c"
-ORACLE="$tmp/runtime/xbox360-visual-oracle.json"
 
 prefix="$tmp/prefix"
 prefix_real=$(readlink -f "$prefix")
@@ -531,8 +529,11 @@ installed_svg="$prefix/share/controller-box/icons/svg/xbox-360.svg"
 installed_license="$prefix/share/controller-box/icons/svg/LICENSE.controllercons"
 installed_map="$prefix/share/controller-box/controller-icons.yaml"
 installed_layout="$prefix/share/controller-box/controller-layouts/xbox-360.json"
+installed_oracle="$prefix/share/controller-box/licensed-diagram-oracle.json"
+installed_authority="$prefix/share/controller-box/licensed-diagram-authority.json"
 for asset in \
     "$installed_svg" "$installed_license" "$installed_map" "$installed_layout" \
+    "$installed_oracle" "$installed_authority" \
     "$prefix/share/controller-box/profiles/default.yaml"; do
     if [[ -f "$asset" && ! -L "$asset" ]]; then
         asset_real=$(readlink -f "$asset")
@@ -808,18 +809,19 @@ log "output: compositor output >= ${WIN_W}x${WIN_H}"
 verdict=$tmp/verdict.json
 marker_analyzed=""
 set +e
-if ! grep -q '^profile-diagram: icon=cc-xbox-360 asset=xbox-360.svg provenance=profile-override raster=512x512 result=loaded$' "$tmp/manager.log"; then
+diagram_log=$(grep '^profile-diagram: icon=cc-xbox-360 asset=xbox-360.svg provenance=profile-override raster=[0-9][0-9]*x[0-9][0-9]* result=loaded$' "$tmp/manager.log" | tail -n 1 || true)
+if [[ -z "$diagram_log" ]]; then
     fail wrong-licensed-model "production selection did not resolve requested Xbox 360 asset without fallback"
 fi
+raster_dims=${diagram_log#* raster=}; raster_dims=${raster_dims%% result=*}
+raster_width=${raster_dims%x*}; raster_height=${raster_dims#*x}
 python3 "$ANALYZER" diagram --screenshot "$shot" \
     --geometry "$win_x,$win_y,$win_w,$win_h" --diagram "$DIAGRAM_RECT" \
     --out "$verdict" --model xb360 --resolved-model xb360 --resolved-asset xbox-360.svg \
-    --fallback-used no --raster-width 512 --raster-height 512 \
-    --asset "$installed_svg" --asset-sha256 "$(sha256sum_file "$installed_svg" | awk '{print $1}')" \
-    --license "$installed_license" --license-sha256 "$(sha256sum_file "$installed_license" | awk '{print $1}')" \
-    --icon-map "$installed_map" --icon-map-sha256 "$(sha256sum_file "$installed_map" | awk '{print $1}')" \
-    --layout "$installed_layout" --layout-sha256 "$(sha256sum_file "$installed_layout" | awk '{print $1}')" \
-    --oracle "$ORACLE" --oracle-sha256 "$(sha256sum_file "$ORACLE" | awk '{print $1}')" \
+    --fallback-used no --raster-width "$raster_width" --raster-height "$raster_height" \
+    --asset "$installed_svg" --license "$installed_license" \
+    --icon-map "$installed_map" --layout "$installed_layout" \
+    --oracle "$installed_oracle" --authority "$installed_authority" \
     >"$tmp/diagram.out" 2>&1
 analyzer_rc=$?
 set -e

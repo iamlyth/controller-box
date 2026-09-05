@@ -1239,9 +1239,18 @@ cbx_manager_on_tab_change(cbx_widget *w, int new_tab, void *user_data)
                     "InputPlumber enumeration/type query failed");
         }
         break;
-    case CBX_MGR_TAB_PROFILES:
+    case CBX_MGR_TAB_PROFILES: {
+        /* Carry only the explicit, user-visible Controllers selection into
+         * the profile editor.  Never guess a target from an arbitrary slot. */
+        const char *device_type = NULL;
+        if (mgr->ct.selected_device >= 0 &&
+            mgr->ct.selected_device < mgr->ct.device_type_count)
+            device_type = cbx_controllers_tab_device_type(
+                &mgr->ct, mgr->ct.selected_device);
+        cbx_profiles_tab_set_device_type(&mgr->pt, device_type);
         cbx_profiles_tab_refresh(&mgr->pt);
         break;
+    }
     case CBX_MGR_TAB_SETTINGS:
         cbx_settings_tab_refresh(&mgr->st);
         break;

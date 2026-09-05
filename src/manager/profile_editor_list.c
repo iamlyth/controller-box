@@ -24,8 +24,10 @@
 #include "icons/icon_map.h"          /* cbx_icon_map_lookup / default path */
 #include "icons/icon_cache.h"        /* cbx_icon_cache_init / load_one */
 
-/* Logical diagram extent; raster size is derived from renderer scale. */
-#define CBX_PE_DIAGRAM_RASTER 300
+/* Licensed diagrams are never rasterised below the release-evidence floor.
+ * The renderer/output scale may raise this further for HiDPI or a resized
+ * drawable, but a 1x 300px widget still gets a 512px source texture. */
+#define CBX_PE_DIAGRAM_RASTER 512
 
 /* ------------------------------------------------------------------ */
 /*  Layout constants                                                  */

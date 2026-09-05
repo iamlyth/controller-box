@@ -297,6 +297,8 @@ install(DIRECTORY data/icons/svg/ DESTINATION "${CBX_ICON_INSTALL_DIR}/svg"
 install(FILES data/icons/svg/LICENSE.controllercons
     DESTINATION "${CBX_ICON_INSTALL_DIR}/svg")
 install(FILES data/controller-icons.yaml
+              data/licensed-diagram-authority.json
+              data/licensed-diagram-oracle.json
     DESTINATION "${CBX_DATA_INSTALL_DIR}")
 install(DIRECTORY data/controller-layouts/ DESTINATION "${CBX_DATA_INSTALL_DIR}/controller-layouts"
     FILES_MATCHING PATTERN "*.json")

@@ -1067,6 +1067,16 @@ cbx_profiles_tab_set_test_dirs(cbx_profiles_tab *tab,
 }
 
 void
+cbx_profiles_tab_set_device_type(cbx_profiles_tab *tab,
+                                  const char *device_type)
+{
+    if (!tab)
+        return;
+    snprintf(tab->current_device_type, sizeof(tab->current_device_type), "%s",
+             device_type ? device_type : "");
+}
+
+void
 cbx_profiles_tab_set_context(cbx_profiles_tab *tab,
                                 SDL_Renderer *renderer,
                                 const ip_dbus_backend *backend,
@@ -1136,8 +1146,10 @@ cbx_profiles_tab_open_editor(cbx_profiles_tab *tab,
     /* Resolve the selected profile's sidecar identity before loading.  A
      * profile is portable, so no arbitrary controller slot is used as a
      * surrogate model. */
-    int rc = cbx_profile_editor_set_diagram_selection(&tab->editor, NULL,
-                                                       icon_override);
+    int rc = cbx_profile_editor_set_diagram_selection(
+        &tab->editor,
+        tab->current_device_type[0] ? tab->current_device_type : NULL,
+        icon_override);
     if (rc != 0)
         return rc;
 

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Callable, Mapping
 
 RESULT_SCHEMA = "factory-readiness-result/v2"
-APPROVAL_SCHEMA = "controller-production-graphics-approval/v2"
+APPROVAL_SCHEMA = "controller-production-graphics-approval/v3"
 TRUST_SCHEMA = "controller-human-review-trust/v1"
 APPROVAL_PATH = ".factory/production-graphics-approval.json"
 TRUST_PATH = ".factory/human-review-trust.json"
@@ -23,8 +23,10 @@ PROTECTED_STATES = (
     "manager_editor_validation_error",
 )
 REQUIRED_CHECKLIST = (
-    "distinct-captures", "licensed-artwork", "layout-and-legibility",
-    "validation-error-state", "hardware-accelerated-renderer",
+    "distinct-captures", "representative-licensed-models", "licensed-artwork",
+    "recognizability", "sharpness", "contrast", "marker-alignment",
+    "layout-and-legibility", "validation-error-state",
+    "hardware-accelerated-renderer", "real-seat-display-metadata",
 )
 REQUIRED_CAPABILITIES = (
     "controller-production-routing", "gpu-compositor",
@@ -94,12 +96,18 @@ def validate_human_approval(
         raise HumanApprovalBlocked("graphics approval must cover exactly three protected states")
     seen_ids, seen_blobs, seen_digests = set(), set(), set()
     for item in states:
-        item_fields = {"id", "capture", "capture_blob", "capture_sha256"}
+        item_fields = {"id", "model", "capture", "capture_blob", "capture_sha256", "assessment"}
         if not isinstance(item, dict) or set(item) != item_fields:
             raise HumanApprovalBlocked("graphics approval state fields are malformed")
         state_id = item.get("id")
         if state_id not in PROTECTED_STATES or state_id in seen_ids:
             raise HumanApprovalBlocked("graphics approval state set is duplicated or substituted")
+        model = item.get("model")
+        if model not in {"xb360", "xbox-series", "ds5"}:
+            raise HumanApprovalBlocked("graphics approval model coverage is not representative")
+        assessment = item.get("assessment")
+        if not isinstance(assessment, dict) or set(assessment) != {"recognizable", "sharp", "contrast", "marker_aligned"} or not all(v is True for v in assessment.values()):
+            raise HumanApprovalBlocked("graphics approval capture assessment is incomplete")
         capture = _safe_path(item.get("capture"), "capture")
         capture_blob = object_id(f"{candidate}:{capture}")
         capture_raw = blob_at(candidate, capture)
@@ -111,13 +119,15 @@ def validate_human_approval(
         seen_ids.add(state_id); seen_blobs.add(capture_blob); seen_digests.add(digest)
     if seen_ids != set(PROTECTED_STATES):
         raise HumanApprovalBlocked("graphics approval omits a protected state")
+    if {item["model"] for item in states} != {"xb360", "xbox-series", "ds5"}:
+        raise HumanApprovalBlocked("graphics approval reuses or omits representative models")
     provenance = data.get("provenance")
-    if not isinstance(provenance, dict) or set(provenance) != {"renderer", "renderer_accelerated", "capture_tool", "session"}:
+    if not isinstance(provenance, dict) or set(provenance) != {"renderer", "renderer_accelerated", "capture_tool", "session", "display", "seat"}:
         raise HumanApprovalBlocked("graphics approval provenance is malformed")
     renderer = provenance.get("renderer")
     if not isinstance(renderer, str) or not renderer.strip() or provenance.get("renderer_accelerated") is not True or re.search(r"(?i)llvmpipe|softpipe|software", renderer):
         raise HumanApprovalBlocked("graphics approval does not prove accelerated rendering")
-    if not all(isinstance(provenance.get(k), str) and provenance[k].strip() for k in ("capture_tool", "session")):
+    if not all(isinstance(provenance.get(k), str) and provenance[k].strip() for k in ("capture_tool", "session", "display", "seat")):
         raise HumanApprovalBlocked("graphics approval provenance is incomplete")
     if data.get("checklist") != list(REQUIRED_CHECKLIST):
         raise HumanApprovalBlocked("graphics approval checklist is incomplete or reordered")

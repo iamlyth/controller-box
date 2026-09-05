@@ -25,7 +25,8 @@ SVG="$PROJECT_ROOT/data/icons/svg/xbox-360.svg"
 LICENSE="$PROJECT_ROOT/data/icons/svg/LICENSE.controllercons"
 ICON_MAP="$PROJECT_ROOT/data/controller-icons.yaml"
 LAYOUT="$PROJECT_ROOT/data/controller-layouts/xbox-360.json"
-ORACLE="$PROJECT_ROOT/scripts/gpurunner-probes/xbox360-visual-oracle.json"
+ORACLE="$PROJECT_ROOT/data/licensed-diagram-oracle.json"
+AUTHORITY="$PROJECT_ROOT/data/licensed-diagram-authority.json"
 
 command -v nix-shell >/dev/null || {
     echo "test: nix-shell required for the gpu-compositor probe fixtures" >&2
@@ -202,7 +203,9 @@ for asset in \
     "\$SM/prefix/share/controller-box/icons/svg/xbox-360.svg" \
     "\$SM/prefix/share/controller-box/icons/svg/LICENSE.controllercons" \
     "\$SM/prefix/share/controller-box/controller-icons.yaml" \
-    "\$SM/prefix/share/controller-box/controller-layouts/xbox-360.json"; do
+    "\$SM/prefix/share/controller-box/controller-layouts/xbox-360.json" \
+    "\$SM/prefix/share/controller-box/licensed-diagram-oracle.json" \
+    "\$SM/prefix/share/controller-box/licensed-diagram-authority.json"; do
     test -f "\$asset" && test ! -L "\$asset" || { echo "smoke: missing asset \$asset" >&2; exit 1; }
     case "\$(readlink -f "\$asset")" in
         "\$(readlink -f "\$SM/prefix")"/*) ;;
@@ -274,6 +277,7 @@ make_base_fixture() { # dir
     printf '512\n' > "$dir/raster-height"
     cp "$SVG" "$dir/installed-asset"; cp "$LICENSE" "$dir/installed-license"
     cp "$ICON_MAP" "$dir/installed-map"; cp "$LAYOUT" "$dir/installed-layout"; cp "$ORACLE" "$dir/oracle"
+    cp "$AUTHORITY" "$dir/authority"
     sha256sum "$dir/installed-asset" | awk '{print $1}' > "$dir/asset-sha256"
     sha256sum "$dir/installed-license" | awk '{print $1}' > "$dir/license-sha256"
     sha256sum "$dir/installed-map" | awk '{print $1}' > "$dir/map-sha256"
@@ -299,11 +303,12 @@ recorded = open(sys.argv[2], encoding="utf-8").read().split()[0]
 assert actual == recorded, (actual, recorded)
 PY
 
-# Pass fixture 2: synthetic polygon silhouette (independent of the SVG asset).
+# Synthetic polygons remain useful to exercise the generic shape analyzer,
+# but are explicitly non-evidence for the licensed capability.
 make_base_fixture "$tmp/synthetic-pass"
 compose_shot "$tmp/synthetic-pass/screenshot.png" "$tmp/gamepad.ppm"
-must_pass "synthetic controller silhouette pass" run_probe "$tmp/synthetic-pass"
-grep -qF "installed-licensed-diagram-verified" "$tmp/synthetic-pass/verdict.json"
+must_fail "synthetic controller silhouette is non-acceptance" \
+    "canonical-silhouette-mismatch" run_probe "$tmp/synthetic-pass"
 
 # ---------------------------------------------------------------------------
 # Adversarial fixtures: every negative path must fail closed with its exact
@@ -324,10 +329,29 @@ rm "$tmp/missing-license/installed-license"
 compose_shot "$tmp/missing-license/screenshot.png" "$tmp/diagram-svg.png"
 must_fail "missing installed license rejected" "installed-license-missing" run_probe "$tmp/missing-license"
 
-make_base_fixture "$tmp/tampered-map"
-printf '#tamper\n' >> "$tmp/tampered-map/installed-map"
-compose_shot "$tmp/tampered-map/screenshot.png" "$tmp/diagram-svg.png"
-must_fail "tampered map hash rejected" "installed-map-hash-mismatch" run_probe "$tmp/tampered-map"
+make_base_fixture "$tmp/tampered-authority"
+printf ' ' >> "$tmp/tampered-authority/authority"
+compose_shot "$tmp/tampered-authority/screenshot.png" "$tmp/diagram-svg.png"
+must_fail "tampered pinned authority rejected" "installed-authority-hash-mismatch" run_probe "$tmp/tampered-authority"
+
+make_base_fixture "$tmp/runtime-self-hash"
+printf '#tamper\n' >> "$tmp/runtime-self-hash/installed-map"
+sha256sum "$tmp/runtime-self-hash/installed-map" | awk '{print $1}' > "$tmp/runtime-self-hash/map-sha256"
+compose_shot "$tmp/runtime-self-hash/screenshot.png" "$tmp/diagram-svg.png"
+must_fail "runtime self hash cannot bless tampering" "installed-map-hash-mismatch" run_probe "$tmp/runtime-self-hash"
+
+for item in asset license map layout oracle; do
+    make_base_fixture "$tmp/tampered-$item"
+    target="installed-$item"; [[ "$item" == oracle ]] && target=oracle
+    printf '#tamper\n' >> "$tmp/tampered-$item/$target"
+    compose_shot "$tmp/tampered-$item/screenshot.png" "$tmp/diagram-svg.png"
+    must_fail "tampered $item hash rejected" "installed-$item-hash-mismatch" run_probe "$tmp/tampered-$item"
+done
+
+make_base_fixture "$tmp/co-omission"
+rm "$tmp/co-omission/installed-asset" "$tmp/co-omission/authority"
+compose_shot "$tmp/co-omission/screenshot.png" "$tmp/diagram-svg.png"
+must_fail "authority and asset co-omission rejected" "installed-asset-missing" run_probe "$tmp/co-omission"
 
 make_base_fixture "$tmp/low-raster"
 printf '128\n' > "$tmp/low-raster/raster-width"

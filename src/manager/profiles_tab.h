@@ -110,6 +110,9 @@ typedef struct {
     SDL_Renderer        *renderer;
     const ip_dbus_backend *dbus_backend;
     ip_bus_handle          dbus_bus;
+    /* User-visible virtual target context selected on Controllers.  Empty is
+     * an explicit no-model/generic state; it is never inferred from a slot. */
+    char current_device_type[CBX_ICON_TYPE_LEN];
 } cbx_profiles_tab;
 
 /* ------------------------------------------------------------------ */
@@ -156,6 +159,11 @@ void cbx_profiles_tab_set_test_dirs(cbx_profiles_tab *tab,
  * The DBus backend/bus are needed for capture mode and capability
  * loading (optional — editor works without them in degraded mode).
  */
+/* Set the currently selected virtual target DeviceType used by the normal
+ * editor path.  NULL/empty means explicit no-model (generic). */
+void cbx_profiles_tab_set_device_type(cbx_profiles_tab *tab,
+                                      const char *device_type);
+
 void cbx_profiles_tab_set_context(cbx_profiles_tab *tab,
                                     SDL_Renderer *renderer,
                                     const ip_dbus_backend *backend,

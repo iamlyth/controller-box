@@ -38,12 +38,15 @@ class ReadinessTests(unittest.TestCase):
     def approval(self):
         return {"schema": readiness.APPROVAL_SCHEMA, "status": "approved", "candidate_commit": self.candidate,
                 "candidate_tree": self.tree, "accepted_relationship": "approval-only-descendant", "states": [
-            {"id": name, "capture": f"captures/{name}.png",
+            {"id": name, "model": model, "capture": f"captures/{name}.png",
              "capture_blob": self.oid(f"{self.candidate}:captures/{name}.png"),
-             "capture_sha256": hashlib.sha256((name + " nonblank licensed xb360").encode()).hexdigest()}
-            for name in readiness.PROTECTED_STATES],
+             "capture_sha256": hashlib.sha256((name + " nonblank licensed xb360").encode()).hexdigest(),
+             "assessment": {"recognizable": True, "sharp": True, "contrast": True,
+                            "marker_aligned": True}}
+            for name, model in zip(readiness.PROTECTED_STATES, ("xb360", "xbox-series", "ds5"))],
             "provenance": {"renderer": "AMD RADV accelerated", "renderer_accelerated": True,
-                           "capture_tool": "kmsgrab", "session": "physical-console"},
+                           "capture_tool": "kmsgrab", "session": "physical-console",
+                           "display": "1920x1080@60", "seat": "seat0"},
             "checklist": list(readiness.REQUIRED_CHECKLIST), "decision": "approve",
             "reviewer": {"identity": "reviewer@example", "key_id": "review-key"},
             "signature_path": ".factory/production-graphics-approval.sig"}

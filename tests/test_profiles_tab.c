@@ -798,6 +798,25 @@ test_name_input_confirm(void **state)
 }
 
 static void
+test_normal_target_model_without_sidecar(void **state)
+{
+    pt_fixture *f = FIX(state);
+    init_tab(f);
+
+    /* Normal workflow context comes from the selected virtual target, not a
+     * test-authored profile metadata sidecar. */
+    cbx_profiles_tab_set_device_type(&f->tab, "xb360");
+    cbx_profiles_tab_begin_create(&f->tab, CBX_PT_CREATE_DEFAULT_COPY);
+    for (const char *p = "target-model"; *p; p++)
+        assert_int_equal(cbx_profiles_tab_name_input_char(&f->tab, *p), 0);
+    assert_int_equal(cbx_profiles_tab_name_input_confirm(&f->tab), 0);
+    assert_string_equal(cbx_profile_editor_resolved_icon(&f->tab.editor),
+                        "cc-xbox-360");
+    assert_int_equal(cbx_profile_editor_diagram_provenance(&f->tab.editor),
+                     CBX_DIAG_PROVENANCE_SUPPORTED_MODEL);
+}
+
+static void
 test_name_input_confirm_empty(void **state)
 {
     pt_fixture *f = FIX(state);
@@ -1373,6 +1392,7 @@ static const struct CMUnitTest tests[] = {
     cmocka_unit_test_setup_teardown(test_name_input_backspace, pt_setup, pt_teardown),
     cmocka_unit_test_setup_teardown(test_name_input_invalid_chars, pt_setup, pt_teardown),
     cmocka_unit_test_setup_teardown(test_name_input_confirm, pt_setup, pt_teardown),
+    cmocka_unit_test_setup_teardown(test_normal_target_model_without_sidecar, pt_setup, pt_teardown),
     cmocka_unit_test_setup_teardown(test_name_input_confirm_empty, pt_setup, pt_teardown),
     cmocka_unit_test_setup_teardown(test_name_input_cancel, pt_setup, pt_teardown),
     cmocka_unit_test_setup_teardown(test_name_input_not_in_mode, pt_setup, pt_teardown),
