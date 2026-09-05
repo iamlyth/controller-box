@@ -1072,27 +1072,6 @@ class LaunchIntegrationTests(_Base):
         policy_bytes = (self.workspace / "AGENTS.md").read_bytes()
         spec_bytes = (self.workspace / "spec.md").read_bytes()
         plan_bytes = (self.workspace / "plan.md").read_bytes()
-        if binding.provider != "synthetic" and "readiness_authorization" not in guard_kwargs:
-            tree = _work(["rev-parse", "HEAD^{tree}"], self.workspace).stdout.decode().strip()
-            bindings = {"accepted_commit":binding.bound_commit,"tree":tree,
-                "environment_blob":binding.bound_commit,
-                "specification_sha256":"b"*64,"plan_sha256":"c"*64,
-                "conformance_sha256":"d"*64,"policy_sha256":"e"*64,
-                "contracts_sha256":"f"*64,"install_manifest_sha256":"1"*64,
-                "command_authority_sha256":"2"*64,"human_authority_sha256":"3"*64,
-                "trust_authority_sha256":"4"*64}
-            results = {"aggregate_sha256":"5"*64,"capability_result_sha256":"6"*64,
-                "core_result_sha256":"7"*64,"conformance_result_sha256":"8"*64,
-                "human_result_sha256":"9"*64}
-            readiness_nonce = hashlib.sha256(json.dumps(sorted(guard_kwargs)).encode()).hexdigest()
-            raw=json.dumps({"schema":"factory-readiness-result/v2","campaign_id":"usage-test",
-                "nonce":readiness_nonce,"status":"complete","terminal_outcome":"pass",
-                "bindings":bindings,"results":results},sort_keys=True,separators=(",",":")).encode()
-            guard_kwargs["readiness_authorization"]=launch.authorize_readiness_launch(
-                raw,expected_campaign_id="usage-test",expected_nonce=readiness_nonce,
-                expected_bindings=bindings,expected_results=results,
-                launch_descriptor_sha256=launch.launch_descriptor_digest(binding),
-                workspace=self.workspace)
         return launch.authorize_launch(
             binding,
             role_prompt=role_bytes,
@@ -1107,17 +1086,12 @@ class LaunchIntegrationTests(_Base):
         before_modules = {
             name for name in sys.modules if name.startswith("_factory_committed_usage_")
         }
-        authority = self._authorize(self._binding("ollama"))
+        with self.assertRaisesRegex(launch.InvocationError, "readiness authorization"):
+            self._authorize(self._binding("ollama"))
         after_modules = {
             name for name in sys.modules if name.startswith("_factory_committed_usage_")
         }
         self.assertEqual(after_modules, before_modules)
-        self.assertIsInstance(authority, launch.LaunchAuthority)
-        self.assertFalse(hasattr(authority, "_usage_guard_module"))
-        staged_usage = authority._exec_dir / "usage.py"
-        staged_fetch = authority._exec_dir / "usage_fetch.py"
-        for path in (staged_usage, staged_fetch):
-            self.assertIn(str(path), authority._staged_digests)
 
     def test_per_model_usage_driver_parameters_are_absent(self) -> None:
         parameters = inspect.signature(launch.authorize_launch).parameters
@@ -1144,7 +1118,7 @@ class LaunchIntegrationTests(_Base):
             launch, "_prepare_private_pi2_home"
         ) as provision:
             with self.assertRaisesRegex(
-                launch.InvocationError, "exact immutable external pi2"
+                launch.InvocationError, "readiness authorization"
             ):
                 self._authorize(binding)
         provision.assert_not_called()
@@ -1159,6 +1133,14 @@ class LaunchIntegrationTests(_Base):
         binding = dataclasses.replace(
             self._binding("openai-codex"), backend=Path(pi2).absolute()
         )
+        # Even an exact external pi2 cannot use a fixture readiness document;
+        # the backend remains unexecuted until canonical campaign authority is
+        # present.
+        with mock.patch.object(launch, "_prepare_private_pi2_home") as provision:
+            with self.assertRaisesRegex(launch.InvocationError, "readiness authorization"):
+                self._authorize(binding)
+        provision.assert_not_called()
+        return
         events = []
         real_revalidate = launch._revalidate_external_runtimes
 
@@ -1236,7 +1218,7 @@ class LaunchIntegrationTests(_Base):
         ) as prove:
             with self.assertRaises(launch.InvocationError) as caught:
                 self._authorize(self._binding("ollama"))
-        self.assertIn("canonical Ollama", str(caught.exception))
+        self.assertIn("readiness authorization", str(caught.exception))
         prove.assert_not_called()
 
     def test_usage_proof_rejects_nonmatching_bound_commit_source(self) -> None:
@@ -1257,9 +1239,9 @@ class LaunchIntegrationTests(_Base):
 
     def test_missing_cookie_is_not_consulted_by_per_model_authorization(self) -> None:
         with _scrubbed_ollama_env():
-            authority = self._authorize(self._binding("ollama"))
+            with self.assertRaisesRegex(launch.InvocationError, "readiness authorization"):
+                self._authorize(self._binding("ollama"))
         self.assertFalse(hasattr(launch, "usage_guard"))
-        self.assertIsInstance(authority, launch.LaunchAuthority)
 
     def test_production_launch_has_no_settings_origin_override(self) -> None:
         """Caller-selected origins are absent before any credential can be read."""

@@ -2175,17 +2175,14 @@ def launch_role_attempt(
             findings=findings_payload,
             readiness_authorization=(
                 launch_module.authorize_readiness_launch(
-                    readiness_result,
-                    expected_campaign_id=config.campaign_id,
-                    expected_nonce=json.loads(readiness_result)["nonce"],
-                    expected_bindings=json.loads(readiness_result)["bindings"],
-                    expected_results=json.loads(readiness_result)["results"],
-                    launch_descriptor_sha256=launch_module.launch_descriptor_digest(binding),
+                    campaign_id=config.campaign_id,
+                    invocation=binding,
                     workspace=root,
                 )
-                if config.provider != "synthetic" and readiness_result is not None
+                if config.provider != "synthetic"
                 else None
             ),
+            readiness_invocation=(binding if config.provider != "synthetic" else None),
         )
     except launch_module.InvocationError as exc:
         # Task 9 review B2: every refused launch — unbound or missing bytes,
@@ -2614,6 +2611,53 @@ class Campaign:
         if plan_sha256(raw) != value.get("result_sha256") or result.get("status") != "complete":
             raise CampaignBindingError("untrusted launch denied: readiness result binding is invalid")
 
+    def _revalidate_readiness_authorities(self, state: state_module.FactoryState) -> None:
+        """Freshly rerun every canonical readiness validator before a model mint.
+
+        ``readiness-result.json`` is only a crash cache: no digest from it is
+        trusted unless the aggregate, gates, committed mappings, external
+        human signature, and exact captures can all be reopened and produce
+        the state-bound results again.
+        """
+        accepted = str(state.readiness["accepted_commit"])
+        checker_exit, aggregate = self._check_runner_aggregate(accepted)
+        if checker_exit != 0 or aggregate != state.readiness["aggregate_sha256"]:
+            raise CampaignBindingError("untrusted launch denied: runner aggregate revalidation failed")
+        cap_ran, cap_exit, _, cap_skipped = self._run_gate(self._config.capability_command, "capability")
+        capability = plan_sha256(json.dumps({"ran": cap_ran, "exit": cap_exit, "skipped": cap_skipped}, sort_keys=True).encode())
+        if not cap_ran or cap_skipped or cap_exit != 0 or capability != state.readiness["capability_result_sha256"]:
+            raise CampaignBindingError("untrusted launch denied: capability evidence is stale")
+        core_ran, core_exit, _, core_skipped = self._run_gate(CORE_ACCEPTANCE_COMMAND, "core acceptance")
+        core = plan_sha256(json.dumps({"ran": core_ran, "exit": core_exit, "skipped": core_skipped}, sort_keys=True).encode())
+        if not core_ran or core_skipped or core_exit != 0 or core != state.readiness["core_result_sha256"]:
+            raise CampaignBindingError("untrusted launch denied: core acceptance is stale")
+        conf_ran, conf_exit, _, conf_skipped = self._run_gate(CONFORMANCE_VALIDATOR_COMMAND, "conformance validator")
+        try:
+            conformance_raw = self._git.blob_at(accepted, DEFAULT_CONFORMANCE_PATH)
+            mapping = readiness_module.validate_core_mapping(
+                conformance_raw, self._git.blob_at(accepted, ".factory/requirement-policy.json"))
+        except readiness_module.ReadinessError as exc:
+            raise CampaignBindingError("untrusted launch denied: core mapping is stale") from exc
+        if (not conf_ran or conf_skipped or conf_exit != 0
+                or mapping != state.readiness["conformance_result_sha256"]):
+            raise CampaignBindingError("untrusted launch denied: conformance is stale")
+        try:
+            approval_raw = self._git.blob_at(accepted, readiness_module.APPROVAL_PATH)
+            trust_raw, _ = readiness_module.read_external_authority(
+                Path(self._config.human_trust_anchor), self._config.human_trust_anchor_sha256)
+            human = readiness_module.validate_human_approval(
+                approval_raw, accepted_commit=accepted, trust_raw=trust_raw,
+                blob_at=self._git.blob_at, object_id=self._git.object_id,
+                is_ancestor=self._git.is_ancestor, diff_paths=self._git.diff_paths)
+            approval = json.loads(approval_raw)
+            human_conf = readiness_module.validate_human_conformance(
+                conformance_raw, candidate_commit=str(approval["candidate_commit"]))
+            human = plan_sha256((human + human_conf).encode())
+        except (readiness_module.HumanApprovalBlocked, ValueError, KeyError) as exc:
+            raise CampaignBindingError("untrusted launch denied: human approval is stale") from exc
+        if human != state.readiness["human_result_sha256"]:
+            raise CampaignBindingError("untrusted launch denied: human approval digest changed")
+
     def _publish_readiness(self, state: state_module.FactoryState, *, status: str,
                            outcome: str, aggregate: str, capability: str,
                            core: str, conformance: str, human: str) -> state_module.FactoryState:
@@ -2630,8 +2674,11 @@ class Campaign:
             campaign_id=self._config.campaign_id, nonce=str(r["nonce"]),
             status=status, terminal_outcome=outcome, bindings=bindings, results=results)
         raw = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
+        # Replace an unauthoritative crash cache only after every canonical
+        # gate above has freshly completed.  Cache presence never authorizes a
+        # transition by itself.
         state_module.atomic_write_json(
-            self._root, READINESS_RESULT_NAME, document, no_replace=True
+            self._root, READINESS_RESULT_NAME, document, no_replace=False
         )
         updated = dict(r)
         updated.update({"cursor": 6, "status": status,
@@ -2649,29 +2696,9 @@ class Campaign:
         for name, value in expected.items():
             if name != "nonce" and state.readiness.get(name) != value:
                 raise CampaignBindingError(f"readiness binding changed: {name}")
-        # A completed publication wins a crash between publication and state
-        # transition.  It is revalidated and never causes physical acquisition.
-        existing = state_module.read_json(self._root, READINESS_RESULT_NAME, maximum=MAX_RESULT_FILE, missing_ok=True)
-        if existing is not None:
-            expected_bindings = {name: state.readiness[name] for name in (
-                "accepted_commit", "tree", "environment_blob", "specification_sha256",
-                "plan_sha256", "conformance_sha256", "policy_sha256", "contracts_sha256",
-                "install_manifest_sha256", "command_authority_sha256",
-                "human_authority_sha256", "trust_authority_sha256")}
-            readiness_module.validate_result(
-                existing, expected_campaign_id=self._config.campaign_id,
-                expected_nonce=str(state.readiness["nonce"]),
-                expected_bindings=expected_bindings,
-            )
-            raw = json.dumps(existing, sort_keys=True, separators=(",", ":")).encode()
-            updated = dict(state.readiness)
-            updated.update(existing["results"])
-            updated.update({"cursor": 6, "status": existing["status"],
-                            "terminal_outcome": existing["terminal_outcome"],
-                            "result_sha256": plan_sha256(raw)})
-            state = self._persist_state(state_module.update_readiness(state, updated))
-            state = self._persist_state(state_module.advance(state, str(existing["terminal_outcome"])))
-            return state, None if state.current_phase == "planning" else str(existing["terminal_outcome"])
+        # A cache left by a crash is never promoted.  Continue through the
+        # canonical acquisition and all validators; an unavailable authority
+        # reruns/fails rather than minting from remembered JSON.
         prior = self._read_runner_acquisition()
         if prior is not None and prior.get("status") == "acquiring":
             return self._publish_readiness(state, status="infrastructure_failure",
@@ -2812,6 +2839,36 @@ class Campaign:
     def _state_file_exists(self) -> bool:
         return (self._state_directory() / state_module.STATE_FILE_NAME).exists()
 
+    def _bind_campaign_launch_authority(self) -> None:
+        """Bind immutable production launch configuration outside caller JSON."""
+        if self._config.role_driver is not None:
+            return
+        descriptor = {
+            "campaign_id": self._config.campaign_id,
+            "provider": self._config.provider,
+            "model": self._config.model,
+            "backend": str(Path(self._config.backend).absolute()),
+            "accepted_commit": self._config.accepted_commit,
+            "branch": self._config.branch,
+            "rounds_requested": self._config.rounds_requested,
+            "state_namespace": self._config.state_namespace,
+            "prompt_set_digest": self._config.prompt_set_digest,
+            "specification_digest": self._config.specification_digest,
+            "audit_objectives_digest": self._config.audit_objectives_digest,
+            "pre_round_hook_configuration_digest": self._config.pre_round_hook_configuration_digest,
+            "install_manifest": self._config.install_manifest,
+            "human_trust_anchor_sha256": self._config.human_trust_anchor_sha256,
+            "verification_command": list(self._config.verification_command),
+            "capability_command": list(self._config.capability_command),
+            "acceptance_command": list(self._config.acceptance_command),
+            "runner_command": list(self._config.runner_command),
+        }
+        try:
+            launch_module.bind_campaign_authority(
+                self._root, self._config.campaign_id, descriptor)
+        except launch_module.InvocationError as exc:
+            raise CampaignBindingError(f"campaign launch authority unavailable: {exc}") from exc
+
     def _load_or_init_state(self):
         """Load or initialize the control state; return ``(state, recovered)``.
 
@@ -2837,6 +2894,7 @@ class Campaign:
                 expected_pre_round_hook_commit=self._config.pre_round_hook_commit,
                 expected_readiness_required=(self._config.role_driver is None),
             )
+            self._bind_campaign_launch_authority()
             return self._reconcile_head(state)
         state = state_module.init_state(
             self._root,
@@ -2855,6 +2913,7 @@ class Campaign:
             readiness_binding=(self._initial_readiness_binding() if self._config.role_driver is None else None),
             branch=self._config.branch,
         )
+        self._bind_campaign_launch_authority()
         return state, None
 
     def _reconcile_head(self, state: state_module.FactoryState):
@@ -3232,6 +3291,8 @@ class Campaign:
         findings_payload: Optional[bytes] = None,
     ) -> RoleOutcome:
         self._assert_readiness(state)
+        if self._config.role_driver is None:
+            self._revalidate_readiness_authorities(state)
         if self._role_runner is not None:
             return self._role_runner(role, state, head, task_id, attempt)
         if self._config.role_driver:
@@ -3249,13 +3310,9 @@ class Campaign:
                 float(self._config.inactivity_limit), runtime_budget
             ),
         )
-        readiness_path = self._state_directory() / READINESS_RESULT_NAME
-        try:
-            readiness_raw = readiness_path.read_bytes()
-        except OSError as exc:
-            raise CampaignPhaseError("passing readiness descriptor is unavailable for role launch") from exc
-        if plan_sha256(readiness_raw) != state.readiness.get("result_sha256"):
-            raise CampaignPhaseError("readiness launch descriptor digest differs from trusted state")
+        # The launch mint reopens canonical state and readiness evidence.  The
+        # published readiness result is an unauthoritative crash cache and is
+        # never transported as caller-supplied authority.
         return launch_role_attempt(
             bounded,
             role=role,
@@ -3264,7 +3321,6 @@ class Campaign:
             round_number=state.current_round,
             attempt_number=attempt,
             findings_payload=findings_payload,
-            readiness_result=readiness_raw,
         )
 
     def _run_driver(

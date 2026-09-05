@@ -605,10 +605,13 @@ reuses an unchanged-HEAD aggregate only when its durable completed acquisition
 record and the strong signed checker agree exactly; interrupted, stale, forged,
 partial, or symlinked state cannot authorize capability acceptance. An
 `acquiring` marker is an ambiguous physical side effect and requires operator
-reconciliation; it is never automatically rerun. The canonical
-`readiness-result.json` is atomically published in the campaign-private state,
-and every campaign/binding/result digest must exactly match reread v2 control
-state before any role launch. Legacy v1 state is never production-resumable.
+reconciliation; it is never automatically rerun. The canonical `readiness-result.json` is an atomically published,
+unauthoritative crash cache in campaign-private state. Presence, a known nonce,
+or nonzero digest-shaped claims never authorize a role. Before every real-model
+mint the coordinator reopens no-follow v2 state and source authorities, reruns
+the signed aggregate/capability/core/conformance/human validators, and derives
+the accepted and current invocation commit/tree bindings. Legacy v1 state is
+never production-resumable.
 Use the same command with `--readiness-only` to collect/publish readiness and
 terminate before planner 1; blocked/findings/infrastructure outcomes remain
 unchanged. The sequence
@@ -617,7 +620,13 @@ a bounded whole-campaign deadline, and exact verification, capability-evidence,
 and final-acceptance argv. The production launcher
 proves the executing installed bytes/manifest/commit and binds the verifier
 before the planner. State, results, receipts, and canonical bindings remain in
-`.factory-state/campaigns/$CAMPAIGN_ID/`. The pre-existing `.factory-state`
+`.factory-state/campaigns/$CAMPAIGN_ID/`. Real launches additionally require
+`FACTORY_COORDINATOR_AUTH_FD` to name an inherited read/write descriptor for
+a root-owned mode-0600, single-link coordinator state file. Its v1 JSON holds
+at least 32 random key bytes (hex encoded) and the global monotonic consumed-
+scope map. This external state authenticates and durably anchors one-use
+transitions; it is never accepted by pathname, argv, workspace JSON, sealed
+fixture key, or a fixture lane. The pre-existing `.factory-state`
 root must be a real current-user-owned mode-0700 directory. Reservation
 lstats only that exact root and the fixed `campaigns` component, never
 enumerates the runtime root, and never reads, repairs, renames, removes, or

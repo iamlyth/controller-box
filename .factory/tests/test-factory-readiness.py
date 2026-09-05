@@ -171,21 +171,17 @@ class ReadinessTests(unittest.TestCase):
         value=readiness.result_document(campaign_id="auth-test",nonce="f"*64,status="complete",
             terminal_outcome="pass",bindings=bindings,results=results)
         raw=json.dumps(value,sort_keys=True,separators=(",",":")).encode(); descriptor="a"*64
-        token=launch.authorize_readiness_launch(raw,expected_campaign_id="auth-test",expected_nonce="f"*64,
-            expected_bindings=bindings,expected_results=results,launch_descriptor_sha256=descriptor,workspace=self.root)
-        self.assertEqual(token.accepted_commit,self.candidate)
-        with self.assertRaises(launch.InvocationError):
-            launch.authorize_readiness_launch(raw,expected_campaign_id="auth-test",expected_nonce="f"*64,
-                expected_bindings=bindings,expected_results=results,launch_descriptor_sha256=descriptor,workspace=self.root)
-        altered=dict(bindings);altered["tree"]="0"*40
-        with self.assertRaises(launch.InvocationError):
-            launch.authorize_readiness_launch(raw,expected_campaign_id="auth-test",expected_nonce="f"*64,
-                expected_bindings=altered,expected_results=results,launch_descriptor_sha256="b"*64,workspace=self.root)
-        code="""import json,pathlib,sys;sys.path.insert(0,sys.argv[1]);import launch\nraw=pathlib.Path(sys.argv[2]).read_bytes();kw=json.loads(pathlib.Path(sys.argv[3]).read_text());kw['workspace']=pathlib.Path(sys.argv[4]);launch.authorize_readiness_launch(raw,**kw)"""
-        raw_path=self.root/'result.json';raw_path.write_bytes(raw)
-        kw_path=self.root/'args.json';kw_path.write_text(json.dumps({"expected_campaign_id":"auth-test","expected_nonce":"f"*64,"expected_bindings":bindings,"expected_results":results,"launch_descriptor_sha256":descriptor}))
-        proc=subprocess.run([sys.executable,"-c",code,str(ROOT/'.factory/loop'),str(raw_path),str(kw_path),str(self.root)],capture_output=True)
-        self.assertNotEqual(proc.returncode,0,"a new process must not replay the same readiness authorization")
+        # Canonical-looking caller JSON, a known nonce, and arbitrary nonzero
+        # digests cannot supply authority or expected values to the mint.
+        with self.assertRaises(TypeError):
+            launch.authorize_readiness_launch(
+                raw, expected_campaign_id="auth-test", expected_nonce="f" * 64,
+                expected_bindings=bindings, expected_results=results,
+                launch_descriptor_sha256=descriptor, workspace=self.root)
+        import inspect
+        self.assertEqual(
+            set(inspect.signature(launch.authorize_readiness_launch).parameters),
+            {"campaign_id", "invocation", "workspace"})
 
     def test_result_exact_bindings_status_and_nonzero_pass_digests(self):
         bindings = {"accepted_commit":"a"*40,"tree":"b"*40,"environment_blob":"c"*40,

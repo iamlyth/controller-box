@@ -64,6 +64,7 @@ import ctypes
 import fcntl
 import functools
 import hashlib
+import hmac
 import json
 import math
 import os
@@ -86,6 +87,7 @@ try:  # package-import mode (the hidden control-plane package)
     from . import workspace_confinement as real_confinement_authority
     from . import redaction as output_redaction
     from . import readiness as readiness_authority
+    from . import state as state_authority
     from .gitutil import (
         GIT_ENV_STRIP,
         GitBoundaryError,
@@ -113,6 +115,7 @@ except ImportError:  # flat-import mode used by the hidden harness test suite
     import workspace_confinement as real_confinement_authority  # type: ignore[no-redef]
     import redaction as output_redaction  # type: ignore[no-redef]
     import readiness as readiness_authority  # type: ignore[no-redef]
+    import state as state_authority  # type: ignore[no-redef]
     from gitutil import (  # type: ignore[no-redef]
         GIT_ENV_STRIP,
         GitBoundaryError,
@@ -2815,6 +2818,10 @@ def _add_common_binding(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--role", required=True, choices=ROLES)
     parser.add_argument("--model", required=True)
     parser.add_argument("--provider", required=True)
+    parser.add_argument(
+        "--campaign-id", default="",
+        help="canonical protected campaign namespace (mandatory for real providers)",
+    )
     parser.add_argument("--backend", required=True, help="absolute model backend")
     parser.add_argument("--role-prompt", required=True, metavar="FILE")
     parser.add_argument(
@@ -3126,65 +3133,169 @@ def launch_descriptor_digest(binding: "InvocationBinding") -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def _readiness_ledger_path(workspace: Path, campaign_id: str) -> Path:
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", campaign_id):
+def _readiness_namespace(workspace: Path, campaign_id: str) -> Path:
+    """Resolve only the canonical private campaign namespace."""
+    if not re.fullmatch(r"[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?", campaign_id):
         raise InvocationError("readiness campaign namespace is invalid")
     root = Path(workspace).absolute()
-    state_root = root / ".factory-state"
-    if state_root.is_symlink() or (state_root.exists() and not state_root.is_dir()):
-        raise InvocationError("readiness state root is unsafe")
-    state_root.mkdir(mode=0o700, exist_ok=True)
-    ledger_root = state_root / "readiness-launch-ledger"
-    if ledger_root.is_symlink() or (ledger_root.exists() and not ledger_root.is_dir()):
-        raise InvocationError("readiness launch ledger root is unsafe")
-    ledger_root.mkdir(mode=0o700, exist_ok=True)
-    return ledger_root / f"{campaign_id}.json"
+    current = root
+    for part in (".factory-state", "campaigns", campaign_id):
+        current /= part
+        try:
+            info = os.lstat(current)
+        except OSError as exc:
+            raise InvocationError("readiness authorization campaign namespace is unavailable") from exc
+        if (not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode)
+                or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700):
+            raise InvocationError("readiness authorization campaign namespace is unsafe")
+    return current
 
 
-def _readiness_ledger_transition(path: Path, scope: str, expected: str, replacement: str) -> None:
-    """Atomically reserve/consume a launch scope under a durable flock."""
+def _read_authority_file(directory: Path, name: str, maximum: int) -> bytes:
+    """Bounded no-follow read with pathname/opened-inode equality."""
+    path = directory / name
+    try:
+        named = os.lstat(path)
+        fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as exc:
+        raise InvocationError(f"canonical readiness authority {name} is unavailable") from exc
+    try:
+        opened = os.fstat(fd)
+        if ((named.st_dev, named.st_ino) != (opened.st_dev, opened.st_ino)
+                or not stat.S_ISREG(opened.st_mode) or opened.st_uid != os.getuid()
+                or opened.st_nlink != 1 or opened.st_size > maximum
+                or stat.S_IMODE(opened.st_mode) != 0o600):
+            raise InvocationError(f"canonical readiness authority {name} is unsafe")
+        raw = bytearray()
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            raw.extend(chunk)
+            if len(raw) > maximum:
+                raise InvocationError(f"canonical readiness authority {name} is oversized")
+        final = os.fstat(fd)
+        if (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns) != (
+                final.st_dev, final.st_ino, final.st_size, final.st_mtime_ns):
+            raise InvocationError(f"canonical readiness authority {name} changed while read")
+        return bytes(raw)
+    finally:
+        os.close(fd)
+
+
+def _coordinator_authorization_key() -> Tuple[bytes, int, str]:
+    """Open the root/control-owned durable authorization state FD.
+
+    The descriptor must be root-owned, mode 0600, and opened read/write by the
+    external coordinator.  It contains a random key plus the monotonic global
+    consumed-scope map.  A workspace ledger is therefore only a cache: same-UID
+    rollback cannot erase consumption authority.
+    """
+    value = os.environ.get("FACTORY_COORDINATOR_AUTH_FD", "")
+    if not value.isdecimal():
+        raise InvocationError("production launch requires a protected coordinator authorization FD")
+    source_fd = int(value)
+    try:
+        info = os.fstat(source_fd)
+        access = fcntl.fcntl(source_fd, fcntl.F_GETFL) & os.O_ACCMODE
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0
+                or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1
+                or access != os.O_RDWR):
+            raise InvocationError("coordinator authorization FD is not root-owned durable read/write state")
+        fd = os.dup(source_fd)
+        os.lseek(fd, 0, os.SEEK_SET)
+        raw = os.read(fd, 4 * 1024 * 1024 + 1)
+    except OSError as exc:
+        raise InvocationError("coordinator authorization FD is unavailable") from exc
+    try:
+        document = json.loads(raw)
+        key = bytes.fromhex(document["key"])
+    except (ValueError, TypeError, KeyError):
+        os.close(fd)
+        raise InvocationError("coordinator authorization state is malformed")
+    if (set(document) != {"schema", "key", "entries"}
+            or document.get("schema") != "factory-coordinator-launch-authority/v1"
+            or not isinstance(document.get("entries"), dict) or len(key) < 32):
+        os.close(fd)
+        raise InvocationError("coordinator authorization state is malformed")
+    return key, fd, f"{info.st_dev:x}:{info.st_ino:x}"
+
+
+def _coordinator_transition(fd: int, scope: str, expected: str, replacement: str) -> None:
+    """Durably transition the external root-owned monotonic one-use map."""
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        os.lseek(fd, 0, os.SEEK_SET)
+        document = json.loads(os.read(fd, 4 * 1024 * 1024 + 1))
+        if (document.get("schema") != "factory-coordinator-launch-authority/v1"
+                or not isinstance(document.get("entries"), dict)
+                or document["entries"].get(scope, "absent") != expected):
+            raise InvocationError("coordinator authorization was replayed or state is malformed")
+        document["entries"][scope] = replacement
+        raw = (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode()
+        os.lseek(fd, 0, os.SEEK_SET); os.ftruncate(fd, 0)
+        offset = 0
+        while offset < len(raw):
+            offset += os.write(fd, raw[offset:])
+        os.fsync(fd)
+    except (OSError, ValueError, TypeError) as exc:
+        if isinstance(exc, InvocationError):
+            raise
+        raise InvocationError("coordinator authorization transition failed") from exc
+    finally:
+        try: fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError: pass
+
+
+def _readiness_ledger_path(workspace: Path, campaign_id: str) -> Path:
+    return _readiness_namespace(workspace, campaign_id) / "readiness-launch-ledger.json"
+
+
+def _signed_ledger_bytes(entries: Mapping[str, object], key: bytes, identity: str) -> bytes:
+    body = {"schema": "factory-readiness-launch-ledger/v2", "identity": identity,
+            "entries": dict(sorted(entries.items()))}
+    body["mac"] = hmac.new(key, json.dumps(body, sort_keys=True, separators=(",", ":")).encode(), hashlib.sha256).hexdigest()
+    return (json.dumps(body, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+
+def _readiness_ledger_transition(path: Path, scope: str, expected: str, replacement: str,
+                                 *, key: bytes, identity: str) -> None:
+    """Serialize an authenticated, fsync-durable one-use transition."""
     parent = path.parent
-    parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if parent.is_symlink() or path.is_symlink():
-        raise InvocationError("readiness launch ledger path is unsafe")
-    lock_path = parent / f".{path.name}.lock"
+    lock_path = parent / ".readiness-launch-ledger.lock"
     fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0), 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
-        ledger = {"schema": "factory-readiness-launch-ledger/v1", "entries": {}}
+        entries: Dict[str, object] = {}
         if path.exists():
+            raw = _read_authority_file(parent, path.name, 4 * 1024 * 1024)
             try:
-                read_fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0))
-                try:
-                    info = os.fstat(read_fd)
-                    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > 4 * 1024 * 1024:
-                        raise InvocationError("readiness launch ledger metadata is unsafe")
-                    chunks=[]
-                    while True:
-                        chunk=os.read(read_fd,65536)
-                        if not chunk: break
-                        chunks.append(chunk)
-                    ledger=json.loads(b"".join(chunks).decode("utf-8"))
-                finally: os.close(read_fd)
-            except (OSError, UnicodeError, ValueError) as exc:
+                ledger = json.loads(raw)
+                mac = ledger.pop("mac")
+            except (ValueError, KeyError, TypeError) as exc:
                 raise InvocationError("readiness launch ledger is malformed") from exc
-        if (not isinstance(ledger, dict)
-                or set(ledger) != {"schema", "entries"}
-                or ledger.get("schema") != "factory-readiness-launch-ledger/v1"
-                or not isinstance(ledger.get("entries"), dict)):
-            raise InvocationError("readiness launch ledger is malformed")
-        current = ledger["entries"].get(scope, "absent")
-        if current != expected:
+            expected_mac = hmac.new(key, json.dumps(ledger, sort_keys=True, separators=(",", ":")).encode(), hashlib.sha256).hexdigest()
+            if (not hmac.compare_digest(str(mac), expected_mac)
+                    or ledger.get("schema") != "factory-readiness-launch-ledger/v2"
+                    or ledger.get("identity") != identity or not isinstance(ledger.get("entries"), dict)):
+                raise InvocationError("readiness launch ledger authentication failed")
+            entries = ledger["entries"]
+        if entries.get(scope, "absent") != expected:
             raise InvocationError("readiness authorization was replayed or already consumed")
-        ledger["entries"][scope] = replacement
-        raw = (json.dumps(ledger, sort_keys=True, separators=(",", ":")) + "\n").encode()
-        temporary = parent / f".{path.name}.{os.getpid()}.{threading.get_ident()}"
-        out = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o600)
+        entries[scope] = replacement
+        raw = _signed_ledger_bytes(entries, key, identity)
+        temporary = f".readiness-ledger.{os.getpid()}.{threading.get_ident()}"
+        directory_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
         try:
-            os.write(out, raw); os.fsync(out)
+            out = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC,
+                          0o600, dir_fd=directory_fd)
+            try:
+                os.write(out, raw); os.fsync(out)
+            finally:
+                os.close(out)
+            os.replace(temporary, path.name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
         finally:
-            os.close(out)
-        os.replace(temporary, path)
+            os.close(directory_fd)
         directory_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
         try: os.fsync(directory_fd)
         finally: os.close(directory_fd)
@@ -3192,62 +3303,145 @@ def _readiness_ledger_transition(path: Path, scope: str, expected: str, replacem
         fcntl.flock(fd, fcntl.LOCK_UN); os.close(fd)
 
 
+def _campaign_descriptor_mac(document: Mapping[str, object], key: bytes) -> str:
+    return hmac.new(key, json.dumps(dict(document), sort_keys=True, separators=(",", ":")).encode(), hashlib.sha256).hexdigest()
+
+
+def bind_campaign_authority(workspace: Path, campaign_id: str,
+                            descriptor: Mapping[str, object]) -> None:
+    """Publish or verify the coordinator-authenticated immutable campaign descriptor."""
+    namespace = _readiness_namespace(workspace, campaign_id)
+    key, coordinator_fd, _ = _coordinator_authorization_key()
+    os.close(coordinator_fd)
+    body = {"schema": "factory-campaign-launch-authority/v1", **dict(descriptor)}
+    body["mac"] = _campaign_descriptor_mac(body, key)
+    path = namespace / "launch-authority.json"
+    raw = (json.dumps(body, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    if path.exists():
+        if _read_authority_file(namespace, path.name, 256 * 1024) != raw:
+            raise InvocationError("campaign launch authority changed across recovery")
+        return
+    directory_fd = os.open(namespace, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        fd = os.open(path.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC,
+                     0o600, dir_fd=directory_fd)
+        try:
+            os.write(fd, raw); os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
 class ReadinessLaunchAuthorization:
     __slots__ = ("digest", "campaign_id", "nonce", "accepted_commit", "tree",
-                 "descriptor_digest", "binding_digest", "bindings", "result_digests",
-                 "scope", "ledger_path", "used", "_mint")
-    def __init__(self, *, digest, campaign_id, nonce, accepted_commit, tree,
-                 descriptor_digest, binding_digest, bindings, result_digests, scope,
-                 ledger_path, _mint):
+                 "current_commit", "current_tree", "descriptor_digest", "campaign_descriptor_digest", "state_digest",
+                 "state_generation", "binding_digest", "bindings", "result_digests",
+                 "scope", "ledger_path", "ledger_identity", "key", "coordinator_fd", "used", "_mint")
+    def __init__(self, *, _mint, **values):
         if _mint is not _READINESS_MINT_SECRET:
             raise LaunchError("readiness launch token cannot be forged")
-        self.digest=digest; self.campaign_id=campaign_id; self.nonce=nonce
-        self.accepted_commit=accepted_commit; self.tree=tree
-        self.descriptor_digest=descriptor_digest; self.binding_digest=binding_digest
-        self.bindings=dict(bindings); self.result_digests=dict(result_digests); self.scope=scope
-        self.ledger_path=Path(ledger_path); self.used=False; self._mint=_mint
+        for name, value in values.items():
+            setattr(self, name, value)
+        self.used = False; self._mint = _mint
 
 
-def authorize_readiness_launch(
-    raw: bytes, *, expected_campaign_id: str, expected_nonce: str,
-    expected_bindings: Mapping[str, object], expected_results: Mapping[str, object],
-    launch_descriptor_sha256: str, workspace: Path,
-) -> ReadinessLaunchAuthorization:
-    """Mint only from the complete canonical, exactly expected readiness result.
-
-    Reservation is durable and descriptor-scoped: a copied token or a second
-    process replaying the same result for the same launch can never produce a
-    second usable authorization.
-    """
+def authorize_readiness_launch(*, campaign_id: str, invocation: "InvocationBinding",
+                               workspace: Path) -> ReadinessLaunchAuthorization:
+    """Rederive authority from canonical campaign state; cache bytes are claims only."""
+    verify_invocation(invocation)
+    root = Path(workspace).absolute()
+    if Path(invocation.workspace).absolute() != root:
+        raise InvocationError("readiness invocation belongs to another workspace")
+    namespace = _readiness_namespace(root, campaign_id)
+    key, coordinator_fd, coordinator_identity = _coordinator_authorization_key()
     try:
-        value = json.loads(raw.decode("utf-8"))
-        readiness_authority.validate_result(
-            value, expected_campaign_id=expected_campaign_id,
-            expected_nonce=expected_nonce, expected_bindings=expected_bindings,
-        )
-    except (UnicodeError, ValueError, readiness_authority.ReadinessError) as exc:
-        raise InvocationError("readiness authorization is malformed or not canonical") from exc
-    canonical = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
-    if raw != canonical:
-        raise InvocationError("readiness authorization bytes are not canonical")
-    if value.get("status") != "complete" or value.get("terminal_outcome") != "pass":
-        raise InvocationError("real-provider launch requires complete passing readiness")
-    if dict(value["results"]) != dict(expected_results):
-        raise InvocationError("readiness result digests do not exactly match expected results")
-    if not SHA256_RE.fullmatch(launch_descriptor_sha256):
-        raise InvocationError("launch descriptor digest is invalid")
-    digest = hashlib.sha256(raw).hexdigest()
-    binding_digest = hashlib.sha256(json.dumps(value["bindings"], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    scope = hashlib.sha256((digest + "\0" + launch_descriptor_sha256).encode()).hexdigest()
-    ledger_path = _readiness_ledger_path(Path(workspace), expected_campaign_id)
-    _readiness_ledger_transition(ledger_path, scope, "absent", "minted")
-    return ReadinessLaunchAuthorization(
-        digest=digest, campaign_id=expected_campaign_id, nonce=expected_nonce,
-        accepted_commit=value["bindings"]["accepted_commit"], tree=value["bindings"]["tree"],
-        descriptor_digest=launch_descriptor_sha256, binding_digest=binding_digest,
-        bindings=value["bindings"], result_digests=value["results"], scope=scope, ledger_path=ledger_path,
-        _mint=_READINESS_MINT_SECRET,
-    )
+        descriptor_raw = _read_authority_file(namespace, "launch-authority.json", 256 * 1024)
+        campaign_descriptor = json.loads(descriptor_raw)
+        descriptor_mac = campaign_descriptor.pop("mac")
+    except (ValueError, KeyError, TypeError) as exc:
+        raise InvocationError("canonical campaign launch descriptor is malformed") from exc
+    if (campaign_descriptor.get("schema") != "factory-campaign-launch-authority/v1"
+            or not hmac.compare_digest(str(descriptor_mac), _campaign_descriptor_mac(campaign_descriptor, key))
+            or campaign_descriptor.get("campaign_id") != campaign_id
+            or campaign_descriptor.get("provider") != invocation.provider
+            or campaign_descriptor.get("model") != invocation.model
+            or Path(str(campaign_descriptor.get("backend", ""))).absolute() != Path(invocation.backend).absolute()
+            or campaign_descriptor.get("prompt_set_digest") != invocation.prompt_set_digest
+            or campaign_descriptor.get("specification_digest") != invocation.specification_digest):
+        raise InvocationError("invocation differs from authenticated campaign descriptor")
+    try:
+        state_raw = _read_authority_file(namespace, state_authority.STATE_FILE_NAME, 16 * 1024)
+        state_value = json.loads(state_raw)
+        state = state_authority.parse_state(state_value)
+    except (ValueError, state_authority.StateError) as exc:
+        raise InvocationError("canonical campaign state is malformed") from exc
+    if (state.campaign_id != campaign_id or state.repository_identity != state_authority.repository_identity(root)
+            or not state.readiness.get("required") or state.readiness.get("status") != "complete"
+            or state.readiness.get("terminal_outcome") != "pass"):
+        raise InvocationError("canonical campaign state does not authorize launch")
+    result_raw = _read_authority_file(namespace, "readiness-result.json", 1024 * 1024)
+    try:
+        result = json.loads(result_raw)
+    except ValueError as exc:
+        raise InvocationError("readiness cache is malformed") from exc
+    canonical = json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
+    expected_bindings = {name: state.readiness[name] for name in (
+        "accepted_commit", "tree", "environment_blob", "specification_sha256", "plan_sha256",
+        "conformance_sha256", "policy_sha256", "contracts_sha256", "install_manifest_sha256",
+        "command_authority_sha256", "human_authority_sha256", "trust_authority_sha256")}
+    try:
+        readiness_authority.validate_result(result, expected_campaign_id=campaign_id,
+            expected_nonce=str(state.readiness["nonce"]), expected_bindings=expected_bindings)
+    except readiness_authority.ReadinessError as exc:
+        raise InvocationError("readiness cache disagrees with canonical state") from exc
+    if (result.get("status") != "complete" or result.get("results") != {
+            name: state.readiness[name] for name in (
+                "aggregate_sha256", "capability_result_sha256", "core_result_sha256",
+                "conformance_result_sha256", "human_result_sha256")}
+            or hashlib.sha256(canonical).hexdigest() != state.readiness.get("result_sha256")):
+        raise InvocationError("readiness cache digest/results are not authoritative")
+    current_commit = resolve_head(root)
+    if current_commit != invocation.bound_commit:
+        raise InvocationError("readiness invocation commit is not current HEAD")
+    tree_result = git_bytes(["-C", str(root), "rev-parse", f"{current_commit}^{{tree}}"], timeout=GIT_BLOB_TIMEOUT)
+    if tree_result.returncode != 0:
+        raise InvocationError("cannot resolve current invocation tree")
+    current_tree = tree_result.stdout.decode().strip()
+    if not SHA40_RE.fullmatch(current_tree):
+        raise InvocationError("current invocation tree is malformed")
+    descriptor_digest = launch_descriptor_digest(invocation)
+    state_digest = state_authority.state_digest(state)
+    generation = f"{state.current_round}:{state.current_phase}:{state.attempt_number}"
+    identity = f"{state.repository_identity}:{campaign_id}"
+    if (state.plan_digest != invocation.plan_digest
+            or state.role_prompt_digests.get(invocation.role) != invocation.role_prompt_digest
+            or campaign_descriptor.get("accepted_commit") != state.readiness["accepted_commit"]):
+        raise InvocationError("invocation differs from canonical campaign state")
+    authenticated = json.dumps({"campaign_id": campaign_id, "nonce": state.readiness["nonce"],
+        "accepted_commit": state.readiness["accepted_commit"], "accepted_tree": state.readiness["tree"],
+        "current_commit": current_commit, "current_tree": current_tree, "state_digest": state_digest,
+        "state_generation": generation, "descriptor_digest": descriptor_digest,
+        "readiness_result_digest": hashlib.sha256(canonical).hexdigest(),
+        "results": result["results"]}, sort_keys=True, separators=(",", ":")).encode()
+    scope = hmac.new(key, (coordinator_identity + "\0").encode() + authenticated, hashlib.sha256).hexdigest()
+    ledger_path = _readiness_ledger_path(root, campaign_id)
+    # The root-owned external state is authoritative and transitions first.
+    # A crash can only fail closed; restoring workspace cache bytes cannot
+    # erase this reservation.
+    _coordinator_transition(coordinator_fd, scope, "absent", "minted")
+    _readiness_ledger_transition(ledger_path, scope, "absent", "minted", key=key, identity=identity)
+    return ReadinessLaunchAuthorization(_mint=_READINESS_MINT_SECRET, digest=hashlib.sha256(canonical).hexdigest(),
+        campaign_id=campaign_id, nonce=state.readiness["nonce"], accepted_commit=state.readiness["accepted_commit"],
+        tree=state.readiness["tree"], current_commit=current_commit, current_tree=current_tree,
+        descriptor_digest=descriptor_digest,
+        campaign_descriptor_digest=hashlib.sha256(descriptor_raw).hexdigest(),
+        state_digest=state_digest, state_generation=generation,
+        binding_digest=hashlib.sha256(json.dumps(expected_bindings, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+        bindings=expected_bindings, result_digests=result["results"], scope=scope,
+        ledger_path=ledger_path, ledger_identity=identity, key=key,
+        coordinator_fd=coordinator_fd)
 
 
 class LaunchAuthority:
@@ -4155,6 +4349,7 @@ def authorize_launch(
     task_excerpt: Optional[bytes] = None,
     findings: Optional[bytes] = None,
     readiness_authorization: Optional[ReadinessLaunchAuthorization] = None,
+    readiness_invocation: Optional["InvocationBinding"] = None,
 ) -> LaunchAuthority:
     """Mint the unforgeable verified-committed authority token (F2/F5).
 
@@ -4198,7 +4393,9 @@ def authorize_launch(
                 or readiness_authorization._mint is not _READINESS_MINT_SECRET
                 or readiness_authorization.used
                 or not SHA256_RE.fullmatch(readiness_authorization.digest)
+                or readiness_invocation != binding
                 or readiness_authorization.descriptor_digest != descriptor_digest
+                or readiness_authorization.current_commit != binding.bound_commit
                 or readiness_authorization.ledger_path != _readiness_ledger_path(
                     Path(binding.workspace), readiness_authorization.campaign_id)
                 or not SHA40_RE.fullmatch(readiness_authorization.accepted_commit)
@@ -4224,12 +4421,43 @@ def authorize_launch(
             raise InvocationError(
                 "standalone real-provider launch lacks exact descriptor-bound readiness authorization"
             )
+        # Reopen state after mint and immediately before durable consumption;
+        # a same-process race or post-mint state/descriptor mutation cannot
+        # ride a previously valid in-memory object into model execution.
+        namespace = _readiness_namespace(Path(binding.workspace), readiness_authorization.campaign_id)
+        try:
+            live_state = state_authority.parse_state(json.loads(
+                _read_authority_file(namespace, state_authority.STATE_FILE_NAME, 16 * 1024)))
+        except (ValueError, state_authority.StateError) as exc:
+            raise InvocationError("canonical launch state changed after readiness mint") from exc
+        live_generation = f"{live_state.current_round}:{live_state.current_phase}:{live_state.attempt_number}"
+        live_head = resolve_head(Path(binding.workspace))
+        live_tree_result = git_bytes(["-C", str(Path(binding.workspace).absolute()), "rev-parse",
+                                      f"{live_head}^{{tree}}"], timeout=GIT_BLOB_TIMEOUT)
+        live_tree = live_tree_result.stdout.decode().strip() if live_tree_result.returncode == 0 else ""
+        if (hashlib.sha256(_read_authority_file(namespace, "launch-authority.json", 256 * 1024)).hexdigest()
+                != readiness_authorization.campaign_descriptor_digest
+                or state_authority.state_digest(live_state) != readiness_authorization.state_digest
+                or live_generation != readiness_authorization.state_generation
+                or live_head != readiness_authorization.current_commit
+                or live_tree != readiness_authorization.current_tree):
+            raise InvocationError("readiness authorization invocation/state binding changed before consumption")
         # The durable transition, not the mutable in-memory flag, is the
         # authority. It rejects copied objects and survives process restart.
+        _coordinator_transition(
+            readiness_authorization.coordinator_fd,
+            readiness_authorization.scope, "minted", "consumed")
         _readiness_ledger_transition(
             readiness_authorization.ledger_path,
-            readiness_authorization.scope, "minted", "consumed")
+            readiness_authorization.scope, "minted", "consumed",
+            key=readiness_authorization.key,
+            identity=readiness_authorization.ledger_identity)
         readiness_authorization.used = True
+        try:
+            os.close(readiness_authorization.coordinator_fd)
+        except OSError:
+            pass
+        readiness_authorization.coordinator_fd = -1
     _verify_input_digest("role prompt", role_prompt, binding.role_prompt_digest)
     _verify_input_digest("operational policy", agents, binding.policy_digest)
     _verify_input_digest("specification", spec, binding.specification_digest)
@@ -4796,6 +5024,12 @@ def _run_cli(args: argparse.Namespace) -> int:
             audit_objective=audit_objective,
             task_excerpt=task_excerpt,
             findings=findings,
+            readiness_authorization=(
+                authorize_readiness_launch(
+                    campaign_id=args.campaign_id, invocation=binding, workspace=root)
+                if binding.provider != "synthetic" else None
+            ),
+            readiness_invocation=(binding if binding.provider != "synthetic" else None),
         )
         supervisor = LaunchSupervision(binding)
         result = supervisor.run(authority)

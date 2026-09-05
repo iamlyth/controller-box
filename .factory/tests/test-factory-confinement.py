@@ -2346,21 +2346,6 @@ class ProductionLaunchConfinementTests(_Base):
             )
 
     def _authorize(self, binding, **kwargs):
-        if binding.provider != "synthetic" and "readiness_authorization" not in kwargs:
-            tree = _git("rev-parse", "HEAD^{tree}", cwd=self.workspace).stdout.strip()
-            bindings={"accepted_commit":binding.bound_commit,"tree":tree,"environment_blob":binding.bound_commit,
-                "specification_sha256":"b"*64,"plan_sha256":"c"*64,"conformance_sha256":"d"*64,
-                "policy_sha256":"e"*64,"contracts_sha256":"f"*64,"install_manifest_sha256":"1"*64,
-                "command_authority_sha256":"2"*64,"human_authority_sha256":"3"*64,"trust_authority_sha256":"4"*64}
-            results={"aggregate_sha256":"5"*64,"capability_result_sha256":"6"*64,"core_result_sha256":"7"*64,
-                "conformance_result_sha256":"8"*64,"human_result_sha256":"9"*64}
-            raw=json.dumps({"schema":"factory-readiness-result/v2","campaign_id":"confinement-test",
-                "nonce":"a"*64,"status":"complete","terminal_outcome":"pass",
-                "bindings":bindings,"results":results},sort_keys=True,separators=(",",":")).encode()
-            kwargs["readiness_authorization"]=launch.authorize_readiness_launch(
-                raw,expected_campaign_id="confinement-test",expected_nonce="a"*64,
-                expected_bindings=bindings,expected_results=results,
-                launch_descriptor_sha256=launch.launch_descriptor_digest(binding),workspace=self.workspace)
         authority = launch.authorize_launch(
             binding,
             role_prompt=(self.workspace / "role.md").read_bytes(),
@@ -2509,12 +2494,8 @@ class ProductionLaunchConfinementTests(_Base):
         """Ollama launch keeps real confinement but opens no quota channel."""
         binding = self.binding(role="planner", provider="ollama")
         self.assertFalse(hasattr(launch, "usage_guard"))
-        authority = self._authorize(binding)
-        self.assertFalse(hasattr(authority._confinement_proof, "synthetic"))
-        self.assertEqual(
-            {c.to_tuple() for c in authority._confinement_proof.credential_channels},
-            {("env_store", usage._default_env_file())},
-        )
+        with self.assertRaisesRegex(launch.InvocationError, "readiness authorization"):
+            self._authorize(binding)
 
     def test_caller_proof_keyword_is_rejected(self) -> None:
         """No installed caller can inject any proof, synthetic or otherwise."""
@@ -2597,19 +2578,19 @@ class ProductionLaunchConfinementTests(_Base):
 
     def test_every_provider_and_direct_api_requires_real_confinement(self) -> None:
         """Every programmatic provider receives internally minted real confinement."""
-        for provider in ("synthetic", "ollama"):
-            with self.subTest(provider=provider):
-                binding = self.binding(role="planner", provider=provider)
-                authority = self._authorize(binding)
-                self.assertFalse(hasattr(authority._confinement_proof, "synthetic"))
-                self.assertTrue(authority._confinement_rule_fds)
+        binding = self.binding(role="planner", provider="synthetic")
+        authority = self._authorize(binding)
+        self.assertFalse(hasattr(authority._confinement_proof, "synthetic"))
+        self.assertTrue(authority._confinement_rule_fds)
+        with self.assertRaisesRegex(launch.InvocationError, "readiness authorization"):
+            self._authorize(self.binding(role="planner", provider="ollama"))
 
     def test_direct_api_with_real_spec_mints_real_proof(self) -> None:
         """The programmatic (non-CLI) authorize API applies real confinement
         and mints a real (never synthetic) proof for every provider — the
         confinement is not CLI-only (finding 5).
         """
-        for provider in ("synthetic", "ollama"):
+        for provider in ("synthetic",):
             with self.subTest(provider=provider):
                 binding = self.binding(role="planner", provider=provider)
                 authority = self._authorize(binding)

@@ -462,7 +462,11 @@ typed result digests are chained into `factory-loop.json` before planning.
 The committed registry currently contains only the enabled mandatory branch
 guard. No Ollama quota hook is implemented or configured; adding one is a
 future explicit change. Per-model `authorize_launch` has no quota/cookie
-options and performs no usage check. Existing standalone operator usage tools
+options and performs no usage check. For real providers it does require a
+canonical campaign-derived readiness token and a separately equal invocation
+binding; caller JSON/digests cannot mint one. The one-use ledger is authenticated
+by the protected coordinator authorization FD, not trusted as plain same-UID
+JSON. Existing standalone operator usage tools
 remain separate from campaign hook execution. Their optional settings live in
 the operator-owned `.ollama-usage-env`:
 

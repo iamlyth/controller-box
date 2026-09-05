@@ -6,6 +6,29 @@ base_commit: 860922af39ed7e2aef9b95705705f7ed90344e87
 status: active
 ---
 
+**Readiness authorization provenance and durable consumption checkpoint**
+
+Real-provider launch authority no longer accepts caller readiness bytes,
+nonces, bindings, result digests, or descriptor digests. The mint resolves the
+exact private campaign namespace, performs bounded no-follow reads of v2 state
+and the unauthoritative readiness cache, derives accepted/current commit and
+tree plus state generation/digest and the exact invocation descriptor, and
+requires every cache field/digest to equal canonical state. Campaign launch
+freshly reruns the signed aggregate, capability, core, conformance, and external
+human-signature/capture validators before minting; crash-cache presence never
+advances readiness and stale authorities fail closed.
+
+One-use reservations and consumption are serialized, fsync-durable, and HMAC
+authenticated with a root-owned or sealed coordinator key supplied only by
+protected inherited FD. Token identity covers repository/campaign, nonce,
+accepted/current commit/tree, state generation/digest, invocation descriptor,
+readiness-result digest, and every result digest. Consumption occurs before
+model staging; copy, restart replay, remint, cross-campaign/commit/tree, and
+concurrent double use fail closed. Synthetic fixture mode receives no such
+authority and standalone real-provider launch remains denied without it.
+Focused launch and campaign suites were run locally; no external runner,
+model, campaign, specification, or golden was used or changed.
+
 **Audit remediation checkpoint (current checkout)**
 
 The blocked-facts validator no longer treats a committed receipt-shaped JSON

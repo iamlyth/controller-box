@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "factory-readiness-result/v2",
+  "$comment": "This document is an unauthoritative cache. Authorization is derived by reopening canonical campaign state and source evidence; digest-shaped values alone are never authority.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "campaign_id", "nonce", "status", "terminal_outcome", "bindings", "results"],

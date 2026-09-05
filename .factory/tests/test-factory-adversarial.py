@@ -1574,19 +1574,24 @@ class CaseAdversarialSuite(_AdversarialBase):
             "campaign_id":"adversarial", "nonce":"a"*64, "status":"complete",
             "terminal_outcome":"pass", "bindings":readiness_bindings,
             "results":readiness_results},sort_keys=True,separators=(",",":")).encode()
-        authority = launch_module.authorize_launch(
+        # A caller-fabricated passing cache (including a known nonce and
+        # arbitrary nonzero digests) is never an authority.  The mint accepts
+        # no raw JSON/expected-value surface and resolves only canonical
+        # campaign state under .factory-state/campaigns/<id>.
+        with self.assertRaises((TypeError, launch_module.InvocationError)):
+            launch_module.authorize_readiness_launch(
+                readiness_raw, expected_campaign_id="adversarial",
+                expected_nonce="a" * 64, expected_bindings=readiness_bindings,
+                expected_results=readiness_results,
+                launch_descriptor_sha256=launch_module.launch_descriptor_digest(binding),
+                workspace=ws.root)
+        with self.assertRaises(launch_module.InvocationError):
+            launch_module.authorize_launch(
                 binding,
-                role_prompt=(ws.root / ".factory" / "prompts" /
-                             "planner.md").read_bytes(),
+                role_prompt=(ws.root / ".factory" / "prompts" / "planner.md").read_bytes(),
                 agents=(ws.root / "AGENTS.md").read_bytes(),
                 spec=(ws.root / "docs" / "SPEC.md").read_bytes(),
-                plan=(ws.root / PLAN_REL).read_bytes(),
-                readiness_authorization=launch_module.authorize_readiness_launch(
-                    readiness_raw,expected_campaign_id="adversarial",expected_nonce="a"*64,
-                    expected_bindings=readiness_bindings,expected_results=readiness_results,
-                    launch_descriptor_sha256=launch_module.launch_descriptor_digest(binding),workspace=ws.root),
-            )
-        self.assertIsInstance(authority, launch_module.LaunchAuthority)
+                plan=(ws.root / PLAN_REL).read_bytes())
         registry = json.loads((ws.root / ".factory/pre-round-hooks.json").read_text())
         enabled = {item["id"]: item["enabled"] for item in registry["hooks"]}
         self.assertEqual(enabled, {"branch-guard": True})
