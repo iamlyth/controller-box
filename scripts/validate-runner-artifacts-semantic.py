@@ -14,27 +14,36 @@ def within(root,rel):
  except ValueError:die('artifact path escapes held root')
  return p
 def png(path):
- raw=read(path); 
+ raw=read(path)
  if raw[:8]!=b'\x89PNG\r\n\x1a\n': die("bad PNG signature")
- off=8;chunks=[];w=h=ct=bd=interlace=None;packed=b'';idat_done=False
+ off=8;chunks=[];w=h=ct=bd=interlace=None;packed=bytearray();idat_done=False
  while off+12<=len(raw):
+  if len(chunks)>=4096:die('too many PNG chunks')
   n=struct.unpack('>I',raw[off:off+4])[0];typ=raw[off+4:off+8];end=off+12+n
   if n>16*1024*1024 or end>len(raw) or zlib.crc32(raw[off+4:off+8+n])&0xffffffff!=struct.unpack('>I',raw[off+8+n:end])[0]:die('bad PNG chunk/CRC')
   payload=raw[off+8:off+8+n]
   if typ==b'IHDR':
    if chunks or n!=13:die('bad PNG IHDR')
    w,h,bd,ct,_,_,interlace=struct.unpack('>IIBBBBB',payload)
+   if w<1280 or h<720 or w>8192 or h>8192 or w*h>16_777_216:die('PNG dimensions/pixels out of bounds')
   elif typ==b'IDAT':
-   if idat_done:die('non-contiguous PNG IDAT');packed+=payload
-  elif packed:idat_done=True
+   if idat_done:die('non-contiguous PNG IDAT')
+   if len(packed)+n>16*1024*1024:die('PNG IDAT bytes exceed bound')
+   packed.extend(payload)
+  elif packed:
+   idat_done=True
   if typ[0]&32==0 and typ not in (b'IHDR',b'IDAT',b'IEND'):die('unknown critical PNG chunk')
   chunks.append(typ);off=end
   if typ==b'IEND':break
- if off!=len(raw) or not chunks or chunks[0]!=b'IHDR' or chunks[-1]!=b'IEND' or not packed or w<1280 or h<720 or bd!=8 or ct not in (2,6) or interlace!=0:die('unsupported/incomplete/clipped PNG')
- channels=3 if ct==2 else 4;stride=w*channels
- try:data=zlib.decompress(packed)
- except zlib.error:die('PNG IDAT decode failed')
- if len(data)!=(stride+1)*h:die('PNG decoded size mismatch')
+ if off!=len(raw) or not chunks or chunks[0]!=b'IHDR' or chunks[-1]!=b'IEND' or not packed or w is None or bd!=8 or ct not in (2,6) or interlace!=0:die('unsupported/incomplete/clipped PNG')
+ channels=3 if ct==2 else 4;stride=w*channels;expected=(stride+1)*h
+ if expected>67_125_248 or expected>len(packed)*2048:die('PNG inflate size/ratio exceeds bound')
+ try:
+  decoder=zlib.decompressobj();data=decoder.decompress(bytes(packed),expected+1)
+  if len(data)>expected or decoder.unconsumed_tail:die('PNG inflate exceeds bound')
+  data+=decoder.flush(expected+1-len(data))
+ except (zlib.error,ValueError):die('PNG IDAT decode failed')
+ if len(data)!=expected or not decoder.eof or decoder.unused_data:die('PNG decoded size/stream mismatch')
  rows=[];prev=bytearray(stride);o=0
  def paeth(a,b,c):
   p=a+b-c;pa=abs(p-a);pb=abs(p-b);pc=abs(p-c);return a if pa<=pb and pa<=pc else b if pb<=pc else c

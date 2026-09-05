@@ -30,7 +30,7 @@ def aggregate_path(campaign_id: str, readiness_nonce: str) -> Path:
 SIGNER_TRUST_PATH = ".factory/signer-trust.json"
 SHA1 = re.compile(r"^[0-9a-f]{40}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
-NAME = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+NAME = re.compile(r"^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$")
 MAX_EVIDENCE_FILE = 16 * 1024 * 1024
 # Finite bound for every trusted Git read (MED2): the pinned absolute Git
 # executable can never wait forever behind the evidence boundary.

@@ -223,8 +223,10 @@ open(path, 'w').write(json.dumps(data))
 PY
 expect "$tmp/no-blocking" planning 1 "open fact without blocking evidence"
 
-# Complete mode reads receipt content from the declared Git blob, never from
-# the working tree: a tampered working-tree copy cannot break a clean commit.
+# Bare committed audit receipts are never authority for fact resolution.  Even
+# a structurally complete, clean-exit receipt must fail: receipt resolutions
+# are accepted only as aggregate-v4 member manifests through the canonical
+# signed runner-evidence checker.
 cp -a "$tmp/blessed" "$tmp/blob-read"
 python3 - "$tmp/blob-read" "$head" <<'PY'
 import hashlib, json, pathlib, sys
@@ -259,8 +261,8 @@ open(path, "w").write(json.dumps(ledger))
 PY
 git -C "$tmp/blob-read" add .factory/artifacts/blocked-facts.json
 git -C "$tmp/blob-read" commit -qm "ledger receipt resolution"
-# Tamper the working-tree copy only: complete mode must still read the clean
-# committed blob at the declared evidence commit.
+# Tampering the working-tree copy is irrelevant: the committed bare receipt is
+# itself insufficient authority.
 python3 - "$tmp/blob-read" <<'PY'
 import json, sys
 path = f"{sys.argv[1]}/tests/probe-receipt.json"
@@ -268,7 +270,7 @@ data = json.load(open(path))
 data["exit_code"] = 9
 open(path, "w").write(json.dumps(data))
 PY
-expect "$tmp/blob-read" complete 0 "complete mode reads receipt from the declared git blob"
+expect "$tmp/blob-read" complete 1 "bare committed audit receipt is not authority"
 
 # A receipt whose committed blob is not a clean pass fails complete mode even
 # when the working tree would pass.
@@ -306,5 +308,58 @@ PY
 git -C "$tmp/bad-blob" add .factory/artifacts/blocked-facts.json
 git -C "$tmp/bad-blob" commit -qm "ledger bad receipt resolution"
 expect "$tmp/bad-blob" complete 1 "committed receipt blob with a nonzero exit"
+
+# An exact runtime manifest namespace is delegated with all namespace bindings
+# to the canonical aggregate-v4 checker.  This fixture validates the dispatch
+# contract; check-factory-runner-evidence's own suite validates signatures,
+# aggregate membership, archive/environment/capability/semantic fields, and
+# every tamper case.
+cp -a "$tmp/blessed" "$tmp/aggregate-authority"
+commit=$(git -C "$tmp/aggregate-authority" rev-parse HEAD)
+readiness=$(printf 'a%.0s' {1..64})
+acquisition=$(printf 'b%.0s' {1..64})
+manifest=".factory-state/runner-evidence/test-campaign/$readiness/probe-runner/$commit/$acquisition/manifest.json"
+mkdir -p "$tmp/aggregate-authority/scripts" "$(dirname "$tmp/aggregate-authority/$manifest")"
+printf '{}\n' > "$tmp/aggregate-authority/$manifest"
+cat > "$tmp/aggregate-authority/scripts/check-factory-runner-evidence.py" <<'PY'
+#!/usr/bin/env python3
+import pathlib, sys
+pathlib.Path('.canonical-checker-argv').write_text('\n'.join(sys.argv[1:]))
+raise SystemExit(0)
+PY
+chmod +x "$tmp/aggregate-authority/scripts/check-factory-runner-evidence.py"
+python3 - "$tmp/aggregate-authority" "$commit" "$manifest" <<'PY'
+import json, pathlib, sys
+root, commit, manifest = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+path = root / '.factory/artifacts/blocked-facts.json'
+data = json.loads(path.read_text())
+data['facts'][0]['status'] = 'resolved'
+data['facts'][0]['resolution'] = {
+    'type': 'receipt', 'refs': [manifest], 'evidence_commit': commit,
+    'resolved_at': '2026-01-01', 'reason': 'canonical signed runner evidence',
+}
+path.write_text(json.dumps(data))
+PY
+expect "$tmp/aggregate-authority" planning 0 "aggregate-v4 canonical authority dispatch"
+grep -Fx -- "--verify-manifest" "$tmp/aggregate-authority/.canonical-checker-argv" >/dev/null
+grep -Fx -- "--expected-campaign-id" "$tmp/aggregate-authority/.canonical-checker-argv" >/dev/null
+grep -Fx -- "test-campaign" "$tmp/aggregate-authority/.canonical-checker-argv" >/dev/null
+grep -Fx -- "--expected-readiness-nonce" "$tmp/aggregate-authority/.canonical-checker-argv" >/dev/null
+grep -Fx -- "$readiness" "$tmp/aggregate-authority/.canonical-checker-argv" >/dev/null
+
+# Cross-commit namespace reuse is rejected before the authority is invoked.
+python3 - "$tmp/aggregate-authority/.factory/artifacts/blocked-facts.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path))
+data['facts'][0]['resolution']['evidence_commit'] = 'f' * 40
+open(path, 'w').write(json.dumps(data))
+PY
+rm -f "$tmp/aggregate-authority/.canonical-checker-argv"
+expect "$tmp/aggregate-authority" planning 1 "cross-commit runner manifest"
+[[ ! -e "$tmp/aggregate-authority/.canonical-checker-argv" ]] || {
+    echo 'test: canonical checker ran for a cross-commit namespace' >&2
+    exit 1
+}
 
 echo "test: blocked-facts ledger adversarial checks passed"

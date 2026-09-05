@@ -174,25 +174,31 @@
               "capture-x.png": "image/png",
               "capture-y.png": "image/png",
               "controller-box-unhighlighted.png": "image/png",
-              "installed-manifest.json": "application/json",
-              "probe.log": "text/plain",
-              "renderer-verdict.json": "application/json",
-              "verdict.json": "application/json",
               "device-type-evidence.json": "application/json",
-              "manager.log": "text/plain",
-              "installed-xbox-360.svg": "image/svg+xml",
-              "installed-license.controllercons": "text/plain",
               "installed-controller-icons.yaml": "application/yaml",
               "installed-layout.json": "application/json",
+              "installed-license.controllercons": "text/plain",
+              "installed-manifest.json": "application/json",
               "installed-oracle.json": "application/json",
-              "installed-authority.json": "application/json"
+              "installed-xbox-360.svg": "image/svg+xml",
+              "manager.log": "text/plain",
+              "probe.log": "text/plain",
+              "renderer-verdict.json": "application/json",
+              "verdict.json": "application/json"
             },
             "required": [
               "artifact-manifest.json",
               "renderer-verdict.json",
               "verdict.json",
               "installed-manifest.json",
+              "device-type-evidence.json",
               "probe.log",
+              "manager.log",
+              "installed-xbox-360.svg",
+              "installed-license.controllercons",
+              "installed-controller-icons.yaml",
+              "installed-layout.json",
+              "installed-oracle.json",
               "controller-box-unhighlighted.png",
               "capture-a.png",
               "capture-b.png",
@@ -210,15 +216,7 @@
               "capture-l2.png",
               "capture-r2.png",
               "capture-l3.png",
-              "capture-r3.png",
-              "device-type-evidence.json",
-              "manager.log",
-              "installed-xbox-360.svg",
-              "installed-license.controllercons",
-              "installed-controller-icons.yaml",
-              "installed-layout.json",
-              "installed-oracle.json",
-              "installed-authority.json"
+              "capture-r3.png"
             ]
           }
         },
@@ -260,25 +258,31 @@
               "capture-x.png": "image/png",
               "capture-y.png": "image/png",
               "controller-box-unhighlighted.png": "image/png",
-              "installed-manifest.json": "application/json",
-              "probe.log": "text/plain",
-              "renderer-verdict.json": "application/json",
-              "verdict.json": "application/json",
               "device-type-evidence.json": "application/json",
-              "manager.log": "text/plain",
-              "installed-xbox-360.svg": "image/svg+xml",
-              "installed-license.controllercons": "text/plain",
               "installed-controller-icons.yaml": "application/yaml",
               "installed-layout.json": "application/json",
+              "installed-license.controllercons": "text/plain",
+              "installed-manifest.json": "application/json",
               "installed-oracle.json": "application/json",
-              "installed-authority.json": "application/json"
+              "installed-xbox-360.svg": "image/svg+xml",
+              "manager.log": "text/plain",
+              "probe.log": "text/plain",
+              "renderer-verdict.json": "application/json",
+              "verdict.json": "application/json"
             },
             "required": [
               "artifact-manifest.json",
               "renderer-verdict.json",
               "verdict.json",
               "installed-manifest.json",
+              "device-type-evidence.json",
               "probe.log",
+              "manager.log",
+              "installed-xbox-360.svg",
+              "installed-license.controllercons",
+              "installed-controller-icons.yaml",
+              "installed-layout.json",
+              "installed-oracle.json",
               "controller-box-unhighlighted.png",
               "capture-a.png",
               "capture-b.png",
@@ -296,15 +300,7 @@
               "capture-l2.png",
               "capture-r2.png",
               "capture-l3.png",
-              "capture-r3.png",
-              "device-type-evidence.json",
-              "manager.log",
-              "installed-xbox-360.svg",
-              "installed-license.controllercons",
-              "installed-controller-icons.yaml",
-              "installed-layout.json",
-              "installed-oracle.json",
-              "installed-authority.json"
+              "capture-r3.png"
             ]
           }
         }
@@ -357,7 +353,6 @@
               "assignment-slot-1.yaml": "application/yaml",
               "assignment-slot-2.yaml": "application/yaml",
               "assignment-slot-3.yaml": "application/yaml",
-              "assignment-after-clear.yaml": "application/yaml",
               "cleanup.log": "text/plain",
               "observer.log": "text/plain",
               "overlay.log": "text/plain",
@@ -368,13 +363,12 @@
               "routing-results.json",
               "observer.log",
               "overlay.log",
+              "udev-targets.log",
               "cleanup.log",
               "assignment-slot-0.yaml",
               "assignment-slot-1.yaml",
               "assignment-slot-2.yaml",
-              "assignment-slot-3.yaml",
-              "assignment-after-clear.yaml",
-              "udev-targets.log"
+              "assignment-slot-3.yaml"
             ]
           }
         },
@@ -495,7 +489,7 @@
     "product-gate.py": "c2f57b48f487de33581b01f29e0014aab78338b43abd8898e5ebc79d85e1798a",
     "validate-capability-semantics.py": "c52a1bc827c1561895f1bc355b4af9da8fc198066aebb6af458e07bb33e26d5e",
     "validate-no-artifacts.py": "9ca5c6cd86eb2274d6f44a1d42ff7f31236dbf47a19fc4773cd4ca048c6348fe",
-    "validate-retained-artifacts.py": "2b6006bf3d6c26d3c400bccd254320681fcbadc60e0bd32e78bd43d7efacd05c"
+    "validate-retained-artifacts.py": "297586ac7b0749fbdaa788ee825c90430806a6df0b7153ab8d09ca0e86ec50e0"
   },
   "licensed_oracle": {
     "path": "licensed-diagram-oracle.json",

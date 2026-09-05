@@ -15,7 +15,7 @@ from factory_runner_authority import AuthorityError, load_authority
 from factory_runner_artifacts import (ArtifactError, PROTOCOL, MAX_ARTIFACTS,
     MAX_ARTIFACT_FILE, MAX_ARTIFACT_BYTES, collect, descriptors_digest, hold)
 
-SHA1=re.compile(r"^[0-9a-f]{40}$"); SHA256=re.compile(r"^[0-9a-f]{64}$"); NAME=re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+SHA1=re.compile(r"^[0-9a-f]{40}$"); SHA256=re.compile(r"^[0-9a-f]{64}$"); NAME=re.compile(r"^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$")
 MAX_HEADER=65536; MAX_ARCHIVE=128*1024*1024; MAX_FILES=10000; MAX_CONTENT=256*1024*1024; MAX_LOG=4*1024*1024
 NONCE_TTL=900; NONCE_OUTSTANDING=32; NONCE_TOTAL=4096; NONCE_RATE=8; NONCE_RATE_WINDOW=60
 SIGNER="/usr/local/libexec/factory-runner-signer"

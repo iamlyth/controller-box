@@ -7,7 +7,7 @@
   "required": ["schema", "campaign_id", "readiness_nonce", "commit", "tree", "environment_blob", "runners"],
   "properties": {
     "schema": {"const": "factory-runner-aggregate/v4"},
-    "campaign_id": {"type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$"},
+    "campaign_id": {"type": "string", "pattern": "^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$"},
     "readiness_nonce": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
     "tree": {"type": "string", "pattern": "^[0-9a-f]{40}$"},

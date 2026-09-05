@@ -219,7 +219,7 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
     name = runner["name"]
     campaign_id = campaign_id or os.environ.get("FACTORY_CAMPAIGN_ID", "")
     readiness_nonce = readiness_nonce or os.environ.get("FACTORY_READINESS_NONCE", "")
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", campaign_id) or not re.fullmatch(r"[0-9a-f]{64}", readiness_nonce):
+    if not re.fullmatch(r"[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?", campaign_id) or not re.fullmatch(r"[0-9a-f]{64}", readiness_nonce):
         fail("campaign/readiness anti-replay binding is missing")
     capabilities = runner["capabilities"]
     archive_sha = hashlib.sha256(archive).hexdigest()
@@ -521,7 +521,7 @@ def main() -> int:
         return dominant
     campaign_id = os.environ.get("FACTORY_CAMPAIGN_ID", "")
     readiness_nonce = os.environ.get("FACTORY_READINESS_NONCE", "")
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", campaign_id) or not re.fullmatch(r"[0-9a-f]{64}", readiness_nonce):
+    if not re.fullmatch(r"[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?", campaign_id) or not re.fullmatch(r"[0-9a-f]{64}", readiness_nonce):
         fail("campaign/readiness anti-replay binding is missing")
     aggregate = {
         "schema": "factory-runner-aggregate/v4",

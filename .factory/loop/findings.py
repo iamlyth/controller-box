@@ -88,7 +88,7 @@ MAX_RESULT_BYTES = 256 * 1024
 PHASE_TAG_RE = re.compile(r"^r([0-9]+)\.([a-z]+)\.([0-9]+)\.a([0-9]+)$")
 SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-SAFE_CAMPAIGN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+SAFE_CAMPAIGN_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$")
 
 FINDING_PHASES = ("verification", "audit")
 

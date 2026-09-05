@@ -18,7 +18,7 @@ MAX_ARTIFACT_FILE = 8 * 1024 * 1024
 MAX_ARTIFACT_BYTES = 48 * 1024 * 1024
 PATH_RE = re.compile(r"^[a-z0-9][a-z0-9._/-]*$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-MEDIA_TYPES = {"application/json", "text/plain", "image/png", "application/yaml"}
+MEDIA_TYPES = {"application/json", "text/plain", "image/png", "image/svg+xml", "application/yaml"}
 
 class ArtifactError(ValueError):
     pass
@@ -110,6 +110,11 @@ def validate_descriptors(descriptors: object, capabilities: list[str]) -> tuple[
             raise ArtifactError("artifact capability ownership mismatch")
         if item["media_type"] not in MEDIA_TYPES or item["type"] != "file" or item["mode"] not in (0o600,0o640,0o644):
             raise ArtifactError("artifact type/media/mode is invalid")
+        # SVG is permitted only under its exact suffix and exact MIME.  This
+        # prevents a text/JSON artifact from acquiring active-image semantics
+        # merely by changing one descriptor field.
+        if (value.endswith(".svg")) != (item["media_type"] == "image/svg+xml"):
+            raise ArtifactError("SVG artifact suffix/media binding is invalid")
         if type(item["size"]) is not int or item["size"] < 0 or item["size"] > MAX_ARTIFACT_FILE:
             raise ArtifactError("artifact size exceeds protocol limit")
         if not isinstance(item["sha256"],str) or not SHA256_RE.fullmatch(item["sha256"]):
@@ -175,6 +180,8 @@ def collect(root: Path, capabilities: list[str], requirements: dict[str,dict], *
                 if (before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns)!=(after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns):
                     raise ArtifactError(f"artifact mutated during read: {rel}")
                 data=b"".join(chunks); media=allowed[name]
+                if media == "image/svg+xml" and (not name.endswith(".svg") or b"<svg" not in data[:4096].lower()):
+                    raise ArtifactError(f"SVG artifact has invalid suffix/content: {rel}")
                 descriptor={"path":rel,"capability":capability,"media_type":media,"type":"file","mode":0o600,"size":len(data),"sha256":hashlib.sha256(data).hexdigest()}
                 descriptors.append(descriptor); payload.append({"path":rel,"data_b64":base64.b64encode(data).decode("ascii")}); found.add(name)
             finally: os.close(fd)
@@ -197,5 +204,7 @@ def decode_payload(payload: object, descriptors: list[dict]) -> list[tuple[dict,
         except Exception as exc: raise ArtifactError("artifact base64 is invalid") from exc
         if len(data)!=desc["size"] or hashlib.sha256(data).hexdigest()!=desc["sha256"]:
             raise ArtifactError("artifact bytes do not match signed descriptor")
+        if desc["media_type"] == "image/svg+xml" and b"<svg" not in data[:4096].lower():
+            raise ArtifactError("SVG artifact content is invalid")
         result.append((desc,data))
     return result

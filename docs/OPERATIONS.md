@@ -697,10 +697,14 @@ independently consumable xb360 targets driven by fresh human events from the
 real USB 045e:028e source; the licensed-diagram contract requires installed
 Controllercons hashes, no fallback, accelerated capture, and independent-oracle
 alignment for an unhighlighted state plus all 17 Xbox 360 controls. Those
-capabilities cannot pass from stdout: receipt-v2 retained artifacts must include
-routing results/observer/topology/cleanup data or installed provenance,
-accelerated-renderer verdict, captures, and analyzer verdict. Artifact protocol
-v1 limits are 64 files, 8 MiB each, 48 MiB total; deployment must install
+capabilities cannot pass from stdout: receipt-v3 retained artifacts must include
+routing results, raw observer/udev/topology/cleanup data, or installed
+provenance, DeviceType selection evidence, exact licensed SVG/license/map/layout/
+oracle bytes, accelerated-renderer verdict, captures, and analyzer verdict.
+Artifact protocol v1 limits are 64 files, 8 MiB each, 48 MiB total. SVG is
+accepted only as `image/svg+xml` with an exact `.svg` suffix and SVG content;
+PNG validation bounds dimensions, pixels, chunks, compressed bytes, inflated
+bytes, and inflate ratio before decoding. Deployment must install
 `factory_runner_artifacts.py` beside both endpoint and signer. Private/headless
 Weston is technical GPU execution, not human or
 real-seat approval. Do not start another five-round campaign until both signed

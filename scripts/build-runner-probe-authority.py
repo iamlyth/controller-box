@@ -14,10 +14,16 @@ def desc(argv,artifacts=empty,semantic=False,cap=''):
  analyzer=["/usr/bin/python3","@/validate-retained-artifacts.py","--capability",cap,"--artifacts","{artifacts}","--commit","{commit}","--tree","{tree}"] if semantic else ["/usr/bin/python3","@/validate-no-artifacts.py","--capability",cap,"--artifacts","{artifacts}","--commit","{commit}","--tree","{tree}"]
  return {"argv":argv,"artifacts":artifacts,"analyzer_argv":analyzer}
 gate=desc(["/usr/bin/python3","@/product-gate.py"],cap='gate')
-routing_required=["routing-results.json","observer.log","overlay.log","cleanup.log"]+[f"assignment-slot-{i}.yaml" for i in range(4)]
+routing_required=["routing-results.json","observer.log","overlay.log","udev-targets.log","cleanup.log"]+[f"assignment-slot-{i}.yaml" for i in range(4)]
 routing_art={"required":routing_required,"files":{n:("application/json" if n.endswith(".json") else "application/yaml" if n.endswith(".yaml") else "text/plain") for n in routing_required}}
-gpu_names=['artifact-manifest.json','renderer-verdict.json','verdict.json','installed-manifest.json','probe.log','controller-box-unhighlighted.png']+[f'capture-{x}.png' for x in ('a','b','x','y','up','down','left','right','start','select','guide','l1','r1','l2','r2','l3','r3')]
-gpu_art={"required":gpu_names,"files":{n:('image/png' if n.endswith('.png') else 'text/plain' if n.endswith('.log') else 'application/json') for n in gpu_names}}
+gpu_names=['artifact-manifest.json','renderer-verdict.json','verdict.json','installed-manifest.json','device-type-evidence.json','probe.log','manager.log','installed-xbox-360.svg','installed-license.controllercons','installed-controller-icons.yaml','installed-layout.json','installed-oracle.json','controller-box-unhighlighted.png']+[f'capture-{x}.png' for x in ('a','b','x','y','up','down','left','right','start','select','guide','l1','r1','l2','r2','l3','r3')]
+def gpu_media(name):
+ if name.endswith('.png'):return 'image/png'
+ if name.endswith('.svg'):return 'image/svg+xml'
+ if name.endswith('.log') or name.endswith('.controllercons'):return 'text/plain'
+ if name.endswith('.yaml'):return 'application/yaml'
+ return 'application/json'
+gpu_art={"required":gpu_names,"files":{n:gpu_media(n) for n in gpu_names}}
 dev_art={"required":["authority-result.json"],"files":{"authority-result.json":"application/json"}}
 def dev_desc(cap):
  return {"argv":["/usr/bin/python3","@/probe-dev-capability.py",cap],"artifacts":dev_art,"analyzer_argv":["/usr/bin/python3","@/validate-capability-semantics.py","--capability",cap,"--artifacts","{artifacts}","--commit","{commit}","--tree","{tree}"]}

@@ -23,7 +23,7 @@
       "type": "string",
       "enum": ["factory-campaign-result/v1"]
     },
-    "campaign_id": { "type": "string", "minLength": 1 },
+    "campaign_id": { "type": "string", "pattern": "^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$" },
     "rounds_requested": { "type": "integer", "minimum": 1 },
     "rounds_completed": { "type": "integer", "minimum": 0 },
     "terminal_phase": {

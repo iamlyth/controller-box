@@ -261,7 +261,7 @@ GATE_DETAIL_MAX = 4000
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
-SAFE_CAMPAIGN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+SAFE_CAMPAIGN_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$")
 
 # The trusted scope authority: no untrusted role may ever modify Git history,
 # the mutable control state, legacy runtime namespaces, model tool stores, or

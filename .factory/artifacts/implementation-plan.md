@@ -6,6 +6,38 @@ base_commit: 860922af39ed7e2aef9b95705705f7ed90344e87
 status: active
 ---
 
+**Audit remediation checkpoint (current checkout)**
+
+The blocked-facts validator no longer treats a committed receipt-shaped JSON
+blob as authority. A receipt resolution must use the exact lowercase
+campaign/readiness/runner/commit/acquisition runtime namespace and is delegated
+to the canonical aggregate-v4 signed runner checker, which binds membership,
+signature, commit/tree/archive/environment, capability semantics, and retained
+logs. Cross-commit and bare audit/runner receipts fail before acceptance. The
+same bounded lowercase campaign grammar is now enforced by campaign,
+readiness, findings, broker/client/checker, and their schemas.
+
+The root and coordinator retained-artifact analyzers fix the IDAT append
+control-flow defect and bound PNG dimensions, pixels, chunks, compressed bytes,
+inflated bytes, and compression ratio with `decompressobj`. The retained
+artifact protocol admits the pinned SVG only with exact `image/svg+xml`, `.svg`
+suffix, and SVG content. Rebuilt authority descriptors now include every raw
+routing artifact consumed by the analyzer and every installed licensed GPU
+artifact, including the SVG. The regenerated authority remains explicitly
+`pending-root-install`/`pending-human-review`; no deployment, external probe,
+runner evidence, human approval, conformance promotion, or golden update
+occurred. Focused blocked-facts, readiness, campaign, runner-authority, and
+artifact tests plus `verify-boilerplate.sh` pass. The diagnostic project gate
+again reaches all 97 CTest targets and fails only protected `test_golden`'s
+three manager-editor comparisons; two declared environment tests skip.
+
+The broader external acceptance findings remain blocked: root enrollment and
+host installation, transport keys, real InputPlumber/physical four-target
+routing, accelerated compositor captures, independently signed human graphics
+approval, and fresh exact-commit runner evidence must be supplied by the
+operator. Remaining installer/broker/readiness hardening that cannot be proven
+without those external authorities is not represented as completed evidence.
+
 **Control-plane/core acceptance closure checkpoint (current checkout)**
 
 Readiness launch authorization now delegates to the canonical readiness-result

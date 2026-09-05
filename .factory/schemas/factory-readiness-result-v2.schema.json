@@ -6,7 +6,7 @@
   "required": ["schema", "campaign_id", "nonce", "status", "terminal_outcome", "bindings", "results"],
   "properties": {
     "schema": {"const": "factory-readiness-result/v2"},
-    "campaign_id": {"type": "string", "minLength": 1},
+    "campaign_id": {"type": "string", "pattern": "^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$"},
     "nonce": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "status": {"enum": ["complete", "findings", "human_blocked", "infrastructure_failure"]},
     "terminal_outcome": {"enum": ["pass", "findings", "blocked", "infrastructure_failure"]},

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Callable, Mapping
 
 RESULT_SCHEMA = "factory-readiness-result/v2"
+CAMPAIGN_ID = re.compile(r"^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$")
 APPROVAL_SCHEMA = "controller-production-graphics-approval/v3"
 TRUST_SCHEMA = "controller-human-review-trust-anchor/v2"
 APPROVAL_PATH = ".factory/production-graphics-approval.json"
@@ -346,7 +347,7 @@ def validate_result(value: object, *, expected_campaign_id: str | None = None, e
     fields = {"schema", "campaign_id", "nonce", "status", "terminal_outcome", "bindings", "results"}
     if not isinstance(value, dict) or set(value) != fields or value.get("schema") != RESULT_SCHEMA:
         raise ReadinessError("readiness result fields/schema are malformed")
-    if not isinstance(value.get("campaign_id"), str) or not value["campaign_id"] or not SHA256.fullmatch(str(value.get("nonce", ""))):
+    if not isinstance(value.get("campaign_id"), str) or not CAMPAIGN_ID.fullmatch(value["campaign_id"]) or not SHA256.fullmatch(str(value.get("nonce", ""))):
         raise ReadinessError("readiness campaign/nonce is invalid")
     consistency = {"complete": "pass", "findings": "findings", "human_blocked": "blocked", "infrastructure_failure": "infrastructure_failure"}
     if value.get("status") not in consistency or value.get("terminal_outcome") != consistency[value["status"]]:

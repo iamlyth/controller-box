@@ -27,7 +27,7 @@ from factory_runner_policy import PolicyError, class_for_name, class_for_uid, lo
 
 SHA1 = re.compile(r"^[0-9a-f]{40}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
-NAME = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+NAME = re.compile(r"^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$")
 ALGORITHM = "ssh-ed25519"
 MAX_REQUEST = 1024 * 1024
 MAX_SIGNATURE = 64 * 1024

@@ -12,8 +12,9 @@ Rules:
   (IDs are unique and strictly ascending in array order);
 - an `open` fact requires explicit blocking evidence and no resolution;
 - a `resolved` fact requires a validated resolution;
-- a `receipt` resolution requires exact machine-receipt/runner-manifest JSON at
-  the evidence commit with a clean exit;
+- a `receipt` resolution requires an exact namespaced live runner manifest
+  accepted as a member of the signed aggregate-v4 authority; bare committed
+  audit/runner receipt JSON is never authority;
 - an `artifact` resolution requires an exact non-documentation artifact at the
   evidence commit (`.md` documentation alone can never resolve a normative
   requirement);
@@ -22,9 +23,9 @@ Rules:
   reviewer strings, or environment reviewer identity, so every decision
   resolution is rejected and the fact must stay open until a verifiable
   external attestation mechanism exists;
-- in complete mode every receipt/artifact ref must exist as a Git blob at the
-  declared evidence commit (working-tree presence is never enough) and receipt
-  content is read from that blob, never from the working tree;
+- in complete mode artifact refs must exist as Git blobs at the declared
+  evidence commit; receipt refs remain ignored runtime manifests and are
+  validated by the canonical signed aggregate checker;
 - cross-checks against the conformance sidecar (every fact referenced by
   exactly the requirements it lists; every open fact referenced by at least
   one blocked/partial row; no verified row may reference a fact) are enforced
@@ -41,6 +42,7 @@ import importlib.util
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -48,7 +50,18 @@ ROOT = Path(__file__).resolve().parent.parent
 FACT_ID = re.compile(r"^FACT-[0-9]{3,}$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
 SAFE_PREFIXES = ("src", "tests", "scripts", "data", "docs", "cmake", "packaging", "third_party", ".github", ".forgejo", ".factory")
-RECEIPT_SCHEMAS = {"ralph-audit-receipt/v1", "factory-runner-receipt/v3"}
+# Receipt resolutions are live signed runner manifests only.  A committed
+# receipt-shaped JSON blob is candidate-controlled data and is never authority.
+# The namespace itself supplies the campaign/readiness/commit bindings that are
+# passed to the canonical aggregate-v4 validator.
+RUNTIME_MANIFEST_RE = re.compile(
+    r"^\.factory-state/runner-evidence/"
+    r"(?P<campaign>[a-z0-9](?:[a-z0-9.-]{0,62}[a-z0-9])?)/"
+    r"(?P<readiness>[0-9a-f]{64})/"
+    r"(?P<runner>[a-z0-9](?:[a-z0-9.-]{0,62}[a-z0-9])?)/"
+    r"(?P<commit>[0-9a-f]{40})/"
+    r"(?P<acquisition>[0-9a-f]{64})/manifest\.json$"
+)
 LEDGER_DEFAULT = ROOT / ".factory/artifacts/blocked-facts.json"
 
 
@@ -158,6 +171,13 @@ def validate_ref_safety(ref: str, where: str) -> None:
     parts = path.parts
     if not parts or any(part in ("", ".", "..") for part in parts):
         fail(f"{where} contains an unsafe path component: {ref!r}")
+    if parts[0] == ".factory-state":
+        if RUNTIME_MANIFEST_RE.fullmatch(ref):
+            return
+        fail(
+            f"{where} uses .factory-state outside the exact signed runner "
+            f"manifest namespace: {ref!r}"
+        )
     if len(parts) > 1 and parts[0] not in SAFE_PREFIXES:
         fail(f"{where} first component must be a tracked refs prefix: {ref!r}")
 
@@ -198,22 +218,54 @@ def blob_json(root: Path, fact_id: str, ref: str, commit: str) -> dict:
 
 
 def validate_receipt_ref(root: Path, fact_id: str, ref: str, commit: str, *, blob_only: bool) -> None:
-    validate_ref(root, fact_id, ref, commit, "receipt", blob_only=blob_only)
-    # Receipt content is always read from the declared Git blob at the
-    # evidence commit, never from the working tree: a tampered or stale
-    # working-tree copy can neither certify nor break a resolution.
-    data = blob_json(root, fact_id, ref, commit)
-    schema = data.get("schema")
-    if schema not in RECEIPT_SCHEMAS:
-        fail(f"fact {fact_id} receipt {ref} has an unknown schema {schema!r}")
-    if schema == "factory-runner-receipt/v3":
-        if data.get("result") != "pass" or data.get("exit_code") != 0:
-            fail(f"fact {fact_id} receipt {ref} does not prove a clean pass")
-    else:
-        if data.get("exit_code") != 0:
-            fail(f"fact {fact_id} receipt {ref} has a nonzero exit")
-        if not isinstance(data.get("argv"), list) or not data["argv"]:
-            fail(f"fact {fact_id} receipt {ref} has no argv binding")
+    """Validate a fact resolution through aggregate-v4 authority only.
+
+    The manifest is ignored runtime state, not a Git blob.  Its exact
+    namespace binds campaign, readiness nonce, runner, tested commit, and
+    acquisition nonce.  The canonical checker then verifies aggregate-v4
+    membership and the complete signature/tree/archive/environment/capability/
+    semantic/log contract.  Reading a bare receipt JSON here would recreate the
+    candidate-authored-result bypass this boundary exists to prevent.
+    """
+    validate_ref_safety(ref, f"fact {fact_id} receipt ref")
+    match = RUNTIME_MANIFEST_RE.fullmatch(ref)
+    if match is None:
+        fail(
+            f"fact {fact_id} receipt must be an exact aggregate-v4 runner "
+            f"manifest reference; bare audit/runner receipt JSON is not authority: {ref}"
+        )
+    if match.group("commit") != commit:
+        fail(
+            f"fact {fact_id} runner manifest namespace commit does not equal "
+            f"the resolution evidence_commit"
+        )
+    checker = root / "scripts/check-factory-runner-evidence.py"
+    if checker.is_symlink() or not checker.is_file():
+        fail(f"fact {fact_id} canonical runner-evidence checker is unavailable")
+    argv = [
+        sys.executable,
+        str(checker),
+        "--verify-manifest", ref,
+        "--expected-commit", commit,
+        "--expected-campaign-id", match.group("campaign"),
+        "--expected-readiness-nonce", match.group("readiness"),
+    ]
+    try:
+        result = subprocess.run(
+            argv, cwd=root, text=True, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, timeout=120, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        fail(
+            f"fact {fact_id} canonical runner-evidence validation could not run: "
+            f"{type(exc).__name__}"
+        )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        fail(
+            f"fact {fact_id} receipt is not aggregate-v4 signed exact-commit "
+            f"evidence: {detail or 'canonical runner-evidence validation failed'}"
+        )
 
 
 def validate_fact(root: Path, fact: dict, index: int, *, blob_only: bool = False) -> None:

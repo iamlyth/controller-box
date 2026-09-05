@@ -41,4 +41,18 @@ with tempfile.TemporaryDirectory() as td:
     rejected(lambda:a.collect(root,['cap'],req)); (cap/'a.json').unlink(); source.unlink()
     os.mkfifo(cap/'a.json'); rejected(lambda:a.collect(root,['cap'],req)); (cap/'a.json').unlink()
     (cap/'extra').write_bytes(b'x'); rejected(lambda:a.collect(root,['cap'],req))
+
+with tempfile.TemporaryDirectory() as td:
+    root=pathlib.Path(td); root.chmod(0o700); cap=root/'cap'; cap.mkdir(mode=0o700)
+    svg=b'<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg"></svg>'
+    (cap/'oracle.svg').write_bytes(svg); (cap/'oracle.svg').chmod(0o600)
+    req={'cap':{'required':['oracle.svg'],'files':{'oracle.svg':'image/svg+xml'}}}
+    descriptors,payload=a.collect(root,['cap'],req)
+    assert descriptors[0]['media_type']=='image/svg+xml'
+    assert a.decode_payload(payload,descriptors)[0][1]==svg
+    bad=dict(descriptors[0],media_type='text/plain')
+    rejected(lambda:a.validate_descriptors([bad],['cap']))
+    (cap/'oracle.svg').write_bytes(b'not svg')
+    rejected(lambda:a.collect(root,['cap'],req))
+
 print('test: retained runner artifact adversarial checks passed')
