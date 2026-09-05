@@ -18,6 +18,7 @@ PHYSICAL_PROBE="$PROJECT_ROOT/scripts/probe-physical-controller.sh"
 TARGET_PROBE="$PROJECT_ROOT/scripts/probe-target-consumer.sh"
 PHYSICAL_SOURCE="$PROJECT_ROOT/scripts/iprunner-probes/physical_controller_probe.c"
 EXPECTATIONS="$PROJECT_ROOT/scripts/iprunner-probes/inputplumber-expectations.json"
+DECODER="$PROJECT_ROOT/scripts/iprunner-probes/unwrap_variant.py"
 
 command -v nix-shell >/dev/null || {
     echo "test: nix-shell required for the iprunner probe fixtures" >&2
@@ -84,6 +85,29 @@ facts = {
 print(json.dumps(facts))
 PY
 }
+
+# Raw, realistic busctl/systemctl shapes used by the live collector. These
+# are synthetic parser fixtures, never real capability acceptance.
+[[ "$(printf '%s' '{"type":"s","data":[":1.42"]}' | python3 "$DECODER" --string-method)" == '":1.42"' ]]
+[[ "$(printf '%s' '{"type":"s","data":"0.78.0"}' | python3 "$DECODER" --property-s)" == '"0.78.0"' ]]
+[[ "$(printf '%s' '{"type":"as","data":["xb360","deck"]}' | python3 "$DECODER" --property-as)" == '["xb360", "deck"]' ]]
+printf '%s' '{"type":"a{oa{sa{sv}}}","data":[{"/org/shadowblip/InputPlumber/Manager":{"org.shadowblip.InputManager":{}},"/org/shadowblip/InputPlumber/Target/0":{"org.shadowblip.Input.Target":{}}}]}' | \
+    python3 "$DECODER" --object-manager > "$tmp/raw-om.json"
+[[ "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' "$tmp/raw-om.json")" -eq 2 ]]
+structured_exec='{ path=/usr/bin/inputplumber ; argv[]=/usr/bin/inputplumber --log-level info ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }'
+[[ "$(printf '%s' "$structured_exec" | python3 "$DECODER" --exec-start)" == '"/usr/bin/inputplumber"' ]]
+[[ "$(printf '%s' '/usr/bin/inputplumber --log-level info' | python3 "$DECODER" --exec-start)" == '"/usr/bin/inputplumber"' ]]
+for entry in \
+  '{"type":"s","data":[":1.42",":1.43"]}' \
+  '{"type":"s","data":":1.42","extra":true}' \
+  '{"type":"as","data":"xb360"}'; do
+    must_fail "malformed raw busctl envelope" bash -c \
+        "printf '%s' '$entry' | python3 '$DECODER' --string-method || printf '%s' '$entry' | python3 '$DECODER' --property-as"
+done
+must_fail "ambiguous structured ExecStart" bash -c \
+    "printf '%s' '{ path=/usr/bin/inputplumber ; } { path=/usr/bin/evil ; }' | python3 '$DECODER' --exec-start"
+must_fail "relative ExecStart" bash -c \
+    "printf '%s' 'inputplumber --daemon' | python3 '$DECODER' --exec-start"
 
 # The honest baseline: perfectly pinned facts pass the validator.
 good_facts > "$tmp/good-facts.json"

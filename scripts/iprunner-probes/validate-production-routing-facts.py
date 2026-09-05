@@ -158,6 +158,10 @@ def validate(facts: dict, fixture_dir: Path) -> None:
             "cleanup termination must be 'ok' or 'fail'")
     require(cleanup.get("target_cleanup") in ("ok", "fail"),
             "cleanup target_cleanup must be 'ok' or 'fail'")
+    require(type(cleanup.get("targets_absent")) is bool,
+            "cleanup targets_absent must be boolean")
+    require(type(cleanup.get("kernel_nodes_absent")) is bool,
+            "cleanup kernel_nodes_absent must be boolean")
 
     # Artifact hash verification: every referenced artifact must exist in the
     # fixture directory, must be confined there, and its sha256 must match the

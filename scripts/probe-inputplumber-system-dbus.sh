@@ -24,6 +24,7 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 VALIDATOR="$SCRIPT_DIR/iprunner-probes/validate-inputplumber-facts.py"
+DECODER="$SCRIPT_DIR/iprunner-probes/unwrap_variant.py"
 EXPECTATIONS="$SCRIPT_DIR/iprunner-probes/inputplumber-expectations.json"
 BUS_NAME="org.shadowblip.InputPlumber"
 MANAGER_PATH="/org/shadowblip/InputPlumber/Manager"
@@ -31,8 +32,8 @@ MANAGER_IFACE="org.shadowblip.InputManager"
 OM_PATH="/org/shadowblip/InputPlumber"
 SOCKET="/run/dbus/system_bus_socket"
 
-[[ -x "$VALIDATOR" && -f "$EXPECTATIONS" ]] || {
-    echo "inputplumber-probe: validator or expectations missing" >&2
+[[ -x "$VALIDATOR" && -x "$DECODER" && -f "$EXPECTATIONS" ]] || {
+    echo "inputplumber-probe: validator, decoder, or expectations missing" >&2
     exit 1
 }
 
@@ -76,15 +77,9 @@ collect_facts() {
         fi
     fi
 
-    # Binary facts: any executable regular file shipped by the package.
-    BIN_PATH=""
-    while IFS= read -r candidate; do
-        [[ -n "$candidate" && "$candidate" == /* && -f "$candidate" && -x "$candidate" ]] || continue
-        BIN_PATH="$candidate"
-        break
-    done < <(dpkg -L "$PKG_NAME" 2>/dev/null | grep -E '^/(usr/bin|usr/libexec|usr/lib)/' || true)
-
-    # Service facts.
+    # Service facts. ExecStart is decoded before selecting the binary: the
+    # service command, not an arbitrary first executable in dpkg -L, is the
+    # identity whose package provenance must be established.
     SVC_ACTIVE="false"; SVC_TYPE=""; SVC_UNIT=""; SVC_EXEC=""
     SVC_UNIT=$(systemctl show -p Id --value "inputplumber.service" 2>/dev/null || true)
     if [[ -n "$SVC_UNIT" ]]; then
@@ -92,24 +87,42 @@ collect_facts() {
         SVC_TYPE=$(systemctl show -p Type --value "inputplumber.service" 2>/dev/null || true)
         SVC_EXEC=$(systemctl show -p ExecStart --value "inputplumber.service" 2>/dev/null || true)
     fi
-    SVC_EXEC_BIN=""
+    SVC_EXEC_BIN=""; BIN_PATH=""; BIN_EXISTS="false"; BIN_EXECUTABLE="false"; BIN_OWNED="false"
     if [[ -n "$SVC_EXEC" ]]; then
-        read -r SVC_EXEC_BIN _ <<< "$SVC_EXEC" || true
+        SVC_EXEC_BIN=$(printf '%s\n' "$SVC_EXEC" | python3 "$DECODER" --exec-start 2>/dev/null | \
+            python3 -c 'import json,sys; v=json.load(sys.stdin); print(v if isinstance(v,str) else "")' 2>/dev/null || true)
+    fi
+    if [[ -n "$SVC_EXEC_BIN" && -f "$SVC_EXEC_BIN" && ! -L "$SVC_EXEC_BIN" ]]; then
+        BIN_EXISTS="true"
+        [[ -x "$SVC_EXEC_BIN" ]] && BIN_EXECUTABLE="true"
+        BIN_PATH=$(readlink -f "$SVC_EXEC_BIN" 2>/dev/null || true)
+        if [[ -n "$BIN_PATH" ]] && dpkg-query -S "$BIN_PATH" >"$tmp/bin-owner" 2>/dev/null; then
+            if python3 - "$tmp/bin-owner" "$PKG_NAME" "$BIN_PATH" <<'PY'
+import sys
+owner_file, package, path = sys.argv[1:]
+lines = open(owner_file, encoding="utf-8", errors="strict").read().splitlines()
+matches = [line for line in lines if line.endswith(": " + path)]
+raise SystemExit(0 if len(matches) == 1 and matches[0].split(":", 1)[0] == package else 1)
+PY
+            then
+                BIN_OWNED="true"
+            fi
+        fi
     fi
 
     # Bus facts via busctl (real system bus).
     HAS_OWNER="false"; UNIQUE_OWNER=""
     if output=$(busctl --system --json=short call org.freedesktop.DBus /org/freedesktop/DBus \
         org.freedesktop.DBus GetNameOwner s "$BUS_NAME" 2>/dev/null); then
-        UNIQUE_OWNER=$(python3 -c "import json,sys;print(json.loads(sys.argv[1]).get('data',''))" "$output" 2>/dev/null || true)
-        [[ -n "$UNIQUE_OWNER" ]] && HAS_OWNER="true"
+        UNIQUE_OWNER=$(printf '%s\n' "$output" | python3 "$DECODER" --string-method 2>/dev/null | python3 -c 'import json,sys; v=json.load(sys.stdin); print(v if isinstance(v,str) else "")' 2>/dev/null || true)
+        [[ "$UNIQUE_OWNER" =~ ^:[0-9]+\.[0-9]+$ ]] && HAS_OWNER="true"
     fi
 
     # Manager version.
     MANAGER_VERSION=""
     if output=$(busctl --system --json=short get-property "$BUS_NAME" "$MANAGER_PATH" \
         "$MANAGER_IFACE" Version 2>/dev/null); then
-        MANAGER_VERSION=$(python3 -c "import json,sys;print(json.loads(sys.argv[1]).get('data',''))" "$output" 2>/dev/null || true)
+        MANAGER_VERSION=$(printf '%s\n' "$output" | python3 "$DECODER" --property-s 2>/dev/null | python3 -c 'import json,sys; v=json.load(sys.stdin); print(v if isinstance(v,str) else "")' 2>/dev/null || true)
     fi
 
     # Manager introspection: methods, GamepadOrder flags, interface names.
@@ -154,20 +167,22 @@ PY
     # SupportedTargetDeviceIds.
     if output=$(busctl --system --json=short get-property "$BUS_NAME" "$MANAGER_PATH" \
         "$MANAGER_IFACE" SupportedTargetDeviceIds 2>/dev/null); then
-        IDS=$(python3 -c "import json,sys;print(json.dumps(json.loads(sys.argv[1]).get('data',[])))" "$output" 2>/dev/null || true)
+        IDS=$(printf '%s\n' "$output" | python3 "$DECODER" --property-as 2>/dev/null || true)
     fi
 
     # ObjectManager.
     OM_OBJECTS=0; OM_PATH_FACT=""; OM_IFACE_FACT=""
     if output=$(busctl --system --json=short call "$BUS_NAME" "$OM_PATH" \
         org.freedesktop.DBus.ObjectManager GetManagedObjects 2>/dev/null); then
-        OM_OBJECTS=$(python3 -c "import json,sys;print(len(json.loads(sys.argv[1])))" "$output" 2>/dev/null || echo 0)
-        OM_PATH_FACT="$OM_PATH"; OM_IFACE_FACT="org.freedesktop.DBus.ObjectManager"
+        if decoded=$(printf '%s\n' "$output" | python3 "$DECODER" --object-manager 2>/dev/null); then
+            OM_OBJECTS=$(python3 -c 'import json,sys; print(len(json.loads(sys.argv[1])))' "$decoded")
+            OM_PATH_FACT="$OM_PATH"; OM_IFACE_FACT="org.freedesktop.DBus.ObjectManager"
+        fi
     fi
 
     python3 - "$facts" "$BUS_ADDRESS" "$PKG_NAME" "$PKG_VERSION" "$PKG_INSTALLED" \
-        "$BIN_PATH" "$SVC_UNIT" "$SVC_ACTIVE" "$SVC_TYPE" "$SVC_EXEC_BIN" \
-        "$HAS_OWNER" "$UNIQUE_OWNER" "$MANAGER_VERSION" "$METHODS" \
+        "$BIN_PATH" "$BIN_EXISTS" "$BIN_EXECUTABLE" "$BIN_OWNED" \
+        "$SVC_UNIT" "$SVC_ACTIVE" "$SVC_TYPE" "$SVC_EXEC_BIN" "$HAS_OWNER" "$UNIQUE_OWNER" "$MANAGER_VERSION" "$METHODS" \
         "$GAMEPAD_SIG" "$GAMEPAD_WRITABLE" "$IDS" "$INTERFACES" \
         "$OM_OBJECTS" "$OM_PATH_FACT" "$OM_IFACE_FACT" <<'PY'
 import json, sys
@@ -183,34 +198,34 @@ facts = {
     },
     "binary": {
         "path": args[4],
-        "exists": bool(args[4]),
-        "executable": bool(args[4]),
-        "owned_by_package": bool(args[4]),
+        "exists": args[5] == "true",
+        "executable": args[6] == "true",
+        "owned_by_package": args[7] == "true",
     },
     "service": {
-        "unit": args[5],
-        "active": args[6] == "true",
-        "type": args[7],
-        "exec_start_binary": args[8],
+        "unit": args[8],
+        "active": args[9] == "true",
+        "type": args[10],
+        "exec_start_binary": args[11],
     },
     "name_owner": {
-        "has_owner": args[9] == "true",
-        "unique_owner": args[10],
+        "has_owner": args[12] == "true",
+        "unique_owner": args[13],
     },
     "manager": {
         "path": "/org/shadowblip/InputPlumber/Manager",
         "interface": "org.shadowblip.InputManager",
-        "version": args[11],
-        "methods": json.loads(args[12]),
-        "gamepad_order_signature": args[13],
-        "gamepad_order_writable": args[14] == "true",
-        "supported_target_device_ids": json.loads(args[15]),
+        "version": args[14],
+        "methods": json.loads(args[15]),
+        "gamepad_order_signature": args[16],
+        "gamepad_order_writable": args[17] == "true",
+        "supported_target_device_ids": json.loads(args[18]),
     },
-    "interfaces_present": json.loads(args[16]),
+    "interfaces_present": json.loads(args[19]),
     "object_manager": {
-        "objects": int(args[17]),
-        "path": args[18],
-        "interface": args[19],
+        "objects": int(args[20]),
+        "path": args[21],
+        "interface": args[22],
     },
 }
 with open(out, "w", encoding="utf-8") as stream:

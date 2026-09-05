@@ -132,6 +132,8 @@ facts = {
     "cleanup": {
         "termination": scenario.get("termination", "ok"),
         "target_cleanup": scenario.get("target_cleanup", "ok"),
+        "targets_absent": bool(scenario.get("targets_absent", 1)),
+        "kernel_nodes_absent": bool(scenario.get("kernel_nodes_absent", 1)),
     },
 }
 with open(os.path.join(base, "facts.json"), "w", encoding="utf-8") as f:
@@ -164,7 +166,7 @@ target_before_physical() { build_fixture "$1" "$(scen_json tbph "{\"event_stream
 wrong_target_identity() { build_fixture "$1" "$(scen_json wrongid "{\"identities_match\": 0, \"event_stream\": \"physical event 1 304 1 ts 1500\\ntarget event 1 304 1 ts 1600\\n\"}")"; }
 # Targets were created but left over (never all stopped): cleanup must fail
 # the probe even though the topology is also incomplete.
-leftover_cleanup() { build_fixture "$1" "$(scen_json leftover "{\"observed\": 2, \"target_paths\": 2, \"kernel_nodes\": 2, \"target_cleanup\": \"fail\", \"event_stream\": \"\"}")"; }
+leftover_cleanup() { build_fixture "$1" "$(scen_json leftover "{\"target_cleanup\": \"ok\", \"targets_absent\": 0, \"kernel_nodes_absent\": 0, \"event_stream\": \"physical event 1 304 1 ts 1500\\ntarget event 1 304 1 ts 1600\\n\"}")"; }
 # Fake/substituted InputPlumber bus owner.
 fake_bus_owner() { build_fixture "$1" "$(scen_json fakebus "{\"owner_exe\": \"/usr/bin/evil\", \"owner_exe_pinned\": 0, \"event_stream\": \"physical event 1 304 1 ts 1500\\ntarget event 1 304 1 ts 1600\\n\"}")"; }
 # Product launched from a source CWD (source fallback via relative lookup).
@@ -193,7 +195,8 @@ must_pass "full 4+fresh physical+routed event pass" \
     env CONTROLLER_PRODUCTION_ROUTING_ARTIFACTS="$tmp/artifacts" bash "$PROBE" --fixture "$tmp/pass"
 grep -q 'production-routing-probe: PASS' "$tmp/last.out"
 grep -q 'topology confirmed: 4 of 4' "$tmp/last.out"
-grep -q 'cleanup: termination=ok target-cleanup=ok' "$tmp/pass/cleanup.log"
+grep -q 'cleanup: termination=ok target-cleanup=ok targets-absent=true kernel-nodes-absent=true' "$tmp/pass/cleanup.log"
+grep -q 'cleanup-postcondition verified: dbus-targets-absent kernel-event-nodes-absent' "$tmp/last.out"
 # cleanup.log must be retained as a signed/hash-printed artifact.
 grep -q 'artifact hash' "$tmp/last.out"
 grep -q "$tmp/artifacts/cleanup.log" "$tmp/last.out"
@@ -313,14 +316,17 @@ must_fail "wrong target name/type identity rejected" bash "$PROBE" --fixture "$t
 grep -q 'target/kernel identities do not match' "$tmp/last.out"
 
 # ---------------------------------------------------------------------------
-# Leftover target cleanup: targets were created but not all stopped; the probe
-# must fail on cleanup even though the topology was also incomplete.
+# Successful StopTargetDevice replies are not proof: leftover DBus objects
+# and event nodes must fail after otherwise-complete routing evidence.
 # ---------------------------------------------------------------------------
 leftover_cleanup "$tmp/leftover"
-must_fail "leftover target cleanup fails the probe" bash "$PROBE" --fixture "$tmp/leftover"
-grep -q 'production-topology-incomplete: 2 of 4' "$tmp/last.out"
+must_fail "successful stops with leftover object/node fail the probe" bash "$PROBE" --fixture "$tmp/leftover"
 grep -q 'cleanup failure' "$tmp/last.out"
-grep -q 'cleanup: termination=ok target-cleanup=fail' "$tmp/leftover/cleanup.log"
+grep -q 'target-cleanup=ok targets-absent=false kernel-nodes-absent=false' "$tmp/leftover/cleanup.log"
+if grep -q 'cleanup-postcondition verified' "$tmp/last.out"; then
+    echo "test: leftover cleanup emitted verified marker" >&2
+    exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # Fake/substituted InputPlumber bus owner: no routing evidence may be claimed.
@@ -407,7 +413,7 @@ unwrap_eq '{"a":1}' '{"a": 1}'
 EXTRACT_OM="$PROJECT_ROOT/scripts/iprunner-probes/extract_om_targets.py"
 : > "$tmp/om-baseline-empty"
 cat > "$tmp/om-data-body.json" <<'EOF'
-{
+{"type":"a{oa{sa{sv}}}","data":[{
   "/org/shadowblip/InputPlumber/Target/1": {
     "org.shadowblip.Input.Target": {
       "DeviceType": {"type":"v","body":{"type":"s","data":"xb360"}},
@@ -420,7 +426,7 @@ cat > "$tmp/om-data-body.json" <<'EOF'
       "Name": {"type":"s","data":"Xbox 360 Controller"}
     }
   }
-}
+}]}
 EOF
 python3 "$EXTRACT_OM" "$tmp/om-data-body.json" "$tmp/om-baseline-empty" "org.shadowblip.Input.Target" > "$tmp/om-out"
 grep -q '^/org/shadowblip/InputPlumber/Target/1	Xbox 360 Controller$' "$tmp/om-out"
@@ -428,31 +434,55 @@ grep -q '^/org/shadowblip/InputPlumber/Target/2	Xbox 360 Controller$' "$tmp/om-o
 
 # A target whose DeviceType is not xb360 must fail (both shapes).
 cat > "$tmp/om-wrongtype.json" <<'EOF'
-{
+{"type":"a{oa{sa{sv}}}","data":[{
   "/org/shadowblip/InputPlumber/Target/3": {
     "org.shadowblip.Input.Target": {
       "DeviceType": {"type":"v","body":{"type":"s","data":"keyboard"}},
       "Name": {"type":"s","data":"Keyboard"}
     }
   }
-}
+}]}
 EOF
 must_fail "extractor rejects non-xb360 DeviceType" \
     python3 "$EXTRACT_OM" "$tmp/om-wrongtype.json" "$tmp/om-baseline-empty" "org.shadowblip.Input.Target"
 
 # A target whose Name is a non-string variant (list body) must fail.
 cat > "$tmp/om-noname.json" <<'EOF'
-{
+{"type":"a{oa{sa{sv}}}","data":[{
   "/org/shadowblip/InputPlumber/Target/4": {
     "org.shadowblip.Input.Target": {
       "DeviceType": {"type":"s","data":"xb360"},
       "Name": {"type":"v","body":["Xbox 360 Controller"]}
     }
   }
-}
+}]}
 EOF
 must_fail "extractor rejects non-string Name" \
     python3 "$EXTRACT_OM" "$tmp/om-noname.json" "$tmp/om-baseline-empty" "org.shadowblip.Input.Target"
+
+# Top-level busctl envelopes fail closed on naked, ambiguous, extra-field,
+# wrong-signature, and empty ObjectManager results.
+printf '%s\n' '{"/org/x":{"org.shadowblip.Input.Target":{}}}' > "$tmp/om-naked.json"
+must_fail "naked ObjectManager map rejected" python3 "$EXTRACT_OM" "$tmp/om-naked.json" "$tmp/om-baseline-empty" "org.shadowblip.Input.Target"
+for bad in \
+  '{"type":"a{oa{sa{sv}}}","data":[{},{}]}' \
+  '{"type":"a{oa{sa{sv}}}","data":[{}],"extra":1}' \
+  '{"type":"s","data":[{}]}' \
+  '{"type":"a{oa{sa{sv}}}","data":[{}]}'; do
+    must_fail "malformed ObjectManager envelope rejected" bash -c \
+        "printf '%s' '$bad' | python3 '$UW' --object-manager"
+done
+
+# CreateTargetDevice accepts exactly the real object-path envelope.
+[[ "$(printf '%s' '{"type":"o","data":["/org/shadowblip/InputPlumber/Target/9"]}' | python3 "$UW" --object-path)" == '"/org/shadowblip/InputPlumber/Target/9"' ]]
+for bad in \
+  '{"type":"o","data":["/org/a","/org/b"]}' \
+  '{"type":"o","data":"/org/a"}' \
+  '{"type":"s","data":["/org/a"]}' \
+  '{"type":"o","data":["created /org/a"]}'; do
+    must_fail "malformed CreateTargetDevice envelope rejected" bash -c \
+        "printf '%s' '$bad' | python3 '$UW' --object-path"
+done
 
 # ---------------------------------------------------------------------------
 # create-xb360-targets.sh: deterministic fixture validation of the

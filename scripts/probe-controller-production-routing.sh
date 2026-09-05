@@ -154,12 +154,15 @@ assess_topology() {
 CLEANUP_LOG=""
 
 record_cleanup() {
-    local termination=$1 target_cleanup=$2
-    printf 'cleanup: termination=%s target-cleanup=%s\n' "$termination" "$target_cleanup" >> "$CLEANUP_LOG"
-    if [[ "$termination" != "ok" || "$target_cleanup" != "ok" ]]; then
-        echo "production-routing-probe: cleanup failure (termination=$termination target-cleanup=$target_cleanup)" >&2
+    local termination=$1 target_cleanup=$2 targets_absent=${3:-false} nodes_absent=${4:-false}
+    printf 'cleanup: termination=%s target-cleanup=%s targets-absent=%s kernel-nodes-absent=%s\n' \
+        "$termination" "$target_cleanup" "$targets_absent" "$nodes_absent" >> "$CLEANUP_LOG"
+    if [[ "$termination" != "ok" || "$target_cleanup" != "ok" || \
+          "$targets_absent" != "true" || "$nodes_absent" != "true" ]]; then
+        echo "production-routing-probe: cleanup failure (termination=$termination target-cleanup=$target_cleanup targets-absent=$targets_absent kernel-nodes-absent=$nodes_absent)" >&2
         return 1
     fi
+    echo "production-routing-probe: cleanup-postcondition verified: dbus-targets-absent kernel-event-nodes-absent"
     return 0
 }
 
@@ -232,6 +235,8 @@ print(observer.get("physical_name", ""))
 print(observer.get("target_name", ""))
 print(cleanup.get("termination", "ok"))
 print(cleanup.get("target_cleanup", "ok"))
+print("true" if cleanup.get("targets_absent", False) else "false")
+print("true" if cleanup.get("kernel_nodes_absent", False) else "false")
 print(int(bus.get("socket_root_owned", 0)))
 print(int(bus.get("owner_exe_pinned", 0)))
 print(bus.get("owner_exe", ""))
@@ -244,7 +249,8 @@ PY
     local event_stream=${FACTS[9]} direct_injection=${FACTS[10]}
     local physical_name=${FACTS[11]} target_name=${FACTS[12]}
     local termination=${FACTS[13]} target_cleanup=${FACTS[14]}
-    local socket_root_owned=${FACTS[15]} owner_exe_pinned=${FACTS[16]} owner_exe=${FACTS[17]}
+    local targets_absent=${FACTS[15]} nodes_absent=${FACTS[16]}
+    local socket_root_owned=${FACTS[17]} owner_exe_pinned=${FACTS[18]} owner_exe=${FACTS[19]}
 
     # Real bus identity: no routing evidence may be claimed for a fake or
     # substituted InputPlumber bus owner.
@@ -273,6 +279,8 @@ PY
         record_cleanup "$termination" "$target_cleanup"
         return 1
     fi
+
+    echo "production-routing-probe: exact-topology verified"
 
     # Collective identity binding: the counted target identities (all xb360,
     # non-empty Name) must match the kernel node identities exactly. A wrong
@@ -325,6 +333,9 @@ PY
             return 1
         fi
         cat "$dir/observer.log"
+        echo "production-routing-probe: physical-source verified"
+        echo "production-routing-probe: independent-consumer verified"
+        echo "production-routing-probe: routed-event verified"
     else
         # No event stream provided: the recorded run produced no routed event.
         echo "production-routing-probe: FAIL: no routed physical->target event recorded" >&2
@@ -332,8 +343,8 @@ PY
         return 1
     fi
 
-    # Cleanup must itself succeed.
-    if ! record_cleanup "$termination" "$target_cleanup"; then
+    # Cleanup must itself succeed and prove both disappearance postconditions.
+    if ! record_cleanup "$termination" "$target_cleanup" "$targets_absent" "$nodes_absent"; then
         return 1
     fi
     # Retain the cleanup log as a signed/hash-printed artifact (alongside
@@ -402,24 +413,10 @@ new_virtual_nodes() {
     printf '%s\n' "${nodes[@]}"
 }
 
-# New org.shadowblip.Input.Target object paths (raw) not in the baseline.
+# New org.shadowblip.Input.Target paths from a strict busctl envelope.
 new_target_paths_from_om() {
-    python3 - "$1" "$2" "$TARGET_IFACE" <<'PY'
-import json, sys
-data = json.loads(sys.argv[1])
-base = set()
-try:
-    for line in open(sys.argv[2], encoding="utf-8"):
-        line = line.strip()
-        if line:
-            base.add(line)
-except FileNotFoundError:
-    pass
-iface = sys.argv[3]
-for path in sorted(data):
-    if iface in data[path] and path not in base:
-        print(path)
-PY
+    python3 "$SCRIPT_DIR/iprunner-probes/extract_om_targets.py" --all-paths \
+        "$1" "$2" "$TARGET_IFACE"
 }
 
 # New xb360 Target paths (with non-empty Name) not in the baseline. Requires
@@ -500,6 +497,7 @@ run_live() {
     CLEANUP_LOG="$tmp/cleanup.log"
     : > "$CLEANUP_LOG"
     local -a created_targets=()
+    local -a created_nodes=()
     local overlay_pid=""
     local xvfb_pid=""
     local prefix="$tmp/prefix"
@@ -507,7 +505,7 @@ run_live() {
 
     cleanup_live() {
         local rc=0
-        local termination="ok" target_cleanup="ok"
+        local termination="ok" target_cleanup="ok" targets_absent="false" nodes_absent="false"
         if [[ -n "$overlay_pid" ]]; then
             kill "$overlay_pid" 2>/dev/null || true
             wait "$overlay_pid" 2>/dev/null || termination="fail"
@@ -522,7 +520,44 @@ run_live() {
                 fi
             done
         fi
-        record_cleanup "$termination" "$target_cleanup" || rc=1
+
+        # StopTargetDevice success is not cleanup evidence. Poll both
+        # ObjectManager and sysfs to a bounded monotonic deadline.
+        local cleanup_deadline now all_gone path node
+        cleanup_deadline=$(python3 -c 'import time; print(time.monotonic_ns() + 15_000_000_000)')
+        while :; do
+            all_gone=1
+            if ! busctl --system --json=short call "$BUS_NAME" "$OM_PATH" \
+                org.freedesktop.DBus.ObjectManager GetManagedObjects >"$tmp/cleanup-om.json" 2>/dev/null || \
+               ! python3 "$SCRIPT_DIR/iprunner-probes/unwrap_variant.py" --object-manager \
+                <"$tmp/cleanup-om.json" >"$tmp/cleanup-objects.json" 2>/dev/null; then
+                all_gone=0
+            else
+                targets_absent="true"
+                for path in "${created_targets[@]}"; do
+                    if python3 - "$tmp/cleanup-objects.json" "$path" <<'PY'
+import json, sys
+raise SystemExit(0 if sys.argv[2] in json.load(open(sys.argv[1], encoding="utf-8")) else 1)
+PY
+                    then
+                        targets_absent="false"
+                        all_gone=0
+                    fi
+                done
+            fi
+            nodes_absent="true"
+            for node in "${created_nodes[@]}"; do
+                if [[ -e "/sys/class/input/$node" || -e "/dev/input/$node" ]]; then
+                    nodes_absent="false"
+                    all_gone=0
+                fi
+            done
+            [[ "$all_gone" -eq 1 ]] && break
+            now=$(python3 -c 'import time; print(time.monotonic_ns())')
+            [[ "$now" -ge "$cleanup_deadline" ]] && break
+            sleep 0.25
+        done
+        record_cleanup "$termination" "$target_cleanup" "$targets_absent" "$nodes_absent" || rc=1
         # Retain the signed artifacts (observer.log, overlay.log, cleanup.log)
         # under the caller-controlled ARTIFACT_DIR and print their hashes; the
         # retained copies are never deleted by cleanup_live.
@@ -617,18 +652,12 @@ run_live() {
     #    snapshot existing targets + kernel nodes BEFORE launch.
     verify_bus_identity || { cleanup_live; return 1; }
     list_event_devices > "$tmp/kernel-baseline"
-    busctl --system --json=short call "$BUS_NAME" "$OM_PATH" \
-        org.freedesktop.DBus.ObjectManager GetManagedObjects > "$tmp/om-baseline.json" 2>/dev/null || true
-    if [[ -f "$tmp/om-baseline.json" ]]; then
-        python3 - "$tmp/om-baseline.json" "$TARGET_IFACE" <<'PY' > "$tmp/target-baseline"
-import json, sys
-data = json.load(open(sys.argv[1], encoding="utf-8"))
-for path, interfaces in data.items():
-    if sys.argv[2] in interfaces:
-        print(path)
-PY
-    else
-        : > "$tmp/target-baseline"
+    if ! busctl --system --json=short call "$BUS_NAME" "$OM_PATH" \
+        org.freedesktop.DBus.ObjectManager GetManagedObjects > "$tmp/om-baseline.json" 2>/dev/null || \
+       ! new_target_paths_from_om "$tmp/om-baseline.json" /dev/null > "$tmp/target-baseline"; then
+        echo "production-routing-probe: FAIL: invalid or empty baseline ObjectManager reply" >&2
+        cleanup_live
+        return 1
     fi
 
     # Compile the observer early so its identity-only mode is available for
@@ -664,7 +693,12 @@ PY
         new_targets=()
         target_names=()
         if [[ -n "$om_output" ]]; then
-            mapfile -t new_targets < <(new_target_paths_from_om "$om_output" "$tmp/target-baseline")
+            if ! new_target_paths_from_om "$om_output" "$tmp/target-baseline" > "$tmp/new-target-paths"; then
+                echo "production-routing-probe: FAIL: malformed ObjectManager reply" >&2
+                cleanup_live
+                return 1
+            fi
+            mapfile -t new_targets < "$tmp/new-target-paths"
             created_targets=("${new_targets[@]}")
             if ! extract_new_xb360_targets "$om_output" "$tmp/target-baseline" \
                 > "$tmp/target-records" 2> "$tmp/target-err"; then
@@ -691,6 +725,7 @@ PY
             target_paths=${#created_targets[@]}
         fi
         mapfile -t new_nodes < <(new_virtual_nodes "$tmp/kernel-baseline")
+        created_nodes=("${new_nodes[@]}")
         kernel_nodes=${#new_nodes[@]}
         observed=$target_paths
         if [[ "$target_paths" -lt "$EXPECTED_TARGETS" ]]; then
@@ -710,6 +745,7 @@ PY
         cleanup_live
         return 1
     fi
+    echo "production-routing-probe: exact-topology verified"
 
     # Collective cardinality: the kernel node identities must match the
     # counted xb360 target names exactly (no extra nodes, no uinput/unrelated).
@@ -751,6 +787,9 @@ PY
         return 1
     fi
     cat "$tmp/observer.log"
+    echo "production-routing-probe: physical-source verified: $physical"
+    echo "production-routing-probe: independent-consumer verified: /dev/input/$target_node"
+    echo "production-routing-probe: routed-event verified"
 
     # 11. Retained live artifacts (observer.log, overlay.log, cleanup.log) and
     #     their hashes are produced inside cleanup_live, then the temp dir is

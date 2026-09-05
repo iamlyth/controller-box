@@ -154,18 +154,13 @@ run_live() {
 
     # Baseline snapshot of kernel nodes + existing target paths.
     list_event_devices > "$tmp/kernel-baseline"
-    busctl --system --json=short call "$BUS_NAME" "$OM_PATH" \
-        org.freedesktop.DBus.ObjectManager GetManagedObjects > "$tmp/om-baseline.json" 2>/dev/null || true
-    if [[ -f "$tmp/om-baseline.json" ]]; then
-        python3 - "$tmp/om-baseline.json" "$TARGET_IFACE" <<'PY' > "$tmp/target-baseline"
-import json, sys
-data = json.load(open(sys.argv[1], encoding="utf-8"))
-for path, interfaces in data.items():
-    if sys.argv[2] in interfaces:
-        print(path)
-PY
-    else
-        : > "$tmp/target-baseline"
+    if ! busctl --system --json=short call "$BUS_NAME" "$OM_PATH" \
+        org.freedesktop.DBus.ObjectManager GetManagedObjects > "$tmp/om-baseline.json" 2>/dev/null || \
+       ! python3 "$EXTRACT" --all-paths "$tmp/om-baseline.json" /dev/null "$TARGET_IFACE" \
+        > "$tmp/target-baseline"; then
+        echo "create-xb360-targets: invalid or empty baseline ObjectManager reply" >&2
+        cleanup_helper
+        return 1
     fi
 
     # Compile the observer for EVIOCGNAME identity reads.
@@ -187,14 +182,8 @@ PY
             cleanup_helper
             return 1
         }
-        path=$(python3 - "$out" "$IPROBES" <<'PY'
-import json, os, sys
-sys.path.insert(0, sys.argv[2])
-from unwrap_variant import unwrap_single
-v = unwrap_single(json.loads(sys.argv[1]))
-print(v if isinstance(v, str) else "")
-PY
-        ) 2>/dev/null || true
+        path=$(printf '%s\n' "$out" | python3 "$IPROBES/unwrap_variant.py" --object-path 2>/dev/null | \
+            python3 -c 'import json,sys; print(json.load(sys.stdin))' 2>/dev/null || true)
         [[ -n "$path" ]] || {
             echo "create-xb360-targets: CreateTargetDevice returned no path" >&2
             cleanup_helper

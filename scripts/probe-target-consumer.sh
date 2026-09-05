@@ -23,6 +23,7 @@ set -u
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 EXPECTATIONS="$SCRIPT_DIR/iprunner-probes/target-consumer-expectations.json"
 OBSERVER_SOURCE="$SCRIPT_DIR/iprunner-probes/target_consumer_observer.c"
+DECODER="$SCRIPT_DIR/iprunner-probes/unwrap_variant.py"
 
 # List kernel event devices by exact name (event + decimal digits).
 list_event_devices() {
@@ -48,8 +49,8 @@ done
     echo "target-consumer-probe: expectations file is missing or unsafe" >&2
     exit 1
 }
-[[ -f "$OBSERVER_SOURCE" ]] || {
-    echo "target-consumer-probe: observer source missing" >&2
+[[ -f "$OBSERVER_SOURCE" && -x "$DECODER" ]] || {
+    echo "target-consumer-probe: observer source or decoder missing" >&2
     exit 1
 }
 
@@ -162,9 +163,13 @@ main() {
     else
         if order_json=$(busctl --system --json=short get-property "$BUS_NAME" "$MANAGER_PATH" \
             "$MANAGER_IFACE" GamepadOrder 2>/dev/null); then
-            readarray -t SAVED_ORDER < <(python3 - "$order_json" <<'PY'
+            if ! printf '%s\n' "$order_json" | python3 "$DECODER" --property-as > "$tmp/order.json"; then
+                echo "target-consumer-probe: malformed GamepadOrder property reply" >&2
+                return 1
+            fi
+            readarray -t SAVED_ORDER < <(python3 - "$tmp/order.json" <<'PY'
 import json, sys
-print("\n".join(json.loads(sys.argv[1]).get("data", [])))
+print("\n".join(json.load(open(sys.argv[1], encoding="utf-8"))))
 PY
             )
             SAVED_ORDER_COUNT=${#SAVED_ORDER[@]}
@@ -200,15 +205,8 @@ PY
     else
         if create_output=$(busctl --system --json=short call "$BUS_NAME" "$MANAGER_PATH" "$MANAGER_IFACE" \
             CreateTargetDevice s "$TARGET_KIND" 2>/dev/null); then
-            TARGET_PATH=$(python3 -c '
-import json, sys
-v = json.loads(sys.argv[1])
-while isinstance(v, dict) and "data" in v:
-    v = v["data"]
-if isinstance(v, list) and len(v) == 1:
-    v = v[0]
-print(v if isinstance(v, str) else "")
-' "$create_output" 2>/dev/null || true)
+            TARGET_PATH=$(printf '%s\n' "$create_output" | python3 "$DECODER" --object-path 2>/dev/null | \
+                python3 -c 'import json,sys; print(json.load(sys.stdin))' 2>/dev/null || true)
             echo "target-consumer-probe: created target $TARGET_PATH"
         else
             echo "target-consumer-probe: CreateTargetDevice failed on the real bus" >&2
@@ -234,17 +232,8 @@ print(v if isinstance(v, str) else "")
     else
         read_target_property() {
             busctl --system --json=short get-property "$BUS_NAME" "$TARGET_PATH" \
-                "$TARGET_IFACE" "$1" 2>/dev/null | python3 -c '
-import json, sys
-v = json.load(sys.stdin)
-while isinstance(v, dict) and "data" in v:
-    v = v["data"]
-if isinstance(v, list) and len(v) == 1:
-    v = v[0]
-if not isinstance(v, str):
-    raise SystemExit(1)
-print(v)
-'
+                "$TARGET_IFACE" "$1" 2>/dev/null | python3 "$DECODER" --property-s | \
+                python3 -c 'import json,sys; print(json.load(sys.stdin))'
         }
         TARGET_NAME=$(read_target_property Name) || {
             echo "target-consumer-probe: cannot read Name from created target $TARGET_PATH" >&2

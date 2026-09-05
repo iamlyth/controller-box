@@ -1,60 +1,75 @@
 #!/usr/bin/env python3
-"""Extract new org.shadowblip.Input.Target object paths from a
-GetManagedObjects JSON snapshot, given a baseline set.
+"""Strictly decode a busctl GetManagedObjects reply and list new targets.
 
-Requires each new target to have DeviceType==xb360 and a non-empty Name
-(variant values unwrapped defensively: `data`, `body`, dict/list/scalar
-forms). Prints "path<TAB>Name" per new conforming target. Fails if any new
-target is non-xb360 or nameless, so a wrong target name/type cannot slip into
-a topology claim.
+The input must be the real ``busctl --json=short`` method envelope
+``{"type":"a{oa{sa{sv}}}","data":[{...}]}``.  Naked maps and malformed,
+ambiguous, empty, extra-field, or wrong-signature envelopes fail closed.
 
 Usage:
-  python3 extract_om_targets.py OM_JSON BASELINE IFACE
-Exit codes: 0 = OK (path<TAB>Name lines on stdout), 1 = non-conforming target.
+  extract_om_targets.py [--all-paths] OM_JSON BASELINE IFACE
 """
 import json
 import sys
 
-from unwrap_variant import variant_value
+from unwrap_variant import decode_object_manager, variant_value
 
 
-def main() -> int:
+def fail(message):
+    print(f"FAIL: {message}", file=sys.stderr)
+    return 1
+
+
+def main():
+    args = sys.argv[1:]
+    all_paths = bool(args and args[0] == "--all-paths")
+    if all_paths:
+        args = args[1:]
+    if len(args) != 3:
+        return fail("usage: extract_om_targets.py [--all-paths] OM_JSON BASELINE IFACE")
+    source, baseline, iface = args
     try:
-        om = json.loads(sys.argv[1])
-    except json.JSONDecodeError:
-        # argv[1] may be a file path to the GetManagedObjects JSON snapshot.
-        with open(sys.argv[1], encoding="utf-8") as stream:
-            om = json.load(stream)
-    iface = sys.argv[3]
+        try:
+            doc = json.loads(source)
+        except json.JSONDecodeError:
+            with open(source, encoding="utf-8") as stream:
+                doc = json.load(stream)
+        om = decode_object_manager(doc, require_nonempty=True)
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        return fail(f"invalid ObjectManager reply: {exc}")
+
     base = set()
     try:
-        for line in open(sys.argv[2], encoding="utf-8"):
-            line = line.strip()
-            if line:
-                base.add(line)
+        with open(baseline, encoding="utf-8") as stream:
+            for line in stream:
+                line = line.strip()
+                if line:
+                    base.add(line)
     except FileNotFoundError:
         pass
 
-    new_paths = [p for p in sorted(om) if iface in om[p] and p not in base]
+    new_paths = [path for path in sorted(om) if iface in om[path] and path not in base]
+    if all_paths:
+        for path in new_paths:
+            print(path)
+        return 0
 
-    bad = 0
-    for p in new_paths:
-        props = om[p].get(iface, {})
-        dt = variant_value(props.get("DeviceType"))
+    bad = False
+    for path in new_paths:
+        props = om[path][iface]
+        device_type = variant_value(props.get("DeviceType"))
         name = variant_value(props.get("Name"))
-        if dt != "xb360":
-            print(f"FAIL: new target {p} DeviceType={dt!r} is not xb360",
-                  file=sys.stderr)
-            bad = 1
+        if device_type != "xb360":
+            print(f"FAIL: new target {path} DeviceType={device_type!r} is not xb360", file=sys.stderr)
+            bad = True
         if not isinstance(name, str) or not name:
-            print(f"FAIL: new target {p} has no Name", file=sys.stderr)
-            bad = 1
+            print(f"FAIL: new target {path} has no Name", file=sys.stderr)
+            bad = True
     if bad:
-        sys.exit(1)
+        return 1
 
-    for p in new_paths:
-        name = variant_value(om[p].get(iface, {}).get("Name"))
-        print(f"{p}\t{name}")
+    for path in new_paths:
+        name = variant_value(om[path][iface].get("Name"))
+        print(f"{path}\t{name}")
     return 0
 
 

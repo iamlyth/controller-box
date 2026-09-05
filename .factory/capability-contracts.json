@@ -213,6 +213,11 @@
       "probe_marker": "--- controller-production-routing capability contract ---",
       "probe_stage": "post",
       "probe_stdout_contains": [
+        "production-routing-probe: exact-topology verified",
+        "production-routing-probe: physical-source verified",
+        "production-routing-probe: independent-consumer verified",
+        "production-routing-probe: routed-event verified",
+        "production-routing-probe: cleanup-postcondition verified: dbus-targets-absent kernel-event-nodes-absent",
         "production-routing-probe: PASS"
       ],
       "probe_is_verify_run": false,
