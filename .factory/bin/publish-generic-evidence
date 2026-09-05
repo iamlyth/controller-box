@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/nix/store/bwry105g7v5jspr41bx9x3fcfqsmfkq2-bash-interactive-5.3p15/bin/bash
 # publish-generic-evidence — trusted two-stage generic evidence publisher
 # (FACTORY-LOOP-SPEC §19; Task 23).
 #
@@ -13,9 +13,9 @@
 # runner, hardware, or human is invoked.
 set -u
 
-root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+root=$(cd -- "$(/nix/store/di26b1kkbammy0sj70nq5qzvfrh78wxl-coreutils-9.11/bin/dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 if [[ ! -f "$root/.factory/loop/generic_evidence.py" ]]; then
     echo "publish-generic-evidence: publisher authority is missing: $root" >&2
     exit 1
 fi
-exec python3 "$root/.factory/loop/generic_evidence.py" --root "$root" "$@"
+exec /nix/store/miscphl6g76fp89z2drc18dckh2cx9ky-python3-3.13.14/bin/python3 "$root/.factory/loop/generic_evidence.py" --root "$root" "$@"

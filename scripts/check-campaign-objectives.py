@@ -192,7 +192,7 @@ def manifest_capabilities(root: Path, reference: str) -> list[str]:
     """Return the recorded capabilities of an accepted exact-commit manifest.
 
     The reference has already passed the strict runner-evidence validation
-    (signature, commit/tree/environment/archive/argv bindings), so the file is
+    (signature, commit/tree/environment/archive/probe-authority bindings), so the file is
     the exact signed record; its `capabilities` array is the runner's exact
     capability evidence for category matching.
     """
@@ -203,7 +203,7 @@ def manifest_capabilities(root: Path, reference: str) -> list[str]:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         fail(f"invalid objective manifest {reference}: {exc}")
-    if not isinstance(data, dict) or data.get("schema") != "factory-runner-receipt/v2":
+    if not isinstance(data, dict) or data.get("schema") != "factory-runner-receipt/v3":
         fail(f"objective manifest schema is invalid: {reference}")
     capabilities = data.get("capabilities")
     if not isinstance(capabilities, list) or not all(

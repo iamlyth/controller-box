@@ -1,0 +1,39 @@
+{
+  "schema": "iprunner-inputplumber-expectations/v1",
+  "description": "Exact pins for the inputplumber-system-dbus capability probe. Every field is verified against live facts collected by scripts/probe-inputplumber-system-dbus.sh; a mismatch fails the probe (non-skipping). Pins were derived from the real provisioned VM (Debian 13 amd64, pinned InputPlumber 0.78.0-1) and from the production DBus client constants (src/dbus/dbus_interface.h, src/dbus/ip_manager.c). Do not weaken a pin to make a probe pass; re-verify against the live system first.",
+  "bus": {
+    "name": "org.shadowblip.InputPlumber",
+    "system_socket": "/run/dbus/system_bus_socket"
+  },
+  "package": {
+    "name": "inputplumber",
+    "version": "0.78.0-1"
+  },
+  "service": {
+    "unit": "inputplumber.service",
+    "type": "dbus"
+  },
+  "manager": {
+    "path": "/org/shadowblip/InputPlumber/Manager",
+    "interface": "org.shadowblip.InputManager",
+    "version": "0.78.0",
+    "methods": {
+      "CreateCompositeDevice": { "in": "s", "out": "s" },
+      "CreateTargetDevice": { "in": "s", "out": "s" },
+      "AttachTargetDevice": { "in": "ss", "out": "" },
+      "StopTargetDevice": { "in": "s", "out": "" }
+    },
+    "gamepad_order": { "writable": true, "signature": "as" },
+    "supported_target_device_ids_required": ["xb360"]
+  },
+  "object_manager": {
+    "path": "/org/shadowblip/InputPlumber",
+    "interface": "org.freedesktop.DBus.ObjectManager",
+    "minimum_objects": 1
+  },
+  "interface_names": {
+    "target": "org.shadowblip.Input.Target",
+    "composite": "org.shadowblip.Input.CompositeDevice",
+    "source_event": "org.shadowblip.Input.Source.EventDevice"
+  }
+}

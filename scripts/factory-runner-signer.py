@@ -235,6 +235,11 @@ def _load_principal(fd: int) -> str:
 
 
 def validate_manifest(raw: bytes, runner_class: dict | None) -> dict:
+    # Production installation mode is 0700 root-owned and only the broker
+    # sets this fixed handoff marker.  There is intentionally no sudoers rule
+    # for this signer and no arbitrary-manifest API for the runner UID.
+    if runner_class is not None and os.environ.get("FACTORY_BROKER_SIGNING") != "1":
+        fail("direct signing is forbidden; use the privileged execution broker")
     if len(raw) > MAX_REQUEST or not raw.endswith(b"\n"):
         fail("invalid signing request")
     try:
@@ -244,10 +249,10 @@ def validate_manifest(raw: bytes, runner_class: dict | None) -> dict:
     if not isinstance(request, dict) or set(request) != {"schema", "manifest"} or request.get("schema") != "factory-runner-sign-request/v1":
         fail("signing request schema is invalid")
     manifest = request["manifest"]
-    fields = {"schema", "result", "runner", "commit", "tree", "environment_blob", "verify_argv_sha256", "archive_sha256", "campaign_id", "readiness_nonce", "authority_pins_sha256", "nonce", "capabilities", "exit_code", "timed_out", "started_at", "finished_at", "cleanup", "stdout_sha256", "stderr_sha256", "artifact_protocol", "artifact_limits", "artifact_count", "artifact_bytes", "artifact_manifest_sha256", "artifact_scope_sha256", "artifacts"}
+    fields = {"schema", "result", "runner", "commit", "tree", "environment_blob", "archive_sha256", "campaign_id", "readiness_nonce", "authority_sha256", "nonce", "capabilities", "exit_code", "timed_out", "started_at", "finished_at", "cleanup", "stdout_sha256", "stderr_sha256", "artifact_protocol", "artifact_limits", "artifact_count", "artifact_bytes", "artifact_manifest_sha256", "artifact_scope_sha256", "artifacts"}
     if not isinstance(manifest, dict) or set(manifest) != fields:
         fail("signing request manifest fields are invalid")
-    if manifest.get("schema") != "factory-runner-receipt/v2" or manifest.get("result") != "pass":
+    if manifest.get("schema") != "factory-runner-receipt/v3" or manifest.get("result") != "pass":
         fail("only passing runner receipts can be signed")
     if not isinstance(manifest["runner"], str) or not NAME.fullmatch(manifest["runner"]):
         fail("signing request runner is invalid")
@@ -258,7 +263,7 @@ def validate_manifest(raw: bytes, runner_class: dict | None) -> dict:
             fail(f"signing request {field} is invalid")
     if not isinstance(manifest["campaign_id"], str) or not NAME.fullmatch(manifest["campaign_id"]):
         fail("signing request campaign_id is invalid")
-    for field in ("verify_argv_sha256", "archive_sha256", "readiness_nonce", "authority_pins_sha256", "nonce", "stdout_sha256", "stderr_sha256"):
+    for field in ("archive_sha256", "readiness_nonce", "authority_sha256", "nonce", "stdout_sha256", "stderr_sha256"):
         if not isinstance(manifest[field], str) or not SHA256.fullmatch(manifest[field]):
             fail(f"signing request {field} is invalid")
     if manifest["exit_code"] != 0 or manifest["timed_out"] is not False or manifest["cleanup"] is not True:
@@ -283,7 +288,8 @@ def validate_manifest(raw: bytes, runner_class: dict | None) -> dict:
             or manifest["artifact_manifest_sha256"] != digest):
         fail("signing request artifact summary is invalid")
     scope = hashlib.sha256(json.dumps({"campaign_id": manifest["campaign_id"],
-        "readiness_nonce": manifest["readiness_nonce"], "nonce": manifest["nonce"],
+        "readiness_nonce": manifest["readiness_nonce"], "runner": manifest["runner"],
+        "commit": manifest["commit"], "nonce": manifest["nonce"],
         "artifact_manifest_sha256": digest}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     if manifest["artifact_scope_sha256"] != scope:
         fail("signing request artifact nonce scope is invalid")

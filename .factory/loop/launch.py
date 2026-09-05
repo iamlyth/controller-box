@@ -148,6 +148,8 @@ __all__ = [
     "InvocationBinding",
     "InvocationError",
     "LaunchAuthority",
+    "ReadinessLaunchAuthorization",
+    "authorize_readiness_launch",
     "LaunchError",
     "LaunchResult",
     "LaunchSupervision",
@@ -3089,6 +3091,31 @@ def verify_bound_executable(
 
 
 _MINT_SECRET = object()
+_READINESS_MINT_SECRET = object()
+
+
+class ReadinessLaunchAuthorization:
+    __slots__=("digest","campaign_id","accepted_commit","used","_mint")
+    def __init__(self,digest,campaign_id,accepted_commit,*,_mint):
+        if _mint is not _READINESS_MINT_SECRET:
+            raise LaunchError("readiness launch token cannot be forged")
+        self.digest=digest; self.campaign_id=campaign_id
+        self.accepted_commit=accepted_commit; self.used=False; self._mint=_mint
+
+
+def authorize_readiness_launch(raw: bytes) -> ReadinessLaunchAuthorization:
+    """Validate exact readiness-result bytes and mint a real-provider token."""
+    try: value=json.loads(raw)
+    except (UnicodeError,ValueError) as exc:
+        raise InvocationError("readiness authorization is malformed") from exc
+    if (not isinstance(value,dict) or value.get("schema")!="factory-readiness-result/v2"
+            or value.get("status")!="complete" or value.get("terminal_outcome")!="pass"
+            or not SHA256_RE.fullmatch(str(value.get("nonce","")))):
+        raise InvocationError("real-provider launch requires passing readiness authorization")
+    bindings=value.get("bindings",{}); commit=bindings.get("accepted_commit") if isinstance(bindings,dict) else None
+    if not isinstance(commit,str) or not re.fullmatch(r"[0-9a-f]{40}",commit):
+        raise InvocationError("readiness authorization commit binding is invalid")
+    return ReadinessLaunchAuthorization(hashlib.sha256(raw).hexdigest(),value.get("campaign_id"),commit,_mint=_READINESS_MINT_SECRET)
 
 
 class LaunchAuthority:
@@ -3995,6 +4022,7 @@ def authorize_launch(
     audit_objective: Optional[bytes] = None,
     task_excerpt: Optional[bytes] = None,
     findings: Optional[bytes] = None,
+    readiness_authorization: Optional[ReadinessLaunchAuthorization] = None,
 ) -> LaunchAuthority:
     """Mint the unforgeable verified-committed authority token (F2/F5).
 
@@ -4032,6 +4060,15 @@ def authorize_launch(
     neither opens a cookie store nor invokes ``require_quota``.
     """
     verify_invocation(binding)
+    if binding.provider != "synthetic":
+        if (not isinstance(readiness_authorization, ReadinessLaunchAuthorization)
+                or readiness_authorization._mint is not _READINESS_MINT_SECRET
+                or readiness_authorization.used
+                or not SHA256_RE.fullmatch(readiness_authorization.digest)):
+            raise InvocationError(
+                "standalone real-provider launch lacks descriptor/digest-bound readiness authorization"
+            )
+        readiness_authorization.used = True
     _verify_input_digest("role prompt", role_prompt, binding.role_prompt_digest)
     _verify_input_digest("operational policy", agents, binding.policy_digest)
     _verify_input_digest("specification", spec, binding.specification_digest)

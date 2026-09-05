@@ -1,11 +1,16 @@
 {
-  "schema": "controller-box-runner-policy-enrollment/v1",
+  "schema": "controller-box-runner-policy-enrollment/v2",
   "status": "pending-human-review",
-  "runner_class": "gpurunner",
-  "authority_sha256": "23cb0a91cdcde1ab7bb179b4fe5f6afc340dd9f2061b9d1222be94a3341c298d",
-  "scopes": [
-    "installed-licensed-diagram",
-    "gpu-compositor-layout-oracle"
-  ],
-  "note": "Candidate-derived enrollment request only; not runner policy authority or acceptance."
+  "probe_authorities": {
+    "dev-runner-vm": {"version": 1, "authority_sha256": "78d61d32cc4fb571fdf179f56a000373608a441bf6326e6dca33c602731b5038", "status": "pending-root-install"},
+    "iprunner": {"version": 1, "authority_sha256": "78d61d32cc4fb571fdf179f56a000373608a441bf6326e6dca33c602731b5038", "status": "pending-root-install"},
+    "gpurunner": {"version": 1, "authority_sha256": "78d61d32cc4fb571fdf179f56a000373608a441bf6326e6dca33c602731b5038", "status": "pending-root-install"}
+  },
+  "licensed_authority": {
+    "runner_class": "gpurunner",
+    "authority_sha256": "23cb0a91cdcde1ab7bb179b4fe5f6afc340dd9f2061b9d1222be94a3341c298d",
+    "scopes": ["installed-licensed-diagram", "gpu-compositor-layout-oracle"],
+    "status": "pending-human-review"
+  },
+  "note": "Candidate-derived deployment request only. It becomes authority only after root-owned immutable installation and independent policy enrollment. No evidence promotion is authorized."
 }

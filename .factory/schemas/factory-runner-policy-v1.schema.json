@@ -1,25 +1,22 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "factory-runner-policy/v1",
+  "$id": "factory-runner-policy/v2",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "namespace", "classes", "authority_pins"],
   "properties": {
-    "schema": {"const": "factory-runner-policy/v1"},
+    "schema": {"const": "factory-runner-policy/v2"},
     "namespace": {"type": "string", "minLength": 1},
-    "classes": {"type": "array", "minItems": 1},
-    "authority_pins": {
-      "type": "array",
-      "items": {
-        "type": "object", "additionalProperties": false,
-        "required": ["class", "scope", "authority_sha256", "status"],
-        "properties": {
-          "class": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
-          "scope": {"enum": ["installed-licensed-diagram", "gpu-compositor-layout-oracle"]},
-          "authority_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-          "status": {"enum": ["enrolled", "pending-human-review"]}
-        }
-      }
-    }
-  }
+    "classes": {"type": "array", "minItems": 1, "items": {"type":"object", "additionalProperties":false,
+      "required":["name","uid","workspace_root","allowed_capabilities","broker_helper","probe_authority","probe_authority_sha256","signer_key","signer_principal_file","nonce_ledger","systemd_run","systemctl","cgroup_root"],
+      "properties": {
+        "name":{"type":"string","pattern":"^[a-z0-9][a-z0-9._-]*$"}, "uid":{"type":"integer","minimum":1},
+        "workspace_root":{"type":"string","pattern":"^/"}, "allowed_capabilities":{"type":"array","minItems":1,"uniqueItems":true,"items":{"type":"string","pattern":"^[a-z0-9][a-z0-9._-]*$"}},
+        "broker_helper":{"const":"/usr/local/libexec/factory-runner-broker"}, "probe_authority":{"type":"string","pattern":"^/"}, "probe_authority_sha256":{"$ref":"#/$defs/sha256"},
+        "signer_key":{"type":"string","pattern":"^/"}, "signer_principal_file":{"type":"string","pattern":"^/"}, "nonce_ledger":{"type":"string","pattern":"^/"},
+        "systemd_run":{"type":"string","pattern":"^/"}, "systemctl":{"type":"string","pattern":"^/"}, "cgroup_root":{"type":"string","pattern":"^/"}
+      } }},
+    "authority_pins": {"type":"array","items":{"type":"object","additionalProperties":false,"required":["class","scope","authority_sha256","status"],"properties":{"class":{"type":"string","pattern":"^[a-z0-9][a-z0-9._-]*$"},"scope":{"enum":["installed-licensed-diagram","gpu-compositor-layout-oracle"]},"authority_sha256":{"$ref":"#/$defs/sha256"},"status":{"enum":["enrolled","pending-human-review"]}}}}
+  },
+  "$defs":{"sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"}}
 }

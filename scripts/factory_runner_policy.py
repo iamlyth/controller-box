@@ -32,6 +32,7 @@ NAME = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 TOKEN = re.compile(r"^[^\x00-\x1f\x7f]{1,128}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 PIN_SCOPES = {"installed-licensed-diagram", "gpu-compositor-layout-oracle"}
+POLICY_SCHEMA = "factory-runner-policy/v2"
 
 
 class PolicyError(Exception):
@@ -107,8 +108,8 @@ def load_policy() -> dict:
     expected = {"schema", "namespace", "classes", "authority_pins"}
     if not isinstance(data, dict) or set(data) != expected:
         raise PolicyError("runner policy top-level fields are invalid")
-    if data.get("schema") != "factory-runner-policy/v1":
-        raise PolicyError("runner policy schema is not factory-runner-policy/v1")
+    if data.get("schema") != POLICY_SCHEMA:
+        raise PolicyError(f"runner policy schema is not {POLICY_SCHEMA}")
     namespace = data.get("namespace")
     if not isinstance(namespace, str) or not namespace or "\n" in namespace:
         raise PolicyError("runner policy namespace is invalid")
@@ -136,8 +137,10 @@ def load_policy() -> dict:
         if not isinstance(entry, dict):
             raise PolicyError(f"runner policy classes[{index}] is not an object")
         fields = {
-            "name", "uid", "workspace_root", "verify_argv", "allowed_capabilities",
-            "signer_helper", "signer_key", "signer_principal_file",
+            "name", "uid", "workspace_root", "allowed_capabilities",
+            "broker_helper", "probe_authority", "probe_authority_sha256",
+            "signer_key", "signer_principal_file", "nonce_ledger",
+            "systemd_run", "systemctl", "cgroup_root",
         }
         if set(entry) != fields:
             raise PolicyError(f"runner policy classes[{index}] fields are invalid")
@@ -158,15 +161,18 @@ def load_policy() -> dict:
             or workspace_root == "/"
         ):
             raise PolicyError(f"runner policy classes[{index}].workspace_root is invalid")
-        validate_argv(entry["verify_argv"], f"classes[{index}]")
         validate_capabilities(entry["allowed_capabilities"], f"classes[{index}]")
-        for field in ("signer_helper", "signer_key", "signer_principal_file"):
+        if not isinstance(entry["probe_authority_sha256"], str) or not SHA256.fullmatch(entry["probe_authority_sha256"]):
+            raise PolicyError(f"runner policy classes[{index}].probe_authority_sha256 is invalid")
+        for field in ("broker_helper", "probe_authority", "signer_key", "signer_principal_file", "nonce_ledger", "systemd_run", "systemctl", "cgroup_root"):
             value = entry[field]
             if (
                 not isinstance(value, str) or not value.startswith("/")
                 or ".." in Path(value).parts
             ):
                 raise PolicyError(f"runner policy classes[{index}].{field} is invalid")
+        if entry["broker_helper"] != "/usr/local/libexec/factory-runner-broker":
+            raise PolicyError(f"runner policy classes[{index}] does not use the canonical broker")
         if name == "gpurunner" or any(cap in {"gpu-compositor", "installed-licensed-diagram"} for cap in entry["allowed_capabilities"]):
             required = {(name, scope) for scope in PIN_SCOPES}
             present = {identity for identity in seen_pins if identity[0] == name}

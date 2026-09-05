@@ -1001,15 +1001,47 @@ generates factory runner evidence for `kernel-uinput` immediately before its
 capability gate through the exact launch-time `--runner-command`. A model role
 must not run that command directly.
 
-The coordinator SSH-deploys the current Git tree to each declared runner in
-`.factory/environment.toml`, executes `verify_argv`, and records a
-signed receipt (manifest + logs) in `.factory-state/runner-evidence/`.
+Protocol v2 sends an exact current-HEAD archive as product-under-test only.
+The unprivileged SSH ForcedCommand is an argument-free sudo trampoline to the
+root-owned broker. The broker issues and consumes a one-time root-ledger nonce,
+reconstructs a fresh product checkout for the gate and every probe, and runs
+only descriptors and bytes from the enrolled immutable
+`/opt/factory-runner/authority/v1` closure. Candidate contracts, analyzers, and
+probe scripts are never executed as authority. Every candidate process runs
+under a distinct systemd transient service with PID/mount isolation and
+`KillMode=control-group`; unavailable primitives, surviving cgroup members, or
+an unreadable cleanup proof refuse signing.
 
-The coordinator runs the strong validator after acquisition; operators may
-also validate the ignored aggregate read-only:
+The broker independently validates retained routing/PNG/renderer/install bytes,
+constructs the manifest, and invokes the class signer internally. The runner
+UID has no signer sudo rule. Publication occurs only after transfer and is
+namespaced as
+`.factory-state/runner-evidence/<campaign>/<readiness>/<runner>/<commit>/<nonce>/`;
+the aggregate is in that campaign/readiness directory, so a fresh same-commit
+acquisition cannot overwrite prior evidence.
+
+Root migration is deliberately out-of-band and pending approval:
 
 ```sh
-python3 scripts/check-factory-runner-evidence.py --print-capabilities
+python3 scripts/build-runner-probe-authority.py
+sudo scripts/install-factory-runner-v2.sh /root/approved-runner-policy-v2.json
+# atomically replace authorized_keys with the template in:
+# deploy/factory-runner-authority-v1/forced-command-v2.txt
+```
+
+The host must provide unified cgroup v2 and a systemd version supporting
+`PrivatePIDs`, `PrivateMounts`, transient services, and readable cgroup cleanup
+state. Keep distinct UIDs, signer keys, and principals for every class. Remove
+the obsolete signer sudoers entry; never grant the SSH UID direct signer
+access.
+
+The coordinator runs the strong validator after acquisition; operators supply
+the exact campaign and readiness namespace:
+
+```sh
+python3 scripts/check-factory-runner-evidence.py \
+  --expected-campaign-id "$CAMPAIGN_ID" \
+  --expected-readiness-nonce "$READINESS_NONCE" --print-capabilities
 ```
 
 The output should include `kernel-uinput`.  The conformance rows

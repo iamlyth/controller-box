@@ -30,6 +30,7 @@
       "type": "string",
       "enum": [
         "success",
+        "readiness_complete",
         "findings",
         "blocked",
         "failed",
@@ -51,7 +52,8 @@
         "pass",
         "findings",
         "infrastructure_failure",
-        "success"
+        "success",
+        "readiness_complete"
       ]
     },
     "head_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
@@ -92,5 +94,19 @@
         }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"terminal_phase": {"const": "success"}}, "required": ["terminal_phase"]},
+      "then": {
+        "description": "Code requires rounds_completed == rounds_requested and one passing audit per requested round."
+      }
+    },
+    {
+      "if": {"properties": {"terminal_phase": {"const": "readiness_complete"}}, "required": ["terminal_phase"]},
+      "then": {
+        "properties": {"terminal_outcome": {"const": "readiness_complete"}, "rounds_completed": {"const": 0}, "phase_history": {"maxItems": 0}}
+      }
+    }
+  ]
 }

@@ -1072,6 +1072,11 @@ class LaunchIntegrationTests(_Base):
         policy_bytes = (self.workspace / "AGENTS.md").read_bytes()
         spec_bytes = (self.workspace / "spec.md").read_bytes()
         plan_bytes = (self.workspace / "plan.md").read_bytes()
+        if binding.provider != "synthetic" and "readiness_authorization" not in guard_kwargs:
+            raw=json.dumps({"schema":"factory-readiness-result/v2","campaign_id":"usage-test",
+                "nonce":"a"*64,"status":"complete","terminal_outcome":"pass",
+                "bindings":{"accepted_commit":binding.bound_commit},"results":{}}).encode()
+            guard_kwargs["readiness_authorization"]=launch.authorize_readiness_launch(raw)
         return launch.authorize_launch(
             binding,
             role_prompt=role_bytes,

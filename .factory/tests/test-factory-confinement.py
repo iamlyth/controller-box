@@ -2346,6 +2346,11 @@ class ProductionLaunchConfinementTests(_Base):
             )
 
     def _authorize(self, binding, **kwargs):
+        if binding.provider != "synthetic" and "readiness_authorization" not in kwargs:
+            raw=json.dumps({"schema":"factory-readiness-result/v2","campaign_id":"confinement-test",
+                "nonce":"a"*64,"status":"complete","terminal_outcome":"pass",
+                "bindings":{"accepted_commit":binding.bound_commit},"results":{}}).encode()
+            kwargs["readiness_authorization"]=launch.authorize_readiness_launch(raw)
         authority = launch.authorize_launch(
             binding,
             role_prompt=(self.workspace / "role.md").read_bytes(),

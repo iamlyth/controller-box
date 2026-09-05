@@ -94,13 +94,13 @@ RUNTIME_RECEIPT_PREFIX = ".factory-state/audit-receipts/"
 RUNTIME_RECEIPT_TAG = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\.json$")
 # The runner-evidence namespace is the second runtime shape a `receipts` ref
 # may cite: an exact committed runner manifest
-# `.factory-state/runner-evidence/<runner>/<40-hex>/manifest.json`.  These are
+# `.factory-state/runner-evidence/<campaign>/<readiness>/<runner>/<commit>/<nonce>/manifest.json`. These are
 # live runner receipts under the ignored runtime namespace (never Git blobs);
 # a `verified` row citing one is validated against the live filesystem by the
 # capability/runner-evidence authority and fails closed when the manifest is
 # missing, stale, or not an accepted exact-commit record.
 RUNTIME_MANIFEST_RE = re.compile(
-    r"^runner-evidence/[^/]+/[0-9a-f]{40}/manifest\.json$"
+    r"^runner-evidence/[A-Za-z0-9][A-Za-z0-9._-]{0,63}/[0-9a-f]{64}/[^/]+/[0-9a-f]{40}/[0-9a-f]{64}/manifest\.json$"
 )
 PLAN_PATH = ROOT / ".factory/artifacts/implementation-plan.md"
 SIDECAR_DEFAULT = ROOT / ".factory/artifacts/conformance.json"
@@ -338,7 +338,7 @@ def validate_ref_safety(ref: str, where: str) -> None:
         fail(
             f"{where} uses the runtime namespace outside the only allowed "
             f"shape `.factory-state/audit-receipts/<tag>.json` or "
-            f"`.factory-state/runner-evidence/<runner>/<commit>/manifest.json`: {ref!r}"
+            f"`.factory-state/runner-evidence/<campaign>/<readiness>/<runner>/<commit>/<nonce>/manifest.json`: {ref!r}"
         )
     if len(parts) > 1 and parts[0] not in SAFE_REF_PREFIXES:
         fail(f"{where} first component must be a tracked refs prefix: {ref!r}")

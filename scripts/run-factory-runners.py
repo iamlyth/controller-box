@@ -161,6 +161,25 @@ def _requested_authority_pins_digest(name: str) -> str:
     return hashlib.sha256(json.dumps(pins, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+def _ssh_argv(runner: dict) -> list[str]:
+    return [ssh_binary(), "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
+            "-o", "IdentitiesOnly=yes", "-o", "UpdateHostKeys=no",
+            "-o", "ClearAllForwardings=yes", "-o", "ForwardAgent=no",
+            "-o", "PermitLocalCommand=no", "-o", "RequestTTY=no", "-T",
+            runner["ssh_config_alias"], "factory-runner-v2"]
+
+
+def _obtain_broker_nonce(runner: dict, campaign_id: str, readiness_nonce: str) -> str:
+    request={"schema":"factory-runner-nonce-request/v1","runner":runner["name"],
+             "campaign_id":campaign_id,"readiness_nonce":readiness_nonce}
+    result=subprocess.run(_ssh_argv(runner),input=(json.dumps(request,separators=(",",":"))+"\n").encode(),capture_output=True,timeout=120)
+    try: response=json.loads(result.stdout)
+    except (UnicodeError,json.JSONDecodeError): fail("runner broker nonce response is malformed",EXIT_TRANSPORT)
+    if result.returncode or not isinstance(response,dict) or set(response)!={"schema","nonce","runner","campaign_id","readiness_nonce"} or response.get("schema")!="factory-runner-nonce/v1" or response.get("runner")!=runner["name"] or response.get("campaign_id")!=campaign_id or response.get("readiness_nonce")!=readiness_nonce or not re.fullmatch(r"[0-9a-f]{64}",str(response.get("nonce",""))):
+        fail("runner broker refused nonce issuance",EXIT_TRANSPORT)
+    return response["nonce"]
+
+
 def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, archive: bytes,
                campaign_id: str | None = None, readiness_nonce: str | None = None) -> dict:
     name = runner["name"]
@@ -168,11 +187,15 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
     readiness_nonce = readiness_nonce or os.environ.get("FACTORY_READINESS_NONCE", "")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", campaign_id) or not re.fullmatch(r"[0-9a-f]{64}", readiness_nonce):
         fail("campaign/readiness anti-replay binding is missing")
-    argv = runner["verify_argv"]
     capabilities = runner["capabilities"]
-    argv_sha = digest_json(argv)
     archive_sha = hashlib.sha256(archive).hexdigest()
-    nonce = hashlib.sha256(os.urandom(32)).hexdigest()
+    nonce = _obtain_broker_nonce(runner, campaign_id, readiness_nonce)
+    enrollment = ROOT / ".factory" / "runner-policy-enrollment.json"
+    try:
+        enrolled = json.loads(enrollment.read_text())
+        authority_sha256 = enrolled["probe_authorities"][name]["authority_sha256"]
+    except (OSError,ValueError,KeyError,TypeError):
+        fail(f"runner {name} has no exact probe-authority enrollment")
     commit_object = subprocess.check_output(
         [GIT, "cat-file", "commit", commit], cwd=ROOT,
         env=gitutil.sanitize_git_environment(os.environ), timeout=120,
@@ -180,35 +203,26 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
     if len(commit_object) > 65_536:
         fail("commit object exceeds protocol limit")
     request = {
-        "schema": "factory-runner-request/v1",
+        "schema": "factory-runner-request/v2",
         "runner": name,
         "class": name,
         "commit": commit,
         "commit_object_b64": base64.b64encode(commit_object).decode(),
         "tree": tree,
         "environment_blob": environment_blob,
-        "verify_argv": argv,
-        "verify_argv_sha256": argv_sha,
+        "authority_sha256": authority_sha256,
         "archive_sha256": archive_sha,
         "archive_size": len(archive),
-        "working_directory": runner["working_directory"],
-        "capabilities": capabilities,
+        "capabilities": sorted(capabilities),
         "campaign_id": campaign_id,
         "readiness_nonce": readiness_nonce,
-        "authority_pins_sha256": _requested_authority_pins_digest(name),
         "nonce": nonce,
     }
     payload = json.dumps(request, separators=(",", ":")).encode() + b"\n" + archive
     with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
         try:
             process = subprocess.Popen(
-                [
-                    ssh_binary(), "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
-                    "-o", "IdentitiesOnly=yes", "-o", "UpdateHostKeys=no",
-                    "-o", "ClearAllForwardings=yes", "-o", "ForwardAgent=no",
-                    "-o", "PermitLocalCommand=no", "-o", "RequestTTY=no", "-T",
-                    runner["ssh_config_alias"], "factory-runner-v1",
-                ],
+                _ssh_argv(runner),
                 stdin=subprocess.PIPE, stdout=stdout_file, stderr=stderr_file,
                 start_new_session=True, preexec_fn=limit_transport_output,
             )
@@ -253,7 +267,7 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
         fail(f"runner {name} verification did not pass", EXIT_FINDINGS)
     expected = {
         "schema", "result", "runner", "commit", "tree", "environment_blob",
-        "verify_argv_sha256", "archive_sha256", "campaign_id", "readiness_nonce", "authority_pins_sha256", "nonce", "capabilities",
+        "archive_sha256", "campaign_id", "readiness_nonce", "authority_sha256", "nonce", "capabilities",
         "exit_code", "timed_out", "stdout_b64", "stderr_b64", "started_at",
         "finished_at", "cleanup", "manifest_b64", "signature_b64",
         "signer_principal", "signer_key_sha256", "signature_algorithm",
@@ -261,17 +275,16 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
         "artifact_count", "artifact_bytes", "artifact_manifest_sha256",
         "artifact_scope_sha256", "artifacts", "artifact_payload",
     }
-    if set(receipt) != expected or receipt["schema"] != "factory-runner-receipt/v2":
+    if set(receipt) != expected or receipt["schema"] != "factory-runner-receipt/v3":
         fail(f"runner {name} receipt fields are invalid")
     bindings = {
         "runner": name,
         "commit": commit,
         "tree": tree,
         "environment_blob": environment_blob,
-        "verify_argv_sha256": argv_sha,
         "archive_sha256": archive_sha,
         "campaign_id": campaign_id, "readiness_nonce": readiness_nonce,
-        "authority_pins_sha256": request["authority_pins_sha256"], "nonce": nonce,
+        "authority_sha256": authority_sha256, "nonce": nonce,
     }
     if any(receipt.get(key) != value for key, value in bindings.items()):
         fail(f"runner {name} receipt binding mismatch")
@@ -324,7 +337,7 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
     except ArtifactError as exc:
         fail(f"runner {name} artifact framing is invalid: {exc}")
     expected_scope = hashlib.sha256(json.dumps({"campaign_id": campaign_id,
-        "readiness_nonce": readiness_nonce, "nonce": nonce,
+        "readiness_nonce": readiness_nonce, "runner": name, "commit": commit, "nonce": nonce,
         "artifact_manifest_sha256": artifact_digest}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     if (receipt["artifact_protocol"] != ARTIFACT_PROTOCOL
             or receipt["artifact_limits"] != {"count":MAX_ARTIFACTS,"file_bytes":MAX_ARTIFACT_FILE,"aggregate_bytes":MAX_ARTIFACT_BYTES}
@@ -333,13 +346,13 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
             or receipt["artifact_manifest_sha256"] != artifact_digest
             or receipt["artifact_scope_sha256"] != expected_scope):
         fail(f"runner {name} signed artifact summary is invalid")
-    evidence_dir = STATE_ROOT / name / commit
+    evidence_dir = STATE_ROOT / campaign_id / readiness_nonce / name / commit / nonce
     runner_dir = evidence_dir.parent
     if runner_dir.is_symlink(): fail(f"unsafe runner evidence parent for {name}")
     runner_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     if evidence_dir.is_symlink() or evidence_dir.exists():
         fail(f"runner evidence publication collision for {name}")
-    staging = runner_dir / f".publish-{commit}-{nonce}"
+    staging = runner_dir / f".publish-{nonce}"
     if staging.exists() or staging.is_symlink(): fail(f"runner evidence staging collision for {name}")
     staging.mkdir(mode=0o700)
     try:
@@ -470,7 +483,7 @@ def main() -> int:
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", campaign_id) or not re.fullmatch(r"[0-9a-f]{64}", readiness_nonce):
         fail("campaign/readiness anti-replay binding is missing")
     aggregate = {
-        "schema": "factory-runner-aggregate/v3",
+        "schema": "factory-runner-aggregate/v4",
         "campaign_id": campaign_id,
         "readiness_nonce": readiness_nonce,
         "commit": commit,
@@ -479,7 +492,10 @@ def main() -> int:
         "runners": records,
     }
     aggregate_bytes = (json.dumps(aggregate, sort_keys=True, indent=2) + "\n").encode()
-    atomic_write(ROOT / ".factory-state/runner-evidence.json", aggregate_bytes)
+    aggregate_path = STATE_ROOT / campaign_id / readiness_nonce / "aggregate.json"
+    if aggregate_path.exists() or aggregate_path.is_symlink():
+        fail("runner aggregate publication collision")
+    atomic_write(aggregate_path, aggregate_bytes)
     print(f"factory-runner: {len(records)} runner(s) passed for {commit[:12]}")
     return 0
 

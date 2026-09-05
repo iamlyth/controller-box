@@ -1,0 +1,34 @@
+{
+  "schema": "controller-box-independent-visual-oracle/v2",
+  "authority_status": "machine-enforced-pending-human-calibration",
+  "derivation": "Regions were independently inspected against the Controllercons 64x64 source viewBox; subjective calibration remains a release blocker.",
+  "models": {
+    "xb360": {
+      "asset": "xbox-360.svg",
+      "view_box": [0, 0, 64, 64],
+      "source_aspect": 1.0,
+      "minimum_raster": [512, 512],
+      "aspect_tolerance": 0.02,
+      "required_controls": ["A", "B", "X", "Y", "Up", "Down", "Left", "Right", "Start", "Select", "Guide", "L1", "R1", "L2", "R2", "L3", "R3"],
+      "controls": {
+        "A": {"centroid_x": [218, 255], "centroid_y": [112, 145], "minimum_pixels": 80},
+        "B": {"centroid_x": [244, 280], "centroid_y": [80, 118], "minimum_pixels": 80},
+        "X": {"centroid_x": [194, 230], "centroid_y": [80, 118], "minimum_pixels": 80},
+        "Y": {"centroid_x": [218, 255], "centroid_y": [48, 87], "minimum_pixels": 80},
+        "Up": {"centroid_x": [87, 116], "centroid_y": [80, 110], "minimum_pixels": 60},
+        "Down": {"centroid_x": [87, 116], "centroid_y": [146, 177], "minimum_pixels": 60},
+        "Left": {"centroid_x": [69, 98], "centroid_y": [113, 143], "minimum_pixels": 60},
+        "Right": {"centroid_x": [105, 135], "centroid_y": [113, 143], "minimum_pixels": 60},
+        "Start": {"centroid_x": [168, 195], "centroid_y": [82, 107], "minimum_pixels": 45},
+        "Select": {"centroid_x": [114, 141], "centroid_y": [82, 107], "minimum_pixels": 45},
+        "Guide": {"centroid_x": [139, 165], "centroid_y": [48, 78], "minimum_pixels": 50},
+        "L1": {"centroid_x": [45, 88], "centroid_y": [30, 55], "minimum_pixels": 50},
+        "R1": {"centroid_x": [212, 255], "centroid_y": [30, 55], "minimum_pixels": 50},
+        "L2": {"centroid_x": [33, 76], "centroid_y": [15, 40], "minimum_pixels": 50},
+        "R2": {"centroid_x": [224, 267], "centroid_y": [15, 40], "minimum_pixels": 50},
+        "L3": {"centroid_x": [43, 78], "centroid_y": [78, 113], "minimum_pixels": 80},
+        "R3": {"centroid_x": [175, 211], "centroid_y": [132, 168], "minimum_pixels": 80}
+      }
+    }
+  }
+}

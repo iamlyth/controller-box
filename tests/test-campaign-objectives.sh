@@ -130,6 +130,9 @@ print(json.dumps({
     "public_keys": keys, "allowed_principals": principals,
 }))
 PY
+    cat > "$dir/.factory/runner-policy-enrollment.json" <<'EOF'
+{"schema":"controller-box-runner-policy-enrollment/v2","status":"pending-human-review","probe_authorities":{"fake-runner":{"version":1,"authority_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","status":"pending-root-install"},"real-system-service":{"version":1,"authority_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","status":"pending-root-install"},"verify-runner":{"version":1,"authority_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","status":"pending-root-install"}},"licensed_authority":{"runner_class":"gpurunner","authority_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","scopes":[],"status":"pending-human-review"},"note":"fixture"}
+EOF
     printf '# Spec\n' > "$dir/docs/SPEC.md"
     printf '%s\n' '.factory-state/' > "$dir/.gitignore"
     git -C "$dir" init -q -b develop
@@ -146,7 +149,8 @@ write_evidence() {
     local dir=$1 runner=$2
     local head
     head=$(git -C "$dir" rev-parse HEAD)
-    mkdir -p "$dir/.factory-state/runner-evidence/$runner/$head"
+    local zero; zero=$(printf '0%.0s' {1..64})
+    mkdir -p "$dir/.factory-state/runner-evidence/synthetic-campaign-objectives/${FACTORY_READINESS_NONCE}/$runner/$head/$zero"
     local public_key
     public_key=$(cut -d' ' -f1,2 "$tmp/signer-key-$runner.pub")
     python3 - "$dir" "$runner" "$head" "$public_key" <<'PY'
@@ -163,7 +167,6 @@ tree = git("rev-parse", f"{head}^{{tree}}")
 environment_blob = git("rev-parse", f"{head}:.factory/environment.toml")
 environment = tomllib.loads(git("show", f"{head}:.factory/environment.toml"))
 declared = next(item for item in environment["runners"] if item["name"] == runner)
-argv_digest = hashlib.sha256(json.dumps(declared["verify_argv"], separators=(",", ":")).encode()).hexdigest()
 archive = subprocess.run(
     ["git", "archive", "--format=tar", "--output", str(root / "commit-archive.tar"), head],
     cwd=root, capture_output=True,
@@ -176,44 +179,45 @@ empty = hashlib.sha256(b"").hexdigest()
 capabilities = sorted(declared["capabilities"])
 key_sha256 = hashlib.sha256(public_key.encode()).hexdigest()
 manifest = {
-    "schema": "factory-runner-receipt/v2", "result": "pass", "runner": runner,
+    "schema": "factory-runner-receipt/v3", "result": "pass", "runner": runner,
     "commit": head, "tree": tree, "environment_blob": environment_blob,
-    "verify_argv_sha256": argv_digest, "archive_sha256": archive_sha256,
-    "campaign_id": "synthetic-campaign-objectives", "readiness_nonce": "2" * 64, "authority_pins_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945", "nonce": "0" * 64,
+    "archive_sha256": archive_sha256,
+    "campaign_id": "synthetic-campaign-objectives", "readiness_nonce": "2" * 64, "authority_sha256": "a" * 64, "nonce": "0" * 64,
     "capabilities": capabilities, "exit_code": 0, "timed_out": False,
     "started_at": 1, "finished_at": 2, "cleanup": True,
     "stdout_sha256": empty, "stderr_sha256": empty,
     "artifact_protocol":"factory-runner-artifacts/v1","artifact_limits":{"count":64,"file_bytes":8388608,"aggregate_bytes":50331648},
     "artifact_count":0,"artifact_bytes":0,"artifact_manifest_sha256":hashlib.sha256(b"[]\n").hexdigest(),
-    "artifact_scope_sha256":hashlib.sha256(json.dumps({"campaign_id":"synthetic-campaign-objectives","readiness_nonce":"2"*64,"nonce":"0"*64,"artifact_manifest_sha256":hashlib.sha256(b"[]\n").hexdigest()},sort_keys=True,separators=(",",":")).encode()).hexdigest(),"artifacts":[],
+    "artifact_scope_sha256":hashlib.sha256(json.dumps({"campaign_id":"synthetic-campaign-objectives","readiness_nonce":"2"*64,"runner":runner,"commit":head,"nonce":"0"*64,"artifact_manifest_sha256":hashlib.sha256(b"[]\n").hexdigest()},sort_keys=True,separators=(",",":")).encode()).hexdigest(),"artifacts":[],
     "signer_principal": runner, "signer_key_sha256": key_sha256,
     "namespace": "factory-runner-receipt", "signature_algorithm": "ssh-ed25519",
 }
 raw = (json.dumps(manifest, sort_keys=True, indent=2) + "\n").encode()
-manifest_path = root / f".factory-state/runner-evidence/{runner}/{head}/manifest.json"
+manifest_path = root / f".factory-state/runner-evidence/synthetic-campaign-objectives/{'2'*64}/{runner}/{head}/{'0'*64}/manifest.json"
 manifest_path.write_bytes(raw)
-aggregate_path = root / ".factory-state/runner-evidence.json"
+aggregate_path = root / f".factory-state/runner-evidence/synthetic-campaign-objectives/{'2'*64}/aggregate.json"
+aggregate_path.parent.mkdir(parents=True,exist_ok=True)
 if aggregate_path.exists():
     aggregate = json.loads(aggregate_path.read_text())
 else:
-    aggregate = {"schema": "factory-runner-aggregate/v3", "campaign_id": "synthetic-campaign-objectives", "readiness_nonce": "2" * 64, "commit": head,
+    aggregate = {"schema": "factory-runner-aggregate/v4", "campaign_id": "synthetic-campaign-objectives", "readiness_nonce": "2" * 64, "commit": head,
                  "tree": tree, "environment_blob": environment_blob, "runners": []}
 aggregate["runners"] = [
     item for item in aggregate["runners"] if item["name"] != runner
-] + [{"name": runner, "manifest": f".factory-state/runner-evidence/{runner}/{head}/manifest.json",
+] + [{"name": runner, "manifest": f".factory-state/runner-evidence/synthetic-campaign-objectives/{'2'*64}/{runner}/{head}/{'0'*64}/manifest.json",
       "manifest_sha256": hashlib.sha256(raw).hexdigest(), "capabilities": capabilities,
       "artifact_manifest_sha256":hashlib.sha256(b"[]\n").hexdigest(),"artifact_count":0,"artifact_bytes":0,
       "signer": {"principal": runner, "key_sha256": key_sha256,
                   "algorithm": "ssh-ed25519", "signature_sha256": ""}}]
 aggregate_path.write_text(json.dumps(aggregate, sort_keys=True, indent=2) + "\n")
-(root / f".factory-state/runner-evidence/{runner}/{head}/stdout.log").write_bytes(b"")
-(root / f".factory-state/runner-evidence/{runner}/{head}/stderr.log").write_bytes(b"")
+(manifest_path.parent / "stdout.log").write_bytes(b"")
+(manifest_path.parent / "stderr.log").write_bytes(b"")
 PY
-    cat "$dir/.factory-state/runner-evidence/$runner/$head/manifest.json" \
+    cat "$dir/.factory-state/runner-evidence/synthetic-campaign-objectives/${FACTORY_READINESS_NONCE}/$runner/$head/$zero/manifest.json" \
         | ssh-keygen -Y sign -f "$tmp/signer-key-$runner" -n factory-runner-receipt \
-            > "$dir/.factory-state/runner-evidence/$runner/$head/manifest.sig" 2>/dev/null
-    python3 - "$dir/.factory-state/runner-evidence/$runner/$head/manifest.sig" \
-        "$dir/.factory-state/runner-evidence.json" "$runner" <<'PY'
+            > "$dir/.factory-state/runner-evidence/synthetic-campaign-objectives/${FACTORY_READINESS_NONCE}/$runner/$head/$zero/manifest.sig" 2>/dev/null
+    python3 - "$dir/.factory-state/runner-evidence/synthetic-campaign-objectives/${FACTORY_READINESS_NONCE}/$runner/$head/$zero/manifest.sig" \
+        "$dir/.factory-state/runner-evidence/synthetic-campaign-objectives/${FACTORY_READINESS_NONCE}/aggregate.json" "$runner" <<'PY'
 import hashlib, json, pathlib, sys
 sig_path, aggregate_path, runner = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3]
 aggregate = json.loads(aggregate_path.read_text())
@@ -451,7 +455,7 @@ result: pass
 # Campaign Audit
 ## Evidence reviewed
 - Executable evidence: ./scripts/verify-project.sh PASS [receipt: .factory-state/audit-receipts/project-verify.json]
-- Executable evidence: ./scripts/probe.sh PASS [manifest: .factory-state/runner-evidence/fake-runner/$head/manifest.json]
+- Executable evidence: ./scripts/probe.sh PASS [manifest: .factory-state/runner-evidence/synthetic-campaign-objectives/${FACTORY_READINESS_NONCE}/fake-runner/$head/$(printf '0%.0s' {1..64})/manifest.json]
 
 pass
 REPORT
@@ -469,7 +473,7 @@ result: pass
 # Campaign Audit
 ## Evidence reviewed
 - Executable evidence: ./scripts/verify-project.sh PASS [receipt: .factory-state/audit-receipts/project-verify.json]
-- Executable evidence: ./scripts/probe.sh PASS [manifest: .factory-state/runner-evidence/real-system-service/$head/manifest.json]
+- Executable evidence: ./scripts/probe.sh PASS [manifest: .factory-state/runner-evidence/synthetic-campaign-objectives/${FACTORY_READINESS_NONCE}/real-system-service/$head/$(printf '0%.0s' {1..64})/manifest.json]
 
 pass
 REPORT
@@ -487,7 +491,7 @@ result: pass
 ---
 # Campaign Audit
 ## Evidence reviewed
-- Executable evidence: ./scripts/probe.sh PASS [manifest: .factory-state/runner-evidence/real-system-service/$head/manifest.json]
+- Executable evidence: ./scripts/probe.sh PASS [manifest: .factory-state/runner-evidence/synthetic-campaign-objectives/${FACTORY_READINESS_NONCE}/real-system-service/$head/$(printf '0%.0s' {1..64})/manifest.json]
 - Executable evidence: ./scripts/probe-routing.sh PASS [receipt: .factory-state/audit-receipts/controller-production-routing.json]
 
 pass
@@ -505,7 +509,7 @@ result: pass
 ---
 # Campaign Audit
 ## Evidence reviewed
-- Executable evidence: ./scripts/probe.sh PASS [manifest: .factory-state/runner-evidence/verify-runner/$head/manifest.json]
+- Executable evidence: ./scripts/probe.sh PASS [manifest: .factory-state/runner-evidence/synthetic-campaign-objectives/${FACTORY_READINESS_NONCE}/verify-runner/$head/$(printf '0%.0s' {1..64})/manifest.json]
 
 pass
 REPORT

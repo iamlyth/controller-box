@@ -289,8 +289,17 @@ requires installed Controllercons asset/license/map/layout hashes, exact Xbox
 highlight alignment. Declaring a runner class makes the
 runner-class binding explicit; it is not provisioned or evidenced evidence —
 a capability is evidenced only by an exact-commit, non-skipped, signed
-runner receipt. The
-following spec requirements have environment limitations that affect full
+runner receipt. Runner protocol v2 does not execute these committed candidate
+contracts or probe scripts: they are deployment source only. The enrolled
+runtime authority is a separately installed, root-owned
+`factory-probe-authority/v1` closure, and the SSH identity can invoke only the
+root broker (never the signer). Evidence is isolated by campaign ID, readiness
+nonce, runner, commit, and acquisition nonce. The checked-in enrollment remains
+pending; deployment/migration uses `scripts/install-factory-runner-v2.sh` and
+`deploy/factory-runner-authority-v1/forced-command-v2.txt` after independent
+operator approval.
+
+The following spec requirements have environment limitations that affect full
 hardware-specific acceptance; they are classified `partial` (not `verified`)
 in `.factory/artifacts/conformance.json` based on code portability,
 architectural evidence, and tests available in the declared environment, with

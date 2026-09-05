@@ -1,0 +1,451 @@
+{
+  "classes": {
+    "dev-runner-vm": {
+      "capabilities": {
+        "installed-package": {
+          "analyzer_argv": [
+            "/usr/bin/python3",
+            "@/validate-no-artifacts.py",
+            "--capability",
+            "installed-package",
+            "--artifacts",
+            "{artifacts}",
+            "--commit",
+            "{commit}",
+            "--tree",
+            "{tree}"
+          ],
+          "argv": [
+            "/usr/bin/python3",
+            "@/product-gate.py"
+          ],
+          "artifacts": {
+            "files": {},
+            "required": []
+          }
+        },
+        "kernel-uinput": {
+          "analyzer_argv": [
+            "/usr/bin/python3",
+            "@/validate-no-artifacts.py",
+            "--capability",
+            "kernel-uinput",
+            "--artifacts",
+            "{artifacts}",
+            "--commit",
+            "{commit}",
+            "--tree",
+            "{tree}"
+          ],
+          "argv": [
+            "/usr/bin/python3",
+            "@/product-gate.py"
+          ],
+          "artifacts": {
+            "files": {},
+            "required": []
+          }
+        },
+        "remote-project-gate": {
+          "analyzer_argv": [
+            "/usr/bin/python3",
+            "@/validate-no-artifacts.py",
+            "--capability",
+            "remote-project-gate",
+            "--artifacts",
+            "{artifacts}",
+            "--commit",
+            "{commit}",
+            "--tree",
+            "{tree}"
+          ],
+          "argv": [
+            "/usr/bin/python3",
+            "@/product-gate.py"
+          ],
+          "artifacts": {
+            "files": {},
+            "required": []
+          }
+        },
+        "systemd-user": {
+          "analyzer_argv": [
+            "/usr/bin/python3",
+            "@/validate-no-artifacts.py",
+            "--capability",
+            "systemd-user",
+            "--artifacts",
+            "{artifacts}",
+            "--commit",
+            "{commit}",
+            "--tree",
+            "{tree}"
+          ],
+          "argv": [
+            "/usr/bin/python3",
+            "@/product-gate.py"
+          ],
+          "artifacts": {
+            "files": {},
+            "required": []
+          }
+        }
+      },
+      "gate": {
+        "analyzer_argv": [
+          "/usr/bin/python3",
+          "@/validate-no-artifacts.py",
+          "--capability",
+          "gate",
+          "--artifacts",
+          "{artifacts}",
+          "--commit",
+          "{commit}",
+          "--tree",
+          "{tree}"
+        ],
+        "argv": [
+          "/usr/bin/python3",
+          "@/product-gate.py"
+        ],
+        "artifacts": {
+          "files": {},
+          "required": []
+        }
+      }
+    },
+    "gpurunner": {
+      "capabilities": {
+        "gpu-compositor": {
+          "analyzer_argv": [
+            "/usr/bin/python3",
+            "@/validate-retained-artifacts.py",
+            "--capability",
+            "gpu-compositor",
+            "--artifacts",
+            "{artifacts}",
+            "--commit",
+            "{commit}",
+            "--tree",
+            "{tree}"
+          ],
+          "argv": [
+            "/bin/bash",
+            "@/probe-gpu-compositor.sh"
+          ],
+          "artifacts": {
+            "files": {
+              "artifact-manifest.json": "application/json",
+              "capture-a.png": "image/png",
+              "capture-b.png": "image/png",
+              "capture-down.png": "image/png",
+              "capture-guide.png": "image/png",
+              "capture-l1.png": "image/png",
+              "capture-l2.png": "image/png",
+              "capture-l3.png": "image/png",
+              "capture-left.png": "image/png",
+              "capture-r1.png": "image/png",
+              "capture-r2.png": "image/png",
+              "capture-r3.png": "image/png",
+              "capture-right.png": "image/png",
+              "capture-select.png": "image/png",
+              "capture-start.png": "image/png",
+              "capture-up.png": "image/png",
+              "capture-x.png": "image/png",
+              "capture-y.png": "image/png",
+              "controller-box-unhighlighted.png": "image/png",
+              "installed-manifest.json": "application/json",
+              "probe.log": "text/plain",
+              "renderer-verdict.json": "application/json",
+              "verdict.json": "application/json"
+            },
+            "required": [
+              "artifact-manifest.json",
+              "renderer-verdict.json",
+              "verdict.json",
+              "installed-manifest.json",
+              "probe.log",
+              "controller-box-unhighlighted.png",
+              "capture-a.png",
+              "capture-b.png",
+              "capture-x.png",
+              "capture-y.png",
+              "capture-up.png",
+              "capture-down.png",
+              "capture-left.png",
+              "capture-right.png",
+              "capture-start.png",
+              "capture-select.png",
+              "capture-guide.png",
+              "capture-l1.png",
+              "capture-r1.png",
+              "capture-l2.png",
+              "capture-r2.png",
+              "capture-l3.png",
+              "capture-r3.png"
+            ]
+          }
+        },
+        "installed-licensed-diagram": {
+          "analyzer_argv": [
+            "/usr/bin/python3",
+            "@/validate-retained-artifacts.py",
+            "--capability",
+            "installed-licensed-diagram",
+            "--artifacts",
+            "{artifacts}",
+            "--commit",
+            "{commit}",
+            "--tree",
+            "{tree}"
+          ],
+          "argv": [
+            "/bin/bash",
+            "@/probe-gpu-compositor.sh"
+          ],
+          "artifacts": {
+            "files": {
+              "artifact-manifest.json": "application/json",
+              "capture-a.png": "image/png",
+              "capture-b.png": "image/png",
+              "capture-down.png": "image/png",
+              "capture-guide.png": "image/png",
+              "capture-l1.png": "image/png",
+              "capture-l2.png": "image/png",
+              "capture-l3.png": "image/png",
+              "capture-left.png": "image/png",
+              "capture-r1.png": "image/png",
+              "capture-r2.png": "image/png",
+              "capture-r3.png": "image/png",
+              "capture-right.png": "image/png",
+              "capture-select.png": "image/png",
+              "capture-start.png": "image/png",
+              "capture-up.png": "image/png",
+              "capture-x.png": "image/png",
+              "capture-y.png": "image/png",
+              "controller-box-unhighlighted.png": "image/png",
+              "installed-manifest.json": "application/json",
+              "probe.log": "text/plain",
+              "renderer-verdict.json": "application/json",
+              "verdict.json": "application/json"
+            },
+            "required": [
+              "artifact-manifest.json",
+              "renderer-verdict.json",
+              "verdict.json",
+              "installed-manifest.json",
+              "probe.log",
+              "controller-box-unhighlighted.png",
+              "capture-a.png",
+              "capture-b.png",
+              "capture-x.png",
+              "capture-y.png",
+              "capture-up.png",
+              "capture-down.png",
+              "capture-left.png",
+              "capture-right.png",
+              "capture-start.png",
+              "capture-select.png",
+              "capture-guide.png",
+              "capture-l1.png",
+              "capture-r1.png",
+              "capture-l2.png",
+              "capture-r2.png",
+              "capture-l3.png",
+              "capture-r3.png"
+            ]
+          }
+        }
+      },
+      "gate": {
+        "analyzer_argv": [
+          "/usr/bin/python3",
+          "@/validate-no-artifacts.py",
+          "--capability",
+          "gate",
+          "--artifacts",
+          "{artifacts}",
+          "--commit",
+          "{commit}",
+          "--tree",
+          "{tree}"
+        ],
+        "argv": [
+          "/usr/bin/python3",
+          "@/product-gate.py"
+        ],
+        "artifacts": {
+          "files": {},
+          "required": []
+        }
+      }
+    },
+    "iprunner": {
+      "capabilities": {
+        "controller-production-routing": {
+          "analyzer_argv": [
+            "/usr/bin/python3",
+            "@/validate-retained-artifacts.py",
+            "--capability",
+            "controller-production-routing",
+            "--artifacts",
+            "{artifacts}",
+            "--commit",
+            "{commit}",
+            "--tree",
+            "{tree}"
+          ],
+          "argv": [
+            "/bin/bash",
+            "@/probe-controller-production-routing.sh"
+          ],
+          "artifacts": {
+            "files": {
+              "assignment-slot-0.yaml": "application/yaml",
+              "assignment-slot-1.yaml": "application/yaml",
+              "assignment-slot-2.yaml": "application/yaml",
+              "assignment-slot-3.yaml": "application/yaml",
+              "cleanup.log": "text/plain",
+              "observer.log": "text/plain",
+              "overlay.log": "text/plain",
+              "routing-results.json": "application/json"
+            },
+            "required": [
+              "routing-results.json",
+              "observer.log",
+              "overlay.log",
+              "cleanup.log",
+              "assignment-slot-0.yaml",
+              "assignment-slot-1.yaml",
+              "assignment-slot-2.yaml",
+              "assignment-slot-3.yaml"
+            ]
+          }
+        },
+        "inputplumber-system-dbus": {
+          "analyzer_argv": [
+            "/usr/bin/python3",
+            "@/validate-no-artifacts.py",
+            "--capability",
+            "inputplumber-system-dbus",
+            "--artifacts",
+            "{artifacts}",
+            "--commit",
+            "{commit}",
+            "--tree",
+            "{tree}"
+          ],
+          "argv": [
+            "/bin/bash",
+            "@/probe-inputplumber-system-dbus.sh"
+          ],
+          "artifacts": {
+            "files": {},
+            "required": []
+          }
+        },
+        "physical-controller": {
+          "analyzer_argv": [
+            "/usr/bin/python3",
+            "@/validate-no-artifacts.py",
+            "--capability",
+            "physical-controller",
+            "--artifacts",
+            "{artifacts}",
+            "--commit",
+            "{commit}",
+            "--tree",
+            "{tree}"
+          ],
+          "argv": [
+            "/bin/bash",
+            "@/probe-physical-controller.sh"
+          ],
+          "artifacts": {
+            "files": {},
+            "required": []
+          }
+        },
+        "target-consumer": {
+          "analyzer_argv": [
+            "/usr/bin/python3",
+            "@/validate-no-artifacts.py",
+            "--capability",
+            "target-consumer",
+            "--artifacts",
+            "{artifacts}",
+            "--commit",
+            "{commit}",
+            "--tree",
+            "{tree}"
+          ],
+          "argv": [
+            "/bin/bash",
+            "@/probe-target-consumer.sh"
+          ],
+          "artifacts": {
+            "files": {},
+            "required": []
+          }
+        }
+      },
+      "gate": {
+        "analyzer_argv": [
+          "/usr/bin/python3",
+          "@/validate-no-artifacts.py",
+          "--capability",
+          "gate",
+          "--artifacts",
+          "{artifacts}",
+          "--commit",
+          "{commit}",
+          "--tree",
+          "{tree}"
+        ],
+        "argv": [
+          "/usr/bin/python3",
+          "@/product-gate.py"
+        ],
+        "artifacts": {
+          "files": {},
+          "required": []
+        }
+      }
+    }
+  },
+  "files": {
+    "forced-command-v2.txt": "841324ec277e4728bca41737ef12e4fd499fd73c49dc6687a5b793e81a5e29b5",
+    "gpurunner-probes/analyze-gpu-compositor.py": "0c11eaa0ae322e40c6e0f1b07b3bf90afc34ed54bc9bd9f7a94db5ffdcbb7571",
+    "gpurunner-probes/egl_renderer_probe.c": "3cb76210be08dc01dd248320af7e4edebc30f9f60ca50495b113e4d5b703d278",
+    "iprunner-probes/extract_om_targets.py": "9de8d5edf6fa5c8467c4abf8d5a44781e5d9d4b7d088d119cd08d6f66493319f",
+    "iprunner-probes/find_source_composite.py": "03401fd814448ae798b447f4bf1fc4c56e70529e6d09e1accb8a833d1694a9c2",
+    "iprunner-probes/inputplumber-expectations.json": "ebc530295aabf7251cd3032955c833ed087245e41b6eee65ac2894b9a846faa4",
+    "iprunner-probes/physical_controller_probe.c": "36a05edfee34cc349358eaa1f656fe1d6932982b866a44f78b01db2c061d3e4d",
+    "iprunner-probes/routing_observer.c": "a45628f24ad59018e9655a2f91d9fb5a7d3358312a2bd30de22ec7c91a813be4",
+    "iprunner-probes/target-consumer-expectations.json": "53f79308b0ad31e53b18f42f4a1f34e7dea601c41937efa52d2331689e6587d4",
+    "iprunner-probes/target_consumer_observer.c": "bee1beca9b073c501c833555e299ce1564dfb520251b8a943bfcfe9afed9b92d",
+    "iprunner-probes/unwrap_variant.py": "9ab3e6b22ff293bb2733c4253a9dfd01e8f23b229ef87df5cce9eb9a5e8eb53b",
+    "iprunner-probes/validate-inputplumber-facts.py": "ba2cfc70f7c37f40045185fbc7efc3c26672f3d4ef96b29a13e64067397534e3",
+    "iprunner-probes/validate-production-routing-facts.py": "e59b1c577acdb8a70fa4ab180a55b3fcdb34ab41c2a59c7c91c9773fbce8dea0",
+    "iprunner-probes/validate_name_sets.py": "5881a28fee65fabd97ea58f8420d30a00067b9fe3346b64de6f2ff6879955949",
+    "licensed-diagram-authority.json": "23cb0a91cdcde1ab7bb179b4fe5f6afc340dd9f2061b9d1222be94a3341c298d",
+    "licensed-diagram-oracle.json": "15fe1b33754e7b08840a7e8e87f194f51d3f5aa18bd24ce57aa599614458d54b",
+    "probe-controller-production-routing.sh": "52df3ed38d21a89741152e357737d25899707bd36d0058dbb8619a1e1ad04b32",
+    "probe-gpu-compositor.sh": "b0ac2e05d70d7b5a5cc527c61e1d03b67c3185ecb1278b99b9d78ed04948280e",
+    "probe-inputplumber-system-dbus.sh": "6352d3f6e0dbb305bb1d98d0b77bdc58e8471cf5a99f8511393c28d8fa7d153a",
+    "probe-physical-controller.sh": "63b2182501cb720e67217cdf72c9d6da5b41cfba5f4164e455ef6a3b7631ea20",
+    "probe-target-consumer.sh": "540ba142b3c2976f3f4f07739a939a71559d8fd8e2a6f8f3e48d124ed20426dd",
+    "product-gate.py": "5143899529ea71148f3ab3f894483e86f12b0b85c880fba12cec3f69513cb9ec",
+    "validate-no-artifacts.py": "9ca5c6cd86eb2274d6f44a1d42ff7f31236dbf47a19fc4773cd4ca048c6348fe",
+    "validate-retained-artifacts.py": "a1fc8f434f7faa0e1fd6a293b1bfb3b288b48c94b99eeab052f0d089a73d5dfa"
+  },
+  "licensed_oracle": {
+    "path": "licensed-diagram-oracle.json",
+    "sha256": "15fe1b33754e7b08840a7e8e87f194f51d3f5aa18bd24ce57aa599614458d54b"
+  },
+  "schema": "factory-probe-authority/v1",
+  "trusted_path": [
+    "/usr/bin"
+  ],
+  "version": 1
+}

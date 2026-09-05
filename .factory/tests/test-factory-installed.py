@@ -341,6 +341,9 @@ class InstalledTierSuite(unittest.TestCase):
             "PYTHONDONTWRITEBYTECODE": "1",
             "PYTHONPATH": str(self.alias),
             "FACTORY_INSTALL_RUNTIME": str(self.tmp),
+            # Disposable harness roots are operator-owned. Production has no
+            # such switch and requires root-owned ancestors.
+            "FACTORY_TEST_AUTHORITY_ANCESTORS": "1",
         }
         for key in list(os.environ):
             if key in env:

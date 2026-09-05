@@ -61,11 +61,17 @@ def validate_descriptors(descriptors: object, capabilities: list[str]) -> tuple[
         if total > MAX_ARTIFACT_BYTES: raise ArtifactError("aggregate artifact size exceeds protocol limit")
     return total, descriptors_digest(descriptors)
 
-def collect(root: Path, capabilities: list[str], requirements: dict[str,dict]) -> tuple[list[dict], list[dict]]:
-    """Open every approved file no-follow, reject hostile inode/layout races, return held bytes."""
+def collect(root: Path, capabilities: list[str], requirements: dict[str,dict], *, expected_uid: int | None = None) -> tuple[list[dict], list[dict]]:
+    """Open every approved file no-follow, reject hostile inode/layout races, return held bytes.
+
+    The privileged broker passes the dropped runner UID explicitly; ordinary
+    unprivileged callers default to their real UID.  Ownership is never inferred
+    from the broker's effective root identity.
+    """
     descriptors=[]; payload=[]
+    owner = os.getuid() if expected_uid is None else expected_uid
     root_info=root.lstat()
-    if not stat.S_ISDIR(root_info.st_mode) or stat.S_ISLNK(root_info.st_mode) or root_info.st_uid != os.getuid() or root_info.st_mode & 0o077:
+    if not stat.S_ISDIR(root_info.st_mode) or stat.S_ISLNK(root_info.st_mode) or root_info.st_uid != owner or root_info.st_mode & 0o077:
         raise ArtifactError("artifact root ownership/mode is unsafe")
     for capability in sorted(capabilities):
         cap=root/capability; req=requirements.get(capability,{})
@@ -75,19 +81,26 @@ def collect(root: Path, capabilities: list[str], requirements: dict[str,dict]) -
             if required: raise ArtifactError(f"required artifact directory absent for {capability}")
             continue
         ci=cap.lstat()
-        if not stat.S_ISDIR(ci.st_mode) or stat.S_ISLNK(ci.st_mode) or ci.st_uid != os.getuid() or ci.st_mode & 0o077:
+        if not stat.S_ISDIR(ci.st_mode) or stat.S_ISLNK(ci.st_mode) or ci.st_uid != owner or ci.st_mode & 0o077:
             raise ArtifactError("artifact capability directory is unsafe")
         found=set()
         cap_fd=os.open(cap,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC)
         try: names=sorted(os.listdir(cap_fd))
         except Exception:
             os.close(cap_fd); raise
+        if len(descriptors) + len(names) > MAX_ARTIFACTS:
+            os.close(cap_fd)
+            raise ArtifactError("artifact count exceeds protocol limit before open")
         for name in names:
             rel=f"{capability}/{name}"; canonical_path(rel)
             if name not in allowed: raise ArtifactError(f"unapproved artifact: {rel}")
             li=os.stat(name,dir_fd=cap_fd,follow_symlinks=False)
-            if not stat.S_ISREG(li.st_mode) or stat.S_ISLNK(li.st_mode) or li.st_nlink != 1 or li.st_uid != os.getuid() or stat.S_IMODE(li.st_mode)&0o022:
+            if not stat.S_ISREG(li.st_mode) or stat.S_ISLNK(li.st_mode) or li.st_nlink != 1 or li.st_uid != owner or stat.S_IMODE(li.st_mode)&0o022:
                 raise ArtifactError(f"artifact is not a unique owned regular file: {rel}")
+            # Enforce both per-file and cumulative bounds from no-follow
+            # metadata before opening or reading candidate-controlled bytes.
+            if li.st_size > MAX_ARTIFACT_FILE or sum(x["size"] for x in descriptors) + li.st_size > MAX_ARTIFACT_BYTES:
+                raise ArtifactError(f"artifact bounds exceeded before open: {rel}")
             fd=os.open(name, os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC, dir_fd=cap_fd)
             try:
                 before=os.fstat(fd)

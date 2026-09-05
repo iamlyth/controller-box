@@ -2373,18 +2373,15 @@ class ReviewHardening(_CampaignBase):
         result_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         descriptor = os.open(result_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         os.close(descriptor)
-        outcome = campaign_module.launch_role_attempt(
-            config, role="tester", head=head, round_number=1,
-        )
-        self.assertEqual(outcome.exit_status, 0)
-        consumed = campaign_module.read_phase_result(
-            ws.root, config.phase_result_path, "verification"
-        )
-        self.assertIsNotNone(consumed)
-        self.assertEqual(consumed[0], {
-            "schema": "factory-phase-result/v1", "outcome": "pass",
-        })
-        self.assertFalse(result_path.exists(), "result handoff must be consumed")
+        # Standalone/programmatic real-provider invocation has no published
+        # descriptor-bound readiness token and must stop before a model.
+        with self.assertRaisesRegex(
+            campaign_module.CampaignPhaseError, "readiness authorization"
+        ):
+            campaign_module.launch_role_attempt(
+                config, role="tester", head=head, round_number=1,
+            )
+        self.assertFalse(result_path.read_text() if result_path.exists() else "")
 
     def test_production_launch_invocation_error_is_clean_campaign_error(
         self,

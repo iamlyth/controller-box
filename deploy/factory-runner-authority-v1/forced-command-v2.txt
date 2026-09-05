@@ -1,0 +1,3 @@
+command="/usr/local/libexec/factory-runner-server",restrict,no-agent-forwarding,no-port-forwarding,no-pty,no-user-rc,no-X11-forwarding ssh-ed25519 REPLACE_WITH_CLASS_PUBLIC_KEY
+
+Migration: replace the old factory-runner-v1 ForcedCommand line atomically after installing the v2 broker and its single sudoers rule. Never grant the SSH UID access to factory-runner-signer.

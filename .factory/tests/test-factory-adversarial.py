@@ -1563,6 +1563,10 @@ class CaseAdversarialSuite(_AdversarialBase):
             inspect.signature(launch_module.authorize_launch).parameters,
         )
         self.assertFalse(hasattr(launch_module, "usage_guard"))
+        readiness_raw=json.dumps({"schema":"factory-readiness-result/v2",
+            "campaign_id":"adversarial", "nonce":"a"*64, "status":"complete",
+            "terminal_outcome":"pass", "bindings":{"accepted_commit":head},
+            "results":{}}).encode()
         authority = launch_module.authorize_launch(
                 binding,
                 role_prompt=(ws.root / ".factory" / "prompts" /
@@ -1570,6 +1574,7 @@ class CaseAdversarialSuite(_AdversarialBase):
                 agents=(ws.root / "AGENTS.md").read_bytes(),
                 spec=(ws.root / "docs" / "SPEC.md").read_bytes(),
                 plan=(ws.root / PLAN_REL).read_bytes(),
+                readiness_authorization=launch_module.authorize_readiness_launch(readiness_raw),
             )
         self.assertIsInstance(authority, launch_module.LaunchAuthority)
         registry = json.loads((ws.root / ".factory/pre-round-hooks.json").read_text())
@@ -1663,6 +1668,12 @@ class CaseAdversarialSuite(_AdversarialBase):
             'verify_argv = ["./scripts/verify-project.sh"]\n',
             encoding="utf-8")
         (root / ".gitignore").write_text(".factory-state/\n", encoding="utf-8")
+        (root / ".factory/runner-policy-enrollment.json").write_text(json.dumps({
+            "schema":"controller-box-runner-policy-enrollment/v2",
+            "status":"pending-human-review",
+            "probe_authorities":{"fixture-runner":{"version":1,"authority_sha256":"a"*64,"status":"pending-root-install"}},
+            "licensed_authority":{"runner_class":"gpurunner","authority_sha256":"b"*64,"scopes":[],"status":"pending-human-review"},
+            "note":"fixture"})+"\n")
         signer_key = self.tmp / "signer-key"
         subprocess.run(
             ["ssh-keygen", "-q", "-t", "ed25519", "-N", "",
@@ -1727,14 +1738,11 @@ class CaseAdversarialSuite(_AdversarialBase):
             a signature/trust/structure failure, never a fixture-binding
             mismatch.  Returns the manifest path.
             """
-            manifest_dir = runner_evidence / "fixture-runner" / head
+            manifest_dir = runner_evidence / "synthetic-adversarial" / ("d" * 64) / "fixture-runner" / head / ("0" * 64)
             manifest_dir.mkdir(parents=True, exist_ok=True)
             environment_blob = _git(
                 root, "rev-parse", f"{head}:.factory/environment.toml"
             ).stdout.strip()
-            argv_digest = sha256(json.dumps(
-                ["./scripts/verify-project.sh"],
-                separators=(",", ":")).encode("utf-8"))
             archive = root / "commit-archive.tar"
             _git(root, "archive", "--format=tar", "--output",
                  str(archive), head)
@@ -1742,14 +1750,13 @@ class CaseAdversarialSuite(_AdversarialBase):
             archive.unlink()
             empty = sha256(b"")
             manifest = {
-                "schema": "factory-runner-receipt/v2", "result": "pass",
+                "schema": "factory-runner-receipt/v3", "result": "pass",
                 "runner": "fixture-runner", "commit": head, "tree": tree,
                 "environment_blob": environment_blob,
-                "verify_argv_sha256": argv_digest,
                 "archive_sha256": archive_sha256,
                 "campaign_id": "synthetic-adversarial",
                 "readiness_nonce": "d" * 64,
-                "authority_pins_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+                "authority_sha256": "a" * 64,
                 "nonce": "0" * 64,
                 "capabilities": ["project-gate"], "exit_code": 0,
                 "timed_out": False, "started_at": 1, "finished_at": 2,
@@ -1759,7 +1766,7 @@ class CaseAdversarialSuite(_AdversarialBase):
                 "artifact_limits": {"count":64,"file_bytes":8388608,"aggregate_bytes":50331648},
                 "artifact_count":0,"artifact_bytes":0,
                 "artifact_manifest_sha256":sha256(b"[]\n"),
-                "artifact_scope_sha256":sha256(json.dumps({"campaign_id":"synthetic-adversarial","readiness_nonce":"d"*64,"nonce":"0"*64,"artifact_manifest_sha256":sha256(b"[]\n")},sort_keys=True,separators=(",",":")).encode()),
+                "artifact_scope_sha256":sha256(json.dumps({"campaign_id":"synthetic-adversarial","readiness_nonce":"d"*64,"runner":"fixture-runner","commit":head,"nonce":"0"*64,"artifact_manifest_sha256":sha256(b"[]\n")},sort_keys=True,separators=(",",":")).encode()),
                 "artifacts":[], "signer_principal": "fixture-runner",
                 "signer_key_sha256": key_sha256,
                 "namespace": "factory-runner-receipt",
@@ -1778,13 +1785,13 @@ class CaseAdversarialSuite(_AdversarialBase):
             )
             (manifest_dir / "manifest.sig").write_bytes(signed.stdout)
             aggregate = {
-                "schema": "factory-runner-aggregate/v3",
+                "schema": "factory-runner-aggregate/v4",
                 "campaign_id": "synthetic-adversarial", "readiness_nonce": "d" * 64,
                 "commit": head,
                 "tree": tree, "environment_blob": environment_blob,
                 "runners": [{
                     "name": "fixture-runner",
-                    "manifest": f".factory-state/runner-evidence/fixture-runner/{head}/manifest.json",
+                    "manifest": f".factory-state/runner-evidence/synthetic-adversarial/{'d'*64}/fixture-runner/{head}/{ '0'*64}/manifest.json",
                     "manifest_sha256": sha256(raw),
                     "capabilities": ["project-gate"],
                     "artifact_manifest_sha256":sha256(b"[]\n"),"artifact_count":0,"artifact_bytes":0,
@@ -1796,7 +1803,9 @@ class CaseAdversarialSuite(_AdversarialBase):
                     },
                 }],
             }
-            (root / STATE_DIR / "runner-evidence.json").write_text(
+            aggregate_path = runner_evidence / "synthetic-adversarial" / ("d" * 64) / "aggregate.json"
+            aggregate_path.parent.mkdir(parents=True, exist_ok=True)
+            aggregate_path.write_text(
                 json.dumps(aggregate, sort_keys=True, indent=2) + "\n",
                 encoding="utf-8")
             return manifest_path
@@ -1828,7 +1837,7 @@ class CaseAdversarialSuite(_AdversarialBase):
         manifest_path = rebuild_runner_evidence()
         unsigned_sig = manifest_path.with_name("manifest.sig")
         unsigned_sig.write_bytes(b"fabricated-signature-bytes\n")
-        aggregate_path = root / STATE_DIR / "runner-evidence.json"
+        aggregate_path = runner_evidence / "synthetic-adversarial" / ("d" * 64) / "aggregate.json"
         aggregate = json.loads(aggregate_path.read_text(encoding="utf-8"))
         aggregate["runners"][0]["signer"]["signature_sha256"] = \
             sha256(b"fabricated-signature-bytes\n")

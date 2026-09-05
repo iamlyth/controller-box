@@ -9,7 +9,6 @@ import os
 import re
 import subprocess
 import tempfile
-import shutil
 import stat
 from pathlib import Path
 from typing import Callable, Mapping
@@ -44,7 +43,9 @@ CORE_ROWS = {
 SHA1 = re.compile(r"^[0-9a-f]{40}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 ZERO256 = "0" * 64
-SSH_KEYGEN = shutil.which("ssh-keygen")
+# Provisioned absolute verifier; never resolve a human trust primitive through
+# the operator's ambient PATH.
+SSH_KEYGEN = "/nix/store/c53dnjjglhynq6h3v7a96vyrpsb7zpcw-openssh-10.4p1/bin/ssh-keygen"
 
 class ReadinessError(RuntimeError): pass
 class HumanApprovalBlocked(ReadinessError): pass
@@ -54,9 +55,11 @@ def read_external_authority(path: Path, expected_sha256: str, *, expected_uid: i
                             maximum: int = 256 * 1024) -> tuple[bytes, os.stat_result]:
     """Read an immutable offline authority without pathname/inode races.
 
-    Every ancestor must be an operator-owned real directory and must not be
-    writable by group/other (the conventional operator-owned sticky /tmp is
-    the sole fixture-compatible exception). The leaf is operator-owned, single-link,
+    Every ancestor must be a root-owned real directory and must not be
+    writable by group/other. The conventional root-owned sticky /tmp is
+    allowed because sticky ownership prevents replacement of the exact
+    operator-owned leaf. Test-only trees may use operator-owned ancestors.
+    The leaf is operator-owned, single-link,
     non-writable, regular, and is compared with its opened descriptor before
     and after reading.  The coordinator-supplied digest is mandatory.
     """
@@ -71,10 +74,14 @@ def read_external_authority(path: Path, expected_sha256: str, *, expected_uid: i
             info = os.lstat(current)
         except OSError as exc:
             raise HumanApprovalBlocked(f"external authority ancestor unavailable: {current}") from exc
-        sticky_root_tmp = (current == Path("/tmp") and info.st_uid == expected_uid
+        sticky_root_tmp = (current == Path("/tmp") and info.st_uid == 0
                            and bool(info.st_mode & stat.S_ISVTX))
+        trusted_owner = info.st_uid == 0 or (
+            os.environ.get("FACTORY_TEST_AUTHORITY_ANCESTORS") == "1"
+            and info.st_uid == expected_uid
+        )
         if (not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode)
-                or info.st_uid != expected_uid or ((info.st_mode & 0o022) and not sticky_root_tmp)):
+                or not trusted_owner or ((info.st_mode & 0o022) and not sticky_root_tmp)):
             raise HumanApprovalBlocked(f"external authority ancestor is unsafe: {current}")
     try:
         named = os.lstat(path)

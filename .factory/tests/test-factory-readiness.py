@@ -9,6 +9,7 @@ sys.path.insert(0, str(ROOT / ".factory/loop"))
 sys.path.insert(0, str(ROOT / "scripts"))
 import readiness
 import state
+import campaign
 import factory_runner_policy
 
 def png(label: str) -> bytes:
@@ -105,7 +106,16 @@ class ReadinessTests(unittest.TestCase):
         raw = readiness.canonical_bytes(self.trust)
         authority.write_bytes(raw); authority.chmod(0o444)
         digest = hashlib.sha256(raw).hexdigest()
-        loaded, info = readiness.read_external_authority(authority, digest, expected_uid=os.getuid())
+        # Disposable test roots are operator-owned; production accepts only
+        # root-owned ancestors (plus a root-owned sticky /tmp). The explicit
+        # fixture switch never exists in production campaign environments.
+        with self.assertRaises(readiness.HumanApprovalBlocked):
+            readiness.read_external_authority(authority, digest, expected_uid=os.getuid())
+        os.environ["FACTORY_TEST_AUTHORITY_ANCESTORS"] = "1"
+        try:
+            loaded, info = readiness.read_external_authority(authority, digest, expected_uid=os.getuid())
+        finally:
+            os.environ.pop("FACTORY_TEST_AUTHORITY_ANCESTORS", None)
         self.assertEqual(loaded, raw); self.assertEqual(info.st_uid, os.getuid())
         authority.chmod(0o644)
         with self.assertRaises(readiness.HumanApprovalBlocked):
@@ -193,18 +203,31 @@ class ReadinessTests(unittest.TestCase):
         self.assertNotEqual(state.state_digest(advanced), state.state_digest(state.FactoryState(**{**advanced.__dict__,"readiness":mutated})))
 
 
+    def test_readiness_only_cannot_impersonate_campaign_success(self):
+        record=campaign.PhaseRecord(1,"audit",1,"pass","a"*40,"b"*64)
+        good=campaign.CampaignResult("ready",5,0,"readiness_complete","readiness_complete","a"*40,())
+        good.validate(); campaign.validate_campaign_result(good)
+        with self.assertRaises(campaign.CampaignResultError):
+            campaign.CampaignResult("forged",5,0,"success","pass","a"*40,()).validate()
+        complete=campaign.CampaignResult("complete",1,1,"success","pass","a"*40,(record,))
+        complete.validate(); campaign.validate_campaign_result(complete)
+
+
 class RunnerPolicyAuthorityTests(unittest.TestCase):
     def test_gpurunner_requires_two_enrolled_exact_class_pins(self):
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "policy.json"
-            base = {"schema":"factory-runner-policy/v1", "namespace":"factory-runner-receipt",
+            base = {"schema":"factory-runner-policy/v2", "namespace":"factory-runner-receipt",
                     "authority_pins":[], "classes":[{
                         "name":"gpurunner", "uid":os.getuid() or 1,
                         "workspace_root":"/var/lib/factory-gpurunner",
-                        "verify_argv":["./scripts/verify-project.sh"],
                         "allowed_capabilities":["gpu-compositor","installed-licensed-diagram"],
-                        "signer_helper":"/usr/lib/factory/signer", "signer_key":"/etc/factory/key",
-                        "signer_principal_file":"/etc/factory/principal"}]}
+                        "broker_helper":"/usr/local/libexec/factory-runner-broker",
+                        "probe_authority":"/opt/factory-runner/authority/v1",
+                        "probe_authority_sha256":"b"*64,
+                        "signer_key":"/etc/factory/key", "signer_principal_file":"/etc/factory/principal",
+                        "nonce_ledger":"/var/lib/factory-runner/nonces", "systemd_run":"/usr/bin/systemd-run",
+                        "systemctl":"/usr/bin/systemctl", "cgroup_root":"/sys/fs/cgroup"}]}
             prior = factory_runner_policy.DEFAULT_POLICY_PATH
             prior_env = os.environ.get("FACTORY_RUNNER_POLICY")
             os.environ["FACTORY_RUNNER_POLICY"] = str(path)

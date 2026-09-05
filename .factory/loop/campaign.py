@@ -120,8 +120,8 @@ PHASE_RESULT_SCHEMA_FILE = "factory-phase-result-v1.schema.json"
 
 PHASES = ("planning", "implementation", "verification", "audit")
 TERMINAL_PHASES = (
-    "success", "findings", "blocked", "failed", "interrupted",
-    "infrastructure_failure",
+    "success", "readiness_complete", "findings", "blocked", "failed",
+    "interrupted", "infrastructure_failure",
 )
 
 # §13 phase-outcome classification sets (subsets of the trusted outcome enum).
@@ -160,6 +160,7 @@ EXIT_ERROR = 6
 
 TERMINAL_EXIT_CODES: Mapping[str, int] = {
     "success": EXIT_SUCCESS,
+    "readiness_complete": EXIT_SUCCESS,
     "findings": EXIT_FINDINGS,
     "blocked": EXIT_BLOCKED,
     "failed": EXIT_FAILED,
@@ -436,6 +437,15 @@ class CampaignResult:
             raise CampaignResultError("readiness_result_digest must be SHA-256")
         if not SHA256_RE.fullmatch(self.trust_authority_sha256):
             raise CampaignResultError("trust_authority_sha256 must be SHA-256")
+        if self.terminal_phase == "readiness_complete":
+            if self.terminal_outcome != "readiness_complete" or self.rounds_completed != 0 or self.phase_history:
+                raise CampaignResultError("readiness-only result cannot impersonate a completed campaign")
+        if self.terminal_phase == "success":
+            if self.rounds_completed != self.rounds_requested:
+                raise CampaignResultError("campaign success requires every requested round complete")
+            completed_audits = {r.round for r in self.phase_history if r.phase == "audit"}
+            if completed_audits != set(range(1, self.rounds_requested + 1)):
+                raise CampaignResultError("campaign success requires complete passing phase history")
         for record in self.phase_history:
             if record.round < 1 or record.round > self.rounds_requested:
                 raise CampaignResultError(
@@ -2052,6 +2062,7 @@ def launch_role_attempt(
     task_excerpt: Optional[bytes] = None,
     audit_objective: Optional[bytes] = None,
     findings_payload: Optional[bytes] = None,
+    readiness_result: Optional[bytes] = None,
 ) -> RoleOutcome:
     """Run one fresh role attempt through the committed launch authority.
 
@@ -2160,6 +2171,11 @@ def launch_role_attempt(
             audit_objective=audit_objective,
             task_excerpt=task_excerpt,
             findings=findings_payload,
+            readiness_authorization=(
+                launch_module.authorize_readiness_launch(readiness_result)
+                if config.provider != "synthetic" and readiness_result is not None
+                else None
+            ),
         )
     except launch_module.InvocationError as exc:
         # Task 9 review B2: every refused launch — unbound or missing bytes,
@@ -3223,6 +3239,13 @@ class Campaign:
                 float(self._config.inactivity_limit), runtime_budget
             ),
         )
+        readiness_path = self._state_directory() / READINESS_RESULT_NAME
+        try:
+            readiness_raw = readiness_path.read_bytes()
+        except OSError as exc:
+            raise CampaignPhaseError("passing readiness descriptor is unavailable for role launch") from exc
+        if plan_sha256(readiness_raw) != state.readiness.get("result_sha256"):
+            raise CampaignPhaseError("readiness launch descriptor digest differs from trusted state")
         return launch_role_attempt(
             bounded,
             role=role,
@@ -3230,6 +3253,7 @@ class Campaign:
             task_id=task_id,
             round_number=state.current_round,
             findings_payload=findings_payload,
+            readiness_result=readiness_raw,
         )
 
     def _run_driver(
@@ -5125,16 +5149,16 @@ class Campaign:
                         and state.readiness.get("required") is True
                         and state.readiness.get("status") == "complete"):
                     self._assert_readiness(state)
-                    terminal_outcome = "pass"
-                    terminal_phase = "success"
+                    terminal_outcome = "readiness_complete"
+                    terminal_phase = "readiness_complete"
                 if state.current_phase == "readiness":
                     state, readiness_terminal = self._run_readiness(state)
                     if readiness_terminal is not None:
                         terminal_outcome = readiness_terminal
                         terminal_phase = state.current_phase
                     elif self._config.readiness_only:
-                        terminal_outcome = "pass"
-                        terminal_phase = "success"
+                        terminal_outcome = "readiness_complete"
+                        terminal_phase = "readiness_complete"
                 while terminal_outcome is None and state.current_phase not in TERMINAL_PHASES:
                     step = self._step(state)
                     history.append(step.record)
@@ -5159,10 +5183,15 @@ class Campaign:
                         "nor advanced the campaign"
                     )
             head = self._git.head()
+            completed_audit_rounds = {r.round for r in history if r.phase == "audit"}
+            completed_rounds = (
+                len(completed_audit_rounds) if terminal_phase == "success"
+                else self._rounds_completed
+            )
             result = CampaignResult(
                 campaign_id=self._config.campaign_id,
                 rounds_requested=self._config.rounds_requested,
-                rounds_completed=self._rounds_completed,
+                rounds_completed=completed_rounds,
                 terminal_phase=terminal_phase,
                 terminal_outcome=terminal_outcome,
                 head_commit=head,

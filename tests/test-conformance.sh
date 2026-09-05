@@ -45,6 +45,9 @@ print(json.dumps({
     "allowed_principals": ["probe-runner"],
 }))
 PY
+    cat > "$dir/.factory/runner-policy-enrollment.json" <<'EOF'
+{"schema":"controller-box-runner-policy-enrollment/v2","status":"pending-human-review","probe_authorities":{"probe-runner":{"version":1,"authority_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","status":"pending-root-install"}},"licensed_authority":{"runner_class":"gpurunner","authority_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","scopes":[],"status":"pending-human-review"},"note":"fixture"}
+EOF
     chmod +x "$dir/scripts/"*.py
     printf '#!/usr/bin/env bash\nexit 0\n' > "$dir/scripts/verify-project.sh"
     chmod +x "$dir/scripts/verify-project.sh"
@@ -126,7 +129,7 @@ write_signed_evidence() {
     local dir=$1 head=$2
     local public_key
     public_key=$(cut -d' ' -f1,2 "$tmp/conformance-signer-key.pub")
-    mkdir -p "$dir/.factory-state/runner-evidence/probe-runner/$head"
+    mkdir -p "$dir/.factory-state/runner-evidence/synthetic-conformance/${FACTORY_READINESS_NONCE}/probe-runner/$head/$(printf '0%.0s' {1..64})"
     python3 - "$dir" "$head" "$public_key" <<'PY'
 import hashlib, json, pathlib, subprocess, sys, tomllib
 root, head, public_key = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
@@ -141,7 +144,6 @@ tree = git("rev-parse", f"{head}^{{tree}}")
 environment_blob = git("rev-parse", f"{head}:.factory/environment.toml")
 environment = tomllib.loads(git("show", f"{head}:.factory/environment.toml"))
 declared = environment["runners"][0]
-argv_sha = hashlib.sha256(json.dumps(declared["verify_argv"], separators=(",", ":")).encode()).hexdigest()
 archive_path = root / "conformance-commit.tar"
 result = subprocess.run(
     ["git", "archive", "--format=tar", "--output", str(archive_path), head],
@@ -155,33 +157,33 @@ stdout = b"--- probe-capability contract ---\n100% tests passed, 0 tests failed 
 stderr = b""
 key_sha = hashlib.sha256(public_key.encode()).hexdigest()
 manifest = {
-    "schema": "factory-runner-receipt/v2", "result": "pass",
+    "schema": "factory-runner-receipt/v3", "result": "pass",
     "runner": "probe-runner", "commit": head, "tree": tree,
-    "environment_blob": environment_blob, "verify_argv_sha256": argv_sha,
+    "environment_blob": environment_blob,
     "archive_sha256": archive_sha, "campaign_id": "synthetic-conformance",
-    "readiness_nonce": "e" * 64, "authority_pins_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945", "nonce": "0" * 64,
+    "readiness_nonce": "e" * 64, "authority_sha256": "a" * 64, "nonce": "0" * 64,
     "capabilities": ["probe-capability"], "exit_code": 0,
     "timed_out": False, "started_at": 1, "finished_at": 2,
     "cleanup": True, "stdout_sha256": hashlib.sha256(stdout).hexdigest(),
     "stderr_sha256": hashlib.sha256(stderr).hexdigest(),
     "artifact_protocol":"factory-runner-artifacts/v1","artifact_limits":{"count":64,"file_bytes":8388608,"aggregate_bytes":50331648},
     "artifact_count":0,"artifact_bytes":0,"artifact_manifest_sha256":hashlib.sha256(b"[]\n").hexdigest(),
-    "artifact_scope_sha256":hashlib.sha256(json.dumps({"campaign_id":"synthetic-conformance","readiness_nonce":"e"*64,"nonce":"0"*64,"artifact_manifest_sha256":hashlib.sha256(b"[]\n").hexdigest()},sort_keys=True,separators=(",",":")).encode()).hexdigest(),"artifacts":[],
+    "artifact_scope_sha256":hashlib.sha256(json.dumps({"campaign_id":"synthetic-conformance","readiness_nonce":"e"*64,"runner":"probe-runner","commit":head,"nonce":"0"*64,"artifact_manifest_sha256":hashlib.sha256(b"[]\n").hexdigest()},sort_keys=True,separators=(",",":")).encode()).hexdigest(),"artifacts":[],
     "signer_principal": "probe-runner", "signer_key_sha256": key_sha,
     "namespace": "factory-runner-receipt", "signature_algorithm": "ssh-ed25519",
 }
 raw = (json.dumps(manifest, sort_keys=True, indent=2) + "\n").encode()
-evidence = root / f".factory-state/runner-evidence/probe-runner/{head}"
+evidence = root / f".factory-state/runner-evidence/synthetic-conformance/{'e'*64}/probe-runner/{head}/{'0'*64}"
 (evidence / "manifest.json").write_bytes(raw)
 (evidence / "stdout.log").write_bytes(stdout)
 (evidence / "stderr.log").write_bytes(stderr)
 aggregate = {
-    "schema": "factory-runner-aggregate/v3", "campaign_id": "synthetic-conformance",
+    "schema": "factory-runner-aggregate/v4", "campaign_id": "synthetic-conformance",
     "readiness_nonce": "e" * 64, "commit": head, "tree": tree,
     "environment_blob": environment_blob,
     "runners": [{
         "name": "probe-runner",
-        "manifest": f".factory-state/runner-evidence/probe-runner/{head}/manifest.json",
+        "manifest": f".factory-state/runner-evidence/synthetic-conformance/{'e'*64}/probe-runner/{head}/{'0'*64}/manifest.json",
         "manifest_sha256": hashlib.sha256(raw).hexdigest(),
         "capabilities": ["probe-capability"],
         "artifact_manifest_sha256":hashlib.sha256(b"[]\n").hexdigest(),"artifact_count":0,"artifact_bytes":0,
@@ -189,16 +191,16 @@ aggregate = {
                    "algorithm": "ssh-ed25519", "signature_sha256": ""},
     }],
 }
-(root / ".factory-state/runner-evidence.json").write_text(
+aggregate_path=root/f".factory-state/runner-evidence/synthetic-conformance/{'e'*64}/aggregate.json"; aggregate_path.parent.mkdir(parents=True,exist_ok=True); aggregate_path.write_text(
     json.dumps(aggregate, sort_keys=True, indent=2) + "\n"
 )
 PY
     ssh-keygen -Y sign -f "$tmp/conformance-signer-key" \
         -n factory-runner-receipt \
-        < "$dir/.factory-state/runner-evidence/probe-runner/$head/manifest.json" \
-        > "$dir/.factory-state/runner-evidence/probe-runner/$head/manifest.sig" 2>/dev/null
-    python3 - "$dir/.factory-state/runner-evidence/probe-runner/$head/manifest.sig" \
-        "$dir/.factory-state/runner-evidence.json" <<'PY'
+        < "$dir/.factory-state/runner-evidence/synthetic-conformance/${FACTORY_READINESS_NONCE}/probe-runner/$head/$(printf '0%.0s' {1..64})/manifest.json" \
+        > "$dir/.factory-state/runner-evidence/synthetic-conformance/${FACTORY_READINESS_NONCE}/probe-runner/$head/$(printf '0%.0s' {1..64})/manifest.sig" 2>/dev/null
+    python3 - "$dir/.factory-state/runner-evidence/synthetic-conformance/${FACTORY_READINESS_NONCE}/probe-runner/$head/$(printf '0%.0s' {1..64})/manifest.sig" \
+        "$dir/.factory-state/runner-evidence/synthetic-conformance/${FACTORY_READINESS_NONCE}/aggregate.json" <<'PY'
 import hashlib, json, pathlib, sys
 signature, aggregate_path = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
 aggregate = json.loads(aggregate_path.read_text())
@@ -424,7 +426,7 @@ for requirement in sidecar["requirements"]:
     requirement["required_tier"] = "unit"
     if requirement["id"] == "REQ-01":
         requirement["receipts"] = [
-            f".factory-state/runner-evidence/probe-runner/{head}/manifest.json"
+            f".factory-state/runner-evidence/synthetic-conformance/{'e'*64}/probe-runner/{head}/{'0'*64}/manifest.json"
         ]
         requirement["artifacts"] = []
 open(sidecar_path, "w").write(json.dumps(sidecar) + "\n")
@@ -436,7 +438,7 @@ PY
 (cd "$tmp/runner-route" && ./scripts/validate-conformance.py complete \
     .factory/artifacts/conformance.json >/dev/null)
 printf 'tamper\n' >> \
-    "$tmp/runner-route/.factory-state/runner-evidence/probe-runner/$runner_head/manifest.json"
+    "$tmp/runner-route/.factory-state/runner-evidence/synthetic-conformance/${FACTORY_READINESS_NONCE}/probe-runner/$runner_head/$(printf '0%.0s' {1..64})/manifest.json"
 expect_fail "$tmp/runner-route" "a tampered signed runtime runner manifest"
 
 # A complete state with a non-verified row must fail (blocked fails
@@ -467,7 +469,7 @@ expect_fail "$tmp/private-dbus" "private DBus evidence for a system capability"
 mutate "$tmp/blessed" "$tmp/skipped-probe" skipped-probe
 head2=$(git -C "$tmp/skipped-probe" rev-parse HEAD)
 write_signed_evidence "$tmp/skipped-probe" "$head2"
-cat > "$tmp/skipped-probe/.factory-state/runner-evidence/probe-runner/$head2/stdout.log" <<'LOG'
+cat > "$tmp/skipped-probe/.factory-state/runner-evidence/synthetic-conformance/${FACTORY_READINESS_NONCE}/probe-runner/$head2/$(printf '0%.0s' {1..64})/stdout.log" <<'LOG'
 --- probe-capability contract ---
 100% tests passed, 0 tests failed out of 1
 Test #1: kernel_probe ...................***Skipped   0.01 sec
