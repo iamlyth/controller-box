@@ -115,17 +115,54 @@ static void test_editor_diagram_resolved_via_production_cache(void **state)
 static void test_editor_set_device_reresolves(void **state)
 {
     pe_fixture *f = *state;
+    static const struct { const char *type, *icon, *asset; } cases[] = {
+        {"xb360", "cc-xbox-360", "xbox-360.svg"},
+        {"xbox-elite", "cc-xbox-one", "xbox-one.svg"},
+        {"xbox-series", "cc-xbox-series-x", "xbox-series-x.svg"},
+        {"ds5", "cc-ps5", "ps5.svg"},
+        {"deck", "cc-steam-deck", "steam-deck.svg"},
+        {"gamepad", "generic-gamepad", "generic-gamepad.svg"},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        assert_int_equal(cbx_profile_editor_set_device(&f->ed, cases[i].type), 0);
+        assert_non_null(f->ed.diagram.base_texture);
+        assert_string_equal(cbx_profile_editor_resolved_icon(&f->ed), cases[i].icon);
+        assert_string_equal(cbx_profile_editor_resolved_asset(&f->ed), cases[i].asset);
+        assert_int_equal(cbx_profile_editor_diagram_provenance(&f->ed),
+            strcmp(cases[i].icon, "generic-gamepad") == 0
+            ? CBX_DIAG_PROVENANCE_EXPLICIT_GENERIC
+            : CBX_DIAG_PROVENANCE_SUPPORTED_MODEL);
+    }
 
-    /* A known device resolves through the icon map to generic-gamepad (the
-     * only geometry-verified asset), so base + layout are preserved. */
+    /* A supported sidecar override wins over the model. */
+    assert_int_equal(cbx_profile_editor_set_diagram_selection(
+        &f->ed, "xb360", "cc-ps5"), 0);
+    assert_string_equal(cbx_profile_editor_resolved_icon(&f->ed), "cc-ps5");
+    assert_int_equal(cbx_profile_editor_diagram_provenance(&f->ed),
+                     CBX_DIAG_PROVENANCE_PROFILE_OVERRIDE);
+
+    /* Unsupported input alone gets an explicit generic fallback reason. */
+    assert_int_equal(cbx_profile_editor_set_device(&f->ed, "mystery-pad"), 0);
+    assert_string_equal(cbx_profile_editor_resolved_icon(&f->ed),
+                        "generic-gamepad");
+    assert_int_equal(cbx_profile_editor_diagram_provenance(&f->ed),
+                     CBX_DIAG_PROVENANCE_UNSUPPORTED_FALLBACK);
+}
+
+static void test_supported_asset_failure_clears_stale(void **state)
+{
+    pe_fixture *f = *state;
     assert_int_equal(cbx_profile_editor_set_device(&f->ed, "xb360"), 0);
     assert_non_null(f->ed.diagram.base_texture);
-    assert_false(f->ed.diagram.owns_base_texture);
-
-    /* Unknown device also keeps the geometry-safe generic diagram. */
-    assert_int_equal(cbx_profile_editor_set_device(&f->ed, NULL), 0);
-    assert_non_null(f->ed.diagram.base_texture);
-    assert_false(f->ed.diagram.owns_base_texture);
+    snprintf(f->ed.icon_cache.icon_dir, sizeof(f->ed.icon_cache.icon_dir),
+             "/definitely/missing/controller-icons");
+    assert_true(cbx_profile_editor_set_device(&f->ed, "ds5") < 0);
+    assert_null(f->ed.diagram.base_texture);
+    assert_null(cbx_profile_diagram_active_button_pos(&f->ed.diagram,
+                                                       CBX_DIAG_BTN_A));
+    assert_string_equal(cbx_profile_editor_resolved_icon(&f->ed), "cc-ps5");
+    assert_int_equal(cbx_profile_editor_diagram_provenance(&f->ed),
+                     CBX_DIAG_PROVENANCE_SUPPORTED_LOAD_FAILURE);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1033,6 +1070,8 @@ int main(void)
             test_editor_diagram_resolved_via_production_cache, setup, teardown),
         cmocka_unit_test_setup_teardown(
             test_editor_set_device_reresolves, setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            test_supported_asset_failure_clears_stale, setup, teardown),
     };
 
     return cmocka_run_group_tests(tests, NULL, NULL);

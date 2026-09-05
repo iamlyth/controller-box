@@ -89,6 +89,7 @@ static void on_create_source_selected(cbx_widget *w, int index,
 static int  cbx_profiles_tab_open_editor(cbx_profiles_tab *tab,
                                             const cbx_profile *profile,
                                             const char *name,
+                                            const char *icon_override,
                                             bool is_new);
 static void cbx_profiles_tab_close_editor(cbx_profiles_tab *tab);
 static int  cbx_profiles_tab_save_editor(cbx_profiles_tab *tab);
@@ -164,7 +165,7 @@ on_edit_pressed(cbx_widget *w, void *user_data)
         return;
 
     /* Open the editor with the loaded profile. */
-    cbx_profiles_tab_open_editor(tab, &prof, e->filename, false);
+    cbx_profiles_tab_open_editor(tab, &prof, e->filename, e->icon, false);
 }
 
 /* ------------------------------------------------------------------ */
@@ -659,6 +660,7 @@ cbx_profiles_tab_name_input_confirm(cbx_profiles_tab *tab)
     cbx_profile prof;
     cbx_profile_init(&prof);
     snprintf(prof.name, sizeof(prof.name), "%s", name);
+    char inherited_icon[CBX_LIST_NAME_LEN] = "";
 
     if (src == CBX_PT_CREATE_DEFAULT_COPY || src == CBX_PT_CREATE_CLONE) {
         const cbx_profile_entry *src_entry = NULL;
@@ -679,6 +681,7 @@ cbx_profiles_tab_name_input_confirm(cbx_profiles_tab *tab)
             src_entry = &tab->profiles.entries[idx];
         }
 
+        snprintf(inherited_icon, sizeof(inherited_icon), "%s", src_entry->icon);
         cbx_profile src_prof;
         cbx_profile_init(&src_prof);
         int rc = cbx_profile_load(&src_prof, src_entry->path);
@@ -694,7 +697,8 @@ cbx_profiles_tab_name_input_confirm(cbx_profiles_tab *tab)
     /* Open the editor with the in-memory profile.  No file is
      * written until the user saves from the editor (which
      * validates NES minimum bindings via cbx_profile_save_to_dir). */
-    return cbx_profiles_tab_open_editor(tab, &prof, name, true);
+    return cbx_profiles_tab_open_editor(tab, &prof, name,
+                                         inherited_icon, true);
 }
 
 void
@@ -1108,6 +1112,7 @@ static int
 cbx_profiles_tab_open_editor(cbx_profiles_tab *tab,
                               const cbx_profile *profile,
                               const char *name,
+                              const char *icon_override,
                               bool is_new)
 {
     if (!tab || !tab->panel || !profile || !name)
@@ -1128,8 +1133,16 @@ cbx_profiles_tab_open_editor(cbx_profiles_tab *tab,
         tab->editor_initialized = true;
     }
 
+    /* Resolve the selected profile's sidecar identity before loading.  A
+     * profile is portable, so no arbitrary controller slot is used as a
+     * surrogate model. */
+    int rc = cbx_profile_editor_set_diagram_selection(&tab->editor, NULL,
+                                                       icon_override);
+    if (rc != 0)
+        return rc;
+
     /* Load the profile into the editor. */
-    int rc = cbx_profile_editor_load_profile(&tab->editor, profile);
+    rc = cbx_profile_editor_load_profile(&tab->editor, profile);
     if (rc != 0)
         return rc;
 
@@ -1146,9 +1159,19 @@ cbx_profiles_tab_open_editor(cbx_profiles_tab *tab,
     snprintf(tab->editor_profile_name, sizeof(tab->editor_profile_name),
               "%s", name);
     tab->editor_is_new = is_new;
+    snprintf(tab->editor_icon_override, sizeof(tab->editor_icon_override),
+             "%s", icon_override ? icon_override : "");
 
-    /* Hide tab widgets, editor widgets are shown by editor init/refresh. */
+    /* Restore the list-mode editor widgets on every open, including lazy
+     * reuse after close.  Sequential/target widgets remain hidden until their
+     * modes explicitly enable them. */
     hide_tab_widgets(tab);
+    cbx_widget_set_visible(&tab->editor.title_lbl.base, true);
+    cbx_widget_set_visible(&tab->editor.diagram.base, true);
+    cbx_widget_set_visible(&tab->editor.binding_list.base, true);
+    cbx_widget_set_visible(&tab->editor.target_list.base, false);
+    cbx_widget_set_visible(&tab->editor.status_lbl.base, true);
+    cbx_widget_set_visible(&tab->editor.progress_bar.base, false);
     cbx_widget_set_visible(&tab->save_btn.base, true);
     cbx_widget_set_visible(&tab->discard_btn.base, true);
 
@@ -1219,6 +1242,22 @@ cbx_profiles_tab_save_editor(cbx_profiles_tab *tab)
                                  "Save failed.");
         }
         return rc;
+    }
+
+    /* A newly cloned profile inherits the selected sidecar icon.  Existing
+     * sidecars are left intact because this editor does not edit metadata. */
+    if (tab->editor_is_new && tab->editor_icon_override[0]) {
+        cbx_profile_meta meta;
+        cbx_profile_meta_init(&meta);
+        meta.has_icon = true;
+        snprintf(meta.icon, sizeof(meta.icon), "%s", tab->editor_icon_override);
+        rc = cbx_profile_save_meta_to_dir(&meta, tab->editor_profile_name,
+                                           tab->test_meta_dir);
+        if (rc != 0) {
+            cbx_label_set_text(&tab->editor.status_lbl,
+                               "Profile saved; icon metadata save failed.");
+            return rc;
+        }
     }
 
     /* Save succeeded — close editor and refresh list. */

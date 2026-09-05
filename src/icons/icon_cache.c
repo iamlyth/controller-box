@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 /* ------------------------------------------------------------------ */
 /*  Hash map internals                                                */
@@ -75,34 +76,34 @@ static int insert_entry(cbx_icon_cache *cache, const char *name,
 /*  SVG rasterization                                                 */
 /* ------------------------------------------------------------------ */
 
-static int rasterize_svg(cbx_icon_cache *cache, const char *icon_name)
+static int rasterize_svg_file(cbx_icon_cache *cache, const char *icon_name,
+                              const char *filename)
 {
     char path[640];
     int plen;
 
-    /* Build full path: icon_dir + "/svg/" + file_name + ".svg"
-     * The CMake install layout places SVGs in ${ICON_DIR}/svg/.
-     * Strip the "cc-" prefix used by Controllercons icon names in the
-     * YAML mapping — the actual SVG files on disk do not have it. */
-    const char *file_name = icon_name;
-    if (strncmp(icon_name, "cc-", 3) == 0)
-        file_name = icon_name + 3;
-
-    /* Reject path traversal — icon names must be simple file names without
-     * directory components or parent-directory sequences.  This prevents a
-     * malicious profile-metadata sidecar from escaping the icon directory
-     * via an icon_override like "../../etc/something". */
-    if (strchr(file_name, '/') != NULL ||
-        strstr(file_name, "..") != NULL ||
-        file_name[0] == '.') {
-        fprintf(stderr, "icon_cache: rejecting path traversal in icon name '%s'\n",
-                icon_name);
+    /* Both the cache key and installed filename must be simple names. */
+    if (!icon_name || !filename || strchr(icon_name, '/') ||
+        strstr(icon_name, "..") || icon_name[0] == '.' ||
+        strchr(filename, '/') || strstr(filename, "..") ||
+        filename[0] == '.' || strlen(filename) < 5 ||
+        strcmp(filename + strlen(filename) - 4, ".svg") != 0) {
+        fprintf(stderr, "icon_cache: rejecting invalid icon asset '%s'/'%s'\n",
+                icon_name ? icon_name : "", filename ? filename : "");
         return -EINVAL;
     }
 
-    plen = snprintf(path, sizeof(path), "%s/svg/%s.svg", cache->icon_dir, file_name);
+    plen = snprintf(path, sizeof(path), "%s/svg/%s", cache->icon_dir, filename);
     if (plen < 0 || (size_t)plen >= sizeof(path))
         return -ENAMETOOLONG;
+
+    /* Built-in assets must be regular files in the selected in-tree/install
+     * prefix.  Do not follow a substituted symlink into an unrelated tree. */
+    struct stat st;
+    if (lstat(path, &st) != 0 || !S_ISREG(st.st_mode) || S_ISLNK(st.st_mode)) {
+        fprintf(stderr, "icon_cache: asset is not a regular file: %s\n", path);
+        return -ENOENT;
+    }
 
     /* Parse the SVG. */
     NSVGimage *image = nsvgParseFromFile(path, "px", 96.0f);
@@ -255,7 +256,7 @@ int cbx_icon_cache_load(cbx_icon_cache *cache, const cbx_icon_map *map)
         if (cbx_icon_cache_get(cache, icon_name) != NULL)
             continue;
 
-        int rc = rasterize_svg(cache, icon_name);
+        int rc = cbx_icon_cache_load_one(cache, icon_name);
         if (rc != 0) {
             /* Log but continue — a single missing icon should not abort. */
             fprintf(stderr, "icon_cache: warning: could not load '%s' (rc=%d)\n",
@@ -307,16 +308,32 @@ int cbx_icon_cache_get_dims(const cbx_icon_cache *cache, const char *icon_name,
     return -ENOENT;
 }
 
+int cbx_icon_cache_load_asset(cbx_icon_cache *cache, const char *icon_name,
+                              const char *filename)
+{
+    if (!cache || !cache->rasterizer || !icon_name || !filename ||
+        icon_name[0] == '\0' || filename[0] == '\0')
+        return -EINVAL;
+    if (cbx_icon_cache_get(cache, icon_name) != NULL)
+        return 0;
+    return rasterize_svg_file(cache, icon_name, filename);
+}
+
 int cbx_icon_cache_load_one(cbx_icon_cache *cache, const char *icon_name)
 {
     if (!cache || !cache->rasterizer || !icon_name || icon_name[0] == '\0')
         return -EINVAL;
 
-    /* Already cached? */
-    if (cbx_icon_cache_get(cache, icon_name) != NULL)
-        return 0;
-
-    return rasterize_svg(cache, icon_name);
+    /* Compatibility path for ordinary icon consumers.  Profile diagrams use
+     * cbx_icon_cache_load_asset() with the strict diagram catalog instead. */
+    const char *file_name = icon_name;
+    if (strncmp(icon_name, "cc-", 3) == 0)
+        file_name = icon_name + 3;
+    char filename[CBX_ICON_ICON_LEN + 5];
+    int n = snprintf(filename, sizeof(filename), "%s.svg", file_name);
+    if (n < 0 || (size_t)n >= sizeof(filename))
+        return -ENAMETOOLONG;
+    return cbx_icon_cache_load_asset(cache, icon_name, filename);
 }
 
 int cbx_icon_cache_insert(cbx_icon_cache *cache, const char *key,

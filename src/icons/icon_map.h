@@ -34,7 +34,8 @@ extern "C" {
 /* A single icon mapping entry: DeviceType → icon + display name. */
 typedef struct {
     char type[CBX_ICON_TYPE_LEN];   /* InputPlumber DeviceType string */
-    char icon[CBX_ICON_ICON_LEN];   /* Icon name (SVG filename without .svg) */
+    char icon[CBX_ICON_ICON_LEN];   /* stable public icon ID */
+    char asset[CBX_ICON_ICON_LEN];  /* explicit installed SVG filename */
     char name[CBX_ICON_NAME_LEN];   /* Human-readable display name */
 } cbx_icon_entry;
 

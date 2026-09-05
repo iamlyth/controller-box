@@ -754,7 +754,12 @@ build_cache_resolved_diagram(pd_fixture *f, cbx_icon_cache *cache,
     int rc = cbx_icon_cache_init(cache, f->sdl.renderer, cbx_icon_dir(), 512);
     if (rc != 0)
         return rc;
-    rc = cbx_icon_cache_load_one(cache, icon);
+    const char *asset = NULL;
+    if (!cbx_profile_diagram_catalog_asset(icon, &asset, NULL)) {
+        cbx_icon_cache_cleanup(cache);
+        return -ENOENT;
+    }
+    rc = cbx_icon_cache_load_asset(cache, icon, asset);
     if (rc != 0) {
         cbx_icon_cache_cleanup(cache);
         return rc;
@@ -781,19 +786,22 @@ static void test_device_geometry_known(void **state)
     assert_true(cbx_profile_diagram_device_geometry_known(NULL));
     assert_true(cbx_profile_diagram_device_geometry_known(""));
     assert_true(cbx_profile_diagram_device_geometry_known("generic-gamepad"));
-    /* Unregistered device icons must NOT be shown with markers: their
-     * control geometry is not verified, so markers could float off. */
-    assert_false(cbx_profile_diagram_device_geometry_known("cc-xbox-360"));
-    assert_false(cbx_profile_diagram_device_geometry_known("cc-ps5"));
+    assert_true(cbx_profile_diagram_device_geometry_known("cc-xbox-360"));
+    assert_true(cbx_profile_diagram_device_geometry_known("cc-xbox-one"));
+    assert_true(cbx_profile_diagram_device_geometry_known("cc-xbox-series-x"));
+    assert_true(cbx_profile_diagram_device_geometry_known("cc-ps5"));
+    assert_true(cbx_profile_diagram_device_geometry_known("cc-steam-deck"));
+    assert_false(cbx_profile_diagram_device_geometry_known("cc-unsupported"));
+    assert_true(cbx_profile_diagram_catalog_valid());
 }
 
 static void test_set_device_default_layout(void **state)
 {
     pd_fixture *f = *state;
 
-    /* Unregistered device falls back to the generic layout table. */
+    /* Supported devices select their own complete layout. */
     cbx_profile_diagram_set_device(&f->diag, "cc-xbox-360");
-    assert_ptr_equal(
+    assert_ptr_not_equal(
         cbx_profile_diagram_active_button_pos(&f->diag, CBX_DIAG_BTN_A),
         cbx_profile_diagram_get_button_pos(CBX_DIAG_BTN_A));
     /* Generic device uses the generic table. */
@@ -801,11 +809,11 @@ static void test_set_device_default_layout(void **state)
     assert_ptr_equal(
         cbx_profile_diagram_active_button_pos(&f->diag, CBX_DIAG_BTN_A),
         cbx_profile_diagram_get_button_pos(CBX_DIAG_BTN_A));
-    /* NULL device -> generic table. */
+    /* Unknown/NULL selections clear the layout; fallback policy belongs to
+     * the editor resolver and is therefore visible in provenance. */
     cbx_profile_diagram_set_device(&f->diag, NULL);
-    assert_ptr_equal(
-        cbx_profile_diagram_active_button_pos(&f->diag, CBX_DIAG_BTN_START),
-        cbx_profile_diagram_get_button_pos(CBX_DIAG_BTN_START));
+    assert_null(cbx_profile_diagram_active_button_pos(&f->diag,
+                                                       CBX_DIAG_BTN_START));
 }
 
 static void test_set_base_image_same_owned_is_noop(void **state)
@@ -874,37 +882,110 @@ static void test_set_base_image_borrowed(void **state)
     cbx_icon_cache_cleanup(&cache);
 }
 
-/* Device-mapped base through the production icon cache preserves raster
- * resolution and aspect (pixelation / stretch guards). */
+static void test_catalog_expected_control_regions(void **state)
+{
+    (void)state;
+    static const struct { const char *icon; float ax0, ax1, ux0, ux1; } e[] = {
+        {"generic-gamepad", .70f,.92f,.08f,.35f},
+        {"cc-xbox-360", .72f,.90f,.22f,.42f},
+        {"cc-xbox-one", .72f,.90f,.24f,.44f},
+        {"cc-xbox-series-x", .68f,.86f,.25f,.45f},
+        {"cc-ps5", .75f,.94f,.08f,.25f},
+        {"cc-steam-deck", .64f,.84f,.08f,.28f},
+    };
+    for (size_t i = 0; i < sizeof(e) / sizeof(e[0]); i++) {
+        cbx_profile_diagram d = {0};
+        cbx_profile_diagram_set_device(&d, e[i].icon);
+        const cbx_diag_button_pos *a = cbx_profile_diagram_active_button_pos(
+            &d, CBX_DIAG_BTN_A);
+        const cbx_diag_button_pos *up = cbx_profile_diagram_active_button_pos(
+            &d, CBX_DIAG_BTN_UP);
+        assert_non_null(a); assert_non_null(up);
+        float ac = a->x + a->w / 2.0f;
+        float uc = up->x + up->w / 2.0f;
+        assert_true(ac >= e[i].ax0 && ac <= e[i].ax1);
+        assert_true(uc >= e[i].ux0 && uc <= e[i].ux1);
+        assert_true(ac - uc > 0.30f);
+    }
+}
+
+static void test_catalog_assets_and_complete_controls(void **state)
+{
+    (void)state;
+    static const struct { const char *icon, *asset; } expected[] = {
+        {"generic-gamepad", "generic-gamepad.svg"},
+        {"cc-xbox-360", "xbox-360.svg"},
+        {"cc-xbox-one", "xbox-one.svg"},
+        {"cc-xbox-series-x", "xbox-series-x.svg"},
+        {"cc-ps5", "ps5.svg"},
+        {"cc-steam-deck", "steam-deck.svg"},
+    };
+    assert_true(cbx_profile_diagram_catalog_valid());
+    for (size_t i = 0; i < sizeof(expected) / sizeof(expected[0]); i++) {
+        const char *asset = NULL;
+        assert_true(cbx_profile_diagram_catalog_asset(expected[i].icon,
+                                                       &asset, NULL));
+        assert_string_equal(asset, expected[i].asset);
+        cbx_profile_diagram diag = {0};
+        cbx_profile_diagram_set_device(&diag, expected[i].icon);
+        for (int b = 0; b < CBX_DIAG_BTN_COUNT; b++)
+            assert_non_null(cbx_profile_diagram_active_button_pos(
+                &diag, (cbx_diag_button)b));
+    }
+}
+
+/* Device-mapped bases preserve adequate raster size and aspect. */
 static void test_device_mapped_resolution_geometry(void **state)
 {
     pd_fixture *f = *state;
 
-    cbx_icon_cache cache;
-    cbx_profile_diagram diag;
-    assert_int_equal(build_cache_resolved_diagram(f, &cache, &diag, "generic-gamepad"),
-                     0);
-    assert_non_null(diag.base_texture);
+    static const char *icons[] = {"generic-gamepad", "cc-xbox-360",
+        "cc-xbox-one", "cc-xbox-series-x", "cc-ps5", "cc-steam-deck"};
+    for (size_t i = 0; i < sizeof(icons) / sizeof(icons[0]); i++) {
+        cbx_icon_cache cache;
+        cbx_profile_diagram diag;
+        assert_int_equal(build_cache_resolved_diagram(f, &cache, &diag,
+                                                       icons[i]), 0);
+        SDL_Rect rect = {0, 0, 300, 300};
+        cbx_widget_set_rect(&diag.base, &rect);
+        SDL_Rect content;
+        assert_true(cbx_profile_diagram_content_rect(&diag, &rect, &content));
+        int tw, th;
+        assert_true(cbx_profile_diagram_base_texture_size(&diag, &tw, &th));
+        assert_true(tw >= content.w);
+        assert_true(th >= content.h);
+        diag_clear(f->sdl.renderer, 0);
+        cbx_profile_diagram_highlight(&diag, CBX_DIAG_BTN_A);
+        cbx_widget_draw(&diag.base, f->sdl.renderer);
+        int fw, fh;
+        uint8_t *frame = diag_read_fb(f->sdl.renderer, &fw, &fh);
+        const uint8_t focus_rgb[3] = {70, 127, 180};
+        SDL_Rect ar = geo_marker_rect(cbx_profile_diagram_active_button_pos(
+            &diag, CBX_DIAG_BTN_A), &content);
+        assert_true(fb_region_has_color(frame, fw, fh, &ar, focus_rgb, 55));
+        free(frame);
+        diag_clear(f->sdl.renderer, 0);
+        cbx_profile_diagram_highlight(&diag, CBX_DIAG_BTN_UP);
+        cbx_widget_draw(&diag.base, f->sdl.renderer);
+        frame = diag_read_fb(f->sdl.renderer, &fw, &fh);
+        SDL_Rect ur = geo_marker_rect(cbx_profile_diagram_active_button_pos(
+            &diag, CBX_DIAG_BTN_UP), &content);
+        assert_true(fb_region_has_color(frame, fw, fh, &ur, focus_rgb, 55));
+        assert_false(fb_region_has_color(frame, fw, fh, &ar, focus_rgb, 30));
+        free(frame);
 
-    /* Landscape content box matching the 5:3 asset. */
-    SDL_Rect rect = {0, 0, 300, 180};
-    cbx_widget_set_rect(&diag.base, &rect);
-
-    SDL_Rect content;
-    assert_true(cbx_profile_diagram_content_rect(&diag, &rect, &content));
-    int tw, th;
-    assert_true(cbx_profile_diagram_base_texture_size(&diag, &tw, &th));
-
-    /* Pixelation guard: raster >= displayed content. */
-    assert_true(tw >= content.w);
-    assert_true(th >= content.h);
-    /* Stretch guard: aspect preserved. */
-    long long tw_th = (long long)tw * content.h;
-    long long th_tw = (long long)th * content.w;
-    assert_true(llabs(tw_th - th_tw) <= content.w);
-
-    cbx_profile_diagram_shutdown(&diag);
-    cbx_icon_cache_cleanup(&cache);
+        if (strcmp(icons[i], "generic-gamepad") == 0) {
+            assert_true(llabs((long long)content.w * 3 -
+                              (long long)content.h * 5) <= 5);
+            assert_true(llabs((long long)tw * 3 -
+                              (long long)th * 5) <= 5);
+        } else {
+            assert_true(content.w == content.h);
+            assert_true(tw == th);
+        }
+        cbx_profile_diagram_shutdown(&diag);
+        cbx_icon_cache_cleanup(&cache);
+    }
 }
 
 /* Device-mapped base through the production icon library still anchors every
@@ -1043,6 +1124,8 @@ int main(void)
                                           setup, teardown),
         cmocka_unit_test_setup_teardown(test_set_base_image_borrowed,
                                           setup, teardown),
+        cmocka_unit_test(test_catalog_expected_control_regions),
+        cmocka_unit_test(test_catalog_assets_and_complete_controls),
         cmocka_unit_test_setup_teardown(test_device_mapped_resolution_geometry,
                                           setup, teardown),
         cmocka_unit_test_setup_teardown(test_device_mapped_marker_alignment,

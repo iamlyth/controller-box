@@ -1257,6 +1257,74 @@ test_confirm_delete_via_dispatch(void **state)
     env_teardown(&env);
 }
 
+static void
+send_pointer_click(cbx_manager *mgr, int x, int y)
+{
+    SDL_Event ev = {0};
+    ev.type = SDL_MOUSEBUTTONDOWN;
+    ev.button.button = SDL_BUTTON_LEFT;
+    ev.button.x = x; ev.button.y = y;
+    cbx_manager_handle_event(mgr, &ev);
+    ev.type = SDL_MOUSEBUTTONUP;
+    cbx_manager_handle_event(mgr, &ev);
+}
+
+static void
+test_profile_sidecar_diagram_identity_via_dispatch(void **state)
+{
+    (void)state;
+    pt_env env;
+    env_setup(&env);
+    char meta_parent[PATH_MAX];
+    snprintf(meta_parent, sizeof(meta_parent), "%s/config/controller-box", env.tmp);
+    mkdir(meta_parent, 0700);
+    mkdir(env.meta_dir, 0700);
+    char path[PATH_MAX + 128];
+    snprintf(path, sizeof(path), "%s/default.yaml", env.system_dir);
+    write_nes_profile_yaml(path, "Default");
+    const char *names[] = {"a_xbox", "b_ps5"};
+    const char *icons[] = {"cc-xbox-360", "cc-ps5"};
+    for (int i = 0; i < 2; i++) {
+        snprintf(path, sizeof(path), "%s/%s.yaml", env.user_dir, names[i]);
+        write_nes_profile_yaml(path, names[i]);
+        snprintf(path, sizeof(path), "%s/%s.meta.yaml", env.meta_dir, names[i]);
+        FILE *meta = fopen(path, "w");
+        assert_non_null(meta);
+        fprintf(meta, "display_order: %d\nicon: %s\n", -2 + i, icons[i]);
+        fclose(meta);
+    }
+
+    ensure_dummy_driver();
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+    cbx_profiles_tab_set_test_dirs(pt, env.user_dir, env.system_dir, env.meta_dir);
+    assert_int_equal(cbx_profiles_tab_refresh(pt), 0);
+    pt_send_key_dn(&mgr, SDLK_RIGHT);
+
+    for (int i = 0; i < 2; i++) {
+        SDL_Rect list_rect, edit_rect;
+        cbx_widget_get_rect(&pt->profile_list_w.base, &list_rect);
+        cbx_widget_get_rect(&pt->edit_btn.base, &edit_rect);
+        send_pointer_click(&mgr, list_rect.x + 30,
+                           list_rect.y + i * pt->profile_list_w.item_h + 8);
+        send_pointer_click(&mgr, edit_rect.x + edit_rect.w / 2,
+                           edit_rect.y + edit_rect.h / 2);
+        assert_int_equal(pt->mode, CBX_PT_MODE_EDITOR);
+        assert_string_equal(cbx_profile_editor_resolved_icon(&pt->editor), icons[i]);
+        assert_int_equal(cbx_profile_editor_diagram_provenance(&pt->editor),
+                         CBX_DIAG_PROVENANCE_PROFILE_OVERRIDE);
+        assert_non_null(pt->editor.diagram.base_texture);
+        assert_true(cbx_widget_is_visible(&pt->editor.diagram.base));
+        assert_true(cbx_profile_editor_get_diagram_highlight(&pt->editor) >= 0);
+        cbx_manager_render(&mgr);
+        pt_send_key_dn(&mgr, SDLK_TAB); /* discard/close through dispatch */
+        assert_int_equal(pt->mode, CBX_PT_MODE_LIST);
+    }
+    cbx_manager_shutdown(&mgr);
+    env_teardown(&env);
+}
+
 /* ================================================================== */
 /*  Test runner                                                        */
 /* ================================================================== */
@@ -1331,6 +1399,7 @@ static const struct CMUnitTest tests[] = {
     cmocka_unit_test(test_create_picker_via_dispatch),
     cmocka_unit_test(test_name_input_via_dispatch),
     cmocka_unit_test(test_confirm_delete_via_dispatch),
+    cmocka_unit_test(test_profile_sidecar_diagram_identity_via_dispatch),
 };
 
 int

@@ -31,6 +31,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 #include <yaml.h>
 
@@ -192,6 +193,8 @@ static int parse_icon_map_events(cbx_icon_map *map, yaml_parser_t *parser)
                     safe_copy(cur_entry.type, sizeof(cur_entry.type), val);
                 else if (strcmp(current_key, "icon") == 0)
                     safe_copy(cur_entry.icon, sizeof(cur_entry.icon), val);
+                else if (strcmp(current_key, "asset") == 0)
+                    safe_copy(cur_entry.asset, sizeof(cur_entry.asset), val);
                 else if (strcmp(current_key, "name") == 0)
                     safe_copy(cur_entry.name, sizeof(cur_entry.name), val);
                 /* Unknown keys: silently ignore. */
@@ -385,10 +388,19 @@ int cbx_icon_map_default_path(char *out_path, size_t path_size)
     if (!out_path || path_size == 0)
         return -EINVAL;
 
-    int rc = snprintf(out_path, path_size, "%s/controller-icons.yaml",
+    char installed[PATH_MAX];
+    int rc = snprintf(installed, sizeof(installed), "%s/controller-icons.yaml",
                       DATA_DIR);
+    if (rc < 0 || (size_t)rc >= sizeof(installed))
+        return -ENAMETOOLONG;
+    struct stat st;
+    const char *selected = installed;
+    if (lstat(installed, &st) != 0 || !S_ISREG(st.st_mode) || S_ISLNK(st.st_mode))
+        selected = SOURCE_DATA_DIR "/controller-icons.yaml";
+    if (lstat(selected, &st) != 0 || !S_ISREG(st.st_mode) || S_ISLNK(st.st_mode))
+        return -ENOENT;
+    rc = snprintf(out_path, path_size, "%s", selected);
     if (rc < 0 || (size_t)rc >= path_size)
         return -ENAMETOOLONG;
-
     return 0;
 }

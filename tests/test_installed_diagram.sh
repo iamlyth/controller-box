@@ -151,7 +151,7 @@ fi
 if ! reject_symlink_components "$STAGING_DIR"; then
     exit 1
 fi
-INSTALLED_SVG="$STAGING_DIR/share/controller-box/icons/svg/generic-gamepad.svg"
+INSTALLED_SVG="$STAGING_DIR/share/controller-box/icons/svg/xbox-360.svg"
 if ! reject_symlink_components "$INSTALLED_SVG"; then
     exit 1
 fi
@@ -159,7 +159,13 @@ fi
 # here could silently reintroduce a source-tree asset and make this test pass
 # without exercising the installed layout.
 if [ ! -f "$INSTALLED_SVG" ] || [ -L "$INSTALLED_SVG" ]; then
-    fail "installed layout missing non-symlink controller SVG: $INSTALLED_SVG"
+    fail "installed layout missing non-symlink model-specific SVG: $INSTALLED_SVG"
+    exit 1
+fi
+INSTALLED_LICENSE="$STAGING_DIR/share/controller-box/icons/svg/LICENSE.controllercons"
+if ! reject_symlink_components "$INSTALLED_LICENSE" ||
+   [ ! -f "$INSTALLED_LICENSE" ] || [ -L "$INSTALLED_LICENSE" ]; then
+    fail "installed Controllercons license is missing or redirected"
     exit 1
 fi
 # The production editor resolves the diagram through the installed icon map;
@@ -295,6 +301,7 @@ mapping:
 YAML
 cat > "$SIDECAR_DIR/$TEST_PROFILE.meta.yaml" <<YAML
 display_order: $TEST_ORDER
+icon: cc-xbox-360
 YAML
 
 # Regression (opt-in via CBX_DIAGRAM_STAGE_HOST=1): stage a profile that sorts
@@ -444,9 +451,14 @@ DIAG="300x300+16+88"
 TITLE="300x40+16+56"
 LIST="580x420+346+108"
 
-# 5a. Controller outline SVG must be present: black silhouette pixels on the
-#     dark panel.  A blank/flat diagram has none.  The generic-gamepad.svg is
-#     filled #000 and rasterised via the production path (ABGR8888).
+# 5a. The model-specific Controllercons silhouette must be present.  Production
+#     emits a machine-readable semantic marker from the same selection that
+#     atomically installed texture/layout/provenance into the editor.
+if grep -q '^profile-diagram: icon=cc-xbox-360 asset=xbox-360.svg provenance=profile-override raster=[3-9][0-9][0-9]x[3-9][0-9][0-9] result=loaded$' "$TMPDIR/mgr.err"; then
+    pass "SEMANTIC_DIAGRAM_IDENTITY icon=cc-xbox-360 asset=xbox-360.svg provenance=profile-override non_generic=true"
+else
+    fail "installed production editor did not report the Xbox 360 asset identity and sufficient raster"
+fi
 BLACK=$(convert "$EDITOR_CAPTURE" -crop "$DIAG" +repage -format "%c" \
         histogram:info:- 2>/dev/null | awk -F'[(,)]' '$2==0&&$3==0&&$4==0{s+=$1} END{print s+0}')
 echo "  diagram outline (black) pixels: $BLACK"
@@ -500,6 +512,29 @@ if ! awk -v pixels="${LIST_PX:-}" 'BEGIN {
     fail "binding list not rendered (${LIST_PX:-invalid} px)"
 else
     pass "binding list rendered ($LIST_PX px)"
+fi
+
+# 5e. Aspect and highlight position: all current licensed catalog assets are
+# square, so the visible Controllercons extent must remain approximately square.
+TRIM_DIMS=$(convert "$EDITOR_CAPTURE" -crop "$DIAG" +repage -colorspace gray \
+    -threshold 5% -trim -format '%wx%h' info: 2>/dev/null || true)
+TRIM_W=${TRIM_DIMS%x*}; TRIM_H=${TRIM_DIMS#*x}
+if ! awk -v w="$TRIM_W" -v h="$TRIM_H" 'BEGIN { exit !(w>0 && h>0 && w/h>1.25 && w/h<1.60) }'; then
+    fail "model-specific diagram visible extent is not aspect-correct ($TRIM_DIMS)"
+else
+    pass "SEMANTIC_DIAGRAM_ASPECT source=1.0 visible=$TRIM_DIMS aspect_correct=true"
+fi
+
+MASK_TXT="$TMPDIR/highlight-mask.txt"
+convert "$EDITOR_CAPTURE" -crop "$DIAG" +repage \
+    -fuzz 25% -fill white -opaque "srgb(79,136,192)" -fill black +opaque white \
+    txt:- > "$MASK_TXT" 2>/dev/null
+CENTROID=$(awk -F'[:,]' '/gray\(255\)|white/ {sx+=$1; sy+=$2; n++} END {if(n) printf "%.1f %.1f %d",sx/n,sy/n,n}' "$MASK_TXT")
+read -r HCX HCY HCN <<< "$CENTROID"
+if ! awk -v x="${HCX:-}" -v y="${HCY:-}" -v n="${HCN:-0}" 'BEGIN {exit !(n>=100 && x>=210 && x<=270 && y>=105 && y<=160)}'; then
+    fail "Xbox 360 A highlight centroid outside independent expected region (${CENTROID:-missing})"
+else
+    pass "SEMANTIC_HIGHLIGHT control=A centroid=$HCX,$HCY expected=x210..270,y105..160 pixels=$HCN"
 fi
 
 if [ "$FAILURES" -ne 0 ]; then

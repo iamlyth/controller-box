@@ -7,7 +7,7 @@ trap 'rm -rf "$tmp"' EXIT
 
 setup_fixture() {
     local root="$1" checker_exit="$2"
-    mkdir -p "$root/scripts" "$root/src/manager" "$root/.factory/artifacts"
+    mkdir -p "$root/scripts" "$root/bin" "$root/.factory/artifacts"
     cp "$PROJECT_ROOT/scripts/check-core-acceptance.sh" "$root/scripts/"
     cat > "$root/scripts/check-capability-evidence.py" <<PY
 #!/usr/bin/env python3
@@ -18,11 +18,11 @@ if sys.argv[1:] != expected:
 raise SystemExit($checker_exit)
 PY
     chmod +x "$root/scripts/check-core-acceptance.sh" "$root/scripts/check-capability-evidence.py"
-    cat > "$root/src/manager/profile_diagram.c" <<'EOF'
-static const int s_device_layouts[] = {
-    { "cc-xbox-360", 0 },
-};
+    cat > "$root/bin/ctest" <<'EOF'
+#!/usr/bin/env bash
+exit "${FIXTURE_CTEST_EXIT:-0}"
 EOF
+    chmod +x "$root/bin/ctest"
     git -C "$root" init -q
     git -C "$root" config user.email fixture@test
     git -C "$root" config user.name fixture
@@ -51,13 +51,13 @@ fi
 strong="$tmp/strong"
 mkdir -p "$strong"
 setup_fixture "$strong" 0
-(cd "$strong" && ./scripts/check-core-acceptance.sh >/dev/null)
+(cd "$strong" && PATH="$strong/bin:$PATH" ./scripts/check-core-acceptance.sh >/dev/null)
 
-# Routing evidence cannot mask a missing licensed production diagram.
-rm "$strong/src/manager/profile_diagram.c"
-if (cd "$strong" && ./scripts/check-core-acceptance.sh >/dev/null 2>&1); then
-    echo "missing licensed diagram passed core acceptance" >&2
+# Routing evidence cannot mask failed/missing executable diagram semantics.
+if (cd "$strong" && PATH="$strong/bin:$PATH" FIXTURE_CTEST_EXIT=1 \
+    ./scripts/check-core-acceptance.sh >/dev/null 2>&1); then
+    echo "failed diagram semantic tests passed core acceptance" >&2
     exit 1
 fi
 
-echo "test: core acceptance requires canonical production-routing evidence"
+echo "test: core acceptance requires routing evidence and executable diagram semantics"

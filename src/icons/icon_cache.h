@@ -98,6 +98,14 @@ int cbx_icon_cache_get_dims(const cbx_icon_cache *cache,
 int cbx_icon_cache_load_one(cbx_icon_cache *cache, const char *icon_name);
 
 /*
+ * Rasterize a built-in SVG using an explicit installed filename and cache it
+ * under icon_name.  filename must be a simple basename ending in .svg.  This
+ * avoids deriving licensed asset filenames from public icon IDs.
+ */
+int cbx_icon_cache_load_asset(cbx_icon_cache *cache, const char *icon_name,
+                              const char *filename);
+
+/*
  * Insert an externally-created texture into the cache under the given
  * key.  Used by Task 18 (icon_lookup) to cache PNG textures loaded via
  * SDL2_image.  The cache takes ownership of the texture — it will be

@@ -18,6 +18,7 @@
 /* Source-tree icon directory — fallback for development builds before
  * `cmake --install`.  SVGs are at ${SOURCE_ICON_DIR}/svg/. */
 #define SOURCE_ICON_DIR "@CMAKE_CURRENT_SOURCE_DIR@/data/icons"
+#define SOURCE_DATA_DIR "@CMAKE_CURRENT_SOURCE_DIR@/data"
 
 /* Bundled font directory: ${DATA_DIR}/fonts (read-only).  Intended for
  * future bundled fonts; runtime discovery also checks system font

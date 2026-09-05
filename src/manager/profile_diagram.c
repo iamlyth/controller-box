@@ -74,44 +74,80 @@ static const cbx_diag_button_pos s_button_pos[CBX_DIAG_BTN_COUNT] = {
 };
 
 /*
- * Registered per-device marker layouts (BUG-0018).
+ * Strict diagram catalog (BUG-0018).
  *
- * Each entry associates an icon name (as resolved by the production icon
- * map — cbx_icon_map_lookup) with the normalised button-position table
- * that matches that device's rendered control geometry.  Only entries here
- * are considered "geometry known": a device SVG is only shown with markers
- * when its controls are registered, otherwise the generic-gamepad layout
- * (the one asset whose controls are drawn at exactly these coordinates) is
- * kept so no marker floats off a control.
- *
- * The generic table below is registered because data/icons/svg/
- * generic-gamepad.svg is drawn with every control at the exact normalised
- * coordinates of s_button_pos (BUG-0018).  Adding a new device requires
- * its SVG's control geometry to be visually verified and its own table
- * appended here — that calibration is out-of-band (human/visual), matching
- * the BUG-0018 acceptance which forbids unverified marker placement.
+ * Public icon IDs, installed filenames and complete marker layouts are bound
+ * explicitly here.  These initial coordinates are implementation geometry
+ * pending exact human visual approval; they are deliberately not described as
+ * human calibrated.  The renderer and markers share content_rect(), so the
+ * normalized geometry receives exactly the SVG's aspect-fit transform.
  */
+#define DEVICE_LAYOUT(name, du, dd, dl, dr, aa, ab, ax, ay, lsx, lsy, rsx, rsy) \
+static const cbx_diag_button_pos name[CBX_DIAG_BTN_COUNT] = { \
+ [CBX_DIAG_BTN_UP]={CBX_DIAG_BTN_UP,"Up",du,0.28f,0.065f,0.065f}, \
+ [CBX_DIAG_BTN_DOWN]={CBX_DIAG_BTN_DOWN,"Down",dd,0.50f,0.065f,0.065f}, \
+ [CBX_DIAG_BTN_LEFT]={CBX_DIAG_BTN_LEFT,"Left",dl,0.39f,0.065f,0.065f}, \
+ [CBX_DIAG_BTN_RIGHT]={CBX_DIAG_BTN_RIGHT,"Right",dr,0.39f,0.065f,0.065f}, \
+ [CBX_DIAG_BTN_A]={CBX_DIAG_BTN_A,"A",aa,0.39f,0.075f,0.075f}, \
+ [CBX_DIAG_BTN_B]={CBX_DIAG_BTN_B,"B",ab,0.28f,0.075f,0.075f}, \
+ [CBX_DIAG_BTN_X]={CBX_DIAG_BTN_X,"X",ax,0.28f,0.075f,0.075f}, \
+ [CBX_DIAG_BTN_Y]={CBX_DIAG_BTN_Y,"Y",ay,0.17f,0.075f,0.075f}, \
+ [CBX_DIAG_BTN_START]={CBX_DIAG_BTN_START,"Start",0.57f,0.29f,0.065f,0.05f}, \
+ [CBX_DIAG_BTN_SELECT]={CBX_DIAG_BTN_SELECT,"Select",0.39f,0.29f,0.065f,0.05f}, \
+ [CBX_DIAG_BTN_GUIDE]={CBX_DIAG_BTN_GUIDE,"Guide",0.47f,0.18f,0.07f,0.07f}, \
+ [CBX_DIAG_BTN_L1]={CBX_DIAG_BTN_L1,"L1",0.16f,0.12f,0.12f,0.05f}, \
+ [CBX_DIAG_BTN_R1]={CBX_DIAG_BTN_R1,"R1",0.72f,0.12f,0.12f,0.05f}, \
+ [CBX_DIAG_BTN_L2]={CBX_DIAG_BTN_L2,"L2",0.12f,0.07f,0.12f,0.05f}, \
+ [CBX_DIAG_BTN_R2]={CBX_DIAG_BTN_R2,"R2",0.76f,0.07f,0.12f,0.05f}, \
+ [CBX_DIAG_BTN_L3]={CBX_DIAG_BTN_L3,"L3",lsx,lsy,0.10f,0.10f}, \
+ [CBX_DIAG_BTN_R3]={CBX_DIAG_BTN_R3,"R3",rsx,rsy,0.10f,0.10f}, \
+}
+
+DEVICE_LAYOUT(s_xb360_pos, 0.31f,0.31f,0.25f,0.37f,
+              0.76f,0.84f,0.68f,0.76f, 0.15f,0.28f,0.59f,0.46f);
+DEVICE_LAYOUT(s_xbone_pos, 0.335f,0.335f,0.28f,0.39f,
+              0.755f,0.825f,0.685f,0.755f, 0.19f,0.285f,0.585f,0.445f);
+DEVICE_LAYOUT(s_series_pos, 0.34f,0.34f,0.285f,0.395f,
+              0.72f,0.79f,0.65f,0.72f, 0.19f,0.29f,0.58f,0.44f);
+DEVICE_LAYOUT(s_ps5_pos, 0.155f,0.155f,0.10f,0.21f,
+              0.79f,0.86f,0.72f,0.79f, 0.285f,0.45f,0.61f,0.45f);
+DEVICE_LAYOUT(s_deck_pos, 0.17f,0.17f,0.11f,0.23f,
+              0.69f,0.76f,0.62f,0.69f, 0.20f,0.50f,0.62f,0.50f);
+
+#undef DEVICE_LAYOUT
+
 typedef struct {
-    const char *icon;                 /* icon name (e.g. "generic-gamepad") */
-    const cbx_diag_button_pos *table; /* matching button-position table    */
+    const char *icon;
+    const char *asset_filename;
+    const char *model_label;
+    const cbx_diag_button_pos *table;
 } cbx_diag_device_layout;
 
 static const cbx_diag_device_layout s_device_layouts[] = {
-    { "generic-gamepad", s_button_pos },
+    { "generic-gamepad", "generic-gamepad.svg", "Generic Gamepad", s_button_pos },
+    { "cc-xbox-360", "xbox-360.svg", "Xbox 360 Controller", s_xb360_pos },
+    { "cc-xbox-one", "xbox-one.svg", "Xbox One / Elite Controller", s_xbone_pos },
+    { "cc-xbox-series-x", "xbox-series-x.svg", "Xbox Series S|X Controller", s_series_pos },
+    { "cc-ps5", "ps5.svg", "DualSense", s_ps5_pos },
+    { "cc-steam-deck", "steam-deck.svg", "Steam Deck Controller", s_deck_pos },
 };
 
-/* The default layout used for unknown / unregistered device icons. */
+static const cbx_diag_device_layout *
+catalog_for_icon(const char *icon_name)
+{
+    if (!icon_name || icon_name[0] == '\0')
+        return NULL;
+    for (size_t i = 0; i < sizeof(s_device_layouts) / sizeof(s_device_layouts[0]); i++)
+        if (strcmp(s_device_layouts[i].icon, icon_name) == 0)
+            return &s_device_layouts[i];
+    return NULL;
+}
+
 static const cbx_diag_button_pos *
 layout_for_icon(const char *icon_name)
 {
-    /* NULL / empty resolves to the default generic device. */
-    if (!icon_name || icon_name[0] == '\0')
-        return s_button_pos;
-    for (size_t i = 0; i < sizeof(s_device_layouts) / sizeof(s_device_layouts[0]); i++) {
-        if (strcmp(s_device_layouts[i].icon, icon_name) == 0)
-            return s_device_layouts[i].table;
-    }
-    return s_button_pos;
+    const cbx_diag_device_layout *entry = catalog_for_icon(icon_name);
+    return entry ? entry->table : NULL;
 }
 
 /* ------------------------------------------------------------------ */
@@ -418,24 +454,47 @@ cbx_profile_diagram_get_highlight(const cbx_profile_diagram *diag)
 /*  Device-mapped base image & marker layout (BUG-0018)               */
 /* ------------------------------------------------------------------ */
 
+int
+cbx_profile_diagram_apply_selection(cbx_profile_diagram *diag,
+                                     SDL_Texture *tex,
+                                     const char *icon_name,
+                                     cbx_diag_provenance provenance)
+{
+    if (!diag)
+        return -EINVAL;
+    const cbx_diag_device_layout *entry = catalog_for_icon(icon_name);
+    if (!entry)
+        return -ENOENT;
+
+    if (diag->owns_base_texture && diag->base_texture &&
+        diag->base_texture != tex)
+        SDL_DestroyTexture(diag->base_texture);
+    diag->base_texture = tex;
+    diag->owns_base_texture = false;
+    diag->btn_table = tex ? entry->table : NULL;
+    snprintf(diag->resolved_icon, sizeof(diag->resolved_icon), "%s", entry->icon);
+    snprintf(diag->asset_filename, sizeof(diag->asset_filename), "%s",
+             entry->asset_filename);
+    snprintf(diag->model_label, sizeof(diag->model_label), "%s",
+             entry->model_label);
+    diag->provenance = provenance;
+    return tex ? 0 : -ENOENT;
+}
+
 void
 cbx_profile_diagram_set_base_image(cbx_profile_diagram *diag,
                                      SDL_Texture *tex)
 {
     if (!diag)
         return;
-    if (!tex)
-        return;                       /* keep whatever base we have */
     if (tex == diag->base_texture)
-        return;                       /* do not destroy then re-adopt the same texture */
-
-    /* Free any texture we own before adopting a borrowed cache texture. */
-    if (diag->owns_base_texture && diag->base_texture) {
+        return;
+    if (diag->owns_base_texture && diag->base_texture)
         SDL_DestroyTexture(diag->base_texture);
-        diag->base_texture = NULL;
-    }
     diag->base_texture = tex;
-    diag->owns_base_texture = false;   /* icon cache owns it */
+    diag->owns_base_texture = false;
+    if (!tex)
+        diag->btn_table = NULL;
 }
 
 void
@@ -450,14 +509,60 @@ cbx_profile_diagram_set_device(cbx_profile_diagram *diag,
 bool
 cbx_profile_diagram_device_geometry_known(const char *icon_name)
 {
-    /* NULL/empty -> default generic device, always geometry-verified. */
-    if (!icon_name || icon_name[0] == '\0')
-        return true;
+    return catalog_for_icon((!icon_name || !icon_name[0])
+                            ? "generic-gamepad" : icon_name) != NULL;
+}
+
+bool
+cbx_profile_diagram_catalog_asset(const char *icon_name,
+                                   const char **asset_filename,
+                                   const char **model_label)
+{
+    const cbx_diag_device_layout *entry = catalog_for_icon(icon_name);
+    if (!entry)
+        return false;
+    if (asset_filename) *asset_filename = entry->asset_filename;
+    if (model_label) *model_label = entry->model_label;
+    return true;
+}
+
+bool
+cbx_profile_diagram_catalog_valid(void)
+{
     for (size_t i = 0; i < sizeof(s_device_layouts) / sizeof(s_device_layouts[0]); i++) {
-        if (strcmp(s_device_layouts[i].icon, icon_name) == 0)
-            return true;
+        const cbx_diag_device_layout *entry = &s_device_layouts[i];
+        if (!entry->icon || !entry->asset_filename || !entry->model_label ||
+            !entry->table || !entry->icon[0] || !entry->asset_filename[0])
+            return false;
+        for (int b = 0; b < CBX_DIAG_BTN_COUNT; b++) {
+            const cbx_diag_button_pos *p = &entry->table[b];
+            if (p->id != b || !p->name || p->x < 0.0f || p->y < 0.0f ||
+                p->w <= 0.0f || p->h <= 0.0f || p->x + p->w > 1.0f ||
+                p->y + p->h > 1.0f)
+                return false;
+        }
     }
-    return false;
+    return true;
+}
+
+const char *cbx_profile_diagram_resolved_icon(const cbx_profile_diagram *diag)
+{ return diag ? diag->resolved_icon : NULL; }
+const char *cbx_profile_diagram_asset_filename(const cbx_profile_diagram *diag)
+{ return diag ? diag->asset_filename : NULL; }
+const char *cbx_profile_diagram_model_label(const cbx_profile_diagram *diag)
+{ return diag ? diag->model_label : NULL; }
+cbx_diag_provenance cbx_profile_diagram_provenance(const cbx_profile_diagram *diag)
+{ return diag ? diag->provenance : CBX_DIAG_PROVENANCE_NONE; }
+const char *cbx_profile_diagram_provenance_name(cbx_diag_provenance p)
+{
+    switch (p) {
+    case CBX_DIAG_PROVENANCE_SUPPORTED_MODEL: return "supported-model";
+    case CBX_DIAG_PROVENANCE_PROFILE_OVERRIDE: return "profile-override";
+    case CBX_DIAG_PROVENANCE_EXPLICIT_GENERIC: return "explicit-generic";
+    case CBX_DIAG_PROVENANCE_UNSUPPORTED_FALLBACK: return "unsupported-fallback";
+    case CBX_DIAG_PROVENANCE_SUPPORTED_LOAD_FAILURE: return "supported-load-failure";
+    default: return "none";
+    }
 }
 
 const cbx_diag_button_pos *
@@ -466,11 +571,8 @@ cbx_profile_diagram_active_button_pos(const cbx_profile_diagram *diag,
 {
     if (btn < 0 || btn >= CBX_DIAG_BTN_COUNT)
         return NULL;
-    const cbx_diag_button_pos *table =
-        diag ? diag->btn_table : s_button_pos;
-    if (!table)
-        table = s_button_pos;
-    return &table[btn];
+    const cbx_diag_button_pos *table = diag ? diag->btn_table : s_button_pos;
+    return table ? &table[btn] : NULL;
 }
 
 /* ------------------------------------------------------------------ */

@@ -120,7 +120,13 @@ Browse, create, edit, and delete profiles. The **Default** profile is
 built-in, read-only, and always the fallback. New profiles can start from a
 copy of Default, an empty template, or a clone of an existing profile.
 
-The profile editor has two modes sharing one always-visible controller diagram:
+The profile editor has two modes sharing one always-visible controller diagram.
+A profile sidecar icon selects the matching installed Controllercons diagram
+for Xbox 360, Xbox One/Elite, Xbox Series, DualSense, and Steam Deck; an
+explicit generic/no-model or unsupported input uses the generic silhouette.
+Supported-asset load failure clears the diagram rather than retaining or
+substituting stale content. Initial per-model marker coordinates are
+implementation geometry pending exact human visual approval.
 
 - **Binding list**: scroll through bindings; the highlighted row lights up the
   corresponding button on the diagram. Press A to edit a binding.
@@ -204,7 +210,7 @@ A fail-closed Git commit boundary (`scripts/install-git-commit-guard.sh`, run on
 | 5a. Installed functional acceptance | `test_installed_functional` | Links against production library; starts private native-signature DBus server, creates SDL virtual controller, exercises manager + overlay lifecycle through production poll path (InterceptMode PASS→ALL activation, framebuffer readback, B-close, assignment persistence) |
 | 5b. Installed binary acceptance | `test_installed_binary` | Launches installed binary as subprocess under Xvfb with private DBus server; verifies manager launch, tab navigation, settings persistence, target creation, profile load/save, overlay activation (InterceptMode→ALL, non-blank screenshot, clean close) |
 | 5c. Kernel-backed controller | `test_kernel_controller` | Creates a synthetic evdev gamepad via `/dev/uinput`, launches installed Manager binary with private DBus server, sends real kernel gamepad events (D-pad, A/B/Start) through production event loop, verifies semantic outcomes (manager survival, settings persistence). Skips (exit 77) when `/dev/uinput` is unavailable locally; the `kernel-uinput` runner capability IS declared in `.factory/environment.toml`. The `26df6c0` receipt is legacy unsigned/unevidenced; valid signed evidence at historical commit `c45336a` is stale, so neither proves the current tree (FACT-007). See SPEC §5.7 for controller acceptance requirements. |
-| 5d. Installed diagram semantic acceptance | `test_installed_diagram` | Drives the real installed `controller-box --manager` through a real X11 window to the profile editor and asserts recognizable controller-diagram content (outline, slot highlight, model label, binding list) via the production path — proves the production diagram rendering path (BUG-0014) |
+| 5d. Installed diagram semantic acceptance | `test_installed_diagram` | Installs to an isolated prefix, drives the real X11 production event path to an Xbox 360 sidecar profile, and asserts the non-generic installed Controllercons asset/provenance, sufficient raster, aspect, binding list, and A-highlight region. This is deterministic software evidence only; BUG-0018 remains blocked on signed real-GPU/window evidence and human review. |
 | 6. Backend smoke | `test_backend_smoke` | Exercises accelerated renderer (OpenGL/ES) with same invariants; skips (exit 77) in headless environments |
 | 7. Human release acceptance | (documented process) | Human reviews captures on target hardware for legibility, clipping, contrast, controller-only usability |
 

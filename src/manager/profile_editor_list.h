@@ -99,7 +99,9 @@ typedef struct {
      * instead of a hardcoded generic-gamepad path.  Owned by the editor. */
     cbx_icon_map      icon_map;
     cbx_icon_cache    icon_cache;
-    char              device_type[CBX_ICON_TYPE_LEN]; /* resolved DeviceType */
+    char              device_type[CBX_ICON_TYPE_LEN]; /* requested DeviceType */
+    char              icon_override[CBX_ICON_ICON_LEN]; /* sidecar override */
+    int               icon_map_status;
 
     /* --- DBus deps (borrowed, optional) --------------------------- */
     const ip_dbus_backend *backend;
@@ -166,6 +168,13 @@ int cbx_profile_editor_init(cbx_profile_editor *ed,
  */
 int cbx_profile_editor_set_device(cbx_profile_editor *ed,
                                    const char *device_type);
+
+/* Resolve device type plus optional profile-sidecar icon override.  The
+ * override has precedence.  Supported-load failure clears the diagram and
+ * returns an error; it never substitutes generic or retains stale content. */
+int cbx_profile_editor_set_diagram_selection(cbx_profile_editor *ed,
+                                              const char *device_type,
+                                              const char *icon_override);
 
 /*
  * Shut down and free all resources.  Safe on a zeroed struct.
@@ -314,6 +323,11 @@ bool            cbx_profile_editor_is_capture_active(
 
 /* Check if the profile has unsaved edits (dirty flag). */
 bool            cbx_profile_editor_is_dirty(const cbx_profile_editor *ed);
+const char     *cbx_profile_editor_resolved_icon(const cbx_profile_editor *ed);
+const char     *cbx_profile_editor_resolved_asset(const cbx_profile_editor *ed);
+const char     *cbx_profile_editor_model_label(const cbx_profile_editor *ed);
+cbx_diag_provenance cbx_profile_editor_diagram_provenance(
+    const cbx_profile_editor *ed);
 
 /* ------------------------------------------------------------------ */
 /*  Sequential binding mode (Task 38)                                */

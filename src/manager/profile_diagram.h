@@ -65,6 +65,15 @@ typedef struct {
 /*  Diagram widget                                                     */
 /* ------------------------------------------------------------------ */
 
+typedef enum {
+    CBX_DIAG_PROVENANCE_NONE = 0,
+    CBX_DIAG_PROVENANCE_SUPPORTED_MODEL,
+    CBX_DIAG_PROVENANCE_PROFILE_OVERRIDE,
+    CBX_DIAG_PROVENANCE_EXPLICIT_GENERIC,
+    CBX_DIAG_PROVENANCE_UNSUPPORTED_FALLBACK,
+    CBX_DIAG_PROVENANCE_SUPPORTED_LOAD_FAILURE,
+} cbx_diag_provenance;
+
 typedef struct {
     cbx_widget base;
     SDL_Texture *base_texture;   /* controller image (owned if owns_base) */
@@ -73,6 +82,10 @@ typedef struct {
     cbx_diag_button highlighted;  /* currently highlighted button, -1 = none */
     SDL_Color highlight_color;
     const cbx_theme *theme;       /* borrowed */
+    char resolved_icon[128];      /* read-only through accessors below */
+    char asset_filename[128];
+    char model_label[128];
+    cbx_diag_provenance provenance;
 } cbx_profile_diagram;
 
 /* ------------------------------------------------------------------ */
@@ -139,14 +152,18 @@ int cbx_profile_diagram_button_count(void);
 /*  Device-mapped base image & marker layout (BUG-0018)               */
 /* ------------------------------------------------------------------ */
 /*
- * Adopt a base image texture that is owned by the production icon cache
- * (i.e. resolved through cbx_icon_lookup / cbx_icon_map / cbx_icon_cache)
- * rather than rasterised ad-hoc from a hand-built path.  The texture is
- * BORROWED: the icon cache keeps ownership and destroys it, so the diagram
- * must not.  Any texture the diagram currently owns is freed first.
- *
- * A NULL tex is a no-op (the diagram keeps whatever base it has).
+ * Atomically replace texture, layout and provenance from the strict diagram
+ * catalog.  The texture is borrowed from the icon cache.  A NULL texture
+ * clears both texture and layout, preventing stale supported assets from
+ * surviving a failed selection.  Returns -ENOENT for an unsupported icon.
  */
+int cbx_profile_diagram_apply_selection(cbx_profile_diagram *diag,
+                                        SDL_Texture *tex,
+                                        const char *icon_name,
+                                        cbx_diag_provenance provenance);
+
+/* Compatibility texture setter.  NULL now clears rather than retaining the
+ * previous texture.  Production selection uses apply_selection(). */
 void cbx_profile_diagram_set_base_image(cbx_profile_diagram *diag,
                                         SDL_Texture *tex);
 
@@ -170,7 +187,23 @@ void cbx_profile_diagram_set_device(cbx_profile_diagram *diag,
  */
 bool cbx_profile_diagram_device_geometry_known(const char *icon_name);
 
-/* Active-table position lookup for a button.  Returns NULL for invalid IDs. */
+/* Strict catalog metadata and validation.  Coordinates are implementation
+ * values pending exact human visual approval; they are not claimed calibrated. */
+bool cbx_profile_diagram_catalog_asset(const char *icon_name,
+                                       const char **asset_filename,
+                                       const char **model_label);
+bool cbx_profile_diagram_catalog_valid(void);
+
+/* Read-only resolved selection provenance for semantic production tests. */
+const char *cbx_profile_diagram_resolved_icon(const cbx_profile_diagram *diag);
+const char *cbx_profile_diagram_asset_filename(const cbx_profile_diagram *diag);
+const char *cbx_profile_diagram_model_label(const cbx_profile_diagram *diag);
+cbx_diag_provenance cbx_profile_diagram_provenance(
+    const cbx_profile_diagram *diag);
+const char *cbx_profile_diagram_provenance_name(cbx_diag_provenance provenance);
+
+/* Active-table position lookup for a button.  Returns NULL for invalid IDs or
+ * a cleared/failed selection. */
 const cbx_diag_button_pos *cbx_profile_diagram_active_button_pos(
     const cbx_profile_diagram *diag, cbx_diag_button btn);
 

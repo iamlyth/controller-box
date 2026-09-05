@@ -15,17 +15,21 @@ virtual_types:
   # --- Xbox family ---
   - type: "xb360"
     icon: "cc-xbox-360"
+    asset: "xbox-360.svg"
     name: "Xbox 360 Controller"
   - type: "xbox-elite"
     icon: "cc-xbox-one"
+    asset: "xbox-one.svg"
     name: "Xbox One Elite Controller"
   - type: "xbox-series"
     icon: "cc-xbox-series-x"
+    asset: "xbox-series-x.svg"
     name: "Xbox Series S|X Controller"
 
   # --- PlayStation family ---
   - type: "ds5"
     icon: "cc-ps5"
+    asset: "ps5.svg"
     name: "DualSense"
   - type: "ds5-usb"
     icon: "cc-ps5"
@@ -46,6 +50,7 @@ virtual_types:
   # --- Steam Deck ---
   - type: "deck"
     icon: "cc-steam-deck"
+    asset: "steam-deck.svg"
     name: "Steam Deck Controller"
   - type: "deck-uhid"
     icon: "cc-steam-deck"
@@ -54,6 +59,7 @@ virtual_types:
   # --- Generic gamepad ---
   - type: "gamepad"
     icon: "generic-gamepad"
+    asset: "generic-gamepad.svg"
     name: "Generic Gamepad"
   - type: "unified-gamepad"
     icon: "generic-gamepad"

@@ -13,6 +13,7 @@
 #include <SDL2/SDL.h>
 #include <errno.h>
 #include <limits.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,8 +24,8 @@
 #include "icons/icon_map.h"          /* cbx_icon_map_lookup / default path */
 #include "icons/icon_cache.h"        /* cbx_icon_cache_init / load_one */
 
-/* Diagram base raster resolution (matches profile_diagram.c). */
-#define CBX_PE_DIAGRAM_RASTER 512
+/* Logical diagram extent; raster size is derived from renderer scale. */
+#define CBX_PE_DIAGRAM_RASTER 300
 
 /* ------------------------------------------------------------------ */
 /*  Layout constants                                                  */
@@ -116,6 +117,22 @@ source_to_diag_button(const cbx_source_event *se)
 /*
  * Update the diagram highlight to match the current list selection.
  */
+static void
+update_editor_title(cbx_profile_editor *ed)
+{
+    if (!ed)
+        return;
+    const char *profile = (ed->profile_loaded && ed->profile.name[0])
+                          ? ed->profile.name : "Profile Editor";
+    const char *model = cbx_profile_diagram_model_label(&ed->diagram);
+    char title[CBX_PE_LABEL_LEN];
+    if (model && model[0])
+        snprintf(title, sizeof(title), "%.110s — %.110s", profile, model);
+    else
+        snprintf(title, sizeof(title), "%s", profile);
+    cbx_label_set_text(&ed->title_lbl, title);
+}
+
 static void
 sync_diagram_highlight(cbx_profile_editor *ed)
 {
@@ -258,17 +275,31 @@ cbx_profile_editor_init(cbx_profile_editor *ed,
     cbx_icon_map_init(&ed->icon_map);
     {
         char icon_map_path[512];
-        if (cbx_icon_map_default_path(icon_map_path, sizeof(icon_map_path)) == 0)
-            cbx_icon_map_load(&ed->icon_map, icon_map_path);  /* best-effort */
+        ed->icon_map_status = cbx_icon_map_default_path(icon_map_path,
+                                                        sizeof(icon_map_path));
+        if (ed->icon_map_status == 0)
+            ed->icon_map_status = cbx_icon_map_load(&ed->icon_map, icon_map_path);
     }
-    cbx_icon_cache_init(&ed->icon_cache, renderer, cbx_icon_dir(),
-                        CBX_PE_DIAGRAM_RASTER);
+    float sx = 1.0f, sy = 1.0f;
+    SDL_RenderGetScale(renderer, &sx, &sy);
+    int logical_w = 0, logical_h = 0, output_w = 0, output_h = 0;
+    SDL_RenderGetLogicalSize(renderer, &logical_w, &logical_h);
+    if (SDL_GetRendererOutputSize(renderer, &output_w, &output_h) == 0 &&
+        logical_w > 0 && logical_h > 0) {
+        float ox = (float)output_w / (float)logical_w;
+        float oy = (float)output_h / (float)logical_h;
+        if (ox > sx) sx = ox;
+        if (oy > sy) sy = oy;
+    }
+    float renderer_scale = sx > sy ? sx : sy;
+    if (renderer_scale < 1.0f) renderer_scale = 1.0f;
+    int raster_size = (int)ceilf(CBX_PE_DIAGRAM_RASTER * renderer_scale);
+    cbx_icon_cache_init(&ed->icon_cache, renderer, cbx_icon_dir(), raster_size);
     ed->device_type[0] = '\0';
 
     int rc = cbx_profile_diagram_init(&ed->diagram, renderer, NULL, theme);
     if (rc != 0)
         return rc;
-    cbx_profile_editor_set_device(ed, NULL);   /* resolve default diagram */
     SDL_Rect diag_rect = { px + 16, py + CBX_PE_TITLE_H, CBX_PE_DIAGRAM_W,
                             CBX_PE_DIAGRAM_H };
     cbx_widget_set_rect(&ed->diagram.base, &diag_rect);
@@ -282,6 +313,7 @@ cbx_profile_editor_init(cbx_profile_editor *ed,
     }
     SDL_Rect title_rect = { px + 16, py + 8, CBX_PE_DIAGRAM_W, CBX_PE_TITLE_H };
     cbx_widget_set_rect(&ed->title_lbl.base, &title_rect);
+    cbx_profile_editor_set_diagram_selection(ed, NULL, NULL);
 
     /* --- Binding list (right panel) ------------------------------- */
     rc = cbx_list_init(&ed->binding_list, font_id, cache, theme);
@@ -390,57 +422,105 @@ cbx_profile_editor_shutdown(cbx_profile_editor *ed)
 /*  Device-mapped diagram resolution (BUG-0018)                       */
 /* ------------------------------------------------------------------ */
 
-/*
- * Re-resolve the diagram base SVG + marker layout for a device type
- * through the production icon mapping utilities.  Only icons with a
- * registered, geometry-verified marker table (cbx_profile_diagram_device_
- * geometry_known) are shown with markers; any other device keeps the
- * generic-gamepad asset whose control geometry matches its marker table,
- * so no marker floats off a control (BUG-0018).
- */
+static const cbx_icon_entry *
+map_entry_for_type(const cbx_icon_map *map, const char *type)
+{
+    if (!map || !map->loaded || !type)
+        return NULL;
+    for (int i = 0; i < map->count; i++)
+        if (strcmp(map->entries[i].type, type) == 0)
+            return &map->entries[i];
+    return NULL;
+}
+
 int
-cbx_profile_editor_set_device(cbx_profile_editor *ed,
-                               const char *device_type)
+cbx_profile_editor_set_diagram_selection(cbx_profile_editor *ed,
+                                          const char *device_type,
+                                          const char *icon_override)
 {
     if (!ed)
         return -EINVAL;
+    snprintf(ed->device_type, sizeof(ed->device_type), "%s",
+             device_type ? device_type : "");
+    snprintf(ed->icon_override, sizeof(ed->icon_override), "%s",
+             icon_override ? icon_override : "");
 
-    if (device_type)
-        strncpy(ed->device_type, device_type, sizeof(ed->device_type) - 1);
-    else
-        ed->device_type[0] = '\0';
-    ed->device_type[sizeof(ed->device_type) - 1] = '\0';
-
-    /* Resolve the device -> icon name through the production icon map.
-     * A NULL/empty device type (no connected/identified device) resolves
-     * directly to the default generic-gamepad asset, matching the icon
-     * map's own unknown-type default. */
-    char icon_name[CBX_ICON_ICON_LEN];
-    if (ed->device_type[0] == '\0') {
-        snprintf(icon_name, sizeof(icon_name), "%s", CBX_ICON_DEFAULT_ICON);
-    } else {
+    char icon_name[CBX_ICON_ICON_LEN] = CBX_ICON_DEFAULT_ICON;
+    cbx_diag_provenance provenance = CBX_DIAG_PROVENANCE_EXPLICIT_GENERIC;
+    if (ed->icon_override[0]) {
+        if (cbx_profile_diagram_device_geometry_known(ed->icon_override)) {
+            snprintf(icon_name, sizeof(icon_name), "%s", ed->icon_override);
+            provenance = strcmp(icon_name, CBX_ICON_DEFAULT_ICON) == 0
+                         ? CBX_DIAG_PROVENANCE_EXPLICIT_GENERIC
+                         : CBX_DIAG_PROVENANCE_PROFILE_OVERRIDE;
+        } else {
+            provenance = CBX_DIAG_PROVENANCE_UNSUPPORTED_FALLBACK;
+        }
+    } else if (ed->device_type[0]) {
+        if (ed->icon_map_status != 0) {
+            cbx_profile_diagram_apply_selection(&ed->diagram, NULL,
+                CBX_ICON_DEFAULT_ICON,
+                CBX_DIAG_PROVENANCE_SUPPORTED_LOAD_FAILURE);
+            update_editor_title(ed);
+            return ed->icon_map_status;
+        }
+        const cbx_icon_entry *mapped_entry = map_entry_for_type(
+            &ed->icon_map, ed->device_type);
+        bool mapped = mapped_entry != NULL;
         char display[CBX_ICON_NAME_LEN];
         cbx_icon_map_lookup(&ed->icon_map, ed->device_type,
-                            icon_name, sizeof(icon_name),
-                            display, sizeof(display));
+                            icon_name, sizeof(icon_name), display,
+                            sizeof(display));
+        if (!mapped || !cbx_profile_diagram_device_geometry_known(icon_name)) {
+            snprintf(icon_name, sizeof(icon_name), "%s", CBX_ICON_DEFAULT_ICON);
+            provenance = CBX_DIAG_PROVENANCE_UNSUPPORTED_FALLBACK;
+        } else {
+            provenance = strcmp(icon_name, CBX_ICON_DEFAULT_ICON) == 0
+                         ? CBX_DIAG_PROVENANCE_EXPLICIT_GENERIC
+                         : CBX_DIAG_PROVENANCE_SUPPORTED_MODEL;
+        }
     }
 
-    /* Geometry guard: only display an SVG whose marker layout is verified.
-     * Unknown/unregistered devices fall back to the generic-gamepad asset
-     * so markers stay aligned to controls (BUG-0018). */
-    if (icon_name[0] == '\0' ||
-        !cbx_profile_diagram_device_geometry_known(icon_name))
-        snprintf(icon_name, sizeof(icon_name), "%s", CBX_ICON_DEFAULT_ICON);
+    const char *asset = NULL;
+    if (!cbx_profile_diagram_catalog_asset(icon_name, &asset, NULL))
+        return -ENOENT;
+    const cbx_icon_entry *mapped_entry = map_entry_for_type(
+        &ed->icon_map, ed->device_type);
+    if (!ed->icon_override[0] && mapped_entry && mapped_entry->asset[0] &&
+        strcmp(mapped_entry->asset, asset) != 0) {
+        cbx_profile_diagram_apply_selection(&ed->diagram, NULL, icon_name,
+            CBX_DIAG_PROVENANCE_SUPPORTED_LOAD_FAILURE);
+        update_editor_title(ed);
+        return -EINVAL;
+    }
+    int rc = cbx_icon_cache_load_asset(&ed->icon_cache, icon_name, asset);
+    SDL_Texture *tex = rc == 0 ? cbx_icon_cache_get(&ed->icon_cache, icon_name) : NULL;
+    if (!tex) {
+        cbx_profile_diagram_apply_selection(&ed->diagram, NULL, icon_name,
+            provenance == CBX_DIAG_PROVENANCE_UNSUPPORTED_FALLBACK
+            ? provenance : CBX_DIAG_PROVENANCE_SUPPORTED_LOAD_FAILURE);
+        update_editor_title(ed);
+        fprintf(stderr, "profile-diagram: icon=%s asset=%s provenance=%s result=cleared\n",
+                icon_name, asset,
+                cbx_profile_diagram_provenance_name(
+                    cbx_profile_diagram_provenance(&ed->diagram)));
+        return rc != 0 ? rc : -ENOENT;
+    }
+    rc = cbx_profile_diagram_apply_selection(&ed->diagram, tex, icon_name,
+                                              provenance);
+    update_editor_title(ed);
+    int rw = 0, rh = 0;
+    cbx_icon_cache_get_dims(&ed->icon_cache, icon_name, &rw, &rh);
+    fprintf(stderr, "profile-diagram: icon=%s asset=%s provenance=%s raster=%dx%d result=loaded\n",
+            icon_name, asset, cbx_profile_diagram_provenance_name(provenance),
+            rw, rh);
+    return rc;
+}
 
-    /* Load the resolved icon through the production icon cache (no ad-hoc
-     * path building) and adopt the cache-owned texture as the base image. */
-    cbx_icon_cache_load_one(&ed->icon_cache, icon_name);
-    SDL_Texture *tex = cbx_icon_cache_get(&ed->icon_cache, icon_name);
-    if (tex)
-        cbx_profile_diagram_set_base_image(&ed->diagram, tex);
-    cbx_profile_diagram_set_device(&ed->diagram, icon_name);
-
-    return 0;
+int
+cbx_profile_editor_set_device(cbx_profile_editor *ed, const char *device_type)
+{
+    return cbx_profile_editor_set_diagram_selection(ed, device_type, NULL);
 }
 
 /* ------------------------------------------------------------------ */
@@ -458,12 +538,7 @@ cbx_profile_editor_load_profile(cbx_profile_editor *ed,
     ed->profile_loaded = true;
     ed->dirty = false;             /* fresh load: no unsaved edits */
 
-    /* Update title */
-    if (ed->profile.name[0])
-        cbx_label_set_text(&ed->title_lbl, ed->profile.name);
-    else
-        cbx_label_set_text(&ed->title_lbl, "Profile Editor");
-
+    update_editor_title(ed);
     return cbx_profile_editor_refresh(ed);
 }
 
@@ -1078,4 +1153,17 @@ cbx_profile_editor_is_dirty(const cbx_profile_editor *ed)
     if (!ed)
         return false;
     return ed->dirty;
+}
+
+const char *cbx_profile_editor_resolved_icon(const cbx_profile_editor *ed)
+{ return ed ? cbx_profile_diagram_resolved_icon(&ed->diagram) : NULL; }
+const char *cbx_profile_editor_resolved_asset(const cbx_profile_editor *ed)
+{ return ed ? cbx_profile_diagram_asset_filename(&ed->diagram) : NULL; }
+const char *cbx_profile_editor_model_label(const cbx_profile_editor *ed)
+{ return ed ? cbx_profile_diagram_model_label(&ed->diagram) : NULL; }
+cbx_diag_provenance
+cbx_profile_editor_diagram_provenance(const cbx_profile_editor *ed)
+{
+    return ed ? cbx_profile_diagram_provenance(&ed->diagram)
+              : CBX_DIAG_PROVENANCE_NONE;
 }

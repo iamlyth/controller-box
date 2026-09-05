@@ -428,16 +428,18 @@ given `DeviceType`. Unknown types fall back to `generic-gamepad` with the raw
 type string as the label.
 
 SVG files live in `/usr/share/controller-box/icons/svg/`. Controllercons
-icons are prefixed `cc-` (e.g. `cc-xbox-360`, `cc-ps5`).  The mapping table
-in `controller-icons.yaml` references three project custom icons under the
-`cc-` prefix as well (`cc-steam-deck`, `cc-mouse`, `cc-keyboard`), although
-their SVG files use plain names (`steam-deck.svg`, `mouse.svg`,
-`keyboard.svg`); the `cc-` prefix is stripped before file lookup.  Other
-custom icons (`generic-gamepad`, `arcade-stick`, `hitbox`) use plain names.
+public icon IDs retain the `cc-` prefix (for example `cc-xbox-360` and
+`cc-ps5`). Diagram-capable mappings include an explicit installed `asset:`
+filename; the strict diagram catalog independently binds that icon ID to a
+complete normalized control layout and rejects mismatches. Ordinary icon
+consumers retain compatibility filename lookup, but the profile-editor diagram
+does not infer licensed filenames by stripping `cc-`.
 
-To add a new device type mapping, append an entry to `controller-icons.yaml`
-under `virtual_types:`. To add a new icon, place the SVG in the icons directory
-and reference it by filename (without `.svg`).
+The supported diagram catalog currently covers Xbox 360, Xbox One/Elite, Xbox
+Series, DualSense/PS5, Steam Deck, and generic-gamepad. Its initial coordinates
+are implementation values pending exact visual approval, not a claim of human
+calibration. Adding diagram support requires the mapping asset, strict catalog
+entry, complete control coordinates, semantic tests, and visual review.
 
 ### Icon override (profile sidecar)
 
@@ -1064,19 +1066,24 @@ non-NULL texture, a fallback rectangle, or a broad pixel-count change.
    directory so `ICON_DIR` resolves to the installed share tree at runtime
    (no source-tree/env-var injection; the installed layout must load the
    diagram asset itself).
-2. Verifies the installed layout delivers `generic-gamepad.svg` to
-   `share/controller-box/icons/svg/`.
+2. Verifies the installed layout delivers the regular, non-symlink licensed
+   `xbox-360.svg`, `LICENSE.controllercons`, and `controller-icons.yaml`; the
+   strict layout authority is compiled into the regular installed binary.
 3. Starts Xvfb on display `:93` (1280×720×24) with
    `SDL_VIDEODRIVER=x11` / `SDL_RENDER_DRIVER=software`, and a temporary
    HOME carrying DejaVuSans.ttf.
 4. Launches the installed manager, uses `xdotool` pointer dispatch to click
    the Profiles tab, select the test-owned profile, and open the profile
    editor.
-5. Captures the editor window with ImageMagick `import` and asserts, in the
-   diagram region, recognizable content: a black controller-outline silhouette
-   (≥5000 px), a focus-colored slot highlight, the title/model label, and the
-   binding list.
+5. Uses a sidecar `icon: cc-xbox-360`, captures the editor window, and asserts
+   explicit non-generic icon/asset/fallback provenance, a sufficiently large
+   raster, recognizable licensed silhouette, aspect-correct visible extent,
+   title/model and binding text, and an A-highlight centroid in an independent
+   expected control region. It emits `SEMANTIC_DIAGRAM_*` and
+   `SEMANTIC_HIGHLIGHT` markers for later capability binding.
 6. If Xvfb, xdotool, or ImageMagick is unavailable it exits 77 (Skipped).
+   A local pass is deterministic software/Xvfb evidence, not signed real-GPU
+   or human acceptance for BUG-0018.
 
 ### Environment independence (Task 8)
 
