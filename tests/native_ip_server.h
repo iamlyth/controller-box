@@ -29,6 +29,7 @@ typedef struct {
     const char *version;          /* Version string (e.g. "9.8.7", "0.78.0") */
     unsigned    publication_delay_ms; /* Create reply precedes OM publication */
     unsigned    removal_delay_ms;     /* Stop reply precedes OM disappearance */
+    unsigned    attachment_delay_ms;  /* replacement precedes TargetDevices state */
     bool        reverse_object_order; /* exercise unordered OM dictionaries */
     bool        fail_stop;
     bool        fail_attach;

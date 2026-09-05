@@ -219,7 +219,7 @@ wait_for_server(const ip_dbus_backend *backend, ip_bus_handle bus,
 /* ================================================================== */
 
 static void
-mn_setup_common(mn_fixture *f, bool fail_create)
+mn_setup_common(mn_fixture *f, bool fail_create, bool delayed)
 {
     /* Isolated HOME */
     snprintf(f->tmp_home, sizeof(f->tmp_home),
@@ -256,7 +256,11 @@ mn_setup_common(mn_fixture *f, bool fail_create)
     if (fail_create)
         g_nip_fail_next_create = 1;
 
-    const nip_server_config cfg = { .num_composites = 2, .version = "0.78.0" };
+    const nip_server_config cfg = {
+        .num_composites = 2, .version = "0.78.0",
+        .publication_delay_ms = delayed ? 20u : 0u,
+        .removal_delay_ms = delayed ? 20u : 0u
+    };
     f->server_pid = nip_fork_server(f->bus_address, &cfg);
     assert_true(f->server_pid > 0);
 
@@ -296,7 +300,7 @@ mn_setup(void **state)
     f->joy_device_index = -1;
     f->daemon_pid = -1;
     f->server_pid = -1;
-    mn_setup_common(f, false);
+    mn_setup_common(f, false, false);
     *state = f;
     return 0;
 }
@@ -309,7 +313,20 @@ mn_setup_fail(void **state)
     f->joy_device_index = -1;
     f->daemon_pid = -1;
     f->server_pid = -1;
-    mn_setup_common(f, true);
+    mn_setup_common(f, true, false);
+    *state = f;
+    return 0;
+}
+
+static int
+mn_setup_delayed(void **state)
+{
+    mn_fixture *f = calloc(1, sizeof(*f));
+    assert_non_null(f);
+    f->joy_device_index = -1;
+    f->daemon_pid = -1;
+    f->server_pid = -1;
+    mn_setup_common(f, false, true);
     *state = f;
     return 0;
 }
@@ -383,6 +400,95 @@ test_m04_list_select_pointer(void **state)
     send_mouse_click(&mgr, cx, cy);
     assert_true(ct->device_list.base.focused);
 
+    cbx_manager_shutdown(&mgr);
+}
+
+/* ================================================================== */
+/*  Atomic mutations with delayed native publication/removal           */
+/* ================================================================== */
+
+static int native_target_count(mn_fixture *f)
+{
+    cbx_device_model model;
+    assert_int_equal(cbx_objectmanager_enumerate(f->backend, f->bus, &model), 0);
+    return model.target_count;
+}
+
+static void pointer_add_first_type(cbx_manager *mgr)
+{
+    cbx_controllers_tab *ct = cbx_manager_controllers_tab(mgr);
+    int x, y;
+    widget_center(&ct->add_btn.base, &x, &y);
+    send_mouse_click(mgr, x, y);
+    assert_int_equal(cbx_controllers_tab_mode(ct), CBX_CT_MODE_TYPE_PICK);
+    send_mouse_click(mgr, list_center_x(&ct->type_picker),
+                     list_item_y(&ct->type_picker, 0));
+}
+
+static void test_delayed_add_remove_pointer_atomic(void **state)
+{
+    mn_fixture *f = *state;
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+    pump_manager(&mgr);
+    assert_int_equal(native_target_count(f), 0);
+
+    pointer_add_first_type(&mgr);
+    assert_int_equal(native_target_count(f), 1);
+    cbx_controllers_tab *ct = cbx_manager_controllers_tab(&mgr);
+    assert_int_equal(cbx_controllers_tab_device_count(ct), 1);
+
+    send_mouse_click(&mgr, list_center_x(&ct->device_list),
+                     list_item_y(&ct->device_list, 0));
+    int x, y;
+    widget_center(&ct->remove_btn.base, &x, &y);
+    send_mouse_click(&mgr, x, y);
+    assert_int_equal(native_target_count(f), 0);
+    assert_int_equal(cbx_controllers_tab_device_count(ct), 0);
+    cbx_manager_shutdown(&mgr);
+}
+
+static void test_target_limit_checked_before_create(void **state)
+{
+    mn_fixture *f = *state;
+    for (int i = 0; i < CBX_MAX_CONTROLLERS; i++) {
+        char *path = NULL;
+        assert_int_equal(ip_manager_create_target_device(f->backend, f->bus,
+            "xb360", &path), 0);
+        free(path);
+    }
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+    pump_manager(&mgr);
+    assert_int_equal(native_target_count(f), CBX_MAX_CONTROLLERS);
+    pointer_add_first_type(&mgr);
+    assert_int_equal(native_target_count(f), CBX_MAX_CONTROLLERS);
+    assert_non_null(strstr(cbx_manager_controllers_tab(&mgr)->status_lbl.text,
+                           "Add failed"));
+    cbx_manager_shutdown(&mgr);
+}
+
+static void test_settings_write_failure_leaks_no_target(void **state)
+{
+    mn_fixture *f = *state;
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+    pump_manager(&mgr);
+
+    char blocker[PATH_MAX + 32];
+    snprintf(blocker, sizeof(blocker), "%s/not-a-directory", f->tmp_home);
+    FILE *fp = fopen(blocker, "w");
+    assert_non_null(fp);
+    fclose(fp);
+    setenv("XDG_CONFIG_HOME", blocker, 1);
+
+    pointer_add_first_type(&mgr);
+    assert_int_equal(native_target_count(f), 0);
+    assert_int_equal(cbx_controllers_tab_device_count(
+                         cbx_manager_controllers_tab(&mgr)), 0);
+    assert_non_null(strstr(cbx_manager_controllers_tab(&mgr)->status_lbl.text,
+                           "Add failed"));
+    unsetenv("XDG_CONFIG_HOME");
     cbx_manager_shutdown(&mgr);
 }
 
@@ -990,6 +1096,13 @@ int
 main(void)
 {
     const struct CMUnitTest tests[] = {
+        /* Delayed publication/removal and persistence compensation */
+        cmocka_unit_test_setup_teardown(test_delayed_add_remove_pointer_atomic,
+                                        mn_setup_delayed, mn_teardown),
+        cmocka_unit_test_setup_teardown(test_settings_write_failure_leaks_no_target,
+                                        mn_setup_delayed, mn_teardown),
+        cmocka_unit_test_setup_teardown(test_target_limit_checked_before_create,
+                                        mn_setup, mn_teardown),
         /* M04 — Controllers tab list select */
         cmocka_unit_test_setup_teardown(test_m04_list_select_controller,
                                         mn_setup, mn_teardown),

@@ -43,12 +43,16 @@ static char     s_version[32] = "9.8.7";
 static volatile sig_atomic_t s_service_running = 1;
 static unsigned s_publication_delay_ms;
 static unsigned s_removal_delay_ms;
+static unsigned s_attachment_delay_ms;
 static bool     s_reverse_object_order;
 static bool     s_fail_stop;
 static bool     s_fail_attach;
 static int      s_hide_attachment_for_composite;
 static uint64_t s_target_publish_at[NIP_MAX_TARGETS];
 static uint64_t s_target_remove_at[NIP_MAX_TARGETS];
+static uint64_t s_attachment_apply_at[NIP_MAX_COMPOSITES];
+static char s_pending_attached[NIP_MAX_COMPOSITES][NIP_MAX_ATTACHED][256];
+static int s_pending_attached_counts[NIP_MAX_COMPOSITES];
 
 /* ================================================================== */
 /*  Helpers                                                            */
@@ -74,6 +78,18 @@ static int composite_idx_from_path(const char *path)
     const char *p = strstr(path, "CompositeDevice");
     if (p) return atoi(p + strlen("CompositeDevice"));
     return -1;
+}
+
+static void apply_pending_attachment(int ci)
+{
+    if (ci < 0 || ci >= NIP_MAX_COMPOSITES ||
+        s_attachment_apply_at[ci] == 0 ||
+        monotonic_ms() < s_attachment_apply_at[ci])
+        return;
+    g_nip_attached_counts[ci] = s_pending_attached_counts[ci];
+    memcpy(g_nip_attached[ci], s_pending_attached[ci],
+           sizeof(g_nip_attached[ci]));
+    s_attachment_apply_at[ci] = 0;
 }
 
 static void stop_service(int signo)
@@ -214,10 +230,20 @@ composite_property_get(sd_bus *bus, const char *path, const char *interface,
     if (ci < 0 || ci >= NIP_MAX_COMPOSITES) return -ENOENT;
 
     if (strcmp(property, "TargetDevices") == 0) {
+        apply_pending_attachment(ci);
         int rc = sd_bus_message_open_container(reply, 'a', "s");
         if (rc < 0) return rc;
         for (int j = 0; j < g_nip_attached_counts[ci]; j++) {
             if (s_hide_attachment_for_composite == ci + 1)
+                continue;
+            bool visible = false;
+            for (int ti = 0; ti < g_nip_target_count; ti++)
+                if (target_is_visible(ti) &&
+                    strcmp(g_nip_target_paths[ti], g_nip_attached[ci][j]) == 0) {
+                    visible = true;
+                    break;
+                }
+            if (!visible)
                 continue;
             rc = sd_bus_message_append(reply, "s", g_nip_attached[ci][j]);
             if (rc < 0) break;
@@ -268,6 +294,43 @@ composite_property_set(sd_bus *bus, const char *path, const char *interface,
         int rc = sd_bus_message_read(value, "u", &mode);
         if (rc < 0) return rc;
         g_nip_intercept_mode[ci] = mode;
+        return 0;
+    }
+    if (strcmp(property, "TargetDevices") == 0) {
+        if (s_fail_attach)
+            return sd_bus_error_set(error,
+                "org.freedesktop.DBus.Error.Failed",
+                "simulated TargetDevices replacement failure");
+        int rc = sd_bus_message_enter_container(value, 'a', "s");
+        if (rc < 0) return rc;
+        s_pending_attached_counts[ci] = 0;
+        const char *target = NULL;
+        while ((rc = sd_bus_message_read_basic(value, 's', &target)) > 0) {
+            bool found = false;
+            for (int ti = 0; ti < g_nip_target_count; ti++)
+                if (target_is_visible(ti) &&
+                    strcmp(g_nip_target_paths[ti], target) == 0) {
+                    found = true;
+                    break;
+                }
+            if (!found)
+                return sd_bus_error_set(error,
+                    "org.freedesktop.DBus.Error.UnknownObject",
+                    "target not found");
+            int n = s_pending_attached_counts[ci];
+            if (n >= NIP_MAX_ATTACHED)
+                return -E2BIG;
+            snprintf(s_pending_attached[ci][n],
+                     sizeof(s_pending_attached[ci][n]), "%s", target);
+            s_pending_attached_counts[ci]++;
+        }
+        if (rc < 0) return rc;
+        rc = sd_bus_message_exit_container(value);
+        if (rc < 0) return rc;
+        s_attachment_apply_at[ci] = monotonic_ms() + s_attachment_delay_ms;
+        if (s_attachment_apply_at[ci] == 0)
+            s_attachment_apply_at[ci] = 1;
+        apply_pending_attachment(ci);
         return 0;
     }
     return -ENOENT;
@@ -359,8 +422,8 @@ static const sd_bus_vtable dbus_device_vtable[] = {
 
 static const sd_bus_vtable composite_vtable[] = {
     SD_BUS_VTABLE_START(0),
-    SD_BUS_PROPERTY("TargetDevices", "as", composite_property_get, 0,
-                    SD_BUS_VTABLE_PROPERTY_CONST),
+    SD_BUS_WRITABLE_PROPERTY("TargetDevices", "as", composite_property_get,
+                              composite_property_set, 0, 0),
     SD_BUS_PROPERTY("ProfileName", "s", composite_property_get, 0,
                     SD_BUS_VTABLE_PROPERTY_CONST),
     SD_BUS_PROPERTY("ProfilePath", "s", composite_property_get, 0,
@@ -399,8 +462,10 @@ method_create_target(sd_bus_message *m, void *userdata, sd_bus_error *error)
         return sd_bus_error_set(error, "org.freedesktop.DBus.Error.LimitsExceeded",
                                 "too many targets");
     int idx = g_nip_target_count;
+    /* Native InputPlumber object identity is independent of DeviceType;
+     * mixed models therefore retain creation/slot order. */
     snprintf(g_nip_target_paths[idx], sizeof(g_nip_target_paths[idx]),
-             "/org/shadowblip/InputPlumber/devices/target/%s%d", kind, idx);
+             "/org/shadowblip/InputPlumber/devices/target/gamepad%d", idx);
     snprintf(g_nip_target_types[idx], sizeof(g_nip_target_types[idx]), "%s", kind);
     s_target_publish_at[idx] = monotonic_ms() + s_publication_delay_ms;
     s_target_remove_at[idx] = 0;
@@ -687,6 +752,9 @@ void nip_reset_server_state(int num_composites)
 
     memset(g_nip_attached, 0, sizeof(g_nip_attached));
     memset(g_nip_attached_counts, 0, sizeof(g_nip_attached_counts));
+    memset(s_pending_attached, 0, sizeof(s_pending_attached));
+    memset(s_pending_attached_counts, 0, sizeof(s_pending_attached_counts));
+    memset(s_attachment_apply_at, 0, sizeof(s_attachment_apply_at));
 
     memset(g_nip_profile_path, 0, sizeof(g_nip_profile_path));
     memset(g_nip_profile_name, 0, sizeof(g_nip_profile_name));
@@ -753,6 +821,7 @@ pid_t nip_fork_server(const char *address, const nip_server_config *cfg)
 
     s_publication_delay_ms = cfg ? cfg->publication_delay_ms : 0;
     s_removal_delay_ms = cfg ? cfg->removal_delay_ms : 0;
+    s_attachment_delay_ms = cfg ? cfg->attachment_delay_ms : 0;
     s_reverse_object_order = cfg && cfg->reverse_object_order;
     s_fail_stop = cfg && cfg->fail_stop;
     s_fail_attach = cfg && cfg->fail_attach;

@@ -14,7 +14,7 @@
  *   LoadProfileFromYaml(yaml: s)                   — load profile from string
  *   GetProfileYaml() → s                           — dump current profile as YAML
  *   SetTargetDevices(types: as)                    — replace all target devices
- *   TargetDevices: as (r)                          — current target device paths
+ *   TargetDevices: as (rw)                         — exact attached target paths
  *   SourceDevicePaths: as (r)                     — physical source device paths
  *   PersistentId: s (r)                           — persistent identifier
  *   Name: s (r)                                    — display name
@@ -141,6 +141,14 @@ int ip_composite_get_target_devices(const ip_dbus_backend *backend,
                                       ip_bus_handle bus,
                                       const char *composite_path,
                                       char **out_value);
+
+/* Authoritatively replace the composite's attached target path set.
+ * An empty CSV clears all routing; a singleton path performs an exact
+ * assignment without retaining stale additive attachments. */
+int ip_composite_set_target_device_paths(const ip_dbus_backend *backend,
+                                          ip_bus_handle bus,
+                                          const char *composite_path,
+                                          const char *paths_csv);
 
 /*
  * Get the SourceDevicePaths property (comma-separated paths).

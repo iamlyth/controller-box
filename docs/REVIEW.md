@@ -5,6 +5,19 @@
 **Review commit base:** develop @ 93133d8
 **Scope:** Full codebase review of `src/` (23.9 KLoC, 66 files), `tests/` (62.4 KLoC, 92 files), and `docs/` (7 files) for the controller-box project — an SDL2-based overlay/manager GUI for InputPlumber DBus input routing.
 
+## 2026-08-27 product/controller remediation addendum
+
+The prior PASS predates the latest human product findings. The current local
+remediation synchronizes manager list selection with the durable selected
+virtual target, replaces additive overlay attachment with exact writable
+`TargetDevices` sets (including empty Unassigned), makes manager topology
+mutations bounded and persistence-aware, and carries ordinary mixed-model
+`DeviceType` context into the profile editor. Private native-signature tests
+exercise delayed publication/removal and exact replacement but are supplemental.
+BUG-0015 remains open pending live signed InputPlumber/system-bus routing
+evidence; BUG-0018 remains open pending installed real-GPU and human visual
+review. This addendum does not promote acceptance or supersede those gates.
+
 ## Review domains
 
 Three parallel read-only reviews were launched via independent subagents:

@@ -1994,6 +1994,84 @@ test_d08_empty_profile_create_pointer(void **state)
 }
 
 /* ================================================================== */
+/*  Mixed target selection reaches profile editor model context        */
+/* ================================================================== */
+
+static void
+create_mixed_targets(mnp_fixture *f, const char *first, const char *second)
+{
+    char *path = NULL;
+    assert_int_equal(ip_manager_create_target_device(f->backend, f->bus,
+                                                       first, &path), 0);
+    free(path); path = NULL;
+    assert_int_equal(ip_manager_create_target_device(f->backend, f->bus,
+                                                       second, &path), 0);
+    free(path);
+}
+
+static void
+open_existing_profile_from_profiles_tab(cbx_manager *mgr, SDL_Joystick *joy)
+{
+    ctrl_press(mgr, joy, 12); /* tab bar -> profile list */
+    ctrl_press(mgr, joy, 12); /* select ordinary user profile */
+    ctrl_press(mgr, joy, 12); /* list bottom -> button row */
+    ctrl_press(mgr, joy, 13); /* Delete -> Edit */
+    ctrl_press(mgr, joy, 0);  /* open editor */
+}
+
+static void
+test_mixed_second_ds5_controller_context(void **state)
+{
+    mnp_fixture *f = *state;
+    create_mixed_targets(f, "xb360", "ds5");
+    cbx_manager mgr;
+    mnp_init_manager(f, &mgr);
+    cbx_controllers_tab *ct = cbx_manager_controllers_tab(&mgr);
+    assert_int_equal(cbx_controllers_tab_device_count(ct), 2);
+
+    ctrl_press(&mgr, f->joystick, 12); /* tab bar -> real device_list */
+    ctrl_press(&mgr, f->joystick, 12); /* select later ds5 row */
+    assert_int_equal(cbx_controllers_tab_selected_device(ct), 1);
+    ctrl_press(&mgr, f->joystick, 14); /* normal tab dispatch -> Profiles */
+
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+    assert_string_equal(pt->current_device_type, "ds5");
+    open_existing_profile_from_profiles_tab(&mgr, f->joystick);
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_EDITOR);
+    assert_string_equal(cbx_profile_diagram_resolved_icon(&pt->editor.diagram),
+                        "cc-ps5");
+    assert_string_equal(cbx_profile_diagram_model_label(&pt->editor.diagram),
+                        "DualSense");
+    cbx_manager_shutdown(&mgr);
+}
+
+static void
+test_mixed_second_xb360_pointer_context(void **state)
+{
+    mnp_fixture *f = *state;
+    create_mixed_targets(f, "ds5", "xb360");
+    cbx_manager mgr;
+    mnp_init_manager(f, &mgr);
+    cbx_controllers_tab *ct = cbx_manager_controllers_tab(&mgr);
+
+    int px = list_center_x(&ct->device_list);
+    int py = list_item_y(&ct->device_list, 1);
+    send_mouse_click(&mgr, px, py); /* real hit test + list dispatch */
+    assert_int_equal(cbx_controllers_tab_selected_device(ct), 1);
+    ctrl_press(&mgr, f->joystick, 14);
+
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+    assert_string_equal(pt->current_device_type, "xb360");
+    open_existing_profile_from_profiles_tab(&mgr, f->joystick);
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_EDITOR);
+    assert_string_equal(cbx_profile_diagram_resolved_icon(&pt->editor.diagram),
+                        "cc-xbox-360");
+    assert_string_equal(cbx_profile_diagram_model_label(&pt->editor.diagram),
+                        "Xbox 360 Controller");
+    cbx_manager_shutdown(&mgr);
+}
+
+/* ================================================================== */
 /*  Test registration                                                  */
 /* ================================================================== */
 
@@ -2001,6 +2079,11 @@ int
 main(void)
 {
     const struct CMUnitTest tests[] = {
+        /* Controllers selection -> ordinary profile editor model context */
+        cmocka_unit_test_setup_teardown(test_mixed_second_ds5_controller_context,
+                                        mnp_setup, mnp_teardown),
+        cmocka_unit_test_setup_teardown(test_mixed_second_xb360_pointer_context,
+                                        mnp_setup, mnp_teardown),
         /* M10 — Profile list select */
         cmocka_unit_test_setup_teardown(test_m10_list_select_controller,
                                         mnp_setup, mnp_teardown),

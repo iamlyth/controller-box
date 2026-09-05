@@ -171,6 +171,21 @@ ip_composite_get_target_devices(const ip_dbus_backend *backend,
 }
 
 int
+ip_composite_set_target_device_paths(const ip_dbus_backend *backend,
+                                       ip_bus_handle bus,
+                                       const char *composite_path,
+                                       const char *paths_csv)
+{
+    if (!backend || !composite_path || !paths_csv)
+        return -EINVAL;
+
+    return backend->set_property(bus, IP_DBUS_NAME,
+                                  composite_path,
+                                  IP_IFACE_COMPOSITE,
+                                  "TargetDevices", paths_csv);
+}
+
+int
 ip_composite_get_source_device_paths(const ip_dbus_backend *backend,
                                         ip_bus_handle bus,
                                         const char *composite_path,

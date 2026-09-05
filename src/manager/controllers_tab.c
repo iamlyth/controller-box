@@ -96,6 +96,8 @@ format_device_label(char *buf, size_t buflen, const char *name,
 /*  Forward declarations for on_select callbacks                       */
 /* ------------------------------------------------------------------ */
 
+static void on_device_selected(cbx_widget *w, int index,
+                                void *user_data);
 static void on_type_pick_selected(cbx_widget *w, int index,
                                     void *user_data);
 
@@ -154,6 +156,7 @@ on_remove_pressed(cbx_widget *w, void *user_data)
     cbx_controllers_tab *tab = (cbx_controllers_tab *)user_data;
     if (!tab)
         return;
+    cbx_controllers_tab_sync_selection(tab);
     int idx = tab->selected_device;
     if (idx < 0 || idx >= cbx_controllers_tab_device_count(tab))
         return;
@@ -171,6 +174,7 @@ on_change_type_pressed(cbx_widget *w, void *user_data)
     cbx_controllers_tab *tab = (cbx_controllers_tab *)user_data;
     if (!tab)
         return;
+    cbx_controllers_tab_sync_selection(tab);
     int idx = tab->selected_device;
     if (idx >= 0 && idx < cbx_controllers_tab_device_count(tab))
         cbx_controllers_tab_begin_type_pick(tab, CBX_CT_ACTION_CHANGE);
@@ -210,7 +214,7 @@ cbx_controllers_tab_init(cbx_controllers_tab *tab,
     int rc = cbx_list_init(&tab->device_list, font_id, cache, theme);
     if (rc != 0)
         return rc;
-    cbx_list_set_select_cb(&tab->device_list, NULL);
+    cbx_list_set_select_cb(&tab->device_list, on_device_selected);
 
     /* --- Type picker (hidden initially) --------------------------- */
     rc = cbx_list_init(&tab->type_picker, font_id, cache, theme);
@@ -314,6 +318,21 @@ cbx_controllers_tab_shutdown(cbx_controllers_tab *tab)
     memset(tab, 0, sizeof(*tab));
 }
 
+static int
+csv_path_token_count(const char *csv)
+{
+    int tokens = 0;
+    if (!csv) return 0;
+    for (const char *p = csv; *p;) {
+        while (*p == ' ' || *p == '\t' || *p == ',') p++;
+        if (!*p) break;
+        tokens++;
+        const char *end = strchr(p, ',');
+        p = end ? end + 1 : p + strlen(p);
+    }
+    return tokens;
+}
+
 static bool
 csv_is_exact_singleton_path(const char *csv, const char *path)
 {
@@ -393,7 +412,9 @@ wait_exact_attachment(cbx_controllers_tab *tab, const char *composite,
         char *csv = NULL;
         int rc = ip_composite_get_target_devices(tab->backend, tab->bus,
                                                    composite, &csv);
-        bool exact = rc == 0 && csv_is_exact_singleton_path(csv, target);
+        bool exact = rc == 0 &&
+            (target ? csv_is_exact_singleton_path(csv, target)
+                    : csv_path_token_count(csv) == 0);
         free(csv);
         if (exact) return 0;
         if ((uint32_t)(SDL_GetTicks() - started) >=
@@ -538,7 +559,13 @@ cbx_controllers_tab_refresh(cbx_controllers_tab *tab)
     if (!tab || !tab->backend)
         return -EINVAL;
 
-    /* Re-enumerate devices without letting dictionary order redefine slots. */
+    /* Re-enumerate devices without letting dictionary order redefine slots.
+     * Preserve the visibly selected object by exact path, not by stale index. */
+    char selected_path[CBX_MAX_PATH_LEN] = "";
+    if (tab->selected_device >= 0 &&
+        tab->selected_device < tab->model.target_count)
+        snprintf(selected_path, sizeof(selected_path), "%s",
+                 tab->model.targets[tab->selected_device].path);
     cbx_device_model prior = tab->model;
     cbx_device_model next;
     int rc = cbx_objectmanager_enumerate(tab->backend, tab->bus, &next);
@@ -575,12 +602,22 @@ cbx_controllers_tab_refresh(cbx_controllers_tab *tab)
                             ? tab->device_types[i] : NULL;
         format_device_label(label, sizeof(label),
                               tab->model.targets[i].name, type);
-        /* user_data stores the index (cast through intptr_t). */
-        cbx_list_add_item(&tab->device_list, label, NULL,
-                           (void *)(intptr_t)(long)i);
+        /* Selection callback receives its owning tab through item user_data. */
+        cbx_list_add_item(&tab->device_list, label, NULL, tab);
     }
 
-    /* Clamp selection. */
+    /* Restore the same selected target after reorder.  If it disappeared,
+     * clamp to the nearest surviving row; an empty topology selects none. */
+    if (selected_path[0]) {
+        int restored = -1;
+        for (int i = 0; i < tab->model.target_count; i++)
+            if (strcmp(tab->model.targets[i].path, selected_path) == 0) {
+                restored = i;
+                break;
+            }
+        if (restored >= 0)
+            tab->selected_device = restored;
+    }
     if (tab->selected_device >= tab->model.target_count)
         tab->selected_device = tab->model.target_count - 1;
     if (tab->selected_device < 0 && tab->model.target_count > 0)
@@ -640,6 +677,12 @@ cbx_controllers_tab_add(cbx_controllers_tab *tab, const char *type)
     if (!tab || !tab->backend || !type)
         return -EINVAL;
 
+    /* Enforce the configured product limit before touching InputPlumber. */
+    if (tab->model.target_count >= CBX_MAX_CONTROLLERS ||
+        (tab->settings &&
+         tab->settings->virtual_controllers.count >= CBX_MAX_CONTROLLERS))
+        return -ENOSPC;
+
     char *out_path = NULL;
     int rc = ip_manager_create_target_device(tab->backend, tab->bus,
                                                type, &out_path);
@@ -666,16 +709,24 @@ cbx_controllers_tab_add(cbx_controllers_tab *tab, const char *type)
     }
     if (rc == 0 && tab->settings) {
         int n = tab->settings->virtual_controllers.count;
-        if (n >= CBX_MAX_CONTROLLERS) rc = -ENOSPC;
-        else {
-            snprintf(tab->settings->virtual_controllers.types[n],
-                     CBX_MAX_TYPE_LEN, "%s", type);
-            tab->settings->virtual_controllers.count = n + 1;
-            rc = cbx_settings_save(tab->settings);
-            if (rc == 0) {
-                tab->expected_target_count = n + 1;
-                check_orphan_columns(tab);
-            }
+        cbx_settings proposed = *tab->settings;
+        snprintf(proposed.virtual_controllers.types[n], CBX_MAX_TYPE_LEN,
+                 "%s", type);
+        proposed.virtual_controllers.count = n + 1;
+        rc = cbx_settings_save(&proposed);
+        if (rc == 0) {
+            *tab->settings = proposed;
+            tab->expected_target_count = n + 1;
+            check_orphan_columns(tab);
+        } else {
+            /* Persistence is part of success.  Compensate the published
+             * target and confirm its exact path disappeared. */
+            int rollback = ip_manager_stop_target_device(tab->backend,
+                                                           tab->bus, out_path);
+            if (rollback == 0)
+                rollback = refresh_until_path(tab, out_path, false, NULL);
+            if (rollback != 0)
+                show_action_error(tab, "Add reconciliation", rollback);
         }
     }
     free(out_path);
@@ -692,50 +743,84 @@ cbx_controllers_tab_remove(cbx_controllers_tab *tab, int device_index)
 
     char path[CBX_MAX_PATH_LEN];
     snprintf(path, sizeof(path), "%s", tab->model.targets[device_index].path);
-    int rc = ip_manager_stop_target_device(tab->backend, tab->bus, path);
-    if (rc != 0)
-        return rc;
 
-    rc = refresh_until_path(tab, path, false, NULL);
-    if (rc != 0)
-        return rc;
-
-    /* SPEC §5.2 / CT-02: physical controller auto-Unassigned.
-     * Load the persisted assignments, remove any assignment whose slot
-     * matches the removed device (the physical controller in that slot
-     * becomes Unassigned), and shift higher slots down by one to match
-     * the new target indexing.  Save the updated assignments. */
-    cbx_assignments asgn;
-    cbx_assignments_init(&asgn);
-    if (cbx_assignments_load(&asgn) == 0) {
-        for (int i = asgn.assignment_count - 1; i >= 0; i--) {
-            if (asgn.assignments[i].slot == device_index) {
-                /* Remove: physical controller is now Unassigned. */
-                asgn.assignments[i] =
-                    asgn.assignments[--asgn.assignment_count];
-            } else if (asgn.assignments[i].slot > device_index) {
-                /* Shift down to match new target indexing. */
-                asgn.assignments[i].slot--;
-            }
-        }
-        rc = cbx_assignments_save(&asgn);
-        if (rc != 0) return rc;
-    }
-    if (tab->settings) {
-        int n = tab->settings->virtual_controllers.count;
-        if (device_index < n) {
-            if (device_index < n - 1)
-                memmove(&tab->settings->virtual_controllers.types[device_index],
-                        &tab->settings->virtual_controllers.types[device_index + 1],
-                        (size_t)(n - device_index - 1) * CBX_MAX_TYPE_LEN);
-            tab->settings->virtual_controllers.types[n - 1][0] = '\0';
-            tab->settings->virtual_controllers.count = n - 1;
-            rc = cbx_settings_save(tab->settings);
-            if (rc != 0) return rc;
-            tab->expected_target_count = n - 1;
-        }
+    /* Prepare and persist desired state before destructive backend mutation.
+     * If either write fails, restore the first file and leave InputPlumber
+     * untouched rather than reporting a half-success. */
+    cbx_assignments old_asgn, proposed_asgn;
+    cbx_assignments_init(&old_asgn);
+    bool have_asgn = cbx_assignments_load(&old_asgn) == 0;
+    proposed_asgn = old_asgn;
+    for (int i = proposed_asgn.assignment_count - 1; i >= 0; i--) {
+        if (proposed_asgn.assignments[i].slot == device_index)
+            proposed_asgn.assignments[i] =
+                proposed_asgn.assignments[--proposed_asgn.assignment_count];
+        else if (proposed_asgn.assignments[i].slot > device_index)
+            proposed_asgn.assignments[i].slot--;
     }
 
+    char composite[CBX_MAX_PATH_LEN] = "";
+    bool assigned = assigned_composite_for_slot(tab, device_index, composite);
+
+    cbx_settings proposed_settings;
+    bool change_settings = tab->settings &&
+        device_index < tab->settings->virtual_controllers.count;
+    if (change_settings) {
+        proposed_settings = *tab->settings;
+        int n = proposed_settings.virtual_controllers.count;
+        if (device_index < n - 1)
+            memmove(&proposed_settings.virtual_controllers.types[device_index],
+                    &proposed_settings.virtual_controllers.types[device_index + 1],
+                    (size_t)(n - device_index - 1) * CBX_MAX_TYPE_LEN);
+        proposed_settings.virtual_controllers.types[n - 1][0] = '\0';
+        proposed_settings.virtual_controllers.count = n - 1;
+    }
+
+    int rc = 0;
+    bool assignments_written = false;
+    if (have_asgn) {
+        rc = cbx_assignments_save(&proposed_asgn);
+        assignments_written = rc == 0;
+    }
+    if (rc == 0 && change_settings)
+        rc = cbx_settings_save(&proposed_settings);
+    if (rc != 0) {
+        if (assignments_written)
+            (void)cbx_assignments_save(&old_asgn);
+        return rc;
+    }
+
+    if (assigned) {
+        rc = ip_composite_set_target_device_paths(tab->backend, tab->bus,
+                                                    composite, "");
+        if (rc == 0)
+            rc = wait_exact_attachment(tab, composite, NULL);
+    }
+    if (rc == 0)
+        rc = ip_manager_stop_target_device(tab->backend, tab->bus, path);
+    if (rc == 0)
+        rc = refresh_until_path(tab, path, false, NULL);
+    if (rc != 0) {
+        /* Restore persisted desired state.  If the target still exists,
+         * restore its exact singleton route; otherwise expose reconciliation
+         * failure explicitly for startup compensation. */
+        if (have_asgn) (void)cbx_assignments_save(&old_asgn);
+        if (change_settings) (void)cbx_settings_save(tab->settings);
+        if (assigned) {
+            int restore = ip_composite_set_target_device_paths(tab->backend,
+                tab->bus, composite, path);
+            if (restore == 0)
+                restore = wait_exact_attachment(tab, composite, path);
+            if (restore != 0)
+                show_action_error(tab, "Remove reconciliation", restore);
+        }
+        return rc;
+    }
+
+    if (change_settings) {
+        *tab->settings = proposed_settings;
+        tab->expected_target_count = proposed_settings.virtual_controllers.count;
+    }
     return 0;
 }
 
@@ -752,17 +837,36 @@ cbx_controllers_tab_change_type(cbx_controllers_tab *tab,
     char old_path[CBX_MAX_PATH_LEN];
     snprintf(old_path, sizeof(old_path), "%s",
              tab->model.targets[device_index].path);
+    cbx_settings proposed_settings;
+    bool settings_prepared = tab->settings &&
+        device_index < tab->settings->virtual_controllers.count;
+    if (settings_prepared) {
+        proposed_settings = *tab->settings;
+        snprintf(proposed_settings.virtual_controllers.types[device_index],
+                 CBX_MAX_TYPE_LEN, "%s", new_type);
+        int save_rc = cbx_settings_save(&proposed_settings);
+        if (save_rc != 0)
+            return save_rc;
+    }
+
     char *replacement = NULL;
     int rc = ip_manager_create_target_device(tab->backend, tab->bus,
                                                new_type, &replacement);
-    if (rc != 0) return rc;
-    if (!replacement || !replacement[0]) { free(replacement); return -EIO; }
+    if (rc != 0) {
+        if (settings_prepared) (void)cbx_settings_save(tab->settings);
+        return rc;
+    }
+    if (!replacement || !replacement[0]) {
+        free(replacement);
+        if (settings_prepared) (void)cbx_settings_save(tab->settings);
+        return -EIO;
+    }
 
     rc = refresh_until_path(tab, replacement, true, new_type);
     char composite[CBX_MAX_PATH_LEN] = "";
     if (rc == 0 && assigned_composite_for_slot(tab, device_index, composite)) {
-        rc = ip_manager_attach_target_device(tab->backend, tab->bus,
-                                               replacement, composite);
+        rc = ip_composite_set_target_device_paths(tab->backend, tab->bus,
+                                                    composite, replacement);
         if (rc == 0)
             rc = wait_exact_attachment(tab, composite, replacement);
     }
@@ -781,6 +885,7 @@ cbx_controllers_tab_change_type(cbx_controllers_tab *tab,
             rc = refresh_until_path(tab, old_path, false, NULL);
     }
     if (rc != 0) {
+        if (settings_prepared) (void)cbx_settings_save(tab->settings);
         int cleanup = ip_manager_stop_target_device(tab->backend, tab->bus,
                                                      replacement);
         if (cleanup == 0)
@@ -790,18 +895,8 @@ cbx_controllers_tab_change_type(cbx_controllers_tab *tab,
                 "controller-box: Change type cleanup failed for %s: rc=%d\n",
                 replacement, cleanup);
     }
-    if (rc == 0 && tab->settings &&
-        device_index < tab->settings->virtual_controllers.count) {
-        char prior[CBX_MAX_TYPE_LEN];
-        snprintf(prior, sizeof(prior), "%s",
-                 tab->settings->virtual_controllers.types[device_index]);
-        snprintf(tab->settings->virtual_controllers.types[device_index],
-                 CBX_MAX_TYPE_LEN, "%s", new_type);
-        rc = cbx_settings_save(tab->settings);
-        if (rc != 0)
-            snprintf(tab->settings->virtual_controllers.types[device_index],
-                     CBX_MAX_TYPE_LEN, "%s", prior);
-    }
+    if (rc == 0 && settings_prepared)
+        *tab->settings = proposed_settings;
     free(replacement);
     return rc;
 }
@@ -900,6 +995,26 @@ cbx_controllers_tab_cancel_type_pick(cbx_controllers_tab *tab)
 /* on_select callback for the type picker list.
  * Called when the user presses A (KEYUP) or clicks (MOUSEUP) on a type item.
  * Syncs the selected type index and confirms the pick. */
+static void
+on_device_selected(cbx_widget *w, int index, void *user_data)
+{
+    (void)w;
+    cbx_controllers_tab *tab = user_data;
+    if (!tab || index < 0 || index >= tab->model.target_count)
+        return;
+    tab->selected_device = index;
+}
+
+void
+cbx_controllers_tab_sync_selection(cbx_controllers_tab *tab)
+{
+    if (!tab || tab->mode != CBX_CT_MODE_LIST)
+        return;
+    int selected = cbx_list_get_selected(&tab->device_list);
+    tab->selected_device = selected >= 0 && selected < tab->model.target_count
+                         ? selected : -1;
+}
+
 static void
 on_type_pick_selected(cbx_widget *w, int index, void *user_data)
 {

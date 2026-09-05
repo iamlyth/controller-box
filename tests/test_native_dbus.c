@@ -338,7 +338,7 @@ static void test_native_target_operations(void **state)
     assert_int_equal(ip_manager_create_target_device(
         backend, bus, "xb360", &path1), 0);
     assert_non_null(path1);
-    assert_true(strstr(path1, "/devices/target/xb3601") != NULL);
+    assert_true(strstr(path1, "/devices/target/gamepad1") != NULL);
 
     /* GetManagedObjects lists both targets. */
     cbx_device_model model;

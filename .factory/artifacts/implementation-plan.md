@@ -117,6 +117,23 @@ four-target InputPlumber routing acceptance). Task 4 (final audit) remains
 
 **Core-evidence hardening checkpoint (current)**
 
+- Local product/controller remediation at the current implementation tree now
+  synchronizes `selected_device` from the real list across controller, keyboard,
+  pointer, focus, refresh, reorder, and removal paths; exact writable
+  `TargetDevices` replacement transfers P1→P2→P3→P4 and clears Unassigned;
+  manager create/remove/type operations use configured-limit checks, exact-path
+  bounded confirmation, pre-persisted desired state, and compensation; and
+  ordinary mixed Xbox 360/DualSense workflows carry selected `DeviceType` into
+  the editor without sidecars. Private native-signature tests cover delayed
+  publication/removal and settings-write failure through production dispatch.
+  This is supplemental software evidence only: BUG-0015 and BUG-0018 remain
+  open pending live signed routing evidence and installed human visual review,
+  and no conformance row or acceptance status is promoted by this work.
+  Validation: clean Nix build and focused controller/profile/editor/overlay/
+  native/integration tests pass; readiness, core-acceptance, capability-contract,
+  and `verify-boilerplate.sh` pass. Full CTest is 95/96 with only the protected
+  `test_golden` target failing its three known manager-editor baselines; two
+  declared environment tests skip. Goldens were not modified.
 - Routing evidence now requires four unique xb360 DBus targets and kernel nodes, one unambiguous real USB `045e:028e` source/composite, and four sequential fresh human presses observed by independent read-only evdev consumers. A target0 event plus three presence-only targets fails; fixture bundles are schema-v2 synthetic non-evidence.
 - GPU evidence now has the distinct declared `installed-licensed-diagram` contract on `gpurunner`. It requires exact installed Xbox 360 Controllercons asset/license/map/layout hashes, no source fallback or generic substitution, accelerated compositor capture, 512x512 raster density, preserved aspect, and A-highlight alignment against a committed independent oracle.
 - `check-core-acceptance.sh` requires signed exact-HEAD evidence for `controller-production-routing`, `gpu-compositor`, and `installed-licensed-diagram`; local pixels and prose cannot pass it.

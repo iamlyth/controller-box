@@ -285,25 +285,21 @@ static int native_setup(void **state)
     /* Use a temp assignments file in the isolated HOME. */
     /* cbx_assignments_load will look in $HOME/.config/controller-box/. */
 
-    /* 9. Create a target device on the server (needed for on_save). */
-    char *target_path = NULL;
-    assert_int_equal(ip_manager_create_target_device(f->svc->conn.backend,
-                                                      f->svc->conn.bus,
-                                                      "xb360", &target_path), 0);
-    assert_non_null(target_path);
-    free(target_path);
+    /* 9. Create the exact P1-P4 topology used by assignment tests. */
+    static const char *types[] = { "xb360", "ds5", "xb360", "ds5" };
+    for (int i = 0; i < 4; i++) {
+        char *target_path = NULL;
+        assert_int_equal(ip_manager_create_target_device(f->svc->conn.backend,
+            f->svc->conn.bus, types[i], &target_path), 0);
+        assert_non_null(target_path);
+        free(target_path);
+    }
 
-    /* Re-enumerate to pick up the new target. */
+    /* Re-enumerate to pick up the new targets. */
     assert_int_equal(cbx_objectmanager_enumerate(f->svc->conn.backend,
                                                    f->svc->conn.bus,
                                                    &f->svc->model), 0);
-    assert_int_equal(f->svc->model.target_count, 1);
-
-    /* Attach target to composite 0 (needed for on_save's AttachTargetDevice). */
-    assert_int_equal(ip_manager_attach_target_device(f->svc->conn.backend,
-                                                       f->svc->conn.bus,
-                                                       f->svc->model.targets[0].path,
-                                                       COMP_PATH_0), 0);
+    assert_int_equal(f->svc->model.target_count, 4);
 
     /* 10. Build composite info from device model. */
     f->svc->comp_count = f->svc->model.composite_count;
@@ -1256,6 +1252,72 @@ static void test_o12_host_profile_cycle_deferred(void **state)
     assert_string_equal(prof_after, prof_before);
 }
 
+/* --- Exact P1->P4 replacement and Unassigned clear --- */
+
+static int csv_tokens(const char *csv)
+{
+    int n = 0;
+    if (!csv) return 0;
+    for (const char *p = csv; *p;) {
+        while (*p == ' ' || *p == '\t' || *p == ',') p++;
+        if (!*p) break;
+        n++;
+        const char *comma = strchr(p, ',');
+        p = comma ? comma + 1 : p + strlen(p);
+    }
+    return n;
+}
+
+static void assert_exact_target_set(cbx_overlay_service_ctx *svc,
+                                    const char *composite,
+                                    const char *expected)
+{
+    char *actual = NULL;
+    assert_int_equal(ip_composite_get_target_devices(svc->conn.backend,
+        svc->conn.bus, composite, &actual), 0);
+    if (expected) {
+        assert_int_equal(csv_tokens(actual), 1);
+        assert_string_equal(actual, expected);
+    } else {
+        assert_int_equal(csv_tokens(actual), 0);
+    }
+    free(actual);
+}
+
+static void test_assignment_replaces_p1_through_p4_then_clears(void **state)
+{
+    native_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    for (int slot = 0; slot < 4; slot++) {
+        activate_overlay(f);
+        emit_input_event(svc->conn.backend, svc->conn.bus,
+                         COMP_PATH_0, "Right", 1.0);
+        drain_bus(svc->conn.backend, svc->conn.bus, 100);
+        cbx_overlay_service_step(svc);
+        emit_input_event(svc->conn.backend, svc->conn.bus,
+                         COMP_PATH_0, "B", 1.0);
+        drain_bus(svc->conn.backend, svc->conn.bus, 100);
+        cbx_overlay_service_step(svc);
+        assert_int_equal(svc->lifecycle.state, CBX_OVERLAY_IDLE);
+        assert_exact_target_set(svc, COMP_PATH_0,
+                                svc->model.targets[slot].path);
+        assert_exact_target_set(svc, COMP_PATH_1, NULL);
+    }
+
+    activate_overlay(f);
+    for (int i = 0; i < 4; i++) {
+        emit_input_event(svc->conn.backend, svc->conn.bus,
+                         COMP_PATH_0, "Left", 1.0);
+        drain_bus(svc->conn.backend, svc->conn.bus, 100);
+        cbx_overlay_service_step(svc);
+    }
+    emit_input_event(svc->conn.backend, svc->conn.bus, COMP_PATH_0, "B", 1.0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
+    cbx_overlay_service_step(svc);
+    assert_exact_target_set(svc, COMP_PATH_0, NULL);
+}
+
 /* --- O13: Conflict detection + auto-resolution on save --- */
 
 static void test_o13_conflict_resolution_on_save(void **state)
@@ -1366,6 +1428,11 @@ static const struct CMUnitTest tests[] = {
     /* O12 — Host profile cycle (deferred per §13) */
     cmocka_unit_test_setup_teardown(test_o12_host_profile_cycle_deferred,
                                      native_setup, native_teardown),
+
+    /* Exact replacement assignment and authoritative Unassigned clear */
+    cmocka_unit_test_setup_teardown(
+        test_assignment_replaces_p1_through_p4_then_clears,
+        native_setup, native_teardown),
 
     /* O13 — Conflict resolution on save */
     cmocka_unit_test_setup_teardown(test_o13_conflict_resolution_on_save,

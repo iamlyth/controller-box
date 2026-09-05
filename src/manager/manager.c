@@ -847,6 +847,8 @@ cbx_manager_handle_event(cbx_manager *mgr, const SDL_Event *ev)
         default: break;
         }
         bool result = cbx_manager_handle_mouse_event(mgr, ev);
+        if (mgr->active_tab == CBX_MGR_TAB_CONTROLLERS)
+            cbx_controllers_tab_sync_selection(&mgr->ct);
         cbx_manager_check_mode_change(mgr, prev_mode);
         return result;
     }
@@ -882,6 +884,8 @@ cbx_manager_handle_event(cbx_manager *mgr, const SDL_Event *ev)
     /* 1. Try the focused widget first. */
     cbx_widget *focused = cbx_focus_chain_get_focused_widget(&mgr->focus);
     if (focused && cbx_widget_handle_event(focused, ev)) {
+        if (mgr->active_tab == CBX_MGR_TAB_CONTROLLERS)
+            cbx_controllers_tab_sync_selection(&mgr->ct);
         cbx_manager_check_mode_change(mgr, prev_mode);
         return true;
     }
@@ -911,11 +915,19 @@ cbx_manager_handle_event(cbx_manager *mgr, const SDL_Event *ev)
             return cbx_widget_handle_event(&mgr->tabbar.base, ev);
         }
 
-        case SDLK_UP:
-            return cbx_focus_chain_navigate(&mgr->focus, CBX_NAV_UP) >= 0;
+        case SDLK_UP: {
+            bool moved = cbx_focus_chain_navigate(&mgr->focus, CBX_NAV_UP) >= 0;
+            if (mgr->active_tab == CBX_MGR_TAB_CONTROLLERS)
+                cbx_controllers_tab_sync_selection(&mgr->ct);
+            return moved;
+        }
 
-        case SDLK_DOWN:
-            return cbx_focus_chain_navigate(&mgr->focus, CBX_NAV_DOWN) >= 0;
+        case SDLK_DOWN: {
+            bool moved = cbx_focus_chain_navigate(&mgr->focus, CBX_NAV_DOWN) >= 0;
+            if (mgr->active_tab == CBX_MGR_TAB_CONTROLLERS)
+                cbx_controllers_tab_sync_selection(&mgr->ct);
+            return moved;
+        }
 
         case SDLK_RETURN:
         case SDLK_SPACE:
@@ -1240,6 +1252,7 @@ cbx_manager_on_tab_change(cbx_widget *w, int new_tab, void *user_data)
         }
         break;
     case CBX_MGR_TAB_PROFILES: {
+        cbx_controllers_tab_sync_selection(&mgr->ct);
         /* Carry only the explicit, user-visible Controllers selection into
          * the profile editor.  Never guess a target from an arbitrary slot. */
         const char *device_type = NULL;

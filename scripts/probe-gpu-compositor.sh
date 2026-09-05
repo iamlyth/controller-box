@@ -482,7 +482,7 @@ log() { # msg
 # source tree, which is deleted before launch so the installed prefix assets
 # must win.
 head_commit=$(git -C "$SCRIPT_DIR/.." rev-parse HEAD 2>/dev/null || true)
-head_tree=$(git -C "$SCRIPT_DIR/.." rev-parse HEAD^{tree} 2>/dev/null || true)
+head_tree=$(git -C "$SCRIPT_DIR/.." rev-parse 'HEAD^{tree}' 2>/dev/null || true)
 [[ "$head_commit" =~ ^[0-9a-f]{40}$ && "$head_tree" =~ ^[0-9a-f]{40}$ ]] || fail exact-commit-unresolved "cannot resolve HEAD in $SCRIPT_DIR/.."
 mkdir -p "$tmp/source"
 if ! git -C "$SCRIPT_DIR/.." archive "$head_commit" | tar -x -C "$tmp/source"; then

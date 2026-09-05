@@ -1460,6 +1460,10 @@ remain explicit. The open bug ledger `.factory/bugs/open.md` lists BUG-0015
 (real InputPlumber system-bus acceptance with four targets), BUG-0016 (proxy
 evidence promoted to production verification), and BUG-0018 (installed
 manager controller diagram renders but is materially incorrect). BUG-0015
-and BUG-0018 remain defects, not successful deferrals. The blocked-facts
-ledger separately preserves unavailable runner, real-system, physical,
-GPU, target-device, latency, and human evidence without elevation.
+and BUG-0018 remain defects, not successful deferrals. Local production-
+dispatch coverage now exercises synchronized mixed-target selection, exact
+P1→P2→P3→P4 replacement and Unassigned clearing, bounded delayed target
+publication/removal, and settings-write compensation. This remains private
+native-signature/software evidence only. The blocked-facts ledger separately
+preserves unavailable runner, real-system, physical, GPU, target-device,
+latency, and human evidence without elevation.

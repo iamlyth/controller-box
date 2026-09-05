@@ -245,6 +245,9 @@ const char *cbx_controllers_tab_device_path(const cbx_controllers_tab *tab,
                                                int index);
 const char *cbx_controllers_tab_supported_type(const cbx_controllers_tab *tab,
                                                    int index);
+/* Synchronize the durable selection with the real list widget after normal
+ * keyboard/controller/pointer/focus dispatch. */
+void cbx_controllers_tab_sync_selection(cbx_controllers_tab *tab);
 int  cbx_controllers_tab_selected_device(const cbx_controllers_tab *tab);
 cbx_ct_mode cbx_controllers_tab_mode(const cbx_controllers_tab *tab);
 

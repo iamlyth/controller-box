@@ -95,6 +95,8 @@ typedef struct {
     int                  creds_rc;    /* 0 = success; <0 to simulate creds lookup failure */
     int                  unique_name_rc; /* 0 = success; <0 to simulate get_unique_name failure */
     ip_mock_last_call    last_call;   /* most recent method call's string args */
+    char target_devices_value[IP_MOCK_LAST_ARGS_LEN]; /* writable as property state */
+    bool target_devices_written;
 } ip_dbus_mock;
 
 /* --- Mock lifecycle -------------------------------------------------------- */

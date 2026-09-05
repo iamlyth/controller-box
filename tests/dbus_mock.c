@@ -249,16 +249,29 @@ static int mock_get_property(ip_bus_handle bus, const char *dest,
     ip_dbus_mock *mock = (ip_dbus_mock *)bus;
     const ip_mock_expectation *e = ip_dbus_mock_find(mock, iface, prop);
     if (!e) return -ENXIO;
-    if (out_value) *out_value = e->value ? strdup(e->value) : NULL;
+    if (out_value) {
+        if (strcmp(iface, IP_IFACE_COMPOSITE) == 0 &&
+            strcmp(prop, "TargetDevices") == 0 &&
+            mock->target_devices_written)
+            *out_value = strdup(mock->target_devices_value);
+        else
+            *out_value = e->value ? strdup(e->value) : NULL;
+    }
     return e->rc;
 }
 
 static int mock_set_property(ip_bus_handle bus, const char *dest,
                              const char *path, const char *iface,
                              const char *prop, const char *value) {
-    (void)dest; (void)path; (void)value;
+    (void)dest; (void)path;
     ip_dbus_mock *mock = (ip_dbus_mock *)bus;
     const ip_mock_expectation *e = ip_dbus_mock_find(mock, iface, prop);
+    if (e && e->rc == 0 && strcmp(iface, IP_IFACE_COMPOSITE) == 0 &&
+        strcmp(prop, "TargetDevices") == 0) {
+        snprintf(mock->target_devices_value,
+                 sizeof(mock->target_devices_value), "%s", value ? value : "");
+        mock->target_devices_written = true;
+    }
     return e ? e->rc : -ENXIO;
 }
 

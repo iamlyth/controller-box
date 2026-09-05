@@ -192,11 +192,21 @@ cbx_overlay_on_save(void *userdata)
         }
     }
 
-    /* --- Phase 1: Apply to engine and verify (SPEC §§4.1-4.7) ---
-     * For each assigned row: LoadProfilePath + verify ProfilePath +
-     * AttachTargetDevice.  Engine state is verified before in-memory
-     * state or disk persistence is touched.  If any step fails, the
-     * in-memory assignments and disk retain the last confirmed state. */
+    /* --- Phase 1: Apply exact replacement routing (SPEC §§4.1-4.7) ---
+     * Clear every composite first, including rows moved to Unassigned.  This
+     * makes P1→P2 transfers and Unassigned authoritative rather than additive.
+     * Each property replacement is bounded and verified as an exact parsed set. */
+    for (int i = 0; i < svc->grid.row_count; i++) {
+        const char *composite = svc->grid.rows[i].composite_path;
+        int clear_rc = ip_composite_set_target_device_paths(
+            svc->conn.backend, svc->conn.bus, composite, "");
+        if (clear_rc != 0)
+            return clear_rc;
+        clear_rc = wait_for_attachment(svc, composite, NULL);
+        if (clear_rc != 0)
+            return clear_rc;
+    }
+
     for (int i = 0; i < svc->grid.row_count; i++) {
         const cbx_grid_row *row = &svc->grid.rows[i];
         int slot = cbx_select_grid_col_to_slot(row->cur_col);
@@ -217,20 +227,15 @@ cbx_overlay_on_save(void *userdata)
                 return profile_rc;
         }
 
-        /* Attach target to composite for routability. */
-        int attach_rc = ip_manager_attach_target_device(
-            svc->conn.backend, svc->conn.bus,
-            svc->model.targets[slot].path, row->composite_path);
+        int attach_rc = ip_composite_set_target_device_paths(
+            svc->conn.backend, svc->conn.bus, row->composite_path,
+            svc->model.targets[slot].path);
         if (attach_rc != 0)
             return attach_rc;
         attach_rc = wait_for_attachment(svc, row->composite_path,
                                          svc->model.targets[slot].path);
-        if (attach_rc != 0) {
-            fprintf(stderr,
-                "controller-box: assignment not exact after AttachTargetDevice; InputPlumber detach/transfer semantics may not support safe reassignment (slot=%d composite=%s target=%s)\n",
-                slot, row->composite_path, svc->model.targets[slot].path);
+        if (attach_rc != 0)
             return attach_rc;
-        }
     }
 
     /* --- Phase 2: Set GamepadOrder on the engine --- */
@@ -240,7 +245,7 @@ cbx_overlay_on_save(void *userdata)
         return rc;
 
     /* --- Phase 3: All engine state verified — sync in-memory and persist ---
-     * Only after every LoadProfilePath, AttachTargetDevice, and
+     * Only after every LoadProfilePath, exact TargetDevices replacement, and
      * SetGamepadOrder succeeded do we update the in-memory assignments
      * and save to disk.  This guarantees that LoadProfile failures do
      * not appear saved (Task 8 acceptance criterion). */
@@ -481,11 +486,11 @@ csv_exact_path_count(const char *csv, const char *path)
     return count;
 }
 
-static bool
-csv_is_exact_singleton(const char *csv, const char *path)
+static int
+csv_token_count(const char *csv)
 {
     int tokens = 0;
-    if (!csv) return false;
+    if (!csv) return 0;
     for (const char *p = csv; *p;) {
         while (*p == ' ' || *p == '\t' || *p == ',') p++;
         if (!*p) break;
@@ -493,7 +498,13 @@ csv_is_exact_singleton(const char *csv, const char *path)
         const char *end = strchr(p, ',');
         p = end ? end + 1 : p + strlen(p);
     }
-    return tokens == 1 && csv_exact_path_count(csv, path) == 1;
+    return tokens;
+}
+
+static bool
+csv_is_exact_singleton(const char *csv, const char *path)
+{
+    return csv_token_count(csv) == 1 && csv_exact_path_count(csv, path) == 1;
 }
 
 /* Resolve a persisted physical assignment by stable composite PersistentId.
@@ -616,7 +627,9 @@ wait_for_attachment(cbx_overlay_service_ctx *svc, const char *composite,
         /* Assignment is accepted only when the selected target is the exact
          * singleton set.  This detects stale/cross-slot targets after a
          * reassignment instead of treating a substring match as routing. */
-        bool found = last_rc == 0 && csv_is_exact_singleton(paths, target);
+        bool found = last_rc == 0 &&
+            (target ? csv_is_exact_singleton(paths, target)
+                    : csv_token_count(paths) == 0);
         free(paths);
         if (found)
             return 0;
@@ -718,9 +731,9 @@ cbx_reconcile_startup_targets(cbx_overlay_service_ctx *svc)
         if (rc != 0) goto fail;
         const char *assigned = assigned_composite_for_slot(svc, slot);
         if (assigned) {
-            phase = "attachment"; operation = "AttachTargetDevice";
-            rc = ip_manager_attach_target_device(svc->conn.backend, svc->conn.bus,
-                path, assigned);
+            phase = "attachment"; operation = "Set TargetDevices property";
+            rc = ip_composite_set_target_device_paths(svc->conn.backend,
+                svc->conn.bus, assigned, path);
             if (rc != 0) goto fail;
             operation = "verify-exact-TargetDevices";
             rc = wait_for_attachment(svc, assigned, path);
@@ -744,9 +757,9 @@ cbx_reconcile_startup_targets(cbx_overlay_service_ctx *svc)
         if (!assigned) continue;
         memcpy(path, slots[slot], sizeof(path));
         path[sizeof(path) - 1] = '\0';
-        phase = "attachment"; operation = "AttachTargetDevice";
-        rc = ip_manager_attach_target_device(svc->conn.backend, svc->conn.bus,
-            path, assigned);
+        phase = "attachment"; operation = "Set TargetDevices property";
+        rc = ip_composite_set_target_device_paths(svc->conn.backend,
+            svc->conn.bus, assigned, path);
         if (rc != 0) goto fail;
         operation = "verify-exact-TargetDevices";
         rc = wait_for_attachment(svc, assigned, path);
@@ -1009,8 +1022,8 @@ overlay_backend_ready(void *userdata)
 
     /* Restore persisted slot/profile topology to the live engine before
      * advertising the overlay as ready (SPEC §§4.1-4.7: startup/restart
-     * restores order/profile).  This re-applies LoadProfilePath,
-     * AttachTargetDevice, and SetGamepadOrder from the saved state. */
+     * restores order/profile).  This re-applies LoadProfilePath, exact
+     * TargetDevices replacement, and SetGamepadOrder from saved state. */
     if (cbx_overlay_on_save(svc) != 0)
         fprintf(stderr, "controller-box: failed to restore assignments after recovery\n");
 
