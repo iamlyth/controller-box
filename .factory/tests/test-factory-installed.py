@@ -431,12 +431,17 @@ class InstalledTierSuite(unittest.TestCase):
             self.fixture, ref, expected_round=1, expected_base=self.head,
             expected_nonce=self.nonce,
         )
-        self.assertEqual(receipt["exit_code"], 0,
-                         f"gate {tag} must exit 0 to be certified PASS")
+        stdout = (self.fixture / RECEIPTS_DIR / f"{tag}.stdout").read_bytes()
+        stderr = (self.fixture / RECEIPTS_DIR / f"{tag}.stderr").read_bytes()
+        diagnostic = (
+            f"gate {tag} must exit 0 to be certified PASS; "
+            f"stdout={stdout[-3000:].decode('utf-8', 'replace')!r}; "
+            f"stderr={stderr[-3000:].decode('utf-8', 'replace')!r}"
+        )
+        self.assertEqual(receipt["exit_code"], 0, diagnostic)
         self.assertEqual(receipt["evidence_commit"], self.head)
         self.assertEqual(receipt["coordinator_round"], 1)
         self.assertEqual(receipt["coordinator_nonce"], self.nonce)
-        stdout = (self.fixture / RECEIPTS_DIR / f"{tag}.stdout").read_bytes()
         self.assertIsNone(
             SKIP_TOKEN.search(stdout.decode("utf-8", "replace")),
             f"gate {tag} printed a skip marker; it can never be PASS",
@@ -905,7 +910,7 @@ class InstalledTierSuite(unittest.TestCase):
         # claim while accepting an honest FAIL claim.
         fail_argv = [
             sys.executable, "-c",
-            "import sys; print('expected installed-tier failure'); sys.exit(7)",
+            "import sys; print('expected installed-tier failure', file=sys.stderr); sys.exit(7)",
         ]
         fail_mint = self.mint("gate-fail", fail_argv, check=False)
         self.assertIn("[receipt: .factory-state/audit-receipts/gate-fail.json]",
@@ -916,7 +921,9 @@ class InstalledTierSuite(unittest.TestCase):
             expected_nonce=self.nonce,
         )
         self.assertNotEqual(fail_receipt["exit_code"], 0)
-        with self.assertRaises(AssertionError):
+        with self.assertRaisesRegex(
+            AssertionError, "expected installed-tier failure"
+        ):
             self.assert_pass_receipt("gate-fail")
         fail_command = " ".join(shlex.quote(item) for item in fail_argv)
         bad_report = self.fixture / "bad-pass.md"
