@@ -802,6 +802,22 @@ test_mg04_topology_failure(void **state)
     assert_true(strstr(text, "Topology incomplete") != NULL);
     assert_true(strstr(text, "0 of 4") != NULL);
 
+    /* Create four targets through the production DBus wrappers, then drive
+     * the Manager's bounded visible-tab refresh.  A confirmed 4/4 topology
+     * must clear the stale 0/4 status without restarting Manager. */
+    for (int i = 0; i < 4; i++) {
+        char *path = NULL;
+        assert_int_equal(ip_manager_create_target_device(mgr.dbus_backend,
+            mgr.dbus_bus, "xb360", &path), 0);
+        assert_non_null(path);
+        free(path);
+    }
+    assert_int_equal(cbx_manager_refresh_controllers_if_due(&mgr,
+        mgr.last_controller_refresh_ms + CBX_MGR_CONTROLLERS_REFRESH_MS), 0);
+    assert_int_equal(cbx_controllers_tab_device_count(ct), 4);
+    assert_false(cbx_widget_is_visible(&ct->status_lbl.base));
+    assert_true(strstr(ct->status_lbl.text, "Topology incomplete") == NULL);
+
     cbx_manager_shutdown(&mgr);
 }
 

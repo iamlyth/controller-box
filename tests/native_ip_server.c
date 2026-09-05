@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <time.h>
 #include <systemd/sd-bus.h>
 
 #include "dbus/dbus_interface.h"  /* IP_DBUS_NAME, IP_IFACE_* */
@@ -40,10 +41,33 @@ volatile sig_atomic_t g_nip_fail_next_create = 0;
 static int      s_num_composites = 1;
 static char     s_version[32] = "9.8.7";
 static volatile sig_atomic_t s_service_running = 1;
+static unsigned s_publication_delay_ms;
+static unsigned s_removal_delay_ms;
+static bool     s_reverse_object_order;
+static bool     s_fail_stop;
+static bool     s_fail_attach;
+static int      s_hide_attachment_for_composite;
+static uint64_t s_target_publish_at[NIP_MAX_TARGETS];
+static uint64_t s_target_remove_at[NIP_MAX_TARGETS];
 
 /* ================================================================== */
 /*  Helpers                                                            */
 /* ================================================================== */
+
+static uint64_t monotonic_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
+}
+
+static bool target_is_visible(int i)
+{
+    uint64_t now = monotonic_ms();
+    return i >= 0 && i < g_nip_target_count &&
+           now >= s_target_publish_at[i] &&
+           (s_target_remove_at[i] == 0 || now < s_target_remove_at[i]);
+}
 
 static int composite_idx_from_path(const char *path)
 {
@@ -149,7 +173,7 @@ target_property_get(sd_bus *bus, const char *path, const char *interface,
     if (strcmp(property, "DeviceType") != 0)
         return -ENOENT;
     for (int i = 0; i < g_nip_target_count; i++) {
-        if (strcmp(g_nip_target_paths[i], path) == 0)
+        if (target_is_visible(i) && strcmp(g_nip_target_paths[i], path) == 0)
             return sd_bus_message_append(reply, "s", g_nip_target_types[i]);
     }
     return -ENOENT;
@@ -168,7 +192,7 @@ target_find(sd_bus *bus, const char *path, const char *interface,
 {
     (void)bus; (void)interface; (void)userdata; (void)error;
     for (int i = 0; i < g_nip_target_count; i++) {
-        if (strcmp(g_nip_target_paths[i], path) == 0) {
+        if (target_is_visible(i) && strcmp(g_nip_target_paths[i], path) == 0) {
             *ret_found = (void *)(intptr_t)(i + 1);
             return 1;
         }
@@ -193,6 +217,8 @@ composite_property_get(sd_bus *bus, const char *path, const char *interface,
         int rc = sd_bus_message_open_container(reply, 'a', "s");
         if (rc < 0) return rc;
         for (int j = 0; j < g_nip_attached_counts[ci]; j++) {
+            if (s_hide_attachment_for_composite == ci + 1)
+                continue;
             rc = sd_bus_message_append(reply, "s", g_nip_attached[ci][j]);
             if (rc < 0) break;
         }
@@ -376,6 +402,8 @@ method_create_target(sd_bus_message *m, void *userdata, sd_bus_error *error)
     snprintf(g_nip_target_paths[idx], sizeof(g_nip_target_paths[idx]),
              "/org/shadowblip/InputPlumber/devices/target/%s%d", kind, idx);
     snprintf(g_nip_target_types[idx], sizeof(g_nip_target_types[idx]), "%s", kind);
+    s_target_publish_at[idx] = monotonic_ms() + s_publication_delay_ms;
+    s_target_remove_at[idx] = 0;
     g_nip_target_count++;
     return sd_bus_reply_method_return(m, "s", g_nip_target_paths[idx]);
 }
@@ -387,15 +415,14 @@ method_stop_target(sd_bus_message *m, void *userdata, sd_bus_error *error)
     const char *path = NULL;
     int rc = sd_bus_message_read(m, "s", &path);
     if (rc < 0) return rc;
+    if (s_fail_stop)
+        return sd_bus_error_set(error, "org.freedesktop.DBus.Error.Failed",
+                                "simulated StopTargetDevice failure");
     for (int i = 0; i < g_nip_target_count; i++) {
         if (strcmp(g_nip_target_paths[i], path) == 0) {
-            for (int j = i; j < g_nip_target_count - 1; j++) {
-                memmove(g_nip_target_paths[j], g_nip_target_paths[j + 1],
-                        sizeof(g_nip_target_paths[j]));
-                memmove(g_nip_target_types[j], g_nip_target_types[j + 1],
-                        sizeof(g_nip_target_types[j]));
-            }
-            g_nip_target_count--;
+            s_target_remove_at[i] = monotonic_ms() + s_removal_delay_ms;
+            if (s_target_remove_at[i] == 0)
+                s_target_remove_at[i] = 1;
             break;
         }
     }
@@ -410,6 +437,9 @@ method_attach_target(sd_bus_message *m, void *userdata, sd_bus_error *error)
     const char *composite_path = NULL;
     int rc = sd_bus_message_read(m, "ss", &target_path, &composite_path);
     if (rc < 0) return rc;
+    if (s_fail_attach)
+        return sd_bus_error_set(error, "org.freedesktop.DBus.Error.Failed",
+                                "simulated AttachTargetDevice failure");
     bool found = false;
     for (int i = 0; i < g_nip_target_count; i++) {
         if (strcmp(g_nip_target_paths[i], target_path) == 0) {
@@ -424,6 +454,9 @@ method_attach_target(sd_bus_message *m, void *userdata, sd_bus_error *error)
     if (ci < 0 || ci >= NIP_MAX_COMPOSITES)
         return sd_bus_error_set(error, "org.freedesktop.DBus.Error.UnknownObject",
                                 "composite not found");
+    for (int j = 0; j < g_nip_attached_counts[ci]; j++)
+        if (strcmp(g_nip_attached[ci][j], target_path) == 0)
+            return sd_bus_reply_method_return(m, "");
     if (g_nip_attached_counts[ci] < NIP_MAX_ATTACHED) {
         snprintf(g_nip_attached[ci][g_nip_attached_counts[ci]],
                  sizeof(g_nip_attached[ci][g_nip_attached_counts[ci]]),
@@ -495,8 +528,9 @@ method_get_managed_objects(sd_bus_message *m, void *userdata, sd_bus_error *erro
         if (rc < 0) goto fail;
     }
 
-    /* Composite devices (configurable count). */
-    for (int c = 0; c < s_num_composites; c++) {
+    /* Composite devices (configurable count; dictionary order is arbitrary). */
+    for (int n = 0; n < s_num_composites; n++) {
+        int c = s_reverse_object_order ? s_num_composites - 1 - n : n;
         char comp_path[128];
         snprintf(comp_path, sizeof(comp_path),
                  "/org/shadowblip/InputPlumber/CompositeDevice%d", c);
@@ -523,7 +557,10 @@ method_get_managed_objects(sd_bus_message *m, void *userdata, sd_bus_error *erro
     }
 
     /* Target objects. */
-    for (int i = 0; i < g_nip_target_count; i++) {
+    for (int n = 0; n < g_nip_target_count; n++) {
+        int i = s_reverse_object_order ? g_nip_target_count - 1 - n : n;
+        if (!target_is_visible(i))
+            continue;
         rc = sd_bus_message_open_container(reply, 'e', "oa{sa{sv}}");
         if (rc < 0) goto fail;
         rc = sd_bus_message_append(reply, "o", g_nip_target_paths[i]);
@@ -645,6 +682,8 @@ void nip_reset_server_state(int num_composites)
     g_nip_target_count = 0;
     memset(g_nip_target_paths, 0, sizeof(g_nip_target_paths));
     memset(g_nip_target_types, 0, sizeof(g_nip_target_types));
+    memset(s_target_publish_at, 0, sizeof(s_target_publish_at));
+    memset(s_target_remove_at, 0, sizeof(s_target_remove_at));
 
     memset(g_nip_attached, 0, sizeof(g_nip_attached));
     memset(g_nip_attached_counts, 0, sizeof(g_nip_attached_counts));
@@ -712,6 +751,13 @@ pid_t nip_fork_server(const char *address, const nip_server_config *cfg)
     else
         snprintf(s_version, sizeof(s_version), "9.8.7");
 
+    s_publication_delay_ms = cfg ? cfg->publication_delay_ms : 0;
+    s_removal_delay_ms = cfg ? cfg->removal_delay_ms : 0;
+    s_reverse_object_order = cfg && cfg->reverse_object_order;
+    s_fail_stop = cfg && cfg->fail_stop;
+    s_fail_attach = cfg && cfg->fail_attach;
+    s_hide_attachment_for_composite = cfg ?
+        cfg->hide_attachment_for_composite : 0;
     s_service_running = 1;
 
     pid_t server_pid = fork();

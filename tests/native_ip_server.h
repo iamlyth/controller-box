@@ -25,8 +25,14 @@
 
 /* --- Server configuration --- */
 typedef struct {
-    int         num_composites;  /* 1 or 2 */
+    int         num_composites;
     const char *version;          /* Version string (e.g. "9.8.7", "0.78.0") */
+    unsigned    publication_delay_ms; /* Create reply precedes OM publication */
+    unsigned    removal_delay_ms;     /* Stop reply precedes OM disappearance */
+    bool        reverse_object_order; /* exercise unordered OM dictionaries */
+    bool        fail_stop;
+    bool        fail_attach;
+    int         hide_attachment_for_composite; /* 1-based; 0 = expose all */
 } nip_server_config;
 
 /* --- Server handle --- */

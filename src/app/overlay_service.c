@@ -46,6 +46,7 @@
 #include <string.h>
 #include <signal.h>
 #include <errno.h>
+#include <time.h>
 
 /* ================================================================== */
 /*  Signal handling (SIGTERM / SIGINT)                                 */
@@ -391,158 +392,376 @@ static void set_all_pass(const ip_dbus_backend *backend, ip_bus_handle bus,
                                          composites[i].path, "1");
 }
 
+static uint64_t
+reconcile_now_ms(void)
+{
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+        return 0;
+    return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
+}
+
+static const char *
+reconcile_error_category(int rc)
+{
+    switch (rc) {
+    case IP_ERR_SERVICE_UNKNOWN: return "service-unknown";
+    case IP_ERR_ACCESS_DENIED: return "access-denied";
+    case IP_ERR_NO_REPLY: return "no-reply/deadline-expired";
+    case IP_ERR_INVALID_ARGS: return "invalid-arguments";
+    case IP_ERR_NOT_CONNECTED: return "not-connected";
+    case -ENODEV: return "missing-composite";
+    case -EPROTOTYPE: return "wrong-device-type";
+    default: return "dbus/internal";
+    }
+}
+
+static void
+reconcile_diag(cbx_overlay_service_ctx *svc, const char *phase,
+               const char *operation, const char *kind, const char *path,
+               int old_count, int new_count, int rc, uint64_t started,
+               bool expired)
+{
+    snprintf(svc->reconcile_status.phase, sizeof(svc->reconcile_status.phase),
+             "%s", phase ? phase : "unknown");
+    snprintf(svc->reconcile_status.operation,
+             sizeof(svc->reconcile_status.operation), "%s",
+             operation ? operation : "unknown");
+    snprintf(svc->reconcile_status.target_kind,
+             sizeof(svc->reconcile_status.target_kind), "%s", kind ? kind : "");
+    snprintf(svc->reconcile_status.target_path,
+             sizeof(svc->reconcile_status.target_path), "%s", path ? path : "");
+    svc->reconcile_status.old_count = old_count;
+    svc->reconcile_status.new_count = new_count;
+    svc->reconcile_status.rc = rc;
+    svc->reconcile_status.elapsed_ms = (uint32_t)(reconcile_now_ms() - started);
+    svc->reconcile_status.deadline_ms = svc->reconcile_timeout_ms ?
+        svc->reconcile_timeout_ms : CBX_RECONCILE_TIMEOUT_MS;
+    svc->reconcile_status.deadline_expired = expired;
+    snprintf(svc->reconcile_status.detail,
+             sizeof(svc->reconcile_status.detail),
+             "phase=%.16s op=%.24s kind=%.16s path=%.48s count=%d->%d elapsed=%ums deadline=%ums expired=%.3s failure=%.25s rc=%d",
+             svc->reconcile_status.phase, svc->reconcile_status.operation,
+             svc->reconcile_status.target_kind,
+             svc->reconcile_status.target_path, old_count, new_count,
+             svc->reconcile_status.elapsed_ms,
+             svc->reconcile_status.deadline_ms, expired ? "yes" : "no",
+             reconcile_error_category(rc), rc);
+}
+
+static bool
+csv_has_exact_path(const char *csv, const char *path)
+{
+    if (!csv || !path)
+        return false;
+    size_t plen = strlen(path);
+    for (const char *p = csv; *p;) {
+        while (*p == ' ' || *p == '\t' || *p == ',') p++;
+        const char *end = strchr(p, ',');
+        if (!end) end = p + strlen(p);
+        while (end > p && (end[-1] == ' ' || end[-1] == '\t')) end--;
+        if ((size_t)(end - p) == plen && memcmp(p, path, plen) == 0)
+            return true;
+        p = *end ? end + 1 : end;
+    }
+    return false;
+}
+
+static int
+reconcile_enumerate(cbx_overlay_service_ctx *svc, cbx_device_model *out)
+{
+    cbx_device_model next;
+    int rc = cbx_objectmanager_enumerate(svc->conn.backend, svc->conn.bus,
+                                          &next);
+    if (rc == 0) {
+        svc->model = next;
+        if (out) *out = next;
+    }
+    return rc;
+}
+
+static int
+reconcile_order_targets(cbx_device_model *model,
+                        char slots[][CBX_MAX_PATH_LEN], int count)
+{
+    cbx_device_entry ordered[CBX_MAX_DEVICES];
+    bool used[CBX_MAX_DEVICES] = {false};
+    int out = 0;
+    for (int slot = 0; slot < count; slot++) {
+        int found = -1;
+        for (int i = 0; i < model->target_count; i++)
+            if (!used[i] && strcmp(model->targets[i].path, slots[slot]) == 0) {
+                found = i; break;
+            }
+        if (found < 0)
+            return -ENOENT;
+        ordered[out++] = model->targets[found];
+        used[found] = true;
+    }
+    for (int i = 0; i < model->target_count; i++)
+        if (!used[i]) ordered[out++] = model->targets[i];
+    memcpy(model->targets, ordered,
+           (size_t)model->target_count * sizeof(model->targets[0]));
+    return 0;
+}
+
+static int
+wait_for_exact_target(cbx_overlay_service_ctx *svc, const char *path,
+                      const char *kind, bool present)
+{
+    uint32_t timeout = svc->reconcile_timeout_ms ? svc->reconcile_timeout_ms :
+        CBX_RECONCILE_TIMEOUT_MS;
+    uint32_t poll = svc->reconcile_poll_ms ? svc->reconcile_poll_ms :
+        CBX_RECONCILE_POLL_MS;
+    uint64_t deadline = reconcile_now_ms() + timeout;
+    int last_rc = 0;
+
+    for (;;) {
+        cbx_device_model model;
+        last_rc = reconcile_enumerate(svc, &model);
+        if (last_rc == 0) {
+            bool found = cbx_device_model_find_target(&model, path) != NULL;
+            if (found == present) {
+                if (!present)
+                    return 0;
+                char *actual = NULL;
+                last_rc = ip_target_get_device_type(svc->conn.backend,
+                    svc->conn.bus, path, &actual);
+                if (last_rc == 0 && actual && strcmp(actual, kind) == 0) {
+                    free(actual);
+                    return 0;
+                }
+                if (last_rc == 0)
+                    last_rc = -EPROTOTYPE;
+                free(actual);
+                if (last_rc == -EPROTOTYPE)
+                    return last_rc;
+            }
+        }
+        if (reconcile_now_ms() >= deadline)
+            return -ETIMEDOUT;
+        /* Dispatch ObjectManager traffic between bounded polls; sleeping is
+         * only a short backoff, never the sole progress mechanism. */
+        if (svc->conn.backend->process)
+            svc->conn.backend->process(svc->conn.bus);
+        SDL_Delay(poll);
+    }
+}
+
+static int
+wait_for_attachment(cbx_overlay_service_ctx *svc, const char *composite,
+                    const char *target)
+{
+    uint32_t timeout = svc->reconcile_timeout_ms ? svc->reconcile_timeout_ms :
+        CBX_RECONCILE_TIMEOUT_MS;
+    uint32_t poll = svc->reconcile_poll_ms ? svc->reconcile_poll_ms :
+        CBX_RECONCILE_POLL_MS;
+    uint64_t deadline = reconcile_now_ms() + timeout;
+    int last_rc = 0;
+    for (;;) {
+        char *paths = NULL;
+        last_rc = ip_composite_get_target_devices(svc->conn.backend,
+                                                    svc->conn.bus,
+                                                    composite, &paths);
+        bool found = last_rc == 0 && csv_has_exact_path(paths, target);
+        free(paths);
+        if (found)
+            return 0;
+        if (reconcile_now_ms() >= deadline)
+            return -ETIMEDOUT;
+        if (svc->conn.backend->process)
+            svc->conn.backend->process(svc->conn.bus);
+        SDL_Delay(poll);
+    }
+}
+
 int
 cbx_reconcile_startup_targets(cbx_overlay_service_ctx *svc)
 {
+    if (!svc || !svc->conn.backend || !svc->conn.bus)
+        return -EINVAL;
     int desired = svc->settings.virtual_controllers.count;
     if (desired < 0 || desired > CBX_MAX_CONTROLLERS)
         return -EINVAL;
 
-    /* --- Record original target paths for rollback ------------------ */
-    char orig_paths[CBX_MAX_DEVICES][CBX_MAX_PATH_LEN];
+    memset(&svc->reconcile_status, 0, sizeof(svc->reconcile_status));
+    uint64_t started = reconcile_now_ms();
     int orig_count = svc->model.target_count;
+    char slots[CBX_MAX_DEVICES][CBX_MAX_PATH_LEN] = {{0}};
+    char created[CBX_MAX_CONTROLLERS][CBX_MAX_PATH_LEN] = {{0}};
+    int created_count = 0;
     for (int i = 0; i < orig_count; i++)
-        snprintf(orig_paths[i], sizeof(orig_paths[i]), "%s",
-                 svc->model.targets[i].path);
+        snprintf(slots[i], sizeof(slots[i]), "%s", svc->model.targets[i].path);
 
     int rc = 0;
+    const char *phase = "enumeration";
+    const char *operation = "validate-topology";
+    const char *kind = "";
+    char path[CBX_MAX_PATH_LEN] = "";
 
-    /* --- Phase 1: Grow — create targets until count matches -------- */
-    while (svc->model.target_count < desired) {
-        int index = svc->model.target_count;
-        const char *kind = svc->settings.virtual_controllers.types[index];
-        if (!kind[0])
-            kind = "xb360";
-        char *created_path = NULL;
-        rc = ip_manager_create_target_device(svc->conn.backend,
-                                               svc->conn.bus, kind,
-                                               &created_path);
-        free(created_path);
-        if (rc != 0)
-            goto rollback;
-        /* Re-enumerate after every transaction; method success without an
-         * ObjectManager-visible target is not a confirmed outcome. */
-        rc = cbx_objectmanager_enumerate(svc->conn.backend, svc->conn.bus,
-                                          &svc->model);
-        if (rc != 0 || svc->model.target_count <= index) {
-            rc = rc != 0 ? rc : -EIO;
-            goto rollback;
-        }
+    /* Refuse to mutate when cardinality cannot make every required target
+     * routable.  Composite indexes are sorted by ObjectManager parsing. */
+    if (svc->model.composite_count < desired) {
+        rc = -ENODEV;
+        phase = "attachment";
+        operation = "require-composites";
+        goto fail;
     }
 
-    /* --- Phase 2: Shrink — stop excess targets -------------------- */
-    while (svc->model.target_count > desired) {
-        char path[CBX_MAX_PATH_LEN];
-        snprintf(path, sizeof(path), "%s",
-                 svc->model.targets[svc->model.target_count - 1].path);
-        int previous = svc->model.target_count;
-        rc = ip_manager_stop_target_device(svc->conn.backend,
-                                             svc->conn.bus, path);
-        if (rc != 0)
-            goto rollback;
-        rc = cbx_objectmanager_enumerate(svc->conn.backend, svc->conn.bus,
-                                          &svc->model);
-        if (rc != 0 || svc->model.target_count >= previous) {
-            rc = rc != 0 ? rc : -EIO;
-            goto rollback;
+    /* Grow using retained return paths, never count deltas or reply order. */
+    for (int slot = orig_count; slot < desired; slot++) {
+        kind = svc->settings.virtual_controllers.types[slot][0] ?
+            svc->settings.virtual_controllers.types[slot] : "xb360";
+        phase = "create"; operation = "CreateTargetDevice";
+        char *returned = NULL;
+        rc = ip_manager_create_target_device(svc->conn.backend, svc->conn.bus,
+                                               kind, &returned);
+        if (rc != 0 || !returned || !returned[0]) {
+            if (rc == 0) rc = -EIO;
+            free(returned);
+            goto fail;
         }
+        snprintf(created[created_count], sizeof(created[created_count]), "%s",
+                 returned);
+        snprintf(slots[slot], sizeof(slots[slot]), "%s", returned);
+        snprintf(path, sizeof(path), "%s", created[created_count++]);
+        free(returned);
+        phase = "publication-timeout"; operation = "confirm-created-path";
+        rc = wait_for_exact_target(svc, path, kind, true);
+        if (rc != 0)
+            goto fail;
     }
 
-    /* --- Phase 3: Per-slot type correction (SPEC §5.2) -------------
-     * Walk slots in reverse order. For each slot whose actual DeviceType
-     * does not match the desired type from settings, stop the old target
-     * and create a new one.  Reverse order preserves the array ordering:
-     * stopping the last target causes no shift, and the new target is
-     * appended to the end — so slot i stays at position i for all i. */
-    for (int slot = svc->model.target_count - 1; slot >= 0; slot--) {
-        const char *desired_type =
-            svc->settings.virtual_controllers.types[slot];
-        if (!desired_type[0])
-            desired_type = "xb360";
-
-        char *actual_type = NULL;
+    /* Correct types without destroying the old slot until its replacement
+     * is published and attached.  A later failure truthfully records any
+     * original that has already been stopped. */
+    int existing_slots = orig_count < desired ? orig_count : desired;
+    for (int slot = 0; slot < existing_slots; slot++) {
+        kind = svc->settings.virtual_controllers.types[slot][0] ?
+            svc->settings.virtual_controllers.types[slot] : "xb360";
+        memcpy(path, slots[slot], sizeof(path));
+        path[sizeof(path) - 1] = '\0';
+        char *actual = NULL;
+        phase = "type-correction"; operation = "read-DeviceType";
         rc = ip_target_get_device_type(svc->conn.backend, svc->conn.bus,
-                                         svc->model.targets[slot].path,
-                                         &actual_type);
-        if (rc != 0) {
-            free(actual_type);
-            goto rollback;
-        }
-        if (strcmp(actual_type, desired_type) == 0) {
-            free(actual_type);
-            continue;
-        }
-        free(actual_type);
+                                        path, &actual);
+        if (rc != 0) { free(actual); goto fail; }
+        bool matches = actual && strcmp(actual, kind) == 0;
+        free(actual);
+        if (matches) continue;
 
-        /* Stop old target and create a new one with the correct type. */
         char old_path[CBX_MAX_PATH_LEN];
-        snprintf(old_path, sizeof(old_path), "%s",
-                 svc->model.targets[slot].path);
-        rc = ip_manager_stop_target_device(svc->conn.backend,
-                                              svc->conn.bus, old_path);
-        if (rc != 0)
-            goto rollback;
-
-        char *new_path = NULL;
-        rc = ip_manager_create_target_device(svc->conn.backend,
-                                                svc->conn.bus, desired_type,
-                                                &new_path);
-        if (rc != 0) {
-            free(new_path);
-            /* Re-enumerate to get the current confirmed state. */
-            cbx_objectmanager_enumerate(svc->conn.backend, svc->conn.bus,
-                                          &svc->model);
-            goto rollback;
+        snprintf(old_path, sizeof(old_path), "%s", path);
+        char *returned = NULL;
+        operation = "CreateTargetDevice";
+        rc = ip_manager_create_target_device(svc->conn.backend, svc->conn.bus,
+                                               kind, &returned);
+        if (rc != 0 || !returned || !returned[0]) {
+            if (rc == 0) rc = -EIO;
+            free(returned); goto fail;
         }
-        free(new_path);
-
-        rc = cbx_objectmanager_enumerate(svc->conn.backend, svc->conn.bus,
-                                          &svc->model);
-        if (rc != 0 || svc->model.target_count != desired) {
-            rc = rc != 0 ? rc : -EIO;
-            goto rollback;
-        }
+        snprintf(created[created_count], sizeof(created[created_count]), "%s",
+                 returned);
+        snprintf(slots[slot], sizeof(slots[slot]), "%s", returned);
+        snprintf(path, sizeof(path), "%s", created[created_count++]);
+        free(returned);
+        operation = "confirm-replacement-publication";
+        rc = wait_for_exact_target(svc, path, kind, true);
+        if (rc != 0) goto fail;
+        phase = "attachment"; operation = "AttachTargetDevice";
+        rc = ip_manager_attach_target_device(svc->conn.backend, svc->conn.bus,
+            path, svc->model.composites[slot].path);
+        if (rc != 0) goto fail;
+        operation = "verify-TargetDevices";
+        rc = wait_for_attachment(svc, svc->model.composites[slot].path, path);
+        if (rc != 0) goto fail;
+        phase = "type-correction"; operation = "StopTargetDevice";
+        snprintf(path, sizeof(path), "%s", old_path);
+        rc = ip_manager_stop_target_device(svc->conn.backend, svc->conn.bus,
+                                             old_path);
+        if (rc != 0) goto fail;
+        svc->reconcile_status.originals_stopped = true;
+        operation = "confirm-old-path-removal";
+        rc = wait_for_exact_target(svc, old_path, kind, false);
+        if (rc != 0) goto fail;
     }
 
-    /* --- Phase 4: Attach targets to composites (SPEC §5.2) ---------
-     * Each target must be attached to its corresponding composite to be
-     * routable under the slot model.  Target[i] → Composite[i]. */
-    for (int slot = 0; slot < svc->model.target_count; slot++) {
-        if (slot >= svc->model.composite_count)
-            break;
-        rc = ip_manager_attach_target_device(svc->conn.backend,
-                                                svc->conn.bus,
-                                                svc->model.targets[slot].path,
-                                                svc->model.composites[slot].path);
-        if (rc != 0)
-            goto rollback;
+    /* Attach and verify every required slot using exact parsed array members. */
+    for (int slot = 0; slot < desired; slot++) {
+        memcpy(path, slots[slot], sizeof(path));
+        path[sizeof(path) - 1] = '\0';
+        phase = "attachment"; operation = "AttachTargetDevice";
+        rc = ip_manager_attach_target_device(svc->conn.backend, svc->conn.bus,
+            path, svc->model.composites[slot].path);
+        if (rc != 0) goto fail;
+        operation = "verify-TargetDevices";
+        rc = wait_for_attachment(svc, svc->model.composites[slot].path, path);
+        if (rc != 0) goto fail;
     }
 
+    /* Destructive shrink is last; stopped originals are not called restored. */
+    for (int slot = orig_count - 1; slot >= desired; slot--) {
+        memcpy(path, slots[slot], sizeof(path));
+        path[sizeof(path) - 1] = '\0';
+        phase = "stop-removal-timeout";
+        operation = "StopTargetDevice";
+        rc = ip_manager_stop_target_device(svc->conn.backend, svc->conn.bus,
+                                             path);
+        if (rc != 0) goto fail;
+        svc->reconcile_status.originals_stopped = true;
+        operation = "confirm-stopped-path";
+        rc = wait_for_exact_target(svc, path, "", false);
+        if (rc != 0) goto fail;
+    }
+
+    rc = reconcile_enumerate(svc, NULL);
+    if (rc != 0) { phase = "enumeration"; operation = "final-enumeration"; goto fail; }
+    if (svc->model.target_count != desired) {
+        rc = -EIO; phase = "enumeration"; operation = "final-cardinality";
+        goto fail;
+    }
+    rc = reconcile_order_targets(&svc->model, slots, desired);
+    if (rc != 0) {
+        phase = "enumeration"; operation = "final-slot-identity";
+        goto fail;
+    }
+    reconcile_diag(svc, "complete", "reconcile", "", "", orig_count,
+                   svc->model.target_count, 0, started, false);
     return 0;
 
-rollback:
-    /* Stop any targets that were created during this reconcile but were
-     * not in the original set (SPEC §5.2: failures retain last confirmed
-     * topology).  Re-enumerate to restore the confirmed state. */
-    cbx_objectmanager_enumerate(svc->conn.backend, svc->conn.bus,
-                                  &svc->model);
-    for (int i = svc->model.target_count - 1; i >= 0; i--) {
-        bool was_original = false;
-        for (int j = 0; j < orig_count; j++) {
-            if (strcmp(svc->model.targets[i].path, orig_paths[j]) == 0) {
-                was_original = true;
-                break;
+fail: {
+        int primary_rc = rc;
+        bool expired = rc == -ETIMEDOUT || rc == IP_ERR_NO_REPLY;
+        reconcile_diag(svc, phase, operation, kind, path, orig_count,
+                       svc->model.target_count, primary_rc, started, expired);
+        char primary_detail[sizeof(svc->reconcile_status.detail)];
+        snprintf(primary_detail, sizeof(primary_detail), "%s",
+                 svc->reconcile_status.detail);
+
+        /* Created paths are authoritative even if publication was delayed or
+         * enumeration failed.  Attempt every cleanup independently. */
+        for (int i = created_count - 1; i >= 0; i--) {
+            int cleanup_rc = ip_manager_stop_target_device(svc->conn.backend,
+                svc->conn.bus, created[i]);
+            if (cleanup_rc == 0)
+                cleanup_rc = wait_for_exact_target(svc, created[i], "", false);
+            if (cleanup_rc != 0) {
+                svc->reconcile_status.cleanup_failures++;
+                fprintf(stderr,
+                    "controller-box: reconcile rollback cleanup failed path=%s failure=%s rc=%d\n",
+                    created[i], reconcile_error_category(cleanup_rc), cleanup_rc);
             }
         }
-        if (!was_original) {
-            ip_manager_stop_target_device(svc->conn.backend,
-                                            svc->conn.bus,
-                                            svc->model.targets[i].path);
-        }
+        reconcile_enumerate(svc, NULL);
+        snprintf(svc->reconcile_status.detail,
+                 sizeof(svc->reconcile_status.detail),
+                 "%.*s cleanup_failures=%d originals_stopped=%s",
+                 190, primary_detail, svc->reconcile_status.cleanup_failures,
+                 svc->reconcile_status.originals_stopped ? "yes" : "no");
+        fprintf(stderr, "controller-box: virtual-controller reconcile failed: %s\n",
+                svc->reconcile_status.detail);
+        return primary_rc;
     }
-    cbx_objectmanager_enumerate(svc->conn.backend, svc->conn.bus,
-                                  &svc->model);
-    return rc;
 }
 
 /* ================================================================== */
@@ -704,9 +923,14 @@ overlay_backend_ready(void *userdata)
     svc->poll_count = 0;
 
     if (cbx_objectmanager_enumerate(svc->conn.backend, svc->conn.bus,
-                                     &svc->model) != 0 ||
-        cbx_reconcile_startup_targets(svc) != 0) {
+                                     &svc->model) != 0) {
         overlay_backend_degraded("InputPlumber enumeration failed", svc);
+        return;
+    }
+    if (cbx_reconcile_startup_targets(svc) != 0) {
+        overlay_backend_degraded(svc->reconcile_status.detail[0] ?
+            svc->reconcile_status.detail :
+            "InputPlumber virtual-controller reconciliation failed", svc);
         return;
     }
 

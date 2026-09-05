@@ -1877,17 +1877,23 @@ test_installed_backend_recovery(void **state)
     assert_true(mgr.ct.status_lbl.base.visible);
 
     /* --- Phase 3: Simulate InputPlumber owner reacquisition --- */
-    /* Reset server state for the new instance. */
-    nip_reset_server_state(2);
-    for (int i = 0; i < 2; i++) {
+    /* Reset server state for the new instance with the expected 4/4 target
+     * topology, so recovery proves the prior incomplete status clears. */
+    nip_reset_server_state(4);
+    for (int i = 0; i < 4; i++) {
         snprintf(g_nip_comp_names[i], sizeof(g_nip_comp_names[i]),
                  "TestController%d", i);
         snprintf(g_nip_dbus_devices[i], sizeof(g_nip_dbus_devices[i]),
                  "/org/shadowblip/InputPlumber/CompositeDevice%d", i);
+        snprintf(g_nip_target_paths[i], sizeof(g_nip_target_paths[i]),
+                 "/org/shadowblip/InputPlumber/devices/target/xb360%d", i);
+        snprintf(g_nip_target_types[i], sizeof(g_nip_target_types[i]),
+                 "xb360");
     }
+    g_nip_target_count = 4;
 
     /* Restart the InputPlumber server. */
-    const nip_server_config cfg = { .num_composites = 2, .version = "0.78.0" };
+    const nip_server_config cfg = { .num_composites = 4, .version = "0.78.0" };
     f->server_pid = nip_fork_server(f->bus_address, &cfg);
     assert_true(f->server_pid > 0);
 

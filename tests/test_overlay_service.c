@@ -728,6 +728,8 @@ reconcile_setup(void **state)
     /* Settings: 1 target, type xb360. */
     cbx_settings_defaults(&f->svc->settings);
     f->svc->settings.virtual_controllers.count = 1;
+    f->svc->reconcile_timeout_ms = 20;
+    f->svc->reconcile_poll_ms = 1;
     snprintf(f->svc->settings.virtual_controllers.types[0],
              CBX_MAX_TYPE_LEN, "xb360");
 
@@ -781,8 +783,10 @@ test_reconcile_grow_and_attach(void **state)
     /* Expect AttachTargetDevice to succeed (returns NULL = void). */
     ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
         "AttachTargetDevice", NULL);
-    /* Expect DeviceType query to return "xb360" (matches settings). */
+    /* Expect DeviceType and exact attachment verification. */
     ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_TARGET, "DeviceType", "xb360");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE, "TargetDevices",
+        "/org/shadowblip/InputPlumber/devices/target/xb3600");
 
     int rc = cbx_reconcile_startup_targets(f->svc);
     assert_int_equal(rc, 0);
@@ -852,9 +856,11 @@ test_reconcile_shrink(void **state)
         "GetManagedObjects", FIXTURE_1C1T_RECON);
     /* DeviceType for the remaining target. */
     ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_TARGET, "DeviceType", "xb360");
-    /* AttachTargetDevice for the remaining target. */
+    /* AttachTargetDevice and exact TargetDevices verification. */
     ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
         "AttachTargetDevice", NULL);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE, "TargetDevices",
+        "/org/shadowblip/InputPlumber/devices/target/xb3600");
 
     int rc = cbx_reconcile_startup_targets(f->svc);
     assert_int_equal(rc, 0);

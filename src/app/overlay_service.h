@@ -178,6 +178,25 @@ typedef struct cbx_overlay_service_ctx {
     /* --- Hotplug --- */
     ip_hotplug             hp;             /* ObjectManager signal handler       */
 
+    /* --- Reconciliation status ------------------------------------ */
+    struct {
+        char phase[32];
+        char operation[48];
+        char target_kind[CBX_MAX_TYPE_LEN];
+        char target_path[CBX_MAX_PATH_LEN];
+        int old_count;
+        int new_count;
+        int rc;
+        uint32_t elapsed_ms;
+        uint32_t deadline_ms;
+        bool deadline_expired;
+        int cleanup_failures;
+        bool originals_stopped;
+        char detail[256];
+    } reconcile_status;
+    uint32_t reconcile_timeout_ms; /* 0 = CBX_RECONCILE_TIMEOUT_MS */
+    uint32_t reconcile_poll_ms;    /* 0 = CBX_RECONCILE_POLL_MS    */
+
     /* --- Status --- */
     bool                   initialized;   /* true after full init              */
     bool                   backend_ready; /* Version + enumeration succeeded   */
@@ -199,6 +218,10 @@ void cbx_overlay_service_step(cbx_overlay_service_ctx *svc);
 
 /* --- Topology reconciliation (exposed for testing — Task 5) ------------- */
 
+/* Finite production defaults.  Tests may override the per-context values. */
+#define CBX_RECONCILE_TIMEOUT_MS 2000u
+#define CBX_RECONCILE_POLL_MS      10u
+
 /*
  * (Re)initialize all intercept polls for the current composites.
  * Stops any existing polls first, then creates one per composite with
@@ -211,20 +234,16 @@ void cbx_overlay_rearm_polls(cbx_overlay_service_ctx *svc);
  * Reconcile InputPlumber's live target topology to match the configured
  * desired topology from settings.yaml (SPEC §5.2).
  *
- * Phases:
- *   1. Grow: create targets until count matches settings.virtual_controllers.count
- *   2. Shrink: stop excess targets
- *   3. Type correction: for each slot whose DeviceType doesn't match
- *      settings, stop old target and create new one (reverse order to
- *      preserve array ordering)
- *   4. Attach: attach each target to its corresponding composite
- *      (target[i] → composite[i]) for routability
+ * Every CreateTargetDevice return path is retained immediately and polled
+ * with a monotonic finite deadline until that exact object is published with
+ * the expected Target interface and DeviceType.  Every stop is similarly
+ * confirmed by exact-path disappearance.  Stable composite indexes and
+ * retained target paths define slots; ObjectManager reply order is not used.
+ * Every required attachment is verified against parsed TargetDevices values.
  *
- * On any failure, rolls back by stopping all targets created during this
- * call that were not in the original set (SPEC §5.2: failures retain
- * last confirmed topology).
- *
- * Every create/stop is confirmed via ObjectManager re-enumeration.
+ * On failure, all paths created by this call are stopped with bounded exact-
+ * path confirmation.  Originals stopped by type correction/shrink are not
+ * claimed as restored; reconcile_status records that destructive boundary.
  *
  * Returns 0 on success, negative errno on failure.
  */

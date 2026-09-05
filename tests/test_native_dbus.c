@@ -424,24 +424,23 @@ static void test_native_topology_reconciliation(void **state)
     assert_int_equal(cbx_objectmanager_enumerate(backend, bus, &model), 0);
     assert_int_equal(model.target_count, 3);
 
+    /* ObjectManager dictionary order is not slot identity.  Verify and attach
+     * using the exact paths returned by CreateTargetDevice. */
     char *dtype0 = NULL, *dtype1 = NULL, *dtype2 = NULL;
-    assert_int_equal(ip_target_get_device_type(backend, bus,
-        model.targets[0].path, &dtype0), 0);
+    assert_int_equal(ip_target_get_device_type(backend, bus, path0, &dtype0), 0);
     assert_string_equal(dtype0, "xb360"); free(dtype0);
-    assert_int_equal(ip_target_get_device_type(backend, bus,
-        model.targets[1].path, &dtype1), 0);
+    assert_int_equal(ip_target_get_device_type(backend, bus, path1, &dtype1), 0);
     assert_string_equal(dtype1, "ds5"); free(dtype1);
-    assert_int_equal(ip_target_get_device_type(backend, bus,
-        model.targets[2].path, &dtype2), 0);
+    assert_int_equal(ip_target_get_device_type(backend, bus, path2, &dtype2), 0);
     assert_string_equal(dtype2, "gamepad"); free(dtype2);
 
     const char *comp0 = "/org/shadowblip/InputPlumber/CompositeDevice0";
     assert_int_equal(ip_manager_attach_target_device(
-        backend, bus, model.targets[0].path, comp0), 0);
+        backend, bus, path0, comp0), 0);
     assert_int_equal(ip_manager_attach_target_device(
-        backend, bus, model.targets[1].path, comp0), 0);
+        backend, bus, path1, comp0), 0);
     assert_int_equal(ip_manager_attach_target_device(
-        backend, bus, model.targets[2].path, comp0), 0);
+        backend, bus, path2, comp0), 0);
 
     char *td = NULL;
     assert_int_equal(ip_composite_get_target_devices(
@@ -454,7 +453,7 @@ static void test_native_topology_reconciliation(void **state)
 
     /* Scenario 2: Remove one slot, verify others preserved. */
     char slot1_path[256];
-    snprintf(slot1_path, sizeof(slot1_path), "%s", model.targets[1].path);
+    snprintf(slot1_path, sizeof(slot1_path), "%s", path1);
     assert_int_equal(ip_manager_stop_target_device(backend, bus, slot1_path), 0);
 
     cbx_device_model model2;
@@ -462,42 +461,37 @@ static void test_native_topology_reconciliation(void **state)
     assert_int_equal(cbx_objectmanager_enumerate(backend, bus, &model2), 0);
     assert_int_equal(model2.target_count, 2);
     char *dt0 = NULL;
-    assert_int_equal(ip_target_get_device_type(backend, bus,
-        model2.targets[0].path, &dt0), 0);
+    assert_int_equal(ip_target_get_device_type(backend, bus, path0, &dt0), 0);
     assert_string_equal(dt0, "xb360"); free(dt0);
     char *dt1 = NULL;
-    assert_int_equal(ip_target_get_device_type(backend, bus,
-        model2.targets[1].path, &dt1), 0);
+    assert_int_equal(ip_target_get_device_type(backend, bus, path2, &dt1), 0);
     assert_string_equal(dt1, "gamepad"); free(dt1);
 
     /* Scenario 3: Type correction (stop+create). */
     char old_path[256];
-    snprintf(old_path, sizeof(old_path), "%s", model2.targets[1].path);
+    snprintf(old_path, sizeof(old_path), "%s", path2);
     assert_int_equal(ip_manager_stop_target_device(backend, bus, old_path), 0);
     char *new_path = NULL;
     assert_int_equal(ip_manager_create_target_device(
         backend, bus, "ds5", &new_path), 0);
     assert_non_null(new_path);
-    free(new_path);
 
     cbx_device_model model3;
     cbx_device_model_init(&model3);
     assert_int_equal(cbx_objectmanager_enumerate(backend, bus, &model3), 0);
     assert_int_equal(model3.target_count, 2);
     char *s3_dt0 = NULL;
-    assert_int_equal(ip_target_get_device_type(backend, bus,
-        model3.targets[0].path, &s3_dt0), 0);
+    assert_int_equal(ip_target_get_device_type(backend, bus, path0, &s3_dt0), 0);
     assert_string_equal(s3_dt0, "xb360"); free(s3_dt0);
     char *s3_dt1 = NULL;
-    assert_int_equal(ip_target_get_device_type(backend, bus,
-        model3.targets[1].path, &s3_dt1), 0);
+    assert_int_equal(ip_target_get_device_type(backend, bus, new_path, &s3_dt1), 0);
     assert_string_equal(s3_dt1, "ds5"); free(s3_dt1);
 
     /* Scenario 4: Attach after type correction. */
     assert_int_equal(ip_manager_attach_target_device(
-        backend, bus, model3.targets[0].path, comp0), 0);
+        backend, bus, path0, comp0), 0);
     assert_int_equal(ip_manager_attach_target_device(
-        backend, bus, model3.targets[1].path, comp0), 0);
+        backend, bus, new_path, comp0), 0);
     char *td2 = NULL;
     assert_int_equal(ip_composite_get_target_devices(
         backend, bus, comp0, &td2), 0);
@@ -509,7 +503,7 @@ static void test_native_topology_reconciliation(void **state)
     for (int i = model3.target_count - 1; i >= 0; i--)
         ip_manager_stop_target_device(backend, bus, model3.targets[i].path);
 
-    free(path0); free(path1); free(path2);
+    free(path0); free(path1); free(path2); free(new_path);
     backend->disconnect(bus);
     nip_stop_server(&sh);
 }
@@ -630,8 +624,8 @@ static void test_native_startup_reconciliation_prod_path(void **state)
 {
     (void)state;
     nip_server_handle sh;
-    const nip_server_config cfg = { .num_composites = 1, .version = "9.8.7" };
-    nip_reset_server_state(1);
+    const nip_server_config cfg = { .num_composites = 3, .version = "9.8.7" };
+    nip_reset_server_state(3);
     assert_int_equal(nip_start_server(&sh, &cfg), 0);
 
     const ip_dbus_backend *backend = ip_dbus_sd_backend();
@@ -656,7 +650,7 @@ static void test_native_startup_reconciliation_prod_path(void **state)
 
     assert_int_equal(cbx_objectmanager_enumerate(backend, bus, &svc.model), 0);
     assert_int_equal(svc.model.target_count, 0);
-    assert_int_equal(svc.model.composite_count, 1);
+    assert_int_equal(svc.model.composite_count, 3);
 
     int rc = cbx_reconcile_startup_targets(&svc);
     assert_int_equal(rc, 0);
@@ -674,11 +668,16 @@ static void test_native_startup_reconciliation_prod_path(void **state)
     assert_string_equal(dt2, "gamepad"); free(dt2);
 
     const char *comp0 = "/org/shadowblip/InputPlumber/CompositeDevice0";
-    char *td = NULL;
-    assert_int_equal(ip_composite_get_target_devices(
-        backend, bus, comp0, &td), 0);
-    assert_true(strstr(td, svc.model.targets[0].path) != NULL);
-    free(td);
+    for (int slot = 0; slot < 3; slot++) {
+        char comp[128];
+        snprintf(comp, sizeof(comp),
+                 "/org/shadowblip/InputPlumber/CompositeDevice%d", slot);
+        char *td = NULL;
+        assert_int_equal(ip_composite_get_target_devices(
+            backend, bus, comp, &td), 0);
+        assert_string_equal(td, svc.model.targets[slot].path);
+        free(td);
+    }
 
     /* Scenario 2: Shrink to 1 VC. */
     svc.settings.virtual_controllers.count = 1;
@@ -713,6 +712,129 @@ static void test_native_startup_reconciliation_prod_path(void **state)
 
     backend->disconnect(bus);
     nip_stop_server(&sh);
+}
+
+static void test_native_reconcile_delays_reorder_and_exact_paths(void **state)
+{
+    (void)state;
+    nip_server_handle sh;
+    const nip_server_config cfg = {
+        .num_composites = 2, .version = "9.8.7",
+        .publication_delay_ms = 80, .removal_delay_ms = 80,
+        .reverse_object_order = true
+    };
+    nip_reset_server_state(2);
+    /* An unrelated existing target means count-only confirmation would be
+     * ambiguous; the new return path must itself become visible. */
+    g_nip_target_count = 1;
+    snprintf(g_nip_target_paths[0], sizeof(g_nip_target_paths[0]),
+             "/org/shadowblip/InputPlumber/devices/target/unrelated9");
+    snprintf(g_nip_target_types[0], sizeof(g_nip_target_types[0]), "xb360");
+    assert_int_equal(nip_start_server(&sh, &cfg), 0);
+
+    const ip_dbus_backend *backend = ip_dbus_sd_backend();
+    ip_bus_handle bus = NULL;
+    assert_int_equal(backend->connect(&bus), 0);
+    assert_int_equal(wait_for_server(backend, bus, NULL), 0);
+    cbx_overlay_service_ctx svc = {0};
+    svc.conn.backend = backend; svc.conn.bus = bus;
+    cbx_settings_defaults(&svc.settings);
+    svc.settings.virtual_controllers.count = 2;
+    snprintf(svc.settings.virtual_controllers.types[0], CBX_MAX_TYPE_LEN, "xb360");
+    snprintf(svc.settings.virtual_controllers.types[1], CBX_MAX_TYPE_LEN, "ds5");
+    assert_int_equal(cbx_objectmanager_enumerate(backend, bus, &svc.model), 0);
+    assert_int_equal(cbx_reconcile_startup_targets(&svc), 0);
+    assert_int_equal(svc.model.target_count, 2);
+    /* Reversed ObjectManager replies are normalized to stable identities. */
+    assert_string_equal(svc.model.composites[0].path,
+        "/org/shadowblip/InputPlumber/CompositeDevice0");
+
+    svc.settings.virtual_controllers.count = 1;
+    assert_int_equal(cbx_reconcile_startup_targets(&svc), 0);
+    assert_int_equal(svc.model.target_count, 1);
+    backend->disconnect(bus);
+    nip_stop_server(&sh);
+}
+
+static void test_native_reconcile_failure_boundaries(void **state)
+{
+    (void)state;
+    const ip_dbus_backend *backend = ip_dbus_sd_backend();
+
+    /* Missing composites fail before any destructive/create operation. */
+    nip_server_handle sh;
+    nip_server_config cfg = { .num_composites = 1, .version = "9.8.7" };
+    nip_reset_server_state(1);
+    assert_int_equal(nip_start_server(&sh, &cfg), 0);
+    ip_bus_handle bus = NULL;
+    assert_int_equal(backend->connect(&bus), 0);
+    assert_int_equal(wait_for_server(backend, bus, NULL), 0);
+    cbx_overlay_service_ctx svc = {0};
+    svc.conn.backend = backend; svc.conn.bus = bus;
+    cbx_settings_defaults(&svc.settings);
+    svc.settings.virtual_controllers.count = 2;
+    assert_int_equal(cbx_objectmanager_enumerate(backend, bus, &svc.model), 0);
+    assert_int_equal(cbx_reconcile_startup_targets(&svc), -ENODEV);
+    assert_string_equal(svc.reconcile_status.phase, "attachment");
+    assert_false(svc.reconcile_status.originals_stopped);
+    backend->disconnect(bus); nip_stop_server(&sh);
+
+    /* Publication timeout still cleans the retained, unpublished path. */
+    cfg = (nip_server_config){ .num_composites = 1, .version = "9.8.7",
+                              .publication_delay_ms = 200 };
+    nip_reset_server_state(1);
+    assert_int_equal(nip_start_server(&sh, &cfg), 0);
+    bus = NULL; assert_int_equal(backend->connect(&bus), 0);
+    assert_int_equal(wait_for_server(backend, bus, NULL), 0);
+    memset(&svc, 0, sizeof(svc)); svc.conn.backend = backend; svc.conn.bus = bus;
+    cbx_settings_defaults(&svc.settings); svc.settings.virtual_controllers.count = 1;
+    svc.reconcile_timeout_ms = 30; svc.reconcile_poll_ms = 2;
+    assert_int_equal(cbx_objectmanager_enumerate(backend, bus, &svc.model), 0);
+    assert_int_equal(cbx_reconcile_startup_targets(&svc), -ETIMEDOUT);
+    assert_true(svc.reconcile_status.deadline_expired);
+    assert_int_equal(svc.reconcile_status.cleanup_failures, 0);
+    backend->disconnect(bus); nip_stop_server(&sh);
+
+    /* Attachment failure plus Stop failure is visible as rollback failure. */
+    cfg = (nip_server_config){ .num_composites = 1, .version = "9.8.7",
+                              .fail_attach = true, .fail_stop = true };
+    nip_reset_server_state(1);
+    assert_int_equal(nip_start_server(&sh, &cfg), 0);
+    bus = NULL; assert_int_equal(backend->connect(&bus), 0);
+    assert_int_equal(wait_for_server(backend, bus, NULL), 0);
+    memset(&svc, 0, sizeof(svc)); svc.conn.backend = backend; svc.conn.bus = bus;
+    cbx_settings_defaults(&svc.settings); svc.settings.virtual_controllers.count = 1;
+    svc.reconcile_timeout_ms = 50;
+    assert_int_equal(cbx_objectmanager_enumerate(backend, bus, &svc.model), 0);
+    assert_true(cbx_reconcile_startup_targets(&svc) < 0);
+    assert_string_equal(svc.reconcile_status.phase, "attachment");
+    assert_int_equal(svc.reconcile_status.cleanup_failures, 1);
+    assert_non_null(strstr(svc.reconcile_status.detail, "cleanup_failures=1"));
+    backend->disconnect(bus); nip_stop_server(&sh);
+}
+
+static void test_native_reconcile_verifies_every_attachment(void **state)
+{
+    (void)state;
+    nip_server_handle sh;
+    const nip_server_config cfg = {
+        .num_composites = 2, .version = "9.8.7",
+        .hide_attachment_for_composite = 2
+    };
+    nip_reset_server_state(2);
+    assert_int_equal(nip_start_server(&sh, &cfg), 0);
+    const ip_dbus_backend *backend = ip_dbus_sd_backend();
+    ip_bus_handle bus = NULL;
+    assert_int_equal(backend->connect(&bus), 0);
+    assert_int_equal(wait_for_server(backend, bus, NULL), 0);
+    cbx_overlay_service_ctx svc = {0};
+    svc.conn.backend = backend; svc.conn.bus = bus;
+    cbx_settings_defaults(&svc.settings); svc.settings.virtual_controllers.count = 2;
+    svc.reconcile_timeout_ms = 40; svc.reconcile_poll_ms = 2;
+    assert_int_equal(cbx_objectmanager_enumerate(backend, bus, &svc.model), 0);
+    assert_int_equal(cbx_reconcile_startup_targets(&svc), -ETIMEDOUT);
+    assert_string_equal(svc.reconcile_status.operation, "verify-TargetDevices");
+    backend->disconnect(bus); nip_stop_server(&sh);
 }
 
 /* ================================================================== */
@@ -998,6 +1120,9 @@ int main(void)
         cmocka_unit_test(test_native_topology_reconciliation),
         cmocka_unit_test(test_native_assignment_application),
         cmocka_unit_test(test_native_startup_reconciliation_prod_path),
+        cmocka_unit_test(test_native_reconcile_delays_reorder_and_exact_paths),
+        cmocka_unit_test(test_native_reconcile_failure_boundaries),
+        cmocka_unit_test(test_native_reconcile_verifies_every_attachment),
         /* New round-trip tests for overlay server capabilities. */
         cmocka_unit_test(test_native_set_intercept_activation),
         cmocka_unit_test(test_native_intercept_mode_writable),

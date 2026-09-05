@@ -66,8 +66,8 @@ int main(int argc, char **argv)
     setenv("DBUS_SYSTEM_BUS_ADDRESS", address, 1);
 
     /* Reset and fork the InputPlumber-compatible server. */
-    nip_reset_server_state(2);
-    nip_server_config cfg = { .num_composites = 2, .version = "0.78.0" };
+    nip_reset_server_state(4);
+    nip_server_config cfg = { .num_composites = 4, .version = "0.78.0" };
     pid_t server_pid = nip_fork_server(address, &cfg);
     if (server_pid < 0) {
         fprintf(stderr, "test_ip_server: failed to fork server: %d\n",

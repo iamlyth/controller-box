@@ -114,11 +114,12 @@ cbx_manager_backend_ready(void *userdata)
     mgr->dbus_connected = true;
     mgr->ct.backend = mgr->dbus_backend;
     mgr->ct.bus = mgr->dbus_bus;
-    if (cbx_controllers_tab_refresh(&mgr->ct) == 0)
-        cbx_controllers_tab_set_available(&mgr->ct, true, NULL);
-    else
+    cbx_controllers_tab_set_available(&mgr->ct, true, NULL);
+    if (cbx_controllers_tab_refresh(&mgr->ct) != 0)
         cbx_controllers_tab_set_available(&mgr->ct, false,
-                                           "InputPlumber enumeration failed");
+            "InputPlumber enumeration/type query failed");
+    else
+        mgr->last_controller_refresh_ms = SDL_GetTicks();
     cbx_profiles_tab_set_context(&mgr->pt, mgr->rend.renderer,
                                   mgr->dbus_backend, mgr->dbus_bus);
 }
@@ -666,6 +667,7 @@ cbx_manager_run(cbx_manager *mgr)
                     break;
             }
         }
+        cbx_manager_refresh_controllers_if_due(mgr, SDL_GetTicks());
         cbx_manager_render(mgr);
         cbx_renderer_present(&mgr->rend);
     }
@@ -729,6 +731,29 @@ cbx_manager_shutdown(cbx_manager *mgr)
     cbx_renderer_shutdown(&mgr->rend);
 
     memset(mgr, 0, sizeof(*mgr));
+}
+
+/* Visible-tab bounded refresh is the least-invasive freshness fallback for
+ * manager target add/remove changes.  Full ObjectManager subscription remains
+ * in the overlay service; Manager refreshes only while Controllers is visible. */
+int
+cbx_manager_refresh_controllers_if_due(cbx_manager *mgr, uint32_t now_ms)
+{
+    if (!mgr || mgr->active_tab != CBX_MGR_TAB_CONTROLLERS ||
+        !mgr->dbus_connected || !mgr->ct.backend)
+        return 0;
+    if ((uint32_t)(now_ms - mgr->last_controller_refresh_ms) <
+        CBX_MGR_CONTROLLERS_REFRESH_MS)
+        return 0;
+
+    mgr->last_controller_refresh_ms = now_ms;
+    if (!mgr->ct.add_btn.base.interactive)
+        cbx_controllers_tab_set_available(&mgr->ct, true, NULL);
+    int rc = cbx_controllers_tab_refresh(&mgr->ct);
+    if (rc != 0)
+        cbx_controllers_tab_set_available(&mgr->ct, false,
+            "InputPlumber enumeration/type query failed");
+    return rc;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1203,8 +1228,15 @@ cbx_manager_on_tab_change(cbx_widget *w, int new_tab, void *user_data)
     switch (new_tab) {
     case CBX_MGR_TAB_CONTROLLERS:
         /* Guard against NULL backend (degraded mode). */
-        if (mgr->ct.backend)
-            cbx_controllers_tab_refresh(&mgr->ct);
+        if (mgr->ct.backend) {
+            if (!mgr->ct.add_btn.base.interactive)
+                cbx_controllers_tab_set_available(&mgr->ct, true, NULL);
+            int refresh_rc = cbx_controllers_tab_refresh(&mgr->ct);
+            mgr->last_controller_refresh_ms = SDL_GetTicks();
+            if (refresh_rc != 0)
+                cbx_controllers_tab_set_available(&mgr->ct, false,
+                    "InputPlumber enumeration/type query failed");
+        }
         break;
     case CBX_MGR_TAB_PROFILES:
         cbx_profiles_tab_refresh(&mgr->pt);

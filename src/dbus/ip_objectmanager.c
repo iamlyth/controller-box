@@ -155,6 +155,24 @@ add_target(cbx_device_model *model, const char *path)
     return true;
 }
 
+static int
+compare_composites(const void *a, const void *b)
+{
+    const cbx_composite_entry *ca = a;
+    const cbx_composite_entry *cb = b;
+    if (ca->index >= 0 && cb->index >= 0 && ca->index != cb->index)
+        return ca->index < cb->index ? -1 : 1;
+    return strcmp(ca->path, cb->path);
+}
+
+static int
+compare_devices(const void *a, const void *b)
+{
+    const cbx_device_entry *da = a;
+    const cbx_device_entry *db = b;
+    return strcmp(da->path, db->path);
+}
+
 /* --- Public API ---------------------------------------------------------- */
 
 int
@@ -227,12 +245,22 @@ cbx_objectmanager_parse_reply(const char *reply, cbx_device_model *model)
             const char *rest = path + dlen;
             if (strncmp(rest, "source/", 7) == 0)
                 add_source(model, path);
-            else if (strncmp(rest, "target/", 7) == 0)
+            else if (strncmp(rest, "target/", 7) == 0 &&
+                     iface_list_contains(ifaces, IP_IFACE_TARGET))
                 add_target(model, path);
         }
 
         line = strtok_r(NULL, "\n", &saveptr);
     }
+
+    /* ObjectManager dictionaries are unordered.  Stable path/index order is
+     * required before any slot mapping is derived from the model. */
+    qsort(model->composites, (size_t)model->composite_count,
+          sizeof(model->composites[0]), compare_composites);
+    qsort(model->sources, (size_t)model->source_count,
+          sizeof(model->sources[0]), compare_devices);
+    qsort(model->targets, (size_t)model->target_count,
+          sizeof(model->targets[0]), compare_devices);
 
     free(copy);
     return 0;

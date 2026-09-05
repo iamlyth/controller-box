@@ -270,12 +270,14 @@ cbx_controllers_tab_init(cbx_controllers_tab *tab,
     cbx_controllers_tab_layout(tab);
 
     /* --- Load supported types + refresh --------------------------- */
-
-    /* --- Load supported types + refresh --------------------------- */
     if (backend && bus) {
-        cbx_controllers_tab_load_supported_types(tab);
-        cbx_controllers_tab_refresh(tab);
-        cbx_controllers_tab_set_available(tab, true, NULL);
+        int load_rc = cbx_controllers_tab_load_supported_types(tab);
+        int refresh_rc = load_rc == 0 ? cbx_controllers_tab_refresh(tab) : load_rc;
+        if (refresh_rc == 0)
+            cbx_controllers_tab_set_available(tab, true, NULL);
+        else
+            cbx_controllers_tab_set_available(tab, false,
+                "InputPlumber enumeration/type query failed");
     } else {
         cbx_controllers_tab_set_available(tab, false,
                                            "InputPlumber unavailable — waiting for recovery");
@@ -347,6 +349,10 @@ check_orphan_columns(cbx_controllers_tab *tab)
                  tab->expected_target_count);
         cbx_label_set_text(&tab->status_lbl, msg);
         cbx_widget_set_visible(&tab->status_lbl.base, true);
+    } else if (strncmp(tab->status_lbl.text, "Topology incomplete:",
+                       strlen("Topology incomplete:")) == 0) {
+        cbx_label_set_text(&tab->status_lbl, "");
+        cbx_widget_set_visible(&tab->status_lbl.base, false);
     }
 }
 
@@ -419,19 +425,23 @@ cbx_controllers_tab_refresh(cbx_controllers_tab *tab)
     if (rc != 0)
         return rc;
 
-    /* Query each target's DeviceType. */
+    /* Query each target's DeviceType.  A connected bus is not available
+     * state when required typed properties cannot be read (SPEC §2.4). */
     tab->device_type_count = 0;
+    int type_rc = 0;
     for (int i = 0; i < tab->model.target_count && i < CBX_CT_MAX_DEVICES; i++) {
         char *dtype = NULL;
         rc = ip_target_get_device_type(tab->backend, tab->bus,
                                          tab->model.targets[i].path,
                                          &dtype);
-        if (rc == 0 && dtype) {
+        if (rc == 0 && dtype && dtype[0]) {
             snprintf(tab->device_types[i], CBX_MAX_TYPE_LEN, "%s", dtype);
-            free(dtype);
         } else {
             tab->device_types[i][0] = '\0';
+            if (type_rc == 0)
+                type_rc = rc != 0 ? rc : -EIO;
         }
+        free(dtype);
         tab->device_type_count++;
     }
 
@@ -459,7 +469,7 @@ cbx_controllers_tab_refresh(cbx_controllers_tab *tab)
      * success.  Check after every refresh. */
     check_orphan_columns(tab);
 
-    return 0;
+    return type_rc;
 }
 
 /* ------------------------------------------------------------------ */

@@ -50,6 +50,7 @@ typedef enum {
 #define CBX_MGR_TABBAR_H  48
 #define CBX_MGR_FONT_SIZE 18
 #define CBX_MGR_MAX_GAMECONTROLLERS 16
+#define CBX_MGR_CONTROLLERS_REFRESH_MS 1000u
 
 /* ------------------------------------------------------------------ */
 /*  Manager                                                           */
@@ -83,6 +84,7 @@ typedef struct {
     bool                   owns_dbus_connection;
     int                    dbus_init_rc;  /* saved connect rc for degraded reason */
     ip_connection          connection;
+    uint32_t               last_controller_refresh_ms;
 
     /* Real SDL game-controller transport (keyboard is supplemental only). */
     SDL_GameController    *gamecontrollers[CBX_MGR_MAX_GAMECONTROLLERS];
@@ -154,6 +156,10 @@ void cbx_manager_stop(cbx_manager *mgr);
  * the event was consumed.
  */
 bool cbx_manager_handle_event(cbx_manager *mgr, const SDL_Event *ev);
+
+/* Bounded visible-tab freshness fallback.  ObjectManager target changes are
+ * refreshed at most once per second while Controllers is visible. */
+int cbx_manager_refresh_controllers_if_due(cbx_manager *mgr, uint32_t now_ms);
 
 /*
  * Render one frame.  Clears the screen, draws the tab bar and the
