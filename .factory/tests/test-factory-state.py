@@ -256,14 +256,23 @@ def make_state(**overrides) -> FactoryState:
         "plan_digest": PLAN_SHA,
         "role_prompt_digests": {"planner": ROLE_SHA},
         "audit_objectives_digest": AUDIT_SHA,
+        "pre_round_hook_configuration_digest": "0" * 64,
+        "pre_round_hook_commit": "0" * 40,
+        "pre_round_hook_results_digest": "0" * 64,
+        "pre_round_hook_started_round": 1,
+        "pre_round_hook_completed_round": 1,
         "phase_base_commit": BASE_COMMIT,
         "selected_task_id": None,
         "attempt_number": 0,
         "phase_started_at_monotonic": MONOTONIC,
         "attempt_started_at_monotonic": 0,
         "last_outcome": None,
+        "readiness": state_module.empty_readiness(),
     }
     data.update(overrides)
+    if data["current_round"] == 0:
+        data["pre_round_hook_started_round"] = 0
+        data["pre_round_hook_completed_round"] = 0
     return parse_state(data)
 
 
@@ -821,6 +830,11 @@ class TransitionTableTest(StateConformanceCase):
                         "status": {"pass": "complete", "findings": "findings", "blocked": "human_blocked", "infrastructure_failure": "infrastructure_failure"}[outcome],
                         "terminal_outcome": outcome,
                         "result_sha256": "2" * 64,
+                        "aggregate_sha256": "3" * 64,
+                        "capability_result_sha256": "4" * 64,
+                        "core_result_sha256": "5" * 64,
+                        "conformance_result_sha256": "6" * 64,
+                        "human_result_sha256": "7" * 64,
                     })
                     source = dataclasses.replace(source, readiness=binding)
                 result = advance(source, outcome, **kwargs)

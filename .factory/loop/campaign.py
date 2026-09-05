@@ -73,6 +73,7 @@ import stat
 import sys
 import secrets
 import time
+import tomllib
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
@@ -467,6 +468,25 @@ class CampaignResult:
 # ---------------------------------------------------------------------------
 
 
+def _committed_campaign_verification(root: Path, commit: str) -> Tuple[str, ...]:
+    """Read the sole production verifier argv from committed config authority."""
+    if not SHA40_RE.fullmatch(commit):
+        raise CampaignConfigError("verification authority requires an exact accepted commit")
+    result = gitutil.git_run(
+        ["-C", str(Path(root).absolute()), "show", f"{commit}:.factory/config.toml"],
+        timeout=GIT_TIMEOUT,
+    )
+    if result.returncode != 0:
+        raise CampaignConfigError("cannot read committed .factory/config.toml verification authority")
+    try:
+        value = tomllib.loads(result.stdout).get("verification", {}).get("campaign_command")
+    except (tomllib.TOMLDecodeError, AttributeError) as exc:
+        raise CampaignConfigError("committed verification authority is malformed") from exc
+    if not isinstance(value, list) or not value or not all(isinstance(x, str) and x for x in value):
+        raise CampaignConfigError("committed campaign verification argv is missing")
+    return tuple(value)
+
+
 @dataclass(frozen=True)
 class CampaignConfig:
     """The trusted campaign contract (bounds, bindings, and role seams).
@@ -527,6 +547,7 @@ class CampaignConfig:
     campaign_timeout: float = DEFAULT_CAMPAIGN_TIMEOUT
     runtime_limit: float = launch_module.DEFAULT_RUNTIME_LIMIT
     inactivity_limit: float = launch_module.DEFAULT_INACTIVITY_LIMIT
+    readiness_only: bool = False
 
     def __post_init__(self) -> None:
         # Fail closed at construction: an invalid campaign contract can never
@@ -657,6 +678,11 @@ class CampaignConfig:
                     f"{name} must be an argv of non-empty strings"
                 )
         if self.role_driver is None:
+            # Production policy remains five rounds.  Readiness itself is
+            # independently mandatory for every real provider, so changing a
+            # CLI round count can never bypass round zero.
+            if self.rounds_requested != 5:
+                raise CampaignConfigError("production campaigns require exactly five rounds")
             if tuple(self.runner_command) != RUNNER_COMMAND:
                 raise CampaignConfigError(
                     "production runner_command must be exactly the declared "
@@ -664,6 +690,7 @@ class CampaignConfig:
                     "with no arguments or shell"
                 )
             canonical_commands = (
+                ("verification_command", tuple(self.verification_command), _committed_campaign_verification(self.root, self.accepted_commit)),
                 ("capability_command", tuple(self.capability_command), CANONICAL_CAPABILITY_COMMAND),
                 ("acceptance_command", tuple(self.acceptance_command), CANONICAL_FINAL_ACCEPTANCE_COMMAND),
             )
@@ -991,11 +1018,11 @@ class TrustedGit:
     def raw_dirty(self) -> bool:
         return bool(self.status_paths())
 
-    def diff_paths(self, base: str) -> List[str]:
-        """Repository-relative paths changed between ``base`` and HEAD."""
-        result = self._bytes(["diff", "--name-only", "-z", base, "HEAD"])
+    def diff_paths(self, base: str, descendant: str = "HEAD") -> List[str]:
+        """Repository-relative paths changed between two exact commits."""
+        result = self._bytes(["diff", "--name-only", "-z", base, descendant])
         if result.returncode != 0:
-            raise CampaignGitError(f"cannot diff {base}..HEAD")
+            raise CampaignGitError(f"cannot diff {base}..{descendant}")
         raw = result.stdout
         if not raw:
             return []
@@ -2236,6 +2263,7 @@ class Campaign:
         # modes execute through the same retained-fd authority — no pathname
         # asymmetry between the two gate lanes.
         self._held_acceptance: Optional[evidence_module.HeldVerifier] = None
+        self._command_closure: Dict[str, str] = {}
         # Task 10 §16: the phase records of THIS run, consumed by the findings
         # authority to bind every previous-round receipt to a phase that
         # actually ran and classified findings/blocked.
@@ -2297,6 +2325,51 @@ class Campaign:
             self._git = None
             raise
 
+    def _bind_command_closure(self) -> None:
+        """Stage and bind the complete committed local command dependency surface."""
+        if self._config.role_driver is not None:
+            return
+        result = self._git._bytes(["ls-tree", "-r", "--name-only", "-z", self._config.accepted_commit])
+        if result.returncode != 0:
+            raise CampaignBindingError("cannot enumerate committed command closure")
+        paths = [p.decode("utf-8") for p in result.stdout.split(b"\0") if p]
+        selected = sorted(p for p in paths if p.startswith(("scripts/", ".factory/loop/", ".factory/schemas/")) or p in {
+            ".factory/config.toml", ".factory/environment.toml", ".factory/capability-contracts.json",
+            ".factory/requirement-policy.json", ".factory/signer-trust.json",
+            readiness_module.APPROVAL_PATH, readiness_module.TRUST_PATH,
+        })
+        if not selected:
+            raise CampaignBindingError("committed command closure is empty")
+        closure_root = self._state_directory() / "command-closure"
+        closure_root.mkdir(mode=0o700)
+        mapping: Dict[str, str] = {}
+        for rel in selected:
+            raw = self._git.blob_at(self._config.accepted_commit, rel)
+            mapping[rel] = plan_sha256(raw)
+            target = closure_root / rel
+            target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o400)
+            try:
+                os.write(fd, raw); os.fsync(fd)
+            finally:
+                os.close(fd)
+        os.chmod(closure_root, 0o500)
+        self._command_closure = mapping
+
+    def _verify_command_closure(self) -> None:
+        if self._config.role_driver is not None:
+            return
+        for rel, digest in self._command_closure.items():
+            try:
+                raw, _ = evidence_module.secure_read_bytes(
+                    self._root / rel, maximum=PLAN_BLOB_MAX,
+                    what=f"command closure {rel}",
+                )
+            except evidence_module.VerifierBindingError as exc:
+                raise CampaignBindingError(f"command dependency substitution: {rel}: {exc}") from exc
+            if plan_sha256(raw) != digest:
+                raise CampaignBindingError(f"command dependency substitution: {rel}")
+
     def _bind_held_authorities(self) -> None:
         """Bind the driver and acceptance gate to their committed descriptors.
 
@@ -2309,6 +2382,7 @@ class Campaign:
         startup (never a silent pathname fallback).
         """
         config = self._config
+        self._bind_command_closure()
         if config.role_driver:
             canonical = "./" + config.role_driver
             try:
@@ -2368,6 +2442,19 @@ class Campaign:
                         f"start: {exc}"
                     ) from exc
 
+    def _persist_state(self, value: state_module.FactoryState) -> state_module.FactoryState:
+        """Publish, reopen, and byte/digest-verify every trusted transition."""
+        state_module.write_state(self._root, value)
+        reread = state_module.load_state(
+            self._root, expected_branch=self._config.branch,
+            expected_campaign_id=self._config.campaign_id,
+            expected_rounds_requested=self._config.rounds_requested,
+            expected_readiness_required=(self._config.role_driver is None),
+        )
+        if reread != value or state_module.state_digest(reread) != state_module.state_digest(value):
+            raise CampaignRecoveryError("persisted state bytes differ from the recovered transition")
+        return reread
+
     def _readiness_authority_digest(self) -> str:
         held = {
             "runner": self._held_runner, "runner_checker": self._held_runner_checker,
@@ -2377,7 +2464,10 @@ class Campaign:
         }
         if any(value is None for value in held.values()):
             raise CampaignBindingError("a mandatory readiness command authority is not held")
-        payload = {name: value.binding.digest() for name, value in held.items()}
+        payload = {
+            "entrypoints": {name: value.binding.digest() for name, value in held.items()},
+            "closure": dict(sorted(self._command_closure.items())),
+        }
         return plan_sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode())
 
     def _initial_readiness_binding(self) -> Dict[str, object]:
@@ -2404,11 +2494,13 @@ class Campaign:
             "contracts_sha256": digest_blob(".factory/capability-contracts.json"),
             "install_manifest_sha256": plan_sha256(manifest_raw),
             "command_authority_sha256": self._readiness_authority_digest(),
+            "human_authority_sha256": digest_blob(readiness_module.APPROVAL_PATH),
+            "trust_authority_sha256": digest_blob(readiness_module.TRUST_PATH),
         })
         return value
 
     def _assert_readiness(self, state: state_module.FactoryState) -> None:
-        if self._config.role_driver is not None or self._config.rounds_requested != 5:
+        if self._config.role_driver is not None:
             return
         value = state.readiness
         if (value.get("required") is not True or value.get("status") != "complete"
@@ -2427,35 +2519,46 @@ class Campaign:
         result = state_module.read_json(self._root, READINESS_RESULT_NAME, maximum=MAX_RESULT_FILE, missing_ok=True)
         if not isinstance(result, dict):
             raise CampaignBindingError("untrusted launch denied: readiness result is missing")
-        readiness_module.validate_result(result)
+        expected_bindings = {name: value[name] for name in (
+            "accepted_commit", "tree", "environment_blob", "specification_sha256",
+            "plan_sha256", "conformance_sha256", "policy_sha256", "contracts_sha256",
+            "install_manifest_sha256", "command_authority_sha256",
+            "human_authority_sha256", "trust_authority_sha256")}
+        readiness_module.validate_result(
+            result, expected_campaign_id=self._config.campaign_id,
+            expected_nonce=str(value["nonce"]), expected_bindings=expected_bindings,
+        )
         raw = json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
-        if plan_sha256(raw) != value.get("result_sha256") or result.get("nonce") != value.get("nonce") or result.get("status") != "complete":
+        if plan_sha256(raw) != value.get("result_sha256") or result.get("status") != "complete":
             raise CampaignBindingError("untrusted launch denied: readiness result binding is invalid")
 
     def _publish_readiness(self, state: state_module.FactoryState, *, status: str,
-                           outcome: str, aggregate: str, evidence: str,
-                           core: str, human: str) -> state_module.FactoryState:
+                           outcome: str, aggregate: str, capability: str,
+                           core: str, conformance: str, human: str) -> state_module.FactoryState:
         r = state.readiness
         bindings = {name: r[name] for name in (
             "accepted_commit", "tree", "environment_blob", "specification_sha256",
             "plan_sha256", "conformance_sha256", "policy_sha256", "contracts_sha256",
-            "install_manifest_sha256", "command_authority_sha256")}
-        results = {"aggregate_sha256": aggregate, "evidence_result_sha256": evidence,
-                   "core_result_sha256": core, "human_result_sha256": human}
+            "install_manifest_sha256", "command_authority_sha256",
+            "human_authority_sha256", "trust_authority_sha256")}
+        results = {"aggregate_sha256": aggregate, "capability_result_sha256": capability,
+                   "core_result_sha256": core, "conformance_result_sha256": conformance,
+                   "human_result_sha256": human}
         document = readiness_module.result_document(
             campaign_id=self._config.campaign_id, nonce=str(r["nonce"]),
             status=status, terminal_outcome=outcome, bindings=bindings, results=results)
         raw = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
-        state_module.atomic_write_json(self._root, READINESS_RESULT_NAME, document)
+        state_module.atomic_write_json(
+            self._root, READINESS_RESULT_NAME, document, no_replace=True
+        )
         updated = dict(r)
         updated.update({"cursor": 6, "status": status,
                         "terminal_outcome": outcome, "aggregate_sha256": aggregate,
-                        "evidence_result_sha256": evidence, "core_result_sha256": core,
+                        "capability_result_sha256": capability, "core_result_sha256": core,
+                        "conformance_result_sha256": conformance,
                         "human_result_sha256": human, "result_sha256": plan_sha256(raw)})
-        state2 = state_module.update_readiness(state, updated)
-        state_module.write_state(self._root, state2)
-        terminal_state = state_module.advance(state2, outcome)
-        state_module.write_state(self._root, terminal_state)
+        state2 = self._persist_state(state_module.update_readiness(state, updated))
+        terminal_state = self._persist_state(state_module.advance(state2, outcome))
         return terminal_state
 
     def _run_readiness(self, state: state_module.FactoryState) -> Tuple[state_module.FactoryState, Optional[str]]:
@@ -2468,30 +2571,35 @@ class Campaign:
         # transition.  It is revalidated and never causes physical acquisition.
         existing = state_module.read_json(self._root, READINESS_RESULT_NAME, maximum=MAX_RESULT_FILE, missing_ok=True)
         if existing is not None:
-            readiness_module.validate_result(existing)
-            if existing.get("nonce") != state.readiness.get("nonce"):
-                raise CampaignRecoveryError("foreign readiness result nonce")
+            expected_bindings = {name: state.readiness[name] for name in (
+                "accepted_commit", "tree", "environment_blob", "specification_sha256",
+                "plan_sha256", "conformance_sha256", "policy_sha256", "contracts_sha256",
+                "install_manifest_sha256", "command_authority_sha256",
+                "human_authority_sha256", "trust_authority_sha256")}
+            readiness_module.validate_result(
+                existing, expected_campaign_id=self._config.campaign_id,
+                expected_nonce=str(state.readiness["nonce"]),
+                expected_bindings=expected_bindings,
+            )
             raw = json.dumps(existing, sort_keys=True, separators=(",", ":")).encode()
             updated = dict(state.readiness)
             updated.update(existing["results"])
             updated.update({"cursor": 6, "status": existing["status"],
                             "terminal_outcome": existing["terminal_outcome"],
                             "result_sha256": plan_sha256(raw)})
-            state = state_module.update_readiness(state, updated)
-            state_module.write_state(self._root, state)
-            state = state_module.advance(state, str(existing["terminal_outcome"]))
-            state_module.write_state(self._root, state)
+            state = self._persist_state(state_module.update_readiness(state, updated))
+            state = self._persist_state(state_module.advance(state, str(existing["terminal_outcome"])))
             return state, None if state.current_phase == "planning" else str(existing["terminal_outcome"])
         prior = self._read_runner_acquisition()
         if prior is not None and prior.get("status") == "acquiring":
             return self._publish_readiness(state, status="infrastructure_failure",
                 outcome="infrastructure_failure", aggregate="0" * 64,
-                evidence="0" * 64, core="0" * 64, human="0" * 64), "infrastructure_failure"
+                capability="0" * 64, core="0" * 64, conformance="0" * 64,
+                human="0" * 64), "infrastructure_failure"
         acquiring = dict(state.readiness)
         acquiring.update({"attempt": int(acquiring["attempt"]) + 1,
                           "cursor": 1, "status": "acquiring"})
-        state = state_module.update_readiness(state, acquiring)
-        state_module.write_state(self._root, state)
+        state = self._persist_state(state_module.update_readiness(state, acquiring))
         ran, code, _detail = self._ensure_runner_evidence()
         acquisition = self._read_runner_acquisition()
         aggregate = str(acquisition.get("aggregate_sha256", "")) if acquisition else ""
@@ -2500,19 +2608,20 @@ class Campaign:
             status = "findings" if outcome == "findings" else "infrastructure_failure"
             return self._publish_readiness(state, status=status, outcome=outcome,
                 aggregate=aggregate if SHA256_RE.fullmatch(aggregate) else "0" * 64,
-                evidence="0" * 64, core="0" * 64, human="0" * 64), outcome
+                capability="0" * 64, core="0" * 64, conformance="0" * 64,
+                human="0" * 64), outcome
         cap_ran, cap_exit, _, cap_skipped = self._run_gate(self._config.capability_command, "capability")
         evidence_digest = plan_sha256(json.dumps({"ran": cap_ran, "exit": cap_exit, "skipped": cap_skipped}, sort_keys=True).encode())
         if not cap_ran or cap_skipped:
-            return self._publish_readiness(state, status="infrastructure_failure", outcome="infrastructure_failure", aggregate=aggregate, evidence=evidence_digest, core="0"*64, human="0"*64), "infrastructure_failure"
+            return self._publish_readiness(state, status="infrastructure_failure", outcome="infrastructure_failure", aggregate=aggregate, capability=evidence_digest, core="0"*64, conformance="0"*64, human="0"*64), "infrastructure_failure"
         if cap_exit != 0:
-            return self._publish_readiness(state, status="findings", outcome="findings", aggregate=aggregate, evidence=evidence_digest, core="0"*64, human="0"*64), "findings"
+            return self._publish_readiness(state, status="findings", outcome="findings", aggregate=aggregate, capability=evidence_digest, core="0"*64, conformance="0"*64, human="0"*64), "findings"
         core_ran, core_exit, _, core_skipped = self._run_gate(CORE_ACCEPTANCE_COMMAND, "core acceptance")
         core_digest = plan_sha256(json.dumps({"ran": core_ran, "exit": core_exit, "skipped": core_skipped}, sort_keys=True).encode())
         if not core_ran or core_skipped:
-            return self._publish_readiness(state, status="infrastructure_failure", outcome="infrastructure_failure", aggregate=aggregate, evidence=evidence_digest, core=core_digest, human="0"*64), "infrastructure_failure"
+            return self._publish_readiness(state, status="infrastructure_failure", outcome="infrastructure_failure", aggregate=aggregate, capability=evidence_digest, core=core_digest, conformance="0"*64, human="0"*64), "infrastructure_failure"
         if core_exit != 0:
-            return self._publish_readiness(state, status="findings", outcome="findings", aggregate=aggregate, evidence=evidence_digest, core=core_digest, human="0"*64), "findings"
+            return self._publish_readiness(state, status="findings", outcome="findings", aggregate=aggregate, capability=evidence_digest, core=core_digest, conformance="0"*64, human="0"*64), "findings"
         conf_ran, conf_exit, _, conf_skipped = self._run_gate(CONFORMANCE_VALIDATOR_COMMAND, "conformance validator")
         try:
             mapping_digest = readiness_module.validate_core_mapping(
@@ -2522,19 +2631,21 @@ class Campaign:
             conf_exit = 1
             mapping_digest = "0" * 64
         if not conf_ran or conf_skipped:
-            return self._publish_readiness(state, status="infrastructure_failure", outcome="infrastructure_failure", aggregate=aggregate, evidence=evidence_digest, core=core_digest, human=mapping_digest), "infrastructure_failure"
+            return self._publish_readiness(state, status="infrastructure_failure", outcome="infrastructure_failure", aggregate=aggregate, capability=evidence_digest, core=core_digest, conformance=mapping_digest, human="0"*64), "infrastructure_failure"
         if conf_exit != 0:
-            return self._publish_readiness(state, status="findings", outcome="findings", aggregate=aggregate, evidence=evidence_digest, core=core_digest, human=mapping_digest), "findings"
+            return self._publish_readiness(state, status="findings", outcome="findings", aggregate=aggregate, capability=evidence_digest, core=core_digest, conformance=mapping_digest, human="0"*64), "findings"
         try:
             approval_raw = self._git.blob_at(self._git.head(), readiness_module.APPROVAL_PATH)
+            trust_raw = self._git.blob_at(self._git.head(), readiness_module.TRUST_PATH)
             human_digest = readiness_module.validate_human_approval(
-                approval_raw, accepted_commit=self._git.head(),
-                blob_at=self._git.blob_at, object_id=self._git.object_id)
+                approval_raw, accepted_commit=self._git.head(), trust_raw=trust_raw,
+                blob_at=self._git.blob_at, object_id=self._git.object_id,
+                is_ancestor=self._git.is_ancestor, diff_paths=self._git.diff_paths)
         except readiness_module.HumanApprovalBlocked:
-            return self._publish_readiness(state, status="human_blocked", outcome="blocked", aggregate=aggregate, evidence=evidence_digest, core=core_digest, human="0"*64), "blocked"
+            return self._publish_readiness(state, status="human_blocked", outcome="blocked", aggregate=aggregate, capability=evidence_digest, core=core_digest, conformance=mapping_digest, human="0"*64), "blocked"
         state = self._publish_readiness(state, status="complete", outcome="pass",
-            aggregate=aggregate, evidence=evidence_digest, core=core_digest,
-            human=human_digest)
+            aggregate=aggregate, capability=evidence_digest, core=core_digest,
+            conformance=mapping_digest, human=human_digest)
         return state, None
 
     def _remaining_time(self, label: str) -> float:
@@ -2553,6 +2664,14 @@ class Campaign:
             **sanitized_gate_environment(),
             "FACTORY_VERIFIER_ROOT": str(self._root),
         }
+        if self._config.role_driver is None:
+            environment["FACTORY_CAMPAIGN_ID"] = self._config.campaign_id
+            if self._state_file_exists():
+                bound = state_module.load_state(
+                    self._root, expected_campaign_id=self._config.campaign_id,
+                    expected_readiness_required=True,
+                )
+                environment["FACTORY_READINESS_NONCE"] = str(bound.readiness["nonce"])
         if self._config.state_namespace:
             evidence_rel = (
                 f"{self._config.state_namespace}/installed-functional-evidence.env"
@@ -2575,6 +2694,7 @@ class Campaign:
         malicious ``PATH`` or a pathname swap can never substitute the
         executed bytes (B1/B2 pinned-interpreter contract).
         """
+        self._verify_command_closure()
         raw = evidence_module.revalidate_verifier(
             self._root, held.binding, git=self._git,
             current_commit=self._git.head(), held=held,
@@ -2624,6 +2744,7 @@ class Campaign:
                     self._config.pre_round_hook_configuration_digest
                 ),
                 expected_pre_round_hook_commit=self._config.pre_round_hook_commit,
+                expected_readiness_required=(self._config.role_driver is None),
             )
             return self._reconcile_head(state)
         state = state_module.init_state(
@@ -2639,8 +2760,8 @@ class Campaign:
             ),
             pre_round_hook_commit=self._config.pre_round_hook_commit,
             phase_base_commit=self._config.phase_base_commit,
-            readiness_required=(self._config.role_driver is None and self._config.rounds_requested == 5),
-            readiness_binding=(self._initial_readiness_binding() if self._config.role_driver is None and self._config.rounds_requested == 5 else None),
+            readiness_required=(self._config.role_driver is None),
+            readiness_binding=(self._initial_readiness_binding() if self._config.role_driver is None else None),
             branch=self._config.branch,
         )
         return state, None
@@ -2865,8 +2986,7 @@ class Campaign:
                 f"the round {round_no} {phase} findings receipt content "
                 f"contradicts the preserved phase-result bytes: {exc}"
             ) from exc
-        state2 = state_module.advance(state, outcome)
-        state_module.write_state(self._root, state2)
+        state2 = self._persist_state(state_module.advance(state, outcome))
         if state2.current_phase == "planning":
             self._rounds_completed = state2.current_round - 1
             self._planning_attempts_used = 0
@@ -2905,11 +3025,11 @@ class Campaign:
                 f"the recovered committed plan at {head} is invalid: {reason}"
             )
         self._planning_attempts_used = 0
-        state2 = state_module.advance(
+        state2 = self._persist_state(state_module.advance(
             state, "planned",
             plan_digest=plan_sha256(plan_data),
             phase_base_commit=head,
-        )
+        ))
         return state2, self._record(state, 1, "planned", "")
 
     def _reconcile_implementation(
@@ -2959,7 +3079,7 @@ class Campaign:
                     f"the committed completion of task {task_id} does not pass "
                     f"its acceptance gate: {detail}"
                 )
-            state2 = state_module.advance(state, "task_completed")
+            state2 = self._persist_state(state_module.advance(state, "task_completed"))
             return state2, self._record(state, 1, "task_completed", "")
         if task.status == "in_progress" and changed:
             return state, None
@@ -2987,7 +3107,15 @@ class Campaign:
 
     def _begin_untrusted(self, state: state_module.FactoryState, seq: int) -> str:
         self._assert_readiness(state)
-        tag = self._phase_tag(state, seq)
+        persisted = state_module.load_state(
+            self._root, expected_branch=self._config.branch,
+            expected_campaign_id=self._config.campaign_id,
+            expected_rounds_requested=self._config.rounds_requested,
+            expected_readiness_required=(self._config.role_driver is None),
+        )
+        if persisted != state or state_module.state_digest(persisted) != state_module.state_digest(state):
+            raise CampaignBindingError("untrusted launch state does not equal persisted bytes")
+        tag = self._phase_tag(persisted, seq)
         try:
             state_module.verify_phase_digest(self._root, tag)
         except state_module.StateDigestError as exc:
@@ -3577,10 +3705,17 @@ class Campaign:
         """Run the strong signed aggregate checker and return its exact digest."""
         if self._held_runner_checker is None:
             return -1, ""
+        nonce = "0" * 64
+        if self._state_file_exists():
+            nonce = str(state_module.load_state(
+                self._root, expected_campaign_id=self._config.campaign_id,
+                expected_readiness_required=(self._config.role_driver is None),
+            ).readiness["nonce"])
         try:
             result = self._spawn_runner_authority(
                 self._held_runner_checker,
-                ("--expected-commit", head, "--print-digest"),
+                ("--expected-commit", head, "--expected-campaign-id", self._config.campaign_id,
+                 "--expected-readiness-nonce", nonce, "--print-digest"),
                 min(self._config.gate_timeout, self._config.runner_timeout),
             )
         except (lock_module.RootLockTimeoutError, CampaignBindingError):
@@ -4901,12 +5036,21 @@ class Campaign:
                     )
                 terminal_outcome = recovered.outcome
             else:
+                if (self._config.readiness_only and state.current_phase == "planning"
+                        and state.readiness.get("required") is True
+                        and state.readiness.get("status") == "complete"):
+                    self._assert_readiness(state)
+                    terminal_outcome = "pass"
+                    terminal_phase = "success"
                 if state.current_phase == "readiness":
                     state, readiness_terminal = self._run_readiness(state)
                     if readiness_terminal is not None:
                         terminal_outcome = readiness_terminal
                         terminal_phase = state.current_phase
-                while state.current_phase not in TERMINAL_PHASES:
+                    elif self._config.readiness_only:
+                        terminal_outcome = "pass"
+                        terminal_phase = "success"
+                while terminal_outcome is None and state.current_phase not in TERMINAL_PHASES:
                     step = self._step(state)
                     history.append(step.record)
                     self._records.append(step.record)
@@ -5011,6 +5155,7 @@ def derive_campaign_config(
     state_namespace: str = "",
     accepted_commit: str = "",
     install_manifest: str = "",
+    readiness_only: bool = False,
 ) -> CampaignConfig:
     """Derive every binding from the committed state at the current HEAD.
 
@@ -5085,6 +5230,7 @@ def derive_campaign_config(
         gate_timeout=gate_timeout,
         runner_timeout=runner_timeout,
         campaign_timeout=campaign_timeout,
+        readiness_only=readiness_only,
     )
 
 
@@ -5187,6 +5333,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     p_run.add_argument(
         "--preflight-only", action="store_true", help=argparse.SUPPRESS,
+    )
+    p_run.add_argument(
+        "--readiness-only", action="store_true",
+        help="acquire, validate, and publish production readiness, then stop before planner one",
     )
     p_run.add_argument("--role-timeout", type=float, default=DEFAULT_ROLE_TIMEOUT)
     p_run.add_argument("--gate-timeout", type=float, default=DEFAULT_GATE_TIMEOUT)
@@ -5341,6 +5491,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 state_namespace=state_namespace,
                 accepted_commit=args.accepted_commit,
                 install_manifest=args.install_manifest,
+                readiness_only=args.readiness_only,
             )
         except (CampaignError, gitutil.GitBoundaryError) as exc:
             print(f"factory-campaign: {exc}", file=sys.stderr)
@@ -5534,6 +5685,13 @@ def _production_preflight(
     namespace fails before :class:`Campaign` acquires or starts a role.
     """
     root = Path(root).absolute()
+    if getattr(args, "rounds", getattr(args, "rounds_requested", None)) != 5:
+        raise CampaignConfigError("production campaigns require exactly five rounds before any model launch")
+    accepted_for_commands = getattr(args, "accepted_commit", "")
+    if tuple(verification_command) != _committed_campaign_verification(root, accepted_for_commands):
+        raise CampaignConfigError("production verification argv must exactly equal committed .factory/config.toml authority")
+    if tuple(capability_command) != CANONICAL_CAPABILITY_COMMAND or tuple(acceptance_command) != CANONICAL_FINAL_ACCEPTANCE_COMMAND:
+        raise CampaignConfigError("production capability/final argv differs from canonical committed policy")
     for label, command in (
         ("verification", verification_command),
         ("capability", capability_command),

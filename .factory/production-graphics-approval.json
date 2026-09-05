@@ -1,7 +1,13 @@
 {
-  "schema": "controller-production-graphics-approval/v1",
+  "schema": "controller-production-graphics-approval/v2",
   "status": "pending",
   "candidate_commit": "0000000000000000000000000000000000000000",
   "candidate_tree": "0000000000000000000000000000000000000000",
-  "states": []
+  "accepted_relationship": "approval-only-descendant",
+  "states": [],
+  "provenance": {"renderer": "", "renderer_accelerated": false, "capture_tool": "", "session": ""},
+  "checklist": [],
+  "decision": "pending",
+  "reviewer": {"identity": "", "key_id": ""},
+  "signature_path": ".factory/production-graphics-approval.sig"
 }

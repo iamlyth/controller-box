@@ -244,7 +244,7 @@ def validate_manifest(raw: bytes, runner_class: dict | None) -> dict:
     if not isinstance(request, dict) or set(request) != {"schema", "manifest"} or request.get("schema") != "factory-runner-sign-request/v1":
         fail("signing request schema is invalid")
     manifest = request["manifest"]
-    fields = {"schema", "result", "runner", "commit", "tree", "environment_blob", "verify_argv_sha256", "archive_sha256", "nonce", "capabilities", "exit_code", "timed_out", "started_at", "finished_at", "cleanup", "stdout_sha256", "stderr_sha256"}
+    fields = {"schema", "result", "runner", "commit", "tree", "environment_blob", "verify_argv_sha256", "archive_sha256", "campaign_id", "readiness_nonce", "nonce", "capabilities", "exit_code", "timed_out", "started_at", "finished_at", "cleanup", "stdout_sha256", "stderr_sha256"}
     if not isinstance(manifest, dict) or set(manifest) != fields:
         fail("signing request manifest fields are invalid")
     if manifest.get("schema") != "factory-runner-receipt/v1" or manifest.get("result") != "pass":
@@ -256,7 +256,9 @@ def validate_manifest(raw: bytes, runner_class: dict | None) -> dict:
     for field in ("commit", "tree", "environment_blob"):
         if not isinstance(manifest[field], str) or not SHA1.fullmatch(manifest[field]):
             fail(f"signing request {field} is invalid")
-    for field in ("verify_argv_sha256", "archive_sha256", "nonce", "stdout_sha256", "stderr_sha256"):
+    if not isinstance(manifest["campaign_id"], str) or not NAME.fullmatch(manifest["campaign_id"]):
+        fail("signing request campaign_id is invalid")
+    for field in ("verify_argv_sha256", "archive_sha256", "readiness_nonce", "nonce", "stdout_sha256", "stderr_sha256"):
         if not isinstance(manifest[field], str) or not SHA256.fullmatch(manifest[field]):
             fail(f"signing request {field} is invalid")
     if manifest["exit_code"] != 0 or manifest["timed_out"] is not False or manifest["cleanup"] is not True:

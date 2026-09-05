@@ -132,7 +132,11 @@ def strong_runner_evidence(root: Path) -> tuple[str, set[str]]:
         checker = load_script_module("factory_runner_evidence", checker_path)
         if Path(checker.ROOT).resolve() != root.resolve():
             fail("strong runner checker resolved a foreign repository root")
-        digest, capabilities = checker.validate(git_head(root))
+        digest, capabilities = checker.validate(
+            git_head(root),
+            expected_campaign_id=os.environ.get("FACTORY_CAMPAIGN_ID"),
+            expected_readiness_nonce=os.environ.get("FACTORY_READINESS_NONCE"),
+        )
     except SystemExit as exc:
         detail = str(exc) or "validation failed"
         fail(f"strong runner evidence rejected: {detail}")
@@ -161,8 +165,10 @@ def aggregate_evidence(root: Path) -> tuple[set[str], dict[str, list[tuple[str, 
         fail(f"invalid runner evidence aggregate {aggregate}: {exc}")
     if hashlib.sha256(raw).hexdigest() != strong_digest:
         fail("runner evidence aggregate changed after strong validation")
-    if not isinstance(data, dict) or data.get("schema") != "factory-runner-aggregate/v1":
+    if not isinstance(data, dict) or data.get("schema") != "factory-runner-aggregate/v2":
         fail(f"runner evidence aggregate schema is invalid: {aggregate}")
+    if data.get("campaign_id") != os.environ.get("FACTORY_CAMPAIGN_ID") or data.get("readiness_nonce") != os.environ.get("FACTORY_READINESS_NONCE"):
+        fail("runner evidence aggregate campaign/readiness binding is stale or replayed")
     head = git_head(root)
     if data.get("commit") != head:
         fail(f"runner evidence aggregate is not bound to HEAD {head[:12]} (stale receipts are unevidenced)")

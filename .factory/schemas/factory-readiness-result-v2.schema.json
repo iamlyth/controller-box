@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory-readiness-result/v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "campaign_id", "nonce", "status", "terminal_outcome", "bindings", "results"],
+  "properties": {
+    "schema": {"const": "factory-readiness-result/v2"},
+    "campaign_id": {"type": "string", "minLength": 1},
+    "nonce": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "status": {"enum": ["complete", "findings", "human_blocked", "infrastructure_failure"]},
+    "terminal_outcome": {"enum": ["pass", "findings", "blocked", "infrastructure_failure"]},
+    "bindings": {
+      "type": "object", "additionalProperties": false,
+      "required": ["accepted_commit", "tree", "environment_blob", "specification_sha256", "plan_sha256", "conformance_sha256", "policy_sha256", "contracts_sha256", "install_manifest_sha256", "command_authority_sha256", "human_authority_sha256", "trust_authority_sha256"],
+      "properties": {
+        "accepted_commit": {"type":"string","pattern":"^[0-9a-f]{40}$"}, "tree": {"type":"string","pattern":"^[0-9a-f]{40}$"}, "environment_blob": {"type":"string","pattern":"^[0-9a-f]{40}$"},
+        "specification_sha256":{"$ref":"#/$defs/sha256"}, "plan_sha256":{"$ref":"#/$defs/sha256"}, "conformance_sha256":{"$ref":"#/$defs/sha256"}, "policy_sha256":{"$ref":"#/$defs/sha256"}, "contracts_sha256":{"$ref":"#/$defs/sha256"}, "install_manifest_sha256":{"$ref":"#/$defs/sha256"}, "command_authority_sha256":{"$ref":"#/$defs/sha256"}, "human_authority_sha256":{"$ref":"#/$defs/sha256"}, "trust_authority_sha256":{"$ref":"#/$defs/sha256"}
+      }
+    },
+    "results": {
+      "type":"object", "additionalProperties":false,
+      "required":["aggregate_sha256","capability_result_sha256","core_result_sha256","conformance_result_sha256","human_result_sha256"],
+      "properties":{"aggregate_sha256":{"$ref":"#/$defs/sha256"},"capability_result_sha256":{"$ref":"#/$defs/sha256"},"core_result_sha256":{"$ref":"#/$defs/sha256"},"conformance_result_sha256":{"$ref":"#/$defs/sha256"},"human_result_sha256":{"$ref":"#/$defs/sha256"}}
+    }
+  },
+  "$defs":{"sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"}}
+}

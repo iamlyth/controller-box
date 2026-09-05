@@ -1714,6 +1714,8 @@ class CaseAdversarialSuite(_AdversarialBase):
         head = _git(root, "rev-parse", "HEAD").stdout.strip()
         tree = _git(root, "rev-parse", f"{head}^{{tree}}").stdout.strip()
         runner_evidence = root / STATE_DIR / "runner-evidence"
+        os.environ["FACTORY_CAMPAIGN_ID"] = "synthetic-adversarial"
+        os.environ["FACTORY_READINESS_NONCE"] = "d" * 64
 
         def rebuild_runner_evidence() -> Path:
             """Build the exact-commit signed runner-evidence fixture.
@@ -1743,7 +1745,9 @@ class CaseAdversarialSuite(_AdversarialBase):
                 "runner": "fixture-runner", "commit": head, "tree": tree,
                 "environment_blob": environment_blob,
                 "verify_argv_sha256": argv_digest,
-                "archive_sha256": archive_sha256, "nonce": "0" * 64,
+                "archive_sha256": archive_sha256,
+                "campaign_id": "synthetic-adversarial",
+                "readiness_nonce": "d" * 64, "nonce": "0" * 64,
                 "capabilities": ["project-gate"], "exit_code": 0,
                 "timed_out": False, "started_at": 1, "finished_at": 2,
                 "cleanup": True, "stdout_sha256": empty,
@@ -1765,7 +1769,9 @@ class CaseAdversarialSuite(_AdversarialBase):
             )
             (manifest_dir / "manifest.sig").write_bytes(signed.stdout)
             aggregate = {
-                "schema": "factory-runner-aggregate/v1", "commit": head,
+                "schema": "factory-runner-aggregate/v2",
+                "campaign_id": "synthetic-adversarial", "readiness_nonce": "d" * 64,
+                "commit": head,
                 "tree": tree, "environment_blob": environment_blob,
                 "runners": [{
                     "name": "fixture-runner",
@@ -1788,7 +1794,9 @@ class CaseAdversarialSuite(_AdversarialBase):
         def runner_check(ref: str, commit: str) -> subprocess.CompletedProcess[str]:
             return run(
                 [PY, str(root / "scripts" / "check-factory-runner-evidence.py"),
-                 "--verify-manifest", ref, "--expected-commit", commit],
+                 "--verify-manifest", ref, "--expected-commit", commit,
+                 "--expected-campaign-id", "synthetic-adversarial",
+                 "--expected-readiness-nonce", "d" * 64],
                 root=root, check=False,
             )
 

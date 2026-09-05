@@ -2344,9 +2344,12 @@ class ReviewHardening(_CampaignBase):
             encoding="utf-8",
         )
         backend.chmod(0o755)
+        (ws.root / ".factory/config.toml").write_text(
+            '[verification]\ncampaign_command = ["' + str(TRUE_EXECUTABLE) + '"]\n', encoding="utf-8"
+        )
         _git(
             ws.root, "add", "result-backend.py",
-            ".factory/loop/confine_launcher.py",
+            ".factory/loop/confine_launcher.py", ".factory/config.toml",
         )
         _git(ws.root, "commit", "-qm", "add real result backend")
         head = _git(ws.root, "rev-parse", "HEAD").stdout.strip()
@@ -2354,6 +2357,7 @@ class ReviewHardening(_CampaignBase):
             ws.derive_config(),
             provider="ollama",
             model="fixture-real-model",
+            rounds_requested=5,
             backend=str(backend),
             role_driver=None,
             acceptance_command=campaign_module.CANONICAL_FINAL_ACCEPTANCE_COMMAND,
@@ -2871,7 +2875,7 @@ class RunnerAcquisitionLifecycleTests(_CampaignBase):
         checker.write_text(
             "#!/usr/bin/env python3\n"
             "import argparse,hashlib,json,pathlib,subprocess,sys\n"
-            "p=argparse.ArgumentParser(); p.add_argument('--expected-commit',required=True); p.add_argument('--print-digest',action='store_true'); a=p.parse_args()\n"
+            "p=argparse.ArgumentParser(); p.add_argument('--expected-commit',required=True); p.add_argument('--expected-campaign-id',required=True); p.add_argument('--expected-readiness-nonce',required=True); p.add_argument('--print-digest',action='store_true'); a=p.parse_args()\n"
             "root=pathlib.Path(__file__).resolve().parent.parent; path=root/'.factory-state/runner-evidence.json'\n"
             "if path.is_symlink() or not path.is_file(): raise SystemExit(22)\n"
             "raw=path.read_bytes()\n"

@@ -352,7 +352,8 @@ def verify_manifest_signature(issuance_trust: dict, current_trust: dict,
 
 def validate_record(declared: dict, record: dict, commit: str, tree: str,
                     environment_blob: str, archive_sha256: str,
-                    issuance_trust: dict, current_trust: dict) -> set[str]:
+                    issuance_trust: dict, current_trust: dict,
+                    campaign_id: str, readiness_nonce: str) -> set[str]:
     """Strictly validate one aggregate record and its runner manifest.
 
     This is the shared canonical per-record validation: an accepted manifest
@@ -395,7 +396,7 @@ def validate_record(declared: dict, record: dict, commit: str, tree: str,
         fail("manifest digest mismatch")
     expected_fields = {
         "schema", "result", "runner", "commit", "tree", "environment_blob",
-        "verify_argv_sha256", "archive_sha256", "nonce", "capabilities",
+        "verify_argv_sha256", "archive_sha256", "campaign_id", "readiness_nonce", "nonce", "capabilities",
         "exit_code", "timed_out", "started_at", "finished_at", "cleanup",
         "stdout_sha256", "stderr_sha256",
         "signer_principal", "signer_key_sha256", "namespace", "signature_algorithm",
@@ -408,6 +409,8 @@ def validate_record(declared: dict, record: dict, commit: str, tree: str,
         or manifest["signer_principal"] != manifest["runner"]
         or manifest["commit"] != commit or manifest["tree"] != tree
         or manifest["environment_blob"] != environment_blob
+        or manifest["campaign_id"] != campaign_id
+        or manifest["readiness_nonce"] != readiness_nonce
     ):
         fail("runner manifest binding or signer class isolation mismatch")
     if (
@@ -425,7 +428,7 @@ def validate_record(declared: dict, record: dict, commit: str, tree: str,
         fail("runner manifest verifier/archive binding mismatch")
     if manifest["capabilities"] != record["capabilities"] or manifest["exit_code"] != 0 or manifest["timed_out"] is not False or manifest["cleanup"] is not True:
         fail("runner manifest does not prove a clean pass")
-    for field in ("verify_argv_sha256", "archive_sha256", "nonce", "stdout_sha256", "stderr_sha256", "signer_key_sha256"):
+    for field in ("verify_argv_sha256", "archive_sha256", "readiness_nonce", "nonce", "stdout_sha256", "stderr_sha256", "signer_key_sha256"):
         if not isinstance(manifest[field], str) or not SHA256.fullmatch(manifest[field]):
             fail(f"runner manifest has invalid {field}")
     for field in ("signer_principal", "signature_algorithm"):
@@ -446,7 +449,8 @@ def validate_record(declared: dict, record: dict, commit: str, tree: str,
     return set(record["capabilities"])
 
 
-def verify_manifest_reference(reference: str, expected_commit: str) -> dict:
+def verify_manifest_reference(reference: str, expected_commit: str,
+                              expected_campaign_id: str, expected_readiness_nonce: str) -> dict:
     """Strict helper: validate one `[manifest:]` reference as an exact record.
 
     Runs the canonical full aggregate validation at the expected commit and then
@@ -456,7 +460,8 @@ def verify_manifest_reference(reference: str, expected_commit: str) -> dict:
     """
     if not SHA1.fullmatch(expected_commit):
         fail("--verify-manifest requires a strict 40-hex --expected-commit audit base")
-    validate(expected_commit)
+    validate(expected_commit, expected_campaign_id=expected_campaign_id,
+             expected_readiness_nonce=expected_readiness_nonce)
     aggregate, _ = regular_json(AGGREGATE)
     records = aggregate["runners"]
     matches = [record for record in records if record["manifest"] == reference]
@@ -465,7 +470,8 @@ def verify_manifest_reference(reference: str, expected_commit: str) -> dict:
     return matches[0]
 
 
-def validate(expected_commit: str | None = None) -> tuple[str, list[str]]:
+def validate(expected_commit: str | None = None, *, expected_campaign_id: str | None = None,
+             expected_readiness_nonce: str | None = None) -> tuple[str, list[str]]:
     os.environ["GIT_NO_REPLACE_OBJECTS"] = "1"
     runtime = ROOT / ".factory-state"
     evidence_directory = runtime / "runner-evidence"
@@ -506,8 +512,12 @@ def validate(expected_commit: str | None = None) -> tuple[str, list[str]]:
     ):
         fail("every declared runner must have distinct issuance/current signer trust coverage")
     aggregate, aggregate_raw = regular_json(AGGREGATE)
-    if set(aggregate) != {"schema", "commit", "tree", "environment_blob", "runners"} or aggregate.get("schema") != "factory-runner-aggregate/v1":
+    if set(aggregate) != {"schema", "campaign_id", "readiness_nonce", "commit", "tree", "environment_blob", "runners"} or aggregate.get("schema") != "factory-runner-aggregate/v2":
         fail("aggregate schema is invalid")
+    if expected_campaign_id is None or aggregate["campaign_id"] != expected_campaign_id:
+        fail("aggregate campaign binding is stale or absent")
+    if expected_readiness_nonce is None or not SHA256.fullmatch(expected_readiness_nonce) or aggregate["readiness_nonce"] != expected_readiness_nonce:
+        fail("aggregate readiness nonce is stale or replayed")
     if aggregate["commit"] != commit or aggregate["tree"] != tree or aggregate["environment_blob"] != environment_blob:
         fail("aggregate Git/environment binding is stale")
     records = aggregate["runners"]
@@ -525,7 +535,8 @@ def validate(expected_commit: str | None = None) -> tuple[str, list[str]]:
     for declaration, record in zip(declared, records):
         evidenced.update(
             validate_record(declaration, record, commit, tree, environment_blob,
-                            archive_sha256, issuance_trust, current_trust)
+                            archive_sha256, issuance_trust, current_trust,
+                            expected_campaign_id, expected_readiness_nonce)
         )
     return hashlib.sha256(aggregate_raw).hexdigest(), sorted(evidenced)
 
@@ -533,18 +544,26 @@ def validate(expected_commit: str | None = None) -> tuple[str, list[str]]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--expected-commit")
+    parser.add_argument("--expected-campaign-id", default=os.environ.get("FACTORY_CAMPAIGN_ID"))
+    parser.add_argument("--expected-readiness-nonce", default=os.environ.get("FACTORY_READINESS_NONCE"))
     parser.add_argument("--print-digest", action="store_true")
     parser.add_argument("--print-capabilities", action="store_true")
     parser.add_argument("--verify-manifest")
     args = parser.parse_args()
     if args.verify_manifest:
-        record = verify_manifest_reference(args.verify_manifest, args.expected_commit)
+        record = verify_manifest_reference(
+            args.verify_manifest, args.expected_commit, args.expected_campaign_id,
+            args.expected_readiness_nonce,
+        )
         print(
             f"factory-runner-evidence: verified manifest {record['manifest']} "
             f"(runner={record['name']}, capabilities={record['capabilities']})"
         )
         return 0
-    digest, capabilities = validate(args.expected_commit)
+    digest, capabilities = validate(
+        args.expected_commit, expected_campaign_id=args.expected_campaign_id,
+        expected_readiness_nonce=args.expected_readiness_nonce,
+    )
     if args.print_digest:
         print(digest)
     elif args.print_capabilities:

@@ -1,0 +1,13 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema", "$id":"controller-production-graphics-approval/v2",
+  "type":"object", "additionalProperties":false,
+  "required":["schema","status","candidate_commit","candidate_tree","accepted_relationship","states","provenance","checklist","decision","reviewer","signature_path"],
+  "properties":{
+    "schema":{"const":"controller-production-graphics-approval/v2"}, "status":{"enum":["pending","approved"]},
+    "candidate_commit":{"type":"string","pattern":"^[0-9a-f]{40}$"}, "candidate_tree":{"type":"string","pattern":"^[0-9a-f]{40}$"}, "accepted_relationship":{"const":"approval-only-descendant"},
+    "states":{"type":"array","maxItems":3,"items":{"type":"object","additionalProperties":false,"required":["id","capture","capture_blob","capture_sha256"],"properties":{"id":{"enum":["manager_editor_list","manager_editor_sequential","manager_editor_validation_error"]},"capture":{"type":"string","minLength":1},"capture_blob":{"type":"string","pattern":"^[0-9a-f]{40}$"},"capture_sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"}}}},
+    "provenance":{"type":"object","additionalProperties":false,"required":["renderer","renderer_accelerated","capture_tool","session"],"properties":{"renderer":{"type":"string"},"renderer_accelerated":{"type":"boolean"},"capture_tool":{"type":"string"},"session":{"type":"string"}}},
+    "checklist":{"type":"array","items":{"type":"string"}}, "decision":{"enum":["pending","approve","reject"]},
+    "reviewer":{"type":"object","additionalProperties":false,"required":["identity","key_id"],"properties":{"identity":{"type":"string"},"key_id":{"type":"string"}}}, "signature_path":{"type":"string"}
+  }
+}

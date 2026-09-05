@@ -10,6 +10,8 @@
 # manifests are rejected via the strict runner-evidence helper; receipts with
 # the wrong coordinator nonce are rejected.
 set -euo pipefail
+export FACTORY_CAMPAIGN_ID=synthetic-campaign-objectives
+export FACTORY_READINESS_NONCE=2222222222222222222222222222222222222222222222222222222222222222
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
@@ -175,7 +177,8 @@ key_sha256 = hashlib.sha256(public_key.encode()).hexdigest()
 manifest = {
     "schema": "factory-runner-receipt/v1", "result": "pass", "runner": runner,
     "commit": head, "tree": tree, "environment_blob": environment_blob,
-    "verify_argv_sha256": argv_digest, "archive_sha256": archive_sha256, "nonce": "0" * 64,
+    "verify_argv_sha256": argv_digest, "archive_sha256": archive_sha256,
+    "campaign_id": "synthetic-campaign-objectives", "readiness_nonce": "2" * 64, "nonce": "0" * 64,
     "capabilities": capabilities, "exit_code": 0, "timed_out": False,
     "started_at": 1, "finished_at": 2, "cleanup": True,
     "stdout_sha256": empty, "stderr_sha256": empty,
@@ -189,7 +192,7 @@ aggregate_path = root / ".factory-state/runner-evidence.json"
 if aggregate_path.exists():
     aggregate = json.loads(aggregate_path.read_text())
 else:
-    aggregate = {"schema": "factory-runner-aggregate/v1", "commit": head,
+    aggregate = {"schema": "factory-runner-aggregate/v2", "campaign_id": "synthetic-campaign-objectives", "readiness_nonce": "2" * 64, "commit": head,
                  "tree": tree, "environment_blob": environment_blob, "runners": []}
 aggregate["runners"] = [
     item for item in aggregate["runners"] if item["name"] != runner

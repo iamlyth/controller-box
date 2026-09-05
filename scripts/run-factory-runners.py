@@ -123,8 +123,13 @@ def ssh_binary() -> str:
     return str(launcher)
 
 
-def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, archive: bytes) -> dict:
+def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, archive: bytes,
+               campaign_id: str | None = None, readiness_nonce: str | None = None) -> dict:
     name = runner["name"]
+    campaign_id = campaign_id or os.environ.get("FACTORY_CAMPAIGN_ID", "")
+    readiness_nonce = readiness_nonce or os.environ.get("FACTORY_READINESS_NONCE", "")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", campaign_id) or not re.fullmatch(r"[0-9a-f]{64}", readiness_nonce):
+        fail("campaign/readiness anti-replay binding is missing")
     argv = runner["verify_argv"]
     capabilities = runner["capabilities"]
     argv_sha = digest_json(argv)
@@ -150,6 +155,8 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
         "archive_size": len(archive),
         "working_directory": runner["working_directory"],
         "capabilities": capabilities,
+        "campaign_id": campaign_id,
+        "readiness_nonce": readiness_nonce,
         "nonce": nonce,
     }
     payload = json.dumps(request, separators=(",", ":")).encode() + b"\n" + archive
@@ -207,7 +214,7 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
         fail(f"runner {name} verification did not pass", EXIT_FINDINGS)
     expected = {
         "schema", "result", "runner", "commit", "tree", "environment_blob",
-        "verify_argv_sha256", "archive_sha256", "nonce", "capabilities",
+        "verify_argv_sha256", "archive_sha256", "campaign_id", "readiness_nonce", "nonce", "capabilities",
         "exit_code", "timed_out", "stdout_b64", "stderr_b64", "started_at",
         "finished_at", "cleanup", "manifest_b64", "signature_b64",
         "signer_principal", "signer_key_sha256", "signature_algorithm",
@@ -222,6 +229,7 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
         "environment_blob": environment_blob,
         "verify_argv_sha256": argv_sha,
         "archive_sha256": archive_sha,
+        "campaign_id": campaign_id, "readiness_nonce": readiness_nonce,
         "nonce": nonce,
     }
     if any(receipt.get(key) != value for key, value in bindings.items()):
@@ -258,7 +266,8 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
         "runner": receipt["runner"], "commit": receipt["commit"],
         "tree": receipt["tree"], "environment_blob": receipt["environment_blob"],
         "verify_argv_sha256": receipt["verify_argv_sha256"],
-        "archive_sha256": receipt["archive_sha256"], "nonce": receipt["nonce"],
+        "archive_sha256": receipt["archive_sha256"], "campaign_id": receipt["campaign_id"],
+        "readiness_nonce": receipt["readiness_nonce"], "nonce": receipt["nonce"],
         "capabilities": receipt["capabilities"], "exit_code": receipt["exit_code"],
         "timed_out": receipt["timed_out"], "started_at": receipt["started_at"],
         "finished_at": receipt["finished_at"], "cleanup": receipt["cleanup"],
@@ -396,8 +405,14 @@ def main() -> int:
         names = ", ".join(name for name, _ in failures)
         print(f"factory-runner: {len(failures)} runner(s) failed for {commit[:12]}: {names}", file=sys.stderr)
         return dominant
+    campaign_id = os.environ.get("FACTORY_CAMPAIGN_ID", "")
+    readiness_nonce = os.environ.get("FACTORY_READINESS_NONCE", "")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", campaign_id) or not re.fullmatch(r"[0-9a-f]{64}", readiness_nonce):
+        fail("campaign/readiness anti-replay binding is missing")
     aggregate = {
-        "schema": "factory-runner-aggregate/v1",
+        "schema": "factory-runner-aggregate/v2",
+        "campaign_id": campaign_id,
+        "readiness_nonce": readiness_nonce,
         "commit": commit,
         "tree": tree,
         "environment_blob": environment_blob,

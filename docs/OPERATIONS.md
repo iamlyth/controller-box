@@ -559,17 +559,25 @@ coordinator acquires every declared runner, validates the signed exact aggregate
 runs all required capability and core acceptance checks, validates planning
 conformance plus explicit core-row mappings, and finally validates the committed
 `.factory/production-graphics-approval.json` for the list, sequential, and
-validation-error editor captures. The approval must bind committed candidate
-capture hashes and accelerated renderer metadata; it cannot waive machine/GPU
-checks. Missing approval terminates as an explicit human blocker. Models never
-invoke runner transport. The coordinator
+validation-error editor captures. The approval must bind three distinct committed
+capture blob IDs and hashes, accelerated renderer provenance, the fixed checklist,
+reviewer identity, and a detached OpenSSH signature from a key in committed
+`.factory/human-review-trust.json`. Trust is currently `pending` with no key, so
+readiness honestly blocks until an operator provisions one. Review the candidate,
+sign the canonical approval, then commit only the approval JSON and detached
+signature as an approval-only descendant; unrelated product, test, or factory
+changes invalidate the relationship. Models never invoke runner transport. The coordinator
 reuses an unchanged-HEAD aggregate only when its durable completed acquisition
 record and the strong signed checker agree exactly; interrupted, stale, forged,
 partial, or symlinked state cannot authorize capability acceptance. An
 `acquiring` marker is an ambiguous physical side effect and requires operator
 reconciliation; it is never automatically rerun. The canonical
 `readiness-result.json` is atomically published in the campaign-private state,
-and its digest must match control state before any role launch. The sequence
+and every campaign/binding/result digest must exactly match reread v2 control
+state before any role launch. Legacy v1 state is never production-resumable.
+Use the same command with `--readiness-only` to collect/publish readiness and
+terminate before planner 1; blocked/findings/infrastructure outcomes remain
+unchanged. The sequence
 ends with an installed-copy five-round launch with explicit provider/model/backend,
 a bounded whole-campaign deadline, and exact verification, capability-evidence,
 and final-acceptance argv. The production launcher

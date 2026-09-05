@@ -462,6 +462,8 @@ class ManifestFixture:
             "environment_blob": environment_blob,
             "verify_argv_sha256": argv_digest,
             "archive_sha256": archive_sha256,
+            "campaign_id": "synthetic-evidence",
+            "readiness_nonce": "4" * 64,
             "nonce": "0" * 64,
             "capabilities": ["project-gate"],
             "exit_code": 0,
@@ -483,7 +485,9 @@ class ManifestFixture:
         _write(manifest_dir / "manifest.sig", b"not-a-real-signature\n")
         signature_sha256 = sha256(b"not-a-real-signature\n")
         aggregate = {
-            "schema": "factory-runner-aggregate/v1",
+            "schema": "factory-runner-aggregate/v2",
+            "campaign_id": "synthetic-evidence",
+            "readiness_nonce": "4" * 64,
             "commit": head,
             "tree": tree,
             "environment_blob": environment_blob,

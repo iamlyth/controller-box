@@ -90,13 +90,17 @@ Volatile, ignored state:
   production campaign state/result/receipt namespace, created no-replace and
   never shared; reservation lstats only the exact state root and fixed parent
   and never enumerates, reads, renames, removes, or overwrites foreign entries.
-  A canonical five-round production run begins in `readiness` at round zero.
-  Static preflight and held descriptors precede coordinator-only runner
-  acquisition; strong aggregate validation, required capability/core checks,
-  conformance core-row mapping, and the committed three-editor-state human
-  graphics approval all precede planner 1. `readiness-result.json` is atomically
-  published and digest-bound into control/campaign state. Interrupted acquisition
-  is ambiguous and is never rerun; only a same-nonce completed aggregate is reused
+  Every real-provider campaign requires `readiness` at round zero, and current
+  production policy additionally requires exactly five rounds. Static preflight
+  precedes coordinator-only runner acquisition; campaign and readiness nonces bind
+  every request, signed manifest, aggregate, and checker invocation. Capability,
+  core, conformance, and detached-signature human review all precede planner 1.
+  Human trust is intentionally pending until an operator commits an allowlisted
+  key; no model-authored `human: true` assertion is accepted. The supported
+  non-self-referential workflow reviews a candidate, then permits an accepted
+  approval-only descendant changing exactly the approval JSON and detached
+  signature. `--readiness-only` performs this identical gate and stops before a
+  planner. Interrupted acquisition is ambiguous and is never rerun.
 - `.bug-ledger.lock`, `.ollama-usage-env`, `logs/`, test fixtures
 
 **Retired Ralph control plane.** `.factory/ralph-freeze` is a tracked,

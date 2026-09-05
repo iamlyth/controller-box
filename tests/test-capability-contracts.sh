@@ -4,6 +4,8 @@
 # receipts, skipped probes, simulated markers, and stale receipts must all be
 # unevidenced and rejected.
 set -euo pipefail
+export FACTORY_CAMPAIGN_ID=synthetic-capability-contracts
+export FACTORY_READINESS_NONCE=1111111111111111111111111111111111111111111111111111111111111111
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
@@ -111,7 +113,9 @@ LOG
     : > "$dir/.factory-state/runner-evidence/probe-runner/$head/stderr.log"
     cat > "$dir/.factory-state/runner-evidence.json" <<AG
 {
-  "schema": "factory-runner-aggregate/v1",
+  "schema": "factory-runner-aggregate/v2",
+  "campaign_id": "synthetic-capability-contracts",
+  "readiness_nonce": "1111111111111111111111111111111111111111111111111111111111111111",
   "commit": "$head",
   "runners": [
     {"name": "probe-runner", "manifest": ".factory-state/runner-evidence/probe-runner/$head/manifest.json", "capabilities": ["probe-capability"]}

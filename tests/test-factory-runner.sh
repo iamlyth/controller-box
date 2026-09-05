@@ -4,6 +4,8 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+export FACTORY_CAMPAIGN_ID=synthetic-runner-protocol
+export FACTORY_READINESS_NONCE=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 mkdir -p "$tmp/repo/scripts" "$tmp/repo/docs" "$tmp/repo/.factory/loop" \
     "$tmp/runner/workspaces/fake-project"
 chmod 0700 "$tmp/runner/workspaces/fake-project"

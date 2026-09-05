@@ -34,10 +34,12 @@ nix-shell --run './scripts/verify-project.sh'
 ./scripts/verify-boilerplate.sh
 
 # Strong validation of existing exact-commit runner evidence (read-only)
-./scripts/check-factory-runner-evidence.py
+./scripts/check-factory-runner-evidence.py --expected-commit "${ACCEPTED_COMMIT:?exact commit}" --expected-campaign-id "${CAMPAIGN_ID:?campaign}" --expected-readiness-nonce "${READINESS_NONCE:?round-zero nonce}"
 
 # Runner acquisition is coordinator-only: model roles never invoke runners.
-# A five-round production campaign runs mandatory trusted round-zero readiness
+# Every real-provider campaign runs mandatory trusted round-zero readiness;
+# production policy also requires exactly five rounds (non-5 fails before a model).
+# Add --readiness-only to acquire/publish the same gate and stop before planner 1.
 # (all declared signed runners, four-target physical routing, licensed accelerated
 # compositor evidence, core/conformance mapping, and committed three-state human
 # graphics approval) before planner 1. Any absent/stale/partial result fails closed.

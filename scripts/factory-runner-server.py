@@ -374,7 +374,7 @@ def main() -> int:
         "schema", "runner", "class", "commit", "commit_object_b64", "tree",
         "environment_blob", "verify_argv", "verify_argv_sha256",
         "archive_sha256", "archive_size", "working_directory",
-        "capabilities", "nonce",
+        "capabilities", "campaign_id", "readiness_nonce", "nonce",
     }
     if not isinstance(request, dict) or set(request) != expected or request.get("schema") != "factory-runner-request/v1":
         fail("request schema or fields are invalid")
@@ -382,8 +382,10 @@ def main() -> int:
         fail("invalid runner")
     if request["runner"] != runner_class["name"] or request["class"] != runner_class["name"]:
         fail("request runner/class does not match the executing runner class")
-    if not isinstance(request["nonce"], str) or not SHA256.fullmatch(request["nonce"]):
-        fail("invalid nonce")
+    if (not isinstance(request["nonce"], str) or not SHA256.fullmatch(request["nonce"])
+            or not isinstance(request["readiness_nonce"], str) or not SHA256.fullmatch(request["readiness_nonce"])
+            or not isinstance(request["campaign_id"], str) or not NAME.fullmatch(request["campaign_id"])):
+        fail("invalid campaign/readiness/runner nonce binding")
     for key in ("commit", "tree", "environment_blob"):
         if not isinstance(request[key], str) or not SHA1.fullmatch(request[key]):
             fail("invalid Git binding")
@@ -567,7 +569,8 @@ def main() -> int:
                     "runner": request["runner"], "commit": request["commit"],
                     "tree": tree, "environment_blob": request["environment_blob"],
                     "verify_argv_sha256": request["verify_argv_sha256"],
-                    "archive_sha256": request["archive_sha256"], "nonce": request["nonce"],
+                    "archive_sha256": request["archive_sha256"], "campaign_id": request["campaign_id"],
+                    "readiness_nonce": request["readiness_nonce"], "nonce": request["nonce"],
                     "capabilities": evidenced, "exit_code": returncode,
                     "timed_out": False, "stdout_b64": base64.b64encode(stdout).decode(),
                     "stderr_b64": base64.b64encode(stderr).decode(),
@@ -579,7 +582,8 @@ def main() -> int:
                 "runner": request["runner"], "commit": request["commit"],
                 "tree": tree, "environment_blob": request["environment_blob"],
                 "verify_argv_sha256": request["verify_argv_sha256"],
-                "archive_sha256": request["archive_sha256"], "nonce": request["nonce"],
+                "archive_sha256": request["archive_sha256"], "campaign_id": request["campaign_id"],
+                "readiness_nonce": request["readiness_nonce"], "nonce": request["nonce"],
                 "capabilities": evidenced, "exit_code": 0,
                 "timed_out": False, "started_at": started, "finished_at": finished_at,
                 "cleanup": True,
@@ -594,7 +598,8 @@ def main() -> int:
                 "runner": request["runner"], "commit": request["commit"],
                 "tree": tree, "environment_blob": request["environment_blob"],
                 "verify_argv_sha256": request["verify_argv_sha256"],
-                "archive_sha256": request["archive_sha256"], "nonce": request["nonce"],
+                "archive_sha256": request["archive_sha256"], "campaign_id": request["campaign_id"],
+                "readiness_nonce": request["readiness_nonce"], "nonce": request["nonce"],
                 "capabilities": evidenced, "exit_code": 0,
                 "timed_out": False, "stdout_b64": base64.b64encode(stdout).decode(),
                 "stderr_b64": base64.b64encode(stderr).decode(),

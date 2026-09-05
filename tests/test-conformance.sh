@@ -6,6 +6,8 @@
 # commit), self-declared required_tier drift from the requirement-policy map,
 # and human-tier self-attestation must all fail.
 set -euo pipefail
+export FACTORY_CAMPAIGN_ID=synthetic-conformance
+export FACTORY_READINESS_NONCE=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
@@ -156,7 +158,8 @@ manifest = {
     "schema": "factory-runner-receipt/v1", "result": "pass",
     "runner": "probe-runner", "commit": head, "tree": tree,
     "environment_blob": environment_blob, "verify_argv_sha256": argv_sha,
-    "archive_sha256": archive_sha, "nonce": "0" * 64,
+    "archive_sha256": archive_sha, "campaign_id": "synthetic-conformance",
+    "readiness_nonce": "e" * 64, "nonce": "0" * 64,
     "capabilities": ["probe-capability"], "exit_code": 0,
     "timed_out": False, "started_at": 1, "finished_at": 2,
     "cleanup": True, "stdout_sha256": hashlib.sha256(stdout).hexdigest(),
@@ -170,7 +173,8 @@ evidence = root / f".factory-state/runner-evidence/probe-runner/{head}"
 (evidence / "stdout.log").write_bytes(stdout)
 (evidence / "stderr.log").write_bytes(stderr)
 aggregate = {
-    "schema": "factory-runner-aggregate/v1", "commit": head, "tree": tree,
+    "schema": "factory-runner-aggregate/v2", "campaign_id": "synthetic-conformance",
+    "readiness_nonce": "e" * 64, "commit": head, "tree": tree,
     "environment_blob": environment_blob,
     "runners": [{
         "name": "probe-runner",

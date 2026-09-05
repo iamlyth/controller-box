@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export FACTORY_CAMPAIGN_ID=synthetic-campaign-audit
+export FACTORY_READINESS_NONCE=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 tmp=$(mktemp -d)

@@ -8,7 +8,15 @@ status: active
 
 **Production readiness gate (2026-08-20)**
 
-The trusted five-round campaign now has a mandatory round-zero readiness phase.
+Every real-provider campaign now has mandatory round-zero readiness, while the
+production policy rejects any round count other than five before model launch.
+State is explicitly `factory-state/v2`; runtime parsing rejects missing readiness
+and legacy production resume, with migration limited to explicit offline tooling.
+Readiness binds campaign/readiness nonces, exact command/input/human/trust
+authorities and separate nonzero result digests. Human graphics review requires
+an allowlisted detached signature over three distinct committed captures and an
+approval-only descendant relationship. The committed trust authority remains
+pending with no key, so this work claims no human approval or readiness evidence.
 It binds the accepted repository and installed/control authorities, acquires and
 strongly validates all declared signed runner evidence, requires all-four
 physical production routing and installed licensed accelerated-compositor core
@@ -17,6 +25,14 @@ committed human approval for the three protected profile-editor captures before
 planner 1. The checked-in approval authority is intentionally empty, so current
 runtime readiness remains honestly blocked pending operator hardware evidence
 and human review; this implementation does not claim those external results.
+
+Validation for this hardening change: focused readiness (5/5), state (129/129),
+campaign (102/102), conformance (49/49), installed harness (16/16), runner
+transfer, signer, audit-receipt, capability, and the complete
+`verify-boilerplate.sh` gate passed serially. The clean project gate reached
+CTest 96 tests with 93 passed, 2 environmental skips, and the existing three
+protected editor golden comparisons failing; goldens were not modified. Human
+review trust and fresh runner deployment/evidence remain external blockers.
 
 **Blocking findings (2026-08-19, lifecycle operator)**
 

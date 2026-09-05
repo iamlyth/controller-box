@@ -6,6 +6,8 @@
 # incomplete cleanup. Fixtures replicate the exact state the live probes
 # validate; a fixture that could produce a false pass is itself a failure.
 set -euo pipefail
+export FACTORY_CAMPAIGN_ID=synthetic-iprunner-probes
+export FACTORY_READINESS_NONCE=3333333333333333333333333333333333333333333333333333333333333333
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
@@ -340,7 +342,9 @@ LOG
 : > "$tmp/skipped-repo/.factory-state/runner-evidence/probe-runner/$head/stderr.log"
 cat > "$tmp/skipped-repo/.factory-state/runner-evidence.json" <<AG
 {
-  "schema": "factory-runner-aggregate/v1",
+  "schema": "factory-runner-aggregate/v2",
+  "campaign_id": "synthetic-iprunner-probes",
+  "readiness_nonce": "3333333333333333333333333333333333333333333333333333333333333333",
   "commit": "$head",
   "runners": [
     {"name": "probe-runner", "manifest": ".factory-state/runner-evidence/probe-runner/$head/manifest.json", "capabilities": ["target-consumer"]}

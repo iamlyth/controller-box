@@ -5,6 +5,8 @@
 # receipts reused across rounds must all be rejected; only coordinator-bound
 # matching receipts certify runtime.
 set -euo pipefail
+export FACTORY_CAMPAIGN_ID=synthetic-audit-receipts
+export FACTORY_READINESS_NONCE=ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
@@ -111,7 +113,9 @@ key_sha256 = hashlib.sha256(public_key.encode()).hexdigest()
 manifest = {
     "schema": "factory-runner-receipt/v1", "result": "pass", "runner": "fake-runner",
     "commit": head, "tree": tree, "environment_blob": environment_blob,
-    "verify_argv_sha256": argv_digest, "archive_sha256": archive_sha256, "nonce": "0" * 64,
+    "verify_argv_sha256": argv_digest, "archive_sha256": archive_sha256,
+    "campaign_id": "synthetic-audit-receipts", "readiness_nonce": "f" * 64,
+    "nonce": "0" * 64,
     "capabilities": capabilities, "exit_code": 0, "timed_out": False,
     "started_at": 1, "finished_at": 2, "cleanup": True,
     "stdout_sha256": empty, "stderr_sha256": empty,
@@ -122,7 +126,9 @@ raw = (json.dumps(manifest, sort_keys=True, indent=2) + "\n").encode()
 manifest_path = root / f".factory-state/runner-evidence/fake-runner/{head}/manifest.json"
 manifest_path.write_bytes(raw)
 aggregate = {
-    "schema": "factory-runner-aggregate/v1",
+    "schema": "factory-runner-aggregate/v2",
+    "campaign_id": "synthetic-audit-receipts",
+    "readiness_nonce": "f" * 64,
     "commit": head,
     "tree": tree,
     "environment_blob": environment_blob,

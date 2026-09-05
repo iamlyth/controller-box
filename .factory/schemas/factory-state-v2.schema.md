@@ -1,4 +1,4 @@
-# `factory-state/v1` control-state schema
+# `factory-state/v2` control-state schema
 
 Status: committed contract (normative for STATE-01, `docs/FACTORY-LOOP-SPEC.md`
 §11/§17). The single mutable control-state authority is the JSON document
@@ -13,9 +13,9 @@ transition it.
 - The file is a single JSON object carrying **exactly** the §11 field set of
   section 2 — no wall-clock timestamp, model prose, task description, memory,
   evidence claim, or copy of the plan is accepted. Parsing rejects both extra
-  and missing fields. A pre-hook 17-field `factory-state/v1` is recognized only
-  as a deterministic migration input with a zero configuration digest; it can
-  never satisfy a real campaign's expected exact-commit hook binding.
+  and missing fields. Runtime parsing performs no synthesis. Legacy
+  `factory-state/v1` input is accepted only by the explicit offline/fixture
+  migration helper and can never migrate into production readiness.
 - Every parse re-validates every structural invariant; a model that fails any
   invariant is a tamper (`StateTamperError`) and never reaches a transition,
   a digest, or a write.
@@ -39,7 +39,7 @@ exactly once, with the §11 type and invariant:
 
 | Field | Type / invariant | Mutable by |
 |-------|------------------|------------|
-| `schema` | exactly the constant `"factory-state/v1"` | write-once |
+| `schema` | exactly the constant `"factory-state/v2"` | write-once |
 | `repository_identity` | `dev:inode` hex pair (`^[0-9a-f]+:[0-9a-f]+$`) of the canonical root directory | write-once |
 | `branch` | non-empty Git branch name | write-once |
 | `campaign_id` | non-empty campaign identifier | write-once |
@@ -61,7 +61,7 @@ exactly once, with the §11 type and invariant:
 | `phase_started_at_monotonic` | positive integer (`time.monotonic_ns`); a zeroed `now=0` epoch marker is rejected as tamper (Task 19 S3) | only phase transitions |
 | `attempt_started_at_monotonic` | non-negative integer; positive exactly while an attempt is active and `>= phase_started_at_monotonic` (an attempt can never precede the phase that owns it, S9); the inverse holds too — when no attempt is active (`attempt_number == 0`) the marker must be zero (S9) | only `begin_attempt` / phase transitions |
 | `last_outcome` | `null` only during round-zero readiness or fresh `planning`, otherwise exactly one trusted outcome of the owning phase; mismatch fails closed | trusted harness only |
-| `readiness` | exact bounded object with required flag, nonce, attempt/cursor/status, accepted commit/tree/environment and authority/input/result SHA bindings, plus terminal outcome; legacy state migrates only to non-authorizing `required=false` | round-zero coordinator only |
+| `readiness` | mandatory exact bounded object with immutable applicability, campaign nonce, attempt/cursor/status, accepted commit/tree/environment, command/human/trust authorities, five separate result digests, and terminal outcome; production load requires `required=true` | round-zero coordinator only |
 
 ### 2.1 Write-once bindings
 

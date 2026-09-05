@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Single mutable control-state authority: ``factory-state/v1`` (STATE-01).
+"""Single mutable control-state authority: ``factory-state/v2`` (STATE-01).
 
 This module implements the one minimal mutable control-state file
 ``.factory-state/factory-loop.json`` specified by FACTORY-LOOP-SPEC § 11 and
@@ -120,7 +120,8 @@ import sys
 import time
 from typing import Callable, Dict, List, Mapping, Optional, Tuple
 
-SCHEMA_NAME = "factory-state/v1"
+SCHEMA_NAME = "factory-state/v2"
+LEGACY_SCHEMA_NAME = "factory-state/v1"
 STATE_FILE_NAME = "factory-loop.json"
 DIGEST_LEDGER_NAME = "state-digest-ledger.jsonl"
 
@@ -249,8 +250,9 @@ READINESS_FIELDS = (
     "tree", "environment_blob", "specification_sha256", "plan_sha256",
     "conformance_sha256", "policy_sha256", "contracts_sha256",
     "install_manifest_sha256", "command_authority_sha256",
-    "aggregate_sha256", "evidence_result_sha256", "core_result_sha256",
-    "human_result_sha256", "result_sha256", "terminal_outcome",
+    "human_authority_sha256", "trust_authority_sha256",
+    "aggregate_sha256", "capability_result_sha256", "core_result_sha256",
+    "conformance_result_sha256", "human_result_sha256", "result_sha256", "terminal_outcome",
 )
 
 
@@ -289,8 +291,13 @@ def _validate_readiness(value: object, *, required: bool) -> None:
             raise StateTamperError(f"readiness {name} must be SHA-256")
     if required and value["nonce"] == "0" * 64:
         raise StateTamperError("required readiness must have a campaign nonce")
-    if value["status"] == "complete" and (value["terminal_outcome"] != "pass" or value["result_sha256"] == "0" * 64 or value["cursor"] != 6):
-        raise StateTamperError("completed readiness lacks its bound result")
+    if value["status"] == "complete":
+        required_digests = (
+            "aggregate_sha256", "capability_result_sha256", "core_result_sha256",
+            "conformance_result_sha256", "human_result_sha256", "result_sha256",
+        )
+        if value["terminal_outcome"] != "pass" or value["cursor"] != 6 or any(value[name] == "0" * 64 for name in required_digests):
+            raise StateTamperError("completed readiness lacks every nonzero bound result")
 
 
 def update_readiness(state: "FactoryState", readiness: Mapping[str, object]) -> "FactoryState":
@@ -301,7 +308,7 @@ def update_readiness(state: "FactoryState", readiness: Mapping[str, object]) -> 
     previous = state.readiness
     if int(readiness.get("attempt", -1)) < int(previous["attempt"]) or int(readiness.get("cursor", -1)) < int(previous["cursor"]):
         raise StateTransitionError("readiness attempt/cursor may not rewind")
-    for name in ("required", "nonce", "accepted_commit", "tree", "environment_blob", "specification_sha256", "plan_sha256", "conformance_sha256", "policy_sha256", "contracts_sha256", "install_manifest_sha256", "command_authority_sha256"):
+    for name in ("required", "nonce", "accepted_commit", "tree", "environment_blob", "specification_sha256", "plan_sha256", "conformance_sha256", "policy_sha256", "contracts_sha256", "install_manifest_sha256", "command_authority_sha256", "human_authority_sha256", "trust_authority_sha256"):
         if readiness.get(name) != previous.get(name):
             raise StateBindingError(f"readiness binding `{name}` may not change")
     result = replace(state, readiness=dict(readiness))
@@ -775,6 +782,45 @@ def _validate_state(state: FactoryState) -> None:
             )
 
 
+def migrate_offline_state(data: object, *, readiness_required: bool = False) -> Dict[str, object]:
+    """Explicitly migrate a legacy v1 document for fixture/offline tooling only.
+
+    Production loading never calls this helper.  A legacy document cannot be
+    upgraded into production readiness: callers requesting readiness are
+    rejected and must start a fresh campaign with a new nonce.
+    """
+    if readiness_required:
+        raise StateTamperError("legacy state cannot migrate into production readiness")
+    if not isinstance(data, dict) or data.get("schema") != LEGACY_SCHEMA_NAME:
+        raise StateTamperError("offline migration requires an exact factory-state/v1 document")
+    migrated = dict(data)
+    migrated["schema"] = SCHEMA_NAME
+    if "readiness" not in migrated:
+        migrated["readiness"] = empty_readiness()
+    legacy_hook_fields = {
+        "pre_round_hook_configuration_digest", "pre_round_hook_commit",
+        "pre_round_hook_results_digest", "pre_round_hook_started_round",
+        "pre_round_hook_completed_round",
+    }
+    present = legacy_hook_fields.intersection(migrated)
+    if present and present != legacy_hook_fields:
+        raise StateTamperError("pre-round hook state fields must be present as one complete set")
+    if not present:
+        current_round = migrated.get("current_round", 0)
+        completed = current_round if type(current_round) is int and current_round > 0 else 0
+        if migrated.get("current_phase") == "planning" and migrated.get("last_outcome") in ("pass", "findings", "blocked") and completed > 0:
+            completed -= 1
+        migrated.update({
+            "pre_round_hook_configuration_digest": "0" * 64,
+            "pre_round_hook_commit": "0" * 40,
+            "pre_round_hook_results_digest": "0" * 64,
+            "pre_round_hook_started_round": completed,
+            "pre_round_hook_completed_round": completed,
+        })
+    parse_state(migrated)
+    return migrated
+
+
 def parse_state(data: object) -> FactoryState:
     """Build a validated ``FactoryState`` from a JSON object.
 
@@ -785,42 +831,9 @@ def parse_state(data: object) -> FactoryState:
     """
     if not isinstance(data, dict):
         raise StateTamperError("control state must be a JSON object")
-    # Migration compatibility for pre-hook factory-state/v1 documents.  The
-    # zero configuration digest can never match a real campaign's expected
-    # exact-commit hook binding, so campaign recovery fails closed; pure state
-    # tooling can still diagnose and migrate the old document deterministically.
-    legacy_hook_fields = {
-        "pre_round_hook_configuration_digest",
-        "pre_round_hook_commit",
-        "pre_round_hook_results_digest",
-        "pre_round_hook_started_round",
-        "pre_round_hook_completed_round",
-    }
-    # Pre-readiness v1 documents are diagnostic migration input only.  Their
-    # explicit required=false binding can never authorize a production role.
-    if "readiness" not in data:
-        data = dict(data)
-        data["readiness"] = empty_readiness()
-    present_legacy = legacy_hook_fields.intersection(data)
-    if not present_legacy:
-        data = dict(data)
-        current_round = data.get("current_round", 0)
-        migrated_round = current_round if type(current_round) is int and current_round > 0 else 0
-        if (
-            data.get("current_phase") == "planning"
-            and data.get("last_outcome") in ("pass", "findings", "blocked")
-            and migrated_round > 0
-        ):
-            migrated_round -= 1
-        data.update({
-            "pre_round_hook_configuration_digest": "0" * 64,
-            "pre_round_hook_commit": "0" * 40,
-            "pre_round_hook_results_digest": "0" * 64,
-            "pre_round_hook_started_round": migrated_round,
-            "pre_round_hook_completed_round": migrated_round,
-        })
-    elif present_legacy != legacy_hook_fields:
-        raise StateTamperError("pre-round hook state fields must be present as one complete set")
+    # Runtime parsing is deliberately migration-free.  Legacy/offline callers
+    # must opt in through ``migrate_offline_state``; production recovery can
+    # therefore never synthesize a readiness authority at the old version.
     extra = sorted(set(data) - set(FIELD_NAMES))
     missing = sorted(set(FIELD_NAMES) - set(data))
     if extra or missing:
@@ -1698,6 +1711,7 @@ def load_state(
     expected_role_prompt_digests: Optional[Mapping[str, str]] = None,
     expected_pre_round_hook_configuration_digest: Optional[str] = None,
     expected_pre_round_hook_commit: Optional[str] = None,
+    expected_readiness_required: Optional[bool] = None,
     _expected_uid: Optional[int] = None,
 ) -> FactoryState:
     """Securely reopen, validate, and bind the control-state file.
@@ -1741,6 +1755,10 @@ def load_state(
         expected_pre_round_hook_configuration_digest,
     )
     _expect_binding(state, "pre_round_hook_commit", expected_pre_round_hook_commit)
+    if expected_readiness_required is not None and state.readiness.get("required") is not expected_readiness_required:
+        raise StateBindingError(
+            "state readiness applicability differs from the immutable expected production policy"
+        )
     return state
 
 
