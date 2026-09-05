@@ -293,7 +293,10 @@ runner receipt. Runner protocol v2 does not execute these committed candidate
 contracts or probe scripts: they are deployment source only. The enrolled
 runtime authority is a separately installed, root-owned
 `factory-probe-authority/v1` closure, and the SSH identity can invoke only the
-root broker (never the signer). Evidence is isolated by campaign ID, readiness
+root broker (never the signer). Production additionally requires the external
+root-owned `factory-ssh-launcher/v1` manifest and the installed runner policy's
+exact group allowlist and `/usr/bin/xdg-dbus-proxy` prerequisite; no launcher is
+resolved from HOME or PATH. Evidence is isolated by campaign ID, readiness
 nonce, runner, commit, and acquisition nonce. The checked-in enrollment remains
 pending; deployment/migration uses `scripts/install-factory-runner-v2.sh` and
 `deploy/factory-runner-authority-v1/forced-command-v2.txt` after independent

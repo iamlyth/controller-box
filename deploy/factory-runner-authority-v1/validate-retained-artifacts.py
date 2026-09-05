@@ -39,9 +39,14 @@ def png(path):
  channels=3 if ct==2 else 4;stride=w*channels;expected=(stride+1)*h
  if expected>67_125_248 or expected>len(packed)*2048:die('PNG inflate size/ratio exceeds bound')
  try:
-  decoder=zlib.decompressobj();data=decoder.decompress(bytes(packed),expected+1)
-  if len(data)>expected or decoder.unconsumed_tail:die('PNG inflate exceeds bound')
-  data+=decoder.flush(expected+1-len(data))
+  decoder=zlib.decompressobj();data=bytearray()
+  for pos in range(0,len(packed),65536):
+   chunk=memoryview(packed)[pos:pos+65536]
+   while chunk:
+    piece=decoder.decompress(chunk,expected+1-len(data));data.extend(piece)
+    if len(data)>expected:die('PNG inflate exceeds bound')
+    chunk=decoder.unconsumed_tail
+  data.extend(decoder.flush(expected+1-len(data)))
  except (zlib.error,ValueError):die('PNG IDAT decode failed')
  if len(data)!=expected or not decoder.eof or decoder.unused_data:die('PNG decoded size/stream mismatch')
  rows=[];prev=bytearray(stride);o=0

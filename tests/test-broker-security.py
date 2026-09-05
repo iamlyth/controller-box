@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Fixture-only adversarial broker/deployment regression checks."""
-import importlib.util,io,json,os,pathlib,stat,tarfile,tempfile
+import importlib.util,io,json,os,pathlib,stat,subprocess,sys,tarfile,tempfile,time
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('broker',ROOT/'scripts/factory-runner-broker.py');b=importlib.util.module_from_spec(spec);spec.loader.exec_module(b)
 
@@ -43,6 +43,35 @@ for marker in ('ProtectHome=yes','ProtectSystem=strict','BindReadOnlyPaths=',
  assert marker in broker,marker
 assert 'os.chown(request_dir,uid' not in broker and 'os.chown(product,uid' not in broker
 assert broker.rindex('collect(artifacts') < broker.rindex('analyze(authority') < broker.rindex('signed=sign(')
+# Slow trickles do not refresh the monotonic deadline, and output is streamed
+# into held bounded files rather than accumulated by subprocess.run.
+r,w=os.pipe()
+try:
+ started=time.monotonic()
+ try:b._read_deadline(r,4,started+.03,exact=True)
+ except b.BrokerError:pass
+ else:raise AssertionError('slow request held a broker past its deadline')
+ assert time.monotonic()-started<.5
+finally:os.close(r);os.close(w)
+with tempfile.TemporaryDirectory(dir=ROOT) as td:
+ out=pathlib.Path(td)/'out';err=pathlib.Path(td)/'err'
+ try:b._bounded_process([sys.executable,'-c',f'import os;os.write(1,b"x"*{b.MAX_LOG+1})'],{},5,out,err)
+ except b.BrokerError:pass
+ else:raise AssertionError('huge candidate output accepted')
+ assert out.stat().st_size==b.MAX_LOG
+for marker in ('HEADER_TIMEOUT=15','ARCHIVE_TIMEOUT=120','BROKER_ADMISSION=8','fcntl.flock',
+ 'aggregate contained output exceeds bound','RLIMIT_AS','RLIMIT_CPU','/var/run',
+ '--filter','--talk=org.shadowblip.InputPlumber','DBUS_SYSTEM_BUS_ADDRESS',
+ 'runner primary/supplementary groups differ from exact approved set'):
+ assert marker in broker,marker
+assert 'capture_output=True,timeout=7300' not in broker
+assert 'zlib.decompress(' not in (ROOT/'scripts/validate-runner-artifacts-semantic.py').read_text()
+
+client=(ROOT/'scripts/run-factory-runners.py').read_text()
+for marker in ('factory-ssh-launcher/v1','/proc/self/fd/','os.O_NOFOLLOW','pass_fds=(launcher.fd,)',
+ 'tree_identities(evidence_dir)','renameat2(sfd','runner aggregate publication collision'):
+ assert marker in client,marker
+assert 'Path.home() / ".ssh/factory-ssh"' not in client
 
 signer=(ROOT/'scripts/factory-runner-signer.py').read_text()
 assert 'FACTORY_BROKER_SIGNING' not in signer

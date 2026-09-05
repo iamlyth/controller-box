@@ -123,7 +123,18 @@ InputPlumber PID/executable provenance is gathered by root outside PrivatePIDs.
 The installer performs full preflight and staged atomic cutover with backups and
 rollback, derives `devrunner` from the configured UID while preserving class
 `dev-runner-vm`, and never treats pending repository enrollment as authority.
-Focused authority, artifact-race, direct-signer, policy, syntax, and readiness
+The remaining runtime boundary is now hardened: host-wide admission precedes
+header bytes; monotonic header/archive deadlines and a single locked nonce
+transaction defeat slow/flood races; candidate and analyzer output streams to
+hard-capped held files with immediate unit termination; analyzers have CPU,
+address-space, file, process, descriptor, time, PNG inflate, and ratio bounds.
+`/run` and `/var/run` are hidden and InputPlumber access requires the pinned
+root-owned allowlisting D-Bus proxy. Runtime and installer enforce exact account
+groups. Coordinator transport now requires an external root-owned
+`factory-ssh-launcher/v1` device/inode/digest pin and executes its held descriptor.
+Evidence directories and aggregate files publish with dirfd-relative
+`RENAME_NOREPLACE` and post-publication inode revalidation.
+Focused authority, artifact-race, output/deadline, direct-signer, policy, syntax, and readiness
 fixture tests pass locally. No external runner/probe/campaign was invoked, no
 deployment/evidence was promoted, and enrollment remains pending human/root
 approval.

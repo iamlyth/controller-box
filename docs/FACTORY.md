@@ -354,8 +354,9 @@ During verification, the installed campaign coordinator invokes its bound
 `scripts/run-factory-runners.py` descriptor (never a model role) to create a history-free
 `git archive` of the exact clean commit, rejects tracked symlinks, gitlinks,
 or special modes that this protocol cannot reproduce safely, sends the
-archive through the pinned SSH alias, verifies the extracted Git tree
-remotely, runs the fixed argv without reusing a checkout or HOME, and cleans
+archive through the pinned SSH alias using an external root-owned launcher
+manifest (absolute no-symlink path, SHA-256, device/inode, descriptor execution),
+verifies the extracted Git tree remotely, runs the fixed argv without reusing a checkout or HOME, and cleans
 the remote workspace. Local receipts and bounded logs are written beneath
 `.factory-state/runner-evidence/` and validated by
 `scripts/check-factory-runner-evidence.py`. Transport or remote-verification
@@ -382,7 +383,10 @@ Receipt v2 embeds `factory-runner-artifacts/v1`: at most 64 approved regular
 files, 8 MiB per file and 48 MiB aggregate. Candidate output paths are opened
 once and copied into root-owned mode-0400 held files; analyzers, descriptors,
 export, and signing all consume those held bytes, never a reopened candidate
-path. Candidate source/archive parents remain root-owned and read-only while
+path. Broker admission and nonce decisions are host-wide locked and bounded;
+header/archive reads have fixed monotonic deadlines. Candidate and analyzer logs
+stream concurrently to bounded held files, and analyzer CPU/address-space/time/file
+limits prevent long-lived root memory growth. Candidate source/archive parents remain root-owned and read-only while
 separate UID-owned home/build/output mounts are the only writable locations. Canonical lowercase relative paths,
 capability ownership, media type, retained mode 0600, size, and SHA-256 are
 signed together with a descriptor-manifest digest scoped to campaign,

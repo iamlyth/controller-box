@@ -122,8 +122,8 @@ def load_policy() -> dict:
     if data.get("schema") != POLICY_SCHEMA:
         raise PolicyError(f"runner policy schema is not {POLICY_SCHEMA}")
     namespace = data.get("namespace")
-    if not isinstance(namespace, str) or not namespace or "\n" in namespace:
-        raise PolicyError("runner policy namespace is invalid")
+    if namespace != "factory-runner-receipt":
+        raise PolicyError("runner policy namespace is not the canonical signature namespace")
     classes = data.get("classes")
     if not isinstance(classes, list) or not classes:
         raise PolicyError("runner policy must declare at least one class")
@@ -151,7 +151,7 @@ def load_policy() -> dict:
             "name", "uid", "workspace_root", "allowed_capabilities",
             "broker_helper", "probe_authority", "probe_authority_sha256", "probe_authority_status",
             "signer_key", "signer_principal_file", "nonce_ledger",
-            "systemd_run", "systemctl", "cgroup_root",
+            "systemd_run", "systemctl", "cgroup_root", "dbus_proxy", "approved_groups",
         }
         if set(entry) != fields:
             raise PolicyError(f"runner policy classes[{index}] fields are invalid")
@@ -177,13 +177,19 @@ def load_policy() -> dict:
             raise PolicyError(f"runner policy classes[{index}].probe_authority_sha256 is invalid")
         if entry["probe_authority_status"] != "enrolled":
             raise PolicyError(f"runner policy classes[{index}] probe authority is pending or unapproved")
-        for field in ("broker_helper", "probe_authority", "signer_key", "signer_principal_file", "nonce_ledger", "systemd_run", "systemctl", "cgroup_root"):
+        groups=entry["approved_groups"]
+        if (not isinstance(groups,list) or not groups or len(groups)!=len(set(groups))
+                or not all(isinstance(g,str) and NAME.fullmatch(g) for g in groups)):
+            raise PolicyError(f"runner policy classes[{index}].approved_groups is invalid")
+        for field in ("broker_helper", "probe_authority", "signer_key", "signer_principal_file", "nonce_ledger", "systemd_run", "systemctl", "cgroup_root", "dbus_proxy"):
             value = entry[field]
             if (
                 not isinstance(value, str) or not value.startswith("/")
                 or ".." in Path(value).parts
             ):
                 raise PolicyError(f"runner policy classes[{index}].{field} is invalid")
+        if any(cap in {"inputplumber-system-dbus","target-consumer","controller-production-routing"} for cap in entry["allowed_capabilities"]) and entry["dbus_proxy"] != "/usr/bin/xdg-dbus-proxy":
+            raise PolicyError(f"runner policy classes[{index}] lacks the canonical D-Bus proxy")
         if entry["broker_helper"] != "/usr/local/libexec/factory-runner-broker":
             raise PolicyError(f"runner policy classes[{index}] does not use the canonical broker")
         if name == "gpurunner" or any(cap in {"gpu-compositor", "installed-licensed-diagram"} for cap in entry["allowed_capabilities"]):

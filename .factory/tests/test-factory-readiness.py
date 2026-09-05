@@ -250,7 +250,8 @@ class RunnerPolicyAuthorityTests(unittest.TestCase):
                         "probe_authority_sha256":"b"*64, "probe_authority_status":"enrolled",
                         "signer_key":"/etc/factory/key", "signer_principal_file":"/etc/factory/principal",
                         "nonce_ledger":"/var/lib/factory-runner/nonces", "systemd_run":"/usr/bin/systemd-run",
-                        "systemctl":"/usr/bin/systemctl", "cgroup_root":"/sys/fs/cgroup"}]}
+                        "systemctl":"/usr/bin/systemctl", "cgroup_root":"/sys/fs/cgroup",
+                        "dbus_proxy":"/usr/bin/xdg-dbus-proxy", "approved_groups":["users"]}]}
             prior = factory_runner_policy.DEFAULT_POLICY_PATH
             prior_env = os.environ.get("FACTORY_RUNNER_POLICY")
             os.environ["FACTORY_RUNNER_POLICY"] = str(path)

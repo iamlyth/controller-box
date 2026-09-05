@@ -29,7 +29,7 @@ trap rollback EXIT INT TERM HUP
 
 # Complete preflight happens before touching production paths.
 /usr/bin/python3 - "$ROOT" "$POLICY" "$STAGE" <<'PY'
-import hashlib,json,os,pathlib,pwd,shutil,stat,subprocess,sys
+import grp,hashlib,json,os,pathlib,pwd,shutil,stat,subprocess,sys
 root=pathlib.Path(sys.argv[1]); policy_path=pathlib.Path(sys.argv[2]); stage=pathlib.Path(sys.argv[3])
 def die(s): raise SystemExit('installer preflight: '+s)
 def chain(p,regular=False):
@@ -66,6 +66,11 @@ for c in policy['classes']:
  if c['probe_authority_sha256']!=digest or c['probe_authority_status']!='enrolled':die(f"class {c['name']} authority is not independently enrolled")
  account=pwd.getpwuid(c['uid'])
  if account.pw_uid!=c['uid'] or account.pw_name==c['name'] and c['name']=='dev-runner-vm':die('dev class/account mapping invalid')
+ actual={grp.getgrgid(g).gr_name for g in os.getgrouplist(account.pw_name,account.pw_gid)}
+ if actual!=set(c['approved_groups']) or grp.getgrgid(account.pw_gid).gr_name not in actual:die(f"runner {c['name']} has dangerous/extraneous group membership")
+ if any(cap in {'inputplumber-system-dbus','target-consumer','controller-production-routing'} for cap in c['allowed_capabilities']):
+  proxy=chain(pathlib.Path(c['dbus_proxy']),True);pi=proxy.stat()
+  if proxy!=pathlib.Path('/usr/bin/xdg-dbus-proxy') or not pi.st_mode&0o111:die('exact D-Bus proxy prerequisite absent')
  for p in (c['workspace_root'],pathlib.Path(c['nonce_ledger']).parent):
   q=pathlib.Path(p);q.mkdir(parents=True,exist_ok=True,mode=0o700);chain(q)
 for exe in ('/usr/bin/systemd-run','/usr/bin/systemctl','/usr/bin/git','/usr/bin/bash','/usr/bin/python3','/usr/bin/ssh-keygen','/usr/bin/sudo','/usr/sbin/visudo'):

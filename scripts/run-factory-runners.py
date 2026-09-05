@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import resource
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -60,16 +61,42 @@ def digest_json(value: object) -> str:
 
 
 def rename_noreplace(source: Path, destination: Path) -> None:
-    """Atomically publish a directory without replacing an existing name."""
-    libc=ctypes.CDLL(None,use_errno=True)
-    renameat2=getattr(libc,"renameat2",None)
+    """Dirfd-relative atomic publication; neither pathname ancestry is re-resolved."""
+    libc=ctypes.CDLL(None,use_errno=True);renameat2=getattr(libc,"renameat2",None)
     if renameat2 is None: fail("renameat2 is unavailable; cannot publish evidence race-free")
-    renameat2.argtypes=[ctypes.c_int,ctypes.c_char_p,ctypes.c_int,ctypes.c_char_p,ctypes.c_uint]
-    renameat2.restype=ctypes.c_int
-    if renameat2(-100,os.fsencode(source),-100,os.fsencode(destination),1)!=0:
+    renameat2.argtypes=[ctypes.c_int,ctypes.c_char_p,ctypes.c_int,ctypes.c_char_p,ctypes.c_uint];renameat2.restype=ctypes.c_int
+    sfd=os.open(source.parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC)
+    dfd=os.open(destination.parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC)
+    try:rc=renameat2(sfd,os.fsencode(source.name),dfd,os.fsencode(destination.name),1)
+    finally:os.close(sfd);os.close(dfd)
+    if rc!=0:
         code=ctypes.get_errno()
         if code==errno.EEXIST: fail("runner evidence publication collision")
         fail(f"runner evidence publication failed with errno {code}")
+
+
+def hold_tree(root: Path) -> tuple[dict[str,tuple[int,int,int,int,int]],list[int]]:
+    """Open and retain every staging inode through verification/publication."""
+    result={};fds=[]
+    try:
+        for path in [root,*sorted(root.rglob("*"))]:
+            named=os.lstat(path)
+            if stat.S_ISLNK(named.st_mode) or not (stat.S_ISDIR(named.st_mode) or stat.S_ISREG(named.st_mode)):
+                fail("runner evidence staging contains an unsafe inode")
+            flags=os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC
+            if stat.S_ISDIR(named.st_mode):flags|=os.O_DIRECTORY
+            fd=os.open(path,flags);info=os.fstat(fd)
+            if (named.st_dev,named.st_ino)!=(info.st_dev,info.st_ino):fail("runner evidence staging inode changed while opening")
+            fds.append(fd);result[path.relative_to(root).as_posix()]=(info.st_dev,info.st_ino,info.st_size,info.st_mtime_ns,stat.S_IFMT(info.st_mode))
+        return result,fds
+    except BaseException:
+        for fd in fds:os.close(fd)
+        raise
+
+def tree_identities(root: Path) -> dict[str,tuple[int,int,int,int,int]]:
+    identities,fds=hold_tree(root)
+    for fd in fds:os.close(fd)
+    return identities
 
 
 def atomic_write(path: Path, data: bytes) -> None:
@@ -95,9 +122,9 @@ def atomic_write(path: Path, data: bytes) -> None:
         with os.fdopen(fd, "wb") as stream:
             stream.write(data)
             stream.flush()
+            os.fchmod(stream.fileno(),0o600)
             os.fsync(stream.fileno())
-        os.chmod(temporary, 0o600)
-        os.replace(temporary, path)
+        rename_noreplace(Path(temporary),path)
     finally:
         try:
             os.unlink(temporary)
@@ -128,20 +155,56 @@ def limit_transport_output() -> None:
     resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_RESPONSE, MAX_RESPONSE))
 
 
-def ssh_binary() -> str:
-    launcher = Path.home() / ".ssh/factory-ssh"
-    if not launcher.is_symlink():
-        fail(
-            "trusted SSH launcher is not provisioned",
-            EXIT_TRANSPORT,
-        )
-    try:
-        target = launcher.resolve(strict=True)
-    except OSError:
-        fail("trusted SSH launcher target is unavailable", EXIT_TRANSPORT)
-    if not target.is_file() or not os.access(target, os.X_OK):
-        fail("trusted SSH launcher target is not executable", EXIT_TRANSPORT)
-    return str(launcher)
+LAUNCHER_MANIFEST = "/etc/controller-box/factory-ssh-launcher.json"
+
+def _trusted_chain(path: Path, fixture: bool) -> None:
+    if not path.is_absolute(): fail("trusted SSH launcher path is not absolute", EXIT_TRANSPORT)
+    owners={0,os.getuid()} if fixture else {0};current=Path("/")
+    for part in path.parts[1:]:
+        current/=part;info=os.lstat(current)
+        if stat.S_ISLNK(info.st_mode) or info.st_uid not in owners or info.st_mode&0o022:
+            fail("trusted SSH launcher ancestry is unsafe",EXIT_TRANSPORT)
+
+class HeldLauncher:
+    """Root-enrolled external launcher executed only through its held inode."""
+    def __init__(self):
+        fixture=os.environ.get("FACTORY_RUNNER_FIXTURE_MODE")=="1"
+        configured=os.environ.get("FACTORY_SSH_LAUNCHER_MANIFEST",LAUNCHER_MANIFEST)
+        manifest=Path(configured);_trusted_chain(manifest,fixture)
+        try:
+            mfd=os.open(manifest,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC);mi=os.fstat(mfd)
+            if not stat.S_ISREG(mi.st_mode) or mi.st_nlink!=1:raise OSError("unsafe manifest inode")
+            raw=os.read(mfd,65537)
+            if len(raw)>65536 or os.read(mfd,1):raise OSError("oversized manifest")
+            if (os.lstat(manifest).st_dev,os.lstat(manifest).st_ino)!=(mi.st_dev,mi.st_ino):raise OSError("manifest replaced")
+            doc=json.loads(raw);os.close(mfd)
+        except (OSError,ValueError,UnicodeError):
+            try:os.close(mfd)
+            except (OSError,UnboundLocalError):pass
+            fail("trusted SSH launcher manifest is invalid",EXIT_TRANSPORT)
+        if (not isinstance(doc,dict) or set(doc)!={"schema","path","sha256","device","inode"}
+                or doc.get("schema")!="factory-ssh-launcher/v1" or not isinstance(doc.get("path"),str)
+                or type(doc.get("device")) is not int or type(doc.get("inode")) is not int
+                or doc["device"]<0 or doc["inode"]<=0
+                or not re.fullmatch(r"[0-9a-f]{64}",str(doc.get("sha256","")))):
+            fail("trusted SSH launcher manifest fields are invalid",EXIT_TRANSPORT)
+        self.path=Path(doc["path"]);_trusted_chain(self.path,fixture)
+        self.fd=os.open(self.path,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC);info=os.fstat(self.fd)
+        if (not stat.S_ISREG(info.st_mode) or not info.st_mode&0o111 or info.st_nlink!=1
+                or (info.st_dev,info.st_ino)!=(doc["device"],doc["inode"])):
+            self.close();fail("trusted SSH launcher inode differs from enrollment",EXIT_TRANSPORT)
+        h=hashlib.sha256();off=0
+        while True:
+            chunk=os.pread(self.fd,65536,off)
+            if not chunk:break
+            h.update(chunk);off+=len(chunk)
+        if h.hexdigest()!=doc["sha256"]:
+            self.close();fail("trusted SSH launcher digest differs from enrollment",EXIT_TRANSPORT)
+        self.executable=f"/proc/self/fd/{self.fd}"
+    def close(self):
+        if getattr(self,"fd",None) is not None:os.close(self.fd);self.fd=None
+    def __enter__(self):return self
+    def __exit__(self,*_):self.close()
 
 
 def _requested_authority_pins_digest(name: str) -> str:
@@ -162,8 +225,8 @@ def _requested_authority_pins_digest(name: str) -> str:
     return hashlib.sha256(json.dumps(pins, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def _ssh_argv(runner: dict) -> list[str]:
-    return [ssh_binary(), "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
+def _ssh_argv(runner: dict, executable: str) -> list[str]:
+    return [executable, "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
             "-o", "IdentitiesOnly=yes", "-o", "UpdateHostKeys=no",
             "-o", "ClearAllForwardings=yes", "-o", "ForwardAgent=no",
             "-o", "PermitLocalCommand=no", "-o", "RequestTTY=no", "-T",
@@ -173,7 +236,8 @@ def _ssh_argv(runner: dict) -> list[str]:
 def _obtain_broker_nonce(runner: dict, campaign_id: str, readiness_nonce: str) -> str:
     request={"schema":"factory-runner-nonce-request/v1","runner":runner["name"],
              "campaign_id":campaign_id,"readiness_nonce":readiness_nonce}
-    result=subprocess.run(_ssh_argv(runner),input=(json.dumps(request,separators=(",",":"))+"\n").encode(),capture_output=True,timeout=120)
+    with HeldLauncher() as launcher:
+        result=subprocess.run(_ssh_argv(runner,launcher.executable),input=(json.dumps(request,separators=(",",":"))+"\n").encode(),capture_output=True,timeout=120,pass_fds=(launcher.fd,))
     try: response=json.loads(result.stdout)
     except (UnicodeError,json.JSONDecodeError): fail("runner broker nonce response is malformed",EXIT_TRANSPORT)
     if result.returncode or not isinstance(response,dict) or set(response)!={"schema","nonce","runner","campaign_id","readiness_nonce"} or response.get("schema")!="factory-runner-nonce/v1" or response.get("runner")!=runner["name"] or response.get("campaign_id")!=campaign_id or response.get("readiness_nonce")!=readiness_nonce or not re.fullmatch(r"[0-9a-f]{64}",str(response.get("nonce",""))):
@@ -255,12 +319,14 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
     payload = json.dumps(request, separators=(",", ":")).encode() + b"\n" + archive
     with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
         try:
-            process = subprocess.Popen(
-                _ssh_argv(runner),
-                stdin=subprocess.PIPE, stdout=stdout_file, stderr=stderr_file,
-                start_new_session=True, preexec_fn=limit_transport_output,
-            )
-            process.communicate(input=payload, timeout=7500)
+            with HeldLauncher() as launcher:
+                process = subprocess.Popen(
+                    _ssh_argv(runner,launcher.executable),
+                    stdin=subprocess.PIPE, stdout=stdout_file, stderr=stderr_file,
+                    start_new_session=True, preexec_fn=limit_transport_output,
+                    pass_fds=(launcher.fd,),
+                )
+                process.communicate(input=payload, timeout=7500)
         except (OSError, subprocess.TimeoutExpired) as exc:
             if 'process' in locals() and process.poll() is None:
                 os.killpg(process.pid, signal.SIGKILL)
@@ -392,6 +458,7 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
     staging = staging_parent / f"{campaign_id}-{readiness_nonce}-{name}-{commit}-{nonce}"
     if staging.exists() or staging.is_symlink(): fail(f"runner evidence staging collision for {name}")
     staging.mkdir(mode=0o700)
+    held_fds=[]
     try:
         atomic_write(staging / "stdout.log", stdout)
         # SSH diagnostics are deliberately outside the signed artifact set.
@@ -401,14 +468,20 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
         atomic_write(staging / "manifest.sig", signature)
         for descriptor, data in decoded_artifacts:
             atomic_write(staging / "artifacts" / Path(descriptor["path"]), data)
+        held_identity,held_fds=hold_tree(staging)
         _verify_before_publication(
             staging, manifest, manifest_bytes, commit, tree,
             list(receipt["capabilities"]),
         )
-        if evidence_dir.exists() or evidence_dir.is_symlink():
-            fail(f"runner evidence publication collision for {name}")
+        if tree_identities(staging)!=held_identity:
+            fail(f"runner evidence staging inode changed during verification for {name}")
         rename_noreplace(staging, evidence_dir)
+        if tree_identities(evidence_dir)!=held_identity:
+            import shutil
+            shutil.rmtree(evidence_dir,ignore_errors=True)
+            fail(f"runner evidence published inode revalidation failed for {name}")
     finally:
+        for fd in held_fds:os.close(fd)
         if staging.exists():
             import shutil
             shutil.rmtree(staging)

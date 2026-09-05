@@ -5,6 +5,7 @@ ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 python3 "$ROOT/tests/test-runner-authority.py"
 python3 "$ROOT/tests/test-runner-artifacts.py"
 python3 "$ROOT/tests/test-broker-security.py"
+python3 "$ROOT/tests/test-runner-client-security.py"
 python3 -m py_compile "$ROOT/scripts/factory-runner-broker.py" "$ROOT/scripts/factory-runner-server.py" "$ROOT/scripts/factory_runner_authority.py" "$ROOT/scripts/run-factory-runners.py" "$ROOT/scripts/check-factory-runner-evidence.py"
 bash -n "$ROOT/scripts/install-factory-runner-v2.sh" "$ROOT/deploy/factory-runner-authority-v1/probe-controller-production-routing.sh" "$ROOT/deploy/factory-runner-authority-v1/probe-gpu-compositor.sh"
 # The checked-in enrollment is explicitly pending and exactly matches the

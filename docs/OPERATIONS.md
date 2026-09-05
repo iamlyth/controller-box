@@ -762,12 +762,23 @@ private root workspace/ledger parents, and canonical fixed-command
 helper bundle, validates sudoers before cutover, uses same-filesystem atomic
 renames with backups and a signal/error rollback trap, switches the broker grant
 before removing the obsolete signer grant, and derives sudoers account names
-from policy UIDs rather than class names. Required host containment is unified
-cgroup v2 plus systemd transient services supporting `PrivatePIDs`,
+from policy UIDs rather than class names. Policy also pins the exact primary and
+supplementary group-name set and `/usr/bin/xdg-dbus-proxy`; installation rejects
+missing proxy support and dangerous or extraneous groups. The coordinator SSH
+launcher is an external root-owned enrollment (`factory-ssh-launcher/v1`) naming
+an immutable absolute executable by SHA-256 and device/inode. Production reads
+`/etc/controller-box/factory-ssh-launcher.json` (an alternate manifest is only
+for explicit fixture mode), rejects symlinks in every ancestor, opens once, and
+executes `/proc/self/fd/N`; home symlinks and PATH lookup are forbidden.
+Required host containment is unified cgroup v2 plus systemd transient services supporting `PrivatePIDs`,
 `PrivateMounts`, strict filesystem/home protection, device policy, resource
 limits, and cgroup cleanup inspection. InputPlumber host-PID provenance is
 resolved and hashed by the privileged broker outside `PrivatePIDs`; the probe
-receives only that read-only broker fact. Signer trust is provisioned and enabled for all three declared
+receives only that read-only broker fact. InputPlumber probes receive only a
+private root-owned filtered proxy socket: `/run` and `/var/run` (including Docker,
+containerd, and host D-Bus sockets) remain hidden, and only the pinned
+`org.shadowblip.InputPlumber` destination and enumerated probe methods pass.
+Proxy absence, startup failure, or cleanup uncertainty fails closed. Signer trust is provisioned and enabled for all three declared
 classes; this is not runner execution evidence. The `26df6c0` receipt is legacy unsigned/unevidenced; valid signed
 evidence exists for historical commit `c45336a`, but it is stale. Neither is
 claimed as current evidence, and Task 26 remains blocked until runner transport
