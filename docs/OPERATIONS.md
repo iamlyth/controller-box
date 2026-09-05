@@ -553,10 +553,23 @@ python3 "$INSTALL_PREFIX/.factory/loop/installer.py" verify --root "$PWD" --comm
 Sequence invariants are: accepted commit, clean `develop`, exact-commit
 production install verification, unique fresh mode-0700 campaign namespace,
 and coordinator-owned runner acquisition after the last commit relevant to each
-verification boundary. Models never invoke runner transport. The coordinator
+verification boundary. A five-round production run starts at round-zero
+`readiness`: after static preflight and held command descriptors, the trusted
+coordinator acquires every declared runner, validates the signed exact aggregate,
+runs all required capability and core acceptance checks, validates planning
+conformance plus explicit core-row mappings, and finally validates the committed
+`.factory/production-graphics-approval.json` for the list, sequential, and
+validation-error editor captures. The approval must bind committed candidate
+capture hashes and accelerated renderer metadata; it cannot waive machine/GPU
+checks. Missing approval terminates as an explicit human blocker. Models never
+invoke runner transport. The coordinator
 reuses an unchanged-HEAD aggregate only when its durable completed acquisition
 record and the strong signed checker agree exactly; interrupted, stale, forged,
-partial, or symlinked state cannot authorize capability acceptance. The sequence
+partial, or symlinked state cannot authorize capability acceptance. An
+`acquiring` marker is an ambiguous physical side effect and requires operator
+reconciliation; it is never automatically rerun. The canonical
+`readiness-result.json` is atomically published in the campaign-private state,
+and its digest must match control state before any role launch. The sequence
 ends with an installed-copy five-round launch with explicit provider/model/backend,
 a bounded whole-campaign deadline, and exact verification, capability-evidence,
 and final-acceptance argv. The production launcher

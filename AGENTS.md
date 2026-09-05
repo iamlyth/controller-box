@@ -37,7 +37,10 @@ nix-shell --run './scripts/verify-project.sh'
 ./scripts/check-factory-runner-evidence.py
 
 # Runner acquisition is coordinator-only: model roles never invoke runners.
-# The production campaign refreshes evidence automatically before capability gates.
+# A five-round production campaign runs mandatory trusted round-zero readiness
+# (all declared signed runners, four-target physical routing, licensed accelerated
+# compositor evidence, core/conformance mapping, and committed three-state human
+# graphics approval) before planner 1. Any absent/stale/partial result fails closed.
 # Finite fresh-plan/implementation/audit campaign (role entries: .factory/bin/factory-launch)
 "${INSTALL_PREFIX:?verified production install}/.factory/bin/factory-campaign" --root "$PWD" run --campaign-id "${CAMPAIGN_ID:?new unique id}" --rounds 5 --branch develop --provider "${PI_PROVIDER:?set provider}" --model "${PI_MODEL:?set model}" --backend "${PI2_BACKEND:?set trusted pi2 executable}" --accepted-commit "${ACCEPTED_COMMIT:?clean accepted HEAD}" --install-manifest "${INSTALL_MANIFEST:?verified manifest}" --campaign-timeout 21600 --verification-command ./scripts/verify-project.sh --runner-command ./scripts/run-factory-runners.py --capability-command ./scripts/check-capability-evidence.py --acceptance-command '["./scripts/final-gate.sh","--implementation"]'
 ```

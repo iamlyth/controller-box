@@ -71,6 +71,7 @@ import re
 import shutil
 import stat
 import sys
+import secrets
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -90,6 +91,7 @@ try:  # package import (the hidden `.factory/loop/` package)
     from . import launch as launch_module
     from . import workspace_confinement as confinement_authority
     from . import redaction as output_redaction
+    from . import readiness as readiness_module
 except ImportError:  # flat import used by the hidden `.factory/tests/` suite
     import audit_objectives as audit_objectives_module  # type: ignore[no-redef]
     import evidence as evidence_module  # type: ignore[no-redef]
@@ -104,6 +106,7 @@ except ImportError:  # flat import used by the hidden `.factory/tests/` suite
     import launch as launch_module  # type: ignore[no-redef]
     import workspace_confinement as confinement_authority  # type: ignore[no-redef]
     import redaction as output_redaction  # type: ignore[no-redef]
+    import readiness as readiness_module  # type: ignore[no-redef]
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -191,6 +194,7 @@ CAMPAIGN_PHASE_RESULT_NAME = "factory-phase-result.json"
 CAMPAIGN_AUDIT_RESULT_NAME = "factory-audit-result.json"
 RUNNER_ACQUISITION_NAME = "runner-acquisition.json"
 RUNNER_ACQUISITION_SCHEMA = "factory-runner-acquisition/v1"
+READINESS_RESULT_NAME = "readiness-result.json"
 RUNNER_COMMAND = ("./scripts/run-factory-runners.py",)
 RUNNER_CHECKER_COMMAND = ("./scripts/check-factory-runner-evidence.py",)
 RUNNER_TRANSPORT_EXIT = 20
@@ -380,6 +384,7 @@ class CampaignResult:
     terminal_outcome: str
     head_commit: str
     phase_history: Tuple[PhaseRecord, ...] = ()
+    readiness_result_digest: str = "0" * 64
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -392,6 +397,7 @@ class CampaignResult:
             "head_commit": self.head_commit,
             "exit_code": TERMINAL_EXIT_CODES[self.terminal_phase],
             "phase_history": [record.to_dict() for record in self.phase_history],
+            "readiness_result_digest": self.readiness_result_digest,
         }
 
     def validate(self) -> None:
@@ -423,6 +429,8 @@ class CampaignResult:
             raise CampaignResultError(
                 "rounds_completed must be between zero and rounds_requested"
             )
+        if not SHA256_RE.fullmatch(self.readiness_result_digest):
+            raise CampaignResultError("readiness_result_digest must be SHA-256")
         for record in self.phase_history:
             if record.round < 1 or record.round > self.rounds_requested:
                 raise CampaignResultError(
@@ -2360,6 +2368,175 @@ class Campaign:
                         f"start: {exc}"
                     ) from exc
 
+    def _readiness_authority_digest(self) -> str:
+        held = {
+            "runner": self._held_runner, "runner_checker": self._held_runner_checker,
+            "capability": self._held_capability, "core": self._held_core_acceptance,
+            "conformance": self._held_conformance_validator,
+            "final": self._held_acceptance, "verification": self._held_verifier,
+        }
+        if any(value is None for value in held.values()):
+            raise CampaignBindingError("a mandatory readiness command authority is not held")
+        payload = {name: value.binding.digest() for name, value in held.items()}
+        return plan_sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode())
+
+    def _initial_readiness_binding(self) -> Dict[str, object]:
+        head, tree, environment_blob = self._runner_bindings()
+        if head != self._config.accepted_commit:
+            raise CampaignBindingError("readiness HEAD differs from accepted commit")
+        try:
+            manifest_raw, _ = evidence_module.secure_read_bytes(
+                Path(self._config.install_manifest), maximum=INSTALL_MANIFEST_MAX,
+                what="production install manifest", required_mode=0o600,
+            )
+        except evidence_module.VerifierBindingError as exc:
+            raise CampaignBindingError(f"readiness install manifest is unsafe: {exc}") from exc
+        def digest_blob(path: str) -> str:
+            return plan_sha256(self._git.blob_at(head, path))
+        value = state_module.empty_readiness(required=True)
+        value.update({
+            "nonce": secrets.token_hex(32), "accepted_commit": head,
+            "tree": tree, "environment_blob": environment_blob,
+            "specification_sha256": self._config.specification_digest,
+            "plan_sha256": self._config.plan_digest,
+            "conformance_sha256": digest_blob(DEFAULT_CONFORMANCE_PATH),
+            "policy_sha256": digest_blob(".factory/requirement-policy.json"),
+            "contracts_sha256": digest_blob(".factory/capability-contracts.json"),
+            "install_manifest_sha256": plan_sha256(manifest_raw),
+            "command_authority_sha256": self._readiness_authority_digest(),
+        })
+        return value
+
+    def _assert_readiness(self, state: state_module.FactoryState) -> None:
+        if self._config.role_driver is not None or self._config.rounds_requested != 5:
+            return
+        value = state.readiness
+        if (value.get("required") is not True or value.get("status") != "complete"
+                or value.get("terminal_outcome") != "pass"
+                or value.get("result_sha256") == "0" * 64):
+            raise CampaignBindingError("untrusted launch denied: production readiness is incomplete")
+        # Before planner one, re-derive every mutable-path/Git binding.  Later
+        # trusted campaign commits legitimately advance HEAD; those roles are
+        # authorized by the immutable published result and state digest rather
+        # than by pretending the accepted pre-campaign commit is current.
+        if state.current_phase == "planning" and state.current_round == 1:
+            expected = self._initial_readiness_binding()
+            for name in ("accepted_commit", "tree", "environment_blob", "specification_sha256", "plan_sha256", "conformance_sha256", "policy_sha256", "contracts_sha256", "install_manifest_sha256", "command_authority_sha256"):
+                if value.get(name) != expected.get(name):
+                    raise CampaignBindingError(f"untrusted launch denied: readiness {name} binding is stale")
+        result = state_module.read_json(self._root, READINESS_RESULT_NAME, maximum=MAX_RESULT_FILE, missing_ok=True)
+        if not isinstance(result, dict):
+            raise CampaignBindingError("untrusted launch denied: readiness result is missing")
+        readiness_module.validate_result(result)
+        raw = json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
+        if plan_sha256(raw) != value.get("result_sha256") or result.get("nonce") != value.get("nonce") or result.get("status") != "complete":
+            raise CampaignBindingError("untrusted launch denied: readiness result binding is invalid")
+
+    def _publish_readiness(self, state: state_module.FactoryState, *, status: str,
+                           outcome: str, aggregate: str, evidence: str,
+                           core: str, human: str) -> state_module.FactoryState:
+        r = state.readiness
+        bindings = {name: r[name] for name in (
+            "accepted_commit", "tree", "environment_blob", "specification_sha256",
+            "plan_sha256", "conformance_sha256", "policy_sha256", "contracts_sha256",
+            "install_manifest_sha256", "command_authority_sha256")}
+        results = {"aggregate_sha256": aggregate, "evidence_result_sha256": evidence,
+                   "core_result_sha256": core, "human_result_sha256": human}
+        document = readiness_module.result_document(
+            campaign_id=self._config.campaign_id, nonce=str(r["nonce"]),
+            status=status, terminal_outcome=outcome, bindings=bindings, results=results)
+        raw = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
+        state_module.atomic_write_json(self._root, READINESS_RESULT_NAME, document)
+        updated = dict(r)
+        updated.update({"cursor": 6, "status": status,
+                        "terminal_outcome": outcome, "aggregate_sha256": aggregate,
+                        "evidence_result_sha256": evidence, "core_result_sha256": core,
+                        "human_result_sha256": human, "result_sha256": plan_sha256(raw)})
+        state2 = state_module.update_readiness(state, updated)
+        state_module.write_state(self._root, state2)
+        terminal_state = state_module.advance(state2, outcome)
+        state_module.write_state(self._root, terminal_state)
+        return terminal_state
+
+    def _run_readiness(self, state: state_module.FactoryState) -> Tuple[state_module.FactoryState, Optional[str]]:
+        """Execute the mandatory bounded coordinator gate before planner one."""
+        expected = self._initial_readiness_binding()
+        for name, value in expected.items():
+            if name != "nonce" and state.readiness.get(name) != value:
+                raise CampaignBindingError(f"readiness binding changed: {name}")
+        # A completed publication wins a crash between publication and state
+        # transition.  It is revalidated and never causes physical acquisition.
+        existing = state_module.read_json(self._root, READINESS_RESULT_NAME, maximum=MAX_RESULT_FILE, missing_ok=True)
+        if existing is not None:
+            readiness_module.validate_result(existing)
+            if existing.get("nonce") != state.readiness.get("nonce"):
+                raise CampaignRecoveryError("foreign readiness result nonce")
+            raw = json.dumps(existing, sort_keys=True, separators=(",", ":")).encode()
+            updated = dict(state.readiness)
+            updated.update(existing["results"])
+            updated.update({"cursor": 6, "status": existing["status"],
+                            "terminal_outcome": existing["terminal_outcome"],
+                            "result_sha256": plan_sha256(raw)})
+            state = state_module.update_readiness(state, updated)
+            state_module.write_state(self._root, state)
+            state = state_module.advance(state, str(existing["terminal_outcome"]))
+            state_module.write_state(self._root, state)
+            return state, None if state.current_phase == "planning" else str(existing["terminal_outcome"])
+        prior = self._read_runner_acquisition()
+        if prior is not None and prior.get("status") == "acquiring":
+            return self._publish_readiness(state, status="infrastructure_failure",
+                outcome="infrastructure_failure", aggregate="0" * 64,
+                evidence="0" * 64, core="0" * 64, human="0" * 64), "infrastructure_failure"
+        acquiring = dict(state.readiness)
+        acquiring.update({"attempt": int(acquiring["attempt"]) + 1,
+                          "cursor": 1, "status": "acquiring"})
+        state = state_module.update_readiness(state, acquiring)
+        state_module.write_state(self._root, state)
+        ran, code, _detail = self._ensure_runner_evidence()
+        acquisition = self._read_runner_acquisition()
+        aggregate = str(acquisition.get("aggregate_sha256", "")) if acquisition else ""
+        if not ran or code not in (0, RUNNER_FINDINGS_EXIT) or not SHA256_RE.fullmatch(aggregate):
+            outcome = "findings" if code == RUNNER_FINDINGS_EXIT else "infrastructure_failure"
+            status = "findings" if outcome == "findings" else "infrastructure_failure"
+            return self._publish_readiness(state, status=status, outcome=outcome,
+                aggregate=aggregate if SHA256_RE.fullmatch(aggregate) else "0" * 64,
+                evidence="0" * 64, core="0" * 64, human="0" * 64), outcome
+        cap_ran, cap_exit, _, cap_skipped = self._run_gate(self._config.capability_command, "capability")
+        evidence_digest = plan_sha256(json.dumps({"ran": cap_ran, "exit": cap_exit, "skipped": cap_skipped}, sort_keys=True).encode())
+        if not cap_ran or cap_skipped:
+            return self._publish_readiness(state, status="infrastructure_failure", outcome="infrastructure_failure", aggregate=aggregate, evidence=evidence_digest, core="0"*64, human="0"*64), "infrastructure_failure"
+        if cap_exit != 0:
+            return self._publish_readiness(state, status="findings", outcome="findings", aggregate=aggregate, evidence=evidence_digest, core="0"*64, human="0"*64), "findings"
+        core_ran, core_exit, _, core_skipped = self._run_gate(CORE_ACCEPTANCE_COMMAND, "core acceptance")
+        core_digest = plan_sha256(json.dumps({"ran": core_ran, "exit": core_exit, "skipped": core_skipped}, sort_keys=True).encode())
+        if not core_ran or core_skipped:
+            return self._publish_readiness(state, status="infrastructure_failure", outcome="infrastructure_failure", aggregate=aggregate, evidence=evidence_digest, core=core_digest, human="0"*64), "infrastructure_failure"
+        if core_exit != 0:
+            return self._publish_readiness(state, status="findings", outcome="findings", aggregate=aggregate, evidence=evidence_digest, core=core_digest, human="0"*64), "findings"
+        conf_ran, conf_exit, _, conf_skipped = self._run_gate(CONFORMANCE_VALIDATOR_COMMAND, "conformance validator")
+        try:
+            mapping_digest = readiness_module.validate_core_mapping(
+                self._git.blob_at(self._git.head(), DEFAULT_CONFORMANCE_PATH),
+                self._git.blob_at(self._git.head(), ".factory/requirement-policy.json"))
+        except readiness_module.ReadinessError:
+            conf_exit = 1
+            mapping_digest = "0" * 64
+        if not conf_ran or conf_skipped:
+            return self._publish_readiness(state, status="infrastructure_failure", outcome="infrastructure_failure", aggregate=aggregate, evidence=evidence_digest, core=core_digest, human=mapping_digest), "infrastructure_failure"
+        if conf_exit != 0:
+            return self._publish_readiness(state, status="findings", outcome="findings", aggregate=aggregate, evidence=evidence_digest, core=core_digest, human=mapping_digest), "findings"
+        try:
+            approval_raw = self._git.blob_at(self._git.head(), readiness_module.APPROVAL_PATH)
+            human_digest = readiness_module.validate_human_approval(
+                approval_raw, accepted_commit=self._git.head(),
+                blob_at=self._git.blob_at, object_id=self._git.object_id)
+        except readiness_module.HumanApprovalBlocked:
+            return self._publish_readiness(state, status="human_blocked", outcome="blocked", aggregate=aggregate, evidence=evidence_digest, core=core_digest, human="0"*64), "blocked"
+        state = self._publish_readiness(state, status="complete", outcome="pass",
+            aggregate=aggregate, evidence=evidence_digest, core=core_digest,
+            human=human_digest)
+        return state, None
+
     def _remaining_time(self, label: str) -> float:
         """Return the finite remaining campaign wall-clock budget."""
         if self._deadline is None:
@@ -2462,6 +2639,8 @@ class Campaign:
             ),
             pre_round_hook_commit=self._config.pre_round_hook_commit,
             phase_base_commit=self._config.phase_base_commit,
+            readiness_required=(self._config.role_driver is None and self._config.rounds_requested == 5),
+            readiness_binding=(self._initial_readiness_binding() if self._config.role_driver is None and self._config.rounds_requested == 5 else None),
             branch=self._config.branch,
         )
         return state, None
@@ -2807,6 +2986,7 @@ class Campaign:
         )
 
     def _begin_untrusted(self, state: state_module.FactoryState, seq: int) -> str:
+        self._assert_readiness(state)
         tag = self._phase_tag(state, seq)
         try:
             state_module.verify_phase_digest(self._root, tag)
@@ -2832,6 +3012,7 @@ class Campaign:
         attempt: int = 1,
         findings_payload: Optional[bytes] = None,
     ) -> RoleOutcome:
+        self._assert_readiness(state)
         if self._role_runner is not None:
             return self._role_runner(role, state, head, task_id, attempt)
         if self._config.role_driver:
@@ -3298,7 +3479,7 @@ class Campaign:
         if value is None:
             return None
         expected = {
-            "schema", "attempt", "status", "head", "tree",
+            "schema", "attempt", "status", "head", "tree", "readiness_nonce",
             "environment_blob", "command_sha256", "command",
             "aggregate_sha256", "checker_exit", "runner_exit",
             "diagnostic",
@@ -3310,6 +3491,7 @@ class Campaign:
             not isinstance(value, dict) or set(value) != expected
             or value.get("schema") != RUNNER_ACQUISITION_SCHEMA
             or type(value.get("attempt")) is not int or value["attempt"] < 1
+            or not SHA256_RE.fullmatch(str(value.get("readiness_nonce", "")))
             or value.get("status") not in {
                 "acquiring", "complete", "transport_failure",
                 "findings", "integrity_failure",
@@ -3349,12 +3531,19 @@ class Campaign:
         command_sha = plan_sha256(
             json.dumps(list(RUNNER_COMMAND), separators=(",", ":")).encode()
         )
+        readiness_nonce = "0" * 64
+        if self._state_file_exists():
+            try:
+                readiness_nonce = str(state_module.load_state(self._root).readiness.get("nonce", readiness_nonce))
+            except state_module.StateError:
+                pass
         state_module.atomic_write_json(self._root, RUNNER_ACQUISITION_NAME, {
             "schema": RUNNER_ACQUISITION_SCHEMA,
             "attempt": attempt,
             "status": status,
             "head": head,
             "tree": tree,
+            "readiness_nonce": readiness_nonce,
             "environment_blob": environment_blob,
             "command_sha256": command_sha,
             "command": list(RUNNER_COMMAND),
@@ -3425,10 +3614,14 @@ class Campaign:
             prior = self._read_runner_acquisition()
         except (CampaignBindingError, CampaignGitError):
             return False, -1, "runner acquisition prerequisite failed integrity validation"
+        expected_nonce = "0" * 64
+        if self._state_file_exists():
+            expected_nonce = str(state_module.load_state(self._root).readiness.get("nonce", expected_nonce))
         same = bool(prior) and all(
             prior.get(name) == value for name, value in (
                 ("head", head), ("tree", tree),
                 ("environment_blob", environment_blob),
+                ("readiness_nonce", expected_nonce),
             )
         )
         if same and prior.get("status") == "complete":
@@ -3778,6 +3971,8 @@ class Campaign:
 
     def _step(self, state: state_module.FactoryState):
         phase = state.current_phase
+        if phase == "readiness":
+            raise CampaignPhaseError("round-zero readiness is coordinator-only and must complete before phase dispatch")
         if phase == "planning":
             return self._step_planning(state)
         if phase == "implementation":
@@ -4706,6 +4901,11 @@ class Campaign:
                     )
                 terminal_outcome = recovered.outcome
             else:
+                if state.current_phase == "readiness":
+                    state, readiness_terminal = self._run_readiness(state)
+                    if readiness_terminal is not None:
+                        terminal_outcome = readiness_terminal
+                        terminal_phase = state.current_phase
                 while state.current_phase not in TERMINAL_PHASES:
                     step = self._step(state)
                     history.append(step.record)
@@ -4738,6 +4938,7 @@ class Campaign:
                 terminal_outcome=terminal_outcome,
                 head_commit=head,
                 phase_history=tuple(history),
+                readiness_result_digest=str(state.readiness.get("result_sha256", "0" * 64)),
             )
             result.validate()
             validate_campaign_result(result)

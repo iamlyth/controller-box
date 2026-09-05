@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "controller-production-graphics-approval/v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "status", "candidate_commit", "candidate_tree", "states"],
+  "allOf": [{
+    "if": {"properties": {"status": {"const": "approved"}}},
+    "then": {"properties": {"states": {"minItems": 3, "maxItems": 3}}}
+  }],
+  "properties": {
+    "schema": {"const": "controller-production-graphics-approval/v1"},
+    "status": {"enum": ["pending", "approved"]},
+    "candidate_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "candidate_tree": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "states": {
+      "type": "array", "minItems": 0, "maxItems": 3,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "capture", "capture_sha256", "renderer", "renderer_accelerated", "decision", "reviewer", "human"],
+        "properties": {
+          "id": {"enum": ["manager_editor_list", "manager_editor_sequential", "manager_editor_validation_error"]},
+          "capture": {"type": "string", "minLength": 1},
+          "capture_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "renderer": {"type": "string", "minLength": 1},
+          "renderer_accelerated": {"const": true},
+          "decision": {"const": "approve"},
+          "reviewer": {"type": "string", "minLength": 1},
+          "human": {"const": true}
+        }
+      }
+    }
+  }
+}

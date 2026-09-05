@@ -14,7 +14,8 @@
     "terminal_outcome",
     "head_commit",
     "exit_code",
-    "phase_history"
+    "phase_history",
+    "readiness_result_digest"
   ],
   "properties": {
     "schema": {
@@ -54,6 +55,7 @@
     },
     "head_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
     "exit_code": { "type": "integer" },
+    "readiness_result_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "phase_history": {
       "type": "array",
       "items": {

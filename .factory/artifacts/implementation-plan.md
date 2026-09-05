@@ -6,6 +6,18 @@ base_commit: 860922af39ed7e2aef9b95705705f7ed90344e87
 status: active
 ---
 
+**Production readiness gate (2026-08-20)**
+
+The trusted five-round campaign now has a mandatory round-zero readiness phase.
+It binds the accepted repository and installed/control authorities, acquires and
+strongly validates all declared signed runner evidence, requires all-four
+physical production routing and installed licensed accelerated-compositor core
+checks, validates the planning conformance core-row mapping, and requires a
+committed human approval for the three protected profile-editor captures before
+planner 1. The checked-in approval authority is intentionally empty, so current
+runtime readiness remains honestly blocked pending operator hardware evidence
+and human review; this implementation does not claim those external results.
+
 **Blocking findings (2026-08-19, lifecycle operator)**
 
 Two human-observed production acceptance failures invalidated the previous

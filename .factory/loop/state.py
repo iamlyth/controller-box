@@ -112,7 +112,7 @@ import hashlib
 import importlib.util
 import json
 import os
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 import re
 import stat
@@ -131,7 +131,7 @@ LEDGER_MAX = 1024 * 1024
 
 # §11 phases: the four lifecycle phases and the terminal campaign states of
 # the §11 transition table.
-PHASES = ("planning", "implementation", "verification", "audit")
+PHASES = ("readiness", "planning", "implementation", "verification", "audit")
 TERMINAL_PHASES = (
     "success", "findings", "blocked", "failed", "interrupted",
     "infrastructure_failure",
@@ -154,6 +154,10 @@ OUTCOMES = (
 # ``advance``; they are listed here only for documentation and for the
 # machine-readable table probe.
 TRANSITIONS: Dict[Tuple[str, str], str] = {
+    ("readiness", "pass"): "planning",
+    ("readiness", "findings"): "findings",
+    ("readiness", "blocked"): "blocked",
+    ("readiness", "infrastructure_failure"): "infrastructure_failure",
     ("planning", "planned"): "implementation",
     ("planning", "failed"): "failed",
     ("planning", "interrupted"): "interrupted",
@@ -197,6 +201,7 @@ RETRY_OUTCOMES: Dict[str, Tuple[str, ...]] = {
 # ``last_outcome`` outside the owning phase's set is a forged phase/outcome
 # combination and fails closed.
 PHASE_OUTCOMES: Dict[str, frozenset] = {
+    "readiness": frozenset({"pass"}),
     "planning": frozenset({"interrupted", "pass", "findings", "blocked"}),
     "implementation": frozenset(
         {"planned", "task_progress", "task_failed", "interrupted"}
@@ -222,7 +227,7 @@ FIELD_NAMES: Tuple[str, ...] = (
     "pre_round_hook_commit", "pre_round_hook_results_digest", "pre_round_hook_started_round",
     "pre_round_hook_completed_round", "phase_base_commit", "selected_task_id",
     "attempt_number", "phase_started_at_monotonic",
-    "attempt_started_at_monotonic", "last_outcome",
+    "attempt_started_at_monotonic", "last_outcome", "readiness",
 )
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -238,6 +243,70 @@ TEMP_ORPHAN_RE = re.compile(rf"^\.{re.escape(STATE_FILE_NAME)}\.[0-9a-f]{{32}}$"
 QUARANTINE_ORPHAN_RE = re.compile(
     rf"^\.{re.escape(STATE_FILE_NAME)}\.quarantine-[0-9a-f]{{32}}$"
 )
+
+READINESS_FIELDS = (
+    "required", "nonce", "attempt", "cursor", "status", "accepted_commit",
+    "tree", "environment_blob", "specification_sha256", "plan_sha256",
+    "conformance_sha256", "policy_sha256", "contracts_sha256",
+    "install_manifest_sha256", "command_authority_sha256",
+    "aggregate_sha256", "evidence_result_sha256", "core_result_sha256",
+    "human_result_sha256", "result_sha256", "terminal_outcome",
+)
+
+
+def empty_readiness(*, required: bool = False) -> Dict[str, object]:
+    """Canonical non-authorizing readiness binding for legacy/non-production state."""
+    return {
+        "required": required, "nonce": "0" * 64, "attempt": 0, "cursor": 0,
+        "status": "pending" if required else "not_required",
+        "accepted_commit": "0" * 40, "tree": "0" * 40,
+        "environment_blob": "0" * 40,
+        **{name: "0" * 64 for name in READINESS_FIELDS if name.endswith("_sha256")},
+        "terminal_outcome": "pending" if required else "not_required",
+    }
+
+
+def _validate_readiness(value: object, *, required: bool) -> None:
+    if not isinstance(value, Mapping) or set(value) != set(READINESS_FIELDS):
+        raise StateTamperError("`readiness` must contain exactly the readiness binding fields")
+    if type(value.get("required")) is not bool or bool(value["required"]) != required:
+        raise StateTamperError("readiness required binding is inconsistent")
+    if type(value.get("attempt")) is not int or int(value["attempt"]) < 0:
+        raise StateTamperError("readiness attempt must be non-negative")
+    if type(value.get("cursor")) is not int or not 0 <= int(value["cursor"]) <= 6:
+        raise StateTamperError("readiness cursor is invalid")
+    if value.get("status") not in {"not_required", "pending", "acquiring", "complete", "findings", "human_blocked", "infrastructure_failure"}:
+        raise StateTamperError("readiness status is invalid")
+    if value.get("terminal_outcome") not in {"not_required", "pending", "pass", "findings", "blocked", "infrastructure_failure"}:
+        raise StateTamperError("readiness terminal outcome is invalid")
+    for name in ("accepted_commit", "tree", "environment_blob"):
+        if not isinstance(value.get(name), str) or not SHA40_RE.fullmatch(str(value[name])):
+            raise StateTamperError(f"readiness {name} must be exact SHA-1")
+    if not isinstance(value.get("nonce"), str) or not SHA256_RE.fullmatch(str(value["nonce"])):
+        raise StateTamperError("readiness nonce must be SHA-256")
+    for name in READINESS_FIELDS:
+        if name.endswith("_sha256") and (not isinstance(value.get(name), str) or not SHA256_RE.fullmatch(str(value[name]))):
+            raise StateTamperError(f"readiness {name} must be SHA-256")
+    if required and value["nonce"] == "0" * 64:
+        raise StateTamperError("required readiness must have a campaign nonce")
+    if value["status"] == "complete" and (value["terminal_outcome"] != "pass" or value["result_sha256"] == "0" * 64 or value["cursor"] != 6):
+        raise StateTamperError("completed readiness lacks its bound result")
+
+
+def update_readiness(state: "FactoryState", readiness: Mapping[str, object]) -> "FactoryState":
+    """Durably advance the trusted round-zero readiness cursor."""
+    state.validate()
+    if state.current_phase != "readiness":
+        raise StateTransitionError("readiness updates are accepted only at round zero")
+    previous = state.readiness
+    if int(readiness.get("attempt", -1)) < int(previous["attempt"]) or int(readiness.get("cursor", -1)) < int(previous["cursor"]):
+        raise StateTransitionError("readiness attempt/cursor may not rewind")
+    for name in ("required", "nonce", "accepted_commit", "tree", "environment_blob", "specification_sha256", "plan_sha256", "conformance_sha256", "policy_sha256", "contracts_sha256", "install_manifest_sha256", "command_authority_sha256"):
+        if readiness.get(name) != previous.get(name):
+            raise StateBindingError(f"readiness binding `{name}` may not change")
+    result = replace(state, readiness=dict(readiness))
+    result.validate()
+    return result
 
 # Deterministic internal race hooks (Task 19 hardening): module-private,
 # one-shot, and unreachable from the trusted CLI.  Production never sets
@@ -445,6 +514,7 @@ class FactoryState:
     phase_started_at_monotonic: int
     attempt_started_at_monotonic: int
     last_outcome: Optional[str]
+    readiness: Mapping[str, object] = field(default_factory=empty_readiness)
 
     def to_dict(self) -> Dict[str, object]:
         """Deterministic JSON-ready dict (role digests sorted by role)."""
@@ -471,6 +541,7 @@ class FactoryState:
             "phase_started_at_monotonic": self.phase_started_at_monotonic,
             "attempt_started_at_monotonic": self.attempt_started_at_monotonic,
             "last_outcome": self.last_outcome,
+            "readiness": dict(self.readiness),
         }
 
     def validate(self) -> None:
@@ -531,13 +602,20 @@ def _validate_state(state: FactoryState) -> None:
     if (
         isinstance(state.current_round, bool)
         or not isinstance(state.current_round, int)
-        or state.current_round < 1
+        or state.current_round < 0
     ):
-        raise StateTamperError("`current_round` must be a positive integer")
+        raise StateTamperError("`current_round` must be a non-negative integer")
     if state.current_round > state.rounds_requested:
         raise StateTamperError(
             "`current_round` may not exceed `rounds_requested`"
         )
+    if state.current_round == 0 and state.current_phase != "readiness" and not (
+        state.current_phase in TERMINAL_PHASES and bool(state.readiness.get("required"))
+    ):
+        raise StateTamperError("round zero is reserved for readiness or its terminal outcome")
+    if state.current_phase == "readiness" and state.current_round != 0:
+        raise StateTamperError("readiness must be phase round zero")
+    _validate_readiness(state.readiness, required=(state.current_phase == "readiness" or bool(state.readiness.get("required"))))
     if state.current_phase not in PHASE_VALUES:
         raise StateTamperError(
             "`current_phase` must be one of "
@@ -681,9 +759,9 @@ def _validate_state(state: FactoryState) -> None:
             f"got {state.last_outcome!r}"
         )
     if state.last_outcome is None:
-        if state.current_phase != "planning":
+        if state.current_phase not in ("readiness", "planning"):
             raise StateTamperError(
-                "`last_outcome` may be null only during the planning phase, "
+                "`last_outcome` may be null only during the planning/readiness phase, "
                 f"not {state.current_phase!r}"
             )
     else:
@@ -718,6 +796,11 @@ def parse_state(data: object) -> FactoryState:
         "pre_round_hook_started_round",
         "pre_round_hook_completed_round",
     }
+    # Pre-readiness v1 documents are diagnostic migration input only.  Their
+    # explicit required=false binding can never authorize a production role.
+    if "readiness" not in data:
+        data = dict(data)
+        data["readiness"] = empty_readiness()
     present_legacy = legacy_hook_fields.intersection(data)
     if not present_legacy:
         data = dict(data)
@@ -792,6 +875,7 @@ def parse_state(data: object) -> FactoryState:
             data, "attempt_started_at_monotonic"
         ),
         last_outcome=data.get("last_outcome"),
+        readiness=dict(data.get("readiness", {})) if isinstance(data.get("readiness"), dict) else data.get("readiness"),
     )
     _validate_state(state)
     return state
@@ -846,6 +930,10 @@ def advance(
     always internally consistent.
     """
     state.validate()
+    if state.current_phase == "readiness":
+        expected_status = {"pass": "complete", "findings": "findings", "blocked": "human_blocked", "infrastructure_failure": "infrastructure_failure"}.get(outcome)
+        if expected_status is None or state.readiness.get("status") != expected_status or state.readiness.get("terminal_outcome") != outcome or state.readiness.get("result_sha256") == "0" * 64:
+            raise StateTransitionError("readiness transition requires a published exact-bound terminal result")
     if state.current_phase in TERMINAL_PHASES:
         raise StateTransitionError(
             f"a terminal {state.current_phase!r} state accepts no transition"
@@ -903,6 +991,7 @@ def advance(
             "epoch marker is rejected as tamper)"
         )
     next_round = (
+        1 if state.current_phase == "readiness" and target == "planning" else
         state.current_round + 1
         if state.current_phase == "audit" and target == "planning"
         else state.current_round
@@ -1080,6 +1169,8 @@ def init_state(
     phase_base_commit: str,
     pre_round_hook_configuration_digest: str = "0" * 64,
     pre_round_hook_commit: str = "0" * 40,
+    readiness_required: bool = False,
+    readiness_binding: Optional[Mapping[str, object]] = None,
     branch: Optional[str] = None,
     now: Optional[int] = None,
     identity: Optional[str] = None,
@@ -1149,8 +1240,8 @@ def init_state(
         branch=branch,
         campaign_id=campaign_id,
         rounds_requested=rounds_requested,
-        current_round=1,
-        current_phase="planning",
+        current_round=0 if readiness_required else 1,
+        current_phase="readiness" if readiness_required else "planning",
         specification_digest=specification_digest,
         plan_digest=plan_digest,
         role_prompt_digests=dict(role_prompt_digests),
@@ -1166,6 +1257,7 @@ def init_state(
         phase_started_at_monotonic=now,
         attempt_started_at_monotonic=0,
         last_outcome=None,
+        readiness=(dict(readiness_binding) if readiness_binding is not None else empty_readiness(required=readiness_required)),
     )
     state.validate()
     # Deterministic crash-window/orphan recovery first (Task 19 S2): a torn

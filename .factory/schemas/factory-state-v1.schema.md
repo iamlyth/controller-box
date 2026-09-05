@@ -34,7 +34,7 @@ transition it.
 
 ## 2. Field set
 
-The object carries exactly these twenty-two keys (`FIELD_NAMES`), each
+The object carries exactly these twenty-three keys (`FIELD_NAMES`), each
 exactly once, with the §11 type and invariant:
 
 | Field | Type / invariant | Mutable by |
@@ -60,7 +60,8 @@ exactly once, with the §11 type and invariant:
 | `attempt_number` | non-negative integer; monotonic within the current task, reset to zero only on a trusted task/phase transition | only `begin_attempt` / phase transitions |
 | `phase_started_at_monotonic` | positive integer (`time.monotonic_ns`); a zeroed `now=0` epoch marker is rejected as tamper (Task 19 S3) | only phase transitions |
 | `attempt_started_at_monotonic` | non-negative integer; positive exactly while an attempt is active and `>= phase_started_at_monotonic` (an attempt can never precede the phase that owns it, S9); the inverse holds too — when no attempt is active (`attempt_number == 0`) the marker must be zero (S9) | only `begin_attempt` / phase transitions |
-| `last_outcome` | `null` only during a fresh `planning` phase, otherwise exactly one §13 outcome of the owning phase (S9); a phase/outcome mismatch fails closed | trusted harness only |
+| `last_outcome` | `null` only during round-zero readiness or fresh `planning`, otherwise exactly one trusted outcome of the owning phase; mismatch fails closed | trusted harness only |
+| `readiness` | exact bounded object with required flag, nonce, attempt/cursor/status, accepted commit/tree/environment and authority/input/result SHA bindings, plus terminal outcome; legacy state migrates only to non-authorizing `required=false` | round-zero coordinator only |
 
 ### 2.1 Write-once bindings
 
@@ -94,6 +95,10 @@ set is enforced exactly as follows (source phase, trusted outcome) → target
 phase; a *terminal* target accepts no further transition:
 
 ```text
+readiness      pass            -> planning round 1
+readiness      findings        -> findings          (terminal round 0)
+readiness      blocked         -> blocked           (terminal round 0)
+readiness      infrastructure_failure -> infrastructure_failure (terminal round 0)
 planning       planned         -> implementation
 planning       failed          -> failed            (terminal)
 planning       interrupted     -> interrupted       (terminal)

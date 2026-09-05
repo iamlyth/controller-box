@@ -269,7 +269,9 @@ campaign cleanly.
 
 The factory MUST have one mutable control-state file, stored outside Git, for example `.factory-state/factory-loop.json`.
 
-It contains exactly:
+For the canonical five-round production predicate, initialization first creates
+round 0 in `readiness`; non-production fixtures retain round-1 planning. It
+contains exactly:
 
 - `schema`;
 - `repository_identity`;
@@ -286,7 +288,11 @@ It contains exactly:
 - `selected_task_id`, if any;
 - `attempt_number` (monotonic within the current task and reset to zero only on a trusted task/phase transition);
 - `phase_started_at_monotonic` and `attempt_started_at_monotonic` for timeout recovery;
-- `last_outcome`, which is a trusted control-plane enum, not an evidence claim.
+- `last_outcome`, which is a trusted control-plane enum, not an evidence claim;
+- one bounded `readiness` binding containing its required flag, campaign nonce,
+  monotonic acquisition attempt/cursor, accepted commit/tree/environment/spec/
+  plan/conformance/policy/contracts/install-manifest/command-authority digests,
+  aggregate/evidence/core/human/result digests, status, and terminal outcome.
 
 No wall-clock timestamp or additional field is accepted by the schema.
 
@@ -377,7 +383,21 @@ left schema-valid JSON. An audit cannot pass with a failed receipt, fabricated c
 
 A campaign is a finite number of rounds and has one required finite production
 wall-clock deadline (at most 86400 seconds) that includes quota waits, role
-supervision, and deterministic gates. Each round consists of:
+supervision, and deterministic gates. Before round 1, a canonical five-round production campaign consists of:
+
+```text
+static preflight + held authorities -> readiness round 0 -> planning round 1
+```
+
+Readiness performs coordinator-only runner acquisition, strong signed aggregate
+validation, required capability and core acceptance, planning conformance with
+explicit core-row mapping, and committed human protected-graphics approval. It
+atomically publishes a campaign-private readiness result and binds its digest
+into control/campaign state. Missing or invalid evidence terminates before any
+model. An interrupted physical acquisition is ambiguous and is never rerun;
+only same-nonce completed exact-bound acquisition may be reused.
+
+Each ordinary round then consists of:
 
 ```text
 ordered enabled pre-round hooks -> planning -> implementation attempts -> verification -> audit

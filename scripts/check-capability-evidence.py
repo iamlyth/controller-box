@@ -149,7 +149,7 @@ def strong_runner_evidence(root: Path) -> tuple[str, set[str]]:
     return result
 
 
-def aggregate_evidence(root: Path) -> tuple[set[str], list[Path]]:
+def aggregate_evidence(root: Path) -> tuple[set[str], dict[str, list[tuple[str, Path]]]]:
     strong_digest, strong_capabilities = strong_runner_evidence(root)
     aggregate = root / ".factory-state/runner-evidence.json"
     if aggregate.is_symlink() or not aggregate.is_file():
@@ -170,7 +170,7 @@ def aggregate_evidence(root: Path) -> tuple[set[str], list[Path]]:
     if not isinstance(records, list):
         fail("runner evidence aggregate has no runners array")
     evidenced: set[str] = set()
-    manifests: list[Path] = []
+    manifests: dict[str, list[tuple[str, Path]]] = {}
     for record in records:
         if not isinstance(record, dict):
             fail("runner aggregate record is invalid")
@@ -187,7 +187,8 @@ def aggregate_evidence(root: Path) -> tuple[set[str], list[Path]]:
             if not path.is_relative_to(root.resolve()):
                 fail(f"runner manifest path escapes the repository: {relative}")
             if path.is_file() and not path.is_symlink():
-                manifests.append(path)
+                for capability in capabilities:
+                    manifests.setdefault(capability, []).append((str(record.get("name", "")), path))
     if evidenced != strong_capabilities:
         fail("aggregate capabilities differ from the strongly validated runner set")
     return evidenced, manifests
@@ -238,9 +239,16 @@ def verify_capability(root: Path, capability: str) -> None:
     if capability not in declared:
         fail(f"capability {capability} is not declared in .factory/environment.toml")
     contract = contract_for(root, capability)
-    evidenced, manifests = aggregate_evidence(root)
+    evidenced, manifests_by_capability = aggregate_evidence(root)
     if capability not in evidenced:
         fail(f"capability {capability} has no accepted runner receipt (unevidenced)")
+    manifests = manifests_by_capability.get(capability, [])
+    runner_class = contract.get("runner_class")
+    if runner_class is not None and (
+        not isinstance(runner_class, str) or not manifests
+        or any(name != runner_class for name, _path in manifests)
+    ):
+        fail(f"capability {capability} is evidenced by the wrong runner principal/class")
     if contract.get("must_execute") is not True:
         fail(f"contract for {capability} must set must_execute=true")
     marker = contract.get("probe_marker", "")
@@ -251,7 +259,11 @@ def verify_capability(root: Path, capability: str) -> None:
     if not manifests:
         fail(f"capability {capability} has no receipt logs to check (unevidenced)")
     marker_seen_any = False
-    for manifest_path in manifests:
+    required_output = contract.get("probe_stdout_contains", [])
+    if not isinstance(required_output, list) or not all(isinstance(item, str) and item for item in required_output):
+        fail(f"contract for {capability} has malformed required output markers")
+    required_seen: set[str] = set()
+    for _runner_name, manifest_path in manifests:
         try:
             manifest_data = json.loads(
                 manifest_path.read_text(encoding="utf-8"),
@@ -277,6 +289,10 @@ def verify_capability(root: Path, capability: str) -> None:
             # unmarked log of a marked contract contributes no scope.
             if marker and not marker_seen:
                 continue
+            if log_name == "stdout.log":
+                for required in required_output:
+                    if any(required in line for line in scope):
+                        required_seen.add(required)
             skipped = scan_tokens(scope, skip_tokens)
             if skipped:
                 fail(f"receipt for {capability} shows a skipped probe ({skipped}); unevidenced")
@@ -285,6 +301,9 @@ def verify_capability(root: Path, capability: str) -> None:
                 fail(f"receipt for {capability} shows simulated/denied markers ({denied}); unevidenced")
     if marker and not marker_seen_any:
         fail(f"receipt for {capability} does not show probe marker {marker!r} (must-execute)")
+    missing_output = sorted(set(required_output) - required_seen)
+    if missing_output:
+        fail(f"receipt for {capability} omits required probe results {missing_output} (partial/substituted evidence)")
 
 
 def main() -> int:

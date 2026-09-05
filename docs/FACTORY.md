@@ -89,7 +89,14 @@ Volatile, ignored state:
 - `.factory-state/campaigns/<campaign-id>/` — one fresh mode-0700 private
   production campaign state/result/receipt namespace, created no-replace and
   never shared; reservation lstats only the exact state root and fixed parent
-  and never enumerates, reads, renames, removes, or overwrites foreign entries
+  and never enumerates, reads, renames, removes, or overwrites foreign entries.
+  A canonical five-round production run begins in `readiness` at round zero.
+  Static preflight and held descriptors precede coordinator-only runner
+  acquisition; strong aggregate validation, required capability/core checks,
+  conformance core-row mapping, and the committed three-editor-state human
+  graphics approval all precede planner 1. `readiness-result.json` is atomically
+  published and digest-bound into control/campaign state. Interrupted acquisition
+  is ambiguous and is never rerun; only a same-nonce completed aggregate is reused
 - `.bug-ledger.lock`, `.ollama-usage-env`, `logs/`, test fixtures
 
 **Retired Ralph control plane.** `.factory/ralph-freeze` is a tracked,

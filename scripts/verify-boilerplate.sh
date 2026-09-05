@@ -111,8 +111,10 @@ required = [
     'tests/test-credential-extension.sh',
     '.factory/artifacts/blocked-facts.json', '.factory/artifacts/conformance.json',
     '.factory/campaign-objectives.json', '.factory/golden-policy.json',
-    '.factory/golden-review.json', '.factory/schemas/blocked-facts.schema.json',
+    '.factory/golden-review.json', '.factory/production-graphics-approval.json',
+    '.factory/schemas/blocked-facts.schema.json',
     '.factory/schemas/golden-review.schema.json',
+    '.factory/schemas/production-graphics-approval-v1.schema.json',
     'tests/test-conformance.sh', 'tests/test-capability-contracts.sh',
     'tests/test-core-acceptance.sh', 'tests/test-audit-receipts.sh',
     'tests/test-blocked-facts.sh', 'tests/test-campaign-objectives.sh',
@@ -145,7 +147,7 @@ required = [
     '.factory/tests/test-factory-confinement-order.sh',
     '.factory/tests/test-factory-supervision.sh',
     '.factory/loop/plan_parser.py', '.factory/loop/selector.py',
-    '.factory/loop/state.py', '.factory/loop/evidence.py',
+    '.factory/loop/state.py', '.factory/loop/readiness.py', '.factory/loop/evidence.py',
     '.factory/loop/gitutil.py', '.factory/loop/footprint.py',
     '.factory/loop/lock.py', '.factory/loop/launch.py',
     '.factory/loop/campaign.py', '.factory/loop/confine_launcher.py',
@@ -160,6 +162,7 @@ required = [
     '.factory/schemas/factory-plan-v1.schema.md',
     '.factory/schemas/factory-state-v1.schema.md',
     '.factory/schemas/factory-campaign-result-v1.schema.json',
+    '.factory/schemas/factory-readiness-result-v1.schema.json',
     '.factory/schemas/factory-phase-result-v1.schema.json',
     '.factory/schemas/factory-launch-result-v1.schema.json',
     '.factory/schemas/factory-confinement-v1.schema.json',
@@ -355,6 +358,7 @@ for hidden_suite in \
         test-factory-plan-parser \
         test-factory-pre-round \
         test-factory-redaction \
+        test-factory-readiness \
         test-factory-selector \
         test-factory-state \
         test-factory-usage; do
