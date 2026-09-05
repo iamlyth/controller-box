@@ -6,6 +6,29 @@ base_commit: 860922af39ed7e2aef9b95705705f7ed90344e87
 status: active
 ---
 
+**Runner broker/deployment security hardening (current checkout)**
+
+The v2 broker now keeps archive/request/source parents root-owned and freezes
+source before the runner starts; only per-run home, build, and output mounts are
+UID-writable. Mandatory transient-unit properties deny privilege/capability,
+home, host filesystem, namespace, network, device, fork/resource, and service
+escape outside capability-specific allowlists, and unconditional cleanup proves
+the identity-bound cgroup empty. Candidate artifacts are copied once into
+root-owned immutable held files before semantic analysis; analyzers, signing,
+and export use the same bytes. Every class needs an independently enrolled
+probe-authority status/digest, gpurunner also needs exact licensed/oracle pins,
+and dev classes execute distinct non-skip/non-simulated semantics. Nonces use
+descriptor-relative atomic state, expiry/rate/quota/GC bounds. The signer has no
+runner sudo surface and requires the broker's inherited one-shot channel.
+InputPlumber PID/executable provenance is gathered by root outside PrivatePIDs.
+The installer performs full preflight and staged atomic cutover with backups and
+rollback, derives `devrunner` from the configured UID while preserving class
+`dev-runner-vm`, and never treats pending repository enrollment as authority.
+Focused authority, artifact-race, direct-signer, policy, syntax, and readiness
+fixture tests pass locally. No external runner/probe/campaign was invoked, no
+deployment/evidence was promoted, and enrollment remains pending human/root
+approval.
+
 **Production readiness gate (2026-08-20)**
 
 Every real-provider campaign now has mandatory round-zero readiness, while the

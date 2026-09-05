@@ -16,5 +16,8 @@ server=(root/'scripts/factory-runner-server.py').read_text()
 assert 'factory-runner-signer' not in server
 install=(root/'scripts/install-factory-runner-v2.sh').read_text()
 assert '/bin/rm -f /etc/sudoers.d/factory-runner-signer' in install
+assert 'pwd.getpwuid' in install and 'factory-runner-v2.bundle' in install
+assert 'trap rollback EXIT INT TERM HUP' in install
+assert 'FACTORY_BROKER_SIGNING' not in (root/'scripts/factory-runner-signer.py').read_text()
 print('test: direct signer and fabricated manifest rejected')
 PY

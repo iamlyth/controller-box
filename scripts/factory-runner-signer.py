@@ -127,6 +127,14 @@ def _open_executable() -> int:
     return fd
 
 
+def _open_executable_digest(fd: int) -> str:
+    h = hashlib.sha256(); offset = 0
+    while True:
+        block = os.pread(fd, 65536, offset)
+        if not block: return h.hexdigest()
+        h.update(block); offset += len(block)
+
+
 def _run_keygen(executable_fd: int, args: list[str], *, key_fd: int,
                 input_bytes: bytes | None = None, timeout: int = 30) -> subprocess.CompletedProcess:
     executable = f"/proc/self/fd/{executable_fd}"
@@ -178,7 +186,7 @@ def resolve_signing_state() -> tuple[Path, Path, dict | None]:
     sudo_user = os.environ.get("SUDO_USER")
     sudo_uid_text = os.environ.get("SUDO_UID")
     if sudo_user is not None or sudo_uid_text is not None:
-        if not sudo_user or sudo_uid_text is None or not NAME.fullmatch(sudo_user):
+        if sudo_uid_text is None or (sudo_user is not None and not NAME.fullmatch(sudo_user)):
             fail("sudo caller identity is incomplete or invalid")
         try:
             sudo_uid = int(sudo_uid_text, 10)
@@ -188,10 +196,11 @@ def resolve_signing_state() -> tuple[Path, Path, dict | None]:
             fail("sudo caller uid is invalid")
         try:
             account_by_uid = pwd.getpwuid(sudo_uid)
-            account_by_name = pwd.getpwnam(sudo_user)
+            if sudo_user is not None:
+                account_by_name = pwd.getpwnam(sudo_user)
         except KeyError:
             fail("sudo caller account does not exist")
-        if account_by_uid.pw_name != sudo_user or account_by_name.pw_uid != sudo_uid:
+        if sudo_user is not None and (account_by_uid.pw_name != sudo_user or account_by_name.pw_uid != sudo_uid):
             fail("sudo caller name/uid account lookup is inconsistent")
         try:
             _validate_chain(policy_path(), leaf_regular=True, private_leaf=False, boundary=Path("/"))
@@ -234,11 +243,10 @@ def _load_principal(fd: int) -> str:
     return principal
 
 
-def validate_manifest(raw: bytes, runner_class: dict | None) -> dict:
-    # Production installation mode is 0700 root-owned and only the broker
-    # sets this fixed handoff marker.  There is intentionally no sudoers rule
-    # for this signer and no arbitrary-manifest API for the runner UID.
-    if runner_class is not None and os.environ.get("FACTORY_BROKER_SIGNING") != "1":
+def validate_manifest(raw: bytes, runner_class: dict | None, *, broker_authenticated: bool=False) -> dict:
+    # A boolean environment marker is not authentication. Production accepts
+    # only a one-shot pipe inherited directly from the root broker.
+    if runner_class is not None and not broker_authenticated:
         fail("direct signing is forbidden; use the privileged execution broker")
     if len(raw) > MAX_REQUEST or not raw.endswith(b"\n"):
         fail("invalid signing request")
@@ -246,7 +254,8 @@ def validate_manifest(raw: bytes, runner_class: dict | None) -> dict:
         request = json.loads(raw)
     except (UnicodeError, json.JSONDecodeError):
         fail("signing request is not valid JSON")
-    if not isinstance(request, dict) or set(request) != {"schema", "manifest"} or request.get("schema") != "factory-runner-sign-request/v1":
+    expected = {"schema", "manifest", "broker_auth_sha256"} if broker_authenticated else {"schema", "manifest"}
+    if not isinstance(request, dict) or set(request) != expected or request.get("schema") != "factory-runner-sign-request/v1":
         fail("signing request schema is invalid")
     manifest = request["manifest"]
     fields = {"schema", "result", "runner", "commit", "tree", "environment_blob", "archive_sha256", "campaign_id", "readiness_nonce", "authority_sha256", "nonce", "capabilities", "exit_code", "timed_out", "started_at", "finished_at", "cleanup", "stdout_sha256", "stderr_sha256", "artifact_protocol", "artifact_limits", "artifact_count", "artifact_bytes", "artifact_manifest_sha256", "artifact_scope_sha256", "artifacts"}
@@ -299,10 +308,20 @@ def validate_manifest(raw: bytes, runner_class: dict | None) -> dict:
 def main() -> int:
     if os.getuid() != os.geteuid() or os.geteuid() != ROOT_UID:
         fail("signer must run as root")
+    broker_authenticated = False
+    broker_token = b""
+    if len(sys.argv) == 3 and sys.argv[1] == "--broker-fd" and sys.argv[2].isdigit():
+        try: broker_token = os.read(int(sys.argv[2]), 33)
+        except OSError: fail("broker authentication channel is invalid")
+        if len(broker_token) != 32: fail("broker authentication channel is invalid")
+        broker_authenticated = True
+    elif len(sys.argv) != 1:
+        fail("invalid signer invocation")
     key_path, principal_path, runner_class = resolve_signing_state()
     key_fd = _open_bound(key_path, private=True)
     principal_fd = _open_bound(principal_path, private=True)
     executable_fd = _open_executable()
+    executable_digest = _open_executable_digest(executable_fd)
     try:
         principal = _load_principal(principal_fd)
         if runner_class is not None and principal != runner_class["name"]:
@@ -313,7 +332,13 @@ def main() -> int:
             fail("cannot derive the signer public key from the private key")
         public = _validate_ed25519_public(derived.stdout)
         key_sha256 = hashlib.sha256(public.encode("ascii")).hexdigest()
-        evidence = validate_manifest(sys.stdin.buffer.read(MAX_REQUEST + 1), runner_class)
+        request_raw = sys.stdin.buffer.read(MAX_REQUEST + 1)
+        if broker_authenticated:
+            try: outer = json.loads(request_raw)
+            except Exception: fail("signing request is not valid JSON")
+            if outer.get("broker_auth_sha256") != hashlib.sha256(broker_token).hexdigest():
+                fail("broker authentication channel mismatch")
+        evidence = validate_manifest(request_raw, runner_class, broker_authenticated=broker_authenticated)
         manifest = dict(evidence)
         manifest.update({"signer_principal": principal, "signer_key_sha256": key_sha256, "namespace": namespace, "signature_algorithm": ALGORITHM})
         canonical = (json.dumps(manifest, sort_keys=True, indent=2) + "\n").encode()
@@ -323,6 +348,14 @@ def main() -> int:
         signature = signed.stdout
         if not signature or len(signature) > MAX_SIGNATURE or not signature.startswith(b"-----BEGIN SSH SIGNATURE-----"):
             fail("signature generation produced invalid output")
+        # Rehash descriptor-bound executable immediately after use so a
+        # pathname/inode replacement or in-place mutation cannot pass.
+        _validate_chain(Path(SSH_KEYGEN_PATH), leaf_regular=True, private_leaf=False,
+                        boundary=Path("/"), executable=True)
+        named = os.lstat(SSH_KEYGEN_PATH); opened = os.fstat(executable_fd)
+        if ((named.st_dev, named.st_ino) != (opened.st_dev, opened.st_ino)
+                or _open_executable_digest(executable_fd) != executable_digest):
+            fail("trusted ssh-keygen changed during signing")
         response = {"schema": "factory-runner-sign-response/v1", "result": "signed", "manifest_b64": base64.b64encode(canonical).decode("ascii"), "signature_b64": base64.b64encode(signature).decode("ascii"), "signer_principal": principal, "signer_key_sha256": key_sha256, "signature_algorithm": ALGORITHM, "namespace": namespace, "signature_sha256": hashlib.sha256(signature).hexdigest()}
         sys.stdout.write(json.dumps(response, sort_keys=True, separators=(",", ":")) + "\n")
         return 0

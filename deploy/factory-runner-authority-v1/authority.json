@@ -5,7 +5,7 @@
         "installed-package": {
           "analyzer_argv": [
             "/usr/bin/python3",
-            "@/validate-no-artifacts.py",
+            "@/validate-capability-semantics.py",
             "--capability",
             "installed-package",
             "--artifacts",
@@ -17,17 +17,22 @@
           ],
           "argv": [
             "/usr/bin/python3",
-            "@/product-gate.py"
+            "@/probe-dev-capability.py",
+            "installed-package"
           ],
           "artifacts": {
-            "files": {},
-            "required": []
+            "files": {
+              "authority-result.json": "application/json"
+            },
+            "required": [
+              "authority-result.json"
+            ]
           }
         },
         "kernel-uinput": {
           "analyzer_argv": [
             "/usr/bin/python3",
-            "@/validate-no-artifacts.py",
+            "@/validate-capability-semantics.py",
             "--capability",
             "kernel-uinput",
             "--artifacts",
@@ -39,17 +44,22 @@
           ],
           "argv": [
             "/usr/bin/python3",
-            "@/product-gate.py"
+            "@/probe-dev-capability.py",
+            "kernel-uinput"
           ],
           "artifacts": {
-            "files": {},
-            "required": []
+            "files": {
+              "authority-result.json": "application/json"
+            },
+            "required": [
+              "authority-result.json"
+            ]
           }
         },
         "remote-project-gate": {
           "analyzer_argv": [
             "/usr/bin/python3",
-            "@/validate-no-artifacts.py",
+            "@/validate-capability-semantics.py",
             "--capability",
             "remote-project-gate",
             "--artifacts",
@@ -61,17 +71,22 @@
           ],
           "argv": [
             "/usr/bin/python3",
-            "@/product-gate.py"
+            "@/probe-dev-capability.py",
+            "remote-project-gate"
           ],
           "artifacts": {
-            "files": {},
-            "required": []
+            "files": {
+              "authority-result.json": "application/json"
+            },
+            "required": [
+              "authority-result.json"
+            ]
           }
         },
         "systemd-user": {
           "analyzer_argv": [
             "/usr/bin/python3",
-            "@/validate-no-artifacts.py",
+            "@/validate-capability-semantics.py",
             "--capability",
             "systemd-user",
             "--artifacts",
@@ -83,11 +98,16 @@
           ],
           "argv": [
             "/usr/bin/python3",
-            "@/product-gate.py"
+            "@/probe-dev-capability.py",
+            "systemd-user"
           ],
           "artifacts": {
-            "files": {},
-            "required": []
+            "files": {
+              "authority-result.json": "application/json"
+            },
+            "required": [
+              "authority-result.json"
+            ]
           }
         }
       },
@@ -130,7 +150,7 @@
             "{tree}"
           ],
           "argv": [
-            "/bin/bash",
+            "/usr/bin/bash",
             "@/probe-gpu-compositor.sh"
           ],
           "artifacts": {
@@ -200,7 +220,7 @@
             "{tree}"
           ],
           "argv": [
-            "/bin/bash",
+            "/usr/bin/bash",
             "@/probe-gpu-compositor.sh"
           ],
           "artifacts": {
@@ -296,7 +316,7 @@
             "{tree}"
           ],
           "argv": [
-            "/bin/bash",
+            "/usr/bin/bash",
             "@/probe-controller-production-routing.sh"
           ],
           "artifacts": {
@@ -336,7 +356,7 @@
             "{tree}"
           ],
           "argv": [
-            "/bin/bash",
+            "/usr/bin/bash",
             "@/probe-inputplumber-system-dbus.sh"
           ],
           "artifacts": {
@@ -358,7 +378,7 @@
             "{tree}"
           ],
           "argv": [
-            "/bin/bash",
+            "/usr/bin/bash",
             "@/probe-physical-controller.sh"
           ],
           "artifacts": {
@@ -380,7 +400,7 @@
             "{tree}"
           ],
           "argv": [
-            "/bin/bash",
+            "/usr/bin/bash",
             "@/probe-target-consumer.sh"
           ],
           "artifacts": {
@@ -430,14 +450,16 @@
     "iprunner-probes/validate_name_sets.py": "5881a28fee65fabd97ea58f8420d30a00067b9fe3346b64de6f2ff6879955949",
     "licensed-diagram-authority.json": "23cb0a91cdcde1ab7bb179b4fe5f6afc340dd9f2061b9d1222be94a3341c298d",
     "licensed-diagram-oracle.json": "15fe1b33754e7b08840a7e8e87f194f51d3f5aa18bd24ce57aa599614458d54b",
-    "probe-controller-production-routing.sh": "52df3ed38d21a89741152e357737d25899707bd36d0058dbb8619a1e1ad04b32",
+    "probe-controller-production-routing.sh": "4240b45ac76c94be57b3c76a74c160687ab75d85b54f3806c47b66389e423830",
+    "probe-dev-capability.py": "4aebc9ad681f5a106e1d6356a6c393741a347f27e4e588801000aa625eabc9ec",
     "probe-gpu-compositor.sh": "b0ac2e05d70d7b5a5cc527c61e1d03b67c3185ecb1278b99b9d78ed04948280e",
     "probe-inputplumber-system-dbus.sh": "6352d3f6e0dbb305bb1d98d0b77bdc58e8471cf5a99f8511393c28d8fa7d153a",
     "probe-physical-controller.sh": "63b2182501cb720e67217cdf72c9d6da5b41cfba5f4164e455ef6a3b7631ea20",
     "probe-target-consumer.sh": "540ba142b3c2976f3f4f07739a939a71559d8fd8e2a6f8f3e48d124ed20426dd",
-    "product-gate.py": "5143899529ea71148f3ab3f894483e86f12b0b85c880fba12cec3f69513cb9ec",
+    "product-gate.py": "c2f57b48f487de33581b01f29e0014aab78338b43abd8898e5ebc79d85e1798a",
+    "validate-capability-semantics.py": "c52a1bc827c1561895f1bc355b4af9da8fc198066aebb6af458e07bb33e26d5e",
     "validate-no-artifacts.py": "9ca5c6cd86eb2274d6f44a1d42ff7f31236dbf47a19fc4773cd4ca048c6348fe",
-    "validate-retained-artifacts.py": "a1fc8f434f7faa0e1fd6a293b1bfb3b288b48c94b99eeab052f0d089a73d5dfa"
+    "validate-retained-artifacts.py": "cdf3accc7306474f2a822886ac637e2f4f996175b8427dfa444369a66975e9df"
   },
   "licensed_oracle": {
     "path": "licensed-diagram-oracle.json",

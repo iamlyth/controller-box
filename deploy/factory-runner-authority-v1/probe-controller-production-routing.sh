@@ -504,19 +504,26 @@ verify_bus_identity() {
         echo "production-routing-probe: FAIL: system bus socket is not root-owned" >&2
         return 1
     }
-    local pid exe
-    pid=$(busctl --system call org.freedesktop.DBus /org/freedesktop/DBus \
-        org.freedesktop.DBus GetConnectionUnixProcessID s "$BUS_NAME" 2>/dev/null | awk '{print $2}')
-    [[ "$pid" =~ ^[0-9]+$ ]] || {
-        echo "production-routing-probe: FAIL: cannot resolve InputPlumber owner PID" >&2
+    # PrivatePIDs intentionally hides the host service PID.  The privileged
+    # broker resolves and hashes it before entering this namespace and binds a
+    # root-owned signed fact read-only.  Never weaken PrivatePIDs for /proc.
+    local fact=${FACTORY_INPUTPLUMBER_PROVENANCE:-}
+    [[ "$fact" == "/run/factory/inputplumber-provenance.json" && -r "$fact" && ! -L "$fact" ]] || {
+        echo "production-routing-probe: FAIL: privileged host provenance fact absent" >&2
         return 1
     }
-    exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)
-    if [[ "$exe" == "$PINNED_INPUTPLUMBER" ]]; then
-        echo "production-routing-probe: bus owner verified pid=$pid exe=$exe"
+    if python3 - "$fact" "$PINNED_INPUTPLUMBER" <<'PY'
+import hashlib,json,pathlib,sys
+p=pathlib.Path(sys.argv[1]); d=json.loads(p.read_bytes()); exe=pathlib.Path(sys.argv[2])
+assert d.get('schema')=='factory-host-inputplumber-provenance/v1'
+assert d.get('verified_by')=='root-broker-outside-private-pids' and d.get('exe')==str(exe)
+assert hashlib.sha256(exe.read_bytes()).hexdigest()==d.get('exe_sha256')
+PY
+    then
+        echo "production-routing-probe: bus owner provenance verified by privileged broker"
         return 0
     fi
-    echo "production-routing-probe: FAIL: InputPlumber bus owner realpath '$exe' is not the pinned $PINNED_INPUTPLUMBER" >&2
+    echo "production-routing-probe: FAIL: signed broker provenance fact rejected" >&2
     return 1
 }
 

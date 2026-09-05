@@ -29,6 +29,12 @@ with tempfile.TemporaryDirectory() as td:
     (cap/'a.json').write_bytes(b'x'); (cap/'a.json').chmod(0o600)
     descriptors,payload=a.collect(root,['cap'],req)
     assert a.decode_payload(payload,descriptors)[0][1]==b'x'
+    held=a.hold(descriptors,payload,root)
+    # Replacing candidate output after collection cannot alter analyzer/signer bytes.
+    (cap/'a.json').write_bytes(b'malicious replacement')
+    assert (held.root/'cap/a.json').read_bytes()==b'x'
+    assert hashlib.sha256(os.pread(held.fds['cap/a.json'],1,0)).hexdigest()==descriptors[0]['sha256']
+    held.close()
     (cap/'a.json').unlink(); os.symlink('/etc/passwd',cap/'a.json')
     rejected(lambda:a.collect(root,['cap'],req)); (cap/'a.json').unlink()
     source=cap/'source'; source.write_bytes(b'x'); os.link(source,cap/'a.json')

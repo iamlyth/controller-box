@@ -9,6 +9,8 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import stat
+import tempfile
+from dataclasses import dataclass
 
 PROTOCOL = "factory-runner-artifacts/v1"
 MAX_ARTIFACTS = 64
@@ -20,6 +22,61 @@ MEDIA_TYPES = {"application/json", "text/plain", "image/png", "application/yaml"
 
 class ArtifactError(ValueError):
     pass
+
+@dataclass
+class HeldArtifacts:
+    """Root-owned immutable copies used by analyzers, signing, and export.
+
+    The candidate paths are opened once by ``collect``.  These copies are then
+    created from the returned bytes, never by reopening candidate paths.
+    """
+    root: Path
+    descriptors: list[dict]
+    payload: list[dict]
+    fds: dict[str, int]
+
+    def close(self) -> None:
+        for fd in self.fds.values():
+            try: os.close(fd)
+            except OSError: pass
+        self.fds.clear()
+        import shutil
+        shutil.rmtree(self.root, ignore_errors=True)
+
+
+def hold(descriptors: list[dict], payload: list[dict], parent: Path) -> HeldArtifacts:
+    """Seal exact collected bytes in root-owned files and retained descriptors."""
+    decoded = decode_payload(payload, descriptors)
+    root = Path(tempfile.mkdtemp(prefix="held-", dir=parent))
+    root.chmod(0o700)
+    fds: dict[str, int] = {}
+    try:
+        for descriptor, data in decoded:
+            rel = canonical_path(descriptor["path"])
+            directory = root.joinpath(*rel.parts[:-1])
+            directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+            path = root.joinpath(*rel.parts)
+            fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o400)
+            try:
+                os.write(fd, data); os.fsync(fd); os.fchmod(fd, 0o400)
+                before = os.fstat(fd)
+                if before.st_uid != os.geteuid() or before.st_nlink != 1 or before.st_size != len(data):
+                    raise ArtifactError("held artifact inode is unsafe")
+                os.lseek(fd, 0, os.SEEK_SET)
+                fds[descriptor["path"]] = fd
+            except Exception:
+                os.close(fd); raise
+        for directory, children, _ in os.walk(root, topdown=False):
+            for child in children: (Path(directory)/child).chmod(0o500)
+        root.chmod(0o500)
+        return HeldArtifacts(root, list(descriptors), list(payload), fds)
+    except Exception:
+        for fd in fds.values():
+            try: os.close(fd)
+            except OSError: pass
+        import shutil
+        shutil.rmtree(root, ignore_errors=True)
+        raise
 
 def canonical_path(value: str) -> PurePosixPath:
     if not isinstance(value, str) or len(value.encode()) > 240 or not PATH_RE.fullmatch(value):

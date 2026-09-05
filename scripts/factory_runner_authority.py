@@ -24,6 +24,7 @@ class AuthorityBundle:
     document: dict
     files: dict[str,tuple[int,bytes]]
     digest: str
+    fixture: bool = False
     def close(self)->None:
         for fd,_ in self.files.values():
             try: os.close(fd)
@@ -34,7 +35,14 @@ class AuthorityBundle:
         except KeyError as exc: raise AuthorityError(f"authority file is not pinned: {relative}") from exc
     def path(self,relative:str)->Path:
         if relative not in self.files: raise AuthorityError(f"authority file is not pinned: {relative}")
-        return self.root/relative
+        path=self.root/relative; fd,data=self.files[relative]; _chain(path,fixture=self.fixture)
+        named=os.lstat(path); opened=os.fstat(fd)
+        if (named.st_dev,named.st_ino)!=(opened.st_dev,opened.st_ino) or hashlib.sha256(data).hexdigest()!=self.document["files"][relative]:
+            raise AuthorityError(f"authority file changed after enrollment: {relative}")
+        return path
+    def revalidate(self)->None:
+        _chain(self.root,fixture=self.fixture)
+        for relative in self.files: self.path(relative)
     def class_contract(self,name:str)->dict:
         value=self.document["classes"].get(name)
         if not isinstance(value,dict): raise AuthorityError(f"authority has no class {name}")
@@ -61,8 +69,13 @@ def load_authority(root:Path, expected_digest:str, *, fixture:bool=False)->Autho
     if not root.is_absolute() or not SHA256.fullmatch(expected_digest): raise AuthorityError("authority root/digest is invalid")
     _chain(root,fixture=fixture)
     manifest=root/"authority.json"; _chain(manifest,fixture=fixture)
-    if manifest.stat().st_size>MAX_FILE: raise AuthorityError("authority manifest is oversized")
-    raw=manifest.read_bytes()
+    mfd=os.open(manifest,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC); mi=os.fstat(mfd)
+    try:
+        if not stat.S_ISREG(mi.st_mode) or mi.st_nlink!=1 or mi.st_size>MAX_FILE: raise AuthorityError("authority manifest inode is unsafe")
+        raw=os.read(mfd,mi.st_size+1)
+        final=os.lstat(manifest)
+        if (final.st_dev,final.st_ino)!=(mi.st_dev,mi.st_ino): raise AuthorityError("authority manifest changed while opening")
+    finally: os.close(mfd)
     if hashlib.sha256(raw).hexdigest()!=expected_digest: raise AuthorityError("authority manifest digest mismatch")
     data=_canonical(raw); file_pins=data["files"]
     if not isinstance(file_pins,dict) or not file_pins or len(file_pins)>MAX_FILES: raise AuthorityError("authority file table is invalid")
@@ -107,7 +120,7 @@ def load_authority(root:Path, expected_digest:str, *, fixture:bool=False)->Autho
                 raise AuthorityError("authority trusted PATH root is mutable or not a directory")
         oracle=data["licensed_oracle"]
         if oracle is not None and (not isinstance(oracle,dict) or set(oracle)!={"path","sha256"} or oracle["path"] not in held or held[oracle["path"]][1] is None or hashlib.sha256(held[oracle["path"]][1]).hexdigest()!=oracle["sha256"]): raise AuthorityError("licensed oracle pin is invalid")
-        return AuthorityBundle(root,data,held,expected_digest)
+        return AuthorityBundle(root,data,held,expected_digest,fixture)
     except Exception:
         for fd,_ in held.values():
             try:os.close(fd)

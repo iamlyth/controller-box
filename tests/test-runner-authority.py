@@ -25,6 +25,17 @@ server=(ROOT/'scripts/factory-runner-server.py').read_text()
 assert 'factory-runner-v2' in server and 'factory-runner-signer' not in server and '[SUDO, "-n", BROKER]' in server
 signer=(ROOT/'scripts/factory-runner-signer.py').read_text();assert 'direct signing is forbidden' in signer
 broker=(ROOT/'scripts/factory-runner-broker.py').read_text()
-for required in ('PrivatePIDs=yes','PrivateMounts=yes','KillMode=control-group','cgroup.procs','nonce was not issued or was already consumed','exact_tree(product','expected_uid=uid'):
+for required in ('PrivatePIDs=yes','PrivateMounts=yes','NoNewPrivileges=yes','CapabilityBoundingSet=',
+ 'ProtectSystem=strict','ProtectHome=yes','DevicePolicy=closed','IPAddressDeny=any','SystemCallFilter=',
+ 'TasksMax=512','MemoryMax=4G','KillMode=control-group','cgroup.procs',
+ 'nonce was not issued or was already consumed','NONCE_OUTSTANDING','os.rename(',
+ 'exact_tree(product','freeze_tree(product)','expected_uid=uid','hold(d,p','inputplumber_provenance'):
  assert required in broker,required
+assert 'os.chown(product,uid' not in broker and 'FACTORY_BROKER_SIGNING' not in broker
+assert 'licensed authority/oracle status is pending or unapproved' in broker
+# Dev classes execute distinct authority semantics and emit non-skip/non-simulated markers.
+doc=json.loads((source/'authority.json').read_text())
+for cap,contract in doc['classes']['dev-runner-vm']['capabilities'].items():
+ assert any('probe-dev-capability.py' in x for x in contract['argv']) and contract['argv'][-1]==cap
+ assert contract['artifacts']['required']==['authority-result.json']
 print('test: v2 root probe authority/broker adversarial checks passed')

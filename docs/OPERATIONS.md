@@ -585,14 +585,21 @@ so readiness remains blocked. Review the candidate, sign the canonical approval,
 then commit exactly one direct child containing only the approval JSON and
 signature; unrelated or later product/test/factory changes invalidate it.
 
-Before deploying gpurunner, add exactly two `enrolled` class-scoped
+Before deploying any runner, its class must set `probe_authority_status` to
+`enrolled` and pin the exact independently installed `authority.json` digest.
+Before deploying gpurunner, also add exactly two `enrolled` class-scoped
 `authority_pins` to root-owned `/etc/factory-runner/runner-policy.json` using
 `.factory/schemas/factory-runner-policy-v1.schema.json`: scopes
-`installed-licensed-diagram` and `gpu-compositor-layout-oracle`. The candidate
-request `.factory/runner-policy-enrollment.json` records digest
-`23cb0a91cdcde1ab7bb179b4fe5f6afc340dd9f2061b9d1222be94a3341c298d`, but is
-explicitly pending human review and is not authority. Missing, pending, duplicate,
-or mismatched pins fail before verifier/probe execution. Models never invoke
+`installed-licensed-diagram` and `gpu-compositor-layout-oracle`. The candidate request `.factory/runner-policy-enrollment.json` records distinct
+pending scope pins: licensed authority
+`23cb0a91cdcde1ab7bb179b4fe5f6afc340dd9f2061b9d1222be94a3341c298d` and
+layout oracle `15fe1b33754e7b08840a7e8e87f194f51d3f5aa18bd24ce57aa599614458d54b`.
+It is explicitly pending human review and is not authority. The currently bundled
+oracle also says `machine-enforced-pending-human-calibration`; gpurunner installer
+preflight and broker execution therefore remain blocked until an operator reviews
+and commits an `approved`/`enrolled` oracle and independently enrolls its new exact
+digest. Missing, pending, duplicate, or mismatched pins fail before verifier/probe
+execution. Models never invoke
 runner transport. The coordinator
 reuses an unchanged-HEAD aggregate only when its durable completed acquisition
 record and the strong signed checker agree exactly; interrupted, stale, forged,
@@ -724,12 +731,30 @@ ed25519 key for each of `dev-runner-vm`, `iprunner`, and `gpurunner`; it has no
 multi-key rotation representation.
 
 The root-owned signer helper resolves the numeric sudo caller UID through the
-root policy (`devrunner` maps to `dev-runner-vm`), requires consistent NSS
-account lookup, and pins a root-owned absolute `ssh-keygen`. Complete executable
-and signer-state ancestor chains and descriptor-bound files are checked before
-use. It signs only manifests it rebuilds from a clean pass, so failures, skips,
-unsupported claims, cross-class claims, and caller-supplied bytes are never
-certified. Signer trust is provisioned and enabled for all three declared
+root policy (`devrunner` maps to `dev-runner-vm`) and pins a root-owned absolute
+`ssh-keygen`. It has no runner sudo grant and accepts production requests only
+over the broker's one-shot inherited authentication pipe. Complete executable
+and signer-state ancestor chains, descriptor-bound inodes, and executable
+digests are checked through use. It signs only broker-constructed manifests
+after capability semantics, exact held-byte analysis, nonce consumption, and
+cleanup are proven, so failures, skips, simulations, cross-class claims, and
+caller-supplied manifests are never certified.
+
+Install or migrate with `sudo scripts/install-factory-runner-v2.sh
+APPROVED-POLICY.json`. Preflight requires root-owned approved policy bytes,
+`enrolled` probe-authority status for every class, exact committed deployment
+bytes, safe absolute host executables, transient-systemd property support,
+private root workspace/ledger parents, and canonical fixed-command
+`authorized_keys`. Deployment stages a non-nested authority and versioned
+helper bundle, validates sudoers before cutover, uses same-filesystem atomic
+renames with backups and a signal/error rollback trap, switches the broker grant
+before removing the obsolete signer grant, and derives sudoers account names
+from policy UIDs rather than class names. Required host containment is unified
+cgroup v2 plus systemd transient services supporting `PrivatePIDs`,
+`PrivateMounts`, strict filesystem/home protection, device policy, resource
+limits, and cgroup cleanup inspection. InputPlumber host-PID provenance is
+resolved and hashed by the privileged broker outside `PrivatePIDs`; the probe
+receives only that read-only broker fact. Signer trust is provisioned and enabled for all three declared
 classes; this is not runner execution evidence. The `26df6c0` receipt is legacy unsigned/unevidenced; valid signed
 evidence exists for historical commit `c45336a`, but it is stale. Neither is
 claimed as current evidence, and Task 26 remains blocked until runner transport

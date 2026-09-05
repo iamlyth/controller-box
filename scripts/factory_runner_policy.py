@@ -85,10 +85,21 @@ def load_policy() -> dict:
     """
     path = policy_path()
     try:
+        fixture = "FACTORY_RUNNER_POLICY" in os.environ
+        expected_owner = os.getuid() if fixture else 0
+        boundary = path.parent if fixture else Path("/")
+        current = boundary
+        components = [boundary] if fixture else [Path("/")]
+        relative = path.relative_to(boundary)
+        components += [boundary.joinpath(*relative.parts[:i]) for i in range(1, len(relative.parts)+1)]
+        for component in components:
+            ci = os.lstat(component)
+            if stat.S_ISLNK(ci.st_mode) or ci.st_uid != expected_owner or ci.st_mode & 0o022:
+                raise PolicyError(f"runner policy ancestor ownership/type/mode is unsafe: {component}")
         named = os.lstat(path)
         fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0))
         opened = os.fstat(fd)
-        fixture_owner = os.getuid() if "FACTORY_RUNNER_POLICY" in os.environ else 0
+        fixture_owner = expected_owner
         if ((named.st_dev, named.st_ino) != (opened.st_dev, opened.st_ino)
                 or not stat.S_ISREG(opened.st_mode) or opened.st_uid != fixture_owner
                 or opened.st_nlink != 1 or stat.S_IMODE(opened.st_mode) not in (0o400, 0o440, 0o444, 0o600, 0o640, 0o644)
@@ -138,7 +149,7 @@ def load_policy() -> dict:
             raise PolicyError(f"runner policy classes[{index}] is not an object")
         fields = {
             "name", "uid", "workspace_root", "allowed_capabilities",
-            "broker_helper", "probe_authority", "probe_authority_sha256",
+            "broker_helper", "probe_authority", "probe_authority_sha256", "probe_authority_status",
             "signer_key", "signer_principal_file", "nonce_ledger",
             "systemd_run", "systemctl", "cgroup_root",
         }
@@ -164,6 +175,8 @@ def load_policy() -> dict:
         validate_capabilities(entry["allowed_capabilities"], f"classes[{index}]")
         if not isinstance(entry["probe_authority_sha256"], str) or not SHA256.fullmatch(entry["probe_authority_sha256"]):
             raise PolicyError(f"runner policy classes[{index}].probe_authority_sha256 is invalid")
+        if entry["probe_authority_status"] != "enrolled":
+            raise PolicyError(f"runner policy classes[{index}] probe authority is pending or unapproved")
         for field in ("broker_helper", "probe_authority", "signer_key", "signer_principal_file", "nonce_ledger", "systemd_run", "systemctl", "cgroup_root"):
             value = entry[field]
             if (

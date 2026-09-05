@@ -224,7 +224,7 @@ class RunnerPolicyAuthorityTests(unittest.TestCase):
                         "allowed_capabilities":["gpu-compositor","installed-licensed-diagram"],
                         "broker_helper":"/usr/local/libexec/factory-runner-broker",
                         "probe_authority":"/opt/factory-runner/authority/v1",
-                        "probe_authority_sha256":"b"*64,
+                        "probe_authority_sha256":"b"*64, "probe_authority_status":"enrolled",
                         "signer_key":"/etc/factory/key", "signer_principal_file":"/etc/factory/principal",
                         "nonce_ledger":"/var/lib/factory-runner/nonces", "systemd_run":"/usr/bin/systemd-run",
                         "systemctl":"/usr/bin/systemctl", "cgroup_root":"/sys/fs/cgroup"}]}

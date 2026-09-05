@@ -56,6 +56,11 @@ def gpu(root,commit,tree,capability):
  if verdict.get('result')!='pass' or set(verdict.get('observations',{}))!=set(x.removeprefix('capture-').removesuffix('.png') for x in names[1:]): die('GPU 17-region oracle verdict incomplete')
  if renderer.get('result')!='pass' or re.search(r'(?i)llvmpipe|softpipe|software|swrast',str(renderer.get('renderer',''))): die('GPU renderer raw evidence rejected')
  if installed.get('commit')!=commit or installed.get('tree')!=tree or not isinstance(installed.get('files'),dict) or not all(H.fullmatch(str(x)) for x in installed['files'].values()): die('GPU installed product hashes not pinned')
+ authority_root=pathlib.Path(__file__).resolve().parent; authority=json.loads(read(authority_root/'licensed-diagram-authority.json')); oracle_raw=read(authority_root/'licensed-diagram-oracle.json')
+ expected={'xbox-360.svg':authority['files']['icons/svg/xbox-360.svg'],'LICENSE.controllercons':authority['files']['icons/svg/LICENSE.controllercons'],'controller-icons.yaml':authority['files']['controller-icons.yaml'],'xbox-360.json':authority['files']['controller-layouts/xbox-360.json'],'licensed-diagram-oracle.json':hashlib.sha256(oracle_raw).hexdigest(),'licensed-diagram-authority.json':hashlib.sha256(read(authority_root/'licensed-diagram-authority.json')).hexdigest()}
+ if installed['files']!=expected: die('GPU installed licensed asset/oracle bytes differ from enrolled authority')
+ oracle=json.loads(oracle_raw)
+ if oracle.get('authority_status') not in ('approved','enrolled'): die('GPU oracle authority is pending or unapproved')
 def main():
  a=argparse.ArgumentParser();a.add_argument('--capability',required=True);a.add_argument('--artifacts',required=True);a.add_argument('--commit',required=True);a.add_argument('--tree',required=True);x=a.parse_args();root=pathlib.Path(x.artifacts)
  if x.capability=='controller-production-routing': routing(root)

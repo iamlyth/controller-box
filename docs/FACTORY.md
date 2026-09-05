@@ -364,13 +364,13 @@ tree, protocol, signer, or aggregate-integrity failure becomes campaign
 infrastructure failure.
 
 Runner receipts are signed by a root-owned signer on the disposable runner VM
-(`scripts/factory-runner-signer.py`, installed root-owned and reached only
-through a narrow sudoers rule). The unprivileged forced-command endpoint never
-signs: after the exact archive/tree/environment/verifier/probes all pass, the
-root signer re-validates every manifest field (clean pass only, supported
-capabilities, bound digests, no caller-supplied signer identity), rebuilds the
-canonical signed manifest itself, and returns the detached signature plus
-aggregate signer metadata. The private signing key is root-owned mode 0600 on
+(`scripts/factory-runner-signer.py`, mode 0700 with no sudoers rule). The only
+sudo grant is the fixed broker. The broker invokes the signer over a one-shot
+inherited pipe, after exact archive/tree/environment probes, capability-specific
+non-skip/non-simulated semantics, held-byte analysis, and independently proven
+cleanup pass. The signer authenticates that pipe, re-validates every manifest
+field, rebuilds the canonical signed manifest, and returns the detached
+signature plus aggregate signer metadata. The private signing key is root-owned mode 0600 on
 the runner, never printed or copied into Git. The signer resolves authorization
 from sudo's numeric caller UID (with NSS name/UID consistency), not from a
 caller-supplied class name; `devrunner` is therefore bound by policy to class
@@ -379,7 +379,11 @@ opens the key, principal, and a fixed absolute root-owned `ssh-keygen` through
 validated non-symlink chains and uses descriptor-bound inodes.
 
 Receipt v2 embeds `factory-runner-artifacts/v1`: at most 64 approved regular
-files, 8 MiB per file and 48 MiB aggregate. Canonical lowercase relative paths,
+files, 8 MiB per file and 48 MiB aggregate. Candidate output paths are opened
+once and copied into root-owned mode-0400 held files; analyzers, descriptors,
+export, and signing all consume those held bytes, never a reopened candidate
+path. Candidate source/archive parents remain root-owned and read-only while
+separate UID-owned home/build/output mounts are the only writable locations. Canonical lowercase relative paths,
 capability ownership, media type, retained mode 0600, size, and SHA-256 are
 signed together with a descriptor-manifest digest scoped to campaign,
 readiness, and request nonces. The endpoint opens files no-follow, rejects

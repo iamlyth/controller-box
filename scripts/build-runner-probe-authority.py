@@ -18,16 +18,19 @@ routing_required=["routing-results.json","observer.log","overlay.log","cleanup.l
 routing_art={"required":routing_required,"files":{n:("application/json" if n.endswith(".json") else "application/yaml" if n.endswith(".yaml") else "text/plain") for n in routing_required}}
 gpu_names=['artifact-manifest.json','renderer-verdict.json','verdict.json','installed-manifest.json','probe.log','controller-box-unhighlighted.png']+[f'capture-{x}.png' for x in ('a','b','x','y','up','down','left','right','start','select','guide','l1','r1','l2','r2','l3','r3')]
 gpu_art={"required":gpu_names,"files":{n:('image/png' if n.endswith('.png') else 'text/plain' if n.endswith('.log') else 'application/json') for n in gpu_names}}
+dev_art={"required":["authority-result.json"],"files":{"authority-result.json":"application/json"}}
+def dev_desc(cap):
+ return {"argv":["/usr/bin/python3","@/probe-dev-capability.py",cap],"artifacts":dev_art,"analyzer_argv":["/usr/bin/python3","@/validate-capability-semantics.py","--capability",cap,"--artifacts","{artifacts}","--commit","{commit}","--tree","{tree}"]}
 classes={
- 'dev-runner-vm':{"gate":gate,"capabilities":{c:desc(["/usr/bin/python3","@/product-gate.py"],cap=c) for c in ('remote-project-gate','systemd-user','kernel-uinput','installed-package')}},
+ 'dev-runner-vm':{"gate":gate,"capabilities":{c:dev_desc(c) for c in ('remote-project-gate','systemd-user','kernel-uinput','installed-package')}},
  'iprunner':{"gate":gate,"capabilities":{
-  'inputplumber-system-dbus':desc(['/bin/bash','@/probe-inputplumber-system-dbus.sh'],cap='inputplumber-system-dbus'),
-  'physical-controller':desc(['/bin/bash','@/probe-physical-controller.sh'],cap='physical-controller'),
-  'target-consumer':desc(['/bin/bash','@/probe-target-consumer.sh'],cap='target-consumer'),
-  'controller-production-routing':desc(['/bin/bash','@/probe-controller-production-routing.sh'],routing_art,True,'controller-production-routing')}},
+  'inputplumber-system-dbus':desc(['/usr/bin/bash','@/probe-inputplumber-system-dbus.sh'],cap='inputplumber-system-dbus'),
+  'physical-controller':desc(['/usr/bin/bash','@/probe-physical-controller.sh'],cap='physical-controller'),
+  'target-consumer':desc(['/usr/bin/bash','@/probe-target-consumer.sh'],cap='target-consumer'),
+  'controller-production-routing':desc(['/usr/bin/bash','@/probe-controller-production-routing.sh'],routing_art,True,'controller-production-routing')}},
  'gpurunner':{"gate":gate,"capabilities":{
-  'gpu-compositor':desc(['/bin/bash','@/probe-gpu-compositor.sh'],gpu_art,True,'gpu-compositor'),
-  'installed-licensed-diagram':desc(['/bin/bash','@/probe-gpu-compositor.sh'],gpu_art,True,'installed-licensed-diagram')}}}
+  'gpu-compositor':desc(['/usr/bin/bash','@/probe-gpu-compositor.sh'],gpu_art,True,'gpu-compositor'),
+  'installed-licensed-diagram':desc(['/usr/bin/bash','@/probe-gpu-compositor.sh'],gpu_art,True,'installed-licensed-diagram')}}}
 doc={"schema":"factory-probe-authority/v1","version":1,"files":files,"classes":classes,"trusted_path":["/usr/bin"],"licensed_oracle":{"path":"licensed-diagram-oracle.json","sha256":files['licensed-diagram-oracle.json']}}
 raw=(json.dumps(doc,sort_keys=True,indent=2)+'\n').encode();(root/'authority.json').write_bytes(raw)
 print(hashlib.sha256(raw).hexdigest())
