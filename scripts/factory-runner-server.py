@@ -11,6 +11,8 @@ from __future__ import annotations
 import os
 import sys
 
+# Canonical support-module location for execution through compatibility links.
+BUNDLE_PATH = "/usr/local/libexec/factory-runner-v2.bundle"
 SUDO = "/usr/bin/sudo"
 BROKER = "/usr/local/libexec/factory-runner-broker"
 SAFE_ENV = {"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "PATH": "/usr/bin:/bin"}

@@ -6,6 +6,32 @@ base_commit: 860922af39ed7e2aef9b95705705f7ed90344e87
 status: active
 ---
 
+**Final installer/bootstrap/transaction verification checkpoint (current checkout)**
+
+Root installation now starts only through an independently installed bootstrap
+whose externally published digest is checked before use. The bootstrap verifies
+a detached signed v2 exact-tree manifest before fixed-parser extraction and
+execution of its pinned installer; deterministic generation reads Git objects,
+rejects dirty/untracked state, symlinks and gitlinks, and binds the full member
+set, blobs and modes. Root Python runs isolated and never imports candidate
+modules. Deep preflight now validates complete effective systemd values, exact
+character devices, locked non-login account state, and descriptor-walked home
+and `.ssh` metadata before host cutover.
+
+Cutover journals and fsyncs intent before each mutation, durably backs up old
+bytes before no-replace activation, covers installer/authority/bundle/policy/
+transport/launcher/sudoers/links/keys/principals, and automatically rolls back
+an interrupted generation on retry. Authorized-key activation is dirfd-relative
+through no-follow home/`.ssh` descriptors. Installed verification rehashes the
+sealed exact generation, transport keys/principals and compatibility links,
+checks obsolete sudoers removal, and performs isolated imports from the
+explicit installed bundle path. Rootless source-manifest and static security
+fixtures cover candidate substitution/import, exact membership/untracked state,
+symlink policy, transaction ordering, launcher schema and installed path
+resolution. Focused installer/bootstrap, broker, client and signer security
+fixtures pass, as does the complete `verify-boilerplate.sh` gate. No deployment,
+runner, model, campaign, approval, specification or golden operation was performed.
+
 **Campaign launch/state-path closure checkpoint (current checkout)**
 
 Production role authorization is now Campaign-only: standalone launch and the

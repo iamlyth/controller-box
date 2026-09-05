@@ -9,7 +9,8 @@ semantic analysis and those same bytes are described, exported, and signed.
 from __future__ import annotations
 import base64, fcntl, grp, hashlib, io, json, os, pwd, re, resource, selectors, shutil, signal, stat, subprocess, sys, tarfile, tempfile, time
 from pathlib import Path, PurePosixPath
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+BUNDLE_PATH = "/usr/local/libexec/factory-runner-v2.bundle"
+sys.path.insert(0, BUNDLE_PATH if os.path.isdir(BUNDLE_PATH) else os.path.dirname(os.path.abspath(__file__)))
 from factory_runner_policy import PolicyError, authority_pin, class_for_uid, load_policy
 from factory_runner_authority import AuthorityError, load_authority
 from factory_runner_artifacts import (ArtifactError, PROTOCOL, MAX_ARTIFACTS,

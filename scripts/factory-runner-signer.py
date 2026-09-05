@@ -22,7 +22,8 @@ import struct
 import subprocess
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+BUNDLE_PATH = "/usr/local/libexec/factory-runner-v2.bundle"
+sys.path.insert(0, BUNDLE_PATH if os.path.isdir(BUNDLE_PATH) else os.path.dirname(os.path.abspath(__file__)))
 from factory_runner_policy import PolicyError, class_for_name, class_for_uid, load_policy, policy_path
 
 SHA1 = re.compile(r"^[0-9a-f]{40}$")

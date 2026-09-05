@@ -773,18 +773,28 @@ one protected newline-terminated ed25519 public-key file for each OS account.
 The transport entries are `{class,sha256,fingerprint,principal}` keyed exactly
 by `devrunner`, `iprunner`, and `gpurunner`.
 
-The installer opens every descriptor and source file once with no-follow,
-checks inode stability and complete per-file digests, snapshots it into
-root-private staging, verifies the commit-object/tree binding, then imports and
-copies exclusively from that snapshot. Preflight checks exact executable pins,
+The operator never runs an installer from a mutable checkout with `sudo`.
+`generate-runner-install-manifest.py` deterministically walks the exact clean
+Git tree through Git objects, rejects untracked/dirty files, symlinks and
+gitlinks, and Merkle-binds the exact member set, blobs, modes, installer,
+authority builder, helpers and executables. The independently installed,
+root-owned `factory-runner-root-bootstrap` is first checked against the digest
+in the offline trusted install manifest. It verifies the detached install
+manifest signature before its fixed parser extracts an exact signed archive.
+Only then does it execute the manifest-pinned installer. Root never imports
+Python from the candidate source tree. The installer opens every descriptor
+and source file once with no-follow, checks inode stability and complete
+per-file digests, and copies exclusively from authenticated staging. Preflight checks exact executable pins,
 unified cgroup v2 and a disposable systemd unit with every containment property,
 class resources, real InputPlumber/version/system bus/uinput, GPU DRM, exact
 UID/account/class/group maps, enrolled authority, transport fingerprints, and
 sudoers. The transaction journals non-nested authority, helper bundle, policy,
 transport descriptor, broker/server/signer links, old/new sudoers, all three
-`authorized_keys`, and principals, using no-replace/exchange renames and fsync.
-Signals roll back; after power interruption the operator must run the explicit
-rollback command before retrying. `verify` checks the complete installed key,
+`authorized_keys`, and principals, using journal-before-mutation no-replace renames and fsync. Old bytes are
+moved durably to backup before activation, eliminating the exchange-before-
+backup crash window. Signals roll back; after power interruption the next
+install deterministically rolls back every recorded intermediate state before
+retrying. `verify` checks the complete installed key,
 principal, account/group, ownership, mode, and generation invariants. The coordinator SSH
 launcher is an external root-owned enrollment (`factory-ssh-launcher/v1`) naming
 an immutable absolute executable by SHA-256 and device/inode. Production reads
@@ -1090,32 +1100,46 @@ namespaced as
 the aggregate is in that campaign/readiness directory, so a fresh same-commit
 acquisition cannot overwrite prior evidence.
 
-Root migration is deliberately out-of-band and pending approval:
+Root migration is deliberately out-of-band and pending approval. Run manifest
+creation and signing on the trusted offline side, from a clean exact commit:
 
 ```sh
 COMMIT=$(git rev-parse HEAD)
-TREE=$(git rev-parse 'HEAD^{tree}')
-python3 scripts/build-runner-probe-authority.py \
-  --source "$PWD" --git "$(command -v git)" \
-  --expected-commit "$COMMIT" --expected-tree "$TREE" \
-  --output "$PWD/deploy/factory-runner-authority-v1"
-
-# All material paths below must be root-owned, non-symlink, non-group/world
-# writable protected files. INSTALL-MANIFEST.json has the format documented
-# above; TRANSPORT.json is factory-runner-transport/v1 and pins each key.
-sudo scripts/install-factory-runner-v2.sh install \
-  --source-root "$PWD" --install-manifest /root/INSTALL-MANIFEST.json \
-  --commit "$COMMIT" --tree "$TREE" \
-  --policy /root/approved-runner-policy-v2.json \
-  --transport-manifest /root/TRANSPORT.json \
-  --ssh-launcher-manifest /root/factory-ssh-launcher.json \
-  --key devrunner=/root/devrunner.pub \
-  --key iprunner=/root/iprunner.pub \
-  --key gpurunner=/root/gpurunner.pub
-sudo scripts/install-factory-runner-v2.sh verify
-# Recovery after interruption, before any retry:
-sudo scripts/install-factory-runner-v2.sh rollback
+python3 scripts/generate-runner-install-manifest.py --source "$PWD" \
+  --revision "$COMMIT" --output "$OFFLINE/INSTALL-MANIFEST.json"
+git archive --format=tar --output "$OFFLINE/controller-box-$COMMIT.tar" "$COMMIT"
+ssh-keygen -Y sign -f "$OFFLINE/install-signing-key" \
+  -n factory-runner-install "$OFFLINE/INSTALL-MANIFEST.json"
+sha256sum scripts/factory-runner-root-bootstrap
 ```
+
+Compare the last digest to the bootstrap digest in the independently trusted
+install manifest. Install that exact bootstrap once as root-owned mode 0755;
+do not execute the checkout copy. Transfer the manifest, signature, exact
+archive, allowed-signers file, policy, transport and key files to a root-owned
+non-writable offline directory. Then run only the preinstalled verifier:
+
+```sh
+sudo /usr/local/sbin/factory-runner-root-bootstrap install \
+  --manifest /root/factory-install/INSTALL-MANIFEST.json \
+  --signature /root/factory-install/INSTALL-MANIFEST.json.sig \
+  --allowed-signers /root/factory-install/allowed-signers \
+  --archive "/root/factory-install/controller-box-$COMMIT.tar" -- \
+  --policy /root/factory-install/approved-runner-policy-v2.json \
+  --transport-manifest /root/factory-install/TRANSPORT.json \
+  --ssh-launcher-manifest /root/factory-install/factory-ssh-launcher.json \
+  --key devrunner=/root/factory-install/devrunner.pub \
+  --key iprunner=/root/factory-install/iprunner.pub \
+  --key gpurunner=/root/factory-install/gpurunner.pub
+sudo /usr/local/sbin/install-factory-runner-v2 verify
+# Explicit rollback remains available; an interrupted retry invokes it first.
+sudo /usr/local/sbin/install-factory-runner-v2 rollback
+```
+
+The allowed-signers entry uses identity `factory-runner-install` and namespace
+`factory-runner-install`. Provision each dedicated account locked, with an
+approved non-login shell and pre-created UID/GID-owned mode-0700 home and
+`.ssh`; the installer never creates or chmods those attacker-controlled paths.
 
 The host must provide unified cgroup v2 and a systemd version supporting
 `PrivatePIDs`, `PrivateMounts`, transient services, and readable cgroup cleanup

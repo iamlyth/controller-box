@@ -91,7 +91,7 @@ assert 'device-type-om.json' in gpu and 'egl-renderer-output.txt' in gpu
 assert 'first-run skipped' not in gpu
 installer=(ROOT/'scripts/install-factory-runner-v2.sh').read_text()
 assert "{'schema','path','sha256','device','inode'}" in installer
-for marker in ('trap rollback_signal EXIT INT TERM HUP','commit_object_b64','mutable source race',"pwd.getpwuid(c['uid'])",'RENAME_EXCHANGE','RENAME_NOREPLACE','factory-runner-v2.bundle','visudo -cf','probe_authority_status'):
+for marker in ('trap rollback_signal EXIT INT TERM HUP','commit_object_b64','mutable source race',"pwd.getpwuid(c['uid'])",'RENAME_NOREPLACE','factory-runner-v2.bundle','visudo -cf','probe_authority_status','before-backup','old-durable'):
  assert marker in installer,marker
 assert 'runner-policy-enrollment.json' not in installer
 print('test: broker persistence/substitution/oracle/containment/cleanup/installer fixtures passed')
