@@ -27,7 +27,9 @@
             "required": [
               "authority-result.json"
             ]
-          }
+          },
+          "descriptor_sha256": "2ed8a0195401d9ced92855159cd53bcfad395f7836dcf7ac2227c3c63121cb21",
+          "probe_id": "factory-root-probe:dev-runner-vm:installed-package:v1"
         },
         "kernel-uinput": {
           "analyzer_argv": [
@@ -54,7 +56,9 @@
             "required": [
               "authority-result.json"
             ]
-          }
+          },
+          "descriptor_sha256": "4b37428c51800112565f7f20e0161d7efe5e4f62b7b6cfcd1178f1005a912a96",
+          "probe_id": "factory-root-probe:dev-runner-vm:kernel-uinput:v1"
         },
         "remote-project-gate": {
           "analyzer_argv": [
@@ -81,7 +85,9 @@
             "required": [
               "authority-result.json"
             ]
-          }
+          },
+          "descriptor_sha256": "0693356703faf9e4f0882a1dbf2fb0f1f079ab4a311e06f687932026110bf67a",
+          "probe_id": "factory-root-probe:dev-runner-vm:remote-project-gate:v1"
         },
         "systemd-user": {
           "analyzer_argv": [
@@ -108,7 +114,9 @@
             "required": [
               "authority-result.json"
             ]
-          }
+          },
+          "descriptor_sha256": "8c47effe468972a0362d7ca2f36e3a6a95cc1ae2e2f261234b295d19f09accbf",
+          "probe_id": "factory-root-probe:dev-runner-vm:systemd-user:v1"
         }
       },
       "gate": {
@@ -131,7 +139,9 @@
         "artifacts": {
           "files": {},
           "required": []
-        }
+        },
+        "descriptor_sha256": "8f657b8d01adbf90612d3d4c7e77c8d3407c1a18f9fc907ad2208e20dbb912ab",
+        "probe_id": "factory-root-probe:dev-runner-vm:gate:v1"
       }
     },
     "gpurunner": {
@@ -183,7 +193,9 @@
               "installed-xbox-360.svg": "image/svg+xml",
               "manager.log": "text/plain",
               "probe.log": "text/plain",
+              "profile-selection-evidence.json": "application/json",
               "renderer-verdict.json": "application/json",
+              "selected-profile.yaml": "application/yaml",
               "verdict.json": "application/json"
             },
             "required": [
@@ -192,6 +204,8 @@
               "verdict.json",
               "installed-manifest.json",
               "device-type-evidence.json",
+              "profile-selection-evidence.json",
+              "selected-profile.yaml",
               "probe.log",
               "manager.log",
               "installed-xbox-360.svg",
@@ -218,7 +232,9 @@
               "capture-l3.png",
               "capture-r3.png"
             ]
-          }
+          },
+          "descriptor_sha256": "166cfc9593c7c46442068f1888cb24a6385de0a000ff413fdc5a995a07674a39",
+          "probe_id": "factory-root-probe:gpurunner:gpu-compositor:v1"
         },
         "installed-licensed-diagram": {
           "analyzer_argv": [
@@ -267,7 +283,9 @@
               "installed-xbox-360.svg": "image/svg+xml",
               "manager.log": "text/plain",
               "probe.log": "text/plain",
+              "profile-selection-evidence.json": "application/json",
               "renderer-verdict.json": "application/json",
+              "selected-profile.yaml": "application/yaml",
               "verdict.json": "application/json"
             },
             "required": [
@@ -276,6 +294,8 @@
               "verdict.json",
               "installed-manifest.json",
               "device-type-evidence.json",
+              "profile-selection-evidence.json",
+              "selected-profile.yaml",
               "probe.log",
               "manager.log",
               "installed-xbox-360.svg",
@@ -302,7 +322,9 @@
               "capture-l3.png",
               "capture-r3.png"
             ]
-          }
+          },
+          "descriptor_sha256": "425a01efbf19ad27b3c3c12d94517e8eda69da0ce0f6fa68b0ab9049f52ab69a",
+          "probe_id": "factory-root-probe:gpurunner:installed-licensed-diagram:v1"
         }
       },
       "gate": {
@@ -325,7 +347,9 @@
         "artifacts": {
           "files": {},
           "required": []
-        }
+        },
+        "descriptor_sha256": "8f657b8d01adbf90612d3d4c7e77c8d3407c1a18f9fc907ad2208e20dbb912ab",
+        "probe_id": "factory-root-probe:gpurunner:gate:v1"
       }
     },
     "iprunner": {
@@ -349,14 +373,31 @@
           ],
           "artifacts": {
             "files": {
+              "assignment-after-clear.yaml": "application/yaml",
               "assignment-slot-0.yaml": "application/yaml",
               "assignment-slot-1.yaml": "application/yaml",
               "assignment-slot-2.yaml": "application/yaml",
               "assignment-slot-3.yaml": "application/yaml",
               "cleanup.log": "text/plain",
+              "dbus-owner-pid.json": "application/json",
+              "dbus-unique-owner.json": "application/json",
+              "dev-input-after-cleanup.txt": "text/plain",
+              "dev-input-after-create.txt": "text/plain",
+              "dev-input-before.txt": "text/plain",
               "observer.log": "text/plain",
+              "om-after-clear.json": "application/json",
+              "om-after-create.json": "application/json",
+              "om-assignment-0.json": "application/json",
+              "om-assignment-1.json": "application/json",
+              "om-assignment-2.json": "application/json",
+              "om-assignment-3.json": "application/json",
+              "om-before.json": "application/json",
+              "om-cleanup.json": "application/json",
               "overlay.log": "text/plain",
+              "provenance-after-routing.json": "application/json",
+              "provenance-before-routing.json": "application/json",
               "routing-results.json": "application/json",
+              "sysfs-targets.txt": "text/plain",
               "udev-targets.log": "text/plain"
             },
             "required": [
@@ -365,12 +406,31 @@
               "overlay.log",
               "udev-targets.log",
               "cleanup.log",
+              "assignment-after-clear.yaml",
+              "om-before.json",
+              "om-after-create.json",
+              "om-after-clear.json",
+              "om-cleanup.json",
+              "dbus-unique-owner.json",
+              "dbus-owner-pid.json",
+              "provenance-before-routing.json",
+              "provenance-after-routing.json",
+              "dev-input-before.txt",
+              "dev-input-after-create.txt",
+              "dev-input-after-cleanup.txt",
+              "sysfs-targets.txt",
               "assignment-slot-0.yaml",
               "assignment-slot-1.yaml",
               "assignment-slot-2.yaml",
-              "assignment-slot-3.yaml"
+              "assignment-slot-3.yaml",
+              "om-assignment-0.json",
+              "om-assignment-1.json",
+              "om-assignment-2.json",
+              "om-assignment-3.json"
             ]
-          }
+          },
+          "descriptor_sha256": "f4ffc1006b0287d329882a2dbbaa1c85eb36df6f79f4e45463635363e489d36a",
+          "probe_id": "factory-root-probe:iprunner:controller-production-routing:v1"
         },
         "inputplumber-system-dbus": {
           "analyzer_argv": [
@@ -392,7 +452,9 @@
           "artifacts": {
             "files": {},
             "required": []
-          }
+          },
+          "descriptor_sha256": "95b9f4e3d815ddd402d0b827be312e6bd224299c402cf40fc9d6bba64dc7fe61",
+          "probe_id": "factory-root-probe:iprunner:inputplumber-system-dbus:v1"
         },
         "physical-controller": {
           "analyzer_argv": [
@@ -414,7 +476,9 @@
           "artifacts": {
             "files": {},
             "required": []
-          }
+          },
+          "descriptor_sha256": "ac5bccc1ec296d7965523659fee4d0ce9be5cb96757995bf997935a828fd9674",
+          "probe_id": "factory-root-probe:iprunner:physical-controller:v1"
         },
         "target-consumer": {
           "analyzer_argv": [
@@ -436,7 +500,9 @@
           "artifacts": {
             "files": {},
             "required": []
-          }
+          },
+          "descriptor_sha256": "b001de026986ab0314d9f6f205a7eaaa7132cf3ff84685b7b3ff6d2f57c226c3",
+          "probe_id": "factory-root-probe:iprunner:target-consumer:v1"
         }
       },
       "gate": {
@@ -459,41 +525,43 @@
         "artifacts": {
           "files": {},
           "required": []
-        }
+        },
+        "descriptor_sha256": "8f657b8d01adbf90612d3d4c7e77c8d3407c1a18f9fc907ad2208e20dbb912ab",
+        "probe_id": "factory-root-probe:iprunner:gate:v1"
       }
     }
   },
   "files": {
     "forced-command-v2.txt": "841324ec277e4728bca41737ef12e4fd499fd73c49dc6687a5b793e81a5e29b5",
-    "gpurunner-probes/analyze-gpu-compositor.py": "0c11eaa0ae322e40c6e0f1b07b3bf90afc34ed54bc9bd9f7a94db5ffdcbb7571",
+    "gpurunner-probes/analyze-gpu-compositor.py": "064d10c88ef6b0fb4c819e46e03aaf06092110cba405392e766966c3465ec4a1",
     "gpurunner-probes/egl_renderer_probe.c": "3cb76210be08dc01dd248320af7e4edebc30f9f60ca50495b113e4d5b703d278",
     "iprunner-probes/extract_om_targets.py": "9de8d5edf6fa5c8467c4abf8d5a44781e5d9d4b7d088d119cd08d6f66493319f",
     "iprunner-probes/find_source_composite.py": "03401fd814448ae798b447f4bf1fc4c56e70529e6d09e1accb8a833d1694a9c2",
     "iprunner-probes/inputplumber-expectations.json": "ebc530295aabf7251cd3032955c833ed087245e41b6eee65ac2894b9a846faa4",
     "iprunner-probes/physical_controller_probe.c": "36a05edfee34cc349358eaa1f656fe1d6932982b866a44f78b01db2c061d3e4d",
-    "iprunner-probes/routing_observer.c": "093c1727e94f3a2997c070669397987c173f903013d4badd23bc777018d4055b",
+    "iprunner-probes/routing_observer.c": "c10d2886aa4073dcc54a9358490271da44cefd71903f61378c43d45ed18cd4c0",
     "iprunner-probes/target-consumer-expectations.json": "53f79308b0ad31e53b18f42f4a1f34e7dea601c41937efa52d2331689e6587d4",
     "iprunner-probes/target_consumer_observer.c": "bee1beca9b073c501c833555e299ce1564dfb520251b8a943bfcfe9afed9b92d",
     "iprunner-probes/unwrap_variant.py": "9ab3e6b22ff293bb2733c4253a9dfd01e8f23b229ef87df5cce9eb9a5e8eb53b",
     "iprunner-probes/validate-inputplumber-facts.py": "ba2cfc70f7c37f40045185fbc7efc3c26672f3d4ef96b29a13e64067397534e3",
     "iprunner-probes/validate-production-routing-facts.py": "e59b1c577acdb8a70fa4ab180a55b3fcdb34ab41c2a59c7c91c9773fbce8dea0",
     "iprunner-probes/validate_name_sets.py": "5881a28fee65fabd97ea58f8420d30a00067b9fe3346b64de6f2ff6879955949",
-    "licensed-diagram-authority.json": "23cb0a91cdcde1ab7bb179b4fe5f6afc340dd9f2061b9d1222be94a3341c298d",
-    "licensed-diagram-oracle.json": "15fe1b33754e7b08840a7e8e87f194f51d3f5aa18bd24ce57aa599614458d54b",
-    "probe-controller-production-routing.sh": "60caaafe90bfa4ce25fc0a2475bf78ab0fb1ccc3977edf5b5581d3549b1cb363",
-    "probe-dev-capability.py": "4aebc9ad681f5a106e1d6356a6c393741a347f27e4e588801000aa625eabc9ec",
-    "probe-gpu-compositor.sh": "357b1dd4a9cda913a536ff3806a031fd7423bc8d87eb8e5d5270a4446867150f",
+    "licensed-diagram-authority.json": "215d8d87a778ba5db1f80d878d79b595d504b6268bd1bb133367993f66555676",
+    "licensed-diagram-oracle.json": "e08bd0f3bea5783f6d0cc07734e2766dd33367a4f8b1d1b99f629b7af76985eb",
+    "probe-controller-production-routing.sh": "c29db97de87e5ba463f939bf745d51d84ce5cd6fc3108479222d453387a40fc5",
+    "probe-dev-capability.py": "ea405fb7e45220dc6bdb9eb63207d72b299340d8a2bdd1b59a7cc52474f724cc",
+    "probe-gpu-compositor.sh": "9a63ed72d1dd18863d77596d1840d412e7b29cebbfaaa00d9cf325d2dbef8237",
     "probe-inputplumber-system-dbus.sh": "6352d3f6e0dbb305bb1d98d0b77bdc58e8471cf5a99f8511393c28d8fa7d153a",
     "probe-physical-controller.sh": "63b2182501cb720e67217cdf72c9d6da5b41cfba5f4164e455ef6a3b7631ea20",
     "probe-target-consumer.sh": "540ba142b3c2976f3f4f07739a939a71559d8fd8e2a6f8f3e48d124ed20426dd",
-    "product-gate.py": "c2f57b48f487de33581b01f29e0014aab78338b43abd8898e5ebc79d85e1798a",
-    "validate-capability-semantics.py": "c52a1bc827c1561895f1bc355b4af9da8fc198066aebb6af458e07bb33e26d5e",
+    "product-gate.py": "2ced1f696e94d37a3704db79e94c5057e6ae78e45ff0ac23ad54555bf1fdb968",
+    "validate-capability-semantics.py": "c45daf3571452ed28df95ccdfdacefbb6cd5ef1f1bfdf4d25e75510561d8f85c",
     "validate-no-artifacts.py": "9ca5c6cd86eb2274d6f44a1d42ff7f31236dbf47a19fc4773cd4ca048c6348fe",
-    "validate-retained-artifacts.py": "b623bad30bdd6ddf7f33a99584b452f5822f65bfa17cc7277faf2b9711520778"
+    "validate-retained-artifacts.py": "34324772c0bf4032545f15f18700e69d0083b8f29e6aafe371aaf4b1ac766627"
   },
   "licensed_oracle": {
     "path": "licensed-diagram-oracle.json",
-    "sha256": "15fe1b33754e7b08840a7e8e87f194f51d3f5aa18bd24ce57aa599614458d54b"
+    "sha256": "e08bd0f3bea5783f6d0cc07734e2766dd33367a4f8b1d1b99f629b7af76985eb"
   },
   "schema": "factory-probe-authority/v1",
   "trusted_path": [

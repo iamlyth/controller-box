@@ -123,7 +123,7 @@ TAB_BAR_H=48
 TAB_DIFF_MIN=200
 DIAGRAM_RECT="16,88,300,300"
 EDIT_CLICK="332,522"
-PROFILE_NAME="nes-gamepad"
+PROFILE_NAME="gpu-xbox-360-oracle"
 
 [[ -f "$ANALYZER" && -f "$EGL_SOURCE" ]] || {
     echo "$PROBE_TAG: analyzer or EGL helper source missing" >&2
@@ -238,7 +238,8 @@ retain_live_artifacts() {
         "$tmp/configure.log" "$tmp/build.log" "$tmp/install.log" \
         "$tmp/weston.log" "$tmp/egl-build.log" "$tmp/screenshooter.log" \
         "$tmp/renderer-verdict.json" "$tmp/installed-manifest.json" \
-        "$tmp/device-type-evidence.json" "$tmp/manager.log" \
+        "$tmp/device-type-evidence.json" "$tmp/profile-selection-evidence.json" \
+        "$tmp/selected-profile.yaml" "$tmp/manager.log" \
         "$tmp/installed-xbox-360.svg" "$tmp/installed-license.controllercons" \
         "$tmp/installed-controller-icons.yaml" "$tmp/installed-layout.json" \
         "$tmp/installed-oracle.json" "$tmp/installed-authority.json" \
@@ -273,7 +274,7 @@ manifest = {
     "marker": marker or "unknown",
     "candidate_commit": commit,
     "candidate_tree": tree,
-    "licensed_authority_sha256": "23cb0a91cdcde1ab7bb179b4fe5f6afc340dd9f2061b9d1222be94a3341c298d",
+    "licensed_authority_sha256": "215d8d87a778ba5db1f80d878d79b595d504b6268bd1bb133367993f66555676",
     "signature_scope": "enclosing-gpurunner-signed-receipt",
     "artifacts": entries,
 }
@@ -747,8 +748,14 @@ mapping:
   - {name: "L3", source_event: {gamepad: {button: L3}}, target_events: [{gamepad: L3}]}
   - {name: "R3", source_event: {gamepad: {button: R3}}, target_events: [{gamepad: R3}]}
 PROFILE
-# No profile sidecar is created. The licensed model must come from the
-# selected production Target.DeviceType and the installed icon map.
+# Deterministically put the exact probe profile on row zero without supplying
+# an icon override. The manager still obtains the diagram model exclusively
+# from the selected production Target.DeviceType and installed icon map.
+profile_meta_dir="$XDG_CONFIG_HOME/controller-box/profile-metadata"
+mkdir -p "$profile_meta_dir"
+printf 'display_order: -1000000\n' > "$profile_meta_dir/${PROFILE_NAME%.yaml}.meta.yaml"
+cp "$profile_dir/$PROFILE_NAME.yaml" "$tmp/selected-profile.yaml"
+# No icon-bearing profile sidecar is created.
 
 # Seed the systemd user unit under the isolated XDG_CONFIG_HOME so the
 # SPEC §9.1 first-run modal is provably skipped (cbx_manager_check_first_run
@@ -848,6 +855,13 @@ if [[ "$tab_diff" -lt "$TAB_DIFF_MIN" ]]; then
 fi
 log "input: Right changed the tab bar (${tab_diff}px differ from pre-input)"
 
+# Explicitly select row zero through normal production pointer dispatch. The
+# exact oracle profile is forced to row zero by its neutral display-order-only
+# sidecar; this click prevents an ambient/default profile from being captured.
+xdotool mousemove --sync $((win_x + 200)) $((win_y + 90))
+xdotool click 1
+sleep 0.3
+
 # Navigate: the Edit button opens the editor on the Profiles tab.
 edit_x=$((win_x + ${EDIT_CLICK%,*}))
 edit_y=$((win_y + ${EDIT_CLICK#*,}))
@@ -873,6 +887,17 @@ log "output: compositor output >= ${WIN_W}x${WIN_H}; captured installed dispatch
 verdict=$tmp/verdict.json
 marker_analyzed=""
 set +e
+selection_log=$(grep '^profile-selection: filename=gpu-xbox-360-oracle.yaml name=GPU Xbox 360 Oracle mappings=18 icon_override=false device_type=xb360 source=production-ui$' "$tmp/manager.log" | tail -n 1 || true)
+[[ -n "$selection_log" ]] || fail wrong-profile-selected "exact 18-row GPU Xbox 360 Oracle profile was not selected through production UI"
+profile_sha=$(sha256sum_file "$tmp/selected-profile.yaml" | awk '{print $1}')
+python3 - "$tmp/profile-selection-evidence.json" "$head_commit" "$head_tree" "$profile_sha" <<'PY'
+import json,sys
+json.dump({'schema':'controller-box-profile-selection/v1','commit':sys.argv[2],'tree':sys.argv[3],
+ 'filename':'gpu-xbox-360-oracle.yaml','name':'GPU Xbox 360 Oracle','mapping_count':18,
+ 'selection_route':'production-ui-pointer','selected_profile_sha256':sys.argv[4],
+ 'display_order_only':True,'icon_override':False},open(sys.argv[1],'w'),sort_keys=True,indent=2)
+open(sys.argv[1],'a').write('\n')
+PY
 diagram_log=$(grep '^profile-diagram: icon=cc-xbox-360 asset=xbox-360.svg provenance=supported-model raster=[0-9][0-9]*x[0-9][0-9]* result=loaded$' "$tmp/manager.log" | tail -n 1 || true)
 if [[ -z "$diagram_log" ]]; then
     fail wrong-licensed-model "production selection did not resolve requested Xbox 360 asset without fallback"

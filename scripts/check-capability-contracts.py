@@ -132,8 +132,8 @@ def load_contracts(path: Path) -> list[dict]:
         data = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=no_duplicate_keys)
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         fail(f"cannot parse {path}: {exc}")
-    if not isinstance(data, dict) or data.get("schema") != "ralph-capability-contract/v1":
-        fail("contract file schema must be ralph-capability-contract/v1")
+    if not isinstance(data, dict) or data.get("schema") not in {"ralph-capability-contract/v1","ralph-capability-contract/v2"}:
+        fail("contract file schema must be ralph-capability-contract/v1 or v2")
     contracts = data.get("capabilities", [])
     if not isinstance(contracts, list):
         fail("contracts must be an array")
@@ -141,10 +141,11 @@ def load_contracts(path: Path) -> list[dict]:
 
 
 def validate_contract(contract: dict, index: int) -> tuple[str, str]:
-    required = {
-        "name", "probe_argv", "probe_marker", "must_execute", "must_not_skip", "deny_simulated_markers",
-    }
-    optional = {"status", "probe_stage", "probe_stdout_contains", "probe_is_verify_run", "runner_class", "artifact_requirements"}
+    v2="authority_probe" in contract
+    required = ({"name", "candidate_probe_argv", "probe_marker", "must_execute", "must_not_skip",
+                 "deny_simulated_markers", "runner_class", "authority_probe"} if v2 else
+                {"name", "probe_argv", "probe_marker", "must_execute", "must_not_skip", "deny_simulated_markers"})
+    optional = {"status", "probe_stage", "probe_stdout_contains", "probe_is_verify_run", "artifact_requirements", "runner_class"}
     if not isinstance(contract, dict):
         fail(f"contracts[{index}] must be an object")
     if not required.issubset(set(contract)) or not set(contract).issubset(required | optional):
@@ -155,30 +156,25 @@ def validate_contract(contract: dict, index: int) -> tuple[str, str]:
     status = contract.get("status", "declared")
     if status not in ("declared", "candidate"):
         fail(f"contracts[{index}].status must be declared or candidate")
-    argv = contract["probe_argv"]
-    if not isinstance(argv, list) or not argv or not all(isinstance(item, str) and item for item in argv):
-        fail(f"contracts[{index}].probe_argv must be a non-empty array of strings")
-    if any(any(ord(char) < 32 for char in item) for item in argv):
-        fail(f"contracts[{index}].probe_argv must be control-character-free")
+    # Candidate argv is informational source-fixture routing only. Execution is
+    # authorized exclusively by the externally enrolled root descriptor below.
+    argv = contract["candidate_probe_argv" if v2 else "probe_argv"]
+    if not isinstance(argv, list) or not argv or not all(isinstance(item, str) and item and not any(ord(ch)<32 for ch in item) for item in argv):
+        fail(f"contracts[{index}] probe argv must be a non-empty control-free string array")
     fixture_tokens = [item for item in argv if is_fixture_option_token(item)]
     if fixture_tokens:
-        fail(
-            f"contracts[{index}].probe_argv carries a fixture/simulation option "
-            f"token {fixture_tokens!r}; a committed probe can never run in fixture mode"
-        )
-    probe0 = argv[0]
-    if "/" in probe0:
-        relative = Path(probe0)
-        if relative.is_absolute():
-            if ".." in relative.parts or relative.parts[1] not in {"bin", "usr"}:
-                fail(f"contracts[{index}].probe_argv must be a bare command name, a scripts/tests path, or a /bin|/usr/bin binary")
-        else:
-            if ".." in relative.parts or len(relative.parts) != 2 or relative.parts[0] not in {"scripts", "tests"}:
-                fail(f"contracts[{index}].probe_argv must start with a bare command name or a scripts/tests path")
-            if not (ROOT / probe0).is_file():
-                fail(f"contracts[{index}].probe_argv names a missing tracked script: {probe0}")
-    elif not BARE_NAME.fullmatch(probe0):
-        fail(f"contracts[{index}].probe_argv[0] is not a bare command name: {probe0}")
+        fail(f"contracts[{index}].candidate_probe_argv carries fixture option {fixture_tokens!r}")
+    if v2:
+        authority=contract["authority_probe"]
+        afields={"probe_id","descriptor_sha256","authority_sha256","expected_semantics","must_execute","must_not_skip","deny_simulation"}
+        if (not isinstance(authority,dict) or set(authority)!=afields
+                or authority.get("probe_id")!=f"factory-root-probe:{contract['runner_class']}:{name}:v1"
+                or not re.fullmatch(r"[0-9a-f]{64}",str(authority.get("descriptor_sha256","")))
+                or not re.fullmatch(r"[0-9a-f]{64}",str(authority.get("authority_sha256","")))
+                or authority.get("expected_semantics")!="capability-specific-root-authority"
+                or authority.get("must_execute") is not True or authority.get("must_not_skip") is not True
+                or authority.get("deny_simulation") is not True):
+            fail(f"contracts[{index}].authority_probe is invalid")
     marker = contract["probe_marker"]
     if not isinstance(marker, str):
         fail(f"contracts[{index}].probe_marker must be a string")
@@ -219,10 +215,24 @@ def main() -> int:
     contracts_path = ROOT / ".factory/capability-contracts.json"
     declared = sorted(set(declared_capabilities(ROOT / ".factory/environment.toml")))
     contracts = load_contracts(contracts_path)
+    authority_doc=None; authority_digest=None
+    authority_path=ROOT/"deploy/factory-runner-authority-v1/authority.json"
+    if any('authority_probe' in c for c in contracts):
+        try:
+            authority_raw=authority_path.read_bytes(); authority_doc=json.loads(authority_raw,object_pairs_hook=no_duplicate_keys)
+        except (OSError,UnicodeError,json.JSONDecodeError) as exc:
+            fail(f"cannot read external root authority enrollment request: {exc}")
+        authority_digest=__import__('hashlib').sha256(authority_raw).hexdigest()
     named: list[str] = []
     declared_named: list[str] = []
     for index, contract in enumerate(contracts):
         name, status = validate_contract(contract, index)
+        if 'authority_probe' in contract:
+            ap=contract['authority_probe']; cls=contract['runner_class']
+            try: descriptor=authority_doc['classes'][cls]['capabilities'][name]
+            except (KeyError,TypeError): fail(f"contracts[{index}] has no matching external root authority descriptor")
+            if (ap['authority_sha256']!=authority_digest or ap['probe_id']!=descriptor.get('probe_id') or ap['descriptor_sha256']!=descriptor.get('descriptor_sha256')):
+                fail(f"contracts[{index}] external root authority binding is stale")
         named.append(name)
         if status == "declared":
             declared_named.append(name)

@@ -592,10 +592,10 @@ Before deploying gpurunner, also add exactly two `enrolled` class-scoped
 `.factory/schemas/factory-runner-policy-v1.schema.json`: scopes
 `installed-licensed-diagram` and `gpu-compositor-layout-oracle`. The candidate request `.factory/runner-policy-enrollment.json` records distinct
 pending scope pins: licensed authority
-`23cb0a91cdcde1ab7bb179b4fe5f6afc340dd9f2061b9d1222be94a3341c298d` and
-layout oracle `15fe1b33754e7b08840a7e8e87f194f51d3f5aa18bd24ce57aa599614458d54b`.
+`215d8d87a778ba5db1f80d878d79b595d504b6268bd1bb133367993f66555676` and
+layout oracle `e08bd0f3bea5783f6d0cc07734e2766dd33367a4f8b1d1b99f629b7af76985eb`.
 It is explicitly pending human review and is not authority. The currently bundled
-oracle also says `machine-enforced-pending-human-calibration`; gpurunner installer
+oracle says `machine-enforced`; gpurunner installer
 preflight and broker execution therefore remain blocked until an operator reviews
 and commits an `approved`/`enrolled` oracle and independently enrolls its new exact
 digest. Missing, pending, duplicate, or mismatched pins fail before verifier/probe

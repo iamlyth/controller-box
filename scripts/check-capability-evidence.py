@@ -111,7 +111,7 @@ def contract_for(root: Path, capability: str) -> dict:
         data = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=no_duplicate_keys)
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         fail(f"cannot parse {path}: {exc}")
-    if not isinstance(data, dict) or data.get("schema") != "ralph-capability-contract/v1":
+    if not isinstance(data, dict) or data.get("schema") not in {"ralph-capability-contract/v1","ralph-capability-contract/v2"}:
         fail(f"contract file schema is invalid: {path}")
     contracts = data.get("capabilities", [])
     if not isinstance(contracts, list):
@@ -289,7 +289,7 @@ def validate_structured_artifacts(manifest_path: Path, manifest: dict, contract:
         cleanup=(artifact_dir/"cleanup.log").read_text(encoding="utf-8")
         if "targets-absent=true kernel-nodes-absent=true" not in cleanup: fail("routing cleanup artifact is incomplete")
     if capability in {"gpu-compositor","installed-licensed-diagram"}:
-        verdict=load("verdict.json"); installed=load("installed-manifest.json"); renderer=load("renderer-verdict.json")
+        verdict=load("verdict.json"); installed=load("installed-manifest.json"); renderer=load("renderer-verdict.json"); selection=load("profile-selection-evidence.json")
         controls=["A","B","X","Y","Up","Down","Left","Right","Start","Select","Guide","L1","R1","L2","R2","L3","R3"]
         observations=verdict.get("observations",{}) if isinstance(verdict,dict) else {}
         if verdict.get("schema")!="gpu-compositor-analysis/v3" or verdict.get("result")!="pass" or set(observations)!=set(controls):
@@ -298,7 +298,11 @@ def validate_structured_artifacts(manifest_path: Path, manifest: dict, contract:
         if len(set(digests))!=17 or any(observations[c].get("result")!="pass" for c in controls):
             fail("licensed diagram captures are reused or have failing observations")
         if renderer.get("result")!="pass" or renderer.get("marker")!="renderer-accepted": fail("renderer artifact is not accelerated")
-        authority="23cb0a91cdcde1ab7bb179b4fe5f6afc340dd9f2061b9d1222be94a3341c298d"
+        if (selection.get('schema')!='controller-box-profile-selection/v1' or selection.get('name')!='GPU Xbox 360 Oracle'
+                or selection.get('mapping_count')!=18 or selection.get('selection_route')!='production-ui-pointer'
+                or selection.get('icon_override') is not False):
+            fail('exact GPU oracle profile selection is absent')
+        authority="215d8d87a778ba5db1f80d878d79b595d504b6268bd1bb133367993f66555676"
         if (installed.get("schema")!="controller-box-installed-provenance/v1" or installed.get("result")!="pass"
                 or installed.get("fallback") is not False or verdict.get("authority_sha256")!=authority
                 or installed.get("files",{}).get("licensed-diagram-authority.json")!=authority):
@@ -344,8 +348,14 @@ def verify_capability(root: Path, capability: str) -> None:
             fail(f"invalid runner manifest {manifest_path}: {exc}")
         if not isinstance(manifest_data, dict) or manifest_data.get("schema") != "factory-runner-receipt/v3":
             fail(f"runner manifest schema is invalid: {manifest_path}")
-        if manifest_data.get("result") != "pass" or manifest_data.get("exit_code") != 0:
-            fail(f"runner manifest does not prove a clean pass: {manifest_path}")
+        authority_probe=contract.get('authority_probe',{})
+        if (manifest_data.get("result") != "pass" or manifest_data.get("exit_code") != 0
+                or authority_probe.get('authority_sha256')!=manifest_data.get('authority_sha256')
+                or authority_probe.get('probe_id')!=f"factory-root-probe:{runner_class}:{capability}:v1"
+                or authority_probe.get('must_execute') is not True
+                or authority_probe.get('must_not_skip') is not True
+                or authority_probe.get('deny_simulation') is not True):
+            fail(f"runner manifest does not bind the executed root authority probe: {manifest_path}")
         validate_structured_artifacts(manifest_path, manifest_data, contract, capability)
         manifest_dir = manifest_path.parent
         for log_name in ("stdout.log", "stderr.log"):

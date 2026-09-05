@@ -103,14 +103,22 @@ def load_authority(root:Path, expected_digest:str, *, fixture:bool=False)->Autho
             caps=entry["capabilities"]
             if not isinstance(caps,dict): raise AuthorityError("authority capability map is invalid")
             for cap,contract in caps.items():
-                if not NAME.fullmatch(cap) or not isinstance(contract,dict) or set(contract)!={"argv","artifacts","analyzer_argv"}: raise AuthorityError("authority capability descriptor is invalid")
+                fields={"argv","artifacts","analyzer_argv","probe_id","descriptor_sha256"}
+                if not NAME.fullmatch(cap) or not isinstance(contract,dict) or set(contract)!=fields: raise AuthorityError("authority capability descriptor is invalid")
+                core={k:contract[k] for k in ("argv","artifacts","analyzer_argv")}
+                descriptor_digest=hashlib.sha256(json.dumps(core,sort_keys=True,separators=(",",":")).encode()).hexdigest()
+                if contract["probe_id"]!=f"factory-root-probe:{cname}:{cap}:v1" or contract["descriptor_sha256"]!=descriptor_digest:
+                    raise AuthorityError("authority probe identity/descriptor digest is invalid")
                 for key in ("argv","analyzer_argv"):
                     argv=contract[key]
                     if not isinstance(argv,list) or not argv or not all(isinstance(x,str) and x and "\0" not in x for x in argv): raise AuthorityError("authority argv is invalid")
                     first=argv[0]
                     if first.startswith("@/") and first[2:] not in held: raise AuthorityError("authority argv references an unpinned file")
             gate=entry["gate"]
-            if not isinstance(gate,dict) or set(gate)!={"argv","artifacts","analyzer_argv"}: raise AuthorityError("authority gate is invalid")
+            if not isinstance(gate,dict) or set(gate)!={"argv","artifacts","analyzer_argv","probe_id","descriptor_sha256"}: raise AuthorityError("authority gate is invalid")
+            gate_core={k:gate[k] for k in ("argv","artifacts","analyzer_argv")}
+            gate_digest=hashlib.sha256(json.dumps(gate_core,sort_keys=True,separators=(",",":")).encode()).hexdigest()
+            if gate["probe_id"]!=f"factory-root-probe:{cname}:gate:v1" or gate["descriptor_sha256"]!=gate_digest: raise AuthorityError("authority gate identity invalid")
         trusted=data["trusted_path"]
         if not isinstance(trusted,list) or not trusted or not all(isinstance(x,str) and x.startswith("/") for x in trusted): raise AuthorityError("authority trusted PATH is invalid")
         for directory in trusted:

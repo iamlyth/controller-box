@@ -5,7 +5,9 @@ p=argparse.ArgumentParser();p.add_argument('--capability',required=True);p.add_a
 path=pathlib.Path(a.artifacts)/a.capability/'authority-result.json'
 if path.is_symlink() or not path.is_file():raise SystemExit('capability-authority: held result absent')
 d=json.loads(path.read_bytes())
-expected={"schema","capability","must_execute","executed","must_not_skip","skipped","deny_simulated","simulated","command_sha256"}
-if set(d)!=expected or d['schema']!='factory-capability-semantics/v1' or d['capability']!=a.capability or d['must_execute'] is not True or d['executed'] is not True or d['must_not_skip'] is not True or d['skipped'] is not False or d['deny_simulated'] is not True or d['simulated'] is not False:
+expected={"schema","capability","must_execute","executed","must_not_skip","skipped","deny_simulated","simulated","complete_project_gate","command_sha256"}
+if set(d)!=expected or d['schema']!='factory-capability-semantics/v2' or d['capability']!=a.capability or d['must_execute'] is not True or d['executed'] is not True or d['must_not_skip'] is not True or d['skipped'] is not False or d['deny_simulated'] is not True or d['simulated'] is not False:
  raise SystemExit('capability-authority: execution/skip/simulation contract rejected')
+if d['complete_project_gate'] is not (a.capability=='remote-project-gate'):
+ raise SystemExit('capability-authority: complete project gate semantic mismatch')
 print('root-authority-capability-semantics: PASS')

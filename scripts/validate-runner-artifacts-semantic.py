@@ -73,6 +73,13 @@ def routing(root):
  cap=root/'controller-production-routing';d=json.loads(read(cap/'routing-results.json'));rows=d.get('targets')
  if d.get('schema')!='controller-production-routing-results/v3' or not isinstance(rows,list) or len(rows)!=4:die('routing v3/cardinality invalid')
  paths=set();nodes=set();sysfs=set();obs=set();last=-1;composite=None;source=None
+ phase_names=['om-before.json','om-after-create.json','om-after-clear.json','om-cleanup.json']+[f'om-assignment-{i}.json' for i in range(4)]
+ phases={n:json.loads(read(cap/n)) for n in phase_names}
+ provenance_before=read(cap/'provenance-before-routing.json');provenance_after=read(cap/'provenance-after-routing.json')
+ if provenance_before!=provenance_after or json.loads(provenance_before).get('schema')!='factory-host-inputplumber-provenance/v1':die('InputPlumber provenance boundary changed or is invalid')
+ for n in ('dbus-unique-owner.json','dbus-owner-pid.json'):json.loads(read(cap/n))
+ before_nodes=set(read(cap/'dev-input-before.txt').decode().splitlines());created_nodes=set(read(cap/'dev-input-after-create.txt').decode().splitlines());cleanup_nodes=set(read(cap/'dev-input-after-cleanup.txt').decode().splitlines())
+ sysfs_facts=read(cap/'sysfs-targets.txt').decode('utf-8',errors='strict')
  log=read(cap/'observer.log').decode('utf-8');windows=list(re.finditer(r'WINDOW baseline=(\d+) selected=(-?\d+) clear=(true|false)',log))
  if len(windows)!=5:die('raw observer must contain four selection windows and one clear window')
  overlay=read(cap/'overlay.log').decode('utf-8',errors='replace')
@@ -85,17 +92,21 @@ def routing(root):
  for i,r in enumerate(rows):
   if r.get('slot')!=i or not OBJ.fullmatch(str(r.get('dbus_path',''))) or not NODE.fullmatch(str(r.get('kernel_node',''))) or not OBJ.fullmatch(str(r.get('composite_path',''))):die('routing identity malformed')
   if created[i][1]!=r['dbus_path']:die('DBus path is not bound to production creation order')
+  encoded_path=r['dbus_path'].encode()
+  if encoded_path not in read(cap/'om-after-create.json') or encoded_path not in read(cap/f'om-assignment-{i}.json'):die('raw ObjectManager phase omits target identity')
   for value,seen in ((r['dbus_path'],paths),(r['kernel_node'],nodes),(r.get('sysfs_identity'),sysfs)):
    if not isinstance(value,str) or value in seen:die('routing stable identity reused')
    seen.add(value)
   if not r['sysfs_identity'].startswith('/sys/devices/') or r.get('source_vidpid')!='045e:028e' or r.get('device_type')!='xb360' or r.get('target_devices')!=[r['dbus_path']]:die('routing kernel/source/assignment binding invalid')
+  if r['kernel_node'] in before_nodes or r['kernel_node'] not in created_nodes or r['kernel_node'] in cleanup_nodes or r['kernel_node'] not in sysfs_facts or r['sysfs_identity'] not in sysfs_facts:die('devnode/sysfs before-create-cleanup identity invalid')
   composite=composite or r['composite_path'];source=source or r.get('source_path')
   if r['composite_path']!=composite or r.get('source_path')!=source:die('routing did not use one real source/composite')
   st=r.get('source_event_us');tt=r.get('target_event_us');oid=r.get('observation_id')
   if type(st)is not int or type(tt)is not int or st<=last or tt<st or tt-st>2_000_000 or oid in obs:die('routing freshness invalid')
   obs.add(oid);last=st
   segment=log[windows[i].start():windows[i+1].start()]
-  if f'selected={i} clear=false' not in segment:die('selected window mismatch')
+  if (f'selected={i} clear=false' not in segment or f'QUIET-TAIL selected={i} ' not in segment
+      or 'quiet_tail_ms=1000' not in segment):die('selected window/quiet-tail mismatch')
   events=re.findall(r'RAW node=(-?\d+) ts=(\d+) type=(\d+) code=(\d+) value=(-?\d+) bytes=([0-9a-f]+)',segment)
   matched=[e for e in events if (int(e[2]),int(e[3]),int(e[4]))==(1,304,1)]
   if not any(int(e[0])==-1 and int(e[1])==st for e in matched) or not any(int(e[0])==i and int(e[1])==tt for e in matched):die('held raw bytes do not prove selected correlation')
@@ -106,7 +117,8 @@ def routing(root):
   persisted=read(within(cap,r['persisted_path']))
   if hashlib.sha256(persisted).hexdigest()!=r.get('persisted_sha256') or not yaml_slot(persisted,r['persistent_id'],i):die('persisted selected assignment bytes invalid')
  clear=log[windows[4].start():]
- if 'clear=true' not in clear or re.search(r'RAW node=[0-3] ',clear):die('post-clear raw target silence absent')
+ if ('clear=true' not in clear or 'full_window=true' not in clear
+     or re.search(r'RAW node=[0-3] ',clear)):die('post-clear full-window raw target silence absent')
  un=d.get('unassignment',{});after=read(within(cap,un.get('persisted_path','')))
  if un.get('target_devices')!=[] or not yaml_slot(after,rows[0]['persistent_id']) or un.get('production_dispatch') is not True:die('persisted unassignment invalid')
  held_order=[n for n in udev_nodes if n in nodes]
@@ -128,9 +140,19 @@ def gpu(root,commit,tree,capability):
   d,w,h,c,pix=png(cap/n)
   if by.get(n)!=d or d in [x[0] for x in imgs]:die('GPU capture digest missing/reused')
   imgs.append((d,w,h,c,pix))
+ selection=json.loads(read(cap/'profile-selection-evidence.json'));profile_raw=read(cap/'selected-profile.yaml')
+ if (set(selection)!={'schema','commit','tree','filename','name','mapping_count','selection_route','selected_profile_sha256','display_order_only','icon_override'}
+  or selection.get('schema')!='controller-box-profile-selection/v1' or selection.get('commit')!=commit or selection.get('tree')!=tree
+  or selection.get('filename')!='gpu-xbox-360-oracle.yaml' or selection.get('name')!='GPU Xbox 360 Oracle'
+  or selection.get('mapping_count')!=18 or selection.get('selection_route')!='production-ui-pointer'
+  or selection.get('selected_profile_sha256')!=hashlib.sha256(profile_raw).hexdigest()
+  or selection.get('display_order_only') is not True or selection.get('icon_override') is not False
+  or profile_raw.count(b'\n  - ' )!=18 or profile_raw.count(b'target_events:')!=18):die('exact GPU oracle profile selection absent')
  ev=json.loads(read(cap/'device-type-evidence.json'))
  if (set(ev)!={'schema','commit','tree','source','target_object_path','target_name','device_type','icon_map_asset','profile_override'} or ev.get('schema')!='controller-box-device-type-evidence/v1' or ev.get('commit')!=commit or ev.get('tree')!=tree or ev.get('source')!='production-backend-selected-target' or not OBJ.fullmatch(str(ev.get('target_object_path',''))) or not isinstance(ev.get('target_name'),str) or not ev['target_name'] or ev.get('device_type')!='xb360' or ev.get('icon_map_asset')!='xbox-360.svg' or ev.get('profile_override') is not False):die('DeviceType production mapping absent')
- if b'provenance=profile-override' in read(cap/'manager.log') or b'provenance=supported-model' not in read(cap/'manager.log'):die('profile override substituted for DeviceType path')
+ manager=read(cap/'manager.log')
+ expected_selection=b'profile-selection: filename=gpu-xbox-360-oracle.yaml name=GPU Xbox 360 Oracle mappings=18 icon_override=false device_type=xb360 source=production-ui'
+ if expected_selection not in manager or b'provenance=profile-override' in manager or b'provenance=supported-model' not in manager:die('profile/DeviceType production selection path invalid')
  ad=authority_dir();authority_raw=read(ad/'licensed-diagram-authority.json');authority=json.loads(authority_raw);oracle_raw=read(ad/'licensed-diagram-oracle.json');oracle=json.loads(oracle_raw)['models']['xb360']
  held={'icons/svg/xbox-360.svg':'installed-xbox-360.svg','icons/svg/LICENSE.controllercons':'installed-license.controllercons','controller-icons.yaml':'installed-controller-icons.yaml','controller-layouts/xbox-360.json':'installed-layout.json','licensed-diagram-oracle.json':'installed-oracle.json'}
  for rel,name in held.items():

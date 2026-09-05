@@ -6,6 +6,38 @@ base_commit: 860922af39ed7e2aef9b95705705f7ed90344e87
 status: active
 ---
 
+**Hardware/GPU acceptance-mechanism hardening checkpoint (current checkout)**
+
+The immutable root probe authority now gives every class/capability descriptor
+an external `probe_id` and canonical descriptor digest. Capability contracts
+bind those identifiers and the pending enrollment-request authority digest;
+candidate checkout argv is informational only and cannot authorize execution.
+The dev authority runs the complete pinned Nix project verifier for the remote
+gate and capability-specific real systemd-user, kernel-uinput, and installed
+package/smoke probes. Receipt checking binds the executed enrolled authority and
+continues to reject absent markers, skips, simulation, and partial generic gate
+substitution.
+
+Routing observation now reconstructs partial `input_event` reads, keeps all four
+target descriptors active for a one-second quiet tail after selected delivery,
+rejects late non-selected bytes, and observes the complete clear window. The
+probe retains exact phase ObjectManager replies, DBus owner/PID replies,
+provenance bytes around routing, devnode sets, sysfs/udev facts, persistence,
+raw events, and cleanup state; the root/coordinator semantic validator consumes
+these raw facts rather than result booleans. GPU capture creates and explicitly
+selects the exact 18-row GPU Xbox 360 Oracle profile through production UI,
+retains selection/profile proof, and binds real `xb360` DeviceType to the
+installed licensed Xbox 360 asset with no icon override. Machine calibration is
+now executable as `machine-enforced`; separate external root enrollment and
+signed human graphics approval remain mandatory and absent.
+
+The authority/enrollment request was reproducibly regenerated as
+`add3cde7d82db7dc1652d297de4da87c3a5d0aff2a4024d0249c0255518605e3`.
+Focused routing, GPU, retained-artifact, authority, capability-contract, build,
+and manager/profile tests pass; the complete `verify-boilerplate.sh` gate
+passes. No external runner/probe/campaign/deployment was invoked, no protected
+golden/spec changed, and no acceptance evidence or human approval is claimed.
+
 **Readiness authorization provenance and durable consumption checkpoint**
 
 Real-provider launch authority no longer accepts caller readiness bytes,

@@ -11,13 +11,13 @@
     "icons/svg/LICENSE.controllercons": "ef23a544729a072912a49697a49b53bc8020fbc8f900e2db40748e0eccddbad3",
     "controller-icons.yaml": "3ccf1f6b4a0e1be0ed85178db56186b0b06b157d0076870b5152dafc10c9c4a5",
     "controller-layouts/xbox-360.json": "f6a7fc8d84fc040c9e6b6e69cf82736660c75ded1e91b04c1661a4081535fd5f",
-    "licensed-diagram-oracle.json": "15fe1b33754e7b08840a7e8e87f194f51d3f5aa18bd24ce57aa599614458d54b"
+    "licensed-diagram-oracle.json": "e08bd0f3bea5783f6d0cc07734e2766dd33367a4f8b1d1b99f629b7af76985eb"
   },
   "metadata": {
     "asset_view_box": [0, 0, 64, 64],
     "asset_aspect": 1.0,
     "minimum_raster": [512, 512],
-    "geometry_calibration": "pending-human-calibration"
+    "geometry_calibration": "machine-enforced"
   },
   "review": {
     "kind": "committed-independent-machine-review",

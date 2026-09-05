@@ -4,26 +4,26 @@
   "probe_authorities": {
     "dev-runner-vm": {
       "version": 1,
-      "authority_sha256": "b665203f8db82f2cfbede72f76c8a56ad4d21589435bd8b2853b352ec2fe182b",
+      "authority_sha256": "add3cde7d82db7dc1652d297de4da87c3a5d0aff2a4024d0249c0255518605e3",
       "status": "pending-root-install"
     },
     "iprunner": {
       "version": 1,
-      "authority_sha256": "b665203f8db82f2cfbede72f76c8a56ad4d21589435bd8b2853b352ec2fe182b",
+      "authority_sha256": "add3cde7d82db7dc1652d297de4da87c3a5d0aff2a4024d0249c0255518605e3",
       "status": "pending-root-install"
     },
     "gpurunner": {
       "version": 1,
-      "authority_sha256": "b665203f8db82f2cfbede72f76c8a56ad4d21589435bd8b2853b352ec2fe182b",
+      "authority_sha256": "add3cde7d82db7dc1652d297de4da87c3a5d0aff2a4024d0249c0255518605e3",
       "status": "pending-root-install"
     }
   },
   "licensed_authority": {
     "runner_class": "gpurunner",
-    "authority_sha256": "23cb0a91cdcde1ab7bb179b4fe5f6afc340dd9f2061b9d1222be94a3341c298d",
+    "authority_sha256": "215d8d87a778ba5db1f80d878d79b595d504b6268bd1bb133367993f66555676",
     "scope_pins": {
-      "installed-licensed-diagram": "23cb0a91cdcde1ab7bb179b4fe5f6afc340dd9f2061b9d1222be94a3341c298d",
-      "gpu-compositor-layout-oracle": "15fe1b33754e7b08840a7e8e87f194f51d3f5aa18bd24ce57aa599614458d54b"
+      "installed-licensed-diagram": "215d8d87a778ba5db1f80d878d79b595d504b6268bd1bb133367993f66555676",
+      "gpu-compositor-layout-oracle": "e08bd0f3bea5783f6d0cc07734e2766dd33367a4f8b1d1b99f629b7af76985eb"
     },
     "scopes": [
       "installed-licensed-diagram",

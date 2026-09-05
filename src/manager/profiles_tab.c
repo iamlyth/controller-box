@@ -1157,6 +1157,11 @@ cbx_profiles_tab_open_editor(cbx_profiles_tab *tab,
     rc = cbx_profile_editor_load_profile(&tab->editor, profile);
     if (rc != 0)
         return rc;
+    fprintf(stderr,
+            "profile-selection: filename=%s name=%s mappings=%d icon_override=%s device_type=%s source=production-ui\n",
+            name, profile->name, profile->mapping_count,
+            (icon_override && icon_override[0]) ? "true" : "false",
+            tab->current_device_type[0] ? tab->current_device_type : "none");
 
     /* Set DBus info (for capture mode and capabilities). */
     if (tab->dbus_backend && tab->dbus_bus)

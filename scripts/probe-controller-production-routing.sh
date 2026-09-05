@@ -98,6 +98,11 @@ elif [[ $# -ne 0 ]]; then
     exit 2
 fi
 
+# Mandatory contract scope delimiter. Fixture output carries it as well so
+# marker handling can be tested, but fixture-only remains an explicit denied
+# acceptance marker.
+echo "--- controller-production-routing capability contract ---"
+
 # --- Refuse root / private DBus / system-bus-address override ---------------
 if [[ $(id -u) -eq 0 ]]; then
     echo "production-routing-probe: must not run as root" >&2
@@ -579,9 +584,9 @@ run_live() {
         while :; do
             all_gone=1
             if ! busctl --system --json=short call "$BUS_NAME" "$OM_PATH" \
-                org.freedesktop.DBus.ObjectManager GetManagedObjects >"$tmp/cleanup-om.json" 2>/dev/null || \
+                org.freedesktop.DBus.ObjectManager GetManagedObjects >"$tmp/om-cleanup.json" 2>/dev/null || \
                ! python3 "$SCRIPT_DIR/iprunner-probes/unwrap_variant.py" --object-manager \
-                <"$tmp/cleanup-om.json" >"$tmp/cleanup-objects.json" 2>/dev/null; then
+                <"$tmp/om-cleanup.json" >"$tmp/cleanup-objects.json" 2>/dev/null; then
                 all_gone=0
             else
                 targets_absent="true"
@@ -608,6 +613,7 @@ PY
             [[ "$now" -ge "$cleanup_deadline" ]] && break
             sleep 0.25
         done
+        list_event_devices | sed 's#^#/dev/input/#' > "$tmp/dev-input-after-cleanup.txt"
         record_cleanup "$termination" "$target_cleanup" "$targets_absent" "$nodes_absent" || rc=1
         if [[ "$rc" -eq 0 && -f "$tmp/routing-results.json" ]]; then
             python3 - "$tmp/routing-results.json" "$CLEANUP_LOG" <<'PY'
@@ -622,7 +628,10 @@ PY
         # Retain the signed artifacts (observer.log, overlay.log, cleanup.log)
         # under the caller-controlled ARTIFACT_DIR and print their hashes; the
         # retained copies are never deleted by cleanup_live.
-        retain_artifacts "$tmp/observer.log" "$tmp/routing-results.json" "$tmp/overlay.log" "$tmp/udev-targets.log" "$CLEANUP_LOG" "$tmp"/assignment-slot-*.yaml "$tmp/assignment-after-clear.yaml" || rc=1
+        retain_artifacts "$tmp/observer.log" "$tmp/routing-results.json" "$tmp/overlay.log" "$tmp/udev-targets.log" "$CLEANUP_LOG" \
+            "$tmp"/assignment-slot-*.yaml "$tmp/assignment-after-clear.yaml" \
+            "$tmp"/om-*.json "$tmp"/dbus-*.json "$tmp"/provenance-*.json \
+            "$tmp"/dev-input-*.txt "$tmp"/sysfs-targets.txt || rc=1
         if [[ -n "$xvfb_pid" ]]; then
             kill "$xvfb_pid" 2>/dev/null || true
             wait "$xvfb_pid" 2>/dev/null || true
@@ -712,10 +721,15 @@ PY
     # 7. Verify the real system bus identity before claiming evidence, and
     #    snapshot existing targets + kernel nodes BEFORE launch.
     verify_bus_identity || { cleanup_live; return 1; }
+    cp -- "$FACTORY_INPUTPLUMBER_PROVENANCE" "$tmp/provenance-before-routing.json" || { cleanup_live; return 1; }
+    busctl --system --json=short call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus GetNameOwner s "$BUS_NAME" > "$tmp/dbus-unique-owner.json" 2>/dev/null || { cleanup_live; return 1; }
+    owner_unique=$(python3 "$SCRIPT_DIR/iprunner-probes/unwrap_variant.py" --property-s < "$tmp/dbus-unique-owner.json") || { cleanup_live; return 1; }
+    busctl --system --json=short call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus GetConnectionUnixProcessID s "$owner_unique" > "$tmp/dbus-owner-pid.json" 2>/dev/null || { cleanup_live; return 1; }
     list_event_devices > "$tmp/kernel-baseline"
+    list_event_devices | sed 's#^#/dev/input/#' > "$tmp/dev-input-before.txt"
     if ! busctl --system --json=short call "$BUS_NAME" "$OM_PATH" \
-        org.freedesktop.DBus.ObjectManager GetManagedObjects > "$tmp/om-baseline.json" 2>/dev/null || \
-       ! new_target_paths_from_om "$tmp/om-baseline.json" /dev/null > "$tmp/target-baseline"; then
+        org.freedesktop.DBus.ObjectManager GetManagedObjects > "$tmp/om-before.json" 2>/dev/null || \
+       ! new_target_paths_from_om "$tmp/om-before.json" /dev/null > "$tmp/target-baseline"; then
         echo "production-routing-probe: FAIL: invalid or empty baseline ObjectManager reply" >&2
         cleanup_live
         return 1
@@ -755,6 +769,7 @@ PY
         local om_output
         om_output=$(busctl --system --json=short call "$BUS_NAME" "$OM_PATH" \
             org.freedesktop.DBus.ObjectManager GetManagedObjects 2>/dev/null || true)
+        [[ -n "$om_output" ]] && printf '%s\n' "$om_output" > "$tmp/om-after-create.json"
         new_targets=()
         target_names=()
         if [[ -n "$om_output" ]]; then
@@ -841,6 +856,12 @@ PY
         [[ $target_found -eq 1 ]] || { echo "production-routing-probe: FAIL: production DBus target is absent from ObjectManager" >&2; cleanup_live; return 1; }
     done
     new_targets=("${production_paths[@]}"); new_nodes=("${ordered_nodes[@]}"); NODE_NAMES=("${ordered_names[@]}"); NODE_SYSFS=("${ordered_sysfs[@]}")
+    printf '/dev/input/%s\n' "${new_nodes[@]}" > "$tmp/dev-input-after-create.txt"
+    : > "$tmp/sysfs-targets.txt"
+    for ((i=0;i<4;i++)); do
+        printf 'slot=%d devnode=/dev/input/%s symlink=%s\n' "$i" "${new_nodes[$i]}" "${NODE_SYSFS[$i]}" >> "$tmp/sysfs-targets.txt"
+        udevadm info --query=property --name="/dev/input/${new_nodes[$i]}" >> "$tmp/sysfs-targets.txt" || { cleanup_live; return 1; }
+    done
 
     # 10. Observe a separate fresh human event on every target. Presence-only
     #     targets are never evidence. A single physical 045e:028e source is
@@ -922,6 +943,7 @@ PY
             echo "production-routing-probe: FAIL: production overlay dispatch/save did not produce an exact singleton TargetDevices assignment for target-$slot; InputPlumber may retain old targets without a detach/transfer operation" >&2
             cleanup_live; return 1
         fi
+        busctl --system --json=short call "$BUS_NAME" "$OM_PATH" org.freedesktop.DBus.ObjectManager GetManagedObjects > "$tmp/om-assignment-$slot.json" 2>/dev/null || { cleanup_live; return 1; }
         echo "production-routing-probe: target-$slot production-dispatch verified controller-box-overlay save-persisted=true direct-assignment-dbus=false"
         echo "production-routing-probe: target-$slot mapping dbus=${new_targets[$slot]} kernel=/dev/input/$target_node composite=$composite source=$source_path" | tee -a "$tmp/observer.log"
         echo "production-routing-probe: target-$slot assignment verified dbus-path+kernel-node+composite+source unique"
@@ -973,6 +995,9 @@ PY2
     done
     [[ "$clear_ok" == true ]] || { echo "production-routing-probe: FAIL: Unassigned did not clear DBus and persistence" >&2; cleanup_live; return 1; }
     cp "$HOME/.config/controller-box/assignments.yaml" "$tmp/assignment-after-clear.yaml" || { cleanup_live; return 1; }
+    busctl --system --json=short call "$BUS_NAME" "$OM_PATH" org.freedesktop.DBus.ObjectManager GetManagedObjects > "$tmp/om-after-clear.json" 2>/dev/null || { cleanup_live; return 1; }
+    cp -- "$FACTORY_INPUTPLUMBER_PROVENANCE" "$tmp/provenance-after-routing.json" || { cleanup_live; return 1; }
+    cmp -s "$tmp/provenance-before-routing.json" "$tmp/provenance-after-routing.json" || { echo "production-routing-probe: FAIL: InputPlumber provenance changed during routing" >&2; cleanup_live; return 1; }
     local -a clear_args=()
     for ((j=0; j<4; j++)); do clear_args+=(--target-device "/dev/input/${new_nodes[$j]}" --target-name "${NODE_NAMES[$j]}"); done
     if ! "$OBSERVER" --physical-device "$physical" --physical-name "$physical_name" \

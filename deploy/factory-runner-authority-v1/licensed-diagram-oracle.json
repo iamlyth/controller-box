@@ -1,7 +1,7 @@
 {
   "schema": "controller-box-independent-visual-oracle/v2",
-  "authority_status": "machine-enforced-pending-human-calibration",
-  "derivation": "Regions were independently inspected against the Controllercons 64x64 source viewBox; subjective calibration remains a release blocker.",
+  "authority_status": "machine-enforced",
+  "derivation": "Deterministic geometry and pixel thresholds derived from the pinned Controllercons 64x64 source viewBox; separate signed human graphics approval remains mandatory.",
   "models": {
     "xb360": {
       "asset": "xbox-360.svg",

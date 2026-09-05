@@ -57,7 +57,7 @@ CONTROL_SLUGS = {"A":"a","B":"b","X":"x","Y":"y","Up":"up","Down":"down","Left":
 PASS_MARKER = "controller-recognized"
 # Digest of data/licensed-diagram-authority.json accepted by independent
 # review.  Runtime files and fixture-provided self-hashes cannot alter it.
-PINNED_AUTHORITY_SHA256 = "23cb0a91cdcde1ab7bb179b4fe5f6afc340dd9f2061b9d1222be94a3341c298d"
+PINNED_AUTHORITY_SHA256 = "215d8d87a778ba5db1f80d878d79b595d504b6268bd1bb133367993f66555676"
 FAIL_MARKER = "diagram-not-recognizable"
 
 # Renderer classification ----------------------------------------------------
