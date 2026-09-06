@@ -6,6 +6,33 @@ base_commit: 860922af39ed7e2aef9b95705705f7ed90344e87
 status: active
 ---
 
+**Dynamic D-Bus mediation and lifecycle residual checkpoint (current checkout)**
+
+The root broker now starts a bounded root-owned InputPlumber bus monitor before
+constructing any candidate proxy, pins the proxy PID/starttime, resolves its
+unique bus sender through `GetConnectionUnixProcessID`, and binds the complete
+audit descriptor/digest into the signed host authority. Candidate routing keeps
+only exact method rules and never receives `Target.InputEvent`. A shared strict
+temporal replay authority rejects foreign paths, mutate-and-restore, malformed
+or fake replies, reorder/gaps, hidden/concurrent senders, truncation/overflow,
+wrong xb360 arguments, and target reuse; its legitimate production-shaped trace
+passes. Because dynamic object paths cannot be pre-authorized by
+`xdg-dbus-proxy`, `docs/FACTORY.md` now explicitly classifies iprunner as a
+dedicated host with one approved physical composite and zero pre-existing
+targets. The target-consumer event is a fixed root broker operation, signed as
+consumer-only and explicitly unable to satisfy physical/routing capability.
+
+Launch cleanup now proves removal of every private home/session/staging path,
+unlinks rather than follows substituted top-level symlinks, and fails the
+control plane if residual removal cannot be proven. The residual fixture covers
+success, findings, blocked, failed, infrastructure failure, interruption,
+timeout, crash, and recovery while preserving only canonical state/results and
+external evidence. Campaign archive/prune rejects resumable state and publishes
+an independently checked archive digest before terminal campaign removal.
+Focused D-Bus/broker/signer/campaign/archive residual suites pass locally; no
+external runner, deployment, evidence, approval, specification, or golden
+operation was performed.
+
 **Closure hardening checkpoint (current checkout)**
 
 The canonical enrollment consumer now parses the complete v3 request, the

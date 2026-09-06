@@ -161,7 +161,7 @@ for root in ('/opt/factory-runner/authority/v1','/usr/local/libexec/factory-runn
 # Import/start checks use the canonical installed bundle explicitly, never the
 # compatibility symlink's dirname.  They expose no request or signing channel.
 bundle='/usr/local/libexec/factory-runner-v2.bundle'
-for script in ('factory-runner-server.py','factory-runner-broker.py','factory-runner-signer.py'):
+for script in ('factory-runner-server.py','factory-runner-broker.py','factory-runner-signer.py','inputplumber-dbus-audit.py'):
  code="import importlib.util; p=%r+'/'+%r; s=importlib.util.spec_from_file_location('installed_dry',p); m=importlib.util.module_from_spec(s); s.loader.exec_module(m)"%(bundle,script)
  subprocess.run(['/usr/bin/python3','-I','-c',code],check=True,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL)
 print('factory runner installed generation verified')
@@ -231,7 +231,7 @@ def git_hash(kind,data,nhex):
  return (hashlib.sha1(framed) if nhex==40 else hashlib.sha256(framed)).hexdigest()
 if git_hash('commit',co,len(commit))!=commit or not co.startswith(f'tree {tree}\n'.encode()):die('commit object/tree binding invalid')
 files=m['files']
-required={'scripts/install-factory-runner-v2.sh','scripts/factory-runner-root-bootstrap','scripts/factory-runner-broker.py','scripts/factory-runner-signer.py','scripts/factory-runner-server.py','scripts/factory_runner_policy.py','scripts/factory_runner_artifacts.py','scripts/factory_runner_authority.py','scripts/build-runner-probe-authority.py','deploy/factory-runner-authority-v1/authority.json'}
+required={'scripts/install-factory-runner-v2.sh','scripts/factory-runner-root-bootstrap','scripts/factory-runner-broker.py','scripts/factory-runner-signer.py','scripts/factory-runner-server.py','scripts/inputplumber-dbus-audit.py','scripts/factory_runner_policy.py','scripts/factory_runner_artifacts.py','scripts/factory_runner_authority.py','scripts/build-runner-probe-authority.py','deploy/factory-runner-authority-v1/authority.json'}
 if not isinstance(files,dict) or not required.issubset(files):die('installation closure is incomplete')
 closure=hashlib.sha256()
 for rel,desc in sorted(files.items()):
@@ -379,7 +379,7 @@ for rel,d in authority['files'].items():
  if hashlib.sha256((auth/rel).read_bytes()).hexdigest()!=d:die(f'authority digest mismatch: {rel}')
 shutil.copytree(auth,stage/'authority')
 lib=stage/'libexec';lib.mkdir()
-for n in ('factory-runner-broker.py','factory-runner-signer.py','factory-runner-server.py','factory_runner_policy.py','factory_runner_artifacts.py','factory_runner_authority.py'):
+for n in ('factory-runner-broker.py','factory-runner-signer.py','factory-runner-server.py','inputplumber-dbus-audit.py','factory_runner_policy.py','factory_runner_artifacts.py','factory_runner_authority.py'):
  shutil.copyfile(snap/'scripts'/n,lib/n);(lib/n).chmod(0o700 if '-' in n and n!='factory-runner-server.py' else 0o755)
 (stage/'policy').write_bytes(policy_raw);(stage/'policy').chmod(0o640)
 (stage/'transport').write_bytes(transport_raw);(stage/'transport').chmod(0o600)

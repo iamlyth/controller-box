@@ -11,9 +11,17 @@ with tempfile.TemporaryDirectory() as td:
  r=run(root);assert r.returncode==0,r.stderr;assert not a.exists();assert of.read_text()=='other\n' and sentinel.read_text()=='keep'
  manifests=list((state/'campaign-archives').glob('campaign-a-*.manifest.json'));assert len(manifests)==1
  m=json.loads(manifests[0].read_text());assert m['schema']=='factory-campaign-archive/v1' and m['members'][0]['path']=='factory-loop.json'
+ archive=manifests[0].with_name(manifests[0].name.replace('.manifest.json','.tar'))
+ import hashlib
+ assert m['archive_sha256']==hashlib.sha256(archive.read_bytes()).hexdigest()
  # Unsafe mode is rejected without touching the campaign.
  a.mkdir(mode=0o700);bad=a/'factory-loop.json';bad.write_text('x');bad.chmod(0o644)
  r=run(root);assert r.returncode!=0 and a.exists();bad.chmod(0o600)
+ # An unlocked but resumable campaign is still not terminal and cannot be
+ # archived or pruned.
+ bad.write_text('{"current_phase":"implementation","campaign_id":"campaign-a"}\n');bad.chmod(0o600)
+ r=run(root);assert r.returncode!=0 and 'active/resumable' in r.stderr and a.exists()
+ bad.write_text('{"current_phase":"failed","campaign_id":"campaign-a"}\n')
  # The repository-directory writer lock makes active campaigns unarchivable.
  fd=os.open(root,os.O_RDONLY|os.O_DIRECTORY);fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
  try:r=run(root);assert r.returncode!=0 and 'active campaign lock' in r.stderr

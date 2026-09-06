@@ -14,7 +14,8 @@ sys.path.insert(0, BUNDLE_PATH if os.path.isdir(BUNDLE_PATH) else os.path.dirnam
 from factory_runner_policy import PolicyError, authority_pin, class_for_uid, load_policy
 from factory_runner_authority import AuthorityError, load_authority
 from factory_runner_artifacts import (ArtifactError, PROTOCOL, MAX_ARTIFACTS,
-    MAX_ARTIFACT_FILE, MAX_ARTIFACT_BYTES, collect, descriptors_digest, hold)
+    MAX_ARTIFACT_FILE, MAX_ARTIFACT_BYTES, collect, descriptors_digest, hold,
+    validate_descriptors)
 
 SHA1=re.compile(r"^[0-9a-f]{40}$"); SHA256=re.compile(r"^[0-9a-f]{64}$"); NAME=re.compile(r"^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$")
 MAX_HEADER=65536; MAX_ARCHIVE=128*1024*1024; MAX_FILES=10000; MAX_CONTENT=256*1024*1024; MAX_LOG=4*1024*1024
@@ -397,8 +398,53 @@ DBUS_MUTATING_CALLS=(
 )
 FORBIDDEN_DBUS_CALLS=("org.shadowblip.InputPlumber.Target.InputEvent",)
 
+class DbusMonitor:
+ """Root-owned bounded system-bus monitor started before the proxy.
+
+ The raw busctl JSON stream is the audit authority.  Candidate mounts never
+ include this directory.  At shutdown the broker resolves every connection
+ whose Unix PID equals the held proxy PID through GetConnectionUnixProcessID;
+ zero or multiple senders fail closed.
+ """
+ def __init__(self,entry,parent):
+  self.busctl=TrustedExecutable("/usr/bin/busctl",_pin(entry,"busctl"));self.path=parent/"inputplumber-dbus-monitor.jsonl"
+  self.fd=os.open(self.path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC,0o400)
+  self.busctl.verify();self.proc=subprocess.Popen([str(self.busctl.path),"--system","--json=short","monitor","org.shadowblip.InputPlumber"],cwd="/",env={"PATH":"/usr/bin:/bin","LANG":"C.UTF-8"},stdin=subprocess.DEVNULL,stdout=self.fd,stderr=self.fd,start_new_session=True,preexec_fn=_analyzer_limits)
+  self.started_ns=time.monotonic_ns();time.sleep(.2)
+  if self.proc.poll() is not None:self.close();raise BrokerError("root InputPlumber bus monitor failed before proxy launch")
+  self.closed=False;self.digest=None;self.size=None;self.proxy_senders=[]
+ def _proxy_senders(self,proxy):
+  self.busctl.verify();listed=subprocess.run([str(self.busctl.path),"--system","--no-pager","--no-legend","list"],capture_output=True,text=True,timeout=10);self.busctl.verify()
+  if listed.returncode:raise BrokerError("cannot enumerate proxy bus connections")
+  found=[]
+  for line in listed.stdout.splitlines():
+   fields=line.split()
+   if not fields or not re.fullmatch(r":[0-9]+\.[0-9]+",fields[0]):continue
+   name=fields[0]
+   self.busctl.verify();r=subprocess.run([str(self.busctl.path),"--system","call","org.freedesktop.DBus","/org/freedesktop/DBus","org.freedesktop.DBus","GetConnectionUnixProcessID","s",name],capture_output=True,text=True,timeout=10);self.busctl.verify()
+   if r.returncode:continue
+   m=re.search(r"(?:^|\s)([0-9]+)\s*$",r.stdout.strip())
+   if m and int(m.group(1))==proxy.pid:found.append(name)
+  if len(found)!=1:raise BrokerError("multiple, hidden, or absent proxy D-Bus senders")
+  return found
+ def close(self,proxy=None):
+  if getattr(self,"closed",False):return
+  if proxy is not None:self.proxy_senders=self._proxy_senders(proxy)
+  if getattr(self,"proc",None) and self.proc.poll() is None:
+   try:os.killpg(self.proc.pid,signal.SIGINT);self.proc.wait(timeout=3)
+   except Exception:
+    try:os.killpg(self.proc.pid,signal.SIGKILL)
+    except ProcessLookupError:pass
+    self.proc.wait(timeout=3)
+  if self.proc.returncode not in (0,-signal.SIGINT,-signal.SIGTERM):raise BrokerError("root InputPlumber monitor stopped unexpectedly (gap/overflow)")
+  os.fsync(self.fd);os.close(self.fd);self.fd=None
+  info=os.lstat(self.path)
+  if not stat.S_ISREG(info.st_mode) or info.st_uid!=0 or info.st_size<=0 or info.st_size>MAX_LOG:raise BrokerError("root D-Bus audit is empty/truncated/overflowed")
+  raw=self.path.read_bytes();self.digest=hashlib.sha256(raw).hexdigest();self.size=len(raw);self.closed=True;self.busctl.close()
+
 class DbusProxy:
- def __init__(self,entry,parent,capabilities=()):
+ def __init__(self,entry,parent,capabilities=(),monitor=None):
+  if monitor is None or monitor.proc.poll() is not None:raise BrokerError("root D-Bus monitor must be live before proxy")
   self.exe=TrustedExecutable(entry["dbus_proxy"],_pin(entry,"xdg-dbus-proxy"));self.root=parent/"dbus-proxy";self.root.mkdir(mode=0o700);os.chown(self.root,0,0)
   self.socket=self.root/"system_bus_socket";self.audit=self.root/"calls.audit"
   self.audit_fd=os.open(self.audit,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC,0o400)
@@ -408,6 +454,7 @@ class DbusProxy:
   argv=[str(self.exe.path),"unix:path=/run/dbus/system_bus_socket",str(self.socket),"--filter","--log",*[f"--call=org.shadowblip.InputPlumber={m}" for m in calls]]
   if any(x in " ".join(argv) for x in FORBIDDEN_DBUS_CALLS):raise BrokerError("synthetic InputPlumber injection authority is forbidden")
   self.exe.verify();self.proc=subprocess.Popen(argv,cwd="/",env={"PATH":"/usr/bin:/bin","LANG":"C.UTF-8"},stdin=subprocess.DEVNULL,stdout=self.audit_fd,stderr=self.audit_fd,start_new_session=True,preexec_fn=_analyzer_limits)
+  self.pid=self.proc.pid;self.starttime=InputPlumberProvenance._starttime(self.pid);self.started_ns=time.monotonic_ns()
   deadline=time.monotonic()+5
   while time.monotonic()<deadline and not self.socket.exists() and self.proc.poll() is None:time.sleep(.02)
   if not self.socket.exists() or self.proc.poll() is not None:self.close();raise BrokerError("allowlisting D-Bus proxy failed closed")
@@ -644,6 +691,53 @@ class InputPlumberProvenance:
   if getattr(self,"fd",None) is not None:os.close(self.fd);self.fd=None
   self.busctl.close();self.systemctl.close();self.dpkg.close()
 
+def target_consumer_operation(entry,parent):
+ """Root-only fixed consumer check; never exposed as a runner command.
+
+ The candidate proxy has no InputEvent rule.  This operation creates exactly
+ one xb360 target, opens the independently discovered kernel consumer before
+ injection, sends one pinned report, observes BTN_SOUTH, and unconditionally
+ stops only the returned request target.  Its complete output is signed as
+ consumer-only and is never promoted to physical/routing evidence.
+ """
+ busctl=TrustedExecutable("/usr/bin/busctl",_pin(entry,"busctl"));before={p.name for p in Path("/dev/input").glob("event*") if re.fullmatch(r"event[0-9]+",p.name)}
+ target=None;fd=None;observed=False;started=time.monotonic_ns()
+ def run(*args):
+  busctl.verify();r=subprocess.run([str(busctl.path),"--system",*args],capture_output=True,text=True,timeout=10);busctl.verify()
+  if r.returncode:raise BrokerError("root target-consumer operation D-Bus call failed")
+  return r.stdout.strip()
+ try:
+  raw=run("call","org.shadowblip.InputPlumber","/org/shadowblip/InputPlumber/Manager","org.shadowblip.InputManager","CreateTargetDevice","s","xb360")
+  m=re.search(r'"(/org/shadowblip/InputPlumber/[A-Za-z0-9_/]+)"',raw)
+  if not m:raise BrokerError("root target-consumer CreateTargetDevice reply malformed")
+  target=m.group(1);deadline=time.monotonic()+20;node=None
+  while time.monotonic()<deadline:
+   new=[p for p in Path("/dev/input").glob("event*") if p.name not in before and re.fullmatch(r"event[0-9]+",p.name)]
+   if len(new)==1:node=new[0];break
+   if len(new)>1:raise BrokerError("root target-consumer kernel target identity ambiguous")
+   time.sleep(.05)
+  if node is None:raise BrokerError("root target-consumer kernel node did not appear")
+  fd=os.open(node,os.O_RDONLY|os.O_NONBLOCK|os.O_NOFOLLOW|os.O_CLOEXEC)
+  run("call","org.shadowblip.InputPlumber",target,"org.shadowblip.Input.Target","InputEvent","say","report","20","0","0","16",*["0"]*17)
+  deadline=time.monotonic()+15
+  while time.monotonic()<deadline and not observed:
+   try:data=os.read(fd,24*64)
+   except BlockingIOError:time.sleep(.01);continue
+   for off in range(0,len(data)-23,24):
+    typ=int.from_bytes(data[off+16:off+18],sys.byteorder);code=int.from_bytes(data[off+18:off+20],sys.byteorder);value=int.from_bytes(data[off+20:off+24],sys.byteorder,signed=True)
+    if (typ,code,value)==(1,304,1):observed=True
+  if not observed:raise BrokerError("root target-consumer fixed event was not consumed")
+ finally:
+  if fd is not None:os.close(fd)
+  if target:
+   try:run("call","org.shadowblip.InputPlumber","/org/shadowblip/InputPlumber/Manager","org.shadowblip.InputManager","StopTargetDevice","s",target)
+   except Exception:observed=False
+  busctl.close()
+ if not observed:raise BrokerError("root target-consumer cleanup or observation failed")
+ record={"schema":"factory-target-consumer-operation/v1","label":"consumer-only","physical_capability":False,"routing_capability":False,"candidate_callable":False,"target":target,"device_type":"xb360","input_event":{"action":"report","data":[0,0,16]+[0]*17},"observed":{"type":1,"code":304,"value":1},"started_ns":started,"finished_ns":time.monotonic_ns(),"cleanup":True}
+ raw=(json.dumps(record,sort_keys=True,separators=(",",":"))+"\n").encode();path=parent/"target-consumer-operation.json";out=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC,0o400);os.write(out,raw);os.fsync(out);os.close(out)
+ return {"path":path.name,"sha256":hashlib.sha256(raw).hexdigest(),"size":len(raw),"label":"consumer-only","candidate_callable":False,"physical_capability":False,"routing_capability":False}
+
 def sign(evidence,entry):
  token=os.urandom(32);rfd,wfd=os.pipe();os.write(wfd,token);os.close(wfd)
  payload=(json.dumps({"schema":"factory-runner-sign-request/v1","broker_auth_sha256":hashlib.sha256(token).hexdigest(),"manifest":evidence},separators=(",",":"))+"\n").encode()
@@ -684,9 +778,10 @@ def main():
   workroot=Path(entry["workspace_root"]);_safe_chain(workroot,leaf="dir");request_dir=Path(tempfile.mkdtemp(prefix=f"request-{req['nonce']}-",dir=workroot));request_dir.chmod(0o700)
   provenance_identity=InputPlumberProvenance(request_dir,entry) if entry["name"]=="iprunner" else None
   provenance=provenance_identity.path if provenance_identity else None
-  proxy=DbusProxy(entry,request_dir,req["capabilities"]) if any(c in DBUS_CAPS for c in req["capabilities"]) else None
+  dbus_monitor=DbusMonitor(entry,request_dir) if any(c in DBUS_CAPS for c in req["capabilities"]) else None
+  proxy=DbusProxy(entry,request_dir,req["capabilities"],dbus_monitor) if dbus_monitor else None
   user_proxy=UserManagerProxy(entry,request_dir) if "systemd-user" in req["capabilities"] else None
-  started=int(time.time());allout=b"";allerr=b"";payload=[];descriptors=[];cleanup_states=[]
+  started=int(time.time());allout=b"";allerr=b"";payload=[];descriptors=[];cleanup_states=[];target_consumer_audit=None
   for index,(name,descriptor) in enumerate([("gate",contract["gate"]),*sorted(contract["capabilities"].items())]):
    runroot=request_dir/f"run-{index}";product=runroot/"source";pool=None
    runroot.mkdir(mode=0o711);product.mkdir(mode=0o700)
@@ -702,7 +797,10 @@ def main():
    if name in DBUS_CAPS:provenance_identity.verify()
    capability_proxy=user_proxy if name=="systemd-user" else proxy
    udev=UdevMonitor(request_dir,entry) if name=="controller-production-routing" else None
-   try:rc,out,err=run_contained(entry,authority,descriptor,product,build,home,artifacts,env,unit,name,provenance,capability_proxy,udev)
+   try:
+    if name=="target-consumer":
+     target_consumer_audit=target_consumer_operation(entry,request_dir);rc,out,err=0,b"target-consumer: root consumer-only operation passed\n",b""
+    else:rc,out,err=run_contained(entry,authority,descriptor,product,build,home,artifacts,env,unit,name,provenance,capability_proxy,udev)
    finally:
     if udev:udev.close()
    if name in DBUS_CAPS:provenance_identity.verify()
@@ -719,13 +817,17 @@ def main():
     analyze(entry,authority,descriptor,held,env,req["commit"],req["tree"]);descriptors.extend(d);payload.extend(held.payload)
    pool.close();pool=None
    shutil.rmtree(runroot)
-  descriptors.sort(key=lambda x:x["path"]);payload.sort(key=lambda x:x["path"]);total=sum(x["size"] for x in descriptors);digest=descriptors_digest(descriptors)
-  scope=hashlib.sha256(json.dumps({"campaign_id":req["campaign_id"],"readiness_nonce":req["readiness_nonce"],"runner":entry["name"],"commit":req["commit"],"nonce":req["nonce"],"artifact_manifest_sha256":digest},sort_keys=True,separators=(",",":")).encode()).hexdigest()
   pins={name:{k:pin[k] for k in ("path","sha256","device","inode")} for name,pin in sorted(entry["executable_pins"].items())}
   dbus_audit=None
   if proxy:
-   os.fsync(proxy.audit_fd);dbus_audit=hashlib.sha256(proxy.audit.read_bytes()).hexdigest()
-  host_authority={"executable_pins":pins,"writable_limits":{"bytes":WRITABLE_BYTES,"inodes":WRITABLE_INODES},"inputplumber_pin":entry.get("inputplumber_pin"),"dbus_audit_sha256":dbus_audit,"cleanup_states":cleanup_states}
+   dbus_monitor.proxy_senders=dbus_monitor._proxy_senders(proxy);proxy.close();dbus_monitor.close()
+   dbus_audit={"path":"inputplumber-dbus-monitor.jsonl","sha256":dbus_monitor.digest,"size":dbus_monitor.size,"monitor_started_ns":dbus_monitor.started_ns,"proxy_started_ns":proxy.started_ns,"proxy_pid":proxy.pid,"proxy_starttime":proxy.starttime,"proxy_senders":dbus_monitor.proxy_senders,"complete":True,"overflow":False,"candidate_generated":False}
+   raw=dbus_monitor.path.read_bytes();rel="controller-production-routing/root-dbus-audit.jsonl";descriptors.append({"path":rel,"capability":"controller-production-routing","media_type":"text/plain","type":"file","mode":0o600,"size":len(raw),"sha256":hashlib.sha256(raw).hexdigest()});payload.append({"path":rel,"data_b64":base64.b64encode(raw).decode()})
+  if target_consumer_audit:
+   raw=(request_dir/target_consumer_audit["path"]).read_bytes();rel="target-consumer/root-operation.json";descriptors.append({"path":rel,"capability":"target-consumer","media_type":"application/json","type":"file","mode":0o600,"size":len(raw),"sha256":hashlib.sha256(raw).hexdigest()});payload.append({"path":rel,"data_b64":base64.b64encode(raw).decode()})
+  descriptors.sort(key=lambda x:x["path"]);payload.sort(key=lambda x:x["path"]);total,digest=validate_descriptors(descriptors,req["capabilities"])
+  scope=hashlib.sha256(json.dumps({"campaign_id":req["campaign_id"],"readiness_nonce":req["readiness_nonce"],"runner":entry["name"],"commit":req["commit"],"nonce":req["nonce"],"artifact_manifest_sha256":digest},sort_keys=True,separators=(",",":")).encode()).hexdigest()
+  host_authority={"executable_pins":pins,"writable_limits":{"bytes":WRITABLE_BYTES,"inodes":WRITABLE_INODES},"inputplumber_pin":entry.get("inputplumber_pin"),"dbus_audit_sha256":dbus_audit["sha256"] if dbus_audit else None,"dbus_audit_descriptor":dbus_audit,"target_consumer_operation":target_consumer_audit,"cleanup_states":cleanup_states}
   evidence={"schema":"factory-runner-receipt/v3","host_authority":host_authority,"result":"pass","runner":entry["name"],"commit":req["commit"],"tree":req["tree"],"environment_blob":req["environment_blob"],"archive_sha256":req["archive_sha256"],"campaign_id":req["campaign_id"],"readiness_nonce":req["readiness_nonce"],"nonce":req["nonce"],"authority_sha256":authority.digest,"capabilities":req["capabilities"],"exit_code":0,"timed_out":False,"started_at":started,"finished_at":int(time.time()),"cleanup":True,"stdout_sha256":hashlib.sha256(allout).hexdigest(),"stderr_sha256":hashlib.sha256(allerr).hexdigest(),"artifact_protocol":PROTOCOL,"artifact_limits":{"count":MAX_ARTIFACTS,"file_bytes":MAX_ARTIFACT_FILE,"aggregate_bytes":MAX_ARTIFACT_BYTES},"artifact_count":len(descriptors),"artifact_bytes":total,"artifact_manifest_sha256":digest,"artifact_scope_sha256":scope,"artifacts":descriptors}
   signed=sign(evidence,entry)
   emit({**evidence,"stdout_b64":base64.b64encode(allout).decode(),"stderr_b64":base64.b64encode(allerr).decode(),**{k:signed[k] for k in ("manifest_b64","signature_b64","signer_principal","signer_key_sha256","signature_algorithm","namespace","signature_sha256")},"artifact_payload":payload})
@@ -738,6 +840,9 @@ def main():
   if authority:authority.close()
   if 'provenance_identity' in locals() and provenance_identity:provenance_identity.close()
   if 'proxy' in locals() and proxy:proxy.close()
+  if 'dbus_monitor' in locals() and dbus_monitor:
+   try:dbus_monitor.close(proxy if 'proxy' in locals() else None)
+   except Exception:pass
   if 'user_proxy' in locals() and user_proxy:user_proxy.close()
   if request_dir:shutil.rmtree(request_dir,ignore_errors=True)
   if admission is not None:os.close(admission)

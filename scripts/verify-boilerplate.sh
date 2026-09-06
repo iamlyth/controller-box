@@ -86,12 +86,14 @@ required = [
     'scripts/factory_runner_authority.py', 'scripts/factory_runner_artifacts.py',
     'scripts/build-runner-probe-authority.py', 'scripts/install-factory-runner-v2.sh',
     'scripts/archive-factory-campaign.py', 'scripts/validate-runner-artifacts-semantic.py',
+    'scripts/inputplumber-dbus-audit.py',
     'deploy/factory-runner-authority-v1/authority.json',
     'deploy/factory-runner-authority-v1/forced-command-v2.txt',
     'scripts/pi2-secure-exec.py',
     'tests/test-factory-environment.sh', 'tests/test-factory-runner.sh',
     'tests/test-runner-authority.py', 'tests/test-runner-install-bootstrap.py',
     'tests/test-runner-installer-security.py', 'tests/test-campaign-archive.py', 'tests/test-iprunner-probes.sh',
+    'tests/test-broker-security.py', 'tests/test-dbus-audit.py', 'tests/test-campaign-residuals.py',
     'tests/test-gpu-compositor-probe.sh',
     'tests/test-campaign-audit.sh',
     'tests/test-factory-lock.py',
@@ -388,6 +390,9 @@ done
 ./tests/test-factory-runner.sh
 python3 ./tests/test-runner-install-bootstrap.py
 python3 ./tests/test-runner-installer-security.py
+python3 ./tests/test-broker-security.py
+python3 ./tests/test-dbus-audit.py
+python3 ./tests/test-campaign-residuals.py
 python3 ./tests/test-campaign-archive.py
 ./tests/test-iprunner-probes.sh
 nix-shell --run 'bash ./tests/test-gpu-compositor-probe.sh'

@@ -468,13 +468,33 @@ def validate_record(declared: dict, record: dict, commit: str, tree: str,
     if set(manifest) != expected_fields or manifest.get("schema") != "factory-runner-receipt/v3" or manifest.get("result") != "pass":
         fail("runner manifest schema/result is invalid")
     host=manifest["host_authority"]
-    if (not isinstance(host,dict) or set(host)!={"executable_pins","writable_limits","inputplumber_pin","dbus_audit_sha256","cleanup_states"}
+    if (not isinstance(host,dict) or set(host)!={"executable_pins","writable_limits","inputplumber_pin","dbus_audit_sha256","dbus_audit_descriptor","target_consumer_operation","cleanup_states"}
             or host["writable_limits"]!={"bytes":768*1024*1024,"inodes":65536}
             or not isinstance(host["executable_pins"],dict) or not host["executable_pins"]
             or not isinstance(host["cleanup_states"],list)
             or any(not isinstance(x,dict) or x.get("before")!=x.get("after") for x in host["cleanup_states"])
             or (host["dbus_audit_sha256"] is not None and not SHA256.fullmatch(str(host["dbus_audit_sha256"])))):
         fail("runner manifest host authority is invalid")
+    audit=host["dbus_audit_descriptor"]
+    if audit is not None:
+        required={"path","sha256","size","monitor_started_ns","proxy_started_ns","proxy_pid","proxy_starttime","proxy_senders","complete","overflow","candidate_generated"}
+        if (not isinstance(audit,dict) or set(audit)!=required or audit.get("path")!="inputplumber-dbus-monitor.jsonl" or audit.get("sha256")!=host["dbus_audit_sha256"]
+                or type(audit.get("size")) is not int or not 0<audit["size"]<=4*1024*1024 or audit.get("complete") is not True
+                or audit.get("overflow") is not False or audit.get("candidate_generated") is not False
+                or not isinstance(audit.get("proxy_senders"),list) or len(audit["proxy_senders"])!=1
+                or type(audit.get("monitor_started_ns")) is not int or type(audit.get("proxy_started_ns")) is not int or audit["monitor_started_ns"]>=audit["proxy_started_ns"]):
+            fail("runner signed D-Bus audit descriptor is invalid")
+    elif host["dbus_audit_sha256"] is not None:
+        fail("runner D-Bus audit digest is unbound")
+    consumer=host["target_consumer_operation"]
+    if ("target-consumer" in manifest["capabilities"]) != (consumer is not None):
+        fail("runner target-consumer capability lacks its root-only operation")
+    if consumer is not None:
+        required={"path","sha256","size","label","candidate_callable","physical_capability","routing_capability"}
+        if (not isinstance(consumer,dict) or set(consumer)!=required or consumer.get("path")!="target-consumer-operation.json"
+                or not SHA256.fullmatch(str(consumer.get("sha256",""))) or consumer.get("label")!="consumer-only"
+                or consumer.get("candidate_callable") is not False or consumer.get("physical_capability") is not False or consumer.get("routing_capability") is not False):
+            fail("runner target-consumer operation descriptor is invalid")
     for pin in host["executable_pins"].values():
         if not isinstance(pin,dict) or set(pin)!={"path","sha256","device","inode"} or not SHA256.fullmatch(str(pin.get("sha256",""))):
             fail("runner manifest executable enrollment is invalid")

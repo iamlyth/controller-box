@@ -1240,21 +1240,47 @@ def _session_directory() -> Path:
 
 
 def _remove_private_directories(directories: Iterable[Optional[Path]]) -> None:
-    """Best-effort removal of private per-launch directories (Task 8, finding 6).
+    """Remove and prove absence of every launch-owned pathname.
 
-    Removes every private directory the mint or supervisor created — the
-    exec staging directory, the prompt directory, the session directory, and
-    the sanitized home — so no private or credential material survives a
-    failed authorization or a rejected attempt.  Removal is best-effort:
-    a failure never masks the original error.
+    ``shutil.rmtree`` does not follow descendant symlinks.  A substituted
+    top-level symlink is unlinked rather than followed.  Cleanup failure is a
+    control-plane failure: silently retaining a session, staging tree, or
+    credential-bearing private HOME would make a terminal result unsafe.
     """
-    for directory in directories:
-        if directory is None:
+    failures: List[str] = []
+    seen: set[Tuple[int, int]] = set()
+    for value in directories:
+        if value is None:
             continue
+        directory = Path(value)
         try:
-            shutil.rmtree(directory)
-        except (OSError, FileNotFoundError):
-            pass
+            info = os.lstat(directory)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            failures.append(f"{directory}: {exc}")
+            continue
+        identity = (info.st_dev, info.st_ino)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        try:
+            if stat.S_ISLNK(info.st_mode):
+                os.unlink(directory)
+            elif stat.S_ISDIR(info.st_mode):
+                shutil.rmtree(directory)
+            else:
+                os.unlink(directory)
+            try:
+                os.lstat(directory)
+            except FileNotFoundError:
+                pass
+            else:
+                failures.append(f"{directory}: pathname remains")
+        except OSError as exc:
+            failures.append(f"{directory}: {exc}")
+    if failures:
+        raise LaunchError("launch residual cleanup not proven: " + "; ".join(failures))
 
 
 def _authority_private_directories(authority: "LaunchAuthority") -> List[Optional[Path]]:

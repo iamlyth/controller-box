@@ -76,13 +76,20 @@ def main():
    i=os.lstat(p)
    if not stat.S_ISDIR(i.st_mode) or stat.S_ISLNK(i.st_mode) or i.st_uid!=uid or stat.S_IMODE(i.st_mode)!=0o700:die(f"unsafe campaign path: {p}")
   members=inspect(campaign,uid)
+  state_member=next((x for x in members if x["path"]=="factory-loop.json"),None)
+  if state_member is None:die("campaign has no canonical resumable/final state")
+  try:control=json.loads(state_member["_bytes"])
+  except (ValueError,UnicodeError):die("campaign state is malformed")
+  terminal={"success","findings","blocked","failed","interrupted","infrastructure_failure"}
+  phase=control.get("current_phase",control.get("outcome")) if isinstance(control,dict) else None
+  if phase not in terminal:die("active/resumable campaign cannot be archived or pruned")
+  if control.get("campaign_id",a.campaign_id)!=a.campaign_id:die("campaign state identity mismatch")
   archives=state/"campaign-archives";archives.mkdir(mode=0o700,exist_ok=True)
   ai=os.lstat(archives)
   if ai.st_uid!=uid or stat.S_IMODE(ai.st_mode)!=0o700 or stat.S_ISLNK(ai.st_mode):die("unsafe archive directory")
   stamp=time.strftime("%Y%m%dT%H%M%SZ",time.gmtime());base=f"{a.campaign_id}-{stamp}"
   manifest_members=[{k:v for k,v in item.items() if k!="_bytes"} for item in members]
   manifest={"schema":"factory-campaign-archive/v1","campaign_id":a.campaign_id,"created_at":stamp,"members":manifest_members}
-  raw=(json.dumps(manifest,sort_keys=True,separators=(",",":"))+"\n").encode()
   with tempfile.NamedTemporaryFile(dir=archives,prefix=".archive.",delete=False) as tf:
    tmp=Path(tf.name)
   try:
@@ -90,8 +97,12 @@ def main():
     for item in members:
      info=tarfile.TarInfo(f"{a.campaign_id}/{item['path']}");info.size=item["size"];info.mode=item["mode"];info.uid=uid;info.gid=os.getgid();info.mtime=0
      tar.addfile(info,io.BytesIO(item["_bytes"]))
-   with open(tmp,"rb") as f:os.fsync(f.fileno())
+   with open(tmp,"rb") as f:
+    os.fsync(f.fileno());archive_sha256=hashlib.sha256(f.read()).hexdigest()
+   manifest["archive_sha256"]=archive_sha256
+   raw=(json.dumps(manifest,sort_keys=True,separators=(",",":"))+"\n").encode()
    archive=archives/(base+".tar");os.link(tmp,archive);os.unlink(tmp)
+   if hashlib.sha256(archive.read_bytes()).hexdigest()!=archive_sha256:die("published archive digest mismatch")
    mtmp=archives/("."+base+".manifest.tmp");fd=os.open(mtmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC,0o600);os.write(fd,raw);os.fsync(fd);os.close(fd)
    os.rename(mtmp,archives/(base+".manifest.json"));fsync_dir(archives)
   finally:

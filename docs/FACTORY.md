@@ -330,7 +330,18 @@ The declared runner classes in `.factory/environment.toml` are:
 - `gpurunner` (SSH transport) declares `gpu-compositor` and
   `installed-licensed-diagram`.
 
-The six `iprunner`/`gpurunner` capabilities are declared contracts. Routing
+The six `iprunner`/`gpurunner` capabilities are declared contracts. The
+`iprunner` host is explicitly **dedicated**: immediately before every bounded
+request it must expose exactly one enrolled physical composite (045e:028e),
+zero InputPlumber target devices, and no unrelated InputPlumber client. This is
+a security invariant, not merely a test topology. `xdg-dbus-proxy` cannot
+pre-authorize request-learned object paths, so its exact global method names
+are safe only with this root-checked invariant plus the root-owned temporal bus
+audit; a second device, target, sender, monitor gap, or collateral call fails
+the whole receipt even if state is later restored. Candidate proxies never
+receive `org.shadowblip.Input.Target.InputEvent`.
+
+Routing
 requires four independently consumed real-source events; installed diagram
 evidence requires licensed hashes, exact model/no fallback, accelerated capture,
 and independent-oracle alignment. The previously

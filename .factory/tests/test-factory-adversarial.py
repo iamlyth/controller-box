@@ -1784,7 +1784,7 @@ class CaseAdversarialSuite(_AdversarialBase):
                 "artifact_manifest_sha256":sha256(b"[]\n"),
                 "artifact_scope_sha256":sha256(json.dumps({"campaign_id":"synthetic-adversarial","readiness_nonce":"d"*64,"runner":"fixture-runner","commit":head,"nonce":"0"*64,"artifact_manifest_sha256":sha256(b"[]\n")},sort_keys=True,separators=(",",":")).encode()),
                 "artifacts":[],
-                "host_authority":{"executable_pins":{"fixture":{"path":"/usr/bin/fixture","sha256":"e"*64,"device":1,"inode":1}},"writable_limits":{"bytes":768*1024*1024,"inodes":65536},"inputplumber_pin":None,"dbus_audit_sha256":None,"cleanup_states":[]},
+                "host_authority":{"executable_pins":{"fixture":{"path":"/usr/bin/fixture","sha256":"e"*64,"device":1,"inode":1}},"writable_limits":{"bytes":768*1024*1024,"inodes":65536},"inputplumber_pin":None,"dbus_audit_sha256":None,"dbus_audit_descriptor":None,"target_consumer_operation":None,"cleanup_states":[]},
                 "signer_principal": "fixture-runner",
                 "signer_key_sha256": key_sha256,
                 "namespace": "factory-runner-receipt",

@@ -72,6 +72,10 @@ for method in ('CreateTargetDevice','StopTargetDevice','SetTargetDevices','SetIn
  assert any(entry.endswith(method) for entry in b.DBUS_MUTATING_CALLS)
 assert all('InputEvent' not in method for method in b.DBUS_MUTATING_CALLS)
 assert 'cannot snapshot InputPlumber objects for cleanup authority' in broker
+for marker in ('class DbusMonitor','GetConnectionUnixProcessID','root InputPlumber bus monitor failed before proxy launch',
+ 'target_consumer_operation','consumer-only','candidate_callable":False','physical_capability":False','routing_capability":False'):
+ assert marker in broker,marker
+assert broker.index('dbus_monitor=DbusMonitor') < broker.index('proxy=DbusProxy')
 # A descendant retaining stdout cannot retain the broker beyond one absolute deadline.
 with tempfile.TemporaryDirectory(dir=ROOT) as td:
  out=pathlib.Path(td)/'pipe-out';err=pathlib.Path(td)/'pipe-err';started=time.monotonic()
