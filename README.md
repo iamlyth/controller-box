@@ -390,7 +390,13 @@ digest, hook start/completion cursors, and a trusted outcome enum; recovery is d
 canonical plan, that campaign-owned state file, and process liveness. A finite
 campaign always terminates as `success`, `findings`, `blocked`, `failed`,
 `interrupted`, or `infrastructure_failure` — it never spins while no task is
-runnable. Available local tools and external runners are declared without
+runnable. Terminal state remains until an operator explicitly runs
+`scripts/archive-factory-campaign.py --root "$PWD" --campaign-id ID`. The tool
+refuses an active lock and unsafe members, creates a campaign-scoped archive and
+digest manifest, then no-follow deletes only that campaign. Its bounded
+`--retention` policy (default 20, maximum 100) reports excess archives but never
+automatically deletes evidence; operators prune campaign IDs individually.
+Available local tools and external runners are declared without
 credentials in `.factory/environment.toml`; the declared runner classes
 `dev-runner-vm`, `iprunner`, and `gpurunner` and their declared capabilities
 are unchanged. Verification validates

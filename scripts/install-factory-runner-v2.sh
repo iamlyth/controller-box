@@ -14,8 +14,44 @@ usage() {
 ACTION=${1:-}; shift || true
 STATE=/var/lib/factory-runner/install-transaction
 if [[ $ACTION == rollback ]]; then
- [[ -f $STATE/targets ]] || { echo 'no recoverable factory-runner transaction' >&2; exit 1; }
- /usr/bin/tac "$STATE/targets" | while IFS=$'\t' read -r name target; do
+ [[ -d $STATE && ! -L $STATE ]] || { echo 'no recoverable factory-runner transaction' >&2; exit 1; }
+ # The fsynced append-only journal is the sole recovery authority.  In
+ # particular, never infer rollback scope from partially written side files.
+ # A committed generation is durable even when power loss leaves STATE behind.
+ if /usr/bin/python3 -I - "$STATE" <<'PY'
+import json,os,pathlib,sys
+s=pathlib.Path(sys.argv[1]);j=s/'journal'
+try: lines=j.read_text().splitlines()
+except FileNotFoundError: raise SystemExit(1)
+committed=[x.split('\t') for x in lines if len(x.split('\t'))==4 and x.split('\t')[1:] == ['committed','generation','complete']]
+if not committed: raise SystemExit(1)
+generation=committed[-1][0]
+try: installed=json.loads(pathlib.Path('/etc/factory-runner/installed-generation.json').read_bytes())
+except Exception: raise SystemExit(2)
+if installed.get('generation_id')!=generation: raise SystemExit(2)
+PY
+ then
+   /bin/rm -rf -- "$STATE"
+   /usr/bin/python3 -I - <<'PY'
+import os
+fd=os.open('/var/lib/factory-runner',os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC);os.fsync(fd);os.close(fd)
+PY
+   echo 'factory runner committed transaction finalized'; exit 0
+ else
+   rc=$?; [[ $rc -ne 2 ]] || { echo 'committed journal does not match installed generation' >&2; exit 1; }
+ fi
+ /usr/bin/python3 -I - "$STATE/journal" <<'PY' | while IFS=$'\t' read -r name target; do
+import pathlib,sys
+p=pathlib.Path(sys.argv[1])
+if not p.exists(): raise SystemExit(0) # no durable intent means no mutation
+seen=set();rows=[]
+for line in p.read_text().splitlines():
+ f=line.split('\t')
+ if len(f)!=4: raise SystemExit('malformed install journal')
+ generation,phase,name,target=f
+ if phase=='intent' and name not in seen: seen.add(name);rows.append((name,target))
+for name,target in reversed(rows): print(name+'\t'+target)
+PY
    [[ -n $name && -n $target ]] || continue
    if [[ $name == authorized_keys-* ]]; then
     /usr/bin/python3 -I - "$name" "$target" "$STATE" <<'PY'
@@ -51,6 +87,10 @@ p=os.path.dirname(sys.argv[1]) or '/'; fd=os.open(p,os.O_RDONLY|os.O_DIRECTORY);
 PY
  done
  /bin/rm -rf -- "$STATE"
+ /usr/bin/python3 -I - <<'PY'
+import os
+fd=os.open('/var/lib/factory-runner',os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC);os.fsync(fd);os.close(fd)
+PY
  echo 'factory runner transaction rolled back'; exit 0
 fi
 if [[ $ACTION == verify ]]; then
@@ -145,6 +185,11 @@ if [[ -e $STATE ]]; then
 fi
 /bin/mkdir -p /var/lib/factory-runner; /bin/chmod 0700 /var/lib/factory-runner
 /bin/mkdir -m 0700 "$STATE" "$STATE/snapshot" "$STATE/stage" "$STATE/backup" "$STATE/missing"
+/usr/bin/python3 -I - <<'PY'
+import os
+for p in ('/var/lib/factory-runner/install-transaction','/var/lib/factory-runner'):
+ fd=os.open(p,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC);os.fsync(fd);os.close(fd)
+PY
 rollback_signal(){ rc=$?; trap - EXIT INT TERM HUP; "$0" rollback || true; exit "$rc"; }
 trap rollback_signal EXIT INT TERM HUP
 # Snapshot/validate all source and external authority through no-follow held FDs.
@@ -405,13 +450,24 @@ PY
 }
 cutover(){
  local name=$1 staged=$2 target=$3 backup="$STATE/backup/$1"
- /bin/mkdir -p -- "$(/usr/bin/dirname -- "$target")"
- printf '%s\t%s\n' "$name" "$target" >> "$STATE/targets"
  journal intent "$name" "$target"
+ /bin/mkdir -p -- "$(/usr/bin/dirname -- "$target")"
+ /usr/bin/python3 -I - "$target" <<'PY'
+import os,sys
+p=os.path.dirname(sys.argv[1]) or '/';fd=os.open(p,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC);os.fsync(fd);os.close(fd)
+PY
  if [[ -e $target || -L $target ]]; then
   journal before-backup "$name" "$target"; rename_noreplace "$target" "$backup"; journal old-durable "$name" "$target"
  else
-  journal before-missing "$name" "$target"; /usr/bin/touch "$STATE/missing/$name"; journal missing-durable "$name" "$target"
+  journal before-missing "$name" "$target"
+  /usr/bin/python3 -I - "$STATE/missing" "$name" <<'PY'
+import os,sys
+root,name=sys.argv[1:];d=os.open(root,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC)
+try:
+ fd=os.open(name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC,0o600,dir_fd=d);os.fsync(fd);os.close(fd);os.fsync(d)
+finally:os.close(d)
+PY
+  journal missing-durable "$name" "$target"
  fi
  journal before-activate "$name" "$target"; rename_noreplace "$staged" "$target"; journal active-durable "$name" "$target"
 }
@@ -440,7 +496,6 @@ try:
  sfd=os.open('.ssh',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC,dir_fd=fd);si=os.fstat(sfd)
  if si.st_dev!=hi.st_dev or si.st_uid!=a.pw_uid or si.st_gid!=a.pw_gid or stat.S_IMODE(si.st_mode)!=0o700:raise SystemExit('unsafe account .ssh during cutover')
  bfd=os.open(state/'backup',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC);mfd=os.open(state/'missing',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC);stagefd=os.open(pathlib.Path(staged).parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC)
- with open(state/'targets','ab',buffering=0) as f:f.write(f'{name}\t{target}\n'.encode());os.fsync(f.fileno())
  event('intent')
  try:os.stat('authorized_keys',dir_fd=sfd,follow_symlinks=False);exists=True
  except FileNotFoundError:exists=False
@@ -476,4 +531,8 @@ journal obsolete-removed old-signer-sudoers /etc/sudoers.d/factory-runner-signer
 journal committed generation complete
 trap - EXIT INT TERM HUP
 /bin/rm -rf -- "$STATE"
+/usr/bin/python3 -I - <<'PY'
+import os
+fd=os.open('/var/lib/factory-runner',os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC);os.fsync(fd);os.close(fd)
+PY
 echo 'factory runner v2 complete generation committed; external enrollment/evidence unchanged'

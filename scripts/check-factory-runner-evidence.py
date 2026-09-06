@@ -597,9 +597,11 @@ def verify_manifest_reference(reference: str, expected_commit: str,
     """
     if not SHA1.fullmatch(expected_commit):
         fail("--verify-manifest requires a strict 40-hex --expected-commit audit base")
-    validate(expected_commit, expected_campaign_id=expected_campaign_id,
-             expected_readiness_nonce=expected_readiness_nonce)
-    aggregate, _ = regular_json(aggregate_path(expected_campaign_id, expected_readiness_nonce))
+    _digest, _capabilities, aggregate = validate(
+        expected_commit, expected_campaign_id=expected_campaign_id,
+        expected_readiness_nonce=expected_readiness_nonce, include_view=True)
+    # Match only the immutable aggregate bytes held and parsed by validate();
+    # never reopen a pathname after strong validation.
     records = aggregate["runners"]
     matches = [record for record in records if record["manifest"] == reference]
     if len(matches) != 1:
@@ -608,7 +610,8 @@ def verify_manifest_reference(reference: str, expected_commit: str,
 
 
 def validate(expected_commit: str | None = None, *, expected_campaign_id: str | None = None,
-             expected_readiness_nonce: str | None = None) -> tuple[str, list[str]]:
+             expected_readiness_nonce: str | None = None,
+             include_view: bool = False):
     os.environ["GIT_NO_REPLACE_OBJECTS"] = "1"
     runtime = ROOT / ".factory-state"
     evidence_directory = runtime / "runner-evidence"
@@ -677,7 +680,10 @@ def validate(expected_commit: str | None = None, *, expected_campaign_id: str | 
                             archive_sha256, issuance_trust, current_trust,
                             expected_campaign_id, expected_readiness_nonce)
         )
-    return hashlib.sha256(aggregate_raw).hexdigest(), sorted(evidenced)
+    result=(hashlib.sha256(aggregate_raw).hexdigest(), sorted(evidenced))
+    # The optional classification view is parsed from the same held aggregate
+    # bytes.  It is deliberately detached from all evidence pathnames.
+    return (*result, aggregate) if include_view else result
 
 
 def main() -> int:
@@ -688,16 +694,20 @@ def main() -> int:
     parser.add_argument("--print-digest", action="store_true")
     parser.add_argument("--print-capabilities", action="store_true")
     parser.add_argument("--verify-manifest")
+    parser.add_argument("--print-record-json", action="store_true")
     args = parser.parse_args()
     if args.verify_manifest:
         record = verify_manifest_reference(
             args.verify_manifest, args.expected_commit, args.expected_campaign_id,
             args.expected_readiness_nonce,
         )
-        print(
-            f"factory-runner-evidence: verified manifest {record['manifest']} "
-            f"(runner={record['name']}, capabilities={record['capabilities']})"
-        )
+        if args.print_record_json:
+            print(json.dumps(record,sort_keys=True,separators=(",",":")))
+        else:
+            print(
+                f"factory-runner-evidence: verified manifest {record['manifest']} "
+                f"(runner={record['name']}, capabilities={record['capabilities']})"
+            )
         return 0
     digest, capabilities = validate(
         args.expected_commit, expected_campaign_id=args.expected_campaign_id,

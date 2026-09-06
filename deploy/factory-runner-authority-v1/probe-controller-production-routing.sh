@@ -108,6 +108,10 @@ if [[ $(id -u) -eq 0 ]]; then
     echo "production-routing-probe: must not run as root" >&2
     exit 1
 fi
+if [[ -n "$FIXTURE" && -n "${DBUS_SYSTEM_BUS_ADDRESS:-}" ]]; then
+    echo "production-routing-probe: refusing a private bus in fixture mode" >&2
+    exit 1
+fi
 if [[ -z "$FIXTURE" && "${DBUS_SYSTEM_BUS_ADDRESS:-}" != "unix:path=/run/factory/dbus/system_bus_socket" ]]; then
     echo "production-routing-probe: exact broker D-Bus proxy is required" >&2
     exit 1

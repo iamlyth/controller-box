@@ -586,7 +586,7 @@
     "iprunner-probes/validate_name_sets.py": "5881a28fee65fabd97ea58f8420d30a00067b9fe3346b64de6f2ff6879955949",
     "licensed-diagram-authority.json": "215d8d87a778ba5db1f80d878d79b595d504b6268bd1bb133367993f66555676",
     "licensed-diagram-oracle.json": "e08bd0f3bea5783f6d0cc07734e2766dd33367a4f8b1d1b99f629b7af76985eb",
-    "probe-controller-production-routing.sh": "158ed524dadbd7a6c1b1e255a7fcd572a7f35203ad768768f641d0273bba3c2a",
+    "probe-controller-production-routing.sh": "5d66ff49c315eb658c0eac4aca9ed2fe7c53e1c04a7eec4d1c72a73606bd2316",
     "probe-dev-capability.py": "b2037f2e9122489f0716ba4098c933b60eaaa766700e289c1772de0f9211ec4f",
     "probe-gpu-compositor.sh": "71acf232466a41ab7ee7dd693ce6cf1bcc47b05281f78de6d0089a6c030d5baa",
     "probe-inputplumber-system-dbus.sh": "ffb62489a4292298692c27020497b76062a296e4c05f149b6a9f0f53e9f99900",

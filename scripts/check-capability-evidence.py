@@ -62,7 +62,7 @@ def load_script_module(name: str, path: Path):
 
 
 _PINNED_GIT_CACHE: dict[str, object] = {}
-_STRONG_EVIDENCE_CACHE: dict[tuple[str, str, str, str], tuple[str, set[str]]] = {}
+_STRONG_EVIDENCE_CACHE: dict[tuple[str, str, str, str], tuple[str, set[str], dict]] = {}
 
 
 def load_pinned_git(root: Path):
@@ -122,7 +122,7 @@ def contract_for(root: Path, capability: str) -> dict:
     fail(f"no tracked contract for declared capability {capability} (unevidenced)")
 
 
-def strong_runner_evidence(root: Path) -> tuple[str, set[str]]:
+def strong_runner_evidence(root: Path) -> tuple[str, set[str], dict]:
     """Run the canonical full runner validator for this exact repository."""
     campaign_id = os.environ.get("FACTORY_CAMPAIGN_ID", "")
     readiness_nonce = os.environ.get("FACTORY_READINESS_NONCE", "")
@@ -135,10 +135,11 @@ def strong_runner_evidence(root: Path) -> tuple[str, set[str]]:
         checker = load_script_module("factory_runner_evidence", checker_path)
         if Path(checker.ROOT).resolve() != root.resolve():
             fail("strong runner checker resolved a foreign repository root")
-        digest, capabilities = checker.validate(
+        digest, capabilities, aggregate = checker.validate(
             head,
             expected_campaign_id=campaign_id,
             expected_readiness_nonce=readiness_nonce,
+            include_view=True,
         )
     except SystemExit as exc:
         detail = str(exc) or "validation failed"
@@ -149,31 +150,25 @@ def strong_runner_evidence(root: Path) -> tuple[str, set[str]]:
         not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)
         or not isinstance(capabilities, list)
         or not all(isinstance(item, str) and NAME.fullmatch(item) for item in capabilities)
+        or not isinstance(aggregate,dict) or aggregate.get("schema")!="factory-runner-aggregate/v4"
     ):
         fail("strong runner checker returned an invalid validation result")
-    result = digest, set(capabilities)
+    result = digest, set(capabilities), aggregate
     _STRONG_EVIDENCE_CACHE[key] = result
     return result
 
 
 def aggregate_evidence(root: Path) -> tuple[set[str], dict[str, list[tuple[str, Path]]]]:
     """Read only the canonical v4 aggregate in the explicit readiness namespace."""
-    strong_digest, strong_capabilities = strong_runner_evidence(root)
+    strong_digest, strong_capabilities, data = strong_runner_evidence(root)
     campaign_id = os.environ.get("FACTORY_CAMPAIGN_ID", "")
     readiness_nonce = os.environ.get("FACTORY_READINESS_NONCE", "")
     if not NAME.fullmatch(campaign_id) or not re.fullmatch(r"[0-9a-f]{64}", readiness_nonce):
         fail("explicit campaign/readiness namespace is required")
     aggregate = (root / ".factory-state" / "runner-evidence" /
                  campaign_id / readiness_nonce / "aggregate.json")
-    if aggregate.is_symlink() or not aggregate.is_file():
-        fail(f"runner evidence aggregate is missing: {aggregate}")
-    try:
-        raw = aggregate.read_bytes()
-        data = json.loads(raw, object_pairs_hook=no_duplicate_keys)
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        fail(f"invalid runner evidence aggregate {aggregate}: {exc}")
-    if hashlib.sha256(raw).hexdigest() != strong_digest:
-        fail("runner evidence aggregate changed after strong validation")
+    # `data` is the immutable classification view returned by the strong
+    # validator.  Do not reopen aggregate by pathname after validation.
     if (not isinstance(data, dict)
             or set(data) != {"schema", "campaign_id", "readiness_nonce", "commit", "tree", "environment_blob", "runners"}
             or data.get("schema") != "factory-runner-aggregate/v4"):

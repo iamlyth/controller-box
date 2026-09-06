@@ -36,6 +36,9 @@ nix-shell --run './scripts/verify-project.sh'
 # Strong validation of existing exact-commit runner evidence (read-only)
 ./scripts/check-factory-runner-evidence.py --expected-commit "${ACCEPTED_COMMIT:?exact commit}" --expected-campaign-id "${CAMPAIGN_ID:?campaign}" --expected-readiness-nonce "${READINESS_NONCE:?round-zero nonce}"
 
+# Operator-only terminal campaign archival (never global or automatic)
+./scripts/archive-factory-campaign.py --root "$PWD" --campaign-id "${CAMPAIGN_ID:?terminal campaign}"
+
 # Runner acquisition is coordinator-only: model roles never invoke runners.
 # Every real-provider campaign runs mandatory trusted round-zero readiness;
 # production policy also requires exactly five rounds (non-5 fails before a model).

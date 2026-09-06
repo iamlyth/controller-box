@@ -298,7 +298,7 @@ def audit_binding(args: argparse.Namespace, root: Path) -> tuple[int, str, str, 
     return state["round"], state["base_commit"], state["nonce"], evidence
 
 
-def strict_manifest(root: Path, reference: str, base: str) -> None:
+def strict_manifest(root: Path, reference: str, base: str) -> list[str]:
     """Require an exact signed aggregate record bound to the audit base.
 
     A standalone/minimal manifest (a bare schema/result/exit JSON) is never
@@ -312,7 +312,7 @@ def strict_manifest(root: Path, reference: str, base: str) -> None:
         fail(f"strict runner-evidence helper is missing: {helper}")
     result = subprocess.run(
         [sys.executable, str(helper), "--verify-manifest", reference,
-         "--expected-commit", base],
+         "--expected-commit", base, "--print-record-json"],
         cwd=root, text=True, capture_output=True,
     )
     if result.returncode:
@@ -321,6 +321,14 @@ def strict_manifest(root: Path, reference: str, base: str) -> None:
             f"runner manifest is not an accepted exact-commit runner receipt: "
             f"{reference} ({detail or 'strict runner-evidence validation failed'})"
         )
+    try:
+        record=json.loads(result.stdout)
+        capabilities=record["capabilities"]
+    except (json.JSONDecodeError,KeyError,TypeError):
+        fail("strict runner helper returned no immutable classification record")
+    if not isinstance(capabilities,list) or not all(isinstance(x,str) and x for x in capabilities):
+        fail("strict runner helper returned invalid immutable capabilities")
+    return capabilities
 
 
 def covered_categories(root: Path, lines: list[str], required: set[str],
@@ -359,8 +367,7 @@ def covered_categories(root: Path, lines: list[str], required: set[str],
                 )
             covered.add(tag)
         for manifest_ref in MANIFEST.findall(line):
-            strict_manifest(root, manifest_ref, base)
-            capabilities = manifest_capabilities(root, manifest_ref)
+            capabilities = strict_manifest(root, manifest_ref, base)
             for category_name in sorted(required - covered):
                 category = policy[category_name]
                 evidencing = capability_evidence_by_category.get(category_name, [])

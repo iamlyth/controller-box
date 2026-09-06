@@ -23,7 +23,7 @@
       "authority_probe": {
         "probe_id": "factory-root-probe:dev-runner-vm:remote-project-gate:v1",
         "descriptor_sha256": "0693356703faf9e4f0882a1dbf2fb0f1f079ab4a311e06f687932026110bf67a",
-        "authority_sha256": "8910d904f94476077b9254d13db3903c52597b9eadebccd1b855e8466573b3bc",
+        "authority_sha256": "d93b6e1b27e11b589abea91d711289ce1e9affb01d974c33f8177fba985b23ed",
         "expected_semantics": "capability-specific-root-authority",
         "must_execute": true,
         "must_not_skip": true,
@@ -63,7 +63,7 @@
       "authority_probe": {
         "probe_id": "factory-root-probe:dev-runner-vm:systemd-user:v1",
         "descriptor_sha256": "8c47effe468972a0362d7ca2f36e3a6a95cc1ae2e2f261234b295d19f09accbf",
-        "authority_sha256": "8910d904f94476077b9254d13db3903c52597b9eadebccd1b855e8466573b3bc",
+        "authority_sha256": "d93b6e1b27e11b589abea91d711289ce1e9affb01d974c33f8177fba985b23ed",
         "expected_semantics": "capability-specific-root-authority",
         "must_execute": true,
         "must_not_skip": true,
@@ -117,7 +117,7 @@
       "authority_probe": {
         "probe_id": "factory-root-probe:dev-runner-vm:kernel-uinput:v1",
         "descriptor_sha256": "4b37428c51800112565f7f20e0161d7efe5e4f62b7b6cfcd1178f1005a912a96",
-        "authority_sha256": "8910d904f94476077b9254d13db3903c52597b9eadebccd1b855e8466573b3bc",
+        "authority_sha256": "d93b6e1b27e11b589abea91d711289ce1e9affb01d974c33f8177fba985b23ed",
         "expected_semantics": "capability-specific-root-authority",
         "must_execute": true,
         "must_not_skip": true,
@@ -160,7 +160,7 @@
       "authority_probe": {
         "probe_id": "factory-root-probe:dev-runner-vm:installed-package:v1",
         "descriptor_sha256": "2ed8a0195401d9ced92855159cd53bcfad395f7836dcf7ac2227c3c63121cb21",
-        "authority_sha256": "8910d904f94476077b9254d13db3903c52597b9eadebccd1b855e8466573b3bc",
+        "authority_sha256": "d93b6e1b27e11b589abea91d711289ce1e9affb01d974c33f8177fba985b23ed",
         "expected_semantics": "capability-specific-root-authority",
         "must_execute": true,
         "must_not_skip": true,
@@ -209,7 +209,7 @@
       "authority_probe": {
         "probe_id": "factory-root-probe:iprunner:inputplumber-system-dbus:v1",
         "descriptor_sha256": "95b9f4e3d815ddd402d0b827be312e6bd224299c402cf40fc9d6bba64dc7fe61",
-        "authority_sha256": "8910d904f94476077b9254d13db3903c52597b9eadebccd1b855e8466573b3bc",
+        "authority_sha256": "d93b6e1b27e11b589abea91d711289ce1e9affb01d974c33f8177fba985b23ed",
         "expected_semantics": "capability-specific-root-authority",
         "must_execute": true,
         "must_not_skip": true,
@@ -248,7 +248,7 @@
       "authority_probe": {
         "probe_id": "factory-root-probe:iprunner:physical-controller:v1",
         "descriptor_sha256": "ac5bccc1ec296d7965523659fee4d0ce9be5cb96757995bf997935a828fd9674",
-        "authority_sha256": "8910d904f94476077b9254d13db3903c52597b9eadebccd1b855e8466573b3bc",
+        "authority_sha256": "d93b6e1b27e11b589abea91d711289ce1e9affb01d974c33f8177fba985b23ed",
         "expected_semantics": "capability-specific-root-authority",
         "must_execute": true,
         "must_not_skip": true,
@@ -288,7 +288,7 @@
       "authority_probe": {
         "probe_id": "factory-root-probe:iprunner:target-consumer:v1",
         "descriptor_sha256": "b001de026986ab0314d9f6f205a7eaaa7132cf3ff84685b7b3ff6d2f57c226c3",
-        "authority_sha256": "8910d904f94476077b9254d13db3903c52597b9eadebccd1b855e8466573b3bc",
+        "authority_sha256": "d93b6e1b27e11b589abea91d711289ce1e9affb01d974c33f8177fba985b23ed",
         "expected_semantics": "capability-specific-root-authority",
         "must_execute": true,
         "must_not_skip": true,
@@ -412,7 +412,7 @@
       "authority_probe": {
         "probe_id": "factory-root-probe:iprunner:controller-production-routing:v1",
         "descriptor_sha256": "72af959ec9629c0da417ab72151a8b5738abe9df42b0ce65e24d71f7b83907f3",
-        "authority_sha256": "8910d904f94476077b9254d13db3903c52597b9eadebccd1b855e8466573b3bc",
+        "authority_sha256": "d93b6e1b27e11b589abea91d711289ce1e9affb01d974c33f8177fba985b23ed",
         "expected_semantics": "capability-specific-root-authority",
         "must_execute": true,
         "must_not_skip": true,
@@ -548,7 +548,7 @@
       "authority_probe": {
         "probe_id": "factory-root-probe:gpurunner:gpu-compositor:v1",
         "descriptor_sha256": "d8175649b906088a33ddee9e76d510b85a130479ee70a368d845f643d5596411",
-        "authority_sha256": "8910d904f94476077b9254d13db3903c52597b9eadebccd1b855e8466573b3bc",
+        "authority_sha256": "d93b6e1b27e11b589abea91d711289ce1e9affb01d974c33f8177fba985b23ed",
         "expected_semantics": "capability-specific-root-authority",
         "must_execute": true,
         "must_not_skip": true,
@@ -684,7 +684,7 @@
       "authority_probe": {
         "probe_id": "factory-root-probe:gpurunner:installed-licensed-diagram:v1",
         "descriptor_sha256": "788cd968f1980745b64c01562810b85e865f8b8695ef08f1952e99ec0e845a01",
-        "authority_sha256": "8910d904f94476077b9254d13db3903c52597b9eadebccd1b855e8466573b3bc",
+        "authority_sha256": "d93b6e1b27e11b589abea91d711289ce1e9affb01d974c33f8177fba985b23ed",
         "expected_semantics": "capability-specific-root-authority",
         "must_execute": true,
         "must_not_skip": true,
