@@ -96,6 +96,8 @@ Plan: Python 3.11 standard library only; the parser never reads process state.
 | DOD-07 | §23 | missing | fixture exercises a registry-bound matrix | Task 2 |
 | DOD-08 | §23 | missing | fixture exercises a registry-bound matrix | Task 2 |
 | DOD-09 | §23 | missing | fixture exercises a registry-bound matrix | Task 2 |
+| CRED-01 | §18 | missing | fixture exercises a registry-bound matrix | Task 2 |
+| GIT-01 | §12, §17 | missing | fixture exercises a registry-bound matrix | Task 2 |
 
 ## Interaction acceptance inventory
 

@@ -72,7 +72,7 @@ import plan_parser  # noqa: E402
 RALPH_SECRET = b"RALPH-FOREIGN-SENTINEL-9f4c1a"
 
 # The canonical plan template: the committed plan-parser fixture that parses
-# against the committed requirement-policy registry (76 stable IDs).  The
+# against the committed requirement-policy registry (78 stable IDs).  The
 # fixture binds its front matter to the real spec blob at commit time.
 PLAN_TEMPLATE = (
     ROOT / ".factory" / "tests" / "fixtures" / "plan-valid-base.md"

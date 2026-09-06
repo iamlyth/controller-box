@@ -61,7 +61,7 @@ with tempfile.TemporaryDirectory(dir=ROOT) as td:
  assert out.stat().st_size==b.MAX_LOG
 for marker in ('HEADER_TIMEOUT=15','ARCHIVE_TIMEOUT=120','BROKER_ADMISSION=8','fcntl.flock',
  'aggregate contained output exceeds bound','RLIMIT_AS','RLIMIT_CPU','/var/run',
- '/usr/local/libexec/inputplumber-mediator','--mutations','root-dbus-preforward.jsonl','DBUS_SYSTEM_BUS_ADDRESS',
+ '/usr/libexec/inputplumber-mediator','--mutations','root-dbus-preforward.jsonl','DBUS_SYSTEM_BUS_ADDRESS',
  'nr_inodes={WRITABLE_INODES}','bounded writable backing resource cleanup not proven',
  'runner primary/supplementary groups differ from exact approved set'):
  assert marker in broker,marker

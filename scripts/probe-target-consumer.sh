@@ -21,9 +21,23 @@
 set -u
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-EXPECTATIONS="$SCRIPT_DIR/iprunner-probes/target-consumer-expectations.json"
-OBSERVER_SOURCE="$SCRIPT_DIR/iprunner-probes/target_consumer_observer.c"
-DECODER="$SCRIPT_DIR/iprunner-probes/unwrap_variant.py"
+PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
+# iprunner-probes live beside the probe in the deployed runner-authority
+# layout and under .factory/runner in the repository layout. Resolve both so
+# the same probe works from the repo and from the installed authority tree.
+# A symlinked probes dir is rejected as unsafe ambiguity (existing policy).
+if [[ -d "$SCRIPT_DIR/iprunner-probes" && ! -L "$SCRIPT_DIR/iprunner-probes" ]]; then
+    IPROBES="$SCRIPT_DIR/iprunner-probes"
+else
+    IPROBES="$PROJECT_ROOT/.factory/runner/iprunner-probes"
+    [[ -d "$IPROBES" && ! -L "$IPROBES" ]] || {
+        echo "target-consumer-probe: iprunner-probes dir missing or unsafe" >&2
+        exit 1
+    }
+fi
+EXPECTATIONS="$IPROBES/target-consumer-expectations.json"
+OBSERVER_SOURCE="$IPROBES/target_consumer_observer.c"
+DECODER="$IPROBES/unwrap_variant.py"
 
 # List kernel event devices by exact name (event + decimal digits).
 list_event_devices() {

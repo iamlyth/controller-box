@@ -97,6 +97,8 @@ parsed plan and never consults a runtime task ledger.
 | DOD-07 | §5, §7 | missing | fixture exercises selector determinism | Task 1 |
 | DOD-08 | §5, §7 | missing | fixture exercises selector determinism | Task 1 |
 | DOD-09 | §5, §7 | missing | fixture exercises selector determinism | Task 1 |
+| CRED-01 | §18 | missing | fixture exercises selector determinism | Task 1 |
+| GIT-01 | §12, §17 | missing | fixture exercises selector determinism | Task 1 |
 
 ## Interaction acceptance inventory
 

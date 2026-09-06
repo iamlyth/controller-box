@@ -20,7 +20,19 @@
 set -u
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-IPROBES="$SCRIPT_DIR/iprunner-probes"
+# iprunner-probes live beside this script in the deployed runner-authority
+# layout and under .factory/runner in the repository layout. Resolve both so
+# the same helper works from the repo and from the installed authority tree.
+# A symlinked probes dir is rejected as unsafe ambiguity (existing policy).
+if [[ -d "$SCRIPT_DIR/iprunner-probes" && ! -L "$SCRIPT_DIR/iprunner-probes" ]]; then
+    IPROBES="$SCRIPT_DIR/iprunner-probes"
+else
+    IPROBES="$(cd -- "$SCRIPT_DIR/.." && pwd)/.factory/runner/iprunner-probes"
+    [[ -d "$IPROBES" && ! -L "$IPROBES" ]] || {
+        echo "create-xb360-targets: iprunner-probes dir missing or unsafe" >&2
+        exit 1
+    }
+fi
 VALIDATE="$IPROBES/validate_name_sets.py"
 EXTRACT="$IPROBES/extract_om_targets.py"
 OBSERVER_SOURCE="$IPROBES/routing_observer.c"

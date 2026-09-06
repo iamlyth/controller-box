@@ -103,16 +103,39 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 if [[ -n "${FACTORY_PRODUCT_ROOT:-}" ]]; then
     PRODUCT_ROOT=$FACTORY_PRODUCT_ROOT
 elif [[ $# -gt 0 ]]; then
-    PRODUCT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
+    PRODUCT_ROOT=$PROJECT_ROOT
 else
     echo "gpu-compositor-probe: root broker must bind the fresh product checkout" >&2; exit 1
 fi
 [[ "$PRODUCT_ROOT" = /* && -d "$PRODUCT_ROOT" ]] || { echo "gpu-compositor-probe: invalid broker product root" >&2; exit 1; }
-ANALYZER="$SCRIPT_DIR/gpurunner-probes/analyze-gpu-compositor.py"
-EGL_SOURCE="$SCRIPT_DIR/gpurunner-probes/egl_renderer_probe.c"
+# gpurunner-probes live beside the probe in the deployed runner-authority
+# layout and under .factory/runner in the repository layout. Resolve both so
+# the same probe works from the repo and from the installed authority tree.
+# A symlinked probes dir is rejected as unsafe ambiguity (existing policy).
+if [[ -d "$SCRIPT_DIR/gpurunner-probes" && ! -L "$SCRIPT_DIR/gpurunner-probes" ]]; then
+    GPROBES="$SCRIPT_DIR/gpurunner-probes"
+else
+    GPROBES="$PROJECT_ROOT/.factory/runner/gpurunner-probes"
+    [[ -d "$GPROBES" && ! -L "$GPROBES" ]] || {
+        echo "gpu-compositor-probe: gpurunner-probes dir missing or unsafe" >&2
+        exit 1
+    }
+fi
+if [[ -d "$SCRIPT_DIR/iprunner-probes" && ! -L "$SCRIPT_DIR/iprunner-probes" ]]; then
+    IPROBES="$SCRIPT_DIR/iprunner-probes"
+else
+    IPROBES="$PROJECT_ROOT/.factory/runner/iprunner-probes"
+    [[ -d "$IPROBES" && ! -L "$IPROBES" ]] || {
+        echo "gpu-compositor-probe: iprunner-probes dir missing or unsafe" >&2
+        exit 1
+    }
+fi
+ANALYZER="$GPROBES/analyze-gpu-compositor.py"
+EGL_SOURCE="$GPROBES/egl_renderer_probe.c"
 
 case "${FACTORY_CAPABILITY:-gpu-compositor}" in
   gpu-compositor|installed-licensed-diagram) MARKER="--- ${FACTORY_CAPABILITY:-gpu-compositor} capability contract ---" ;;
@@ -711,7 +734,7 @@ busctl --system --json=short call org.shadowblip.InputPlumber /org/shadowblip/In
   org.freedesktop.DBus.ObjectManager GetManagedObjects > "$tmp/device-type-om.json" 2>/dev/null \
   || fail device-type-unavailable "production ObjectManager query failed"
 : > "$tmp/no-target-baseline"
-python3 "$SCRIPT_DIR/iprunner-probes/extract_om_targets.py" "$tmp/device-type-om.json" \
+python3 "$IPROBES/extract_om_targets.py" "$tmp/device-type-om.json" \
   "$tmp/no-target-baseline" org.shadowblip.Input.Target > "$tmp/xb360-targets.tsv" \
   || fail device-type-unavailable "production targets were absent, ambiguous, or not xb360"
 mapfile -t xb360_targets < "$tmp/xb360-targets.tsv"

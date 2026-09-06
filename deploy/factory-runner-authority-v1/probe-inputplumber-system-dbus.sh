@@ -5,7 +5,7 @@
 #
 # Collects live facts from the real system (dpkg, systemctl, busctl) and
 # validates every fact against the committed pins
-# (scripts/iprunner-probes/inputplumber-expectations.json) via
+# (.factory/runner/iprunner-probes/inputplumber-expectations.json) via
 # validate-inputplumber-facts.py. Any mismatch fails the probe with a precise
 # diagnostic; there is no skip path.
 #
@@ -23,9 +23,23 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-VALIDATOR="$SCRIPT_DIR/iprunner-probes/validate-inputplumber-facts.py"
-DECODER="$SCRIPT_DIR/iprunner-probes/unwrap_variant.py"
-EXPECTATIONS="$SCRIPT_DIR/iprunner-probes/inputplumber-expectations.json"
+PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
+# iprunner-probes live beside the probe in the deployed runner-authority
+# layout and under .factory/runner in the repository layout. Resolve both so
+# the same probe works from the repo and from the installed authority tree.
+# A symlinked probes dir is rejected as unsafe ambiguity (existing policy).
+if [[ -d "$SCRIPT_DIR/iprunner-probes" && ! -L "$SCRIPT_DIR/iprunner-probes" ]]; then
+    IPROBES="$SCRIPT_DIR/iprunner-probes"
+else
+    IPROBES="$PROJECT_ROOT/.factory/runner/iprunner-probes"
+    [[ -d "$IPROBES" && ! -L "$IPROBES" ]] || {
+        echo "inputplumber-probe: iprunner-probes dir missing or unsafe" >&2
+        exit 1
+    }
+fi
+VALIDATOR="$IPROBES/validate-inputplumber-facts.py"
+DECODER="$IPROBES/unwrap_variant.py"
+EXPECTATIONS="$IPROBES/inputplumber-expectations.json"
 BUS_NAME="org.shadowblip.InputPlumber"
 MANAGER_PATH="/org/shadowblip/InputPlumber/Manager"
 MANAGER_IFACE="org.shadowblip.InputManager"

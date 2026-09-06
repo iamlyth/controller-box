@@ -479,7 +479,7 @@ class DbusProxy:
  def __init__(self,entry,parent,host_lock,capabilities=(),monitor=None):
   if monitor is None or monitor.proc.poll() is not None:raise BrokerError("root D-Bus monitor must be live before mediator")
   if host_lock is None:raise BrokerError("mediator requires root-held dedicated topology")
-  self.exe=TrustedExecutable("/usr/local/libexec/inputplumber-mediator",_pin(entry,"inputplumber-mediator"));self.root=parent/"dbus-mediator";self.root.mkdir(mode=0o700);os.chown(self.root,0,0)
+  self.exe=TrustedExecutable("/usr/libexec/inputplumber-mediator",_pin(entry,"inputplumber-mediator"));self.root=parent/"dbus-mediator";self.root.mkdir(mode=0o700);os.chown(self.root,0,0)
   self.socket=self.root/"system_bus_socket";self.audit=parent/"root-dbus-preforward.jsonl"
   mutate="yes" if "controller-production-routing" in capabilities else "no"
   argv=[str(self.exe.path),"--mutations",mutate,str(self.socket),str(host_lock.snapshot_path),str(self.audit)]

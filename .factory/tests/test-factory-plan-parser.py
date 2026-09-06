@@ -131,7 +131,7 @@ class CanonicalPlanAgreementTest(unittest.TestCase):
         self.assertEqual(plan.schema, SCHEMA_NAME)
         self.assertEqual(plan.status, "active")
         self.assertEqual(len(plan.tasks), 54)
-        self.assertEqual(len(plan.matrix), 76)
+        self.assertEqual(len(plan.matrix), 78)
         self.assertEqual(
             [entry.boundary for entry in plan.interactions],
             list(INTERACTION_BOUNDARIES),
