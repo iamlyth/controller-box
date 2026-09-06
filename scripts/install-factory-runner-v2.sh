@@ -40,34 +40,49 @@ PY
  else
    rc=$?; [[ $rc -ne 2 ]] || { echo 'committed journal does not match installed generation' >&2; exit 1; }
  fi
- /usr/bin/python3 -I - "$STATE/journal" <<'PY' | while IFS=$'\t' read -r name target; do
+ /usr/bin/python3 -I - "$STATE/journal" <<'PY' | while IFS=$'\t' read -r name target disposition; do
 import pathlib,sys
 p=pathlib.Path(sys.argv[1])
 if not p.exists(): raise SystemExit(0) # no durable intent means no mutation
-seen=set();rows=[]
+rows=[];by_name={}
 for line in p.read_text().splitlines():
  f=line.split('\t')
  if len(f)!=4: raise SystemExit('malformed install journal')
  generation,phase,name,target=f
- if phase=='intent' and name not in seen: seen.add(name);rows.append((name,target))
-for name,target in reversed(rows): print(name+'\t'+target)
+ if name not in by_name: by_name[name]=[target,set()];rows.append(name)
+ elif by_name[name][0]!=target: raise SystemExit('install journal target changed')
+ by_name[name][1].add(phase)
+for name in reversed(rows):
+ target,phases=by_name[name]
+ disposition='backup' if 'old-durable' in phases else 'missing' if 'missing-durable' in phases else 'intent-only'
+ print(name+'\t'+target+'\t'+disposition)
 PY
    [[ -n $name && -n $target ]] || continue
    if [[ $name == authorized_keys-* ]]; then
-    /usr/bin/python3 -I - "$name" "$target" "$STATE" <<'PY'
+    /usr/bin/python3 -I - "$name" "$target" "$STATE" "$disposition" <<'PY'
 import os,pathlib,pwd,stat,sys
-name,target,state=sys.argv[1:];account=name.removeprefix('authorized_keys-');a=pwd.getpwnam(account);home=pathlib.Path(a.pw_dir)
+name,target,state,disposition=sys.argv[1:];account=name.removeprefix('authorized_keys-');a=pwd.getpwnam(account);home=pathlib.Path(a.pw_dir)
 if target!=str(home/'.ssh/authorized_keys'):raise SystemExit('rollback authorized_keys target mismatch')
 fd=os.open('/',os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC);rootdev=os.fstat(fd).st_dev
 try:
  for part in home.parts[1:]:n=os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC,dir_fd=fd);os.close(fd);fd=n
  hi=os.fstat(fd);sfd=os.open('.ssh',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC,dir_fd=fd);si=os.fstat(sfd)
  if hi.st_dev!=rootdev or si.st_dev!=hi.st_dev or hi.st_uid!=a.pw_uid or si.st_uid!=a.pw_uid or hi.st_gid!=a.pw_gid or si.st_gid!=a.pw_gid or stat.S_IMODE(hi.st_mode)!=0o700 or stat.S_IMODE(si.st_mode)!=0o700:raise SystemExit('unsafe account path during rollback')
- try:os.unlink('authorized_keys',dir_fd=sfd)
- except FileNotFoundError:pass
  backup=pathlib.Path(state)/'backup'/name
- if backup.exists():
+ if disposition=='backup':
+  # Never remove the active pathname until the journal proves the original
+  # reached the durable backup directory and that backup is still present.
+  if not backup.exists() or backup.is_symlink():raise SystemExit('durable authorized_keys backup is absent')
+  try:os.unlink('authorized_keys',dir_fd=sfd)
+  except FileNotFoundError:pass
   bfd=os.open(backup.parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC);os.rename(name,'authorized_keys',src_dir_fd=bfd,dst_dir_fd=sfd);os.fsync(bfd);os.close(bfd)
+ elif disposition=='missing':
+  try:os.unlink('authorized_keys',dir_fd=sfd)
+  except FileNotFoundError:pass
+ else:
+  # Intent was durable before any mutation, but no durable outcome exists.
+  # Preserve the pathname rather than risking destruction of the original.
+  raise SystemExit('authorized_keys transaction has intent without durable backup/missing state')
  os.fsync(sfd)
 finally:
  for x in ('sfd','fd'):
@@ -98,6 +113,18 @@ if [[ $ACTION == verify ]]; then
 import grp,hashlib,json,os,pathlib,pwd,stat,subprocess,sys,tempfile
 m={'devrunner':'dev-runner-vm','iprunner':'iprunner','gpurunner':'gpurunner'}
 p=pathlib.Path('/etc/factory-runner/runner-policy.json');d=json.loads(p.read_bytes());transport=json.loads(pathlib.Path('/etc/factory-runner/transport-manifest.json').read_bytes())
+bundle='/usr/local/libexec/factory-runner-v2.bundle';sys.path.insert(0,bundle)
+from factory_runner_policy import load_policy
+from factory_runner_authority import load_authority
+# Verification must exercise the same canonical strict loaders as production,
+# not an installer-local approximation of their schemas.
+assert load_policy()==d
+for cls in d['classes']:
+ authority=load_authority(pathlib.Path(cls['probe_authority']),cls['probe_authority_sha256'])
+ try:
+  assert authority.digest==cls['probe_authority_sha256']
+  assert sorted(authority.class_contract(cls['name'])['capabilities'])==sorted(cls['allowed_capabilities'])
+ finally:authority.close()
 assert {x['name'] for x in d['classes']}==set(m.values()) and set(transport['classes'])==set(m)
 gen=json.loads(pathlib.Path('/etc/factory-runner/installed-generation.json').read_bytes());assert set(gen)=={'schema','generation_id','objects'} and gen['schema']=='factory-runner-installed-generation/v1'
 assert hashlib.sha256(json.dumps(gen['objects'],sort_keys=True,separators=(',',':')).encode()).hexdigest()==gen['generation_id']
@@ -131,7 +158,7 @@ for c in d['classes']:
  for pin in c['executable_pins'].values():
   q=pathlib.Path(pin['path']);i=os.stat(q);h=hashlib.sha256(q.read_bytes()).hexdigest()
   assert pin['status']=='enrolled' and (i.st_dev,i.st_ino)==(pin['device'],pin['inode']) and h==pin['sha256']
- if c['name']=='iprunner':
+ if any(x in c['allowed_capabilities'] for x in ('inputplumber-system-dbus','target-consumer','controller-production-routing','gpu-compositor','installed-licensed-diagram')):
   pin=c['inputplumber_pin'];q=pathlib.Path(pin['path']);i=os.stat(q)
   assert pin['status']=='enrolled' and (i.st_dev,i.st_ino)==(pin['device'],pin['inode']) and hashlib.sha256(q.read_bytes()).hexdigest()==pin['sha256']
   assert subprocess.check_output(['/usr/bin/dpkg-query','-W','-f=${Version}','inputplumber'],text=True)==pin['package_version']
@@ -160,7 +187,6 @@ for root in ('/opt/factory-runner/authority/v1','/usr/local/libexec/factory-runn
  assert actual==expected
 # Import/start checks use the canonical installed bundle explicitly, never the
 # compatibility symlink's dirname.  They expose no request or signing channel.
-bundle='/usr/local/libexec/factory-runner-v2.bundle'
 for script in ('factory-runner-server.py','factory-runner-broker.py','factory-runner-signer.py','inputplumber-dbus-audit.py'):
  code="import importlib.util; p=%r+'/'+%r; s=importlib.util.spec_from_file_location('installed_dry',p); m=importlib.util.module_from_spec(s); s.loader.exec_module(m)"%(bundle,script)
  subprocess.run(['/usr/bin/python3','-I','-c',code],check=True,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL)
@@ -287,7 +313,9 @@ for c in policy['classes']:
   if not isinstance(pin,dict) or set(pin)!={'path','sha256','device','inode','status'} or pin['status']!='enrolled':die('executable enrollment is invalid or pending')
   raw=protected(pin['path']);i=os.stat(pin['path'])
   if hashlib.sha256(raw).hexdigest()!=pin['sha256'] or (i.st_dev,i.st_ino)!=(pin['device'],pin['inode']):die('executable enrollment mismatch')
- if c['name']=='iprunner' and (not isinstance(c['inputplumber_pin'],dict) or c['inputplumber_pin'].get('status')!='enrolled'):die('InputPlumber enrollment is absent or pending')
+ needs_ip=any(x in c['allowed_capabilities'] for x in ('inputplumber-system-dbus','target-consumer','controller-production-routing','gpu-compositor','installed-licensed-diagram'))
+ if needs_ip and (not isinstance(c['inputplumber_pin'],dict) or c['inputplumber_pin'].get('status')!='enrolled'):die('InputPlumber enrollment is absent or pending')
+ if not needs_ip and c['inputplumber_pin'] is not None:die('unexpected InputPlumber enrollment')
 account_map={'devrunner':'dev-runner-vm','iprunner':'iprunner','gpurunner':'gpurunner'}
 if {c['name'] for c in policy['classes']}!=set(account_map.values()):die('policy class set is not exact')
 # System tools must be immutable root-owned executables.  The coordinator

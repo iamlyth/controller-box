@@ -181,16 +181,18 @@ for gate in gates:
     else:
         argv = [str(root / 'tests' / name)]
         argv += [str(build_dir) if a == '{BUILD_DIR}' else a for a in args]
-        result = subprocess.run(argv)
-        if name in ('test_packaging.sh', 'test-visual-audit.sh'):
-            # test_packaging.sh and test-visual-audit.sh are strict-rc0 gates.
-            # test-visual-audit.sh is non-skipping under the authenticated Nix
-            # inner gate, so a 77 (skip) return would be a silent false-pass,
-            # never a legitimate skip: it is rejected here (the dead 77 is
-            # removed for this gate) so the adversarial visual/atomic-capture
-            # regressions can never pass by skipping.
-            if result.returncode != 0:
-                raise SystemExit(f'verify-project: gate {name} failed (exit {result.returncode})')
+        result = subprocess.run(argv, capture_output=True, text=True)
+        sys.stdout.write(result.stdout); sys.stderr.write(result.stderr)
+        mandatory = {'test_packaging.sh', 'test_installed_smoke.sh',
+                     'test_installed_diagram.sh', 'test-visual-audit.sh'}
+        combined = (result.stdout + result.stderr).lower()
+        skip_markers = ('skip', 'skipped', 'not run', 'exit 77')
+        if name in mandatory:
+            # Production installed and diagram gates are strict rc-zero and
+            # reject every textual skip form, including wrappers that turn 77
+            # into success.
+            if result.returncode != 0 or any(marker in combined for marker in skip_markers):
+                raise SystemExit(f'verify-project: mandatory gate {name} skipped or failed (exit {result.returncode})')
         elif result.returncode not in (0, 77):
             raise SystemExit(f'verify-project: gate {name} failed (exit {result.returncode})')
         elif result.returncode == 77:

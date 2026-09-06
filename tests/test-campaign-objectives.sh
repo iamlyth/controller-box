@@ -186,7 +186,7 @@ manifest = {
     "capabilities": capabilities, "exit_code": 0, "timed_out": False,
     "started_at": 1, "finished_at": 2, "cleanup": True,
     "stdout_sha256": empty, "stderr_sha256": empty,
-    "artifact_protocol":"factory-runner-artifacts/v1","artifact_limits":{"count":64,"file_bytes":8388608,"aggregate_bytes":50331648},
+    "artifact_protocol":"factory-runner-artifacts/v1","artifact_limits":{"count":128,"file_bytes":8388608,"aggregate_bytes":50331648},
     "artifact_count":0,"artifact_bytes":0,"artifact_manifest_sha256":hashlib.sha256(b"[]\n").hexdigest(),
     "artifact_scope_sha256":hashlib.sha256(json.dumps({"campaign_id":"synthetic-campaign-objectives","readiness_nonce":"2"*64,"runner":runner,"commit":head,"nonce":"0"*64,"artifact_manifest_sha256":hashlib.sha256(b"[]\n").hexdigest()},sort_keys=True,separators=(",",":")).encode()).hexdigest(),"artifacts":[],
     "host_authority":{"executable_pins":{"fixture":{"path":"/usr/bin/fixture","sha256":"f"*64,"device":1,"inode":1}},"writable_limits":{"bytes":768*1024*1024,"inodes":65536},"inputplumber_pin":None,"dbus_audit_sha256":None,"dbus_audit_descriptor":None,"target_consumer_operation":None,"cleanup_states":[]},

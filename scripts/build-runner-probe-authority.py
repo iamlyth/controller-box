@@ -22,6 +22,21 @@ if subprocess.run([str(git_exe),'-C',str(source),'diff','--quiet','--ignore-subm
  raise SystemExit('authority builder: source snapshot is dirty')
 expected=(source/'deploy/factory-runner-authority-v1').resolve()
 if root!=expected:raise SystemExit('authority builder: output must be the authority directory in the exact trusted snapshot')
+# Deploy bytes are generated copies of canonical scripts, never a second
+# editable implementation. Refuse to sign when source -> deploy parity drifts.
+canonical={
+ 'scripts/probe-inputplumber-system-dbus.sh':'probe-inputplumber-system-dbus.sh',
+ 'scripts/probe-physical-controller.sh':'probe-physical-controller.sh',
+ 'scripts/probe-target-consumer.sh':'probe-target-consumer.sh',
+ 'scripts/probe-controller-production-routing.sh':'probe-controller-production-routing.sh',
+ 'scripts/probe-gpu-compositor.sh':'probe-gpu-compositor.sh',
+ 'scripts/gpurunner-probes/analyze-gpu-compositor.py':'gpurunner-probes/analyze-gpu-compositor.py',
+ 'scripts/gpurunner-probes/egl_renderer_probe.c':'gpurunner-probes/egl_renderer_probe.c',
+}
+for src_rel,dst_rel in canonical.items():
+ src=source/src_rel;dst=root/dst_rel
+ if not src.is_file() or not dst.is_file() or src.read_bytes()!=dst.read_bytes():
+  raise SystemExit(f'authority builder: canonical source/deploy parity mismatch: {src_rel} -> {dst_rel}')
 files={p.relative_to(root).as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(root.rglob('*')) if p.is_file() and p.name!='authority.json' and '__pycache__' not in p.parts and p.suffix!='.pyc'}
 empty={"required":[],"files":{}}
 def desc(argv,artifacts=empty,semantic=False,cap='',runner=''):

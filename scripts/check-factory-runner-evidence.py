@@ -597,6 +597,25 @@ def validate_record(declared: dict, record: dict, commit: str, tree: str,
         )
         if result.returncode != 0:
             fail(f"independent retained-artifact semantics rejected {capability}")
+    dbus_desc=manifest.get('host_authority',{}).get('dbus_audit_descriptor')
+    if dbus_desc is not None:
+        wanted={'root-dbus-audit.json','root-dbus-before.json','root-dbus-after.json','root-dbus-contract.json','root-dbus-binding.json'}
+        matches={Path(p).name:p for p in expected_paths if Path(p).name in wanted}
+        if set(matches)!=wanted:fail('signed InputPlumber audit replay artifacts are incomplete')
+        result=subprocess.run([PYTHON,str(ROOT/'scripts/inputplumber-dbus-audit.py'),'--audit',str(artifact_root/matches['root-dbus-audit.json']),'--before',str(artifact_root/matches['root-dbus-before.json']),'--after',str(artifact_root/matches['root-dbus-after.json']),'--contract',str(artifact_root/matches['root-dbus-contract.json'])],cwd='/',capture_output=True,timeout=120)
+        if result.returncode:fail('coordinator InputPlumber temporal audit replay rejected signed normalized bytes')
+        if result.stdout!=(artifact_root/matches['root-dbus-binding.json']).read_bytes():fail('root/coordinator InputPlumber audit bindings differ')
+    target_op=manifest.get('host_authority',{}).get('target_consumer_operation')
+    if target_op is not None:
+        target_matches=[p for p in expected_paths if p.endswith('/root-operation.json')]
+        if len(target_matches)!=1:fail('broker target-consumer artifact is absent or ambiguous')
+        try:op=json.loads((artifact_root/target_matches[0]).read_bytes())
+        except ValueError:fail('broker target-consumer artifact is malformed')
+        if (op.get('schema')!='factory-target-consumer-operation/v1' or op.get('label')!='consumer-only'
+                or op.get('physical_capability') is not False or op.get('routing_capability') is not False
+                or op.get('candidate_callable') is not False or op.get('device_type')!='xb360'
+                or op.get('observed')!={'type':1,'code':304,'value':1} or op.get('cleanup') is not True):
+            fail('broker target-consumer semantics are invalid')
     signature_path = manifest_path.parent / f"{manifest_path.stem}.sig"
     if signature_path.is_symlink() or not signature_path.is_file() or signature_path.stat().st_size > MAX_EVIDENCE_FILE:
         fail("runner detached signature is missing or unsafe")

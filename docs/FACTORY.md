@@ -116,7 +116,7 @@ Volatile, ignored state:
   routing receives broker-held raw udev/provenance facts, and the hidden
   `/opt/factory-runner` parent exposes only its exact immutable authority path
   read-only inside candidate containment.
-- `.bug-ledger.lock`, `.ollama-usage-env`, `logs/`, test fixtures
+- `.bug-ledger.lock`, `logs/`, test fixtures; Ollama credentials are external-only
 
 **Retired Ralph control plane.** `.factory/ralph-freeze` is a tracked,
 non-executable tombstone: it records that Ralph Orchestrator launchers,
@@ -145,11 +145,16 @@ multiple Git worktrees and non-`develop` autonomous branches.
 ## Initial setup
 
 1. Merge this boilerplate into `develop`.
-2. Configure Ollama usage credentials:
+2. Configure Ollama usage credentials in the current shell only:
 
    ```bash
    source scripts/update-ollama-cookies.sh
    ```
+
+   The helper never writes plaintext below the repository. To persist exports,
+   provide a pre-opened protected `OLLAMA_CREDENTIAL_FD`, or set an absolute
+   owner-only `OLLAMA_CREDENTIAL_PATH` outside the repository. Rotate all three
+   session values after any suspected exposure; never paste values into logs.
 
 3. Confirm access and quota parsing:
 
@@ -205,7 +210,7 @@ INSTALL_MANIFEST="$INSTALL_PARENT/install-manifest.json"
 CAMPAIGN_ID="controller-box-$(date +%Y%m%dT%H%M%S)-$$"
 python3 .factory/loop/installer.py install --root "$PWD" --commit "$ACCEPTED_COMMIT" --prefix "$INSTALL_PREFIX" --manifest-out "$INSTALL_MANIFEST"
 python3 "$INSTALL_PREFIX/.factory/loop/installer.py" verify --root "$PWD" --commit "$ACCEPTED_COMMIT" --prefix "$INSTALL_PREFIX" --manifest "$INSTALL_MANIFEST"
-"$INSTALL_PREFIX/.factory/bin/factory-campaign" --root "$PWD" run --campaign-id "$CAMPAIGN_ID" --rounds 5 --branch develop --provider "${PI_PROVIDER:?set provider}" --model "${PI_MODEL:?set model}" --backend "${PI2_BACKEND:?set trusted pi2 executable}" --accepted-commit "$ACCEPTED_COMMIT" --install-manifest "$INSTALL_MANIFEST" --campaign-timeout 21600 --verification-command ./scripts/verify-project.sh --runner-command ./scripts/run-factory-runners.py --capability-command ./scripts/check-capability-evidence.py --acceptance-command '["./scripts/final-gate.sh","--implementation"]'
+"$INSTALL_PREFIX/.factory/bin/factory-campaign" --root "$PWD" run --campaign-id "$CAMPAIGN_ID" --rounds 5 --branch develop --provider "${PI_PROVIDER:?set provider}" --model "${PI_MODEL:?set model}" --backend "${PI2_BACKEND:?set trusted pi2 executable}" --accepted-commit "$ACCEPTED_COMMIT" --install-manifest "$INSTALL_MANIFEST" --human-trust-anchor "${HUMAN_TRUST_ANCHOR:?operator-provisioned immutable root-owned file}" --human-trust-anchor-sha256 "${HUMAN_TRUST_ANCHOR_SHA256:?offline approved digest}" --campaign-timeout 21600 --verification-command ./scripts/verify-project.sh --runner-command ./scripts/run-factory-runners.py --capability-command ./scripts/check-capability-evidence.py --acceptance-command '["./scripts/final-gate.sh","--implementation"]'
 ```
 
 Production has no synthetic provider/model/backend/gate/deadline defaults. Runner
@@ -276,7 +281,7 @@ Finite outcomes (documented in FACTORY-LOOP-SPEC §13–§15):
 
 One mutable control-state file,
 `.factory-state/campaigns/<campaign-id>/factory-loop.json`, records
-exactly the schema, repository identity, branch, campaign ID, rounds, current
+`factory-state/v2` with exactly the schema, repository identity, branch, campaign ID, rounds, current
 round, current phase, specification/plan/prompt-set digests, phase base
 commit, selected task ID, attempt counters, and a trusted `last_outcome` enum.
 It contains no model prose, memories, or evidence claims. All writes are
@@ -311,6 +316,19 @@ model session.
   counter, or invalid state transition fails closed for human/operator review.
 - Recovery never resets, discards, or silently overwrites dirty work; a
   `scratchpad` is not part of the system.
+
+## Authenticated terminal campaign archive
+
+Terminal campaign state is retained until an operator invokes
+`archive-factory-campaign.py` with `FACTORY_COORDINATOR_AUTH_FD` naming an
+inherited root-owned (or fixture-owner) mode-0600 authority file descriptor.
+The v2 archive manifest authenticates the campaign namespace, relevant
+`runner-evidence` and `audit-receipts` namespaces, and every member digest under
+the `factory-campaign-archive` MAC namespace. The tool rereads and authenticates
+the published tar and manifest before descriptor-relative deletion. Retention
+is bounded per campaign ID; old archives are removed only after their own MAC
+and member set verify. Missing evidence, tampering, unsafe members, or active
+state fails closed without pruning the campaign.
 
 ## Declared tools and runners
 
@@ -474,6 +492,10 @@ Missing/expired cookies or an unparseable settings page return status 2 and requ
 source scripts/update-ollama-cookies.sh
 ```
 
+This refreshes the caller environment without creating a workspace credential
+file. Optional persistence is only through a protected caller FD or an absolute
+external credential path; repository descendants and symlinks are rejected.
+
 ## Ordered pre-round hooks
 
 `.factory/pre-round-hooks.json` is an exact-commit ordered registry of fixed,
@@ -494,13 +516,14 @@ JSON/digests and the public `launch_role_attempt` API cannot mint one;
 `factory-launch` is synthetic-fixture-only. The one-use ledger is authenticated
 by the protected coordinator authorization FD, not trusted as plain same-UID
 JSON. Existing standalone operator usage tools
-remain separate from campaign hook execution. Their optional settings live in
-the operator-owned `.ollama-usage-env`:
+remain separate from campaign hook execution. Their non-secret settings are
+ordinary caller environment variables; secret cookies remain caller-only or in
+an external OS/root-owned credential location:
 
 ```bash
-OLLAMA_THRESHOLD=80
-OLLAMA_WAIT_INTERVAL_SECONDS=300
-OLLAMA_WAIT_MAX_SECONDS=0  # unlimited
+export OLLAMA_THRESHOLD=80
+export OLLAMA_WAIT_INTERVAL_SECONDS=300
+export OLLAMA_WAIT_MAX_SECONDS=0  # unlimited
 ```
 
 ## Clean stop

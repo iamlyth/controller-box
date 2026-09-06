@@ -347,7 +347,7 @@ INSTALL_MANIFEST="$INSTALL_PARENT/install-manifest.json"
 CAMPAIGN_ID="controller-box-$(date +%Y%m%dT%H%M%S)-$$"
 python3 .factory/loop/installer.py install --root "$PWD" --commit "$ACCEPTED_COMMIT" --prefix "$INSTALL_PREFIX" --manifest-out "$INSTALL_MANIFEST"
 python3 "$INSTALL_PREFIX/.factory/loop/installer.py" verify --root "$PWD" --commit "$ACCEPTED_COMMIT" --prefix "$INSTALL_PREFIX" --manifest "$INSTALL_MANIFEST"
-"$INSTALL_PREFIX/.factory/bin/factory-campaign" --root "$PWD" run --campaign-id "$CAMPAIGN_ID" --rounds 5 --branch develop --provider "${PI_PROVIDER:?set provider}" --model "${PI_MODEL:?set model}" --backend "${PI2_BACKEND:?set trusted pi2 executable}" --accepted-commit "$ACCEPTED_COMMIT" --install-manifest "$INSTALL_MANIFEST" --campaign-timeout 21600 --verification-command ./scripts/verify-project.sh --runner-command ./scripts/run-factory-runners.py --capability-command ./scripts/check-capability-evidence.py --acceptance-command '["./scripts/final-gate.sh","--implementation"]'
+"$INSTALL_PREFIX/.factory/bin/factory-campaign" --root "$PWD" run --campaign-id "$CAMPAIGN_ID" --rounds 5 --branch develop --provider "${PI_PROVIDER:?set provider}" --model "${PI_MODEL:?set model}" --backend "${PI2_BACKEND:?set trusted pi2 executable}" --accepted-commit "$ACCEPTED_COMMIT" --install-manifest "$INSTALL_MANIFEST" --human-trust-anchor "${HUMAN_TRUST_ANCHOR:?operator-provisioned immutable root-owned file}" --human-trust-anchor-sha256 "${HUMAN_TRUST_ANCHOR_SHA256:?offline approved digest}" --campaign-timeout 21600 --verification-command ./scripts/verify-project.sh --runner-command ./scripts/run-factory-runners.py --capability-command ./scripts/check-capability-evidence.py --acceptance-command '["./scripts/final-gate.sh","--implementation"]'
 ```
 
 The launch executes installed control-plane bytes and re-verifies their
@@ -391,11 +391,13 @@ canonical plan, that campaign-owned state file, and process liveness. A finite
 campaign always terminates as `success`, `findings`, `blocked`, `failed`,
 `interrupted`, or `infrastructure_failure` — it never spins while no task is
 runnable. Terminal state remains until an operator explicitly runs
-`scripts/archive-factory-campaign.py --root "$PWD" --campaign-id ID`. The tool
-refuses an active lock and unsafe members, creates a campaign-scoped archive and
-digest manifest, then no-follow deletes only that campaign. Its bounded
-`--retention` policy (default 20, maximum 100) reports excess archives but never
-automatically deletes evidence; operators prune campaign IDs individually.
+`FACTORY_COORDINATOR_AUTH_FD=N scripts/archive-factory-campaign.py --root "$PWD" --campaign-id ID`, where `N` is an inherited protected coordinator-authority descriptor. The tool
+refuses an active lock and unsafe members, includes the campaign plus relevant
+audit-receipt and runner-evidence namespaces, authenticates its v2 manifest and
+archive with the protected authority, verifies the published bytes, then
+no-follow deletes only that campaign. Its bounded `--retention` policy (default
+20, maximum 100) authenticates and removes only the oldest archives for the same
+campaign namespace.
 Available local tools and external runners are declared without
 credentials in `.factory/environment.toml`; the declared runner classes
 `dev-runner-vm`, `iprunner`, and `gpurunner` and their declared capabilities
@@ -429,12 +431,15 @@ links, maintenance, verification, and recovery.
 
 ## Documentation
 
+- [docs/SPEC.md](docs/SPEC.md) — Product contract and acceptance requirements
 - [docs/OPERATIONS.md](docs/OPERATIONS.md) — Service architecture, systemd management, troubleshooting
 - [docs/DBus-API.md](docs/DBus-API.md) — Full DBus API reference and gaps
 - [docs/PROFILES.md](docs/PROFILES.md) — Profile format, editor modes, validation
 - [docs/PACKAGING.md](docs/PACKAGING.md) — Flatpak, tarball, install layout
 - [docs/FACTORY.md](docs/FACTORY.md) — Development factory boilerplate (fresh Python factory orchestration)
+- [docs/FACTORY-LOOP-SPEC.md](docs/FACTORY-LOOP-SPEC.md) — Campaign state v2 and orchestration methodology
 - [docs/BUG_WORKFLOW.md](docs/BUG_WORKFLOW.md) — GitHub/Forgejo tickets and portable maintenance ledgers
+- [docs/REVIEW.md](docs/REVIEW.md) — Historical review record (not acceptance authority)
 
 ## Credits
 

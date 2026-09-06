@@ -564,6 +564,19 @@ python3 "$INSTALL_PREFIX/.factory/loop/installer.py" verify --root "$PWD" --comm
 "$INSTALL_PREFIX/.factory/bin/factory-campaign" --root "$PWD" run --campaign-id "$CAMPAIGN_ID" --rounds 5 --branch develop --provider "${PI_PROVIDER:?set provider}" --model "${PI_MODEL:?set model}" --backend "${PI2_BACKEND:?set trusted pi2 executable}" --accepted-commit "$ACCEPTED_COMMIT" --install-manifest "$INSTALL_MANIFEST" --human-trust-anchor "${HUMAN_TRUST_ANCHOR:?operator-provisioned absolute file}" --human-trust-anchor-sha256 "${HUMAN_TRUST_ANCHOR_SHA256:?offline approved digest}" --campaign-timeout 21600 --verification-command ./scripts/verify-project.sh --runner-command ./scripts/run-factory-runners.py --capability-command ./scripts/check-capability-evidence.py --acceptance-command '["./scripts/final-gate.sh","--implementation"]'
 ```
 
+After a terminal outcome, archive only the named campaign with an inherited
+protected coordinator authority descriptor:
+
+```bash
+FACTORY_COORDINATOR_AUTH_FD="${FACTORY_COORDINATOR_AUTH_FD:?protected fd}" \
+  ./scripts/archive-factory-campaign.py --root "$PWD" --campaign-id "$CAMPAIGN_ID"
+```
+
+The authenticated v2 archive includes relevant runner evidence and audit
+receipts, verifies all members before no-follow campaign deletion, and applies
+bounded same-campaign retention. Tampering or missing evidence leaves state in
+place.
+
 Sequence invariants are: accepted commit, clean `develop`, exact-commit
 production install verification, unique fresh mode-0700 campaign namespace,
 and coordinator-owned runner acquisition after the last commit relevant to each

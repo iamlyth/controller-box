@@ -257,13 +257,15 @@ def _ssh_argv(runner: dict, executable: str) -> list[str]:
 
 
 def _obtain_broker_nonce(runner: dict, campaign_id: str, readiness_nonce: str) -> str:
+    capabilities=sorted(runner["capabilities"])
     request={"schema":"factory-runner-nonce-request/v1","runner":runner["name"],
-             "campaign_id":campaign_id,"readiness_nonce":readiness_nonce}
+             "campaign_id":campaign_id,"readiness_nonce":readiness_nonce,
+             "capabilities":capabilities}
     with HeldLauncher() as launcher:
         result=subprocess.run(_ssh_argv(runner,launcher.executable),input=(json.dumps(request,separators=(",",":"))+"\n").encode(),capture_output=True,timeout=120,pass_fds=(launcher.fd,))
     try: response=json.loads(result.stdout)
     except (UnicodeError,json.JSONDecodeError): fail("runner broker nonce response is malformed",EXIT_TRANSPORT)
-    if result.returncode or not isinstance(response,dict) or set(response)!={"schema","nonce","runner","campaign_id","readiness_nonce"} or response.get("schema")!="factory-runner-nonce/v1" or response.get("runner")!=runner["name"] or response.get("campaign_id")!=campaign_id or response.get("readiness_nonce")!=readiness_nonce or not re.fullmatch(r"[0-9a-f]{64}",str(response.get("nonce",""))):
+    if result.returncode or not isinstance(response,dict) or set(response)!={"schema","nonce","runner","campaign_id","readiness_nonce","capabilities"} or response.get("schema")!="factory-runner-nonce/v1" or response.get("runner")!=runner["name"] or response.get("campaign_id")!=campaign_id or response.get("readiness_nonce")!=readiness_nonce or response.get("capabilities")!=capabilities or not re.fullmatch(r"[0-9a-f]{64}",str(response.get("nonce",""))):
         fail("runner broker refused nonce issuance",EXIT_TRANSPORT)
     return response["nonce"]
 

@@ -2,7 +2,7 @@
 """Coordinator-independent validation of exact held acceptance artifacts."""
 import argparse,hashlib,json,pathlib,re,struct,sys,zlib
 sys.path.insert(0,str(pathlib.Path(__file__).resolve().parent/'iprunner-probes'))
-from unwrap_variant import decode_object_manager, variant_value
+from unwrap_variant import decode_method_single, decode_object_manager, decode_string_method, variant_value
 H=re.compile(r"^[0-9a-f]{64}$"); OBJ=re.compile(r"^/org/shadowblip/InputPlumber/[A-Za-z0-9_/]+$"); NODE=re.compile(r"^/dev/input/event[0-9]+$")
 def die(x): raise SystemExit("artifact-authority: "+x)
 def read(p,limit=16*1024*1024):
@@ -100,11 +100,16 @@ def routing(root):
      or any(provenance.get(k) is not True for k in ('package_installed','service_active','exe_owned_by_package'))
      or provenance.get('verified_by')!='root-broker-held-proc-exe-outside-private-pids'):
   die('InputPlumber held executable provenance boundary changed or is invalid')
- for n in ('dbus-unique-owner.json','dbus-owner-pid.json'):json.loads(read(cap/n))
+ try:
+  raw_owner=decode_string_method(json.loads(read(cap/'dbus-unique-owner.json')))
+  raw_pid=decode_method_single(json.loads(read(cap/'dbus-owner-pid.json')),'u')
+ except (ValueError,TypeError):die('raw owner/PID replies are malformed')
+ if raw_owner!=provenance['unique_owner'] or type(raw_pid) is not int or raw_pid!=provenance['pid']:die('raw owner/PID replies differ from root-held provenance')
  before_nodes=set(read(cap/'dev-input-before.txt').decode().splitlines());created_nodes=set(read(cap/'dev-input-after-create.txt').decode().splitlines());cleanup_nodes=set(read(cap/'dev-input-after-cleanup.txt').decode().splitlines())
  sysfs_facts=read(cap/'sysfs-targets.txt').decode('utf-8',errors='strict')
  physical=read(cap/'physical-source-sysfs.txt').decode('utf-8',errors='strict')
- if (not re.search(r'(?m)^sysfs=/sys/devices/.*usb',physical) or not re.search(r'(?m)^vendor=(?:0x)?045e$',physical)
+ physical_sysfs=re.search(r'(?m)^sysfs=(/sys/devices/.*usb\S*)$',physical)
+ if (not physical_sysfs or not re.search(r'(?m)^vendor=(?:0x)?045e$',physical)
      or not re.search(r'(?m)^product=(?:0x)?028e$',physical)):die('retained physical USB 045e:028e sysfs identity invalid')
  log=read(cap/'observer.log').decode('utf-8');windows=list(re.finditer(r'WINDOW baseline=(\d+) selected=(-?\d+) clear=(true|false)',log))
  if len(windows)!=5:die('raw observer must contain four selection windows and one clear window')
@@ -149,6 +154,8 @@ def routing(root):
    if len(b)<24 or struct.unpack_from('HHi',b,len(b)-8)!=(int(e[2]),int(e[3]),int(e[4])):die('raw evdev bytes disagree with metadata')
   persisted=read(within(cap,r['persisted_path']))
   if hashlib.sha256(persisted).hexdigest()!=r.get('persisted_sha256') or not yaml_slot(persisted,r['persistent_id'],i):die('persisted selected assignment bytes invalid')
+ if (source is None or source not in phases['om-before.json']
+     or source.rsplit('/',1)[-1]!=pathlib.PurePosixPath(physical_sysfs.group(1)).name):die('raw USB/sysfs identity is not bound to the ObjectManager source row')
  if composite is None or variant_value(phases['om-after-clear.json'].get(composite,{}).get('org.shadowblip.Input.CompositeDevice',{}).get('TargetDevices'))!=[]:
   die('ObjectManager clear row does not prove exact empty TargetDevices')
  if any(path in phases['om-cleanup.json'] for path in paths):die('ObjectManager cleanup retains request target')
@@ -190,11 +197,11 @@ def gpu(root,commit,tree,capability):
  expected_selection=b'profile-selection: filename=gpu-xbox-360-oracle.yaml name=GPU Xbox 360 Oracle mappings=18 icon_override=false device_type=xb360 source=production-ui'
  if expected_selection not in manager or b'provenance=profile-override' in manager or b'provenance=supported-model' not in manager:die('profile/DeviceType production selection path invalid')
  ad=authority_dir();authority_raw=read(ad/'licensed-diagram-authority.json');authority=json.loads(authority_raw);oracle_raw=read(ad/'licensed-diagram-oracle.json');oracle=json.loads(oracle_raw)['models']['xb360']
- held={'icons/svg/xbox-360.svg':'installed-xbox-360.svg','icons/svg/LICENSE.controllercons':'installed-license.controllercons','controller-icons.yaml':'installed-controller-icons.yaml','controller-layouts/xbox-360.json':'installed-layout.json','licensed-diagram-oracle.json':'installed-oracle.json','licensed-diagram-authority.json':'installed-authority.json'}
+ held={'icons/svg/xbox-360.svg':'installed-xbox-360.svg','icons/svg/LICENSE.controllercons':'installed-license.controllercons','controller-icons.yaml':'installed-controller-icons.yaml','controller-layouts/xbox-360.json':'installed-layout.json','licensed-diagram-oracle.json':'installed-oracle.json'}
  for rel,name in held.items():
   raw=read(cap/name)
-  expected=hashlib.sha256(authority_raw).hexdigest() if rel=='licensed-diagram-authority.json' else authority['files'][rel]
-  if hashlib.sha256(raw).hexdigest()!=expected:die('held installed licensed bytes differ from pin')
+  if hashlib.sha256(raw).hexdigest()!=authority['files'][rel]:die('held installed licensed bytes differ from pin')
+ if read(cap/'installed-authority.json')!=authority_raw:die('held installed authority differs from canonical authority bytes')
  installed=json.loads(read(cap/'installed-manifest.json'))
  if installed.get('commit')!=commit or installed.get('tree')!=tree or installed.get('fallback') is not False:die('installed provenance invalid')
  controls=oracle['required_controls'];slugs=('a','b','x','y','up','down','left','right','start','select','guide','l1','r1','l2','r2','l3','r3')
@@ -217,17 +224,10 @@ def gpu(root,commit,tree,capability):
  accelerated=re.compile(r'(?i)(virgl|virtio|nvidia|amd|radeon|intel|iris|nouveau)')
  if (renderer.get('result')!='pass' or len(renderer_lines)!=1 or renderer_lines[0]!=renderer.get('renderer')
      or not accelerated.search(renderer_lines[0]) or re.search(r'(?i)llvmpipe|softpipe|software|swrast',renderer_lines[0])):die('raw accelerated renderer evidence invalid')
- try: om=json.loads(read(cap/'device-type-om.json').decode('utf-8'))
+ try: om=decode_object_manager(json.loads(read(cap/'device-type-om.json').decode('utf-8')),require_nonempty=True)
  except (ValueError,UnicodeError):die('raw ObjectManager DeviceType reply malformed')
- strings=[]
- def walk(v):
-  if isinstance(v,str):strings.append(v)
-  elif isinstance(v,list):
-   for x in v:walk(x)
-  elif isinstance(v,dict):
-   for k,x in v.items():strings.append(str(k));walk(x)
- walk(om)
- if ev['target_object_path'] not in strings or 'xb360' not in strings:die('raw ObjectManager bytes do not bind selected xb360 DeviceType')
+ target_props=om.get(ev['target_object_path'],{}).get('org.shadowblip.Input.Target')
+ if not isinstance(target_props,dict) or variant_value(target_props.get('DeviceType'))!='xb360':die('raw ObjectManager target row does not bind selected xb360 DeviceType')
 def main():
  a=argparse.ArgumentParser();a.add_argument('--capability',required=True);a.add_argument('--artifacts',required=True);a.add_argument('--commit',required=True);a.add_argument('--tree',required=True);x=a.parse_args();root=pathlib.Path(x.artifacts)
  if x.capability=='controller-production-routing':routing(root)

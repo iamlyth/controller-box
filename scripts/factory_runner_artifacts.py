@@ -13,7 +13,9 @@ import tempfile
 from dataclasses import dataclass
 
 PROTOCOL = "factory-runner-artifacts/v1"
-MAX_ARTIFACTS = 64
+# Both GPU capabilities retain separate capability-owned copies of the licensed
+# capture set.  The strict global bound covers that exact two-capability set.
+MAX_ARTIFACTS = 128
 MAX_ARTIFACT_FILE = 8 * 1024 * 1024
 MAX_ARTIFACT_BYTES = 48 * 1024 * 1024
 PATH_RE = re.compile(r"^[a-z0-9][a-z0-9._/-]*$")

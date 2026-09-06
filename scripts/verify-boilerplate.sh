@@ -13,6 +13,9 @@ unset FACTORY_FINAL_GATE_ATTEST FACTORY_CAMPAIGN_PHASE FACTORY_CAMPAIGN_ROUND \
       FACTORY_CAMPAIGN_AUDIT_ROUND FACTORY_CAMPAIGN_AUDIT_BASE \
       FACTORY_CAMPAIGN_RUNNER_EVIDENCE_SHA256 FACTORY_CAMPAIGN_OBJECTIVE
 
+# Git status omits ignored plaintext. Scan the actual workspace namespace.
+python3 scripts/check-workspace-credentials.py --root "$PROJECT_ROOT"
+
 mapfile -t SHELL_FILES < <(find scripts tests .factory/tests -type f -name '*.sh' -print | sort)
 for file in "${SHELL_FILES[@]}"; do
     bash -n "$file"
@@ -85,14 +88,14 @@ required = [
     'scripts/factory-runner-server.py', 'scripts/factory-runner-broker.py',
     'scripts/factory_runner_authority.py', 'scripts/factory_runner_artifacts.py',
     'scripts/build-runner-probe-authority.py', 'scripts/install-factory-runner-v2.sh',
-    'scripts/archive-factory-campaign.py', 'scripts/validate-runner-artifacts-semantic.py',
+    'scripts/archive-factory-campaign.py', 'scripts/check-workspace-credentials.py', 'scripts/validate-runner-artifacts-semantic.py',
     'scripts/inputplumber-dbus-audit.py',
     'deploy/factory-runner-authority-v1/authority.json',
     'deploy/factory-runner-authority-v1/forced-command-v2.txt',
     'scripts/pi2-secure-exec.py',
     'tests/test-factory-environment.sh', 'tests/test-factory-runner.sh',
     'tests/test-runner-authority.py', 'tests/test-runner-install-bootstrap.py',
-    'tests/test-runner-installer-security.py', 'tests/test-campaign-archive.py', 'tests/test-iprunner-probes.sh',
+    'tests/test-runner-installer-security.py', 'tests/test-campaign-archive.py', 'tests/test-workspace-credentials.py', 'tests/test-iprunner-probes.sh',
     'tests/test-broker-security.py', 'tests/test-dbus-audit.py', 'tests/test-campaign-residuals.py',
     'tests/test-gpu-compositor-probe.sh',
     'tests/test-campaign-audit.sh',
@@ -394,6 +397,7 @@ python3 ./tests/test-broker-security.py
 python3 ./tests/test-dbus-audit.py
 python3 ./tests/test-campaign-residuals.py
 python3 ./tests/test-campaign-archive.py
+python3 ./tests/test-workspace-credentials.py
 ./tests/test-iprunner-probes.sh
 nix-shell --run 'bash ./tests/test-gpu-compositor-probe.sh'
 ./tests/test-campaign-audit.sh

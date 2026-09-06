@@ -253,7 +253,7 @@ class RunnerPolicyAuthorityTests(unittest.TestCase):
                         "nonce_ledger":"/var/lib/factory-runner/nonces", "systemd_run":"/usr/bin/systemd-run",
                         "systemctl":"/usr/bin/systemctl", "cgroup_root":"/sys/fs/cgroup",
                         "dbus_proxy":"/usr/bin/xdg-dbus-proxy", "approved_groups":["users"],
-                        "executable_pins":tools,"inputplumber_pin":None}]}
+                        "executable_pins":tools,"inputplumber_pin":{"path":"/usr/bin/inputplumber","sha256":"d"*64,"device":1,"inode":2,"status":"enrolled","package_version":"1","service_exec_start":"/usr/bin/inputplumber"}}]}
             for offset,name,caps in ((1,"dev-runner-vm",["remote-project-gate"]),(2,"iprunner",["inputplumber-system-dbus"])):
                 entry=json.loads(json.dumps(base["classes"][0]));entry.update(
                     name=name,uid=(os.getuid() or 1)+offset,

@@ -7,18 +7,18 @@
   "required": ["schema", "count", "bytes", "sha256", "artifacts"],
   "properties": {
     "schema": {"const": "factory-runner-artifacts/v1"},
-    "count": {"type": "integer", "minimum": 0, "maximum": 64},
+    "count": {"type": "integer", "minimum": 0, "maximum": 128},
     "bytes": {"type": "integer", "minimum": 0, "maximum": 50331648},
     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "artifacts": {
-      "type": "array", "maxItems": 64,
+      "type": "array", "maxItems": 128,
       "items": {
         "type": "object", "additionalProperties": false,
         "required": ["path", "capability", "media_type", "type", "mode", "size", "sha256"],
         "properties": {
           "path": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._/-]*$", "maxLength": 240},
           "capability": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
-          "media_type": {"enum": ["application/json", "text/plain", "image/png", "application/yaml"]},
+          "media_type": {"enum": ["application/json", "text/plain", "image/png", "image/svg+xml", "application/yaml"]},
           "type": {"const": "file"}, "mode": {"const": 384},
           "size": {"type": "integer", "minimum": 0, "maximum": 8388608},
           "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}

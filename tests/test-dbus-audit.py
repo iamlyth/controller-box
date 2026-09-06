@@ -24,7 +24,7 @@ def good():
   call(11,6,a.MANAGER,a.IF_MANAGER,"StopTargetDevice","s",[T]),reply(12,6),
   call(13,7,C,a.IF_COMPOSITE,"SetTargetDevices","as",[[]]),reply(14,7),
  ]
- return {"schema":a.SCHEMA,"complete":True,"overflow":False,"truncated":False,"monitor_started_ns":1,"proxy_started_ns":2,"monitor_pid":20,"proxy_pid":30,"proxy_starttime":99,"inputplumber_owner":O,"sender_pids":{S:30},"events":events}
+ return {"schema":a.SCHEMA,"complete":True,"overflow":False,"truncated":False,"monitor_started_ns":1,"proxy_started_ns":2,"monitor_pid":20,"proxy_pid":30,"proxy_starttime":99,"proxy_cgroup":"/factory/proxy","inputplumber_owner":O,"sender_pids":{S:30},"events":events}
 
 def reject(doc,before=BEFORE,after=AFTER):
  try:a.replay(doc,before,after,{"target_count":1,"allowed_intercepts":[[["Guide"],"Guide"]]})

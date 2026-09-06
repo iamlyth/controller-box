@@ -21,8 +21,8 @@ add_test(NAME smoke_test_nanosvg COMMAND smoke_test_nanosvg)
 # verifies semantic outcomes from real kernel gamepad events through the
 # production event loop.  Skips (exit 77) when /dev/uinput is unavailable
 # (skips locally without /dev/uinput; kernel-uinput capability IS
-# declared in .factory/environment.toml and proven by runner receipt
-# at commit 26df6c0).
+# declared in .factory/environment.toml; the old 26df6c0 receipt is unsigned
+# legacy data and does not prove the current tree).
 add_executable(test_kernel_controller tests/test_kernel_controller.c)
 add_test(NAME test_kernel_controller
     COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/run-kernel-controller-test.sh

@@ -71,10 +71,11 @@ def replay(document,before,after,contract=None):
  """Validate one normalised complete monitor stream and return its binding."""
  contract=contract or {}
  _need(isinstance(document,dict) and document.get("schema")==SCHEMA,"audit schema invalid")
- exact={"schema","complete","overflow","truncated","monitor_started_ns","proxy_started_ns","monitor_pid","proxy_pid","proxy_starttime","inputplumber_owner","sender_pids","events"}
+ exact={"schema","complete","overflow","truncated","monitor_started_ns","proxy_started_ns","monitor_pid","proxy_pid","proxy_starttime","proxy_cgroup","inputplumber_owner","sender_pids","events"}
  _need(set(document)==exact,"audit top-level field set is not exact")
  for key in ("monitor_started_ns","proxy_started_ns","monitor_pid","proxy_pid","proxy_starttime"):
   _need(type(document.get(key)) is int and document[key]>0,f"audit {key} invalid")
+ _need(isinstance(document.get('proxy_cgroup'),str) and document['proxy_cgroup'].startswith('/') and '\n' not in document['proxy_cgroup'],'audit proxy cgroup invalid')
  _need(document["monitor_started_ns"]<document["proxy_started_ns"],"monitor did not start before proxy")
  _need(document["complete"] is True and document["overflow"] is False and document["truncated"] is False,"monitor gap/truncation/overflow")
  owner=document["inputplumber_owner"]

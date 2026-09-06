@@ -595,7 +595,7 @@
     "product-gate.py": "2ced1f696e94d37a3704db79e94c5057e6ae78e45ff0ac23ad54555bf1fdb968",
     "validate-capability-semantics.py": "c45daf3571452ed28df95ccdfdacefbb6cd5ef1f1bfdf4d25e75510561d8f85c",
     "validate-no-artifacts.py": "9ca5c6cd86eb2274d6f44a1d42ff7f31236dbf47a19fc4773cd4ca048c6348fe",
-    "validate-retained-artifacts.py": "910428b8ae2b3a6dd6dd4748eccc1045d4e8ea716a2af0c731af6bac97ee1cad"
+    "validate-retained-artifacts.py": "5ba03a9776201dc0ae1794672686f6d71738d47da386606934bd80b094c6b209"
   },
   "licensed_oracle": {
     "path": "licensed-diagram-oracle.json",

@@ -22,8 +22,8 @@
 .pi/subagent-schedules/
 .pi/agent-memory-local/
 
-# Ollama credentials and quota snapshots
-.ollama-usage-env
+# Ollama quota snapshots only. Credentials must never exist in the workspace,
+# even as ignored files (enforced by check-workspace-credentials.py).
 .ollama-usage-state.json
 *.env
 

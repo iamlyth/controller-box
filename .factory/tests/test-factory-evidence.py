@@ -477,7 +477,7 @@ class ManifestFixture:
             "stdout_sha256": empty,
             "stderr_sha256": empty,
             "artifact_protocol":"factory-runner-artifacts/v1",
-            "artifact_limits":{"count":64,"file_bytes":8388608,"aggregate_bytes":50331648},
+            "artifact_limits":{"count":128,"file_bytes":8388608,"aggregate_bytes":50331648},
             "artifact_count":0,"artifact_bytes":0,"artifact_manifest_sha256":sha256(b"[]\n"),
             "artifact_scope_sha256":sha256(json.dumps({"campaign_id":"synthetic-evidence","readiness_nonce":"4"*64,"nonce":"0"*64,"artifact_manifest_sha256":sha256(b"[]\n")},sort_keys=True,separators=(",",":")).encode()),"artifacts":[],
             "signer_principal": "factory-signer",

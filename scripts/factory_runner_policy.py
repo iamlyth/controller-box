@@ -192,10 +192,11 @@ def load_policy() -> dict:
                 raise PolicyError(f"runner policy executable pin {key} is invalid or pending")
         ipin=entry["inputplumber_pin"]
         ipin_fields=PIN_FIELDS|{"package_version","service_exec_start"}
-        if name=="iprunner" and (not isinstance(ipin,dict) or set(ipin)!=ipin_fields or ipin.get("status")!="enrolled" or not isinstance(ipin.get("package_version"),str) or not isinstance(ipin.get("service_exec_start"),str)):
+        needs_inputplumber = any(cap in {"inputplumber-system-dbus","target-consumer","controller-production-routing","gpu-compositor","installed-licensed-diagram"} for cap in entry["allowed_capabilities"])
+        if needs_inputplumber and (not isinstance(ipin,dict) or set(ipin)!=ipin_fields or ipin.get("status")!="enrolled" or not isinstance(ipin.get("package_version"),str) or not isinstance(ipin.get("service_exec_start"),str)):
             raise PolicyError("InputPlumber package/binary enrollment is absent or pending")
-        if name!="iprunner" and ipin is not None:
-            raise PolicyError("InputPlumber pin belongs only to iprunner")
+        if not needs_inputplumber and ipin is not None:
+            raise PolicyError("InputPlumber pin belongs only to a service-consuming class")
         groups=entry["approved_groups"]
         if (not isinstance(groups,list) or not groups or len(groups)!=len(set(groups))
                 or not all(isinstance(g,str) and NAME.fullmatch(g) for g in groups)):

@@ -6,6 +6,39 @@ base_commit: 860922af39ed7e2aef9b95705705f7ed90344e87
 status: active
 ---
 
+**Final audit concrete-blocker remediation checkpoint (current checkout)**
+
+InputPlumber-capable requests now take one exclusive root host lock before
+provenance, monitoring, or proxy construction; root ObjectManager plus USB
+sysfs facts require one 045e:028e composite and zero targets. Production routing
+has read-only evdev access and no uinput authority, exact proxy call members,
+and a pre-proxy root monitor whose normalized bounded history is replayed by
+the installed analyzer before signing and independently replayed by the
+coordinator. GPU classes now require exact InputPlumber provenance rather than
+dereferencing `None`; raw owner/PID, source sysfs, and same-row DeviceType facts
+are checked. Target-consumer output carries its exact delimiter/PASS marker and
+its nonce now binds the complete capability set.
+
+The retained artifact protocol has one schema-consistent 128-file bound and SVG
+media type. Installer recovery preserves `authorized_keys` on intent-only
+crashes and unlinks it only after a durable backup or durable missing marker;
+installed verification invokes canonical policy/authority loaders. Mandatory
+installed smoke/diagram gates reject rc 77 and textual skip forms. Ollama
+credentials remain caller-only unless emitted through a protected FD or
+external owner-only path; workspace scanning includes ignored credential files.
+Campaign archives are v2 HMAC-authenticated across campaign, runner-evidence,
+and audit-receipt namespaces, verified before no-follow deletion, and retained
+under an authenticated bound. README/factory documentation records trust flags,
+state v2, archive authority, credential rotation, and the complete docs index.
+
+Focused broker/authority/artifact/archive/installer/D-Bus suites and the complete
+exact-PATH `verify-boilerplate.sh` gate pass. The diagnostic Nix project gate
+reached all 97 CTest targets and failed only the three protected manager-editor
+golden comparisons in `test_golden`; `test_kernel_controller` and accelerated
+`test_backend_smoke` were the two declared environmental skips. No external
+runner, deployment, evidence, approval, specification, golden, or credential
+operation was performed.
+
 **Dynamic D-Bus mediation and lifecycle residual checkpoint (current checkout)**
 
 The root broker now starts a bounded root-owned InputPlumber bus monitor before
