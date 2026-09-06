@@ -561,7 +561,7 @@ INSTALL_MANIFEST="$INSTALL_PARENT/install-manifest.json"
 CAMPAIGN_ID="controller-box-$(date +%Y%m%dT%H%M%S)-$$"
 python3 .factory/loop/installer.py install --root "$PWD" --commit "$ACCEPTED_COMMIT" --prefix "$INSTALL_PREFIX" --manifest-out "$INSTALL_MANIFEST"
 python3 "$INSTALL_PREFIX/.factory/loop/installer.py" verify --root "$PWD" --commit "$ACCEPTED_COMMIT" --prefix "$INSTALL_PREFIX" --manifest "$INSTALL_MANIFEST"
-"$INSTALL_PREFIX/.factory/bin/factory-campaign" --root "$PWD" run --campaign-id "$CAMPAIGN_ID" --rounds 5 --branch develop --provider "${PI_PROVIDER:?set provider}" --model "${PI_MODEL:?set model}" --backend "${PI2_BACKEND:?set trusted pi2 executable}" --accepted-commit "$ACCEPTED_COMMIT" --install-manifest "$INSTALL_MANIFEST" --human-trust-anchor "${HUMAN_TRUST_ANCHOR:?operator-provisioned absolute file}" --human-trust-anchor-sha256 "${HUMAN_TRUST_ANCHOR_SHA256:?offline approved digest}" --campaign-timeout 21600 --verification-command ./scripts/verify-project.sh --runner-command ./scripts/run-factory-runners.py --capability-command ./scripts/check-capability-evidence.py --acceptance-command '["./scripts/final-gate.sh","--implementation"]'
+"$INSTALL_PREFIX/.factory/bin/factory-campaign" --root "$PWD" run --campaign-id "$CAMPAIGN_ID" --rounds 5 --branch develop --provider "${PI_PROVIDER:?set provider}" --model "${PI_MODEL:?set model}" --backend "${PI2_BACKEND:?set trusted pi2 executable}" --accepted-commit "$ACCEPTED_COMMIT" --install-manifest "$INSTALL_MANIFEST" --human-trust-anchor "${HUMAN_TRUST_ANCHOR:?operator-provisioned absolute file}" --human-trust-anchor-sha256 "${HUMAN_TRUST_ANCHOR_SHA256:?offline approved digest}" --campaign-timeout 21600 --verification-command ./scripts/verify-project.sh --runner-command ./.factory/runner/run-factory-runners.py --capability-command ./.factory/tools/check-capability-evidence.py --acceptance-command '["./scripts/final-gate.sh","--implementation"]'
 ```
 
 After a terminal outcome, archive only the named campaign with an inherited
@@ -743,7 +743,7 @@ contracts and separate human installed-graphics approval exist. Models validate
 declarations and existing evidence only:
 
 ```bash
-./scripts/check-factory-environment.py
+./.factory/tools/check-factory-environment.py
 ./scripts/check-factory-runner-evidence.py
 ```
 
@@ -820,11 +820,19 @@ Required host containment is unified cgroup v2 plus systemd transient services s
 `PrivateMounts`, strict filesystem/home protection, device policy, resource
 limits, and cgroup cleanup inspection. InputPlumber host-PID provenance is
 resolved and hashed by the privileged broker outside `PrivatePIDs`; the probe
-receives only that read-only broker fact. InputPlumber probes receive only a
-private root-owned filtered proxy socket: `/run` and `/var/run` (including Docker,
-containerd, and host D-Bus sockets) remain hidden, and only the pinned
-`org.shadowblip.InputPlumber` destination and enumerated probe methods pass.
-Proxy absence, startup failure, or cleanup uncertainty fails closed. Signer trust is provisioned and enabled for all three declared
+receives only that read-only broker fact. InputPlumber probes receive only a private root-owned mediator socket: `/run`
+and `/var/run` (including Docker, containerd, and host D-Bus sockets) remain
+hidden. The separately enrolled `/usr/libexec/inputplumber-mediator`
+binary and digest are pinned as `inputplumber-mediator`. The installed
+`controller-box-runner-dbus.conf` denies every restricted runner UID direct
+messages to the real service, and broker preflight proves that denial with a
+concurrent direct client before creating the private endpoint; the mediator parses every call
+against the root-held dedicated-source snapshot before forwarding through its
+own system-bus connection. The root broker retains its bounded canonical
+`preforward-decisions.jsonl`, pins PID/starttime/sender, and compares it with
+the independent system monitor before signing. Mediator absence, startup
+failure, malformed/unknown traffic, direct system-bus access, log overflow, or
+cleanup uncertainty fails closed. Signer trust is provisioned and enabled for all three declared
 classes; this is not runner execution evidence. The `26df6c0` receipt is legacy unsigned/unevidenced; valid signed
 evidence exists for historical commit `c45336a`, but it is stale. Neither is
 claimed as current evidence, and Task 26 remains blocked until runner transport
@@ -837,15 +845,15 @@ cannot satisfy undeclared production hardware capabilities.
 
 GitHub and Forgejo issues are optional external references. The portable,
 canonical workflow state is `.factory/bugs/open.md` and `.factory/bugs/closed.md`; never put PATs
-or credential-bearing URLs in either ledger. Use `scripts/bug-ledger.py` for
+or credential-bearing URLs in either ledger. Use `.factory/tools/bug-ledger.py` for
 validated intake, links, transitions, closure evidence, and interrupted-close
 recovery.
 
 An ordinary defect is triaged, then the selected bug and cycle base are
-recorded in ignored `.factory-state/` (`scripts/factory-state-file.py`) and a
+recorded in ignored `.factory-state/` (`.factory/tools/factory-state-file.py`) and a
 canonical `.factory/artifacts/maintenance-plan.md` is validated by
-`scripts/validate-maintenance-plan.py planning|complete` and
-`scripts/check-maintenance-freshness.sh`. The maintenance lifecycle runs
+`.factory/tools/validate-maintenance-plan.py planning|complete` and
+`.factory/tools/check-maintenance-freshness.sh`. The maintenance lifecycle runs
 through the same fresh-context control plane as implementation; one cycle
 handles one bug and runs the configured project verifier before closure. The
 final maintenance audit is the only task that may close the ledger record.
@@ -1120,12 +1128,12 @@ creation and signing on the trusted offline side, from a clean exact commit:
 
 ```sh
 COMMIT=$(git rev-parse HEAD)
-python3 scripts/generate-runner-install-manifest.py --source "$PWD" \
+python3 .factory/runner/generate-runner-install-manifest.py --source "$PWD" \
   --revision "$COMMIT" --output "$OFFLINE/INSTALL-MANIFEST.json"
 git archive --format=tar --output "$OFFLINE/controller-box-$COMMIT.tar" "$COMMIT"
 ssh-keygen -Y sign -f "$OFFLINE/install-signing-key" \
   -n factory-runner-install "$OFFLINE/INSTALL-MANIFEST.json"
-sha256sum scripts/factory-runner-root-bootstrap
+sha256sum .factory/runner/factory-runner-root-bootstrap
 ```
 
 Compare the last digest to the bootstrap digest in the independently trusted

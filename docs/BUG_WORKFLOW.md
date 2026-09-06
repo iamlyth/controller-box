@@ -17,23 +17,23 @@ Provider templates are byte-identical at `.github/ISSUE_TEMPLATE/bug_report.md` 
 ## Ledger commands
 
 ```bash
-./scripts/bug-ledger.py validate
-./scripts/bug-ledger.py list [--status triaged]
-./scripts/bug-ledger.py show BUG-0001
-./scripts/bug-ledger.py fingerprint BUG-0001
-./scripts/bug-ledger.py add --title "Failure" --severity high \
+./.factory/tools/bug-ledger.py validate
+./.factory/tools/bug-ledger.py list [--status triaged]
+./.factory/tools/bug-ledger.py show BUG-0001
+./.factory/tools/bug-ledger.py fingerprint BUG-0001
+./.factory/tools/bug-ledger.py add --title "Failure" --severity high \
   --reproduction "steps" --expected "result" --actual "failure" \
   --acceptance "regression passes" \
   --external github=https://github.com/ORG/REPO/issues/123 \
   --external forgejo=https://forge.example/ORG/REPO/issues/456
-./scripts/bug-ledger.py link BUG-0001 github https://github.com/ORG/REPO/issues/123
-./scripts/bug-ledger.py unlink BUG-0001 github
-./scripts/bug-ledger.py set-status BUG-0001 triaged
-./scripts/bug-ledger.py set-status BUG-0001 planned
-./scripts/bug-ledger.py set-status BUG-0001 in_progress
-./scripts/bug-ledger.py close BUG-0001 \
+./.factory/tools/bug-ledger.py link BUG-0001 github https://github.com/ORG/REPO/issues/123
+./.factory/tools/bug-ledger.py unlink BUG-0001 github
+./.factory/tools/bug-ledger.py set-status BUG-0001 triaged
+./.factory/tools/bug-ledger.py set-status BUG-0001 planned
+./.factory/tools/bug-ledger.py set-status BUG-0001 in_progress
+./.factory/tools/bug-ledger.py close BUG-0001 \
   --resolution "implemented correction" --verification "test command and result"
-./scripts/bug-ledger.py recover
+./.factory/tools/bug-ledger.py recover
 ```
 
 Each ledger-file replacement is individually atomic and deterministic; moving a record between two ledgers is not transactionally atomic. All read-modify-write commands serialize on ignored `.bug-ledger.lock`. If closure is interrupted after writing the closed destination, normal validation reports the duplicate and `recover` removes the open duplicate only when immutable fingerprints match and the closed record has valid evidence. Intake fingerprints cover immutable problem/acceptance fields, not workflow status or external URLs. Links cannot duplicate a provider, closed records are immutable, and closure requires `in_progress` plus resolution and verification evidence.
@@ -41,14 +41,14 @@ Each ledger-file replacement is individually atomic and deterministic; moving a 
 ## One-bug maintenance cycle
 
 Triage an ordinary defect, then record the selected bug and cycle base in the
-ignored trusted state (`scripts/factory-state-file.py`), seed a canonical
+ignored trusted state (`.factory/tools/factory-state-file.py`), seed a canonical
 `.factory/artifacts/maintenance-plan.md`, and validate it:
 
 ```bash
-./scripts/bug-ledger.py validate
-./scripts/factory-state-file.py write maintenance-bug-id BUG-0001
-./scripts/validate-maintenance-plan.py planning .factory/artifacts/maintenance-plan.md
-./scripts/check-maintenance-freshness.sh --planning
+./.factory/tools/bug-ledger.py validate
+./.factory/tools/factory-state-file.py write maintenance-bug-id BUG-0001
+./.factory/tools/validate-maintenance-plan.py planning .factory/artifacts/maintenance-plan.md
+./.factory/tools/check-maintenance-freshness.sh --planning
 ```
 
 The maintenance lifecycle then runs through the same fresh-context Python

@@ -14,6 +14,8 @@ target_link_libraries(smoke_test_nanosvg PRIVATE nanosvg m)
 
 add_test(NAME smoke_test_sdl2    COMMAND smoke_test_sdl2)
 add_test(NAME smoke_test_nanosvg COMMAND smoke_test_nanosvg)
+add_test(NAME test_inputplumber_mediator_policy
+    COMMAND /usr/bin/env python3 ${PROJECT_SOURCE_DIR}/.factory/tests/test-inputplumber-mediator.py)
 
 # --- Kernel-backed controller integration test (Task 7, §5.7/§11.1) --------
 # Creates a synthetic evdev gamepad via /dev/uinput, launches the installed
@@ -84,23 +86,6 @@ if(BASH_EXECUTABLE)
             ${CMAKE_CURRENT_BINARY_DIR})
     set_tests_properties(test_installed_diagram PROPERTIES
         SKIP_RETURN_CODE 77)
-    add_test(NAME test_installed_functional_evidence
-        COMMAND ${BASH_EXECUTABLE}
-            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test-installed-functional-evidence.sh
-            ${CMAKE_CURRENT_SOURCE_DIR})
-    add_test(NAME test_factory_environment
-        COMMAND ${BASH_EXECUTABLE}
-            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test-factory-environment.sh)
-    add_test(NAME test_factory_runner
-        COMMAND ${BASH_EXECUTABLE}
-            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test-factory-runner.sh)
-    add_test(NAME test_runner_artifacts
-        COMMAND ${Python3_EXECUTABLE}
-            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test-runner-artifacts.py)
-    add_test(NAME test_campaign_audit
-        COMMAND ${BASH_EXECUTABLE}
-            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test-campaign-audit.sh)
-
     # Task 7 — Installed binary functional acceptance test (§11.1.5).
     # Executes the installed `controller-box` binary as a subprocess
     # against a private native-signature DBus server.  Does NOT link

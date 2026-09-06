@@ -6,7 +6,7 @@ This test lives under the hidden ``.factory/tests/`` namespace because the
 specification (HIDE-01, §3) keeps harness-only tests out of the adopting
 product's visible test tree.  It is the deterministic verification for
 Task 6, exercising ``.factory/loop/launch.py`` through the real
-``scripts/pi2-secure-exec.py`` wrapper (invoked, never reimplemented) with
+``.factory/tools/pi2-secure-exec.py`` wrapper (invoked, never reimplemented) with
 synthetic backends:
 
 * **invocation / task-excerpt exact byte binding (TASK-02, §9/§20)**: the
@@ -136,7 +136,7 @@ COMMITTED_FIXTURE_NAMES = frozenset(
         "backend.py",      # model backend
         "plan.md",         # implementation plan
         "role.md",         # role prompt
-        "scripts",         # secure wrapper
+        ".factory",       # hidden harness (secure wrapper, guard, shims)
         "spec.md",         # product specification
     }
 )
@@ -348,31 +348,31 @@ class _Base(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp(prefix="factory-supervisor-test."))
         self.workspace = self.tmp / "workspace"
         self.workspace.mkdir()
-        scripts = self.workspace / "scripts"
-        scripts.mkdir()
+        tools = self.workspace / ".factory" / "tools"
+        tools.mkdir(parents=True)
         self.marker_dir = self.workspace / "src" / ".factory-test-output"
         self.marker_dir.mkdir(parents=True)
-        shutil.copy2(REAL_WRAPPER, scripts / WRAPPER_BASENAME)
+        shutil.copy2(REAL_WRAPPER, tools / WRAPPER_BASENAME)
         # Task 11: the exact committed credential guard is a fixture blob too
         # — the launch authority verifies the working-tree guard equals the
         # committed blob at the bound commit before any child output channel
         # is redacted, so every fixture repository commits the exact guard.
         shutil.copy2(
-            ROOT / "scripts" / "credential-guard.py",
-            scripts / "credential-guard.py",
+            ROOT / ".factory/tools" / "credential-guard.py",
+            tools / "credential-guard.py",
         )
         # Task 11: the model-side Pi guard extension is a fixture blob too —
         # the launch authority verifies the working-tree extension equals the
         # committed blob at the bound commit and always loads it through
         # ``--extension`` in the child argv.
         shutil.copy2(
-            ROOT / "scripts" / "pi-factory-guard-extension.mjs",
-            scripts / "pi-factory-guard-extension.mjs",
+            ROOT / ".factory/tools" / "pi-factory-guard-extension.mjs",
+            tools / "pi-factory-guard-extension.mjs",
         )
-        (scripts / "pi-cli-shims").mkdir()
+        (tools / "pi-cli-shims").mkdir()
         shutil.copy2(
-            ROOT / "scripts" / "pi-cli-shims" / "git",
-            scripts / "pi-cli-shims" / "git",
+            ROOT / ".factory/tools" / "pi-cli-shims" / "git",
+            tools / "pi-cli-shims" / "git",
         )
         loop = self.workspace / ".factory" / "loop"
         loop.mkdir(parents=True)
@@ -952,7 +952,7 @@ class ArgvEnvironmentTests(_Base):
         )
         self.assertEqual(argv[0], os.path.realpath(sys.executable))
         self.assertEqual(
-            argv[1], str(self.workspace / "scripts" / WRAPPER_BASENAME)
+            argv[1], str(self.workspace / ".factory" / "tools" / WRAPPER_BASENAME)
         )
         self.assertIn("--prompt-fd", argv)
         self.assertNotIn("--prompt-file", argv)
@@ -968,7 +968,7 @@ class ArgvEnvironmentTests(_Base):
         self.assertIn("--extension", argv)
         self.assertEqual(
             argv[argv.index("--extension") + 1],
-            str(self.workspace / "scripts" / "pi-factory-guard-extension.mjs"),
+            str(self.workspace / ".factory" / "tools" / "pi-factory-guard-extension.mjs"),
         )
         self.assertNotIn(SYNTHETIC_SECRET, json.dumps(argv))
         for flag in launch.FORBIDDEN_BACKEND_FLAGS:
@@ -1979,26 +1979,27 @@ class CliTests(_Base):
     def make_repo(self) -> tuple[Path, str, Path]:
         repo = self.tmp / "repo"
         repo.mkdir()
-        (repo / "scripts").mkdir()
+        tools = repo / ".factory" / "tools"
+        tools.mkdir(parents=True)
         (repo / "src" / ".factory-test-output").mkdir(parents=True)
-        shutil.copy2(REAL_WRAPPER, repo / "scripts" / WRAPPER_BASENAME)
+        shutil.copy2(REAL_WRAPPER, tools / WRAPPER_BASENAME)
         # Task 11: commit the exact credential guard into every fixture repo
         # (the launch redacts every child output channel through the exact
         # committed guard before any result is produced).
         shutil.copy2(
-            ROOT / "scripts" / "credential-guard.py",
-            repo / "scripts" / "credential-guard.py",
+            ROOT / ".factory/tools" / "credential-guard.py",
+            tools / "credential-guard.py",
         )
         # Task 11: commit the exact model-side Pi guard extension into every
         # fixture repo (the launch always loads it through ``--extension``).
         shutil.copy2(
-            ROOT / "scripts" / "pi-factory-guard-extension.mjs",
-            repo / "scripts" / "pi-factory-guard-extension.mjs",
+            ROOT / ".factory/tools" / "pi-factory-guard-extension.mjs",
+            tools / "pi-factory-guard-extension.mjs",
         )
-        (repo / "scripts" / "pi-cli-shims").mkdir()
+        (tools / "pi-cli-shims").mkdir()
         shutil.copy2(
-            ROOT / "scripts" / "pi-cli-shims" / "git",
-            repo / "scripts" / "pi-cli-shims" / "git",
+            ROOT / ".factory/tools" / "pi-cli-shims" / "git",
+            tools / "pi-cli-shims" / "git",
         )
         # Task 8 confined launch: the fixture repo commits the exact
         # confine-launcher blob (F2/F5) so the production CLI can stage it
@@ -2148,7 +2149,7 @@ class CliTests(_Base):
     def test_tampered_workspace_wrapper_rejected_before_exec(self) -> None:
         """F2: the secure wrapper must run from its exact bound-commit bytes."""
         repo, head, plan = self.make_repo()
-        wrapper = repo / "scripts" / WRAPPER_BASENAME
+        wrapper = repo / ".factory" / "tools" / WRAPPER_BASENAME
         original = wrapper.read_bytes()
         wrapper.write_bytes(original + b"\n# tampered\n")
         argv = self._argv(repo, head, plan)
@@ -2430,7 +2431,7 @@ class AuthorityTokenTests(_Base):
         # Mutate both the workspace wrapper and backend after the token minted
         # the exact committed bytes into the private staging directory.
         self.backend.write_text("#!/bin/sh\necho swapped\n", encoding="utf-8")
-        wrapper = self.workspace / "scripts" / WRAPPER_BASENAME
+        wrapper = self.workspace / ".factory" / "tools" / WRAPPER_BASENAME
         wrapper.write_text("# swapped wrapper\n", encoding="utf-8")
         (self.workspace / launch.PI_FACTORY_GUARD_EXTENSION).write_text(
             "throw new Error('swapped extension');\n", encoding="utf-8"

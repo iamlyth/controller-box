@@ -464,13 +464,13 @@ class ForbiddenTrackedTest(unittest.TestCase):
                       migration.FORBIDDEN_TRACKED_EXACT)
         self.assertIn("scripts/pi2-ollama.sh",
                       migration.FORBIDDEN_TRACKED_EXACT)
-        self.assertNotIn("scripts/pi-factory-guard-extension.mjs",
+        self.assertNotIn(".factory/tools/pi-factory-guard-extension.mjs",
                          migration.FORBIDDEN_TRACKED_EXACT)
         self.assertFalse(
-            migration._is_forbidden_tracked("scripts/pi-factory-guard-extension.mjs")
+            migration._is_forbidden_tracked(".factory/tools/pi-factory-guard-extension.mjs")
         )
         fx = FixtureRepo(self)
-        fx.commit_forbidden("scripts/pi-factory-guard-extension.mjs")
+        fx.commit_forbidden(".factory/tools/pi-factory-guard-extension.mjs")
         report = migration.verify_migration(fx.root)
         self.assertTrue(report["ok"],
                         "the generic guard extension must not be forbidden")

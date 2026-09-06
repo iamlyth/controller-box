@@ -14,13 +14,13 @@ PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-IP_VALIDATOR="$PROJECT_ROOT/scripts/iprunner-probes/validate-inputplumber-facts.py"
+IP_VALIDATOR="$PROJECT_ROOT/.factory/runner/iprunner-probes/validate-inputplumber-facts.py"
 IP_PROBE="$PROJECT_ROOT/scripts/probe-inputplumber-system-dbus.sh"
 PHYSICAL_PROBE="$PROJECT_ROOT/scripts/probe-physical-controller.sh"
 TARGET_PROBE="$PROJECT_ROOT/scripts/probe-target-consumer.sh"
-PHYSICAL_SOURCE="$PROJECT_ROOT/scripts/iprunner-probes/physical_controller_probe.c"
-EXPECTATIONS="$PROJECT_ROOT/scripts/iprunner-probes/inputplumber-expectations.json"
-DECODER="$PROJECT_ROOT/scripts/iprunner-probes/unwrap_variant.py"
+PHYSICAL_SOURCE="$PROJECT_ROOT/.factory/runner/iprunner-probes/physical_controller_probe.c"
+EXPECTATIONS="$PROJECT_ROOT/.factory/runner/iprunner-probes/inputplumber-expectations.json"
+DECODER="$PROJECT_ROOT/.factory/runner/iprunner-probes/unwrap_variant.py"
 
 command -v nix-shell >/dev/null || {
     echo "test: nix-shell required for the iprunner probe fixtures" >&2
@@ -291,8 +291,8 @@ grep -q 'cleanup: stop-target=ok restore-gamepad-order=ok' "$tmp/tc-noevent/clea
 # ---------------------------------------------------------------------------
 mkdir -p "$tmp/skipped-repo/scripts" "$tmp/skipped-repo/docs" "$tmp/skipped-repo/.factory/artifacts" \
     "$tmp/skipped-repo/.factory-state/runner-evidence/probe-runner"
-cp "$PROJECT_ROOT/scripts/check-capability-contracts.py" \
-   "$PROJECT_ROOT/scripts/check-capability-evidence.py" "$tmp/skipped-repo/scripts/"
+cp "$PROJECT_ROOT/.factory/tools/check-capability-contracts.py" \
+   "$PROJECT_ROOT/.factory/tools/check-capability-evidence.py" "$tmp/skipped-repo/scripts/"
 chmod +x "$tmp/skipped-repo/scripts/"*.py
 cat > "$tmp/skipped-repo/.factory/environment.toml" <<'EOF'
 schema_version = 1
@@ -353,6 +353,6 @@ cat > "$tmp/skipped-repo/.factory-state/runner-evidence.json" <<AG
 }
 AG
 must_fail "skipped consumer receipt is unevidenced" \
-    bash -c "cd '$tmp/skipped-repo' && ./scripts/check-capability-evidence.py"
+    bash -c "cd '$tmp/skipped-repo' && ./.factory/tools/check-capability-evidence.py"
 
 echo "test: iprunner probe adversarial checks passed"

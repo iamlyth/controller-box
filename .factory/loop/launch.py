@@ -7,7 +7,7 @@ This module implements the fresh-context boundary of
 is the deterministic Task-6 deliverable:
 
 * **Fresh process per role.** Every role attempt starts a *new* process via
-  the existing secure wrapper (``scripts/pi2-secure-exec.py``, invoked never
+  the existing secure wrapper (``.factory/tools/pi2-secure-exec.py``, invoked never
   reimplemented) in one-shot mode: a new process session/group, no resumed
   session, no session storage shared with any previous loop identity, no
   automatic memory injection, and only allowlisted prompt inputs.
@@ -218,7 +218,7 @@ PROVIDER_GUARD_REQUIRED = frozenset({"ollama"})
 CANONICAL_OLLAMA_SETTINGS_URL = "https://ollama.com/settings"
 
 # The existing secure wrapper — invoked, never reimplemented (§18).
-SECURE_WRAPPER = "scripts/pi2-secure-exec.py"
+SECURE_WRAPPER = ".factory/tools/pi2-secure-exec.py"
 PI2_BACKEND_ADAPTER = ".factory/loop/pi2_backend.py"
 
 # Hard bounds: the wrapper itself caps the prompt at 4 MiB; the composition
@@ -262,8 +262,8 @@ STAGED_CREDENTIAL_GUARD_NAME = "credential-guard.py"
 STAGED_GIT_SHIM_NAME = "git"
 STAGED_USAGE_GUARD_NAME = "usage.py"
 STAGED_USAGE_FETCH_NAME = "usage_fetch.py"
-CREDENTIAL_GUARD = "scripts/credential-guard.py"
-PI_GIT_SHIM = "scripts/pi-cli-shims/git"
+CREDENTIAL_GUARD = ".factory/tools/credential-guard.py"
+PI_GIT_SHIM = ".factory/tools/pi-cli-shims/git"
 USAGE_GUARD_SOURCES = (".factory/loop/usage.py", ".factory/loop/usage_fetch.py")
 # Staged scripts/modules are readable data, never direct execve targets. They
 # run only as arguments to an approved immutable interpreter inside the
@@ -317,13 +317,13 @@ PI_FACTORY_TOOL_FD_INO_ENV = "PI_FACTORY_TOOL_FD_INO"
 # The committed model-side Pi extension (Task 11 review): the generic
 # factory guard extension loaded by the model backend through ``--extension``
 # in the exact child argv.  It enforces the model-side Git command boundary
-# (routing direct commit verbs through ``scripts/pi-cli-shims/git`` and
+# (routing direct commit verbs through ``.factory/tools/pi-cli-shims/git`` and
 # blocking bypass/unguarded verbs), the credential/path tool-input guard,
 # the exact-commit credential-guard digest binding, bounded tool-result
 # redaction, and overflow-log process cleanup.  The extension is a committed
 # workspace blob verified against the bound commit (F5) and is readable by
 # the confined model through the workspace ``scripts/`` read allowlist.
-PI_FACTORY_GUARD_EXTENSION = "scripts/pi-factory-guard-extension.mjs"
+PI_FACTORY_GUARD_EXTENSION = ".factory/tools/pi-factory-guard-extension.mjs"
 
 # Explicit environment allowlist for model children.  The child environment
 # is *constructed* from these benign keys only (when present in the parent)
@@ -1221,7 +1221,7 @@ def child_argv(
 
 
 def secure_wrapper_path(workspace: Path) -> Path:
-    """Absolute committed wrapper path: ``<workspace>/scripts/pi2-secure-exec.py``."""
+    """Absolute committed wrapper path: ``<workspace>/.factory/tools/pi2-secure-exec.py``."""
     path = Path(workspace).absolute() / SECURE_WRAPPER
     if not path.is_file():
         raise InvocationError(

@@ -171,6 +171,7 @@ class SmokeWorkspace:
             ".factory/schemas",
             ".factory/smoke",
             ".factory/loop",
+            ".factory/tools",
         ):
             (ws / rel).mkdir(parents=True)
         # The complete hidden loop package (the campaign runs as a script).
@@ -260,7 +261,7 @@ class SmokeWorkspace:
             "the adversarial suite is .factory/tests/test-factory-adversarial.sh.\n",
             encoding="utf-8",
         )
-        (ws / "scripts" / "verify-boilerplate.sh").write_text(
+        (ws / ".factory" / "tools" / "verify-boilerplate.sh").write_text(
             "#!/usr/bin/env bash\n"
             "set -euo pipefail\n"
             "# Fixture generic verifier stub: the documentation gate is part "
@@ -269,7 +270,7 @@ class SmokeWorkspace:
             "echo 'fixture verifier stub'\n",
             encoding="utf-8",
         )
-        os.chmod(ws / "scripts" / "verify-boilerplate.sh", 0o755)
+        os.chmod(ws / ".factory" / "tools" / "verify-boilerplate.sh", 0o755)
         shutil.copy2(
             ROOT / "docs/SPEC.md", ws / "docs/SPEC.md"
         )
@@ -278,38 +279,40 @@ class SmokeWorkspace:
             "credential-guard.py",
             "check-plan-freshness.sh",
             "check-generic-leakage.sh",
-            "check-docs-sync.sh",
         ):
-            shutil.copy2(ROOT / "scripts" / script, ws / "scripts" / script)
+            shutil.copy2(ROOT / ".factory" / "tools" / script,
+                         ws / ".factory" / "tools" / script)
+        shutil.copy2(ROOT / "scripts/check-docs-sync.sh",
+                     ws / "scripts/check-docs-sync.sh")
         # Task 11: the fixture commits the exact model-side Pi guard
         # extension so any launch authority can always load it through
         # ``--extension`` in the child argv.
         shutil.copy2(
-            ROOT / "scripts" / "pi-factory-guard-extension.mjs",
-            ws / "scripts" / "pi-factory-guard-extension.mjs",
+            ROOT / ".factory/tools" / "pi-factory-guard-extension.mjs",
+            ws / ".factory" / "tools" / "pi-factory-guard-extension.mjs",
         )
         shutil.copy2(
-            ROOT / "scripts" / "pi2-secure-exec.py",
-            ws / "scripts" / "pi2-secure-exec.py",
+            ROOT / ".factory/tools" / "pi2-secure-exec.py",
+            ws / ".factory" / "tools" / "pi2-secure-exec.py",
         )
-        (ws / "scripts" / "pi-cli-shims").mkdir()
+        (ws / ".factory" / "tools" / "pi-cli-shims").mkdir()
         shutil.copy2(
-            ROOT / "scripts" / "pi-cli-shims" / "git",
-            ws / "scripts" / "pi-cli-shims" / "git",
+            ROOT / ".factory" / "tools" / "pi-cli-shims" / "git",
+            ws / ".factory" / "tools" / "pi-cli-shims" / "git",
         )
         # The fixture installs the *real* tracked Git commit boundary: the
         # exact `git-commit-guard.sh` and its installer are committed and the
         # six launcher hooks are installed, so every campaign commit (and
         # every fixture commit) runs through the production guard.
         shutil.copy2(
-            ROOT / "scripts" / "git-commit-guard.sh",
-            ws / "scripts" / "git-commit-guard.sh",
+            ROOT / ".factory/tools" / "git-commit-guard.sh",
+            ws / ".factory" / "tools" / "git-commit-guard.sh",
         )
         shutil.copy2(
-            ROOT / "scripts" / "install-git-commit-guard.sh",
-            ws / "scripts" / "install-git-commit-guard.sh",
+            ROOT / ".factory/tools" / "install-git-commit-guard.sh",
+            ws / ".factory" / "tools" / "install-git-commit-guard.sh",
         )
-        os.chmod(ws / "scripts" / "git-commit-guard.sh", 0o755)
+        os.chmod(ws / ".factory" / "tools" / "git-commit-guard.sh", 0o755)
         shutil.copy2(
             ROOT / ".factory" / "generic-leak-allowlist",
             ws / ".factory" / "generic-leak-allowlist",
@@ -355,7 +358,7 @@ class SmokeWorkspace:
         # the fixture provably runs every commit (including the campaign's)
         # behind the production Git boundary.
         run(
-            ["bash", str(ws / "scripts" / "install-git-commit-guard.sh")],
+            ["bash", str(ws / ".factory" / "tools" / "install-git-commit-guard.sh")],
             cwd=str(ws),
         )
         _git(ws, "add", "-A")
@@ -821,8 +824,8 @@ class EvidenceSmokeAdversarial(_SmokeBase):
             common.DESIGNATED_DRIVER_REL,
             common.GATE_REL,
             ".factory/smoke/evidence_smoke.py",
-            "scripts/git-commit-guard.sh",
-            "scripts/install-git-commit-guard.sh",
+            ".factory/tools/git-commit-guard.sh",
+            ".factory/tools/install-git-commit-guard.sh",
         ):
             entry = _git(ws.root, "ls-files", "-s", "--", rel).stdout.strip()
             self.assertTrue(entry.startswith("100755"), (rel, entry))
@@ -839,7 +842,7 @@ class EvidenceSmokeAdversarial(_SmokeBase):
             self.assertFalse(hook_path.is_symlink(), hook)
         check = run(
             [
-                "bash", str(ws.root / "scripts" / "install-git-commit-guard.sh"),
+                "bash", str(ws.root / ".factory" / "tools" / "install-git-commit-guard.sh"),
                 "--check",
             ],
             cwd=str(ws.root),

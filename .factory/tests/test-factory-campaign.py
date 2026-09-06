@@ -201,7 +201,7 @@ class FixtureWorkspace:
         for rel in (
             "docs",
             "scripts",
-            "scripts/pi-cli-shims",
+            ".factory/tools/pi-cli-shims",
             ".factory/loop",
             ".factory/prompts",
             ".factory/audit-objectives",
@@ -216,23 +216,23 @@ class FixtureWorkspace:
         # committed guard before it can enter a result, log, receipt, or
         # repository state.
         shutil.copy2(
-            ROOT / "scripts" / "credential-guard.py",
-            ws / "scripts" / "credential-guard.py",
+            ROOT / ".factory/tools" / "credential-guard.py",
+            ws / ".factory" / "tools" / "credential-guard.py",
         )
         # Task 11: every fixture repository commits the exact model-side Pi
         # guard extension — the launch authority always loads it through
         # ``--extension`` in the child argv.
         shutil.copy2(
-            ROOT / "scripts" / "pi-factory-guard-extension.mjs",
-            ws / "scripts" / "pi-factory-guard-extension.mjs",
+            ROOT / ".factory/tools" / "pi-factory-guard-extension.mjs",
+            ws / ".factory" / "tools" / "pi-factory-guard-extension.mjs",
         )
         shutil.copy2(
-            ROOT / "scripts" / "pi-cli-shims" / "git",
-            ws / "scripts" / "pi-cli-shims" / "git",
+            ROOT / ".factory" / "tools" / "pi-cli-shims" / "git",
+            ws / ".factory" / "tools" / "pi-cli-shims" / "git",
         )
         shutil.copy2(
-            ROOT / "scripts" / "pi2-secure-exec.py",
-            ws / "scripts" / "pi2-secure-exec.py",
+            ROOT / ".factory/tools" / "pi2-secure-exec.py",
+            ws / ".factory" / "tools" / "pi2-secure-exec.py",
         )
         for module in (
             "usage.py", "usage_fetch.py", "pre_round.py", "campaign.py", "state.py",
@@ -1681,7 +1681,7 @@ class LifecycleAndCli(_CampaignBase):
              "--rounds", "5", "--branch", BRANCH,
              "--verification-command", "./scripts/verify.sh",
              "--capability-command", "./scripts/capability.sh",
-             "--runner-command", "./scripts/run-factory-runners.py",
+             "--runner-command", "./.factory/runner/run-factory-runners.py",
              "--acceptance-command", "./scripts/acceptance.sh"],
             root=ROOT, check=False,
         )
@@ -1697,7 +1697,7 @@ class LifecycleAndCli(_CampaignBase):
              "--campaign-timeout", "60",
              "--verification-command", "./scripts/verify.sh",
              "--capability-command", "./scripts/capability.sh",
-             "--runner-command", "./scripts/run-factory-runners.py",
+             "--runner-command", "./.factory/runner/run-factory-runners.py",
              "--acceptance-command", "./scripts/acceptance.sh"],
             root=ROOT, check=False,
         )
@@ -2677,7 +2677,7 @@ class ReviewHardening(_CampaignBase):
             ".factory/config.toml", ".factory/environment.toml",
             "docs/FACTORY.md", "docs/OPERATIONS.md",
             "docs/FACTORY-LOOP-SPEC.md", "scripts/verify-project.sh",
-            "scripts/git-commit-guard.sh", "scripts/pi2-secure-exec.py",
+            ".factory/tools/git-commit-guard.sh", ".factory/tools/pi2-secure-exec.py",
         ]
         allowed = [
             "src/main.py", "tests/test-main.py", "data/fixture.bin",
@@ -2850,11 +2850,12 @@ class RunnerAcquisitionLifecycleTests(_CampaignBase):
         (ws.root / ".factory" / "environment.toml").write_text(
             "schema_version = 1\n", encoding="utf-8",
         )
-        runner = ws.root / "scripts" / "run-factory-runners.py"
+        runner = ws.root / ".factory" / "runner" / "run-factory-runners.py"
+        runner.parent.mkdir(exist_ok=True)
         runner.write_text(
             "#!/usr/bin/env python3\n"
             "import hashlib,json,pathlib,subprocess,sys,time\n"
-            "root=pathlib.Path(__file__).resolve().parent.parent\n"
+            "root=pathlib.Path(__file__).resolve().parent.parent.parent\n"
             "state=root/'.factory-state'; state.mkdir(mode=0o700,exist_ok=True)\n"
             "mode=(state/'runner-mode').read_text().strip() if (state/'runner-mode').exists() else 'pass'\n"
             "if mode=='timeout': time.sleep(5)\n"
@@ -2868,12 +2869,12 @@ class RunnerAcquisitionLifecycleTests(_CampaignBase):
             "tmp=state/'.runner-evidence.tmp'; tmp.write_bytes(raw); tmp.replace(state/'runner-evidence.json')\n",
             encoding="utf-8",
         )
-        checker = ws.root / "scripts" / "check-factory-runner-evidence.py"
+        checker = ws.root / ".factory" / "tools" / "check-factory-runner-evidence.py"
         checker.write_text(
             "#!/usr/bin/env python3\n"
             "import argparse,hashlib,json,pathlib,subprocess,sys\n"
             "p=argparse.ArgumentParser(); p.add_argument('--expected-commit',required=True); p.add_argument('--expected-campaign-id',required=True); p.add_argument('--expected-readiness-nonce',required=True); p.add_argument('--print-digest',action='store_true'); a=p.parse_args()\n"
-            "root=pathlib.Path(__file__).resolve().parent.parent; path=root/'.factory-state/runner-evidence.json'\n"
+            "root=pathlib.Path(__file__).resolve().parent.parent.parent; path=root/'.factory-state/runner-evidence.json'\n"
             "if path.is_symlink() or not path.is_file(): raise SystemExit(22)\n"
             "raw=path.read_bytes()\n"
             "try: data=json.loads(raw)\n"
@@ -2884,8 +2885,8 @@ class RunnerAcquisitionLifecycleTests(_CampaignBase):
             encoding="utf-8",
         )
         runner.chmod(0o755); checker.chmod(0o755)
-        _git(ws.root, "add", ".factory/environment.toml", "scripts/run-factory-runners.py",
-             "scripts/check-factory-runner-evidence.py")
+        _git(ws.root, "add", ".factory/environment.toml", ".factory/runner/run-factory-runners.py",
+             ".factory/tools/check-factory-runner-evidence.py")
         _git(ws.root, "commit", "-qm", "add declared runner acquisition fixtures")
         config = dataclasses.replace(
             ws.derive_config(), runner_command=campaign_module.RUNNER_COMMAND,
@@ -3081,17 +3082,17 @@ class RunnerAcquisitionLifecycleTests(_CampaignBase):
         ws = self.make(SUCCESS_SCENARIO)
         base = ws.derive_config()
         for command in (
-            ("./scripts/run-factory-runners.py", "--candidate"),
-            ("sh", "-c", "./scripts/run-factory-runners.py"),
+            ("./.factory/runner/run-factory-runners.py", "--candidate"),
+            ("sh", "-c", "./.factory/runner/run-factory-runners.py"),
             ("./scripts/model-owned-runner.py",),
-            ("./scripts/run-factory-runners.py;touch",),
+            ("./.factory/runner/run-factory-runners.py;touch",),
         ):
             with self.subTest(command=command):
                 with self.assertRaises(campaign_module.CampaignConfigError):
                     dataclasses.replace(
                         base, role_driver=None, backend="/trusted/backend",
-                        acceptance_command=("./scripts/credential-guard.py",),
-                        capability_command=("./scripts/credential-guard.py",),
+                        acceptance_command=("./.factory/tools/credential-guard.py",),
+                        capability_command=("./.factory/tools/credential-guard.py",),
                         runner_command=command,
                         state_namespace=".factory-state/campaigns/campaign",
                         accepted_commit=base.phase_base_commit,

@@ -11,7 +11,7 @@
 #     through the external-prefix alias: `factory` on `PYTHONPATH` resolving
 #     to the canonical `.factory/` directory — no visible bare `scripts/`
 #     wrapper);
-#   * the real `scripts/pi2-secure-exec.py` wrapper (invoked, never
+#   * the real `.factory/tools/pi2-secure-exec.py` wrapper (invoked, never
 #     reimplemented) with a synthetic committed model backend.
 #
 # The suite re-derives every authoritative byte from the committed fixture
@@ -77,16 +77,16 @@ repo="$tmp/repo"
 mkdir -p "$repo/scripts/pi-cli-shims"
 mkdir -p "$repo/.factory/loop"
 mkdir -p "$repo/.factory/schemas"
-cp scripts/pi2-secure-exec.py "$repo/scripts/"
+cp .factory/tools/pi2-secure-exec.py "$repo/scripts/"
 # Task 11: every fixture repo commits the exact credential guard so the
 # launch authority can verify the guard source before any child output
 # channel is redacted.
-cp scripts/credential-guard.py "$repo/scripts/"
+cp .factory/tools/credential-guard.py "$repo/scripts/"
 # Task 11: every fixture repo commits the exact model-side Pi guard
 # extension so the launch authority can verify and always load it through
 # ``--extension`` in the child argv.
-cp scripts/pi-factory-guard-extension.mjs "$repo/scripts/"
-cp scripts/pi-cli-shims/git "$repo/scripts/pi-cli-shims/"
+cp .factory/tools/pi-factory-guard-extension.mjs "$repo/scripts/"
+cp .factory/tools/pi-cli-shims/git "$repo/scripts/pi-cli-shims/"
 cp .factory/loop/confine_launcher.py .factory/loop/usage.py \
     .factory/loop/usage_fetch.py "$repo/.factory/loop/"
 cp .factory/schemas/factory-confinement-v1.schema.json "$repo/.factory/schemas/"
@@ -171,7 +171,7 @@ grep -qi 'committed blob' "$tmp/tamper.err" \
 
 # The tampered wrapper (the file that must run from its exact bound-commit
 # bytes) is rejected the same way, before any backend read or spawn.
-printf '\n# tampered\n' >> "$repo/scripts/pi2-secure-exec.py"
+printf '\n# tampered\n' >> "$repo/.factory/tools/pi2-secure-exec.py"
 if run_launch >"$tmp/wraptamper.out" 2>"$tmp/wraptamper.err"; then
     fail "tampered wrapper was not rejected before exec"
 fi

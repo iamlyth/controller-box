@@ -721,7 +721,7 @@ def verify_external_install(
     exceptions of ``entrypoints``, an explicit list of trusted operator
     entrypoints that must each be a regular executable file, and ``shared``,
     an explicit list of non-executable shared authorities (for example the
-    committed ``scripts/factory_state_io.py`` the hidden control plane loads
+    committed ``.factory/tools/factory_state_io.py`` the hidden control plane loads
     by its established absolute path) that must each be a regular file.
     Symlinks and special inodes are never allowed anywhere in the installed
     copy.  ``prefix`` must be absolute, a real (never symlinked) directory,

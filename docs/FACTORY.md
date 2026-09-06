@@ -112,8 +112,9 @@ Volatile, ignored state:
   The canonical conformance validator accepts a human-tier row only when this
   same external trust-anchor descriptor verifies the detached approval and its
   exact retained captures; readiness and final gates forward that descriptor.
-  Runner D-Bus probes receive only capability-private broker proxy sockets,
-  routing receives broker-held raw udev/provenance facts, and the hidden
+  Runner D-Bus probes receive only capability-private broker mediator sockets;
+  every mutation is decoded and authorized before forwarding, routing receives
+  broker-held raw udev/provenance facts, and the hidden
   `/opt/factory-runner` parent exposes only its exact immutable authority path
   read-only inside candidate containment.
 - `.bug-ledger.lock`, `logs/`, test fixtures; Ollama credentials are external-only
@@ -133,7 +134,7 @@ no operative control flow depends on any of them.
 ## Branch policy
 
 The autonomous lifecycle runs only on `develop`. `main` is protected by policy
-and never modified by the factory. `scripts/branch-guard.sh` also rejects
+and never modified by the factory. `.factory/tools/branch-guard.sh` also rejects
 multiple Git worktrees and non-`develop` autonomous branches.
 
 ## Prerequisites
@@ -148,7 +149,7 @@ multiple Git worktrees and non-`develop` autonomous branches.
 2. Configure Ollama usage credentials in the current shell only:
 
    ```bash
-   source scripts/update-ollama-cookies.sh
+   source .factory/tools/update-ollama-cookies.sh
    ```
 
    The helper never writes plaintext below the repository. To persist exports,
@@ -159,7 +160,7 @@ multiple Git worktrees and non-`develop` autonomous branches.
 3. Confirm access and quota parsing:
 
    ```bash
-   ./scripts/ollama-usage-guard.sh --check
+   ./.factory/tools/ollama-usage-guard.sh --check
    ```
 
 4. Edit `docs/SPEC.md` and commit it separately:
@@ -189,7 +190,7 @@ generated plan records:
 Inspect the plan before implementation. Every newly accepted task must be
 `pending`; inherited completed, in-progress, or blocked tasks fail the
 planning gate. Every `partial`, `missing`, or `ambiguous` conformance row must
-map to a task. `scripts/check-plan-freshness.sh` prevents a stale plan or
+map to a task. `.factory/tools/check-plan-freshness.sh` prevents a stale plan or
 altered cycle base from running after the specification changes.
 
 ## Implement
@@ -210,7 +211,7 @@ INSTALL_MANIFEST="$INSTALL_PARENT/install-manifest.json"
 CAMPAIGN_ID="controller-box-$(date +%Y%m%dT%H%M%S)-$$"
 python3 .factory/loop/installer.py install --root "$PWD" --commit "$ACCEPTED_COMMIT" --prefix "$INSTALL_PREFIX" --manifest-out "$INSTALL_MANIFEST"
 python3 "$INSTALL_PREFIX/.factory/loop/installer.py" verify --root "$PWD" --commit "$ACCEPTED_COMMIT" --prefix "$INSTALL_PREFIX" --manifest "$INSTALL_MANIFEST"
-"$INSTALL_PREFIX/.factory/bin/factory-campaign" --root "$PWD" run --campaign-id "$CAMPAIGN_ID" --rounds 5 --branch develop --provider "${PI_PROVIDER:?set provider}" --model "${PI_MODEL:?set model}" --backend "${PI2_BACKEND:?set trusted pi2 executable}" --accepted-commit "$ACCEPTED_COMMIT" --install-manifest "$INSTALL_MANIFEST" --human-trust-anchor "${HUMAN_TRUST_ANCHOR:?operator-provisioned immutable root-owned file}" --human-trust-anchor-sha256 "${HUMAN_TRUST_ANCHOR_SHA256:?offline approved digest}" --campaign-timeout 21600 --verification-command ./scripts/verify-project.sh --runner-command ./scripts/run-factory-runners.py --capability-command ./scripts/check-capability-evidence.py --acceptance-command '["./scripts/final-gate.sh","--implementation"]'
+"$INSTALL_PREFIX/.factory/bin/factory-campaign" --root "$PWD" run --campaign-id "$CAMPAIGN_ID" --rounds 5 --branch develop --provider "${PI_PROVIDER:?set provider}" --model "${PI_MODEL:?set model}" --backend "${PI2_BACKEND:?set trusted pi2 executable}" --accepted-commit "$ACCEPTED_COMMIT" --install-manifest "$INSTALL_MANIFEST" --human-trust-anchor "${HUMAN_TRUST_ANCHOR:?operator-provisioned immutable root-owned file}" --human-trust-anchor-sha256 "${HUMAN_TRUST_ANCHOR_SHA256:?offline approved digest}" --campaign-timeout 21600 --verification-command ./scripts/verify-project.sh --runner-command ./.factory/runner/run-factory-runners.py --capability-command ./.factory/tools/check-capability-evidence.py --acceptance-command '["./scripts/final-gate.sh","--implementation"]'
 ```
 
 Production has no synthetic provider/model/backend/gate/deadline defaults. Runner
@@ -296,7 +297,7 @@ before exec, so untrusted model processes inherit no lock authority and cannot
 unlock the holder through a separately opened descriptor. Only the developer
 role may modify product code; the planner may modify only the plan; tester and
 auditor are read-only. The Git command-boundary guard
-(`scripts/git-commit-guard.sh` hooks + `scripts/pi-cli-shims/git`) rejects
+(`.factory/tools/git-commit-guard.sh` hooks + `.factory/tools/pi-cli-shims/git`) rejects
 hook bypass, hook-path overrides, alternate worktrees, amend/merge/rebase
 bypasses, and forged handoffs; only `git commit` creates commits from the
 model boundary, and every commit must carry at least one substantive tracked
@@ -352,12 +353,16 @@ The six `iprunner`/`gpurunner` capabilities are declared contracts. The
 `iprunner` host is explicitly **dedicated**: immediately before every bounded
 request it must expose exactly one enrolled physical composite (045e:028e),
 zero InputPlumber target devices, and no unrelated InputPlumber client. This is
-a security invariant, not merely a test topology. `xdg-dbus-proxy` cannot
-pre-authorize request-learned object paths, so its exact global method names
-are safe only with this root-checked invariant plus the root-owned temporal bus
-audit; a second device, target, sender, monitor gap, or collateral call fails
-the whole receipt even if state is later restored. Candidate proxies never
-receive `org.shadowblip.Input.Target.InputEvent`.
+a security invariant, not merely a test topology. The pinned root-owned C
+mediator reads that root-held snapshot, serves the candidate's sole private
+system-bus endpoint, and decodes path/interface/member/signature/arguments
+before each real system-bus call. It learns only successful request-created
+target paths and permits stop only for those paths. Unknown calls, malformed
+wire values, foreign paths, target reuse, and
+`org.shadowblip.Input.Target.InputEvent` fail before forwarding. Its durable
+canonical pre-forward decision stream and the independent system-bus monitor
+are replayed before signing; a second device, target, sender, monitor gap, or
+collateral call fails the receipt even if state is later restored.
 
 Routing
 requires four independently consumed real-source events; installed diagram
@@ -383,11 +388,11 @@ evidence (Task 26).
 Validation:
 
 ```bash
-./scripts/check-factory-environment.py
+./.factory/tools/check-factory-environment.py
 ```
 
 During verification, the installed campaign coordinator invokes its bound
-`scripts/run-factory-runners.py` descriptor (never a model role) to create a history-free
+`.factory/runner/run-factory-runners.py` descriptor (never a model role) to create a history-free
 `git archive` of the exact clean commit, rejects tracked symlinks, gitlinks,
 or special modes that this protocol cannot reproduce safely, sends the
 archive through the pinned SSH alias using an external root-owned launcher
@@ -401,7 +406,7 @@ tree, protocol, signer, or aggregate-integrity failure becomes campaign
 infrastructure failure.
 
 Runner receipts are signed by a root-owned signer on the disposable runner VM
-(`scripts/factory-runner-signer.py`, mode 0700 with no sudoers rule). The only
+(`.factory/runner/factory-runner-signer.py`, mode 0700 with no sudoers rule). The only
 sudo grant is the fixed broker. The broker invokes the signer over a one-shot
 inherited pipe, after exact archive/tree/environment probes, capability-specific
 non-skip/non-simulated semantics, held-byte analysis, and independently proven
@@ -454,11 +459,11 @@ Ordinary defects stay out of `docs/SPEC.md`. Canonical state is tracked in
 `.factory/bugs/open.md` and `.factory/bugs/closed.md`, with optional manual
 references to GitHub, Forgejo, or both. After human triage, the selected bug
 and cycle base are recorded in ignored `.factory-state/`
-(`scripts/factory-state-file.py` reads/writes `maintenance-bug-id` and
+(`.factory/tools/factory-state-file.py` reads/writes `maintenance-bug-id` and
 `maintenance-base-commit`), and a canonical
 `.factory/artifacts/maintenance-plan.md` is validated by
-`scripts/validate-maintenance-plan.py planning|complete` and
-`scripts/check-maintenance-freshness.sh`. The maintenance lifecycle runs
+`.factory/tools/validate-maintenance-plan.py planning|complete` and
+`.factory/tools/check-maintenance-freshness.sh`. The maintenance lifecycle runs
 through the same fresh-context control plane as implementation (fresh planner
 seeds the minimal selected-bug skeleton, fresh developer implements and tests,
 verification runs the configured project verifier, and the final maintenance
@@ -467,7 +472,7 @@ pending; contract changes are blocked and returned to the human specification
 workflow. See [BUG_WORKFLOW.md](BUG_WORKFLOW.md).
 
 ```bash
-./scripts/bug-ledger.py validate
+./.factory/tools/bug-ledger.py validate
 ```
 
 ## Quota states
@@ -489,7 +494,7 @@ Network and server failures are retried in wait mode. Single-check mode returns 
 Missing/expired cookies or an unparseable settings page return status 2 and require operator action:
 
 ```bash
-source scripts/update-ollama-cookies.sh
+source .factory/tools/update-ollama-cookies.sh
 ```
 
 This refreshes the caller environment without creating a workspace credential
@@ -552,7 +557,7 @@ Git blob against plan metadata. If they differ:
 ## Documentation gate
 
 Every implementation plan ends with **Final documentation and specification
-audit**. `scripts/validate-implementation-plan.py` requires the plan to
+audit**. `.factory/tools/validate-implementation-plan.py` requires the plan to
 contain a conformance matrix, interaction inventory, canonical task statuses,
 and a final audit depending on every other task. At implementation completion
 it rejects unfinished tasks and any matrix classification other than
@@ -585,20 +590,20 @@ tracked artifacts make acceptance machine-checked:
   `ambiguous`/`blocked`/`not_applicable`), evidence tier (`unit`/`simulated`/
   `private_integration`/`installed`/`real_system`/`human`), required
   capabilities, the exact evidence commit, and receipt/artifact refs.
-  `scripts/validate-conformance.py planning|complete` checks the schema,
+  `.factory/tools/validate-conformance.py planning|complete` checks the schema,
   cross-checks the plan matrix, and rejects `verified` rows below the
   normative tier, unevidenced, or backed by an undeclared capability.
 - `.factory/capability-contracts.json` (schema `ralph-capability-contract/v1`)
   defines one probe per declared/required capability: probe argv,
   must-execute marker, must-not-skip tokens, deny-simulated markers.
-  `scripts/check-capability-contracts.py` rejects contracts for undeclared
+  `.factory/tools/check-capability-contracts.py` rejects contracts for undeclared
   capabilities and declared capabilities without contracts;
-  `scripts/check-capability-evidence.py` requires a fresh exact-commit runner
+  `.factory/tools/check-capability-evidence.py` requires a fresh exact-commit runner
   receipt whose probe section executed (no skip) and shows no simulated
   marker. Missing contract, probe, or receipt is unevidenced and never
   auto-reclassified.
 - Audit reports must cite machine receipts: coordinator-executed commands are
-  wrapped by `scripts/machine-receipt.py --tag <tag> -- <argv...>` and
+  wrapped by `.factory/tools/machine-receipt.py --tag <tag> -- <argv...>` and
   recorded under `.factory-state/audit-receipts/`. Each command runs below a
   fresh command-only subreaper broker; the coordinator waits only for that
   broker. A trusted direct-child stage stops before command exec and retains
@@ -614,7 +619,7 @@ tracked artifacts make acceptance machine-checked:
   are pidfd-signaled and reaped before the retained leader status is consumed.
   Unrelated coordinator children, their workers, and their wait statuses are
   outside receipt ownership.
-  `scripts/check-audit-receipts.py` requires every executable-evidence line to
+  `.factory/tools/check-audit-receipts.py` requires every executable-evidence line to
   carry PASS/FAIL/BLOCKED plus a `[receipt: ...]`/`[manifest: ...]` reference,
   PASS requires exit 0, and any BLOCKED evidence forces `result: findings`.
   Subagent prose cannot certify runtime.
@@ -635,7 +640,7 @@ only when the evidence actually exists.
   (undeclared capability, missing system service, missing hardware target,
   open product defect, or pending human decision) is an `open` fact;
   `blocked`/`partial` conformance rows reference it through `fact_refs`.
-  `scripts/validate-blocked-facts.py planning|complete` enforces strictly
+  `.factory/tools/validate-blocked-facts.py planning|complete` enforces strictly
   ascending unique IDs and resolution discipline: a `receipt` resolution needs
   an exact clean-pass machine receipt at the evidence commit, an `artifact`
   resolution needs a real non-documentation artifact (`.md` files can never
@@ -644,7 +649,7 @@ only when the evidence actually exists.
   fails while any fact is open.
 - `.factory/campaign-objectives.json` (schema `ralph-campaign-objectives/v1`)
   binds each audit round to one product-neutral falsification objective with
-  its own receipt categories. `scripts/check-campaign-objectives.py` requires
+  its own receipt categories. `.factory/tools/check-campaign-objectives.py` requires
   the round's report to carry machine receipts (or accepted runner manifests)
   covering every category of that round's objective; replaying the same
   generic suite cannot satisfy all rounds.
@@ -652,7 +657,7 @@ only when the evidence actually exists.
   `.factory/golden-review.json` (schema `ralph-golden-review/v1`). Generation
   can never overwrite active goldens: `scripts/generate-golden.sh` refuses to
   run without a review manifest path and human reviewer identity, and
-  `scripts/check-golden-policy.py` requires every working-tree golden change
+  `.factory/tools/check-golden-policy.py` requires every working-tree golden change
   to carry an exact before/after SHA-256 plus reviewer/human identity;
   committed changes stay valid against real Git transitions. Never regenerate
   goldens merely to make a test pass.
@@ -667,7 +672,7 @@ non-skipping probe and independently accepted calibration controls are
 required before live review. Machine vision is supplemental falsification
 evidence: it may add findings but never elevates an evidence tier, certifies a
 golden, replaces compositor/physical/target-consumer evidence, or substitutes
-for human acceptance. Completion runs `scripts/visual-audit-gate.sh`, which
+for human acceptance. Completion runs `.factory/tools/visual-audit-gate.sh`, which
 only validates an existing report and never captures or invokes a model under
 the lifecycle lock.
 
@@ -690,7 +695,7 @@ target-consumer, or runner claims.
 
 ## Credential boundary guard
 
-`scripts/credential-guard.py` and the project-local Pi extension block
+`.factory/tools/credential-guard.py` and the project-local Pi extension block
 sensitive command/path reads before execution and redact tool-result strings
 before display or session persistence. Candidate command/output text is sent
 to the guard on standard input, never process arguments. Guard errors fail

@@ -197,8 +197,8 @@ CAMPAIGN_AUDIT_RESULT_NAME = "factory-audit-result.json"
 RUNNER_ACQUISITION_NAME = "runner-acquisition.json"
 RUNNER_ACQUISITION_SCHEMA = "factory-runner-acquisition/v1"
 READINESS_RESULT_NAME = "readiness-result.json"
-RUNNER_COMMAND = ("./scripts/run-factory-runners.py",)
-RUNNER_CHECKER_COMMAND = ("./scripts/check-factory-runner-evidence.py",)
+RUNNER_COMMAND = ("./.factory/runner/run-factory-runners.py",)
+RUNNER_CHECKER_COMMAND = ("./.factory/tools/check-factory-runner-evidence.py",)
 RUNNER_TRANSPORT_EXIT = 20
 RUNNER_FINDINGS_EXIT = 21
 RUNNER_INTEGRITY_EXIT = 22
@@ -208,9 +208,9 @@ RUNNER_INTEGRITY_EXIT = 22
 # rows cannot be silently accepted behind a passing deterministic gate.
 DEFAULT_CONFORMANCE_PATH = ".factory/artifacts/conformance.json"
 CONFORMANCE_VALIDATOR_COMMAND = (
-    "./scripts/validate-conformance.py", "planning", DEFAULT_CONFORMANCE_PATH,
+    "./.factory/tools/validate-conformance.py", "planning", DEFAULT_CONFORMANCE_PATH,
 )
-CANONICAL_CAPABILITY_COMMAND = ("./scripts/check-capability-evidence.py",)
+CANONICAL_CAPABILITY_COMMAND = ("./.factory/tools/check-capability-evidence.py",)
 CANONICAL_FINAL_ACCEPTANCE_COMMAND = (
     "./scripts/final-gate.sh", "--implementation",
 )
@@ -702,7 +702,7 @@ class CampaignConfig:
             if tuple(self.runner_command) != RUNNER_COMMAND:
                 raise CampaignConfigError(
                     "production runner_command must be exactly the declared "
-                    "coordinator entrypoint ./scripts/run-factory-runners.py "
+                    "coordinator entrypoint ./.factory/runner/run-factory-runners.py "
                     "with no arguments or shell"
                 )
             canonical_commands = (
@@ -5626,7 +5626,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "--runner-command", action="append", default=[],
         help=(
             "exact coordinator-owned runner acquisition argv; production "
-            "requires ./scripts/run-factory-runners.py with no shell/arguments"
+            "requires ./.factory/runner/run-factory-runners.py with no shell/arguments"
         ),
     )
     p_run.add_argument(
@@ -6009,7 +6009,7 @@ def _production_preflight(
     if tuple(runner_command) != RUNNER_COMMAND:
         raise CampaignConfigError(
             "production runner acquisition command must be exactly "
-            "./scripts/run-factory-runners.py with no shell or arguments"
+            "./.factory/runner/run-factory-runners.py with no shell or arguments"
         )
     provider = str(getattr(args, "provider", "")).lower()
     if provider not in launch_module.SUPPORTED_PROVIDERS or provider == "synthetic":

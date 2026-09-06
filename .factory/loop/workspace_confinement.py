@@ -275,6 +275,8 @@ TRUSTED_POLICY_RELPATHS = frozenset({
     ".factory/visual-audit-calibration.json",
     ".factory/visual-audit-inventory.json",
     ".factory/visual-audit.toml",
+    ".factory/tools",
+    ".factory/runner",
     "docs/FACTORY.md",
     "docs/OPERATIONS.md",
     "docs/FACTORY-LOOP-SPEC.md",

@@ -5,7 +5,7 @@
 #
 # Collects live facts from the real system (dpkg, systemctl, busctl) and
 # validates every fact against the committed pins
-# (scripts/iprunner-probes/inputplumber-expectations.json) via
+# (.factory/runner/iprunner-probes/inputplumber-expectations.json) via
 # validate-inputplumber-facts.py. Any mismatch fails the probe with a precise
 # diagnostic; there is no skip path.
 #

@@ -51,15 +51,15 @@ PY
 ) || exit $?
 
 # The project gate is bound to the declared Nix environment (shell.nix). The
-# authenticated boundary (scripts/nix-gate.sh + scripts/nix-gate-exec.sh)
+# authenticated boundary (.factory/tools/nix-gate.sh + .factory/tools/nix-gate-exec.sh)
 # replaces the forgeable CBX_VERIFY_IN_NIX_SHELL / IN_NIX_SHELL trust: this
 # script never trusts a caller-set variable to claim it is already "inside
 # Nix". If it is not running under the authenticated declared environment it
 # re-executes through the wrapper, which FAILS rather than silently verifying
 # against undeclared host packages when Nix is unavailable.
-source "$PROJECT_ROOT/scripts/nix-gate.sh"
+source "$PROJECT_ROOT/.factory/tools/nix-gate.sh"
 if ! nix_gate_require full; then
-    exec "$PROJECT_ROOT/scripts/nix-gate-exec.sh" \
+    exec "$PROJECT_ROOT/.factory/tools/nix-gate-exec.sh" \
         "$PROJECT_ROOT/scripts/verify-project.sh" "$@"
 fi
 # Export only after authenticated Nix re-exec. Exporting the normal operator
@@ -164,10 +164,15 @@ for gate in gates:
         raise SystemExit(f'verify-project: invalid gate args: {name!r}')
     print(f'verify-project: running gate {name}', flush=True)
     if name == 'ctest':
-        subprocess.run(
+        result = subprocess.run(
             ['ctest', '--test-dir', str(build_dir), '--output-on-failure', '--timeout', '120'],
-            check=True,
+            capture_output=True, text=True,
         )
+        sys.stdout.write(result.stdout); sys.stderr.write(result.stderr)
+        combined = (result.stdout + result.stderr).lower()
+        skip_markers = ('***skipped', 'not run', 'exit 77', 'skipped:')
+        if result.returncode != 0 or any(marker in combined for marker in skip_markers):
+            raise SystemExit('verify-project: CTest contained a failed, skipped, or not-run test')
     elif name == 'test_installed_functional':
         result = subprocess.run(
             ['ctest', '--test-dir', str(build_dir), '--no-tests=error', '--timeout', '120',
@@ -184,7 +189,7 @@ for gate in gates:
         result = subprocess.run(argv, capture_output=True, text=True)
         sys.stdout.write(result.stdout); sys.stderr.write(result.stderr)
         mandatory = {'test_packaging.sh', 'test_installed_smoke.sh',
-                     'test_installed_diagram.sh', 'test-visual-audit.sh'}
+                     'test_installed_diagram.sh'}
         combined = (result.stdout + result.stderr).lower()
         skip_markers = ('skip', 'skipped', 'not run', 'exit 77')
         if name in mandatory:

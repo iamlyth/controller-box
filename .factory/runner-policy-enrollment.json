@@ -20,7 +20,7 @@
   },
   "host_executable_enrollment": {
     "status": "pending-root-install",
-    "required": ["systemd-run", "systemctl", "xdg-dbus-proxy", "git", "bash", "python3", "ssh-keygen", "sudo", "busctl", "mount", "umount", "udevadm", "stdbuf", "dpkg-query", "InputPlumber"],
+    "required": ["systemd-run", "systemctl", "xdg-dbus-proxy", "git", "bash", "python3", "ssh-keygen", "sudo", "busctl", "mount", "umount", "udevadm", "stdbuf", "dpkg-query", "inputplumber-mediator", "InputPlumber"],
     "identity_fields": ["path", "sha256", "device", "inode"],
     "inputplumber_additional_fields": ["package_version", "service_exec_start"],
     "note": "Pins must be measured and enrolled independently by the root installer; this repository does not claim their values."

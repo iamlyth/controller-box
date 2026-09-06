@@ -88,10 +88,9 @@ INSTALLER_VERSION = "factory-installer/v1"
 SHA1 = re.compile(r"^[0-9a-f]{40}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
-# The installed surface: the hidden namespaces plus the shared ``scripts/``
-# authorities the hidden control plane loads by their established absolute
-# path (``scripts/factory_state_io.py``) and the operator entrypoints.
-INSTALLED_SURFACE = (".factory", ".pi", "scripts")
+# Harness installation is confined to hidden namespaces. Product ``scripts/``
+# is deliberately excluded; compatibility wrappers are never authority bytes.
+INSTALLED_SURFACE = (".factory", ".pi")
 
 # Legacy synthetic-confinement proof code is retained only as historical test
 # source in this checkout.  It is not imported by production and must never be
@@ -107,18 +106,15 @@ NON_INSTALLED_PREFIXES: Tuple[str, ...] = (
 
 # The committed shared authority the hidden control plane imports at runtime
 # and the trusted operator entrypoints of the installed copy.
-DEFAULT_SHARED: Tuple[str, ...] = ("scripts/factory_state_io.py",)
+DEFAULT_SHARED: Tuple[str, ...] = (".factory/tools/factory_state_io.py",)
 DEFAULT_ENTRYPOINTS: Tuple[str, ...] = (
     ".factory/bin/factory-launch",
     ".factory/bin/factory-campaign",
-    "scripts/machine-receipt.py",
+    ".factory/tools/machine-receipt.py",
 )
 
-# Declared shared authorities and operator entrypoints may only live under
-# these first segments: the hidden namespaces plus the shared ``scripts/``
-# surface.  A declared path anywhere else would smuggle a foreign file into
-# the installed copy.
-ALLOWED_FIRST_SEGMENTS: frozenset = frozenset({".factory", ".pi", "scripts"})
+# Declared authorities and entrypoints may only live under hidden namespaces.
+ALLOWED_FIRST_SEGMENTS: frozenset = frozenset({".factory", ".pi"})
 
 # The exact Task-20-era pending authorities that reviewer-mode staging may
 # take from the working tree while they are not yet part of the bound
@@ -365,7 +361,7 @@ PENDING_ALLOWLIST: frozenset = frozenset({
     '.factory/tests/test-factory-installed.py',
     '.factory/tests/test-factory-installed.sh',
     '.factory/tests/test-factory-launch.py',
-    '.factory/tests/test-factory-lock.py',
+    '.factory/.factory/tests/test-legacy-factory-lock.py',
     '.factory/tests/test-factory-migration.py',
     '.factory/tests/test-factory-migration.sh',
     '.factory/tests/test-factory-plan-parser.py',
@@ -378,8 +374,8 @@ PENDING_ALLOWLIST: frozenset = frozenset({
     '.factory/tests/test-factory-state.py',
     '.factory/tests/test-factory-supervision.sh',
     '.factory/tests/test-factory-usage.py',
-    'scripts/factory_state_io.py',
-    'scripts/machine-receipt.py',
+    '.factory/tools/factory_state_io.py',
+    '.factory/tools/machine-receipt.py',
 })
 
 
@@ -634,7 +630,7 @@ def _pending_is_production_authority(root: Path, rel: str) -> bool:
     """Whether pending bytes could execute or control an installed harness."""
     authority_prefixes = (
         ".factory/bin/", ".factory/loop/", ".factory/prompts/",
-        ".factory/schemas/", ".pi/", "scripts/",
+        ".factory/schemas/", ".factory/tools/", ".factory/runner/", ".pi/",
     )
     authority_exact = {
         ".factory/__init__.py", ".factory/campaign-receipt-policy.json",

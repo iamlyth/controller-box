@@ -10,8 +10,8 @@ set -euo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 PROBE="$PROJECT_ROOT/scripts/probe-controller-production-routing.sh"
-VALIDATOR="$PROJECT_ROOT/scripts/iprunner-probes/validate-production-routing-facts.py"
-OBSERVER_SOURCE="$PROJECT_ROOT/scripts/iprunner-probes/routing_observer.c"
+VALIDATOR="$PROJECT_ROOT/.factory/runner/iprunner-probes/validate-production-routing-facts.py"
+OBSERVER_SOURCE="$PROJECT_ROOT/.factory/runner/iprunner-probes/routing_observer.c"
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -469,7 +469,7 @@ must_fail "validator rejects wrong schema" \
 # ---------------------------------------------------------------------------
 # unwrap_variant.py: busctl `data` and `body` shapes, dict/list/scalar forms.
 # ---------------------------------------------------------------------------
-UW="$PROJECT_ROOT/scripts/iprunner-probes/unwrap_variant.py"
+UW="$PROJECT_ROOT/.factory/runner/iprunner-probes/unwrap_variant.py"
 unwrap_eq() {
     local input=$1 expected=$2
     local got
@@ -498,7 +498,7 @@ unwrap_eq '{"a":1}' '{"a": 1}'
 # ---------------------------------------------------------------------------
 # extract_om_targets.py: new xb360 targets parsed from both data/body shapes.
 # ---------------------------------------------------------------------------
-EXTRACT_OM="$PROJECT_ROOT/scripts/iprunner-probes/extract_om_targets.py"
+EXTRACT_OM="$PROJECT_ROOT/.factory/runner/iprunner-probes/extract_om_targets.py"
 : > "$tmp/om-baseline-empty"
 cat > "$tmp/om-data-body.json" <<'EOF'
 {"type":"a{oa{sa{sv}}}","data":[{

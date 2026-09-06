@@ -5,7 +5,7 @@ This test lives under the hidden ``.factory/tests/`` namespace because the
 specification (HIDE-01, §3) keeps harness-only tests out of the adopting
 product's visible test tree.  It verifies the retained exact-commit evidence
 machinery of ``.factory/loop/evidence.py`` and its script counterparts
-(``scripts/machine-receipt.py``, ``scripts/check-audit-receipts.py``):
+(``.factory/tools/machine-receipt.py``, ``.factory/tools/check-audit-receipts.py``):
 
 * **held verifier binding (§19)**: the deterministic verification entrypoint
   is opened no-follow and bound to its committed blob, secure identity, and
@@ -85,13 +85,13 @@ import state as state_module  # noqa: E402
 
 GIT = gitutil.GIT_EXECUTABLE
 TRUE_EXECUTABLE = Path(shutil.which("true"))
-MACHINE_RECEIPT = ROOT / "scripts" / "machine-receipt.py"
-CHECK_AUDIT_RECEIPTS = ROOT / "scripts" / "check-audit-receipts.py"
-CHECK_RUNNER_EVIDENCE = ROOT / "scripts" / "check-factory-runner-evidence.py"
-RUNNER_ARTIFACTS = ROOT / "scripts" / "factory_runner_artifacts.py"
-INITIALIZE_CAMPAIGN_AUDIT = ROOT / "scripts" / "initialize-campaign-audit.py"
-VALIDATE_CAMPAIGN_AUDIT = ROOT / "scripts" / "validate-campaign-audit.py"
-CHECK_ENV = ROOT / "scripts" / "check-factory-environment.py"
+MACHINE_RECEIPT = ROOT / ".factory/tools" / "machine-receipt.py"
+CHECK_AUDIT_RECEIPTS = ROOT / ".factory/tools" / "check-audit-receipts.py"
+CHECK_RUNNER_EVIDENCE = ROOT / ".factory/tools" / "check-factory-runner-evidence.py"
+RUNNER_ARTIFACTS = ROOT / ".factory/runner" / "factory_runner_artifacts.py"
+INITIALIZE_CAMPAIGN_AUDIT = ROOT / ".factory/tools" / "initialize-campaign-audit.py"
+VALIDATE_CAMPAIGN_AUDIT = ROOT / ".factory/tools" / "validate-campaign-audit.py"
+CHECK_ENV = ROOT / ".factory/tools" / "check-factory-environment.py"
 
 SHA1 = evidence_module.SHA1
 SHA256 = evidence_module.SHA256
@@ -136,7 +136,7 @@ def _write(path: Path, data: bytes | str) -> Path:
 
 
 def _load_machine_receipt() -> object:
-    """Load ``scripts/machine-receipt.py`` as an importable module.
+    """Load ``.factory/tools/machine-receipt.py`` as an importable module.
 
     The hidden evidence suite exercises the wrapper's bounded supervision
     in-process (baseline-child and foreign-process isolation), so the real
@@ -144,7 +144,7 @@ def _load_machine_receipt() -> object:
     it — by committed path with a pinned interpreter, never a copy.
     """
     spec = importlib.util.spec_from_file_location(
-        "machine_receipt", ROOT / "scripts" / "machine-receipt.py"
+        "machine_receipt", ROOT / ".factory/tools" / "machine-receipt.py"
     )
     if spec is None or spec.loader is None:
         raise AssertionError("cannot load the machine-receipt authority")
@@ -391,7 +391,7 @@ class ManifestFixture:
     def __init__(self, root: Path) -> None:
         self.root = root
         _mkdir(self.root)
-        for rel in ("scripts", "docs", ".factory"):
+        for rel in ("scripts", "docs", ".factory", ".factory/tools"):
             (self.root / rel).mkdir(parents=True, exist_ok=True)
         _mkdir(self.root / STATE_DIR)
         self.trust = {
@@ -415,10 +415,10 @@ class ManifestFixture:
         )
 
     def commit(self, message: str = "runner fixture") -> str:
-        shutil.copy2(CHECK_RUNNER_EVIDENCE, self.root / "scripts" /
+        shutil.copy2(CHECK_RUNNER_EVIDENCE, self.root / ".factory" / "tools" /
                      "check-factory-runner-evidence.py")
-        shutil.copy2(RUNNER_ARTIFACTS, self.root / "scripts" / "factory_runner_artifacts.py")
-        shutil.copy2(CHECK_ENV, self.root / "scripts" / "check-factory-environment.py")
+        shutil.copy2(RUNNER_ARTIFACTS, self.root / ".factory" / "tools" / "factory_runner_artifacts.py")
+        shutil.copy2(CHECK_ENV, self.root / ".factory" / "tools" / "check-factory-environment.py")
         _write(self.root / ".factory" / "environment.toml", self.environment)
         _write(self.root / ".factory" / "signer-trust.json",
                json.dumps(self.trust, sort_keys=True, indent=2) + "\n")
@@ -1681,7 +1681,7 @@ class ManifestValidationTests(unittest.TestCase):
     def test_checker_cli_rejects_without_real_keys(self) -> None:
         root, head, ref = self.build(enabled=False)
         result = run(
-            [sys.executable, str(root / "scripts/check-factory-runner-evidence.py"),
+            [sys.executable, str(root / ".factory/tools/check-factory-runner-evidence.py"),
              "--verify-manifest", ref, "--expected-commit", head],
             root=root, check=False,
         )
@@ -1834,7 +1834,7 @@ class PinnedExecutableBoundaryTests(unittest.TestCase):
         root, head, ref = self._build_manifest_fixture(enabled=False)
         base_command = [
             sys.executable,
-            str(root / "scripts/check-factory-runner-evidence.py"),
+            str(root / ".factory/tools/check-factory-runner-evidence.py"),
             "--verify-manifest", ref, "--expected-commit", head,
         ]
         clean = run(base_command, root=root, check=False, env=None)
@@ -1854,7 +1854,7 @@ class PinnedExecutableBoundaryTests(unittest.TestCase):
         root, head, ref = self._build_manifest_fixture(enabled=True)
         result = run(
             [sys.executable,
-             str(root / "scripts/check-factory-runner-evidence.py"),
+             str(root / ".factory/tools/check-factory-runner-evidence.py"),
              "--verify-manifest", ref, "--expected-commit", head],
             root=root, check=False, env=self._hostile_env(fake_bin),
         )
@@ -1871,7 +1871,7 @@ class PinnedExecutableBoundaryTests(unittest.TestCase):
         marker = self.tmp / "fake-invoked"
         root = _mkdir(self.tmp / "coordinator-ws")
         for rel in (".factory/artifacts", ".ralph/agent",
-                    ".factory-state", "scripts"):
+                    ".factory-state", "scripts", ".factory/tools"):
             _mkdir(root / rel)
         _write(root / ".factory/artifacts/implementation-plan.md",
                "# fixture plan\n")
@@ -1879,7 +1879,7 @@ class PinnedExecutableBoundaryTests(unittest.TestCase):
                "schema_version = 1\n[[runners]]\nname = \"x\"\n"
                "capabilities = []\nverify_argv = []\n")
         shutil.copy2(INITIALIZE_CAMPAIGN_AUDIT,
-                     root / "scripts" / "initialize-campaign-audit.py")
+                     root / ".factory" / "tools" / "initialize-campaign-audit.py")
         _git(root, "init", "-q", "-b", "develop")
         _git(root, "config", "user.email", "fixture@test")
         _git(root, "config", "user.name", "fixture")
@@ -1888,7 +1888,7 @@ class PinnedExecutableBoundaryTests(unittest.TestCase):
         head = _git(root, "rev-parse", "HEAD").stdout.strip()
         result = run(
             [sys.executable,
-             str(root / "scripts/initialize-campaign-audit.py"),
+             str(root / ".factory/tools/initialize-campaign-audit.py"),
              "--round", "1", "--base", head,
              "--runner-evidence-sha256", "0" * 64],
             root=root, check=False, env=self._hostile_env(fake_bin),
@@ -1906,7 +1906,7 @@ class PinnedExecutableBoundaryTests(unittest.TestCase):
         nonce_before = data["nonce"]
         reinit = run(
             [sys.executable,
-             str(root / "scripts/initialize-campaign-audit.py"),
+             str(root / ".factory/tools/initialize-campaign-audit.py"),
              "--round", "1", "--base", head,
              "--runner-evidence-sha256", "0" * 64],
             root=root, check=False, env=self._hostile_env(fake_bin),
@@ -1918,7 +1918,7 @@ class PinnedExecutableBoundaryTests(unittest.TestCase):
                          "the exact-matching coordinator must be reused, not re-minted")
         mismatch = run(
             [sys.executable,
-             str(root / "scripts/initialize-campaign-audit.py"),
+             str(root / ".factory/tools/initialize-campaign-audit.py"),
              "--round", "2", "--base", head,
              "--runner-evidence-sha256", "0" * 64],
             root=root, check=False, env=self._hostile_env(fake_bin),
@@ -1933,13 +1933,13 @@ class PinnedExecutableBoundaryTests(unittest.TestCase):
         fake_bin = self._fake_bin()
         marker = self.tmp / "fake-invoked"
         root = _mkdir(self.tmp / "audit-validator-ws")
-        for rel in (".factory/artifacts", "scripts"):
+        for rel in (".factory/artifacts", "scripts", ".factory/tools"):
             _mkdir(root / rel)
         _write(root / ".factory/artifacts/implementation-plan.md",
                "[fixture-plan]\n")
         _write(root / ".factory/environment.toml", "schema_version = 1\n")
         shutil.copy2(VALIDATE_CAMPAIGN_AUDIT,
-                     root / "scripts" / "validate-campaign-audit.py")
+                     root / ".factory" / "tools" / "validate-campaign-audit.py")
         _git(root, "init", "-q", "-b", "develop")
         _git(root, "config", "user.email", "fixture@test")
         _git(root, "config", "user.name", "fixture")
@@ -1966,7 +1966,7 @@ class PinnedExecutableBoundaryTests(unittest.TestCase):
         )
         _write(root / ".factory/artifacts/campaign-audit.md", report)
         result = run(
-            [sys.executable, str(root / "scripts/validate-campaign-audit.py"),
+            [sys.executable, str(root / ".factory/tools/validate-campaign-audit.py"),
              "metadata"],
             root=root, check=False, env=self._hostile_env(fake_bin),
         )
@@ -1982,7 +1982,7 @@ class PinnedExecutableBoundaryTests(unittest.TestCase):
         deterministically at the digest match; the hostile env must produce
         byte-identical output and never invoke the fake binaries."""
         root = _mkdir(self.tmp / "audit-validator-complete-ws")
-        for rel in (".factory/artifacts", ".factory-state", "scripts"):
+        for rel in (".factory/artifacts", ".factory-state", "scripts", ".factory/tools"):
             _mkdir(root / rel)
         _write(root / ".factory/artifacts/implementation-plan.md",
                "[fixture-plan]\n")
@@ -2004,7 +2004,7 @@ class PinnedExecutableBoundaryTests(unittest.TestCase):
         )
         for script in (VALIDATE_CAMPAIGN_AUDIT, CHECK_RUNNER_EVIDENCE,
                        CHECK_ENV):
-            shutil.copy2(script, root / "scripts" / script.name)
+            shutil.copy2(script, root / ".factory" / "tools" / script.name)
         _git(root, "init", "-q", "-b", "develop")
         _git(root, "config", "user.email", "fixture@test")
         _git(root, "config", "user.name", "fixture")
@@ -2042,7 +2042,7 @@ class PinnedExecutableBoundaryTests(unittest.TestCase):
         marker = self.tmp / "fake-invoked"
         root, head = self._complete_audit_fixture()
         command = [
-            sys.executable, str(root / "scripts/validate-campaign-audit.py"),
+            sys.executable, str(root / ".factory/tools/validate-campaign-audit.py"),
             "complete", ".factory/artifacts/campaign-audit.md",
             "--expected-round", "1", "--expected-base", head,
             "--expected-runner-evidence-sha256", "0" * 64,
@@ -2066,7 +2066,7 @@ class PinnedExecutableBoundaryTests(unittest.TestCase):
         traceback, no hang): the finite bound converts TimeoutExpired into
         a SystemExit message."""
         root, head = self._complete_audit_fixture()
-        validator_path = root / "scripts/validate-campaign-audit.py"
+        validator_path = root / ".factory/tools/validate-campaign-audit.py"
         spec = importlib.util.spec_from_file_location(
             "factory_validate_campaign_audit", str(validator_path))
         assert spec.loader is not None

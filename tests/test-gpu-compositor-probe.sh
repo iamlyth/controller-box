@@ -19,7 +19,7 @@ PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-ANALYZER="$PROJECT_ROOT/scripts/gpurunner-probes/analyze-gpu-compositor.py"
+ANALYZER="$PROJECT_ROOT/.factory/runner/gpurunner-probes/analyze-gpu-compositor.py"
 PROBE="$PROJECT_ROOT/scripts/probe-gpu-compositor.sh"
 SVG="$PROJECT_ROOT/data/icons/svg/xbox-360.svg"
 LICENSE="$PROJECT_ROOT/data/icons/svg/LICENSE.controllercons"
@@ -170,7 +170,7 @@ smoke=$tmp/smoke
 mkdir -p "$smoke"
 cat > "$smoke/smoke.sh" <<SMOKE
 set -euo pipefail
-EGL_SRC='$PROJECT_ROOT/scripts/gpurunner-probes/egl_renderer_probe.c'
+EGL_SRC='$PROJECT_ROOT/.factory/runner/gpurunner-probes/egl_renderer_probe.c'
 SM='$smoke'
 # 1. Compile the EGL renderer helper under the nix shell, with the same
 #    pkg-config flags the live probe uses.

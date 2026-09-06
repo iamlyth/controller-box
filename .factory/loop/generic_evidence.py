@@ -44,7 +44,7 @@ No model, runner, hardware, or human is ever invoked: the publisher is
 deterministic control-plane code with a one-writer lock, and a failed or
 skipped suite leaves no artifacts.  The evidence record binds the receipt
 digest, the exact commit, and the coordinator round/nonce so
-``scripts/check-installed-harness-evidence.sh`` can require a matching
+``.factory/tools/check-installed-harness-evidence.sh`` can require a matching
 installed-harness receipt before accepting the generic evidence.
 
 **Crash recovery/resume (Task 23).** Every canonical write is atomic
@@ -107,8 +107,8 @@ STAGING_SCHEMA = "factory-generic-evidence-staging/v1"
 PRESERVATION_SCHEMA = "factory-generic-preservation/v1"
 COORDINATOR_SCHEMA = "ralph-audit-coordinator/v1"
 POLICY_REL = ".factory/campaign-receipt-policy.json"
-MACHINE_RECEIPT_REL = "scripts/machine-receipt.py"
-CHECKER_REL = "scripts/check-installed-harness-evidence.sh"
+MACHINE_RECEIPT_REL = ".factory/tools/machine-receipt.py"
+CHECKER_REL = ".factory/tools/check-installed-harness-evidence.sh"
 STATE_FILE = ".factory-state/factory-loop.json"
 
 SHA1 = re.compile(r"^[0-9a-f]{40}$")
@@ -144,7 +144,7 @@ ALLOWED_NEW_PREFIXES = (
 RECEIPT_ARTIFACT_NAMES = ("stdout", "stderr", "json")
 
 # The hidden evidence, state, and git authorities are loaded by committed
-# path (the same idiom state.py uses for scripts/factory_state_io.py), so
+# path (the same idiom state.py uses for .factory/tools/factory_state_io.py), so
 # the publisher works both as a package member and as a direct script.
 sys.path.insert(0, str(LOOP_DIR))
 import evidence as evidence_module  # noqa: E402

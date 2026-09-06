@@ -94,7 +94,7 @@ FORBIDDEN_TRACKED_EXACT: Tuple[str, ...] = (
     "tests/test-pi2-ollama-wrapper.sh",  # legacy wrapper tests
 )
 # The generic model-side Pi guard extension
-# (``scripts/pi-factory-guard-extension.mjs``) is the required replacement
+# (``.factory/tools/pi-factory-guard-extension.mjs``) is the required replacement
 # for the retired emit extension: it is *not* forbidden here and is bound
 # by the boilerplate verifier and the launch authority.
 # Old role prompts replaced by the canonical planner/developer/tester/auditor

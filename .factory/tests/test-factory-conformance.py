@@ -48,15 +48,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 SCRIPTS = ROOT / "scripts"
+TOOLS = ROOT / ".factory" / "tools"
+RUNNER = ROOT / ".factory" / "runner"
 FIXTURES = ROOT / ".factory" / "tests" / "fixtures" / "conformance"
 
-VALIDATOR = SCRIPTS / "validate-conformance.py"
-FACTS_VALIDATOR = SCRIPTS / "validate-blocked-facts.py"
-CAPABILITY_CHECKER = SCRIPTS / "check-capability-evidence.py"
-CONTRACT_CHECKER = SCRIPTS / "check-capability-contracts.py"
-RUNNER_CHECKER = SCRIPTS / "check-factory-runner-evidence.py"
-ARTIFACT_HELPER = SCRIPTS / "factory_runner_artifacts.py"
-ENVIRONMENT_CHECKER = SCRIPTS / "check-factory-environment.py"
+VALIDATOR = TOOLS / "validate-conformance.py"
+FACTS_VALIDATOR = TOOLS / "validate-blocked-facts.py"
+CAPABILITY_CHECKER = TOOLS / "check-capability-evidence.py"
+CONTRACT_CHECKER = TOOLS / "check-capability-contracts.py"
+RUNNER_CHECKER = TOOLS / "check-factory-runner-evidence.py"
+ARTIFACT_HELPER = RUNNER / "factory_runner_artifacts.py"
+ENVIRONMENT_CHECKER = TOOLS / "check-factory-environment.py"
 
 
 def run(argv, cwd: Path, check: bool = False,
@@ -77,13 +79,13 @@ class ConformanceFixture:
     def __init__(self, root: Path) -> None:
         self.root = root
         for rel in (".factory/artifacts", ".factory/schemas", ".factory/loop",
-                    ".factory-state", "tests/fixtures", "docs", "scripts"):
+                    ".factory/tools", ".factory-state", "tests/fixtures", "docs", "scripts"):
             (root / rel).mkdir(parents=True, exist_ok=True)
         for script in (
             VALIDATOR, FACTS_VALIDATOR, CAPABILITY_CHECKER, CONTRACT_CHECKER,
             RUNNER_CHECKER, ARTIFACT_HELPER, ENVIRONMENT_CHECKER,
         ):
-            shutil.copy2(script, root / "scripts" / script.name)
+            shutil.copy2(script, root / ".factory" / "tools" / script.name)
         shutil.copy2(
             ROOT / ".factory" / "signer-trust.json",
             root / ".factory" / "signer-trust.json",
@@ -97,10 +99,10 @@ class ConformanceFixture:
         if gitutil.is_symlink() or not gitutil.is_file():
             raise AssertionError(f"missing pinned-Git authority: {gitutil}")
         shutil.copy2(gitutil, root / ".factory" / "loop" / "gitutil.py")
-        (root / "scripts" / "verify-boilerplate.sh").write_text(
+        (root / ".factory" / "tools" / "verify-boilerplate.sh").write_text(
             "#!/usr/bin/env bash\nexit 0\n", encoding="utf-8"
         )
-        (root / "scripts" / "verify-boilerplate.sh").chmod(0o755)
+        (root / ".factory" / "tools" / "verify-boilerplate.sh").chmod(0o755)
         (root / "docs" / "SPEC.md").write_text("# Spec\n", encoding="utf-8")
         (root / ".gitignore").write_text(".factory-state/\n", encoding="utf-8")
         (root / ".factory" / "environment.toml").write_text(
@@ -237,7 +239,7 @@ class ConformanceFixture:
     def validator(self, mode: str, *extra: str,
                   env: dict | None = None) -> subprocess.CompletedProcess:
         return run(
-            [sys.executable, "./scripts/validate-conformance.py", mode,
+            [sys.executable, "./.factory/tools/validate-conformance.py", mode,
              ".factory/artifacts/conformance.json", *extra],
             self.root,
             env=env,
@@ -285,7 +287,7 @@ class ConformanceFixtureTests(unittest.TestCase):
         # contract file), never the live product's stale runner aggregate.
         for name in ("check-capability-contracts.py",
                      "check-capability-evidence.py"):
-            result = run([sys.executable, f"./scripts/{name}"],
+            result = run([sys.executable, f"./.factory/tools/{name}"],
                          self.fixture.root)
             self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -312,8 +314,8 @@ class RuntimeReceiptTests(unittest.TestCase):
                      root / ".factory" / "loop" / "evidence.py")
         shutil.copy2(ROOT / ".factory" / "loop" / "lock.py",
                      root / ".factory" / "loop" / "lock.py")
-        shutil.copy2(ROOT / "scripts" / "machine-receipt.py",
-                     root / "scripts" / "machine-receipt.py")
+        shutil.copy2(ROOT / ".factory/tools" / "machine-receipt.py",
+                     root / ".factory" / "tools" / "machine-receipt.py")
         self.state_dir = root / ".factory-state"
         self.state_dir.mkdir(mode=0o700, exist_ok=True)
         os.chmod(self.state_dir, 0o700)
@@ -337,7 +339,7 @@ class RuntimeReceiptTests(unittest.TestCase):
 
     def _mint(self, tag: str, *argv: str) -> subprocess.CompletedProcess[str]:
         return run(
-            [sys.executable, "scripts/machine-receipt.py", "--root", str(self.fixture.root),
+            [sys.executable, ".factory/tools/machine-receipt.py", "--root", str(self.fixture.root),
              "--tag", tag, "--audit-round", "1", "--evidence-commit", self.head,
              "--nonce", self.nonce, "--", *argv],
             self.fixture.root,
@@ -823,7 +825,7 @@ class DuplicateAuthorityTests(unittest.TestCase):
             ".factory/artifacts/blocked-facts.json",
             '{"schema": "ralph-blocked-facts/v1", "facts": [], "facts": []}',
         )
-        result = run([sys.executable, "./scripts/validate-blocked-facts.py",
+        result = run([sys.executable, "./.factory/tools/validate-blocked-facts.py",
                       "planning", ".factory/artifacts/blocked-facts.json"],
                      self.fixture.root)
         self.assertEqual(result.returncode, 1, result.stdout)
@@ -845,7 +847,7 @@ class DuplicateAuthorityTests(unittest.TestCase):
             ".factory/capability-contracts.json",
             '{"schema": "ralph-capability-contract/v1", "capabilities": [], "capabilities": []}',
         )
-        result = run([sys.executable, "./scripts/check-capability-contracts.py"],
+        result = run([sys.executable, "./.factory/tools/check-capability-contracts.py"],
                      self.fixture.root)
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn("duplicate JSON object key", result.stderr)
@@ -892,7 +894,7 @@ class DuplicateAuthorityTests(unittest.TestCase):
         data = json.loads(self.fixture.facts_path.read_text(encoding="utf-8"))
         data["facts"].append(dict(data["facts"][0], id="FACT-001"))
         self.fixture.facts_path.write_text(json.dumps(data), encoding="utf-8")
-        result = run([sys.executable, "./scripts/validate-blocked-facts.py",
+        result = run([sys.executable, "./.factory/tools/validate-blocked-facts.py",
                       "planning", ".factory/artifacts/blocked-facts.json"],
                      self.fixture.root)
         self.assertEqual(result.returncode, 1, result.stdout)
@@ -924,7 +926,7 @@ class DuplicateAuthorityTests(unittest.TestCase):
                  "must_not_skip": ["Skipped"],
                  "deny_simulated_markers": ["mock"]},
             ]}), encoding="utf-8")
-        result = run([sys.executable, "./scripts/check-capability-contracts.py"],
+        result = run([sys.executable, "./.factory/tools/check-capability-contracts.py"],
                      self.fixture.root)
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn("contract names must be unique", result.stderr)

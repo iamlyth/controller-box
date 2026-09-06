@@ -32,7 +32,7 @@ Documentation index: [operations and service architecture](docs/OPERATIONS.md),
 historical review record, not current acceptance authority. Generated copies of
 runner authority data under `deploy/factory-runner-authority-v1/` intentionally
 duplicate source inputs; regenerate them with
-`scripts/build-runner-probe-authority.py` rather than editing either copy by hand.
+`.factory/runner/build-runner-probe-authority.py` rather than editing either copy by hand.
 
 ## Install
 
@@ -204,7 +204,7 @@ The project includes a multi-layer visual acceptance suite (SPEC §11.1)
 that verifies actual framebuffer pixel output, not just state-machine or
 geometry correctness:
 
-A fail-closed Git commit boundary (`scripts/install-git-commit-guard.sh`, run on every factory launch) rejects empty metadata-only commits at the hook level: every commit must carry at least one substantive tracked path, and retired `.ralph/**` recovery paths may only be deleted from the index. There is no lifecycle token or scratchpad exemption. Hook bypass markers and commit-creation verbs without hook coverage are refused at the model command boundary (`scripts/pi-cli-shims/git`).
+A fail-closed Git commit boundary (`.factory/tools/install-git-commit-guard.sh`, run on every factory launch) rejects empty metadata-only commits at the hook level: every commit must carry at least one substantive tracked path, and retired `.ralph/**` recovery paths may only be deleted from the index. There is no lifecycle token or scratchpad exemption. Hook bypass markers and commit-creation verbs without hook coverage are refused at the model command boundary (`.factory/tools/pi-cli-shims/git`).
 
 | Layer | Test | What it verifies |
 |-------|------|-----------------|
@@ -301,10 +301,11 @@ runtime authority is a separately installed, root-owned
 `factory-probe-authority/v1` closure, and the SSH identity can invoke only the
 root broker (never the signer). Production additionally requires the external
 root-owned `factory-ssh-launcher/v1` manifest and the installed runner policy's
-exact group allowlist and `/usr/bin/xdg-dbus-proxy` prerequisite; no launcher is
+exact group allowlist and digest-pinned root InputPlumber mediator prerequisite
+(`/usr/libexec/inputplumber-mediator`); no launcher is
 resolved from HOME or PATH. Evidence is isolated by campaign ID, readiness
 nonce, runner, commit, and acquisition nonce. The checked-in enrollment remains
-pending; deployment/migration uses `scripts/install-factory-runner-v2.sh` and
+pending; deployment/migration uses `.factory/runner/install-factory-runner-v2.sh` and
 `deploy/factory-runner-authority-v1/forced-command-v2.txt` after independent
 operator approval.
 
@@ -347,7 +348,7 @@ INSTALL_MANIFEST="$INSTALL_PARENT/install-manifest.json"
 CAMPAIGN_ID="controller-box-$(date +%Y%m%dT%H%M%S)-$$"
 python3 .factory/loop/installer.py install --root "$PWD" --commit "$ACCEPTED_COMMIT" --prefix "$INSTALL_PREFIX" --manifest-out "$INSTALL_MANIFEST"
 python3 "$INSTALL_PREFIX/.factory/loop/installer.py" verify --root "$PWD" --commit "$ACCEPTED_COMMIT" --prefix "$INSTALL_PREFIX" --manifest "$INSTALL_MANIFEST"
-"$INSTALL_PREFIX/.factory/bin/factory-campaign" --root "$PWD" run --campaign-id "$CAMPAIGN_ID" --rounds 5 --branch develop --provider "${PI_PROVIDER:?set provider}" --model "${PI_MODEL:?set model}" --backend "${PI2_BACKEND:?set trusted pi2 executable}" --accepted-commit "$ACCEPTED_COMMIT" --install-manifest "$INSTALL_MANIFEST" --human-trust-anchor "${HUMAN_TRUST_ANCHOR:?operator-provisioned immutable root-owned file}" --human-trust-anchor-sha256 "${HUMAN_TRUST_ANCHOR_SHA256:?offline approved digest}" --campaign-timeout 21600 --verification-command ./scripts/verify-project.sh --runner-command ./scripts/run-factory-runners.py --capability-command ./scripts/check-capability-evidence.py --acceptance-command '["./scripts/final-gate.sh","--implementation"]'
+"$INSTALL_PREFIX/.factory/bin/factory-campaign" --root "$PWD" run --campaign-id "$CAMPAIGN_ID" --rounds 5 --branch develop --provider "${PI_PROVIDER:?set provider}" --model "${PI_MODEL:?set model}" --backend "${PI2_BACKEND:?set trusted pi2 executable}" --accepted-commit "$ACCEPTED_COMMIT" --install-manifest "$INSTALL_MANIFEST" --human-trust-anchor "${HUMAN_TRUST_ANCHOR:?operator-provisioned immutable root-owned file}" --human-trust-anchor-sha256 "${HUMAN_TRUST_ANCHOR_SHA256:?offline approved digest}" --campaign-timeout 21600 --verification-command ./scripts/verify-project.sh --runner-command ./.factory/runner/run-factory-runners.py --capability-command ./.factory/tools/check-capability-evidence.py --acceptance-command '["./scripts/final-gate.sh","--implementation"]'
 ```
 
 The launch executes installed control-plane bytes and re-verifies their
@@ -414,13 +415,13 @@ not replace the local ledger. Ordinary defects use the dedicated maintenance
 plan and do not modify `docs/SPEC.md`:
 
 ```bash
-./scripts/bug-ledger.py validate
+./.factory/tools/bug-ledger.py validate
 ```
 
 Maintenance keeps the selected bug and cycle base in ignored `.factory-state/`
-(via `scripts/factory-state-file.py`), a canonical
+(via `.factory/tools/factory-state-file.py`), a canonical
 `.factory/artifacts/maintenance-plan.md` validated by
-`scripts/validate-maintenance-plan.py` and `scripts/check-maintenance-freshness.sh`,
+`.factory/tools/validate-maintenance-plan.py` and `.factory/tools/check-maintenance-freshness.sh`,
 and runs through the same fresh-context control plane as implementation.
 Completed tasks remain only in Git history; every newly accepted task must be
 `pending`.

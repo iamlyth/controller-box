@@ -11,11 +11,11 @@ schema_version = 1
 [visual-audit]
 enabled = false
 vision_model = "ollama/kimi-k2.6"
-sdk_driver = "scripts/visual-audit-review-sdk.mjs"
+sdk_driver = ".factory/tools/visual-audit-review-sdk.mjs"
 lease_file = ".factory-state/visual-audit.lease"
 review_parallelism = 4
 review_timeout_seconds = 300
-capture_driver = "scripts/visual-capture-driver.sh"
+capture_driver = ".factory/tools/visual-capture-driver.sh"
 capture_dir = ".factory/artifacts/visual-audit/captures"
 review_dir = ".factory/artifacts/visual-audit/reviews"
 prompt_template = ".factory/prompts/visual-audit.md"

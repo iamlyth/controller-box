@@ -28,7 +28,7 @@ tier end to end:
    bound to the audit coordinator in the fixture authority
    (`.factory-state/audit-coordinator.json` with the exact bound commit);
    a gate that exits nonzero or prints a skip marker is never PASS;
-   `scripts/check-audit-receipts.py` exits 0 against the fixture audit
+   `.factory/tools/check-audit-receipts.py` exits 0 against the fixture audit
    report and rejects a PASS claim for a failing receipt;
 5. the fresh installed-functional evidence gate accepts a commit-bound
    env in the fixture authority and rejects stale/skipped/failing records;
@@ -86,8 +86,8 @@ LOOP = ROOT / ".factory" / "loop"
 STATE_DIR = ".factory-state"
 RECEIPTS_DIR = f"{STATE_DIR}/audit-receipts"
 INSTALLER = LOOP / "installer.py"
-CHECK_AUDIT_RECEIPTS = ROOT / "scripts" / "check-audit-receipts.py"
-CHECK_INSTALLED_FUNCTIONAL = ROOT / "scripts" / "check-installed-harness-evidence.sh"
+CHECK_AUDIT_RECEIPTS = ROOT / ".factory/tools" / "check-audit-receipts.py"
+CHECK_INSTALLED_FUNCTIONAL = ROOT / ".factory/tools" / "check-installed-harness-evidence.sh"
 SMOKE_DIR = ROOT / ".factory" / "smoke"
 FIXTURES_DIR = ROOT / ".factory" / "tests" / "fixtures"
 SMOKE_BRANCH = "fixture-main"
@@ -410,7 +410,7 @@ class InstalledTierSuite(unittest.TestCase):
 
     def mint(self, tag: str, argv: list[str], *, check: bool = True,
              env: dict | None = None) -> subprocess.CompletedProcess[str]:
-        wrapper = self.external / "scripts" / "machine-receipt.py"
+        wrapper = self.external / ".factory" / "tools" / "machine-receipt.py"
         command = [
             sys.executable, str(wrapper),
             "--root", str(self.fixture),
@@ -576,7 +576,7 @@ class InstalledTierSuite(unittest.TestCase):
                 self.assertNotIn(first, footprint.PRODUCT_POLLUTION_NAMESPACES,
                                  entry["path"])
                 self.assertTrue(
-                    first in footprint.HIDDEN_NAMESPACE_SET or first == "scripts",
+                    first in footprint.HIDDEN_NAMESPACE_SET,
                     entry["path"],
                 )
             # Task 11: the installed copy carries the model-side Pi guard
@@ -585,7 +585,7 @@ class InstalledTierSuite(unittest.TestCase):
             # is a new worktree file not yet part of the bound commit, the
             # source working-tree file is bound instead; once committed the
             # manifest entry must be blob-exact.
-            ext_rel = "scripts/pi-factory-guard-extension.mjs"
+            ext_rel = ".factory/tools/pi-factory-guard-extension.mjs"
             ext_manifest = next(
                 (e for e in manifest["files"] if e["path"] == ext_rel), None
             )
@@ -731,7 +731,7 @@ class InstalledTierSuite(unittest.TestCase):
             (
                 "gate-receipt-wrapper",
                 [
-                    sys.executable, str(self.external / "scripts" / "machine-receipt.py"),
+                    sys.executable, str(self.external / ".factory" / "tools" / "machine-receipt.py"),
                     "--help",
                 ],
             ),
@@ -854,8 +854,8 @@ class InstalledTierSuite(unittest.TestCase):
         required_gates = (
             "--campaign-timeout", "21600",
             "--verification-command", "./scripts/verify-project.sh",
-            "--runner-command", "./scripts/run-factory-runners.py",
-            "--capability-command", "./scripts/check-capability-evidence.py",
+            "--runner-command", "./.factory/runner/run-factory-runners.py",
+            "--capability-command", "./.factory/tools/check-capability-evidence.py",
             "--acceptance-command", "[\"./scripts/final-gate.sh\",\"--implementation\"]",
         )
         campaign_id = "installed-production-preflight"
@@ -1037,7 +1037,7 @@ class InstalledTierSuite(unittest.TestCase):
         # (the stub suite exits 0) — never hand-fabricated.
         receipt_ref = f"{RECEIPTS_DIR}/installed-harness-smoke.json"
         minted = _run(
-            [sys.executable, str(fixture / "scripts" / "machine-receipt.py"),
+            [sys.executable, str(fixture / ".factory" / "tools" / "machine-receipt.py"),
              "--root", str(fixture), "--tag", "installed-harness-smoke",
              "--audit-round", "1", "--evidence-commit", commit,
              "--nonce", nonce, "--", "./.factory/tests/test-factory-installed.sh"],
@@ -1067,7 +1067,7 @@ class InstalledTierSuite(unittest.TestCase):
             encoding="utf-8",
         )
         os.chmod(record_path, 0o600)
-        checker = ["bash", str(fixture / "scripts" /
+        checker = ["bash", str(fixture / ".factory" / "tools" /
                                "check-installed-harness-evidence.sh")]
         ok = _run(checker, cwd=str(fixture))
         self.assertIn("PASS", ok.stdout)
@@ -1129,7 +1129,7 @@ class InstalledTierSuite(unittest.TestCase):
         for rel in ("docs", "scripts", "src",
                     ".factory/prompts", ".factory/audit-objectives",
                     ".factory/artifacts", ".factory/schemas",
-                    ".factory/smoke", ".factory/loop"):
+                    ".factory/smoke", ".factory/loop", ".factory/tools"):
             (ws / rel).mkdir(parents=True)
         for module in sorted(LOOP.glob("*.py")):
             shutil.copy2(module, ws / ".factory/loop" / module.name)
@@ -1172,15 +1172,17 @@ class InstalledTierSuite(unittest.TestCase):
                      "evidence_smoke.py"):
             os.chmod(ws / ".factory/smoke" / name, 0o755)
         for script in ("factory_state_io.py", "credential-guard.py",
-                       "check-plan-freshness.sh", "check-generic-leakage.sh",
-                       "check-docs-sync.sh"):
-            shutil.copy2(ROOT / "scripts" / script, ws / "scripts" / script)
-        shutil.copy2(ROOT / "scripts/git-commit-guard.sh",
-                     ws / "scripts/git-commit-guard.sh")
-        shutil.copy2(ROOT / "scripts/install-git-commit-guard.sh",
-                     ws / "scripts/install-git-commit-guard.sh")
-        os.chmod(ws / "scripts/git-commit-guard.sh", 0o755)
-        os.chmod(ws / "scripts/install-git-commit-guard.sh", 0o755)
+                       "check-plan-freshness.sh", "check-generic-leakage.sh"):
+            shutil.copy2(ROOT / ".factory" / "tools" / script,
+                         ws / ".factory" / "tools" / script)
+        shutil.copy2(ROOT / "scripts/check-docs-sync.sh",
+                     ws / "scripts/check-docs-sync.sh")
+        shutil.copy2(ROOT / ".factory/tools/git-commit-guard.sh",
+                     ws / ".factory/tools/git-commit-guard.sh")
+        shutil.copy2(ROOT / ".factory/tools/install-git-commit-guard.sh",
+                     ws / ".factory/tools/install-git-commit-guard.sh")
+        os.chmod(ws / ".factory/tools/git-commit-guard.sh", 0o755)
+        os.chmod(ws / ".factory/tools/install-git-commit-guard.sh", 0o755)
         (ws / "scripts/verify-boilerplate.sh").write_text(
             "#!/usr/bin/env bash\n"
             "set -euo pipefail\n"
@@ -1191,7 +1193,7 @@ class InstalledTierSuite(unittest.TestCase):
         # The real Git commit boundary: the production guard and its six
         # launcher hooks are installed before any fixture commit, so every
         # campaign commit (and fixture commit) runs through it.
-        _run(["bash", str(ws / "scripts/install-git-commit-guard.sh")],
+        _run(["bash", str(ws / ".factory/tools/install-git-commit-guard.sh")],
              cwd=str(ws))
         _run([gitutil.GIT_EXECUTABLE, "-C", str(ws), "add", "-A"])
         _run([gitutil.GIT_EXECUTABLE, "-C", str(ws), "commit", "-qm",
@@ -1381,8 +1383,8 @@ class InstalledTierSuite(unittest.TestCase):
         self.assertNotIn(".factory/bin/factory-launch", files)
         self.assertIn(".factory/bin/factory-launch", entrypoints)
         self.assertIn(".factory/bin/factory-campaign", entrypoints)
-        self.assertIn("scripts/machine-receipt.py", entrypoints)
-        self.assertIn("scripts/factory_state_io.py", shared)
+        self.assertIn(".factory/tools/machine-receipt.py", entrypoints)
+        self.assertIn(".factory/tools/factory_state_io.py", shared)
         self.assertTrue((prefix / ".factory/bin/factory-launch").is_file())
         self.assert_external_install_clean(prefix, manifest)
         errors = installer_module.verify_staged(fixture, prefix, manifest)

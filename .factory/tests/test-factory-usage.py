@@ -1008,17 +1008,17 @@ class LaunchIntegrationTests(_Base):
         super().setUp()
         self.workspace = self.tmp / "workspace"
         self.workspace.mkdir()
-        scripts = self.workspace / "scripts"
-        scripts.mkdir()
-        shutil.copy2(ROOT / "scripts" / "pi2-secure-exec.py",
-                     scripts / "pi2-secure-exec.py")
-        shutil.copy2(ROOT / "scripts" / "credential-guard.py",
-                     scripts / "credential-guard.py")
-        shutil.copy2(ROOT / "scripts" / "pi-factory-guard-extension.mjs",
-                     scripts / "pi-factory-guard-extension.mjs")
-        (scripts / "pi-cli-shims").mkdir()
-        shutil.copy2(ROOT / "scripts" / "pi-cli-shims" / "git",
-                     scripts / "pi-cli-shims" / "git")
+        tools = self.workspace / ".factory" / "tools"
+        tools.mkdir(parents=True)
+        shutil.copy2(ROOT / ".factory/tools" / "pi2-secure-exec.py",
+                     tools / "pi2-secure-exec.py")
+        shutil.copy2(ROOT / ".factory/tools" / "credential-guard.py",
+                     tools / "credential-guard.py")
+        shutil.copy2(ROOT / ".factory/tools" / "pi-factory-guard-extension.mjs",
+                     tools / "pi-factory-guard-extension.mjs")
+        (tools / "pi-cli-shims").mkdir()
+        shutil.copy2(ROOT / ".factory/tools" / "pi-cli-shims" / "git",
+                     tools / "pi-cli-shims" / "git")
         loop = self.workspace / ".factory" / "loop"
         loop.mkdir(parents=True)
         for module in (

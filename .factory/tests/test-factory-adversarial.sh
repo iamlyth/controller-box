@@ -284,9 +284,9 @@ echo "test-factory-adversarial: freeze-guard exit table and substitution atomici
 # and the ralph forwarders that once routed it are removed; the retained
 # Python authority is the single binding path.
 verifier_fixture="$tmp/verifier-fixture"
-mkdir -p "$verifier_fixture/.factory" "$verifier_fixture/scripts"
-cp "$ROOT/scripts/campaign-verifier-binding.py" \
-    "$verifier_fixture/scripts/campaign-verifier-binding.py"
+mkdir -p "$verifier_fixture/.factory/tools" "$verifier_fixture/scripts"
+cp "$ROOT/.factory/tools/campaign-verifier-binding.py" \
+    "$verifier_fixture/.factory/tools/campaign-verifier-binding.py"
 printf '#!/usr/bin/env bash\necho ORIGINAL-VERIFIER-RAN\nexit 0\n' \
     > "$verifier_fixture/scripts/verify-project.sh"
 chmod +x "$verifier_fixture/scripts/verify-project.sh"
@@ -303,7 +303,7 @@ git -C "$verifier_fixture" add -A
 git -C "$verifier_fixture" commit -qm base
 # The campaign binding resolves and the descriptor-executed helper runs the
 # exact bound verifier inode; a substituted helper pathname never runs.
-exec {helper_fd}<"$verifier_fixture/scripts/campaign-verifier-binding.py" || \
+exec {helper_fd}<"$verifier_fixture/.factory/tools/campaign-verifier-binding.py" || \
     fail "cannot open the retained binding helper"
 binding_json=$("/proc/self/fd/$helper_fd" <&"$helper_fd") || \
     fail "the campaign binding must resolve"

@@ -278,6 +278,11 @@ target_compile_definitions(controllerbox_testing PRIVATE CBX_TESTING)
 add_executable(controller-box src/app/main.c)
 target_link_libraries(controller-box PRIVATE controllerbox)
 
+# Root runner helper: all InputPlumber mutation decisions occur before the
+# helper's independently opened system-bus connection can forward a call.
+add_executable(inputplumber-mediator .factory/runner/inputplumber-mediator.c)
+target_link_libraries(inputplumber-mediator PRIVATE PkgConfig::SYSTEMD)
+
 # --- Testing ------------------------------------------------------------------
 enable_testing()
 # Test targets and CTest registrations live in tests/CMakeLists.txt (Task 3).
@@ -286,6 +291,10 @@ include(tests/CMakeLists.txt)
 # --- Install rules (expanded in Task 41) -------------------------------------
 install(TARGETS controller-box
     RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+install(TARGETS inputplumber-mediator
+    RUNTIME DESTINATION "${CMAKE_INSTALL_LIBEXECDIR}")
+install(FILES .factory/runner/inputplumber-runner-dbus.conf
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/dbus-1/system.d")
 install(TARGETS controllerbox nanosvg
     ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}")
 

@@ -221,7 +221,7 @@ independently.
     focus, event dispatch, refresh, and shutdown operate through the production
     path; regression test exercises the same composition path as the
     executable.
-  - Close BUG-0003 via `scripts/bug-ledger.py`: set non-empty `resolution`
+  - Close BUG-0003 via `.factory/tools/bug-ledger.py`: set non-empty `resolution`
     (e.g., "cbx_manager_init now initializes all three tab modules and
     populates every panel; cbx_manager_shutdown tears down tabs and disconnects
     DBus; regression test verifies nonempty panels via production path") and
@@ -237,8 +237,8 @@ independently.
   unchanged. No stale comments about empty panels remain.
 - Verification:
   `nix-shell --run 'cmake --build build-manual && ctest --test-dir build-manual -E "^test_packaging$" --output-on-failure'`;
-  `python3 scripts/bug-ledger.py validate`;
-  `python3 scripts/bug-ledger.py show BUG-0003` (status=closed, resolution non-empty);
+  `python3 .factory/tools/bug-ledger.py validate`;
+  `python3 .factory/tools/bug-ledger.py show BUG-0003` (status=closed, resolution non-empty);
   `git diff --exit-code docs/SPEC.md`.
 - Documentation impact: `src/manager/manager.h` and `src/manager/manager.c`
   comment updates only; no SPEC or external doc changes.
