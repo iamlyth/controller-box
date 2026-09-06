@@ -25,7 +25,7 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
+PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd)
 cd -- "$PROJECT_ROOT"
 
 # Authenticated Nix gate (.factory/tools/nix-gate.sh). Under the declared Nix
@@ -59,13 +59,17 @@ open(path, 'wb').write(data)
 PY
 }
 
-mkdir -p "$tmp/scripts" "$tmp/.factory/schemas" "$tmp/.factory/prompts" "$tmp/docs"
+mkdir -p "$tmp/scripts" "$tmp/.factory/tools" "$tmp/.factory/schemas" "$tmp/.factory/prompts" "$tmp/docs"
 for script in visual-audit-provenance.py visual-audit-review.py visual-audit-lease.py \
         visual-audit-review-sdk.mjs visual-audit-capture.py visual-audit-capture.sh \
         visual-audit-probe.sh visual-capture-driver.sh check-visual-audit.py \
         visual-audit-gate.sh; do
-    cp "$PROJECT_ROOT/scripts/$script" "$tmp/scripts/" 2>/dev/null || true
+    cp "$PROJECT_ROOT/.factory/tools/$script" "$tmp/.factory/tools/" 2>/dev/null || true
 done
+# The production capture tool resolves its provenance helper relative to
+# root/scripts (cwd is the temp repo during capture tests); keep that helper
+# there so the capture fixtures bind the committed provenance tool.
+cp "$PROJECT_ROOT/.factory/tools/visual-audit-provenance.py" "$tmp/scripts/" 2>/dev/null || true
 cp "$PROJECT_ROOT/.factory/schemas/visual-audit-review.schema.json" "$tmp/.factory/schemas/"
 cp "$PROJECT_ROOT/.factory/prompts/visual-audit.md" "$tmp/.factory/prompts/"
 cp "$PROJECT_ROOT/.factory/visual-audit.toml" "$tmp/.factory/"
