@@ -4,17 +4,17 @@
   "probe_authorities": {
     "dev-runner-vm": {
       "version": 1,
-      "authority_sha256": "d9df58fe6b0fbbec3b8ea2b7ea4ea9cb713d600b9f2ef59ab6c26c9aba18d128",
+      "authority_sha256": "8910d904f94476077b9254d13db3903c52597b9eadebccd1b855e8466573b3bc",
       "status": "pending-root-install"
     },
     "iprunner": {
       "version": 1,
-      "authority_sha256": "d9df58fe6b0fbbec3b8ea2b7ea4ea9cb713d600b9f2ef59ab6c26c9aba18d128",
+      "authority_sha256": "8910d904f94476077b9254d13db3903c52597b9eadebccd1b855e8466573b3bc",
       "status": "pending-root-install"
     },
     "gpurunner": {
       "version": 1,
-      "authority_sha256": "d9df58fe6b0fbbec3b8ea2b7ea4ea9cb713d600b9f2ef59ab6c26c9aba18d128",
+      "authority_sha256": "8910d904f94476077b9254d13db3903c52597b9eadebccd1b855e8466573b3bc",
       "status": "pending-root-install"
     }
   },

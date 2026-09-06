@@ -1,6 +1,6 @@
 # Controller-Box Operational Guide
 
-Keep this file brief and operational. Progress, task status, and verification evidence belong in `.factory/artifacts/implementation-plan.md`; the fresh Python factory keeps its single mutable control state in `.factory-state/factory-loop.json` (methodology: `docs/FACTORY-LOOP-SPEC.md`).
+Keep this file brief and operational. Progress, task status, and verification evidence belong in `.factory/artifacts/implementation-plan.md`; the fresh Python factory keeps canonical mutable loop state in `.factory-state/factory-loop.json` and campaign-scoped runtime state below `.factory-state/campaigns/` (methodology: `docs/FACTORY-LOOP-SPEC.md`).
 
 ## Sources of truth
 

@@ -29,14 +29,14 @@ fi
 # Extension node syntax must stay green.
 node --check "$EXTENSION"
 
-# The guard must stay importable/compilable (py_compile writes to __pycache__
-# under the tracked tree; remove the cache artifact we just produced).
-python3 -m py_compile "$GUARD"
-rm -f "$PROJECT_ROOT"/scripts/__pycache__/credential-guard.cpython-*.pyc
-
 tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/tmpdir"
+trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+mkdir -p "$tmp/tmpdir" "$tmp/pycache"
+
+# Compile into test-owned storage; factory tests never create bytecode in the
+# tracked source tree.
+PYTHONDONTWRITEBYTECODE=1 PYTHONPYCACHEPREFIX="$tmp/pycache" \
+    python3 -m py_compile "$GUARD"
 
 # The fixture runs against a hermetic TMPDIR so the fake overflow log stays
 # inside the test. Guard executables are swapped only through the explicit

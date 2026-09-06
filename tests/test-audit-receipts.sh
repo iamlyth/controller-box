@@ -64,7 +64,7 @@ print(json.dumps({
 }))
 PY
     cat > "$dir/.factory/runner-policy-enrollment.json" <<'EOF'
-{"schema":"controller-box-runner-policy-enrollment/v2","status":"pending-human-review","probe_authorities":{"fake-runner":{"version":1,"authority_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","status":"pending-root-install"}},"licensed_authority":{"runner_class":"gpurunner","authority_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","scopes":[],"status":"pending-human-review"},"note":"fixture"}
+{"schema":"controller-box-runner-policy-enrollment/v3","status":"pending-human-review","probe_authorities":{"fake-runner":{"version":1,"authority_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","status":"pending-root-install"}},"host_executable_enrollment":{"status":"pending-root-install","required":["systemd-run","systemctl","xdg-dbus-proxy","git","bash","python3","ssh-keygen","sudo","busctl","mount","umount","udevadm","stdbuf","dpkg-query","InputPlumber"],"identity_fields":["path","sha256","device","inode"],"inputplumber_additional_fields":["package_version","service_exec_start"],"note":"fixture"},"licensed_authority":{"runner_class":"gpurunner","authority_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","scope_pins":{},"scopes":[],"status":"pending-human-review"},"note":"fixture"}
 EOF
     git -C "$dir" init -q -b develop
     git -C "$dir" config user.name test

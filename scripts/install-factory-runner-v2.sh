@@ -173,28 +173,28 @@ def protected(path):
 raw_manifest=protected(mp)
 try:m=json.loads(raw_manifest)
 except Exception:die('installation manifest is invalid JSON')
-v2=m.get('schema')=='factory-runner-install-manifest/v2'
-expected_v2={'schema','commit','tree','commit_object_b64','source_merkle_sha256','files','installer','authority_builder','symlinks','submodules'}
-expected_v1={'schema','commit','tree','commit_object_b64','files','executables','host_requirements'}
-if set(m)!=(expected_v2 if v2 else expected_v1) or (not v2 and m.get('schema')!='factory-runner-install-manifest/v1'):die('installation manifest fields/schema invalid')
+expected={'schema','commit','tree','commit_object_b64','source_merkle_sha256','files','installer','authority_builder','symlinks','submodules'}
+if set(m)!=expected or m.get('schema')!='factory-runner-install-manifest/v2':die('installation manifest fields/schema invalid')
 if not commit:commit=m['commit']
 if not tree:tree=m['tree']
 if m['commit']!=commit or m['tree']!=tree or not re.fullmatch('[0-9a-f]{40,64}',commit) or not re.fullmatch('[0-9a-f]{40,64}',tree):die('explicit commit/tree binding mismatch')
-if v2 and (m['installer']!='scripts/install-factory-runner-v2.sh' or m['authority_builder']!='scripts/build-runner-probe-authority.py' or m['symlinks']!='reject' or m['submodules']!='reject'):die('source policy binding mismatch')
+if m['installer']!='scripts/install-factory-runner-v2.sh' or m['authority_builder']!='scripts/build-runner-probe-authority.py' or m['symlinks']!='reject' or m['submodules']!='reject':die('source policy binding mismatch')
 try:co=base64.b64decode(m['commit_object_b64'],validate=True)
 except Exception:die('commit object encoding invalid')
-if hashlib.sha1(b'commit '+str(len(co)).encode()+b'\0'+co).hexdigest()!=commit or not co.startswith(f'tree {tree}\n'.encode()):die('commit object/tree binding invalid')
+def git_hash(kind,data,nhex):
+ framed=kind.encode()+b' '+str(len(data)).encode()+b'\0'+data
+ return (hashlib.sha1(framed) if nhex==40 else hashlib.sha256(framed)).hexdigest()
+if git_hash('commit',co,len(commit))!=commit or not co.startswith(f'tree {tree}\n'.encode()):die('commit object/tree binding invalid')
 files=m['files']
 required={'scripts/install-factory-runner-v2.sh','scripts/factory-runner-root-bootstrap','scripts/factory-runner-broker.py','scripts/factory-runner-signer.py','scripts/factory-runner-server.py','scripts/factory_runner_policy.py','scripts/factory_runner_artifacts.py','scripts/factory_runner_authority.py','scripts/build-runner-probe-authority.py','deploy/factory-runner-authority-v1/authority.json'}
 if not isinstance(files,dict) or not required.issubset(files):die('installation closure is incomplete')
-if v2:
- closure=hashlib.sha256()
- for rel,desc in sorted(files.items()):
-  closure.update(rel.encode()+b'\0');closure.update(json.dumps(desc,sort_keys=True,separators=(',',':')).encode()+b'\0')
- if closure.hexdigest()!=m['source_merkle_sha256']:die('source Merkle digest mismatch')
-snap=state/'snapshot'/'source';snap.mkdir()
+closure=hashlib.sha256()
 for rel,desc in sorted(files.items()):
- expected_desc={'blob','sha256','mode','size'} if v2 else {'sha256','mode'}
+ closure.update(rel.encode()+b'\0');closure.update(json.dumps(desc,sort_keys=True,separators=(',',':')).encode()+b'\0')
+if closure.hexdigest()!=m['source_merkle_sha256']:die('source Merkle digest mismatch')
+snap=state/'snapshot'/'source';snap.mkdir();trie={}
+for rel,desc in sorted(files.items()):
+ expected_desc={'blob','sha256','mode','size'}
  if not isinstance(rel,str) or pathlib.PurePosixPath(rel).is_absolute() or '..' in pathlib.PurePosixPath(rel).parts or set(desc)!=expected_desc:die('invalid source manifest entry')
  p=source/rel;before=os.lstat(p)
  if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):die(f'source path is not regular/no-follow: {rel}')
@@ -205,8 +205,23 @@ for rel,desc in sorted(files.items()):
   data+=b
  after=os.lstat(p);os.close(fd)
  if (before.st_dev,before.st_ino)!=(opened.st_dev,opened.st_ino) or (after.st_dev,after.st_ino,after.st_size)!=(opened.st_dev,opened.st_ino,opened.st_size):die(f'mutable source race: {rel}')
- if hashlib.sha256(data).hexdigest()!=desc['sha256'] or stat.S_IMODE(opened.st_mode)!=desc['mode']:die(f'source digest/mode mismatch: {rel}')
+ if hashlib.sha256(data).hexdigest()!=desc['sha256'] or len(data)!=desc['size'] or stat.S_IMODE(opened.st_mode)!=desc['mode']:die(f'source digest/mode mismatch: {rel}')
+ if not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}',str(desc['blob'])) or len(desc['blob'])!=len(tree) or git_hash('blob',data,len(desc['blob']))!=desc['blob']:die(f'Git blob mismatch: {rel}')
+ parts=pathlib.PurePosixPath(rel).parts;node=trie
+ for part in parts[:-1]:
+  if part in node and not isinstance(node[part],dict):die('Git tree file/directory collision')
+  node=node.setdefault(part,{})
+ if parts[-1] in node:die('duplicate Git tree path')
+ node[parts[-1]]=(desc['mode'],desc['blob'])
  out=snap/rel;out.parent.mkdir(parents=True,exist_ok=True);out.write_bytes(data);out.chmod(desc['mode'])
+def tree_oid(node):
+ body=bytearray()
+ for name,value in sorted(node.items(),key=lambda x:x[0].encode()+(b'/' if isinstance(x[1],dict) else b'')):
+  if isinstance(value,dict):mode='40000';oid=tree_oid(value)
+  else:mode='100755' if value[0]==0o755 else '100644';oid=value[1]
+  body.extend(mode.encode()+b' '+name.encode()+b'\0'+bytes.fromhex(oid))
+ return git_hash('tree',bytes(body),len(tree))
+if tree_oid(trie)!=tree:die('manifest does not reconstruct declared Git tree')
 # Exact set: the trusted manifest, not a later checkout walk, defines the closure.
 (state/'snapshot'/'install-manifest.json').write_bytes(raw_manifest)
 policy_raw=protected(pp);transport_raw=protected(tp);launcher_raw=protected(lp);(state/'snapshot'/'policy.json').write_bytes(policy_raw);(state/'snapshot'/'transport.json').write_bytes(transport_raw);(state/'snapshot'/'ssh-launcher.json').write_bytes(launcher_raw)

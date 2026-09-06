@@ -72,8 +72,10 @@ for name,d in sorted(files.items()):
  closure.update(name.encode()+b'\0');closure.update(json.dumps(d,sort_keys=True,separators=(',',':')).encode()+b'\0')
 if closure.hexdigest()!=m['source_merkle_sha256']:die('source Merkle digest mismatch')
 co=base64.b64decode(m['commit_object_b64'],validate=True)
-prefix=b'commit '+str(len(co)).encode()+b'\0'
-if len(m['commit'])==40 and hashlib.sha1(prefix+co).hexdigest()!=m['commit']:die('commit object mismatch')
+def git_hash(kind,data,nhex):
+ framed=kind.encode()+b' '+str(len(data)).encode()+b'\0'+data
+ return (hashlib.sha1(framed) if nhex==40 else hashlib.sha256(framed)).hexdigest()
+if git_hash('commit',co,len(m['commit']))!=m['commit']:die('commit object mismatch')
 if not co.startswith(('tree '+m['tree']+'\n').encode()):die('commit/tree mismatch')
 archive_bytes=read_protected(archive,512*1024*1024)
 out.mkdir(mode=0o700,parents=True)
@@ -87,12 +89,33 @@ with tarfile.open(fileobj=io.BytesIO(archive_bytes),mode='r:*') as tf:
   if name in seen:die(f'duplicate archive member: {name}')
   data=tf.extractfile(member).read();d=files[name]
   if len(data)!=d['size'] or hashlib.sha256(data).hexdigest()!=d['sha256']:die(f'archive digest mismatch: {name}')
+  if not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}',str(d['blob'])) or len(d['blob'])!=len(m['tree']) or git_hash('blob',data,len(d['blob']))!=d['blob']:die(f'Git blob mismatch: {name}')
   dest=out/name;dest.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
   fd=os.open(dest,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_CLOEXEC,d['mode'])
   try:os.write(fd,data);os.fsync(fd)
   finally:os.close(fd)
   os.chmod(dest,d['mode']);seen.add(name)
 if seen!=set(files):die('archive is not the exact signed tree')
+# Reconstruct every nested Git tree from authenticated bytes, exact modes and
+# path components. A valid signature over a manifest that merely declares a
+# foreign tree must not authorize installation.
+trie={}
+for name,d in files.items():
+ node=trie;parts=pathlib.PurePosixPath(name).parts
+ if any(not part or part in ('.','..') for part in parts):die('unsafe Git tree path')
+ for part in parts[:-1]:
+  if part in node and not isinstance(node[part],dict):die('Git tree file/directory collision')
+  node=node.setdefault(part,{})
+ if parts[-1] in node:die('duplicate Git tree path')
+ node[parts[-1]]=(d['mode'],d['blob'])
+def tree_oid(node):
+ body=bytearray()
+ for name,value in sorted(node.items(),key=lambda x:x[0].encode()+ (b'/' if isinstance(x[1],dict) else b'')):
+  if isinstance(value,dict):mode='40000';oid=tree_oid(value)
+  else:mode='100755' if value[0]==0o755 else '100644';oid=value[1]
+  body.extend(mode.encode()+b' '+name.encode()+b'\0'+bytes.fromhex(oid))
+ return git_hash('tree',bytes(body),len(m['tree']))
+if tree_oid(trie)!=m['tree']:die('manifest does not reconstruct declared Git tree')
 PY
 installer="$stage/source/scripts/install-factory-runner-v2.sh"
 [ -x "$installer" ] || fail 'signed installer is absent or non-executable'

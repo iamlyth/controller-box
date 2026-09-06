@@ -1,5 +1,9 @@
 # Independent Review Artifact (DOD-07)
 
+> **Historical record:** this document preserves the review at the commit and
+> date below. It is not current acceptance evidence or an approval authority;
+> use the conformance sidecar and exact-commit signed receipts for current state.
+
 **Review date:** 2026-08-16
 **Reviewer type:** Automated read-only subagents (correctness/test-quality, security, documentation)
 **Review commit base:** develop @ 93133d8

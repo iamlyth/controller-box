@@ -25,8 +25,14 @@ Both modes share one codebase, one config directory, and one DBus connection.
 - **systemd** (for sd-bus and the user service)
 - Minimum hardware: Raspberry Pi 4 or equivalent (ARM64, OpenGL ES 3.0)
 
-See [docs/OPERATIONS.md](docs/OPERATIONS.md) for service architecture and
-[docs/PACKAGING.md](docs/PACKAGING.md) for install methods.
+Documentation index: [operations and service architecture](docs/OPERATIONS.md),
+[packaging and installation](docs/PACKAGING.md), [profile format](docs/PROFILES.md),
+[D-Bus API](docs/DBus-API.md), [factory operation](docs/FACTORY.md), and the
+[factory-loop methodology](docs/FACTORY-LOOP-SPEC.md). `docs/REVIEW.md` is a
+historical review record, not current acceptance authority. Generated copies of
+runner authority data under `deploy/factory-runner-authority-v1/` intentionally
+duplicate source inputs; regenerate them with
+`scripts/build-runner-probe-authority.py` rather than editing either copy by hand.
 
 ## Install
 

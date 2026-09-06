@@ -1684,10 +1684,11 @@ class CaseAdversarialSuite(_AdversarialBase):
             encoding="utf-8")
         (root / ".gitignore").write_text(".factory-state/\n", encoding="utf-8")
         (root / ".factory/runner-policy-enrollment.json").write_text(json.dumps({
-            "schema":"controller-box-runner-policy-enrollment/v2",
+            "schema":"controller-box-runner-policy-enrollment/v3",
             "status":"pending-human-review",
             "probe_authorities":{"fixture-runner":{"version":1,"authority_sha256":"a"*64,"status":"pending-root-install"}},
-            "licensed_authority":{"runner_class":"gpurunner","authority_sha256":"b"*64,"scopes":[],"status":"pending-human-review"},
+            "host_executable_enrollment":{"status":"pending-root-install","required":["systemd-run","systemctl","xdg-dbus-proxy","git","bash","python3","ssh-keygen","sudo","busctl","mount","umount","udevadm","stdbuf","dpkg-query","InputPlumber"],"identity_fields":["path","sha256","device","inode"],"inputplumber_additional_fields":["package_version","service_exec_start"],"note":"fixture pending enrollment"},
+            "licensed_authority":{"runner_class":"gpurunner","authority_sha256":"b"*64,"scope_pins":{},"scopes":[],"status":"pending-human-review"},
             "note":"fixture"})+"\n")
         signer_key = self.tmp / "signer-key"
         subprocess.run(

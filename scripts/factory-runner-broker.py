@@ -385,9 +385,16 @@ DBUS_READ_CALLS=(
  "org.freedesktop.DBus.ObjectManager.GetManagedObjects",
  "org.freedesktop.DBus.Properties.Get","org.freedesktop.DBus.Properties.GetAll",
  "org.freedesktop.DBus.Introspectable.Introspect")
-# Synthetic injection is never delegated.  Routing mutations are mediated by
-# root code in production; a candidate proxy remains read-only.
-DBUS_MUTATING_CALLS=()
+# Synthetic injection is never delegated. Production routing receives only
+# the exact mutation members used by the product; no destination-wide --talk
+# grant is present. The retained proxy log is part of root cleanup/audit.
+DBUS_MUTATING_CALLS=(
+ "org.shadowblip.InputPlumber.Manager.CreateTargetDevice",
+ "org.shadowblip.InputPlumber.Manager.StopTargetDevice",
+ "org.shadowblip.InputPlumber.CompositeDevice.SetTargetDevices",
+ "org.shadowblip.InputPlumber.CompositeDevice.SetInterceptActivation",
+ "org.freedesktop.DBus.Properties.Set",
+)
 FORBIDDEN_DBUS_CALLS=("org.shadowblip.InputPlumber.Target.InputEvent",)
 
 class DbusProxy:
@@ -395,8 +402,10 @@ class DbusProxy:
   self.exe=TrustedExecutable(entry["dbus_proxy"],_pin(entry,"xdg-dbus-proxy"));self.root=parent/"dbus-proxy";self.root.mkdir(mode=0o700);os.chown(self.root,0,0)
   self.socket=self.root/"system_bus_socket";self.audit=self.root/"calls.audit"
   self.audit_fd=os.open(self.audit,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC,0o400)
-  calls=DBUS_READ_CALLS # capability-specific authority: every exposed candidate capability is read-only
-  argv=[str(self.exe.path),"unix:path=/run/dbus/system_bus_socket",str(self.socket),"--filter","--log","--talk=org.shadowblip.InputPlumber",*[f"--call=org.shadowblip.InputPlumber={m}" for m in calls]]
+  calls=list(DBUS_READ_CALLS)
+  if "controller-production-routing" in capabilities:
+   calls.extend(DBUS_MUTATING_CALLS)
+  argv=[str(self.exe.path),"unix:path=/run/dbus/system_bus_socket",str(self.socket),"--filter","--log",*[f"--call=org.shadowblip.InputPlumber={m}" for m in calls]]
   if any(x in " ".join(argv) for x in FORBIDDEN_DBUS_CALLS):raise BrokerError("synthetic InputPlumber injection authority is forbidden")
   self.exe.verify();self.proc=subprocess.Popen(argv,cwd="/",env={"PATH":"/usr/bin:/bin","LANG":"C.UTF-8"},stdin=subprocess.DEVNULL,stdout=self.audit_fd,stderr=self.audit_fd,start_new_session=True,preexec_fn=_analyzer_limits)
   deadline=time.monotonic()+5
@@ -417,21 +426,23 @@ class DbusProxy:
   shutil.rmtree(getattr(self,"root",Path("/nonexistent")),ignore_errors=True)
 
 class UdevMonitor:
- """Root-held raw kernel udev stream; candidate receives only a read-only file."""
+ """Root-held, size-limited raw kernel udev stream with bounded shutdown."""
  def __init__(self,parent,entry):
   self.udev=TrustedExecutable("/usr/bin/udevadm",_pin(entry,"udevadm"));self.stdbuf=TrustedExecutable("/usr/bin/stdbuf",_pin(entry,"stdbuf"))
   self.path=parent/"udev-snapshot.log";self.fd=os.open(self.path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC,0o444)
   self.udev.verify();self.stdbuf.verify()
-  self.proc=subprocess.Popen([str(self.stdbuf.path),"-oL",str(self.udev.path),"monitor","--kernel","--property","--subsystem-match=input"],cwd="/",env={"PATH":"/usr/bin:/bin","LANG":"C.UTF-8"},stdin=subprocess.DEVNULL,stdout=self.fd,stderr=self.fd,start_new_session=True)
+  self.proc=subprocess.Popen([str(self.stdbuf.path),"-oL",str(self.udev.path),"monitor","--kernel","--property","--subsystem-match=input"],cwd="/",env={"PATH":"/usr/bin:/bin","LANG":"C.UTF-8"},stdin=subprocess.DEVNULL,stdout=self.fd,stderr=self.fd,start_new_session=True,preexec_fn=_analyzer_limits)
   time.sleep(.2)
   if self.proc.poll() is not None:self.close();raise BrokerError("root-held udev monitor failed")
  def close(self):
+  deadline=time.monotonic()+3
   if getattr(self,"proc",None) and self.proc.poll() is None:
-   try:os.killpg(self.proc.pid,signal.SIGTERM);self.proc.wait(timeout=3)
+   try:os.killpg(self.proc.pid,signal.SIGTERM);self.proc.wait(timeout=max(0.0,deadline-time.monotonic()))
    except Exception:
     try:os.killpg(self.proc.pid,signal.SIGKILL)
     except ProcessLookupError:pass
-    self.proc.wait()
+    try:self.proc.wait(timeout=max(0.0,deadline-time.monotonic()))
+    except subprocess.TimeoutExpired:raise BrokerError("udev monitor exceeded absolute shutdown deadline")
   if getattr(self,"fd",None) is not None:os.fsync(self.fd);os.close(self.fd);self.fd=None
   for name in ("udev","stdbuf"):
    exe=getattr(self,name,None)
@@ -440,9 +451,17 @@ class UdevMonitor:
 class UserManagerProxy(DbusProxy):
  """Capability-private endpoint for exactly the caller's user-manager bus."""
  def __init__(self,entry,parent):
-  self.exe=TrustedExecutable(entry["dbus_proxy"]);self.root=parent/"user-dbus-proxy";self.root.mkdir(mode=0o700);os.chown(self.root,0,0)
+  self.exe=TrustedExecutable(entry["dbus_proxy"],_pin(entry,"xdg-dbus-proxy"));self.root=parent/"user-dbus-proxy";self.root.mkdir(mode=0o700);os.chown(self.root,0,0)
   upstream=f"unix:path=/run/user/{entry['uid']}/bus";self.socket=self.root/"user_bus_socket"
-  argv=[str(self.exe.path),upstream,str(self.socket),"--filter","--talk=org.freedesktop.systemd1","--talk=org.freedesktop.DBus"]
+  calls=(
+   "org.freedesktop.systemd1.Manager.StartTransientUnit",
+   "org.freedesktop.systemd1.Manager.GetUnit",
+   "org.freedesktop.systemd1.Manager.Subscribe",
+   "org.freedesktop.DBus.Properties.Get",
+   "org.freedesktop.DBus.Properties.GetAll",
+   "org.freedesktop.DBus.GetNameOwner",
+  )
+  argv=[str(self.exe.path),upstream,str(self.socket),"--filter",*[f"--call=org.freedesktop.systemd1={m}" for m in calls[:5]],f"--call=org.freedesktop.DBus={calls[5]}"]
   self.exe.verify();self.proc=subprocess.Popen(argv,cwd="/",env={"PATH":"/usr/bin:/bin","LANG":"C.UTF-8"},stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True,preexec_fn=_analyzer_limits)
   deadline=time.monotonic()+5
   while time.monotonic()<deadline and not self.socket.exists() and self.proc.poll() is None:time.sleep(.02)
@@ -460,7 +479,10 @@ def run_contained(entry,authority,descriptor,host_product,host_build,host_home,h
   senv["FACTORY_RUNNER_ARTIFACT_DIR"]=str(sandbox_output/capability)
   senv["CONTROLLER_PRODUCTION_ROUTING_ARTIFACTS"]=str(sandbox_output/capability)
   senv["CBX_GPU_PROBE_ARTIFACTS"]=str(sandbox_output/capability)
- argv=argv_for(authority,descriptor["argv"],sandbox_product,sandbox_output);command_exe=TrustedExecutable(argv[0])
+ argv=argv_for(authority,descriptor["argv"],sandbox_product,sandbox_output)
+ command_name=Path(argv[0]).name
+ if command_name not in {"python3","bash"}:raise BrokerError("capability interpreter has no exact external policy pin")
+ command_exe=TrustedExecutable(argv[0],_pin(entry,command_name))
  blocked_paths=["/root","/home","/run","/var/run","/etc/ssh","/etc/sudoers","/etc/sudoers.d","/etc/factory-runner","/opt/factory-runner","/workspace"]
  blocked=" ".join(x for x in blocked_paths if Path(x).exists())
  # The parent stays hidden.  This one immutable root-owned authority is
@@ -499,8 +521,11 @@ def run_contained(entry,authority,descriptor,host_product,host_build,host_home,h
  if not clean: raise BrokerError("cannot prove unconditional request unit/cgroup cleanup")
  return rc,out,err
 
-def analyze(authority,descriptor,held,env,commit,tree):
- authority.revalidate();argv=argv_for(authority,descriptor["analyzer_argv"],Path("/noncandidate"),held.root,commit,tree);exe=TrustedExecutable(argv[0])
+def analyze(entry,authority,descriptor,held,env,commit,tree):
+ authority.revalidate();argv=argv_for(authority,descriptor["analyzer_argv"],Path("/noncandidate"),held.root,commit,tree)
+ analyzer_name=Path(argv[0]).name
+ if analyzer_name not in {"python3","bash"}:raise BrokerError("analyzer interpreter has no exact external policy pin")
+ exe=TrustedExecutable(argv[0],_pin(entry,analyzer_name))
  out=held.root.parent/f"{held.root.name}.analyzer.stdout";err=held.root.parent/f"{held.root.name}.analyzer.stderr"
  try:
   exe.verify();rc,_,_=_bounded_process(argv,env,180,out,err,preexec=_analyzer_limits);exe.verify()
@@ -531,12 +556,11 @@ def host_cleanup_snapshot(capability,entry):
  if capability in {"gpu-compositor","installed-licensed-diagram"}:
   fact["dri_nodes"]=sorted(p.name for p in Path("/dev/dri").glob("*")) if Path("/dev/dri").exists() else []
  if capability in {"inputplumber-system-dbus","target-consumer","controller-production-routing"}:
-  try:
-   busctl=TrustedExecutable("/usr/bin/busctl",_pin(entry,"busctl"));busctl.verify()
-   try:r=subprocess.run([str(busctl.path),"--system","--json=short","call","org.shadowblip.InputPlumber","/org/shadowblip/InputPlumber","org.freedesktop.DBus.ObjectManager","GetManagedObjects"],capture_output=True,timeout=10);busctl.verify()
-   finally:busctl.close()
-   fact["inputplumber_objects_sha256"]=hashlib.sha256(r.stdout).hexdigest() if r.returncode==0 else None
-  except Exception: fact["inputplumber_objects_sha256"]=None
+  busctl=TrustedExecutable("/usr/bin/busctl",_pin(entry,"busctl"));busctl.verify()
+  try:r=subprocess.run([str(busctl.path),"--system","--json=short","call","org.shadowblip.InputPlumber","/org/shadowblip/InputPlumber","org.freedesktop.DBus.ObjectManager","GetManagedObjects"],capture_output=True,timeout=10);busctl.verify()
+  finally:busctl.close()
+  if r.returncode!=0:raise BrokerError("cannot snapshot InputPlumber objects for cleanup authority")
+  fact["inputplumber_objects_sha256"]=hashlib.sha256(r.stdout).hexdigest()
  return fact
 
 
@@ -692,7 +716,7 @@ def main():
    if rc:raise BrokerError(f"{name} candidate execution failed")
    if name!="gate":
     d,p=collect(artifacts,[name],{name:descriptor["artifacts"]},expected_uid=uid);held=hold(d,p,request_dir);held_all.append(held)
-    analyze(authority,descriptor,held,env,req["commit"],req["tree"]);descriptors.extend(d);payload.extend(held.payload)
+    analyze(entry,authority,descriptor,held,env,req["commit"],req["tree"]);descriptors.extend(d);payload.extend(held.payload)
    pool.close();pool=None
    shutil.rmtree(runroot)
   descriptors.sort(key=lambda x:x["path"]);payload.sort(key=lambda x:x["path"]);total=sum(x["size"] for x in descriptors);digest=descriptors_digest(descriptors)

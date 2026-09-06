@@ -1,6 +1,8 @@
 #!/usr/bin/python3
 """Coordinator-independent validation of exact held acceptance artifacts."""
-import argparse,hashlib,json,pathlib,re,struct,zlib
+import argparse,hashlib,json,pathlib,re,struct,sys,zlib
+sys.path.insert(0,str(pathlib.Path(__file__).resolve().parent/'iprunner-probes'))
+from unwrap_variant import decode_object_manager, variant_value
 H=re.compile(r"^[0-9a-f]{64}$"); OBJ=re.compile(r"^/org/shadowblip/InputPlumber/[A-Za-z0-9_/]+$"); NODE=re.compile(r"^/dev/input/event[0-9]+$")
 def die(x): raise SystemExit("artifact-authority: "+x)
 def read(p,limit=16*1024*1024):
@@ -83,7 +85,7 @@ def routing(root):
  if d.get('schema')!='controller-production-routing-results/v3' or not isinstance(rows,list) or len(rows)!=4:die('routing v3/cardinality invalid')
  paths=set();nodes=set();sysfs=set();obs=set();last=-1;composite=None;source=None
  phase_names=['om-before.json','om-after-create.json','om-after-clear.json','om-cleanup.json']+[f'om-assignment-{i}.json' for i in range(4)]
- phases={n:json.loads(read(cap/n)) for n in phase_names}
+ phases={n:decode_object_manager(json.loads(read(cap/n)),require_nonempty=True) for n in phase_names}
  provenance_before=read(cap/'provenance-before-routing.json');provenance_after=read(cap/'provenance-after-routing.json')
  try: provenance=json.loads(provenance_before)
  except ValueError:die('InputPlumber provenance fact is malformed')
@@ -116,21 +118,15 @@ def routing(root):
  for i,r in enumerate(rows):
   if r.get('slot')!=i or not OBJ.fullmatch(str(r.get('dbus_path',''))) or not NODE.fullmatch(str(r.get('kernel_node',''))) or not OBJ.fullmatch(str(r.get('composite_path',''))):die('routing identity malformed')
   if created[i][1]!=r['dbus_path']:die('DBus path is not bound to production creation order')
-  def om_strings(name):
-   try:value=json.loads(read(cap/name).decode('utf-8'))
-   except (ValueError,UnicodeError):die('raw ObjectManager phase is malformed')
-   found=[]
-   def walk(v):
-    if isinstance(v,str):found.append(v)
-    elif isinstance(v,list):
-     for x in v:walk(x)
-    elif isinstance(v,dict):
-     for k,x in v.items():found.append(str(k));walk(x)
-   walk(value);return found
-  created_raw=om_strings('om-after-create.json');assigned_raw=om_strings(f'om-assignment-{i}.json')
-  if r['dbus_path'] not in created_raw or r['dbus_path'] not in assigned_raw or 'xb360' not in created_raw:
-   die('decoded raw ObjectManager phase omits exact target DeviceType/identity')
-  if assigned_raw.count(r['dbus_path'])<1:die('decoded raw assignment omits exact TargetDevices member')
+  target_iface='org.shadowblip.Input.Target';composite_iface='org.shadowblip.Input.CompositeDevice'
+  created_props=phases['om-after-create.json'].get(r['dbus_path'],{}).get(target_iface)
+  assigned_props=phases[f'om-assignment-{i}.json'].get(r['dbus_path'],{}).get(target_iface)
+  composite_props=phases[f'om-assignment-{i}.json'].get(r['composite_path'],{}).get(composite_iface)
+  if (not isinstance(created_props,dict) or not isinstance(assigned_props,dict)
+      or variant_value(created_props.get('DeviceType'))!='xb360'
+      or variant_value(assigned_props.get('DeviceType'))!='xb360'
+      or variant_value(composite_props.get('TargetDevices') if isinstance(composite_props,dict) else None)!=[r['dbus_path']]):
+   die('same ObjectManager rows do not bind xb360 target and exact TargetDevices')
   for value,seen in ((r['dbus_path'],paths),(r['kernel_node'],nodes),(r.get('sysfs_identity'),sysfs)):
    if not isinstance(value,str) or value in seen:die('routing stable identity reused')
    seen.add(value)
@@ -153,6 +149,9 @@ def routing(root):
    if len(b)<24 or struct.unpack_from('HHi',b,len(b)-8)!=(int(e[2]),int(e[3]),int(e[4])):die('raw evdev bytes disagree with metadata')
   persisted=read(within(cap,r['persisted_path']))
   if hashlib.sha256(persisted).hexdigest()!=r.get('persisted_sha256') or not yaml_slot(persisted,r['persistent_id'],i):die('persisted selected assignment bytes invalid')
+ if composite is None or variant_value(phases['om-after-clear.json'].get(composite,{}).get('org.shadowblip.Input.CompositeDevice',{}).get('TargetDevices'))!=[]:
+  die('ObjectManager clear row does not prove exact empty TargetDevices')
+ if any(path in phases['om-cleanup.json'] for path in paths):die('ObjectManager cleanup retains request target')
  clear=log[windows[4].start():]
  if ('clear=true' not in clear or 'full_window=true' not in clear
      or re.search(r'RAW node=[0-3] ',clear)):die('post-clear full-window raw target silence absent')

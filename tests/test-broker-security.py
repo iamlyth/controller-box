@@ -42,7 +42,7 @@ for marker in ('ProtectHome=yes','ProtectSystem=strict','BindReadOnlyPaths=',
  'stop","kill','MainPID','cgroup.procs','populated 0'):
  assert marker in broker,marker
 assert 'os.chown(request_dir,uid' not in broker and 'os.chown(product,uid' not in broker
-assert broker.rindex('collect(artifacts') < broker.rindex('analyze(authority') < broker.rindex('signed=sign(')
+assert broker.rindex('collect(artifacts') < broker.rindex('analyze(entry,authority') < broker.rindex('signed=sign(')
 # Slow trickles do not refresh the monotonic deadline, and output is streamed
 # into held bounded files rather than accumulated by subprocess.run.
 r,w=os.pipe()
@@ -61,13 +61,17 @@ with tempfile.TemporaryDirectory(dir=ROOT) as td:
  assert out.stat().st_size==b.MAX_LOG
 for marker in ('HEADER_TIMEOUT=15','ARCHIVE_TIMEOUT=120','BROKER_ADMISSION=8','fcntl.flock',
  'aggregate contained output exceeds bound','RLIMIT_AS','RLIMIT_CPU','/var/run',
- '--filter','--talk=org.shadowblip.InputPlumber','DBUS_SYSTEM_BUS_ADDRESS',
+ '--filter','--call=org.shadowblip.InputPlumber=','DBUS_SYSTEM_BUS_ADDRESS',
  'nr_inodes={WRITABLE_INODES}','bounded writable backing resource cleanup not proven',
  'runner primary/supplementary groups differ from exact approved set'):
  assert marker in broker,marker
 assert 'capture_output=True,timeout=7300' not in broker
 assert 'org.shadowblip.InputPlumber.Target.InputEvent' in broker
-assert 'DBUS_MUTATING_CALLS=()' in broker
+assert '--talk=' not in broker
+for method in ('CreateTargetDevice','StopTargetDevice','SetTargetDevices','SetInterceptActivation','Properties.Set'):
+ assert any(entry.endswith(method) for entry in b.DBUS_MUTATING_CALLS)
+assert all('InputEvent' not in method for method in b.DBUS_MUTATING_CALLS)
+assert 'cannot snapshot InputPlumber objects for cleanup authority' in broker
 # A descendant retaining stdout cannot retain the broker beyond one absolute deadline.
 with tempfile.TemporaryDirectory(dir=ROOT) as td:
  out=pathlib.Path(td)/'pipe-out';err=pathlib.Path(td)/'pipe-err';started=time.monotonic()

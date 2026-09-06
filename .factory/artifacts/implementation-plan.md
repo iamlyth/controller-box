@@ -6,6 +6,28 @@ base_commit: 860922af39ed7e2aef9b95705705f7ed90344e87
 status: active
 ---
 
+**Closure hardening checkpoint (current checkout)**
+
+The canonical enrollment consumer now parses the complete v3 request, the
+bootstrap/installer authenticate every Git blob and recursively reconstruct the
+exact nested Git tree, cleanup snapshot failure is fatal, all delegated D-Bus
+access uses exact call rules without destination-wide `--talk`, and production
+routing receives the exact product mutation members while `Target.InputEvent`
+remains denied. Root and coordinator retained-artifact analyzers now parse
+ObjectManager variants structurally, bind `xb360` and `TargetDevices` on the
+same rows, validate full provenance-v2 fields, and retain the physical USB
+045e:028e sysfs fact. Factory verification uses disposable install/bytecode
+storage and canonically runs the previously omitted installer and probe suites;
+the unreferenced repro helper was removed and documentation authority wording
+was clarified. The reproducibly rebuilt pending authority digest is
+`8910d904f94476077b9254d13db3903c52597b9eadebccd1b855e8466573b3bc` and the
+pending enrollment-request digest is
+`9d2a903175e91f8093dc6a92e6e86b07bb9e5042990627147f0791a4616c0024`.
+Focused broker, installer, authority, iprunner and GPU probe suites passed, as
+did the complete `./scripts/verify-boilerplate.sh` gate. Local fixture
+validation only is recorded; no runner, campaign, deployment, approval,
+evidence promotion, specification, or golden operation was performed.
+
 **Final installer/bootstrap/transaction verification checkpoint (current checkout)**
 
 Root installation now starts only through an independently installed bootstrap

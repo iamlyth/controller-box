@@ -118,8 +118,16 @@ cmake --build "$BUILD_DIR" --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-2}"
 # a mutable caller-supplied value is validated by the driver's provenance
 # hardening before it is ever launched). Under the authenticated Nix inner gate
 # the 13f installed-binary-not-found case fails rather than skips.
-INSTALL_PREFIX=${CBX_VERIFY_INSTALL_PREFIX:-"$PROJECT_ROOT/.test-install"}
-mkdir -p "$INSTALL_PREFIX"
+if [[ -n ${CBX_VERIFY_INSTALL_PREFIX:-} ]]; then
+    INSTALL_PREFIX=$CBX_VERIFY_INSTALL_PREFIX
+    mkdir -p "$INSTALL_PREFIX"
+else
+    # The default verification install is disposable and cannot dirty the
+    # checkout. An explicit caller-owned prefix retains its historical
+    # persistence and is never removed here.
+    INSTALL_PREFIX=$(mktemp -d "${TMPDIR:-/tmp}/controller-box-verify-install.XXXXXX")
+    trap 'rm -rf -- "$INSTALL_PREFIX"' EXIT HUP INT TERM
+fi
 cmake --install "$BUILD_DIR" --prefix "$INSTALL_PREFIX" >/dev/null
 if [[ -x "$INSTALL_PREFIX/bin/controller-box" ]]; then
     export VISUAL_AUDIT_INSTALL_PREFIX="$INSTALL_PREFIX"

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export PYTHONDONTWRITEBYTECODE=1
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
@@ -89,7 +90,9 @@ required = [
     'deploy/factory-runner-authority-v1/forced-command-v2.txt',
     'scripts/pi2-secure-exec.py',
     'tests/test-factory-environment.sh', 'tests/test-factory-runner.sh',
-    'tests/test-runner-authority.py',
+    'tests/test-runner-authority.py', 'tests/test-runner-install-bootstrap.py',
+    'tests/test-runner-installer-security.py', 'tests/test-iprunner-probes.sh',
+    'tests/test-gpu-compositor-probe.sh',
     'tests/test-campaign-audit.sh',
     'tests/test-factory-lock.py',
     'tests/test-orchestration-security.py',
@@ -383,6 +386,10 @@ done
 ./tests/test-installed-functional-evidence.sh "$PROJECT_ROOT"
 ./tests/test-factory-environment.sh
 ./tests/test-factory-runner.sh
+python3 ./tests/test-runner-install-bootstrap.py
+python3 ./tests/test-runner-installer-security.py
+./tests/test-iprunner-probes.sh
+nix-shell --run 'bash ./tests/test-gpu-compositor-probe.sh'
 ./tests/test-campaign-audit.sh
 ./tests/test-factory-lock.py
 ./tests/test-boilerplate-env-isolation.sh

@@ -372,12 +372,42 @@ def verify_manifest_signature(issuance_trust: dict, current_trust: dict,
 def expected_probe_authority_digest(commit: str, runner: str) -> str:
     try: data=json.loads(git("show",f"{commit}:.factory/runner-policy-enrollment.json"))
     except (SystemExit,json.JSONDecodeError): fail("commit-bound probe-authority enrollment is unavailable")
-    try: entry=data["probe_authorities"][runner]
-    except (KeyError,TypeError): fail("runner has no probe-authority enrollment request")
-    digest=entry.get("authority_sha256") if isinstance(entry,dict) else None
-    if data.get("schema")!="controller-box-runner-policy-enrollment/v2" or not SHA256.fullmatch(str(digest or "")):
+    top={"schema","status","probe_authorities","host_executable_enrollment","licensed_authority","note"}
+    if (not isinstance(data,dict) or set(data)!=top
+            or data.get("schema")!="controller-box-runner-policy-enrollment/v3"
+            or data.get("status")!="pending-human-review"
+            or not isinstance(data.get("note"),str) or not data["note"]):
         fail("commit-bound probe-authority enrollment is invalid")
-    return digest
+    host=data.get("host_executable_enrollment")
+    host_fields={"status","required","identity_fields","inputplumber_additional_fields","note"}
+    required=["systemd-run","systemctl","xdg-dbus-proxy","git","bash","python3","ssh-keygen","sudo","busctl","mount","umount","udevadm","stdbuf","dpkg-query","InputPlumber"]
+    if (not isinstance(host,dict) or set(host)!=host_fields or host.get("status")!="pending-root-install"
+            or host.get("required")!=required or host.get("identity_fields")!=["path","sha256","device","inode"]
+            or host.get("inputplumber_additional_fields")!=["package_version","service_exec_start"]
+            or not isinstance(host.get("note"),str) or not host["note"]):
+        fail("commit-bound executable enrollment request is invalid")
+    authorities=data.get("probe_authorities")
+    if not isinstance(authorities,dict) or runner not in authorities:
+        fail("runner has no probe-authority enrollment request")
+    for name,item in authorities.items():
+        if (not isinstance(name,str) or not name or not isinstance(item,dict)
+                or set(item)!={"version","authority_sha256","status"}
+                or item.get("version")!=1 or item.get("status")!="pending-root-install"
+                or not SHA256.fullmatch(str(item.get("authority_sha256","")))):
+            fail("commit-bound probe-authority enrollment is invalid")
+    licensed=data.get("licensed_authority")
+    if (not isinstance(licensed,dict)
+            or set(licensed)!={"runner_class","authority_sha256","scope_pins","scopes","status"}
+            or licensed.get("runner_class")!="gpurunner"
+            or not SHA256.fullmatch(str(licensed.get("authority_sha256","")))
+            or licensed.get("status")!="pending-human-review"
+            or not isinstance(licensed.get("scope_pins"),dict)
+            or not isinstance(licensed.get("scopes"),list)
+            or len(licensed["scopes"])!=len(set(licensed["scopes"]))
+            or set(licensed["scopes"])!=set(licensed["scope_pins"])
+            or any(not SHA256.fullmatch(str(v)) for v in licensed["scope_pins"].values())):
+        fail("commit-bound licensed authority enrollment is invalid")
+    return authorities[runner]["authority_sha256"]
 
 
 def validate_record(declared: dict, record: dict, commit: str, tree: str,
