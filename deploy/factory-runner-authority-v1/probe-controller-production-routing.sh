@@ -65,8 +65,21 @@ else
     echo "production-routing-probe: root broker must bind the fresh product checkout" >&2; exit 1
 fi
 [[ "$PROJECT_ROOT" = /* && -d "$PROJECT_ROOT" ]] || { echo "production-routing-probe: invalid broker product root" >&2; exit 1; }
-VALIDATOR="$SCRIPT_DIR/iprunner-probes/validate-production-routing-facts.py"
-OBSERVER_SOURCE="$SCRIPT_DIR/iprunner-probes/routing_observer.c"
+# iprunner-probes live beside the probe in the deployed runner-authority
+# layout and under .factory/runner in the repository layout. Resolve both so
+# the same probe works from the repo and from the installed authority tree.
+# A symlinked probes dir is rejected as unsafe ambiguity (existing policy).
+if [[ -d "$SCRIPT_DIR/iprunner-probes" && ! -L "$SCRIPT_DIR/iprunner-probes" ]]; then
+    PROBES_DIR="$SCRIPT_DIR/iprunner-probes"
+else
+    PROBES_DIR="$PROJECT_ROOT/.factory/runner/iprunner-probes"
+    [[ -d "$PROBES_DIR" && ! -L "$PROBES_DIR" ]] || {
+        echo "production-routing-probe: iprunner-probes dir missing or unsafe" >&2
+        exit 1
+    }
+fi
+VALIDATOR="$PROBES_DIR/validate-production-routing-facts.py"
+OBSERVER_SOURCE="$PROBES_DIR/routing_observer.c"
 EXPECTED_TARGETS=4
 BUS_NAME="org.shadowblip.InputPlumber"
 MANAGER_PATH="/org/shadowblip/InputPlumber/Manager"
@@ -436,7 +449,7 @@ new_virtual_nodes() {
 
 # New org.shadowblip.Input.Target paths from a strict busctl envelope.
 new_target_paths_from_om() {
-    python3 "$SCRIPT_DIR/iprunner-probes/extract_om_targets.py" --all-paths \
+    python3 "$PROBES_DIR/extract_om_targets.py" --all-paths \
         "$1" "$2" "$TARGET_IFACE"
 }
 
@@ -446,7 +459,7 @@ new_target_paths_from_om() {
 # by the shared extract_om_targets.py helper. Fails if a new target is
 # non-xb360 or nameless.
 extract_new_xb360_targets() {
-    python3 "$SCRIPT_DIR/iprunner-probes/extract_om_targets.py" \
+    python3 "$PROBES_DIR/extract_om_targets.py" \
         "$1" "$2" "$TARGET_IFACE"
 }
 
@@ -586,7 +599,7 @@ run_live() {
             all_gone=1
             if ! busctl --system --json=short call "$BUS_NAME" "$OM_PATH" \
                 org.freedesktop.DBus.ObjectManager GetManagedObjects >"$tmp/om-cleanup.json" 2>/dev/null || \
-               ! python3 "$SCRIPT_DIR/iprunner-probes/unwrap_variant.py" --object-manager \
+               ! python3 "$PROBES_DIR/unwrap_variant.py" --object-manager \
                 <"$tmp/om-cleanup.json" >"$tmp/cleanup-objects.json" 2>/dev/null; then
                 all_gone=0
             else
@@ -724,7 +737,7 @@ PY
     verify_bus_identity || { cleanup_live; return 1; }
     cp -- "$FACTORY_INPUTPLUMBER_PROVENANCE" "$tmp/provenance-before-routing.json" || { cleanup_live; return 1; }
     busctl --system --json=short call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus GetNameOwner s "$BUS_NAME" > "$tmp/dbus-unique-owner.json" 2>/dev/null || { cleanup_live; return 1; }
-    owner_unique=$(python3 "$SCRIPT_DIR/iprunner-probes/unwrap_variant.py" --property-s < "$tmp/dbus-unique-owner.json") || { cleanup_live; return 1; }
+    owner_unique=$(python3 "$PROBES_DIR/unwrap_variant.py" --property-s < "$tmp/dbus-unique-owner.json") || { cleanup_live; return 1; }
     busctl --system --json=short call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus GetConnectionUnixProcessID s "$owner_unique" > "$tmp/dbus-owner-pid.json" 2>/dev/null || { cleanup_live; return 1; }
     list_event_devices > "$tmp/kernel-baseline"
     list_event_devices | sed 's#^#/dev/input/#' > "$tmp/dev-input-before.txt"
@@ -890,7 +903,7 @@ PY
         echo "production-routing-probe: FAIL: cannot enumerate physical composite assignment" >&2
         cleanup_live; return 1
     fi
-    composite=$(python3 "$SCRIPT_DIR/iprunner-probes/find_source_composite.py" \
+    composite=$(python3 "$PROBES_DIR/find_source_composite.py" \
         "$tmp/routing-om.json" "$source_path") || {
         echo "production-routing-probe: FAIL: real 045e:028e source/composite assignment is absent or ambiguous" >&2
         cleanup_live; return 1
@@ -916,7 +929,7 @@ PY
         [[ -f "$assignments_file" && ! -L "$assignments_file" ]] && before_hash=$(sha256sum "$assignments_file" | cut -d' ' -f1)
         persistent_id=$(busctl --system --json=short get-property "$BUS_NAME" "$composite" \
             org.shadowblip.Input.CompositeDevice PersistentId 2>/dev/null | \
-            python3 "$SCRIPT_DIR/iprunner-probes/unwrap_variant.py" --property-s) || {
+            python3 "$PROBES_DIR/unwrap_variant.py" --property-s) || {
             echo "production-routing-probe: FAIL: composite PersistentId unavailable" >&2
             cleanup_live; return 1
         }
@@ -941,7 +954,7 @@ PY
                 then
                     if busctl --system --json=short get-property "$BUS_NAME" "$composite" \
                          org.shadowblip.Input.CompositeDevice TargetDevices 2>/dev/null | \
-                       python3 "$SCRIPT_DIR/iprunner-probes/unwrap_variant.py" --property-as | \
+                       python3 "$PROBES_DIR/unwrap_variant.py" --property-as | \
                        python3 -c 'import json,sys; a=json.load(sys.stdin); raise SystemExit(0 if a == [sys.argv[1]] else 1)' "${new_targets[$slot]}"; then
                         assignment_ok=true
                         break
@@ -991,7 +1004,7 @@ PY
     clear_deadline=$(( $(date +%s) + 90 )); clear_ok=false
     while [[ $(date +%s) -lt $clear_deadline ]]; do
         if busctl --system --json=short get-property "$BUS_NAME" "$composite" org.shadowblip.Input.CompositeDevice TargetDevices 2>/dev/null | \
-           python3 "$SCRIPT_DIR/iprunner-probes/unwrap_variant.py" --property-as | \
+           python3 "$PROBES_DIR/unwrap_variant.py" --property-as | \
            python3 -c 'import json,sys; raise SystemExit(0 if json.load(sys.stdin)==[] else 1)' && \
            python3 - "$HOME/.config/controller-box/assignments.yaml" "$persistent_id" <<'PY2'
 import sys,yaml
