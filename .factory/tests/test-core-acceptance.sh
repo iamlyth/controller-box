@@ -7,8 +7,9 @@ trap 'rm -rf "$tmp"' EXIT
 
 setup_fixture() {
     local root="$1" checker_exit="$2"
-    mkdir -p "$root/scripts" "$root/bin" "$root/.factory/artifacts"
+    mkdir -p "$root/scripts" "$root/bin" "$root/.factory/artifacts" "$root/.factory/tools"
     cp "$PROJECT_ROOT/scripts/check-core-acceptance.sh" "$root/scripts/"
+    cp "$PROJECT_ROOT/.factory/tools/check-core-acceptance.sh" "$root/.factory/tools/"
     cat > "$root/.factory/tools/check-capability-evidence.py" <<PY
 #!/usr/bin/env python3
 import sys
@@ -17,7 +18,7 @@ if sys.argv[1:] != expected:
     raise SystemExit(127)
 raise SystemExit($checker_exit)
 PY
-    chmod +x "$root/scripts/check-core-acceptance.sh" "$root/.factory/tools/check-capability-evidence.py"
+    chmod +x "$root/scripts/check-core-acceptance.sh" "$root/.factory/tools/check-core-acceptance.sh" "$root/.factory/tools/check-capability-evidence.py"
     cat > "$root/bin/ctest" <<'EOF'
 #!/usr/bin/env bash
 exit "${FIXTURE_CTEST_EXIT:-0}"
