@@ -243,6 +243,6 @@ the bugs surfaced and were fixed.
 - Reviews conducted via parallel read-only subagents (reviewer, security-reviewer, docs-reviewer)
 - Review commit base: `93133d8` on `develop`
 - All prior security fixes (iterations 9, 17–19) confirmed in place with no regressions
-- 100 CTest targets registered (98 pass, 0 failures, 2 environment skips: `test_kernel_controller`, `test_backend_smoke`)
+- 93 CTest targets total; only `test_golden` failed, with its three named manager-editor subcases; `test_kernel_controller` and accelerated `test_backend_smoke` were the two declared environmental skips. No full project PASS is claimed.
 - Sanitizer gate (ASan+UBSan): clean
 - Final gate `--implementation`: EXIT 0
