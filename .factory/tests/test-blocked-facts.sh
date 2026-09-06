@@ -5,7 +5,7 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
+PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
@@ -17,10 +17,10 @@ CONTRACT_CHECKER="$PROJECT_ROOT/.factory/tools/check-capability-contracts.py"
 setup_repo() {
     local dir=$1
     mkdir -p "$dir/scripts" "$dir/.factory/artifacts" "$dir/.factory/loop" "$dir/.factory-state/runner-evidence/probe-runner" \
-        "$dir/tests" "$dir/docs"
-    cp "$VALIDATOR" "$CONFORMANCE" "$EVIDENCE_CHECKER" "$CONTRACT_CHECKER" "$dir/scripts/"
+        "$dir/tests" "$dir/docs" "$dir/.factory/tools"
+    cp "$VALIDATOR" "$CONFORMANCE" "$EVIDENCE_CHECKER" "$CONTRACT_CHECKER" "$dir/.factory/tools/"
     cp "$PROJECT_ROOT/.factory/loop/gitutil.py" "$dir/.factory/loop/gitutil.py"
-    chmod +x "$dir/scripts/"*.py
+    chmod +x "$dir/.factory/tools/"*.py
     cat > "$dir/.factory/environment.toml" <<'EOF'
 schema_version = 1
 [[runners]]

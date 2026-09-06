@@ -10,7 +10,7 @@ export FACTORY_CAMPAIGN_ID=synthetic-conformance
 export FACTORY_READINESS_NONCE=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
+PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
@@ -24,9 +24,11 @@ ENV_CHECKER="$PROJECT_ROOT/.factory/tools/check-factory-environment.py"
 setup_repo() {
     local dir=$1
     mkdir -p "$dir/scripts" "$dir/.factory/artifacts" "$dir/.factory/loop" "$dir/.factory/schemas" "$dir/.factory-state/runner-evidence/probe-runner" \
-        "$dir/tests/fixtures" "$dir/docs"
+        "$dir/tests/fixtures" "$dir/docs" "$dir/.factory/tools" "$dir/.factory/runner"
     cp "$VALIDATOR" "$EVIDENCE_CHECKER" "$CONTRACT_CHECKER" "$FACTS_VALIDATOR" \
-        "$RUNNER_CHECKER" "$ENV_CHECKER" "$PROJECT_ROOT/.factory/runner/factory_runner_artifacts.py" "$dir/scripts/"
+        "$ENV_CHECKER" "$PROJECT_ROOT/.factory/tools/check-factory-runner-evidence.py" "$dir/.factory/tools/"
+    cp "$RUNNER_CHECKER" "$dir/scripts/"
+    cp "$PROJECT_ROOT/.factory/runner/factory_runner_artifacts.py" "$dir/.factory/runner/"
     cp "$PROJECT_ROOT/.factory/loop/gitutil.py" "$dir/.factory/loop/gitutil.py"
     if [[ ! -f "$tmp/conformance-signer-key" ]]; then
         ssh-keygen -q -t ed25519 -N '' -f "$tmp/conformance-signer-key"

@@ -6,11 +6,11 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
+PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd)
 cd -- "$PROJECT_ROOT"
 
 # The suite runner must neutralize ambient lifecycle state before any test.
-grep -q '^unset FACTORY_FINAL_GATE_ATTEST' scripts/verify-boilerplate.sh || {
+grep -q '^unset FACTORY_FINAL_GATE_ATTEST' .factory/tools/verify-boilerplate.sh || {
     echo "test: verify-boilerplate does not sanitize the ambient attestation flag" >&2
     exit 1
 }

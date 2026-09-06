@@ -21,7 +21,7 @@ generator=(ROOT/'.factory/runner/generate-runner-install-manifest.py').read_text
 for marker in ('--untracked-files=all','ls-tree','cat-file','gitlink/submodule','source_merkle_sha256'):
  assert marker in generator,marker
 assert 'factory-runner-signer"' not in (ROOT/'deploy/factory-runner-authority-v1/forced-command-v2.txt').read_text()
-assert all('BUNDLE_PATH = "/usr/local/libexec/factory-runner-v2.bundle"' in (ROOT/'scripts'/n).read_text() for n in ('factory-runner-broker.py','factory-runner-signer.py','factory-runner-server.py'))
+assert all('BUNDLE_PATH = "/usr/local/libexec/factory-runner-v2.bundle"' in (ROOT/'.factory/runner'/n).read_text() for n in ('factory-runner-broker.py','factory-runner-signer.py','factory-runner-server.py'))
 broker=(ROOT/'.factory/runner/factory-runner-broker.py').read_text()
 for marker in ('GetNameOwner','unique_owner','starttime','os.O_NOFOLLOW','os.pread(self.fd',
  'InputPlumber D-Bus owner restarted or changed during routing','provenance_identity.verify()'):
@@ -31,7 +31,7 @@ assert 'REQUIRED_CLASSES = {"dev-runner-vm", "iprunner", "gpurunner"}' in policy
 # Bare v3 parsers are permitted only behind canonical aggregate validation or
 # in issuance/transfer components; acceptance consumers must mention v4/strong validation.
 allowed={'factory-runner-broker.py','factory-runner-signer.py','run-factory-runners.py','check-factory-runner-evidence.py'}
-for path in (ROOT/'scripts').glob('*.py'):
+for path in (ROOT/'.factory/runner').glob('*.py'):
  text=path.read_text()
  if 'factory-runner-receipt/v3' not in text or path.name in allowed:continue
  assert ('factory-runner-aggregate/v4' in text or 'strong_runner_evidence' in text or

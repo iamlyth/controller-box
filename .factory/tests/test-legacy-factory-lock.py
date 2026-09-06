@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 import time
 
-SOURCE = Path(__file__).resolve().parent.parent
+SOURCE = Path(__file__).resolve().parents[2]
 ENV_KEYS = ("FACTORY_LOCK_HELD", "FACTORY_LOCK_FD", "FACTORY_LOCK_ID", "FACTORY_LOCK_ROOT")
 
 
@@ -26,9 +26,9 @@ def run(command: list[str], root: Path, *, check: bool = True) -> subprocess.Com
 
 def make_repo() -> Path:
     root = Path(tempfile.mkdtemp(prefix="factory-lock-test."))
-    (root / "scripts").mkdir()
+    (root / ".factory" / "tools").mkdir(parents=True)
     for name in ("factory-lock-exec.py", "factory_lock.py", "factory_state_io.py", "factory-lock.sh"):
-        shutil.copy2(SOURCE / "scripts" / name, root / "scripts" / name)
+        shutil.copy2(SOURCE / ".factory/tools" / name, root / ".factory/tools" / name)
     (root / ".gitignore").write_text(".factory-state/\n.factory-lock\n", encoding="utf-8")
     (root / "tracked").write_text("test\n", encoding="utf-8")
     run(["git", "init", "-q", "-b", "develop"], root)

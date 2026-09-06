@@ -155,8 +155,8 @@ class _FixtureWorkspace:
 
     def __init__(self, tmp: Path, *, commit_guard: bool = True) -> None:
         self.root = tmp / "workspace"
-        scripts = self.root / "scripts"
-        scripts.mkdir(parents=True)
+        tools = self.root / ".factory" / "tools"
+        tools.mkdir(parents=True)
         # A placeholder so the empty (no-guard) base repo still has one
         # committed file (git refuses an empty initial commit).
         (self.root / "README").write_text("fixture\n", encoding="utf-8")
@@ -213,11 +213,11 @@ class GuardSourceBindingTests(unittest.TestCase):
     def test_symlinked_guard_fails_closed(self) -> None:
         ws = _FixtureWorkspace(self.tmp)
         target = ws.root / ".factory" / "tools" / "credential-guard.py"
-        link = ws.root / "scripts" / "guard-link.py"
+        link = ws.root / ".factory" / "tools" / "guard-link.py"
         link.symlink_to(target.name)
         with self.assertRaises(redaction.OutputRedactionError) as caught:
             redaction._read_worktree_source(
-                ws.root, "scripts/guard-link.py", redaction.MAX_GUARD_SOURCE_BYTES
+                ws.root, ".factory/tools/guard-link.py", redaction.MAX_GUARD_SOURCE_BYTES
             )
         self.assertIn("open", str(caught.exception))
 
@@ -1363,19 +1363,19 @@ class ExternalBackendTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         # A launch-style fixture: wrapper + backend + guard committed at HEAD.
         self.workspace = self.tmp / "workspace"
-        scripts = self.workspace / "scripts"
-        scripts.mkdir(parents=True)
+        tools = self.workspace / ".factory" / "tools"
+        tools.mkdir(parents=True)
         shutil.copy2(ROOT / launch_module.SECURE_WRAPPER,
-                     scripts / Path(launch_module.SECURE_WRAPPER).name)
-        shutil.copy2(REAL_GUARD, scripts / Path(GUARD_RELPATH).name)
+                     tools / Path(launch_module.SECURE_WRAPPER).name)
+        shutil.copy2(REAL_GUARD, tools / Path(GUARD_RELPATH).name)
         shutil.copy2(
             ROOT / ".factory/tools" / "pi-factory-guard-extension.mjs",
-            scripts / "pi-factory-guard-extension.mjs",
+            tools / "pi-factory-guard-extension.mjs",
         )
-        (scripts / "pi-cli-shims").mkdir()
+        (tools / "pi-cli-shims").mkdir()
         shutil.copy2(
             ROOT / ".factory/tools" / "pi-cli-shims" / "git",
-            scripts / "pi-cli-shims" / "git",
+            tools / "pi-cli-shims" / "git",
         )
         loop = self.workspace / ".factory" / "loop"
         loop.mkdir(parents=True)

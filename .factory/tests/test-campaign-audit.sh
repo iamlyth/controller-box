@@ -3,18 +3,20 @@ set -euo pipefail
 export FACTORY_CAMPAIGN_ID=synthetic-campaign-audit
 export FACTORY_READINESS_NONCE=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
+PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/scripts" "$tmp/.ralph/agent" "$tmp/.factory/artifacts" "$tmp/.factory/loop"
+mkdir -p "$tmp/scripts" "$tmp/.ralph/agent" "$tmp/.factory/artifacts" "$tmp/.factory/loop" \
+    "$tmp/.factory/tools" "$tmp/.factory/runner"
 cp "$PROJECT_ROOT/.factory/tools/initialize-campaign-audit.py" \
    "$PROJECT_ROOT/.factory/tools/validate-campaign-audit.py" \
-   "$PROJECT_ROOT/.factory/runner/run-factory-runners.py" \
-   "$PROJECT_ROOT/scripts/check-factory-runner-evidence.py" \
-   "$PROJECT_ROOT/.factory/runner/factory_runner_artifacts.py" \
-   "$PROJECT_ROOT/.factory/tools/check-factory-environment.py" "$tmp/scripts/"
+   "$PROJECT_ROOT/.factory/tools/check-factory-environment.py" "$tmp/.factory/tools/"
+cp "$PROJECT_ROOT/.factory/runner/run-factory-runners.py" \
+   "$PROJECT_ROOT/.factory/runner/factory_runner_artifacts.py" "$tmp/.factory/runner/"
+cp "$PROJECT_ROOT/scripts/check-factory-runner-evidence.py" "$tmp/scripts/"
+cp "$PROJECT_ROOT/.factory/tools/check-factory-runner-evidence.py" "$tmp/.factory/tools/"
 cp "$PROJECT_ROOT/.factory/loop/gitutil.py" "$tmp/.factory/loop/gitutil.py"
-chmod +x "$tmp/scripts/"*
+chmod +x "$tmp/scripts/"* "$tmp/.factory/tools/"* "$tmp/.factory/runner/"*
 cat > "$tmp/.factory/environment.toml" <<'EOF'
 schema_version = 1
 EOF

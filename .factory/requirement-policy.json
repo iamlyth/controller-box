@@ -544,6 +544,21 @@
       "spec_sections": [
         "\u00a711.2.9"
       ]
+    },
+    {
+      "id": "GIT-01",
+      "required_tier": "installed",
+      "spec_sections": [
+        "\u00a712",
+        "\u00a717"
+      ]
+    },
+    {
+      "id": "CRED-01",
+      "required_tier": "private_integration",
+      "spec_sections": [
+        "\u00a718"
+      ]
     }
   ]
 }

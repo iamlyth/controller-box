@@ -14,7 +14,7 @@ export FACTORY_CAMPAIGN_ID=synthetic-campaign-objectives
 export FACTORY_READINESS_NONCE=2222222222222222222222222222222222222222222222222222222222222222
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
+PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
@@ -28,10 +28,12 @@ setup_repo() {
     local dir=$1
     mkdir -p "$dir/scripts" "$dir/.factory/loop" "$dir/.factory/artifacts" "$dir/docs" \
         "$dir/.factory-state/audit-receipts" \
-        "$dir/.factory-state/runner-evidence"
+        "$dir/.factory-state/runner-evidence" "$dir/.factory/tools" "$dir/.factory/runner"
     chmod 700 "$dir/.factory-state" "$dir/.factory-state/audit-receipts"
-    cp "$CHECKER" "$RUNNER_EVIDENCE" "$ENV_CHECKER" \
-        "$PROJECT_ROOT/.factory/runner/factory_runner_artifacts.py" "$dir/scripts/"
+    cp "$CHECKER" "$ENV_CHECKER" \
+        "$PROJECT_ROOT/.factory/tools/check-factory-runner-evidence.py" "$dir/.factory/tools/"
+    cp "$RUNNER_EVIDENCE" "$dir/scripts/"
+    cp "$PROJECT_ROOT/.factory/runner/factory_runner_artifacts.py" "$dir/.factory/runner/"
     cp "$PROJECT_ROOT/.factory/loop/evidence.py" \
         "$PROJECT_ROOT/.factory/loop/gitutil.py" "$dir/.factory/loop/"
     chmod +x "$dir/scripts/"*.py

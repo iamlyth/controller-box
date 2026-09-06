@@ -34,6 +34,18 @@ implementation_prefixes = (
 )
 implementation = [p for p in paths if p.startswith(implementation_prefixes)]
 
+# Exact tracked paths exempted from the product-term scan.  The allowlist
+# is deliberately narrow: only synthetic-secret test fixtures that must
+# exercise credential-shaped content belong here; product content is
+# neutralized instead of allowlisted.
+allowlist_path = root / ".factory/generic-leak-allowlist"
+allowlisted: set[str] = set()
+if allowlist_path.is_file():
+    for line in allowlist_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            allowlisted.add(line)
+
 # migration.py and its tests are the sole authority allowed to name retired
 # paths. footprint.py may name `.ralph` only to lstat the root without walking.
 legacy_allow = {
@@ -66,7 +78,7 @@ for rel in implementation:
         failed.append(f"unsafe hidden-factory inode: {rel}")
         continue
     data = path.read_bytes()
-    if secret.search(data):
+    if rel not in allowlisted and secret.search(data):
         failed.append(f"credential-like content in hidden factory: {rel}")
     runtime_surface = rel.startswith((
         ".factory/loop/", ".factory/bin/", ".factory/smoke/"

@@ -570,6 +570,8 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 | DOD-07 | §11.2.7 | verified | Campaign audit round 1 completed with 5 findings; this plan addresses all | |
 | DOD-08 | §11.2.8 | verified | README.md/OPERATIONS.md capability claims and inventory counts corrected (Task 1); capability-accounted items documented in OPERATIONS.md (Task 3) | Task 1, Task 3 |
 | DOD-09 | §11.2.9 | partial | Plan status is active; production acceptance failure BUG-0015 open; final gate cannot accept completion | Task 4 |
+| CRED-01 | §18 | verified | `.factory/tools/credential-guard.py` + `pi-factory-guard-extension.mjs` redact/block credential-shaped content; `test-credential-guard.sh`, `test-credential-extension.sh` | |
+| GIT-01 | §12, §17 | verified | `.factory/tools/git-commit-guard.sh` + `install-git-commit-guard.sh` enforce the substantive-commit boundary; `pi-cli-shims/git`; `test-git-commit-guard.sh` | |
 
 ## Interaction acceptance inventory
 

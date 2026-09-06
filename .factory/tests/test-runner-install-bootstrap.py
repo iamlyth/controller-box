@@ -21,7 +21,7 @@ with tempfile.TemporaryDirectory() as td:
  doc=json.loads(out.read_bytes());assert set(doc['files'])==set(required)
  assert doc['files']['.factory/runner/install-factory-runner-v2.sh']['mode']==0o755
  # An untracked authority candidate must fail before output creation.
- (r/'scripts/attack.py').write_text('raise SystemExit("root import attack")\n')
+ (r/'scripts').mkdir();(r/'scripts/attack.py').write_text('raise SystemExit("root import attack")\n')
  bad=pathlib.Path(td)/'bad.json';p=run(str(GEN),'--source',str(r),'--output',str(bad),check=False)
  assert p.returncode and not bad.exists() and 'untracked' in p.stderr
  (r/'scripts/attack.py').unlink()

@@ -359,10 +359,54 @@ def _first_word(segment: str) -> str:
 _SEARCH_TOOLS = {"grep", "rg", "ag", "egrep", "fgrep", "ack"}
 
 
+# sudo/doas option letters that take a following value (``-u root``,
+# ``-h host``, ``-p prompt``, ``-r role``, ``-R chroot``, ``-t type``,
+# ``-T timeout``, ``-U user``, ``-Z type``, ``-a type``, ``-C num``,
+# ``-D dir``, ``-F file``, ``-g group``).  ``h`` is included so a host
+# value can never be mistaken for the command word.
+_PRIV_VALUE_TAKING = frozenset("aCDFghprRtTUuZ")
+# sudo/doas option letters that are plain flags (no value).  Anything not in
+# this set and not value-taking is treated as unknown and fails closed.
+_PRIV_FLAGS = frozenset("bBekKlnPqQsvVHES")
+
+
 def _strip_privilege(segment: str) -> str:
-    """Remove a leading sudo/doas wrapper so the inner verb is inspected."""
-    match = re.match(r"\s*(?:sudo|doas)(?:\s+[^\s|;&#]+)*\s+(.*)$", segment, re.S)
-    return match.group(1) if match else segment
+    """Remove a leading sudo/doas wrapper so the inner verb is inspected.
+
+    The wrapper is stripped for inspection only and is never an execution
+    authority: the inner verb is still classified exactly as if it had been
+    invoked directly.  Only sudo/doas option tokens (``-n``, ``-u root``,
+    ``-E``, ...) are consumed; the first non-option token is the command word
+    and is always preserved, so a privilege-wrapped sensitive command (for
+    example ``sudo ps eww``) is still blocked.
+
+    A value-taking option (``-u root``, ``-h host``, ``-p prompt``, ...) also
+    consumes the following token as its value.  An option token that is not a
+    recognized flag is treated as value-taking (fail closed): the wrapper is
+    stripped only when the option grammar is unambiguous, so an unknown option
+    can never hide the inner command word behind a value.
+    """
+    match = re.match(r"\s*(?:sudo|doas)\s+(.*)$", segment, re.S)
+    if not match:
+        return segment
+    tokens = match.group(1).split()
+    consumed = 0
+    while consumed < len(tokens):
+        token = tokens[consumed]
+        if not token.startswith("-") or token == "-":
+            break
+        body = token[1:]
+        if not body:
+            break
+        if body[0] in _PRIV_VALUE_TAKING and consumed + 1 < len(tokens):
+            consumed += 2
+        elif body[0] in _PRIV_FLAGS:
+            consumed += 1
+        else:
+            # Unknown option: fail closed by consuming a following value so
+            # the inner command word is never hidden behind an option value.
+            consumed += 2 if consumed + 1 < len(tokens) else 1
+    return " ".join(tokens[consumed:])
 
 
 def _env_dump_reason(segment: str) -> Optional[str]:

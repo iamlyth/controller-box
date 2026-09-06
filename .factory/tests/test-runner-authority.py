@@ -2,7 +2,7 @@
 """Adversarial tests for the v2 runner trust boundary."""
 import hashlib,json,os,pathlib,shutil,tempfile,sys
 ROOT=pathlib.Path(__file__).resolve().parents[2]
-sys.path.insert(0,str(ROOT/'scripts'));import factory_runner_authority as auth
+sys.path.insert(0,str(ROOT/'.factory/runner'));import factory_runner_authority as auth
 def reject(fn):
  try: fn()
  except (auth.AuthorityError,OSError): return

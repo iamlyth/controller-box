@@ -13,7 +13,8 @@ cd "$root"
 git init -q
 git config user.name test
 git config user.email test@example.invalid
-mkdir -p scripts .factory-state src tests data packaging
+mkdir -p scripts .factory/tools .factory-state src tests data packaging
+cp "$source_root/.factory/tools/check-installed-functional-evidence.sh" .factory/tools/
 cp "$source_root/scripts/check-installed-functional-evidence.sh" scripts/
 printf 'source\n' > src/app.c
 printf 'cmake\n' > CMakeLists.txt

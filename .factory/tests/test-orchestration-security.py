@@ -13,7 +13,7 @@ import subprocess
 import sys
 import tempfile
 
-SOURCE = Path(__file__).resolve().parent.parent
+SOURCE = Path(__file__).resolve().parents[2]
 HEX = "a" * 64
 
 
@@ -37,9 +37,10 @@ def run(
 
 
 def copy_scripts(root: Path, *names: str) -> None:
+    (root / ".factory" / "tools").mkdir(parents=True, exist_ok=True)
     (root / "scripts").mkdir(exist_ok=True)
     for name in names:
-        shutil.copy2(SOURCE / "scripts" / name, root / "scripts" / name)
+        shutil.copy2(SOURCE / ".factory/tools" / name, root / ".factory/tools" / name)
 
 
 def test_symlink_safe_state_markers() -> None:

@@ -2,16 +2,18 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
+PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/scripts" "$tmp/docs" "$tmp/.factory-state" "$tmp/.ralph/agent" \
-    "$tmp/.factory/bugs" "$tmp/.factory/artifacts"
+    "$tmp/.factory/bugs" "$tmp/.factory/artifacts" "$tmp/.factory/tools"
 cp "$PROJECT_ROOT/.factory/tools/bug-ledger.py" "$PROJECT_ROOT/.factory/tools/check-maintenance-freshness.sh" \
     "$PROJECT_ROOT/.factory/tools/factory-state-file.py" \
     "$PROJECT_ROOT/.factory/tools/factory_state_io.py" \
-    "$PROJECT_ROOT/.factory/tools/validate-maintenance-plan.py" "$PROJECT_ROOT/scripts/final-gate.sh" "$tmp/scripts/"
-chmod +x "$tmp/scripts/"*
+    "$PROJECT_ROOT/.factory/tools/validate-maintenance-plan.py" \
+    "$PROJECT_ROOT/.factory/tools/final-gate.sh" "$tmp/.factory/tools/"
+cp "$PROJECT_ROOT/scripts/final-gate.sh" "$tmp/scripts/"
+chmod +x "$tmp/scripts/"* "$tmp/.factory/tools/"*
 chmod 700 "$tmp/.factory-state"
 cd "$tmp"
 

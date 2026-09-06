@@ -12,7 +12,7 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
+PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd)
 EXTENSION="$PROJECT_ROOT/.factory/tools/pi-factory-guard-extension.mjs"
 GUARD="$PROJECT_ROOT/.factory/tools/credential-guard.py"
 

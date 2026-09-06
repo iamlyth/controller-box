@@ -10,15 +10,15 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
+PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/scripts/pi-cli-shims" "$tmp/.ralph/agent" "$tmp/sub"
+mkdir -p "$tmp/scripts/pi-cli-shims" "$tmp/.factory/tools/pi-cli-shims" "$tmp/.ralph/agent" "$tmp/sub"
 for name in git-commit-guard.sh install-git-commit-guard.sh factory_state_io.py; do
-    cp "$PROJECT_ROOT/scripts/$name" "$tmp/scripts/"
+    cp "$PROJECT_ROOT/.factory/tools/$name" "$tmp/.factory/tools/"
 done
 cp "$PROJECT_ROOT/.factory/tools/pi-cli-shims/git" "$tmp/.factory/tools/pi-cli-shims/git"
-chmod +x "$tmp/scripts/"*
+chmod +x "$tmp/.factory/tools/"*
 SHIM="$tmp/.factory/tools/pi-cli-shims/git"
 
 printf '.factory-state/\n.factory-lock\n__pycache__/\n.ralph/*\n!.ralph/agent/\n.ralph/agent/*\n!.ralph/agent/scratchpad.md\n' > "$tmp/.gitignore"

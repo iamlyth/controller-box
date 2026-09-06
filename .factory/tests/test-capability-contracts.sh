@@ -8,7 +8,7 @@ export FACTORY_CAMPAIGN_ID=synthetic-capability-contracts
 export FACTORY_READINESS_NONCE=1111111111111111111111111111111111111111111111111111111111111111
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
+PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
@@ -29,8 +29,9 @@ must_fail() {
 setup_repo() {
     local dir=$1 capability=$2
     mkdir -p "$dir/scripts" "$dir/.factory/artifacts" "$dir/.factory/loop" "$dir/docs" \
-        "$dir/.factory-state/runner-evidence/probe-runner"
-    cp "$CONTRACT_CHECKER" "$EVIDENCE_CHECKER" "$RUNNER_CHECKER" "$ENV_CHECKER" "$dir/scripts/"
+        "$dir/.factory-state/runner-evidence/probe-runner" "$dir/.factory/tools"
+    cp "$CONTRACT_CHECKER" "$EVIDENCE_CHECKER" "$ENV_CHECKER" "$dir/.factory/tools/"
+    cp "$RUNNER_CHECKER" "$dir/scripts/"
     cp "$PROJECT_ROOT/.factory/loop/gitutil.py" "$dir/.factory/loop/gitutil.py"
     cp "$PROJECT_ROOT/.factory/signer-trust.json" "$dir/.factory/signer-trust.json"
     chmod +x "$dir/scripts/"*.py

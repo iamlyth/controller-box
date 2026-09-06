@@ -9,7 +9,7 @@ export FACTORY_CAMPAIGN_ID=synthetic-audit-receipts
 export FACTORY_READINESS_NONCE=ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
+PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
@@ -23,10 +23,13 @@ ROUND=2
 setup_repo() {
     local dir=$1
     mkdir -p "$dir/scripts" "$dir/.factory" "$dir/.factory/artifacts" "$dir/.ralph/agent" \
-        "$dir/.factory-state/runner-evidence" "$dir/docs" "$dir/.factory/loop"
+        "$dir/.factory-state/runner-evidence" "$dir/docs" "$dir/.factory/loop" \
+        "$dir/.factory/tools" "$dir/.factory/runner"
     chmod 700 "$dir/.factory-state"
-    cp "$RECORDER" "$CHECKER" "$RUNNER_EVIDENCE" "$ENV_CHECKER" \
-       "$PROJECT_ROOT/.factory/runner/factory_runner_artifacts.py" "$dir/scripts/"
+    cp "$RECORDER" "$CHECKER" "$ENV_CHECKER" \
+        "$PROJECT_ROOT/.factory/tools/check-factory-runner-evidence.py" "$dir/.factory/tools/"
+    cp "$RUNNER_EVIDENCE" "$dir/scripts/"
+    cp "$PROJECT_ROOT/.factory/runner/factory_runner_artifacts.py" "$dir/.factory/runner/"
     # The receipt wrapper reuses the hidden control plane's supervised process
     # boundary (`.factory/loop/lock.py` and its pinned-Git sibling) for the
     # bounded descendant capture; the fixture must carry the exact fresh

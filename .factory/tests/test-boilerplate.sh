@@ -2,19 +2,19 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
+PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd)
 GUARD="$PROJECT_ROOT/.factory/tools/ollama-usage-guard.sh"
 
-json=$($GUARD --check --json --html-file "$SCRIPT_DIR/fixtures/usage-ok.html")
+json=$($GUARD --check --json --html-file "$PROJECT_ROOT/tests/fixtures/usage-ok.html")
 python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["blocked"] is False; assert d["session_percent"] == 12.5' <<< "$json"
 
 set +e
-$GUARD --check --html-file "$SCRIPT_DIR/fixtures/usage-blocked.html" >/dev/null
+$GUARD --check --html-file "$PROJECT_ROOT/tests/fixtures/usage-blocked.html" >/dev/null
 blocked_rc=$?
 OLLAMA_WAIT_MAX_POLLS=1 OLLAMA_WAIT_INTERVAL_SECONDS=0 \
-    $GUARD --wait --html-file "$SCRIPT_DIR/fixtures/usage-blocked.html" >/dev/null 2>&1
+    $GUARD --wait --html-file "$PROJECT_ROOT/tests/fixtures/usage-blocked.html" >/dev/null 2>&1
 wait_rc=$?
-$GUARD --check --html-file "$SCRIPT_DIR/fixtures/login.html" >/dev/null 2>&1
+$GUARD --check --html-file "$PROJECT_ROOT/tests/fixtures/login.html" >/dev/null 2>&1
 login_rc=$?
 set -e
 [[ $blocked_rc -eq 1 ]] || { echo "test: blocked usage returned $blocked_rc" >&2; exit 1; }
@@ -23,8 +23,8 @@ set -e
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/scripts" "$tmp/docs" "$tmp/.factory/artifacts" "$tmp/.factory/loop"
-cp "$PROJECT_ROOT/.factory/tools/check-plan-freshness.sh" "$tmp/scripts/"
+mkdir -p "$tmp/scripts" "$tmp/docs" "$tmp/.factory/artifacts" "$tmp/.factory/loop" "$tmp/.factory/tools"
+cp "$PROJECT_ROOT/.factory/tools/check-plan-freshness.sh" "$tmp/.factory/tools/"
 cp "$PROJECT_ROOT/.factory/loop/gitutil.py" "$tmp/.factory/loop/"
 for policy in campaign-receipt-policy.json requirement-policy.json capability-contracts.json; do
     cp "$PROJECT_ROOT/.factory/$policy" "$tmp/.factory/$policy"

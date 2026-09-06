@@ -2,21 +2,22 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
+PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/scripts" "$tmp/docs" "$tmp/.factory-state" \
-    "$tmp/.factory/artifacts" "$tmp/.factory/bugs" "$tmp/.factory/loop"
+    "$tmp/.factory/artifacts" "$tmp/.factory/bugs" "$tmp/.factory/loop" "$tmp/.factory/tools"
 cp "$PROJECT_ROOT/.factory/tools/bug-ledger.py" \
    "$PROJECT_ROOT/.factory/tools/check-plan-freshness.sh" \
-   "$PROJECT_ROOT/scripts/final-gate.sh" \
    "$PROJECT_ROOT/.factory/tools/validate-implementation-plan.py" \
-   "$PROJECT_ROOT/.factory/tools/validate-maintenance-plan.py" "$tmp/scripts/"
+   "$PROJECT_ROOT/.factory/tools/validate-maintenance-plan.py" \
+   "$PROJECT_ROOT/.factory/tools/final-gate.sh" "$tmp/.factory/tools/"
+cp "$PROJECT_ROOT/scripts/final-gate.sh" "$tmp/scripts/"
 cp "$PROJECT_ROOT/.factory/loop/gitutil.py" "$tmp/.factory/loop/"
 for policy in campaign-receipt-policy.json requirement-policy.json capability-contracts.json; do
     cp "$PROJECT_ROOT/.factory/$policy" "$tmp/.factory/$policy"
 done
-chmod +x "$tmp/scripts/"*
+chmod +x "$tmp/scripts/"* "$tmp/.factory/tools/"*
 cat > "$tmp/.factory/config.toml" <<'EOF'
 [project]
 spec = "docs/SPEC.md"
