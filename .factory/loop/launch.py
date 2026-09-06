@@ -314,6 +314,26 @@ PI_FACTORY_TOOL_FD_ENV = "PI_FACTORY_TOOL_FD"
 PI_FACTORY_TOOL_FD_DEV_ENV = "PI_FACTORY_TOOL_FD_DEV"
 PI_FACTORY_TOOL_FD_INO_ENV = "PI_FACTORY_TOOL_FD_INO"
 
+# The credential-return pipe: the trusted parent provisions one private pipe
+# per openai-codex launch; the model-side extension writes the detached
+# credential bytes there at session shutdown (never a pathname).  The parent
+# drains it through a dedicated reader thread, caps it at 1 MiB while
+# draining, marks oversize, and never logs the bytes.  The write end travels
+# in the adapter's transient argv and is forwarded to the extension through
+# the sanitized env; it is absent from the model process argv.
+CREDENTIAL_RETURN_MAX_BYTES = 1 << 20
+CREDENTIAL_RETURN_ENV = "PI_FACTORY_CREDENTIAL_RETURN_FD"
+# The credential-return reader starts at spawn and drains for the whole
+# (arbitrarily long, bounded) campaign runtime, so there is no spawn-relative
+# drain deadline: it exits only on EOF or on the stop event.  It polls through
+# a selector with a short timeout so it can observe the stop event promptly;
+# a descendant that never closes the write end keeps the reader alive until
+# cleanup signals stop, and the bounded join on every consume/cleanup path
+# fails closed (no EOF) rather than waiting unboundedly.
+# Bounded join window for the reader thread on every consume/cleanup path;
+# cleanup never waits unboundedly and never deadlocks on a stuck reader.
+CREDENTIAL_RETURN_JOIN_TIMEOUT = 2.0
+
 # The committed model-side Pi extension (Task 11 review): the generic
 # factory guard extension loaded by the model backend through ``--extension``
 # in the exact child argv.  It enforces the model-side Git command boundary
@@ -1132,6 +1152,7 @@ def child_argv(
     guard_extension: Optional[Path] = None,
     prompt_digest: Optional[str] = None,
     auth_fd: int = -1,
+    credential_return_fd: int = -1,
 ) -> List[str]:
     """Build the exact one-shot argv for the secure wrapper.
 
@@ -1212,6 +1233,16 @@ def child_argv(
         if type(auth_fd) is not int:
             raise InvocationError("the auth descriptor must be an integer")
         argv.extend(["--auth-fd", str(auth_fd)])
+    if credential_return_fd >= 0:
+        # The credential-return pipe write end travels in the adapter's
+        # transient argv exactly like the auth descriptor; the adapter
+        # forwards the number to the extension through the sanitized env and
+        # it is absent from the model process argv.
+        if type(credential_return_fd) is not int:
+            raise InvocationError(
+                "the credential return descriptor must be an integer"
+            )
+        argv.extend(["--credential-return-fd", str(credential_return_fd)])
     for flag in FORBIDDEN_BACKEND_FLAGS:
         if flag in argv:
             raise InvocationError(
@@ -1760,6 +1791,18 @@ class LaunchSupervision:
         # sibling to the same exact-commit authority without any Git access.
         self._redactor: Optional["output_redaction.Redactor"] = None
         self._guard_digest: Optional[str] = None
+        # Credential-return pipe state (openai-codex only): the read end is
+        # held by the parent and drained by a dedicated reader thread; the
+        # write end travels to the model through the adapter argv/pass_fds and
+        # is closed by the parent immediately after spawn.  The thread caps
+        # the returned bytes at 1 MiB, marks oversize, and never logs them.
+        self._credential_return_fd: int = -1
+        self._credential_return_write_fd: int = -1
+        self._credential_return_thread: Optional[threading.Thread] = None
+        self._credential_return_stop: Optional[threading.Event] = None
+        self._credential_return_data: Optional[bytearray] = None
+        self._credential_return_oversize: bool = False
+        self._credential_return_eof: bool = False
 
     # -- dedicated broker lifecycle (F7) -------------------------------------
     # The staged confine launcher installs PR_SET_CHILD_SUBREAPER in its own
@@ -1900,6 +1943,111 @@ class LaunchSupervision:
 
     # -- spawning --------------------------------------------------------------
 
+    def _provision_credential_return_pipe(self) -> None:
+        """Create the private credential-return pipe for an openai-codex launch.
+
+        The read end is held by the parent and drained by a dedicated reader
+        thread; the write end travels to the model through the adapter argv,
+        ``pass_fds``, and the confined launcher's ``--target-only-fds``.  The
+        pipe is created with ``O_CLOEXEC`` so no unrelated exec can inherit it.
+        """
+        if self.binding.provider.lower() != "openai-codex":
+            return
+        try:
+            read_fd, write_fd = os.pipe2(getattr(os, "O_CLOEXEC", 0))
+        except (AttributeError, OSError) as exc:
+            raise SupervisionError(
+                f"cannot create the credential-return pipe: {exc}"
+            ) from exc
+        self._credential_return_fd = read_fd
+        self._credential_return_write_fd = write_fd
+        self._credential_return_stop = threading.Event()
+
+    def _zero_credential_return(self) -> None:
+        """Zero and drop any buffered credential-return bytes.
+
+        Called on consume, on every consume error, and on noncompleted
+        cleanup so no credential byte survives in parent memory after the
+        channel is done with.
+        """
+        data = self._credential_return_data
+        self._credential_return_data = None
+        if data is not None:
+            data.clear()
+
+    def _drain_credential_return(self) -> None:
+        """Drain the credential-return pipe read end until EOF (never logs bytes).
+
+        Runs on a dedicated daemon thread.  The read end is nonblocking and
+        polled through a selector with a short timeout, so the thread can
+        observe the stop event and exit promptly.  The reader starts at spawn
+        and drains for the whole (arbitrarily long, bounded) campaign runtime,
+        so there is no spawn-relative drain deadline: it exits only on EOF or
+        on the stop event.  Bytes are capped at 1 MiB while draining; once the
+        cap is exceeded the thread keeps draining (so the child never blocks
+        on a full pipe) but discards the content and marks the result oversize.
+        The read end is closed at EOF or on stop.  No credential byte is ever
+        logged or echoed.
+        """
+        fd = self._credential_return_fd
+        if fd < 0:
+            return
+        data = bytearray()
+        oversize = False
+        eof = False
+        stop = self._credential_return_stop
+        try:
+            os.set_blocking(fd, False)
+        except OSError:
+            pass
+        selector = selectors.DefaultSelector()
+        registered = False
+        try:
+            selector.register(fd, selectors.EVENT_READ)
+            registered = True
+        except (KeyError, OSError):
+            # A selector that cannot register the read end cannot drain; fail
+            # closed (no EOF) rather than busy-looping on an empty selector.
+            pass
+        try:
+            if registered:
+                while stop is None or not stop.is_set():
+                    try:
+                        events = selector.select(timeout=0.5)
+                    except OSError:
+                        break
+                    if not events:
+                        continue
+                    try:
+                        chunk = os.read(fd, 65536)
+                    except (BlockingIOError, InterruptedError):
+                        continue
+                    except OSError:
+                        break
+                    if not chunk:
+                        eof = True
+                        break
+                    if oversize:
+                        continue
+                    if len(data) + len(chunk) > CREDENTIAL_RETURN_MAX_BYTES:
+                        oversize = True
+                        data = bytearray()
+                    else:
+                        data.extend(chunk)
+        finally:
+            try:
+                selector.close()
+            except Exception:
+                pass
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            self._credential_return_fd = -1
+        self._credential_return_data = data
+        self._credential_return_oversize = oversize
+        self._credential_return_eof = eof
+
     def spawn(self) -> subprocess.Popen[bytes]:
         """Spawn the fresh one-shot model process behind the wrapper.
 
@@ -1965,6 +2113,12 @@ class LaunchSupervision:
             and "execute" in rule.get("access", [])
             and str(rule.get("path", "")).startswith("/nix/store/")
         })
+        # Provision the private credential-return pipe before any argv is built
+        # so the write end can travel through the adapter argv, ``pass_fds``,
+        # and the confined launcher's ``--target-only-fds``.  Only an
+        # openai-codex launch provisions a pipe; every other provider leaves
+        # the state at its closed defaults.
+        self._provision_credential_return_pipe()
         env = child_environment(
             self.binding,
             guard_digest=self._guard_digest,
@@ -1977,6 +2131,7 @@ class LaunchSupervision:
             guard_extension=self._guard_extension,
             prompt_digest=self._prompt_digest,
             auth_fd=self._auth_fd,
+            credential_return_fd=self._credential_return_write_fd,
         )
         # Task 8 confined launch: when the verified authority carries the
         # exact confinement specification and a real proof, the model child is
@@ -2033,6 +2188,10 @@ class LaunchSupervision:
                     "descendant escape reporting must fail closed"
                 ) from exc
             self._confinement_status_fd = status_read
+            target_only = [
+                fd for fd in (self._auth_fd, self._credential_return_write_fd)
+                if fd >= 0
+            ]
             argv = [
                 sys.executable,
                 str(self._confined_launcher),
@@ -2041,8 +2200,8 @@ class LaunchSupervision:
                 "--rule-fds",
                 ",".join(str(fd) for fd in self._confinement_rule_fds),
                 *(
-                    ["--target-only-fds", str(self._auth_fd)]
-                    if self._auth_fd >= 0 else []
+                    ["--target-only-fds", ",".join(str(fd) for fd in target_only)]
+                    if target_only else []
                 ),
                 "--supervision-fd",
                 str(supervision_write),
@@ -2058,6 +2217,10 @@ class LaunchSupervision:
                 auth_pass: Tuple[int, ...] = (
                     (self._auth_fd,) if self._auth_fd >= 0 else ()
                 )
+                credential_pass: Tuple[int, ...] = (
+                    (self._credential_return_write_fd,)
+                    if self._credential_return_write_fd >= 0 else ()
+                )
                 process = subprocess.Popen(
                     argv,
                     cwd=str(self.binding.workspace),
@@ -2066,7 +2229,7 @@ class LaunchSupervision:
                     close_fds=True,
                     pass_fds=(
                         *self._confinement_rule_fds, self.prompt_fd,
-                        *auth_pass, *extra_fds,
+                        *auth_pass, *credential_pass, *extra_fds,
                     ),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
@@ -2079,6 +2242,18 @@ class LaunchSupervision:
                     except OSError:
                         pass
                     self._confinement_status_fd = None
+                if self._credential_return_fd >= 0:
+                    try:
+                        os.close(self._credential_return_fd)
+                    except OSError:
+                        pass
+                    self._credential_return_fd = -1
+                if self._credential_return_write_fd >= 0:
+                    try:
+                        os.close(self._credential_return_write_fd)
+                    except OSError:
+                        pass
+                    self._credential_return_write_fd = -1
                 raise LaunchError(f"cannot spawn the model process: {exc}") from exc
             finally:
                 if supervision_write is not None:
@@ -2110,6 +2285,21 @@ class LaunchSupervision:
                 except OSError:
                     pass
                 self._auth_fd = -1
+            # The parent must not keep a second writable copy of the
+            # credential-return pipe: close it immediately so the read end
+            # reaches EOF exactly when the model closes its copy, then start
+            # the dedicated reader thread that drains the returned credential.
+            if self._credential_return_write_fd >= 0:
+                try:
+                    os.close(self._credential_return_write_fd)
+                except OSError:
+                    pass
+                self._credential_return_write_fd = -1
+            if self._credential_return_fd >= 0:
+                self._credential_return_thread = threading.Thread(
+                    target=self._drain_credential_return, daemon=True
+                )
+                self._credential_return_thread.start()
             # F4: pin the leader's starttime at spawn; every later group
             # signal re-verifies it so a reused PID is never signaled or
             # reaped.  The identity is recorded *before* the mask is
@@ -2408,6 +2598,178 @@ class LaunchSupervision:
             f"status {report!r}"
         )
 
+    def _consume_credential_return(self) -> Optional[bytes]:
+        """Join the reader thread and return exactly one JSON credential document.
+
+        Runs only after the child process tree is fully terminated and the
+        confinement lifecycle report is consumed, so the write end is closed
+        and the reader thread has reached EOF.  The join is bounded; a reader
+        that did not finish, did not reach EOF (drain timeout or stop), or
+        returned oversize/malformed content fails closed and the buffered
+        bytes are zeroed.  Returns ``None`` when no credential was returned.
+        The bytes are never logged.
+        """
+        thread = self._credential_return_thread
+        if thread is not None:
+            thread.join(timeout=CREDENTIAL_RETURN_JOIN_TIMEOUT)
+            if thread.is_alive():
+                self._zero_credential_return()
+                raise SupervisionError(
+                    "the credential-return reader did not finish within the "
+                    "bounded join window"
+                )
+            self._credential_return_thread = None
+        if self._credential_return_oversize:
+            self._zero_credential_return()
+            raise SupervisionError(
+                "the credential-return pipe exceeded the 1 MiB bound"
+            )
+        if not self._credential_return_eof:
+            self._zero_credential_return()
+            raise SupervisionError(
+                "the credential-return reader was stopped before reaching EOF"
+            )
+        data = self._credential_return_data
+        self._credential_return_data = None
+        if data is None or not data:
+            return None
+        try:
+            document, end = json.JSONDecoder().raw_decode(data.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            data.clear()
+            raise SupervisionError(
+                "the returned credential is not exactly one JSON document"
+            ) from exc
+        if end != len(data) or not isinstance(document, dict):
+            data.clear()
+            raise SupervisionError(
+                "the returned credential is not exactly one JSON document"
+            )
+        returned = bytes(data)
+        data.clear()
+        return returned
+
+    def _publish_credential_return_to_private_home(self, data: bytes) -> None:
+        """Atomically publish the returned credential to the launch-private home.
+
+        Writes the returned bytes to ``<sanitized-home>/.pi/agent2/auth.json``
+        as a mode-0600 single-link file through a nofollow-safe atomic
+        replace, so the existing operator persistence authority
+        (:func:`_persist_private_pi2_auth`) can read and validate it.  The
+        private home and every intermediate directory must be real
+        directories (never symlinks).
+
+        Every directory component is pinned once: opened with
+        ``O_DIRECTORY|O_NOFOLLOW`` and fstat-bound (dev/ino/mode/uid) against
+        the lstat expectation taken just before the open, so a path swap in
+        the window is detected and fails closed.  From then on only relative
+        names anchored to the pinned agent-directory descriptor are used: a
+        unique ``O_CREAT|O_EXCL`` temp name, ``os.replace`` with
+        ``src_dir_fd``/``dst_dir_fd``, and ``os.unlink`` cleanup.  A swap
+        after pinning cannot redirect the bytes anywhere else: the rename
+        operates on the anchored directory, so the credential lands in the
+        verified original home or the publish fails closed — never in an
+        attacker-chosen directory.
+        """
+        if self._sanitized_home is None:
+            raise SupervisionError(
+                "openai-codex launch has no private home for credential refresh"
+            )
+        home = Path(self._sanitized_home)
+        agent_dir = home / ".pi" / "agent2"
+        try:
+            agent_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise SupervisionError(
+                f"cannot create the private Pi2 agent directory: {exc}"
+            ) from exc
+        components = ((home, ""), (home / ".pi", ".pi"), (agent_dir, "agent2"))
+        expected = []
+        for path, _name in components:
+            try:
+                info = os.lstat(path)
+            except OSError as exc:
+                raise SupervisionError(
+                    f"private Pi2 path is unavailable: {exc}"
+                ) from exc
+            if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+                raise SupervisionError(
+                    "private Pi2 path is a symlink or not a directory"
+                )
+            expected.append(info)
+        nofollow = getattr(os, "O_NOFOLLOW", 0)
+        directory_fd = -1
+        pi_fd = -1
+        agent_fd = -1
+        temp_fd = -1
+        temp_name: Optional[str] = None
+        try:
+            open_flags = os.O_RDONLY | os.O_DIRECTORY | nofollow | os.O_CLOEXEC
+            directory_fd = os.open(str(home), open_flags)
+            pi_fd = os.open(".pi", open_flags, dir_fd=directory_fd)
+            agent_fd = os.open("agent2", open_flags, dir_fd=pi_fd)
+            for fd, info in ((directory_fd, expected[0]), (pi_fd, expected[1]),
+                             (agent_fd, expected[2])):
+                pinned = os.fstat(fd)
+                if (pinned.st_dev != info.st_dev or pinned.st_ino != info.st_ino
+                        or pinned.st_uid != info.st_uid
+                        or stat.S_IMODE(pinned.st_mode)
+                        != stat.S_IMODE(info.st_mode)
+                        or not stat.S_ISDIR(pinned.st_mode)):
+                    raise OSError(
+                        "private Pi2 directory identity changed after verification"
+                    )
+            # Everything below is anchored to the pinned agent-directory
+            # descriptor: temporary creation, rename, and cleanup use only
+            # relative names with dir_fd=agent_fd, never pathnames.
+            temp_name = (
+                f".auth-return-{os.getpid()}.{threading.get_ident()}."
+                f"{secrets.token_hex(8)}"
+            )
+            temp_fd = os.open(
+                temp_name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow
+                | os.O_CLOEXEC,
+                0o600,
+                dir_fd=agent_fd,
+            )
+            os.fchmod(temp_fd, 0o600)
+            temp_info = os.fstat(temp_fd)
+            if (temp_info.st_nlink != 1
+                    or stat.S_IMODE(temp_info.st_mode) != 0o600):
+                raise OSError(
+                    "credential-return temp target preconditions not met"
+                )
+            view = memoryview(data)
+            while view:
+                written = os.write(temp_fd, view)
+                if written <= 0:
+                    raise OSError("short credential-return write")
+                view = view[written:]
+            os.fsync(temp_fd)
+            os.close(temp_fd)
+            temp_fd = -1
+            os.replace(temp_name, "auth.json", src_dir_fd=agent_fd,
+                       dst_dir_fd=agent_fd)
+            temp_name = None
+            os.fsync(agent_fd)
+        except OSError as exc:
+            raise SupervisionError(
+                f"cannot publish the returned credential: {exc}"
+            ) from exc
+        finally:
+            if temp_name is not None and agent_fd >= 0:
+                try:
+                    os.unlink(temp_name, dir_fd=agent_fd)
+                except OSError:
+                    pass
+            for fd in (temp_fd, agent_fd, pi_fd, directory_fd):
+                if fd >= 0:
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
+
     # -- the run -----------------------------------------------------------------
 
     @_outer_launch_cleanup
@@ -2635,6 +2997,22 @@ class LaunchSupervision:
                         raise SupervisionError(
                             "openai-codex launch has no private home for credential refresh"
                         )
+                    # The child process tree is fully terminated and the
+                    # confinement lifecycle report is consumed, so the
+                    # credential-return write end is closed and the reader
+                    # thread has reached EOF.  A completed openai-codex launch
+                    # must have returned exactly one JSON credential document
+                    # through the pipe; it is published to the launch-private
+                    # home and then persisted by the existing operator
+                    # authority.  A noncompleted launch discards the returned
+                    # bytes (never persisted).
+                    returned = self._consume_credential_return()
+                    if returned is None:
+                        raise SupervisionError(
+                            "openai-codex completed without a returned "
+                            "credential document"
+                        )
+                    self._publish_credential_return_to_private_home(returned)
                     _persist_private_pi2_auth(Path(self._sanitized_home))
                 elapsed = time.monotonic() - started
                 result = LaunchResult(
@@ -2809,6 +3187,43 @@ class LaunchSupervision:
             except OSError:
                 pass
             self._auth_fd = -1
+        # Stop, join (bounded), and close the credential-return reader without
+        # deadlock.  The child is always reaped before cleanup runs, so the
+        # write end is normally closed and the thread reaches EOF promptly;
+        # a stuck reader (a descendant that never closed the write end) is
+        # stopped via the event, joined within a bounded window, and the read
+        # end is closed to unblock it.  Any buffered credential bytes are
+        # zeroed on this noncompleted path.
+        if self._credential_return_thread is not None:
+            if self._credential_return_stop is not None:
+                self._credential_return_stop.set()
+            self._credential_return_thread.join(
+                timeout=CREDENTIAL_RETURN_JOIN_TIMEOUT
+            )
+            if self._credential_return_thread.is_alive():
+                if self._credential_return_fd >= 0:
+                    try:
+                        os.close(self._credential_return_fd)
+                    except OSError:
+                        pass
+                    self._credential_return_fd = -1
+                self._credential_return_thread.join(
+                    timeout=CREDENTIAL_RETURN_JOIN_TIMEOUT
+                )
+            self._credential_return_thread = None
+        self._zero_credential_return()
+        if self._credential_return_fd >= 0:
+            try:
+                os.close(self._credential_return_fd)
+            except OSError:
+                pass
+            self._credential_return_fd = -1
+        if self._credential_return_write_fd >= 0:
+            try:
+                os.close(self._credential_return_write_fd)
+            except OSError:
+                pass
+            self._credential_return_write_fd = -1
         directories: List[Optional[Path]] = [
             self.session_dir, self._exec_dir, self._sanitized_home,
         ]
@@ -4088,6 +4503,19 @@ def _persist_private_pi2_auth(
     the launch-private ``auth.json``; after the child is fully reaped, this
     trusted parent validates that file and atomically replaces the operator's
     existing mode-0600 store. No model/tool path can select either endpoint.
+
+    The operator ``agent2`` directory is pinned once: opened with
+    ``O_DIRECTORY|O_NOFOLLOW`` and fstat-bound (dev/ino/uid/mode) against the
+    lstat expectation taken just before the open, so a path swap in the window
+    is detected and fails closed.  From then on only relative names anchored
+    to that pinned directory descriptor are used: a unique
+    ``O_CREAT|O_EXCL|O_NOFOLLOW`` temp file (fstat-checked for
+    nlink/regular/uid/mode), a dirfd-relative nofollow re-validation of the
+    expected ``auth.json`` identity immediately before the replace, an
+    ``os.replace`` with ``src_dir_fd``/``dst_dir_fd``, and ``os.unlink``
+    cleanup.  A pathname swap after binding therefore cannot redirect the
+    credential anywhere: the bytes land in the verified original directory or
+    the refresh fails closed.
     """
     source = Path(sanitized_home) / ".pi" / "agent2" / "auth.json"
     target_dir = (operator_home or Path.home()) / ".pi" / "agent2"
@@ -4218,17 +4646,45 @@ def _persist_private_pi2_auth(
     directory_fd = os.open(
         target_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
     )
-    temp_path = None
+    temp_name: Optional[str] = None
     temp_fd = -1
     try:
         anchored = os.fstat(directory_fd)
-        if (anchored.st_dev, anchored.st_ino) != (
-            target_dir_info.st_dev, target_dir_info.st_ino
+        if (
+            anchored.st_dev != target_dir_info.st_dev
+            or anchored.st_ino != target_dir_info.st_ino
+            or anchored.st_uid != uid
+            or stat.S_IMODE(anchored.st_mode)
+            != stat.S_IMODE(target_dir_info.st_mode)
+            or not stat.S_ISDIR(anchored.st_mode)
         ):
             raise SupervisionError("Pi2 operator auth directory identity changed")
-        temp_fd, temp_name = tempfile.mkstemp(prefix=".auth-refresh-", dir=target_dir)
-        temp_path = Path(temp_name)
+        # From here only relative names anchored to the pinned directory
+        # descriptor are used (temp creation, target re-validation, replace,
+        # and cleanup all pass dir_fd=directory_fd), so a pathname swap after
+        # binding cannot redirect the credential anywhere else.
+        temp_name = (
+            f".auth-refresh-{os.getpid()}.{threading.get_ident()}."
+            f"{secrets.token_hex(8)}"
+        )
+        temp_fd = os.open(
+            temp_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+            | os.O_CLOEXEC,
+            0o600,
+            dir_fd=directory_fd,
+        )
         os.fchmod(temp_fd, 0o600)
+        temp_info = os.fstat(temp_fd)
+        if (
+            temp_info.st_nlink != 1
+            or not stat.S_ISREG(temp_info.st_mode)
+            or temp_info.st_uid != uid
+            or stat.S_IMODE(temp_info.st_mode) != 0o600
+        ):
+            raise SupervisionError(
+                "Pi2 auth refresh temp target preconditions not met"
+            )
         view = memoryview(data)
         while view:
             written = os.write(temp_fd, view)
@@ -4238,13 +4694,25 @@ def _persist_private_pi2_auth(
         os.fsync(temp_fd)
         os.close(temp_fd)
         temp_fd = -1
-        before_replace = os.lstat(target)
-        if (before_replace.st_dev, before_replace.st_ino) != (
-            target_info.st_dev, target_info.st_ino
+        current_target = os.stat(
+            "auth.json", dir_fd=directory_fd, follow_symlinks=False
+        )
+        if (
+            current_target.st_dev != target_info.st_dev
+            or current_target.st_ino != target_info.st_ino
+            or current_target.st_uid != uid
+            or current_target.st_nlink != 1
+            or stat.S_IMODE(current_target.st_mode) != 0o600
+            or not stat.S_ISREG(current_target.st_mode)
         ):
-            raise SupervisionError("Pi2 operator auth identity changed before replace")
-        os.replace(temp_path, target)
-        temp_path = None
+            raise SupervisionError(
+                "Pi2 operator auth identity changed before replace"
+            )
+        os.replace(
+            temp_name, "auth.json", src_dir_fd=directory_fd,
+            dst_dir_fd=directory_fd,
+        )
+        temp_name = None
         os.fsync(directory_fd)
         return True
     except OSError as exc:
@@ -4253,9 +4721,9 @@ def _persist_private_pi2_auth(
         data[:] = b"\x00" * len(data)
         if temp_fd >= 0:
             os.close(temp_fd)
-        if temp_path is not None:
+        if temp_name is not None:
             try:
-                os.unlink(temp_path)
+                os.unlink(temp_name, dir_fd=directory_fd)
             except OSError:
                 pass
         os.close(directory_fd)

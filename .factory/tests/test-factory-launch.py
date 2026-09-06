@@ -61,6 +61,7 @@ from pathlib import Path
 import shutil
 import signal
 import stat
+import selectors
 import subprocess
 import sys
 import tempfile
@@ -2623,6 +2624,478 @@ class AuthorityTokenTests(_Base):
         os.chmod(script, 0o500)
         with self.assertRaises(gitutil.GitBoundaryError):
             gitutil.require_trusted_executable(str(script))
+
+
+class CredentialReturnTests(_Base):
+    """Focused credential-return pipe consume/publish/cleanup unit tests.
+
+    The trusted parent provisions one private pipe per openai-codex launch;
+    the model-side extension returns the detached credential bytes there at
+    session shutdown.  These tests exercise the parent-side consume contract:
+    exactly one JSON document, a 1 MiB cap, EOF ordering after the child is
+    reaped, and fd/thread cleanup on every path.
+    """
+
+    def _openai_supervisor(self) -> launch.LaunchSupervision:
+        """Build a supervisor bound to an openai-codex provider."""
+        binding, role, agents, spec, plan = self.make_binding()
+        codex = launch.InvocationBinding(
+            role=binding.role,
+            model=binding.model,
+            provider="openai-codex",
+            backend=binding.backend,
+            workspace=binding.workspace,
+            bound_commit=binding.bound_commit,
+            role_prompt_digest=binding.role_prompt_digest,
+            prompt_set_digest=binding.prompt_set_digest,
+            plan_digest=binding.plan_digest,
+            policy_digest=binding.policy_digest,
+            specification_digest=binding.specification_digest,
+            allowed_tools=binding.allowed_tools,
+            task_id=binding.task_id,
+            task_excerpt_digest=binding.task_excerpt_digest,
+            audit_objective_digest=binding.audit_objective_digest,
+            runtime_limit=binding.runtime_limit,
+            inactivity_limit=binding.inactivity_limit,
+        )
+        return launch.LaunchSupervision(codex, kill_grace=0.3)
+
+    def _valid_document(self) -> bytes:
+        return json.dumps({
+            "openai-codex": {
+                "type": "oauth", "access": "SYNTHETIC-ACCESS-VALUE",
+                "refresh": "SYNTHETIC-REFRESH-VALUE",
+                "accountId": "synthetic-account",
+                "expires": int(time.time() * 1000) + 3_600_000,
+            },
+        }).encode("utf-8")
+
+    def test_valid_single_document_returned(self) -> None:
+        supervisor = self._openai_supervisor()
+        valid = self._valid_document()
+        supervisor._credential_return_data = bytearray(valid)
+        supervisor._credential_return_eof = True
+        returned = supervisor._consume_credential_return()
+        self.assertEqual(returned, valid)
+        self.assertIsNone(supervisor._credential_return_data)
+
+    def test_missing_returns_none(self) -> None:
+        supervisor = self._openai_supervisor()
+        supervisor._credential_return_data = None
+        supervisor._credential_return_eof = True
+        self.assertIsNone(supervisor._consume_credential_return())
+
+    def test_malformed_raises(self) -> None:
+        supervisor = self._openai_supervisor()
+        supervisor._credential_return_data = bytearray(b"{not-json")
+        supervisor._credential_return_eof = True
+        with self.assertRaises(launch.SupervisionError):
+            supervisor._consume_credential_return()
+
+    def test_oversize_raises(self) -> None:
+        supervisor = self._openai_supervisor()
+        supervisor._credential_return_oversize = True
+        supervisor._credential_return_data = bytearray()
+        supervisor._credential_return_eof = True
+        with self.assertRaises(launch.SupervisionError):
+            supervisor._consume_credential_return()
+
+    def test_concatenated_documents_raise(self) -> None:
+        supervisor = self._openai_supervisor()
+        supervisor._credential_return_data = bytearray(
+            self._valid_document() + self._valid_document()
+        )
+        supervisor._credential_return_eof = True
+        with self.assertRaises(launch.SupervisionError):
+            supervisor._consume_credential_return()
+
+    def test_ordering_after_reap_and_cleanup(self) -> None:
+        """The reader thread reaches EOF only after the write end is closed
+        (the child is reaped); cleanup joins the thread and closes both ends."""
+        supervisor = self._openai_supervisor()
+        supervisor._provision_credential_return_pipe()
+        self.assertGreaterEqual(supervisor._credential_return_fd, 0)
+        self.assertGreaterEqual(supervisor._credential_return_write_fd, 0)
+        document = self._valid_document()
+        # The model writes the returned credential and closes its write end
+        # (the child process tree is fully terminated).
+        os.write(supervisor._credential_return_write_fd, document)
+        os.close(supervisor._credential_return_write_fd)
+        supervisor._credential_return_write_fd = -1
+        supervisor._credential_return_thread = threading.Thread(
+            target=supervisor._drain_credential_return, daemon=True
+        )
+        supervisor._credential_return_thread.start()
+        returned = supervisor._consume_credential_return()
+        self.assertEqual(returned, document)
+        self.assertTrue(supervisor._credential_return_eof)
+        # Cleanup is idempotent and closes the read end / joins the thread.
+        supervisor._cleanup()
+        supervisor._cleanup()
+        self.assertEqual(supervisor._credential_return_fd, -1)
+        self.assertEqual(supervisor._credential_return_write_fd, -1)
+        self.assertIsNone(supervisor._credential_return_thread)
+
+    def test_long_session_beyond_old_drain_window_still_consumes(self) -> None:
+        """Regression: the reader starts at spawn and must drain for an
+        arbitrarily long bounded campaign runtime, so a session longer than the
+        old 30s spawn-relative drain window must still reach EOF and consume.
+        The selector is mocked to report no events for 70 polls (each 0.5s =>
+        35s, beyond the removed 30s deadline) before the credential becomes
+        readable, without actually sleeping."""
+        supervisor = self._openai_supervisor()
+        supervisor._provision_credential_return_pipe()
+        document = self._valid_document()
+        # The model writes the returned credential and closes its write end at
+        # session shutdown; the reader only notices it after a long idle poll.
+        os.write(supervisor._credential_return_write_fd, document)
+        os.close(supervisor._credential_return_write_fd)
+        supervisor._credential_return_write_fd = -1
+
+        class _LongIdleSelector:
+            def __init__(self) -> None:
+                self._calls = 0
+                self._closed = False
+
+            def register(self, fileobj, events):
+                pass
+
+            def select(self, timeout=None):
+                self._calls += 1
+                # 70 idle polls * 0.5s = 35s, beyond the old 30s deadline.
+                if self._calls <= 70:
+                    return []
+                return [(None, selectors.EVENT_READ)]
+
+            def close(self):
+                self._closed = True
+
+        fake = _LongIdleSelector()
+        with unittest.mock.patch.object(
+            launch.selectors, "DefaultSelector", return_value=fake
+        ):
+            supervisor._credential_return_thread = threading.Thread(
+                target=supervisor._drain_credential_return, daemon=True
+            )
+            supervisor._credential_return_thread.start()
+            returned = supervisor._consume_credential_return()
+        self.assertEqual(returned, document)
+        self.assertTrue(supervisor._credential_return_eof)
+        self.assertTrue(fake._closed)
+        supervisor._cleanup()
+        self.assertEqual(supervisor._credential_return_fd, -1)
+        self.assertIsNone(supervisor._credential_return_thread)
+
+    def test_selector_register_failure_fails_closed_without_hang(self) -> None:
+        """A selector that cannot register the read end must fail closed (no
+        EOF, no consumed bytes) and return promptly rather than busy-looping
+        on an empty selector or hanging the drain thread."""
+        supervisor = self._openai_supervisor()
+        supervisor._provision_credential_return_pipe()
+        self.assertGreaterEqual(supervisor._credential_return_fd, 0)
+
+        class _RegisterFailingSelector:
+            def __init__(self) -> None:
+                self._closed = False
+
+            def register(self, fileobj, events):
+                raise OSError("synthetic register failure")
+
+            def select(self, timeout=None):
+                raise AssertionError("select must never be reached")
+
+            def close(self):
+                self._closed = True
+
+        fake = _RegisterFailingSelector()
+        with unittest.mock.patch.object(
+            launch.selectors, "DefaultSelector", return_value=fake
+        ):
+            supervisor._credential_return_thread = threading.Thread(
+                target=supervisor._drain_credential_return, daemon=True
+            )
+            supervisor._credential_return_thread.start()
+            supervisor._credential_return_thread.join(timeout=5.0)
+        self.assertFalse(supervisor._credential_return_thread.is_alive())
+        self.assertFalse(supervisor._credential_return_eof)
+        self.assertEqual(supervisor._credential_return_data, bytearray())
+        self.assertFalse(supervisor._credential_return_oversize)
+        self.assertTrue(fake._closed)
+        supervisor._cleanup()
+        self.assertEqual(supervisor._credential_return_fd, -1)
+        self.assertIsNone(supervisor._credential_return_thread)
+
+    # -- subprocess-level return-channel tests -------------------------------
+    # A real child process (the model) inherits the return write end, seals it
+    # exactly like the extension (CLOEXEC duplicate, original closed), spawns
+    # a descendant that attempts to hold/write the descriptor, returns a valid
+    # credential document, and exits.  The parent drains through the real
+    # reader thread, consumes only after EOF (the child is reaped), and
+    # atomically persists the returned bytes.
+
+    RETURN_CHILD_SOURCE = r'''
+import os, subprocess, sys
+
+fd = int(sys.argv[1])
+marker = sys.argv[2]
+descendant = sys.argv[3]
+document_path = sys.argv[4]
+# Seal exactly like the extension: duplicate through /proc/self/fd with
+# O_WRONLY|O_CLOEXEC, close the original inheritable descriptor.
+dup = os.open(f"/proc/self/fd/{fd}", os.O_WRONLY | os.O_CLOEXEC)
+os.close(fd)
+# A descendant spawned by the model must not inherit the sealed descriptor
+# (CLOEXEC) and therefore cannot write it.
+result = subprocess.run(
+    [sys.executable, descendant, str(dup)], capture_output=True, timeout=20
+)
+with open(marker, "w") as stream:
+    stream.write(f"rc={result.returncode}")
+if result.returncode != 0:
+    os._exit(9)
+with open(document_path, "rb") as stream:
+    document = stream.read()
+os.write(dup, document)
+os.close(dup)
+os._exit(0)
+'''
+
+    RETURN_DESCENDANT_SOURCE = r'''
+import os, sys
+
+fd = int(sys.argv[1])
+try:
+    os.write(fd, b"x")
+except OSError as error:
+    if error.errno == 9:  # EBADF: the sealed descriptor was not inherited
+        os._exit(0)
+    os._exit(3)
+os._exit(2)
+'''
+
+    def test_subprocess_descendant_cannot_inherit_and_persist_after_completion(self) -> None:
+        """A real child seals the return fd; its descendant cannot inherit or
+        write it, and the completed valid return is atomically persisted only
+        after the child (broker/leader) is reaped and EOF is reached."""
+        supervisor = self._openai_supervisor()
+        supervisor._provision_credential_return_pipe()
+        write_fd = supervisor._credential_return_write_fd
+        child_script = self.tmp / "return-child.py"
+        child_script.write_text(self.RETURN_CHILD_SOURCE, encoding="utf-8")
+        descendant_script = self.tmp / "return-descendant.py"
+        descendant_script.write_text(
+            self.RETURN_DESCENDANT_SOURCE, encoding="utf-8"
+        )
+        marker = self.tmp / "descendant.marker"
+        document = self._valid_document()
+        document_path = self.tmp / "return-document.json"
+        document_path.write_bytes(document)
+        child = subprocess.Popen(
+            [sys.executable, str(child_script), str(write_fd),
+             str(marker), str(descendant_script), str(document_path)],
+            pass_fds=(write_fd,),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        # The parent must not keep a writable copy: close it immediately so
+        # EOF arrives exactly when the child closes its sealed copy.
+        os.close(write_fd)
+        supervisor._credential_return_write_fd = -1
+        supervisor._credential_return_thread = threading.Thread(
+            target=supervisor._drain_credential_return, daemon=True
+        )
+        supervisor._credential_return_thread.start()
+        _, err = child.communicate(timeout=30)
+        self.assertEqual(child.returncode, 0, err)
+        # The descendant could not inherit or write the sealed return fd.
+        self.assertEqual(marker.read_text(encoding="utf-8").strip(), "rc=0")
+        # The completed valid return is consumed only after EOF (the child is
+        # reaped) and atomically persisted to the private home.
+        returned = supervisor._consume_credential_return()
+        self.assertEqual(returned, document)
+        home = self.tmp / "sanitized-home"
+        home.mkdir()
+        supervisor._sanitized_home = home
+        supervisor._publish_credential_return_to_private_home(returned)
+        persisted = home / ".pi" / "agent2" / "auth.json"
+        self.assertEqual(persisted.read_bytes(), returned)
+        self.assertEqual(persisted.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(persisted.stat().st_nlink, 1)
+        supervisor._cleanup()
+
+    def test_timeout_cleanup_zeroes_and_fails_closed(self) -> None:
+        """A write end that never closes (no EOF) fails the consume closed
+        within the bounded join window, zeroes the buffer, and cleanup
+        stops/joins/closes without deadlock."""
+        supervisor = self._openai_supervisor()
+        supervisor._provision_credential_return_pipe()
+        write_fd = supervisor._credential_return_write_fd
+        holder = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            pass_fds=(write_fd,),
+        )
+        os.close(write_fd)
+        supervisor._credential_return_write_fd = -1
+        supervisor._credential_return_thread = threading.Thread(
+            target=supervisor._drain_credential_return, daemon=True
+        )
+        supervisor._credential_return_thread.start()
+        with self.assertRaises(launch.SupervisionError):
+            supervisor._consume_credential_return()
+        self.assertIsNone(supervisor._credential_return_data)
+        self.assertFalse(supervisor._credential_return_eof)
+        supervisor._cleanup()
+        holder.kill()
+        holder.wait(timeout=10)
+        self.assertEqual(supervisor._credential_return_fd, -1)
+        self.assertEqual(supervisor._credential_return_write_fd, -1)
+        self.assertIsNone(supervisor._credential_return_thread)
+
+    def test_publish_fails_closed_when_agent_dir_swapped_before_pin(self) -> None:
+        """A swap of the ``agent2`` path between the lstat expectation and the
+        pinned ``O_DIRECTORY|O_NOFOLLOW`` open is detected by the fstat
+        dev/ino/mode/uid bind and fails closed: neither the attacker directory
+        nor the displaced original receives the credential."""
+        home = self.tmp / "sanitized-home"
+        agent_dir = home / ".pi" / "agent2"
+        agent_dir.mkdir(parents=True)
+        supervisor = self._openai_supervisor()
+        supervisor._sanitized_home = home
+        returned = self._valid_document()
+        attacker = self.tmp / "attacker-agent-dir"
+        real_open = os.open
+        swapped = False
+
+        def staged_open(path, flags, mode=0o777, *, dir_fd=None):
+            nonlocal swapped
+            if path == "agent2" and dir_fd is not None and not swapped:
+                swapped = True
+                agent_dir.rename(self.tmp / "agent2.original")
+                attacker.mkdir()
+                (attacker / "attacker-marker").write_text("owned")
+            return real_open(path, flags, mode, dir_fd=dir_fd)
+
+        with unittest.mock.patch("os.open", side_effect=staged_open):
+            with self.assertRaises(launch.SupervisionError):
+                supervisor._publish_credential_return_to_private_home(returned)
+        self.assertTrue(swapped)
+        # Bytes never reached the attacker directory or the displaced original.
+        self.assertFalse(attacker.joinpath("auth.json").exists())
+        self.assertFalse(
+            (self.tmp / "agent2.original" / "auth.json").exists()
+        )
+        self.assertEqual(attacker.joinpath("attacker-marker").read_text(), "owned")
+
+    def test_publish_swap_after_dirfd_pin_stays_anchored_in_original(self) -> None:
+        """Swapping the ``.pi/agent2`` pathname after the directory
+        descriptors are pinned cannot redirect the credential: the rename is
+        anchored to the pinned descriptor, so the bytes land only in the
+        displaced original home and never in the attacker-created directory."""
+        home = self.tmp / "sanitized-home"
+        agent_dir = home / ".pi" / "agent2"
+        agent_dir.mkdir(parents=True)
+        supervisor = self._openai_supervisor()
+        supervisor._sanitized_home = home
+        returned = self._valid_document()
+        real_open = os.open
+        swapped = False
+
+        def staged_open(path, flags, mode=0o777, *, dir_fd=None):
+            nonlocal swapped
+            if (dir_fd is not None and (flags & os.O_CREAT)
+                    and (flags & os.O_EXCL)
+                    and path.startswith(".auth-return-") and not swapped):
+                # The pinned agent-directory descriptor is already held;
+                # divert the pathname the attacker controls.
+                swapped = True
+                agent_dir.rename(home / ".pi" / "agent2.anchor")
+                attacker = home / ".pi" / "agent2"
+                attacker.mkdir()
+                (attacker / "attacker-marker").write_text("owned")
+            return real_open(path, flags, mode, dir_fd=dir_fd)
+
+        with unittest.mock.patch("os.open", side_effect=staged_open):
+            supervisor._publish_credential_return_to_private_home(returned)
+        self.assertTrue(swapped)
+        anchor = home / ".pi" / "agent2.anchor"
+        published = anchor / "auth.json"
+        self.assertEqual(published.read_bytes(), returned)
+        self.assertEqual(published.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(published.stat().st_nlink, 1)
+        attacker = home / ".pi" / "agent2"
+        self.assertFalse(attacker.joinpath("auth.json").exists())
+        self.assertEqual(attacker.joinpath("attacker-marker").read_text(), "owned")
+        # No temp litter remains in the anchored directory.
+        self.assertEqual(list(anchor.glob(".auth-return-*")), [])
+
+    def test_publish_fails_closed_on_symlink_components(self) -> None:
+        """A symlinked ``agent2`` or ``.pi`` component fails closed before any
+        write and never resolves through the link."""
+        outsider = self.tmp / "outsider"
+        outsider.mkdir()
+        for component in ("agent2", ".pi"):
+            with self.subTest(component=component):
+                home = self.tmp / f"symlink-home-{component}"
+                home.mkdir()
+                if component == "agent2":
+                    (home / ".pi").mkdir()
+                    (home / ".pi" / "agent2").symlink_to(
+                        outsider, target_is_directory=True
+                    )
+                else:
+                    (home / ".pi").symlink_to(outsider, target_is_directory=True)
+                supervisor = self._openai_supervisor()
+                supervisor._sanitized_home = home
+                with self.assertRaises(launch.SupervisionError):
+                    supervisor._publish_credential_return_to_private_home(
+                        self._valid_document()
+                    )
+                self.assertFalse(outsider.joinpath("auth.json").exists())
+                self.assertFalse(
+                    (home / ".pi" / "agent2" / "auth.json").exists()
+                )
+
+    def test_publish_replaces_hardlinked_target_without_writing_through(self) -> None:
+        """A pre-existing ``auth.json`` hardlinked to a victim file is
+        atomically replaced by a fresh single-link mode-0600 file; the victim
+        inode is untouched and the temp precondition (nlink/mode) holds."""
+        home = self.tmp / "sanitized-home"
+        agent_dir = home / ".pi" / "agent2"
+        agent_dir.mkdir(parents=True)
+        victim = self.tmp / "victim-auth.json"
+        victim.write_bytes(b"victim-bytes")
+        os.link(victim, agent_dir / "auth.json")
+        supervisor = self._openai_supervisor()
+        supervisor._sanitized_home = home
+        returned = self._valid_document()
+        supervisor._publish_credential_return_to_private_home(returned)
+        published = agent_dir / "auth.json"
+        self.assertEqual(published.read_bytes(), returned)
+        self.assertEqual(published.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(published.stat().st_nlink, 1)
+        self.assertEqual(victim.read_bytes(), b"victim-bytes")
+        self.assertEqual(list(agent_dir.glob(".auth-return-*")), [])
+
+    def test_publish_fails_closed_when_component_is_not_a_directory(self) -> None:
+        """A regular file in the component chain fails the directory
+        precondition closed with no writes anywhere."""
+        for component in ("pi-file", "agent2-file"):
+            with self.subTest(component=component):
+                home = self.tmp / f"file-home-{component}"
+                if component == "pi-file":
+                    home.mkdir()
+                    (home / ".pi").write_bytes(b"not a directory")
+                else:
+                    (home / ".pi").mkdir(parents=True)
+                    (home / ".pi" / "agent2").write_bytes(b"not a directory")
+                supervisor = self._openai_supervisor()
+                supervisor._sanitized_home = home
+                with self.assertRaises(launch.SupervisionError):
+                    supervisor._publish_credential_return_to_private_home(
+                        self._valid_document()
+                    )
+                self.assertFalse(
+                    (home / ".pi" / "agent2" / "auth.json").exists()
+                )
 
 
 if __name__ == "__main__":

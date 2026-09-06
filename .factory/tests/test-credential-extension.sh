@@ -200,6 +200,41 @@ assert.equal(git.matched, true);
 assert.equal(git.command, `${shimCommand} commit -m done`);
 assert.equal(extension.rewriteGitCommitCommand('git commit --no-verify -m x').blocked, true);
 assert.equal(extension.rewriteGitCommitCommand('git cherry-pick abc').blocked, true);
+// Combined short-option no-verify defense: -n is rejected only when it is a
+// standalone flag or a member of a no-value cluster, never when it is the
+// value of a value-taking option (-m -n, -mn, -cn) or the optional value of
+// -S/-u (-Sn, -un).
+for (const reject of [
+  'git commit -n -m x',
+  'git commit -an -m x',
+  'git commit -qn -m x',
+  'git commit -sn -m x',
+  'git commit -vn -m x',
+  'git commit -pn -m x',
+  'git commit -on -m x',
+  'git commit -zn -m x',
+  'git commit -S -n -m x',
+  'git commit -u -n -m x',
+  'git commit --gpg-sign -n -m x',
+  'git commit --untracked-files -n -m x',
+]) {
+  assert.equal(extension.rewriteGitCommitCommand(reject).blocked, true, reject);
+}
+for (const allow of [
+  'git commit -m -n',
+  'git commit -mn',
+  'git commit -cn',
+  'git commit -Sn',
+  'git commit -un',
+  'git commit --message -n',
+  'git commit --message=-n',
+  'git commit --gpg-sign=-n -m x',
+  'git commit --untracked-files=-n -m x',
+]) {
+  const result = extension.rewriteGitCommitCommand(allow);
+  assert.equal(result.blocked, false, allow);
+  assert.equal(result.matched, true, allow);
+}
 for (const mutator of [
   'git commit-tree deadbeef -m forged', 'git update-ref refs/heads/x deadbeef',
   'git fast-import', 'git hash-object -w payload', 'git replace a b',
