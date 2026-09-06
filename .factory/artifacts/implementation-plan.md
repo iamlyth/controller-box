@@ -502,7 +502,7 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 | ARCH-04 | §2.4 | partial | `ip_connection.c` NameOwnerChanged, degraded/recovery, ≤2s re-enumerate; `test_native_dbus.c` is a private native-signature test, not real InputPlumber system-bus acceptance (BUG-0015, inputplumber-system-dbus undeclared) | Task 6 |
 | ARCH-05 | §2.5 | verified | `trigger.c` SetInterceptActivation; `ip_intercept_poll.c` 50 ms poll; `test_trigger.c`, `test_intercept_poll.c` | |
 | SYS-01 | §3 | partial | aarch64 toolchain files present and correctly configured (cmake/aarch64-toolchain.cmake, cross-shell.nix); cross-compile attempted but no zero-warning aarch64 build artifact exists; requires an aarch64-capable build path (FACT-004) | Task 4 |
-| SYS-02 | §3 | partial | x86_64 build and full test suite verified (100 CTest targets; 98 pass / 2 environment skips; runner receipt unsigned — FACT-007); ARM64 portability confirmed by code review and Flatpak multi-arch target; Pi 4 runtime requires physical target hardware and real target consumer (FACT-004, FACT-006) | Task 4 |
+| SYS-02 | §3 | partial | x86_64 build and full test suite locally verified (100 CTest targets; 98 pass / 2 environment skips); the historical runner receipt is stale and not admissible for the current exact tree (FACT-007); ARM64 portability confirmed by code review and Flatpak multi-arch target; Pi 4 runtime requires physical target hardware and real target consumer (FACT-004, FACT-006) | Task 4 |
 | SYS-03 | §3 | verified | SDL2 supports X11/Wayland/Gamescope; `test_sdl_dummy.c` | |
 | SYS-04 | §3 | verified | `CMakeLists.txt` deps: SDL2, SDL2_ttf, SDL2_image, libsystemd, libyaml; nanosvg vendored `third_party/nanosvg/` | |
 | SYS-05 | §3 | verified | InputPlumber not bundled; runtime bus-name check in `ip_connection.c` | |
@@ -539,7 +539,7 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 | ICN-03 | §8.3 | verified | `icon_cache.c` nanosvg rasterize at startup, cached; `test_icon_cache.c`, `smoke_test_nanosvg.c` | |
 | ICN-04 | §8.4 | verified | `icon_map.c` controller-icons.yaml; `test_icon_map.c` | |
 | ICN-05 | §8.5 | verified | `icon_lookup.c` profile override; `test_icon_lookup.c` | |
-| PKG-01 | §9.1 | partial | `packaging/org.shadowblip.ControllerBox.yaml`; `test_flatpak_manifest.py`; runner receipt 26df6c0 Flatpak PASS | Task 4 |
+| PKG-01 | §9.1 | partial | `packaging/org.shadowblip.ControllerBox.yaml`; `test_flatpak_manifest.py`; the historical runner receipt 26df6c0 is stale and not admissible for the current exact tree (FACT-007) | Task 4 |
 | PKG-02 | §9.2 | verified | CMake install rules; `test_packaging.sh` | |
 | PKG-03 | §9.3 | verified | `CMakeLists.txt` install layout; `test_packaging.sh` | |
 | PKG-04 | §9.4 | verified | `ip_connection.c` runtime bus-name check; no cross-manager dependency | |
@@ -560,7 +560,7 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 | VRF-02 | §11.1.2 | verified | `fb_assert.c` region-level assertions; `test_fb_assert.c` | |
 | VRF-03 | §11.1.3 | verified | `test_golden.c` 11 baselines in `tests/golden/`, ±3/channel <2% tolerance | |
 | VRF-04 | §11.1.4 | verified | `fb_assert.c` saves actual/expected/diff on mismatch | |
-| VRF-05 | §11.1.5 | partial | `test_installed_functional.c` (4 tests), `test_installed_smoke.sh`, `test_installed_binary.sh`; runner receipt 26df6c0 all pass | Task 4 |
+| VRF-05 | §11.1.5 | partial | `test_installed_functional.c` (4 tests), `test_installed_smoke.sh`, `test_installed_binary.sh`; the historical runner receipt 26df6c0 is stale and not admissible for the current exact tree (FACT-007) | Task 4 |
 | VRF-06 | §11.1.6 | partial | Software-renderer smoke test_backend_smoke_sw.c passes (non-blank framebuffer, region content assertions); GPU backend test_backend_smoke.c exits 77 in headless, gpu-compositor undeclared (FACT-005) | Task 4 |
 | VRF-07 | §11.1.7 | partial | Human release acceptance checklist documented with procedure, criteria, and evidence storage; requires human reviewer on target hardware per §11.1.7 (FACT-004, FACT-006) | Task 4 |
 | DOD-01 | §11.2.1 | partial | Not all matrix rows verified: 21 of 78 rows partial (ARCH-04, SYS-01, SYS-02, SYS-06, OVL-09, OVL-10, MGR-02, MGR-03, MGR-07, MGR-08, PKG-01, DBUS-02, DBUS-05, PERF-01, VRF-05, VRF-06, VRF-07, DOD-01, DOD-05, DOD-06, DOD-09) pending BUG-0015, fresh exact-head installed diagram evidence (FACT-009), fresh exact-commit runner evidence (FACT-007), and hardware/capability facts | Task 4 |

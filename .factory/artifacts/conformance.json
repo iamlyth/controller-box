@@ -128,15 +128,13 @@
     "\u00a73"
    ],
    "classification": "partial",
-   "evidence_tier": "installed",
+   "evidence_tier": "private_integration",
    "required_tier": "real_system",
    "required_capabilities": [
     "target-consumer"
    ],
    "evidence_commit": "26df6c05a5319214f1c0a97a2c3c6f763128b1c6",
-   "receipts": [
-    ".factory-state/runner-evidence/dev-runner-vm/26df6c05a5319214f1c0a97a2c3c6f763128b1c6/manifest.json"
-   ],
+   "receipts": [],
    "artifacts": [
     "docs/OPERATIONS.md"
    ],
@@ -144,7 +142,7 @@
     "FACT-004",
     "FACT-006"
    ],
-   "reason": "x86_64 build/test suite verified by runner receipt; Pi 4 minimum-hardware runtime unproven (SPEC \u00a73, \u00a711)."
+   "reason": "Historical v1 runner receipt (26df6c0) is stale and not admissible for the current exact tree; only cited source/local diagnostic evidence (docs/OPERATIONS.md) remains. Pi 4 minimum-hardware runtime and real target consumer remain unproven (SPEC \u00a73, \u00a711; FACT-004, FACT-006)."
   },
   {
    "id": "SYS-03",
@@ -466,13 +464,11 @@
     "\u00a75.3"
    ],
    "classification": "partial",
-   "evidence_tier": "installed",
+   "evidence_tier": "private_integration",
    "required_tier": "installed",
    "required_capabilities": [],
    "evidence_commit": "04e2b373460c10ff0c7487f5750616a688d27df1",
-   "receipts": [
-    ".factory-state/runner-evidence/dev-runner-vm/26df6c05a5319214f1c0a97a2c3c6f763128b1c6/manifest.json"
-   ],
+   "receipts": [],
    "artifacts": [
     "src/manager/profiles_tab.c",
     "tests/test_profiles_tab.c",
@@ -485,7 +481,7 @@
    "fact_refs": [
     "FACT-007"
    ],
-   "reason": "FACT-007: the runner signer IS provisioned and valid signed evidence exists for the older c45336a commit, but no signed manifest is bound to this row's evidence commit or the current implementation. Live runner manifests need not be Git blobs; complete-mode conformance accepts them only through the strong aggregate/signature/exact-commit validator. Resolving requires re-running the declared runner for the current exact implementation commit; that transport is not reachable from this environment."
+   "reason": "Historical v1 runner receipt (26df6c0) is stale and not admissible for the current exact tree; only cited source/local diagnostic evidence remains. Installed-tier acceptance requires a fresh signed exact-commit runner manifest bound to the current implementation (FACT-007); that transport is not reachable from this environment."
   },
   {
    "id": "MGR-04",
@@ -854,13 +850,11 @@
     "\u00a79.1"
    ],
    "classification": "partial",
-   "evidence_tier": "installed",
+   "evidence_tier": "private_integration",
    "required_tier": "installed",
    "required_capabilities": [],
    "evidence_commit": "26df6c05a5319214f1c0a97a2c3c6f763128b1c6",
-   "receipts": [
-    ".factory-state/runner-evidence/dev-runner-vm/26df6c05a5319214f1c0a97a2c3c6f763128b1c6/manifest.json"
-   ],
+   "receipts": [],
    "artifacts": [
     "packaging/org.shadowblip.ControllerBox.yaml",
     "tests/test_flatpak_manifest.py"
@@ -868,7 +862,7 @@
    "fact_refs": [
     "FACT-007"
    ],
-   "reason": "FACT-007: the runner signer IS provisioned and valid signed evidence exists for the older c45336a commit, but no signed manifest is bound to this row's evidence commit or the current implementation. Live runner manifests need not be Git blobs; complete-mode conformance accepts them only through the strong aggregate/signature/exact-commit validator. Resolving requires re-running the declared runner for the current exact implementation commit; that transport is not reachable from this environment."
+   "reason": "Historical v1 runner receipt (26df6c0) is stale and not admissible for the current exact tree; only cited source/local diagnostic evidence (packaging manifest, test_flatpak_manifest.py) remains. Installed-tier Flatpak acceptance requires a fresh signed exact-commit runner manifest bound to the current implementation (FACT-007); that transport is not reachable from this environment."
   },
   {
    "id": "PKG-02",
@@ -1253,13 +1247,11 @@
     "\u00a711.1.5"
    ],
    "classification": "partial",
-   "evidence_tier": "installed",
+   "evidence_tier": "private_integration",
    "required_tier": "installed",
    "required_capabilities": [],
    "evidence_commit": "26df6c05a5319214f1c0a97a2c3c6f763128b1c6",
-   "receipts": [
-    ".factory-state/runner-evidence/dev-runner-vm/26df6c05a5319214f1c0a97a2c3c6f763128b1c6/manifest.json"
-   ],
+   "receipts": [],
    "artifacts": [
     "tests/test_installed_functional.c",
     "tests/test_installed_smoke.sh",
@@ -1268,7 +1260,7 @@
    "fact_refs": [
     "FACT-007"
    ],
-   "reason": "FACT-007: the runner signer IS provisioned and valid signed evidence exists for the older c45336a commit, but no signed manifest is bound to this row's evidence commit or the current implementation. Live runner manifests need not be Git blobs; complete-mode conformance accepts them only through the strong aggregate/signature/exact-commit validator. Resolving requires re-running the declared runner for the current exact implementation commit; that transport is not reachable from this environment."
+   "reason": "Historical v1 runner receipt (26df6c0) is stale and not admissible for the current exact tree; only cited source/local diagnostic evidence (test_installed_functional.c, test_installed_smoke.sh, test_installed_binary.sh) remains. Installed-tier acceptance requires a fresh signed exact-commit runner manifest bound to the current implementation (FACT-007); that transport is not reachable from this environment."
   },
   {
    "id": "VRF-06",
@@ -1425,13 +1417,11 @@
     "\u00a711.2.6"
    ],
    "classification": "partial",
-   "evidence_tier": "installed",
+   "evidence_tier": "private_integration",
    "required_tier": "installed",
    "required_capabilities": [],
    "evidence_commit": "26df6c05a5319214f1c0a97a2c3c6f763128b1c6",
-   "receipts": [
-    ".factory-state/runner-evidence/dev-runner-vm/26df6c05a5319214f1c0a97a2c3c6f763128b1c6/manifest.json"
-   ],
+   "receipts": [],
    "artifacts": [
     "scripts/verify-boilerplate.sh",
     ".factory/artifacts/campaign-audit.md"
@@ -1439,7 +1429,7 @@
    "fact_refs": [
     "FACT-007"
    ],
-   "reason": "FACT-007: the runner signer IS provisioned and valid signed evidence exists for the older c45336a commit, but no signed manifest is bound to this row's evidence commit or the current implementation. Live runner manifests need not be Git blobs; complete-mode conformance accepts them only through the strong aggregate/signature/exact-commit validator. Resolving requires re-running the declared runner for the current exact implementation commit; that transport is not reachable from this environment."
+   "reason": "Historical v1 runner receipt (26df6c0) is stale and not admissible for the current exact tree; only cited source/local diagnostic evidence (verify-boilerplate.sh, campaign-audit.md) remains. Installed-tier acceptance requires a fresh signed exact-commit runner manifest bound to the current implementation (FACT-007); that transport is not reachable from this environment."
   },
   {
    "id": "DOD-07",
