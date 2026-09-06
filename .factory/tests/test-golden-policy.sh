@@ -8,7 +8,7 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
+PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
@@ -17,9 +17,10 @@ GENERATOR="$PROJECT_ROOT/scripts/generate-golden.sh"
 
 setup_repo() {
     local dir=$1
-    mkdir -p "$dir/scripts" "$dir/.factory/schemas" "$dir/.factory/artifacts" "$dir/tests/golden" \
+    mkdir -p "$dir/scripts" "$dir/.factory/tools" "$dir/.factory/schemas" "$dir/.factory/artifacts" "$dir/tests/golden" \
         "$dir/docs"
-    cp "$CHECKER" "$GENERATOR" "$dir/scripts/"
+    cp "$CHECKER" "$dir/.factory/tools/"
+    cp "$GENERATOR" "$dir/scripts/"
     chmod +x "$dir/.factory/tools/check-golden-policy.py" "$dir/scripts/generate-golden.sh"
     cat > "$dir/.factory/golden-policy.json" <<'POLICY'
 {
