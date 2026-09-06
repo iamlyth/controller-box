@@ -13,7 +13,8 @@ bash -n "$ROOT/scripts/install-factory-runner-v2.sh" "$ROOT/deploy/factory-runne
 python3 - "$ROOT" <<'PY'
 import hashlib,json,pathlib,sys
 r=pathlib.Path(sys.argv[1]); e=json.loads((r/'.factory/runner-policy-enrollment.json').read_text()); raw=(r/'deploy/factory-runner-authority-v1/authority.json').read_bytes(); d=hashlib.sha256(raw).hexdigest()
-assert e['schema']=='controller-box-runner-policy-enrollment/v2' and e['status']=='pending-human-review'
+assert e['schema']=='controller-box-runner-policy-enrollment/v3' and e['status']=='pending-human-review'
+assert e['host_executable_enrollment']['status']=='pending-root-install'
 assert all(x['authority_sha256']==d and x['status']=='pending-root-install' for x in e['probe_authorities'].values())
 PY
 echo 'test: factory runner v2 broker boundary passed'

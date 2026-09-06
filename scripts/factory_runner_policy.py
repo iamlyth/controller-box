@@ -32,7 +32,9 @@ NAME = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 TOKEN = re.compile(r"^[^\x00-\x1f\x7f]{1,128}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 PIN_SCOPES = {"installed-licensed-diagram", "gpu-compositor-layout-oracle"}
-POLICY_SCHEMA = "factory-runner-policy/v2"
+POLICY_SCHEMA = "factory-runner-policy/v3"
+PIN_FIELDS = {"path", "sha256", "device", "inode", "status"}
+REQUIRED_EXECUTABLES = {"systemd-run", "systemctl", "xdg-dbus-proxy", "git", "bash", "python3", "ssh-keygen", "sudo", "busctl", "mount", "umount", "udevadm", "stdbuf", "dpkg-query"}
 REQUIRED_CLASSES = {"dev-runner-vm", "iprunner", "gpurunner"}
 
 
@@ -153,6 +155,7 @@ def load_policy() -> dict:
             "broker_helper", "probe_authority", "probe_authority_sha256", "probe_authority_status",
             "signer_key", "signer_principal_file", "nonce_ledger",
             "systemd_run", "systemctl", "cgroup_root", "dbus_proxy", "approved_groups",
+            "executable_pins", "inputplumber_pin",
         }
         if set(entry) != fields:
             raise PolicyError(f"runner policy classes[{index}] fields are invalid")
@@ -178,6 +181,21 @@ def load_policy() -> dict:
             raise PolicyError(f"runner policy classes[{index}].probe_authority_sha256 is invalid")
         if entry["probe_authority_status"] != "enrolled":
             raise PolicyError(f"runner policy classes[{index}] probe authority is pending or unapproved")
+        epins=entry["executable_pins"]
+        if not isinstance(epins,dict) or set(epins)!=REQUIRED_EXECUTABLES:
+            raise PolicyError(f"runner policy classes[{index}].executable_pins is incomplete")
+        for key,pin in epins.items():
+            if (not isinstance(pin,dict) or set(pin)!=PIN_FIELDS or pin.get("status")!="enrolled"
+                    or not isinstance(pin.get("path"),str) or not pin["path"].startswith("/")
+                    or not SHA256.fullmatch(str(pin.get("sha256","")))
+                    or type(pin.get("device")) is not int or type(pin.get("inode")) is not int):
+                raise PolicyError(f"runner policy executable pin {key} is invalid or pending")
+        ipin=entry["inputplumber_pin"]
+        ipin_fields=PIN_FIELDS|{"package_version","service_exec_start"}
+        if name=="iprunner" and (not isinstance(ipin,dict) or set(ipin)!=ipin_fields or ipin.get("status")!="enrolled" or not isinstance(ipin.get("package_version"),str) or not isinstance(ipin.get("service_exec_start"),str)):
+            raise PolicyError("InputPlumber package/binary enrollment is absent or pending")
+        if name!="iprunner" and ipin is not None:
+            raise PolicyError("InputPlumber pin belongs only to iprunner")
         groups=entry["approved_groups"]
         if (not isinstance(groups,list) or not groups or len(groups)!=len(set(groups))
                 or not all(isinstance(g,str) and NAME.fullmatch(g) for g in groups)):

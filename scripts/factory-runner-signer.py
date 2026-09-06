@@ -259,7 +259,7 @@ def validate_manifest(raw: bytes, runner_class: dict | None, *, broker_authentic
     if not isinstance(request, dict) or set(request) != expected or request.get("schema") != "factory-runner-sign-request/v1":
         fail("signing request schema is invalid")
     manifest = request["manifest"]
-    fields = {"schema", "result", "runner", "commit", "tree", "environment_blob", "archive_sha256", "campaign_id", "readiness_nonce", "authority_sha256", "nonce", "capabilities", "exit_code", "timed_out", "started_at", "finished_at", "cleanup", "stdout_sha256", "stderr_sha256", "artifact_protocol", "artifact_limits", "artifact_count", "artifact_bytes", "artifact_manifest_sha256", "artifact_scope_sha256", "artifacts"}
+    fields = {"schema", "result", "runner", "commit", "tree", "environment_blob", "archive_sha256", "campaign_id", "readiness_nonce", "authority_sha256", "nonce", "capabilities", "exit_code", "timed_out", "started_at", "finished_at", "cleanup", "stdout_sha256", "stderr_sha256", "artifact_protocol", "artifact_limits", "artifact_count", "artifact_bytes", "artifact_manifest_sha256", "artifact_scope_sha256", "artifacts", "host_authority"}
     if not isinstance(manifest, dict) or set(manifest) != fields:
         fail("signing request manifest fields are invalid")
     if manifest.get("schema") != "factory-runner-receipt/v3" or manifest.get("result") != "pass":
@@ -278,6 +278,22 @@ def validate_manifest(raw: bytes, runner_class: dict | None, *, broker_authentic
             fail(f"signing request {field} is invalid")
     if manifest["exit_code"] != 0 or manifest["timed_out"] is not False or manifest["cleanup"] is not True:
         fail("signing request does not prove a clean pass")
+    host=manifest["host_authority"]
+    if (not isinstance(host,dict) or set(host)!={"executable_pins","writable_limits","inputplumber_pin","dbus_audit_sha256","cleanup_states"}
+            or host["writable_limits"]!={"bytes":768*1024*1024,"inodes":65536}
+            or not isinstance(host["executable_pins"],dict) or not isinstance(host["cleanup_states"],list)
+            or (host["dbus_audit_sha256"] is not None and not SHA256.fullmatch(str(host["dbus_audit_sha256"])))):
+        fail("signing request host authority is invalid")
+    for pin in host["executable_pins"].values():
+        if (not isinstance(pin,dict) or set(pin)!={"path","sha256","device","inode"}
+                or not SHA256.fullmatch(str(pin.get("sha256","")))):
+            fail("signing request executable pin is invalid")
+    if any(not isinstance(x,dict) or set(x)!={"capability","before","after"} or x["before"]!=x["after"] for x in host["cleanup_states"]):
+        fail("signing request global cleanup state is invalid")
+    if runner_class is not None:
+        expected={name:{k:pin[k] for k in ("path","sha256","device","inode")} for name,pin in runner_class["executable_pins"].items()}
+        if host["executable_pins"]!=expected or host["inputplumber_pin"]!=runner_class.get("inputplumber_pin"):
+            fail("signing request host authority differs from enrolled policy")
     if type(manifest["started_at"]) is not int or type(manifest["finished_at"]) is not int or manifest["started_at"] < 0 or manifest["finished_at"] < manifest["started_at"]:
         fail("signing request timestamps are invalid")
     capabilities = manifest["capabilities"]
@@ -323,6 +339,10 @@ def main() -> int:
     principal_fd = _open_bound(principal_path, private=True)
     executable_fd = _open_executable()
     executable_digest = _open_executable_digest(executable_fd)
+    if runner_class is not None:
+        pin=runner_class["executable_pins"]["ssh-keygen"];info=os.fstat(executable_fd)
+        if pin.get("status")!="enrolled" or pin.get("path")!=SSH_KEYGEN_PATH or pin.get("sha256")!=executable_digest or (pin.get("device"),pin.get("inode"))!=(info.st_dev,info.st_ino):
+            fail("ssh-keygen differs from independent executable enrollment")
     try:
         principal = _load_principal(principal_fd)
         if runner_class is not None and principal != runner_class["name"]:

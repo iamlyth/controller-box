@@ -1,23 +1,25 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "factory-runner-policy/v2",
+  "$id": "factory-runner-policy/v3",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "namespace", "classes", "authority_pins"],
   "properties": {
-    "schema": {"const": "factory-runner-policy/v2"},
+    "schema": {"const": "factory-runner-policy/v3"},
     "namespace": {"const": "factory-runner-receipt"},
-    "classes": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type":"object", "additionalProperties":false,
-      "required":["name","uid","workspace_root","allowed_capabilities","broker_helper","probe_authority","probe_authority_sha256","probe_authority_status","signer_key","signer_principal_file","nonce_ledger","systemd_run","systemctl","cgroup_root","dbus_proxy","approved_groups"],
-      "properties": {
-        "name":{"type":"string","pattern":"^[a-z0-9][a-z0-9._-]*$"}, "uid":{"type":"integer","minimum":1},
-        "workspace_root":{"type":"string","pattern":"^/"}, "allowed_capabilities":{"type":"array","minItems":1,"uniqueItems":true,"items":{"type":"string","pattern":"^[a-z0-9][a-z0-9._-]*$"}},
-        "broker_helper":{"const":"/usr/local/libexec/factory-runner-broker"}, "probe_authority":{"type":"string","pattern":"^/"}, "probe_authority_sha256":{"$ref":"#/$defs/sha256"}, "probe_authority_status":{"const":"enrolled"},
-        "signer_key":{"type":"string","pattern":"^/"}, "signer_principal_file":{"type":"string","pattern":"^/"}, "nonce_ledger":{"type":"string","pattern":"^/"},
-        "systemd_run":{"type":"string","pattern":"^/"}, "systemctl":{"type":"string","pattern":"^/"}, "cgroup_root":{"type":"string","pattern":"^/"},
-        "dbus_proxy":{"type":"string","pattern":"^/"}, "approved_groups":{"type":"array","minItems":1,"uniqueItems":true,"items":{"type":"string","pattern":"^[a-z0-9][a-z0-9._-]*$"}}
-      } }},
-    "authority_pins": {"type":"array","items":{"type":"object","additionalProperties":false,"required":["class","scope","authority_sha256","status"],"properties":{"class":{"type":"string","pattern":"^[a-z0-9][a-z0-9._-]*$"},"scope":{"enum":["installed-licensed-diagram","gpu-compositor-layout-oracle"]},"authority_sha256":{"$ref":"#/$defs/sha256"},"status":{"enum":["enrolled","pending-human-review"]}}}}
+    "classes": {"type":"array","minItems":3,"maxItems":3,"items":{"type":"object","additionalProperties":false,
+      "required":["name","uid","workspace_root","allowed_capabilities","broker_helper","probe_authority","probe_authority_sha256","probe_authority_status","signer_key","signer_principal_file","nonce_ledger","systemd_run","systemctl","cgroup_root","dbus_proxy","approved_groups","executable_pins","inputplumber_pin"],
+      "properties":{
+        "name":{"type":"string","pattern":"^[a-z0-9][a-z0-9._-]*$"},"uid":{"type":"integer","minimum":1},"workspace_root":{"type":"string","pattern":"^/"},
+        "allowed_capabilities":{"type":"array","minItems":1,"uniqueItems":true,"items":{"type":"string"}},"broker_helper":{"const":"/usr/local/libexec/factory-runner-broker"},
+        "probe_authority":{"type":"string","pattern":"^/"},"probe_authority_sha256":{"$ref":"#/$defs/sha256"},"probe_authority_status":{"const":"enrolled"},
+        "signer_key":{"type":"string","pattern":"^/"},"signer_principal_file":{"type":"string","pattern":"^/"},"nonce_ledger":{"type":"string","pattern":"^/"},
+        "systemd_run":{"type":"string","pattern":"^/"},"systemctl":{"type":"string","pattern":"^/"},"cgroup_root":{"type":"string","pattern":"^/"},"dbus_proxy":{"type":"string","pattern":"^/"},
+        "approved_groups":{"type":"array","minItems":1,"uniqueItems":true,"items":{"type":"string"}},
+        "executable_pins":{"type":"object","minProperties":14,"maxProperties":14,"additionalProperties":{"$ref":"#/$defs/pin"}},
+        "inputplumber_pin":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/inputplumberPin"}]}
+      }}},
+    "authority_pins":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["class","scope","authority_sha256","status"],"properties":{"class":{"type":"string"},"scope":{"enum":["installed-licensed-diagram","gpu-compositor-layout-oracle"]},"authority_sha256":{"$ref":"#/$defs/sha256"},"status":{"enum":["enrolled","pending-human-review"]}}}}
   },
-  "$defs":{"sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"}}
+  "$defs":{"sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},"pin":{"type":"object","additionalProperties":false,"required":["path","sha256","device","inode","status"],"properties":{"path":{"type":"string","pattern":"^/"},"sha256":{"$ref":"#/$defs/sha256"},"device":{"type":"integer","minimum":0},"inode":{"type":"integer","minimum":1},"status":{"const":"enrolled"}}},"inputplumberPin":{"type":"object","additionalProperties":false,"required":["path","sha256","device","inode","status","package_version","service_exec_start"],"properties":{"path":{"type":"string","pattern":"^/"},"sha256":{"$ref":"#/$defs/sha256"},"device":{"type":"integer","minimum":0},"inode":{"type":"integer","minimum":1},"status":{"const":"enrolled"},"package_version":{"type":"string","minLength":1},"service_exec_start":{"type":"string","minLength":1}}}}
 }

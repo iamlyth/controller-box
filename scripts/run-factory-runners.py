@@ -35,7 +35,15 @@ GIT = gitutil.GIT_EXECUTABLE
 EXIT_TRANSPORT = 20
 EXIT_FINDINGS = 21
 EXIT_INTEGRITY = 22
-STATE_ROOT = ROOT / ".factory-state" / "runner-evidence"
+STATE_BASE = ROOT / ".factory-state"
+STATE_ROOT = STATE_BASE / "runner-evidence"
+# Bind mutable publication ancestry once. All later publication/deletion is
+# relative to this retained inode, so an ancestor pathname swap is irrelevant.
+STATE_BASE.mkdir(mode=0o700,exist_ok=True)
+_state_info=os.lstat(STATE_BASE)
+if not stat.S_ISDIR(_state_info.st_mode) or stat.S_ISLNK(_state_info.st_mode) or _state_info.st_uid!=os.getuid() or stat.S_IMODE(_state_info.st_mode)!=0o700:
+    raise RuntimeError(".factory-state is not a private owned directory")
+STATE_DIRFD = os.open(STATE_BASE,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC)
 MAX_RESPONSE = 80 * 1024 * 1024
 
 
@@ -60,20 +68,54 @@ def digest_json(value: object) -> str:
     return hashlib.sha256(json.dumps(value, separators=(",", ":"), sort_keys=False).encode()).hexdigest()
 
 
+def _state_parent_fd(path: Path,create=False) -> tuple[int,str]:
+    try:parts=path.relative_to(STATE_BASE).parts
+    except ValueError:fail("publication path escapes retained .factory-state")
+    fd=os.dup(STATE_DIRFD)
+    try:
+        for part in parts[:-1]:
+            if create:
+                try:os.mkdir(part,0o700,dir_fd=fd)
+                except FileExistsError:pass
+            nfd=os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC,dir_fd=fd);os.close(fd);fd=nfd
+        return fd,parts[-1]
+    except BaseException:os.close(fd);raise
+
 def rename_noreplace(source: Path, destination: Path) -> None:
-    """Dirfd-relative atomic publication; neither pathname ancestry is re-resolved."""
+    """renameat2 beneath the retained state dirfd; no ancestry is re-resolved."""
     libc=ctypes.CDLL(None,use_errno=True);renameat2=getattr(libc,"renameat2",None)
     if renameat2 is None: fail("renameat2 is unavailable; cannot publish evidence race-free")
     renameat2.argtypes=[ctypes.c_int,ctypes.c_char_p,ctypes.c_int,ctypes.c_char_p,ctypes.c_uint];renameat2.restype=ctypes.c_int
-    sfd=os.open(source.parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC)
-    dfd=os.open(destination.parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC)
-    try:rc=renameat2(sfd,os.fsencode(source.name),dfd,os.fsencode(destination.name),1)
+    sfd,sname=_state_parent_fd(source);dfd,dname=_state_parent_fd(destination,True)
+    try:rc=renameat2(sfd,os.fsencode(sname),dfd,os.fsencode(dname),1)
     finally:os.close(sfd);os.close(dfd)
     if rc!=0:
         code=ctypes.get_errno()
         if code==errno.EEXIST: fail("runner evidence publication collision")
         fail(f"runner evidence publication failed with errno {code}")
 
+
+def anchored_delete(root: Path) -> None:
+    """Delete a bounded publication tree without resolving state ancestry."""
+    pfd,name=_state_parent_fd(root)
+    try:
+        fd=os.open(name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC,dir_fd=pfd)
+        def clear(dfd,depth=0):
+            if depth>32:fail("runner evidence deletion depth exceeds bound")
+            names=os.listdir(dfd)
+            if len(names)>MAX_ARTIFACTS*8+32:fail("runner evidence deletion entry bound exceeded")
+            for child in names:
+                info=os.stat(child,dir_fd=dfd,follow_symlinks=False)
+                if stat.S_ISDIR(info.st_mode):
+                    cfd=os.open(child,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC,dir_fd=dfd)
+                    try:clear(cfd,depth+1)
+                    finally:os.close(cfd)
+                    os.rmdir(child,dir_fd=dfd)
+                else:os.unlink(child,dir_fd=dfd)
+        try:clear(fd)
+        finally:os.close(fd)
+        os.rmdir(name,dir_fd=pfd)
+    finally:os.close(pfd)
 
 def hold_tree(root: Path) -> tuple[dict[str,tuple[int,int,int,int,int]],list[int]]:
     """Open and retain every staging inode through verification/publication."""
@@ -100,36 +142,17 @@ def tree_identities(root: Path) -> dict[str,tuple[int,int,int,int,int]]:
 
 
 def atomic_write(path: Path, data: bytes) -> None:
-    runtime = ROOT / ".factory-state"
-    if runtime.is_symlink() or not runtime.is_dir():
-        fail(".factory-state must be a real mode-0700 directory")
+    pfd,name=_state_parent_fd(path,True);temporary=f".{name}.{os.urandom(12).hex()}"
     try:
-        relative = path.relative_to(runtime)
-    except ValueError:
-        fail(f"evidence path escapes .factory-state: {path}")
-    current = runtime
-    for part in relative.parts[:-1]:
-        current = current / part
-        if current.is_symlink():
-            fail(f"evidence parent is a symlink: {current}")
-        current.mkdir(mode=0o700, exist_ok=True)
-        if not current.is_dir():
-            fail(f"evidence parent is not a directory: {current}")
-    if path.is_symlink() or (path.exists() and not path.is_file()):
-        fail(f"unsafe evidence path: {path}")
-    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        with os.fdopen(fd, "wb") as stream:
-            stream.write(data)
-            stream.flush()
-            os.fchmod(stream.fileno(),0o600)
-            os.fsync(stream.fileno())
-        rename_noreplace(Path(temporary),path)
+        fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC,0o600,dir_fd=pfd)
+        try:os.write(fd,data);os.fsync(fd)
+        finally:os.close(fd)
+        libc=ctypes.CDLL(None,use_errno=True);renameat2=libc.renameat2
+        if renameat2(pfd,os.fsencode(temporary),pfd,os.fsencode(name),1)!=0:fail("runner evidence file publication collision")
     finally:
-        try:
-            os.unlink(temporary)
-        except FileNotFoundError:
-            pass
+        try:os.unlink(temporary,dir_fd=pfd)
+        except FileNotFoundError:pass
+        os.close(pfd)
 
 
 def load_runners(commit: str) -> list[dict]:
@@ -373,7 +396,7 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
         "signer_principal", "signer_key_sha256", "signature_algorithm",
         "namespace", "signature_sha256", "artifact_protocol", "artifact_limits",
         "artifact_count", "artifact_bytes", "artifact_manifest_sha256",
-        "artifact_scope_sha256", "artifacts", "artifact_payload",
+        "artifact_scope_sha256", "artifacts", "artifact_payload", "host_authority",
     }
     if set(receipt) != expected or receipt["schema"] != "factory-runner-receipt/v3":
         fail(f"runner {name} receipt fields are invalid")
@@ -477,14 +500,12 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
             fail(f"runner evidence staging inode changed during verification for {name}")
         rename_noreplace(staging, evidence_dir)
         if tree_identities(evidence_dir)!=held_identity:
-            import shutil
-            shutil.rmtree(evidence_dir,ignore_errors=True)
+            anchored_delete(evidence_dir)
             fail(f"runner evidence published inode revalidation failed for {name}")
     finally:
         for fd in held_fds:os.close(fd)
-        if staging.exists():
-            import shutil
-            shutil.rmtree(staging)
+        try:anchored_delete(staging)
+        except FileNotFoundError:pass
     return {
         "name": name,
         "manifest": str((evidence_dir / "manifest.json").relative_to(ROOT)),

@@ -62,9 +62,17 @@ with tempfile.TemporaryDirectory(dir=ROOT) as td:
 for marker in ('HEADER_TIMEOUT=15','ARCHIVE_TIMEOUT=120','BROKER_ADMISSION=8','fcntl.flock',
  'aggregate contained output exceeds bound','RLIMIT_AS','RLIMIT_CPU','/var/run',
  '--filter','--talk=org.shadowblip.InputPlumber','DBUS_SYSTEM_BUS_ADDRESS',
+ 'nr_inodes={WRITABLE_INODES}','bounded writable backing resource cleanup not proven',
  'runner primary/supplementary groups differ from exact approved set'):
  assert marker in broker,marker
 assert 'capture_output=True,timeout=7300' not in broker
+assert 'org.shadowblip.InputPlumber.Target.InputEvent' in broker
+assert 'DBUS_MUTATING_CALLS=()' in broker
+# A descendant retaining stdout cannot retain the broker beyond one absolute deadline.
+with tempfile.TemporaryDirectory(dir=ROOT) as td:
+ out=pathlib.Path(td)/'pipe-out';err=pathlib.Path(td)/'pipe-err';started=time.monotonic()
+ rejected(lambda:b._bounded_process([sys.executable,'-c','import os,time; p=os.fork(); (time.sleep(30) if p==0 else None)'],{},.25,out,err))
+ assert time.monotonic()-started<1.5
 assert 'zlib.decompress(' not in (ROOT/'scripts/validate-runner-artifacts-semantic.py').read_text()
 
 client=(ROOT/'scripts/run-factory-runners.py').read_text()

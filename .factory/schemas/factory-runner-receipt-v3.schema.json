@@ -4,7 +4,7 @@
   "title": "Namespaced signed runner receipt with retained artifacts",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "result", "runner", "commit", "tree", "environment_blob", "archive_sha256", "campaign_id", "readiness_nonce", "authority_sha256", "nonce", "capabilities", "exit_code", "timed_out", "started_at", "finished_at", "cleanup", "stdout_sha256", "stderr_sha256", "artifact_protocol", "artifact_limits", "artifact_count", "artifact_bytes", "artifact_manifest_sha256", "artifact_scope_sha256", "artifacts", "signer_principal", "signer_key_sha256", "namespace", "signature_algorithm"],
+  "required": ["schema", "result", "runner", "commit", "tree", "environment_blob", "archive_sha256", "campaign_id", "readiness_nonce", "authority_sha256", "nonce", "capabilities", "exit_code", "timed_out", "started_at", "finished_at", "cleanup", "stdout_sha256", "stderr_sha256", "artifact_protocol", "artifact_limits", "artifact_count", "artifact_bytes", "artifact_manifest_sha256", "artifact_scope_sha256", "artifacts", "host_authority", "signer_principal", "signer_key_sha256", "namespace", "signature_algorithm"],
   "properties": {
     "schema": {"const": "factory-runner-receipt/v3"},
     "result": {"const": "pass"},
@@ -22,6 +22,7 @@
     "signature_algorithm": {"const": "ssh-ed25519"},
     "capabilities": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
     "artifacts": {"type": "array", "maxItems": 64},
+    "host_authority": {"type":"object","additionalProperties":false,"required":["executable_pins","writable_limits","inputplumber_pin","dbus_audit_sha256","cleanup_states"],"properties":{"executable_pins":{"type":"object","minProperties":1},"writable_limits":{"const":{"bytes":805306368,"inodes":65536}},"inputplumber_pin":{"type":["object","null"]},"dbus_audit_sha256":{"type":["string","null"],"pattern":"^[0-9a-f]{64}$"},"cleanup_states":{"type":"array"}}},
     "artifact_count": {"type": "integer", "minimum": 0, "maximum": 64},
     "artifact_bytes": {"type": "integer", "minimum": 0, "maximum": 50331648},
     "archive_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},

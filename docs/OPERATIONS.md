@@ -768,10 +768,12 @@ explicit commit, tree, base64 commit-object bytes, complete `{path:
 {sha256,mode}}` install closure, root executable `{sha256,dev,ino}` pins, and
 per-class `host_requirements` (`required_paths` plus an empty
 `allowed_absent_until_evidence` array). It also supplies an approved
-`factory-runner-policy/v2`, a `factory-runner-transport/v1` manifest, and exactly
+`factory-runner-policy/v3`, a `factory-runner-transport/v1` manifest, and exactly
 one protected newline-terminated ed25519 public-key file for each OS account.
 The transport entries are `{class,sha256,fingerprint,principal}` keyed exactly
 by `devrunner`, `iprunner`, and `gpurunner`.
+
+Each policy class independently enrolls every broker/helper executable by absolute path, SHA-256, device, and inode. InputPlumber also binds package version and service `ExecStart`; the broker rechecks these identities through each request and installed verification. Candidate build, home, and output share a root-mounted tmpfs capped at 768 MiB and 65,536 inodes. Teardown unmounts that pool instead of recursively walking candidate-controlled trees. Candidate InputPlumber D-Bus endpoints are read-only and never expose `Target.InputEvent`; mutation authority is not delegated to candidate code.
 
 The operator never runs an installer from a mutable checkout with `sudo`.
 `generate-runner-install-manifest.py` deterministically walks the exact clean

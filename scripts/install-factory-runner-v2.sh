@@ -88,6 +88,13 @@ def read_account_key(a):
  finally:os.close(fd)
 for c in d['classes']:
  a=pwd.getpwuid(c['uid']);assert m[a.pw_name]==c['name']
+ for pin in c['executable_pins'].values():
+  q=pathlib.Path(pin['path']);i=os.stat(q);h=hashlib.sha256(q.read_bytes()).hexdigest()
+  assert pin['status']=='enrolled' and (i.st_dev,i.st_ino)==(pin['device'],pin['inode']) and h==pin['sha256']
+ if c['name']=='iprunner':
+  pin=c['inputplumber_pin'];q=pathlib.Path(pin['path']);i=os.stat(q)
+  assert pin['status']=='enrolled' and (i.st_dev,i.st_ino)==(pin['device'],pin['inode']) and hashlib.sha256(q.read_bytes()).hexdigest()==pin['sha256']
+  assert subprocess.check_output(['/usr/bin/dpkg-query','-W','-f=${Version}','inputplumber'],text=True)==pin['package_version']
  groups={grp.getgrgid(g).gr_name for g in os.getgrouplist(a.pw_name,a.pw_gid)};assert groups==set(c['approved_groups'])
  lines=read_account_key(a);assert len(lines)==1
  prefix='command="/usr/local/libexec/factory-runner-server",restrict,no-agent-forwarding,no-port-forwarding,no-pty,no-user-rc,no-X11-forwarding '
@@ -208,12 +215,19 @@ for a,p in keypaths.items():(state/'snapshot'/f'{a}.pub').write_bytes(protected(
 # Python from the candidate tree, even after signature verification.
 try:policy=json.loads(policy_raw)
 except Exception:die('runner policy invalid JSON')
-if not isinstance(policy,dict) or set(policy)!={'schema','namespace','classes','authority_pins'} or policy['schema']!='factory-runner-policy/v2' or policy['namespace']!='factory-runner-receipt' or not isinstance(policy['classes'],list):die('runner policy schema invalid')
-required_class_fields={'name','uid','workspace_root','allowed_capabilities','broker_helper','probe_authority','probe_authority_sha256','probe_authority_status','signer_key','signer_principal_file','nonce_ledger','systemd_run','systemctl','cgroup_root','dbus_proxy','approved_groups'}
+if not isinstance(policy,dict) or set(policy)!={'schema','namespace','classes','authority_pins'} or policy['schema']!='factory-runner-policy/v3' or policy['namespace']!='factory-runner-receipt' or not isinstance(policy['classes'],list):die('runner policy schema invalid')
+required_class_fields={'name','uid','workspace_root','allowed_capabilities','broker_helper','probe_authority','probe_authority_sha256','probe_authority_status','signer_key','signer_principal_file','nonce_ledger','systemd_run','systemctl','cgroup_root','dbus_proxy','approved_groups','executable_pins','inputplumber_pin'}
 for c in policy['classes']:
  if not isinstance(c,dict) or set(c)!=required_class_fields or type(c['uid']) is not int or c['uid']<=0 or c['probe_authority_status']!='enrolled' or not isinstance(c['approved_groups'],list) or not c['approved_groups']:die('runner policy class invalid or not enrolled')
  for field in ('workspace_root','broker_helper','probe_authority','signer_key','signer_principal_file','nonce_ledger','systemd_run','systemctl','cgroup_root','dbus_proxy'):
   if not isinstance(c[field],str) or not c[field].startswith('/') or '..' in pathlib.PurePosixPath(c[field]).parts:die('runner policy path invalid')
+ required_pins={'systemd-run','systemctl','xdg-dbus-proxy','git','bash','python3','ssh-keygen','sudo','busctl','mount','umount','udevadm','stdbuf','dpkg-query'}
+ if not isinstance(c['executable_pins'],dict) or set(c['executable_pins'])!=required_pins:die('executable enrollment set is incomplete')
+ for pin in c['executable_pins'].values():
+  if not isinstance(pin,dict) or set(pin)!={'path','sha256','device','inode','status'} or pin['status']!='enrolled':die('executable enrollment is invalid or pending')
+  raw=protected(pin['path']);i=os.stat(pin['path'])
+  if hashlib.sha256(raw).hexdigest()!=pin['sha256'] or (i.st_dev,i.st_ino)!=(pin['device'],pin['inode']):die('executable enrollment mismatch')
+ if c['name']=='iprunner' and (not isinstance(c['inputplumber_pin'],dict) or c['inputplumber_pin'].get('status')!='enrolled'):die('InputPlumber enrollment is absent or pending')
 account_map={'devrunner':'dev-runner-vm','iprunner':'iprunner','gpurunner':'gpurunner'}
 if {c['name'] for c in policy['classes']}!=set(account_map.values()):die('policy class set is not exact')
 # System tools must be immutable root-owned executables.  The coordinator

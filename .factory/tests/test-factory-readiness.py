@@ -240,7 +240,8 @@ class RunnerPolicyAuthorityTests(unittest.TestCase):
     def test_gpurunner_requires_two_enrolled_exact_class_pins(self):
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "policy.json"
-            base = {"schema":"factory-runner-policy/v2", "namespace":"factory-runner-receipt",
+            tools={n:{"path":"/usr/bin/"+n,"sha256":"c"*64,"device":1,"inode":1,"status":"enrolled"} for n in factory_runner_policy.REQUIRED_EXECUTABLES}
+            base = {"schema":"factory-runner-policy/v3", "namespace":"factory-runner-receipt",
                     "authority_pins":[], "classes":[{
                         "name":"gpurunner", "uid":os.getuid() or 1,
                         "workspace_root":"/var/lib/factory-gpurunner",
@@ -251,13 +252,16 @@ class RunnerPolicyAuthorityTests(unittest.TestCase):
                         "signer_key":"/etc/factory/key", "signer_principal_file":"/etc/factory/principal",
                         "nonce_ledger":"/var/lib/factory-runner/nonces", "systemd_run":"/usr/bin/systemd-run",
                         "systemctl":"/usr/bin/systemctl", "cgroup_root":"/sys/fs/cgroup",
-                        "dbus_proxy":"/usr/bin/xdg-dbus-proxy", "approved_groups":["users"]}]}
+                        "dbus_proxy":"/usr/bin/xdg-dbus-proxy", "approved_groups":["users"],
+                        "executable_pins":tools,"inputplumber_pin":None}]}
             for offset,name,caps in ((1,"dev-runner-vm",["remote-project-gate"]),(2,"iprunner",["inputplumber-system-dbus"])):
                 entry=json.loads(json.dumps(base["classes"][0]));entry.update(
                     name=name,uid=(os.getuid() or 1)+offset,
                     workspace_root=f"/var/lib/factory-{name}",allowed_capabilities=caps,
                     signer_key=f"/etc/factory/{name}.key",signer_principal_file=f"/etc/factory/{name}.principal",
                     nonce_ledger=f"/var/lib/factory-runner/{name}-nonces")
+                if name=="iprunner":entry["inputplumber_pin"]={"path":"/usr/bin/inputplumber","sha256":"d"*64,"device":1,"inode":2,"status":"enrolled","package_version":"1","service_exec_start":"/usr/bin/inputplumber"}
+                else:entry["inputplumber_pin"]=None
                 base["classes"].append(entry)
             prior = factory_runner_policy.DEFAULT_POLICY_PATH
             prior_env = os.environ.get("FACTORY_RUNNER_POLICY")

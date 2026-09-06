@@ -432,11 +432,22 @@ def validate_record(declared: dict, record: dict, commit: str, tree: str,
         "exit_code", "timed_out", "started_at", "finished_at", "cleanup",
         "stdout_sha256", "stderr_sha256", "artifact_protocol", "artifact_limits",
         "artifact_count", "artifact_bytes", "artifact_manifest_sha256",
-        "artifact_scope_sha256", "artifacts",
+        "artifact_scope_sha256", "artifacts", "host_authority",
         "signer_principal", "signer_key_sha256", "namespace", "signature_algorithm",
     }
     if set(manifest) != expected_fields or manifest.get("schema") != "factory-runner-receipt/v3" or manifest.get("result") != "pass":
         fail("runner manifest schema/result is invalid")
+    host=manifest["host_authority"]
+    if (not isinstance(host,dict) or set(host)!={"executable_pins","writable_limits","inputplumber_pin","dbus_audit_sha256","cleanup_states"}
+            or host["writable_limits"]!={"bytes":768*1024*1024,"inodes":65536}
+            or not isinstance(host["executable_pins"],dict) or not host["executable_pins"]
+            or not isinstance(host["cleanup_states"],list)
+            or any(not isinstance(x,dict) or x.get("before")!=x.get("after") for x in host["cleanup_states"])
+            or (host["dbus_audit_sha256"] is not None and not SHA256.fullmatch(str(host["dbus_audit_sha256"])))):
+        fail("runner manifest host authority is invalid")
+    for pin in host["executable_pins"].values():
+        if not isinstance(pin,dict) or set(pin)!={"path","sha256","device","inode"} or not SHA256.fullmatch(str(pin.get("sha256",""))):
+            fail("runner manifest executable enrollment is invalid")
     if (
         manifest["runner"] != record["name"]
         or manifest["runner"] != declared.get("name")

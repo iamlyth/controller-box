@@ -18,7 +18,10 @@ from factory_runner_artifacts import (ArtifactError, PROTOCOL, MAX_ARTIFACTS,
 
 SHA1=re.compile(r"^[0-9a-f]{40}$"); SHA256=re.compile(r"^[0-9a-f]{64}$"); NAME=re.compile(r"^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$")
 MAX_HEADER=65536; MAX_ARCHIVE=128*1024*1024; MAX_FILES=10000; MAX_CONTENT=256*1024*1024; MAX_LOG=4*1024*1024
-HEADER_TIMEOUT=15; ARCHIVE_TIMEOUT=120; BROKER_ADMISSION=8
+# One request receives one kernel-enforced writable pool.  The inode bound is
+# intentionally far below host-risk levels; it also bounds directory entries.
+WRITABLE_BYTES=768*1024*1024; WRITABLE_INODES=65536
+HEADER_TIMEOUT=15; ARCHIVE_TIMEOUT=120; BROKER_ADMISSION=8; PROCESS_STOP_RESERVE=12
 NONCE_TTL=900; NONCE_OUTSTANDING=32; NONCE_TOTAL=4096; NONCE_RATE=8; NONCE_RATE_WINDOW=60
 ADMISSION_ROOT=Path("/run/factory-runner-admission")
 SIGNER="/usr/local/libexec/factory-runner-signer"
@@ -94,10 +97,14 @@ def _safe_chain(path:Path, *, leaf="file"):
   if last and leaf=="dir" and not stat.S_ISDIR(info.st_mode): raise BrokerError(f"trusted directory is unsafe: {current}")
 
 class TrustedExecutable:
- def __init__(self,path:str):
+ def __init__(self,path:str,pin:dict|None=None):
   self.path=Path(path); _safe_chain(self.path)
   self.fd=os.open(self.path,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC); self.info=os.fstat(self.fd)
   self.digest=self._digest()
+  if pin is not None:
+   expected={"path":str(self.path),"sha256":self.digest,"device":self.info.st_dev,"inode":self.info.st_ino}
+   if pin.get("status")!="enrolled" or any(pin.get(k)!=v for k,v in expected.items()):
+    self.close();raise BrokerError(f"trusted executable differs from independent enrollment: {self.path}")
  def _digest(self):
   h=hashlib.sha256(); off=0
   while True:
@@ -266,6 +273,38 @@ def _device_properties(capability):
  devices={"kernel-uinput":["/dev/uinput rw"],"physical-controller":["char-input r"],"target-consumer":["char-input r"],"controller-production-routing":["char-input rw","/dev/uinput rw"],"gpu-compositor":["char-drm rw"],"installed-licensed-diagram":["char-drm rw"]}.get(capability,[])
  return (["PrivateDevices=yes"] if not devices else ["PrivateDevices=no","DevicePolicy=closed",*[f"DeviceAllow={x}" for x in devices]])
 
+def _pin(entry,name):
+ try:return entry["executable_pins"][name]
+ except KeyError as exc:raise BrokerError(f"missing executable enrollment: {name}") from exc
+
+class WritablePool:
+ """Root-mounted, byte/inode-bounded disposable storage for candidate writes."""
+ def __init__(self,entry,runroot,uid):
+  self.root=runroot/"writable";self.root.mkdir(mode=0o700)
+  self.mount=TrustedExecutable("/usr/bin/mount",_pin(entry,"mount"));self.umount=TrustedExecutable("/usr/bin/umount",_pin(entry,"umount"));self.mounted=False
+  opts=f"size={WRITABLE_BYTES},nr_inodes={WRITABLE_INODES},mode=0700,uid=0,gid=0,nosuid,nodev"
+  self.mount.verify();r=subprocess.run([str(self.mount.path),"-t","tmpfs","-o",opts,"factory-runner-writable",str(self.root)],capture_output=True,timeout=10);self.mount.verify()
+  if r.returncode:raise BrokerError("bounded writable tmpfs unavailable")
+  self.mounted=True
+  for name in ("build","home","output"):
+   p=self.root/name;p.mkdir(mode=0o700);os.chown(p,uid,uid)
+ def paths(self):return self.root/"build",self.root/"home",self.root/"output"
+ def close(self):
+  error=None
+  if self.mounted:
+   self.umount.verify()
+   try:r=subprocess.run([str(self.umount.path),str(self.root)],capture_output=True,timeout=10)
+   except Exception as exc:r=None;error=exc
+   self.umount.verify()
+   if r is None or r.returncode:error=error or BrokerError("bounded writable pool did not unmount")
+   else:self.mounted=False
+  # Never recursively walk candidate trees: unmount discards all attacker inodes.
+  if not self.mounted:
+   try:self.root.rmdir()
+   except OSError as exc:error=error or exc
+  self.mount.close();self.umount.close()
+  if error:raise BrokerError("bounded writable backing resource cleanup not proven") from error
+
 def _cleanup_unit(systemctl,unit,cgroup_root):
  errors=[]
  for verb in ("stop","kill"):
@@ -285,53 +324,56 @@ def _cleanup_unit(systemctl,unit,cgroup_root):
  return False
 
 def _bounded_process(argv,env,timeout,stdout_path,stderr_path,*,cwd="/",preexec=None,overflow=None,pass_fds=()):
- """Concurrently stream child pipes to fixed held files with hard byte caps."""
+ """Run, stop, drain and reap under one absolute, non-resettable deadline."""
  flags=os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC
  outfd=os.open(stdout_path,flags,0o600);errfd=os.open(stderr_path,flags,0o600)
- proc=None;exceeded=False;deadline=time.monotonic()+timeout;counts={"stdout":0,"stderr":0}
+ proc=None;poll=None;exceeded=False;deadline=time.monotonic()+timeout;counts={"stdout":0,"stderr":0};stop_sent=False
+ def stop():
+  nonlocal stop_sent
+  if stop_sent:return
+  stop_sent=True
+  try:
+   if overflow:overflow(max(0.0,deadline-time.monotonic()))
+   elif proc:os.killpg(proc.pid,signal.SIGKILL)
+  except (ProcessLookupError,OSError,subprocess.SubprocessError):pass
  try:
+  # timeout includes Popen and leaves a fixed reserve for stop/drain/wait.
   proc=subprocess.Popen(argv,cwd=cwd,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,stdin=subprocess.DEVNULL,start_new_session=True,preexec_fn=preexec,pass_fds=pass_fds)
   poll=selectors.DefaultSelector()
   for stream,name,fd in ((proc.stdout,"stdout",outfd),(proc.stderr,"stderr",errfd)):
    os.set_blocking(stream.fileno(),False);poll.register(stream,selectors.EVENT_READ,(name,fd))
-  while poll.get_map():
-   left=deadline-time.monotonic()
-   if left<=0:
-    exceeded=True
-    if overflow:overflow()
-    else:
-     try:os.killpg(proc.pid,signal.SIGKILL)
-     except ProcessLookupError:pass
-    deadline=time.monotonic()+10
-   events=poll.select(min(max(left,0),.25))
+  run_end=deadline-min(PROCESS_STOP_RESERVE,max(0.1,timeout/2))
+  while poll.get_map() and time.monotonic()<deadline:
+   now=time.monotonic()
+   if now>=run_end:exceeded=True;stop()
+   events=poll.select(min(.25,max(0,deadline-now)))
    for key,_ in events:
     name,fd=key.data
     try:chunk=os.read(key.fd,65536)
     except BlockingIOError:continue
     if not chunk:poll.unregister(key.fileobj);continue
     allowed=max(0,MAX_LOG-counts[name]);os.write(fd,chunk[:allowed]);counts[name]+=len(chunk)
-    if counts[name]>MAX_LOG and not exceeded:
-     exceeded=True
-     if overflow:overflow()
-     else:
-      try:os.killpg(proc.pid,signal.SIGTERM)
-      except ProcessLookupError:pass
-   if exceeded and time.monotonic()>deadline:
-    try:os.killpg(proc.pid,signal.SIGKILL)
-    except ProcessLookupError:pass
-  proc.wait(timeout=10)
+    if counts[name]>MAX_LOG:exceeded=True;stop()
+  if poll.get_map():
+   exceeded=True;stop()
+   # Pipe holders must not retain the broker: close our read ends at deadline.
+   for key in list(poll.get_map().values()):poll.unregister(key.fileobj);key.fileobj.close()
+  left=max(0,deadline-time.monotonic())
+  try:proc.wait(timeout=left)
+  except subprocess.TimeoutExpired:exceeded=True;stop()
   os.fsync(outfd);os.fsync(errfd)
  finally:
+  if poll:poll.close()
+  for stream in ((proc.stdout,proc.stderr) if proc else ()):
+   try:stream.close()
+   except Exception:pass
   os.close(outfd);os.close(errfd)
-  if proc and proc.poll() is None:
-   try:os.killpg(proc.pid,signal.SIGKILL)
-   except ProcessLookupError:pass
-   proc.wait()
+  if proc and proc.poll() is None:stop() # never perform an unbounded wait
  def held(path):
   fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC)
   try:return os.read(fd,MAX_LOG+1)
   finally:os.close(fd)
- if exceeded:raise BrokerError("child output or runtime bound exceeded")
+ if exceeded or not proc or proc.poll() is None:raise BrokerError("child output or absolute runtime bound exceeded")
  return proc.returncode,held(stdout_path),held(stderr_path)
 
 def _analyzer_limits():
@@ -339,20 +381,24 @@ def _analyzer_limits():
  resource.setrlimit(resource.RLIMIT_FSIZE,(MAX_LOG,MAX_LOG));resource.setrlimit(resource.RLIMIT_NPROC,(32,32));resource.setrlimit(resource.RLIMIT_NOFILE,(64,64))
 
 DBUS_CAPS={"inputplumber-system-dbus","target-consumer","controller-production-routing","gpu-compositor","installed-licensed-diagram"}
-DBUS_CALLS=(
+DBUS_READ_CALLS=(
  "org.freedesktop.DBus.ObjectManager.GetManagedObjects",
- "org.freedesktop.DBus.Properties.Get","org.freedesktop.DBus.Properties.GetAll","org.freedesktop.DBus.Properties.Set",
- "org.freedesktop.DBus.Introspectable.Introspect",
- "org.shadowblip.InputPlumber.Manager.CreateTargetDevice","org.shadowblip.InputPlumber.Manager.StopTargetDevice",
- "org.shadowblip.InputPlumber.Manager.SetTargetDevices","org.shadowblip.InputPlumber.CompositeDevice.SetTargetDevices",
- "org.shadowblip.InputPlumber.Target.InputEvent")
+ "org.freedesktop.DBus.Properties.Get","org.freedesktop.DBus.Properties.GetAll",
+ "org.freedesktop.DBus.Introspectable.Introspect")
+# Synthetic injection is never delegated.  Routing mutations are mediated by
+# root code in production; a candidate proxy remains read-only.
+DBUS_MUTATING_CALLS=()
+FORBIDDEN_DBUS_CALLS=("org.shadowblip.InputPlumber.Target.InputEvent",)
 
 class DbusProxy:
- def __init__(self,entry,parent):
-  self.exe=TrustedExecutable(entry["dbus_proxy"]);self.root=parent/"dbus-proxy";self.root.mkdir(mode=0o700);os.chown(self.root,0,0)
-  self.socket=self.root/"system_bus_socket"
-  argv=[str(self.exe.path),"unix:path=/run/dbus/system_bus_socket",str(self.socket),"--filter","--talk=org.shadowblip.InputPlumber",*[f"--call=org.shadowblip.InputPlumber={m}" for m in DBUS_CALLS]]
-  self.exe.verify();self.proc=subprocess.Popen(argv,cwd="/",env={"PATH":"/usr/bin:/bin","LANG":"C.UTF-8"},stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True,preexec_fn=_analyzer_limits)
+ def __init__(self,entry,parent,capabilities=()):
+  self.exe=TrustedExecutable(entry["dbus_proxy"],_pin(entry,"xdg-dbus-proxy"));self.root=parent/"dbus-proxy";self.root.mkdir(mode=0o700);os.chown(self.root,0,0)
+  self.socket=self.root/"system_bus_socket";self.audit=self.root/"calls.audit"
+  self.audit_fd=os.open(self.audit,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC,0o400)
+  calls=DBUS_READ_CALLS # capability-specific authority: every exposed candidate capability is read-only
+  argv=[str(self.exe.path),"unix:path=/run/dbus/system_bus_socket",str(self.socket),"--filter","--log","--talk=org.shadowblip.InputPlumber",*[f"--call=org.shadowblip.InputPlumber={m}" for m in calls]]
+  if any(x in " ".join(argv) for x in FORBIDDEN_DBUS_CALLS):raise BrokerError("synthetic InputPlumber injection authority is forbidden")
+  self.exe.verify();self.proc=subprocess.Popen(argv,cwd="/",env={"PATH":"/usr/bin:/bin","LANG":"C.UTF-8"},stdin=subprocess.DEVNULL,stdout=self.audit_fd,stderr=self.audit_fd,start_new_session=True,preexec_fn=_analyzer_limits)
   deadline=time.monotonic()+5
   while time.monotonic()<deadline and not self.socket.exists() and self.proc.poll() is None:time.sleep(.02)
   if not self.socket.exists() or self.proc.poll() is not None:self.close();raise BrokerError("allowlisting D-Bus proxy failed closed")
@@ -366,13 +412,14 @@ class DbusProxy:
     try:os.killpg(self.proc.pid,signal.SIGKILL)
     except ProcessLookupError:pass
     self.proc.wait()
+  if getattr(self,"audit_fd",None) is not None:os.fsync(self.audit_fd);os.close(self.audit_fd);self.audit_fd=None
   if getattr(self,"exe",None):self.exe.close();self.exe=None
   shutil.rmtree(getattr(self,"root",Path("/nonexistent")),ignore_errors=True)
 
 class UdevMonitor:
  """Root-held raw kernel udev stream; candidate receives only a read-only file."""
- def __init__(self,parent):
-  self.udev=TrustedExecutable("/usr/bin/udevadm");self.stdbuf=TrustedExecutable("/usr/bin/stdbuf")
+ def __init__(self,parent,entry):
+  self.udev=TrustedExecutable("/usr/bin/udevadm",_pin(entry,"udevadm"));self.stdbuf=TrustedExecutable("/usr/bin/stdbuf",_pin(entry,"stdbuf"))
   self.path=parent/"udev-snapshot.log";self.fd=os.open(self.path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC,0o444)
   self.udev.verify();self.stdbuf.verify()
   self.proc=subprocess.Popen([str(self.stdbuf.path),"-oL",str(self.udev.path),"monitor","--kernel","--property","--subsystem-match=input"],cwd="/",env={"PATH":"/usr/bin:/bin","LANG":"C.UTF-8"},stdin=subprocess.DEVNULL,stdout=self.fd,stderr=self.fd,start_new_session=True)
@@ -405,7 +452,7 @@ class UserManagerProxy(DbusProxy):
   os.chown(self.socket,0,pwd.getpwuid(entry["uid"]).pw_gid);os.chmod(self.socket,0o660)
 
 def run_contained(entry,authority,descriptor,host_product,host_build,host_home,host_artifacts,env,unit,capability,provenance=None,proxy=None,udev=None):
- systemd=TrustedExecutable(entry["systemd_run"]);systemctl=TrustedExecutable(entry["systemctl"])
+ systemd=TrustedExecutable(entry["systemd_run"],_pin(entry,"systemd-run"));systemctl=TrustedExecutable(entry["systemctl"],_pin(entry,"systemctl"))
  sandbox_product=Path("/run/factory/product");sandbox_build=Path("/run/factory/build");sandbox_home=Path("/run/factory/home");sandbox_output=Path("/run/factory/output")
  senv=clean_env(sandbox_home,authority,sandbox_product,sandbox_build,sandbox_output)
  if capability!="gate":
@@ -436,10 +483,14 @@ def run_contained(entry,authority,descriptor,host_product,host_build,host_home,h
  cmd=[str(systemd.path),"--quiet","--wait","--pipe","--collect","--unit",unit,"--service-type=exec",f"--uid={entry['uid']}",*[f"--property={p}" for p in props],*[f"--setenv={k}={v}" for k,v in sorted(senv.items())],*argv]
  # systemd-run receives a scrubbed environment; candidate-controlled variables never cross.
  logroot=host_artifacts.parent;stdout_path=logroot/"candidate.stdout";stderr_path=logroot/"candidate.stderr"
- def abort():
+ def abort(remaining):
+  # All cleanup attempts share _bounded_process's absolute budget.
   for verb in ("stop","kill"):
-   try:subprocess.run([str(systemctl.path),verb,unit],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=10)
+   if remaining<=0:return
+   began=time.monotonic()
+   try:subprocess.run([str(systemctl.path),verb,unit],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=min(remaining,2))
    except Exception:pass
+   remaining-=time.monotonic()-began
  try:
   systemd.verify();command_exe.verify();rc,out,err=_bounded_process(cmd,senv,7300,stdout_path,stderr_path,overflow=abort);command_exe.verify()
  finally:
@@ -472,7 +523,7 @@ def verify_authority_pins(policy,entry,authority):
   if licensed_doc.get("status")!="accepted-machine-authority" or oracle_doc.get("authority_status") not in {"machine-enforced","approved","enrolled"}:
    raise BrokerError("licensed authority/oracle status is pending or unapproved")
 
-def host_cleanup_snapshot(capability):
+def host_cleanup_snapshot(capability,entry):
  """Independent capability-specific host state used as cleanup postcondition."""
  fact={"capability":capability}
  if capability in {"inputplumber-system-dbus","physical-controller","target-consumer","controller-production-routing","kernel-uinput"}:
@@ -481,18 +532,20 @@ def host_cleanup_snapshot(capability):
   fact["dri_nodes"]=sorted(p.name for p in Path("/dev/dri").glob("*")) if Path("/dev/dri").exists() else []
  if capability in {"inputplumber-system-dbus","target-consumer","controller-production-routing"}:
   try:
-   r=subprocess.run(["/usr/bin/busctl","--system","--json=short","call","org.shadowblip.InputPlumber","/org/shadowblip/InputPlumber","org.freedesktop.DBus.ObjectManager","GetManagedObjects"],capture_output=True,timeout=10)
+   busctl=TrustedExecutable("/usr/bin/busctl",_pin(entry,"busctl"));busctl.verify()
+   try:r=subprocess.run([str(busctl.path),"--system","--json=short","call","org.shadowblip.InputPlumber","/org/shadowblip/InputPlumber","org.freedesktop.DBus.ObjectManager","GetManagedObjects"],capture_output=True,timeout=10);busctl.verify()
+   finally:busctl.close()
    fact["inputplumber_objects_sha256"]=hashlib.sha256(r.stdout).hexdigest() if r.returncode==0 else None
   except Exception: fact["inputplumber_objects_sha256"]=None
  return fact
 
 
 class InputPlumberProvenance:
- """Held host-namespace identity for the real D-Bus owner across routing."""
- def __init__(self,parent):
-  self.busctl=TrustedExecutable("/usr/bin/busctl")
-  self.systemctl=TrustedExecutable("/usr/bin/systemctl")
-  self.dpkg=TrustedExecutable("/usr/bin/dpkg-query")
+ """Held host-namespace identity for the enrolled service across routing."""
+ def __init__(self,parent,entry=None):
+  self.busctl=TrustedExecutable("/usr/bin/busctl",_pin(entry,"busctl"))
+  self.systemctl=TrustedExecutable("/usr/bin/systemctl",_pin(entry,"systemctl"))
+  self.dpkg=TrustedExecutable("/usr/bin/dpkg-query",_pin(entry,"dpkg-query"))
   self.owner,self.pid=self._resolve()
   self.starttime=self._starttime(self.pid)
   self.exe_link=os.readlink(f"/proc/{self.pid}/exe")
@@ -502,10 +555,15 @@ class InputPlumberProvenance:
   self.dev,self.ino,self.size=st.st_dev,st.st_ino,st.st_size
   self.digest=self._digest()
   package=self._host_command(self.dpkg,"-W","-f=${Package}\t${Version}\t${Status}","inputplumber").split("\t")
-  service=self._host_command(self.systemctl,"show","inputplumber.service","--property=Id","--property=Type","--property=ActiveState","--value").splitlines()
+  service=self._host_command(self.systemctl,"show","inputplumber.service","--property=Id","--property=Type","--property=ActiveState","--property=ExecStart","--value").splitlines()
   owned=self._host_command(self.dpkg,"-S",self.exe_link)
-  if len(package)!=3 or package[0]!="inputplumber" or package[2]!="install ok installed" or service!=["inputplumber.service","dbus","active"]:
+  if len(package)!=3 or package[0]!="inputplumber" or package[2]!="install ok installed" or len(service)!=4 or service[:3]!=["inputplumber.service","dbus","active"] or self.exe_link not in service[3]:
    raise BrokerError("InputPlumber package/service provenance is not exact")
+  pin=(entry or {}).get("inputplumber_pin")
+  enrolled={"path":self.exe_link,"sha256":self.digest,"device":self.dev,"inode":self.ino}
+  if not pin or pin.get("status")!="enrolled" or any(pin.get(k)!=v for k,v in enrolled.items()) or pin.get("package_version")!=package[1] or pin.get("service_exec_start")!=service[3]:
+   raise BrokerError("InputPlumber executable/package differs from independent enrollment")
+  self.package_version=package[1];self.service_exec_start=service[3]
   self.fact={"schema":"factory-host-inputplumber-provenance/v2","unique_owner":self.owner,"pid":self.pid,"starttime":self.starttime,"exe":self.exe_link,"exe_dev":self.dev,"exe_ino":self.ino,"exe_size":self.size,"exe_sha256":self.digest,"package_name":package[0],"package_version":package[1],"package_installed":True,"service_unit":service[0],"service_type":service[1],"service_active":True,"exe_owned_by_package":owned.startswith("inputplumber: "),"verified_by":"root-broker-held-proc-exe-outside-private-pids"}
   self.path=parent/"inputplumber-provenance.json"
   fd=os.open(self.path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC,0o444)
@@ -554,6 +612,10 @@ class InputPlumberProvenance:
   if (owner,pid,start)!=(self.owner,self.pid,self.starttime):raise BrokerError("InputPlumber D-Bus owner restarted or changed during routing")
   if link!=self.exe_link or (live.st_dev,live.st_ino)!=(self.dev,self.ino) or (held.st_dev,held.st_ino,held.st_size)!=(self.dev,self.ino,self.size) or self._digest()!=self.digest:
    raise BrokerError("InputPlumber executable identity changed during routing")
+  package=self._host_command(self.dpkg,"-W","-f=${Version}","inputplumber")
+  exec_start=self._host_command(self.systemctl,"show","inputplumber.service","--property=ExecStart","--value")
+  if package!=self.package_version or exec_start!=self.service_exec_start:
+   raise BrokerError("InputPlumber package or service ExecStart changed during routing")
  def close(self):
   if getattr(self,"fd",None) is not None:os.close(self.fd);self.fd=None
   self.busctl.close();self.systemctl.close();self.dpkg.close()
@@ -577,7 +639,8 @@ def main():
  except Exception: fail("request header is invalid")
  if req.get("schema")=="factory-runner-nonce-request/v1":
   if prefetched:fail("nonce request has trailing bytes")
-  issue_nonce(entry,req,uid);return 0
+  try:issue_nonce(entry,req,uid);return 0
+  finally:os.close(admission);admission=None
  fields={"schema","runner","class","commit","commit_object_b64","tree","environment_blob","archive_sha256","archive_size","capabilities","campaign_id","readiness_nonce","nonce","authority_sha256"}
  if not isinstance(req,dict) or set(req)!=fields or req.get("schema")!="factory-runner-request/v2":fail("request fields/schema invalid")
  if req["runner"]!=entry["name"] or req["class"]!=entry["name"] or req["capabilities"]!=sorted(entry["allowed_capabilities"]):fail("request does not equal root class policy")
@@ -595,47 +658,58 @@ def main():
   contract=authority.class_contract(entry["name"])
   if sorted(contract["capabilities"])!=req["capabilities"]:raise BrokerError("probe authority capability set differs from root policy")
   workroot=Path(entry["workspace_root"]);_safe_chain(workroot,leaf="dir");request_dir=Path(tempfile.mkdtemp(prefix=f"request-{req['nonce']}-",dir=workroot));request_dir.chmod(0o700)
-  provenance_identity=InputPlumberProvenance(request_dir) if entry["name"]=="iprunner" else None
+  provenance_identity=InputPlumberProvenance(request_dir,entry) if entry["name"]=="iprunner" else None
   provenance=provenance_identity.path if provenance_identity else None
-  proxy=DbusProxy(entry,request_dir) if any(c in DBUS_CAPS for c in req["capabilities"]) else None
+  proxy=DbusProxy(entry,request_dir,req["capabilities"]) if any(c in DBUS_CAPS for c in req["capabilities"]) else None
   user_proxy=UserManagerProxy(entry,request_dir) if "systemd-user" in req["capabilities"] else None
-  started=int(time.time());allout=b"";allerr=b"";payload=[];descriptors=[]
+  started=int(time.time());allout=b"";allerr=b"";payload=[];descriptors=[];cleanup_states=[]
   for index,(name,descriptor) in enumerate([("gate",contract["gate"]),*sorted(contract["capabilities"].items())]):
-   runroot=request_dir/f"run-{index}";product=runroot/"source";build=runroot/"build";home=runroot/"home";artifacts=runroot/"output"
+   runroot=request_dir/f"run-{index}";product=runroot/"source";pool=None
    runroot.mkdir(mode=0o711);product.mkdir(mode=0o700)
-   for p in (build,home,artifacts):p.mkdir(mode=0o700);os.chown(p,uid,uid)
+   pool=WritablePool(entry,runroot,uid);build,home,artifacts=pool.paths()
    extract(archive,product)
    gitpath=next((str(Path(x)/"git") for x in authority.document["trusted_path"] if (Path(x)/"git").is_file()),"")
    if not gitpath:raise BrokerError("trusted control closure has no pinned git")
-   git=TrustedExecutable(gitpath);env=clean_env(home,authority,product,build,artifacts)
+   git=TrustedExecutable(gitpath,_pin(entry,"git"));env=clean_env(home,authority,product,build,artifacts)
    try:exact_tree(product,req,git,env)
    finally:git.close()
    source_before=source_digest(product)
-   unit=f"factory-runner-{entry['name']}-{req['nonce'][:20]}-{index}.service";host_before=host_cleanup_snapshot(name)
+   unit=f"factory-runner-{entry['name']}-{req['nonce'][:20]}-{index}.service";host_before=host_cleanup_snapshot(name,entry)
    if name in DBUS_CAPS:provenance_identity.verify()
    capability_proxy=user_proxy if name=="systemd-user" else proxy
-   udev=UdevMonitor(request_dir) if name=="controller-production-routing" else None
+   udev=UdevMonitor(request_dir,entry) if name=="controller-production-routing" else None
    try:rc,out,err=run_contained(entry,authority,descriptor,product,build,home,artifacts,env,unit,name,provenance,capability_proxy,udev)
    finally:
     if udev:udev.close()
    if name in DBUS_CAPS:provenance_identity.verify()
    if len(allout)+len(out)>MAX_LOG or len(allerr)+len(err)>MAX_LOG:raise BrokerError("aggregate contained output exceeds bound")
    allout+=out;allerr+=err
-   if host_cleanup_snapshot(name)!=host_before:raise BrokerError(f"{name} capability-specific host cleanup not proven")
+   host_after=host_cleanup_snapshot(name,entry)
+   if host_after!=host_before:raise BrokerError(f"{name} capability-specific host cleanup not proven")
+   cleanup_states.append({"capability":name,"before":host_before,"after":host_after})
    # Root-owned source bytes/inodes/modes are revalidated after execution.
    if source_digest(product)!=source_before:raise BrokerError("candidate source changed during execution")
    if rc:raise BrokerError(f"{name} candidate execution failed")
    if name!="gate":
     d,p=collect(artifacts,[name],{name:descriptor["artifacts"]},expected_uid=uid);held=hold(d,p,request_dir);held_all.append(held)
     analyze(authority,descriptor,held,env,req["commit"],req["tree"]);descriptors.extend(d);payload.extend(held.payload)
+   pool.close();pool=None
    shutil.rmtree(runroot)
   descriptors.sort(key=lambda x:x["path"]);payload.sort(key=lambda x:x["path"]);total=sum(x["size"] for x in descriptors);digest=descriptors_digest(descriptors)
   scope=hashlib.sha256(json.dumps({"campaign_id":req["campaign_id"],"readiness_nonce":req["readiness_nonce"],"runner":entry["name"],"commit":req["commit"],"nonce":req["nonce"],"artifact_manifest_sha256":digest},sort_keys=True,separators=(",",":")).encode()).hexdigest()
-  evidence={"schema":"factory-runner-receipt/v3","result":"pass","runner":entry["name"],"commit":req["commit"],"tree":req["tree"],"environment_blob":req["environment_blob"],"archive_sha256":req["archive_sha256"],"campaign_id":req["campaign_id"],"readiness_nonce":req["readiness_nonce"],"nonce":req["nonce"],"authority_sha256":authority.digest,"capabilities":req["capabilities"],"exit_code":0,"timed_out":False,"started_at":started,"finished_at":int(time.time()),"cleanup":True,"stdout_sha256":hashlib.sha256(allout).hexdigest(),"stderr_sha256":hashlib.sha256(allerr).hexdigest(),"artifact_protocol":PROTOCOL,"artifact_limits":{"count":MAX_ARTIFACTS,"file_bytes":MAX_ARTIFACT_FILE,"aggregate_bytes":MAX_ARTIFACT_BYTES},"artifact_count":len(descriptors),"artifact_bytes":total,"artifact_manifest_sha256":digest,"artifact_scope_sha256":scope,"artifacts":descriptors}
+  pins={name:{k:pin[k] for k in ("path","sha256","device","inode")} for name,pin in sorted(entry["executable_pins"].items())}
+  dbus_audit=None
+  if proxy:
+   os.fsync(proxy.audit_fd);dbus_audit=hashlib.sha256(proxy.audit.read_bytes()).hexdigest()
+  host_authority={"executable_pins":pins,"writable_limits":{"bytes":WRITABLE_BYTES,"inodes":WRITABLE_INODES},"inputplumber_pin":entry.get("inputplumber_pin"),"dbus_audit_sha256":dbus_audit,"cleanup_states":cleanup_states}
+  evidence={"schema":"factory-runner-receipt/v3","host_authority":host_authority,"result":"pass","runner":entry["name"],"commit":req["commit"],"tree":req["tree"],"environment_blob":req["environment_blob"],"archive_sha256":req["archive_sha256"],"campaign_id":req["campaign_id"],"readiness_nonce":req["readiness_nonce"],"nonce":req["nonce"],"authority_sha256":authority.digest,"capabilities":req["capabilities"],"exit_code":0,"timed_out":False,"started_at":started,"finished_at":int(time.time()),"cleanup":True,"stdout_sha256":hashlib.sha256(allout).hexdigest(),"stderr_sha256":hashlib.sha256(allerr).hexdigest(),"artifact_protocol":PROTOCOL,"artifact_limits":{"count":MAX_ARTIFACTS,"file_bytes":MAX_ARTIFACT_FILE,"aggregate_bytes":MAX_ARTIFACT_BYTES},"artifact_count":len(descriptors),"artifact_bytes":total,"artifact_manifest_sha256":digest,"artifact_scope_sha256":scope,"artifacts":descriptors}
   signed=sign(evidence,entry)
   emit({**evidence,"stdout_b64":base64.b64encode(allout).decode(),"stderr_b64":base64.b64encode(allerr).decode(),**{k:signed[k] for k in ("manifest_b64","signature_b64","signer_principal","signer_key_sha256","signature_algorithm","namespace","signature_sha256")},"artifact_payload":payload})
  except (AuthorityError,ArtifactError,PolicyError,BrokerError,OSError,subprocess.SubprocessError,ValueError) as e:fail(str(e))
  finally:
+  if 'pool' in locals() and pool:
+   try:pool.close()
+   except Exception:pass
   for held in held_all:held.close()
   if authority:authority.close()
   if 'provenance_identity' in locals() and provenance_identity:provenance_identity.close()
