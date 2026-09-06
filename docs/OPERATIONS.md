@@ -675,7 +675,7 @@ planner only through a revised canonical plan, never through memory injection.
 
 One mutable control-state file,
 `.factory-state/campaigns/<campaign-id>/factory-loop.json`
-(schema `factory-state/v1`), records the phase, round, attempt, campaign hook
+(schema `factory-state/v2`), records the phase, round, attempt, campaign hook
 configuration digest and exact source commit, chained typed hook-result digest, hook start/completion
 cursors, and a trusted outcome enum; it contains no model prose, raw hook
 output, or evidence claims. All

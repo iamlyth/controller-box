@@ -32,12 +32,14 @@ under an authenticated bound. README/factory documentation records trust flags,
 state v2, archive authority, credential rotation, and the complete docs index.
 
 Focused broker/authority/artifact/archive/installer/D-Bus suites and the complete
-exact-PATH `verify-boilerplate.sh` gate pass. The diagnostic Nix project gate
-reached all 97 CTest targets and failed only the three protected manager-editor
-golden comparisons in `test_golden`; `test_kernel_controller` and accelerated
-`test_backend_smoke` were the two declared environmental skips. No external
-runner, deployment, evidence, approval, specification, golden, or credential
-operation was performed.
+exact-PATH `verify-boilerplate.sh` gate pass. The exact-PATH generic gate
+(`verify-boilerplate.sh`) passes at a29a42f. The diagnostic Nix project gate
+reached 93 CTest targets total; only `test_golden` failed, with three named
+subcases (the protected manager-editor golden comparisons), and
+`test_kernel_controller` and accelerated `test_backend_smoke` were the two
+declared environmental skips. No external runner, deployment, evidence,
+approval, specification, golden, or credential operation was performed; no
+human approval exists.
 
 **Dynamic D-Bus mediation and lifecycle residual checkpoint (current checkout)**
 
@@ -561,7 +563,7 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 | VRF-05 | §11.1.5 | partial | `test_installed_functional.c` (4 tests), `test_installed_smoke.sh`, `test_installed_binary.sh`; runner receipt 26df6c0 all pass | Task 4 |
 | VRF-06 | §11.1.6 | partial | Software-renderer smoke test_backend_smoke_sw.c passes (non-blank framebuffer, region content assertions); GPU backend test_backend_smoke.c exits 77 in headless, gpu-compositor undeclared (FACT-005) | Task 4 |
 | VRF-07 | §11.1.7 | partial | Human release acceptance checklist documented with procedure, criteria, and evidence storage; requires human reviewer on target hardware per §11.1.7 (FACT-004, FACT-006) | Task 4 |
-| DOD-01 | §11.2.1 | partial | Not all matrix rows verified: 21 of 76 rows partial (ARCH-04, SYS-01, SYS-02, SYS-06, OVL-09, OVL-10, MGR-02, MGR-03, MGR-07, MGR-08, PKG-01, DBUS-02, DBUS-05, PERF-01, VRF-05, VRF-06, VRF-07, DOD-01, DOD-05, DOD-06, DOD-09) pending BUG-0015, fresh exact-head installed diagram evidence (FACT-009), fresh exact-commit runner evidence (FACT-007), and hardware/capability facts | Task 4 |
+| DOD-01 | §11.2.1 | partial | Not all matrix rows verified: 21 of 78 rows partial (ARCH-04, SYS-01, SYS-02, SYS-06, OVL-09, OVL-10, MGR-02, MGR-03, MGR-07, MGR-08, PKG-01, DBUS-02, DBUS-05, PERF-01, VRF-05, VRF-06, VRF-07, DOD-01, DOD-05, DOD-06, DOD-09) pending BUG-0015, fresh exact-head installed diagram evidence (FACT-009), fresh exact-commit runner evidence (FACT-007), and hardware/capability facts | Task 4 |
 | DOD-02 | §11.2.2 | verified | Tests use production dispatch; native DBus preserves signatures | |
 | DOD-03 | §11.2.3 | verified | M39 added to inventory (Task 1); M28–M38 controller-transport evidence via ctrl_press in test_manager_native_prof.c (Task 2); keyboard tests in test_manager_interaction_prof.c relabeled to _keyboard per §5.7 | Task 1, Task 2 |
 | DOD-04 | §11.2.4 | verified | `test_overlay_visual.c`, `test_manager_visual.c` cover degraded/error/recovery states | |
@@ -570,8 +572,8 @@ runner, Pi 4, human reviewer) are documented as deferrals, not implemented.
 | DOD-07 | §11.2.7 | verified | Campaign audit round 1 completed with 5 findings; this plan addresses all | |
 | DOD-08 | §11.2.8 | verified | README.md/OPERATIONS.md capability claims and inventory counts corrected (Task 1); capability-accounted items documented in OPERATIONS.md (Task 3) | Task 1, Task 3 |
 | DOD-09 | §11.2.9 | partial | Plan status is active; production acceptance failure BUG-0015 open; final gate cannot accept completion | Task 4 |
-| CRED-01 | §18 | verified | `.factory/tools/credential-guard.py` + `pi-factory-guard-extension.mjs` redact/block credential-shaped content; `test-credential-guard.sh`, `test-credential-extension.sh` | |
-| GIT-01 | §12, §17 | verified | `.factory/tools/git-commit-guard.sh` + `install-git-commit-guard.sh` enforce the substantive-commit boundary; `pi-cli-shims/git`; `test-git-commit-guard.sh` | |
+| CRED-01 | §18 | verified | `.factory/tools/credential-guard.py` + `pi-factory-guard-extension.mjs` redact/block credential-shaped content; `test-credential-guard.sh`, `test-credential-extension.sh`; evidence commit a29a42f | |
+| GIT-01 | §12, §17 | verified | `.factory/tools/git-commit-guard.sh` + `install-git-commit-guard.sh` enforce the substantive-commit boundary; `pi-cli-shims/git`; `test-git-commit-guard.sh`; evidence commit a29a42f | |
 
 ## Interaction acceptance inventory
 

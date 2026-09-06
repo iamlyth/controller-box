@@ -1339,7 +1339,7 @@
     "FACT-005",
     "FACT-006"
    ],
-   "reason": "Not all matrix rows verified: 21 of 76 rows partial (ARCH-04, SYS-01, SYS-02, SYS-06, OVL-09, OVL-10, MGR-02, MGR-03, MGR-07, MGR-08, PKG-01, DBUS-02, DBUS-05, PERF-01, VRF-05, VRF-06, VRF-07, DOD-01, DOD-05, DOD-06, DOD-09) pending BUG-0015, fresh exact-head installed diagram evidence (FACT-009), fresh exact-commit runner evidence (FACT-007), and hardware/capability facts"
+   "reason": "Not all matrix rows verified: 21 of 78 rows partial (ARCH-04, SYS-01, SYS-02, SYS-06, OVL-09, OVL-10, MGR-02, MGR-03, MGR-07, MGR-08, PKG-01, DBUS-02, DBUS-05, PERF-01, VRF-05, VRF-06, VRF-07, DOD-01, DOD-05, DOD-06, DOD-09) pending BUG-0015, fresh exact-head installed diagram evidence (FACT-009), fresh exact-commit runner evidence (FACT-007), and hardware/capability facts"
   },
   {
    "id": "DOD-02",
@@ -1511,7 +1511,7 @@
    "evidence_tier": "private_integration",
    "required_tier": "private_integration",
    "required_capabilities": [],
-   "evidence_commit": "de951ca356edf4e4103c762326e7dfef757811bb",
+   "evidence_commit": "a29a42fd6635401d0d875c75150a0f405ab3f7ab",
    "receipts": [],
    "artifacts": [
     ".factory/tools/pi-factory-guard-extension.mjs",
@@ -1532,7 +1532,7 @@
    "evidence_tier": "installed",
    "required_tier": "installed",
    "required_capabilities": [],
-   "evidence_commit": "de951ca356edf4e4103c762326e7dfef757811bb",
+   "evidence_commit": "a29a42fd6635401d0d875c75150a0f405ab3f7ab",
    "receipts": [],
    "artifacts": [
     ".factory/tools/git-commit-guard.sh",
