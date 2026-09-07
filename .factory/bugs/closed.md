@@ -261,6 +261,22 @@ Schema: `ralph-bug-ledger/v1`
     "resolution": "compile mediator from byte-identical non-hidden generated copy plus contained stale-object migration",
     "verification": "targeted Nix CTest passed and BUG0020-FIX-ACCEPTABLE YES",
     "closed": "2026-09-07"
+  },
+  {
+    "id": "BUG-0021",
+    "title": "Timing-dependent campaign archive integrity: tampered retained same-campaign archive can cross a second boundary",
+    "status": "closed",
+    "severity": "high",
+    "reported": "2026-09-07",
+    "external": [],
+    "contract_change": false,
+    "reproduction": "Run a multi-round campaign whose archive retention keeps the same campaign's archive across a second boundary. A tampered retained same-campaign archive is not re-authenticated at the second boundary, so a modified archive can be carried forward and reused. Prefix-overlap pruning and post-delete validation are timing-dependent: pruning that matches by prefix can delete a newer archive when names overlap, and validation performed after a delete cannot detect the loss of the removed archive.",
+    "expected": "Archive integrity is enforced at every boundary regardless of timing: a retained same-campaign archive is re-authenticated before it is reused across a second boundary; pruning never deletes a newer archive via prefix overlap; and deletion is validated before the archive is removed, not after.",
+    "actual": "The archive lifecycle was timing-dependent: a tampered retained same-campaign archive was ignored across the second boundary (not re-authenticated before reuse), prefix-overlap pruning could remove a newer archive, and post-delete validation could not detect the loss.",
+    "acceptance": "A bounded nofollow exact-campaign pre-publish/pre-delete authentication re-verifies the exact retained archive before it is published or deleted; nonce naming prevents prefix-overlap collisions; prune-before-delete removes only the authenticated target; and a strict manifest/archive binding ties each archive to its exact manifest. Direct verification covers 13 archive scenarios, the full verify-boilerplate gate passes, and the independent security verdict is ARCHIVE-INTEGRITY-SECURE YES.",
+    "resolution": "Added bounded nofollow exact-campaign pre-publish/pre-delete authentication that re-verifies the exact retained archive before reuse or removal; nonce naming eliminates prefix-overlap collisions; prune-before-delete removes only the authenticated target; and a strict manifest/archive binding ties each archive to its exact manifest.",
+    "verification": "Direct verification exercised 13 archive scenarios covering tampered retained same-campaign reuse across a second boundary, prefix-overlap pruning, and post-delete validation; the full verify-boilerplate gate passes; independent security verdict ARCHIVE-INTEGRITY-SECURE YES. No product acceptance or runner evidence is claimed.",
+    "closed": "2026-09-07"
   }
 ]
 ```

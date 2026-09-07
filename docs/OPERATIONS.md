@@ -573,9 +573,13 @@ FACTORY_COORDINATOR_AUTH_FD="${FACTORY_COORDINATOR_AUTH_FD:?protected fd}" \
 ```
 
 The authenticated v2 archive includes relevant runner evidence and audit
-receipts, verifies all members before no-follow campaign deletion, and applies
-bounded same-campaign retention. Tampering or missing evidence leaves state in
-place.
+receipts, uses collision-safe `{campaign_id}-{UTC-stamp}-{nonce}` names,
+authenticates every retained archive for the exact campaign before publishing
+and again before no-follow campaign deletion, and applies bounded exact-campaign
+retention that re-verifies each pruned pair immediately before unlink. Tampering,
+missing evidence, or unsafe members/symlinks/modes leave state in place; a
+tampered archive for the same campaign blocks the operation, while unrelated
+campaign archives never block.
 
 Sequence invariants are: accepted commit, clean `develop`, exact-commit
 production install verification, unique fresh mode-0700 campaign namespace,

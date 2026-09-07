@@ -333,11 +333,18 @@ Terminal campaign state is retained until an operator invokes
 inherited root-owned (or fixture-owner) mode-0600 authority file descriptor.
 The v2 archive manifest authenticates the campaign namespace, relevant
 `runner-evidence` and `audit-receipts` namespaces, and every member digest under
-the `factory-campaign-archive` MAC namespace. The tool rereads and authenticates
-the published tar and manifest before descriptor-relative deletion. Retention
-is bounded per campaign ID; old archives are removed only after their own MAC
-and member set verify. Missing evidence, tampering, unsafe members, or active
-state fails closed without pruning the campaign.
+the `factory-campaign-archive` MAC namespace. Archive names are
+`{campaign_id}-{UTC-stamp}-{16-hex nonce}` so same-second archives never
+collide. Before anything is published or deleted, the tool enumerates every
+retained archive for the exact campaign (bounded, no-follow, never
+prefix-overlapping) and authenticates each tar/manifest pair; it repeats that
+authentication immediately before campaign deletion. Retention is bounded per
+campaign ID and prunes oldest archives only after re-verifying each target
+immediately before unlink, and pruning runs before campaign deletion. Missing
+evidence, tampering, unsafe members, unsafe symlinks/modes, or active state
+fails closed without publishing or pruning the campaign. A tampered archive for
+the same campaign blocks the operation; archives of unrelated campaigns are
+never read, verified, or pruned.
 
 ## Declared tools and runners
 

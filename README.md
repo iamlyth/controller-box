@@ -396,9 +396,12 @@ runnable. Terminal state remains until an operator explicitly runs
 refuses an active lock and unsafe members, includes the campaign plus relevant
 audit-receipt and runner-evidence namespaces, authenticates its v2 manifest and
 archive with the protected authority, verifies the published bytes, then
-no-follow deletes only that campaign. Its bounded `--retention` policy (default
-20, maximum 100) authenticates and removes only the oldest archives for the same
-campaign namespace.
+no-follow deletes only that campaign. Archive names carry a collision-safe
+`{campaign_id}-{UTC-stamp}-{nonce}` suffix; every retained archive for the exact
+campaign is authenticated before publishing and again before deletion. Its
+bounded `--retention` policy (default 20, maximum 100) re-verifies and removes
+only the oldest archives for the same exact campaign namespace, never a
+prefix-overlapping one.
 Available local tools and external runners are declared without
 credentials in `.factory/environment.toml`; the declared runner classes
 `dev-runner-vm`, `iprunner`, and `gpurunner` and their declared capabilities
