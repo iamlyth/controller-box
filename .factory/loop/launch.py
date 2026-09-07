@@ -4556,6 +4556,49 @@ def _resolve_pi2_runtime(wrapper: str) -> Tuple[_ExternalRuntimeBinding, _Extern
     return node_binding, cli_binding
 
 
+def _pi2_backend_runtime(
+    bindings: Sequence[_ExternalRuntimeBinding],
+) -> Dict[str, bool]:
+    """Derive the authenticated Pi2 runtime admit-list for confinement.
+
+    Only the exact immutable Node executable (executable) and the Pi CLI
+    data module (data) named by the verified Pi2 wrapper chain travel as
+    ``backend_runtime`` entries into the confinement specification.  The
+    pi2 wrapper itself is *already* admitted by ``_backend_paths`` on the
+    resolved external backend, so it is deliberately excluded here; the
+    host agent directory (``~/.pi/agent2``) is never an entry.  The shape
+    is fixed — exactly one executable Node and one non-executable CLI data
+    file — so an unexpected binding (an extra runtime, a missing file, or
+    a flipped flag) fails closed instead of silently admitting a broader
+    runtime.
+
+    Returns a deterministic path->bool Mapping (``node`` -> ``True``,
+    ``cli`` -> ``False``) exactly as the confinement authority consumes it;
+    never a tuple.
+    """
+    executables: List[str] = []
+    data: List[str] = []
+    for item in bindings:
+        if item.executable and Path(item.path).name == "pi2":
+            # The wrapper is covered by the backend read/execute rules
+            # derived from ``binding.backend``; never repeat it here.
+            continue
+        if not item.path.startswith("/"):
+            raise InvocationError(
+                f"authenticated pi2 runtime path is not absolute: {item.path!r}"
+            )
+        (executables if item.executable else data).append(item.path)
+    if len(executables) != 1 or len(data) != 1:
+        raise InvocationError(
+            "authenticated pi2 runtime must admit exactly one Node "
+            "executable and one CLI data file for confinement; got "
+            f"{len(executables)} executable(s) and {len(data)} data "
+            "file(s), so the runtime admit-list cannot be derived (fail "
+            "closed; no broader runtime is granted)"
+        )
+    return {executables[0]: True, data[0]: False}
+
+
 def _prepare_private_pi2_home(sanitized_home: Path) -> int:
     """Prepare the private Pi2 agent directory and return the sealed auth fd.
 
@@ -5364,6 +5407,11 @@ def authorize_launch(
     auth_fd = -1
     rule_fd_list: List[int] = []
     rule_fds: Tuple[int, ...] = ()
+    # The authenticated Pi2 runtime admit-list (node executable, cli data)
+    # derived from the verified external runtime bindings; None for every
+    # non-Pi2 backend (no runtime is admitted there because the wrapper
+    # remains covered by binding.backend and there is no Node/CLI to bind).
+    backend_runtime: Optional[Dict[str, bool]] = None
     try:
         # Production constructs every confinement input itself.  Callers can
         # neither inject a proof/spec/home nor opt into a synthetic transport.
@@ -5387,6 +5435,14 @@ def authorize_launch(
             # and CLI digest/dev/inode bindings as one complete identity.
             _revalidate_external_runtimes(external_runtime_bindings)
             auth_fd = _prepare_private_pi2_home(sanitized_home)
+            # BUG-0019: the authenticated wrapper/node/cli bindings were
+            # revalidated above; the confinement specification must admit
+            # exactly those Node/CLI identities so the adapter's exec of
+            # Node under Landlock succeeds without any directory-level
+            # EXECUTE, host agent directory, or network/env widening.
+            backend_runtime = _pi2_backend_runtime(
+                external_runtime_bindings
+            )
         try:
             base_spec = real_confinement_authority.confinement_spec(
                 binding,
@@ -5395,6 +5451,7 @@ def authorize_launch(
                     [binding.result_write_path]
                     if binding.result_write_path else []
                 ),
+                backend_runtime=backend_runtime,
                 _rule_descriptors=rule_fd_list,
             )
         except real_confinement_authority.ConfinementError as exc:

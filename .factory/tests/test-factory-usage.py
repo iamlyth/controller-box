@@ -58,6 +58,7 @@ import io
 import json
 import os
 from pathlib import Path
+import secrets
 import shutil
 import signal
 import socket
@@ -68,6 +69,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
 import unittest.mock as mock
 
@@ -1124,29 +1126,91 @@ class LaunchIntegrationTests(_Base):
         provision.assert_not_called()
 
     def test_pi2_cli_authority_inclusion_and_pre_auth_pre_exec_revalidation(self) -> None:
-        """A positive exact-Pi mint carries wrapper/Node/CLI identities; the
-        revalidation happens before provisioning and a CLI mutation blocks
-        the live supervisor before Popen."""
+        """A positive exact-Pi authenticated mint carries wrapper/Node/CLI
+        identities into the confinement specification as backend_runtime
+        (node executable true, CLI data false); the wrapper is admitted once
+        through the backend rules, the host agent directory is never
+        admitted, Git stays excluded, the revalidation happens before
+        provisioning, and a CLI mutation blocks the live supervisor before
+        Popen."""
         pi2 = shutil.which("pi2")
         self.assertIsNotNone(pi2, "the production exact-Pi regression requires pi2")
         assert pi2 is not None
         binding = dataclasses.replace(
             self._binding("openai-codex"), backend=Path(pi2).absolute()
         )
-        # Even an exact external pi2 cannot use a fixture readiness document;
-        # the backend remains unexecuted until canonical campaign authority is
-        # present.
+        # Unauthenticated negative path: an exact external pi2 without a
+        # campaign-bound readiness document fails closed before any
+        # credential provisioning (the backend stays unexecuted).
         with mock.patch.object(launch, "_prepare_private_pi2_home") as provision:
             with self.assertRaisesRegex(launch.InvocationError, "readiness authorization"):
                 self._authorize(binding)
         provision.assert_not_called()
-        return
+        # ---- authenticated positive mint (BUG-0019 launch half) ----
+        # A genuine readiness authorization bound to this exact invocation
+        # (real mint-secret marker, real descriptor/digest bindings, real
+        # namespace/coordinator descriptors) lets the authenticated launch
+        # proceed.  The root-owned durable consumption machinery and the
+        # real-Landlock proof mint (exercised end-to-end by the confinement
+        # suite on Landlock hosts) are replaced by in-test recorders because
+        # unit tests never hold the campaign lock; they are not the subject
+        # of this test.
+        zero = "0" * 64
+        tree = _work(["rev-parse", "HEAD^{tree}"], self.workspace).stdout.decode().strip()
+        self.assertEqual(len(tree), 40)
+        bindings = {
+            "accepted_commit": self.head, "tree": tree,
+            "environment_blob": self.head,
+            "specification_sha256": zero, "plan_sha256": zero,
+            "conformance_sha256": zero, "policy_sha256": zero,
+            "readiness_policy_sha256": zero, "contracts_sha256": zero,
+            "install_manifest_sha256": zero, "command_authority_sha256": zero,
+            "human_authority_sha256": zero, "trust_authority_sha256": zero,
+        }
+        result_digests = {
+            "aggregate_sha256": zero, "findings_aggregate_sha256": zero,
+            "capability_result_sha256": zero, "core_result_sha256": zero,
+            "conformance_result_sha256": zero, "human_result_sha256": zero,
+            "product_findings_sha256": zero,
+        }
+        namespace_dir = self.tmp / "readiness-namespace"
+        namespace_dir.mkdir(mode=0o700)
+        namespace_fd = os.open(
+            namespace_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
+        )
+        coordinator_path = self.tmp / "coordinator-auth.json"
+        coordinator_path.write_bytes(
+            (json.dumps({"schema": "factory-coordinator-launch-authority/v1",
+                         "key": "k" * 64, "entries": {}},
+                        sort_keys=True) + "\n").encode("utf-8")
+        )
+        os.chmod(coordinator_path, 0o600)
+        coordinator_fd = os.open(coordinator_path, os.O_RDWR | os.O_CLOEXEC)
+        scope = secrets.token_hex(16)
+        authority_bytes = b"factory-campaign-launch-authority fixture bytes\n"
+        state_blob = b'{"schema":"factory-loop/v1"}\n'
+        readiness = launch.ReadinessLaunchAuthorization(
+            _mint=launch._READINESS_MINT_SECRET,
+            digest=zero, campaign_id="launch-half-test", nonce=zero,
+            accepted_commit=self.head, tree=tree,
+            current_commit=self.head, current_tree=tree,
+            descriptor=launch._launch_descriptor(binding),
+            descriptor_digest=launch.launch_descriptor_digest(binding),
+            campaign_descriptor_digest=hashlib.sha256(authority_bytes).hexdigest(),
+            state_digest=zero, state_generation="0:planning:0",
+            binding_digest=hashlib.sha256(
+                json.dumps(bindings, sort_keys=True, separators=(",", ":"))
+                .encode()).hexdigest(),
+            bindings=bindings, result_digests=result_digests, scope=scope,
+            namespace_fd=namespace_fd, ledger_identity="test:launch-half",
+            key=bytes.fromhex("ab" * 32), coordinator_fd=coordinator_fd,
+        )
         events = []
         real_revalidate = launch._revalidate_external_runtimes
 
-        def record_revalidation(bindings):
+        def record_revalidation(bindings_):
             events.append("revalidate")
-            return real_revalidate(bindings)
+            return real_revalidate(bindings_)
 
         def synthetic_provision(_home):
             events.append("provision")
@@ -1155,25 +1219,127 @@ class LaunchIntegrationTests(_Base):
             os.lseek(fd, 0, os.SEEK_SET)
             return fd
 
+        captured_runtime = []
+        real_spec = launch.real_confinement_authority.confinement_spec
+
+        def recording_spec(binding_, *, sanitized_home, extra_read=(),
+                           extra_write=(), backend_runtime=None,
+                           _rule_descriptors=None):
+            captured_runtime.append(
+                None if backend_runtime is None else dict(backend_runtime)
+            )
+            return real_spec(
+                binding_, sanitized_home=sanitized_home,
+                extra_read=extra_read, extra_write=extra_write,
+                backend_runtime=backend_runtime,
+                _rule_descriptors=_rule_descriptors,
+            )
+
+        def stub_read(directory_fd, name, maximum):
+            if name == "factory-loop.json":
+                return state_blob
+            if name == "launch-authority.json":
+                return authority_bytes
+            raise AssertionError(f"unexpected readiness authority read {name!r}")
+
+        transitions = []
+
+        def record_consume(*args, **kwargs):
+            transitions.append((args[1], args[2], args[3]))
+
         with mock.patch.object(
-            launch, "_revalidate_external_runtimes", side_effect=record_revalidation
+            launch, "_read_authority_at", side_effect=stub_read
+        ), mock.patch.object(
+            launch.state_authority, "parse_state",
+            return_value=types.SimpleNamespace(
+                current_round=0, current_phase="planning", attempt_number=0
+            ),
+        ), mock.patch.object(
+            launch.state_authority, "state_digest", return_value=zero
+        ), mock.patch.object(
+            launch, "_coordinator_transition", side_effect=record_consume
+        ), mock.patch.object(
+            launch, "_readiness_ledger_transition_at",
+            side_effect=record_consume,
+        ), mock.patch.object(
+            launch, "_revalidate_external_runtimes",
+            side_effect=record_revalidation,
         ), mock.patch.object(
             launch, "_prepare_private_pi2_home", side_effect=synthetic_provision
+        ), mock.patch.object(
+            launch.real_confinement_authority, "confinement_spec",
+            side_effect=recording_spec,
+        ), mock.patch.object(
+            launch.real_confinement_authority, "validate_rule_anchors"
+        ), mock.patch.object(
+            launch.real_confinement_authority, "prove_confinement",
+            return_value=types.SimpleNamespace(),
+        ), mock.patch.object(
+            launch.real_confinement_authority, "validate_proof"
         ):
-            authority = self._authorize(binding)
+            authority = self._authorize(
+                binding,
+                readiness_authorization=readiness,
+                readiness_invocation=binding,
+            )
         self.assertEqual(events[:2], ["revalidate", "provision"])
+        # The authenticated wrapper/Node/CLI identities survive on the token.
         paths = tuple(authority._external_paths)
         identities = tuple(authority._external_runtime_bindings)
         self.assertEqual(paths, tuple(item.path for item in identities))
         self.assertEqual(len(paths), 3)
         wrapper, node, cli = identities
+        self.assertEqual(wrapper.path, os.path.realpath(Path(pi2).absolute()))
         self.assertEqual(cli.path, os.path.realpath(cli.path))
         self.assertTrue(cli.path.startswith("/nix/store/"))
-        self.assertIn(cli.path, paths)
         self.assertRegex(cli.sha256, r"^[0-9a-f]{64}$")
         self.assertGreater(cli.device, 0)
         self.assertGreater(cli.inode, 0)
+        # Exact runtime propagation: the backend_runtime mapping admitted to
+        # the confinement specification carries exactly node (executable) +
+        # cli (data) — never the wrapper, never anything else.
+        self.assertEqual(
+            captured_runtime, [{node.path: True, cli.path: False}]
+        )
+        spec = authority._confinement_spec
+        rules = spec["rules"]
+        by_path = {rule["path"]: set(rule["access"]) for rule in rules}
+        self.assertIn(node.path, by_path)
+        self.assertIn("execute", by_path[node.path])
+        self.assertIn("read", by_path[node.path])
+        self.assertIn(cli.path, by_path)
+        self.assertIn("read", by_path[cli.path])
+        self.assertNotIn("execute", by_path[cli.path])
+        # The wrapper is admitted once (through the backend rules, not
+        # through backend_runtime) and the host agent directory is never
+        # admitted; /nix/store rules stay read-only except exact files.
+        self.assertIn(wrapper.path, by_path)
+        agent_dir = str(Path.home() / ".pi" / "agent2")
+        self.assertNotIn(agent_dir, by_path)
+        for rule in rules:
+            if "execute" in rule["access"]:
+                self.assertTrue(
+                    os.path.isfile(rule["path"]),
+                    f"EXECUTE must stay file-granular, got {rule['path']!r}",
+                )
+        # Git exclusion: admitting the Pi2 runtime never admits the pinned
+        # Git executable, and no rule grants it EXECUTE.
+        git_real = os.path.realpath(shutil.which("git"))
+        self.assertNotIn(git_real, by_path)
+        # Both durable one-use transitions (coordinator authority and
+        # readiness ledger) were consumed exactly once, each strictly
+        # token-scoped: the same non-empty campaign mint scope advances
+        # absent->minted (verified upstream) to minted->consumed, with no
+        # repeats, no cross-token leakage, and nothing minted in-band.
+        self.assertTrue(scope and len(scope) >= 32, f"mint scope must be non-empty, got {scope!r}")
+        self.assertEqual(len(transitions), 2, f"expected exactly 2 durable one-use transitions, got {transitions}")
+        self.assertEqual(
+            transitions,
+            [(scope, "minted", "consumed"), (scope, "minted", "consumed")],
+        )
 
+        # Pre-exec revalidation: mutating the bound CLI digest blocks the
+        # live supervisor before Popen.
         real_bind = launch._bind_external_runtime
 
         def mutate_cli(path: str, *, executable: bool):
@@ -1196,6 +1362,39 @@ class LaunchIntegrationTests(_Base):
             ):
                 supervisor.run(authority)
         popen.assert_not_called()
+
+    def test_pi2_backend_runtime_derivation_admits_exact_node_and_cli(self) -> None:
+        """BUG-0019: the confinement ``backend_runtime`` derive-list is a pure
+        function of the verified external runtime bindings: exactly the Node
+        executable (true) and the CLI data file (false), with the wrapper
+        (already covered by the backend rules) excluded and every unexpected
+        shape rejected instead of silently admitting a broader runtime."""
+        def binding_of(path: str, *, executable: bool):
+            return launch._ExternalRuntimeBinding(
+                path=path, sha256="0" * 64, device=1, inode=2,
+                executable=executable,
+            )
+
+        wrapper = binding_of("/nix/store/aaaa-pi2-closure/bin/pi2", executable=True)
+        node = binding_of("/nix/store/bbbb-nodejs-24.18.1/bin/node", executable=True)
+        cli = binding_of("/nix/store/cccc-pi-0.84.1/dist/cli.js", executable=False)
+        runtime = launch._pi2_backend_runtime((wrapper, node, cli))
+        # Deterministic path->bool Mapping with exactly node=True, cli=False.
+        self.assertIsInstance(runtime, dict)
+        self.assertEqual(runtime, {node.path: True, cli.path: False})
+        # Mutation/forgery shapes fail closed (never a tuple, never a
+        # broader runtime admit-list).
+        for bad in (
+            (wrapper,),             # authenticated node/cli missing
+            (wrapper, node),        # missing CLI data
+            (wrapper, cli),         # missing Node executable
+            (wrapper, node, node, cli),  # extra executable
+            (wrapper, node, cli, cli),   # extra data file
+            (wrapper, node, cli, binding_of("/nix/store/dddd/other", executable=True)),
+        ):
+            with self.subTest(bad=[b.path for b in bad]):
+                with self.assertRaises(launch.InvocationError):
+                    launch._pi2_backend_runtime(bad)
 
     def test_bound_commit_origin_is_checked_before_channel_proof(self) -> None:
         usage_source = self.workspace / ".factory" / "loop" / "usage.py"

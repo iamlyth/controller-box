@@ -183,6 +183,13 @@ SYSTEM_READ = (
     # /nix/var state is visible; store data remains closure-granular above.
     "/nix/var/nix/daemon-socket",
 )
+
+# The single anchored device *write* grant (BUG-0019): the exact canonical
+# /dev/null discard sink.  Confined interpreters/tooling dispose of stdio
+# through this device, so it receives READ+WRITE as one exact-file rule;
+# every other device node (/dev/urandom, /dev/random, /dev/zero, /dev/tty)
+# stays read-only and no other /dev entry receives any write right.
+DEV_NULL_SINK = "/dev/null"
 NETWORK_CONFIG_LINKS = (
     "/etc/resolv.conf", "/etc/hosts", "/etc/nsswitch.conf",
 )
@@ -1213,6 +1220,166 @@ def _backend_paths(backend: Path, workspace: Path) -> Tuple[List[str], List[str]
     return [], []
 
 
+def _pinned_git_identity() -> Optional[Tuple[int, int]]:
+    """The dev/ino identity of the pinned Git executable, when resolvable.
+
+    Runtime grants must preserve the ambient Git inode/name exclusion: an
+    entry that *is* the pinned real Git binary can never receive Landlock
+    EXECUTE through the bound-runtime mechanism any more than through the
+    ambient tool list.
+    """
+    try:
+        pinned = os.path.realpath(str(gitutil.GIT_EXECUTABLE))
+        info = os.stat(pinned)
+    except OSError:
+        return None
+    return (int(info.st_dev), int(info.st_ino))
+
+
+def _backend_runtime_paths(
+    backend_runtime: Optional[Mapping[str, bool]],
+    workspace: Path,
+) -> Tuple[List[str], List[str], List[str]]:
+    """Validate keyword-only bound backend runtime entries (BUG-0019).
+
+    ``backend_runtime`` maps one exact canonical absolute path to a bool
+    that flags the entry's role:
+
+    * ``True`` — an executable runtime inode (the authenticated Pi2
+      ``node``); it is validated through the immutable-chain executable
+      authority and later receives an exact-file READ+EXECUTE rule;
+    * ``False`` — interpreter *data* the executable reads (the Pi
+      ``cli.js`` module); it is validated as canonical immutable
+      single-link regular data and later receives an exact-file READ-only
+      rule.
+
+    Every entry fails closed when it is non-absolute, non-canonical,
+    symlinked, missing, caller-mutable, multi-link, resolved inside the
+    model workspace (a workspace file must never become executable), or
+    Git-named / the pinned Git inode (preserving the Git inode/name
+    exclusion for runtime grants).  The immutable store roots of the entry
+    paths seed one bounded closure resolution whose members are granted
+    READ only: no closure directory or file ever receives Landlock EXECUTE
+    and the broad store root itself never enters the rules.
+
+    Returns the ``(read_paths, execute_paths, closure_paths)`` triples.
+    """
+    if backend_runtime is None:
+        return [], [], []
+    if not isinstance(backend_runtime, Mapping):
+        raise ConfinementError(
+            "the bound backend runtime entries must be a path->bool mapping"
+        )
+    workspace_resolved = Path(os.path.realpath(str(workspace))).absolute()
+    git_identity = _pinned_git_identity()
+    read_paths: List[str] = []
+    execute_paths: List[str] = []
+    seed_paths: List[str] = []
+    resolved_contract: Dict[str, bool] = {}
+    for raw_path, executable in sorted(
+        backend_runtime.items(), key=lambda item: str(item[0])
+    ):
+        if not isinstance(raw_path, str) or not raw_path:
+            raise ConfinementError(
+                "a backend runtime entry must be an absolute path string"
+            )
+        if not isinstance(executable, bool):
+            raise ConfinementError(
+                f"backend runtime entry {raw_path} must carry an executable bool"
+            )
+        if (
+            not os.path.isabs(raw_path)
+            or "\x00" in raw_path
+            or os.path.normpath(raw_path) != raw_path
+        ):
+            raise ConfinementError(
+                f"backend runtime entry {raw_path!r} is not a clean absolute "
+                "path (fail closed)"
+            )
+        label = "backend runtime entry"
+        _no_symlink_components(raw_path, label)
+        _resolved_is_self(raw_path, label)
+        path = Path(raw_path)
+        if path.is_relative_to(workspace_resolved):
+            raise ConfinementError(
+                f"backend runtime entry {raw_path} resolves inside the model "
+                "workspace; bound runtime grants stay external so a workspace "
+                "file can never become executable (fail closed)"
+            )
+        basename = path.name.lower()
+        if basename == "git" or basename.startswith("git-"):
+            raise ConfinementError(
+                f"backend runtime entry {raw_path} is Git-named; the Git "
+                "inode/name exclusion is preserved for runtime grants"
+            )
+        try:
+            info = os.lstat(raw_path)
+        except OSError as exc:
+            raise ConfinementError(
+                f"backend runtime entry {raw_path} is unavailable: {exc} "
+                "(fail closed)"
+            ) from exc
+        if not stat.S_ISREG(info.st_mode):
+            raise ConfinementError(
+                f"backend runtime entry {raw_path} is not a regular file"
+            )
+        if info.st_nlink != 1:
+            raise ConfinementError(
+                f"backend runtime entry {raw_path} has link count "
+                f"{info.st_nlink}; multi-link runtime entries are never "
+                "accepted (fail closed)"
+            )
+        resolved = os.path.realpath(raw_path)
+        if executable:
+            if git_identity is not None:
+                try:
+                    resolved_info = os.stat(resolved)
+                except OSError as exc:
+                    raise ConfinementError(
+                        f"cannot verify backend runtime identity {raw_path}: "
+                        f"{exc} (fail closed)"
+                    ) from exc
+                if (
+                    int(resolved_info.st_dev),
+                    int(resolved_info.st_ino),
+                ) == git_identity:
+                    raise ConfinementError(
+                        f"backend runtime entry {raw_path} is the pinned Git "
+                        "inode; Git is never a bound runtime (fail closed)"
+                    )
+            try:
+                gitutil.require_trusted_executable(resolved)
+            except gitutil.GitBoundaryError as exc:
+                raise ConfinementError(
+                    f"executable backend runtime entry {raw_path} is not an "
+                    f"immutable trusted executable: {exc}"
+                ) from exc
+        else:
+            try:
+                gitutil.require_trusted_regular_file(resolved)
+            except gitutil.GitBoundaryError as exc:
+                raise ConfinementError(
+                    f"data backend runtime entry {raw_path} is not canonical "
+                    f"immutable single-link data: {exc}"
+                ) from exc
+        if resolved in resolved_contract:
+            if resolved_contract[resolved] != executable:
+                raise ConfinementError(
+                    f"backend runtime entry {raw_path} conflicts with an "
+                    "earlier entry for the same inode (ambiguous "
+                    "executable contract)"
+                )
+            continue
+        resolved_contract[resolved] = executable
+        seed_paths.append(resolved)
+        if executable:
+            execute_paths.append(resolved)
+        else:
+            read_paths.append(resolved)
+    closure = _toolchain_closure_paths(seed_paths) if seed_paths else []
+    return read_paths, execute_paths, closure
+
+
 def sanitized_home_directory() -> Path:
     """A fresh private mode-0700 directory for one attempt's sanitized HOME.
 
@@ -1260,6 +1427,7 @@ def confinement_spec(
     sanitized_home: Path,
     extra_read: Sequence[str] = (),
     extra_write: Sequence[str] = (),
+    backend_runtime: Optional[Mapping[str, bool]] = None,
     _rule_descriptors: Optional[List[int]] = None,
 ) -> Dict[str, object]:
     """The deterministic per-launch confinement specification.
@@ -1267,7 +1435,14 @@ def confinement_spec(
     ``binding`` is the ``launch.InvocationBinding``; ``sanitized_home`` is
     the fresh private home directory created by the control plane;
     ``extra_read``/``extra_write`` are absolute paths added for the backend
-    and tooling.  The returned specification (schema
+    and tooling.  ``backend_runtime`` (keyword-only, BUG-0019) binds the
+    exact immutable external runtime files of an authenticated backend: a
+    mapping of exact canonical path to an executable bool, where ``True``
+    grants an exact-file READ+EXECUTE rule (the Pi2 ``node``) and ``False``
+    grants an exact-file READ-only rule (the Pi ``cli`` module), with every
+    entry validated for executable/data identity and the immutable closure
+    of their store roots granted READ only (never directory EXECUTE, never
+    the broad store root).  The returned specification (schema
     ``factory-confinement/v1``) is a pure function of the binding, the
     committed workspace state, and the given extras; the proof's
     specification digest binds exactly these bytes.
@@ -1305,6 +1480,9 @@ def confinement_spec(
     backend_read, backend_execute = _backend_paths(
         Path(binding.backend), workspace
     )
+    runtime_read, runtime_execute, runtime_closure = _backend_runtime_paths(
+        backend_runtime, workspace
+    )
     # Include immutable PATH package roots and the exact selected inputs of the
     # commit-bound project shell. Nix exposes multicall tools such as nix-shell
     # through immutable store symlinks; the broker validates those aliases and
@@ -1319,12 +1497,30 @@ def confinement_spec(
     ])
     tool_execute = _tool_execute_paths(toolchain_closure)
     for path in _tool_read_paths(toolchain_closure):
-        add_rule(path, (ACCESS_READ,))
+        if path == DEV_NULL_SINK:
+            # Anchored exact discard sink (BUG-0019): the canonical /dev/null
+            # device node receives READ+WRITE so confined subprocesses can
+            # dispose of stdio; no other device node ever receives a write
+            # grant (the remaining /dev entries stay read-only or denied).
+            add_rule(path, (ACCESS_READ, ACCESS_WRITE))
+        else:
+            add_rule(path, (ACCESS_READ,))
     for path in tool_execute:
         add_rule(path, (ACCESS_READ, ACCESS_EXECUTE))
     for path in backend_read:
         add_rule(path, (ACCESS_READ,))
     for path in backend_execute:
+        add_rule(path, (ACCESS_READ, ACCESS_EXECUTE))
+    # Bound backend runtime entries (BUG-0019 confinement half): each exact
+    # validated entry receives READ, plus exact-file EXECUTE only where its
+    # executable flag is set; the immutable closure of their store roots is
+    # granted READ only — no closure directory or file ever receives
+    # EXECUTE, so the model never sees a broad /nix/store grant either.
+    for path in runtime_closure:
+        add_rule(path, (ACCESS_READ,))
+    for path in runtime_read:
+        add_rule(path, (ACCESS_READ,))
+    for path in runtime_execute:
         add_rule(path, (ACCESS_READ, ACCESS_EXECUTE))
     for path in extra_read:
         # Task 10 review (REQ 4): every extra allowlist entry is validated

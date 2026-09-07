@@ -91,6 +91,15 @@ Coverage:
   bytes; and the campaign launch authority grants the result channel only to
   the role that owns it (tester -> phase result, auditor -> audit result,
   planner/developer -> none);
+* **bound backend runtime entries** (BUG-0019 confinement half): the
+  keyword-only ``backend_runtime`` table grants an exact-file READ+EXECUTE
+  rule to the flagged runtime executable (Pi2 ``node``) and an exact-file
+  READ-only rule to interpreter data (the Pi ``cli`` module), validates
+  executable/data identity (immutable chain, canonical, single-link, Git
+  inode/name excluded, external to the workspace), seeds the immutable
+  closure of their store roots READ-only (never directory EXECUTE, never
+  the broad store root), and keeps the anchored exact ``/dev/null``
+  discard sink as the only device write grant;
 * **role-prompt set and audit-objective registry**: the four committed static
   role prompts have fixed bytes and deterministic per-role/prompt-set digests,
   and the committed audit-objective registry is parsed strictly and selects
@@ -2011,6 +2020,336 @@ class ConfinementSpecTests(_Base):
         os.symlink(str(inside), link)
         with self.assertRaises(wc.ConfinementError):
             wc.confinement_spec(binding, sanitized_home=home)
+
+
+class BackendRuntimeConfinementTests(_Base):
+    """BUG-0019 confinement half: exact bound backend runtime grants.
+
+    Adversarial specification tests for the keyword-only ``backend_runtime``
+    table of :func:`workspace_confinement.confinement_spec`: the runtime
+    executable receives an exact-file READ+EXECUTE rule, interpreter data
+    receives READ only, the runtime store roots/closure are granted READ
+    without directory EXECUTE, Git inode/name stays excluded, the anchored
+    exact ``/dev/null`` discard sink is the only device write, and any
+    mutation, symlink, alias, or malformed contract fails closed.
+    """
+
+    def _immutable_data_fixture(self) -> str:
+        """An exact canonical immutable single-link regular data file.
+
+        Stands in for the Pi ``cli`` module: a store-python ``os.py`` (or, on
+        an FHS host, ``/etc/passwd``) that passes the production immutable
+        data authority.  Unavailable hosts skip the data-dependent tests
+        rather than weaken the assertions.
+        """
+        store = Path(PY).parent.parent
+        candidates: list = []
+        try:
+            lib = store / "lib"
+            if lib.is_dir():
+                for entry in sorted(lib.iterdir()):
+                    if not entry.name.startswith("python"):
+                        continue
+                    for name in ("os.py", "json.py", "types.py"):
+                        candidate = entry / name
+                        try:
+                            if (
+                                candidate.is_file()
+                                and os.lstat(candidate).st_nlink == 1
+                            ):
+                                candidates.append(candidate)
+                        except OSError:
+                            continue
+        except OSError:
+            pass
+        candidates.append(Path("/etc/passwd"))
+        for candidate in candidates:
+            try:
+                wc.gitutil.require_trusted_regular_file(str(candidate))
+            except wc.gitutil.GitBoundaryError:
+                continue
+            return str(candidate)
+        self.skipTest(
+            "no canonical immutable single-link regular data fixture exists "
+            "on this host"
+        )
+        raise AssertionError("unreachable")
+
+    def _runtime_spec(self, backend_runtime: object) -> dict:
+        binding = self.binding()
+        home = wc.sanitized_home_directory()
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        spec = wc.confinement_spec(
+            binding, sanitized_home=home, backend_runtime=backend_runtime
+        )
+        wc.validate_confinement_spec(spec, binding)
+        return spec
+
+    def _runtime_pair(self):
+        """A valid (executable, interpreter-data) runtime pair fixture."""
+        return PY, self._immutable_data_fixture()
+
+    def test_backend_runtime_is_keyword_only_and_default_is_noop(self) -> None:
+        parameter = inspect.signature(wc.confinement_spec).parameters[
+            "backend_runtime"
+        ]
+        self.assertEqual(parameter.kind, inspect.Parameter.KEYWORD_ONLY)
+        self.assertIsNone(parameter.default)
+        # Without the keyword the specification is byte-identical to an
+        # explicit ``None`` (the anchored /dev/null sink is part of every
+        # launch, not gated on the runtime table).
+        binding = self.binding()
+        home = wc.sanitized_home_directory()
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        plain = wc.confinement_spec(binding, sanitized_home=home)
+        explicit = wc.confinement_spec(
+            binding, sanitized_home=home, backend_runtime=None
+        )
+        plain_rules = [
+            (str(rule["path"]), sorted(rule["access"]))
+            for rule in plain["rules"]
+        ]
+        explicit_rules = [
+            (str(rule["path"]), sorted(rule["access"]))
+            for rule in explicit["rules"]
+        ]
+        self.assertEqual(sorted(plain_rules), sorted(explicit_rules))
+        wc.validate_confinement_spec(plain, binding)
+        wc.validate_confinement_spec(explicit, binding)
+
+    def test_backend_runtime_node_gets_exact_file_execute(self) -> None:
+        """The flagged runtime executable receives exact-file READ+EXECUTE.
+
+        The granting rule names the exact regular inode; no strict ancestor
+        directory (store root, bin directory, ...) ever receives EXECUTE.
+        """
+        node, cli = self._runtime_pair()
+        spec = self._runtime_spec({node: True, cli: False})
+        by_path = {
+            str(rule["path"]): set(rule["access"]) for rule in spec["rules"]
+        }
+        self.assertEqual(
+            by_path[node], {wc.ACCESS_READ, wc.ACCESS_EXECUTE}
+        )
+        node_rule = next(
+            rule for rule in spec["rules"] if str(rule["path"]) == node
+        )
+        info = os.lstat(node)
+        self.assertTrue(stat.S_ISREG(info.st_mode))
+        self.assertEqual(node_rule["identity"]["type"], stat.S_IFMT(info.st_mode))
+        node_path = Path(node)
+        for rule in spec["rules"]:
+            rule_path = Path(str(rule["path"]))
+            if rule_path == node_path:
+                continue
+            if node_path.is_relative_to(rule_path):
+                self.assertEqual(
+                    set(rule["access"]), {wc.ACCESS_READ},
+                    f"EXECUTE leaked onto an ancestor directory of the "
+                    f"runtime executable: {rule_path}",
+                )
+
+    def test_backend_runtime_cli_is_read_only_data(self) -> None:
+        """The interpreter-data entry is validated data and never executes."""
+        node, cli = self._runtime_pair()
+        spec = self._runtime_spec({node: True, cli: False})
+        by_path = {
+            str(rule["path"]): set(rule["access"]) for rule in spec["rules"]
+        }
+        self.assertIn(cli, by_path)
+        self.assertEqual(
+            by_path[cli], {wc.ACCESS_READ},
+            "the Pi cli interpreter data must be an exact READ-only grant",
+        )
+
+    def test_backend_runtime_store_root_never_receives_execute(self) -> None:
+        """A runtime store root is granted READ, never EXECUTE."""
+        node, cli = self._runtime_pair()
+        seed_root = wc._nix_store_root(node)
+        if seed_root is None:
+            self.skipTest("the runtime executable is not Nix-store data")
+        spec = self._runtime_spec({node: True, cli: False})
+        root_rules = [
+            rule for rule in spec["rules"] if str(rule["path"]) == seed_root
+        ]
+        self.assertTrue(root_rules, "the runtime store root rule is absent")
+        for rule in root_rules:
+            self.assertEqual(
+                set(rule["access"]), {wc.ACCESS_READ},
+                "the runtime store root must be READ-only (zero store-root "
+                "EXECUTE)",
+            )
+        for rule in spec["rules"]:
+            path = str(rule["path"])
+            if path == "/nix/store":
+                self.fail("the broad Nix store root must never be allowlisted")
+            if wc.NIX_STORE_ROOT_RE.fullmatch(path) and os.path.isdir(path):
+                self.assertNotIn(wc.ACCESS_EXECUTE, rule["access"])
+                self.assertNotIn(wc.ACCESS_WRITE, rule["access"])
+
+    def test_backend_runtime_closure_is_read_only(self) -> None:
+        """Every runtime closure member is an exact READ-only rule."""
+        node, cli = self._runtime_pair()
+        if wc._nix_store_root(node) is None:
+            self.skipTest("the runtime executable is not Nix-store data")
+        closure = wc._toolchain_closure_paths([node, cli])
+        self.assertTrue(closure)
+        spec = self._runtime_spec({node: True, cli: False})
+        by_path = {
+            str(rule["path"]): set(rule["access"]) for rule in spec["rules"]
+        }
+        for member in closure:
+            self.assertIn(
+                member, by_path,
+                f"runtime closure member {member} is absent from the spec",
+            )
+            self.assertEqual(
+                by_path[member], {wc.ACCESS_READ},
+                f"runtime closure member {member} must stay read-only",
+            )
+
+    def test_backend_runtime_git_entry_denied(self) -> None:
+        """The pinned Git inode/name can never become a bound runtime."""
+        real_git = os.path.realpath(str(wc.gitutil.GIT_EXECUTABLE))
+        self.assertTrue(os.path.isfile(real_git))
+        binding = self.binding()
+        home = wc.sanitized_home_directory()
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        with self.assertRaisesRegex(wc.ConfinementError, "[Gg]it"):
+            wc.confinement_spec(
+                binding, sanitized_home=home,
+                backend_runtime={real_git: True},
+            )
+        with self.assertRaisesRegex(wc.ConfinementError, "[Gg]it"):
+            wc.confinement_spec(
+                binding, sanitized_home=home,
+                backend_runtime={real_git: False},
+            )
+
+    def test_dev_null_is_the_only_device_write_grant(self) -> None:
+        """Anchored exact /dev/null read+write; no other device write."""
+        node, cli = self._runtime_pair()
+        spec = self._runtime_spec({node: True, cli: False})
+        sink_rules = [
+            rule for rule in spec["rules"] if str(rule["path"]) == wc.DEV_NULL_SINK
+        ]
+        self.assertTrue(sink_rules, "the /dev/null discard sink rule is absent")
+        for rule in sink_rules:
+            self.assertEqual(
+                set(rule["access"]), {wc.ACCESS_READ, wc.ACCESS_WRITE}
+            )
+            info = os.lstat(wc.DEV_NULL_SINK)
+            self.assertEqual(
+                rule["identity"]["type"], stat.S_IFMT(info.st_mode)
+            )
+        for rule in spec["rules"]:
+            path = str(rule["path"])
+            if path == wc.DEV_NULL_SINK:
+                continue
+            if path.startswith("/dev/"):
+                self.assertNotIn(
+                    wc.ACCESS_WRITE, rule["access"],
+                    f"device {path} unexpectedly receives a write grant",
+                )
+
+    def test_backend_runtime_mutation_and_symlink_rejection(self) -> None:
+        """Malformed, mutable, symlinked, or escaping contracts fail closed."""
+        binding = self.binding()
+        home = wc.sanitized_home_directory()
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        node, cli = self._runtime_pair()
+
+        def attempt(runtime: object) -> None:
+            wc.confinement_spec(
+                binding, sanitized_home=home, backend_runtime=runtime
+            )
+
+        with self.assertRaises(wc.ConfinementError):
+            attempt({"node": True})  # relative
+        with self.assertRaises(wc.ConfinementError):
+            attempt({"/nix/store/../usr/bin/node": True})  # unclean
+        with self.assertRaises(wc.ConfinementError):
+            attempt({"/nonexistent/factory-runtime": True})  # missing
+        with self.assertRaises(wc.ConfinementError):
+            attempt({os.path.dirname(node): True})  # directory, not a file
+        # Caller-owned mutable executables/data outside the workspace fail the
+        # immutable identity validation.
+        mutable_dir = self.diag / "mutable"
+        mutable_dir.mkdir(exist_ok=True)
+        mutable_exe = mutable_dir / "synthetic-runtime"
+        mutable_exe.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        os.chmod(mutable_exe, 0o755)
+        with self.assertRaises(wc.ConfinementError):
+            attempt({str(mutable_exe): True})
+        mutable_data = mutable_dir / "synthetic-data.js"
+        mutable_data.write_text("// data\n", encoding="utf-8")
+        with self.assertRaises(wc.ConfinementError):
+            attempt({str(mutable_data): False})
+        # Workspace-scoped entries can never become bound runtimes (a
+        # workspace file must never be executable).
+        with self.assertRaises(wc.ConfinementError):
+            attempt({str(self.workspace / "backend.py"): True})
+        # A symlink alias of a trusted executable is never accepted.
+        alias = self.workspace / "src" / "runtime-alias"
+        os.symlink(node, alias)
+        with self.assertRaises(wc.ConfinementError):
+            attempt({str(alias): True})
+        # A non-bool flag and a non-mapping table are malformed contracts.
+        with self.assertRaises(wc.ConfinementError):
+            attempt({node: "yes"})
+        with self.assertRaises(wc.ConfinementError):
+            attempt([(node, True)])
+        # A valid pair still builds after every adversarial rejection.
+        spec = self._runtime_spec({node: True, cli: False})
+        self.assertTrue(spec["rules"])
+
+
+class BackendRuntimeDeviceLandlockTests(_Base):
+    """BUG-0019 device boundary: only /dev/null accepts model writes.
+
+    Under the real Landlock confinement the anchored exact /dev/null discard
+    sink is writable while every other device node stays write-denied, with
+    an unconfined control proving the denials are not vacuous.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        if not wc.confinement_primitive_available():
+            raise unittest.SkipTest(
+                "the Landlock LSM is unavailable on this host; the real "
+                "device-boundary probe cannot run (fail closed, never "
+                "simulated)"
+            )
+
+    def test_dev_null_writable_while_other_devices_denied(self) -> None:
+        binding = self.binding()
+        home = wc.sanitized_home_directory()
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        spec = wc.confinement_spec(binding, sanitized_home=home)
+        wc.validate_confinement_spec(spec, binding)
+        targets = [
+            {"op": "write", "path": "/dev/null"},
+            {"op": "read", "path": "/dev/null"},
+            {"op": "write", "path": "/dev/urandom"},
+            {"op": "write", "path": "/dev/zero"},
+            {"op": "write", "path": "/dev/random"},
+        ]
+        free = self.run_unconfined(targets)
+        for op, device in (
+            ("write", "/dev/null"), ("read", "/dev/null"),
+            ("write", "/dev/urandom"), ("write", "/dev/zero"),
+            ("write", "/dev/random"),
+        ):
+            self.assertEqual(
+                free[f"{op}:{device}"], "ok",
+                f"the unconfined {device} device control is not usable "
+                "(vacuous)",
+            )
+        confined = self.run_confined("developer", targets, spec=spec)
+        self.assertProbe(confined, "write", "/dev/null", "ok")
+        self.assertProbe(confined, "read", "/dev/null", "ok")
+        for device in ("/dev/urandom", "/dev/zero", "/dev/random"):
+            self.assertProbe(confined, "write", device, "PermissionError")
 
 
 class Task10ResultHandoffConfinementTests(_Base):
