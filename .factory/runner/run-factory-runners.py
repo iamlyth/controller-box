@@ -230,24 +230,6 @@ class HeldLauncher:
     def __exit__(self,*_):self.close()
 
 
-def _requested_authority_pins_digest(name: str) -> str:
-    enrollment = ROOT / ".factory" / "runner-policy-enrollment.json"
-    pins = []
-    if name == "gpurunner" and enrollment.is_file() and not enrollment.is_symlink():
-        try:
-            data = json.loads(enrollment.read_text())
-            if (data.get("schema") == "controller-box-runner-policy-enrollment/v1"
-                    and data.get("runner_class") == name
-                    and re.fullmatch(r"[0-9a-f]{64}", str(data.get("authority_sha256", "")))
-                    and isinstance(data.get("scopes"), list)):
-                pins = [{"class": name, "scope": scope,
-                         "authority_sha256": data["authority_sha256"]}
-                        for scope in sorted(data["scopes"])]
-        except (OSError, ValueError):
-            pins = []
-    return hashlib.sha256(json.dumps(pins, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-
-
 def _ssh_argv(runner: dict, executable: str) -> list[str]:
     return [executable, "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
             "-o", "IdentitiesOnly=yes", "-o", "UpdateHostKeys=no",
