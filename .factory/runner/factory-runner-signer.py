@@ -344,6 +344,145 @@ def validate_manifest(raw: bytes, runner_class: dict | None, *, broker_authentic
     return manifest
 
 
+def validate_findings_manifest(raw: bytes, runner_class: dict | None, *, broker_authenticated: bool=False) -> dict:
+    """Validate and return an executed-product-findings signing request.
+
+    The sibling of :func:`validate_manifest`: it signs the structural proof
+    that every declared probe *executed* to completion inside the bounded
+    sandbox (``timed_out=false``, ``cleanup=true``, before==after host
+    cleanup, source unchanged, no skip/simulation markers) and that the
+    probe verdicts were not a clean pass (``result=findings``, nonzero
+    ``exit_code``, per-probe records).  It is strictly pass-incompatible: a
+    findings manifest can never be signed as ``factory-runner-receipt/v3``
+    with ``result=pass``, so the coordinator can never launder a failing
+    probe into readiness acceptance.  Every binding and the exact
+    broker-authenticated one-shot signer pipe are enforced exactly as in
+    the pass path; output retained for findings is bounded and digest-bound.
+    """
+    if runner_class is not None and not broker_authenticated:
+        fail("direct signing is forbidden; use the privileged execution broker")
+    if len(raw) > MAX_REQUEST or not raw.endswith(b"\n"):
+        fail("invalid signing request")
+    try:
+        request = json.loads(raw)
+    except (UnicodeError, json.JSONDecodeError):
+        fail("signing request is not valid JSON")
+    expected = {"schema", "manifest", "broker_auth_sha256"} if broker_authenticated else {"schema", "manifest"}
+    if not isinstance(request, dict) or set(request) != expected or request.get("schema") != "factory-runner-sign-request/v1":
+        fail("signing request schema is invalid")
+    manifest = request["manifest"]
+    fields = {"schema", "result", "runner", "commit", "tree", "environment_blob", "archive_sha256", "campaign_id", "readiness_nonce", "authority_sha256", "nonce", "capabilities", "probes", "skip_marker_detected", "exit_code", "timed_out", "started_at", "finished_at", "cleanup", "stdout_sha256", "stderr_sha256", "artifact_protocol", "artifact_limits", "artifact_count", "artifact_bytes", "artifact_manifest_sha256", "artifact_scope_sha256", "artifacts", "host_authority"}
+    if not isinstance(manifest, dict) or set(manifest) != fields:
+        fail("signing request manifest fields are invalid")
+    if manifest.get("schema") != "factory-runner-findings-receipt/v1" or manifest.get("result") != "findings":
+        fail("only executed finding runner receipts can be signed as findings")
+    if manifest.get("skip_marker_detected") is not False:
+        fail("a findings receipt must prove no skip/simulation markers")
+    if not isinstance(manifest["runner"], str) or not NAME.fullmatch(manifest["runner"]):
+        fail("signing request runner is invalid")
+    if runner_class is not None and manifest["runner"] != runner_class["name"]:
+        fail("signing request runner does not match the runner class")
+    for field in ("commit", "tree", "environment_blob"):
+        if not isinstance(manifest[field], str) or not SHA1.fullmatch(manifest[field]):
+            fail(f"signing request {field} is invalid")
+    if not isinstance(manifest["campaign_id"], str) or not NAME.fullmatch(manifest["campaign_id"]):
+        fail("signing request campaign_id is invalid")
+    for field in ("archive_sha256", "readiness_nonce", "authority_sha256", "nonce", "stdout_sha256", "stderr_sha256"):
+        if not isinstance(manifest[field], str) or not SHA256.fullmatch(manifest[field]):
+            fail(f"signing request {field} is invalid")
+    exit_code = manifest["exit_code"]
+    if type(exit_code) is not int or exit_code <= 0 or manifest["timed_out"] is not False or manifest["cleanup"] is not True:
+        fail("signing request does not prove executed non-pass probe outcomes")
+    probes = manifest["probes"]
+    if not isinstance(probes, list) or not probes or len(probes) > 32:
+        fail("signing request probes are invalid")
+    probe_caps = []
+    nonzero = 0
+    for probe in probes:
+        if (not isinstance(probe, dict) or set(probe) != {"capability", "exit_code", "timed_out"}
+                or not isinstance(probe["capability"], str) or not NAME.fullmatch(probe["capability"])
+                or type(probe["exit_code"]) is not int or probe["exit_code"] < 0
+                or probe["timed_out"] is not False):
+            fail("signing request probe record is invalid")
+        probe_caps.append(probe["capability"])
+        if probe["exit_code"] != 0:
+            nonzero = max(nonzero, probe["exit_code"])
+    # The gate build probe is recorded alongside every declared capability
+    # probe.  Capability probes must be exactly the declared capability set;
+    # the gate (when present) is the only extra allowed probe.
+    expected_probes = set(manifest["capabilities"])
+    if "gate" in set(probe_caps):
+        expected_probes |= {"gate"}
+    if len(probe_caps) != len(set(probe_caps)) or set(probe_caps) != expected_probes:
+        fail("signing request probe/capability set is inconsistent")
+    if nonzero != exit_code or exit_code < 1:
+        fail("signing request dominant probe exit is inconsistent")
+    host = manifest["host_authority"]
+    if (not isinstance(host, dict) or set(host) != {"executable_pins", "writable_limits", "inputplumber_pin", "dbus_audit_sha256", "dbus_audit_descriptor", "target_consumer_operation", "cleanup_states"}
+            or host["writable_limits"] != {"bytes": 768 * 1024 * 1024, "inodes": 65536}
+            or not isinstance(host["executable_pins"], dict) or not isinstance(host["cleanup_states"], list)
+            or (host["dbus_audit_sha256"] is not None and not SHA256.fullmatch(str(host["dbus_audit_sha256"])))):
+        fail("signing request host authority is invalid")
+    audit = host["dbus_audit_descriptor"]
+    if audit is not None:
+        required = {"path", "sha256", "size", "monitor_started_ns", "proxy_started_ns", "proxy_pid", "proxy_starttime", "proxy_senders", "complete", "overflow", "candidate_generated"}
+        if (not isinstance(audit, dict) or set(audit) != required or audit.get("path") != "inputplumber-dbus-monitor.jsonl"
+                or audit.get("sha256") != host["dbus_audit_sha256"] or type(audit.get("size")) is not int or not 0 < audit["size"] <= 4 * 1024 * 1024
+                or type(audit.get("monitor_started_ns")) is not int or type(audit.get("proxy_started_ns")) is not int or audit["monitor_started_ns"] >= audit["proxy_started_ns"]
+                or any(type(audit.get(k)) is not int or audit[k] <= 0 for k in ("proxy_pid", "proxy_starttime"))
+                or not isinstance(audit.get("proxy_senders"), list) or len(audit["proxy_senders"]) != 1
+                or audit.get("complete") is not True or audit.get("overflow") is not False or audit.get("candidate_generated") is not False):
+            fail("signed D-Bus audit descriptor is invalid")
+    elif host["dbus_audit_sha256"] is not None:
+        fail("D-Bus audit digest has no signed descriptor")
+    consumer = host["target_consumer_operation"]
+    if ("target-consumer" in manifest["capabilities"]) != (consumer is not None):
+        fail("target-consumer capability has no exclusive root operation")
+    if consumer is not None:
+        required = {"path", "sha256", "size", "label", "candidate_callable", "physical_capability", "routing_capability"}
+        if (not isinstance(consumer, dict) or set(consumer) != required or consumer.get("path") != "target-consumer-operation.json"
+                or not SHA256.fullmatch(str(consumer.get("sha256", ""))) or type(consumer.get("size")) is not int or consumer["size"] <= 0
+                or consumer.get("label") != "consumer-only" or consumer.get("candidate_callable") is not False
+                or consumer.get("physical_capability") is not False or consumer.get("routing_capability") is not False):
+            fail("root target-consumer operation descriptor is invalid")
+    for pin in host["executable_pins"].values():
+        if (not isinstance(pin, dict) or set(pin) != {"path", "sha256", "device", "inode"}
+                or not SHA256.fullmatch(str(pin.get("sha256", "")))):
+            fail("signing request executable pin is invalid")
+    if any(not isinstance(x, dict) or set(x) != {"capability", "before", "after"} or x["before"] != x["after"] for x in host["cleanup_states"]):
+        fail("signing request global cleanup state is invalid")
+    if runner_class is not None:
+        expected = {name: {k: pin[k] for k in ("path", "sha256", "device", "inode")} for name, pin in runner_class["executable_pins"].items()}
+        if host["executable_pins"] != expected or host["inputplumber_pin"] != runner_class.get("inputplumber_pin"):
+            fail("signing request host authority differs from enrolled policy")
+    if type(manifest["started_at"]) is not int or type(manifest["finished_at"]) is not int or manifest["started_at"] < 0 or manifest["finished_at"] < manifest["started_at"]:
+        fail("signing request timestamps are invalid")
+    capabilities = manifest["capabilities"]
+    if not isinstance(capabilities, list) or not capabilities or len(capabilities) != len(set(capabilities)) or not all(isinstance(item, str) and NAME.fullmatch(item) for item in capabilities):
+        fail("signing request capabilities are invalid")
+    if runner_class is not None and sorted(capabilities) != sorted(runner_class["allowed_capabilities"]):
+        fail("signing request capabilities do not equal the runner class allowlist")
+    try:
+        from factory_runner_artifacts import (PROTOCOL, MAX_ARTIFACTS, MAX_ARTIFACT_FILE,
+            MAX_ARTIFACT_BYTES, validate_descriptors, descriptors_digest)
+        total, digest = validate_descriptors(manifest["artifacts"], capabilities)
+    except (ImportError, ValueError) as exc:
+        fail(f"signing request artifacts are invalid: {exc}")
+    if (manifest["artifact_protocol"] != PROTOCOL
+            or manifest["artifact_limits"] != {"count": MAX_ARTIFACTS, "file_bytes": MAX_ARTIFACT_FILE, "aggregate_bytes": MAX_ARTIFACT_BYTES}
+            or manifest["artifact_count"] != len(manifest["artifacts"])
+            or manifest["artifact_bytes"] != total
+            or manifest["artifact_manifest_sha256"] != digest):
+        fail("signing request artifact summary is invalid")
+    scope = hashlib.sha256(json.dumps({"campaign_id": manifest["campaign_id"],
+        "readiness_nonce": manifest["readiness_nonce"], "runner": manifest["runner"],
+        "commit": manifest["commit"], "nonce": manifest["nonce"],
+        "artifact_manifest_sha256": digest}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    if manifest["artifact_scope_sha256"] != scope:
+        fail("signing request artifact nonce scope is invalid")
+    return manifest
+
+
 def main() -> int:
     if os.getuid() != os.geteuid() or os.geteuid() != ROOT_UID:
         fail("signer must run as root")
@@ -381,7 +520,17 @@ def main() -> int:
             except Exception: fail("signing request is not valid JSON")
             if outer.get("broker_auth_sha256") != hashlib.sha256(broker_token).hexdigest():
                 fail("broker authentication channel mismatch")
-        evidence = validate_manifest(request_raw, runner_class, broker_authenticated=broker_authenticated)
+        try:
+            request_probe = json.loads(request_raw)
+            manifest_schema = request_probe["manifest"]["schema"]
+        except Exception:
+            fail("signing request is not valid JSON")
+        if manifest_schema == "factory-runner-findings-receipt/v1":
+            evidence = validate_findings_manifest(request_raw, runner_class, broker_authenticated=broker_authenticated)
+        elif manifest_schema == "factory-runner-receipt/v3":
+            evidence = validate_manifest(request_raw, runner_class, broker_authenticated=broker_authenticated)
+        else:
+            fail("signing request manifest schema is invalid")
         manifest = dict(evidence)
         manifest.update({"signer_principal": principal, "signer_key_sha256": key_sha256, "namespace": namespace, "signature_algorithm": ALGORITHM})
         canonical = (json.dumps(manifest, sort_keys=True, indent=2) + "\n").encode()

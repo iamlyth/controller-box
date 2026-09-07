@@ -271,8 +271,15 @@ def _obtain_broker_nonce(runner: dict, campaign_id: str, readiness_nonce: str) -
 
 
 def _verify_before_publication(staging: Path, manifest: dict, manifest_bytes: bytes,
-                               commit: str, tree: str, capabilities: list[str]) -> None:
-    """Apply current+issuance signature trust and root semantics to held bytes."""
+                               commit: str, tree: str, capabilities: list[str],
+                               *, findings: bool = False) -> None:
+    """Apply current+issuance signature trust and root semantics to held bytes.
+
+    A findings manifest still requires the exact signature trust and commit/
+    tree bindings; the pass-only semantic analyzer is deliberately skipped for
+    executed-product-findings envelopes (failing probes legitimately retain
+    no passing artifacts), so a findings run can never fabricate acceptance.
+    """
     checker_path = ROOT / ".factory/tools" / "check-factory-runner-evidence.py"
     spec = importlib.util.spec_from_file_location("factory_transfer_evidence_checker", checker_path)
     if spec is None or spec.loader is None:
@@ -289,6 +296,8 @@ def _verify_before_publication(staging: Path, manifest: dict, manifest_bytes: by
     except Exception:
         fail("canonical signature checker failed before publication")
     analyzer = ROOT / ".factory/runner" / "validate-runner-artifacts-semantic.py"
+    if findings:
+        return
     for capability in capabilities:
         if capability not in {"controller-production-routing", "gpu-compositor", "installed-licensed-diagram"}:
             continue
@@ -386,10 +395,22 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
             f"stdout_sha256={hashlib.sha256(transport_stdout).hexdigest()}, "
             f"stderr_sha256={hashlib.sha256(transport_stderr).hexdigest()})"
         )
-    if returncode != 0 or not isinstance(receipt, dict) or receipt.get("result") != "pass":
-        # Remote verification is an honest product/capability finding. Do not
-        # expose the runner-provided error text: it is untrusted transport data.
-        fail(f"runner {name} verification did not pass", EXIT_FINDINGS)
+    if not isinstance(receipt, dict):
+        # Broker infrastructure failures emit factory-runner-error; any other
+        # nonzero/incompatible payload is unclassified protocol output.
+        fail(f"runner {name} returned a non-object protocol response", EXIT_INTEGRITY)
+    if returncode != 0:
+        # The broker exits nonzero only for infrastructure failure (error
+        # envelope, cleanup/source/analyzer/timeout proof failures).  Never
+        # echo remote bytes: they may contain host diagnostics or secrets.
+        fail(f"runner {name} broker infrastructure or protocol failure", EXIT_TRANSPORT)
+    if receipt.get("schema") not in ("factory-runner-receipt/v3", "factory-runner-findings-receipt/v1"):
+        fail(f"runner {name} receipt schema is invalid")
+    findings = receipt.get("result") == "findings" and receipt.get("schema") == "factory-runner-findings-receipt/v1"
+    if not findings and (receipt.get("result") != "pass" or receipt.get("schema") != "factory-runner-receipt/v3"):
+        # An executed-product-findings envelope is signed with result=findings;
+        # anything else is unclassified transport output, never a finding.
+        fail(f"runner {name} returned an unclassified protocol result", EXIT_TRANSPORT)
     expected = {
         "schema", "result", "runner", "commit", "tree", "environment_blob",
         "archive_sha256", "campaign_id", "readiness_nonce", "authority_sha256", "nonce", "capabilities",
@@ -400,7 +421,9 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
         "artifact_count", "artifact_bytes", "artifact_manifest_sha256",
         "artifact_scope_sha256", "artifacts", "artifact_payload", "host_authority",
     }
-    if set(receipt) != expected or receipt["schema"] != "factory-runner-receipt/v3":
+    if findings:
+        expected |= {"probes", "skip_marker_detected"}
+    if set(receipt) != expected:
         fail(f"runner {name} receipt fields are invalid")
     bindings = {
         "runner": name,
@@ -413,7 +436,37 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
     }
     if any(receipt.get(key) != value for key, value in bindings.items()):
         fail(f"runner {name} receipt binding mismatch")
-    if (
+    if findings:
+        # Executed non-pass verdicts still prove clean execution: bounded,
+        # not timed out, cleanup proven, no skip/simulation markers, and at
+        # least one probe exited nonzero.
+        probes = receipt["probes"]
+        probe_caps = [p["capability"] for p in probes]
+        if (
+            not isinstance(probes, list) or not probes or len(probes) != len(receipt["capabilities"]) + 1
+            or any(not isinstance(p, dict) or set(p) != {"capability", "exit_code", "timed_out"}
+                   or p["timed_out"] is not False or type(p.get("exit_code")) is not int
+                   or p["exit_code"] < 0 for p in probes)
+            or not any(p["exit_code"] != 0 for p in probes)
+        ):
+            fail(f"runner {name} findings probes are malformed")
+        if receipt["skip_marker_detected"] is not False:
+            fail(f"runner {name} findings receipt shows skip/simulation markers")
+        if receipt["capabilities"] != sorted(capabilities):
+            fail(f"runner {name} findings receipt capability set mismatch")
+        # The gate build probe is the only probe outside the declared
+        # capability set; every capability must still have been executed.
+        expected_probes = set(receipt["capabilities"])
+        if "gate" in set(probe_caps):
+            expected_probes |= {"gate"}
+        if len(probe_caps) != len(set(probe_caps)) or set(probe_caps) != expected_probes:
+            fail(f"runner {name} findings probe set is inconsistent")
+        dominant = max(p["exit_code"] for p in probes)
+        if (type(receipt["exit_code"]) is not int or receipt["exit_code"] < 1
+                or receipt["exit_code"] != dominant
+                or receipt["timed_out"] is not False or receipt["cleanup"] is not True):
+            fail(f"runner {name} findings receipt does not prove clean executed probes")
+    elif (
         receipt["capabilities"] != sorted(capabilities)
         or receipt["exit_code"] != 0
         or receipt["timed_out"] is not False
@@ -441,6 +494,9 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
         manifest = json.loads(manifest_bytes)
     except (UnicodeError, json.JSONDecodeError):
         fail(f"runner {name} returned an invalid signed manifest")
+    manifest_findings = findings and manifest.get("schema") == "factory-runner-findings-receipt/v1" and manifest.get("result") == "findings"
+    if (findings and not manifest_findings) or (not findings and (manifest.get("schema") != "factory-runner-receipt/v3" or manifest.get("result") != "pass")):
+        fail(f"runner {name} signed manifest result contradicts its envelope")
     expected_manifest = dict(receipt)
     expected_manifest.update({"stdout_sha256": hashlib.sha256(stdout).hexdigest(),
                               "stderr_sha256": hashlib.sha256(remote_stderr).hexdigest()})
@@ -496,7 +552,7 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
         held_identity,held_fds=hold_tree(staging)
         _verify_before_publication(
             staging, manifest, manifest_bytes, commit, tree,
-            list(receipt["capabilities"]),
+            list(receipt["capabilities"]), findings=findings,
         )
         if tree_identities(staging)!=held_identity:
             fail(f"runner evidence staging inode changed during verification for {name}")
@@ -508,11 +564,17 @@ def run_runner(runner: dict, commit: str, tree: str, environment_blob: str, arch
         for fd in held_fds:os.close(fd)
         try:anchored_delete(staging)
         except FileNotFoundError:pass
+    if findings:
+        # The signed manifest is the byte authority for the per-probe records.
+        if manifest.get("probes") != receipt["probes"] or manifest.get("skip_marker_detected") is not False:
+            fail(f"runner {name} signed manifest probes contradict the receipt")
     return {
         "name": name,
+        "result": "findings" if findings else "pass",
         "manifest": str((evidence_dir / "manifest.json").relative_to(ROOT)),
         "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
         "capabilities": receipt["capabilities"],
+        "probes": list(manifest.get("probes", [])) if findings else [],
         "artifact_manifest_sha256": artifact_digest,
         "artifact_count": len(decoded_artifacts),
         "artifact_bytes": total,
@@ -619,8 +681,40 @@ def main() -> int:
     readiness_nonce = os.environ.get("FACTORY_READINESS_NONCE", "")
     if not re.fullmatch(r"[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?", campaign_id) or not re.fullmatch(r"[0-9a-f]{64}", readiness_nonce):
         fail("campaign/readiness anti-replay binding is missing")
+    classified = {record.get("result") for record in records}
+    if not classified <= {"pass", "findings"}:
+        fail("runner evidence records carry no exact classified result")
+    # With no declared runners the classified set is empty; that is a clean
+    # pass (nothing to fail), not a findings verdict.
+    all_pass = classified <= {"pass"}
+    # The v4 pass-only aggregate keeps the established record field set; the
+    # findings aggregate v1 is the only document that carries per-runner
+    # result/probes verdicts (a findings record proves execution of every
+    # declared probe with a non-pass verdict, and can never satisfy a
+    # capability/final gate).
+    pass_records = [{key: record[key] for key in (
+        "name", "manifest", "manifest_sha256", "capabilities",
+        "artifact_manifest_sha256", "artifact_count", "artifact_bytes",
+        "signer")} for record in records]
+    if all_pass:
+        aggregate = {
+            "schema": "factory-runner-aggregate/v4",
+            "campaign_id": campaign_id,
+            "readiness_nonce": readiness_nonce,
+            "commit": commit,
+            "tree": tree,
+            "environment_blob": environment_blob,
+            "runners": pass_records,
+        }
+        aggregate_bytes = (json.dumps(aggregate, sort_keys=True, indent=2) + "\n").encode()
+        aggregate_path = STATE_ROOT / campaign_id / readiness_nonce / "aggregate.json"
+        if aggregate_path.exists() or aggregate_path.is_symlink():
+            fail("runner aggregate publication collision")
+        atomic_write(aggregate_path, aggregate_bytes)
+        print(f"factory-runner: {len(records)} runner(s) passed for {commit[:12]}")
+        return 0
     aggregate = {
-        "schema": "factory-runner-aggregate/v4",
+        "schema": "factory-runner-findings-aggregate/v1",
         "campaign_id": campaign_id,
         "readiness_nonce": readiness_nonce,
         "commit": commit,
@@ -629,12 +723,12 @@ def main() -> int:
         "runners": records,
     }
     aggregate_bytes = (json.dumps(aggregate, sort_keys=True, indent=2) + "\n").encode()
-    aggregate_path = STATE_ROOT / campaign_id / readiness_nonce / "aggregate.json"
+    aggregate_path = STATE_ROOT / campaign_id / readiness_nonce / "findings-aggregate.json"
     if aggregate_path.exists() or aggregate_path.is_symlink():
-        fail("runner aggregate publication collision")
+        fail("runner findings aggregate publication collision")
     atomic_write(aggregate_path, aggregate_bytes)
-    print(f"factory-runner: {len(records)} runner(s) passed for {commit[:12]}")
-    return 0
+    print(f"factory-runner: {len(records)} runner(s) completed with executed product findings for {commit[:12]}")
+    return EXIT_FINDINGS
 
 
 if __name__ == "__main__":

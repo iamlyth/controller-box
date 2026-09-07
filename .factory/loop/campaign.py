@@ -3947,8 +3947,13 @@ class Campaign:
             stdout_limit=GATE_DETAIL_MAX, stderr_limit=GATE_DETAIL_MAX,
         )
 
-    def _check_runner_aggregate(self, head: str) -> Tuple[int, str]:
-        """Run the strong signed aggregate checker and return its exact digest."""
+    def _check_runner_aggregate(self, head: str, *, findings: bool = False) -> Tuple[int, str]:
+        """Run the strong signed aggregate checker and return its exact digest.
+
+        With ``findings=True`` the checker validates ``findings-aggregate.json``
+        (signed executed-product-findings envelopes) instead of the pass-only
+        ``aggregate.json``; a findings aggregate never evidences a capability.
+        """
         if self._held_runner_checker is None:
             return -1, ""
         nonce = "0" * 64
@@ -3957,11 +3962,13 @@ class Campaign:
                 self._root, expected_campaign_id=self._config.campaign_id,
                 expected_readiness_required=(self._config.role_driver is None),
             ).readiness["nonce"])
+        argv = ["--expected-commit", head, "--expected-campaign-id", self._config.campaign_id,
+                "--expected-readiness-nonce", nonce, "--print-digest"]
+        if findings:
+            argv.append("--verify-findings")
         try:
             result = self._spawn_runner_authority(
-                self._held_runner_checker,
-                ("--expected-commit", head, "--expected-campaign-id", self._config.campaign_id,
-                 "--expected-readiness-nonce", nonce, "--print-digest"),
+                self._held_runner_checker, argv,
                 min(self._config.gate_timeout, self._config.runner_timeout),
             )
         except (lock_module.RootLockTimeoutError, CampaignBindingError):
@@ -4048,6 +4055,24 @@ class Campaign:
         except CampaignBindingError:
             runner_exit = RUNNER_INTEGRITY_EXIT
         checker_exit, digest = self._check_runner_aggregate(head)
+        if runner_exit == RUNNER_FINDINGS_EXIT:
+            # Executed product findings are plannable only when backed by a
+            # validated signed findings aggregate at the exact same commit;
+            # exit 21 without one is an infrastructure integrity failure.
+            findings_exit, findings_digest = self._check_runner_aggregate(
+                head, findings=True)
+            if findings_exit != 0 or not SHA256_RE.fullmatch(findings_digest):
+                self._write_runner_acquisition(
+                    attempt=attempt, status="integrity_failure", head=head,
+                    tree=tree, environment_blob=environment_blob,
+                    checker_exit=findings_exit,
+                    runner_exit=runner_exit,
+                    aggregate_sha256=(
+                        findings_digest if SHA256_RE.fullmatch(findings_digest) else ""),
+                    diagnostic="executed findings lack a validated signed findings aggregate",
+                )
+                return True, -1, "executed findings lack a validated signed findings aggregate"
+            checker_exit, digest = findings_exit, findings_digest
         if runner_exit == 0 and checker_exit == 0:
             self._write_runner_acquisition(
                 attempt=attempt, status="complete", head=head, tree=tree,

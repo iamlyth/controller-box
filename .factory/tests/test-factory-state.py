@@ -209,6 +209,7 @@ ALL_FIXTURES = sorted(
 # The documented §11 advance edge set (audit finality is handled explicitly).
 ADVANCE_EDGES = {
     ("readiness", "pass"): "planning",
+    ("readiness", "plannable"): "planning",
     ("readiness", "findings"): "findings",
     ("readiness", "blocked"): "blocked",
     ("readiness", "infrastructure_failure"): "infrastructure_failure",
@@ -560,7 +561,7 @@ class CounterTest(StateConformanceCase):
         # carries the prior round's trusted audit outcome on a nonfinal edge.
         self.assertEqual(
             PHASE_OUTCOMES["planning"], frozenset(
-                {"interrupted", "pass", "findings", "blocked"}
+                {"interrupted", "pass", "findings", "blocked", "plannable"}
             )
         )
         self.assertEqual(
@@ -718,7 +719,7 @@ class OutcomeTest(StateConformanceCase):
                 "task_completed", "task_progress", "task_failed",
                 "work_exhausted", "blocked",
                 "pass", "findings", "infrastructure_failure",
-                "success",
+                "plannable", "success",
             ),
         )
 
@@ -827,15 +828,19 @@ class TransitionTableTest(StateConformanceCase):
                     binding = dict(source.readiness)
                     binding.update({
                         "cursor": 6,
-                        "status": {"pass": "complete", "findings": "findings", "blocked": "human_blocked", "infrastructure_failure": "infrastructure_failure"}[outcome],
+                        "status": {"pass": "complete", "plannable": "infrastructure_ready", "findings": "findings", "blocked": "human_blocked", "infrastructure_failure": "infrastructure_failure"}[outcome],
                         "terminal_outcome": outcome,
                         "result_sha256": "2" * 64,
                         "aggregate_sha256": "3" * 64,
+                        "findings_aggregate_sha256": "0" * 64,
                         "capability_result_sha256": "4" * 64,
                         "core_result_sha256": "5" * 64,
                         "conformance_result_sha256": "6" * 64,
                         "human_result_sha256": "7" * 64,
+                        "product_findings_sha256": "8" * 64,
                     })
+                    if outcome == "pass":
+                        binding["product_findings_sha256"] = "0" * 64
                     source = dataclasses.replace(source, readiness=binding)
                 result = advance(source, outcome, **kwargs)
                 self.assertEqual(result.current_phase, target)

@@ -34,6 +34,49 @@ def fail(msg):
  raise SystemExit(1)
 def emit(v): print(json.dumps(v,sort_keys=True,separators=(",",":")),flush=True)
 
+SKIP_TOKEN_RE=re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+def probe_skip_tokens(product: Path, name: str, out: bytes, err: bytes) -> list:
+ """Committed must_not_skip/deny_simulated tokens present in retained output.
+
+ The tokens are read from the exact frozen candidate tree (already root-owned
+ read-only after ``exact_tree``) so the rejection criteria and token set are
+ the same bytes the coordinator requires.  A capabilities probe whose retained
+ output contains a must-not-skip or deny-simulated token is skipped or
+ simulated, which is never signable as a pass or as an executed finding:
+ the request fails closed with an infrastructure error (no envelope is
+ signed).  The gate probe has no capability contract and is not scanned.
+ """
+ if name == "gate":
+  return []
+ path = product / ".factory" / "capability-contracts.json"
+ try:
+  raw = path.read_bytes()
+  data = json.loads(raw)
+ except (OSError, ValueError) as exc:
+  raise BrokerError("candidate skip/simulation contract is unreadable") from exc
+ if not isinstance(data, dict) or not isinstance(data.get("capabilities"), list):
+  raise BrokerError("candidate capability contracts are malformed")
+ tokens = []
+ for entry in data["capabilities"]:
+  if not isinstance(entry, dict) or entry.get("name") != name:
+   continue
+  for key in ("must_not_skip", "deny_simulated_markers"):
+   values = entry.get(key)
+   if isinstance(values, list):
+    tokens.extend(str(item) for item in values if isinstance(item, str) and item)
+  break
+ if not tokens:
+  return []
+ hits = set()
+ for token in tokens:
+  pattern = re.compile(re.escape(token), re.IGNORECASE)
+  for line in (out + b"\n" + err).splitlines():
+   if pattern.search(line.decode("utf-8", errors="replace")):
+    hits.add(token)
+    break
+ return sorted(hits)
+
+
 def _admit():
  """Take one host-wide root slot before accepting even a header byte."""
  try:ADMISSION_ROOT.mkdir(mode=0o700,parents=True)
@@ -879,7 +922,7 @@ def main():
   dbus_monitor=DbusMonitor(entry,request_dir) if any(c in DBUS_CAPS for c in req["capabilities"]) else None
   proxy=DbusProxy(entry,request_dir,host_input_lock,req["capabilities"],dbus_monitor) if dbus_monitor else None
   user_proxy=UserManagerProxy(entry,request_dir) if "systemd-user" in req["capabilities"] else None
-  started=int(time.time());allout=b"";allerr=b"";payload=[];descriptors=[];cleanup_states=[];target_consumer_audit=None
+  started=int(time.time());allout=b"";allerr=b"";payload=[];descriptors=[];cleanup_states=[];target_consumer_audit=None;probes=[];dominant_exit=0
   for index,(name,descriptor) in enumerate([("gate",contract["gate"]),*sorted(contract["capabilities"].items())]):
    runroot=request_dir/f"run-{index}";product=runroot/"source";pool=None
    runroot.mkdir(mode=0o711);product.mkdir(mode=0o700)
@@ -909,8 +952,21 @@ def main():
    cleanup_states.append({"capability":name,"before":host_before,"after":host_after})
    # Root-owned source bytes/inodes/modes are revalidated after execution.
    if source_digest(product)!=source_before:raise BrokerError("candidate source changed during execution")
-   if rc:raise BrokerError(f"{name} candidate execution failed")
-   if name!="gate":
+   # An executed probe whose retained output carries a must-not-skip or
+   # deny-simulated token is skipped/simulated, never signable as a pass or
+   # as an executed finding: fail closed without signing anything.
+   skipped=probe_skip_tokens(product,name,out,err)
+   if skipped:raise BrokerError(f"{name} retained probe output is skipped or simulated: {', '.join(skipped)}")
+   # Executed non-pass probe verdicts are product findings, not
+   # infrastructure: the probe ran to completion under the bounded sandbox
+   # (``_bounded_process`` raises on timeout/overflow), cleanup was proven,
+   # and the source tree did not change.  Passing capabilities still have
+   # their artifacts collected, analyzed, and signed; failing probes retain
+   # their stdout/stderr and any already-held evidence but are not subject
+   # to the pass-only semantic analyzer.
+   probes.append({"capability":name,"exit_code":rc,"timed_out":False})
+   if rc:dominant_exit=max(dominant_exit,rc)
+   elif name!="gate":
     d,p=collect(artifacts,[name],{name:descriptor["artifacts"]},expected_uid=uid);held=hold(d,p,request_dir);held_all.append(held)
     analyze(entry,authority,descriptor,held,env,req["commit"],req["tree"]);descriptors.extend(d);payload.extend(held.payload)
    pool.close();pool=None
@@ -934,6 +990,8 @@ def main():
   scope=hashlib.sha256(json.dumps({"campaign_id":req["campaign_id"],"readiness_nonce":req["readiness_nonce"],"runner":entry["name"],"commit":req["commit"],"nonce":req["nonce"],"artifact_manifest_sha256":digest},sort_keys=True,separators=(",",":")).encode()).hexdigest()
   host_authority={"executable_pins":pins,"writable_limits":{"bytes":WRITABLE_BYTES,"inodes":WRITABLE_INODES},"inputplumber_pin":entry.get("inputplumber_pin"),"dbus_audit_sha256":dbus_audit["sha256"] if dbus_audit else None,"dbus_audit_descriptor":dbus_audit,"target_consumer_operation":target_consumer_audit,"cleanup_states":cleanup_states}
   evidence={"schema":"factory-runner-receipt/v3","host_authority":host_authority,"result":"pass","runner":entry["name"],"commit":req["commit"],"tree":req["tree"],"environment_blob":req["environment_blob"],"archive_sha256":req["archive_sha256"],"campaign_id":req["campaign_id"],"readiness_nonce":req["readiness_nonce"],"nonce":req["nonce"],"authority_sha256":authority.digest,"capabilities":req["capabilities"],"exit_code":0,"timed_out":False,"started_at":started,"finished_at":int(time.time()),"cleanup":True,"stdout_sha256":hashlib.sha256(allout).hexdigest(),"stderr_sha256":hashlib.sha256(allerr).hexdigest(),"artifact_protocol":PROTOCOL,"artifact_limits":{"count":MAX_ARTIFACTS,"file_bytes":MAX_ARTIFACT_FILE,"aggregate_bytes":MAX_ARTIFACT_BYTES},"artifact_count":len(descriptors),"artifact_bytes":total,"artifact_manifest_sha256":digest,"artifact_scope_sha256":scope,"artifacts":descriptors}
+  if dominant_exit:
+   evidence.update({"schema":"factory-runner-findings-receipt/v1","result":"findings","probes":probes,"skip_marker_detected":False,"exit_code":dominant_exit})
   signed=sign(evidence,entry)
   emit({**evidence,"stdout_b64":base64.b64encode(allout).decode(),"stderr_b64":base64.b64encode(allerr).decode(),**{k:signed[k] for k in ("manifest_b64","signature_b64","signer_principal","signer_key_sha256","signature_algorithm","namespace","signature_sha256")},"artifact_payload":payload})
  except (AuthorityError,ArtifactError,PolicyError,BrokerError,OSError,subprocess.SubprocessError,ValueError) as e:fail(str(e))

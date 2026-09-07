@@ -23,10 +23,11 @@ from factory_runner_artifacts import (ArtifactError, PROTOCOL as ARTIFACT_PROTOC
     MAX_ARTIFACTS, MAX_ARTIFACT_FILE, MAX_ARTIFACT_BYTES, validate_descriptors)
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-def aggregate_path(campaign_id: str, readiness_nonce: str) -> Path:
+def aggregate_path(campaign_id: str, readiness_nonce: str, *, findings: bool = False) -> Path:
     if not NAME.fullmatch(campaign_id) or not SHA256.fullmatch(readiness_nonce):
         fail("campaign/readiness namespace is invalid")
-    return ROOT / ".factory-state" / "runner-evidence" / campaign_id / readiness_nonce / "aggregate.json"
+    name = "findings-aggregate.json" if findings else "aggregate.json"
+    return ROOT / ".factory-state" / "runner-evidence" / campaign_id / readiness_nonce / name
 SIGNER_TRUST_PATH = ".factory/signer-trust.json"
 SHA1 = re.compile(r"^[0-9a-f]{40}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -413,16 +414,29 @@ def expected_probe_authority_digest(commit: str, runner: str) -> str:
 def validate_record(declared: dict, record: dict, commit: str, tree: str,
                     environment_blob: str, archive_sha256: str,
                     issuance_trust: dict, current_trust: dict,
-                    campaign_id: str, readiness_nonce: str) -> set[str]:
+                    campaign_id: str, readiness_nonce: str,
+                    findings: bool = False) -> set[str]:
     """Strictly validate one aggregate record and its runner manifest.
 
     This is the shared canonical per-record validation: an accepted manifest
     must be an exact record in the aggregate, digest-faithful, bound to the
     aggregate's commit/tree/environment/blob/archive, argv-faithful to the
     commit-bound declaration, and signed by a provisioned trust principal.
+    With ``findings=True`` the record is an executed-product-findings
+    envelope (``factory-runner-findings-receipt/v1``): it proves every
+    declared probe executed to completion with a non-pass verdict and can
+    never contribute an evidenced capability (the returned set is always
+    empty for findings records).  Infrastructure failures (``factory-runner-
+    error`` envelopes, skips/simulation markers, timeout, unproven cleanup,
+    source changes) are never signable and therefore never reach here.
     """
-    if not isinstance(record, dict) or set(record) != {"name", "manifest", "manifest_sha256", "capabilities", "artifact_manifest_sha256", "artifact_count", "artifact_bytes", "signer"}:
+    record_fields = {"name", "manifest", "manifest_sha256", "capabilities", "artifact_manifest_sha256", "artifact_count", "artifact_bytes", "signer"}
+    if findings:
+        record_fields |= {"result", "probes"}
+    if not isinstance(record, dict) or set(record) != record_fields:
         fail("runner aggregate record is invalid")
+    if findings and record.get("result") != "findings":
+        fail("findings aggregate record must carry result=findings")
     if record["name"] != declared.get("name") or record["capabilities"] != sorted(declared.get("capabilities", [])):
         fail("runner declaration/evidence mismatch")
     signer_meta = record["signer"]
@@ -465,8 +479,43 @@ def validate_record(declared: dict, record: dict, commit: str, tree: str,
         "artifact_scope_sha256", "artifacts", "host_authority",
         "signer_principal", "signer_key_sha256", "namespace", "signature_algorithm",
     }
-    if set(manifest) != expected_fields or manifest.get("schema") != "factory-runner-receipt/v3" or manifest.get("result") != "pass":
+    if findings:
+        expected_fields |= {"probes", "skip_marker_detected"}
+    if (set(manifest) != expected_fields
+            or manifest.get("schema") != ("factory-runner-findings-receipt/v1" if findings else "factory-runner-receipt/v3")
+            or manifest.get("result") != ("findings" if findings else "pass")):
         fail("runner manifest schema/result is invalid")
+    if findings:
+        if manifest.get("skip_marker_detected") is not False:
+            fail("runner findings manifest shows skip/simulation markers")
+        if manifest.get("cleanup") is not True or manifest.get("timed_out") is not False:
+            fail("runner findings manifest does not prove clean executed probes")
+        if type(manifest.get("exit_code")) is not int or manifest["exit_code"] < 1:
+            fail("runner findings manifest has no dominant non-pass verdict")
+        probes = manifest["probes"]
+        if not isinstance(probes, list) or not probes or len(probes) > 64:
+            fail("runner findings manifest probes are invalid")
+        probe_caps = []
+        nonzero = 0
+        for probe in probes:
+            if (not isinstance(probe, dict) or set(probe) != {"capability", "exit_code", "timed_out"}
+                    or not isinstance(probe["capability"], str)
+                    or not NAME.fullmatch(probe["capability"])
+                    or type(probe["exit_code"]) is not int or probe["exit_code"] < 0
+                    or probe["timed_out"] is not False):
+                fail("runner findings manifest probe record is invalid")
+            probe_caps.append(probe["capability"])
+            if probe["exit_code"] != 0:
+                nonzero = max(nonzero, probe["exit_code"])
+        expected_probes = set(manifest["capabilities"])
+        if "gate" in set(probe_caps):
+            expected_probes |= {"gate"}
+        if (len(probe_caps) != len(set(probe_caps)) or set(probe_caps) != expected_probes
+                or nonzero != manifest["exit_code"]
+                or record.get("probes") != probes):
+            fail("runner findings manifest probe/exit validation failed")
+        if manifest["capabilities"] != record["capabilities"]:
+            fail("runner findings manifest capability set mismatch")
     host=manifest["host_authority"]
     if (not isinstance(host,dict) or set(host)!={"executable_pins","writable_limits","inputplumber_pin","dbus_audit_sha256","dbus_audit_descriptor","target_consumer_operation","cleanup_states"}
             or host["writable_limits"]!={"bytes":768*1024*1024,"inodes":65536}
@@ -519,8 +568,12 @@ def validate_record(declared: dict, record: dict, commit: str, tree: str,
         fail("runner manifest namespace is invalid")
     if manifest["archive_sha256"] != archive_sha256:
         fail("runner manifest archive binding mismatch")
-    if manifest["capabilities"] != record["capabilities"] or manifest["exit_code"] != 0 or manifest["timed_out"] is not False or manifest["cleanup"] is not True:
-        fail("runner manifest does not prove a clean pass")
+    if (
+        manifest["capabilities"] != record["capabilities"]
+        or manifest["timed_out"] is not False or manifest["cleanup"] is not True
+        or (not findings and manifest["exit_code"] != 0)
+    ):
+        fail("runner manifest does not prove a clean executed verdict")
     for field in ("archive_sha256", "readiness_nonce", "authority_sha256", "nonce", "stdout_sha256", "stderr_sha256", "signer_key_sha256"):
         if not isinstance(manifest[field], str) or not SHA256.fullmatch(manifest[field]):
             fail(f"runner manifest has invalid {field}")
@@ -588,7 +641,7 @@ def validate_record(declared: dict, record: dict, commit: str, tree: str,
     # from the installed trusted control closure, not from the product archive.
     analyzer = ROOT / ".factory/runner/validate-runner-artifacts-semantic.py"
     for capability in record["capabilities"]:
-        if capability not in {"controller-production-routing", "gpu-compositor", "installed-licensed-diagram"}:
+        if findings or capability not in {"controller-production-routing", "gpu-compositor", "installed-licensed-diagram"}:
             continue
         result = subprocess.run(
             [PYTHON, str(analyzer), "--capability", capability,
@@ -622,7 +675,7 @@ def validate_record(declared: dict, record: dict, commit: str, tree: str,
     if hashlib.sha256(signature_path.read_bytes()).hexdigest() != signer_meta["signature_sha256"]:
         fail("runner signature digest does not match the aggregate metadata")
     verify_manifest_signature(issuance_trust, current_trust, manifest, manifest_path, raw)
-    return set(record["capabilities"])
+    return set() if findings else set(record["capabilities"])
 
 
 def verify_manifest_reference(reference: str, expected_commit: str,
@@ -650,7 +703,7 @@ def verify_manifest_reference(reference: str, expected_commit: str,
 
 def validate(expected_commit: str | None = None, *, expected_campaign_id: str | None = None,
              expected_readiness_nonce: str | None = None,
-             include_view: bool = False):
+             include_view: bool = False, findings: bool = False):
     os.environ["GIT_NO_REPLACE_OBJECTS"] = "1"
     runtime = ROOT / ".factory-state"
     evidence_directory = runtime / "runner-evidence"
@@ -692,9 +745,14 @@ def validate(expected_commit: str | None = None, *, expected_campaign_id: str | 
         fail("every declared runner must have distinct issuance/current signer trust coverage")
     if expected_campaign_id is None or expected_readiness_nonce is None:
         fail("explicit campaign/readiness namespace is required")
-    aggregate, aggregate_raw = regular_json(aggregate_path(expected_campaign_id, expected_readiness_nonce))
-    if set(aggregate) != {"schema", "campaign_id", "readiness_nonce", "commit", "tree", "environment_blob", "runners"} or aggregate.get("schema") != "factory-runner-aggregate/v4":
-        fail("aggregate schema is invalid")
+    aggregate, aggregate_raw = regular_json(aggregate_path(expected_campaign_id, expected_readiness_nonce, findings=findings))
+    if findings:
+        expected_aggregate = {"schema", "campaign_id", "readiness_nonce", "commit", "tree", "environment_blob", "runners"}
+        if set(aggregate) != expected_aggregate or aggregate.get("schema") != "factory-runner-findings-aggregate/v1":
+            fail("findings aggregate schema is invalid")
+    else:
+        if set(aggregate) != {"schema", "campaign_id", "readiness_nonce", "commit", "tree", "environment_blob", "runners"} or aggregate.get("schema") != "factory-runner-aggregate/v4":
+            fail("aggregate schema is invalid")
     if expected_campaign_id is None or aggregate["campaign_id"] != expected_campaign_id:
         fail("aggregate campaign binding is stale or absent")
     if expected_readiness_nonce is None or not SHA256.fullmatch(expected_readiness_nonce) or aggregate["readiness_nonce"] != expected_readiness_nonce:
@@ -713,12 +771,22 @@ def validate(expected_commit: str | None = None, *, expected_campaign_id: str | 
             fail("cannot reconstruct commit-bound source archive")
         archive_sha256 = hashlib.sha256(Path(archive_file.name).read_bytes()).hexdigest()
     evidenced: set[str] = set()
+    finding_records = 0
     for declaration, record in zip(declared, records):
+        if findings:
+            record_findings = record.get("result") == "findings"
+            if record_findings:
+                finding_records += 1
+        else:
+            record_findings = False
         evidenced.update(
             validate_record(declaration, record, commit, tree, environment_blob,
                             archive_sha256, issuance_trust, current_trust,
-                            expected_campaign_id, expected_readiness_nonce)
+                            expected_campaign_id, expected_readiness_nonce,
+                            findings=record_findings)
         )
+    if findings and finding_records == 0:
+        fail("a findings aggregate must carry at least one executed findings record")
     result=(hashlib.sha256(aggregate_raw).hexdigest(), sorted(evidenced))
     # The optional classification view is parsed from the same held aggregate
     # bytes.  It is deliberately detached from all evidence pathnames.
@@ -730,6 +798,7 @@ def main() -> int:
     parser.add_argument("--expected-commit")
     parser.add_argument("--expected-campaign-id", default=os.environ.get("FACTORY_CAMPAIGN_ID"))
     parser.add_argument("--expected-readiness-nonce", default=os.environ.get("FACTORY_READINESS_NONCE"))
+    parser.add_argument("--verify-findings", action="store_true")
     parser.add_argument("--print-digest", action="store_true")
     parser.add_argument("--print-capabilities", action="store_true")
     parser.add_argument("--verify-manifest")
@@ -751,6 +820,7 @@ def main() -> int:
     digest, capabilities = validate(
         args.expected_commit, expected_campaign_id=args.expected_campaign_id,
         expected_readiness_nonce=args.expected_readiness_nonce,
+        findings=args.verify_findings,
     )
     if args.print_digest:
         print(digest)

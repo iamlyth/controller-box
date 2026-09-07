@@ -147,7 +147,7 @@ OUTCOMES = (
     "task_completed", "task_progress", "task_failed",
     "work_exhausted", "blocked",
     "pass", "findings", "infrastructure_failure",
-    "success",
+    "plannable", "success",
 )
 
 # The §11 transition table: (source phase, trusted outcome) -> target phase.
@@ -156,6 +156,7 @@ OUTCOMES = (
 # machine-readable table probe.
 TRANSITIONS: Dict[Tuple[str, str], str] = {
     ("readiness", "pass"): "planning",
+    ("readiness", "plannable"): "planning",
     ("readiness", "findings"): "findings",
     ("readiness", "blocked"): "blocked",
     ("readiness", "infrastructure_failure"): "infrastructure_failure",
@@ -202,8 +203,8 @@ RETRY_OUTCOMES: Dict[str, Tuple[str, ...]] = {
 # ``last_outcome`` outside the owning phase's set is a forged phase/outcome
 # combination and fails closed.
 PHASE_OUTCOMES: Dict[str, frozenset] = {
-    "readiness": frozenset({"pass"}),
-    "planning": frozenset({"interrupted", "pass", "findings", "blocked"}),
+    "readiness": frozenset({"pass", "plannable"}),
+    "planning": frozenset({"interrupted", "pass", "findings", "blocked", "plannable"}),
     "implementation": frozenset(
         {"planned", "task_progress", "task_failed", "interrupted"}
     ),
@@ -251,8 +252,10 @@ READINESS_FIELDS = (
     "conformance_sha256", "policy_sha256", "contracts_sha256",
     "install_manifest_sha256", "command_authority_sha256",
     "human_authority_sha256", "trust_authority_sha256",
-    "aggregate_sha256", "capability_result_sha256", "core_result_sha256",
-    "conformance_result_sha256", "human_result_sha256", "result_sha256", "terminal_outcome",
+    "aggregate_sha256", "findings_aggregate_sha256",
+    "capability_result_sha256", "core_result_sha256",
+    "conformance_result_sha256", "human_result_sha256",
+    "product_findings_sha256", "result_sha256", "terminal_outcome",
 )
 
 
@@ -277,9 +280,9 @@ def _validate_readiness(value: object, *, required: bool) -> None:
         raise StateTamperError("readiness attempt must be non-negative")
     if type(value.get("cursor")) is not int or not 0 <= int(value["cursor"]) <= 6:
         raise StateTamperError("readiness cursor is invalid")
-    if value.get("status") not in {"not_required", "pending", "acquiring", "complete", "findings", "human_blocked", "infrastructure_failure"}:
+    if value.get("status") not in {"not_required", "pending", "acquiring", "complete", "infrastructure_ready", "findings", "human_blocked", "infrastructure_failure"}:
         raise StateTamperError("readiness status is invalid")
-    if value.get("terminal_outcome") not in {"not_required", "pending", "pass", "findings", "blocked", "infrastructure_failure"}:
+    if value.get("terminal_outcome") not in {"not_required", "pending", "pass", "plannable", "findings", "blocked", "infrastructure_failure"}:
         raise StateTamperError("readiness terminal outcome is invalid")
     for name in ("accepted_commit", "tree", "environment_blob"):
         if not isinstance(value.get(name), str) or not SHA40_RE.fullmatch(str(value[name])):
@@ -298,6 +301,25 @@ def _validate_readiness(value: object, *, required: bool) -> None:
         )
         if value["terminal_outcome"] != "pass" or value["cursor"] != 6 or any(value[name] == "0" * 64 for name in required_digests):
             raise StateTamperError("completed readiness lacks every nonzero bound result")
+        # A product pass can never claim authenticated findings: both sibling
+        # evidence digests must be zero for a complete readiness.
+        if value["findings_aggregate_sha256"] != "0" * 64 or value["product_findings_sha256"] != "0" * 64:
+            raise StateTamperError("a product pass can never claim signed findings")
+    if value["status"] == "infrastructure_ready":
+        # Infrastructure-readiness (plannable) requires: a validated runner
+        # acquisition digest (pass aggregate OR signed findings aggregate),
+        # capability execution proof, evaluated core/conformance/human
+        # verdicts, and a nonzero digest-bound product-findings payload that
+        # the planner receives through the canonical findings channel.
+        required_digests = (
+            "capability_result_sha256", "core_result_sha256",
+            "conformance_result_sha256", "human_result_sha256",
+            "product_findings_sha256", "result_sha256",
+        )
+        if value["terminal_outcome"] != "plannable" or value["cursor"] != 6 or any(value[name] == "0" * 64 for name in required_digests):
+            raise StateTamperError("infrastructure-ready readiness lacks every nonzero bound result")
+        if value["aggregate_sha256"] == "0" * 64 and value["findings_aggregate_sha256"] == "0" * 64:
+            raise StateTamperError("infrastructure-ready readiness lacks validated runner evidence")
 
 
 def update_readiness(state: "FactoryState", readiness: Mapping[str, object]) -> "FactoryState":
@@ -944,7 +966,7 @@ def advance(
     """
     state.validate()
     if state.current_phase == "readiness":
-        expected_status = {"pass": "complete", "findings": "findings", "blocked": "human_blocked", "infrastructure_failure": "infrastructure_failure"}.get(outcome)
+        expected_status = {"pass": "complete", "plannable": "infrastructure_ready", "findings": "findings", "blocked": "human_blocked", "infrastructure_failure": "infrastructure_failure"}.get(outcome)
         if expected_status is None or state.readiness.get("status") != expected_status or state.readiness.get("terminal_outcome") != outcome or state.readiness.get("result_sha256") == "0" * 64:
             raise StateTransitionError("readiness transition requires a published exact-bound terminal result")
     if state.current_phase in TERMINAL_PHASES:

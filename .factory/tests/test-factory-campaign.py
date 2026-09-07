@@ -2862,9 +2862,11 @@ class RunnerAcquisitionLifecycleTests(_CampaignBase):
             "mode=(state/'runner-mode').read_text().strip() if (state/'runner-mode').exists() else 'pass'\n"
             "if mode=='timeout': time.sleep(5)\n"
             "if mode=='transport': raise SystemExit(20)\n"
-            "if mode=='findings': raise SystemExit(21)\n"
             "if mode=='integrity': raise SystemExit(22)\n"
             "head=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()\n"
+            "if mode=='findings':\n"
+            "    (state/'findings-aggregate.json').write_bytes((json.dumps({'commit':head,'runners':[{'result':'findings'}]},sort_keys=True)+'\\n').encode())\n"
+            "    raise SystemExit(21)\n"
             "counter=state/'runner-count'; n=int(counter.read_text())+1 if counter.exists() else 1\n"
             "counter.write_text(str(n))\n"
             "raw=(json.dumps({'commit':head,'attempt':n},sort_keys=True)+'\\n').encode()\n"
@@ -2875,14 +2877,15 @@ class RunnerAcquisitionLifecycleTests(_CampaignBase):
         checker.write_text(
             "#!/usr/bin/env python3\n"
             "import argparse,hashlib,json,pathlib,subprocess,sys\n"
-            "p=argparse.ArgumentParser(); p.add_argument('--expected-commit',required=True); p.add_argument('--expected-campaign-id',required=True); p.add_argument('--expected-readiness-nonce',required=True); p.add_argument('--print-digest',action='store_true'); a=p.parse_args()\n"
-            "root=pathlib.Path(__file__).resolve().parent.parent.parent; path=root/'.factory-state/runner-evidence.json'\n"
+            "p=argparse.ArgumentParser(); p.add_argument('--expected-commit',required=True); p.add_argument('--expected-campaign-id',required=True); p.add_argument('--expected-readiness-nonce',required=True); p.add_argument('--verify-findings',action='store_true'); p.add_argument('--print-digest',action='store_true'); a=p.parse_args()\n"
+            "root=pathlib.Path(__file__).resolve().parent.parent.parent; name='findings-aggregate.json' if a.verify_findings else 'runner-evidence.json'; path=root/'.factory-state'/name\n"
             "if path.is_symlink() or not path.is_file(): raise SystemExit(22)\n"
             "raw=path.read_bytes()\n"
             "try: data=json.loads(raw)\n"
             "except Exception: raise SystemExit(22)\n"
             "head=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()\n"
             "if data.get('commit')!=a.expected_commit or head!=a.expected_commit: raise SystemExit(22)\n"
+            "if a.verify_findings and not any((r.get('result')=='findings') for r in data.get('runners',[]) if isinstance(r,dict)): raise SystemExit(22)\n"
             "print(hashlib.sha256(raw).hexdigest())\n",
             encoding="utf-8",
         )

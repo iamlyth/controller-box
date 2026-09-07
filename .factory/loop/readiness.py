@@ -13,7 +13,7 @@ import stat
 from pathlib import Path
 from typing import Callable, Mapping
 
-RESULT_SCHEMA = "factory-readiness-result/v2"
+RESULT_SCHEMA = "factory-readiness-result/v3"
 CAMPAIGN_ID = re.compile(r"^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$")
 APPROVAL_SCHEMA = "controller-production-graphics-approval/v3"
 TRUST_SCHEMA = "controller-human-review-trust-anchor/v2"
@@ -349,11 +349,11 @@ def validate_result(value: object, *, expected_campaign_id: str | None = None, e
         raise ReadinessError("readiness result fields/schema are malformed")
     if not isinstance(value.get("campaign_id"), str) or not CAMPAIGN_ID.fullmatch(value["campaign_id"]) or not SHA256.fullmatch(str(value.get("nonce", ""))):
         raise ReadinessError("readiness campaign/nonce is invalid")
-    consistency = {"complete": "pass", "findings": "findings", "human_blocked": "blocked", "infrastructure_failure": "infrastructure_failure"}
+    consistency = {"complete": "pass", "infrastructure_ready": "plannable", "findings": "findings", "human_blocked": "blocked", "infrastructure_failure": "infrastructure_failure"}
     if value.get("status") not in consistency or value.get("terminal_outcome") != consistency[value["status"]]:
         raise ReadinessError("readiness status/outcome is inconsistent")
     binding_keys = {"accepted_commit", "tree", "environment_blob", "specification_sha256", "plan_sha256", "conformance_sha256", "policy_sha256", "contracts_sha256", "install_manifest_sha256", "command_authority_sha256", "human_authority_sha256", "trust_authority_sha256"}
-    result_keys = {"aggregate_sha256", "capability_result_sha256", "core_result_sha256", "conformance_result_sha256", "human_result_sha256"}
+    result_keys = {"aggregate_sha256", "findings_aggregate_sha256", "capability_result_sha256", "core_result_sha256", "conformance_result_sha256", "human_result_sha256", "product_findings_sha256"}
     bindings, results = value.get("bindings"), value.get("results")
     if not isinstance(bindings, dict) or set(bindings) != binding_keys or not isinstance(results, dict) or set(results) != result_keys:
         raise ReadinessError("readiness result binding/result sets are malformed")
@@ -367,5 +367,61 @@ def validate_result(value: object, *, expected_campaign_id: str | None = None, e
         raise ReadinessError("readiness result nonce is stale or replayed")
     if expected_bindings is not None and dict(bindings) != dict(expected_bindings):
         raise ReadinessError("readiness result bindings do not exactly match expected authority")
-    if value["status"] == "complete" and any(results[k] == ZERO256 for k in result_keys):
-        raise ReadinessError("passing readiness requires every nonzero canonical result digest")
+    if value["status"] == "complete":
+        if any(results[k] == ZERO256 for k in ("aggregate_sha256", "capability_result_sha256", "core_result_sha256", "conformance_result_sha256", "human_result_sha256")):
+            raise ReadinessError("passing readiness requires every nonzero canonical result digest")
+        # A product pass can never claim authenticated findings.
+        if results.get("findings_aggregate_sha256") != ZERO256 or results.get("product_findings_sha256") != ZERO256:
+            raise ReadinessError("a product pass can never claim signed findings")
+    if value["status"] == "infrastructure_ready":
+        if results.get("aggregate_sha256") == ZERO256 and results.get("findings_aggregate_sha256") == ZERO256:
+            raise ReadinessError("infrastructure-ready readiness lacks validated runner evidence")
+        if any(results[k] == ZERO256 for k in ("capability_result_sha256", "core_result_sha256", "conformance_result_sha256", "human_result_sha256", "product_findings_sha256")):
+            raise ReadinessError("infrastructure-ready readiness requires executed product findings and evaluated verdicts")
+
+
+def load_readiness_policy(root: Path) -> dict | None:
+    """Load the committed Controller readiness policy, or ``None`` when absent.
+
+    The policy is generic-shaped (``controller-readiness-policy/v1``): it
+    classifies each readiness gate as ``infrastructure``,
+    ``infrastructure_execution``, or ``product_acceptance``.  Absence is
+    honored as the strict legacy behavior (every gate must pass before
+    planner one); this module never invents a runner or weakens a constraint.
+    """
+    path = root / ".factory" / "readiness-policy.json"
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return None
+    except (OSError, IsADirectoryError):
+        raise ReadinessError("readiness policy is unreadable") from None
+    if len(raw) > 256 * 1024:
+        raise ReadinessError("readiness policy exceeds the size limit")
+    try:
+        policy = json.loads(raw)
+    except ValueError as exc:
+        raise ReadinessError("readiness policy is malformed") from exc
+    if not isinstance(policy, dict) or policy.get("schema") != "controller-readiness-policy/v1":
+        raise ReadinessError("readiness policy schema is invalid")
+    gates = policy.get("gates")
+    if not isinstance(gates, dict) or set(gates) != {"runner", "capability", "core", "conformance", "human"}:
+        raise ReadinessError("readiness policy gates are malformed")
+    allowed = {"infrastructure", "infrastructure_execution", "product_acceptance"}
+    if any(not isinstance(value, str) or value not in allowed for value in gates.values()):
+        raise ReadinessError("readiness policy gate classification is invalid")
+    for key in ("required_capabilities_execution", "required_conformance_rows"):
+        values = policy.get(key)
+        if not isinstance(values, list) or not all(isinstance(v, str) and v for v in values):
+            raise ReadinessError(f"readiness policy {key} is malformed")
+    return policy
+
+
+def classify_gate(policy: dict | None, gate: str) -> str:
+    """Classify one readiness gate; absent policy is the strict legacy pass."""
+    if policy is None:
+        return "product_acceptance"
+    gates = policy.get("gates", {})
+    if not isinstance(gates, dict) or gate not in gates:
+        raise ReadinessError(f"readiness policy omits gate {gate}")
+    return gates[gate]
