@@ -1764,7 +1764,10 @@ class FindingsLaunchUnit(unittest.TestCase):
         role_bytes = b"role prompt"
         agents = b"AGENTS.md"
         spec = b"spec"
-        plan = b"plan"
+        # Task 46: compose_prompt projects the canonical plan through the
+        # real parser (project_plan_context), so the fixture must be a valid
+        # factory-plan/v1 document, never raw noncanonical bytes.
+        plan = _reflection_plan()
         binding = launch_module.InvocationBinding(
             role=role,
             model="synthetic-model",
