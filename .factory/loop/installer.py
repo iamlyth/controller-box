@@ -76,6 +76,17 @@ import sys
 import tempfile
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
+# The trusted installer must never write bytecode into the installed copy
+# (or anywhere else): the installed tier is an exact physical-file inventory
+# (FACTORY-LOOP-SPEC §19 EVID-01, §3 HIDE-01), and a stray ``__pycache__``
+# or ``.pyc`` would break the exact-physical-set rejection in
+# ``verify_staged``.  This is set immediately after importing ``sys`` and
+# before any local factory import, so importing ``footprint``/``gitutil``
+# (and the module itself) can never emit bytecode even when the caller does
+# not set ``PYTHONDONTWRITEBYTECODE``.  The exact-physical-set rejection is
+# deliberately preserved: ``__pycache__`` is never ignored, it fails closed.
+sys.dont_write_bytecode = True
+
 try:  # package-import mode (the hidden control-plane package)
     from . import footprint
     from . import gitutil

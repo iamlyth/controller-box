@@ -919,6 +919,57 @@ class InstalledTierSuite(unittest.TestCase):
         finally:
             dirty_path.write_bytes(original)
 
+    def test_installed_installer_verify_writes_no_bytecode(self) -> None:
+        """Regression: the installed installer must never write bytecode into
+        the installed copy even when ``PYTHONDONTWRITEBYTECODE`` is absent.
+
+        The trusted installer sets ``sys.dont_write_bytecode = True``
+        immediately after importing ``sys`` and before its local factory
+        imports, so invoking the installed script directly (with no env
+        guard) must exit 0 and leave no ``__pycache__``/``*.pyc`` anywhere
+        in the installed prefix.  The exact-physical-set rejection in
+        ``verify_staged`` is deliberately preserved: ``__pycache__`` is
+        never ignored, it fails closed.
+        """
+        self.install(self.external, self.manifest_ext)
+        # A minimal environment with no bytecode guard: the regression is
+        # that the installed script itself suppresses bytecode writes.
+        env = {
+            "PATH": os.environ.get("PATH", ""),
+            "HOME": str(self.tmp),
+            "TMPDIR": str(self.tmp),
+            "LANG": "C.UTF-8",
+        }
+        self.assertNotIn("PYTHONDONTWRITEBYTECODE", env)
+        result = _run(
+            [
+                sys.executable,
+                str(self.external / ".factory/loop/installer.py"),
+                "verify",
+                "--root", str(self.install_source),
+                "--commit", self.head,
+                "--prefix", str(self.external),
+                "--manifest", str(self.manifest_ext),
+            ],
+            cwd=str(self.fixture),
+            env=env,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("verified production install", result.stdout)
+        # No bytecode anywhere in the installed copy: the exact physical
+        # set is preserved (a stray __pycache__/.pyc would fail closed).
+        for rel, info in footprint._walk_nofollow(self.external, ""):
+            self.assertNotIn("__pycache__", rel, rel)
+            self.assertFalse(rel.endswith(".pyc"), rel)
+        self.assertEqual(
+            list(self.external.rglob("__pycache__")), [],
+            "installed copy must contain no __pycache__ directory",
+        )
+        self.assertEqual(
+            list(self.external.rglob("*.pyc")), [],
+            "installed copy must contain no .pyc file",
+        )
+
     def test_no_pass_when_gate_skips_or_fails(self) -> None:
         self.install(self.external, self.manifest_ext)
         # A failing command mints a receipt with a non-zero exit; the suite
