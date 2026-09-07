@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory-readiness-findings-consumed/v1",
+  "title": "factory-readiness-findings consumed",
+  "description": "The durable one-use consumption marker for the round-1 readiness-findings artifact (BLOCKER 4). The trusted orchestrator writes this write-once marker under the ignored .factory-state/ evidence namespace at the exact moment it consumes the readiness-findings artifact for the round-1 planner. The marker binds the campaign id, the readiness nonce, and the SHA-256 digest of the exact product-findings payload consumed, so a genuine replay (a different campaign, nonce, or digest) fails closed and a crash-window re-consume of the same run is accepted idempotently only when the marker bytes are byte-exact.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "campaign_id",
+    "readiness_nonce",
+    "payload_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "enum": ["factory-readiness-findings-consumed/v1"]
+    },
+    "campaign_id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$"
+    },
+    "readiness_nonce": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "payload_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

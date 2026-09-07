@@ -3998,8 +3998,9 @@ def authorize_readiness_launch(*, campaign_id: str, invocation: "InvocationBindi
                 state.selected_task_id != permit.task_id
                 or state.attempt_number != permit.attempt))
             or (invocation.role != "developer" and state.selected_task_id is not None)
-            or not state.readiness.get("required") or state.readiness.get("status") != "complete"
-            or state.readiness.get("terminal_outcome") != "pass"):
+            or not state.readiness.get("required")
+            or state.readiness.get("status") not in ("complete", "infrastructure_ready")
+            or state.readiness.get("terminal_outcome") not in ("pass", "plannable")):
         raise InvocationError("canonical campaign state does not authorize launch")
     result_raw = _read_authority_at(namespace_fd, "readiness-result.json", 1024 * 1024)
     try:
@@ -4009,17 +4010,24 @@ def authorize_readiness_launch(*, campaign_id: str, invocation: "InvocationBindi
     canonical = json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
     expected_bindings = {name: state.readiness[name] for name in (
         "accepted_commit", "tree", "environment_blob", "specification_sha256", "plan_sha256",
-        "conformance_sha256", "policy_sha256", "contracts_sha256", "install_manifest_sha256",
+        "conformance_sha256", "policy_sha256", "readiness_policy_sha256", "contracts_sha256", "install_manifest_sha256",
         "command_authority_sha256", "human_authority_sha256", "trust_authority_sha256")}
     try:
         readiness_authority.validate_result(result, expected_campaign_id=campaign_id,
             expected_nonce=str(state.readiness["nonce"]), expected_bindings=expected_bindings)
     except readiness_authority.ReadinessError as exc:
         raise InvocationError("readiness cache disagrees with canonical state") from exc
-    if (result.get("status") != "complete" or result.get("results") != {
-            name: state.readiness[name] for name in (
-                "aggregate_sha256", "capability_result_sha256", "core_result_sha256",
-                "conformance_result_sha256", "human_result_sha256")}
+    expected_results = {
+        name: state.readiness[name] for name in (
+            "aggregate_sha256", "findings_aggregate_sha256",
+            "capability_result_sha256", "core_result_sha256",
+            "conformance_result_sha256", "human_result_sha256",
+            "product_findings_sha256",
+        )
+    }
+    if (result.get("status") != state.readiness.get("status")
+            or result.get("terminal_outcome") != state.readiness.get("terminal_outcome")
+            or result.get("results") != expected_results
             or hashlib.sha256(canonical).hexdigest() != state.readiness.get("result_sha256")):
         raise InvocationError("readiness cache digest/results are not authoritative")
     current_commit = authoritative_commit
@@ -5077,16 +5085,23 @@ def authorize_launch(
                 or readiness_authorization.bindings.get("tree") != readiness_authorization.tree
                 or set(readiness_authorization.bindings) != {
                     "accepted_commit", "tree", "environment_blob", "specification_sha256",
-                    "plan_sha256", "conformance_sha256", "policy_sha256", "contracts_sha256",
-                    "install_manifest_sha256", "command_authority_sha256",
+                    "plan_sha256", "conformance_sha256", "policy_sha256", "readiness_policy_sha256",
+                    "contracts_sha256", "install_manifest_sha256", "command_authority_sha256",
                     "human_authority_sha256", "trust_authority_sha256"}
                 or any((not SHA40_RE.fullmatch(str(v))) if k in {"accepted_commit", "tree", "environment_blob"}
                        else (not SHA256_RE.fullmatch(str(v)))
                        for k, v in readiness_authorization.bindings.items())
                 or set(readiness_authorization.result_digests) != {
-                    "aggregate_sha256", "capability_result_sha256", "core_result_sha256",
-                    "conformance_result_sha256", "human_result_sha256"}
-                or any(not SHA256_RE.fullmatch(str(v)) or v == "0" * 64
+                    "aggregate_sha256", "findings_aggregate_sha256", "capability_result_sha256",
+                    "core_result_sha256", "conformance_result_sha256", "human_result_sha256",
+                    "product_findings_sha256"}
+                # The exact seven-key v3 results set is required. A pass result
+                # legitimately carries ZERO findings/product digests and a
+                # plannable result may carry a ZERO aggregate digest, so only a
+                # valid SHA-256 shape is enforced here; the zero/nonzero matrix
+                # is already enforced by canonical validate_result inside the
+                # mint (authorize_readiness_launch) and the state revalidation.
+                or any(not SHA256_RE.fullmatch(str(v))
                        for v in readiness_authorization.result_digests.values())):
             raise InvocationError(
                 "standalone real-provider launch lacks exact descriptor-bound readiness authorization"

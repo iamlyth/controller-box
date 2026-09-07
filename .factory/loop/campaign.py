@@ -76,7 +76,7 @@ import time
 import tomllib
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 try:  # package import (the hidden `.factory/loop/` package)
     from . import audit_objectives as audit_objectives_module
@@ -1237,6 +1237,40 @@ def plan_sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def gate_verdict_digest(ran: bool, exit_code: int, skipped: bool) -> str:
+    """Canonical digest of one readiness gate verdict.
+
+    One fixed canonical JSON representation (sorted keys, compact separators)
+    is shared by the readiness mint and every per-mint revalidation so the
+    recorded ``*_result_sha256`` always re-derives to the same digest.
+    """
+    return plan_sha256(json.dumps(
+        {"ran": ran, "exit": exit_code, "skipped": skipped},
+        sort_keys=True, separators=(",", ":"),
+    ).encode())
+
+
+def capability_signed_findings_digest(aggregate_sha256: str) -> str:
+    """Deterministic canonical capability-execution digest (BLOCKER 3).
+
+    A validated signed findings aggregate already proves every declared probe
+    executed to completion (signed ``factory-runner-findings-receipt/v1``
+    envelopes, no skip/simulation markers, clean cleanup, no timeout), so the
+    aggregate's executed-probe classification is the infrastructure-execution
+    proof.  The capability result binds exactly the strongly validated
+    aggregate hash through one fixed canonical JSON representation (sorted
+    keys, compact separators); every per-mint revalidation re-derives the same
+    digest from the same exact aggregate without consulting a separate
+    capability-checker verdict (whose exit 1 is the expected findings-run
+    state and is never a product finding).
+    """
+    return plan_sha256(json.dumps(
+        {"proof": "signed-findings-aggregate",
+         "aggregate_sha256": aggregate_sha256},
+        sort_keys=True, separators=(",", ":"),
+    ).encode())
+
+
 def _unsafe_repo_relative(path: str) -> Tuple[Optional[str], Optional[str]]:
     """``(unsafe_render, reason)`` for a path that is not repo-relative-safe.
 
@@ -1418,6 +1452,7 @@ def classify_planning(
     plan_changed: bool,
     plan_valid: bool,
     scope_ok: bool,
+    findings_reflected: bool = True,
 ) -> str:
     """Classify one planning attempt (planned/failed/interrupted).
 
@@ -1425,6 +1460,13 @@ def classify_planning(
     planner scope; ``interrupted`` records a bounded process interruption;
     everything else is a deterministic planning failure retried until the
     planning budget exhausts (then terminal ``failed``).
+
+    ``findings_reflected`` (BLOCKER 4) is the round-1 readiness-findings
+    plan-digest backstop: when the round-1 planner received a readiness
+    findings payload, the revised canonical plan must reflect those
+    findings (as task scope or blocked_on references) before the attempt
+    can be ``planned``.  It defaults to ``True`` so the round>1 flow and
+    any caller that never delivered a findings payload is unchanged.
     """
     if role.interrupted:
         return "interrupted"
@@ -1435,6 +1477,8 @@ def classify_planning(
     if not plan_valid:
         return "failed"
     if not scope_ok:
+        return "failed"
+    if not findings_reflected:
         return "failed"
     return "planned"
 
@@ -2568,6 +2612,15 @@ class Campaign:
             raise CampaignBindingError(f"readiness install manifest is unsafe: {exc}") from exc
         def digest_blob(path: str) -> str:
             return plan_sha256(self._git.blob_at(head, path))
+        try:
+            readiness_policy_raw = self._git.blob_at(
+                head, readiness_module.READINESS_POLICY_PATH)
+        except CampaignGitError:
+            # Absent-policy strict legacy: no committed readiness policy.
+            readiness_policy_raw = None
+        readiness_policy_sha256 = (
+            plan_sha256(readiness_policy_raw)
+            if readiness_policy_raw is not None else "0" * 64)
         value = state_module.empty_readiness(required=True)
         value.update({
             "nonce": secrets.token_hex(32), "accepted_commit": head,
@@ -2576,6 +2629,7 @@ class Campaign:
             "plan_sha256": self._config.plan_digest,
             "conformance_sha256": digest_blob(DEFAULT_CONFORMANCE_PATH),
             "policy_sha256": digest_blob(".factory/requirement-policy.json"),
+            "readiness_policy_sha256": readiness_policy_sha256,
             "contracts_sha256": digest_blob(".factory/capability-contracts.json"),
             "install_manifest_sha256": plan_sha256(manifest_raw),
             "command_authority_sha256": self._readiness_authority_digest(),
@@ -2588,8 +2642,9 @@ class Campaign:
         if self._config.role_driver is not None:
             return
         value = state.readiness
-        if (value.get("required") is not True or value.get("status") != "complete"
-                or value.get("terminal_outcome") != "pass"
+        if (value.get("required") is not True
+                or value.get("status") not in ("complete", "infrastructure_ready")
+                or value.get("terminal_outcome") not in ("pass", "plannable")
                 or value.get("result_sha256") == "0" * 64):
             raise CampaignBindingError("untrusted launch denied: production readiness is incomplete")
         # Before planner one, re-derive every mutable-path/Git binding.  Later
@@ -2598,7 +2653,7 @@ class Campaign:
         # than by pretending the accepted pre-campaign commit is current.
         if state.current_phase == "planning" and state.current_round == 1:
             expected = self._initial_readiness_binding()
-            for name in ("accepted_commit", "tree", "environment_blob", "specification_sha256", "plan_sha256", "conformance_sha256", "policy_sha256", "contracts_sha256", "install_manifest_sha256", "command_authority_sha256"):
+            for name in ("accepted_commit", "tree", "environment_blob", "specification_sha256", "plan_sha256", "conformance_sha256", "policy_sha256", "readiness_policy_sha256", "contracts_sha256", "install_manifest_sha256", "command_authority_sha256"):
                 if value.get(name) != expected.get(name):
                     raise CampaignBindingError(f"untrusted launch denied: readiness {name} binding is stale")
         result = state_module.read_json(self._root, READINESS_RESULT_NAME, maximum=MAX_RESULT_FILE, missing_ok=True)
@@ -2606,7 +2661,8 @@ class Campaign:
             raise CampaignBindingError("untrusted launch denied: readiness result is missing")
         expected_bindings = {name: value[name] for name in (
             "accepted_commit", "tree", "environment_blob", "specification_sha256",
-            "plan_sha256", "conformance_sha256", "policy_sha256", "contracts_sha256",
+            "plan_sha256", "conformance_sha256", "policy_sha256", "readiness_policy_sha256",
+            "contracts_sha256",
             "install_manifest_sha256", "command_authority_sha256",
             "human_authority_sha256", "trust_authority_sha256")}
         readiness_module.validate_result(
@@ -2614,75 +2670,153 @@ class Campaign:
             expected_nonce=str(value["nonce"]), expected_bindings=expected_bindings,
         )
         raw = json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
-        if plan_sha256(raw) != value.get("result_sha256") or result.get("status") != "complete":
+        expected_results = {name: value[name] for name in (
+            "aggregate_sha256", "findings_aggregate_sha256",
+            "capability_result_sha256", "core_result_sha256",
+            "conformance_result_sha256", "human_result_sha256",
+            "product_findings_sha256",
+        )}
+        if (plan_sha256(raw) != value.get("result_sha256")
+                or result.get("status") != value.get("status")
+                or result.get("terminal_outcome") != value.get("terminal_outcome")
+                or result.get("results") != expected_results):
             raise CampaignBindingError("untrusted launch denied: readiness result binding is invalid")
 
     def _revalidate_readiness_authorities(self, state: state_module.FactoryState) -> None:
-        """Freshly rerun every canonical readiness validator before a model mint.
+        """Freshly rerun the per-mint infrastructure readiness authorities.
 
         ``readiness-result.json`` is only a crash cache: no digest from it is
-        trusted unless the aggregate, gates, committed mappings, external
-        human signature, and exact captures can all be reopened and produce
-        the state-bound results again.
+        trusted unless the infrastructure authorities selected by the
+        committed ``readiness-policy.json`` can be reopened and produce the
+        state-bound results again.  Per the committed policy, only the
+        ``infrastructure`` (runner acquisition) and ``infrastructure_execution``
+        (capability execution) gates are revalidated before every model mint;
+        the ``product_acceptance`` gates (core, conformance, human) and the
+        current-HEAD product verifier are enforced only by the strict exact-head
+        final gate, never per mint.  Absent policy is the strict legacy
+        behavior: every gate is revalidated.
         """
         accepted = str(state.readiness["accepted_commit"])
-        checker_exit, aggregate = self._check_runner_aggregate(accepted)
-        if checker_exit != 0 or aggregate != state.readiness["aggregate_sha256"]:
+        try:
+            committed_policy_raw = self._git.blob_at(
+                accepted, readiness_module.READINESS_POLICY_PATH)
+        except CampaignGitError:
+            committed_policy_raw = None
+        if (committed_policy_raw is None and
+                state.readiness["readiness_policy_sha256"] != "0" * 64):
+            raise CampaignBindingError(
+                "untrusted launch denied: absent readiness policy disagrees "
+                "with the bound policy digest")
+        if committed_policy_raw is not None and (
+                plan_sha256(committed_policy_raw) !=
+                state.readiness["readiness_policy_sha256"]):
+            raise CampaignBindingError(
+                "untrusted launch denied: committed readiness policy bytes "
+                "disagree with the bound policy digest")
+        # Classification/revalidation always uses the bound committed bytes,
+        # never the mutable unbound worktree copy.
+        policy = readiness_module.readiness_policy_from_bytes(
+            committed_policy_raw)
+        strict = policy is None
+
+        def _revalidate(gate: str) -> bool:
+            if strict:
+                return True
+            return readiness_module.classify_gate(policy, gate) in (
+                "infrastructure", "infrastructure_execution")
+
+        findings_runner = state.readiness["findings_aggregate_sha256"] != "0" * 64
+        checker_exit, aggregate = self._check_runner_aggregate(
+            accepted, findings=findings_runner)
+        expected_aggregate = state.readiness[
+            "findings_aggregate_sha256" if findings_runner else "aggregate_sha256"]
+        if checker_exit != 0 or aggregate != expected_aggregate:
             raise CampaignBindingError("untrusted launch denied: runner aggregate revalidation failed")
         cap_ran, cap_exit, _, cap_skipped = self._run_gate(self._config.capability_command, "capability")
-        capability = plan_sha256(json.dumps({"ran": cap_ran, "exit": cap_exit, "skipped": cap_skipped}, sort_keys=True).encode())
-        if not cap_ran or cap_skipped or cap_exit != 0 or capability != state.readiness["capability_result_sha256"]:
+        capability_execution_failed = (
+            not cap_ran or cap_skipped or cap_exit < 0
+            or cap_exit in (126, 127))
+        if findings_runner:
+            # BLOCKER 3: mirror ``_run_readiness`` — the validated signed
+            # findings aggregate is the infrastructure-execution proof, and its
+            # deterministic canonical digest re-derives from the freshly
+            # revalidated exact aggregate.  The capability checker's exit 1 (no
+            # accepted pass receipts) is the expected findings-run state, never
+            # a product finding.
+            if capability_execution_failed:
+                raise CampaignBindingError(
+                    "untrusted launch denied: capability evidence is stale")
+            capability = capability_signed_findings_digest(aggregate)
+        else:
+            # BLOCKER 3: a pass aggregate requires capability evidence exit 0;
+            # exit 1 is missing/malformed/stale/untrusted evidence and is
+            # infrastructure, never plannable.
+            capability = gate_verdict_digest(cap_ran, cap_exit, cap_skipped)
+            if capability_execution_failed or cap_exit != 0:
+                raise CampaignBindingError(
+                    "untrusted launch denied: capability evidence is stale")
+        if capability != state.readiness["capability_result_sha256"]:
             raise CampaignBindingError("untrusted launch denied: capability evidence is stale")
-        core_ran, core_exit, _, core_skipped = self._run_gate(CORE_ACCEPTANCE_COMMAND, "core acceptance")
-        core = plan_sha256(json.dumps({"ran": core_ran, "exit": core_exit, "skipped": core_skipped}, sort_keys=True).encode())
-        if not core_ran or core_skipped or core_exit != 0 or core != state.readiness["core_result_sha256"]:
-            raise CampaignBindingError("untrusted launch denied: accepted-commit core authority is stale")
-        # Hardware/core readiness above deliberately remains bound to the
-        # immutable accepted commit. Independently, every role boundary runs
-        # the complete product verifier against the authorized current HEAD.
-        product_ran, product_exit, _, product_skipped = self._run_gate(
-            self._config.verification_command, "current product verification")
-        if not product_ran or product_skipped or product_exit != 0:
-            raise CampaignBindingError("untrusted launch denied: current-HEAD product verification failed")
-        conf_ran, conf_exit, _, conf_skipped = self._run_gate(CONFORMANCE_VALIDATOR_COMMAND, "conformance validator")
-        try:
-            conformance_raw = self._git.blob_at(accepted, DEFAULT_CONFORMANCE_PATH)
-            mapping = readiness_module.validate_core_mapping(
-                conformance_raw, self._git.blob_at(accepted, ".factory/requirement-policy.json"))
-        except readiness_module.ReadinessError as exc:
-            raise CampaignBindingError("untrusted launch denied: core mapping is stale") from exc
-        if (not conf_ran or conf_skipped or conf_exit != 0
-                or mapping != state.readiness["conformance_result_sha256"]):
-            raise CampaignBindingError("untrusted launch denied: conformance is stale")
-        try:
-            approval_raw = self._git.blob_at(accepted, readiness_module.APPROVAL_PATH)
-            trust_raw, _ = readiness_module.read_external_authority(
-                Path(self._config.human_trust_anchor), self._config.human_trust_anchor_sha256)
-            human = readiness_module.validate_human_approval(
-                approval_raw, accepted_commit=accepted, trust_raw=trust_raw,
-                blob_at=self._git.blob_at, object_id=self._git.object_id,
-                is_ancestor=self._git.is_ancestor, diff_paths=self._git.diff_paths)
-            approval = json.loads(approval_raw)
-            human_conf = readiness_module.validate_human_conformance(
-                conformance_raw, candidate_commit=str(approval["candidate_commit"]))
-            human = plan_sha256((human + human_conf).encode())
-        except (readiness_module.HumanApprovalBlocked, ValueError, KeyError) as exc:
-            raise CampaignBindingError("untrusted launch denied: human approval is stale") from exc
-        if human != state.readiness["human_result_sha256"]:
-            raise CampaignBindingError("untrusted launch denied: human approval digest changed")
+        if _revalidate("core"):
+            core_ran, core_exit, _, core_skipped = self._run_gate(CORE_ACCEPTANCE_COMMAND, "core acceptance")
+            core = gate_verdict_digest(core_ran, core_exit, core_skipped)
+            if not core_ran or core_skipped or core_exit != 0 or core != state.readiness["core_result_sha256"]:
+                raise CampaignBindingError("untrusted launch denied: accepted-commit core authority is stale")
+        if strict:
+            # The complete product verifier against the authorized current HEAD
+            # is a product-acceptance authority enforced only by the strict
+            # exact-head final gate, not per mint.
+            product_ran, product_exit, _, product_skipped = self._run_gate(
+                self._config.verification_command, "current product verification")
+            if not product_ran or product_skipped or product_exit != 0:
+                raise CampaignBindingError("untrusted launch denied: current-HEAD product verification failed")
+        if _revalidate("conformance"):
+            conf_ran, conf_exit, _, conf_skipped = self._run_gate(CONFORMANCE_VALIDATOR_COMMAND, "conformance validator")
+            try:
+                conformance_raw = self._git.blob_at(accepted, DEFAULT_CONFORMANCE_PATH)
+                mapping = readiness_module.validate_core_mapping(
+                    conformance_raw, self._git.blob_at(accepted, ".factory/requirement-policy.json"))
+            except readiness_module.ReadinessError as exc:
+                raise CampaignBindingError("untrusted launch denied: core mapping is stale") from exc
+            if (not conf_ran or conf_skipped or conf_exit != 0
+                    or mapping != state.readiness["conformance_result_sha256"]):
+                raise CampaignBindingError("untrusted launch denied: conformance is stale")
+        if _revalidate("human"):
+            try:
+                approval_raw = self._git.blob_at(accepted, readiness_module.APPROVAL_PATH)
+                trust_raw, _ = readiness_module.read_external_authority(
+                    Path(self._config.human_trust_anchor), self._config.human_trust_anchor_sha256)
+                human = readiness_module.validate_human_approval(
+                    approval_raw, accepted_commit=accepted, trust_raw=trust_raw,
+                    blob_at=self._git.blob_at, object_id=self._git.object_id,
+                    is_ancestor=self._git.is_ancestor, diff_paths=self._git.diff_paths)
+                approval = json.loads(approval_raw)
+                human_conf = readiness_module.validate_human_conformance(
+                    self._git.blob_at(accepted, DEFAULT_CONFORMANCE_PATH),
+                    candidate_commit=str(approval["candidate_commit"]))
+                human = plan_sha256((human + human_conf).encode())
+            except (readiness_module.HumanApprovalBlocked, ValueError, KeyError) as exc:
+                raise CampaignBindingError("untrusted launch denied: human approval is stale") from exc
+            if human != state.readiness["human_result_sha256"]:
+                raise CampaignBindingError("untrusted launch denied: human approval digest changed")
 
     def _publish_readiness(self, state: state_module.FactoryState, *, status: str,
                            outcome: str, aggregate: str, capability: str,
-                           core: str, conformance: str, human: str) -> state_module.FactoryState:
+                           core: str, conformance: str, human: str,
+                           findings_aggregate: str = "0" * 64,
+                           product_findings: str = "0" * 64) -> state_module.FactoryState:
         r = state.readiness
         bindings = {name: r[name] for name in (
             "accepted_commit", "tree", "environment_blob", "specification_sha256",
-            "plan_sha256", "conformance_sha256", "policy_sha256", "contracts_sha256",
+            "plan_sha256", "conformance_sha256", "policy_sha256", "readiness_policy_sha256",
+            "contracts_sha256",
             "install_manifest_sha256", "command_authority_sha256",
             "human_authority_sha256", "trust_authority_sha256")}
         results = {"aggregate_sha256": aggregate, "capability_result_sha256": capability,
                    "core_result_sha256": core, "conformance_result_sha256": conformance,
-                   "human_result_sha256": human}
+                   "human_result_sha256": human,
+                   "findings_aggregate_sha256": findings_aggregate,
+                   "product_findings_sha256": product_findings}
         document = readiness_module.result_document(
             campaign_id=self._config.campaign_id, nonce=str(r["nonce"]),
             status=status, terminal_outcome=outcome, bindings=bindings, results=results)
@@ -2696,83 +2830,336 @@ class Campaign:
         updated = dict(r)
         updated.update({"cursor": 6, "status": status,
                         "terminal_outcome": outcome, "aggregate_sha256": aggregate,
+                        "findings_aggregate_sha256": findings_aggregate,
                         "capability_result_sha256": capability, "core_result_sha256": core,
                         "conformance_result_sha256": conformance,
-                        "human_result_sha256": human, "result_sha256": plan_sha256(raw)})
+                        "human_result_sha256": human,
+                        "product_findings_sha256": product_findings,
+                        "result_sha256": plan_sha256(raw)})
         state2 = self._persist_state(state_module.update_readiness(state, updated))
         terminal_state = self._persist_state(state_module.advance(state2, outcome))
         return terminal_state
 
     def _run_readiness(self, state: state_module.FactoryState) -> Tuple[state_module.FactoryState, Optional[str]]:
-        """Execute the mandatory bounded coordinator gate before planner one."""
+        """Execute bounded round-zero infrastructure and baseline evaluation.
+
+        With no committed readiness policy this preserves the strict legacy
+        rule: every product gate must pass before planner one.  Controller's
+        committed split policy instead requires every authority to execute,
+        but turns ordinary product failures into a digest-bound, one-use
+        round-one findings payload.  Missing, skipped, malformed, unsigned,
+        or authority-failure evidence always remains infrastructure failure.
+        """
         expected = self._initial_readiness_binding()
         for name, value in expected.items():
             if name != "nonce" and state.readiness.get(name) != value:
                 raise CampaignBindingError(f"readiness binding changed: {name}")
-        # A cache left by a crash is never promoted.  Continue through the
-        # canonical acquisition and all validators; an unavailable authority
-        # reruns/fails rather than minting from remembered JSON.
+        # Round-zero worktree/commit identity: the mutable worktree copy of the
+        # readiness policy must match the exact committed blob that was bound
+        # into the authority, never a silently re-derived unbound worktree file.
+        try:
+            committed_policy_raw = self._git.blob_at(
+                self._git.head(), readiness_module.READINESS_POLICY_PATH)
+        except CampaignGitError:
+            committed_policy_raw = None
+        policy_digest = state.readiness["readiness_policy_sha256"]
+        if committed_policy_raw is None and policy_digest != "0" * 64:
+            raise CampaignBindingError(
+                "readiness-policy.json is absent from the committed HEAD but "
+                "a nonzero policy digest is bound")
+        if committed_policy_raw is not None and (
+                plan_sha256(committed_policy_raw) != policy_digest):
+            raise CampaignBindingError(
+                "readiness-policy.json committed bytes disagree with the "
+                "bound policy digest")
+        worktree_policy_path = self._root / ".factory" / "readiness-policy.json"
+        try:
+            worktree_policy_raw = worktree_policy_path.read_bytes()
+        except FileNotFoundError:
+            worktree_policy_raw = None
+        except (OSError, IsADirectoryError):
+            raise CampaignBindingError("readiness policy is unreadable") from None
+        if worktree_policy_raw is None and policy_digest != "0" * 64:
+            raise CampaignBindingError(
+                "readiness-policy.json is missing from the worktree but a "
+                "nonzero policy digest is bound")
+        if worktree_policy_raw is not None and (
+                plan_sha256(worktree_policy_raw) != policy_digest):
+            raise CampaignBindingError(
+                "worktree readiness-policy.json disagrees with the committed "
+                "bound policy digest")
+        # Classification uses only the bound committed bytes, never the
+        # mutable unbound worktree copy.
+        policy = readiness_module.readiness_policy_from_bytes(
+            committed_policy_raw)
+        strict = policy is None
         prior = self._read_runner_acquisition()
         if prior is not None and prior.get("status") == "acquiring":
-            return self._publish_readiness(state, status="infrastructure_failure",
+            return self._publish_readiness(
+                state, status="infrastructure_failure",
                 outcome="infrastructure_failure", aggregate="0" * 64,
-                capability="0" * 64, core="0" * 64, conformance="0" * 64,
-                human="0" * 64), "infrastructure_failure"
+                capability="0" * 64, core="0" * 64,
+                conformance="0" * 64, human="0" * 64,
+            ), "infrastructure_failure"
+
         acquiring = dict(state.readiness)
         acquiring.update({"attempt": int(acquiring["attempt"]) + 1,
                           "cursor": 1, "status": "acquiring"})
         state = self._persist_state(state_module.update_readiness(state, acquiring))
         ran, code, _detail = self._ensure_runner_evidence()
         acquisition = self._read_runner_acquisition()
-        aggregate = str(acquisition.get("aggregate_sha256", "")) if acquisition else ""
-        if not ran or code not in (0, RUNNER_FINDINGS_EXIT) or not SHA256_RE.fullmatch(aggregate):
-            outcome = "findings" if code == RUNNER_FINDINGS_EXIT else "infrastructure_failure"
-            status = "findings" if outcome == "findings" else "infrastructure_failure"
-            return self._publish_readiness(state, status=status, outcome=outcome,
-                aggregate=aggregate if SHA256_RE.fullmatch(aggregate) else "0" * 64,
-                capability="0" * 64, core="0" * 64, conformance="0" * 64,
-                human="0" * 64), outcome
-        cap_ran, cap_exit, _, cap_skipped = self._run_gate(self._config.capability_command, "capability")
-        evidence_digest = plan_sha256(json.dumps({"ran": cap_ran, "exit": cap_exit, "skipped": cap_skipped}, sort_keys=True).encode())
-        if not cap_ran or cap_skipped:
-            return self._publish_readiness(state, status="infrastructure_failure", outcome="infrastructure_failure", aggregate=aggregate, capability=evidence_digest, core="0"*64, conformance="0"*64, human="0"*64), "infrastructure_failure"
-        if cap_exit != 0:
-            return self._publish_readiness(state, status="findings", outcome="findings", aggregate=aggregate, capability=evidence_digest, core="0"*64, conformance="0"*64, human="0"*64), "findings"
-        core_ran, core_exit, _, core_skipped = self._run_gate(CORE_ACCEPTANCE_COMMAND, "core acceptance")
-        core_digest = plan_sha256(json.dumps({"ran": core_ran, "exit": core_exit, "skipped": core_skipped}, sort_keys=True).encode())
-        if not core_ran or core_skipped:
-            return self._publish_readiness(state, status="infrastructure_failure", outcome="infrastructure_failure", aggregate=aggregate, capability=evidence_digest, core=core_digest, conformance="0"*64, human="0"*64), "infrastructure_failure"
+        runner_digest = str(acquisition.get("aggregate_sha256", "")) if acquisition else ""
+        if (not ran or code not in (0, RUNNER_FINDINGS_EXIT)
+                or not SHA256_RE.fullmatch(runner_digest)):
+            return self._publish_readiness(
+                state, status="infrastructure_failure",
+                outcome="infrastructure_failure", aggregate="0" * 64,
+                capability="0" * 64, core="0" * 64,
+                conformance="0" * 64, human="0" * 64,
+            ), "infrastructure_failure"
+        aggregate = runner_digest if code == 0 else "0" * 64
+        findings_aggregate = (
+            runner_digest if code == RUNNER_FINDINGS_EXIT else "0" * 64)
+        findings: List[str] = []
+        runner_entries: List[Dict[str, object]] = []
+        if code == RUNNER_FINDINGS_EXIT:
+            # B5: the round-1 planner receives the validated signed findings
+            # aggregate projected into fixed-semantic structured entries —
+            # never a generic prose sentence.  The exact checker-validated
+            # aggregate bytes are re-read under exactly
+            # ``.factory-state/runner-evidence/<campaign>/<nonce>/``
+            # ``findings-aggregate.json`` through the hardened no-follow
+            # bounded reader, the re-read bytes must digest to the strong
+            # checker's acquisition digest, every projection binding is
+            # re-derived from trusted state/Git/environment/contracts, and
+            # any absent, path-escaping, malformed, digest-mismatched,
+            # binding-mismatched, skipped/simulated, or prose artifact fails
+            # the campaign closed as an infrastructure failure (never a
+            # plannable claim).
+            try:
+                head, tree, environment_blob = self._runner_bindings()
+            except (CampaignBindingError, CampaignGitError) as exc:
+                raise CampaignBindingError(
+                    "runner findings projection Git bindings failed "
+                    "integrity validation"
+                ) from exc
+            if acquisition is None or any(
+                str(acquisition.get(name, "")) != value
+                for name, value in (
+                    ("head", head), ("tree", tree),
+                    ("environment_blob", environment_blob),
+                )
+            ):
+                raise CampaignBindingError(
+                    "runner findings projection bindings disagree with the "
+                    "validated acquisition identity"
+                )
+            bindings = self._runner_findings_bindings(
+                state, head, tree, environment_blob)
+            try:
+                aggregate_raw, aggregate_data = (
+                    findings_module.read_runner_findings_aggregate(
+                        self._root,
+                        campaign_id=self._config.campaign_id,
+                        readiness_nonce=str(state.readiness["nonce"]),
+                    )
+                )
+            except findings_module.FindingsError as exc:
+                raise CampaignBindingError(
+                    "the validated runner findings aggregate re-read failed "
+                    f"closed: {exc}"
+                ) from exc
+            if findings_module.sha256(aggregate_raw) != runner_digest:
+                raise CampaignBindingError(
+                    "the re-read findings-aggregate.json bytes do not digest "
+                    "to the strong checker acquisition digest; a tampered "
+                    "aggregate fails closed"
+                )
+            try:
+                archive_bindings = findings_module.derive_archive_bindings(
+                    self._root, aggregate_data)
+                code_strings, _verdicts = (
+                    findings_module.project_runner_findings(
+                        aggregate_raw,
+                        aggregate_sha256=runner_digest,
+                        campaign_id=self._config.campaign_id,
+                        readiness_nonce=str(state.readiness["nonce"]),
+                        commit=head, tree=tree,
+                        environment_blob=environment_blob,
+                        contracts_sha256=bindings["contracts_sha256"],
+                        declarations=bindings["declarations"],
+                        contracts=bindings["contracts"],
+                        archive_bindings=archive_bindings,
+                    )
+                )
+            except findings_module.FindingsError as exc:
+                raise CampaignBindingError(
+                    f"runner findings projection failed closed: {exc}"
+                ) from exc
+            payload = findings_module.build_runner_readiness_findings_payload(
+                campaign_id=self._config.campaign_id,
+                code_strings=code_strings,
+            )
+            runner_entries.append(payload["entries"][0])
+
+        cap_ran, cap_exit, _, cap_skipped = self._run_gate(
+            self._config.capability_command, "capability")
+        capability_execution_failed = (
+            not cap_ran or cap_skipped or cap_exit < 0
+            or cap_exit in (126, 127))
+        if code == RUNNER_FINDINGS_EXIT:
+            # BLOCKER 3: a validated signed findings aggregate already proves
+            # every declared probe executed to completion (signed receipts,
+            # no skip/simulation markers, clean cleanup, no timeout), so its
+            # executed-probe classification is the infrastructure-execution
+            # proof.  In a findings run the capability checker's exit 1 (no
+            # accepted pass receipts) is the expected state and is never a
+            # product finding; bind a deterministic canonical digest of the
+            # exact validated aggregate instead.
+            if capability_execution_failed:
+                return self._publish_readiness(
+                    state, status="infrastructure_failure",
+                    outcome="infrastructure_failure", aggregate=aggregate,
+                    findings_aggregate=findings_aggregate,
+                    capability=gate_verdict_digest(
+                        cap_ran, cap_exit, cap_skipped),
+                    core="0" * 64, conformance="0" * 64, human="0" * 64,
+                ), "infrastructure_failure"
+            capability_digest = capability_signed_findings_digest(
+                findings_aggregate)
+        else:
+            # BLOCKER 3: a pass aggregate requires capability evidence exit 0.
+            # Exit 1 means missing/malformed/stale/untrusted evidence and is an
+            # infrastructure failure, never a plannable product finding.
+            if capability_execution_failed or cap_exit != 0:
+                return self._publish_readiness(
+                    state, status="infrastructure_failure",
+                    outcome="infrastructure_failure", aggregate=aggregate,
+                    findings_aggregate=findings_aggregate,
+                    capability=gate_verdict_digest(
+                        cap_ran, cap_exit, cap_skipped),
+                    core="0" * 64, conformance="0" * 64, human="0" * 64,
+                ), "infrastructure_failure"
+            capability_digest = gate_verdict_digest(
+                cap_ran, cap_exit, cap_skipped)
+
+        core_ran, core_exit, _, core_skipped = self._run_gate(
+            CORE_ACCEPTANCE_COMMAND, "core acceptance")
+        core_digest = gate_verdict_digest(core_ran, core_exit, core_skipped)
+        if (not core_ran or core_skipped or core_exit < 0
+                or core_exit not in (0, 1)):
+            return self._publish_readiness(
+                state, status="infrastructure_failure",
+                outcome="infrastructure_failure", aggregate=aggregate,
+                findings_aggregate=findings_aggregate,
+                capability=capability_digest, core=core_digest,
+                conformance="0" * 64, human="0" * 64,
+            ), "infrastructure_failure"
         if core_exit != 0:
-            return self._publish_readiness(state, status="findings", outcome="findings", aggregate=aggregate, capability=evidence_digest, core=core_digest, conformance="0"*64, human="0"*64), "findings"
-        conf_ran, conf_exit, _, conf_skipped = self._run_gate(CONFORMANCE_VALIDATOR_COMMAND, "conformance validator")
+            findings.append("core acceptance reported product findings")
+
+        conf_ran, conf_exit, _, conf_skipped = self._run_gate(
+            CONFORMANCE_VALIDATOR_COMMAND, "conformance validator")
+        mapping_valid = True
         try:
             mapping_digest = readiness_module.validate_core_mapping(
                 self._git.blob_at(self._git.head(), DEFAULT_CONFORMANCE_PATH),
-                self._git.blob_at(self._git.head(), ".factory/requirement-policy.json"))
+                self._git.blob_at(
+                    self._git.head(), ".factory/requirement-policy.json"))
         except readiness_module.ReadinessError:
-            conf_exit = 1
-            mapping_digest = "0" * 64
-        if not conf_ran or conf_skipped:
-            return self._publish_readiness(state, status="infrastructure_failure", outcome="infrastructure_failure", aggregate=aggregate, capability=evidence_digest, core=core_digest, conformance=mapping_digest, human="0"*64), "infrastructure_failure"
-        if conf_exit != 0:
-            return self._publish_readiness(state, status="findings", outcome="findings", aggregate=aggregate, capability=evidence_digest, core=core_digest, conformance=mapping_digest, human="0"*64), "findings"
+            mapping_valid = False
+            mapping_digest = gate_verdict_digest(True, 1, False)
+        if (not conf_ran or conf_skipped or conf_exit < 0
+                or conf_exit in (126, 127)):
+            return self._publish_readiness(
+                state, status="infrastructure_failure",
+                outcome="infrastructure_failure", aggregate=aggregate,
+                findings_aggregate=findings_aggregate,
+                capability=capability_digest, core=core_digest,
+                conformance=mapping_digest, human="0" * 64,
+            ), "infrastructure_failure"
+        if conf_exit != 0 or not mapping_valid:
+            findings.append("conformance evaluation reported product findings")
+
+        human_passed = True
         try:
-            approval_raw = self._git.blob_at(self._git.head(), readiness_module.APPROVAL_PATH)
+            approval_raw = self._git.blob_at(
+                self._git.head(), readiness_module.APPROVAL_PATH)
             trust_raw, _ = readiness_module.read_external_authority(
-                Path(self._config.human_trust_anchor), self._config.human_trust_anchor_sha256)
+                Path(self._config.human_trust_anchor),
+                self._config.human_trust_anchor_sha256)
             human_digest = readiness_module.validate_human_approval(
-                approval_raw, accepted_commit=self._git.head(), trust_raw=trust_raw,
-                blob_at=self._git.blob_at, object_id=self._git.object_id,
-                is_ancestor=self._git.is_ancestor, diff_paths=self._git.diff_paths)
+                approval_raw, accepted_commit=self._git.head(),
+                trust_raw=trust_raw, blob_at=self._git.blob_at,
+                object_id=self._git.object_id,
+                is_ancestor=self._git.is_ancestor,
+                diff_paths=self._git.diff_paths)
             approval_data = json.loads(approval_raw)
             conformance_human = readiness_module.validate_human_conformance(
                 self._git.blob_at(self._git.head(), DEFAULT_CONFORMANCE_PATH),
                 candidate_commit=str(approval_data["candidate_commit"]))
-            human_digest = plan_sha256((human_digest + conformance_human).encode())
+            human_digest = plan_sha256(
+                (human_digest + conformance_human).encode())
         except readiness_module.HumanApprovalBlocked:
-            return self._publish_readiness(state, status="human_blocked", outcome="blocked", aggregate=aggregate, capability=evidence_digest, core=core_digest, conformance=mapping_digest, human="0"*64), "blocked"
-        state = self._publish_readiness(state, status="complete", outcome="pass",
-            aggregate=aggregate, capability=evidence_digest, core=core_digest,
+            human_passed = False
+            human_digest = plan_sha256(
+                b'{"gate":"human","outcome":"blocked"}')
+            findings.append("human graphics acceptance remains blocked")
+
+        if findings or runner_entries:
+            if strict:
+                terminal = "blocked" if not human_passed else "findings"
+                status = "human_blocked" if not human_passed else "findings"
+                return self._publish_readiness(
+                    state, status=status, outcome=terminal,
+                    aggregate=aggregate,
+                    findings_aggregate=findings_aggregate,
+                    capability=capability_digest, core=core_digest,
+                    conformance=mapping_digest, human=human_digest,
+                ), terminal
+            local_entries = [
+                {
+                    "phase": "readiness", "outcome": "findings",
+                    "findings": [sentence], "blocked_on": [],
+                }
+                for sentence in findings
+            ]
+            # B5 merged deterministic payload: the fixed-semantic runner
+            # findings entry first, then one structured entry per fixed local
+            # product-gate finding.  Arbitrary prose never enters — the
+            # runner findings are the coordinator-minted bounded codes and
+            # the local gate entries are the fixed deterministic sentences.
+            payload = {
+                "schema": findings_module.PAYLOAD_SCHEMA_NAME,
+                "campaign_id": self._config.campaign_id,
+                "source_round": 0,
+                "entries": [
+                    dict(entry)
+                    for entry in (*runner_entries, *local_entries)
+                ],
+            }
+            findings_module.validate_readiness_payload(payload)
+            payload_raw = findings_module.payload_bytes(payload)
+            product_findings = plan_sha256(payload_raw)
+            findings_module.mint_readiness_findings(
+                self._root, campaign_id=self._config.campaign_id,
+                readiness_nonce=str(state.readiness["nonce"]),
+                accepted_commit=str(state.readiness["accepted_commit"]),
+                findings_payload=payload_raw,
+            )
+            state = self._publish_readiness(
+                state, status="infrastructure_ready", outcome="plannable",
+                aggregate=aggregate,
+                findings_aggregate=findings_aggregate,
+                capability=capability_digest, core=core_digest,
+                conformance=mapping_digest, human=human_digest,
+                product_findings=product_findings,
+            )
+            return state, None
+
+        state = self._publish_readiness(
+            state, status="complete", outcome="pass", aggregate=aggregate,
+            capability=capability_digest, core=core_digest,
             conformance=mapping_digest, human=human_digest)
         return state, None
 
@@ -3831,6 +4218,102 @@ class Campaign:
         )
         return head, tree, environment_blob
 
+    def _runner_findings_bindings(
+        self, state: state_module.FactoryState,
+        head: str, tree: str, environment_blob: str,
+    ) -> Dict[str, object]:
+        """Derive every B5 runner-findings projection binding (fail closed).
+
+        The committed ``.factory/environment.toml`` runner declarations, the
+        committed ``.factory/capability-contracts.json``, and the bound
+        contracts digest are the exact trusted authorities the strong
+        checker validated the aggregate against.  A declaration that cannot
+        be parsed, a contracts digest that disagrees with the bound
+        readiness state, or a malformed contract set fails closed: a binding
+        mismatch is an infrastructure failure, never a plannable findings
+        claim.
+        """
+        for label, value in (("commit", head), ("tree", tree),
+                             ("environment blob", environment_blob)):
+            if not SHA40_RE.fullmatch(str(value)):
+                raise CampaignBindingError(
+                    f"runner findings projection requires a 40-hex {label}"
+                )
+        try:
+            environment_raw = self._git.blob_at(
+                head, ".factory/environment.toml")
+        except CampaignGitError as exc:
+            raise CampaignBindingError(
+                "runner findings projection cannot read the committed "
+                ".factory/environment.toml"
+            ) from exc
+        try:
+            environment = tomllib.loads(environment_raw.decode("utf-8"))
+        except (UnicodeError, tomllib.TOMLDecodeError) as exc:
+            raise CampaignBindingError(
+                "the committed factory environment is not valid TOML"
+            ) from exc
+        declarations: Dict[str, Sequence[str]] = {}
+        runners = environment.get("runners", [])
+        if not isinstance(runners, list):
+            raise CampaignBindingError(
+                "the committed runner declarations are not an array"
+            )
+        for entry in runners:
+            if (
+                not isinstance(entry, dict)
+                or not isinstance(entry.get("name"), str)
+                or not isinstance(entry.get("capabilities"), list)
+                or not all(
+                    isinstance(capability, str)
+                    for capability in entry["capabilities"]
+                )
+            ):
+                raise CampaignBindingError(
+                    "a committed runner declaration is malformed"
+                )
+            declarations[entry["name"]] = [
+                str(capability) for capability in entry["capabilities"]
+            ]
+        if not declarations:
+            raise CampaignBindingError(
+                "runner findings projection requires declared runners"
+            )
+        try:
+            contracts_raw = self._git.blob_at(
+                head, ".factory/capability-contracts.json")
+        except CampaignGitError as exc:
+            raise CampaignBindingError(
+                "runner findings projection cannot read the committed "
+                ".factory/capability-contracts.json"
+            ) from exc
+        if plan_sha256(contracts_raw) != str(
+            state.readiness["contracts_sha256"]
+        ):
+            raise CampaignBindingError(
+                "the committed capability contracts disagree with the bound "
+                "contracts digest"
+            )
+        try:
+            contracts = json.loads(contracts_raw.decode("utf-8"))
+        except (UnicodeError, ValueError) as exc:
+            raise CampaignBindingError(
+                "the committed capability contracts are not valid JSON"
+            ) from exc
+        if (
+            not isinstance(contracts, dict)
+            or not isinstance(contracts.get("capabilities"), list)
+        ):
+            raise CampaignBindingError(
+                "the committed capability contracts must be an object with a "
+                "capabilities array"
+            )
+        return {
+            "contracts_sha256": str(state.readiness["contracts_sha256"]),
+            "declarations": declarations,
+            "contracts": contracts,
+        }
+
     def _read_runner_acquisition(self) -> Optional[Dict[str, object]]:
         state_directory = self._state_directory()
         if not state_directory.exists() and not state_directory.is_symlink():
@@ -4093,7 +4576,9 @@ class Campaign:
             )
             self._write_runner_acquisition(
                 attempt=attempt, status=status, head=head, tree=tree,
-                environment_blob=environment_blob, checker_exit=checker_exit,
+                environment_blob=environment_blob,
+                aggregate_sha256=(digest if runner_exit == RUNNER_FINDINGS_EXIT else ""),
+                checker_exit=checker_exit,
                 runner_exit=runner_exit, diagnostic=diagnostic,
             )
             return True, runner_exit, diagnostic
@@ -4106,10 +4591,16 @@ class Campaign:
         return True, -1, "runner protocol or aggregate integrity failure"
 
     def _run_gate(
-        self, command: Sequence[str], label: str
+        self, command: Sequence[str], label: str,
+        *, current_product: bool = False,
     ) -> Tuple[bool, int, str, bool]:
         if not command:
             return False, 0, "", False
+        # BLOCKER 5: the final acceptance gates must execute against the
+        # current exact HEAD worktree (``current_product=True``), never the
+        # initial accepted-commit closure, so a changed tree is certified by
+        # its own evidence rather than by the stale accepted commit.
+        is_current = current_product or label == "current product verification"
         held = {
             "capability": self._held_capability,
             "final capability": self._held_capability,
@@ -4155,7 +4646,7 @@ class Campaign:
                         self._spawn_held_script(held, list(command)[1:])
                     )
                 else:
-                    if label == "current product verification":
+                    if is_current:
                         if self._held_shell is None:
                             raise CampaignBindingError("pinned Bash authority is unavailable")
                         self._held_shell.revalidate(git=self._git, current_commit=self._git.head())
@@ -4192,8 +4683,8 @@ class Campaign:
                 spawn_argv,
                 executable=spawn_executable,
                 pass_fds=spawn_pass_fds,
-                env=self._gate_environment(current_product=label == "current product verification"),
-                cwd=(self._root if label == "current product verification"
+                env=self._gate_environment(current_product=is_current),
+                cwd=(self._root if is_current
                      else (self._command_closure_root or self._root)),
                 timeout=min(
                     self._config.gate_timeout,
@@ -4528,6 +5019,44 @@ class Campaign:
                     f"cannot consume the previous round's findings for the "
                     f"next planner: {exc}"
                 ) from exc
+        elif state.current_round == 1 and self._config.role_driver is None:
+            # BLOCKER 4: the round-1 authenticated readiness-findings channel.
+            # The planner receives the readiness findings only when readiness
+            # published infrastructure_ready/plannable with a digest-bound
+            # product-findings payload; a complete/pass readiness carries no
+            # findings (the channel returns ``None``).  Consumption is durable
+            # one-use: the write-once marker fails a genuine replay closed.
+            readiness = state.readiness
+            if (readiness.get("status") == "infrastructure_ready"
+                    and readiness.get("terminal_outcome") == "plannable"):
+                try:
+                    findings_payload = findings_module.consume_readiness_findings(
+                        self._root,
+                        campaign_id=self._config.campaign_id,
+                        readiness_nonce=str(readiness["nonce"]),
+                        accepted_commit=str(readiness["accepted_commit"]),
+                        expected_payload_sha256=str(
+                            readiness["product_findings_sha256"]),
+                    )
+                except findings_module.FindingsError as exc:
+                    raise CampaignFindingsError(
+                        f"cannot consume the readiness findings for the "
+                        f"round-1 planner: {exc}"
+                    ) from exc
+                if findings_payload is None:
+                    # FIND-01 fail-closed: an infrastructure_ready/plannable
+                    # readiness always carries a nonzero product-findings
+                    # digest (readiness.py), so a missing artifact means the
+                    # required findings never flowed.  The planner must never
+                    # launch without the digest-bound artifact.
+                    raise CampaignFindingsError(
+                        "cannot consume the readiness findings for the "
+                        "round-1 planner: the readiness result is "
+                        "infrastructure_ready/plannable with a nonzero "
+                        "product-findings digest but the readiness-findings "
+                        "artifact is missing; the planner must never launch "
+                        "without the required artifact"
+                    )
         role = self._run_role(
             "planner", state, head, attempt=attempt,
             findings_payload=findings_payload,
@@ -4554,9 +5083,28 @@ class Campaign:
             dirty, phase="planning",
             plan_path=self._config.plan_path, spec_path=self._config.spec_path,
         )
+        # BLOCKER 4 plan-digest backstop: the round-1 planner must propagate
+        # the readiness findings through the canonical plan authority (the
+        # committed revised plan), never as unauthoritative model memory.
+        # The backstop applies only to the round-1 readiness-findings
+        # channel; round>1 findings flow through the existing
+        # ``consume_next_round_findings``/``findings-revised`` seam whose
+        # driver already reflects the accepted findings into the plan.
+        findings_reflected = True
+        if findings_payload is not None and state.current_round == 1:
+            try:
+                findings_module.validate_plan_reflects_findings(
+                    plan_worktree, findings_payload)
+            except findings_module.FindingsError as exc:
+                findings_reflected = False
+                reason = (
+                    f"the revised plan does not reflect the readiness "
+                    f"findings: {exc}"
+                )
         outcome = classify_planning(
             role=role, plan_changed=plan_changed,
             plan_valid=valid, scope_ok=violation is None,
+            findings_reflected=findings_reflected,
         )
         self._end_untrusted(tag)
         if outcome == "planned":
@@ -5100,6 +5648,151 @@ class Campaign:
             state=state2,
         )
 
+    def _final_gate(
+        self,
+        role: RoleOutcome,
+        result_data: Dict[str, Any],
+    ) -> Tuple[RoleOutcome, Dict[str, Any], str]:
+        """Run the strict exact-HEAD final gate at the success transition.
+
+        Only the orchestrator-owned success transition may call this (the
+        caller guards on a valid pass auditor result, a clean scope, the final
+        requested round, and no embedded role driver).  Auditor JSON is never
+        sufficient for success: every exact-commit-bound production command
+        must execute without skips, the committed readiness policy's
+        conformance mapping must derive, and the independent human
+        graphics-approval / VRF-07 authority must revalidate at the current
+        exact HEAD.  Deterministic failures become findings; unavailable
+        facts/capabilities become infrastructure, never ordinary product
+        findings.  Returns the possibly-reclassified ``(role, result_data)``
+        and the accumulated gate detail.
+        """
+        acquisition_ran, acquisition_exit, acquisition_detail = (
+            self._ensure_runner_evidence()
+        )
+        cap_ran, cap_exit, cap_detail, cap_skipped = self._run_gate(
+            self._config.capability_command, "final capability",
+            current_product=True,
+        )
+        if acquisition_exit != 0:
+            cap_ran = acquisition_ran
+            cap_exit = acquisition_exit
+            cap_detail = acquisition_detail
+        core_ran, core_exit, core_detail, core_skipped = self._run_gate(
+            CORE_ACCEPTANCE_COMMAND, "final core acceptance",
+            current_product=True,
+        )
+        acc_ran, acc_exit, acc_detail, acc_skipped = self._run_gate(
+            self._config.acceptance_command, "final acceptance",
+            current_product=True,
+        )
+        # The committed readiness policy classifies the conformance and
+        # human authorities as ``product_acceptance`` and therefore turns
+        # them off per mint; the strict exact-HEAD final gate is their only
+        # enforcement point.  Nothing is reused from the readiness cache:
+        # conformance and the independent human approval / VRF-07 graphics
+        # authority are each freshly re-derived against the current exact
+        # HEAD before any success transition is permitted.
+        conf_ran, conf_exit, _conf_detail, conf_skipped = self._run_gate(
+            CONFORMANCE_VALIDATOR_COMMAND, "final conformance validator",
+            current_product=True,
+        )
+        final_mapping_ok = True
+        try:
+            readiness_module.validate_core_mapping(
+                self._git.blob_at(self._git.head(), DEFAULT_CONFORMANCE_PATH),
+                self._git.blob_at(
+                    self._git.head(), ".factory/requirement-policy.json"),
+            )
+        except readiness_module.ReadinessError:
+            final_mapping_ok = False
+        final_human_ok = True
+        human_authority_available = False
+        try:
+            approval_raw = self._git.blob_at(
+                self._git.head(), readiness_module.APPROVAL_PATH)
+            if not approval_raw:
+                raise ValueError(
+                    "missing human approval blob at current exact HEAD")
+            trust_raw, _ = readiness_module.read_external_authority(
+                Path(self._config.human_trust_anchor),
+                self._config.human_trust_anchor_sha256)
+            human_authority_available = True
+            readiness_module.validate_human_approval(
+                approval_raw, accepted_commit=self._git.head(),
+                trust_raw=trust_raw, blob_at=self._git.blob_at,
+                object_id=self._git.object_id,
+                is_ancestor=self._git.is_ancestor,
+                diff_paths=self._git.diff_paths)
+            approval = json.loads(approval_raw)
+            readiness_module.validate_human_conformance(
+                self._git.blob_at(self._git.head(), DEFAULT_CONFORMANCE_PATH),
+                candidate_commit=str(approval["candidate_commit"]))
+            final_human_ok = True
+        except (readiness_module.HumanApprovalBlocked, ValueError, KeyError):
+            # An approval/VRF-07 binding that fails to revalidate for the
+            # current exact HEAD while the authority is present is a
+            # product-level finding.  A missing/malformed approval blob or
+            # an unreadable external trust anchor (authority unavailable)
+            # is infrastructure, never an ordinary product finding.
+            final_human_ok = False
+        failures: List[str] = []
+        final_gate_detail = ""
+        if not cap_ran or cap_exit != 0 or cap_skipped:
+            failures.append("final capability/evidence command did not pass without skips")
+        if not core_ran or core_exit != 0 or core_skipped:
+            failures.append("final core acceptance command did not pass without skips")
+        if not acc_ran or acc_exit != 0 or acc_skipped:
+            failures.append("final Controller acceptance command did not pass without skips")
+        conf_ok = (
+            conf_ran and conf_exit == 0 and not conf_skipped and final_mapping_ok
+        )
+        if not conf_ok:
+            failures.append(
+                "final conformance validator did not pass without skips")
+        if not final_human_ok and human_authority_available:
+            failures.append(
+                "final human graphics approval/VRF-07 did not revalidate "
+                "at current exact HEAD")
+        if failures:
+            result_data = dict(result_data)
+            result_data["outcome"] = "findings"
+            result_data["findings"] = [
+                *list(result_data.get("findings", [])), *failures
+            ]
+            final_gate_detail = "; ".join(failures)
+        authority_failure = (
+            acquisition_exit < 0
+            or acquisition_exit in (
+                RUNNER_TRANSPORT_EXIT, RUNNER_INTEGRITY_EXIT,
+            )
+            or any(
+                (not ran) or code < 0 or code in (
+                    RUNNER_TRANSPORT_EXIT, RUNNER_INTEGRITY_EXIT, 126, 127,
+                )
+                for ran, code in (
+                    (cap_ran, cap_exit), (acc_ran, acc_exit),
+                )
+            )
+            or not core_ran or core_exit < 0 or core_exit not in (0, 1)
+            or cap_skipped or core_skipped or acc_skipped
+            or (not conf_ran or conf_exit < 0
+                or conf_exit in (126, 127) or conf_skipped
+                or not final_mapping_ok)
+            or (not final_human_ok and not human_authority_available)
+        )
+        # The core authority has an intentionally narrow exit contract:
+        # 0 pass, 1 acceptance findings, everything else infrastructure.
+        if authority_failure:
+            # Missing/substituted/unexecuted/command-not-found/timeout or
+            # signed-protocol integrity failures are control-plane
+            # infrastructure, never ordinary product findings.
+            role = replace(
+                role, exit_status=-1,
+                diagnostic="final acceptance authority failure",
+            )
+        return role, result_data, final_gate_detail
+
     def _step_audit(self, state: state_module.FactoryState) -> _Step:
         head = self._git.head()
         # One fresh retry absorbs a transient/malformed/missing auditor process
@@ -5153,61 +5846,13 @@ class Campaign:
             and state.current_round == self._config.rounds_requested
             and self._config.role_driver is None
         ):
-            # Auditor JSON is never sufficient for campaign success.  At the
-            # only transition that could yield success, execute both exact-
-            # commit-bound production commands and reject nonzero, unrun, or
-            # skip-marked output.  Deterministic failures become findings;
-            # unavailable facts/capabilities therefore cannot be elevated.
-            acquisition_ran, acquisition_exit, acquisition_detail = (
-                self._ensure_runner_evidence()
-            )
-            cap_ran, cap_exit, cap_detail, cap_skipped = self._run_gate(
-                self._config.capability_command, "final capability"
-            )
-            if acquisition_exit != 0:
-                cap_ran = acquisition_ran
-                cap_exit = acquisition_exit
-                cap_detail = acquisition_detail
-            core_ran, core_exit, core_detail, core_skipped = self._run_gate(
-                CORE_ACCEPTANCE_COMMAND, "final core acceptance"
-            )
-            acc_ran, acc_exit, acc_detail, acc_skipped = self._run_gate(
-                self._config.acceptance_command, "final acceptance"
-            )
-            failures: List[str] = []
-            if not cap_ran or cap_exit != 0 or cap_skipped:
-                failures.append("final capability/evidence command did not pass without skips")
-            if not core_ran or core_exit != 0 or core_skipped:
-                failures.append("final core acceptance command did not pass without skips")
-            if not acc_ran or acc_exit != 0 or acc_skipped:
-                failures.append("final Controller acceptance command did not pass without skips")
-            if failures:
-                result_data = dict(result_data)
-                result_data["outcome"] = "findings"
-                result_data["findings"] = [
-                    *list(result_data.get("findings", [])), *failures
-                ]
-                final_gate_detail = "; ".join(failures)
-            authority_failure = (
-                acquisition_exit < 0
-                or any(
-                    (not ran) or code < 0 or code in (126, 127)
-                    for ran, code in (
-                        (cap_ran, cap_exit), (acc_ran, acc_exit),
-                    )
-                )
-                or not core_ran or core_exit < 0 or core_exit not in (0, 1)
-            )
-            # The core authority has an intentionally narrow exit contract:
-            # 0 pass, 1 acceptance findings, everything else infrastructure.
-            if authority_failure:
-                # Missing/substituted/unexecuted/command-not-found/timeout or
-                # signed-protocol integrity failures are control-plane
-                # infrastructure, never ordinary product findings.
-                role = replace(
-                    role, exit_status=-1,
-                    diagnostic="final acceptance authority failure",
-                )
+            # Auditor JSON is never sufficient for campaign success.  Delegate
+            # the strict exact-HEAD classification to ``_final_gate``, a
+            # focused seam extracted so the pass/findings/infrastructure
+            # decision is behaviorally testable without a full untrusted
+            # auditor round.
+            role, result_data, final_gate_detail = self._final_gate(
+                role, result_data)
         outcome = classify_audit(
             role=role,
             scope_ok=violation is None,
@@ -5332,7 +5977,8 @@ class Campaign:
             else:
                 if (self._config.readiness_only and state.current_phase == "planning"
                         and state.readiness.get("required") is True
-                        and state.readiness.get("status") == "complete"):
+                        and state.readiness.get("status") in (
+                            "complete", "infrastructure_ready")):
                     self._assert_readiness(state)
                     terminal_outcome = "readiness_complete"
                     terminal_phase = "readiness_complete"

@@ -164,7 +164,7 @@ class ReadinessTests(unittest.TestCase):
     def test_launch_authorization_requires_complete_bindings_and_is_restart_durable(self):
         bindings={"accepted_commit":self.candidate,"tree":self.tree,"environment_blob":self.candidate,
             "specification_sha256":"1"*64,"plan_sha256":"2"*64,"conformance_sha256":"3"*64,
-            "policy_sha256":"4"*64,"contracts_sha256":"5"*64,"install_manifest_sha256":"6"*64,
+            "policy_sha256":"4"*64,"readiness_policy_sha256":"44"*32,"contracts_sha256":"5"*64,"install_manifest_sha256":"6"*64,
             "command_authority_sha256":"7"*64,"human_authority_sha256":"8"*64,"trust_authority_sha256":"9"*64}
         results={"aggregate_sha256":"a"*64,"findings_aggregate_sha256":"0"*64,
             "capability_result_sha256":"b"*64,"core_result_sha256":"c"*64,
@@ -187,7 +187,7 @@ class ReadinessTests(unittest.TestCase):
 
     def test_result_exact_bindings_status_and_nonzero_pass_digests(self):
         bindings = {"accepted_commit":"a"*40,"tree":"b"*40,"environment_blob":"c"*40,
-                    **{k:"d"*64 for k in ("specification_sha256","plan_sha256","conformance_sha256","policy_sha256","contracts_sha256","install_manifest_sha256","command_authority_sha256","human_authority_sha256","trust_authority_sha256")}}
+                    **{k:"d"*64 for k in ("specification_sha256","plan_sha256","conformance_sha256","policy_sha256","readiness_policy_sha256","contracts_sha256","install_manifest_sha256","command_authority_sha256","human_authority_sha256","trust_authority_sha256")}}
         results = {k:"e"*64 for k in ("aggregate_sha256","capability_result_sha256","core_result_sha256","conformance_result_sha256","human_result_sha256")}
         results.update({"findings_aggregate_sha256": "0"*64, "product_findings_sha256": "0"*64})
         value = readiness.result_document(campaign_id="campaign-a", nonce="f"*64,

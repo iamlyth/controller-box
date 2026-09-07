@@ -47,6 +47,7 @@ of real model acceptance or real confinement).
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import hashlib
 import json
@@ -70,6 +71,7 @@ STATE_DIR = ".factory-state"
 sys.path.insert(0, str(LOOP))
 import audit_objectives as audit_objectives_module  # noqa: E402
 import campaign as campaign_module  # noqa: E402
+import findings as findings_module  # noqa: E402
 import gitutil  # noqa: E402
 import launch as launch_module  # noqa: E402
 import pre_round as pre_round_module  # noqa: E402
@@ -3103,6 +3105,794 @@ class RunnerAcquisitionLifecycleTests(_CampaignBase):
                         accepted_commit=base.phase_base_commit,
                         install_manifest="/trusted/manifest.json",
                     )
+
+
+class _FinalGateHarness:
+    """Stand-in exposing the exact collaborator surface ``_final_gate`` reads.
+
+    ``Campaign._final_gate`` is exercised as an unbound method on this object so
+    the strict exact-HEAD pass/findings/infrastructure decision is behaviorally
+    tested without a full untrusted auditor round or real runner acquisition.
+    ``calls`` records ``(label, current_product)`` for every ``_run_gate`` so a
+    test can assert every final gate executes against the current product tree.
+    """
+
+    def __init__(self, *, acquisition, gates, config, git):
+        self.acquisition = acquisition  # (ran, exit, detail) from the runner
+        self.gates = gates              # label -> (ran, exit, detail, skipped)
+        self.calls: list[tuple[str, bool]] = []
+        self._config = config
+        self._git = git
+
+    def _ensure_runner_evidence(self):
+        return self.acquisition
+
+    def _run_gate(self, command, label, *, current_product=False):
+        self.calls.append((label, current_product))
+        return self.gates[label]
+
+
+class FinalGateDirect(_CampaignBase):
+    """Direct unit tests of the strict exact-HEAD ``_final_gate`` seam.
+
+    The success transition is never granted on auditor JSON alone: every
+    exact-commit-bound command must execute without skips, the committed
+    readiness conformance mapping must derive, and the independent human
+    graphics-approval / VRF-07 authority must revalidate at the current
+    exact HEAD.  Deterministic failures become findings and can never reach
+    success; missing/substituted/unexecuted gates and signed-runner
+    transport/integrity failures are control-plane infrastructure.
+    """
+
+    APPROVAL = json.dumps({
+        "candidate_commit": "a" * 40,
+        "schema": "human-approval/v1",
+        "signature": "sig",
+    }).encode()
+
+    def _config(self):
+        cfg = unittest.mock.Mock()
+        cfg.capability_command = ("./scripts/check-capability-evidence.py",)
+        cfg.acceptance_command = ("./scripts/final-gate.sh",)
+        cfg.human_trust_anchor = "/trusted/anchor.json"
+        cfg.human_trust_anchor_sha256 = "0" * 64
+        return cfg
+
+    def _git(self):
+        g = unittest.mock.Mock()
+        g.head.return_value = "c" * 40
+        g.blob_at.side_effect = lambda commit, relpath: (
+            self.APPROVAL
+            if relpath == campaign_module.readiness_module.APPROVAL_PATH
+            else b"{}"
+        )
+        return g
+
+    def _harness(self, *, acquisition=(True, 0, ""), gates=None):
+        default = {
+            "final capability": (True, 0, "", False),
+            "final core acceptance": (True, 0, "", False),
+            "final acceptance": (True, 0, "", False),
+            "final conformance validator": (True, 0, "", False),
+        }
+        default.update(gates or {})
+        return _FinalGateHarness(
+            acquisition=acquisition, gates=default,
+            config=self._config(), git=self._git(),
+        )
+
+    @contextlib.contextmanager
+    def _readiness(self, *, mapping_ok=True, human_ok=True):
+        if mapping_ok:
+            core_mapping = unittest.mock.Mock(return_value="ok")
+        else:
+            core_mapping = unittest.mock.Mock(
+                side_effect=campaign_module.readiness_module.ReadinessError(
+                    "mapping"))
+        if human_ok:
+            human_approval = unittest.mock.Mock(return_value="ok")
+        else:
+            human_approval = unittest.mock.Mock(
+                side_effect=(
+                    campaign_module.readiness_module.HumanApprovalBlocked(
+                        "blocked")))
+        with unittest.mock.patch.multiple(
+            campaign_module.readiness_module,
+            validate_core_mapping=core_mapping,
+            read_external_authority=unittest.mock.Mock(
+                return_value=(b"trust-raw", b"")),
+            validate_human_approval=human_approval,
+            validate_human_conformance=unittest.mock.Mock(return_value="ok"),
+        ):
+            yield
+
+    def _audit_role(self):
+        return campaign_module.RoleOutcome(
+            role="auditor", exit_status=0, diagnostic="")
+
+    def test_all_authorities_pass_preserves_pass(self) -> None:
+        role = self._audit_role()
+        result = {"schema": "audit-result/v1", "outcome": "pass",
+                  "findings": []}
+        harness = self._harness()
+        with self._readiness():
+            out_role, out_result, detail = (
+                campaign_module.Campaign._final_gate(
+                    harness, role, dict(result)))
+        # A fully passing strict gate leaves the outcome untouched: the pass
+        # auditor may transition to success.
+        self.assertEqual(out_role, role)
+        self.assertEqual(out_role.exit_status, 0)
+        self.assertEqual(out_result["outcome"], "pass")
+        self.assertEqual(out_result["findings"], [])
+        self.assertEqual(detail, "")
+        # Every final gate executes against the current exact product tree.
+        labels = [label for label, _ in harness.calls]
+        self.assertEqual(labels, [
+            "final capability", "final core acceptance",
+            "final acceptance", "final conformance validator",
+        ])
+        for _, current_product in harness.calls:
+            self.assertTrue(current_product)
+
+    def test_runner_transport_and_integrity_failure_are_infrastructure(self) -> None:
+        for exit_code, kind in (
+            (campaign_module.RUNNER_TRANSPORT_EXIT, "transport"),
+            (campaign_module.RUNNER_INTEGRITY_EXIT, "integrity"),
+        ):
+            with self.subTest(kind=kind):
+                role = self._audit_role()
+                result = {"schema": "audit-result/v1", "outcome": "pass",
+                          "findings": []}
+                harness = self._harness(
+                    acquisition=(False, exit_code, f"{kind} detail"))
+                with self._readiness():
+                    out_role, out_result, detail = (
+                        campaign_module.Campaign._final_gate(
+                            harness, role, dict(result)))
+                # A signed-runner transport/integrity authority failure is
+                # control-plane infrastructure and can never be satisfied by
+                # fixing the product.
+                self.assertEqual(out_role.exit_status, -1)
+                self.assertEqual(
+                    out_role.diagnostic, "final acceptance authority failure")
+                # The capability gate inherits the acquisition failure, so the
+                # reclassified result also carries that recorded finding.
+                self.assertEqual(out_result["outcome"], "findings")
+                self.assertIn(
+                    "final capability/evidence command did not pass without "
+                    "skips", out_result["findings"])
+
+    def test_skipped_or_unavailable_gates_fail_infrastructure(self) -> None:
+        for label, gates, human_ok in (
+            ("final capability",
+             {"final capability": (True, 0, "", True)}, True),
+            ("final core acceptance",
+             {"final core acceptance": (True, 0, "", True)}, True),
+            ("final acceptance",
+             {"final acceptance": (True, 0, "", True)}, True),
+            ("final conformance validator",
+             {"final conformance validator": (True, 0, "", True)}, True),
+            ("final capability unavailable",
+             {"final capability": (False, 0, "", False)}, True),
+            ("final core acceptance not run (unavailable)",
+             {"final core acceptance": (False, 0, "", False)}, True),
+        ):
+            with self.subTest(gate=label):
+                role = self._audit_role()
+                result = {"schema": "audit-result/v1", "outcome": "pass",
+                          "findings": []}
+                harness = self._harness(gates=gates)
+                with self._readiness(human_ok=human_ok):
+                    out_role, out_result, _detail = (
+                        campaign_module.Campaign._final_gate(
+                            harness, role, dict(result)))
+                # A skipped or unexecuted authority means the exact tree was
+                # never fully certified: fail closed as infrastructure.
+                self.assertEqual(out_role.exit_status, -1)
+                self.assertEqual(
+                    out_role.diagnostic, "final acceptance authority failure")
+
+    def test_deterministic_conformance_human_product_nonpass_yields_findings(
+        self) -> None:
+        # Deterministic non-passes (a conformance/acceptance command whose
+        # probe ran and returned findings, or a human approval that fails to
+        # revalidate at the current exact HEAD) are legitimate product
+        # findings: the role is NOT reclassified to infrastructure, yet the
+        # campaign can never reach success.
+        scenarios = [
+            ("conformance findings",
+             {"final conformance validator": (True, 1, "partial rows", False)},
+             True),
+            ("acceptance findings",
+             {"final acceptance": (True, 1, "test failed", False)}, True),
+            ("capability findings",
+             {"final capability": (True, 1, "probe failed", False)}, True),
+            ("human approval/VRF-07 revalidation", {}, False),
+        ]
+        for name, gates, human_ok in scenarios:
+            with self.subTest(case=name):
+                role = self._audit_role()
+                result = {"schema": "audit-result/v1", "outcome": "pass",
+                          "findings": []}
+                harness = self._harness(gates=gates)
+                with self._readiness(human_ok=human_ok):
+                    out_role, out_result, detail = (
+                        campaign_module.Campaign._final_gate(
+                            harness, role, dict(result)))
+                # The product-level authority failure stays a finding, never
+                # control-plane infrastructure.
+                self.assertEqual(out_role.exit_status, 0)
+                self.assertEqual(out_result["outcome"], "findings")
+                self.assertTrue(out_result["findings"])
+                self.assertTrue(detail)
+                # The real classifier confirms the campaign cannot succeed: a
+                # deterministic non-pass is at most ``findings``.
+                outcome = campaign_module.classify_audit(
+                    role=out_role, scope_ok=True, result_valid=True,
+                    outcome=out_result["outcome"],
+                    findings=out_result["findings"], blocked_refs=[])
+                self.assertEqual(outcome, "findings")
+                self.assertNotEqual(outcome, "pass")
+
+    def test_mapping_or_authority_unavailability_fails_infrastructure(self) -> None:
+        # A conformance mapping that cannot derive from the committed policy
+        # (ReadinessError) or an unavailable external human trust anchor means
+        # the authority cannot run: infrastructure, not a product finding.
+        role = self._audit_role()
+        result = {"schema": "audit-result/v1", "outcome": "pass",
+                  "findings": []}
+        harness = self._harness()
+        with self._readiness(mapping_ok=False):
+            out_role, out_result, _detail = (
+                campaign_module.Campaign._final_gate(
+                    harness, role, dict(result)))
+        self.assertEqual(out_role.exit_status, -1)
+        self.assertEqual(
+            out_role.diagnostic, "final acceptance authority failure")
+
+
+class _RunnerFindingsReadinessHarness(campaign_module.Campaign):
+    """Direct round-zero seam overrides for the B5 readiness tests.
+
+    Only the untrusted authority entry points (runner acquisition, the
+    readiness binding seed, and the gate results) are stubbed; every real B5
+    path — the hardened no-follow aggregate/manifest re-reads, the archive
+    binding derivation, the projection, the merged payload mint, and the
+    published terminal state — executes the production code.
+    """
+
+    def __init__(self, config, *, acquisition, gates, binding):
+        super().__init__(config)
+        self._test_acquisition = acquisition
+        self._test_gates = gates
+        self._test_binding = binding
+        self.gate_calls = []
+
+    def _initial_readiness_binding(self):
+        return dict(self._test_binding)
+
+    def _ensure_runner_evidence(self):
+        return (
+            True,
+            campaign_module.RUNNER_FINDINGS_EXIT,
+            "declared runner verification did not pass",
+        )
+
+    def _read_runner_acquisition(self):
+        return (
+            dict(self._test_acquisition)
+            if self._test_acquisition is not None else None
+        )
+
+    def _run_gate(self, command, label, *, current_product=False):
+        self.gate_calls.append((label, current_product))
+        return self._test_gates[label]
+
+    def _persist_state(
+        self, value: campaign_module.state_module.FactoryState,
+    ) -> campaign_module.state_module.FactoryState:
+        """The real publish/reopen/digest-verify transition, with the
+        readiness-required expectation pinned to the production policy this
+        direct suite drives (the fixture's role-driver seam would otherwise
+        expect a non-readiness state)."""
+        state_module.write_state(self._root, value)
+        reread = state_module.load_state(
+            self._root, expected_branch=self._config.branch,
+            expected_campaign_id=self._config.campaign_id,
+            expected_rounds_requested=self._config.rounds_requested,
+            expected_readiness_required=True,
+        )
+        if (
+            reread != value
+            or state_module.state_digest(reread)
+            != state_module.state_digest(value)
+        ):
+            raise campaign_module.CampaignRecoveryError(
+                "persisted state bytes differ from the recovered transition"
+            )
+        return reread
+
+
+class RunnerFindingsReadinessTests(_CampaignBase):
+    """B5 direct campaign tests: round-zero readiness projects the validated
+    signed findings aggregate into fixed-semantic structured findings.
+
+    A real fixture workspace provides the trusted Git/config surface; the
+    untrusted authority seams (runner acquisition, gates, human trust,
+    conformance mapping) are stubbed exactly like the other direct seam
+    suites while the aggregate re-read, the signed-manifest archive binding
+    derivation, the projection, the merged payload mint, and the published
+    infrastructure-ready state exercise the real implementation paths.  Any
+    absent, path-escaping, malformed, digest-mismatched, binding-mismatched,
+    skipped/simulated, or prose artifact fails the campaign closed as an
+    infrastructure failure — never a plannable claim.
+    """
+
+    RUNNER = "dev-runner-vm"
+    CAPABILITY = "remote-project-gate"
+    NONCE = "ab" * 32
+
+    def expected_code(self, exit_code: int = 8) -> str:
+        return (
+            f"{findings_module.RUNNER_FINDINGS_CODE}:"
+            f"{self.RUNNER}:{self.CAPABILITY}:{exit_code}"
+        )
+
+    def _policy_raw(self) -> bytes:
+        return (ROOT / ".factory" / "readiness-policy.json").read_bytes()
+
+    def _environment_raw(self) -> bytes:
+        return (
+            "schema_version = 1\n\n"
+            "[[runners]]\n"
+            f"name = \"{self.RUNNER}\"\n"
+            "transport = \"ssh\"\n"
+            'verify_argv = ["./scripts/verify-project.sh"]\n'
+            f"capabilities = [\"{self.CAPABILITY}\"]\n"
+        ).encode()
+
+    def _contracts_raw(self) -> bytes:
+        return json.dumps({
+            "schema": "ralph-capability-contract/v2",
+            "description": "fixture",
+            "capabilities": [{
+                "name": self.CAPABILITY,
+                "status": "declared",
+                "runner_class": self.RUNNER,
+                "must_execute": True,
+                "candidate_probe_argv": ["./scripts/verify-project.sh"],
+            }],
+        }, sort_keys=True, separators=(",", ":")).encode()
+
+    def _manifest(
+        self, *, commit: str, tree: str, env_blob: str, nonce: str,
+        **overrides,
+    ) -> dict:
+        manifest = {
+            "schema": "factory-runner-findings-receipt/v1",
+            "result": "findings",
+            "runner": self.RUNNER,
+            "commit": commit,
+            "tree": tree,
+            "environment_blob": env_blob,
+            "archive_sha256": "4" * 64,
+            "capabilities": [self.CAPABILITY],
+            "campaign_id": "campaign",
+            "readiness_nonce": nonce,
+            "authority_sha256": "5" * 64,
+            "nonce": nonce,
+            "exit_code": 8,
+            "timed_out": False,
+            "cleanup": True,
+            "skip_marker_detected": False,
+        }
+        manifest.update(overrides)
+        return manifest
+
+    def _record(
+        self, *, commit: str, nonce: str, manifest_raw: bytes, **overrides,
+    ) -> dict:
+        record = {
+            "name": self.RUNNER,
+            "manifest": (
+                ".factory-state/runner-evidence/campaign/"
+                f"{nonce}/{self.RUNNER}/{commit}/{nonce}/manifest.json"
+            ),
+            "manifest_sha256": sha256(manifest_raw),
+            "result": "findings",
+            "capabilities": [self.CAPABILITY],
+            "probes": [{
+                "capability": self.CAPABILITY,
+                "exit_code": 8,
+                "timed_out": False,
+            }],
+            "artifact_manifest_sha256": "6" * 64,
+            "artifact_count": 1,
+            "artifact_bytes": 1024,
+            "signer": {
+                "principal": self.RUNNER,
+                "key_sha256": "7" * 64,
+                "algorithm": "ssh-ed25519",
+                "signature_sha256": "8" * 64,
+            },
+        }
+        record.update(overrides)
+        return record
+
+    @contextlib.contextmanager
+    def _readiness_authorities(self, *, human_blocked: bool = True):
+        if human_blocked:
+            human = unittest.mock.Mock(
+                side_effect=(
+                    campaign_module.readiness_module.HumanApprovalBlocked(
+                        "blocked")))
+        else:
+            human = unittest.mock.Mock(return_value="2" * 64)
+        with unittest.mock.patch.multiple(
+            campaign_module.readiness_module,
+            validate_core_mapping=unittest.mock.Mock(
+                return_value="1" * 64),
+            read_external_authority=unittest.mock.Mock(
+                return_value=(b"trust-raw", b"")),
+            validate_human_approval=human,
+            validate_human_conformance=unittest.mock.Mock(
+                return_value="c" * 64),
+        ):
+            yield
+
+    def _build(
+        self,
+        *,
+        gate_results=None,
+        human_blocked=True,
+        acquisition_digest=None,
+        aggregate=None,
+        aggregate_overrides=None,
+        aggregate_bytes=None,
+        write_aggregate=True,
+        manifest_overrides=None,
+        records=None,
+    ):
+        ws = self.make(SUCCESS_SCENARIO)
+        config = ws.derive_config()
+        nonce = self.NONCE
+        commit = _git(ws.root, "rev-parse", "HEAD").stdout.strip()
+        tree = _git(ws.root, "rev-parse", "HEAD^{tree}").stdout.strip()
+        env_blob = "c" * 40
+        policy_raw = self._policy_raw()
+        environment_raw = self._environment_raw()
+        contracts_raw = self._contracts_raw()
+        git = unittest.mock.Mock()
+        git.role_dirty_paths.return_value = False
+        git.head.return_value = commit
+        git.object_id.side_effect = lambda rev: {
+            f"{commit}^{{tree}}": tree,
+            f"{commit}:.factory/environment.toml": env_blob,
+        }[rev]
+        git.blob_at.side_effect = lambda c, relpath: {
+            campaign_module.readiness_module.READINESS_POLICY_PATH: policy_raw,
+            campaign_module.DEFAULT_CONFORMANCE_PATH: b"{}",
+            ".factory/requirement-policy.json": b"{}",
+            campaign_module.readiness_module.APPROVAL_PATH: (
+                b'{"candidate_commit": "' + commit.encode() + b'"}'),
+            ".factory/environment.toml": environment_raw,
+            ".factory/capability-contracts.json": contracts_raw,
+        }.get(relpath, b"")
+        binding = state_module.empty_readiness(required=True)
+        binding.update({
+            "nonce": nonce,
+            "accepted_commit": commit,
+            "tree": tree,
+            "environment_blob": env_blob,
+            "specification_sha256": config.specification_digest,
+            "plan_sha256": config.plan_digest,
+            "conformance_sha256": "1" * 64,
+            "policy_sha256": "2" * 64,
+            "readiness_policy_sha256": campaign_module.plan_sha256(
+                policy_raw),
+            "contracts_sha256": campaign_module.plan_sha256(
+                contracts_raw),
+            "install_manifest_sha256": "3" * 64,
+            "command_authority_sha256": "9" * 64,
+            "human_authority_sha256": "a" * 64,
+            "trust_authority_sha256": "b" * 64,
+        })
+        state = state_module.init_state(
+            ws.root,
+            campaign_id=config.campaign_id,
+            rounds_requested=config.rounds_requested,
+            specification_digest=config.specification_digest,
+            plan_digest=config.plan_digest,
+            role_prompt_digests=dict(config.role_prompt_digests),
+            audit_objectives_digest=config.audit_objectives_digest,
+            pre_round_hook_configuration_digest=(
+                config.pre_round_hook_configuration_digest),
+            pre_round_hook_commit=config.pre_round_hook_commit,
+            phase_base_commit=config.phase_base_commit,
+            readiness_required=True,
+            readiness_binding=binding,
+            branch=config.branch,
+        )
+        # The mutable worktree policy must be byte-bound to the committed
+        # policy digest the readiness state binds.
+        (ws.root / ".factory" / "readiness-policy.json").write_bytes(
+            policy_raw)
+        if records is None:
+            manifest = self._manifest(
+                commit=commit, tree=tree, env_blob=env_blob, nonce=nonce,
+                **(manifest_overrides or {}))
+            manifest_raw = json.dumps(
+                manifest, sort_keys=True, separators=(",", ":")).encode()
+            record = self._record(
+                commit=commit, nonce=nonce, manifest_raw=manifest_raw)
+            records = [record]
+        else:
+            manifest_raw = None
+        if aggregate_bytes is None:
+            if aggregate is None:
+                aggregate = {
+                    "schema": "factory-runner-findings-aggregate/v1",
+                    "campaign_id": "campaign",
+                    "readiness_nonce": nonce,
+                    "commit": commit,
+                    "tree": tree,
+                    "environment_blob": env_blob,
+                    "runners": records,
+                }
+            if aggregate_overrides:
+                aggregate.update(aggregate_overrides)
+            aggregate_bytes = (
+                json.dumps(
+                    aggregate, sort_keys=True, separators=(",", ":")).encode()
+                + b"\n"
+            )
+        digest = acquisition_digest or sha256(aggregate_bytes)
+        if write_aggregate:
+            evidence_dir = (
+                ws.root / ".factory-state" / "runner-evidence"
+                / "campaign" / nonce
+            )
+            evidence_dir.mkdir(mode=0o700, parents=True)
+            for candidate in (
+                ws.root / ".factory-state" / "runner-evidence",
+                ws.root / ".factory-state" / "runner-evidence" / "campaign",
+                evidence_dir,
+            ):
+                candidate.chmod(0o700)
+            aggregate_path = evidence_dir / "findings-aggregate.json"
+            aggregate_path.write_bytes(aggregate_bytes)
+            os.chmod(aggregate_path, 0o600)
+        if manifest_raw is not None:
+            runner_dir = (
+                ws.root / ".factory-state" / "runner-evidence"
+                / "campaign" / nonce / self.RUNNER / commit / nonce
+            )
+            runner_dir.mkdir(mode=0o700, parents=True)
+            for candidate in (
+                ws.root / ".factory-state" / "runner-evidence"
+                / "campaign" / nonce / self.RUNNER,
+                ws.root / ".factory-state" / "runner-evidence"
+                / "campaign" / nonce / self.RUNNER / commit,
+                runner_dir,
+            ):
+                candidate.chmod(0o700)
+            manifest_path = runner_dir / "manifest.json"
+            manifest_path.write_bytes(manifest_raw)
+            os.chmod(manifest_path, 0o600)
+        gates = {
+            "capability": (True, 0, "", False),
+            "core acceptance": (True, 0, "", False),
+            "conformance validator": (True, 0, "", False),
+        }
+        gates.update(gate_results or {})
+        acquisition = {
+            "status": "findings",
+            "aggregate_sha256": digest,
+            "head": commit,
+            "tree": tree,
+            "environment_blob": env_blob,
+        }
+        harness = _RunnerFindingsReadinessHarness(
+            config, acquisition=acquisition, gates=gates, binding=binding)
+        harness._git = git
+        return ws, harness, state, {
+            "nonce": nonce, "commit": commit, "tree": tree,
+            "env_blob": env_blob, "aggregate_bytes": aggregate_bytes,
+            "digest": digest, "manifest_raw": manifest_raw,
+            "records": records,
+        }
+
+    def _readiness(self, ws):
+        return state_module.load_state(
+            ws.root,
+            expected_branch=BRANCH,
+            expected_campaign_id="campaign",
+            expected_rounds_requested=1,
+            expected_readiness_required=True,
+        ).readiness
+
+    # -- positive projection ------------------------------------------------
+
+    def test_runner_findings_projection_publishes_digest_bound_plannable(
+        self,
+    ) -> None:
+        ws, harness, state, ctx = self._build()
+        with self._readiness_authorities(human_blocked=False):
+            final_state, terminal = harness._run_readiness(state)
+        self.assertIsNone(terminal)
+        readiness = self._readiness(ws)
+        self.assertEqual(readiness["status"], "infrastructure_ready")
+        self.assertEqual(readiness["terminal_outcome"], "plannable")
+        self.assertEqual(
+            readiness["findings_aggregate_sha256"], ctx["digest"])
+        # The canonical payload digest is the one the readiness artifact/state
+        # binds — never a self-derived or free-text digest.
+        artifact = json.loads(
+            (ws.root / ".factory-state"
+             / findings_module.READINESS_FINDINGS_NAME).read_bytes())
+        self.assertEqual(artifact["campaign_id"], "campaign")
+        self.assertEqual(
+            artifact["readiness_nonce"], ctx["nonce"])
+        self.assertEqual(
+            artifact["accepted_commit"], ctx["commit"])
+        payload = artifact["payload"]
+        self.assertEqual(payload["schema"], "factory-findings/v1")
+        self.assertEqual(payload["source_round"], 0)
+        self.assertEqual(len(payload["entries"]), 1)
+        entry = payload["entries"][0]
+        self.assertEqual(entry["phase"], "readiness")
+        self.assertEqual(entry["outcome"], "findings")
+        self.assertEqual(entry["findings"], [self.expected_code()])
+        self.assertEqual(entry["blocked_on"], [])
+        # The structured payload is prose-free and its digest binds exactly.
+        self.assertEqual(
+            artifact["payload_sha256"],
+            findings_module.sha256(findings_module.payload_bytes(payload)))
+        self.assertEqual(
+            readiness["product_findings_sha256"],
+            campaign_module.plan_sha256(
+                findings_module.payload_bytes(payload)))
+        self.assertEqual(
+            readiness["product_findings_sha256"],
+            artifact["payload_sha256"],
+        )
+        # The three infrastructure/product authorities executed.
+        self.assertEqual(
+            [label for label, _ in harness.gate_calls],
+            ["capability", "core acceptance", "conformance validator"])
+        # The published state advances the round-zero terminal to planning.
+        self.assertEqual(final_state.current_phase, "planning")
+        self.assertEqual(final_state.current_round, 1)
+
+    def test_local_product_gate_findings_merge_into_structured_entries(
+        self,
+    ) -> None:
+        # The fixed local product-gate findings merge after the structured
+        # runner entry into one canonical deterministic payload; the runner
+        # prose sentence never appears.
+        ws, harness, state, ctx = self._build(
+            gate_results={
+                "core acceptance": (True, 1, "core probe failed", False),
+                "conformance validator": (True, 1, "partial rows", False),
+            },
+        )
+        with self._readiness_authorities(human_blocked=True):
+            final_state, terminal = harness._run_readiness(state)
+        self.assertIsNone(terminal)
+        readiness = self._readiness(ws)
+        self.assertEqual(readiness["terminal_outcome"], "plannable")
+        artifact = json.loads(
+            (ws.root / ".factory-state"
+             / findings_module.READINESS_FINDINGS_NAME).read_bytes())
+        entries = artifact["payload"]["entries"]
+        self.assertEqual(len(entries), 4)
+        self.assertEqual(entries[0]["findings"], [self.expected_code()])
+        self.assertEqual(
+            entries[1]["findings"],
+            ["core acceptance reported product findings"])
+        self.assertEqual(
+            entries[2]["findings"],
+            ["conformance evaluation reported product findings"])
+        self.assertEqual(
+            entries[3]["findings"],
+            ["human graphics acceptance remains blocked"])
+        blob = json.dumps(artifact["payload"]).encode()
+        self.assertNotIn(
+            b"signed runner probes reported product findings", blob)
+        self.assertEqual(
+            readiness["product_findings_sha256"],
+            artifact["payload_sha256"],
+        )
+
+    # -- fail-closed: absent / digest / path / binding / skip --------------
+
+    def test_missing_findings_aggregate_is_infrastructure_failure(self) -> None:
+        ws, harness, state, ctx = self._build(write_aggregate=False)
+        with self._readiness_authorities():
+            with self.assertRaises(campaign_module.CampaignBindingError):
+                harness._run_readiness(state)
+
+    def test_re_read_aggregate_digest_mismatch_fails_closed(self) -> None:
+        ws, harness, state, ctx = self._build(
+            acquisition_digest=findings_module.sha256(b"other bytes"))
+        with self._readiness_authorities():
+            with self.assertRaises(campaign_module.CampaignBindingError):
+                harness._run_readiness(state)
+
+    def test_symlinked_aggregate_fails_closed(self) -> None:
+        ws, harness, state, ctx = self._build()
+        evidence_dir = (
+            ws.root / ".factory-state" / "runner-evidence"
+            / "campaign" / self.NONCE
+        )
+        aggregate_path = evidence_dir / "findings-aggregate.json"
+        target = ws.root / "aggregate-target.json"
+        target.write_bytes(b"{}")
+        aggregate_path.unlink()
+        os.symlink(target, aggregate_path)
+        with self._readiness_authorities():
+            with self.assertRaises(campaign_module.CampaignBindingError):
+                harness._run_readiness(state)
+
+    def test_aggregate_git_binding_mismatch_fails_closed(self) -> None:
+        # The aggregate binds a commit that disagrees with the trusted
+        # acquisition/Git identity: a stale or replayed artifact fails closed.
+        ws, harness, state, ctx = self._build(
+            aggregate_overrides={"commit": "b" * 40})
+        with self._readiness_authorities():
+            with self.assertRaises(campaign_module.CampaignBindingError):
+                harness._run_readiness(state)
+
+    def test_skipped_or_simulated_manifest_fails_closed(self) -> None:
+        # A signed findings receipt showing skip/simulation markers can never
+        # be projected into a plannable product finding.
+        ws, harness, state, ctx = self._build(
+            manifest_overrides={"skip_marker_detected": True})
+        with self._readiness_authorities():
+            with self.assertRaises(campaign_module.CampaignBindingError):
+                harness._run_readiness(state)
+
+    def test_declaration_mismatch_fails_closed(self) -> None:
+        # The aggregate record's capability set must exactly match the
+        # committed environment declaration.  A fresh aggregate byte stream is
+        # written with a runner whose capability set disagrees with the
+        # committed declaration while every signed evidence file stays exact.
+        ws, harness, state, ctx = self._build()
+        agg = self._aggregate_doc(ctx, capabilities=["systemd-user"])
+        agg_bytes = (
+            json.dumps(agg, sort_keys=True, separators=(",", ":")).encode()
+            + b"\n"
+        )
+        evidence_dir = (
+            ws.root / ".factory-state" / "runner-evidence"
+            / "campaign" / self.NONCE
+        )
+        aggregate_path = evidence_dir / "findings-aggregate.json"
+        aggregate_path.write_bytes(agg_bytes)
+        os.chmod(aggregate_path, 0o600)
+        harness._test_acquisition["aggregate_sha256"] = sha256(agg_bytes)
+        with self._readiness_authorities():
+            with self.assertRaises(campaign_module.CampaignBindingError):
+                harness._run_readiness(state)
+
+    def _aggregate_doc(self, ctx: dict, *, capabilities) -> dict:
+        manifest_raw = ctx["manifest_raw"]
+        manifest = json.loads(manifest_raw)
+        record = self._record(
+            commit=ctx["commit"], nonce=self.NONCE,
+            manifest_raw=json.dumps(
+                manifest, sort_keys=True, separators=(",", ":")).encode())
+        record["capabilities"] = list(capabilities)
+        return {
+            "schema": "factory-runner-findings-aggregate/v1",
+            "campaign_id": "campaign",
+            "readiness_nonce": self.NONCE,
+            "commit": ctx["commit"],
+            "tree": ctx["tree"],
+            "environment_blob": ctx["env_blob"],
+            "runners": [record],
+        }
 
 
 if __name__ == "__main__":

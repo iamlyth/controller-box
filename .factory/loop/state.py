@@ -249,7 +249,8 @@ QUARANTINE_ORPHAN_RE = re.compile(
 READINESS_FIELDS = (
     "required", "nonce", "attempt", "cursor", "status", "accepted_commit",
     "tree", "environment_blob", "specification_sha256", "plan_sha256",
-    "conformance_sha256", "policy_sha256", "contracts_sha256",
+    "conformance_sha256", "policy_sha256", "readiness_policy_sha256",
+    "contracts_sha256",
     "install_manifest_sha256", "command_authority_sha256",
     "human_authority_sha256", "trust_authority_sha256",
     "aggregate_sha256", "findings_aggregate_sha256",
@@ -330,7 +331,7 @@ def update_readiness(state: "FactoryState", readiness: Mapping[str, object]) -> 
     previous = state.readiness
     if int(readiness.get("attempt", -1)) < int(previous["attempt"]) or int(readiness.get("cursor", -1)) < int(previous["cursor"]):
         raise StateTransitionError("readiness attempt/cursor may not rewind")
-    for name in ("required", "nonce", "accepted_commit", "tree", "environment_blob", "specification_sha256", "plan_sha256", "conformance_sha256", "policy_sha256", "contracts_sha256", "install_manifest_sha256", "command_authority_sha256", "human_authority_sha256", "trust_authority_sha256"):
+    for name in ("required", "nonce", "accepted_commit", "tree", "environment_blob", "specification_sha256", "plan_sha256", "conformance_sha256", "policy_sha256", "readiness_policy_sha256", "contracts_sha256", "install_manifest_sha256", "command_authority_sha256", "human_authority_sha256", "trust_authority_sha256"):
         if readiness.get(name) != previous.get(name):
             raise StateBindingError(f"readiness binding `{name}` may not change")
     result = replace(state, readiness=dict(readiness))

@@ -567,6 +567,30 @@ def require_sha(commit: str, where: str) -> None:
         fail(f"{where} refuses a non-commit object argument: {commit!r}")
 
 
+def git_head(root: Path) -> str:
+    """Resolve the full 40-hex HEAD of ``root`` through the pinned Git authority.
+
+    The accepted human-approval commit is the repository HEAD at validation
+    time.  It is resolved with the same PATH-pinned absolute executable and
+    sanitized no-replace environment as every other trusted Git call of this
+    validator (never an unqualified ``git`` from a caller-controlled PATH),
+    finite-bounded, and refused when it does not resolve to a full 40-hex
+    commit so a mutable ref name can never be accepted as the approval anchor.
+    """
+    git = load_pinned_git(root)
+    result = git.git_run(
+        ["-C", str(root), "rev-parse", "--verify", "HEAD"],
+        env=trusted_git_env(git),
+        timeout=git.GIT_TIMEOUT,
+    )
+    if result.returncode:
+        fail(f"cannot resolve HEAD of {root}")
+    head = result.stdout.strip()
+    if not SHA.fullmatch(head):
+        fail(f"resolved HEAD of {root} is not a full 40-hex commit")
+    return head
+
+
 def commit_exists(root: Path, commit: str) -> bool:
     require_sha(commit, "trusted Git commit lookup")
     git = load_pinned_git(root)

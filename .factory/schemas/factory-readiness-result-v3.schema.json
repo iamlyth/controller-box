@@ -13,10 +13,10 @@
     "terminal_outcome": {"enum": ["pass", "plannable", "findings", "blocked", "infrastructure_failure"]},
     "bindings": {
       "type": "object", "additionalProperties": false,
-      "required": ["accepted_commit", "tree", "environment_blob", "specification_sha256", "plan_sha256", "conformance_sha256", "policy_sha256", "contracts_sha256", "install_manifest_sha256", "command_authority_sha256", "human_authority_sha256", "trust_authority_sha256"],
+      "required": ["accepted_commit", "tree", "environment_blob", "specification_sha256", "plan_sha256", "conformance_sha256", "policy_sha256", "readiness_policy_sha256", "contracts_sha256", "install_manifest_sha256", "command_authority_sha256", "human_authority_sha256", "trust_authority_sha256"],
       "properties": {
         "accepted_commit": {"type":"string","pattern":"^[0-9a-f]{40}$"}, "tree": {"type":"string","pattern":"^[0-9a-f]{40}$"}, "environment_blob": {"type":"string","pattern":"^[0-9a-f]{40}$"},
-        "specification_sha256":{"$ref":"#/$defs/sha256"}, "plan_sha256":{"$ref":"#/$defs/sha256"}, "conformance_sha256":{"$ref":"#/$defs/sha256"}, "policy_sha256":{"$ref":"#/$defs/sha256"}, "contracts_sha256":{"$ref":"#/$defs/sha256"}, "install_manifest_sha256":{"$ref":"#/$defs/sha256"}, "command_authority_sha256":{"$ref":"#/$defs/sha256"}, "human_authority_sha256":{"$ref":"#/$defs/sha256"}, "trust_authority_sha256":{"$ref":"#/$defs/sha256"}
+        "specification_sha256":{"$ref":"#/$defs/sha256"}, "plan_sha256":{"$ref":"#/$defs/sha256"}, "conformance_sha256":{"$ref":"#/$defs/sha256"}, "policy_sha256":{"$ref":"#/$defs/sha256"}, "readiness_policy_sha256":{"$ref":"#/$defs/sha256"}, "contracts_sha256":{"$ref":"#/$defs/sha256"}, "install_manifest_sha256":{"$ref":"#/$defs/sha256"}, "command_authority_sha256":{"$ref":"#/$defs/sha256"}, "human_authority_sha256":{"$ref":"#/$defs/sha256"}, "trust_authority_sha256":{"$ref":"#/$defs/sha256"}
       }
     },
     "results": {

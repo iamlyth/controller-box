@@ -18,6 +18,7 @@ CAMPAIGN_ID = re.compile(r"^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$")
 APPROVAL_SCHEMA = "controller-production-graphics-approval/v3"
 TRUST_SCHEMA = "controller-human-review-trust-anchor/v2"
 APPROVAL_PATH = ".factory/production-graphics-approval.json"
+READINESS_POLICY_PATH = ".factory/readiness-policy.json"
 # This repository document is pending enrollment data only.  It is never a
 # verification root. Production receives the trust anchor out-of-tree.
 TRUST_PATH = ".factory/human-review-trust.json"
@@ -352,7 +353,7 @@ def validate_result(value: object, *, expected_campaign_id: str | None = None, e
     consistency = {"complete": "pass", "infrastructure_ready": "plannable", "findings": "findings", "human_blocked": "blocked", "infrastructure_failure": "infrastructure_failure"}
     if value.get("status") not in consistency or value.get("terminal_outcome") != consistency[value["status"]]:
         raise ReadinessError("readiness status/outcome is inconsistent")
-    binding_keys = {"accepted_commit", "tree", "environment_blob", "specification_sha256", "plan_sha256", "conformance_sha256", "policy_sha256", "contracts_sha256", "install_manifest_sha256", "command_authority_sha256", "human_authority_sha256", "trust_authority_sha256"}
+    binding_keys = {"accepted_commit", "tree", "environment_blob", "specification_sha256", "plan_sha256", "conformance_sha256", "policy_sha256", "readiness_policy_sha256", "contracts_sha256", "install_manifest_sha256", "command_authority_sha256", "human_authority_sha256", "trust_authority_sha256"}
     result_keys = {"aggregate_sha256", "findings_aggregate_sha256", "capability_result_sha256", "core_result_sha256", "conformance_result_sha256", "human_result_sha256", "product_findings_sha256"}
     bindings, results = value.get("bindings"), value.get("results")
     if not isinstance(bindings, dict) or set(bindings) != binding_keys or not isinstance(results, dict) or set(results) != result_keys:
@@ -380,22 +381,18 @@ def validate_result(value: object, *, expected_campaign_id: str | None = None, e
             raise ReadinessError("infrastructure-ready readiness requires executed product findings and evaluated verdicts")
 
 
-def load_readiness_policy(root: Path) -> dict | None:
-    """Load the committed Controller readiness policy, or ``None`` when absent.
+def readiness_policy_from_bytes(raw: bytes | None) -> dict | None:
+    """Validate committed readiness-policy blob bytes, or ``None`` when absent.
 
-    The policy is generic-shaped (``controller-readiness-policy/v1``): it
-    classifies each readiness gate as ``infrastructure``,
-    ``infrastructure_execution``, or ``product_acceptance``.  Absence is
+    Absent policy (``None`` or the file absent from the bound commit) is
     honored as the strict legacy behavior (every gate must pass before
     planner one); this module never invents a runner or weakens a constraint.
+    The policy is generic-shaped (``controller-readiness-policy/v1``): it
+    classifies each readiness gate as ``infrastructure``,
+    ``infrastructure_execution``, or ``product_acceptance``.
     """
-    path = root / ".factory" / "readiness-policy.json"
-    try:
-        raw = path.read_bytes()
-    except FileNotFoundError:
+    if raw is None:
         return None
-    except (OSError, IsADirectoryError):
-        raise ReadinessError("readiness policy is unreadable") from None
     if len(raw) > 256 * 1024:
         raise ReadinessError("readiness policy exceeds the size limit")
     try:
@@ -415,6 +412,24 @@ def load_readiness_policy(root: Path) -> dict | None:
         if not isinstance(values, list) or not all(isinstance(v, str) and v for v in values):
             raise ReadinessError(f"readiness policy {key} is malformed")
     return policy
+
+
+def load_readiness_policy(root: Path) -> dict | None:
+    """Load the worktree readiness policy, or ``None`` when absent.
+
+    This worktree loader exists only for the round-zero worktree/commit
+    identity check.  Classification and per-mint revalidation must use the
+    bound committed bytes via ``readiness_policy_from_bytes``, never this
+    mutable unbound worktree read.
+    """
+    path = root / ".factory" / "readiness-policy.json"
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return None
+    except (OSError, IsADirectoryError):
+        raise ReadinessError("readiness policy is unreadable") from None
+    return readiness_policy_from_bytes(raw)
 
 
 def classify_gate(policy: dict | None, gate: str) -> str:

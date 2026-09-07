@@ -65,6 +65,16 @@ FACTORY_CAMPAIGN = importlib.util.module_from_spec(_spec)
 assert _spec.loader is not None
 _spec.loader.exec_module(FACTORY_CAMPAIGN)
 
+# The committed fixture plan generator produces valid ``factory-plan/v1``
+# documents through the real parser; the defect-5 reflection tests build
+# every revised-plan fixture through it (never hand-rolled plan bytes).
+_FIXTURE_TOOL = ROOT / ".factory" / "tests" / "fixtures" / "fixture_plan_tool.py"
+_spec_tool = importlib.util.spec_from_file_location(
+    "fixture_plan_tool", _FIXTURE_TOOL)
+FIXTURE_PLAN_TOOL = importlib.util.module_from_spec(_spec_tool)
+assert _spec_tool.loader is not None
+_spec_tool.loader.exec_module(FIXTURE_PLAN_TOOL)
+
 import campaign as campaign_module  # noqa: E402
 import findings as findings_module  # noqa: E402
 import launch as launch_module  # noqa: E402
@@ -106,6 +116,65 @@ def receipt_rel(round_no: int, phase: str) -> str:
     return (
         f"{STATE_DIR}/factory-findings-receipt-round-{round_no}-{phase}.json"
     )
+
+
+# ---------------------------------------------------------------------------
+# Defect 5: plan reflection is judged against the parsed `factory-plan/v1`
+# task model, never raw plan bytes
+# ---------------------------------------------------------------------------
+
+FINDING = "readiness finding"
+BLOCKER = "external-capability-required"
+
+
+def _reflection_tasks(overrides: dict | None = None) -> list[dict]:
+    """A valid three-task fixture set (final audit task last)."""
+    tasks = [
+        {
+            "number": 1, "title": "Implement the fixture feature",
+            "status": "pending", "priority": 10, "dependencies": [],
+            "blocked_on": None, "scope": "initial scope statement.",
+            "acceptance": "fixture acceptance gate passes.",
+            "verification": "`src/work-1.md`",
+            "documentation": "none.",
+            "evidence": "",
+        },
+        {
+            "number": 2, "title": "Implement the second feature",
+            "status": "pending", "priority": 20, "dependencies": [],
+            "blocked_on": None,
+            "scope": "second scope statement.",
+            "acceptance": "second acceptance gate passes.",
+            "verification": "`src/work-2.md`",
+            "documentation": "none.",
+            "evidence": "",
+        },
+        {
+            "number": 3, "title": "final", "status": "pending",
+            "priority": 1, "dependencies": [1, 2], "blocked_on": None,
+            "scope": "audit scope.",
+            "acceptance": "audit gate passes.",
+            "verification": "`src/work-3.md`",
+            "documentation": "none.",
+            "evidence": "",
+        },
+    ]
+    for key, value in (overrides or {}).items():
+        tasks[int(key) - 1].update(value)
+    return tasks
+
+
+def _reflection_plan(tasks=None, *, lifecycle: str = "active") -> bytes:
+    """A valid ``factory-plan/v1`` document through the committed tool."""
+    spec = {
+        "spec_path": "docs/SPEC.md",
+        "spec_commit": "a" * 40,
+        "spec_blob": "b" * 40,
+        "base_commit": "c" * 40,
+        "lifecycle": lifecycle,
+        "tasks": tasks if tasks is not None else _reflection_tasks(),
+    }
+    return FIXTURE_PLAN_TOOL.generate(spec, REQUIREMENT_REGISTRY).encode("utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -860,6 +929,827 @@ class FindingsPayloadUnit(_FindingsBase):
             findings_module.payload_bytes(findings_module.build_payload(
                 campaign_id="campaign", source_round=1, entries=[entry])),
         )
+
+
+# ---------------------------------------------------------------------------
+# BLOCKER 4: round-1 authenticated readiness-findings channel
+# ---------------------------------------------------------------------------
+
+
+class ReadinessFindingsUnit(_FindingsBase):
+    """BLOCKER 4: the round-1 authenticated readiness-findings channel.
+
+    The trusted orchestrator mints one write-once readiness-findings
+    artifact bound to the campaign id, the readiness nonce, the exact
+    accepted commit, and the digest of the deterministic product-findings
+    payload.  Consumption is durable one-use: every binding is re-validated
+    against the committed schema and the caller's expected authority, and a
+    genuine replay (a different campaign, nonce, or digest) fails closed
+    while a byte-exact crash-window re-consume is accepted idempotently.
+    A complete/pass readiness carries no findings (no artifact exists), and
+    the round-1 planner must reflect the findings through the canonical
+    plan authority before the attempt can be ``planned``.
+    """
+
+    NONCE = "0" * 64
+    READINESS_ARTIFACT = "factory-readiness-findings.json"
+    READINESS_CONSUMED = "factory-readiness-findings-consumed.json"
+
+    def _payload(self, findings=None, blocked_on=None, **overrides) -> dict:
+        entry = {
+            "phase": "readiness",
+            "outcome": "findings",
+            "findings": (["readiness finding"]
+                          if findings is None else list(findings)),
+            "blocked_on": ([] if blocked_on is None else list(blocked_on)),
+        }
+        entry.update(overrides)
+        return {
+            "schema": "factory-findings/v1",
+            "campaign_id": self.campaign_id,
+            "source_round": 0,
+            "entries": [entry],
+        }
+
+    def _payload_bytes(self, **overrides) -> bytes:
+        return findings_module.payload_bytes(self._payload(**overrides))
+
+    def _artifact(self, **overrides) -> dict:
+        artifact = {
+            "schema": "factory-readiness-findings/v1",
+            "campaign_id": self.campaign_id,
+            "readiness_nonce": self.NONCE,
+            "accepted_commit": self.head,
+            "payload_sha256": sha256(self._payload_bytes()),
+            "payload": self._payload(),
+        }
+        artifact.update(overrides)
+        return artifact
+
+    def _mint(self, **overrides) -> str:
+        params = dict(
+            campaign_id=self.campaign_id,
+            readiness_nonce=self.NONCE,
+            accepted_commit=self.head,
+            findings_payload=self._payload_bytes(),
+        )
+        params.update(overrides)
+        return findings_module.mint_readiness_findings(self.root, **params)
+
+    def _consume(self, **overrides):
+        params = dict(
+            campaign_id=self.campaign_id,
+            readiness_nonce=self.NONCE,
+            accepted_commit=self.head,
+            expected_payload_sha256=sha256(self._payload_bytes()),
+        )
+        params.update(overrides)
+        return findings_module.consume_readiness_findings(self.root, **params)
+
+    def test_mint_rejects_unsafe_bindings(self) -> None:
+        for kwargs, fragment in (
+            ({"campaign_id": "not safe!"}, "campaign"),
+            ({"campaign_id": ""}, "campaign"),
+            ({"readiness_nonce": "beef"}, "nonce"),
+            ({"readiness_nonce": "A" * 64}, "nonce"),
+            ({"accepted_commit": "beef"}, "commit"),
+            ({"accepted_commit": "A" * 40}, "commit"),
+            ({"findings_payload": b"not json"}, "json"),
+            ({"findings_payload": b"[]"}, "object"),
+        ):
+            with self.assertRaises(
+                findings_module.FindingsError, msg=fragment):
+                self._mint(**kwargs)
+
+    def test_mint_rejects_non_readiness_payload(self) -> None:
+        # A payload whose source is a verification/audit round (not round
+        # zero) or whose entry is not the readiness phase fails closed.
+        bad = self._payload()
+        bad["source_round"] = 1
+        with self.assertRaises(findings_module.FindingsError):
+            self._mint(findings_payload=findings_module.payload_bytes(bad))
+        bad = self._payload()
+        bad["entries"][0]["phase"] = "verification"
+        with self.assertRaises(findings_module.FindingsError):
+            self._mint(findings_payload=findings_module.payload_bytes(bad))
+        bad = self._payload()
+        bad["entries"][0]["outcome"] = "pass"
+        with self.assertRaises(findings_module.FindingsError):
+            self._mint(findings_payload=findings_module.payload_bytes(bad))
+
+    def test_valid_round1_consumption_is_durable_one_use(self) -> None:
+        name = self._mint()
+        self.assertEqual(name, self.READINESS_ARTIFACT)
+        # The artifact binds every authority and is schema-conforming.
+        artifact = json.loads(self._read_marker(self.READINESS_ARTIFACT))
+        self.assertEqual(artifact["schema"], "factory-readiness-findings/v1")
+        self.assertEqual(artifact["campaign_id"], self.campaign_id)
+        self.assertEqual(artifact["readiness_nonce"], self.NONCE)
+        self.assertEqual(artifact["accepted_commit"], self.head)
+        self.assertEqual(
+            artifact["payload_sha256"], sha256(self._payload_bytes()))
+        # Consumption returns the exact deterministic product-findings bytes.
+        self.assertEqual(self._consume(), self._payload_bytes())
+        # The durable one-use marker is recorded.
+        marker = json.loads(self._read_marker(self.READINESS_CONSUMED))
+        self.assertEqual(
+            marker["schema"], "factory-readiness-findings-consumed/v1")
+        self.assertEqual(marker["campaign_id"], self.campaign_id)
+        self.assertEqual(marker["readiness_nonce"], self.NONCE)
+        self.assertEqual(
+            marker["payload_sha256"], sha256(self._payload_bytes()))
+
+    def test_byte_exact_reconsume_is_crash_recovery(self) -> None:
+        # A byte-exact marker pre-planted is this run's own crashed consume;
+        # the rerun accepts it idempotently and never wedges.
+        self._mint()
+        marker = {
+            "schema": "factory-readiness-findings-consumed/v1",
+            "campaign_id": self.campaign_id,
+            "readiness_nonce": self.NONCE,
+            "payload_sha256": sha256(self._payload_bytes()),
+        }
+        self._write_marker(
+            self.READINESS_CONSUMED,
+            findings_module.readiness_findings_consumed_bytes(marker),
+        )
+        self.assertEqual(self._consume(), self._payload_bytes())
+
+    def test_replay_marker_with_different_bytes_fails_closed(self) -> None:
+        # A genuine replay: the same artifact is consumed again but a marker
+        # from a different run (different nonce/digest) is already recorded.
+        # The consume passes every artifact binding, then the write-once
+        # marker with different bytes fails the replay closed.
+        self._mint()
+        foreign_marker = {
+            "schema": "factory-readiness-findings-consumed/v1",
+            "campaign_id": self.campaign_id,
+            "readiness_nonce": "1" * 64,
+            "payload_sha256": sha256(b"other"),
+        }
+        self._write_marker(
+            self.READINESS_CONSUMED,
+            findings_module.readiness_findings_consumed_bytes(foreign_marker),
+        )
+        with self.assertRaises(findings_module.FindingsStaleError):
+            self._consume()
+
+    def test_wrong_campaign_fails_closed(self) -> None:
+        self._mint()
+        with self.assertRaises(findings_module.FindingsForeignError):
+            self._consume(campaign_id="othercampaign")
+
+    def test_wrong_readiness_nonce_fails_closed(self) -> None:
+        self._mint()
+        with self.assertRaises(findings_module.FindingsStaleError):
+            self._consume(readiness_nonce="1" * 64)
+
+    def test_wrong_accepted_commit_fails_closed(self) -> None:
+        self._mint()
+        with self.assertRaises(findings_module.FindingsStaleError):
+            self._consume(accepted_commit="b" * 40)
+
+    def test_wrong_payload_digest_fails_closed(self) -> None:
+        self._mint()
+        with self.assertRaises(findings_module.FindingsSyntheticError):
+            self._consume(expected_payload_sha256=sha256(b"other"))
+
+    def test_missing_artifact_with_nonzero_digest_fails_closed(self) -> None:
+        # A readiness result that expected a nonzero product-findings digest
+        # but left no artifact is a findings claim without evidence: it fails
+        # closed instead of silently returning ``None``.
+        with self.assertRaises(findings_module.FindingsReceiptError):
+            self._consume()
+
+    def test_missing_artifact_with_zero256_is_pass_readiness(self) -> None:
+        # A complete/pass readiness carries no findings: the expected digest
+        # is exactly ZERO256, no artifact exists, and consumption returns
+        # ``None`` (no payload flows to the planner).
+        self.assertIsNone(
+            self._consume(expected_payload_sha256=findings_module.ZERO256))
+
+    def test_malformed_artifact_fails_closed(self) -> None:
+        # Invalid JSON.
+        self._write_marker(self.READINESS_ARTIFACT, b"not json")
+        with self.assertRaises(findings_module.FindingsMalformedError):
+            self._consume()
+        # Not an object.
+        self._write_marker(self.READINESS_ARTIFACT, b"[]")
+        with self.assertRaises(findings_module.FindingsMalformedError):
+            self._consume()
+        # Tampered payload digest (contradicts the stored payload bytes).
+        self._write_marker(
+            self.READINESS_ARTIFACT,
+            findings_module.readiness_findings_bytes(
+                self._artifact(payload_sha256="1" * 64)),
+        )
+        with self.assertRaises(findings_module.FindingsMalformedError):
+            self._consume()
+        # A foreign campaign id inside the artifact.
+        self._write_marker(
+            self.READINESS_ARTIFACT,
+            findings_module.readiness_findings_bytes(
+                self._artifact(campaign_id="othercampaign")),
+        )
+        with self.assertRaises(findings_module.FindingsForeignError):
+            self._consume()
+
+    def test_plan_must_reflect_findings(self) -> None:
+        payload = self._payload_bytes()
+        # A revised plan that reflects the finding in a task's structured
+        # Scope field passes.
+        plan = _reflection_plan(_reflection_tasks({
+            1: {"scope": "initial scope statement. Revised: readiness finding."}}))
+        findings_module.validate_plan_reflects_findings(plan, payload)
+        # A plan that omits the finding fails closed.
+        with self.assertRaises(findings_module.FindingsError):
+            findings_module.validate_plan_reflects_findings(
+                _reflection_plan(), payload)
+
+    def test_plan_must_reflect_blocked_references(self) -> None:
+        payload = self._payload_bytes(
+            findings=[], blocked_on=[BLOCKER])
+        # A blocked task naming the exact reference in its Blocked on field
+        # reflects the blocker.
+        plan = _reflection_plan(_reflection_tasks({
+            1: {"status": "blocked", "blocked_on": BLOCKER}}))
+        findings_module.validate_plan_reflects_findings(plan, payload)
+        # A plan without the blocker fails closed.
+        with self.assertRaises(findings_module.FindingsError):
+            findings_module.validate_plan_reflects_findings(
+                _reflection_plan(), payload)
+
+    def test_plan_reflection_accepts_structured_task_fields(self) -> None:
+        # Every legitimate structured carrier satisfies the backstop: Scope,
+        # Acceptance criteria, Verification, and Evidence for findings, and
+        # the Blocked on field for blockers.
+        payload = self._payload_bytes()
+        for field, value in (
+            ("scope", "initial scope statement. readiness finding."),
+            ("acceptance", "fixture acceptance gate passes. readiness finding."),
+            ("verification", "`src/work-1.md` readiness finding"),
+            ("evidence", "readiness finding evidence"),
+        ):
+            plan = _reflection_plan(_reflection_tasks({1: {field: value}}))
+            findings_module.validate_plan_reflects_findings(plan, payload)
+
+    def test_plan_reflection_rejects_findings_in_comments(self) -> None:
+        # A finding hidden inside an HTML comment in a task field is not a
+        # legitimate reflection: comments never satisfy the backstop.
+        payload = self._payload_bytes()
+        plan = _reflection_plan(_reflection_tasks({
+            1: {"scope": "initial scope statement. <!-- readiness finding -->"}}))
+        with self.assertRaises(findings_module.FindingsError):
+            findings_module.validate_plan_reflects_findings(plan, payload)
+
+    def test_plan_reflection_rejects_findings_in_metadata_prose(self) -> None:
+        # A finding that appears only in unrelated canonical-section prose
+        # (the Goal section) or the interaction inventory is not reflected in
+        # any task's structured fields and must fail closed.
+        payload = self._payload_bytes()
+        plan = _reflection_plan()
+        text = plan.decode("utf-8")
+        text = text.replace(
+            "Goal: exercise the Task 9 phase/campaign orchestrator "
+            "deterministically.",
+            "Goal: exercise the Task 9 phase/campaign orchestrator "
+            "deterministically. The readiness finding was noted.",
+        )
+        plan_parser.parse_plan(text)  # still a valid plan
+        with self.assertRaises(findings_module.FindingsError):
+            findings_module.validate_plan_reflects_findings(
+                text.encode("utf-8"), payload)
+        # The interaction inventory is structured but is not a task field.
+        text = plan.decode("utf-8")
+        text = text.replace(
+            "- input boundary: every role receives only the fresh "
+            "allowlisted inputs.",
+            "- input boundary: every role receives only the fresh "
+            "allowlisted inputs. readiness finding",
+        )
+        plan_parser.parse_plan(text)
+        with self.assertRaises(findings_module.FindingsError):
+            findings_module.validate_plan_reflects_findings(
+                text.encode("utf-8"), payload)
+
+    def test_plan_reflection_rejects_substring_occurrences(self) -> None:
+        # A finding that appears only as a substring of a larger token (here
+        # the plural "readiness findings" inside a task's Scope) is not a
+        # representation of the exact finding and must fail closed.
+        payload = self._payload_bytes()
+        plan = _reflection_plan(_reflection_tasks({
+            1: {"scope": "initial scope statement. readiness findings noted."}}))
+        with self.assertRaises(findings_module.FindingsError):
+            findings_module.validate_plan_reflects_findings(plan, payload)
+
+    def test_plan_reflection_rejects_findings_in_code_fences(self) -> None:
+        # A finding hidden inside a fenced code block in a task field is not
+        # a legitimate reflection: code fences never satisfy the backstop.
+        payload = self._payload_bytes()
+        plan = _reflection_plan()
+        text = plan.decode("utf-8")
+        text = text.replace(
+            "- Verification: `src/work-1.md`",
+            "- Verification: ```\n  readiness finding\n  ```",
+        )
+        plan_parser.parse_plan(text)  # still a valid plan
+        with self.assertRaises(findings_module.FindingsError):
+            findings_module.validate_plan_reflects_findings(
+                text.encode("utf-8"), payload)
+
+    def test_plan_reflection_rejects_malformed_inputs(self) -> None:
+        with self.assertRaises(findings_module.FindingsError):
+            findings_module.validate_plan_reflects_findings(
+                b"x" * (findings_module.MAX_PLAN_BYTES + 1),
+                self._payload_bytes())
+        with self.assertRaises(findings_module.FindingsError):
+            findings_module.validate_plan_reflects_findings(
+                b"plan", b"not json")
+        # A plan that is not a valid factory-plan/v1 document fails closed:
+        # reflection is only ever judged against the parsed task model, so a
+        # raw-byte substring in arbitrary text can never satisfy it.
+        with self.assertRaises(findings_module.FindingsError):
+            findings_module.validate_plan_reflects_findings(
+                b"revised plan: readiness finding", self._payload_bytes())
+
+
+# ---------------------------------------------------------------------------
+# B5: trusted coordinator projection of the validated findings aggregate
+# ---------------------------------------------------------------------------
+
+
+class RunnerFindingsProjectionUnit(unittest.TestCase):
+    """B5: the pure coordinator projection of the validated signed findings
+    aggregate into deterministic bounded ``factory-findings/v1`` readiness
+    entries.
+
+    The projector accepts the exact checker-validated aggregate bytes plus
+    the expected aggregate digest and the exact expected campaign / readiness
+    nonce / commit / tree / environment / declaration / contract bindings,
+    re-validates the strict committed schema and every field, rejects prose /
+    skips / simulation / mismatch, and returns deterministic fixed-semantic
+    per-runner / per-capability payload entries.  These are pure unit tests:
+    no Git, no campaign, no runner — only the projector and its bindings.
+    """
+
+    CAMPAIGN = "campaign"
+    NONCE = "0" * 64
+    COMMIT = "a" * 40
+    TREE = "b" * 40
+    ENV = "c" * 40
+    CONTRACTS_SHA = "d" * 64
+    RUNNER = "dev-runner-vm"
+    CAPABILITY = "remote-project-gate"
+    CONTRACT_RUNNER = "dev-runner-vm"
+
+    def _contracts(self) -> dict:
+        return {
+            "schema": "ralph-capability-contract/v2",
+            "capabilities": [
+                {
+                    "name": self.CAPABILITY,
+                    "status": "declared",
+                    "runner_class": self.CONTRACT_RUNNER,
+                    "must_execute": True,
+                    "candidate_probe_argv": ["./scripts/verify-project.sh"],
+                }
+            ],
+        }
+
+    def _declarations(self) -> dict:
+        return {self.RUNNER: [self.CAPABILITY]}
+
+    def _archive_bindings(self, **overrides) -> dict:
+        binding = {
+            "archive_sha256": "e" * 64,
+            "authority_sha256": "f" * 64,
+            "nonce": self.NONCE,
+            "skip_marker_detected": False,
+            "cleanup": True,
+            "timed_out": False,
+        }
+        binding.update(overrides)
+        return {self.RUNNER: binding}
+
+    def _probe(self, exit_code: int, capability: str | None = None) -> dict:
+        return {
+            "capability": capability or self.CAPABILITY,
+            "exit_code": exit_code,
+            "timed_out": False,
+        }
+
+    def _runner(self, *, result: str = "findings",
+                exit_code: int | None = 1, **overrides) -> dict:
+        record = {
+            "name": self.RUNNER,
+            "manifest": (
+                ".factory-state/runner-evidence/"
+                f"{self.CAMPAIGN}/{self.NONCE}/{self.RUNNER}/"
+                f"{self.COMMIT}/{self.NONCE}/manifest.json"
+            ),
+            "manifest_sha256": "1" * 64,
+            "result": result,
+            "capabilities": [self.CAPABILITY],
+            "probes": [self._probe(exit_code)],
+            "artifact_manifest_sha256": "2" * 64,
+            "artifact_count": 1,
+            "artifact_bytes": 1024,
+            "signer": {
+                "principal": self.RUNNER,
+                "key_sha256": "3" * 64,
+                "algorithm": "ssh-ed25519",
+                "signature_sha256": "4" * 64,
+            },
+        }
+        record.update(overrides)
+        return record
+
+    def _aggregate(self, runners=None, **overrides) -> dict:
+        aggregate = {
+            "schema": "factory-runner-findings-aggregate/v1",
+            "campaign_id": self.CAMPAIGN,
+            "readiness_nonce": self.NONCE,
+            "commit": self.COMMIT,
+            "tree": self.TREE,
+            "environment_blob": self.ENV,
+            "runners": runners if runners is not None else [self._runner()],
+        }
+        aggregate.update(overrides)
+        return aggregate
+
+    def _bytes(self, aggregate: dict) -> tuple[bytes, str]:
+        raw = json.dumps(
+            aggregate, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return raw, findings_module.sha256(raw)
+
+    def _project(self, aggregate: dict | None = None, **overrides):
+        agg = aggregate if aggregate is not None else self._aggregate()
+        raw, digest = self._bytes(agg)
+        params = dict(
+            aggregate_bytes=raw,
+            aggregate_sha256=digest,
+            campaign_id=self.CAMPAIGN,
+            readiness_nonce=self.NONCE,
+            commit=self.COMMIT,
+            tree=self.TREE,
+            environment_blob=self.ENV,
+            contracts_sha256=self.CONTRACTS_SHA,
+            declarations=self._declarations(),
+            contracts=self._contracts(),
+            archive_bindings=self._archive_bindings(),
+        )
+        params.update(overrides)
+        return findings_module.project_runner_findings(**params)
+
+    def test_positive_projection_is_deterministic_and_bounded(self) -> None:
+        aggregate = self._aggregate([self._runner(exit_code=8)])
+        raw, digest = self._bytes(aggregate)
+        codes, verdicts = self._project(aggregate=aggregate)
+        # Exactly one fixed-semantic code per non-pass probe.
+        self.assertEqual(
+            codes,
+            (f"{findings_module.RUNNER_FINDINGS_CODE}:"
+             f"{self.RUNNER}:{self.CAPABILITY}:8",),
+        )
+        self.assertEqual(len(verdicts), 1)
+        verdict = verdicts[0]
+        self.assertEqual(verdict["code"], findings_module.RUNNER_FINDINGS_CODE)
+        self.assertEqual(verdict["runner"], self.RUNNER)
+        self.assertEqual(verdict["capability"], self.CAPABILITY)
+        self.assertEqual(verdict["exit_code"], 8)
+        # Exact binding echo: campaign/nonce/commit/tree/env/contract/digest
+        # and the per-record archive/authority/nonce + aggregate digest.
+        self.assertEqual(verdict["campaign_id"], self.CAMPAIGN)
+        self.assertEqual(verdict["readiness_nonce"], self.NONCE)
+        self.assertEqual(verdict["commit"], self.COMMIT)
+        self.assertEqual(verdict["tree"], self.TREE)
+        self.assertEqual(verdict["environment_blob"], self.ENV)
+        self.assertEqual(verdict["contracts_sha256"], self.CONTRACTS_SHA)
+        self.assertEqual(verdict["aggregate_sha256"], digest)
+        self.assertEqual(verdict["archive_sha256"], "e" * 64)
+        self.assertEqual(verdict["authority_sha256"], "f" * 64)
+        self.assertEqual(verdict["nonce"], self.NONCE)
+        # Deterministic: projecting the same bytes yields identical output.
+        codes2, verdicts2 = self._project(aggregate=aggregate)
+        self.assertEqual(codes2, codes)
+        self.assertEqual(verdicts2, verdicts)
+        # No arbitrary prose / wall-clock time anywhere in the projection.
+        blob = json.dumps(verdicts).encode("utf-8")
+        self.assertNotIn(b"stdout", blob)
+        self.assertNotIn(b"log", blob.lower())
+        self.assertNotIn(b"timestamp", blob)
+
+    def test_projects_only_nonpass_probes_of_findings_records(self) -> None:
+        # A findings record with a non-pass and a pass probe projects exactly
+        # the non-pass probe; a pass-only probe set contributes nothing.
+        record = self._runner(exit_code=7)
+        record["capabilities"] = [self.CAPABILITY, "systemd-user"]
+        record["probes"] = [self._probe(7), self._probe(0, "systemd-user")]
+        contracts = self._contracts()
+        contracts["capabilities"].append({
+            "name": "systemd-user", "status": "declared",
+            "runner_class": self.RUNNER, "must_execute": True,
+            "candidate_probe_argv": ["/usr/bin/systemd-run"],
+        })
+        declarations = {self.RUNNER: [self.CAPABILITY, "systemd-user"]}
+        agg = self._aggregate([record])
+        raw, digest = self._bytes(agg)
+        codes, verdicts = self._project(
+            aggregate=agg,
+            declarations=declarations, contracts=contracts,
+        )
+        self.assertEqual(len(codes), 1)
+        self.assertEqual(len(verdicts), 1)
+        self.assertEqual(verdicts[0]["capability"], self.CAPABILITY)
+        self.assertEqual(verdicts[0]["exit_code"], 7)
+
+    def test_build_runner_readiness_payload_is_schema_conforming(self) -> None:
+        _, verdicts = self._project()
+        payload = findings_module.build_runner_readiness_findings_payload(
+            campaign_id=self.CAMPAIGN,
+            code_strings=[
+                f"{findings_module.RUNNER_FINDINGS_CODE}:"
+                f"{self.RUNNER}:{self.CAPABILITY}:8"
+            ],
+        )
+        self.assertEqual(payload["schema"], "factory-findings/v1")
+        self.assertEqual(payload["source_round"], 0)
+        self.assertEqual(payload["entries"][0]["phase"], "readiness")
+        self.assertEqual(payload["entries"][0]["outcome"], "findings")
+        # The readiness payload validator accepts it.
+        findings_module.validate_readiness_payload(payload)
+        # Prose is never smuggled into the findings list.
+        self.assertEqual(
+            payload["entries"][0]["findings"],
+            [f"{findings_module.RUNNER_FINDINGS_CODE}:"
+             f"{self.RUNNER}:{self.CAPABILITY}:8"],
+        )
+
+    # -- fail-closed: digest / schema / binding mismatch --------------------
+
+    def test_tampered_aggregate_digest_fails_closed(self) -> None:
+        raw, digest = self._bytes(self._aggregate())
+        with self.assertRaises(findings_module.FindingsSyntheticError):
+            findings_module.project_runner_findings(
+                aggregate_bytes=raw,
+                aggregate_sha256=findings_module.sha256(b"other"),
+                campaign_id=self.CAMPAIGN, readiness_nonce=self.NONCE,
+                commit=self.COMMIT, tree=self.TREE,
+                environment_blob=self.ENV,
+                contracts_sha256=self.CONTRACTS_SHA,
+                declarations=self._declarations(),
+                contracts=self._contracts(),
+                archive_bindings=self._archive_bindings(),
+            )
+
+    def test_wrong_campaign_fails_closed(self) -> None:
+        with self.assertRaises(findings_module.FindingsForeignError):
+            self._project(aggregate=self._aggregate(
+                campaign_id="other-campaign"))
+
+    def test_wrong_readiness_nonce_fails_closed(self) -> None:
+        with self.assertRaises(findings_module.FindingsStaleError):
+            self._project(aggregate=self._aggregate(
+                readiness_nonce="1" * 64))
+
+    def test_wrong_commit_fails_closed(self) -> None:
+        with self.assertRaises(findings_module.FindingsStaleError):
+            self._project(aggregate=self._aggregate(commit="b" * 40))
+
+    def test_wrong_tree_fails_closed(self) -> None:
+        with self.assertRaises(findings_module.FindingsStaleError):
+            self._project(aggregate=self._aggregate(tree="c" * 40))
+
+    def test_wrong_environment_blob_fails_closed(self) -> None:
+        with self.assertRaises(findings_module.FindingsStaleError):
+            self._project(aggregate=self._aggregate(
+                environment_blob="d" * 40))
+
+    def test_stale_archive_nonce_mismatch_fails_closed(self) -> None:
+        # The archive binding's nonce must equal the nonce embedded in the
+        # manifest path; a replayed/foreign receipt fails closed.
+        with self.assertRaises(findings_module.FindingsSyntheticError):
+            self._project(archive_bindings=self._archive_bindings(
+                nonce="9" * 64))
+
+    def test_manifest_path_escape_fails_closed(self) -> None:
+        # A schema-valid manifest path whose campaign segment escapes the
+        # expected namespace fails the projection closed.
+        record = self._runner(exit_code=8)
+        record["manifest"] = (
+            ".factory-state/runner-evidence/other/"
+            f"{self.NONCE}/{self.RUNNER}/{self.COMMIT}/{self.NONCE}/manifest.json"
+        )
+        with self.assertRaises(findings_module.FindingsSyntheticError):
+            self._project(aggregate=self._aggregate([record]))
+
+    def test_schema_violating_aggregate_fails_closed(self) -> None:
+        agg = self._aggregate()
+        agg["runners"][0].pop("probes")
+        raw, digest = self._bytes(agg)
+        params = dict(
+            campaign_id=self.CAMPAIGN, readiness_nonce=self.NONCE,
+            commit=self.COMMIT, tree=self.TREE, environment_blob=self.ENV,
+            contracts_sha256=self.CONTRACTS_SHA,
+            declarations=self._declarations(), contracts=self._contracts(),
+            archive_bindings=self._archive_bindings(),
+        )
+        with self.assertRaises(findings_module.FindingsMalformedError):
+            findings_module.project_runner_findings(
+                aggregate_bytes=raw, aggregate_sha256=digest, **params)
+        # Unknown extra field.
+        agg = self._aggregate()
+        agg["extra"] = 1
+        raw, digest = self._bytes(agg)
+        with self.assertRaises(findings_module.FindingsMalformedError):
+            findings_module.project_runner_findings(
+                aggregate_bytes=raw, aggregate_sha256=digest, **params)
+
+    def test_non_json_or_non_object_aggregate_fails_closed(self) -> None:
+        params = dict(
+            campaign_id=self.CAMPAIGN, readiness_nonce=self.NONCE,
+            commit=self.COMMIT, tree=self.TREE, environment_blob=self.ENV,
+            contracts_sha256=self.CONTRACTS_SHA,
+            declarations=self._declarations(), contracts=self._contracts(),
+            archive_bindings=self._archive_bindings(),
+        )
+        with self.assertRaises(findings_module.FindingsMalformedError):
+            findings_module.project_runner_findings(
+                aggregate_bytes=b"{not json",
+                aggregate_sha256=findings_module.sha256(b"{not json"),
+                **params)
+        with self.assertRaises(findings_module.FindingsMalformedError):
+            findings_module.project_runner_findings(
+                aggregate_bytes=findings_module.sha256(b"[]").encode("utf-8"),
+                aggregate_sha256=findings_module.sha256(
+                    findings_module.sha256(b"[]").encode("utf-8")),
+                **params)
+
+    def test_oversized_aggregate_fails_closed(self) -> None:
+        raw = b"{" + b"x" * (findings_module.MAX_READINESS_FINDINGS_BYTES + 1)
+        with self.assertRaises(findings_module.FindingsMalformedError):
+            findings_module.project_runner_findings(
+                aggregate_bytes=raw,
+                aggregate_sha256=findings_module.sha256(raw),
+                campaign_id=self.CAMPAIGN, readiness_nonce=self.NONCE,
+                commit=self.COMMIT, tree=self.TREE,
+                environment_blob=self.ENV,
+                contracts_sha256=self.CONTRACTS_SHA,
+                declarations=self._declarations(),
+                contracts=self._contracts(),
+                archive_bindings=self._archive_bindings(),
+            )
+
+    # -- fail-closed: prose / skip / simulation / mismatch ------------------
+
+    def test_pass_only_aggregate_fails_closed(self) -> None:
+        # A findings aggregate must carry at least one result=findings record.
+        with self.assertRaises(findings_module.FindingsSyntheticError):
+            self._project(aggregate=self._aggregate(
+                [self._runner(result="pass", exit_code=0, probes=[])]))
+
+    def test_findings_record_without_nonpass_probe_fails_closed(self) -> None:
+        # A findings record whose probe set is all pass is synthetic.
+        with self.assertRaises(findings_module.FindingsSyntheticError):
+            self._project(aggregate=self._aggregate(
+                [self._runner(result="findings", exit_code=0)]))
+
+    def test_undeclared_runner_fails_closed(self) -> None:
+        with self.assertRaises(findings_module.FindingsSyntheticError):
+            self._project(
+                declarations={"other-runner": [self.CAPABILITY]})
+
+    def test_declared_capability_mismatch_fails_closed(self) -> None:
+        # The aggregate record claims a capability set that differs from the
+        # committed environment declaration for that runner.
+        with self.assertRaises(findings_module.FindingsSyntheticError):
+            self._project(declarations={self.RUNNER: ["systemd-user"]})
+
+    def test_missing_archive_binding_fails_closed(self) -> None:
+        with self.assertRaises(findings_module.FindingsReceiptError):
+            self._project(archive_bindings={})
+
+    def test_skip_marker_fails_closed(self) -> None:
+        with self.assertRaises(findings_module.FindingsSyntheticError):
+            self._project(archive_bindings=self._archive_bindings(
+                skip_marker_detected=True))
+
+    def test_unproven_cleanup_fails_closed(self) -> None:
+        with self.assertRaises(findings_module.FindingsSyntheticError):
+            self._project(archive_bindings=self._archive_bindings(
+                cleanup=False))
+
+    def test_timed_out_probe_fails_closed(self) -> None:
+        with self.assertRaises(findings_module.FindingsSyntheticError):
+            self._project(archive_bindings=self._archive_bindings(
+                timed_out=True))
+
+    def test_undeclared_capability_contract_fails_closed(self) -> None:
+        # The projected capability has no committed capability contract.
+        contracts = self._contracts()
+        contracts["capabilities"] = []
+        with self.assertRaises(findings_module.FindingsSyntheticError):
+            self._project(contracts=contracts)
+
+    def test_candidate_capability_contract_fails_closed(self) -> None:
+        contracts = self._contracts()
+        contracts["capabilities"][0]["status"] = "candidate"
+        with self.assertRaises(findings_module.FindingsSyntheticError):
+            self._project(contracts=contracts)
+
+    def test_contract_runner_class_mismatch_fails_closed(self) -> None:
+        contracts = self._contracts()
+        contracts["capabilities"][0]["runner_class"] = "gpurunner"
+        with self.assertRaises(findings_module.FindingsSyntheticError):
+            self._project(contracts=contracts)
+
+    def test_contract_not_must_execute_fails_closed(self) -> None:
+        contracts = self._contracts()
+        contracts["capabilities"][0]["must_execute"] = False
+        with self.assertRaises(findings_module.FindingsSyntheticError):
+            self._project(contracts=contracts)
+
+    def test_fixture_probe_argv_fails_closed(self) -> None:
+        contracts = self._contracts()
+        contracts["capabilities"][0]["candidate_probe_argv"] = [
+            "./scripts/x.sh", "--fixture-dir"]
+        with self.assertRaises(findings_module.FindingsSyntheticError):
+            self._project(contracts=contracts)
+
+    def test_untrusted_code_rejected(self) -> None:
+        with self.assertRaises(findings_module.FindingsError):
+            findings_module.validate_runner_findings_code(
+                "arbitrary prose describing a defect")
+        with self.assertRaises(findings_module.FindingsError):
+            findings_module.validate_runner_findings_code(
+                f"{findings_module.RUNNER_FINDINGS_CODE}:bad!runner:cap:1")
+
+    def test_build_payload_rejects_untrusted_code(self) -> None:
+        with self.assertRaises(findings_module.FindingsError):
+            findings_module.build_runner_readiness_findings_payload(
+                campaign_id=self.CAMPAIGN, code_strings=["free prose"])
+
+    def test_build_payload_requires_code_strings(self) -> None:
+        with self.assertRaises(findings_module.FindingsError):
+            findings_module.build_runner_readiness_findings_payload(
+                campaign_id=self.CAMPAIGN, code_strings=[])
+
+    def test_four_controller_capability_projection(self) -> None:
+        # A realistic four-capability runner finding projects one fixed code
+        # and structured verdict per failing capability, never free prose.
+        capabilities = [
+            "controller-production-routing", "target-consumer",
+            "physical-controller", "inputplumber-system-dbus",
+        ]
+        record = {
+            "name": "iprunner",
+            "manifest": (
+                ".factory-state/runner-evidence/"
+                f"{self.CAMPAIGN}/{self.NONCE}/iprunner/"
+                f"{self.COMMIT}/{self.NONCE}/manifest.json"
+            ),
+            "manifest_sha256": "1" * 64,
+            "result": "findings",
+            "capabilities": sorted(capabilities),
+            "probes": [
+                {"capability": c, "exit_code": 1, "timed_out": False}
+                for c in capabilities
+            ],
+            "artifact_manifest_sha256": "2" * 64,
+            "artifact_count": 1,
+            "artifact_bytes": 1024,
+            "signer": {
+                "principal": "iprunner", "key_sha256": "3" * 64,
+                "algorithm": "ssh-ed25519", "signature_sha256": "4" * 64,
+            },
+        }
+        contracts = {"capabilities": [
+            {"name": c, "status": "declared", "runner_class": "iprunner",
+             "must_execute": True,
+             "candidate_probe_argv": ["nix-shell", "--run", "x.sh"]}
+            for c in capabilities
+        ]}
+        declarations = {"iprunner": sorted(capabilities)}
+        agg = self._aggregate([record], readiness_nonce=self.NONCE)
+        raw, digest = self._bytes(agg)
+        archive = {"iprunner": {
+            "archive_sha256": "e" * 64, "authority_sha256": "f" * 64,
+            "nonce": self.NONCE, "skip_marker_detected": False,
+            "cleanup": True, "timed_out": False,
+        }}
+        codes, verdicts = self._project(
+            aggregate=agg, declarations=declarations, contracts=contracts,
+            archive_bindings=archive,
+        )
+        self.assertEqual(len(codes), len(capabilities))
+        self.assertEqual(len(verdicts), len(capabilities))
+        self.assertEqual(
+            {v["capability"] for v in verdicts}, set(capabilities))
+        self.assertEqual({v["runner"] for v in verdicts}, {"iprunner"})
+        for v in verdicts:
+            self.assertEqual(v["exit_code"], 1)
+            self.assertEqual(v["code"], findings_module.RUNNER_FINDINGS_CODE)
+            self.assertEqual(v["aggregate_sha256"], digest)
 
 
 # ---------------------------------------------------------------------------
@@ -1685,6 +2575,258 @@ class FindingsCampaignFailClosed(_FindingsCampaign):
         rc, data = ws.run_cli()
         self.assertEqual(rc, campaign_module.EXIT_ERROR)
         self.assertIsNone(data)
+
+
+class RunnerEvidenceReadUnit(_FindingsBase):
+    """B5: the hardened bounded no-follow runner-evidence reader and the
+    derive-archive-bindings derivation the coordinator feeds the projector.
+
+    The exact evidence bytes are re-read beneath ``.factory-state/`` with
+    per-component ``O_DIRECTORY|O_NOFOLLOW`` descriptors; any absent,
+    symlinked, path-escaping, oversized, ownership/mode-anomalous, or
+    digest-mismatched artifact fails closed.
+    """
+
+    NONCE = "ab" * 32
+    RUNNER = "dev-runner-vm"
+
+    def _evidence_dir(self) -> Path:
+        path = (
+            self.root / ".factory-state" / "runner-evidence"
+            / "campaign" / self.NONCE
+        )
+        self._private_dirs(path)
+        return path
+
+    def _private_dirs(self, path: Path) -> None:
+        """Create the evidence ancestry as private owned directories (the
+        umask must never leave group/other bits on the evidence tree)."""
+        current = self.root
+        for part in path.relative_to(self.root).parts[:-1]:
+            current = current / part
+            current.mkdir(mode=0o700, exist_ok=True)
+            current.chmod(0o700)
+        path.mkdir(mode=0o700, exist_ok=True)
+        path.chmod(0o700)
+
+    def _write_evidence(self, relpath: str, data: bytes) -> Path:
+        path = self.root / relpath
+        self._private_dirs(path.parent)
+        path.write_bytes(data)
+        os.chmod(path, 0o600)
+        return path
+
+    def _manifest(self, **overrides) -> dict:
+        manifest = {
+            "schema": "factory-runner-findings-receipt/v1",
+            "result": "findings",
+            "runner": self.RUNNER,
+            "commit": "a" * 40,
+            "tree": "b" * 40,
+            "environment_blob": "c" * 40,
+            "archive_sha256": "d" * 64,
+            "capabilities": ["remote-project-gate"],
+            "campaign_id": "campaign",
+            "readiness_nonce": self.NONCE,
+            "authority_sha256": "e" * 64,
+            "nonce": self.NONCE,
+            "exit_code": 8,
+            "timed_out": False,
+            "cleanup": True,
+            "skip_marker_detected": False,
+        }
+        manifest.update(overrides)
+        return manifest
+
+    def _manifest_rel(self, commit: str = "a" * 40) -> str:
+        return (
+            f".factory-state/runner-evidence/campaign/{self.NONCE}/"
+            f"{self.RUNNER}/{commit}/{self.NONCE}/manifest.json"
+        )
+
+    def _aggregate(self, *, manifest: dict, commit: str = "a" * 40) -> dict:
+        manifest_raw = json.dumps(
+            manifest, sort_keys=True, separators=(",", ":")).encode()
+        return {
+            "schema": "factory-runner-findings-aggregate/v1",
+            "campaign_id": "campaign",
+            "readiness_nonce": self.NONCE,
+            "commit": commit,
+            "tree": "b" * 40,
+            "environment_blob": "c" * 40,
+            "runners": [{
+                "name": self.RUNNER,
+                "manifest": self._manifest_rel(commit),
+                "manifest_sha256": findings_module.sha256(manifest_raw),
+                "result": "findings",
+                "capabilities": ["remote-project-gate"],
+                "probes": [{
+                    "capability": "remote-project-gate",
+                    "exit_code": 8,
+                    "timed_out": False,
+                }],
+                "artifact_manifest_sha256": "f" * 64,
+                "artifact_count": 1,
+                "artifact_bytes": 1024,
+                "signer": {
+                    "principal": self.RUNNER,
+                    "key_sha256": "7" * 64,
+                    "algorithm": "ssh-ed25519",
+                    "signature_sha256": "8" * 64,
+                },
+            }],
+        }
+
+    def test_aggregate_read_returns_exact_bytes_and_digest(self) -> None:
+        aggregate = self._aggregate(manifest=self._manifest())
+        raw = (
+            json.dumps(
+                aggregate, sort_keys=True, separators=(",", ":")).encode()
+            + b"\n"
+        )
+        self._write_evidence(
+            ".factory-state/runner-evidence/campaign/"
+            f"{self.NONCE}/findings-aggregate.json", raw)
+        got, data = findings_module.read_runner_findings_aggregate(
+            self.root, campaign_id="campaign",
+            readiness_nonce=self.NONCE,
+        )
+        self.assertEqual(got, raw)
+        self.assertEqual(findings_module.sha256(got), findings_module.sha256(raw))
+        self.assertEqual(data["schema"], "factory-runner-findings-aggregate/v1")
+        self.assertEqual(data["campaign_id"], "campaign")
+
+    def test_missing_aggregate_fails_closed(self) -> None:
+        with self.assertRaises(findings_module.FindingsMalformedError):
+            findings_module.read_runner_findings_aggregate(
+                self.root, campaign_id="campaign",
+                readiness_nonce=self.NONCE,
+            )
+
+    def test_aggregate_over_owned_writable_component_fails_closed(self) -> None:
+        raw = (
+            json.dumps(self._aggregate(manifest=self._manifest()),
+                       sort_keys=True, separators=(",", ":")).encode()
+            + b"\n"
+        )
+        path = self._write_evidence(
+            ".factory-state/runner-evidence/campaign/"
+            f"{self.NONCE}/findings-aggregate.json", raw)
+        os.chmod(path, 0o620)  # group-writable artifact
+        with self.assertRaises(findings_module.FindingsMalformedError):
+            findings_module.read_runner_findings_aggregate(
+                self.root, campaign_id="campaign",
+                readiness_nonce=self.NONCE,
+            )
+
+    def test_symlinked_final_artifact_fails_closed(self) -> None:
+        raw = (
+            json.dumps(self._aggregate(manifest=self._manifest()),
+                       sort_keys=True, separators=(",", ":")).encode()
+            + b"\n"
+        )
+        self._write_evidence(
+            ".factory-state/runner-evidence/campaign/"
+            f"{self.NONCE}/findings-aggregate.json", raw)
+        directory = self._evidence_dir()
+        target = self.root / "elsewhere.json"
+        target.write_bytes(b"{}")
+        (directory / "findings-aggregate.json").unlink()
+        (directory / "findings-aggregate.json").symlink_to(target)
+        with self.assertRaises(findings_module.FindingsMalformedError):
+            findings_module.read_runner_findings_aggregate(
+                self.root, campaign_id="campaign",
+                readiness_nonce=self.NONCE,
+            )
+
+    def test_path_escape_and_foreign_namespace_fail_closed(self) -> None:
+        for relpath in (
+            "../secret.json",
+            ".factory-state/other/findings-aggregate.json",
+            ".factory-state/runner-evidence/campaign/findings-aggregate.json",
+            "/abs/findings-aggregate.json",
+        ):
+            with self.subTest(path=relpath):
+                with self.assertRaises(
+                    findings_module.FindingsMalformedError
+                ):
+                    findings_module.read_runner_evidence_bytes(
+                        self.root, relpath, maximum=1024)
+
+    def test_derive_archive_bindings_positive(self) -> None:
+        manifest = self._manifest()
+        manifest_raw = json.dumps(
+            manifest, sort_keys=True, separators=(",", ":")).encode()
+        self._write_evidence(self._manifest_rel(), manifest_raw)
+        aggregate = self._aggregate(manifest=manifest)
+        bindings = findings_module.derive_archive_bindings(
+            self.root, aggregate)
+        binding = bindings[self.RUNNER]
+        self.assertEqual(binding["archive_sha256"], "d" * 64)
+        self.assertEqual(binding["authority_sha256"], "e" * 64)
+        self.assertEqual(binding["nonce"], self.NONCE)
+        self.assertIs(binding["skip_marker_detected"], False)
+        self.assertIs(binding["cleanup"], True)
+        self.assertIs(binding["timed_out"], False)
+
+    def test_derive_archive_bindings_manifest_digest_mismatch_fails(self) -> None:
+        manifest = self._manifest()
+        manifest_raw = json.dumps(
+            manifest, sort_keys=True, separators=(",", ":")).encode()
+        self._write_evidence(self._manifest_rel(), manifest_raw)
+        aggregate = self._aggregate(manifest=manifest)
+        aggregate["runners"][0]["manifest_sha256"] = "9" * 64
+        with self.assertRaises(findings_module.FindingsSyntheticError):
+            findings_module.derive_archive_bindings(self.root, aggregate)
+
+    def test_derive_archive_bindings_skip_marker_fails_closed(self) -> None:
+        manifest = self._manifest(skip_marker_detected=True)
+        manifest_raw = json.dumps(
+            manifest, sort_keys=True, separators=(",", ":")).encode()
+        self._write_evidence(self._manifest_rel(), manifest_raw)
+        aggregate = self._aggregate(manifest=manifest)
+        with self.assertRaises(findings_module.FindingsSyntheticError):
+            findings_module.derive_archive_bindings(self.root, aggregate)
+
+    def test_derive_archive_bindings_timed_out_fails_closed(self) -> None:
+        manifest = self._manifest(timed_out=True)
+        manifest_raw = json.dumps(
+            manifest, sort_keys=True, separators=(",", ":")).encode()
+        self._write_evidence(self._manifest_rel(), manifest_raw)
+        aggregate = self._aggregate(manifest=manifest)
+        with self.assertRaises(findings_module.FindingsSyntheticError):
+            findings_module.derive_archive_bindings(self.root, aggregate)
+
+    def test_pass_manifest_without_marker_field_binds_clean(self) -> None:
+        # A pass-only receipt class carries no skip-marker field; the derived
+        # binding still proves clean cleanup and no timeout.
+        manifest = {
+            "schema": "factory-runner-receipt/v3",
+            "result": "pass",
+            "runner": self.RUNNER,
+            "commit": "a" * 40,
+            "tree": "b" * 40,
+            "environment_blob": "c" * 40,
+            "archive_sha256": "d" * 64,
+            "capabilities": ["remote-project-gate"],
+            "campaign_id": "campaign",
+            "readiness_nonce": self.NONCE,
+            "authority_sha256": "e" * 64,
+            "nonce": self.NONCE,
+            "exit_code": 0,
+            "timed_out": False,
+            "cleanup": True,
+        }
+        manifest_raw = json.dumps(
+            manifest, sort_keys=True, separators=(",", ":")).encode()
+        self._write_evidence(self._manifest_rel(), manifest_raw)
+        aggregate = self._aggregate(manifest=manifest)
+        aggregate["runners"][0]["result"] = "pass"
+        binding = findings_module.derive_archive_bindings(
+            self.root, aggregate)[self.RUNNER]
+        self.assertIs(binding["skip_marker_detected"], False)
+        self.assertIs(binding["cleanup"], True)
+        self.assertIs(binding["timed_out"], False)
 
 
 if __name__ == "__main__":
