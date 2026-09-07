@@ -69,22 +69,6 @@ Schema: `ralph-bug-ledger/v1`
     "resolution": "",
     "verification": "",
     "closed": null
-  },
-  {
-    "id": "BUG-0020",
-    "title": "verify-project.sh leaves a forbidden nested .factory namespace inside the retained build-maintenance-verify tree",
-    "status": "open",
-    "severity": "medium",
-    "reported": "2026-08-27",
-    "external": [],
-    "contract_change": false,
-    "reproduction": "Run the full project gate: nix-shell --run './scripts/verify-project.sh'. The gate builds into the retained build directory build-maintenance-verify (scripts/verify-project.sh:18, BUILD_DIR=${CBX_VERIFY_BUILD_DIR:-build-maintenance-verify}). After the build, an ignored generated object path remains at build-maintenance-verify/CMakeFiles/inputplumber-mediator.dir/.factory/... (a hidden-namespace path emitted by the build inside the retained build tree). A subsequent live inventory via ./scripts/verify-boilerplate.sh fails on this forbidden nested namespace: the boilerplate live inventory scans the actual workspace namespace (Git status omits ignored plaintext) and rejects the nested .factory path. Manually deleting the generated hidden-namespace object path restores cleanliness and the boilerplate gate passes again.",
-    "expected": "The full project gate leaves the retained build-maintenance-verify tree free of any generated hidden-namespace path (no nested .factory/... object path under build-maintenance-verify/CMakeFiles/inputplumber-mediator.dir/), so a subsequent verify-boilerplate.sh live inventory passes without manual cleanup. The exact hidden-namespace checks and protected-golden evidence must be preserved unchanged.",
-    "actual": "The build emits an ignored hidden-namespace object path build-maintenance-verify/CMakeFiles/inputplumber-mediator.dir/.factory/... inside the retained build tree. The prior reviewer hypothesis that build directories are harmless is contradicted by the actual path: the boilerplate live inventory scans the real workspace namespace (not Git status) and fails on this forbidden nested namespace, so the retained build dir is not inert. Manual deletion of the generated hidden-namespace object path restores cleanliness.",
-    "acceptance": "A Ralph-owned product diagnosis and fix: the full project gate no longer leaves a forbidden nested .factory namespace inside the retained build-maintenance-verify tree, while preserving the exact hidden-namespace checks and protected-golden evidence. The likely remediation is to clean or move generated hidden-namespace object paths out of the retained build directory (considering the documented retained build dir), so a subsequent verify-boilerplate.sh live inventory passes without manual deletion and without weakening any hidden-namespace or golden-policy assertion.",
-    "resolution": "",
-    "verification": "",
-    "closed": null
   }
 ]
 ```

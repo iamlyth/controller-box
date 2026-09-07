@@ -62,6 +62,14 @@ if(BASH_EXECUTABLE)
         COMMAND ${BASH_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_packaging.sh
             ${CMAKE_CURRENT_BINARY_DIR})
+    # BUG-0020 regression: the retained build tree must never emit a nested
+    # .factory/... object path under CMakeFiles/inputplumber-mediator.dir/.
+    # Builds the mediator target in a private temp dir, asserts the generated
+    # copy is byte-identical to the tracked source, and rejects any hidden
+    # namespace segment under the target object output.
+    add_test(NAME test_mediator_build_namespace
+        COMMAND ${BASH_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test-mediator-build-namespace.sh)
 else()
     message(STATUS "bash not found — test_packaging skipped")
 endif()

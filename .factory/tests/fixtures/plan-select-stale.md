@@ -110,6 +110,7 @@ parsed plan and never consults a runtime task ledger.
 
 - Status: pending
 - Dependencies: None
+- Priority: 1
 - Scope: fixture task.
 - Acceptance criteria: the fixture proves deterministic selection.
 - Verification: the hidden selector fixture suite.
@@ -119,6 +120,7 @@ parsed plan and never consults a runtime task ledger.
 
 - Status: pending
 - Dependencies: Task 1
+- Priority: 2
 - Scope: fixture audit task for the acceptance plan; the definition of done
   covers the conformance matrix, the interaction inventory, open findings,
   the final review, and a clean tree.

@@ -130,6 +130,7 @@ parsed plan and never consults a runtime task ledger.
 
 - Status: pending
 - Dependencies: Tasks 1-2
+- Priority: 3
 - Scope: fixture audit task for the acceptance plan; the definition of done
   covers the conformance matrix, the interaction inventory, open findings,
   the final review, and a clean tree.

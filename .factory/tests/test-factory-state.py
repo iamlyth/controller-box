@@ -53,6 +53,8 @@ from state import (  # noqa: E402
     BINDING_FIELDS,
     DIGEST_LEDGER_NAME,
     FIELD_NAMES,
+    FLOOR_FILE_NAME,
+    FLOOR_SCHEMA_NAME,
     LEDGER_MAX,
     OUTCOMES,
     PHASES,
@@ -939,13 +941,13 @@ class TransitionTableTest(StateConformanceCase):
             advance(planning, "planned", now=1)
         bound = advance(
             planning, "planned", plan_digest="0" * 64,
-            phase_base_commit="0" * 40, now=1,
+            phase_base_commit="0" * 40, now=MONOTONIC + 1,
         )
         self.assertEqual(bound.plan_digest, "0" * 64)
         # The next planning round must bind again, not carry the previous one.
         round_two = advance(
             make_state(), "planned", plan_digest="1" * 64,
-            phase_base_commit="1" * 40, now=2,
+            phase_base_commit="1" * 40, now=MONOTONIC + 1,
         )
         self.assertEqual(round_two.plan_digest, "1" * 64)
 
@@ -969,25 +971,25 @@ class TransitionTableTest(StateConformanceCase):
         """S3: epoch-zero markers are tamper; S9: attempt >= owning phase."""
         state = advance(
             make_state(), "planned", plan_digest="0" * 64,
-            phase_base_commit="0" * 40, now=100,
+            phase_base_commit="0" * 40, now=MONOTONIC + 1,
         )
         with self.assertRaisesRegex(StateTamperError, "epoch marker"):
             begin_attempt(state, 4, now=0)
         with self.assertRaisesRegex(StateTamperError, "can never precede"):
             begin_attempt(state, 4, now=1)
-        began = begin_attempt(state, 4, now=100)
-        self.assertEqual(began.attempt_started_at_monotonic, 100)
+        began = begin_attempt(state, 4, now=MONOTONIC + 1)
+        self.assertEqual(began.attempt_started_at_monotonic, MONOTONIC + 1)
 
     def test_round_increments_only_on_audit_nonfinal(self) -> None:
         state = make_state()
         state = advance(state, "planned", plan_digest="0" * 64,
-                        phase_base_commit="0" * 40, now=1)
-        state = advance(state, "task_completed", now=2)
-        state = advance(state, "pass", now=3)
+                        phase_base_commit="0" * 40, now=MONOTONIC + 1)
+        state = advance(state, "task_completed", now=MONOTONIC + 2)
+        state = advance(state, "pass", now=MONOTONIC + 3)
         self.assertEqual(state.current_round, 1, "no increment before audit")
-        state = advance(state, "pass", now=4)
+        state = advance(state, "pass", now=MONOTONIC + 4)
         self.assertEqual(state.current_round, 2, "audit nonfinal increments once")
-        state = advance(state, "failed", now=5)
+        state = advance(state, "failed", now=MONOTONIC + 5)
         self.assertEqual(state.current_phase, "failed")
 
     def test_write_once_bindings_survive_a_full_campaign(self) -> None:
@@ -1005,10 +1007,12 @@ class TransitionTableTest(StateConformanceCase):
             dict(outcome="pass"),
             dict(outcome="pass"),   # final -> success
         )
+        now = MONOTONIC
         for step in steps:
+            now += 1
             kwargs = dict(step)
             outcome = kwargs.pop("outcome")
-            state = advance(state, outcome, now=MONOTONIC2, **kwargs)
+            state = advance(state, outcome, now=now, **kwargs)
         self.assertEqual(state.current_phase, "success")
         for name, value in bindings.items():
             with self.subTest(binding=name):
@@ -1062,17 +1066,17 @@ class RetryAndAttemptTest(StateConformanceCase):
     def test_begin_attempt_increments_within_the_same_task(self) -> None:
         state = advance(
             make_state(), "planned", plan_digest="0" * 64,
-            phase_base_commit="0" * 40, now=1,
+            phase_base_commit="0" * 40, now=MONOTONIC + 1,
         )
-        first = begin_attempt(state, 4, now=10)
-        second = begin_attempt(first, 4, now=20)
-        third = begin_attempt(second, 4, now=30)
+        first = begin_attempt(state, 4, now=MONOTONIC + 2)
+        second = begin_attempt(first, 4, now=MONOTONIC + 3)
+        third = begin_attempt(second, 4, now=MONOTONIC + 4)
         self.assertEqual(
             (first.attempt_number, second.attempt_number, third.attempt_number),
             (1, 2, 3),
         )
         self.assertEqual(third.selected_task_id, 4)
-        self.assertEqual(third.attempt_started_at_monotonic, 30)
+        self.assertEqual(third.attempt_started_at_monotonic, MONOTONIC + 4)
 
     def test_begin_attempt_restarts_on_a_trusted_task_transition(self) -> None:
         state = begin_attempt(make_state(
@@ -1097,7 +1101,7 @@ class RetryAndAttemptTest(StateConformanceCase):
                     begin_attempt(state, task_id)
 
     def test_counters_never_move_backward(self) -> None:
-        now = 0
+        now = MONOTONIC
         state = make_state()
         seen = []
         for outcome in ("planned", "task_completed", "pass", "pass"):
@@ -1136,9 +1140,14 @@ class SecureIoTamperTest(StateConformanceCase):
         info = os.stat(directory, follow_symlinks=False)
         self.assertTrue(stat.S_ISDIR(info.st_mode))
         self.assertEqual(info.st_mode & 0o077, 0)
-        self.assertEqual(sorted(p.name for p in directory.iterdir()), [STATE_FILE_NAME])
+        self.assertEqual(
+            sorted(p.name for p in directory.iterdir()),
+            [STATE_FILE_NAME, FLOOR_FILE_NAME],
+        )
         state_file = directory / STATE_FILE_NAME
         self._assert_private(state_file)
+        floor_file = directory / FLOOR_FILE_NAME
+        self._assert_private(floor_file)
         self.assertEqual(load_state(root), state)
         data["repository_identity"] = state.repository_identity
         self.assertEqual(state.to_dict(), parse_state(data).to_dict())
@@ -1147,11 +1156,14 @@ class SecureIoTamperTest(StateConformanceCase):
         root = self.new_repo()
         self.init_campaign(root)
         directory = root / ".factory-state"
-        self.assertEqual(sorted(p.name for p in directory.iterdir()), [STATE_FILE_NAME])
+        self.assertEqual(
+            sorted(p.name for p in directory.iterdir()),
+            [STATE_FILE_NAME, FLOOR_FILE_NAME],
+        )
         record_phase_digest(root, "round-1-planning")
         self.assertEqual(
             sorted(p.name for p in directory.iterdir()),
-            [STATE_FILE_NAME, DIGEST_LEDGER_NAME],
+            [STATE_FILE_NAME, DIGEST_LEDGER_NAME, FLOOR_FILE_NAME],
         )
         # A full campaign walk writes through the real atomic path and leaves
         # no temporary or quarantine artifact behind.
@@ -1163,7 +1175,7 @@ class SecureIoTamperTest(StateConformanceCase):
             dict(outcome="pass"),
             dict(outcome="pass"),  # round 2 planning
         )
-        now = 0
+        now = MONOTONIC
         for step in steps:
             now += 1
             kwargs = dict(step)
@@ -1179,7 +1191,7 @@ class SecureIoTamperTest(StateConformanceCase):
             write_state(root, load_state(root))
         self.assertEqual(
             sorted(p.name for p in directory.iterdir()),
-            [STATE_FILE_NAME, DIGEST_LEDGER_NAME],
+            [STATE_FILE_NAME, DIGEST_LEDGER_NAME, FLOOR_FILE_NAME],
         )
 
     def test_init_refuses_to_overwrite_existing_state(self) -> None:
@@ -1357,17 +1369,18 @@ class SecureIoTamperTest(StateConformanceCase):
         self.init_campaign(root, rounds=2)
         state = load_state(root)
         state = advance(state, "planned", plan_digest="0" * 64,
-                        phase_base_commit="0" * 40, now=1)
-        state = advance(state, "task_completed", now=2)
-        state = advance(state, "pass", now=3)
-        state = advance(state, "pass", now=4)  # round 2 planning
+                        phase_base_commit="0" * 40, now=MONOTONIC + 1)
+        state = advance(state, "task_completed", now=MONOTONIC + 2)
+        state = advance(state, "pass", now=MONOTONIC + 3)
+        state = advance(state, "pass", now=MONOTONIC + 4)  # round 2 planning
         write_state(root, state)
         record_phase_digest(root, "round-2-planning")
         forged = parse_state({**state.to_dict(), "current_round": 1})
         write_state(root, forged)
-        with self.assertRaises(StateDigestError) as caught:
+        # The rewound round counter is below the durable floor, so the fresh
+        # load fails closed before the digest comparison can even run.
+        with self.assertRaisesRegex(StateTamperError, "below the durable"):
             verify_phase_digest(root, "round-2-planning")
-        self.assertIn("changed during", str(caught.exception))
 
     def test_forged_binding_is_detected_by_digest(self) -> None:
         root = self.new_repo()
@@ -1440,6 +1453,225 @@ class SecureIoTamperTest(StateConformanceCase):
         ):
             with self.assertRaisesRegex(StateError, "pinned Git hung"):
                 live_branch(root)
+
+
+class CounterFloorTest(StateConformanceCase):
+    """AUD-04/F-04: the durable authenticated high-water floor fails closed.
+
+    ``state-floor.json`` (schema ``factory-state-floor/v1``) records the
+    highest ``current_round`` and per-task ``attempt_number`` ever published.
+    ``write_state`` raises the floor *before* the atomic state publication (no
+    rollback window), and ``load_state``/recovery fail closed when the state's
+    counters are below the floor or when the floor is missing or tampered — so
+    a rewound counter fails closed across fresh processes even when no
+    phase-digest tag matches.  A legitimate new-task attempt reset is preserved
+    because the floor is keyed per task.
+    """
+
+    def _walk_to_round_two(self, root: Path) -> FactoryState:
+        """Advance a fresh campaign to round-2 planning and publish it."""
+        state = load_state(root)
+        steps = (
+            dict(outcome="planned", plan_digest="0" * 64,
+                 phase_base_commit="0" * 40),
+            dict(outcome="task_completed"),
+            dict(outcome="pass"),
+            dict(outcome="pass"),  # round 2 planning
+        )
+        now = MONOTONIC
+        for step in steps:
+            now += 1
+            kwargs = dict(step)
+            outcome = kwargs.pop("outcome")
+            state = advance(state, outcome, now=now, **kwargs)
+            write_state(root, state)
+        self.assertEqual(load_state(root).current_round, 2)
+        return state
+
+    def test_floor_is_private_0600_after_init(self) -> None:
+        root = self.new_repo()
+        self.init_campaign(root)
+        floor_file = root / ".factory-state" / FLOOR_FILE_NAME
+        self.assertTrue(floor_file.is_file())
+        self._assert_private(floor_file)
+        data = json.loads(floor_file.read_text("utf-8"))
+        self.assertEqual(data["schema"], FLOOR_SCHEMA_NAME)
+        self.assertEqual(data["current_round"], 1)
+        self.assertEqual(data["attempts"], {})
+
+    def test_floor_mode_tamper_0644_fails_closed(self) -> None:
+        root = self.new_repo()
+        self.init_campaign(root)
+        os.chmod(root / ".factory-state" / FLOOR_FILE_NAME, 0o644)
+        with self.assertRaises(StateTamperError):
+            load_state(root)
+
+    def test_floor_mode_tamper_0400_fails_closed(self) -> None:
+        root = self.new_repo()
+        self.init_campaign(root)
+        os.chmod(root / ".factory-state" / FLOOR_FILE_NAME, 0o400)
+        with self.assertRaises(StateTamperError):
+            load_state(root)
+
+    def test_floor_missing_fails_closed(self) -> None:
+        root = self.new_repo()
+        self.init_campaign(root)
+        (root / ".factory-state" / FLOOR_FILE_NAME).unlink()
+        with self.assertRaisesRegex(StateTamperError, "counter floor is missing"):
+            load_state(root)
+
+    def test_floor_tamper_schema_fails_closed(self) -> None:
+        root = self.new_repo()
+        self.init_campaign(root)
+        self.seed(root, FLOOR_FILE_NAME, json.dumps(
+            {"schema": "forged/v1", "current_round": 1, "attempts": {}},
+            sort_keys=True,
+        ).encode())
+        with self.assertRaisesRegex(StateTamperError, "floor schema"):
+            load_state(root)
+
+    def test_floor_tamper_extra_field_fails_closed(self) -> None:
+        root = self.new_repo()
+        self.init_campaign(root)
+        self.seed(root, FLOOR_FILE_NAME, json.dumps(
+            {"schema": FLOOR_SCHEMA_NAME, "current_round": 1,
+             "attempts": {}, "forged": True},
+            sort_keys=True,
+        ).encode())
+        with self.assertRaisesRegex(StateTamperError, "exactly the floor field set"):
+            load_state(root)
+
+    def test_floor_tamper_rewound_round_fails_closed(self) -> None:
+        root = self.new_repo()
+        self.init_campaign(root)
+        self._walk_to_round_two(root)
+        # The floor now records round 2; a forged floor that rewinds the
+        # high-water round to 1 is tamper and fails closed.
+        self.seed(root, FLOOR_FILE_NAME, json.dumps(
+            {"schema": FLOOR_SCHEMA_NAME, "current_round": 1, "attempts": {}},
+            sort_keys=True,
+        ).encode())
+        with self.assertRaisesRegex(StateTamperError, "rewound floor"):
+            load_state(root)
+
+    def test_floor_tamper_rewound_attempt_fails_closed(self) -> None:
+        root = self.new_repo()
+        self.init_campaign(root)
+        state = load_state(root)
+        state = advance(state, "planned", now=MONOTONIC + 1,
+                        plan_digest="0" * 64, phase_base_commit="0" * 40)
+        state = begin_attempt(state, 4, now=MONOTONIC + 2)
+        state = begin_attempt(state, 4, now=MONOTONIC + 3)  # attempt 2
+        write_state(root, state)
+        # The floor records task 4 -> 2; a forged floor rewinding it to 1 is
+        # tamper and fails closed.
+        self.seed(root, FLOOR_FILE_NAME, json.dumps(
+            {"schema": FLOOR_SCHEMA_NAME, "current_round": 1,
+             "attempts": {"4": 1}},
+            sort_keys=True,
+        ).encode())
+        with self.assertRaisesRegex(StateTamperError, "rewound floor"):
+            load_state(root)
+
+    def test_phase_timestamp_rewind_fails_closed(self) -> None:
+        root = self.new_repo()
+        self.init_campaign(root)
+        state = load_state(root)
+        # ``now`` equal to the owning phase marker is a rewind and fails.
+        with self.assertRaises(StateTamperError):
+            advance(state, "planned", now=MONOTONIC,
+                    plan_digest="0" * 64, phase_base_commit="0" * 40)
+        with self.assertRaises(StateTamperError):
+            advance(state, "planned", now=MONOTONIC - 1,
+                    plan_digest="0" * 64, phase_base_commit="0" * 40)
+
+    def test_attempt_timestamp_rewind_fails_closed(self) -> None:
+        root = self.new_repo()
+        self.init_campaign(root)
+        state = load_state(root)
+        state = advance(state, "planned", now=MONOTONIC + 1,
+                        plan_digest="0" * 64, phase_base_commit="0" * 40)
+        state = begin_attempt(state, 4, now=MONOTONIC + 2)
+        # A new attempt of the same task must start strictly after the attempt
+        # that owns it; an equal (or earlier) marker is a rewind and fails.
+        with self.assertRaises(StateTamperError):
+            begin_attempt(state, 4, now=MONOTONIC + 2)
+        with self.assertRaises(StateTamperError):
+            begin_attempt(state, 4, now=MONOTONIC + 1)
+
+    def test_fresh_load_round_rollback_fails_closed(self) -> None:
+        root = self.new_repo()
+        self.init_campaign(root)
+        self._walk_to_round_two(root)
+        state = load_state(root)
+        # A same-UID forgery rewinds the round below the durable floor; a
+        # fresh-process load fails closed even with no phase-digest tag.
+        forged = parse_state({**state.to_dict(), "current_round": 1})
+        write_state(root, forged)
+        with self.assertRaisesRegex(StateTamperError, "below the durable"):
+            load_state(root)
+
+    def test_fresh_load_same_task_attempt_rollback_fails_closed(self) -> None:
+        root = self.new_repo()
+        self.init_campaign(root)
+        state = load_state(root)
+        state = advance(state, "planned", now=MONOTONIC + 1,
+                        plan_digest="0" * 64, phase_base_commit="0" * 40)
+        state = begin_attempt(state, 4, now=MONOTONIC + 2)
+        state = begin_attempt(state, 4, now=MONOTONIC + 3)  # attempt 2
+        write_state(root, state)
+        # Rewind the same task's attempt below the floor: fails closed.
+        forged = parse_state({**state.to_dict(), "attempt_number": 1})
+        write_state(root, forged)
+        with self.assertRaisesRegex(StateTamperError, "below the durable"):
+            load_state(root)
+
+    def test_recovery_round_rollback_fails_closed(self) -> None:
+        root = self.new_repo()
+        self.init_campaign(root)
+        initial_bytes = (root / ".factory-state" / STATE_FILE_NAME).read_bytes()
+        self._walk_to_round_two(root)
+        # A torn write leaves only a quarantine holding the *older* round-1
+        # state; recovery must fail closed because it is below the floor.
+        quarantine = f".{STATE_FILE_NAME}.quarantine-" + "6" * 32
+        (root / ".factory-state" / STATE_FILE_NAME).unlink()
+        self.seed(root, quarantine, initial_bytes)
+        with self.assertRaisesRegex(StateTamperError, "below the durable"):
+            recover_state(root)
+        directory = root / ".factory-state"
+        self.assertFalse((directory / STATE_FILE_NAME).exists())
+        self.assertTrue((directory / quarantine).exists())
+
+    def test_crash_between_floor_and_state_fails_closed(self) -> None:
+        root = self.new_repo()
+        self.init_campaign(root)
+        # Normal load before the floor is raised: the fresh campaign is round 1.
+        self.assertEqual(load_state(root).current_round, 1)
+        # Simulate a crash after the floor was raised to round 2 but before
+        # the round-2 state was published: the on-disk state is still round 1
+        # while the durable floor already records round 2.  A fresh load fails
+        # closed (no rollback window).
+        round_two = make_state(current_round=2, current_phase="planning")
+        state_module._raise_floor(root, round_two)
+        with self.assertRaisesRegex(StateTamperError, "below the durable"):
+            load_state(root)
+
+    def test_legitimate_new_task_attempt_reset_preserved(self) -> None:
+        root = self.new_repo()
+        self.init_campaign(root)
+        state = load_state(root)
+        state = advance(state, "planned", now=MONOTONIC + 1,
+                        plan_digest="0" * 64, phase_base_commit="0" * 40)
+        state = begin_attempt(state, 4, now=MONOTONIC + 2)
+        state = begin_attempt(state, 4, now=MONOTONIC + 3)  # task 4 -> 2
+        write_state(root, state)
+        # A trusted task transition to a different task resets the attempt to
+        # 1; the floor is keyed per task, so this legitimate reset loads.
+        state = begin_attempt(state, 5, now=MONOTONIC + 4)  # task 5 -> 1
+        write_state(root, state)
+        reloaded = load_state(root)
+        self.assertEqual(reloaded.selected_task_id, 5)
+        self.assertEqual(reloaded.attempt_number, 1)
 
 
 class LedgerTest(StateConformanceCase):
@@ -1658,7 +1890,8 @@ class InitNoReplaceTest(StateConformanceCase):
         # The failed init leaves no temporary or quarantine artifact behind.
         directory = root / ".factory-state"
         self.assertEqual(
-            sorted(p.name for p in directory.iterdir()), [STATE_FILE_NAME]
+            sorted(p.name for p in directory.iterdir()),
+            [STATE_FILE_NAME, FLOOR_FILE_NAME],
         )
 
     def test_init_refuses_a_prior_campaign_ledger_binding(self) -> None:
@@ -1719,7 +1952,8 @@ class RecoveryTest(StateConformanceCase):
         self.assertEqual(load_state(root), state, "no durable state is lost")
         directory = root / ".factory-state"
         self.assertEqual(
-            sorted(p.name for p in directory.iterdir()), [STATE_FILE_NAME]
+            sorted(p.name for p in directory.iterdir()),
+            [STATE_FILE_NAME, FLOOR_FILE_NAME],
         )
 
     def test_recover_keeps_canonical_and_cleans_leftovers(self) -> None:
@@ -1830,7 +2064,7 @@ class RecoveryTest(StateConformanceCase):
         directory = root / ".factory-state"
         self.assertEqual(
             sorted(p.name for p in directory.iterdir()),
-            [STATE_FILE_NAME, DIGEST_LEDGER_NAME],
+            [STATE_FILE_NAME, DIGEST_LEDGER_NAME, FLOOR_FILE_NAME],
         )
 
     def test_recover_fails_closed_when_quarantine_digest_mismatches_ledger(
@@ -1866,7 +2100,7 @@ class RecoveryTest(StateConformanceCase):
         self.assertTrue((directory / quarantine).exists())
         self.assertEqual(
             sorted(p.name for p in directory.iterdir()),
-            [quarantine, DIGEST_LEDGER_NAME],
+            [quarantine, DIGEST_LEDGER_NAME, FLOOR_FILE_NAME],
         )
 
     def test_recover_fails_closed_on_unsafe_ledger_during_restore(self) -> None:
@@ -1904,7 +2138,8 @@ class RecoveryTest(StateConformanceCase):
         directory = root / ".factory-state"
         self.assertEqual(
             sorted(p.name for p in directory.iterdir()),
-            [STATE_FILE_NAME, "operator-note.txt", DIGEST_LEDGER_NAME],
+            [STATE_FILE_NAME, "operator-note.txt", DIGEST_LEDGER_NAME,
+             FLOOR_FILE_NAME],
         )
         self.assertEqual(load_state(root).campaign_id, "state-conformance")
 

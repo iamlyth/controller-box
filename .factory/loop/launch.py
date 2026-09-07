@@ -178,6 +178,7 @@ __all__ = [
     "child_environment",
     "compose_prompt",
     "derive_task_excerpt",
+    "project_plan_context",
     "secure_wrapper_path",
     "task_excerpt_bytes",
     "task_excerpt_digest",
@@ -779,6 +780,142 @@ def _verify_input_digest(label: str, data: bytes, digest: str) -> None:
         )
 
 
+# Task fields that are machine-authoritative current-task context and may be
+# projected into a fresh prompt.  ``Evidence`` is deliberately excluded: it is
+# historical model-authored prose (completion/pass claims, receipts, stale
+# narrative) that must never become operative fresh-role instructions
+# (AUD-01, §5.2).  ``Source`` and ``Blocked on`` are retained because they
+# carry the current unresolved blockers and the provenance needed to operate.
+PROJECTED_TASK_FIELDS = (
+    "Status",
+    "Priority",
+    "Dependencies",
+    "Blocked on",
+    "Scope",
+    "Acceptance criteria",
+    "Verification",
+    "Documentation impact",
+    "Source",
+)
+
+
+def _render_projected_field(label: str, value: str) -> List[str]:
+    """Render one projected task field as ``- Label: first`` + indented lines."""
+    parts = value.split("\n")
+    out = [f"- {label}: {parts[0]}"]
+    for part in parts[1:]:
+        out.append(f"  {part}")
+    return out
+
+
+def project_plan_context(plan_bytes: bytes) -> bytes:
+    """Deterministic fresh-context projection of the canonical plan.
+
+    Parses the committed ``factory-plan/v1`` plan and emits only the
+    machine-authoritative current-task context needed to operate: the front
+    matter, the static canonical sections (goal, architecture, interaction
+    inventory), a conformance matrix re-rendered without its historical
+    ``Evidence`` column, and each task's actionable fields (title, status,
+    priority, dependencies, blocked_on, scope, acceptance criteria,
+    verification, documentation impact, source).  Historical model-authored
+    ``Evidence`` prose, completion/pass claims, receipts, and stale narrative
+    are excluded so they can never become operative fresh-role instructions
+    (AUD-01, §5.2).  The full canonical plan bytes remain the sole task
+    ledger and stay digest-bound for planning/audit binding; this projection
+    is a derived view, not a second source of truth.
+    """
+    if not isinstance(plan_bytes, (bytes, bytearray)):
+        raise InvocationError("`plan_bytes` must be bytes")
+    try:
+        text = plan_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise InvocationError(f"plan bytes are not valid UTF-8: {exc}") from exc
+    try:
+        plan = parse_plan(text)
+    except PlanError as exc:
+        raise InvocationError(f"cannot project the committed plan: {exc}") from exc
+
+    lines: List[str] = []
+    # Static authoritative sections (front matter, title, goal, architecture,
+    # interaction inventory) are machine-checked and carry no historical
+    # model-authored evidence; serialize them verbatim.
+    for block in plan._blocks:
+        if block.heading is not None and block.heading.startswith("## Task"):
+            break
+        if block.heading == "## " + "Specification conformance matrix":
+            # The conformance matrix is re-rendered below without its
+            # historical Evidence column (AUD-01); skip the verbatim block.
+            continue
+        lines.extend(block.lines)
+    # Re-render the conformance matrix without the historical Evidence column:
+    # the matrix's Evidence cell is historical model-authored prose that must
+    # not become operative fresh-role instructions.  The machine classification
+    # and task references are retained.
+    lines.append("")
+    lines.append("## Specification conformance matrix")
+    lines.append("")
+    lines.append("| ID | Spec § | Classification | Task |")
+    lines.append("|----|--------|--------------|------|")
+    for row in plan.matrix:
+        task_cell = (
+            ", ".join(f"Task {n}" for n in row.tasks) if row.tasks else ""
+        )
+        lines.append(
+            f"| {row.requirement_id} | {row.spec_sections} | "
+            f"{row.classification} | {task_cell} |"
+        )
+    # Project each task's actionable fields, excluding historical Evidence.
+    for task in plan.tasks:
+        lines.append("")
+        lines.append(f"## Task {task.number}: {task.title}")
+        for label in PROJECTED_TASK_FIELDS:
+            if label in task.fields:
+                lines.extend(_render_projected_field(label, task.fields[label]))
+    projection = "\n".join(lines)
+    return projection.encode("utf-8")
+
+
+def render_selected_task(plan_bytes: bytes, task_id: int) -> bytes:
+    """Deterministic fresh-context render of the selected task's actionable fields.
+
+    Parses the committed ``factory-plan/v1`` plan, locates the digest-verified
+    Task ``task_id``, and emits only the machine-authoritative actionable
+    fields from ``PROJECTED_TASK_FIELDS`` (title, status, priority,
+    dependencies, blocked_on, scope, acceptance criteria, verification,
+    documentation impact, source).  Historical model-authored ``Evidence``
+    prose, completion/pass claims, receipts, and any raw block bytes are
+    excluded so they can never become operative fresh-role instructions
+    (AUD-01, §5.2).  The caller verifies the task section's digest against
+    the invocation binding before this render is composed; this function
+    re-parses the same committed plan so the rendered fields always come from
+    the digest-verified parsed Task, never a caller-supplied paraphrase.
+    """
+    if not isinstance(plan_bytes, (bytes, bytearray)):
+        raise InvocationError("`plan_bytes` must be bytes")
+    try:
+        text = plan_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise InvocationError(f"plan bytes are not valid UTF-8: {exc}") from exc
+    try:
+        plan = parse_plan(text)
+    except PlanError as exc:
+        raise InvocationError(f"cannot render the selected task: {exc}") from exc
+    task = None
+    for candidate in plan.tasks:
+        if candidate.number == task_id:
+            task = candidate
+            break
+    if task is None:
+        raise InvocationError(
+            f"the committed plan has no Task {task_id} section"
+        )
+    lines = [f"## Task {task.number}: {task.title}"]
+    for label in PROJECTED_TASK_FIELDS:
+        if label in task.fields:
+            lines.extend(_render_projected_field(label, task.fields[label]))
+    return "\n".join(lines).encode("utf-8")
+
+
 def compose_prompt(
     binding: InvocationBinding,
     *,
@@ -794,13 +931,15 @@ def compose_prompt(
 
     The prompt is a bounded deterministic document that contains exactly the
     authoritative §5.1 inputs: the static role prompt, ``AGENTS.md``, the
-    canonical product specification, the canonical implementation plan, the
-    audit objective (auditor only), the exact selected task excerpt
-    (developer only), and the deterministic receipt-backed findings payload
-    of the previous round (planner only, Task 10 §16).  Every input's bytes
-    are digest-verified against the binding (a substituted or paraphrased
-    input fails closed) and every input is independently bounded.  No
-    session id, memory, scratchpad, task-queue, or historical-conversation
+    canonical product specification, a deterministic fresh-context projection
+    of the canonical implementation plan (AUD-01: actionable current-task
+    context only, historical model-authored ``Evidence``/completion claims
+    excluded), the audit objective (auditor only), the exact selected task
+    excerpt (developer only), and the deterministic receipt-backed findings
+    payload of the previous round (planner only, Task 10 §16).  Every input's
+    bytes are digest-verified against the binding (a substituted or
+    paraphrased input fails closed) and every input is independently bounded.
+    No session id, memory, scratchpad, task-queue, or historical-conversation
     content is ever composed.
     """
     verify_invocation(binding)
@@ -839,7 +978,12 @@ def compose_prompt(
         + binding.plan_digest.encode("ascii")
         + b")"
     )
-    sections.append(plan)
+    # AUD-01: the fresh prompt carries a deterministic trusted projection of
+    # the canonical plan (actionable current-task context, historical
+    # model-authored Evidence/completion claims excluded), never the full
+    # plan verbatim.  The raw plan bytes were digest-verified above and stay
+    # the sole task ledger for planning/audit binding.
+    sections.append(project_plan_context(plan))
     if binding.role == "developer":
         if task_excerpt is None:
             raise InvocationError(
@@ -866,7 +1010,13 @@ def compose_prompt(
             + binding.task_excerpt_digest.encode("ascii")
             + b")"
         )
-        sections.append(task_excerpt)
+        # AUD-01: the developer prompt carries a deterministic render of the
+        # digest-verified selected task's actionable fields
+        # (``PROJECTED_TASK_FIELDS``), never the raw task-section bytes
+        # verbatim.  Historical model-authored Evidence/completion/pass/receipt
+        # prose and any raw block bytes are excluded so they can never become
+        # operative fresh-role instructions.
+        sections.append(render_selected_task(plan, binding.task_id))
     if binding.role == "auditor":
         if audit_objective is None:
             raise InvocationError(

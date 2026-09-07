@@ -1616,6 +1616,7 @@ class LifecycleAndCli(_CampaignBase):
             "campaign-result-campaign.json",
             "factory-loop.json",
             "state-digest-ledger.jsonl",
+            "state-floor.json",
         ])
 
     def test_published_result_conforms_to_committed_schema(self) -> None:
@@ -3158,6 +3159,18 @@ class FinalGateDirect(_CampaignBase):
         cfg.human_trust_anchor_sha256 = "0" * 64
         return cfg
 
+    def _config_absent_anchor(self):
+        cfg = self._config()
+        cfg.human_trust_anchor = ""
+        cfg.human_trust_anchor_sha256 = ""
+        return cfg
+
+    def _config_partial_anchor(self):
+        cfg = self._config()
+        cfg.human_trust_anchor = "/trusted/anchor.json"
+        cfg.human_trust_anchor_sha256 = ""
+        return cfg
+
     def _git(self):
         g = unittest.mock.Mock()
         g.head.return_value = "c" * 40
@@ -3201,6 +3214,8 @@ class FinalGateDirect(_CampaignBase):
             validate_core_mapping=core_mapping,
             read_external_authority=unittest.mock.Mock(
                 return_value=(b"trust-raw", b"")),
+            validate_trust_anchor=unittest.mock.Mock(
+                return_value={"keys": []}),
             validate_human_approval=human_approval,
             validate_human_conformance=unittest.mock.Mock(return_value="ok"),
         ):
@@ -3334,6 +3349,50 @@ class FinalGateDirect(_CampaignBase):
                     findings=out_result["findings"], blocked_refs=[])
                 self.assertEqual(outcome, "findings")
                 self.assertNotEqual(outcome, "pass")
+
+    def test_absent_anchor_is_product_findings_not_infrastructure(self) -> None:
+        # The canonical absent authority (omitted path+digest, bound as
+        # ZERO256) is an authenticated product finding: the role is NOT
+        # reclassified to infrastructure, yet the campaign can never reach
+        # success.
+        role = self._audit_role()
+        result = {"schema": "audit-result/v1", "outcome": "pass",
+                  "findings": []}
+        harness = self._harness()
+        harness._config = self._config_absent_anchor()
+        with self._readiness():
+            out_role, out_result, detail = (
+                campaign_module.Campaign._final_gate(
+                    harness, role, dict(result)))
+        self.assertEqual(out_role.exit_status, 0)
+        self.assertEqual(out_result["outcome"], "findings")
+        self.assertIn(
+            "final human graphics approval/VRF-07 did not revalidate "
+            "at current exact HEAD", out_result["findings"])
+        self.assertTrue(detail)
+        outcome = campaign_module.classify_audit(
+            role=out_role, scope_ok=True, result_valid=True,
+            outcome=out_result["outcome"],
+            findings=out_result["findings"], blocked_refs=[])
+        self.assertEqual(outcome, "findings")
+        self.assertNotEqual(outcome, "infrastructure_failure")
+        self.assertNotEqual(outcome, "pass")
+
+    def test_partial_anchor_is_infrastructure(self) -> None:
+        # A path without its exact digest (or vice versa) is a provided-but-
+        # invalid anchor: infrastructure, never an ordinary product finding.
+        role = self._audit_role()
+        result = {"schema": "audit-result/v1", "outcome": "pass",
+                  "findings": []}
+        harness = self._harness()
+        harness._config = self._config_partial_anchor()
+        with self._readiness():
+            out_role, out_result, _detail = (
+                campaign_module.Campaign._final_gate(
+                    harness, role, dict(result)))
+        self.assertEqual(out_role.exit_status, -1)
+        self.assertEqual(
+            out_role.diagnostic, "final acceptance authority failure")
 
     def test_mapping_or_authority_unavailability_fails_infrastructure(self) -> None:
         # A conformance mapping that cannot derive from the committed policy
@@ -3535,6 +3594,8 @@ class RunnerFindingsReadinessTests(_CampaignBase):
                 return_value="1" * 64),
             read_external_authority=unittest.mock.Mock(
                 return_value=(b"trust-raw", b"")),
+            validate_trust_anchor=unittest.mock.Mock(
+                return_value={"keys": []}),
             validate_human_approval=human,
             validate_human_conformance=unittest.mock.Mock(
                 return_value="c" * 64),
@@ -3556,6 +3617,15 @@ class RunnerFindingsReadinessTests(_CampaignBase):
     ):
         ws = self.make(SUCCESS_SCENARIO)
         config = ws.derive_config()
+        # The direct readiness suite drives a provided (valid) external
+        # human trust anchor so the human gate is evaluated through the
+        # stubbed approval authority rather than short-circuited by the
+        # canonical absent-anchor product finding.
+        config = dataclasses.replace(
+            config,
+            human_trust_anchor="/trusted/anchor.json",
+            human_trust_anchor_sha256="0" * 64,
+        )
         nonce = self.NONCE
         commit = _git(ws.root, "rev-parse", "HEAD").stdout.strip()
         tree = _git(ws.root, "rev-parse", "HEAD^{tree}").stdout.strip()

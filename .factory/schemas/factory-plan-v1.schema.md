@@ -84,7 +84,7 @@ and cardinality are fixed:
 | `Acceptance criteria` | yes | non-empty |
 | `Verification` | yes | non-empty |
 | `Documentation impact` | yes | may be empty |
-| `Priority` | no | positive integer; defaults to the task number |
+| `Priority` | yes | exactly one; a bare positive base-10 integer within the safe bound (no task-number fallback) |
 | `Evidence` | no | acceptance/evidence references recorded by the developer |
 | `Blocked on` | no | required when `Status: blocked`; names the exact unresolved requirement/fact reference |
 
@@ -122,8 +122,12 @@ one task may be `in_progress`, and a `blocked` task must carry a non-empty
   the final documentation and specification audit (which may also reference
   appended remediation tasks that follow it).
 - The dependency graph must be acyclic.
-- `Priority` is an optional positive integer; when absent it defaults to the
-  task number, so §8 deterministic selection still sorts by ID.
+- `Priority` is a required positive base-10 integer on every task, within the
+  safe bound (`MAX_PRIORITY` in the parser). It must be a bare ASCII digit
+  string with no sign, decimal point, exponent, surrounding/embedded
+  whitespace, or Unicode digits; there is no task-number fallback. §8
+  deterministic selection sorts runnable tasks by this explicit priority
+  first, then lexicographic task identifier.
 
 ## 7. Conformance matrix
 

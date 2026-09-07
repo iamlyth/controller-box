@@ -53,6 +53,7 @@ Plan: Python 3.11 standard library only.
 
 - Status: pending
 - Dependencies: Task 1, Task 2
+- Priority: 3
 - Scope: fixture audit task for the acceptance plan.
 - Acceptance criteria: the fixture remains parseable.
 - Verification: the fixture suite.

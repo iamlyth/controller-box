@@ -43,6 +43,7 @@ Plan: Python 3.11 standard library only.
 
 - Status: pending
 - Dependencies: Task 1
+- Priority: 3
 - Scope: task identifiers must be contiguous from 1.
 - Acceptance criteria: a missing identifier is rejected.
 - Verification: the fixture suite.

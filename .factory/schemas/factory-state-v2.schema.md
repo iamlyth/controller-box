@@ -30,7 +30,11 @@ transition it.
   orchestration state) and re-validated after the phase; any same-UID
   semantic mutation not produced by the trusted transition fails closed.
 - The state file is the *only* mutable lifecycle file; the ledger is
-  append-only evidence.
+  append-only evidence.  A second private marker,
+  `.factory-state/state-floor.json` (schema `factory-state-floor/v1`, §2.2),
+  is the durable authenticated high-water floor for `current_round` and
+  per-task `attempt_number`; it is raised *before* every state publication
+  and is never orchestration state.
 
 ## 2. Field set
 
@@ -86,6 +90,40 @@ binding differs. The state-file and private-directory owner checks compare
 real `stat` metadata against an internal expected owner UID (default: the
 current user), so the exact owner-rejection branch is always exercisable with
 real stat metadata and a wrong expected UID, with no `chown` required (S7).
+
+### 2.2 Durable authenticated high-water floor (`factory-state-floor/v1`)
+
+AUD-04/F-04: rewinding `current_round` or `attempt_number` must fail closed
+across fresh processes even when no phase-digest tag matches.  The state file
+itself cannot carry its own floor (a rewind of the file would rewind the
+floor with it), so the trusted harness maintains a separate private marker
+`.factory-state/state-floor.json` with schema `factory-state-floor/v1` and
+exactly this field set:
+
+| Field | Type / invariant |
+|-------|------------------|
+| `schema` | exactly the constant `"factory-state-floor/v1"` |
+| `current_round` | non-negative integer: the highest `current_round` ever published |
+| `attempts` | JSON object mapping each task id (decimal string) to the highest `attempt_number` ever published for that task |
+
+Contract:
+
+- `init_state` establishes the floor (no-replace) *before* the first state
+  publication; `write_state` raises the floor (max-merge) *before* the atomic
+  state publication, so there is **no rollback window** — a crash between the
+  floor raise and the state publication leaves the state below the floor and
+  a fresh load fails closed instead of silently accepting a rewound counter.
+- `load_state` and recovery fail closed when the state's `current_round` is
+  below the floor's round or when the current task's `attempt_number` is
+  below the floor's per-task high-water mark, and when the floor is missing
+  or tampered (wrong schema, extra/missing field, non-integer or negative
+  counter, unsafe marker).  A legitimate new-task attempt reset is preserved:
+  the floor is keyed per task, so a different `selected_task_id` is never
+  compared against another task's floor.
+- The floor is written/read through the same atomic no-follow owner/mode
+  authority as the state file (exact 0600, single link, same-UID, bounded
+  `FLOOR_MAX`), so a foreign-owned, group/other-readable, symlinked, or
+  oversized floor fails closed.
 
 ## 3. Transition table and outcomes
 
@@ -185,7 +223,10 @@ afterwards:
   `chown` required (S7).
 - The state file is a regular same-UID file, mode 0600, link count 1, size
   bounded (`STATE_FILE_MAX`); reads hold one descriptor and re-validate the
-  (dev, inode) and size before/after reading.
+  (dev, inode) and size before/after reading.  The counter floor
+  (`.factory-state/state-floor.json`, §2.2) is protected identically: exact
+  0600, single link, same-UID, bounded (`FLOOR_MAX`), and read through the
+  same no-follow bounded reader.
 - Writes publish through a mode-0600 temporary inode and `linkat`; a raced
   pathname is never silently replaced; the previous validated inode is
   quarantined on failure, never destroyed silently.

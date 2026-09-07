@@ -37,6 +37,7 @@ A duplicated canonical heading is a defect.
 
 - Status: pending
 - Dependencies: None
+- Priority: 1
 - Scope: one fixture plan parses and round-trips byte-exactly.
 - Acceptance criteria: the parser accepts and the model is deterministic.
 - Verification: `.factory/tests/test-factory-plan-parser.py`.
@@ -46,6 +47,7 @@ A duplicated canonical heading is a defect.
 
 - Status: pending
 - Dependencies: Task 1
+- Priority: 2
 - Scope: fixture audit task for the acceptance plan.
 - Acceptance criteria: the fixture remains parseable.
 - Verification: the fixture suite.

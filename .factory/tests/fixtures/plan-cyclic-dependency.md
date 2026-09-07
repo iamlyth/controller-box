@@ -43,6 +43,7 @@ Plan: Python 3.11 standard library only.
 
 - Status: pending
 - Dependencies: Task 1, Task 3
+- Priority: 2
 - Scope: fixture audit task with a forward dependency on the appended task.
 - Acceptance criteria: the audit may reference appended remediation tasks.
 - Verification: the fixture suite.
@@ -52,6 +53,7 @@ Plan: Python 3.11 standard library only.
 
 - Status: pending
 - Dependencies: Task 2
+- Priority: 3
 - Scope: the appended task returns the edge to the audit, closing a cycle.
 - Acceptance criteria: a cycle is rejected.
 - Verification: the fixture suite.

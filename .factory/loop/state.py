@@ -104,6 +104,20 @@ closed (:meth:`record_phase_digest` / :meth:`verify_phase_digest`).
 the state model, so any semantic mutation (forged field, rewound counter,
 changed binding or phase) changes the digest; file-metadata mutations are
 caught by the no-follow identity checks.
+
+AUD-04/F-04 hardening: a durable authenticated high-water floor
+(``.factory-state/state-floor.json``, schema ``factory-state-floor/v1``)
+records the highest ``current_round`` and per-task ``attempt_number`` ever
+published.  ``write_state`` raises the floor *before* the atomic state
+publication (no rollback window: a crash between the two leaves the state
+below the floor and a fresh load fails closed), and ``load_state``/recovery
+fail closed when the state's counters are below the floor or when the floor
+is missing or tampered — so rewinding ``current_round`` or ``attempt_number``
+fails closed across fresh processes even when no phase-digest tag matches.
+The floor is written/read through the same atomic no-follow owner/mode
+authority (exact 0600, single link, same-UID) as the state file, and a
+legitimate new-task attempt reset (a different ``selected_task_id``) is
+preserved because the floor is keyed per task.
 """
 
 from __future__ import annotations
@@ -124,11 +138,23 @@ SCHEMA_NAME = "factory-state/v2"
 LEGACY_SCHEMA_NAME = "factory-state/v1"
 STATE_FILE_NAME = "factory-loop.json"
 DIGEST_LEDGER_NAME = "state-digest-ledger.jsonl"
+# Durable authenticated high-water floor (AUD-04/F-04): a separate private
+# marker that records the highest ``current_round`` and per-task
+# ``attempt_number`` ever published, so a fresh-process ``load_state`` fails
+# closed on a rewound counter even when no phase-digest tag matches.  The
+# floor is raised *before* the state file is published (no rollback window)
+# and is written/read through the same atomic no-follow owner/mode authority
+# as the state file itself.
+FLOOR_FILE_NAME = "state-floor.json"
+FLOOR_SCHEMA_NAME = "factory-state-floor/v1"
 
 # One mutable control-state file plus one append-only evidence ledger; the
 # ledger is never orchestration state (FACTORY-LOOP-SPEC §11).
 STATE_FILE_MAX = 16 * 1024
 LEDGER_MAX = 1024 * 1024
+# The floor carries one small entry per selected task (a plan is bounded), so
+# a generous bound keeps the per-task attempt map from ever overflowing.
+FLOOR_MAX = 256 * 1024
 
 # §11 phases: the four lifecycle phases and the terminal campaign states of
 # the §11 transition table.
@@ -1026,6 +1052,12 @@ def advance(
             "`now` must be a positive monotonic marker (a zeroed `now=0` "
             "epoch marker is rejected as tamper)"
         )
+    if now <= state.phase_started_at_monotonic:
+        raise StateTamperError(
+            "`now` may not rewind the phase marker: a new phase must start "
+            "strictly after the phase that owns it "
+            f"(`phase_started_at_monotonic` {state.phase_started_at_monotonic})"
+        )
     next_round = (
         1 if state.current_phase == "readiness" and target == "planning" else
         state.current_round + 1
@@ -1097,6 +1129,17 @@ def begin_attempt(
         raise StateTamperError(
             "`now` must be a positive monotonic marker (a zeroed `now=0` "
             "epoch marker is rejected as tamper)"
+        )
+    if (
+        state.selected_task_id == task_id
+        and now <= state.attempt_started_at_monotonic
+    ):
+        raise StateTamperError(
+            "`now` may not rewind the attempt marker of the current task: a "
+            "new attempt of the same task must start strictly after the "
+            "attempt that owns it "
+            f"(`attempt_started_at_monotonic` "
+            f"{state.attempt_started_at_monotonic})"
         )
     attempt = (
         state.attempt_number + 1
@@ -1187,10 +1230,154 @@ def _validate_ledger_file(info: os.stat_result) -> None:
         not stat.S_ISREG(info.st_mode)
         or info.st_uid != os.getuid()
         or info.st_nlink != 1
-        or info.st_mode & 0o022
+        or stat.S_IMODE(info.st_mode) != 0o600
         or info.st_size > LEDGER_MAX
     ):
         raise StateDigestError("unsafe digest ledger")
+
+
+# ---------------------------------------------------------------------------
+# Durable authenticated high-water floor (AUD-04/F-04)
+# ---------------------------------------------------------------------------
+
+
+def _parse_floor(data: object) -> Dict[str, object]:
+    """Validate the exact ``factory-state-floor/v1`` field set.
+
+    The floor is a private high-water marker, never orchestration state: it
+    records the highest ``current_round`` and per-task ``attempt_number``
+    ever published.  A missing field, an extra field, a wrong schema, a
+    non-integer counter, or a negative counter is tamper and fails closed.
+    """
+    if not isinstance(data, dict):
+        raise StateTamperError("counter floor must be a JSON object")
+    if data.get("schema") != FLOOR_SCHEMA_NAME:
+        raise StateTamperError(
+            f"counter floor schema must be exactly {FLOOR_SCHEMA_NAME!r}"
+        )
+    if set(data) != {"schema", "current_round", "attempts"}:
+        raise StateTamperError(
+            "counter floor must contain exactly the floor field set"
+        )
+    current_round = data["current_round"]
+    if (
+        isinstance(current_round, bool)
+        or not isinstance(current_round, int)
+        or current_round < 0
+    ):
+        raise StateTamperError(
+            "counter floor `current_round` must be a non-negative integer"
+        )
+    attempts = data["attempts"]
+    if not isinstance(attempts, dict):
+        raise StateTamperError("counter floor `attempts` must be an object")
+    for key, value in attempts.items():
+        if (
+            not isinstance(key, str)
+            or not key.isdigit()
+            or isinstance(value, bool)
+            or not isinstance(value, int)
+            or value < 0
+        ):
+            raise StateTamperError(
+                "counter floor `attempts` must map task ids to non-negative "
+                "integers"
+            )
+    return data
+
+
+def _read_floor(
+    root: Path, *, _expected_uid: Optional[int] = None
+) -> Optional[Dict[str, object]]:
+    """Read and validate the durable counter floor through the same authority.
+
+    The floor is read through the established no-follow bounded reader with
+    the same owner/mode/link-count protections as the state file, so a
+    foreign-owned, group/other-readable, symlinked, or oversized floor fails
+    closed.  ``None`` means the floor is absent (never a valid state).
+    """
+    try:
+        data = read_json(
+            root, FLOOR_FILE_NAME, maximum=FLOOR_MAX, missing_ok=True,
+            _expected_uid=_expected_uid,
+        )
+    except StateIOError as exc:
+        raise StateTamperError(f"unsafe counter floor: {exc}") from exc
+    if data is None:
+        return None
+    return _parse_floor(data)
+
+
+def _enforce_floor(state: FactoryState, floor: Dict[str, object]) -> None:
+    """Fail closed when the state's counters diverge from the durable floor.
+
+    The floor is a high-water mark that is raised to cover the state *before*
+    the state is published, so after any successful write the floor equals the
+    state's counters.  ``current_round`` must therefore equal the floor's
+    round, and the current task's ``attempt_number`` must equal the floor's
+    per-task attempt high-water mark.  A state below the floor is a rewound
+    state (a crash between the floor raise and the state publication, or a
+    same-UID rollback); a floor below the state is a rewound/forged floor.
+    Both are tamper and fail closed, with distinct messages so an operator
+    can tell a state rollback from a floor rewind.  A legitimate new-task
+    attempt reset is preserved: the floor is keyed per task, so a different
+    ``selected_task_id`` is never compared against another task's floor.
+    """
+    floor_round = int(floor["current_round"])
+    if state.current_round < floor_round:
+        raise StateTamperError(
+            f"`current_round` {state.current_round} is below the durable "
+            f"counter floor {floor_round}; refusing to load a rewound state"
+        )
+    if state.current_round > floor_round:
+        raise StateTamperError(
+            f"durable counter floor {floor_round} is below the state's "
+            f"`current_round` {state.current_round}; refusing to load a "
+            f"rewound floor"
+        )
+    if state.selected_task_id is not None:
+        key = str(state.selected_task_id)
+        floor_attempt = floor["attempts"].get(key)
+        if floor_attempt is not None:
+            floor_attempt = int(floor_attempt)
+            if state.attempt_number < floor_attempt:
+                raise StateTamperError(
+                    f"`attempt_number` {state.attempt_number} for task {key} "
+                    f"is below the durable counter floor {floor_attempt}; "
+                    f"refusing to load a rewound state"
+                )
+            if state.attempt_number > floor_attempt:
+                raise StateTamperError(
+                    f"durable counter floor {floor_attempt} for task {key} is "
+                    f"below the state's `attempt_number` "
+                    f"{state.attempt_number}; refusing to load a rewound floor"
+                )
+
+
+def _raise_floor(root: Path, state: FactoryState) -> None:
+    """Raise the durable counter floor to cover ``state`` *before* publication.
+
+    The floor is merged (max) with the existing floor and written atomically
+    through the same authority as the state file, so a crash between the
+    floor raise and the state publication leaves the state below the floor
+    and a fresh load fails closed (no rollback window).  A missing floor is
+    fail-closed: an initialized campaign must always carry its floor.
+    """
+    current = _read_floor(root)
+    if current is None:
+        raise StateTamperError(
+            "counter floor is missing; refusing to write an unfloored state"
+        )
+    attempts = dict(current["attempts"])
+    if state.selected_task_id is not None:
+        key = str(state.selected_task_id)
+        attempts[key] = max(int(attempts.get(key, 0)), state.attempt_number)
+    new_floor = {
+        "schema": FLOOR_SCHEMA_NAME,
+        "current_round": max(int(current["current_round"]), state.current_round),
+        "attempts": attempts,
+    }
+    atomic_write_json(root, FLOOR_FILE_NAME, new_floor)
 
 
 def init_state(
@@ -1321,6 +1508,25 @@ def init_state(
             f"{root / '.factory-state' / DIGEST_LEDGER_NAME} already records "
             f"a prior campaign's phase digests"
         )
+    try:
+        # The durable counter floor is established first (no-replace): the
+        # floor is the high-water authority that makes a later rewound state
+        # fail closed, so it must exist before the first state publication.
+        atomic_write_json(
+            root, FLOOR_FILE_NAME,
+            {
+                "schema": FLOOR_SCHEMA_NAME,
+                "current_round": state.current_round,
+                "attempts": {},
+            },
+            no_replace=True,
+        )
+    except StateIOError as exc:
+        raise StateError(
+            f"refusing to create a second campaign binding: the counter "
+            f"floor {root / '.factory-state' / FLOOR_FILE_NAME} already "
+            f"exists: {exc}"
+        ) from exc
     try:
         # Atomic no-replace publication (Task 19 S1): the existence check and
         # the linkat publish happen inside one directory scope, so init can
@@ -1597,6 +1803,13 @@ def recover_state(
                     f"digest-ledger entry ({latest}); refusing to restore a "
                     f"tampered state"
                 )
+            floor = _read_floor(root, _expected_uid=_expected_uid)
+            if floor is None:
+                raise StateError(
+                    "counter floor is missing; refusing to restore an "
+                    "unfloored state"
+                )
+            _enforce_floor(recovered, floor)
             with _fio.state_dir(
                 root, create=False, _expected_uid=_expected_uid
             ) as directory_fd:
@@ -1705,9 +1918,15 @@ def write_state(root, state: FactoryState) -> None:
     the previous file after an identity check, publishes with ``linkat`` (so
     a raced pathname is never silently replaced), and ``fsync``s the
     directory.
+
+    The durable counter floor is raised *before* the state publication (no
+    rollback window): a crash between the two leaves the state below the
+    floor and a fresh load fails closed instead of silently accepting a
+    rewound counter.
     """
     root = _as_root(root)
     state.validate()
+    _raise_floor(root, state)
     atomic_write_json(root, STATE_FILE_NAME, state.to_dict())
 
 
@@ -1766,6 +1985,12 @@ def load_state(
         raise StateTamperError(
             "state `repository_identity` does not match the canonical root"
         )
+    floor = _read_floor(root, _expected_uid=_expected_uid)
+    if floor is None:
+        raise StateTamperError(
+            "counter floor is missing; refusing to load an unfloored state"
+        )
+    _enforce_floor(state, floor)
     _expect_binding(state, "branch", expected_branch)
     _expect_binding(state, "campaign_id", expected_campaign_id)
     _expect_binding(state, "rounds_requested", expected_rounds_requested)

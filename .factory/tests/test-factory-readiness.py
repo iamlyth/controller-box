@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fail-before-model conformance for the production round-zero authority."""
 from __future__ import annotations
-import hashlib, json, os, subprocess, sys, tempfile, unittest, zlib
+import hashlib, json, os, subprocess, sys, tempfile, types, unittest, zlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -237,6 +237,158 @@ class ReadinessTests(unittest.TestCase):
             campaign.CampaignResult("forged",5,0,"success","pass","a"*40,()).validate()
         complete=campaign.CampaignResult("complete",1,1,"success","pass","a"*40,(record,))
         complete.validate(); campaign.validate_campaign_result(complete)
+
+
+class HumanAuthoritySplitTests(unittest.TestCase):
+    """Autonomous-development human-authority split matrix.
+
+    An omitted anchor path+digest is the canonical absent authority bound as
+    ZERO256: preflight permits it, readiness records a deterministic
+    authenticated product finding (plannable), launch/recovery bindings
+    preserve the zero digest immutably, and the final gate classifies it as
+    product findings — never infrastructure and never success.  A partial,
+    malformed, unreadable, or substituted anchor fails infrastructure
+    closed.  Valid anchors retain every strict validation, and exact-HEAD
+    final success still requires the signed human approval/VRF-07.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.key = self.root / "human-key"
+        subprocess.run([readiness.SSH_KEYGEN, "-q", "-t", "ed25519", "-N", "", "-f", self.key], check=True)
+        self.public_key = " ".join((self.root / "human-key.pub").read_text().split()[:2])
+        self.trust = {"schema": readiness.TRUST_SCHEMA, "status": "active", "namespace": readiness.SIGNATURE_NAMESPACE,
+                      "scope": "production-human-review",
+                      "keys": [{"key_id": "review-key", "reviewer": "reviewer@example", "public_key": self.public_key}]}
+        self.trust_raw = readiness.canonical_bytes(self.trust)
+        self.anchor = self.root / "review-anchor.json"
+        self.anchor.write_bytes(self.trust_raw)
+        self.anchor.chmod(0o444)
+        self.digest = hashlib.sha256(self.trust_raw).hexdigest()
+        # Disposable test roots are operator-owned; production accepts only
+        # root-owned ancestors (plus a root-owned sticky /tmp). The explicit
+        # fixture switch never exists in production campaign environments.
+        os.environ["FACTORY_TEST_AUTHORITY_ANCESTORS"] = "1"
+
+    def tearDown(self):
+        os.environ.pop("FACTORY_TEST_AUTHORITY_ANCESTORS", None)
+        self.tmp.cleanup()
+
+    def classify(self, path="", digest=""):
+        return campaign.classify_human_authority(
+            anchor_path=path, anchor_digest=digest,
+            read_authority=readiness.read_external_authority,
+            validate_trust=readiness.validate_trust_anchor,
+        )
+
+    def bare_campaign(self, path, digest):
+        bare = object.__new__(campaign.Campaign)
+        bare._config = types.SimpleNamespace(
+            human_trust_anchor=path, human_trust_anchor_sha256=digest)
+        return bare
+
+    def test_absent_anchor_is_canonical_absent_authority(self):
+        verdict, trust_raw = self.classify()
+        self.assertEqual(verdict, "absent")
+        self.assertIsNone(trust_raw)
+        # The absent authority is a product finding, never infrastructure
+        # and never success.
+        self.assertEqual(campaign.classify_human_gate(
+            authority="absent", approval_ok=False), (False, False))
+        # The canonical binding is ZERO256, which state validation accepts;
+        # the empty string would be rejected as a tampered binding.
+        value = state.empty_readiness(required=True)
+        value["nonce"] = "1" * 64
+        value["trust_authority_sha256"] = "0" * 64
+        state._validate_readiness(value, required=True)
+        value["trust_authority_sha256"] = ""
+        with self.assertRaises(state.StateTamperError):
+            state._validate_readiness(value, required=True)
+        # The binding helpers agree: both omitted is absent, never partial.
+        bare = self.bare_campaign("", "")
+        self.assertTrue(bare._human_authority_absent())
+        self.assertFalse(bare._human_authority_partial())
+
+    def test_partial_anchor_fails_infrastructure_closed(self):
+        for path, digest in ((str(self.anchor), ""), ("", self.digest)):
+            with self.subTest(path=path, digest=digest):
+                verdict, trust_raw = self.classify(path, digest)
+                self.assertEqual(verdict, "invalid")
+                self.assertIsNone(trust_raw)
+        # A partial anchor is infrastructure, never a product finding.
+        self.assertEqual(campaign.classify_human_gate(
+            authority="invalid", approval_ok=False), (False, True))
+        # The binding helpers flag exactly one provided side as partial.
+        for path, digest in ((str(self.anchor), ""), ("", self.digest)):
+            bare = self.bare_campaign(path, digest)
+            self.assertFalse(bare._human_authority_absent())
+            self.assertTrue(bare._human_authority_partial())
+
+    def test_malformed_or_substituted_anchor_fails_infrastructure_closed(self):
+        # Wrong digest (a stale digest over the same path) is invalid.
+        verdict, _ = self.classify(str(self.anchor), "0" * 64)
+        self.assertEqual(verdict, "invalid")
+        # Malformed content with a matching digest is invalid.
+        bad = self.root / "bad-anchor.json"
+        bad.write_bytes(b"{not json")
+        bad.chmod(0o444)
+        verdict, _ = self.classify(str(bad), hashlib.sha256(b"{not json").hexdigest())
+        self.assertEqual(verdict, "invalid")
+        # Unreadable/missing path is invalid.
+        verdict, _ = self.classify(str(self.root / "missing-anchor.json"), self.digest)
+        self.assertEqual(verdict, "invalid")
+        # Substituted leaf (symlink) is invalid: the authority never reads
+        # through a link.
+        link = self.root / "link-anchor.json"
+        link.symlink_to(self.anchor)
+        verdict, _ = self.classify(str(link), self.digest)
+        self.assertEqual(verdict, "invalid")
+        # Every invalid anchor is infrastructure, never a product finding.
+        self.assertEqual(campaign.classify_human_gate(
+            authority="invalid", approval_ok=True), (False, True))
+
+    def test_valid_anchor_without_approval_is_product_finding(self):
+        verdict, trust_raw = self.classify(str(self.anchor), self.digest)
+        self.assertEqual(verdict, "valid")
+        self.assertEqual(trust_raw, self.trust_raw)
+        # A valid anchor whose approval/VRF-07 did not revalidate is a
+        # product finding, never infrastructure.
+        self.assertEqual(campaign.classify_human_gate(
+            authority="valid", approval_ok=False), (False, False))
+
+    def test_valid_anchor_with_approval_passes(self):
+        verdict, trust_raw = self.classify(str(self.anchor), self.digest)
+        self.assertEqual(verdict, "valid")
+        self.assertEqual(trust_raw, self.trust_raw)
+        self.assertEqual(campaign.classify_human_gate(
+            authority="valid", approval_ok=True), (True, False))
+
+    def test_anchor_replay_and_substitution_are_rejected(self):
+        # Replay: the digest was captured from the original bytes; after the
+        # file is replaced with different bytes the old digest must fail.
+        replaced = self.root / "replaced-anchor.json"
+        replaced.write_bytes(self.trust_raw)
+        replaced.chmod(0o444)
+        verdict, _ = self.classify(str(replaced), self.digest)
+        self.assertEqual(verdict, "valid")
+        # The leaf is intentionally read-only, so a direct write would raise
+        # PermissionError before exercising the stale-digest logic.  Stage a
+        # fresh sibling with the modified bytes and correct owner/mode, then
+        # atomically replace the original so the authority reader observes the
+        # same path with a new inode/content and rejects the stale digest.
+        staged = self.root / "replaced-anchor.staged"
+        staged.write_bytes(self.trust_raw + b"\n")
+        os.chown(staged, os.getuid(), -1)
+        staged.chmod(0o444)
+        os.replace(staged, replaced)
+        verdict, _ = self.classify(str(replaced), self.digest)
+        self.assertEqual(verdict, "invalid")
+        # Substitution: a symlinked leaf never reads through the link.
+        link = self.root / "substituted-anchor.json"
+        link.symlink_to(self.anchor)
+        verdict, _ = self.classify(str(link), self.digest)
+        self.assertEqual(verdict, "invalid")
 
 
 class RunnerPolicyAuthorityTests(unittest.TestCase):

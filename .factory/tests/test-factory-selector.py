@@ -292,6 +292,59 @@ class CallerBuiltInvariantTest(unittest.TestCase):
             select_task(plan)
 
 
+class PriorityValidationTest(unittest.TestCase):
+    """Task 47 / AUD-02: the selector independently rejects bad priorities.
+
+    Defense in depth: even a caller-built ``Plan``/``Task`` model that
+    smuggles in a ``bool``, ``None``, zero, negative, non-integer, or
+    out-of-bound priority must be rejected before the
+    ``(priority, str(number))`` sort key is ever consulted.
+    """
+
+    @staticmethod
+    def task(number: int, priority: object) -> Task:
+        return Task(
+            number=number,
+            title=f"Task {number}",
+            status="pending",
+            dependencies=[],
+            priority=priority,  # type: ignore[arg-type]
+            blocked_on=None,
+            fields={},
+            field_order=[],
+        )
+
+    def _assert_rejected(self, priority: object, fragment: str) -> None:
+        plan = Plan(tasks=[self.task(1, priority)])
+        with self.assertRaisesRegex(SelectorError, fragment):
+            select_task(plan)
+
+    def test_bool_priority_rejected(self) -> None:
+        self._assert_rejected(True, "not a boolean")
+
+    def test_none_priority_rejected(self) -> None:
+        self._assert_rejected(None, "must be an integer")
+
+    def test_zero_priority_rejected(self) -> None:
+        self._assert_rejected(0, "must be positive")
+
+    def test_negative_priority_rejected(self) -> None:
+        self._assert_rejected(-1, "must be positive")
+
+    def test_non_integer_priority_rejected(self) -> None:
+        self._assert_rejected("3", "must be an integer")
+        self._assert_rejected(3.5, "must be an integer")
+
+    def test_out_of_bound_priority_rejected(self) -> None:
+        self._assert_rejected(1_000_000_001, "exceeds the safe bound")
+
+    def test_valid_priority_accepted(self) -> None:
+        plan = Plan(tasks=[self.task(1, 3)])
+        selection = select_task(plan)
+        self.assertEqual(selection.classification, "selected")
+        self.assertEqual(selection.task_id, 1)
+
+
 class SingleTaskGuaranteeTest(unittest.TestCase):
     """Selection is exactly one task, or a classification with none."""
 

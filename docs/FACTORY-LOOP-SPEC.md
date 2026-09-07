@@ -397,6 +397,15 @@ into control/campaign state. Missing or invalid evidence terminates before any
 model. An interrupted physical acquisition is ambiguous and is never rerun;
 only same-nonce completed exact-bound acquisition may be reused.
 
+An omitted external human trust-anchor path+digest is the canonical absent
+authority bound as ZERO256: preflight permits it, readiness records the human
+gate as a deterministic authenticated product finding with a plannable
+outcome, and launch/recovery bindings preserve the zero digest immutably. A
+partial, malformed, unreadable, or substituted anchor fails infrastructure
+closed. Valid anchors retain every strict validation; exact-HEAD final success
+still requires the signed human approval/VRF-07, and machine vision never
+substitutes for it.
+
 Each ordinary round then consists of:
 
 ```text
@@ -495,6 +504,14 @@ functional evidence only to the campaign-owned namespace through the validated
 explicit override; normal operator verification retains the root evidence path.
 
 Missing evidence remains a finding. A receipt declaration is not a receipt; a model assertion is not evidence; private integration is not real-system acceptance; machine vision is not human approval.
+
+The external human trust anchor may be omitted as the canonical absent
+authority (bound as ZERO256): the campaign starts autonomously, readiness
+records the human gate as a deterministic authenticated product finding with a
+plannable outcome, and the final gate classifies the absent anchor as product
+findings — never infrastructure and never success. A provided anchor must be
+an exact path+digest pair that reads and validates strictly; a partial,
+malformed, unreadable, or substituted anchor is infrastructure failure.
 
 ## 20. Direct Pi execution
 

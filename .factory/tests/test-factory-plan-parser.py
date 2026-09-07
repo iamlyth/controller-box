@@ -145,12 +145,14 @@ class CanonicalPlanAgreementTest(unittest.TestCase):
         self.assertEqual(final[0].number, 55)
         self.assertEqual(set(final[0].dependencies), set(range(1, 55)))
         # Canonical priorities stay byte-bound to the active plan. Most
-        # remediation tasks are explicitly priority 1; legacy defaults remain
-        # visible until Task 47 removes that fallback from the parser. The
-        # appended runner-class restoration tasks (48-50) carry explicit
-        # priorities (1, 1, 2), BUG-0015 remediation (51) and signer security
-        # remediation (52) and installed excerpt repair (53) are priority 1,
-        # and the readiness-split task (54) and final audit (55) are priority 1.
+        # remediation tasks are explicitly priority 1; the legacy tasks that
+        # previously relied on the task-number fallback (1-3, 22-25, 28-32,
+        # 35-36) now carry that same value explicitly (Task 47 removed the
+        # fallback). The appended runner-class restoration tasks (48-50) carry
+        # explicit priorities (1, 1, 2), BUG-0015 remediation (51) and signer
+        # security remediation (52) and installed excerpt repair (53) are
+        # priority 1, and the readiness-split task (54) and final audit (55)
+        # are priority 1.
         self.assertEqual(
             [task.priority for task in plan.tasks],
             [1, 2, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
@@ -350,6 +352,114 @@ class BoundedRangeProbeTest(unittest.TestCase):
             "range probes grew peak RSS by "
             f"{rss_after - rss_before} KiB",
         )
+
+
+class ExplicitPriorityTest(unittest.TestCase):
+    """Task 47 / AUD-02: every task needs an explicit valid positive priority.
+
+    The parser requires an explicit positive base-10 integer ``Priority`` on
+    every task within the safe bound, with no task-number fallback, and
+    rejects omitted, zero, negative, bool-like, signed, whitespace-confusable,
+    duplicate, non-integer, and out-of-bound priorities.
+    """
+
+    BASE = FIXTURES / "plan-valid-base.md"
+    PRIORITY_LINE = "- Priority: 3"
+
+    def _plan_with_priority(self, replacement: str | None) -> str:
+        """Return the valid base plan with Task 1's Priority line replaced."""
+        text = self.BASE.read_text("utf-8")
+        if replacement is None:
+            # Omit the Priority field entirely.
+            return text.replace(self.PRIORITY_LINE + "\n", "")
+        return text.replace(self.PRIORITY_LINE, replacement)
+
+    def _assert_rejected(self, text: str, fragment: str) -> None:
+        with self.assertRaises(PlanError) as caught:
+            parse_plan(text)
+        self.assertIn(fragment, str(caught.exception))
+
+    def test_omitted_priority_rejected(self) -> None:
+        self._assert_rejected(
+            self._plan_with_priority(None), "requires exactly one `- Priority:`"
+        )
+
+    def test_zero_priority_rejected(self) -> None:
+        self._assert_rejected(
+            self._plan_with_priority("- Priority: 0"), "positive"
+        )
+
+    def test_negative_priority_rejected(self) -> None:
+        self._assert_rejected(
+            self._plan_with_priority("- Priority: -1"), "bare positive base-10"
+        )
+
+    def test_signed_priority_rejected(self) -> None:
+        self._assert_rejected(
+            self._plan_with_priority("- Priority: +3"), "bare positive base-10"
+        )
+
+    def test_bool_like_priority_rejected(self) -> None:
+        self._assert_rejected(
+            self._plan_with_priority("- Priority: True"), "bare positive base-10"
+        )
+
+    def test_non_integer_priority_rejected(self) -> None:
+        self._assert_rejected(
+            self._plan_with_priority("- Priority: 3.5"), "bare positive base-10"
+        )
+
+    def test_duplicate_priority_rejected(self) -> None:
+        text = self.BASE.read_text("utf-8")
+        text = text.replace(
+            self.PRIORITY_LINE, self.PRIORITY_LINE + "\n" + self.PRIORITY_LINE
+        )
+        self._assert_rejected(text, "duplicate field `Priority`")
+
+    def test_trailing_whitespace_priority_rejected(self) -> None:
+        self._assert_rejected(
+            self._plan_with_priority("- Priority: 3 "),
+            "no surrounding or embedded whitespace",
+        )
+
+    def test_leading_whitespace_priority_rejected(self) -> None:
+        self._assert_rejected(
+            self._plan_with_priority("- Priority:  3"),
+            "no surrounding or embedded whitespace",
+        )
+
+    def test_unicode_whitespace_priority_rejected(self) -> None:
+        # A no-break space is Unicode whitespace that ``FIELD_RE``'s ``\s*``
+        # would otherwise silently strip; the strict line check rejects it.
+        self._assert_rejected(
+            self._plan_with_priority("- Priority: 3\u00a0"),
+            "no surrounding or embedded whitespace",
+        )
+
+    def test_unicode_digit_priority_rejected(self) -> None:
+        # A full-width digit is not an ASCII ``[0-9]`` and must be rejected.
+        self._assert_rejected(
+            self._plan_with_priority("- Priority: \uff13"),
+            "bare positive base-10",
+        )
+
+    def test_out_of_bound_priority_rejected(self) -> None:
+        self._assert_rejected(
+            self._plan_with_priority("- Priority: 1000000001"),
+            "exceeds the safe bound",
+        )
+
+    def test_oversized_digit_string_priority_rejected(self) -> None:
+        # A digit string longer than the bound is rejected before int() so an
+        # attacker-sized value can never reach conversion.
+        self._assert_rejected(
+            self._plan_with_priority("- Priority: " + "9" * 100),
+            "exceeds the safe bound",
+        )
+
+    def test_valid_priority_still_accepted(self) -> None:
+        plan = parse_plan(self.BASE.read_text("utf-8"))
+        self.assertEqual(plan.tasks[0].priority, 3)
 
 
 class TransitionTableTest(unittest.TestCase):

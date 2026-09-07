@@ -1760,6 +1760,63 @@ def classify_audit(
     return "findings"
 
 
+def classify_human_authority(
+    *,
+    anchor_path: str,
+    anchor_digest: str,
+    read_authority: Callable[[Path, str], Tuple[bytes, object]],
+    validate_trust: Callable[[bytes], object],
+) -> Tuple[str, Optional[bytes]]:
+    """Classify the external human trust authority state.
+
+    Returns ``("absent", None)`` when both path and digest are omitted —
+    the canonical absent authority bound as ZERO256 that preflight permits
+    and readiness turns into a deterministic authenticated product finding.
+    Returns ``("invalid", None)`` when exactly one of path/digest is
+    provided or the provided authority is malformed, unreadable, or
+    substituted — an infrastructure failure, never an ordinary product
+    finding.  Returns ``("valid", trust_raw)`` when the provided anchor
+    reads and validates strictly.
+    """
+    if not anchor_path and not anchor_digest:
+        return "absent", None
+    if bool(anchor_path) != bool(anchor_digest):
+        return "invalid", None
+    try:
+        trust_raw, _ = read_authority(Path(anchor_path), anchor_digest)
+        validate_trust(trust_raw)
+    except readiness_module.HumanApprovalBlocked:
+        return "invalid", None
+    return "valid", trust_raw
+
+
+def classify_human_gate(
+    *,
+    authority: str,
+    approval_ok: bool,
+) -> Tuple[bool, bool]:
+    """Classify the human gate from the anchor and approval state.
+
+    ``authority`` is the ``classify_human_authority`` verdict
+    (``"absent"``/``"invalid"``/``"valid"``).  Returns
+    ``(human_passed, authority_invalid)``:
+
+    - a provided-but-invalid anchor is ``(False, True)`` — infrastructure
+      failure, never an ordinary product finding;
+    - the canonical absent authority is ``(False, False)`` — an
+      authenticated product finding (the human approval is missing), never
+      infrastructure and never success;
+    - a valid anchor whose approval/VRF-07 revalidated is ``(True, False)``;
+    - a valid anchor whose approval/VRF-07 did not revalidate is
+      ``(False, False)`` — a product finding.
+    """
+    if authority == "invalid":
+        return False, True
+    if authority == "valid" and approval_ok:
+        return True, False
+    return False, False
+
+
 # ---------------------------------------------------------------------------
 # Machine-result schema validation
 # ---------------------------------------------------------------------------
@@ -2599,7 +2656,20 @@ class Campaign:
         }
         return plan_sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode())
 
+    def _human_authority_absent(self) -> bool:
+        """Canonical absent human trust authority: both path and digest omitted."""
+        return not self._config.human_trust_anchor and not self._config.human_trust_anchor_sha256
+
+    def _human_authority_partial(self) -> bool:
+        """A path without its exact digest (or vice versa) is never valid."""
+        return bool(self._config.human_trust_anchor) != bool(self._config.human_trust_anchor_sha256)
+
     def _initial_readiness_binding(self) -> Dict[str, object]:
+        if self._human_authority_partial():
+            raise CampaignBindingError(
+                "human trust anchor must be an exact path+digest pair or "
+                "omitted entirely; a partial anchor is infrastructure failure"
+            )
         head, tree, environment_blob = self._runner_bindings()
         if head != self._config.accepted_commit:
             raise CampaignBindingError("readiness HEAD differs from accepted commit")
@@ -2634,7 +2704,10 @@ class Campaign:
             "install_manifest_sha256": plan_sha256(manifest_raw),
             "command_authority_sha256": self._readiness_authority_digest(),
             "human_authority_sha256": digest_blob(readiness_module.APPROVAL_PATH),
-            "trust_authority_sha256": self._config.human_trust_anchor_sha256,
+            "trust_authority_sha256": (
+                "0" * 64 if self._human_authority_absent()
+                else self._config.human_trust_anchor_sha256
+            ),
         })
         return value
 
@@ -2653,7 +2726,7 @@ class Campaign:
         # than by pretending the accepted pre-campaign commit is current.
         if state.current_phase == "planning" and state.current_round == 1:
             expected = self._initial_readiness_binding()
-            for name in ("accepted_commit", "tree", "environment_blob", "specification_sha256", "plan_sha256", "conformance_sha256", "policy_sha256", "readiness_policy_sha256", "contracts_sha256", "install_manifest_sha256", "command_authority_sha256"):
+            for name in ("accepted_commit", "tree", "environment_blob", "specification_sha256", "plan_sha256", "conformance_sha256", "policy_sha256", "readiness_policy_sha256", "contracts_sha256", "install_manifest_sha256", "command_authority_sha256", "trust_authority_sha256"):
                 if value.get(name) != expected.get(name):
                     raise CampaignBindingError(f"untrusted launch denied: readiness {name} binding is stale")
         result = state_module.read_json(self._root, READINESS_RESULT_NAME, maximum=MAX_RESULT_FILE, missing_ok=True)
@@ -3081,13 +3154,32 @@ class Campaign:
         if conf_exit != 0 or not mapping_valid:
             findings.append("conformance evaluation reported product findings")
 
+        human_authority, trust_raw = classify_human_authority(
+            anchor_path=self._config.human_trust_anchor,
+            anchor_digest=self._config.human_trust_anchor_sha256,
+            read_authority=readiness_module.read_external_authority,
+            validate_trust=readiness_module.validate_trust_anchor,
+        )
+        if human_authority == "invalid":
+            # A provided-but-invalid/unreadable/substituted anchor is an
+            # infrastructure failure, never an ordinary product finding.
+            return self._publish_readiness(
+                state, status="infrastructure_failure",
+                outcome="infrastructure_failure", aggregate=aggregate,
+                findings_aggregate=findings_aggregate,
+                capability=capability_digest, core=core_digest,
+                conformance=mapping_digest, human="0" * 64,
+            ), "infrastructure_failure"
         human_passed = True
         try:
             approval_raw = self._git.blob_at(
                 self._git.head(), readiness_module.APPROVAL_PATH)
-            trust_raw, _ = readiness_module.read_external_authority(
-                Path(self._config.human_trust_anchor),
-                self._config.human_trust_anchor_sha256)
+            if human_authority == "absent":
+                # The canonical absent authority: the human gate is a
+                # deterministic authenticated product finding, never
+                # infrastructure and never success.
+                raise readiness_module.HumanApprovalBlocked(
+                    "human trust anchor is absent")
             human_digest = readiness_module.validate_human_approval(
                 approval_raw, accepted_commit=self._git.head(),
                 trust_raw=trust_raw, blob_at=self._git.blob_at,
@@ -3260,7 +3352,10 @@ class Campaign:
             "audit_objectives_digest": self._config.audit_objectives_digest,
             "pre_round_hook_configuration_digest": self._config.pre_round_hook_configuration_digest,
             "install_manifest": self._config.install_manifest,
-            "human_trust_anchor_sha256": self._config.human_trust_anchor_sha256,
+            "human_trust_anchor_sha256": (
+                "0" * 64 if self._human_authority_absent()
+                else self._config.human_trust_anchor_sha256
+            ),
             "verification_command": list(self._config.verification_command),
             "capability_command": list(self._config.capability_command),
             "acceptance_command": list(self._config.acceptance_command),
@@ -5664,8 +5759,12 @@ class Campaign:
         graphics-approval / VRF-07 authority must revalidate at the current
         exact HEAD.  Deterministic failures become findings; unavailable
         facts/capabilities become infrastructure, never ordinary product
-        findings.  Returns the possibly-reclassified ``(role, result_data)``
-        and the accumulated gate detail.
+        findings.  The canonical absent human trust authority (omitted
+        path+digest, bound as ZERO256) is an authenticated product finding —
+        never infrastructure and never success — while a provided-but-invalid
+        anchor (partial, malformed, unreadable, or substituted) is
+        infrastructure.  Returns the possibly-reclassified ``(role,
+        result_data)`` and the accumulated gate detail.
         """
         acquisition_ran, acquisition_exit, acquisition_detail = (
             self._ensure_runner_evidence()
@@ -5706,36 +5805,45 @@ class Campaign:
             )
         except readiness_module.ReadinessError:
             final_mapping_ok = False
+        human_authority, trust_raw = classify_human_authority(
+            anchor_path=self._config.human_trust_anchor,
+            anchor_digest=self._config.human_trust_anchor_sha256,
+            read_authority=readiness_module.read_external_authority,
+            validate_trust=readiness_module.validate_trust_anchor,
+        )
+        human_authority_invalid = human_authority == "invalid"
         final_human_ok = True
-        human_authority_available = False
-        try:
-            approval_raw = self._git.blob_at(
-                self._git.head(), readiness_module.APPROVAL_PATH)
-            if not approval_raw:
-                raise ValueError(
-                    "missing human approval blob at current exact HEAD")
-            trust_raw, _ = readiness_module.read_external_authority(
-                Path(self._config.human_trust_anchor),
-                self._config.human_trust_anchor_sha256)
-            human_authority_available = True
-            readiness_module.validate_human_approval(
-                approval_raw, accepted_commit=self._git.head(),
-                trust_raw=trust_raw, blob_at=self._git.blob_at,
-                object_id=self._git.object_id,
-                is_ancestor=self._git.is_ancestor,
-                diff_paths=self._git.diff_paths)
-            approval = json.loads(approval_raw)
-            readiness_module.validate_human_conformance(
-                self._git.blob_at(self._git.head(), DEFAULT_CONFORMANCE_PATH),
-                candidate_commit=str(approval["candidate_commit"]))
-            final_human_ok = True
-        except (readiness_module.HumanApprovalBlocked, ValueError, KeyError):
-            # An approval/VRF-07 binding that fails to revalidate for the
-            # current exact HEAD while the authority is present is a
-            # product-level finding.  A missing/malformed approval blob or
-            # an unreadable external trust anchor (authority unavailable)
-            # is infrastructure, never an ordinary product finding.
-            final_human_ok = False
+        if not human_authority_invalid:
+            try:
+                approval_raw = self._git.blob_at(
+                    self._git.head(), readiness_module.APPROVAL_PATH)
+                if not approval_raw:
+                    raise ValueError(
+                        "missing human approval blob at current exact HEAD")
+                if human_authority == "absent":
+                    # The canonical absent authority: the human gate is a
+                    # product finding (no human approval exists), never
+                    # infrastructure and never success.
+                    raise readiness_module.HumanApprovalBlocked(
+                        "human trust anchor is absent")
+                readiness_module.validate_human_approval(
+                    approval_raw, accepted_commit=self._git.head(),
+                    trust_raw=trust_raw, blob_at=self._git.blob_at,
+                    object_id=self._git.object_id,
+                    is_ancestor=self._git.is_ancestor,
+                    diff_paths=self._git.diff_paths)
+                approval = json.loads(approval_raw)
+                readiness_module.validate_human_conformance(
+                    self._git.blob_at(self._git.head(), DEFAULT_CONFORMANCE_PATH),
+                    candidate_commit=str(approval["candidate_commit"]))
+                final_human_ok = True
+            except (readiness_module.HumanApprovalBlocked, ValueError, KeyError):
+                # An approval/VRF-07 binding that fails to revalidate for
+                # the current exact HEAD is a product-level finding: the
+                # human decision is missing, stale, or not bound to the
+                # current exact HEAD.  A missing/malformed approval blob is
+                # the same product finding (no human approval exists).
+                final_human_ok = False
         failures: List[str] = []
         final_gate_detail = ""
         if not cap_ran or cap_exit != 0 or cap_skipped:
@@ -5750,10 +5858,14 @@ class Campaign:
         if not conf_ok:
             failures.append(
                 "final conformance validator did not pass without skips")
-        if not final_human_ok and human_authority_available:
-            failures.append(
-                "final human graphics approval/VRF-07 did not revalidate "
-                "at current exact HEAD")
+        if not final_human_ok:
+            if human_authority_invalid:
+                failures.append(
+                    "final human trust anchor is invalid or unreadable")
+            else:
+                failures.append(
+                    "final human graphics approval/VRF-07 did not revalidate "
+                    "at current exact HEAD")
         if failures:
             result_data = dict(result_data)
             result_data["outcome"] = "findings"
@@ -5779,7 +5891,7 @@ class Campaign:
             or (not conf_ran or conf_exit < 0
                 or conf_exit in (126, 127) or conf_skipped
                 or not final_mapping_ok)
-            or (not final_human_ok and not human_authority_available)
+            or human_authority_invalid
         )
         # The core authority has an intentionally narrow exit contract:
         # 0 pass, 1 acceptance findings, everything else infrastructure.
@@ -6719,14 +6831,25 @@ def _production_preflight(
         )
     # External/offline reviewer trust is a coordinator prerequisite, never a
     # candidate-tree authority. Validate it before reserving state or running
-    # any acquisition/probe/model process.
-    trust_path = Path(str(getattr(args, "human_trust_anchor", "")))
+    # any acquisition/probe/model process.  An omitted path+digest pair is the
+    # canonical absent authority (bound as ZERO256): the campaign may start
+    # autonomously and readiness records the human gate as a deterministic
+    # authenticated product finding.  A partial, malformed, unreadable, or
+    # substituted anchor fails infrastructure closed before any model launch.
+    trust_path = str(getattr(args, "human_trust_anchor", ""))
     trust_digest = str(getattr(args, "human_trust_anchor_sha256", ""))
-    try:
-        trust_raw, _ = readiness_module.read_external_authority(trust_path, trust_digest)
-        readiness_module.validate_trust_anchor(trust_raw)
-    except readiness_module.HumanApprovalBlocked as exc:
-        raise CampaignConfigError(f"external human trust anchor is unavailable: {exc}") from exc
+    authority, _ = classify_human_authority(
+        anchor_path=trust_path, anchor_digest=trust_digest,
+        read_authority=readiness_module.read_external_authority,
+        validate_trust=readiness_module.validate_trust_anchor,
+    )
+    if authority == "invalid":
+        raise CampaignConfigError(
+            "external human trust anchor is unavailable: a provided anchor "
+            "must be an exact path+digest pair that reads and validates "
+            "strictly; a partial, malformed, unreadable, or substituted "
+            "anchor is infrastructure failure"
+        )
 
     manifest_path = getattr(args, "install_manifest", "")
     manifest = _secure_install_manifest(manifest_path)

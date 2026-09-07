@@ -15,9 +15,10 @@ Contract (see schema for the full grammar):
   interaction inventory), in order, before any ``## Task N:`` section;
 * tasks are uniquely and contiguously numbered, each with exactly one
   ``Status``, ``Dependencies``, ``Scope``, ``Acceptance criteria``,
-  ``Verification``, and ``Documentation impact`` field and optional
-  ``Priority``, ``Evidence``, and ``Blocked on`` fields; unknown or repeated
-  fields are rejected;
+  ``Verification``, ``Documentation impact``, and ``Priority`` field and
+  optional ``Evidence`` and ``Blocked on`` fields; unknown or repeated
+  fields are rejected; every task carries an explicit positive base-10
+  integer ``Priority`` within a safe bound (no task-number fallback);
 * statuses are limited to the documented lifecycle set; at most one task is
   ``in_progress``; a ``blocked`` task must name an exact unresolved reference;
 * dependencies reference existing tasks only, never themselves, never a later
@@ -132,8 +133,9 @@ REQUIRED_FIELDS = (
     "Acceptance criteria",
     "Verification",
     "Documentation impact",
+    "Priority",
 )
-OPTIONAL_FIELDS = ("Priority", "Evidence", "Blocked on", "Source")
+OPTIONAL_FIELDS = ("Evidence", "Blocked on", "Source")
 ALL_FIELDS = REQUIRED_FIELDS + OPTIONAL_FIELDS
 
 # The canonical sections, in canonical order, before any task section.
@@ -173,7 +175,21 @@ TASK_HEADING_RE = re.compile(r"^## Task\s+(\d+):\s*(.+?)\s*$")
 FIELD_RE = re.compile(r"^- ([A-Z][A-Za-z ]*?):\s*(.*?)\s*$")
 FRONT_RE = re.compile(r"^([a-z_]+):\s*(\S.*?)\s*$")
 DEP_ITEM_RE = re.compile(r"^Tasks?\s+(\d+)(?:\s*[-\u2013\u2014]\s*(\d+))?$", re.I)
-PRIORITY_RE = re.compile(r"^\d+$")
+# A priority is a bare ASCII base-10 integer (``[0-9]`` only, never Unicode
+# ``\d`` digits) with no sign, decimal point, exponent, or whitespace.  The
+# safe bound keeps ``int()`` conversion trivial and far above every real
+# priority (the canonical plan's largest is 36); a digit string longer than
+# the bound is rejected before conversion so an attacker-sized value can
+# never reach ``int()`` (Task 47 / AUD-02).
+MAX_PRIORITY = 1_000_000_000
+PRIORITY_RE = re.compile(r"^[0-9]+$")
+# The raw ``- Priority:`` line must be exactly the label, a single ASCII
+# space separator, then bare ASCII digits and end-of-line: any surrounding or
+# embedded whitespace (including Unicode whitespace such as a no-break space
+# that ``FIELD_RE``'s ``\s*`` would otherwise silently strip, and leading value
+# whitespace such as ``- Priority:  3``) is rejected rather than normalized to
+# a clean integer.
+STRICT_PRIORITY_LINE_RE = re.compile(r"^- Priority: [0-9]+$")
 BOUNDARY_RE = re.compile(r"^- ((?:input|semantic|production|evidence) boundary):\s*(.*?)\s*$")
 
 
@@ -726,6 +742,15 @@ def _parse_task_block(number: int, title: str, block: Block) -> Task:
                 raise PlanError(f"task {number} has a duplicate field `{label}`")
             if label not in ALL_FIELDS:
                 raise PlanError(f"task {number} has an unknown field `{label}`")
+            if label == "Priority" and not STRICT_PRIORITY_LINE_RE.fullmatch(line):
+                # Reject any surrounding/embedded whitespace (including
+                # Unicode whitespace) and any non-ASCII-digit character on the
+                # raw line, so ``- Priority: 1 `` or ``- Priority: 1\u00a0`` is
+                # never silently normalized to a clean integer (Task 47).
+                raise PlanError(
+                    f"task {number} priority must be a bare positive base-10 "
+                    "integer with no surrounding or embedded whitespace"
+                )
             values[label] = [first]
             order.append(label)
             current = label
@@ -762,15 +787,31 @@ def _parse_task_block(number: int, title: str, block: Block) -> Task:
     dep_spans = _parse_dep_spans(
         values["Dependencies"][0], what=f"task {number}"
     )
-    if "Priority" in values:
-        raw_priority = values["Priority"][0].strip()
-        if not PRIORITY_RE.fullmatch(raw_priority) or int(raw_priority) < 1:
-            raise PlanError(
-                f"task {number} priority must be a positive integer, got `{raw_priority}`"
-            )
-        priority = int(raw_priority)
-    else:
-        priority = number
+    if "Priority" not in values:
+        raise PlanError(
+            f"task {number} requires exactly one `- Priority:` field "
+            "(an explicit positive base-10 integer; there is no task-number "
+            "fallback)"
+        )
+    raw_priority = values["Priority"][0].strip()
+    if not PRIORITY_RE.fullmatch(raw_priority):
+        raise PlanError(
+            f"task {number} priority must be a positive base-10 integer, "
+            f"got `{raw_priority}`"
+        )
+    if len(raw_priority) > len(str(MAX_PRIORITY)):
+        raise PlanError(
+            f"task {number} priority exceeds the safe bound {MAX_PRIORITY}"
+        )
+    priority = int(raw_priority)
+    if priority < 1:
+        raise PlanError(
+            f"task {number} priority must be a positive integer, got `{raw_priority}`"
+        )
+    if priority > MAX_PRIORITY:
+        raise PlanError(
+            f"task {number} priority exceeds the safe bound {MAX_PRIORITY}"
+        )
 
     blocked_on = (
         "\n".join(part.lstrip(" \t") for part in values["Blocked on"])

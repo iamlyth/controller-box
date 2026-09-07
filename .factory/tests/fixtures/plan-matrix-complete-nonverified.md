@@ -66,6 +66,7 @@ Plan: Python 3.11 standard library only; the parser never reads process state.
 
 - Status: complete
 - Dependencies: Task 1
+- Priority: 2
 - Scope: fixture audit task for the acceptance plan; the definition of done
   covers the conformance matrix, the interaction inventory, open findings,
   the final review, and a clean tree.

@@ -115,7 +115,7 @@ def _validate_file(
         not stat.S_ISREG(info.st_mode)
         or info.st_uid != _expected_uid
         or (info.st_nlink not in (1, 2) if allow_linked else info.st_nlink != 1)
-        or info.st_mode & 0o022
+        or stat.S_IMODE(info.st_mode) != 0o600
         or info.st_size > maximum
     ):
         raise StateIOError("unsafe lifecycle marker")
@@ -343,6 +343,10 @@ def atomic_write(
             0o600,
             dir_fd=directory_fd,
         )
+        # Pin the exact private mode regardless of the caller's umask: the
+        # published marker must be exactly 0600 (AUD-04/F-01), never a
+        # umask-narrowed 0400 or a widened group/other-readable mode.
+        os.fchmod(descriptor, 0o600)
         temporary_exists = True
         quarantine: str | None = None
         try:

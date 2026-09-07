@@ -33,6 +33,7 @@ Plan: Python 3.11 standard library only.
 
 - Status: pending
 - Dependencies: Task 2
+- Priority: 1
 - Scope: fixture audit task that is not last; the definition of done covers the
   conformance matrix, the interaction inventory, open findings, the final
   review, and a clean tree.

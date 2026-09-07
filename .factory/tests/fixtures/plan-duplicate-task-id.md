@@ -53,6 +53,7 @@ Plan: Python 3.11 standard library only.
 
 - Status: pending
 - Dependencies: Task 1
+- Priority: 2
 - Scope: second occurrence of the same identifier.
 - Acceptance criteria: identifiers must be unique.
 - Verification: the fixture suite.

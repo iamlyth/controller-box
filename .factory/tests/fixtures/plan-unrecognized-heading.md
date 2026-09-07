@@ -47,6 +47,7 @@ A heading outside the documented grammar is rejected.
 
 - Status: pending
 - Dependencies: Task 1
+- Priority: 2
 - Scope: fixture for the unknown-heading test.
 - Acceptance criteria: the fixture remains parseable.
 - Verification: the fixture suite.

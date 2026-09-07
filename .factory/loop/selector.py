@@ -41,9 +41,9 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 try:
-    from .plan_parser import TASK_STATUSES, Plan, PlanError
+    from .plan_parser import MAX_PRIORITY, TASK_STATUSES, Plan, PlanError, Task
 except ImportError:  # flat-import mode used by the hidden harness test suite
-    from plan_parser import TASK_STATUSES, Plan, PlanError  # type: ignore[no-redef]
+    from plan_parser import MAX_PRIORITY, TASK_STATUSES, Plan, PlanError, Task  # type: ignore[no-redef]
 
 # Valid selector outcomes: exactly one selected task, or one of the two
 # empty-work phase classes (FACTORY-LOOP-SPEC \u00a78, \u00a713.2).
@@ -94,6 +94,40 @@ class Selection:
         return self.classification == "selected"
 
 
+def _validate_priority(task: Task) -> None:
+    """Reject a caller-supplied task whose priority is not a valid positive int.
+
+    Defense in depth: the parser already guarantees every parsed task carries
+    an explicit positive base-10 integer priority within the safe bound, but a
+    directly constructed ``Plan``/``Task`` model could smuggle in ``None``,
+    a ``bool`` (a subclass of ``int``), zero, a negative value, a non-integer,
+    or an out-of-bound value.  Any of those must be rejected before the
+    ``(priority, str(number))`` sort key is ever consulted, so an invalid
+    priority can never influence selection.
+    """
+    priority = task.priority
+    if isinstance(priority, bool):
+        raise SelectorError(
+            f"invalid plan: task {task.number} priority must be an integer, "
+            "not a boolean"
+        )
+    if not isinstance(priority, int):
+        raise SelectorError(
+            f"invalid plan: task {task.number} priority must be an integer, "
+            f"got {priority!r}"
+        )
+    if priority < 1:
+        raise SelectorError(
+            f"invalid plan: task {task.number} priority must be positive, "
+            f"got {priority}"
+        )
+    if priority > MAX_PRIORITY:
+        raise SelectorError(
+            f"invalid plan: task {task.number} priority exceeds the safe "
+            f"bound {MAX_PRIORITY}"
+        )
+
+
 def _validate_model(plan: Plan) -> None:
     """Defense in depth on the parsed plan model at the selection boundary.
 
@@ -107,8 +141,12 @@ def _validate_model(plan: Plan) -> None:
     list; every task status in the lifecycle set; dependencies that reference
     existing tasks only, never the task itself, and never in a cycle; a
     ``blocked`` task that names an exact unresolved reference; at most one
-    ``in_progress`` task; and an ``in_progress`` task whose dependencies are
-    all ``complete``.
+    ``in_progress`` task; an ``in_progress`` task whose dependencies are all
+    ``complete``; and an explicit positive base-10 integer ``priority``
+    within the safe bound on every task (never a ``bool``, ``None``, zero,
+    negative, non-integer, or out-of-bound value).  The priority check is
+    defense-in-depth: a caller-supplied invalid priority must never reach the
+    ``(priority, str(number))`` sort key.
     """
     if not plan.tasks:
         raise SelectorError("invalid plan: plan has no tasks")
@@ -123,6 +161,7 @@ def _validate_model(plan: Plan) -> None:
                 f"invalid plan: task {task.number} has unknown status "
                 f"{task.status!r}"
             )
+        _validate_priority(task)
 
     statuses = {task.number: task.status for task in plan.tasks}
     for task in plan.tasks:

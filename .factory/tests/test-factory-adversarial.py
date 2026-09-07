@@ -754,7 +754,7 @@ class CaseAdversarialSuite(_AdversarialBase):
         # persistent surfaces.  No runtime task ledger, memory store, event
         # stream, or scratchpad.
         expected = {"factory-loop.json", "state-digest-ledger.jsonl",
-                    "campaign-result-campaign.json"}
+                    "state-floor.json", "campaign-result-campaign.json"}
         self.assertEqual(set(names), expected, f"unexpected .factory-state entries: {names}")
         # The transient result files were consumed, never left behind.
         self.assertFalse((state_dir / "phase-result.json").exists())
@@ -2813,13 +2813,19 @@ class CaseAdversarialSuite(_AdversarialBase):
         # Counter rewind: rewinding the round counter is a digest change the
         # gate rejects.  The state is first advanced to a valid later round
         # (rounds_requested=2) and its digest recorded; the rewind to round 1
-        # is then a semantic mutation the gate must refuse.
-        state = json.loads(state_file.read_text(encoding="utf-8"))
-        state["current_round"] = 2
-        state_file.write_text(
-            json.dumps(state, sort_keys=True, separators=(",", ":")),
-            encoding="utf-8")
-        os.chmod(state_file, 0o600)
+        # is then a semantic mutation the gate must refuse.  The later round
+        # is reached through the four verified real §11 CLI transitions
+        # (planning -> planned -> task_completed -> pass -> pass), each
+        # asserted rc=0, so the recorded phase-2 digest is a genuine
+        # later-round digest rather than a direct file mutation.
+        for outcome, extra in (
+            ("planned", ["--plan-digest", digest, "--base-commit", head]),
+            ("task_completed", []),
+            ("pass", []),
+            ("pass", []),
+        ):
+            adv = self.state_cli(root, "advance", outcome, *extra)
+            self.assertEqual(adv.returncode, 0, adv.stderr[-1000:])
         self.assertEqual(
             self.state_cli(root, "record-phase-digest", "phase-2").returncode, 0)
         state = json.loads(state_file.read_text(encoding="utf-8"))

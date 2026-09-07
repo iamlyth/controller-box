@@ -43,6 +43,7 @@ Plan: Python 3.11 standard library only.
 
 - Status: in_progress
 - Dependencies: Task 1
+- Priority: 2
 - Scope: second in-progress task.
 - Acceptance criteria: exactly zero or one task may be in progress.
 - Verification: the fixture suite.

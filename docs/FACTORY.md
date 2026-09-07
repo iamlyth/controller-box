@@ -96,10 +96,18 @@ Volatile, ignored state:
   every request, signed manifest, aggregate, and checker invocation. Capability,
   core, conformance, and detached-signature human review all precede planner 1.
   Human trust is intentionally external and pending: candidate Git is never
-  its own reviewer-key authority. Production requires
-  `--human-trust-anchor ABSOLUTE_FILE --human-trust-anchor-sha256 SHA256`; the
-  anchor is an offline root-owned, single-link, non-writable regular file with
-  a safe root-owned ancestor chain and is descriptor/inode/digest revalidated.
+  its own reviewer-key authority. Production accepts
+  `--human-trust-anchor ABSOLUTE_FILE --human-trust-anchor-sha256 SHA256` as
+  an exact pair; the anchor is an offline root-owned, single-link, non-writable
+  regular file with a safe root-owned ancestor chain and is
+  descriptor/inode/digest revalidated. An omitted pair is the canonical absent
+  authority bound as ZERO256: preflight permits it, readiness records the
+  human gate as a deterministic authenticated product finding (plannable),
+  launch/recovery bindings preserve the zero digest immutably, and the final
+  gate classifies it as product findings — never infrastructure and never
+  success. A partial, malformed, unreadable, or substituted anchor fails
+  infrastructure closed, and exact-HEAD final success still requires the
+  signed human approval/VRF-07.
   The tracked `.factory/human-review-trust.json` is enrollment data only. The
   supported workflow reviews a candidate, then permits exactly one direct
   approval-only child changing only the approval JSON and detached signature.

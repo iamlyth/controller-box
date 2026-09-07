@@ -43,6 +43,7 @@ Plan: Python 3.11 standard library only.
 
 - Status: pending
 - Dependencies: Task 1
+- Priority: 2
 - Scope: fixture for the front-matter-traversal test.
 - Acceptance criteria: the fixture remains parseable.
 - Verification: the fixture suite.
