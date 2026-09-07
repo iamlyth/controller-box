@@ -197,7 +197,7 @@ base=$(git rev-parse HEAD)
 spec_commit=$(git log -1 --format=%H -- docs/SPEC.md)
 spec_blob=$(git rev-parse HEAD:docs/SPEC.md)
 fingerprint=$(./.factory/tools/bug-ledger.py fingerprint BUG-0001)
-printf 'BUG-0001\n' > .factory-state/maintenance-bug-id
+./.factory/tools/factory-state-file.py write maintenance-bug-id BUG-0001
 cat > .factory/artifacts/maintenance-plan.md <<EOF
 ---
 bug_id: BUG-0001
@@ -218,7 +218,7 @@ status: active
 - Documentation impact: none
 EOF
 ./.factory/tools/validate-maintenance-plan.py planning .factory/artifacts/maintenance-plan.md >/dev/null
-printf '%s\n' "$base" > .factory-state/maintenance-base-commit
+./.factory/tools/factory-state-file.py write maintenance-base-commit "$base"
 ./.factory/tools/check-maintenance-freshness.sh --planning >/dev/null
 # A malformed draft lifecycle checkpoint must not deadlock a corrected plan.
 cp .factory/artifacts/maintenance-plan.md valid-planning-plan.md
