@@ -292,7 +292,18 @@ contains exactly:
 - one bounded `readiness` binding containing its required flag, campaign nonce,
   monotonic acquisition attempt/cursor, accepted commit/tree/environment/spec/
   plan/conformance/policy/contracts/install-manifest/command-authority digests,
-  aggregate/evidence/core/human/result digests, status, and terminal outcome.
+  aggregate/evidence/core/human/result digests, status, terminal outcome, and a
+  bounded `terminal_reason`.
+
+`terminal_reason` is a closed enum (`none`, `transport`, `enrollment_policy_configuration`,
+`protocol`, `signature_trust`, `manifest_integrity`, `aggregate_missing_invalid`,
+`capability_gate`, `core_gate`, `conformance_gate`, `interrupted_acquisition`,
+`human_authority`, `generic_integrity_failure`). It is the only public
+infrastructure-failure detail: raw child output, hostnames, paths, remote
+bytes, nonces, and unknown prose never enter it, and unknown/malformed input
+fails closed to `generic_integrity_failure`. `none` means no infrastructure
+failure (success, product findings, blocked, or plannable). Existing results
+published before this field cannot recover the lost detail.
 
 No wall-clock timestamp or additional field is accepted by the schema.
 

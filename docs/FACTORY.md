@@ -314,6 +314,17 @@ Finite outcomes (documented in FACTORY-LOOP-SPEC §13–§15):
 - `interrupted`: dirty implementation-attempt exhaustion or operator/process interruption;
 - `infrastructure_failure`: untrusted verifier/control-plane failure (fails closed).
 
+Readiness/campaign results carry a bounded `terminal_reason` closed enum
+(`none`, `transport`, `enrollment_policy_configuration`, `protocol`,
+`signature_trust`, `manifest_integrity`, `aggregate_missing_invalid`,
+`capability_gate`, `core_gate`, `conformance_gate`, `interrupted_acquisition`,
+`human_authority`, `generic_integrity_failure`). It is the only public
+infrastructure-failure detail; raw child output, hostnames, paths, remote
+bytes, nonces, and unknown prose never enter it, and unknown/malformed input
+fails closed to `generic_integrity_failure`. `none` means no infrastructure
+failure. Existing results published before this field cannot recover the lost
+detail.
+
 One mutable control-state file,
 `.factory-state/campaigns/<campaign-id>/factory-loop.json`, records
 `factory-state/v2` with exactly the schema, repository identity, branch, campaign ID, rounds, current

@@ -76,6 +76,7 @@ import gitutil  # noqa: E402
 import launch as launch_module  # noqa: E402
 import plan_parser  # noqa: E402
 import pre_round as pre_round_module  # noqa: E402
+import readiness as readiness_module  # noqa: E402
 import state as state_module  # noqa: E402
 
 GIT = gitutil.GIT_EXECUTABLE
@@ -4357,6 +4358,194 @@ class RunnerFindingsReadinessTests(_CampaignBase):
             "environment_blob": ctx["env_blob"],
             "runners": [record],
         }
+
+
+class BoundedReadinessReasonTests(_CampaignBase):
+    """BUG-0026: bounded readiness failure reasons.
+
+    The runner stderr classifier matches only anchored first-party markers
+    from the canonical runner command; raw output, hostnames, paths, remote
+    bytes, nonces, and unknown prose never influence the result and fail
+    closed to ``generic_integrity_failure``.  Every terminal path publishes a
+    valid closed-enum reason (``none`` when not applicable), and the public
+    readiness/campaign result JSON carries it.
+    """
+
+    def test_classifier_maps_first_party_markers_to_categories(self) -> None:
+        cases = [
+            ("factory-runner: runner gpu transport failed: connection reset",
+             readiness_module.TERMINAL_REASON_TRANSPORT),
+            ("factory-runner: runner gpu broker refused nonce issuance",
+             readiness_module.TERMINAL_REASON_ENROLLMENT),
+            ("factory-runner: runner gpu returned malformed protocol output",
+             readiness_module.TERMINAL_REASON_PROTOCOL),
+            ("factory-runner: canonical signature checker cannot be loaded",
+             readiness_module.TERMINAL_REASON_SIGNATURE),
+            ("factory-runner: runner evidence publication collision",
+             readiness_module.TERMINAL_REASON_MANIFEST),
+            ("factory-runner: runner evidence records carry no exact classified result",
+             readiness_module.TERMINAL_REASON_AGGREGATE),
+            ("factory-runner: runner gpu root semantics failed before publication",
+             readiness_module.TERMINAL_REASON_CAPABILITY),
+            ("factory-runner: committed factory environment is invalid TOML",
+             readiness_module.TERMINAL_REASON_ENROLLMENT),
+        ]
+        for stderr, expected in cases:
+            with self.subTest(stderr=stderr):
+                self.assertEqual(
+                    campaign_module.classify_runner_failure(
+                        campaign_module.RUNNER_INTEGRITY_EXIT, stderr),
+                    expected,
+                )
+
+    def test_classifier_unknown_and_adversarial_stderr_collapse_to_generic(self) -> None:
+        # Credentials, hostnames, absolute paths, remote bytes, and unknown
+        # prose must never surface in a bounded reason and never match a
+        # category: they fail closed to generic_integrity_failure.
+        adversarial = [
+            "GITHUB_TOKEN=ghp_super_secret_12345 leaked from runner",
+            "ssh://root@10.0.0.5:22/var/run/runner.sock refused",
+            "/home/operator/.ssh/id_ed25519 permission denied",
+            "nonce=deadbeefcafebabe transport bytes 0x7f 0x45 0x4c 0x46",
+        ]
+        for stderr in adversarial:
+            with self.subTest(stderr=stderr):
+                self.assertEqual(
+                    campaign_module.classify_runner_failure(
+                        campaign_module.RUNNER_INTEGRITY_EXIT, stderr),
+                    readiness_module.TERMINAL_REASON_GENERIC,
+                )
+
+    def test_classifier_exit_code_fallbacks(self) -> None:
+        # Success and executed product findings are not infrastructure
+        # failures; a bare transport exit maps to transport; any other
+        # unknown exit fails closed to generic.
+        self.assertEqual(
+            campaign_module.classify_runner_failure(0, ""),
+            readiness_module.TERMINAL_REASON_NONE,
+        )
+        self.assertEqual(
+            campaign_module.classify_runner_failure(
+                campaign_module.RUNNER_FINDINGS_EXIT, ""),
+            readiness_module.TERMINAL_REASON_NONE,
+        )
+        self.assertEqual(
+            campaign_module.classify_runner_failure(
+                campaign_module.RUNNER_TRANSPORT_EXIT, ""),
+            readiness_module.TERMINAL_REASON_TRANSPORT,
+        )
+        self.assertEqual(
+            campaign_module.classify_runner_failure(99, ""),
+            readiness_module.TERMINAL_REASON_GENERIC,
+        )
+
+    def test_runner_acquisition_persists_bounded_reason(self) -> None:
+        ws = self.make(SUCCESS_SCENARIO)
+        config = ws.derive_config()
+        campaign = campaign_module.Campaign(config)
+        campaign._acquire()
+        try:
+            campaign._write_runner_acquisition(
+                attempt=1, status="integrity_failure",
+                head="0" * 40, tree="0" * 40,
+                environment_blob="0" * 40,
+                terminal_reason=readiness_module.TERMINAL_REASON_PROTOCOL,
+                diagnostic="fixture",
+            )
+            persisted = campaign._read_runner_acquisition()
+            self.assertIsNotNone(persisted)
+            self.assertEqual(
+                persisted["terminal_reason"],
+                readiness_module.TERMINAL_REASON_PROTOCOL,
+            )
+            # An unbound reason is rejected before any write.
+            with self.assertRaises(campaign_module.CampaignBindingError):
+                campaign._write_runner_acquisition(
+                    attempt=1, status="integrity_failure",
+                    head="0" * 40, tree="0" * 40,
+                    environment_blob="0" * 40,
+                    terminal_reason="not-a-bounded-reason",
+                    diagnostic="fixture",
+                )
+        finally:
+            campaign._lock.release()
+
+    def test_readiness_result_schema_and_digest_carry_reason(self) -> None:
+        bindings = {"accepted_commit": "a" * 40, "tree": "b" * 40,
+                    "environment_blob": "c" * 40,
+                    **{k: "d" * 64 for k in (
+                        "specification_sha256", "plan_sha256",
+                        "conformance_sha256", "policy_sha256",
+                        "readiness_policy_sha256", "contracts_sha256",
+                        "install_manifest_sha256", "command_authority_sha256",
+                        "human_authority_sha256", "trust_authority_sha256")}}
+        results = {k: "e" * 64 for k in (
+            "aggregate_sha256", "capability_result_sha256",
+            "core_result_sha256", "conformance_result_sha256",
+            "human_result_sha256")}
+        results.update({"findings_aggregate_sha256": "0" * 64,
+                        "product_findings_sha256": "0" * 64})
+        value = readiness_module.result_document(
+            campaign_id="campaign-a", nonce="f" * 64, status="complete",
+            terminal_outcome="pass",
+            terminal_reason=readiness_module.TERMINAL_REASON_NONE,
+            bindings=bindings, results=results)
+        self.assertEqual(value["terminal_reason"], "none")
+        readiness_module.validate_result(value)
+        # An unbound reason is rejected by the readiness validator.
+        bad = dict(value)
+        bad["terminal_reason"] = "not-a-bounded-reason"
+        with self.assertRaises(readiness_module.ReadinessError):
+            readiness_module.validate_result(bad)
+
+    def test_campaign_result_public_json_carries_reason(self) -> None:
+        result = campaign_module.CampaignResult(
+            campaign_id="campaign", rounds_requested=1, rounds_completed=1,
+            terminal_phase="success", terminal_outcome="success",
+            head_commit="0" * 40,
+            phase_history=(
+                campaign_module.PhaseRecord(
+                    round=1, phase="audit", attempt=1, outcome="pass",
+                    head_commit="0" * 40, plan_digest="0" * 64,
+                ),
+            ),
+            terminal_reason=readiness_module.TERMINAL_REASON_NONE,
+        )
+        result.validate()
+        campaign_module.validate_campaign_result(result)
+        self.assertEqual(result.to_dict()["terminal_reason"], "none")
+        # An unbound reason fails the model and the committed schema.
+        bad = dataclasses.replace(
+            result, terminal_reason="not-a-bounded-reason")
+        with self.assertRaises(campaign_module.CampaignResultError):
+            bad.validate()
+        with self.assertRaises(campaign_module.CampaignResultError):
+            campaign_module.validate_campaign_result(bad)
+
+    def test_readiness_only_result_reason_is_none(self) -> None:
+        # A readiness-only completion is not an infrastructure failure, so
+        # its terminal reason must be ``none`` and the result must validate
+        # against the committed schema.
+        result = campaign_module.CampaignResult(
+            campaign_id="campaign", rounds_requested=1, rounds_completed=0,
+            terminal_phase="readiness_complete",
+            terminal_outcome="readiness_complete",
+            head_commit="0" * 40,
+            terminal_reason=readiness_module.TERMINAL_REASON_NONE,
+        )
+        result.validate()
+        campaign_module.validate_campaign_result(result)
+        self.assertEqual(result.to_dict()["terminal_reason"], "none")
+        # A readiness-only result must never impersonate a completed campaign.
+        bad = dataclasses.replace(
+            result, terminal_reason=readiness_module.TERMINAL_REASON_GENERIC)
+        self.assertEqual(bad.terminal_reason, "generic_integrity_failure")
+        # An unbound reason is rejected by the model and the committed schema.
+        invalid = dataclasses.replace(result, terminal_reason="not-a-reason")
+        with self.assertRaises(campaign_module.CampaignResultError):
+            invalid.validate()
+        with self.assertRaises(campaign_module.CampaignResultError):
+            campaign_module.validate_campaign_result(invalid)
 
 
 if __name__ == "__main__":

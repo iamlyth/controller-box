@@ -209,6 +209,104 @@ RUNNER_CHECKER_COMMAND = ("./.factory/tools/check-factory-runner-evidence.py",)
 RUNNER_TRANSPORT_EXIT = 20
 RUNNER_FINDINGS_EXIT = 21
 RUNNER_INTEGRITY_EXIT = 22
+
+# Anchored first-party stderr markers from the canonical runner command
+# (``.factory/runner/run-factory-runners.py``).  Only these fixed local
+# messages are ever matched; raw output, hostnames, paths, remote bytes,
+# nonces, and unknown prose never influence classification and fail closed
+# to ``generic_integrity_failure``.  Order matters: the first matching
+# marker wins.  The ``.*`` spans only the fixed interpolated runner/capability
+# names and errno codes that the canonical script itself emits.
+_RUNNER_STDERR_MARKERS = (
+    (re.compile(r"^factory-runner: runner .* transport failed: "), readiness_module.TERMINAL_REASON_TRANSPORT),
+    (re.compile(r"^factory-runner: runner .* transport exited without a protocol response "), readiness_module.TERMINAL_REASON_TRANSPORT),
+    (re.compile(r"^factory-runner: runner .* broker nonce response is malformed"), readiness_module.TERMINAL_REASON_PROTOCOL),
+    (re.compile(r"^factory-runner: runner .* broker refused nonce issuance"), readiness_module.TERMINAL_REASON_ENROLLMENT),
+    (re.compile(r"^factory-runner: runner .* broker infrastructure or protocol failure"), readiness_module.TERMINAL_REASON_PROTOCOL),
+    (re.compile(r"^factory-runner: runner .* returned malformed protocol output"), readiness_module.TERMINAL_REASON_PROTOCOL),
+    (re.compile(r"^factory-runner: runner .* returned a non-object protocol response"), readiness_module.TERMINAL_REASON_PROTOCOL),
+    (re.compile(r"^factory-runner: runner .* returned an unclassified protocol result"), readiness_module.TERMINAL_REASON_PROTOCOL),
+    (re.compile(r"^factory-runner: runner .* receipt schema is invalid"), readiness_module.TERMINAL_REASON_PROTOCOL),
+    (re.compile(r"^factory-runner: runner .* receipt fields are invalid"), readiness_module.TERMINAL_REASON_PROTOCOL),
+    (re.compile(r"^factory-runner: runner .* receipt binding mismatch"), readiness_module.TERMINAL_REASON_PROTOCOL),
+    (re.compile(r"^factory-runner: runner .* findings probes are malformed"), readiness_module.TERMINAL_REASON_PROTOCOL),
+    (re.compile(r"^factory-runner: runner .* findings receipt shows skip/simulation markers"), readiness_module.TERMINAL_REASON_PROTOCOL),
+    (re.compile(r"^factory-runner: runner .* findings receipt capability set mismatch"), readiness_module.TERMINAL_REASON_PROTOCOL),
+    (re.compile(r"^factory-runner: runner .* findings probe set is inconsistent"), readiness_module.TERMINAL_REASON_PROTOCOL),
+    (re.compile(r"^factory-runner: runner .* findings receipt does not prove clean executed probes"), readiness_module.TERMINAL_REASON_PROTOCOL),
+    (re.compile(r"^factory-runner: runner .* did not evidence every declared capability"), readiness_module.TERMINAL_REASON_PROTOCOL),
+    (re.compile(r"^factory-runner: runner .* returned invalid log or signature encoding"), readiness_module.TERMINAL_REASON_PROTOCOL),
+    (re.compile(r"^factory-runner: runner .* response exceeded limits"), readiness_module.TERMINAL_REASON_PROTOCOL),
+    (re.compile(r"^factory-runner: commit object exceeds protocol limit"), readiness_module.TERMINAL_REASON_PROTOCOL),
+    (re.compile(r"^factory-runner: canonical signature checker cannot be loaded"), readiness_module.TERMINAL_REASON_SIGNATURE),
+    (re.compile(r"^factory-runner: runner detached signature/principal/key/revocation validation failed"), readiness_module.TERMINAL_REASON_SIGNATURE),
+    (re.compile(r"^factory-runner: canonical signature checker failed before publication"), readiness_module.TERMINAL_REASON_SIGNATURE),
+    (re.compile(r"^factory-runner: runner .* signer binding is invalid"), readiness_module.TERMINAL_REASON_SIGNATURE),
+    (re.compile(r"^factory-runner: runner .* signer digest is invalid"), readiness_module.TERMINAL_REASON_SIGNATURE),
+    (re.compile(r"^factory-runner: runner .* signer principal is invalid"), readiness_module.TERMINAL_REASON_SIGNATURE),
+    (re.compile(r"^factory-runner: runner .* returned an invalid detached signature"), readiness_module.TERMINAL_REASON_SIGNATURE),
+    (re.compile(r"^factory-runner: runner .* returned an invalid signed manifest"), readiness_module.TERMINAL_REASON_MANIFEST),
+    (re.compile(r"^factory-runner: runner .* signed manifest result contradicts its envelope"), readiness_module.TERMINAL_REASON_MANIFEST),
+    (re.compile(r"^factory-runner: runner .* signed manifest does not match the receipt"), readiness_module.TERMINAL_REASON_MANIFEST),
+    (re.compile(r"^factory-runner: runner .* signed manifest signer binding mismatch"), readiness_module.TERMINAL_REASON_MANIFEST),
+    (re.compile(r"^factory-runner: runner .* signed manifest probes contradict the receipt"), readiness_module.TERMINAL_REASON_MANIFEST),
+    (re.compile(r"^factory-runner: runner .* artifact framing is invalid"), readiness_module.TERMINAL_REASON_MANIFEST),
+    (re.compile(r"^factory-runner: runner .* signed artifact summary is invalid"), readiness_module.TERMINAL_REASON_MANIFEST),
+    (re.compile(r"^factory-runner: runner evidence publication collision"), readiness_module.TERMINAL_REASON_MANIFEST),
+    (re.compile(r"^factory-runner: runner evidence staging collision"), readiness_module.TERMINAL_REASON_MANIFEST),
+    (re.compile(r"^factory-runner: runner evidence staging inode changed during verification"), readiness_module.TERMINAL_REASON_MANIFEST),
+    (re.compile(r"^factory-runner: runner evidence published inode revalidation failed"), readiness_module.TERMINAL_REASON_MANIFEST),
+    (re.compile(r"^factory-runner: unsafe runner evidence parent"), readiness_module.TERMINAL_REASON_MANIFEST),
+    (re.compile(r"^factory-runner: runner transfer staging root is unsafe"), readiness_module.TERMINAL_REASON_MANIFEST),
+    (re.compile(r"^factory-runner: runner evidence staging contains an unsafe inode"), readiness_module.TERMINAL_REASON_MANIFEST),
+    (re.compile(r"^factory-runner: runner evidence staging inode changed while opening"), readiness_module.TERMINAL_REASON_MANIFEST),
+    (re.compile(r"^factory-runner: runner evidence file publication collision"), readiness_module.TERMINAL_REASON_MANIFEST),
+    (re.compile(r"^factory-runner: runner evidence publication failed with errno"), readiness_module.TERMINAL_REASON_MANIFEST),
+    (re.compile(r"^factory-runner: renameat2 is unavailable"), readiness_module.TERMINAL_REASON_MANIFEST),
+    (re.compile(r"^factory-runner: runner evidence deletion depth exceeds bound"), readiness_module.TERMINAL_REASON_MANIFEST),
+    (re.compile(r"^factory-runner: runner evidence deletion entry bound exceeded"), readiness_module.TERMINAL_REASON_MANIFEST),
+    (re.compile(r"^factory-runner: runner evidence records carry no exact classified result"), readiness_module.TERMINAL_REASON_AGGREGATE),
+    (re.compile(r"^factory-runner: runner aggregate publication collision"), readiness_module.TERMINAL_REASON_AGGREGATE),
+    (re.compile(r"^factory-runner: runner findings aggregate publication collision"), readiness_module.TERMINAL_REASON_AGGREGATE),
+    (re.compile(r"^factory-runner: runner .* root semantics failed before publication"), readiness_module.TERMINAL_REASON_CAPABILITY),
+    (re.compile(r"^factory-runner: committed factory environment is invalid TOML"), readiness_module.TERMINAL_REASON_ENROLLMENT),
+    (re.compile(r"^factory-runner: committed factory environment fails policy validation"), readiness_module.TERMINAL_REASON_ENROLLMENT),
+    (re.compile(r"^factory-runner: factory runners must be an array"), readiness_module.TERMINAL_REASON_ENROLLMENT),
+    (re.compile(r"^factory-runner: campaign/readiness anti-replay binding is missing"), readiness_module.TERMINAL_REASON_ENROLLMENT),
+    (re.compile(r"^factory-runner: runner .* has no exact probe-authority enrollment"), readiness_module.TERMINAL_REASON_ENROLLMENT),
+    (re.compile(r"^factory-runner: runner verification requires develop"), readiness_module.TERMINAL_REASON_ENROLLMENT),
+    (re.compile(r"^factory-runner: runner verification requires a clean Git tree"), readiness_module.TERMINAL_REASON_ENROLLMENT),
+    (re.compile(r"^factory-runner: Git replacement objects are forbidden"), readiness_module.TERMINAL_REASON_ENROLLMENT),
+    (re.compile(r"^factory-runner: \.factory-state must be a real directory"), readiness_module.TERMINAL_REASON_ENROLLMENT),
+    (re.compile(r"^factory-runner: runner evidence root must be a real directory"), readiness_module.TERMINAL_REASON_ENROLLMENT),
+    (re.compile(r"^factory-runner: tracked symlinks, gitlinks, and special Git modes are unsupported by the runner archive"), readiness_module.TERMINAL_REASON_ENROLLMENT),
+    (re.compile(r"^factory-runner: trusted SSH launcher path is not absolute"), readiness_module.TERMINAL_REASON_ENROLLMENT),
+    (re.compile(r"^factory-runner: trusted SSH launcher ancestry is unsafe"), readiness_module.TERMINAL_REASON_ENROLLMENT),
+    (re.compile(r"^factory-runner: trusted SSH launcher manifest is invalid"), readiness_module.TERMINAL_REASON_ENROLLMENT),
+    (re.compile(r"^factory-runner: trusted SSH launcher manifest fields are invalid"), readiness_module.TERMINAL_REASON_ENROLLMENT),
+    (re.compile(r"^factory-runner: trusted SSH launcher inode differs from enrollment"), readiness_module.TERMINAL_REASON_ENROLLMENT),
+    (re.compile(r"^factory-runner: trusted SSH launcher digest differs from enrollment"), readiness_module.TERMINAL_REASON_ENROLLMENT),
+)
+
+
+def classify_runner_failure(returncode: int, stderr: str) -> str:
+    """Map a canonical runner command exit to a bounded terminal reason.
+
+    ``returncode`` 0 and the executed-product-findings exit (21) are not
+    infrastructure failures and map to ``none``.  Transport (20) and
+    integrity (22) are classified by anchored first-party stderr markers
+    first, then by the exit code; any unknown/malformed input fails closed
+    to ``generic_integrity_failure``.  Raw child output, hostnames, paths,
+    remote bytes, nonces, and unknown prose never influence the result.
+    """
+    if returncode == 0 or returncode == RUNNER_FINDINGS_EXIT:
+        return readiness_module.TERMINAL_REASON_NONE
+    for pattern, reason in _RUNNER_STDERR_MARKERS:
+        if pattern.search(stderr):
+            return reason
+    if returncode == RUNNER_TRANSPORT_EXIT:
+        return readiness_module.TERMINAL_REASON_TRANSPORT
+    return readiness_module.TERMINAL_REASON_GENERIC
 # Phase 3: the conformance sidecar (``.factory/artifacts/conformance.json``)
 # is the deterministic record of which requirement rows are ``verified``. The
 # campaign consults it after the ``verify-project.sh`` gate passes so partial
@@ -395,6 +493,7 @@ class CampaignResult:
     phase_history: Tuple[PhaseRecord, ...] = ()
     readiness_result_digest: str = "0" * 64
     trust_authority_sha256: str = "0" * 64
+    terminal_reason: str = "none"
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -409,6 +508,7 @@ class CampaignResult:
             "phase_history": [record.to_dict() for record in self.phase_history],
             "readiness_result_digest": self.readiness_result_digest,
             "trust_authority_sha256": self.trust_authority_sha256,
+            "terminal_reason": self.terminal_reason,
         }
 
     def validate(self) -> None:
@@ -444,6 +544,10 @@ class CampaignResult:
             raise CampaignResultError("readiness_result_digest must be SHA-256")
         if not SHA256_RE.fullmatch(self.trust_authority_sha256):
             raise CampaignResultError("trust_authority_sha256 must be SHA-256")
+        if self.terminal_reason not in readiness_module.TERMINAL_REASONS:
+            raise CampaignResultError(
+                "terminal_reason must be a bounded readiness reason"
+            )
         if self.terminal_phase == "readiness_complete":
             if self.terminal_outcome != "readiness_complete" or self.rounds_completed != 0 or self.phase_history:
                 raise CampaignResultError("readiness-only result cannot impersonate a completed campaign")
@@ -3012,7 +3116,12 @@ class Campaign:
                            outcome: str, aggregate: str, capability: str,
                            core: str, conformance: str, human: str,
                            findings_aggregate: str = "0" * 64,
-                           product_findings: str = "0" * 64) -> state_module.FactoryState:
+                           product_findings: str = "0" * 64,
+                           terminal_reason: str = "none") -> state_module.FactoryState:
+        if terminal_reason not in readiness_module.TERMINAL_REASONS:
+            raise CampaignBindingError(
+                "readiness terminal reason is not bounded"
+            )
         r = state.readiness
         bindings = {name: r[name] for name in (
             "accepted_commit", "tree", "environment_blob", "specification_sha256",
@@ -3027,7 +3136,8 @@ class Campaign:
                    "product_findings_sha256": product_findings}
         document = readiness_module.result_document(
             campaign_id=self._config.campaign_id, nonce=str(r["nonce"]),
-            status=status, terminal_outcome=outcome, bindings=bindings, results=results)
+            status=status, terminal_outcome=outcome, terminal_reason=terminal_reason,
+            bindings=bindings, results=results)
         raw = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
         # Replace an unauthoritative crash cache only after every canonical
         # gate above has freshly completed.  Cache presence never authorizes a
@@ -3037,7 +3147,8 @@ class Campaign:
         )
         updated = dict(r)
         updated.update({"cursor": 6, "status": status,
-                        "terminal_outcome": outcome, "aggregate_sha256": aggregate,
+                        "terminal_outcome": outcome, "terminal_reason": terminal_reason,
+                        "aggregate_sha256": aggregate,
                         "findings_aggregate_sha256": findings_aggregate,
                         "capability_result_sha256": capability, "core_result_sha256": core,
                         "conformance_result_sha256": conformance,
@@ -3108,6 +3219,7 @@ class Campaign:
                 outcome="infrastructure_failure", aggregate="0" * 64,
                 capability="0" * 64, core="0" * 64,
                 conformance="0" * 64, human="0" * 64,
+                terminal_reason=readiness_module.TERMINAL_REASON_INTERRUPTED,
             ), "infrastructure_failure"
 
         acquiring = dict(state.readiness)
@@ -3119,11 +3231,23 @@ class Campaign:
         runner_digest = str(acquisition.get("aggregate_sha256", "")) if acquisition else ""
         if (not ran or code not in (0, RUNNER_FINDINGS_EXIT)
                 or not SHA256_RE.fullmatch(runner_digest)):
+            # A bounded reason is always published for an infrastructure
+            # failure: the classified runner reason when an acquisition was
+            # written, otherwise the fail-closed enrollment/config category
+            # (no runner command, unbound authority, or prerequisite failure).
+            runner_reason = (
+                str(acquisition.get(
+                    "terminal_reason",
+                    readiness_module.TERMINAL_REASON_GENERIC))
+                if acquisition
+                else readiness_module.TERMINAL_REASON_ENROLLMENT
+            )
             return self._publish_readiness(
                 state, status="infrastructure_failure",
                 outcome="infrastructure_failure", aggregate="0" * 64,
                 capability="0" * 64, core="0" * 64,
                 conformance="0" * 64, human="0" * 64,
+                terminal_reason=runner_reason,
             ), "infrastructure_failure"
         aggregate = runner_digest if code == 0 else "0" * 64
         findings_aggregate = (
@@ -3232,6 +3356,7 @@ class Campaign:
                     capability=gate_verdict_digest(
                         cap_ran, cap_exit, cap_skipped),
                     core="0" * 64, conformance="0" * 64, human="0" * 64,
+                    terminal_reason=readiness_module.TERMINAL_REASON_CAPABILITY,
                 ), "infrastructure_failure"
             capability_digest = capability_signed_findings_digest(
                 findings_aggregate)
@@ -3247,6 +3372,7 @@ class Campaign:
                     capability=gate_verdict_digest(
                         cap_ran, cap_exit, cap_skipped),
                     core="0" * 64, conformance="0" * 64, human="0" * 64,
+                    terminal_reason=readiness_module.TERMINAL_REASON_CAPABILITY,
                 ), "infrastructure_failure"
             capability_digest = gate_verdict_digest(
                 cap_ran, cap_exit, cap_skipped)
@@ -3262,6 +3388,7 @@ class Campaign:
                 findings_aggregate=findings_aggregate,
                 capability=capability_digest, core=core_digest,
                 conformance="0" * 64, human="0" * 64,
+                terminal_reason=readiness_module.TERMINAL_REASON_CORE,
             ), "infrastructure_failure"
         if core_exit != 0:
             findings.append("core acceptance reported product findings")
@@ -3285,6 +3412,7 @@ class Campaign:
                 findings_aggregate=findings_aggregate,
                 capability=capability_digest, core=core_digest,
                 conformance=mapping_digest, human="0" * 64,
+                terminal_reason=readiness_module.TERMINAL_REASON_CONFORMANCE,
             ), "infrastructure_failure"
         if conf_exit != 0 or not mapping_valid:
             findings.append("conformance evaluation reported product findings")
@@ -3304,6 +3432,7 @@ class Campaign:
                 findings_aggregate=findings_aggregate,
                 capability=capability_digest, core=core_digest,
                 conformance=mapping_digest, human="0" * 64,
+                terminal_reason=readiness_module.TERMINAL_REASON_HUMAN,
             ), "infrastructure_failure"
         human_passed = True
         try:
@@ -4581,7 +4710,7 @@ class Campaign:
             "schema", "attempt", "status", "head", "tree", "readiness_nonce",
             "environment_blob", "command_sha256", "command",
             "aggregate_sha256", "checker_exit", "runner_exit",
-            "diagnostic",
+            "terminal_reason", "diagnostic",
         }
         command_sha = plan_sha256(
             json.dumps(list(RUNNER_COMMAND), separators=(",", ":")).encode()
@@ -4595,6 +4724,7 @@ class Campaign:
                 "acquiring", "complete", "transport_failure",
                 "findings", "integrity_failure",
             }
+            or value.get("terminal_reason") not in readiness_module.TERMINAL_REASONS
             or value.get("command") != list(RUNNER_COMMAND)
             or value.get("command_sha256") != command_sha
             or not all(
@@ -4625,8 +4755,12 @@ class Campaign:
         self, *, attempt: int, status: str, head: str, tree: str,
         environment_blob: str, aggregate_sha256: str = "",
         checker_exit: int = -1, runner_exit: int = -1,
-        diagnostic: str = "",
+        terminal_reason: str = "none", diagnostic: str = "",
     ) -> None:
+        if terminal_reason not in readiness_module.TERMINAL_REASONS:
+            raise CampaignBindingError(
+                "runner acquisition terminal reason is not bounded"
+            )
         command_sha = plan_sha256(
             json.dumps(list(RUNNER_COMMAND), separators=(",", ":")).encode()
         )
@@ -4649,6 +4783,7 @@ class Campaign:
             "aggregate_sha256": aggregate_sha256,
             "checker_exit": checker_exit,
             "runner_exit": runner_exit,
+            "terminal_reason": terminal_reason,
             # Fixed coordinator classifications only: child output, hostnames,
             # transport bytes, environment values, and credentials never enter
             # durable acquisition state or campaign findings.
@@ -4751,6 +4886,7 @@ class Campaign:
                 attempt=int(prior["attempt"]), status="integrity_failure",
                 head=head, tree=tree, environment_blob=environment_blob,
                 checker_exit=checker_exit, runner_exit=RUNNER_INTEGRITY_EXIT,
+                terminal_reason=readiness_module.TERMINAL_REASON_AGGREGATE,
                 diagnostic="completed runner aggregate failed integrity validation",
             )
             return True, -1, "completed runner aggregate failed integrity validation"
@@ -4773,6 +4909,7 @@ class Campaign:
             self._write_runner_acquisition(
                 attempt=attempt, status="integrity_failure", head=head,
                 tree=tree, environment_blob=environment_blob,
+                terminal_reason=readiness_module.TERMINAL_REASON_GENERIC,
                 diagnostic="Git binding changed before runner invocation",
             )
             return False, -1, "Git binding changed before runner invocation"
@@ -4781,10 +4918,14 @@ class Campaign:
                 self._held_runner, (), self._config.runner_timeout,
             )
             runner_exit = result.returncode
+            runner_stderr = result.stderr or ""
         except lock_module.RootLockTimeoutError:
             runner_exit = RUNNER_TRANSPORT_EXIT
+            runner_stderr = ""
         except CampaignBindingError:
             runner_exit = RUNNER_INTEGRITY_EXIT
+            runner_stderr = ""
+        runner_reason = classify_runner_failure(runner_exit, runner_stderr)
         checker_exit, digest = self._check_runner_aggregate(head)
         if runner_exit == RUNNER_FINDINGS_EXIT:
             # Executed product findings are plannable only when backed by a
@@ -4827,13 +4968,14 @@ class Campaign:
                 environment_blob=environment_blob,
                 aggregate_sha256=(digest if runner_exit == RUNNER_FINDINGS_EXIT else ""),
                 checker_exit=checker_exit,
-                runner_exit=runner_exit, diagnostic=diagnostic,
+                runner_exit=runner_exit, terminal_reason=runner_reason,
+                diagnostic=diagnostic,
             )
             return True, runner_exit, diagnostic
         self._write_runner_acquisition(
             attempt=attempt, status="integrity_failure", head=head, tree=tree,
             environment_blob=environment_blob, checker_exit=checker_exit,
-            runner_exit=runner_exit,
+            runner_exit=runner_exit, terminal_reason=runner_reason,
             diagnostic="runner protocol or aggregate integrity failure",
         )
         return True, -1, "runner protocol or aggregate integrity failure"
@@ -6345,6 +6487,7 @@ class Campaign:
                 phase_history=tuple(history),
                 readiness_result_digest=str(state.readiness.get("result_sha256", "0" * 64)),
                 trust_authority_sha256=str(state.readiness.get("trust_authority_sha256", "0" * 64)),
+                terminal_reason=str(state.readiness.get("terminal_reason", "none")),
             )
             result.validate()
             validate_campaign_result(result)

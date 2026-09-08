@@ -705,6 +705,16 @@ never from model completion tokens.
 
 A finite campaign always terminates as `success`, `findings`, `blocked`,
 `failed`, `interrupted`, or `infrastructure_failure`. It never spins while no
+runnable task remains. Readiness/campaign results carry a bounded
+`terminal_reason` closed enum (`none`, `transport`,
+`enrollment_policy_configuration`, `protocol`, `signature_trust`,
+`manifest_integrity`, `aggregate_missing_invalid`, `capability_gate`,
+`core_gate`, `conformance_gate`, `interrupted_acquisition`, `human_authority`,
+`generic_integrity_failure`) as the only public infrastructure-failure detail;
+raw child output, hostnames, paths, remote bytes, nonces, and unknown prose
+never enter it, and unknown/malformed input fails closed to
+`generic_integrity_failure`. `none` means no infrastructure failure. Existing
+results published before this field cannot recover the lost detail.
 task is runnable: `work_exhausted`/`blocked` implementation phases still run
 verification and audit. Any nonzero leaf or gate result stops immediately
 with campaign state active at the same phase; the campaign never retries an

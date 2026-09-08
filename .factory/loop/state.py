@@ -283,6 +283,7 @@ READINESS_FIELDS = (
     "capability_result_sha256", "core_result_sha256",
     "conformance_result_sha256", "human_result_sha256",
     "product_findings_sha256", "result_sha256", "terminal_outcome",
+    "terminal_reason",
 )
 
 
@@ -295,6 +296,7 @@ def empty_readiness(*, required: bool = False) -> Dict[str, object]:
         "environment_blob": "0" * 40,
         **{name: "0" * 64 for name in READINESS_FIELDS if name.endswith("_sha256")},
         "terminal_outcome": "pending" if required else "not_required",
+        "terminal_reason": "none",
     }
 
 
@@ -311,6 +313,8 @@ def _validate_readiness(value: object, *, required: bool) -> None:
         raise StateTamperError("readiness status is invalid")
     if value.get("terminal_outcome") not in {"not_required", "pending", "pass", "plannable", "findings", "blocked", "infrastructure_failure"}:
         raise StateTamperError("readiness terminal outcome is invalid")
+    if value.get("terminal_reason") not in {"none", "transport", "enrollment_policy_configuration", "protocol", "signature_trust", "manifest_integrity", "aggregate_missing_invalid", "capability_gate", "core_gate", "conformance_gate", "interrupted_acquisition", "human_authority", "generic_integrity_failure"}:
+        raise StateTamperError("readiness terminal reason is invalid")
     for name in ("accepted_commit", "tree", "environment_blob"):
         if not isinstance(value.get(name), str) or not SHA40_RE.fullmatch(str(value[name])):
             raise StateTamperError(f"readiness {name} must be exact SHA-1")

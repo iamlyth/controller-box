@@ -43,7 +43,8 @@
     "status": "not_required",
     "terminal_outcome": "not_required",
     "tree": "0000000000000000000000000000000000000000",
-    "trust_authority_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    "trust_authority_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "terminal_reason": "none"
   },
   "repository_identity": "1a2b3c:4d5e6f",
   "role_prompt_digests": {

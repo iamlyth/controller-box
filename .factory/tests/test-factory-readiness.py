@@ -171,7 +171,7 @@ class ReadinessTests(unittest.TestCase):
             "conformance_result_sha256":"d"*64,"human_result_sha256":"e"*64,
             "product_findings_sha256":"0"*64}
         value=readiness.result_document(campaign_id="auth-test",nonce="f"*64,status="complete",
-            terminal_outcome="pass",bindings=bindings,results=results)
+            terminal_outcome="pass",terminal_reason="none",bindings=bindings,results=results)
         raw=json.dumps(value,sort_keys=True,separators=(",",":")).encode(); descriptor="a"*64
         # Canonical-looking caller JSON, a known nonce, and arbitrary nonzero
         # digests cannot supply authority or expected values to the mint.
@@ -191,7 +191,7 @@ class ReadinessTests(unittest.TestCase):
         results = {k:"e"*64 for k in ("aggregate_sha256","capability_result_sha256","core_result_sha256","conformance_result_sha256","human_result_sha256")}
         results.update({"findings_aggregate_sha256": "0"*64, "product_findings_sha256": "0"*64})
         value = readiness.result_document(campaign_id="campaign-a", nonce="f"*64,
-            status="complete", terminal_outcome="pass", bindings=bindings, results=results)
+            status="complete", terminal_outcome="pass", terminal_reason="none", bindings=bindings, results=results)
         readiness.validate_result(value, expected_campaign_id="campaign-a", expected_nonce="f"*64, expected_bindings=bindings)
         for label, mutate in (
             ("campaign-replay", lambda d: d.update(campaign_id="campaign-b")),

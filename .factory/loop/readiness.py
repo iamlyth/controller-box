@@ -52,6 +52,34 @@ SSH_KEYGEN = "/nix/store/c53dnjjglhynq6h3v7a96vyrpsb7zpcw-openssh-10.4p1/bin/ssh
 class ReadinessError(RuntimeError): pass
 class HumanApprovalBlocked(ReadinessError): pass
 
+# Bounded terminal reason codes (closed enum). These are the only values that
+# may appear in the public readiness/campaign result ``terminal_reason`` field.
+# Raw child output, hostnames, paths, remote bytes, nonces, and unknown prose
+# never enter these values; unknown/malformed input fails closed to
+# ``generic_integrity_failure``. ``none`` means no infrastructure failure
+# (success, product findings, blocked, or plannable).
+TERMINAL_REASON_NONE = "none"
+TERMINAL_REASON_TRANSPORT = "transport"
+TERMINAL_REASON_ENROLLMENT = "enrollment_policy_configuration"
+TERMINAL_REASON_PROTOCOL = "protocol"
+TERMINAL_REASON_SIGNATURE = "signature_trust"
+TERMINAL_REASON_MANIFEST = "manifest_integrity"
+TERMINAL_REASON_AGGREGATE = "aggregate_missing_invalid"
+TERMINAL_REASON_CAPABILITY = "capability_gate"
+TERMINAL_REASON_CORE = "core_gate"
+TERMINAL_REASON_CONFORMANCE = "conformance_gate"
+TERMINAL_REASON_INTERRUPTED = "interrupted_acquisition"
+TERMINAL_REASON_HUMAN = "human_authority"
+TERMINAL_REASON_GENERIC = "generic_integrity_failure"
+
+TERMINAL_REASONS = frozenset({
+    TERMINAL_REASON_NONE, TERMINAL_REASON_TRANSPORT, TERMINAL_REASON_ENROLLMENT,
+    TERMINAL_REASON_PROTOCOL, TERMINAL_REASON_SIGNATURE, TERMINAL_REASON_MANIFEST,
+    TERMINAL_REASON_AGGREGATE, TERMINAL_REASON_CAPABILITY, TERMINAL_REASON_CORE,
+    TERMINAL_REASON_CONFORMANCE, TERMINAL_REASON_INTERRUPTED,
+    TERMINAL_REASON_HUMAN, TERMINAL_REASON_GENERIC,
+})
+
 
 def read_external_authority(path: Path, expected_sha256: str, *, expected_uid: int | None = None,
                             maximum: int = 256 * 1024) -> tuple[bytes, os.stat_result]:
@@ -338,16 +366,18 @@ def validate_core_mapping(conformance_raw: bytes, policy_raw: bytes) -> str:
     return hashlib.sha256(conformance_raw + b"\0" + policy_raw).hexdigest()
 
 
-def result_document(*, campaign_id: str, nonce: str, status: str, terminal_outcome: str, bindings: Mapping[str, object], results: Mapping[str, object]) -> dict:
-    value = {"schema": RESULT_SCHEMA, "campaign_id": campaign_id, "nonce": nonce, "status": status, "terminal_outcome": terminal_outcome, "bindings": dict(bindings), "results": dict(results)}
+def result_document(*, campaign_id: str, nonce: str, status: str, terminal_outcome: str, terminal_reason: str, bindings: Mapping[str, object], results: Mapping[str, object]) -> dict:
+    value = {"schema": RESULT_SCHEMA, "campaign_id": campaign_id, "nonce": nonce, "status": status, "terminal_outcome": terminal_outcome, "terminal_reason": terminal_reason, "bindings": dict(bindings), "results": dict(results)}
     validate_result(value)
     return value
 
 
 def validate_result(value: object, *, expected_campaign_id: str | None = None, expected_nonce: str | None = None, expected_bindings: Mapping[str, object] | None = None) -> None:
-    fields = {"schema", "campaign_id", "nonce", "status", "terminal_outcome", "bindings", "results"}
+    fields = {"schema", "campaign_id", "nonce", "status", "terminal_outcome", "terminal_reason", "bindings", "results"}
     if not isinstance(value, dict) or set(value) != fields or value.get("schema") != RESULT_SCHEMA:
         raise ReadinessError("readiness result fields/schema are malformed")
+    if value.get("terminal_reason") not in TERMINAL_REASONS:
+        raise ReadinessError("readiness terminal reason is invalid")
     if not isinstance(value.get("campaign_id"), str) or not CAMPAIGN_ID.fullmatch(value["campaign_id"]) or not SHA256.fullmatch(str(value.get("nonce", ""))):
         raise ReadinessError("readiness campaign/nonce is invalid")
     consistency = {"complete": "pass", "infrastructure_ready": "plannable", "findings": "findings", "human_blocked": "blocked", "infrastructure_failure": "infrastructure_failure"}

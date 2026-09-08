@@ -16,7 +16,8 @@
     "exit_code",
     "phase_history",
     "readiness_result_digest",
-    "trust_authority_sha256"
+    "trust_authority_sha256",
+    "terminal_reason"
   ],
   "properties": {
     "schema": {
@@ -60,6 +61,24 @@
     "exit_code": { "type": "integer" },
     "readiness_result_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "trust_authority_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "terminal_reason": {
+      "type": "string",
+      "enum": [
+        "none",
+        "transport",
+        "enrollment_policy_configuration",
+        "protocol",
+        "signature_trust",
+        "manifest_integrity",
+        "aggregate_missing_invalid",
+        "capability_gate",
+        "core_gate",
+        "conformance_gate",
+        "interrupted_acquisition",
+        "human_authority",
+        "generic_integrity_failure"
+      ]
+    },
     "phase_history": {
       "type": "array",
       "items": {

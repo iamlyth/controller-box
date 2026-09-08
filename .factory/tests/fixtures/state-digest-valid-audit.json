@@ -1,5 +1,5 @@
 {
-  "digest_sha256": "c614e9553b8544a38d3772f1697c1883c08312459e30e983dd4132ab332c790d",
+  "digest_sha256": "00a66b3e2b7873fc798c5a8f35f4982d9fdd72e4f62ebfb730a72b592ede0bb1",
   "state": {
     "attempt_number": 0,
     "attempt_started_at_monotonic": 0,
@@ -44,7 +44,8 @@
       "status": "not_required",
       "terminal_outcome": "not_required",
       "tree": "0000000000000000000000000000000000000000",
-      "trust_authority_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      "trust_authority_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "terminal_reason": "none"
     },
     "repository_identity": "1a2b3c:4d5e6f",
     "role_prompt_digests": {

@@ -401,7 +401,16 @@ digest, hook start/completion cursors, and a trusted outcome enum; recovery is d
 canonical plan, that campaign-owned state file, and process liveness. A finite
 campaign always terminates as `success`, `findings`, `blocked`, `failed`,
 `interrupted`, or `infrastructure_failure` — it never spins while no task is
-runnable. Terminal state remains until an operator explicitly runs
+runnable. Readiness/campaign results carry a bounded `terminal_reason` closed
+enum (`none`, `transport`, `enrollment_policy_configuration`, `protocol`,
+`signature_trust`, `manifest_integrity`, `aggregate_missing_invalid`,
+`capability_gate`, `core_gate`, `conformance_gate`, `interrupted_acquisition`,
+`human_authority`, `generic_integrity_failure`) as the only public
+infrastructure-failure detail; raw child output, hostnames, paths, remote
+bytes, nonces, and unknown prose never enter it, and unknown/malformed input
+fails closed to `generic_integrity_failure`. `none` means no infrastructure
+failure. Existing results published before this field cannot recover the lost
+detail. Terminal state remains until an operator explicitly runs
 `FACTORY_COORDINATOR_AUTH_FD=N scripts/archive-factory-campaign.py --root "$PWD" --campaign-id ID`, where `N` is an inherited protected coordinator-authority descriptor. The tool
 refuses an active lock and unsafe members, includes the campaign plus relevant
 audit-receipt and runner-evidence namespaces, authenticates its v2 manifest and
