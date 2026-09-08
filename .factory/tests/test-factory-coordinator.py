@@ -41,6 +41,7 @@ import types
 import unittest
 import unittest.mock
 from pathlib import Path
+from typing import Tuple
 
 ROOT = Path(__file__).resolve().parents[2]
 LOOP = ROOT / ".factory" / "loop"
@@ -208,6 +209,116 @@ class CoordinatorStateTests(unittest.TestCase):
         ):
             with self.assertRaises(coordinator.CoordinatorError):
                 coordinator.open_authority_state()
+
+    def test_existing_empty_state_fails_closed(self) -> None:
+        # An existing zero-byte (or crashed-truncated) state is never treated
+        # as fresh: only this invocation creating the file with O_CREAT|O_EXCL
+        # may initialize it, so a crash can fail closed but never silently
+        # resets the key or the consumed-scope entries map.
+        state_dir = self.state_home / coordinator.STATE_DIR_NAME
+        state_dir.mkdir(mode=0o700)
+        (state_dir / coordinator.STATE_FILE_NAME).write_bytes(b"")
+        with self.assertRaises(coordinator.CoordinatorError):
+            self._open()
+        self.assertEqual((state_dir / coordinator.STATE_FILE_NAME).stat().st_size, 0)
+
+    def test_truncated_state_fails_closed(self) -> None:
+        state_dir = self.state_home / coordinator.STATE_DIR_NAME
+        state_dir.mkdir(mode=0o700)
+        state_file = state_dir / coordinator.STATE_FILE_NAME
+        state_file.write_bytes(_valid_state_bytes()[:23])
+        with self.assertRaises(coordinator.CoordinatorError):
+            self._open()
+
+    def test_auto_creates_missing_state_base(self) -> None:
+        # The private XDG state base may be absent: it is auto-created
+        # mode-0700/current-user-owned through descriptor opens (ancestor
+        # checks above it are unchanged/not weakened).
+        missing_home = self.tmp / "missing-state"
+        self.assertFalse(missing_home.exists())
+        with unittest.mock.patch.dict(
+            os.environ, {"XDG_STATE_HOME": str(missing_home)}, clear=False
+        ):
+            fd, state_file = coordinator.open_authority_state()
+        try:
+            os.close(fd)
+        finally:
+            pass
+        base_info = os.lstat(missing_home)
+        self.assertTrue(stat.S_ISDIR(base_info.st_mode))
+        self.assertEqual(stat.S_IMODE(base_info.st_mode), 0o700)
+        self.assertEqual(base_info.st_uid, os.geteuid())
+        dir_info = os.lstat(state_file.parent)
+        self.assertTrue(stat.S_ISDIR(dir_info.st_mode))
+        self.assertEqual(stat.S_IMODE(dir_info.st_mode), 0o700)
+        self.assertEqual(dir_info.st_uid, os.geteuid())
+        document = json.loads(state_file.read_text(encoding="utf-8"))
+        self.assertEqual(document["schema"], coordinator.SCHEMA)
+        self.assertEqual(document["entries"], {})
+
+    def test_state_dir_symlink_fails_closed(self) -> None:
+        # A swapped state directory (symlink to another private dir) must
+        # fail the no-follow descriptor walk instead of being followed.
+        real = self.tmp / "real-state"
+        real.mkdir(mode=0o700)
+        link = self.state_home / coordinator.STATE_DIR_NAME
+        link.symlink_to(real)
+        with self.assertRaises(coordinator.CoordinatorError):
+            self._open()
+
+    def test_state_dir_wrong_mode_fails_closed(self) -> None:
+        fd, _ = self._open()
+        os.close(fd)
+        (self.state_home / coordinator.STATE_DIR_NAME).chmod(0o755)
+        with self.assertRaises(coordinator.CoordinatorError):
+            self._open()
+
+    def test_foreign_owned_state_dir_fails_closed(self) -> None:
+        # Simulate a directory swap to a foreign-owned directory: identity is
+        # validated with fstat on the held descriptor, so a substitution after
+        # inspection cannot masquerade as our private directory.
+        fd, _ = self._open()
+        os.close(fd)
+        with unittest.mock.patch.object(
+            coordinator.os, "geteuid", return_value=os.geteuid() + 1
+        ):
+            with self.assertRaises(coordinator.CoordinatorError):
+                self._open()
+
+    def test_short_write_fresh_state_completes(self) -> None:
+        # The fresh-state writer is a complete write loop: a short/partial
+        # write never silently truncates the authority document.
+        real_write = coordinator.os.write
+
+        def short_write(fdno, view):
+            return real_write(fdno, view[:min(3, len(view))])
+
+        with unittest.mock.patch.object(coordinator.os, "write", side_effect=short_write):
+            fd, state_file = self._open()
+        try:
+            os.lseek(fd, 0, os.SEEK_SET)
+            raw = os.read(fd, 4096)
+        finally:
+            os.close(fd)
+        document = json.loads(raw.decode("utf-8"))
+        self.assertEqual(document["schema"], coordinator.SCHEMA)
+        self.assertEqual(document["entries"], {})
+        self.assertGreaterEqual(len(bytes.fromhex(document["key"])), 32)
+        self.assertEqual(raw, state_file.read_bytes()[0:len(raw)])
+
+    def test_proc_fd_lockdown_fails_closed(self) -> None:
+        # If the /proc/self/fd descriptor lockdown cannot be performed the
+        # coordinator fails closed instead of silently exporting an unrelated
+        # descriptor to the campaign.
+        fd, _ = self._open()
+        try:
+            with unittest.mock.patch.object(
+                coordinator.os, "listdir", side_effect=OSError("no /proc")
+            ):
+                with self.assertRaises(coordinator.CoordinatorError):
+                    coordinator._mark_unrelated_close_on_exec(fd)
+        finally:
+            os.close(fd)
 
     def test_inherited_fd_is_rdwr(self) -> None:
         fd, _ = self._open()
@@ -405,6 +516,23 @@ class LaunchAuthorityOwnerTests(unittest.TestCase):
         finally:
             os.close(fd)
 
+    def test_launch_rejects_existing_empty_authority(self) -> None:
+        # An existing zero-byte authority is never treated as fresh on the
+        # launch side either: the descriptor read fails closed before any
+        # key/entries reset could occur.
+        empty = self.tmp / "empty-authority.json"
+        empty.write_bytes(b"")
+        empty.chmod(0o600)
+        fd = os.open(str(empty), os.O_RDWR | os.O_CLOEXEC)
+        try:
+            with unittest.mock.patch.dict(
+                os.environ, {coordinator.AUTH_ENV: str(fd)}, clear=False
+            ):
+                with self.assertRaises(launch.InvocationError):
+                    launch._coordinator_authorization_key()
+        finally:
+            os.close(fd)
+
     def test_model_descendant_closure(self) -> None:
         # The coordinator FD env value must never reach a model child: it is
         # not in the child environment allowlist, and the child-environment
@@ -416,6 +544,158 @@ class LaunchAuthorityOwnerTests(unittest.TestCase):
             os.environ, {coordinator.AUTH_ENV: "3"}, clear=False
         ):
             self.assertNotIn(coordinator.AUTH_ENV, launch.ENV_ALLOWLIST)
+
+
+class CoordinatorTransitionTests(unittest.TestCase):
+    """One-use coordinator transitions are crash-fail-closed, never reset.
+
+    ``launch`` may only write the entire new serialization from offset 0 with
+    complete pwrite loops, fsync, and only then truncate trailing old bytes
+    (followed by a second fsync) — the inherited FD's inode is never replaced
+    and a crash can fail closed but never silently resets the key/entries.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="factory-coordinator-transition."))
+        self.state_home = self.tmp / "state"
+        self.state_home.mkdir(mode=0o700)
+        self.addCleanup(self._cleanup)
+
+    def _cleanup(self) -> None:
+        for child in list(self.tmp.iterdir()):
+            if child.is_dir() and not child.is_symlink():
+                import shutil
+                shutil.rmtree(child)
+            else:
+                child.unlink(missing_ok=True)
+        self.tmp.rmdir()
+
+    def _authority(self) -> Tuple[int, str]:
+        with unittest.mock.patch.dict(
+            os.environ, {"XDG_STATE_HOME": str(self.state_home)}, clear=False
+        ):
+            fd, _ = coordinator.open_authority_state()
+        os.lseek(fd, 0, os.SEEK_SET)
+        document = json.loads(os.read(fd, 4096).decode("utf-8"))
+        return fd, document["key"]
+
+    def _entries(self, fd: int) -> dict:
+        return json.loads(os.pread(fd, 4096, 0).decode("utf-8"))["entries"]
+
+    def test_no_truncate_before_complete_write_and_fsync(self) -> None:
+        fd, key = self._authority()
+        try:
+            events = []
+            real_pwrite = launch.os.pwrite
+            real_ftruncate = launch.os.ftruncate
+            real_fsync = launch.os.fsync
+
+            def recording_pwrite(fdno, view, offset):
+                written = real_pwrite(fdno, view, offset)
+                events.append(("pwrite", written, offset))
+                return written
+
+            def recording_ftruncate(fdno, length):
+                real_ftruncate(fdno, length)
+                events.append(("ftruncate", length))
+
+            def recording_fsync(fdno):
+                real_fsync(fdno)
+                events.append(("fsync",))
+
+            with unittest.mock.patch.object(launch.os, "pwrite", side_effect=recording_pwrite), \
+                 unittest.mock.patch.object(launch.os, "ftruncate", side_effect=recording_ftruncate), \
+                 unittest.mock.patch.object(launch.os, "fsync", side_effect=recording_fsync):
+                launch._coordinator_transition(fd, "scope-1", "absent", "minted")
+            kinds = [event[0] for event in events]
+            first_truncate = kinds.index("ftruncate")
+            # Every write precedes the first truncate, and a full durable
+            # barrier (fsync) separates them: no truncate-first behavior.
+            self.assertNotIn("pwrite", kinds[first_truncate + 1:])
+            self.assertTrue(any(kind == "fsync" for kind in kinds[:first_truncate]))
+            # The truncate removes only the trailing old bytes (length == new
+            # serialization length, never a zeroing of the document).
+            lengths = [event[1] for event in events if event[0] == "ftruncate"]
+            self.assertTrue(lengths)
+            self.assertTrue(all(length > 0 for length in lengths))
+            self.assertEqual(self._entries(fd), {"scope-1": "minted"})
+            reopened = json.loads(os.pread(fd, 4096, 0).decode("utf-8"))
+            self.assertEqual(reopened["key"], key)  # key preserved, no reset
+        finally:
+            os.close(fd)
+
+    def test_replayed_transition_fails_closed_and_preserves_state(self) -> None:
+        fd, key = self._authority()
+        try:
+            launch._coordinator_transition(fd, "scope-a", "absent", "minted")
+            with self.assertRaises(launch.InvocationError):
+                launch._coordinator_transition(fd, "scope-a", "absent", "minted")
+            with self.assertRaises(launch.InvocationError):
+                launch._coordinator_transition(fd, "scope-a", "consumed", "minted")
+            document = json.loads(os.pread(fd, 4096, 0).decode("utf-8"))
+            self.assertEqual(document["entries"], {"scope-a": "minted"})
+            self.assertEqual(document["key"], key)
+        finally:
+            os.close(fd)
+
+    def test_short_pwrite_loop_completes_transition(self) -> None:
+        fd, _ = self._authority()
+        try:
+            real_pwrite = launch.os.pwrite
+
+            def short_pwrite(fdno, view, offset):
+                return real_pwrite(fdno, view[:min(5, len(view))], offset)
+
+            with unittest.mock.patch.object(launch.os, "pwrite", side_effect=short_pwrite):
+                launch._coordinator_transition(fd, "scope-b", "absent", "minted")
+            document = json.loads(os.pread(fd, 4096, 0).decode("utf-8"))
+            self.assertEqual(document["entries"], {"scope-b": "minted"})
+        finally:
+            os.close(fd)
+
+    def test_transition_never_replaces_inode_behind_fd(self) -> None:
+        # The inherited FD's inode must remain the original state file: no
+        # rename/replace exchange is performed during a transition.
+        fd, _ = self._authority()
+        try:
+            before = os.fstat(fd)
+            launch._coordinator_transition(fd, "scope-c", "absent", "minted")
+            after = os.fstat(fd)
+            self.assertEqual((before.st_dev, before.st_ino), (after.st_dev, after.st_ino))
+            self.assertEqual(self._entries(fd), {"scope-c": "minted"})
+        finally:
+            os.close(fd)
+
+
+class OperatorDocumentationTests(unittest.TestCase):
+    """Tracked operator docs show the rootless production command only.
+
+    Production examples must run the installed ``factory-coordinator`` (never
+    a direct ``factory-campaign`` invocation) with the canonical
+    ``.factory/runner/run-factory-runners.py`` and
+    ``.factory/tools/check-capability-evidence.py`` paths (BUG-0022 Task 55).
+    """
+
+    DOCS = ("README.md", "docs/FACTORY.md", "docs/OPERATIONS.md", "AGENTS.md")
+
+    def test_production_examples_use_rootless_coordinator(self) -> None:
+        for rel in self.DOCS:
+            text = (ROOT / rel).read_text(encoding="utf-8")
+            with self.subTest(rel=rel):
+                self.assertIn(".factory/bin/factory-coordinator", text)
+                # No direct operator invocation of the campaign remains. The
+                # coordinator forwards campaign arguments and execs only the
+                # sibling installed factory-campaign.
+                self.assertNotIn('.factory/bin/factory-campaign"', text)
+                self.assertIn(".factory/runner/run-factory-runners.py", text)
+                self.assertIn(".factory/tools/check-capability-evidence.py", text)
+
+    def test_docs_reject_stale_scripts_runner_paths(self) -> None:
+        for rel in self.DOCS:
+            text = (ROOT / rel).read_text(encoding="utf-8")
+            with self.subTest(rel=rel):
+                self.assertNotIn("scripts/run-factory-runners.py", text)
+                self.assertNotIn("scripts/check-capability-evidence.py", text)
 
 
 class InstalledSurfaceTests(unittest.TestCase):

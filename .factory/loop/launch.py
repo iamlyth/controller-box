@@ -3909,7 +3909,19 @@ def _coordinator_authorization_key() -> Tuple[bytes, int, str]:
 
 
 def _coordinator_transition(fd: int, scope: str, expected: str, replacement: str) -> None:
-    """Durably transition the external current-user-owned monotonic one-use map."""
+    """Durably transition the external current-user-owned monotonic one-use map.
+
+    The committed inode behind the inherited descriptor is never replaced (an
+    ``O_TMPFILE``/rename exchange would leave the inherited FD pointing at the
+    old inode and silently reset authority), so the transition is a
+    crash-fail-closed in-place update, not an atomic rename: the entire new
+    serialization is written from offset 0 with complete ``pwrite`` loops and
+    fsynced, and only then are trailing old bytes truncated (followed by a
+    second fsync).  A crash at any point leaves a state that is either the
+    old valid document or a partial/malformed one — never a silently
+    reinitialized key/entries map, and every later reader fails closed on a
+    partial document.
+    """
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         os.lseek(fd, 0, os.SEEK_SET)
@@ -3920,10 +3932,20 @@ def _coordinator_transition(fd: int, scope: str, expected: str, replacement: str
             raise InvocationError("coordinator authorization was replayed or state is malformed")
         document["entries"][scope] = replacement
         raw = (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode()
-        os.lseek(fd, 0, os.SEEK_SET); os.ftruncate(fd, 0)
+        # Crash-fail-closed write: never truncate before the complete new
+        # serialization is durably present (BUG-0022 Task 55).
+        view = memoryview(raw)
         offset = 0
-        while offset < len(raw):
-            offset += os.write(fd, raw[offset:])
+        while view:
+            written = os.pwrite(fd, view, offset)
+            if written <= 0:
+                raise OSError("short coordinator state write")
+            view = view[written:]
+            offset += written
+        os.fsync(fd)
+        # Only the trailing bytes the full write no longer covers are removed
+        # now, after the complete new document is durable.
+        os.ftruncate(fd, len(raw))
         os.fsync(fd)
     except (OSError, ValueError, TypeError) as exc:
         if isinstance(exc, InvocationError):
