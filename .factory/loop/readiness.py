@@ -383,6 +383,19 @@ def validate_result(value: object, *, expected_campaign_id: str | None = None, e
     consistency = {"complete": "pass", "infrastructure_ready": "plannable", "findings": "findings", "human_blocked": "blocked", "infrastructure_failure": "infrastructure_failure"}
     if value.get("status") not in consistency or value.get("terminal_outcome") != consistency[value["status"]]:
         raise ReadinessError("readiness status/outcome is inconsistent")
+    # Terminal-reason invariant (BUG-0027): an infrastructure failure must
+    # always carry a non-none bounded reason so operators can diagnose it;
+    # every non-failure readiness outcome must use ``none`` and never claim a
+    # failure category it did not experience.
+    if value["status"] == "infrastructure_failure":
+        if value["terminal_reason"] == TERMINAL_REASON_NONE:
+            raise ReadinessError(
+                "an infrastructure failure must carry a non-none terminal reason"
+            )
+    elif value["terminal_reason"] != TERMINAL_REASON_NONE:
+        raise ReadinessError(
+            "a non-failing readiness result cannot claim an infrastructure reason"
+        )
     binding_keys = {"accepted_commit", "tree", "environment_blob", "specification_sha256", "plan_sha256", "conformance_sha256", "policy_sha256", "readiness_policy_sha256", "contracts_sha256", "install_manifest_sha256", "command_authority_sha256", "human_authority_sha256", "trust_authority_sha256"}
     result_keys = {"aggregate_sha256", "findings_aggregate_sha256", "capability_result_sha256", "core_result_sha256", "conformance_result_sha256", "human_result_sha256", "product_findings_sha256"}
     bindings, results = value.get("bindings"), value.get("results")

@@ -4934,6 +4934,11 @@ class Campaign:
             findings_exit, findings_digest = self._check_runner_aggregate(
                 head, findings=True)
             if findings_exit != 0 or not SHA256_RE.fullmatch(findings_digest):
+                # Exit 21 (executed product findings) without a validated
+                # signed findings aggregate is an infrastructure integrity
+                # failure and must persist a non-none bounded reason, never
+                # the ``none`` that the pure exit-code classifier assigns to
+                # the executed-findings exit.
                 self._write_runner_acquisition(
                     attempt=attempt, status="integrity_failure", head=head,
                     tree=tree, environment_blob=environment_blob,
@@ -4941,6 +4946,7 @@ class Campaign:
                     runner_exit=runner_exit,
                     aggregate_sha256=(
                         findings_digest if SHA256_RE.fullmatch(findings_digest) else ""),
+                    terminal_reason=readiness_module.TERMINAL_REASON_AGGREGATE,
                     diagnostic="executed findings lack a validated signed findings aggregate",
                 )
                 return True, -1, "executed findings lack a validated signed findings aggregate"
@@ -4972,10 +4978,19 @@ class Campaign:
                 diagnostic=diagnostic,
             )
             return True, runner_exit, diagnostic
+        # Reaching this final fallback with runner exit 0 means the success
+        # path ran but the strong signed aggregate checker rejected the result
+        # (missing/invalid aggregate). The pure exit-code classifier maps exit 0
+        # to ``none``, so it must be overridden to a non-none bounded reason
+        # here: a genuine infrastructure integrity failure needs a diagnosable
+        # terminal reason, never ``none``.
+        final_reason = runner_reason
+        if runner_exit == 0:
+            final_reason = readiness_module.TERMINAL_REASON_AGGREGATE
         self._write_runner_acquisition(
             attempt=attempt, status="integrity_failure", head=head, tree=tree,
             environment_blob=environment_blob, checker_exit=checker_exit,
-            runner_exit=runner_exit, terminal_reason=runner_reason,
+            runner_exit=runner_exit, terminal_reason=final_reason,
             diagnostic="runner protocol or aggregate integrity failure",
         )
         return True, -1, "runner protocol or aggregate integrity failure"

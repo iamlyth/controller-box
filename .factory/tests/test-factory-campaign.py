@@ -3261,7 +3261,9 @@ class RunnerAcquisitionLifecycleTests(_CampaignBase):
             "if mode=='timeout': time.sleep(5)\n"
             "if mode=='transport': raise SystemExit(20)\n"
             "if mode=='integrity': raise SystemExit(22)\n"
+            "if mode=='pass-invalid': raise SystemExit(0)\n"
             "head=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()\n"
+            "if mode=='findings-bad': raise SystemExit(21)\n"
             "if mode=='findings':\n"
             "    (state/'findings-aggregate.json').write_bytes((json.dumps({'commit':head,'runners':[{'result':'findings'}]},sort_keys=True)+'\\n').encode())\n"
             "    raise SystemExit(21)\n"
@@ -3480,6 +3482,62 @@ class RunnerAcquisitionLifecycleTests(_CampaignBase):
             ),
             "findings",
         )
+
+    def test_aggregate_checker_failure_after_runner_exit0_is_aggregate_reason(self) -> None:
+        # F1: an aggregate checker rejection after a clean runner exit 0
+        # (success code but missing/invalid signed aggregate) must terminate
+        # as an infrastructure integrity failure carrying a non-none bounded
+        # ``aggregate_missing_invalid`` reason.  The pure exit-code
+        # classifier maps exit 0 to ``none``, so the strong aggregate
+        # checker must override it to the diagnosable bounded reason.
+        ws, authority = self._authority(timeout=2.0)
+        try:
+            # Fail the signed-aggregate checker while the runner itself
+            # reports a clean success exit: exit 0 but no valid aggregate.
+            (ws.root / ".factory-state").mkdir(mode=0o700, exist_ok=True)
+            (ws.root / ".factory-state/runner-mode").write_text("pass-invalid")
+            ran, code, detail = authority._ensure_runner_evidence()
+            self.assertTrue(ran)
+            self.assertEqual(code, -1)
+            self.assertIn("integrity", detail)
+            metadata = json.loads(
+                (ws.root / ".factory-state/runner-acquisition.json").read_text()
+            )
+            self.assertEqual(metadata["status"], "integrity_failure")
+            self.assertEqual(
+                metadata["terminal_reason"],
+                readiness_module.TERMINAL_REASON_AGGREGATE,
+            )
+        finally:
+            self._close(authority)
+
+    def test_aggregate_checker_failure_after_runner_exit21_is_aggregate_reason(self) -> None:
+        # F2: an executed-but-findings runner exit (21) without a validated
+        # signed findings aggregate must terminate as an infrastructure
+        # integrity failure carrying a non-none bounded ``aggregate_missing_
+        # invalid`` reason -- never a plannable ``findings`` projection and
+        # never the ``none`` the pure exit-code classifier assigns to exit 21.
+        ws, authority = self._authority(timeout=2.0)
+        try:
+            # Exit 21 (executed product findings) but no validated signed
+            # findings aggregate exists at the exact commit.
+            (ws.root / ".factory-state").mkdir(mode=0o700, exist_ok=True)
+            (ws.root / ".factory-state/runner-mode").write_text("findings-bad")
+            ran, code, detail = authority._ensure_runner_evidence()
+            self.assertTrue(ran)
+            self.assertEqual(code, -1)
+            self.assertIn("findings", detail)
+            self.assertIn("aggregate", detail)
+            metadata = json.loads(
+                (ws.root / ".factory-state/runner-acquisition.json").read_text()
+            )
+            self.assertEqual(metadata["status"], "integrity_failure")
+            self.assertEqual(
+                metadata["terminal_reason"],
+                readiness_module.TERMINAL_REASON_AGGREGATE,
+            )
+        finally:
+            self._close(authority)
 
     def test_runner_argv_refuses_arguments_shell_and_substitution(self) -> None:
         ws = self.make(SUCCESS_SCENARIO)
@@ -4497,6 +4555,69 @@ class BoundedReadinessReasonTests(_CampaignBase):
         bad["terminal_reason"] = "not-a-bounded-reason"
         with self.assertRaises(readiness_module.ReadinessError):
             readiness_module.validate_result(bad)
+
+    def _bounded_result(self, *, status: str, terminal_reason: str) -> dict:
+        bindings = {"accepted_commit": "a" * 40, "tree": "b" * 40,
+                    "environment_blob": "c" * 40,
+                    **{k: "d" * 64 for k in (
+                        "specification_sha256", "plan_sha256",
+                        "conformance_sha256", "policy_sha256",
+                        "readiness_policy_sha256", "contracts_sha256",
+                        "install_manifest_sha256", "command_authority_sha256",
+                        "human_authority_sha256", "trust_authority_sha256")}}
+        outcome = {
+            "complete": "pass", "infrastructure_ready": "plannable",
+            "findings": "findings", "human_blocked": "blocked",
+            "infrastructure_failure": "infrastructure_failure",
+        }[status]
+        results = {"aggregate_sha256": "e" * 64, "capability_result_sha256": "e" * 64,
+                   "core_result_sha256": "e" * 64,
+                   "conformance_result_sha256": "e" * 64,
+                   "human_result_sha256": "e" * 64,
+                   "findings_aggregate_sha256": "e" * 64 if status == "infrastructure_ready" else "0" * 64,
+                   "product_findings_sha256": "e" * 64 if status == "infrastructure_ready" else "0" * 64}
+        value = readiness_module.result_document(
+            campaign_id="campaign-b", nonce="f" * 64, status=status,
+            terminal_outcome=outcome, terminal_reason=terminal_reason,
+            bindings=bindings, results=results)
+        readiness_module.validate_result(value)
+        return value
+
+    def test_every_infrastructure_failure_requires_non_none_reason(self) -> None:
+        # BUG-0027: an infrastructure failure must always carry a non-none
+        # bounded reason so an operator can diagnose it; the validator
+        # rejects a failure that claims ``none`` even when every other field
+        # is well-formed.
+        value = self._bounded_result(
+            status="infrastructure_failure",
+            terminal_reason=readiness_module.TERMINAL_REASON_AGGREGATE)
+        self.assertEqual(value["terminal_reason"], "aggregate_missing_invalid")
+        bad = dict(value)
+        bad["terminal_reason"] = readiness_module.TERMINAL_REASON_NONE
+        with self.assertRaises(readiness_module.ReadinessError):
+            readiness_module.validate_result(bad)
+
+    def test_non_failure_result_cannot_claim_infrastructure_reason(self) -> None:
+        # BUG-0027: only a genuine infrastructure failure may carry a
+        # failure category; a passing/plannable/findings/blocked readiness
+        # outcome must stay ``none`` and never impersonate a failure.
+        for status in ("complete", "infrastructure_ready", "findings",
+                       "human_blocked"):
+            with self.subTest(status=status):
+                self._bounded_result(
+                    status=status,
+                    terminal_reason=readiness_module.TERMINAL_REASON_NONE)
+        for status in ("complete", "infrastructure_ready", "findings",
+                       "human_blocked"):
+            with self.subTest(status=status, reason=True):
+                value = self._bounded_result(
+                    status=status,
+                    terminal_reason=readiness_module.TERMINAL_REASON_NONE)
+                bad = dict(value)
+                bad["terminal_reason"] = (
+                    readiness_module.TERMINAL_REASON_AGGREGATE)
+                with self.assertRaises(readiness_module.ReadinessError):
+                    readiness_module.validate_result(bad)
 
     def test_campaign_result_public_json_carries_reason(self) -> None:
         result = campaign_module.CampaignResult(
