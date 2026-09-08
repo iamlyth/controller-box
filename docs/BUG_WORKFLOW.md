@@ -73,6 +73,16 @@ non-empty argv array whose first element exists and is executable. The argv
 is executed directly, without shell evaluation. The project supplies
 `scripts/verify-project.sh` as that command.
 
+Bug-ledger bookkeeping is metadata, never progress. A status flip, Evidence/
+status/prose touch, or ledger-only revision is not a substantive commit and is
+never committed on its own; a maintenance run records the transition and
+closes only after tests pass, with truthful resolution and verification. The
+only administrative-only commit the boundary permits is a genuine semantic
+planning change to the implementation plan, committed exactly once (see
+[FACTORY.md](FACTORY.md) and `.factory/loop/substance.py`). Developer
+completion/progress/recovery always requires substantive tracked work, and
+runtime `.factory-state/` stays untracked.
+
 Recovery is derived from Git, the canonical maintenance plan, the trusted
 state, and process liveness (see [FACTORY.md](FACTORY.md) — there is no
 separate recovery launcher and no resumed model session). If freshness

@@ -93,6 +93,36 @@ def touch(root: str, rel: str) -> None:
         stream.write("dirty fixture work\n")
 
 
+def append_field_prose(root: str, plan_rel: str, task_no: int, field: str, note: str) -> None:
+    """Append a fixed continuation line to a named task field's prose.
+
+    A *non-semantic* deterministic revision: the plan bytes change but the
+    ``Verification``/``Evidence`` surface is excluded from the semantic-plan
+    fingerprint, so the shared meaningful-substance classifier reports no
+    genuine planning change.  The meaningful-substance boundary therefore
+    records ``planned`` for the planner and restores the commit instead of
+    manufacturing a metadata-only revision commit.
+    """
+    path = os.path.join(root, plan_rel)
+    with open(path, encoding="utf-8") as stream:
+        lines = stream.read().split("\n")
+    start = next(
+        (i for i, line in enumerate(lines) if line.startswith(f"## Task {task_no}:")),
+        None,
+    )
+    if start is None:
+        raise SystemExit(f"campaign driver: no task {task_no} in the plan")
+    target = next(
+        (i for i in range(start + 1, len(lines)) if lines[i].startswith(f"- {field}:")),
+        None,
+    )
+    if target is None:
+        raise SystemExit(f"campaign driver: task {task_no} has no {field} field")
+    lines.insert(target + 1, "  " + note)
+    with open(path, "w", encoding="utf-8") as stream:
+        stream.write("\n".join(lines))
+
+
 def main() -> int:
     root = env("ROOT")
     plan_rel = env("PLAN")
@@ -111,6 +141,17 @@ def main() -> int:
         behavior = pick(scenario.get("planner", {}), round_no, attempt, "planned")
         if behavior == "planned":
             copy_template(f"planner-{round_no}.md", plan_rel, root)
+            return 0
+        if behavior == "planned-prose":
+            # A deterministic *non-semantic* revision: the planner appends a
+            # fixed prose continuation to task 1's ``Verification`` field.
+            # The plan bytes change but the semantic fingerprint does not, so
+            # the meaningful-substance boundary records ``planned`` and
+            # restores the commit -- no revision commit, no HEAD advance.
+            append_field_prose(
+                root, plan_rel, 1, "Verification",
+                "fixed prose-only smoke note (not a semantic planning change)",
+            )
             return 0
         if behavior == "planned-exit1":
             copy_template(f"planner-{round_no}.md", plan_rel, root)
@@ -305,6 +346,20 @@ def main() -> int:
         if behavior == "complete-no-file":
             copy_template(f"dev-{task_id}.md", plan_rel, root)
             return 0
+        if behavior == "progress-no-file":
+            # A plan-only *progress* revision: the developer marks the task
+            # ``in_progress`` in the plan but produces no substantive source/
+            # tests/evidence, so the meaningful-substance boundary rejects it
+            # (no progressive work) and restores the regenerable plan.
+            copy_template(f"dev-{task_id}-progress.md", plan_rel, root)
+            return 0
+        if behavior == "plan-crash":
+            # A crash that leaves *only* a plan revision (no substantive
+            # work): the orchestrator must restore the regenerable plan and
+            # never manufacture a resume commit from harness metadata, so the
+            # next attempt starts clean at the committed plan.
+            copy_template(f"dev-{task_id}.md", plan_rel, root)
+            os.kill(os.getpid(), signal.SIGKILL)
         if behavior == "complete-exit1":
             # Deterministic L3 fixture: the work is coherent and complete, but
             # the role process ends with a nonzero machine-readable exit

@@ -335,7 +335,17 @@ auditor are read-only. The Git command-boundary guard
 hook bypass, hook-path overrides, alternate worktrees, amend/merge/rebase
 bypasses, and forged handoffs; only `git commit` creates commits from the
 model boundary, and every commit must carry at least one substantive tracked
-path.
+path. The shared classifier `.factory/loop/substance.py` defines the narrow
+administrative path set (implementation plan, bug ledgers, campaign
+audit/evidence sidecars): an entirely-administrative staged set is valid only
+when the plan carries a genuine semantic planning change (task
+add/remove/reorder or a title/priority/dependencies/Scope/Acceptance edit),
+committed exactly once. Evidence/status/prose/timestamp edits are not
+meaningful, a valid unchanged or non-semantic planning result records the
+phase without a commit or HEAD advance (plan restored), and developer
+completion/progress/recovery requires substantive tracked work;
+plan/bug/audit/evidence-only bookkeeping is never progress. Runtime state
+`.factory-state/` stays untracked.
 
 ## Recovery
 

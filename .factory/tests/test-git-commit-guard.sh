@@ -14,11 +14,19 @@ PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/scripts/pi-cli-shims" "$tmp/.factory/tools/pi-cli-shims" "$tmp/.ralph/agent" "$tmp/sub"
+mkdir -p "$tmp/.factory/loop" "$tmp/.factory/schemas" "$tmp/.factory/artifacts" "$tmp/.factory/bugs"
 for name in git-commit-guard.sh install-git-commit-guard.sh factory_state_io.py; do
     cp "$PROJECT_ROOT/.factory/tools/$name" "$tmp/.factory/tools/"
 done
 cp "$PROJECT_ROOT/.factory/tools/pi-cli-shims/git" "$tmp/.factory/tools/pi-cli-shims/git"
 chmod +x "$tmp/.factory/tools/"*
+# The meaningful-substance boundary (:substance) reuses the committed plan
+# parser and its requirement-policy registry, so they must live inside the
+# isolated fixture for the guard's ``python3 .factory/loop/substance.py`` to
+# resolve deterministically.
+cp "$PROJECT_ROOT/.factory/loop/substance.py" "$PROJECT_ROOT/.factory/loop/plan_parser.py" "$tmp/.factory/loop/"
+cp "$PROJECT_ROOT/.factory/requirement-policy.json" "$tmp/.factory/"
+cp "$PROJECT_ROOT/.factory/schemas/factory-plan-v1.requirements.json" "$tmp/.factory/schemas/"
 SHIM="$tmp/.factory/tools/pi-cli-shims/git"
 
 printf '.factory-state/\n.factory-lock\n__pycache__/\n.ralph/*\n!.ralph/agent/\n.ralph/agent/*\n!.ralph/agent/scratchpad.md\n' > "$tmp/.gitignore"
@@ -387,5 +395,83 @@ git -C "$tmp" rm -qr .ralph
 git -C "$tmp" add -u
 (cd "$tmp" && git commit -qm 'migration: remove retired recovery namespace')
 [[ -z $(git -C "$tmp" ls-files '.ralph/**') ]]
+
+# -- meaningful-substance plan boundary -----------------------------------
+# An entirely-administrative commit (implementation plan, bug ledgers, or
+# campaign audit/evidence sidecar only) is allowed only when the staged plan
+# carries a genuine semantic planning change.  Seed the canonical plan into
+# the fixture HEAD through a substantive commit, then exercise the plan-only
+# allowed/rejected decision.
+PLAN_REL=".factory/artifacts/implementation-plan.md"
+cp "$PROJECT_ROOT/$PLAN_REL" "$tmp/$PLAN_REL"
+printf 'seed\n' >> "$tmp/source.txt"
+git -C "$tmp" add "$PLAN_REL" source.txt
+(cd "$tmp" && git commit -qm "implement: seed canonical plan")
+seed_head=$(git -C "$tmp" rev-parse HEAD)
+
+# A plan-only commit that carries a genuine semantic planning change (task 1
+# priority bumped, plan still parseable) is allowed and advances history.
+python3 - "$tmp/$PLAN_REL" "$tmp/.factory/loop" <<'PY'
+import re, sys
+sys.path.insert(0, sys.argv[2])
+from plan_parser import Plan
+path = sys.argv[1]
+plan = Plan.from_file(path)
+for blk in plan._blocks:
+    heading = (blk.heading or '').strip()
+    if re.match(r'^## Task\s+1:', heading):
+        for i, line in enumerate(blk.lines):
+            match = re.match(r'^(-?\s*Priority:\s*)(\d+)$', line.strip())
+            if match:
+                blk.lines[i] = line.replace(
+                    match.group(2), str(int(match.group(2)) + 1), 1)
+                break
+        break
+open(path, 'w', encoding='utf-8').write(plan.serialize())
+PY
+git -C "$tmp" add "$PLAN_REL"
+(cd "$tmp" && git commit -qm "plan: genuine semantic task-1 priority change")
+semantic_head=$(git -C "$tmp" rev-parse HEAD)
+[[ "$semantic_head" != "$seed_head" ]]
+
+# A plan-only commit that merely extends Evidence/verification prose (no
+# semantic planning field changed) is rejected without advancing history.
+python3 - "$tmp/$PLAN_REL" "$tmp/.factory/loop" <<'PY'
+import re, sys
+sys.path.insert(0, sys.argv[2])
+from plan_parser import Plan
+path = sys.argv[1]
+plan = Plan.from_file(path)
+applied = False
+for blk in plan._blocks:
+    heading = (blk.heading or '').strip()
+    if re.match(r'^## Task\s+1:', heading):
+        for i, line in enumerate(blk.lines):
+            if line.strip().startswith('- Verification:'):
+                blk.lines.insert(i + 1, '  appended prose-only note')
+                applied = True
+                break
+        break
+assert applied, 'no Verification field to extend'
+open(path, 'w', encoding='utf-8').write(plan.serialize())
+PY
+git -C "$tmp" add "$PLAN_REL"
+set +e
+(cd "$tmp" && git commit -m "plan: prose-only revision" >/dev/null 2>&1)
+prose_rc=$?
+set -e
+[[ $prose_rc -eq 1 ]] || { echo "test-git-commit-guard: prose-only plan commit was accepted" >&2; exit 1; }
+[[ $(git -C "$tmp" rev-parse HEAD) == "$semantic_head" ]]
+
+# An administrative-only commit that touches no substantive path and no plan
+# (a bug ledger only) is rejected without advancing history.
+printf '# Bug ledger\n\n- BUG-0000: seeded.\n' > "$tmp/.factory/bugs/open.md"
+git -C "$tmp" add .factory/bugs/open.md
+set +e
+(cd "$tmp" && git commit -m "admin: bug ledger only" >/dev/null 2>&1)
+ledger_rc=$?
+set -e
+[[ $ledger_rc -eq 1 ]] || { echo "test-git-commit-guard: bug-ledger-only commit was accepted" >&2; exit 1; }
+[[ $(git -C "$tmp" rev-parse HEAD) == "$semantic_head" ]]
 
 echo 'test: fail-closed Git commit boundary passed'

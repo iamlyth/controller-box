@@ -2207,7 +2207,12 @@ class CaseAdversarialSuite(_AdversarialBase):
         # a failing probe is classified as findings by the authority); the
         # audit then stays blocked so the campaign terminates blocked.
         fixtures = [
-            ({"planner": {"behavior": "no-change"},
+            # A planner that returns a *valid* plan without changing it is now
+            # ``planned`` (no-op planning makes no commit, BUG-0023), so the
+            # planning-failure terminal is exercised by a deterministic
+            # invalid-planner retry exhaustion like the campaign terminal
+            # suite: three failed attempts then the ``failed`` terminal.
+            ({"planner": {"behavior": {"default": "invalid"}},
               "developer": {"behavior": "complete"},
               "tester": {"behavior": "pass"},
               "auditor": {"behavior": "pass"}},

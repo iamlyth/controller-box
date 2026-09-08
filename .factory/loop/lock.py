@@ -657,7 +657,9 @@ class RootLock:
                 f"cannot anchor a Git descriptor to the locked inode: {exc}"
             ) from exc
 
-    def _git_run(self, argv: Sequence[str], *, timeout: Optional[float] = None):
+    def _git_run(
+        self, argv: Sequence[str], *, timeout: Optional[float] = None, env=None
+    ):
         """Run the pinned Git anchored to the locked inode (text output)."""
         self._assert_anchored()
         anchor = self._anchor_descriptor()
@@ -665,6 +667,7 @@ class RootLock:
             result = git_run(
                 ["-C", f"/proc/self/fd/{anchor}", *argv],
                 timeout=timeout,
+                env=env,
                 pass_fds=[anchor],
             )
         except GitBoundaryError as exc:
@@ -676,7 +679,9 @@ class RootLock:
         self._assert_anchored()
         return result
 
-    def _git_bytes(self, argv: Sequence[str], *, timeout: Optional[float] = None):
+    def _git_bytes(
+        self, argv: Sequence[str], *, timeout: Optional[float] = None, env=None
+    ):
         """Run the pinned Git anchored to the locked inode (byte output)."""
         self._assert_anchored()
         anchor = self._anchor_descriptor()
@@ -684,6 +689,7 @@ class RootLock:
             result = git_bytes(
                 ["-C", f"/proc/self/fd/{anchor}", *argv],
                 timeout=timeout,
+                env=env,
                 pass_fds=[anchor],
             )
         except GitBoundaryError as exc:

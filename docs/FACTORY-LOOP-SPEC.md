@@ -333,9 +333,19 @@ Model completion tokens are not control protocol. The trusted harness derives ou
 
 Outcomes:
 
-- `planned`: valid fresh plan committed;
+- `planned`: valid fresh plan committed (only when the plan carries a genuine semantic planning change — task add/remove/reorder or a title/priority/dependencies/Scope/Acceptance edit — committed exactly once);
+- `planned_noop`: a valid planner result with no such semantic planning change records the phase without a planner commit or HEAD advance and with the plan restored;
 - `failed`: no valid plan commit after the configured bounded planning attempts; campaign terminates nonzero `failed`;
 - `interrupted`: process ended before a valid checkpoint; retry while budget remains, otherwise terminate nonzero `interrupted`.
+
+The committed plan is the sole administrative path that may justify a commit.
+Bug ledgers and campaign audit/evidence sidecars are administrative metadata:
+an entirely-administrative commit is valid only when the plan carries a
+genuine semantic planning change, committed exactly once. Evidence/status/
+prose/timestamp edits are not meaningful and are never committed. Developer
+completion, progress, and recovery always require at least one substantive
+tracked path; plan/bug/audit/evidence-only bookkeeping is never work. Runtime
+state `.factory-state/` stays untracked.
 
 A nonzero planner exit is `failed` regardless of a valid changed plan left in
 the worktree.

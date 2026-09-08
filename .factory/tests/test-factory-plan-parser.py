@@ -130,7 +130,7 @@ class CanonicalPlanAgreementTest(unittest.TestCase):
         plan = Plan.from_file(CANONICAL_PLAN)
         self.assertEqual(plan.schema, SCHEMA_NAME)
         self.assertEqual(plan.status, "active")
-        self.assertEqual(len(plan.tasks), 55)
+        self.assertEqual(len(plan.tasks), 56)
         self.assertEqual(len(plan.matrix), 78)
         self.assertEqual(
             [entry.boundary for entry in plan.interactions],
@@ -142,8 +142,8 @@ class CanonicalPlanAgreementTest(unittest.TestCase):
         )
         final = [task for task in plan.tasks if task.title == FINAL_AUDIT_TITLE]
         self.assertEqual(len(final), 1)
-        self.assertEqual(final[0].number, 55)
-        self.assertEqual(set(final[0].dependencies), set(range(1, 55)))
+        self.assertEqual(final[0].number, 56)
+        self.assertEqual(set(final[0].dependencies), set(range(1, 56)))
         # Canonical priorities stay byte-bound to the active plan. Most
         # remediation tasks are explicitly priority 1; the legacy tasks that
         # previously relied on the task-number fallback (1-3, 22-25, 28-32,
@@ -151,13 +151,13 @@ class CanonicalPlanAgreementTest(unittest.TestCase):
         # fallback). The appended runner-class restoration tasks (48-50) carry
         # explicit priorities (1, 1, 2), BUG-0015 remediation (51) and signer
         # security remediation (52) and installed excerpt repair (53) are
-        # priority 1, and the readiness-split task (54) and final audit (55)
-        # are priority 1.
+        # priority 1, and the readiness-split task (54), the meaningful-
+        # substance task (55), and final audit (56) are priority 1.
         self.assertEqual(
             [task.priority for task in plan.tasks],
             [1, 2, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
              1, 1, 1, 22, 23, 24, 25, 1, 1, 28, 29, 30, 31, 32, 1, 1,
-             35, 36, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1],
+             35, 36, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1],
         )
         # Front matter binds the canonical specification.
         self.assertEqual(plan.spec_path, "docs/SPEC.md")

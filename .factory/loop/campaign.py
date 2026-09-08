@@ -89,6 +89,7 @@ try:  # package import (the hidden `.factory/loop/` package)
     from . import pre_round as pre_round_module
     from . import selector as selector_module
     from . import state as state_module
+    from . import substance as substance_module
     from . import launch as launch_module
     from . import workspace_confinement as confinement_authority
     from . import redaction as output_redaction
@@ -104,6 +105,7 @@ except ImportError:  # flat import used by the hidden `.factory/tests/` suite
     import pre_round as pre_round_module  # type: ignore[no-redef]
     import selector as selector_module  # type: ignore[no-redef]
     import state as state_module  # type: ignore[no-redef]
+    import substance as substance_module  # type: ignore[no-redef]
     import launch as launch_module  # type: ignore[no-redef]
     import workspace_confinement as confinement_authority  # type: ignore[no-redef]
     import redaction as output_redaction  # type: ignore[no-redef]
@@ -853,16 +855,33 @@ class TrustedGit:
             )
         self._lock = lock
         self._plan_path = plan_path
+        # Pin the campaign's own interpreter at the front of PATH for every
+        # trusted Git child (the committed ``git-commit-guard.sh`` invokes
+        # ``python3 .factory/loop/substance.py``; its hooks inherit this
+        # environment).  The guard must never resolve ``python3`` from a
+        # caller-controlled PATH -- a poisoned interpreter could substitute
+        # behind the commit boundary and manufacture or veto revisions -- so
+        # the orchestrator prepends the real interpreter's directory exactly
+        # like it pins the absolute Git executable.  ``git_run`` still strips
+        # every ``GIT_CONFIG*``/redirector key and re-pins ``GIT_NO_REPLACE_OBJECTS``.
+        self._git_environment = dict(os.environ)
+        py_dir = os.path.dirname(sys.executable) or ""
+        current = self._git_environment.get("PATH", "")
+        self._git_environment["PATH"] = (
+            py_dir + os.pathsep + current if py_dir and current else py_dir or current
+        )
 
     def _run(self, argv: Sequence[str], *, timeout: Optional[float] = None):
         # Task 9 review L4: every trusted Git call is bounded by a finite
         # timeout; an unbounded trusted Git wait behind the lock is never
         # permitted.
-        return self._lock._git_run(list(argv), timeout=timeout or GIT_TIMEOUT)
+        return self._lock._git_run(
+            list(argv), timeout=timeout or GIT_TIMEOUT, env=self._git_environment
+        )
 
     def _bytes(self, argv: Sequence[str], *, timeout: Optional[float] = None):
         return self._lock._git_bytes(
-            list(argv), timeout=timeout or GIT_TIMEOUT
+            list(argv), timeout=timeout or GIT_TIMEOUT, env=self._git_environment
         )
 
     def head(self) -> str:
@@ -1120,6 +1139,52 @@ class TrustedGit:
                 f"staged scope {sorted(staged_names)} does not equal the allowed "
                 f"scope {sorted(paths)}; refusing a foreign commit"
             )
+        # Meaningful-substance boundary: the shared classifier
+        # (``.factory/loop/substance.py``) owns the narrow administrative path
+        # set (implementation plan, bug ledgers, campaign audit/evidence
+        # sidecars) and the semantic-plan fingerprint, exactly like the
+        # committed ``git-commit-guard.sh``.  A substantive commit (stable
+        # source/config/policy/product docs/tests, or the authenticated
+        # conformance/capability contracts) is allowed.  An entirely
+        # administrative staged set is meaningful only when the staged change
+        # is a plan-only genuine semantic planning revision (a task
+        # add/remove/reorder, or a change to a task's title, priority,
+        # dependencies, Scope, or Acceptance criteria); anything else would be
+        # rejected by the installed guard and manufactures metadata-only
+        # progress, so the orchestrator refuses it before ever invoking Git.
+        _admin, staged_substantive = substance_module.classify_path_set(
+            tuple(sorted(staged_names))
+        )
+        if not staged_substantive:
+            if self._plan_path in staged_names:
+                head_plan = self.blob_at(self.head(), self._plan_path)
+                staged_plan = self._bytes(["show", f":{self._plan_path}"])
+                if staged_plan.returncode != 0:
+                    raise CampaignGitError(
+                        f"cannot read the staged plan {self._plan_path!r} "
+                        "for semantic comparison"
+                    )
+                semantic = substance_module.plan_has_semantic_change(
+                    head_plan, staged_plan.stdout
+                )
+                if semantic is True and len(staged_names) == 1:
+                    # A plan-only genuine semantic planning revision is the one
+                    # acceptable administrative commit (the planner's single
+                    # write); the guard and this authority agree.
+                    pass
+                else:
+                    raise CampaignGitError(
+                        "administrative-only commit without a genuine "
+                        "plan-only semantic planning change; refusing "
+                        "metadata-only progress"
+                    )
+            else:
+                raise CampaignGitError(
+                    "administrative-only commit (plan/bug/audit/evidence "
+                    "sidecar) without a genuine plan-only semantic planning "
+                    "change; a plan/bug/audit/evidence-only revision is not "
+                    "substantive progress"
+                )
         commit_result = self._run(
             [
                 "-c", f"user.name={COMMIT_AUTHOR_NAME}",
@@ -1449,17 +1514,22 @@ def validate_plan_worktree(
 def classify_planning(
     *,
     role: RoleOutcome,
-    plan_changed: bool,
     plan_valid: bool,
     scope_ok: bool,
     findings_reflected: bool = True,
 ) -> str:
     """Classify one planning attempt (planned/failed/interrupted).
 
-    ``planned`` requires a changed, valid, spec-bound plan within the
-    planner scope; ``interrupted`` records a bounded process interruption;
-    everything else is a deterministic planning failure retried until the
-    planning budget exhausts (then terminal ``failed``).
+    ``planned`` requires a valid, spec-bound plan within the planner scope
+    (whether or not its bytes changed); ``interrupted`` records a bounded
+    process interruption; everything else is a deterministic planning failure
+    retried until the planning budget exhausts (then terminal ``failed``).
+
+    Whether a ``planned`` attempt also *commits* is decided separately from
+    the semantic-plan fingerprint: a valid unchanged or non-semantic
+    (prose/status-only) planner result advances the phase without a commit
+    or HEAD advance, while a genuine semantic planning revision commits
+    exactly once.  The scope/exit/findings checks below all fail closed.
 
     ``findings_reflected`` (BLOCKER 4) is the round-1 readiness-findings
     plan-digest backstop: when the round-1 planner received a readiness
@@ -1471,8 +1541,6 @@ def classify_planning(
     if role.interrupted:
         return "interrupted"
     if role.exit_status != 0:
-        return "failed"
-    if not plan_changed:
         return "failed"
     if not plan_valid:
         return "failed"
@@ -1489,7 +1557,7 @@ def classify_implementation(
     plan_valid: bool,
     task_complete: bool,
     acceptance_pass: bool,
-    had_changes: bool,
+    had_substantive: bool,
     scope_ok: bool,
 ) -> str:
     """Pure classification of one developer attempt (§13.2).
@@ -1501,6 +1569,12 @@ def classify_implementation(
     exit status (the §13 model-process-failed signal), an invalid plan, a
     rejected completion claim, no usable work, or a scope violation — is
     ``task_failed`` (Task 9 review L3).
+
+    ``had_substantive`` is *not* ``bool(dirty)``: it is true only when the
+    in-scope dirty scope carries at least one substantive tracked path per
+    the shared classifier.  Plan/bug/audit/evidence-sidecar-only revisions
+    are metadata, never usable work, so they can neither complete a task nor
+    count as committed progress.
     """
     if role.interrupted or role.exit_status < 0:
         return "interrupted"
@@ -1517,12 +1591,12 @@ def classify_implementation(
     if not plan_valid:
         return "task_failed"
     if task_complete:
-        if acceptance_pass and had_changes:
+        if acceptance_pass and had_substantive:
             return "task_completed"
         # The completion claim failed its deterministic acceptance gate or
-        # produced no coherent commit: it is never accepted.
+        # produced no substantive commit: it is never accepted.
         return "task_failed"
-    if had_changes:
+    if had_substantive:
         return "task_progress"
     return "task_failed"
 
@@ -5197,17 +5271,39 @@ class Campaign:
                     f"findings: {exc}"
                 )
         outcome = classify_planning(
-            role=role, plan_changed=plan_changed,
-            plan_valid=valid, scope_ok=violation is None,
+            role=role,
+            plan_valid=valid,
+            scope_ok=violation is None,
             findings_reflected=findings_reflected,
         )
         self._end_untrusted(tag)
         if outcome == "planned":
-            new_head = self._git.commit(
-                [self._config.plan_path],
-                f"factory-campaign: planning round {state.current_round}",
+            # A genuine semantic planning revision commits exactly once; a
+            # valid unchanged or non-semantic (prose/status-only) planner
+            # result advances the phase without a commit or HEAD advance.
+            # The commit path is the planner's sole write and it is exactly
+            # the plan path, restored to the committed HEAD bytes when the
+            # revision carries no meaningful planning content so the next
+            # phase starts clean at the last coherent committed plan.
+            semantic_plan = bool(
+                plan_changed
+                and substance_module.plan_has_semantic_change(
+                    plan_committed, plan_worktree
+                )
             )
-            plan_digest = plan_sha256(self._git.blob_at(new_head, self._config.plan_path))
+            if semantic_plan:
+                new_head = self._git.commit(
+                    [self._config.plan_path],
+                    f"factory-campaign: planning round {state.current_round}",
+                )
+                plan_digest = plan_sha256(
+                    self._git.blob_at(new_head, self._config.plan_path)
+                )
+            else:
+                if plan_changed:
+                    self._restore_plan_worktree()
+                new_head = head
+                plan_digest = plan_sha256(plan_committed)
             state2 = state_module.advance(
                 state, "planned",
                 plan_digest=plan_digest,
@@ -5303,6 +5399,33 @@ class Campaign:
                 allow_paths=self._implementation_allow_paths(),
             )
             if valid and violation is None:
+                resume_allowed = [
+                    path for path in dirty
+                    if not scope_violation(
+                        [path], phase="implementation",
+                        plan_path=self._config.plan_path,
+                        spec_path=self._config.spec_path,
+                        allow_paths=self._implementation_allow_paths(),
+                    )
+                ]
+                # A crashed attempt left work to resume.  Only substantive
+                # tracked work (product/tests/fixture evidence) is preservable
+                # progress; an admin-only (plan-only) crashed revision is
+                # regenerable harness metadata, so it is restored and the task
+                # fails cleanly so the next attempt starts at the committed
+                # plan rather than manufacturing a resume commit.
+                _, resume_substantive = substance_module.classify_path_set(
+                    tuple(resume_allowed)
+                )
+                if not resume_substantive:
+                    self._end_untrusted(tag)
+                    self._restore_plan_worktree()
+                    return self._implementation_outcome(
+                        state, attempt, "task_failed",
+                        detail="crashed attempt left no substantive work; "
+                        "the plan revision is not preservable progress",
+                        dirty_work=False,
+                    )
                 work_plan = plan_parser.Plan.from_bytes(plan_worktree)
                 resumed_task = next(
                     (t for t in work_plan.tasks if t.number == task_id), None
@@ -5317,12 +5440,7 @@ class Campaign:
                     and resumed_task.status == "complete"
                 )
                 head = self._git.commit(
-                    [path for path in dirty if not scope_violation(
-                        [path], phase="implementation",
-                        plan_path=self._config.plan_path,
-                        spec_path=self._config.spec_path,
-                        allow_paths=self._implementation_allow_paths(),
-                    )],
+                    resume_allowed,
                     (
                         f"factory-campaign: task {task_id} complete"
                         if resumed_complete
@@ -5376,7 +5494,24 @@ class Campaign:
             allow_paths=self._implementation_allow_paths(),
         )
         scope_ok = violation is None
-        had_changes = bool(dirty)
+        _allowed = [
+            path for path in dirty
+            if not scope_violation(
+                [path], phase="implementation",
+                plan_path=self._config.plan_path,
+                spec_path=self._config.spec_path,
+                allow_paths=self._implementation_allow_paths(),
+            )
+        ]
+        # ``had_substantive`` - never ``bool(dirty)`` - is true only when the
+        # in-scope dirty scope carries at least one substantive tracked path
+        # per the shared classifier.  Plan/bug/audit/evidence-sidecar-only
+        # revisions are metadata, not progressive work, so they can neither
+        # commit as progress nor complete a task.
+        _, substantive_allowed = substance_module.classify_path_set(
+            tuple(_allowed)
+        )
+        had_substantive = bool(substantive_allowed)
         task_complete = False
         if valid:
             work_plan = plan_parser.Plan.from_bytes(plan_worktree)
@@ -5392,43 +5527,33 @@ class Campaign:
             plan_valid=valid,
             task_complete=task_complete,
             acceptance_pass=acceptance_pass,
-            had_changes=had_changes,
+            had_substantive=had_substantive,
             scope_ok=scope_ok,
         )
         self._end_untrusted(tag)
         if outcome == "task_completed":
-            allowed = [
-                path for path in dirty
-                if not scope_violation(
-                    [path], phase="implementation",
-                    plan_path=self._config.plan_path,
-                    spec_path=self._config.spec_path,
-                    allow_paths=self._implementation_allow_paths(),
-                )
-            ]
             new_head = self._git.commit(
-                allowed, f"factory-campaign: task {task_id} complete"
+                _allowed, f"factory-campaign: task {task_id} complete"
             )
             state2 = state_module.advance(state, "task_completed")
             state_module.write_state(self._root, state2)
             return _Step(self._record(state, attempt, "task_completed", ""), state=state2)
         if outcome == "task_progress":
-            allowed = [
-                path for path in dirty
-                if not scope_violation(
-                    [path], phase="implementation",
-                    plan_path=self._config.plan_path,
-                    spec_path=self._config.spec_path,
-                    allow_paths=self._implementation_allow_paths(),
-                )
-            ]
-            if allowed:
+            # ``task_progress`` is reached only with substantive in-scope
+            # work, so the commit is well-formed; the guard is defensive.
+            if _allowed:
                 self._git.commit(
-                    allowed, f"factory-campaign: progress task {task_id}"
+                    _allowed, f"factory-campaign: progress task {task_id}"
                 )
             return self._implementation_outcome(
                 state, attempt, "task_progress", "", dirty_work=False
             )
+        # task_failed/interrupted with no substantive work: a plan-only
+        # (admin) revision is regenerable harness metadata, so restore it so
+        # the next attempt starts clean at the committed plan instead of
+        # being misread as crashed residue on the next attempt.
+        if not had_substantive:
+            self._restore_plan_worktree()
         return self._implementation_outcome(
             state, attempt, outcome,
             reason or (

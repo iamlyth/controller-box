@@ -503,7 +503,9 @@ class EvidenceSmokeUnit(_SmokeBase):
         production selector and the committed plan are never modified.
         """
         text = (ROOT / PLAN_REL).read_text(encoding="utf-8")
-        text = text.replace(common.SMOKE_MARKER + "\n", "", 1)
+        # The planner's smoke note is appended to Task 22's Scope: strip it so
+        # the derived pre-round plan carries the original scope bytes.
+        text = text.replace(" " + common.SMOKE_MARKER, "", 1)
         heading = "## Task 22: Port the fresh Python factory engine without changing Controller production or runner authority"
         start = text.index(heading)
         end = text.index("\n## Task 23:", start)
@@ -532,7 +534,7 @@ class EvidenceSmokeUnit(_SmokeBase):
                 lines[index] = "- Status: complete"
         return ("\n".join(lines)).encode("utf-8")
 
-    def test_marker_revision_is_canonical_and_byte_bound(self) -> None:
+    def test_marker_revision_is_canonical_semantic_and_byte_bound(self) -> None:
         plan = self._pre_smoke_plan()
         revision = common.plan_with_smoke_marker(plan)
         parsed = plan_parser_module.Plan.from_bytes(revision)
@@ -541,9 +543,22 @@ class EvidenceSmokeUnit(_SmokeBase):
         self.assertEqual(common.plan_with_smoke_marker(plan), revision)
         task22 = next(t for t in parsed.tasks if t.number == 22)
         self.assertEqual(task22.status, "pending")
-        # The planner revision is a pure byte extension: one marker line.
+        # The planner revision carries exactly one fixed smoke note appended
+        # to its Task 22 Scope field, so it is a genuine semantic planning
+        # change the meaningful-substance boundary commits exactly once.
         self.assertIn(common.SMOKE_MARKER, revision.decode("utf-8"))
+        self.assertIn(
+            " " + common.SMOKE_MARKER, task22.fields["Scope"]
+        )
         self.assertNotEqual(revision, plan)
+        # A genuine semantic planning change: the scoped revision fingerprint
+        # differs from the committed plan's fingerprint (a scope edit is a
+        # semantic task-field change).
+        import substance as substance_module  # noqa: PLC0415
+
+        self.assertTrue(
+            substance_module.plan_has_semantic_change(plan, revision)
+        )
 
     def test_developer_revision_completes_exactly_one_task(self) -> None:
         plan = self._pre_smoke_plan()

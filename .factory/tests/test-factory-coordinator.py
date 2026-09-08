@@ -673,7 +673,7 @@ class OperatorDocumentationTests(unittest.TestCase):
     Production examples must run the installed ``factory-coordinator`` (never
     a direct ``factory-campaign`` invocation) with the canonical
     ``.factory/runner/run-factory-runners.py`` and
-    ``.factory/tools/check-capability-evidence.py`` paths (BUG-0022 Task 55).
+    ``.factory/tools/check-capability-evidence.py`` paths (BUG-0022 Task 56).
     """
 
     DOCS = ("README.md", "docs/FACTORY.md", "docs/OPERATIONS.md", "AGENTS.md")

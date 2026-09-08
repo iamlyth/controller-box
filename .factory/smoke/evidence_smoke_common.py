@@ -2,13 +2,13 @@
 """Deterministic shared helpers of the designated evidence-smoke lane (Task 22).
 
 This module is the single authority for the deterministic bytes of the
-evidence-smoke round: the canonical planner revision (the committed plan plus
-exactly one fixed marker line in the ``Goal and non-goals`` section), the
-developer completion revision (the current plan with the selected task
-``- Status: pending`` line flipped to ``complete``), the machine-readable
-developer evidence artifact (schema ``factory-smoke-evidence/v1``), and the
-private seam label.  The designated seam driver
-(``evidence_smoke_driver.py``), the deterministic gates
+evidence-smoke round: the canonical planner revision (the committed plan
+with the fixed smoke note appended to the selected task's ``Scope``
+field), the developer completion revision (the current plan with the
+selected task ``- Status: pending`` line flipped to ``complete``), the
+machine-readable developer evidence artifact (schema
+``factory-smoke-evidence/v1``), and the private seam label.  The designated
+seam driver (``evidence_smoke_driver.py``), the deterministic gates
 (``evidence_smoke_gate.py``), the trusted operator command
 (``evidence_smoke.py``), and the hidden smoke suite all consume this module,
 so the planner output is byte-bound to the exact revision this module
@@ -61,16 +61,19 @@ EVIDENCE_TASK_ID = 22
 # the evidence round: the round proves one full phase cycle, not acceptance.
 FINAL_AUDIT_TASK_ID = 25
 
-# One fixed, deterministic marker line inserted into the canonical plan's
-# ``Goal and non-goals`` section by the planner.  The revision is otherwise
-# byte-identical to the committed plan (bindings, tasks, statuses, matrix and
-# inventory are untouched), so ``Task 22`` stays ``pending`` for the evidence
-# round and the revision remains canonical and byte-bound.
+# One fixed, deterministic smoke note the planner appends to the selected
+# task's ``Scope`` field.  Appending it to a semantic task field (``Scope``)
+# makes the planner revision a *genuine semantic planning change*, so the
+# meaningful-substance boundary commits exactly that planner revision once
+# (the evidence round requires a real committed planner output).  The
+# revision is otherwise byte-identical to the committed plan (bindings,
+# task statuses, matrix and inventory are untouched), so ``Task 22`` stays
+# ``pending`` for the evidence round and the revision remains canonical and
+# byte-bound.
 SMOKE_MARKER = (
     "- Smoke evidence round (evidence-smoke): deterministic designated "
     "harness seam; no external model, cookies, credentials, runner, or human."
 )
-_GOAL_HEADING = "## Goal and non-goals"
 _TASK_HEADING_RE = re.compile(r"^## Task\s+(\d+):")
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -255,47 +258,53 @@ def marker_processes(campaign_id: str) -> List[int]:
     return found
 
 
-def _insert_before_heading(lines: List[str], start: int, marker: str) -> List[str]:
-    """Return ``lines`` with ``marker`` inserted before the next ``## `` line."""
-    insert_at = next(
-        (index for index in range(start + 1, len(lines))
-         if lines[index].startswith("## ")),
-        None,
-    )
-    if insert_at is None:
-        raise EvidenceSmokeError("plan has no section heading after the goal section")
-    out = list(lines)
-    out.insert(insert_at, marker)
-    return out
-
-
 def plan_with_smoke_marker(data: bytes) -> bytes:
-    """The deterministic planner revision of the committed plan bytes.
+    """The deterministic *semantic* planner revision of the committed plan.
 
-    Exactly one fixed marker line is added to the ``Goal and non-goals``
-    section; every other byte of the plan is preserved verbatim, so the
-    revision is a pure deterministic function of the committed plan and the
-    canonical bindings, task statuses (including ``Task 22`` pending), and
-    conformance rows never change.
+    The planner revision appends the fixed smoke note to the selected
+    (``EVIDENCE_TASK_ID``) task's ``Scope`` field so the revision is a genuine
+    semantic planning change: the trusted campaign's meaningful-substance
+    boundary commits exactly this revision once (a scope change is a semantic
+    task-field change), which the evidence round requires so the planner's
+    output is a real committed revision rather than metadata-only prose.
+    Every other byte of the plan (bindings, the task statuses - ``Task 22``
+    stays pending until the developer works it - matrix, and inventory) is
+    preserved verbatim, so the revision is a pure deterministic function of
+    the committed plan.
     """
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise EvidenceSmokeError("the plan is not valid UTF-8") from exc
-    lines = text.split("\n")
-    goal = next(
-        (index for index, line in enumerate(lines) if line == _GOAL_HEADING),
-        None,
-    )
-    if goal is None:
-        raise EvidenceSmokeError("the plan has no `## Goal and non-goals` section")
-    if SMOKE_MARKER in lines:
+    if SMOKE_MARKER in text:
         raise EvidenceSmokeError(
             "the plan already carries the smoke marker; a repeated revision "
             "is ambiguous"
         )
-    out = _insert_before_heading(lines, goal, SMOKE_MARKER)
-    return "\n".join(out).encode("utf-8")
+    lines = text.split("\n")
+    start = None
+    for index, line in enumerate(lines):
+        match = _TASK_HEADING_RE.match(line)
+        if match and int(match.group(1)) == EVIDENCE_TASK_ID:
+            start = index
+            break
+    if start is None:
+        raise EvidenceSmokeError(
+            f"the plan has no `## Task {EVIDENCE_TASK_ID}:` section"
+        )
+    end = next(
+        (index for index in range(start + 1, len(lines))
+         if lines[index].startswith("## ")),
+        len(lines),
+    )
+    out = list(lines)
+    for index in range(start, end):
+        if out[index].startswith("- Scope:"):
+            out[index] = out[index].rstrip() + " " + SMOKE_MARKER
+            return "\n".join(out).encode("utf-8")
+    raise EvidenceSmokeError(
+        f"task {EVIDENCE_TASK_ID} has no `- Scope:` line to revise"
+    )
 
 
 def plan_with_task_complete(data: bytes, task_id: int) -> bytes:

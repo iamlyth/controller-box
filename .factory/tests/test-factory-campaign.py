@@ -307,7 +307,21 @@ class FixtureWorkspace:
                 }
             gen_plan(ws, common, f"fixture/templates/planner-{round_no}.md",
                      revised)
-        complete = [{**dict(t), "status": "complete"} for t in TASK_SPECS]
+        # The work-exhausted planner output must be a *genuine semantic*
+        # planning revision (a scope edit, not just status flips), because the
+        # meaningful-substance boundary commits a planner revision only when it
+        # carries a real planning change; ``planned-complete`` therefore edits
+        # each task's Scope while marking it complete so the committed
+        # complete-plan drives implementation to ``work_exhausted``.
+        complete = [
+            {
+                **dict(t),
+                "status": "complete",
+                "scope": (t.get("scope", "fixture-scoped work only.")
+                          + " complete."),
+            }
+            for t in TASK_SPECS
+        ]
         gen_plan(ws, {**common, "lifecycle": "complete"},
                  "fixture/templates/planner-complete.md", complete)
         blocked = [
@@ -665,7 +679,9 @@ class CampaignTerminals(_CampaignBase):
 
     def test_planning_attempt_exhaustion_terminates_failed(self) -> None:
         ws = self.make({
-            "planner": {"behavior": "no-change"},
+            "planner": {
+                "behavior": {"default": "invalid"},
+            },
             "developer": {"behavior": "complete"},
             "tester": {"behavior": "pass"},
             "auditor": {"behavior": "pass"},
@@ -681,21 +697,26 @@ class CampaignTerminals(_CampaignBase):
             record["phase"] == "planning" and record["outcome"] == "failed"
             for record in history))
 
-    def test_invalid_planner_retry_restores_committed_plan(self) -> None:
+    def test_invalid_planner_retry_commits_from_restored_plan(self) -> None:
+        # A deterministic planner failure leaves its unparsable plan restored
+        # to the committed canonical bytes; a later valid ``planned`` attempt
+        # then commits a genuine semantic revision without any parse residual.
         ws = self.make({
             "planner": {"behavior": {
-                "1.1": "invalid", "1.2": "no-change", "default": "no-change",
+                "1.1": "invalid", "1.2": "planned", "default": "planned",
             }},
             "developer": {"behavior": "complete"},
             "tester": {"behavior": "pass"},
             "auditor": {"behavior": "pass"},
         })
         rc, data = ws.run_cli()
-        self.assertEqual(rc, 3)
+        self.assertEqual(rc, 0)
         history = data["phase_history"]
+        self.assertEqual(history[0]["outcome"], "failed")
         self.assertIn("does not parse", history[0]["detail"])
+        self.assertEqual(history[1]["outcome"], "planned")
         self.assertNotIn("does not parse", history[1]["detail"])
-        self.assertNotIn("does not parse", history[2]["detail"])
+        # The planner committed the restored canonical plan; the tree is clean.
         self.assertEqual(
             _git(ws.root, "status", "--short", "--", PLAN_REL).stdout, ""
         )
@@ -1058,7 +1079,7 @@ class EmptyWorkAndFindings(_CampaignBase):
 
     def test_planner_retries_do_not_rerun_pre_round_hooks(self) -> None:
         ws = self.make({
-            "planner": {"behavior": "no-change"},
+            "planner": {"behavior": {"default": "invalid"}},
             "developer": {"behavior": "complete"},
             "tester": {"behavior": "pass"},
             "auditor": {"behavior": "pass"},
@@ -1252,7 +1273,7 @@ class EmptyWorkAndFindings(_CampaignBase):
     def test_shell_command_verification_prose_is_not_treated_as_path(self) -> None:
         ws = self.make({
             "planner": {"behavior": "planned"},
-            "developer": {"behavior": "complete-no-file"},
+            "developer": {"behavior": "complete"},
             "tester": {"behavior": "pass"},
             "auditor": {"behavior": "pass"},
         })
@@ -1472,8 +1493,161 @@ class EmptyWorkAndFindings(_CampaignBase):
         self.assertEqual(data2["phase_history"][2]["outcome"], "findings")
 
 
+class SubstanceBoundaryCampaigns(_CampaignBase):
+    """Meaningful-commit substance boundary end to end (BUG/TASK evidence).
+
+    These fixtures drive the shared ``substance`` classifier through the real
+    campaign authority: a planner result that only rewords non-semantic plan
+    prose is still a valid ``planned`` phase, but it is never committed (no
+    metadata-only revision commit, no HEAD advance, plan restored), and a
+    developer that revises only the plan (complete, progress, or a crash that
+    leaves only a plan revision) produces no commit and fails/retries with a
+    clean restoration instead of manufacturing resume progress.  Each scenario
+    asserts the exact orchestrator-authored commit set so no harness-metadata
+    commit can be hidden inside substantive-looking progress.
+    """
+
+    def _committed_plan_digest(self, ws, commit: str) -> str:
+        blob = _git(ws.root, "show", f"{commit}:{PLAN_REL}").stdout.encode()
+        return campaign_module.plan_sha256(blob)
+
+    def test_planner_prose_revision_plans_without_commit_or_head_advance(self) -> None:
+        # A planner result that only rewords prose (non-semantic plan surface)
+        # is a genuine ``planned`` phase outcome: the meaningful-substance
+        # boundary records the phase WITHOUT committing a metadata-only
+        # revision, leaves HEAD on the committed plan, and restores the plan
+        # so the developer works the exact committed bytes.  Only the
+        # developer's later substantive completion commit advances history.
+        ws = self.make({
+            "planner": {"behavior": "planned-prose"},
+            "developer": {"behavior": "complete"},
+            "tester": {"behavior": "pass"},
+            "auditor": {"behavior": "pass"},
+        })
+        start_head = ws.scenario_commit
+        start_digest = self._committed_plan_digest(ws, start_head)
+        rc, data = ws.run_cli()
+        self.assertEqual(rc, 0)
+        assert_terminal(self, data, terminal_phase="success",
+                        terminal_outcome="pass", exit_code=0,
+                        rounds_completed=1)
+        assert_history(self, data, [
+            (1, "planning", "planned"),
+            (1, "implementation", "task_completed"),
+            (1, "verification", "pass"),
+            (1, "audit", "pass"),
+        ])
+        # The planning ``planned`` record advanced the phase without a commit
+        # or HEAD move and reused the committed plan digest; a genuine semantic
+        # planner revision would update both fields.
+        planning = data["phase_history"][0]
+        self.assertEqual(planning["outcome"], "planned")
+        self.assertEqual(planning["head_commit"], start_head)
+        self.assertEqual(planning["plan_digest"], start_digest)
+        # No ``planning round`` commit ever landed; only the developer's one
+        # substantive completion commit advanced history.
+        messages = _git(ws.root, "log", f"{start_head}..HEAD",
+                        "--format=%s").stdout.splitlines()
+        self.assertEqual(messages, ["factory-campaign: task 1 complete"])
+        # The restored plan left no worktree residue: the tree is clean.
+        self.assertEqual(
+            _git(ws.root, "status", "--short", "--", PLAN_REL).stdout, ""
+        )
+
+    def test_developer_plan_only_complete_fails_without_commit(self) -> None:
+        # A developer that revises only the plan (marks the task complete, a
+        # ``complete-no-file`` fixture) and produces no substantive
+        # source/tests/evidence is not progressive: the completion claim is
+        # rejected (``task_failed``), the plan-only revision is restored, and
+        # nothing beyond the planner's semantic revision is ever committed.
+        ws = self.make({
+            "planner": {"behavior": "planned"},
+            "developer": {"behavior": "complete-no-file"},
+            "tester": {"behavior": "pass"},
+            "auditor": {"behavior": "pass"},
+        })
+        start_head = ws.scenario_commit
+        rc, data = ws.run_cli()
+        self.assertEqual(rc, 0)
+        self.assertEqual(
+            [r["outcome"] for r in data["phase_history"][1:4]],
+            ["task_failed", "task_failed", "task_failed"],
+        )
+        # Only the planner's genuine semantic revision was committed; no
+        # implementation commit (complete/progress/resume) ever landed.
+        messages = _git(ws.root, "log", f"{start_head}..HEAD",
+                        "--format=%s").stdout.splitlines()
+        self.assertEqual(messages, ["factory-campaign: planning round 1"])
+        # The plan-only revision was restored, never committed: tree is clean.
+        self.assertEqual(
+            _git(ws.root, "status", "--short", "--", PLAN_REL).stdout, ""
+        )
+
+    def test_developer_plan_only_progress_fails_without_commit(self) -> None:
+        # A plan-only *progress* revision (``progress-no-file``: the task is
+        # marked ``in_progress`` in the plan with no substantive work) is
+        # metadata, never progressive work: ``task_failed`` and restored.
+        ws = self.make({
+            "planner": {"behavior": "planned"},
+            "developer": {"behavior": "progress-no-file"},
+            "tester": {"behavior": "pass"},
+            "auditor": {"behavior": "pass"},
+        })
+        start_head = ws.scenario_commit
+        rc, data = ws.run_cli()
+        self.assertEqual(rc, 0)
+        # progress-no-file marks task 1 in_progress (not complete), so every
+        # attempt is a rejected ``task_failed`` with no committed progress.
+        self.assertEqual(
+            [r["outcome"] for r in data["phase_history"][1:4]],
+            ["task_failed", "task_failed", "task_failed"],
+        )
+        messages = _git(ws.root, "log", f"{start_head}..HEAD",
+                        "--format=%s").stdout.splitlines()
+        self.assertEqual(messages, ["factory-campaign: planning round 1"])
+        self.assertEqual(
+            _git(ws.root, "status", "--short", "--", PLAN_REL).stdout, ""
+        )
+
+    def test_developer_plan_only_crash_retries_clean_without_commit(self) -> None:
+        # A crashed attempt that leaves only a plan revision (``plan-crash``)
+        # is regenerable harness metadata, never preservable progress: the
+        # orchestrator restores the plan so the retry starts clean at the
+        # committed plan, never manufactures a ``resume`` commit, and records
+        # a retry (``interrupted``) then deterministic ``task_failed`` on the
+        # later plan-only completion attempts.
+        ws = self.make({
+            "planner": {"behavior": "planned"},
+            "developer": {"behavior": {
+                "1.1": "plan-crash",
+                "default": "complete-no-file",
+            }},
+            "tester": {"behavior": "pass"},
+            "auditor": {"behavior": "pass"},
+        })
+        start_head = ws.scenario_commit
+        rc, data = ws.run_cli()
+        self.assertEqual(rc, 0)
+        self.assertEqual(
+            [r["outcome"] for r in data["phase_history"][1:4]],
+            ["interrupted", "task_failed", "task_failed"],
+        )
+        # No resume/complete/progress commit was manufactured from the
+        # plan-only crash; only the planner's genuine semantic revision.
+        messages = _git(ws.root, "log", f"{start_head}..HEAD",
+                        "--format=%s").stdout.splitlines()
+        self.assertEqual(messages, ["factory-campaign: planning round 1"])
+        self.assertNotIn(
+            "resume", [m for m in messages], "plan-only crash manufactured a resume commit"
+        )
+        self.assertEqual(
+            _git(ws.root, "status", "--short", "--", PLAN_REL).stdout, ""
+        )
+
+
 class ScopeAndGit(_CampaignBase):
     """§12 scope authority, commit boundary, and dirty preservation."""
+
 
     def test_planner_scope_violation_terminates_failed(self) -> None:
         ws = self.make({
@@ -1896,38 +2070,47 @@ class ClassificationUnits(_CampaignBase):
 
     def test_planning_classification(self) -> None:
         planned = campaign_module.RoleOutcome("planner", 0)
+        # A valid, scope-clean, exit-0 planner result is ``planned`` whether
+        # or not its plan bytes changed; whether it also commits is decided
+        # separately from the semantic-plan fingerprint in the phase step.
         self.assertEqual(campaign_module.classify_planning(
-            role=planned, plan_changed=True, plan_valid=True, scope_ok=True),
+            role=planned, plan_valid=True, scope_ok=True),
             "planned")
         self.assertEqual(campaign_module.classify_planning(
-            role=planned, plan_changed=False, plan_valid=True, scope_ok=True),
+            role=planned, plan_valid=False, scope_ok=True),
             "failed")
         self.assertEqual(campaign_module.classify_planning(
-            role=planned, plan_changed=True, plan_valid=False, scope_ok=True),
+            role=planned, plan_valid=True, scope_ok=False),
             "failed")
         self.assertEqual(campaign_module.classify_planning(
             role=campaign_module.RoleOutcome("planner", 7),
-            plan_changed=True, plan_valid=True, scope_ok=True), "failed")
+            plan_valid=True, scope_ok=True), "failed")
+        # BLOCKER 4: a round-1 planner that received a readiness findings
+        # payload reflects it in the plan before the attempt can be planned.
+        self.assertEqual(campaign_module.classify_planning(
+            role=planned, plan_valid=True, scope_ok=True,
+            findings_reflected=False), "failed")
         interrupted = campaign_module.RoleOutcome(
             "planner", -9, interrupted=True, signal="SIGKILL")
         self.assertEqual(campaign_module.classify_planning(
-            role=interrupted, plan_changed=False, plan_valid=True,
-            scope_ok=True), "interrupted")
+            role=interrupted, plan_valid=True, scope_ok=True), "interrupted")
 
     def test_implementation_classification(self) -> None:
         ok = campaign_module.RoleOutcome("developer", 0)
         base = dict(role=ok, plan_valid=True, task_complete=False,
-                    acceptance_pass=False, had_changes=True, scope_ok=True)
+                    acceptance_pass=False, had_substantive=True, scope_ok=True)
         self.assertEqual(campaign_module.classify_implementation(
             **{**base, "task_complete": True, "acceptance_pass": True,
-               "had_changes": True}), "task_completed")
+               "had_substantive": True}), "task_completed")
         self.assertEqual(campaign_module.classify_implementation(
             **{**base, "task_complete": True, "acceptance_pass": False,
-               "had_changes": True}), "task_failed")
+               "had_substantive": True}), "task_failed")
         self.assertEqual(campaign_module.classify_implementation(**base),
                          "task_progress")
+        # No-substance (plan/bug/audit/evidence-sidecar-only) work is never
+        # progressive: it can neither complete a task nor record progress.
         self.assertEqual(campaign_module.classify_implementation(
-            **{**base, "had_changes": False}), "task_failed")
+            **{**base, "had_substantive": False}), "task_failed")
         self.assertEqual(campaign_module.classify_implementation(
             **{**base, "scope_ok": False}), "task_failed")
         self.assertEqual(campaign_module.classify_implementation(
@@ -2742,7 +2925,7 @@ class ReviewHardening(_CampaignBase):
     def test_implementation_classification_honors_exit_status(self) -> None:
         ok = campaign_module.RoleOutcome("developer", 0)
         base = dict(role=ok, plan_valid=True, task_complete=True,
-                    acceptance_pass=True, had_changes=True, scope_ok=True)
+                    acceptance_pass=True, had_substantive=True, scope_ok=True)
         self.assertEqual(campaign_module.classify_implementation(**base),
                          "task_completed")
         failed = campaign_module.RoleOutcome("developer", 1)
@@ -2750,7 +2933,7 @@ class ReviewHardening(_CampaignBase):
             **{**base, "role": failed}), "task_failed")
         self.assertEqual(campaign_module.classify_implementation(
             **{**base, "role": failed, "task_complete": False,
-               "acceptance_pass": False, "had_changes": True}), "task_failed")
+               "acceptance_pass": False, "had_substantive": True}), "task_failed")
         doc = campaign_module.classify_implementation.__doc__ or ""
         self.assertIn("nonzero machine-readable", doc)
 
@@ -2789,13 +2972,13 @@ class ReviewHardening(_CampaignBase):
             real_bytes = campaign._lock._git_bytes
             recorded: list = []
 
-            def recording_run(argv, *, timeout=None):
+            def recording_run(argv, *, timeout=None, env=None):
                 recorded.append((list(argv), timeout))
-                return real_run(argv, timeout=timeout)
+                return real_run(argv, timeout=timeout, env=env)
 
-            def recording_bytes(argv, *, timeout=None):
+            def recording_bytes(argv, *, timeout=None, env=None):
                 recorded.append((list(argv), timeout))
-                return real_bytes(argv, timeout=timeout)
+                return real_bytes(argv, timeout=timeout, env=env)
 
             with unittest.mock.patch.object(
                 campaign._lock, "_git_run", side_effect=recording_run,

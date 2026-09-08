@@ -3933,7 +3933,7 @@ def _coordinator_transition(fd: int, scope: str, expected: str, replacement: str
         document["entries"][scope] = replacement
         raw = (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode()
         # Crash-fail-closed write: never truncate before the complete new
-        # serialization is durably present (BUG-0022 Task 55).
+        # serialization is durably present (BUG-0022 Task 56).
         view = memoryview(raw)
         offset = 0
         while view:

@@ -206,6 +206,8 @@ geometry correctness:
 
 A fail-closed Git commit boundary (`.factory/tools/install-git-commit-guard.sh`, run on every factory launch) rejects empty metadata-only commits at the hook level: every commit must carry at least one substantive tracked path, and retired `.ralph/**` recovery paths may only be deleted from the index. There is no lifecycle token or scratchpad exemption. Hook bypass markers and commit-creation verbs without hook coverage are refused at the model command boundary (`.factory/tools/pi-cli-shims/git`).
 
+The boundary enforces meaningful substance through the shared classifier `.factory/loop/substance.py`: semantic planning revisions are committed exactly once, while a valid unchanged or non-semantic planning result records the phase without a commit or HEAD advance (the plan is restored). Developer completion/progress/recovery always requires substantive tracked work; plan/bug/audit/evidence-only bookkeeping is metadata, never progress. Runtime state `.factory-state/` stays untracked.
+
 | Layer | Test | What it verifies |
 |-------|------|-----------------|
 | 1. Deterministic framebuffer | `test_overlay_visual`, `test_manager_visual` | Renders through production composition path, reads back pixels via `SDL_RenderReadPixels`, asserts content in expected regions |

@@ -168,6 +168,8 @@ required = [
     '.factory/tests/test-factory-confinement-order.sh',
     '.factory/tests/test-factory-supervision.sh',
     '.factory/loop/plan_parser.py', '.factory/loop/selector.py',
+    '.factory/loop/substance.py',
+    '.factory/tests/test-substance-policy.py',
     '.factory/loop/state.py', '.factory/loop/readiness.py', '.factory/loop/evidence.py',
     '.factory/loop/gitutil.py', '.factory/loop/footprint.py',
     '.factory/loop/lock.py', '.factory/loop/launch.py',
@@ -385,7 +387,8 @@ for hidden_suite in \
         test-factory-readiness \
         test-factory-selector \
         test-factory-state \
-        test-factory-usage; do
+        test-factory-usage \
+        test-substance-policy; do
     echo "verify: running hidden suite $hidden_suite"
     python3 -W error::ResourceWarning ".factory/tests/$hidden_suite.py"
 done
