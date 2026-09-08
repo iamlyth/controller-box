@@ -69,6 +69,22 @@ Schema: `ralph-bug-ledger/v1`
     "resolution": "",
     "verification": "",
     "closed": null
+  },
+  {
+    "id": "BUG-0022",
+    "title": "Local factory harness requires root for coordinator authority state",
+    "status": "open",
+    "severity": "high",
+    "reported": "2026-09-08",
+    "external": [],
+    "contract_change": false,
+    "reproduction": "Run a production campaign as an unprivileged operator. The campaign requires FACTORY_COORDINATOR_AUTH_FD to name a coordinator authority state file, but launch.py::_coordinator_authorization_key() rejects any descriptor whose st_uid is not 0, and no rootless creator/opener for the coordinator authority state exists. The local factory harness therefore cannot run without root, contradicting the contract that only remote runners may use root.",
+    "expected": "The local factory harness never requires root: an installed rootless coordinator entrypoint (.factory/bin/factory-coordinator) rejects euid 0, creates/opens the persistent per-user authority state under a private mode-0700 XDG state directory outside the repository (regular current-user-owned file, exact 0600, nlink 1, O_RDWR with no-follow/openat race resistance, schema factory-coordinator-launch-authority/v1, random key >= 32 bytes, entries {}, durably fsynced), fails closed on malformed/unsafe state, exports only the inherited FACTORY_COORDINATOR_AUTH_FD descriptor, and execs only the sibling installed factory-campaign. Production authority validation requires the current effective/user owner (root-owned authority is rejected by unprivileged campaigns) while preserving regular-file, exact-0600, nlink==1, O_RDWR, schema/key length, locking, and one-use anti-replay semantics. Model/tool descendants never inherit the FD or its env value; the entrypoint is registered in the production installer and exact inventory verification; docs describe the rootless contract and one operator command.",
+    "actual": "launch.py::_coordinator_authorization_key() requires info.st_uid == 0 and there is no rootless creator/opener for the coordinator authority state; AGENTS.md, docs/FACTORY.md, docs/OPERATIONS.md, and README.md still state that local coordinator state must be root-owned.",
+    "acceptance": "A rootless coordinator entrypoint and current-user-owned authority validation are implemented and tested: creation/reopen, modes/schema, root rejection, symlink/hardlink/mode/owner/path-inside-workspace failures, fixed sibling exec only, inherited O_RDWR FD, current-user authority acceptance, unsafe owner rejection, model descendant closure, and installed surface; targeted suites and ./scripts/verify-boilerplate.sh pass serially; docs updated (AGENTS.md, docs/FACTORY.md, docs/OPERATIONS.md, README.md, docs/FACTORY-LOOP-SPEC.md, not docs/SPEC.md); remote runner root requirements remain intact.",
+    "resolution": "",
+    "verification": "",
+    "closed": null
   }
 ]
 ```

@@ -1,0 +1,25 @@
+#!/nix/store/bwry105g7v5jspr41bx9x3fcfqsmfkq2-bash-interactive-5.3p15/bin/bash
+# Installed-copy rootless coordinator entrypoint (BUG-0022).  The local
+# factory harness must never require root; only remote runners may use root.
+# This entrypoint creates/opens the per-user coordinator authority state
+# under a private mode-0700 XDG state directory outside the repository,
+# exports only the inherited FACTORY_COORDINATOR_AUTH_FD descriptor, and
+# execs only the sibling installed factory-campaign with the forwarded
+# campaign arguments.
+set -euo pipefail
+
+root=$(cd -- "$(/nix/store/di26b1kkbammy0sj70nq5qzvfrh78wxl-coreutils-9.11/bin/dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+[[ -f "$root/.factory/loop/coordinator.py" ]] || {
+    echo "factory-coordinator: installed coordinator control plane is missing: $root" >&2
+    exit 1
+}
+runtime=${FACTORY_INSTALL_RUNTIME:-${TMPDIR:-/tmp}}
+alias_dir=$(/nix/store/di26b1kkbammy0sj70nq5qzvfrh78wxl-coreutils-9.11/bin/mktemp -d "${runtime%/}/factory-coordinator-alias.XXXXXX") || {
+    echo "factory-coordinator: cannot create installed package alias" >&2
+    exit 1
+}
+cleanup() { /nix/store/di26b1kkbammy0sj70nq5qzvfrh78wxl-coreutils-9.11/bin/rm -rf -- "$alias_dir"; }
+trap cleanup EXIT INT TERM HUP
+/nix/store/di26b1kkbammy0sj70nq5qzvfrh78wxl-coreutils-9.11/bin/ln -s -- "$root/.factory" "$alias_dir/factory"
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$alias_dir" \
+    /nix/store/miscphl6g76fp89z2drc18dckh2cx9ky-python3-3.13.14/bin/python3 -m factory.loop.coordinator "$@"

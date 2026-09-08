@@ -3868,12 +3868,15 @@ def _read_authority_file(directory: Path, name: str, maximum: int) -> bytes:
 
 
 def _coordinator_authorization_key() -> Tuple[bytes, int, str]:
-    """Open the root/control-owned durable authorization state FD.
+    """Open the current-user-owned durable authorization state FD.
 
-    The descriptor must be root-owned, mode 0600, and opened read/write by the
-    external coordinator.  It contains a random key plus the monotonic global
-    consumed-scope map.  A workspace ledger is therefore only a cache: same-UID
-    rollback cannot erase consumption authority.
+    The descriptor must be owned by the current effective user, mode 0600, and
+    opened read/write by the rootless coordinator (BUG-0022).  It contains a
+    random key plus the monotonic global consumed-scope map.  A workspace
+    ledger is therefore only a cache: same-UID rollback cannot erase
+    consumption authority.  Root-owned authority is rejected: the local
+    factory harness must never require root, and an unprivileged campaign
+    must never accept a root-owned state file.
     """
     value = os.environ.get("FACTORY_COORDINATOR_AUTH_FD", "")
     if not value.isdecimal():
@@ -3882,10 +3885,10 @@ def _coordinator_authorization_key() -> Tuple[bytes, int, str]:
     try:
         info = os.fstat(source_fd)
         access = fcntl.fcntl(source_fd, fcntl.F_GETFL) & os.O_ACCMODE
-        if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
                 or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1
                 or access != os.O_RDWR):
-            raise InvocationError("coordinator authorization FD is not root-owned durable read/write state")
+            raise InvocationError("coordinator authorization FD is not current-user-owned durable read/write state")
         fd = os.dup(source_fd)
         os.lseek(fd, 0, os.SEEK_SET)
         raw = os.read(fd, 4 * 1024 * 1024 + 1)
@@ -3906,7 +3909,7 @@ def _coordinator_authorization_key() -> Tuple[bytes, int, str]:
 
 
 def _coordinator_transition(fd: int, scope: str, expected: str, replacement: str) -> None:
-    """Durably transition the external root-owned monotonic one-use map."""
+    """Durably transition the external current-user-owned monotonic one-use map."""
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         os.lseek(fd, 0, os.SEEK_SET)
@@ -4202,7 +4205,7 @@ def authorize_readiness_launch(*, campaign_id: str, invocation: "InvocationBindi
         "readiness_result_digest": hashlib.sha256(canonical).hexdigest(),
         "results": result["results"]}, sort_keys=True, separators=(",", ":")).encode()
     scope = hmac.new(key, (coordinator_identity + "\0").encode() + authenticated, hashlib.sha256).hexdigest()
-    # The root-owned external state is authoritative and transitions first.
+    # The current-user-owned external state is authoritative and transitions first.
     # A crash can only fail closed; restoring workspace cache bytes cannot
     # erase this reservation.
     _coordinator_transition(coordinator_fd, scope, "absent", "minted")

@@ -150,6 +150,9 @@ required = [
     '.factory/loop/installer.py',
     '.factory/bin/factory-launch',
     '.factory/bin/factory-campaign',
+    '.factory/bin/factory-coordinator',
+    '.factory/loop/coordinator.py',
+    '.factory/tests/test-factory-coordinator.py',
     '.factory/tests/test-factory-installed.py',
     '.factory/tests/test-factory-installed.sh',
     '.factory/loop/generic_evidence.py',
@@ -371,6 +374,7 @@ for hidden_suite in \
         test-factory-campaign \
         test-factory-confinement \
         test-factory-conformance \
+        test-factory-coordinator \
         test-factory-evidence \
         test-factory-findings \
         test-factory-launch \

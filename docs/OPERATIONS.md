@@ -648,11 +648,19 @@ proves the executing installed bytes/manifest/commit and binds the verifier
 before the planner. State, results, receipts, and canonical bindings remain in
 `.factory-state/campaigns/$CAMPAIGN_ID/`. Real launches additionally require
 `FACTORY_COORDINATOR_AUTH_FD` to name an inherited read/write descriptor for
-a root-owned mode-0600, single-link coordinator state file. Its v1 JSON holds
+a current-user-owned mode-0600, single-link coordinator state file. Its v1 JSON holds
 at least 32 random key bytes (hex encoded) and the global monotonic consumed-
 scope map. This external state authenticates and durably anchors one-use
 transitions; it is never accepted by pathname, argv, workspace JSON, sealed
-fixture key, or a fixture lane. The pre-existing `.factory-state`
+fixture key, or a fixture lane. The local factory harness never requires root:
+run the installed rootless coordinator entrypoint
+(`$INSTALL_PREFIX/.factory/bin/factory-coordinator --root "$PWD" run ...`),
+which rejects euid 0, creates/opens the per-user state under a private
+mode-0700 XDG state directory outside the repository, exports only the
+inherited `FACTORY_COORDINATOR_AUTH_FD` descriptor, and execs only the
+sibling installed `factory-campaign`. Only remote runners may use root; the
+production launch authority rejects root-owned authority for unprivileged
+campaigns. The pre-existing `.factory-state`
 root must be a real current-user-owned mode-0700 directory. Reservation
 lstats only that exact root and the fixed `campaigns` component, never
 enumerates the runtime root, and never reads, repairs, renames, removes, or

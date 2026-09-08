@@ -477,6 +477,24 @@ The control plane MUST preserve:
 - no model tools or extensions beyond the explicitly allowed set;
 - no environment, authentication-file, private-key, or secret dumping.
 
+The local factory harness MUST never require root: only remote runners may
+use root.  The installed rootless coordinator entrypoint
+(`.factory/bin/factory-coordinator`) rejects euid 0, creates/opens the
+per-user coordinator authority state under a private mode-0700 XDG state
+directory outside the repository, exports only the inherited
+`FACTORY_COORDINATOR_AUTH_FD` descriptor (never the pathname), and execs
+only the sibling installed `factory-campaign` with the forwarded campaign
+arguments.  The state file is a regular current-user-owned file with exact
+mode 0600, link count 1, opened `O_RDWR` with no-follow/openat race
+resistance; a fresh file carries schema
+`factory-coordinator-launch-authority/v1`, a random key of at least 32
+bytes, and an empty `entries` map, durably fsynced.  Malformed, unsafe,
+symlinked, hardlinked, foreign-owned, or workspace-resident state fails
+closed.  The production launch authority requires the current effective
+user as owner and rejects root-owned authority for unprivileged campaigns;
+model/tool descendants never inherit the descriptor or its environment
+value.
+
 The new loop MUST call the existing secure Pi wrapper rather than reproducing authentication logic. The Pi extension retained by the redesign contains only required credential tool-call/tool-result enforcement and guarded Git command-boundary behavior. Ralph lifecycle topics, `ralph emit`, completion-token handling, event snapshots, launch handshakes, and Ralph CLI shims are removed from the new path and MUST NOT be reimplemented for parity.
 
 ## 19. Evidence and acceptance

@@ -121,6 +121,7 @@ DEFAULT_SHARED: Tuple[str, ...] = (".factory/tools/factory_state_io.py",)
 DEFAULT_ENTRYPOINTS: Tuple[str, ...] = (
     ".factory/bin/factory-launch",
     ".factory/bin/factory-campaign",
+    ".factory/bin/factory-coordinator",
     ".factory/tools/machine-receipt.py",
 )
 

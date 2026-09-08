@@ -238,6 +238,32 @@ State, structured role results, receipts, and final result stay in the fresh
 child; foreign entries retain their bytes, mode, and mtime. `.factory/bin/factory-launch` remains the single-role
 supervisor; the installed `.factory/bin/factory-campaign` owns finite rounds.
 
+### Rootless coordinator authority (BUG-0022)
+
+The local factory harness never requires root: only remote runners may use
+root.  The installed `.factory/bin/factory-coordinator` entrypoint rejects
+euid 0, creates/opens the persistent per-user coordinator authority state
+under a private mode-0700 XDG state directory outside the repository
+(`$XDG_STATE_HOME/factory-coordinator/launch-authority.json` or
+`~/.local/state/factory-coordinator/launch-authority.json`), and execs only
+the sibling installed `factory-campaign` with the forwarded campaign
+arguments.  The state file is a regular current-user-owned file with exact
+mode 0600, link count 1, opened `O_RDWR` with no-follow/openat race
+resistance; a fresh file carries schema
+`factory-coordinator-launch-authority/v1`, a random key of at least 32 bytes,
+and an empty `entries` map, durably fsynced.  Malformed, unsafe, symlinked,
+hardlinked, foreign-owned, or workspace-resident state fails closed.  Only
+the inherited `FACTORY_COORDINATOR_AUTH_FD=<fd>` descriptor number is
+exported to the campaign (never the pathname), and every unrelated
+descriptor is close-on-exec.  The production launch authority requires the
+current effective user as owner and rejects root-owned authority for
+unprivileged campaigns.  One operator command replaces the direct campaign
+invocation:
+
+```bash
+"$INSTALL_PREFIX/.factory/bin/factory-coordinator" --root "$PWD" run --campaign-id "$CAMPAIGN_ID" --rounds 5 --branch develop --provider "${PI_PROVIDER:?set provider}" --model "${PI_MODEL:?set model}" --backend "${PI2_BACKEND:?set trusted pi2 executable}" --accepted-commit "$ACCEPTED_COMMIT" --install-manifest "$INSTALL_MANIFEST" --campaign-timeout 21600 --verification-command ./scripts/verify-project.sh --runner-command ./.factory/runner/run-factory-runners.py --capability-command ./.factory/tools/check-capability-evidence.py --acceptance-command '[./scripts/final-gate.sh,--implementation]'
+```
+
 Each campaign round:
 
 1. validates branch, plan freshness, and the single control-state file;
@@ -330,7 +356,7 @@ model session.
 
 Terminal campaign state is retained until an operator invokes
 `archive-factory-campaign.py` with `FACTORY_COORDINATOR_AUTH_FD` naming an
-inherited root-owned (or fixture-owner) mode-0600 authority file descriptor.
+inherited current-user-owned (or fixture-owner) mode-0600 authority file descriptor.
 The v2 archive manifest authenticates the campaign namespace, relevant
 `runner-evidence` and `audit-receipts` namespaces, and every member digest under
 the `factory-campaign-archive` MAC namespace. Archive names are

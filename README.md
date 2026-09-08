@@ -352,7 +352,15 @@ python3 "$INSTALL_PREFIX/.factory/loop/installer.py" verify --root "$PWD" --comm
 ```
 
 The launch executes installed control-plane bytes and re-verifies their
-manifest/commit identity before the planner starts. The trusted coordinator,
+manifest/commit identity before the planner starts. The local factory harness
+never requires root: run the installed rootless coordinator entrypoint
+(`$INSTALL_PREFIX/.factory/bin/factory-coordinator --root "$PWD" run ...`),
+which rejects euid 0, creates/opens the per-user coordinator authority state
+under a private mode-0700 XDG state directory outside the repository, exports
+only the inherited `FACTORY_COORDINATOR_AUTH_FD` descriptor, and execs only
+the sibling installed `factory-campaign`. Only remote runners may use root;
+the production launch authority rejects root-owned authority for unprivileged
+campaigns. The trusted coordinator,
 not a model role, runs the exact `--runner-command` after model-authored commits
 and immediately before capability validation; an unchanged HEAD reuses evidence
 only after the signed aggregate passes strong exact-commit validation.
