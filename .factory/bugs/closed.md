@@ -325,6 +325,22 @@ Schema: `ralph-bug-ledger/v1`
     "resolution": "Meaningful-substance boundary hardened (Task 55): the Git commit guard now rejects staged deletion/type-change/rename of any administrative path even when substantive paths ride along and accepts an administrative-only staged set exactly when it is the canonical plan path carrying a genuine semantic planning change. .factory/loop/substance.py classifies exact administrative membership without slash normalization and projects the parsed dependency list, Blocked on, the canonical conformance matrix rows, and the interaction inventory into the deterministic semantic fingerprint. campaign.py pins developer_evidence_path to exactly .factory/artifacts/campaign-smoke-evidence.json, requiring an evidence-smoke- campaign-id seam with the synthetic committed driver, and fails a non-semantic plan-only recovered commit closed for operator inspection.",
     "verification": "Serial suites at the exact commit (Task 55 evidence): test-substance-policy.py green including exact-path no-slash-strip, blocked_on/matrix/interaction semantic projection, and dependency-formatting invariance; test-factory-campaign.py green (127) including the new DeveloperEvidenceBoundary config cases and the non-semantic plan-only recovery fail-closed; test-git-commit-guard.sh green including plan-deletion+substantive, admin-deletion+substantive, plan+bug with semantic plan, admin rename, and admin type-change rejections plus ordinary substantive deletion allow; test-factory-plan-parser, test-factory-smoke, and test-factory-installed green; bug-ledger.py validate and validate-implementation-plan.py planning pass; ./scripts/verify-boilerplate.sh exits 0 (verify: boilerplate checks passed). Task 56 final audit preserved; no runner, probe, campaign, or golden was run.",
     "closed": "2026-09-08"
+  },
+  {
+    "id": "BUG-0025",
+    "title": "Production campaign command closure fails with NameError: subprocess not imported",
+    "status": "closed",
+    "severity": "high",
+    "reported": "2026-09-08",
+    "external": [],
+    "contract_change": false,
+    "reproduction": "Launch the installed production coordinator (role_driver is None) so it reaches campaign._bind_command_closure. That method calls subprocess.run to import the accepted commit into the staged command closure, but .factory/loop/campaign.py did not import subprocess, so the call raises NameError: name 'subprocess' is not defined before any runner launch.",
+    "expected": "The production campaign command closure stages the complete accepted tree and imports the accepted commit into the private closure Git database through the real subprocess.run path, then binds the closure HEAD, without a NameError. A missing subprocess import must fail the campaign test suite.",
+    "actual": "campaign.py reached _bind_command_closure on the production path and raised NameError because subprocess was not imported; the campaign could not bind its command closure and no runner launched.",
+    "acceptance": "campaign.py imports subprocess and the real _bind_command_closure runs on the production path (role_driver is None) with a real Git authority and a real committed closure tree, staging the committed plan and verification authority and binding the closure HEAD; the focused regression test and the full test-factory-campaign.py and installed suites pass serially, and ./scripts/verify-boilerplate.sh exits 0.",
+    "resolution": "campaign.py now imports subprocess, so the real _bind_command_closure on the production path (role_driver is None) stages the complete accepted tree and imports the accepted commit into the private closure Git database through subprocess.run, then binds the closure HEAD, without a NameError. A focused regression test drives the real _bind_command_closure with a real Git authority and a real committed closure tree (never a mocked-away path) and asserts the closure stages the committed plan and the committed .factory/config.toml verification authority and binds the closure HEAD.",
+    "verification": "Serial suites at the exact commit: test-factory-campaign.py green (128, the prior 127 plus the new focused ReviewHardening.test_bind_command_closure_production_path_imports_subprocess regression test); .factory/tests/test-factory-installed.sh green (installed suite, live .factory-state preserved byte-for-byte); ./scripts/verify-boilerplate.sh exits 0 (verify: boilerplate checks passed). No runner, probe, campaign, or golden was run.",
+    "closed": "2026-09-08"
   }
 ]
 ```

@@ -2505,6 +2505,89 @@ class ReviewHardening(_CampaignBase):
         return dataclasses.replace(
             ws.derive_config(), backend=str(ws.root / DRIVER_REL))
 
+    def _full_production_config(self, ws: FixtureWorkspace):
+        """A real production (non-driver) config that passes validation.
+
+        ``_bind_command_closure`` is reached only on the production path
+        (``role_driver is None``), so this helper builds the exact committed
+        verification authority, canonical capability/acceptance/runner
+        commands, a fresh private namespace, an exact accepted commit, and an
+        absolute install manifest that ``CampaignConfig.validate`` requires.
+        """
+        (ws.root / ".factory/config.toml").write_text(
+            '[verification]\ncampaign_command = ["' + str(TRUE_EXECUTABLE) + '"]\n',
+            encoding="utf-8",
+        )
+        _git(ws.root, "add", ".factory/config.toml")
+        _git(ws.root, "commit", "-qm", "add committed verification authority")
+        head = _git(ws.root, "rev-parse", "HEAD").stdout.strip()
+        return dataclasses.replace(
+            ws.derive_config(),
+            provider="ollama",
+            model="fixture-real-model",
+            rounds_requested=5,
+            backend=str(ws.root / DRIVER_REL),
+            role_driver=None,
+            acceptance_command=campaign_module.CANONICAL_FINAL_ACCEPTANCE_COMMAND,
+            capability_command=campaign_module.CANONICAL_CAPABILITY_COMMAND,
+            runner_command=campaign_module.RUNNER_COMMAND,
+            state_namespace=".factory-state/campaigns/campaign",
+            accepted_commit=head,
+            install_manifest=str(ws.root / "fixture-install-manifest.json"),
+            phase_result_path=".factory-state/campaigns/campaign/phase-result.json",
+            audit_result_path=".factory-state/campaigns/campaign/audit-result.json",
+        )
+
+    def test_bind_command_closure_production_path_imports_subprocess(self) -> None:
+        """Regression (BUG-0025): the real ``_bind_command_closure`` runs.
+
+        The installed production coordinator reached
+        ``campaign._bind_command_closure``, which calls ``subprocess.run`` to
+        import the accepted commit into the staged closure, but ``subprocess``
+        was not imported, raising ``NameError`` before any runner launch.  This
+        test drives the real ``_bind_command_closure`` code path with a real
+        Git authority and a real committed closure tree (never a mocked-away
+        path), so a missing ``subprocess`` import fails the test.
+        """
+        ws = self.make(SUCCESS_SCENARIO)
+        config = self._full_production_config(ws)
+        campaign = campaign_module.Campaign(config)
+        # The private campaign namespace must already exist (the production
+        # preflight reserves it before acquisition); create it exactly as the
+        # coordinator does so ``_bind_command_closure`` can stage its closure.
+        namespace = ws.root / config.state_namespace
+        namespace.mkdir(mode=0o700, parents=True, exist_ok=True)
+        # Set up the real lock + Git authority exactly as ``_acquire`` does,
+        # then invoke the real ``_bind_command_closure`` (not a mock).
+        spec = campaign_module.lock_module.SpecBinding(
+            config.spec_path, config.spec_commit, config.spec_blob)
+        spec.validate()
+        head = campaign_module._live_head(ws.root)
+        plan = campaign_module.lock_module.PlanBinding(
+            config.plan_path, head,
+            campaign_module.plan_sha256(
+                campaign_module._blob_at(ws.root, config.plan_path)))
+        plan.validate()
+        campaign._lock = campaign_module.lock_module.RootLock(
+            ws.root,
+            expected_identity=state_module.repository_identity(ws.root),
+            expected_branch=config.branch,
+            spec=spec,
+            plan=plan,
+        )
+        campaign._git = campaign_module.TrustedGit(campaign._lock, config.plan_path)
+        try:
+            campaign._bind_command_closure()
+            self.assertTrue(campaign._command_closure)
+            self.assertIsNotNone(campaign._command_closure_root)
+            self.assertTrue(campaign._command_closure_root.is_dir())
+            # The closure must contain the committed plan and the committed
+            # verification authority, proving the real tree was staged.
+            self.assertIn(config.plan_path, campaign._command_closure)
+            self.assertIn(".factory/config.toml", campaign._command_closure)
+        finally:
+            campaign._lock.release()
+
     def test_production_developer_launch_derives_exact_committed_task_bytes(
         self,
     ) -> None:
