@@ -474,4 +474,88 @@ set -e
 [[ $ledger_rc -eq 1 ]] || { echo "test-git-commit-guard: bug-ledger-only commit was accepted" >&2; exit 1; }
 [[ $(git -C "$tmp" rev-parse HEAD) == "$semantic_head" ]]
 
+# -- hardened administrative-path integrity boundary ----------------------
+# Administrative control artifacts (implementation plan, bug ledgers, campaign
+# audit/evidence sidecars) may never be deleted, type-changed, renamed, or
+# replaced -- even when substantive paths ride along -- and an entirely
+# administrative commit is meaningful only when its staged set is exactly the
+# canonical plan path revised by a genuine semantic planning change.  Restore
+# a deterministic baseline at the last committed HEAD before each case.
+rm -f "$tmp/.factory/bugs/open.md"
+
+# Deleting the canonical plan while substantive work rides along is rejected.
+git -C "$tmp" rm -q --cached "$PLAN_REL"
+printf 'plan-delete-ride\n' >> "$tmp/source.txt"
+git -C "$tmp" add source.txt
+assert_blocked "plan deletion with substantive" "$semantic_head" \
+    git -C "$tmp" commit -m "x: plan deletion with substantive"
+git -C "$tmp" reset -q --hard "$semantic_head"
+
+# Deleting a bug ledger while substantive work rides along is rejected.
+mkdir -p "$tmp/.factory/bugs"
+printf '# Bug ledger\n\n- BUG-0001: seeded.\n' > "$tmp/.factory/bugs/open.md"
+printf 'bug-seed\n' >> "$tmp/source.txt"
+git -C "$tmp" add .factory/bugs/open.md source.txt
+(cd "$tmp" && git commit -qm "implement: seed bug ledger")
+ledger_head=$(git -C "$tmp" rev-parse HEAD)
+rm -f "$tmp/.factory/bugs/open.md"
+printf 'admin-delete-ride\n' >> "$tmp/source.txt"
+git -C "$tmp" add .factory/bugs/open.md source.txt
+assert_blocked "admin deletion with substantive" "$ledger_head" \
+    git -C "$tmp" commit -m "x: admin deletion with substantive"
+git -C "$tmp" reset -q --hard "$ledger_head"
+
+# An all-administrative set of plan + bug ledger is not meaningful even when
+# the plan revision is a genuine semantic planning change: only the exact
+# canonical plan path may appear in an administrative-only commit.
+python3 - "$tmp/$PLAN_REL" "$tmp/.factory/loop" <<'PY'
+import re, sys
+sys.path.insert(0, sys.argv[2])
+from plan_parser import Plan
+path = sys.argv[1]
+plan = Plan.from_file(path)
+for blk in plan._blocks:
+    heading = (blk.heading or '').strip()
+    if re.match(r'^## Task\s+1:', heading):
+        for i, line in enumerate(blk.lines):
+            match = re.match(r'^(-?\s*Priority:\s*)(\d+)$', line.strip())
+            if match:
+                blk.lines[i] = line.replace(
+                    match.group(2), str(int(match.group(2)) + 1), 1)
+                break
+        break
+open(path, 'w', encoding='utf-8').write(plan.serialize())
+PY
+printf '# Bug update\n\n- BUG-0002: appended.\n' >> "$tmp/.factory/bugs/open.md"
+git -C "$tmp" add "$PLAN_REL" .factory/bugs/open.md
+assert_blocked "plan plus bug ledger with semantic plan" "$ledger_head" \
+    git -C "$tmp" commit -m "admin: plan plus bug ledger"
+git -C "$tmp" reset -q --hard "$ledger_head"
+
+# Renaming an administrative path is a delete+add and is rejected: the retired
+# old name is caught at its deletion, and the new-name add does not conceal it.
+git -C "$tmp" mv .factory/bugs/open.md .factory/bugs/open-renamed.md
+assert_blocked "admin rename" "$ledger_head" \
+    git -C "$tmp" commit -m "admin: rename bug ledger"
+git -C "$tmp" reset -q --hard "$ledger_head"
+
+# Type-changing an administrative path (regular file to symlink) is rejected.
+printf 'outside\n' > "$tmp/outside.txt"
+rm "$tmp/.factory/bugs/open.md"
+ln -s ../outside.txt "$tmp/.factory/bugs/open.md"
+git -C "$tmp" add -f .factory/bugs/open.md
+assert_blocked "admin type-change" "$ledger_head" \
+    git -C "$tmp" commit -m "admin: symlink bug ledger"
+git -C "$tmp" reset -q --hard "$ledger_head"
+rm -f "$tmp/outside.txt"
+
+# An ordinary substantive deletion (a non-administrative tracked file removed)
+# is allowed and advances history.
+git -C "$tmp" rm -q source.txt
+(cd "$tmp" && git commit -qm "refactor: drop source.txt")
+substantive_del_head=$(git -C "$tmp" rev-parse HEAD)
+[[ "$substantive_del_head" != "$ledger_head" ]]
+mapfile -t changed_del < <(git -C "$tmp" diff-tree --no-commit-id --name-only -r HEAD | sort)
+[[ "${changed_del[*]}" == 'source.txt' ]]
+
 echo 'test: fail-closed Git commit boundary passed'

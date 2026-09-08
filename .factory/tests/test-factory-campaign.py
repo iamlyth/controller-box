@@ -74,6 +74,7 @@ import campaign as campaign_module  # noqa: E402
 import findings as findings_module  # noqa: E402
 import gitutil  # noqa: E402
 import launch as launch_module  # noqa: E402
+import plan_parser  # noqa: E402
 import pre_round as pre_round_module  # noqa: E402
 import state as state_module  # noqa: E402
 
@@ -1003,6 +1004,46 @@ class CampaignRecovery(_CampaignBase):
         (ws.root / "foreign.txt").write_text("not role work\n", encoding="utf-8")
         _git(ws.root, "add", "foreign.txt")
         _git(ws.root, "commit", "-qm", "foreign scope")
+        with self.assertRaises(campaign_module.CampaignRecoveryError):
+            campaign_module.Campaign(config).run()
+
+    def test_non_semantic_plan_only_recovered_commit_fails_closed(self) -> None:
+        # A plan-only recovery commit that is not a genuine semantic planning
+        # change from the committed plan at the planning base must never
+        # advance the phase as ``planned``.  The planning commit below (prose-
+        # only, semantically identical to the base plan) would otherwise be a
+        # foreign/metadata-only recovery; the reconciler re-checks
+        # ``plan_has_semantic_change`` and fails closed for inspection.
+        ws = self.make(SUCCESS_SCENARIO)
+        config = self._crash_at_plan(
+            ws,
+            lambda state: (
+                state.current_phase == "implementation"
+                and state.last_outcome == "planned"
+            ),
+        )
+        base = ws.load_state().phase_base_commit
+        # Rewind to the phase base: the state file (untracked under
+        # ``.factory-state``) still records the planning phase at ``base``,
+        # while HEAD is now advanced only by a plan-only prose commit.
+        _git(ws.root, "reset", "--hard", base)
+        plan_rel = ws.root / PLAN_REL
+        plan = plan_parser.Plan.from_file(plan_rel)
+        block = next(
+            blk for blk in plan._blocks
+            if (blk.heading or "").strip().startswith("## Task 1:")
+        )
+        target = next(
+            i for i, line in enumerate(block.lines)
+            if line.strip() == "- Verification:"
+            or line.strip().startswith("- Verification: ")
+        )
+        block.lines.insert(target + 1, "  appended non-semantic prose")
+        plan_rel.write_text(plan.serialize(), encoding="utf-8")
+        _git(ws.root, "add", PLAN_REL)
+        _git(ws.root, "commit", "-qm", "non-semantic plan-only recovery")
+        changed = _git(ws.root, "diff", "--name-only", base, "HEAD").stdout.split()
+        self.assertEqual(changed, [PLAN_REL])
         with self.assertRaises(campaign_module.CampaignRecoveryError):
             campaign_module.Campaign(config).run()
 
@@ -2063,6 +2104,93 @@ class LifecycleAndCli(_CampaignBase):
         rc, data = ws.run_cli()
         self.assertEqual(rc, 3)
         self.assertEqual(data["terminal_phase"], "failed")
+
+
+class DeveloperEvidenceBoundary(_CampaignBase):
+    """The developer-evidence artifact is the private evidence-smoke seam.
+
+    ``developer_evidence_path`` may be bound only to exactly the one
+    designated evidence-smoke artifact, and only by a config that is the
+    designated evidence-smoke lane (synthetic committed role driver and an
+    ``evidence-smoke-`` campaign-id seam label).  A production campaign
+    (``role_driver is None``), an arbitrary ``.factory/artifacts`` path, a
+    non-synthetic provider, or an ordinary/production campaign id is rejected
+    at construction, so no source-methodology evidence can ever be created
+    outside the exact smoke seam.
+    """
+
+    def test_exact_smoke_seam_is_accepted(self) -> None:
+        # The designated synthetic committed-driver evidence-smoke seam
+        # validates at construction and keeps the exact artifact binding.
+        ws = self.make(SUCCESS_SCENARIO)
+        config = ws.derive_config(campaign_id="evidence-smoke-deadbeef")
+        bound = dataclasses.replace(
+            config,
+            developer_evidence_path=campaign_module.EVIDENCE_SMOKE_EVIDENCE_REL,
+        )
+        self.assertEqual(
+            bound.developer_evidence_path,
+            campaign_module.EVIDENCE_SMOKE_EVIDENCE_REL,
+        )
+        self.assertEqual(bound.provider, "synthetic")
+        self.assertTrue(bound.role_driver)
+        self.assertTrue(
+            bound.campaign_id.startswith("evidence-smoke-"), bound.campaign_id
+        )
+
+    def test_rejects_arbitrary_evidence_artifact_paths(self) -> None:
+        # Only the one designated artifact is ever accepted; no alternative
+        # or normalized ``.factory/artifacts`` path (sibling, suffix, or
+        # directory marker) can reach the smoke exception.
+        ws = self.make(SUCCESS_SCENARIO)
+        config = ws.derive_config(campaign_id="evidence-smoke-deadbeef")
+        for path in (
+            ".factory/artifacts/other-evidence.json",
+            ".factory/artifacts/campaign-smoke-evidence.json.bak",
+            ".factory/artifacts/",
+            ".factory/artifacts/campaign-smoke-evidence.json/",
+            ".factory/artifacts",
+        ):
+            with self.subTest(path=path):
+                with self.assertRaises(campaign_module.CampaignConfigError):
+                    dataclasses.replace(
+                        config, developer_evidence_path=path
+                    )
+
+    def test_rejects_production_without_committed_driver(self) -> None:
+        # A production campaign (``role_driver is None``) can never bind a
+        # developer evidence artifact, even when it names the designated path.
+        ws = self.make(SUCCESS_SCENARIO)
+        config = ws.derive_config(campaign_id="evidence-smoke-deadbeef")
+        with self.assertRaises(campaign_module.CampaignConfigError):
+            dataclasses.replace(
+                config,
+                developer_evidence_path=campaign_module.EVIDENCE_SMOKE_EVIDENCE_REL,
+                role_driver=None,
+            )
+
+    def test_rejects_ordinary_campaign_id(self) -> None:
+        # The ``evidence-smoke-`` seam label is mandatory; an ordinary or
+        # production campaign id can never bind a developer evidence artifact.
+        ws = self.make(SUCCESS_SCENARIO)
+        config = ws.derive_config()  # default campaign id: "campaign"
+        with self.assertRaises(campaign_module.CampaignConfigError):
+            dataclasses.replace(
+                config,
+                developer_evidence_path=campaign_module.EVIDENCE_SMOKE_EVIDENCE_REL,
+            )
+
+    def test_rejects_non_synthetic_provider(self) -> None:
+        # The evidence-smoke seam is synthetic only; an external model never
+        # publishes smoke evidence.
+        ws = self.make(SUCCESS_SCENARIO)
+        config = ws.derive_config(campaign_id="evidence-smoke-deadbeef")
+        with self.assertRaises(campaign_module.CampaignConfigError):
+            dataclasses.replace(
+                config,
+                developer_evidence_path=campaign_module.EVIDENCE_SMOKE_EVIDENCE_REL,
+                provider="anthropic",
+            )
 
 
 class ClassificationUnits(_CampaignBase):

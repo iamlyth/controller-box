@@ -123,6 +123,21 @@ class ClassifyPathSetTest(unittest.TestCase):
         )
         self.assertIn(".factory/artifacts/implementation-plan.md.bak", substantive)
 
+    def test_no_slash_is_stripped_from_exact_paths(self):
+        # Path matching is exact and rooted; a trailing slash (the porcelain
+        # whole-directory marker) or any slash-normalized variant must never
+        # be promoted into the administrative set.
+        for path in (
+            ".factory/artifacts/implementation-plan.md/",
+            ".factory/artifacts/implementation-plan.md//",
+            ".factory/bugs/open.md/",
+            "/.factory/bugs/open.md",
+        ):
+            with self.subTest(path=path):
+                admin, substantive = classify_path_set((path,))
+                self.assertEqual(admin, [])
+                self.assertEqual(substantive, [path])
+
 
 class PlanSemanticChangeTest(unittest.TestCase):
     """Semantic canonical-plan revision decision."""
@@ -264,9 +279,153 @@ class PlanSemanticChangeTest(unittest.TestCase):
         self.assertEqual(numbers, list(range(1, len(numbers) + 1)))
         for task in projection["tasks"]:
             self.assertEqual(
-                set(task.keys()), {"number", "title", "dependencies", "fields"}
+                set(task.keys()),
+                {"number", "title", "dependencies", "blocked_on", "fields"},
             )
             self.assertEqual(set(task["fields"].keys()), set(SEMANTIC_FIELDS))
+        # The canonical conformance matrix and interaction inventory are
+        # exposed by the parser and projected as legitimate planning
+        # structures.
+        self.assertIn("matrix", projection)
+        self.assertIn("interactions", projection)
+        self.assertTrue(projection["matrix"])
+        self.assertEqual(
+            {entry["boundary"] for entry in projection["interactions"]},
+            {"input boundary", "semantic boundary", "production boundary",
+             "evidence boundary"},
+        )
+
+    def test_dependency_formatting_change_is_not_semantic(self):
+        # Dependencies are projected from the parsed dependency list only;
+        # a raw ``- Dependencies:`` formatting change (separator whitespace)
+        # that expands to the same parsed list is not a genuine change.
+        target = None
+        tasks = self.plan.to_dict()["tasks"]
+        last = tasks[-1]["number"]
+        for task in tasks:
+            if task["number"] != last and len(task["dependencies"]) >= 2:
+                target, deps = task["number"], task["dependencies"]
+                break
+        if target is None:
+            self.skipTest("no non-final task with >=2 dependencies found")
+        plan = Plan.from_text(self.base_text)
+        block = find_task_block(plan, target)
+        assert block is not None
+        index = field_index(block, "Dependencies")
+        assert index != -1
+        raw = block.lines[index]
+        reformatted = raw.replace(", ", ",")
+        self.assertNotEqual(reformatted, raw)
+        block.lines[index] = reformatted
+        formatted_bytes = plan.serialize().encode("utf-8")
+        # Same parsed dependency list, different raw separator formatting.
+        self.assertEqual(
+            Plan.from_bytes(formatted_bytes).to_dict()["tasks"][target - 1]["dependencies"],
+            list(deps),
+        )
+        self.assertIsNotNone(plan_fingerprint(formatted_bytes))
+        self.assertFalse(plan_has_semantic_change(self.base, formatted_bytes))
+        self.assertEqual(plan_fingerprint(formatted_bytes), self.fingerprint)
+
+    def test_blocked_on_change_is_semantic(self):
+        # ``Blocked on``/``blocked_on`` is part of the semantic planning
+        # projection: revising a blocked task's exact reference is a genuine
+        # planning change.
+        target = None
+        for task in self.plan.to_dict()["tasks"]:
+            if task["blocked_on"]:
+                target = task["number"]
+                break
+        if target is None:
+            self.skipTest("no task with a Blocked on field found")
+        plan = Plan.from_text(self.base_text)
+        block = find_task_block(plan, target)
+        assert block is not None
+        index = field_index(block, "Blocked on")
+        assert index != -1
+        block.lines[index] = block.lines[index].rstrip() + " (revised reference)"
+        new = plan.serialize().encode("utf-8")
+        self.assertIsNotNone(plan_fingerprint(new))
+        self.assertTrue(plan_has_semantic_change(self.base, new))
+
+    def test_matrix_bound_tasks_change_is_semantic(self):
+        # A conformance-row bound-task change is a legitimate semantic
+        # planning change: the parser exposes the matrix as planning surface
+        # (requirement id, classification, bound tasks), so it is projected.
+        # We mutate a ``verified`` row's task references to another set of
+        # completed tasks so the revision stays on the accepted grammar.
+        plan = Plan.from_text(self.base_text)
+        complete_task_ids = [
+            task.number for task in plan.tasks if task.status == "complete"
+        ]
+        row_model = next(
+            (r for r in plan.matrix
+             if r.classification == "verified" and r.tasks),
+            None,
+        )
+        if row_model is None or not complete_task_ids:
+            self.skipTest("no verified conformance row with bound tasks found")
+        alternatives = [
+            number for number in complete_task_ids
+            if number not in row_model.tasks
+        ]
+        if not alternatives:
+            self.skipTest("no alternate complete task to rebind the row")
+        new_tasks = sorted(row_model.tasks[:-1] + [alternatives[0]])
+        if new_tasks == sorted(row_model.tasks):
+            self.skipTest("could not build a distinct complete-task binding")
+        matrix_block = next(
+            block for block in plan._blocks
+            if (block.heading or "").strip()
+            == "## Specification conformance matrix"
+        )
+        replaced = False
+        for i, line in enumerate(matrix_block.lines[1:], start=1):
+            if line.strip().startswith(f"| {row_model.requirement_id} |"):
+                cells = [c.strip() for c in line.strip().strip("|").split("|")]
+                cells[4] = ", ".join("Task %d" % n for n in new_tasks)
+                matrix_block.lines[i] = "| " + " | ".join(cells) + " |"
+                replaced = True
+                break
+        assert replaced, "conformance row not found for mutation"
+        new = plan.serialize().encode("utf-8")
+        mutated = Plan.from_bytes(new)
+        mutated_row = next(
+            r for r in mutated.matrix
+            if r.requirement_id == row_model.requirement_id
+        )
+        self.assertNotEqual(mutated_row.tasks, row_model.tasks)
+        self.assertIsNotNone(plan_fingerprint(new))
+        self.assertTrue(plan_has_semantic_change(self.base, new))
+
+    def test_interaction_inventory_change_is_semantic(self):
+        # The interaction inventory text is exposed by the parser as a
+        # legitimate planning structure and is projected into the fingerprint.
+        baseline = {
+            entry.boundary: entry.text
+            for entry in self.plan.interactions
+        }
+        boundary = next(iter(baseline))
+        plan = Plan.from_text(self.base_text)
+        interactions_block = next(
+            block for block in plan._blocks
+            if (block.heading or "").strip()
+            == "## Interaction acceptance inventory"
+        )
+        marker = f"- {boundary}:"
+        replaced = False
+        for i, line in enumerate(interactions_block.lines[1:], start=1):
+            if line.strip().startswith(marker):
+                interactions_block.lines[i] = (
+                    line.rstrip() + " revised-inventory-note"
+                )
+                replaced = True
+                break
+        assert replaced, f"{boundary} boundary not found"
+        new = plan.serialize().encode("utf-8")
+        if plan_fingerprint(new) is None:
+            self.skipTest("mutated inventory no longer parses as a canonical plan")
+        self.assertTrue(plan_has_semantic_change(self.base, new))
 
     def test_fingerprint_is_deterministic(self):
         self.assertEqual(plan_fingerprint(self.base), self.fingerprint)

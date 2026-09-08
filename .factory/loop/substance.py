@@ -36,17 +36,21 @@ through the plan.
 Semantic fingerprint
 --------------------
 The fingerprint reuses the deterministic parser in ``plan_parser`` to project
-only the semantic planning surface per task: number, title, priority,
-dependencies, ``Scope``, and ``Acceptance criteria``.  The projection omits
-status, Evidence, completion markers, Blocked-on, Verification, Documentation
-impact, front-matter lifecycle fields, and iteration prose.  Two revisions
-expose a genuine change exactly when their fingerprints differ.  A revision
-that no longer parses cannot be shown to carry a genuine planning change, so
-it fails closed (the loop already requires the committed plan to stay on the
-accepted ``factory-plan/v1`` grammar).  A plan newly introduced into a
-repository (the old revision is empty because HEAD never tracked it) that
-parses is treated as a genuine change: the whole task ledger is established
-in one revision.
+only the semantic planning surface: per task, number, title, the parsed
+dependency list (never the raw ``Dependencies`` line formatting), ``Scope``,
+``Acceptance criteria``, ``Priority``, and the task's ``Blocked on``
+reference; plus the canonical conformance matrix rows (requirement id,
+classification, and bound task references) and the interaction inventory
+(boundary and text) the parser exposes as legitimate planning structures.
+The projection omits status, Evidence, completion markers, Verification,
+Documentation impact, front-matter lifecycle fields, the conformance
+``Evidence`` cell prose, and iteration prose.  Two revisions expose a genuine
+change exactly when their fingerprints differ.  A revision that no longer
+parses cannot be shown to carry a genuine planning change, so it fails closed
+(the loop already requires the committed plan to stay on the accepted
+``factory-plan/v1`` grammar).  A plan newly introduced into a repository (the
+old revision is empty because HEAD never tracked it) that parses is treated
+as a genuine change: the whole task ledger is established in one revision.
 """
 
 from __future__ import annotations
@@ -85,8 +89,13 @@ ADMIN_PATHS = frozenset({
 })
 
 # Semantic planning fields projected for the fingerprint.  Description is the
-# ``Scope`` field, acceptance is ``Acceptance criteria``.
-SEMANTIC_FIELDS = ("Dependencies", "Scope", "Acceptance criteria", "Priority")
+# ``Scope`` field and acceptance is ``Acceptance criteria``.  ``Dependencies``
+# is deliberately absent: dependencies are projected from the parsed dependency
+# list (``task.dependencies``), so a pure formatting change of the raw
+# ``- Dependencies:`` line (for example ``Task 1-3`` vs ``Task 1, Task 2,
+# Task 3``) that expands to the same parsed list is not a semantic change.
+# ``Blocked on``/``blocked_on`` is projected as a dedicated normalized field.
+SEMANTIC_FIELDS = ("Scope", "Acceptance criteria", "Priority")
 
 
 def classify_path_set(paths: Tuple[str, ...]) -> Tuple[List[str], List[str]]:
@@ -94,13 +103,15 @@ def classify_path_set(paths: Tuple[str, ...]) -> Tuple[List[str], List[str]]:
 
     Membership is exact and rooted.  Callers hand over already NUL/split
     entries (``git diff --cached --name-only -z`` in the guard), so any path
-    with spaces or newlines is handled exactly.
+    with spaces or newlines is handled exactly.  No slash is ever stripped:
+    a sibling path that merely resembles an administrative path (for example
+    a trailing-slash directory marker or a suffixed copy) must not match the
+    administrative set by prefix or normalization.
     """
     admin: List[str] = []
     substantive: List[str] = []
     for raw in paths:
-        path = raw.strip("/") if raw else raw
-        if path in ADMIN_PATHS:
+        if raw in ADMIN_PATHS:
             admin.append(raw)
         else:
             substantive.append(raw)
@@ -112,9 +123,14 @@ def plan_fingerprint(data: bytes) -> Optional[str]:
     ``data`` is not a valid canonical plan (fail closed).
 
     The projection covers task add/remove/reorder (through ordered task
-    numbers/titles), plus each task's title, priority, dependencies, Scope,
-    and Acceptance criteria.  It intentionally excludes status, Evidence,
-    Blocked-on, Verification, Documentation impact, and iteration prose.
+    numbers/titles), plus each task's title, the parsed dependency list (not
+    the raw ``Dependencies`` line), Scope, Acceptance criteria, Priority, and
+    the ``Blocked on`` reference; plus the canonical conformance matrix rows
+    (requirement id, classification, bound task references) and the
+    interaction inventory (boundary and text) that the parser exposes as
+    legitimate planning structures.  It intentionally excludes status,
+    Evidence, Verification, Documentation impact, the conformance ``Evidence``
+    cell prose, and iteration prose.
     """
     try:
         plan = Plan.from_bytes(data)
@@ -126,9 +142,25 @@ def plan_fingerprint(data: bytes) -> Optional[str]:
             "number": task.number,
             "title": task.title,
             "dependencies": list(task.dependencies),
+            "blocked_on": task.blocked_on,
             "fields": {key: task.fields.get(key, "") for key in SEMANTIC_FIELDS},
         })
-    return json.dumps({"tasks": tasks}, sort_keys=True, separators=(",", ":"))
+    matrix = [
+        {
+            "requirement_id": row.requirement_id,
+            "classification": row.classification,
+            "tasks": list(row.tasks),
+        }
+        for row in plan.matrix
+    ]
+    interactions = [
+        {"boundary": entry.boundary, "text": entry.text}
+        for entry in plan.interactions
+    ]
+    return json.dumps(
+        {"tasks": tasks, "matrix": matrix, "interactions": interactions},
+        sort_keys=True, separators=(",", ":"),
+    )
 
 
 def plan_has_semantic_change(old_data: bytes, new_data: bytes) -> Optional[bool]:
@@ -173,7 +205,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_plan.add_argument("--old", required=True, help="file with the HEAD plan bytes")
     p_plan.add_argument("--new", required=True, help="file with the staged plan bytes")
 
+    p_admin = sub.add_parser(
+        "admin",
+        help="print one administrative path per line that is present in the staged set",
+    )
+    p_admin.add_argument("paths", nargs="*", help="staged paths")
+
     args = parser.parse_args(argv)
+
+    if args.command == "admin":
+        admin, _substantive = classify_path_set(tuple(args.paths))
+        # Administrative paths are fixed NUL-free constants, so a
+        # newline-delimited emission is unambiguous for the guard; paths are
+        # deduplicated and ordered for deterministic shell comparison.
+        for path in sorted(set(admin)):
+            sys.stdout.write(path + "\n")
+        return 0
 
     if args.command == "classify":
         admin, substantive = classify_path_set(tuple(args.paths))

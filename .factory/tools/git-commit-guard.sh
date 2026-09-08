@@ -15,10 +15,15 @@
 # commit manufactures metadata-only progress and is rejected. A `.ralph/**`
 # path may only be deleted from the index; any staged addition or modification
 # is rejected so the retired recovery namespace can never be reintroduced.
-# There is no lifecycle token, scratchpad exception, legacy lifecycle
-# environment, or final-handoff authorization. All six hooks enforce the same
-# content policy, so commit-creation paths that never run pre-commit (merge,
-# cherry-pick, revert, am, rebase) are guarded identically.
+# Administrative control artifacts (implementation plan, bug ledgers, campaign
+# audit/evidence sidecars) may never be deleted, type-changed, renamed, or
+# replaced -- even when substantive paths ride along -- and an entirely
+# administrative commit is meaningful only when its staged set is exactly the
+# canonical plan path revised by a genuine semantic planning change. There is
+# no lifecycle token, scratchpad exception, legacy lifecycle environment, or
+# final-handoff authorization. All six hooks enforce the same content policy,
+# so commit-creation paths that never run pre-commit (merge, cherry-pick,
+# revert, am, rebase) are guarded identically.
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
@@ -43,12 +48,34 @@ fi
 cd -- "$PROJECT_ROOT"
 
 # Staged paths relative to the repository root, NUL-separated so that any path
-# (spaces, newlines) is handled exactly.
-mapfile -d '' -t STAGED < <(git diff --cached --name-only -z)
+# (spaces, newlines) is handled exactly.  Rename detection is disabled
+# (``--no-renames``) so a rename surfaces as an explicit delete+add pair and
+# every changed path is one concrete create/modify/delete -- deterministic,
+# like the trusted orchestrator's ``status_entries`` (which refuses ambiguous
+# R/C porcelain entries).
+mapfile -d '' -t STAGED < <(git diff --cached --name-only --no-renames -z)
 
 if [[ ${#STAGED[@]} -eq 0 ]]; then
     echo "git-commit-guard: empty commits manufacture metadata-only progress" >&2
     exit 1
+fi
+
+SUBSTANCE="$PROJECT_ROOT/.factory/loop/substance.py"
+
+# Administrative-path integrity: no staged administrative path may be
+# deleted, type-changed, renamed, or replaced, even when substantive paths
+# ride along.  Because ``--no-renames`` surfaces a rename as delete+add, the
+# deleted old name is caught exactly like a deletion; an addition at a new
+# (possibly substantive) path does not conceal the retired administrative
+# path.  Deletions (``D``) and type-changes (``T``) are enumerated NUL-safely
+# and classified by the shared authority.
+mapfile -d '' -t AT_RISK < <(git diff --cached --diff-filter=DT --no-renames --name-only -z || true)
+if [[ ${#AT_RISK[@]} -gt 0 ]]; then
+    risk_admin=$(python3 "$SUBSTANCE" admin "${AT_RISK[@]}")
+    if [[ -n "$risk_admin" ]]; then
+        echo "git-commit-guard: removing/type-changing/renaming an administrative path is forbidden: $risk_admin" >&2
+        exit 1
+    fi
 fi
 
 # A retired recovery path is acceptable only when absent from the staged
@@ -71,7 +98,6 @@ done
 # semantic plan fingerprint; everything else (stable source/config/policies/
 # schemas/prompts, product config/docs/tests, authenticated conformance and
 # capability contracts) is substantive.
-SUBSTANCE="$PROJECT_ROOT/.factory/loop/substance.py"
 classify_out=$(python3 "$SUBSTANCE" classify "${STAGED[@]}") || {
     echo "git-commit-guard: substance classifier could not classify the staged set" >&2
     exit 1
@@ -88,15 +114,24 @@ fi
 # The staged set is entirely administrative ("admin 0/1").  Only the
 # implementation plan can make such a commit meaningful, and only through a
 # genuine semantic planning change (task add/remove/reorder, or a change to a
-# task's title, priority, dependencies, Scope, or Acceptance criteria);
-# Evidence text, completion/status markers, timestamps, and iteration prose
-# are not meaningful.
+# task's title, priority, dependencies, Scope, Acceptance criteria, or Blocked
+# on reference); Evidence text, completion/status markers, timestamps, and
+# iteration prose are not meaningful.  An all-administrative set is allowed
+# ONLY when it is exactly the canonical plan path (administrative paths are
+# emitted one per line by the ``admin`` subcommand): a plan + bug/audit
+# sidecar set is never meaningful, and a non-plan administrative set is
+# metadata-only progress.
 if [[ "${classify_out##* }" != 1 ]]; then
     echo "git-commit-guard: administrative-only commit without a genuine semantic plan change" >&2
     exit 1
 fi
 
 PLAN_REL=".factory/artifacts/implementation-plan.md"
+admin_paths=$(python3 "$SUBSTANCE" admin "${STAGED[@]}")
+if [[ "$admin_paths" != "$PLAN_REL" ]]; then
+    echo "git-commit-guard: administrative-only commit must touch exactly the canonical plan path (got: ${admin_paths})" >&2
+    exit 1
+fi
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 tmp_old="$tmpdir/old-plan.md"

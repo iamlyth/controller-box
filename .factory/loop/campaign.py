@@ -181,7 +181,11 @@ CAMPAIGN_ENV_PREFIX = "FACTORY_LOOP_CAMPAIGN_"
 # outcome.
 EVIDENCE_SMOKE_DRIVER_REL = ".factory/smoke/evidence_smoke_driver.py"
 EVIDENCE_SMOKE_ID_PREFIX = "evidence-smoke-"
-EVIDENCE_SMOKE_EVIDENCE_PREFIX = ".factory/artifacts/"
+# The single designated evidence-smoke artifact.  A ``developer_evidence_path``
+# may be bound only to exactly this artifact and only by a campaign whose id
+# carries the ``evidence-smoke-`` seam label; there is never an arbitrary
+# ``.factory/artifacts`` developer-evidence exception.
+EVIDENCE_SMOKE_EVIDENCE_REL = ".factory/artifacts/campaign-smoke-evidence.json"
 _CONTROL_SOURCE_ROOT = Path(__file__).resolve().parents[2]
 _SOURCE_FIXTURE_SEAMS_AVAILABLE = (
     (_CONTROL_SOURCE_ROOT / ".git").is_dir()
@@ -765,6 +769,33 @@ class CampaignConfig:
                     "segments"
                 )
         if self.developer_evidence_path:
+            # The developer-evidence artifact is the private source-methodology
+            # seam that only the designated evidence-smoke lane may create.
+            # It is bound to exactly the one designated smoke artifact and to
+            # a campaign id carrying the ``evidence-smoke-`` seam label, so a
+            # production campaign (``role_driver is None``) - or any fixture
+            # that is not the designated synthetic smoke seam - can never
+            # reach this exception and no arbitrary ``.factory/artifacts``
+            # path is ever accepted.
+            if self.role_driver is None:
+                raise CampaignConfigError(
+                    "developer evidence binding is the evidence-smoke fixture "
+                    "surface only; a production campaign must not bind a "
+                    "developer evidence artifact"
+                )
+            if provider != "synthetic":
+                raise CampaignConfigError(
+                    "developer evidence binding requires the synthetic smoke "
+                    "provider; an external model never publishes smoke "
+                    "evidence"
+                )
+            if not self.campaign_id.startswith(EVIDENCE_SMOKE_ID_PREFIX):
+                raise CampaignConfigError(
+                    "developer evidence binding requires the designated "
+                    "evidence-smoke campaign-id seam "
+                    f"(`{EVIDENCE_SMOKE_ID_PREFIX}...`); an ordinary or "
+                    "production campaign can never reach this exception"
+                )
             unsafe_evidence, reason = _unsafe_repo_relative(
                 self.developer_evidence_path
             )
@@ -773,12 +804,12 @@ class CampaignConfig:
                     f"developer evidence path is not a safe repository-relative "
                     f"path: {reason}"
                 )
-            if not self.developer_evidence_path.startswith(
-                EVIDENCE_SMOKE_EVIDENCE_PREFIX
-            ):
+            if self.developer_evidence_path != EVIDENCE_SMOKE_EVIDENCE_REL:
                 raise CampaignConfigError(
-                    "developer evidence must live under the bounded harness-owned "
-                    f"`{EVIDENCE_SMOKE_EVIDENCE_PREFIX}` namespace"
+                    "developer evidence must be pinned to exactly the one "
+                    "designated evidence-smoke artifact "
+                    f"`{EVIDENCE_SMOKE_EVIDENCE_REL}`; an arbitrary "
+                    "`.factory/artifacts` path is forbidden"
                 )
             if self.developer_evidence_path == self.plan_path:
                 raise CampaignConfigError(
@@ -1138,6 +1169,35 @@ class TrustedGit:
             raise CampaignGitError(
                 f"staged scope {sorted(staged_names)} does not equal the allowed "
                 f"scope {sorted(paths)}; refusing a foreign commit"
+            )
+        # Administrative-path integrity (aligned with the committed Git commit
+        # guard): no staged administrative path may be deleted, type-changed,
+        # renamed, or replaced, even when substantive paths ride along.  As in
+        # ``status_entries``, rename detection is disabled so a rename surfaces
+        # as an explicit delete+add and the retired old name is caught at its
+        # deletion.  The check is NUL-safe and delegated to the shared
+        # classifier, the same authority the installed guard consults.
+        at_risk = self._bytes(
+            ["diff", "--cached", "--diff-filter=DT", "--no-renames",
+             "--name-only", "-z"]
+        )
+        if at_risk.returncode != 0:
+            raise CampaignGitError(
+                "cannot read the staged administrative-path status"
+            )
+        at_risk_names = {
+            item.decode("utf-8", "replace")
+            for item in at_risk.stdout.split(b"\x00")
+            if item
+        }
+        risk_admin, _risk_sub = substance_module.classify_path_set(
+            tuple(sorted(at_risk_names))
+        )
+        if risk_admin:
+            raise CampaignGitError(
+                "an administrative path is being deleted/type-changed/renamed: "
+                f"{sorted(risk_admin)}; refusing to conceal the retired "
+                "control artifact"
             )
         # Meaningful-substance boundary: the shared classifier
         # (``.factory/loop/substance.py``) owns the narrow administrative path
@@ -3745,6 +3805,24 @@ class Campaign:
         if not valid:
             raise CampaignRecoveryError(
                 f"the recovered committed plan at {head} is invalid: {reason}"
+            )
+        # The forward planner commits a plan-only revision only when it is a
+        # genuine semantic planning change (``_step_planning``).  Recovery
+        # re-checks the same predicate against the committed plan at the
+        # planning base: a plan-only foreign/recovery commit that merely
+        # rewords prose or metadata (non-semantic) never advances the phase
+        # as ``planned`` and fails closed for operator inspection.
+        if (
+            substance_module.plan_has_semantic_change(
+                git.blob_at(base, self._config.plan_path), plan_data
+            )
+            is not True
+        ):
+            raise CampaignRecoveryError(
+                f"the recovered committed plan at {head} is not a genuine "
+                f"semantic planning change from the committed plan at the "
+                f"planning base {base}; a non-semantic plan-only recovery "
+                "commit fails closed"
             )
         self._planning_attempts_used = 0
         state2 = self._persist_state(state_module.advance(
