@@ -875,6 +875,23 @@ def target_consumer_operation(entry,parent):
  raw=(json.dumps(record,sort_keys=True,separators=(",",":"))+"\n").encode();path=parent/"target-consumer-operation.json";out=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC,0o400);os.write(out,raw);os.fsync(out);os.close(out)
  return {"path":path.name,"sha256":hashlib.sha256(raw).hexdigest(),"size":len(raw),"label":"consumer-only","candidate_callable":False,"physical_capability":False,"routing_capability":False}
 
+def target_consumer_lane(entry,request_dir):
+ """Root-only target-consumer probe lane (Controller-specific).
+
+ The root-owned ``target_consumer_operation`` raises on any failure — target
+ creation, unique kernel-node discovery, separate-fd observation of the pinned
+ report, or cleanup — so the exact committed contract output is derived only
+ after the truthful create -> node -> observe -> stop chain succeeded.  A
+ failed lane propagates the BrokerError and aborts the whole request before
+ any signable output exists: no stub, fixture, or private-bus shortcut can
+ ever spoof the success marker, and the lane is the only producer of the
+ capability's contractual probe output.
+ """
+ audit=target_consumer_operation(entry,request_dir)
+ out=(b"--- target-consumer capability contract ---\n"
+      b"target-consumer-probe: PASS\n")
+ return audit,0,out,b""
+
 def sign(evidence,entry):
  token=os.urandom(32);rfd,wfd=os.pipe();os.write(wfd,token);os.close(wfd)
  payload=(json.dumps({"schema":"factory-runner-sign-request/v1","broker_auth_sha256":hashlib.sha256(token).hexdigest(),"manifest":evidence},separators=(",",":"))+"\n").encode()
@@ -940,7 +957,7 @@ def main():
    udev=UdevMonitor(request_dir,entry) if name=="controller-production-routing" else None
    try:
     if name=="target-consumer":
-     target_consumer_audit=target_consumer_operation(entry,request_dir);rc,out,err=0,b"--- target-consumer capability contract ---\nPASS: broker-generated consumer-only operation semantically verified\n",b""
+     target_consumer_audit,rc,out,err=target_consumer_lane(entry,request_dir)
     else:rc,out,err=run_contained(entry,authority,descriptor,product,build,home,artifacts,env,unit,name,provenance,capability_proxy,udev)
    finally:
     if udev:udev.close()

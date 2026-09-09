@@ -110,4 +110,91 @@ assert "{'schema','path','sha256','device','inode'}" in installer
 for marker in ('trap rollback_signal EXIT INT TERM HUP','commit_object_b64','mutable source race',"pwd.getpwuid(c['uid'])",'RENAME_NOREPLACE','factory-runner-v2.bundle','visudo -cf','probe_authority_status','before-backup','old-durable'):
  assert marker in installer,marker
 assert 'runner-policy-enrollment.json' not in installer
+
+# ---- Controller target-consumer lane: exact contract output ----------------
+# The root-only target-consumer lane (CreateTargetDevice -> unique kernel node
+# -> separate-fd pinned-event observation -> StopTargetDevice) must emit
+# exactly the committed contract marker, and that output must satisfy the same
+# scope scan the capability-evidence acceptance gate runs.  Reuse the real
+# evidence checker functions and the real tracked contract — never a
+# reimplementation.
+_cev_spec=importlib.util.spec_from_file_location('capability_evidence',ROOT/'.factory/tools/check-capability-evidence.py')
+_CEV=importlib.util.module_from_spec(_cev_spec)
+assert _cev_spec.loader is not None
+_cev_spec.loader.exec_module(_CEV)
+
+def _target_consumer_contract():
+ contracts=json.loads((ROOT/'.factory/capability-contracts.json').read_text(encoding='utf-8'))
+ return next(c for c in contracts['capabilities'] if c['name']=='target-consumer')
+
+def _evidence_scope_result(contract, lines):
+ """Replicate the exact stdout-scope computation of verify_capability."""
+ marker=contract.get('probe_marker','')
+ assert marker, 'target-consumer contract must carry a probe marker'
+ scope,marker_seen=_CEV.probe_scope(lines,marker)
+ required_seen=set()
+ if marker_seen:
+  for required in contract['probe_stdout_contains']:
+   if any(required in line for line in scope):
+    required_seen.add(required)
+ skipped=_CEV.scan_tokens(scope,contract.get('must_not_skip',[])) if marker_seen else []
+ denied=_CEV.scan_tokens(scope,contract.get('deny_simulated_markers',[])) if marker_seen else []
+ return marker_seen,required_seen,skipped,denied
+
+TC_CONTRACT=_target_consumer_contract()
+TC_OUT=b"--- target-consumer capability contract ---\ntarget-consumer-probe: PASS\n"
+
+# Positive: the lane output is byte-exact and satisfies capability validation
+# (marker seen, required result present, no skip/deny token in scope).
+lane_seen,lane_required,lane_skipped,lane_denied=_evidence_scope_result(TC_CONTRACT,TC_OUT.decode().splitlines())
+assert lane_seen and set(TC_CONTRACT['probe_stdout_contains'])==lane_required
+assert not lane_skipped and not lane_denied
+# The broker's own pre-sign skip scan (over the real tracked contract) must
+# not self-deny the exact lane output it will emit.
+with tempfile.TemporaryDirectory(dir=ROOT) as td:
+ product=pathlib.Path(td)/'product'
+ (product/'.factory').mkdir(parents=True)
+ (product/'.factory/capability-contracts.json').write_bytes((ROOT/'.factory/capability-contracts.json').read_bytes())
+ assert b.probe_skip_tokens(product,'target-consumer',TC_OUT,b'')==[]
+
+# Positive: the lane runs the operation first, forwards its held audit record,
+# and returns exit 0 with the exact contractual stdout (never a stub output).
+real_operation=b.target_consumer_operation
+fake_audit={'path':'target-consumer-operation.json','sha256':'e'*64}
+b.target_consumer_operation=lambda entry,request_dir: fake_audit
+try:
+ with tempfile.TemporaryDirectory(dir=ROOT) as td:
+  audit,rc,out,err=b.target_consumer_lane(object(),pathlib.Path(td))
+  assert audit is fake_audit and rc==0 and out==TC_OUT and err==b''
+finally:
+ b.target_consumer_operation=real_operation
+
+# Adversarial: the former P0 defect — a PASS-shaped line without the exact
+# contract marker — fails the same required-output scan, so capability
+# validation cannot be satisfied by a different success wording.
+legacy_seen,legacy_required,legacy_skipped,legacy_denied=_evidence_scope_result(
+ TC_CONTRACT,b"--- target-consumer capability contract ---\nPASS: broker-generated consumer-only operation semantically verified\n".decode().splitlines())
+assert legacy_seen and not legacy_required and not legacy_skipped and not legacy_denied
+
+# Adversarial: failure cannot spoof success.  A failing root operation
+# propagates and the lane produces no output; the marker literal exists only
+# in the lane function after the operation call, so a stub/skip/bus failure
+# can never emit the PASS marker, and the main loop consumes the lane.
+def _boom(entry,request_dir):
+ raise b.BrokerError('root target-consumer operation failed')
+b.target_consumer_operation=_boom
+try:
+ try:
+  b.target_consumer_lane(None,None)
+ except b.BrokerError:
+  pass
+ else:
+  raise AssertionError('failed target-consumer lane produced success output')
+finally:
+ b.target_consumer_operation=real_operation
+broker_src=(ROOT/'.factory/runner/factory-runner-broker.py').read_text()
+assert broker_src.count('target-consumer-probe: PASS')==1
+assert broker_src.index('def target_consumer_lane')<broker_src.index('target-consumer-probe: PASS')
+assert 'target_consumer_audit,rc,out,err=target_consumer_lane(entry,request_dir)' in broker_src
+assert 'PASS: broker-generated consumer-only operation semantically verified' not in broker_src
 print('test: broker persistence/substitution/oracle/containment/cleanup/installer fixtures passed')
