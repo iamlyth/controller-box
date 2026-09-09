@@ -39,7 +39,7 @@ nix-shell --run './scripts/verify-project.sh'
 # Operator-only terminal campaign archival (never global or automatic)
 ./scripts/archive-factory-campaign.py --root "$PWD" --campaign-id "${CAMPAIGN_ID:?terminal campaign}"
 
-# Runner acquisition is coordinator-only: model roles never invoke runners.
+# Runner acquisition is coordinator-only. Outside an active factory campaign, an AI harness maintainer explicitly authorized by the human may launch only the trusted installed coordinator with --readiness-only; planner, developer, tester, and auditor model roles and all their descendants never invoke runners directly.
 # Every real-provider campaign runs mandatory trusted round-zero readiness;
 # production policy also requires exactly five rounds (non-5 fails before a model).
 # Add --readiness-only to acquire/publish the same gate and stop before planner 1.
