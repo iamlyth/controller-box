@@ -34,6 +34,7 @@ from .runner import (
     get_available_capabilities,
     run_verification,
     VerificationResult,
+    _wrap_nix_shell,
 )
 from .preflight import run_preflight
 
@@ -133,8 +134,13 @@ def config_clean_dirs(config: dict) -> list[str]:
     return list(config.get("verification", {}).get("clean", []))
 
 
+def config_build_command(config: dict) -> str:
+    """Build command to run after cleaning, before task verification."""
+    return str(config.get("verification", {}).get("build_command", ""))
+
+
 def _clean_verification_dirs(root: Path, config: dict) -> None:
-    """Remove directories listed in verification.clean before running verification.
+    """Remove directories listed in verification.clean, then rebuild.
 
     The developer role runs inside a sandbox (pi2) that may remap paths.
     Build artifacts created there contain sandbox-internal paths that are
@@ -145,6 +151,15 @@ def _clean_verification_dirs(root: Path, config: dict) -> None:
         target = root / d
         if target.is_dir():
             shutil.rmtree(target, ignore_errors=True)
+    # Rebuild from the correct external path.
+    build_cmd = config_build_command(config)
+    if build_cmd:
+        wrapped = _wrap_nix_shell(build_cmd, root)
+        subprocess.run(
+            wrapped, cwd=str(root), shell=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            timeout=600, check=False,
+        )
 
 
 def find_runner_for_capability(runners: list, capability: str) -> Runner | None:
