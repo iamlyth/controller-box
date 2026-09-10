@@ -280,42 +280,7 @@ target_link_libraries(controller-box PRIVATE controllerbox)
 
 # Root runner helper: all InputPlumber mutation decisions occur before the
 # helper's independently opened system-bus connection can forward a call.
-# BUG-0020: compile from a byte-identical non-hidden generated copy so the
-# retained build tree never emits a nested .factory/... object path (the
-# boilerplate live inventory rejects a hidden namespace inside the product
-# build tree). configure_file registers the source as a configure dependency,
-# so editing .factory/runner/inputplumber-mediator.c still triggers a
-# reconfigure + rebuild; the target name and install rule are unchanged.
-#
-# A pre-fix build may have left a stale nested .factory object dir inside an
-# existing retained build tree (CMake does not delete orphaned object files
-# when a source is removed from a target), so a subsequent live inventory
-# would still fail without manual cleanup. Remove that exact legacy object
-# dir at configure time, before target generation. The removal is narrowly
-# scoped to the one legacy object dir and never touches the retained
-# build/cache or any other path. Symlink safety: if the legacy path is a
-# symlink we remove only the link itself (never following it), so a
-# malicious/external symlink cannot cause deletion outside the build tree.
-set(CBX_MEDIATOR_LEGACY_OBJ_DIR
-    "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/inputplumber-mediator.dir/.factory")
-if(EXISTS "${CBX_MEDIATOR_LEGACY_OBJ_DIR}")
-    if(IS_SYMLINK "${CBX_MEDIATOR_LEGACY_OBJ_DIR}")
-        # Remove only the link; never follow it outside the build tree.
-        file(REMOVE "${CBX_MEDIATOR_LEGACY_OBJ_DIR}")
-    else()
-        file(REMOVE_RECURSE "${CBX_MEDIATOR_LEGACY_OBJ_DIR}")
-    endif()
-endif()
-set(CBX_MEDIATOR_GENERATED "${CMAKE_CURRENT_BINARY_DIR}/generated/inputplumber-mediator.c")
-configure_file(
-    "${CMAKE_CURRENT_SOURCE_DIR}/.factory/runner/inputplumber-mediator.c"
-    "${CBX_MEDIATOR_GENERATED}"
-    COPYONLY)
-# Preserve the original source path in DWARF debug info (the mediator has no
-# __FILE__/__LINE__ diagnostics, but keeping the path aids gdb/addr2line).
-set_source_files_properties("${CBX_MEDIATOR_GENERATED}" PROPERTIES
-    COMPILE_FLAGS "-fdebug-prefix-map=${CMAKE_CURRENT_BINARY_DIR}/generated=${CMAKE_CURRENT_SOURCE_DIR}/.factory/runner")
-add_executable(inputplumber-mediator "${CBX_MEDIATOR_GENERATED}")
+add_executable(inputplumber-mediator src/inputplumber-mediator.c)
 target_link_libraries(inputplumber-mediator PRIVATE PkgConfig::SYSTEMD)
 
 # --- Testing ------------------------------------------------------------------
@@ -328,7 +293,7 @@ install(TARGETS controller-box
     RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 install(TARGETS inputplumber-mediator
     RUNTIME DESTINATION "${CMAKE_INSTALL_LIBEXECDIR}")
-install(FILES .factory/runner/inputplumber-runner-dbus.conf
+install(FILES data/inputplumber-runner-dbus.conf
     DESTINATION "${CMAKE_INSTALL_DATADIR}/dbus-1/system.d")
 install(TARGETS controllerbox nanosvg
     ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}")
