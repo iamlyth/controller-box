@@ -16,6 +16,7 @@ interrupted, infrastructure_failure.
 from __future__ import annotations
 
 import argparse
+import shutil
 import subprocess
 import sys
 import time
@@ -127,6 +128,25 @@ def config_verify_command(config: dict) -> str:
     return str(cmd) if cmd else ""
 
 
+def config_clean_dirs(config: dict) -> list[str]:
+    """Directories to clean before verification (spec 13.1 ``clean``)."""
+    return list(config.get("verification", {}).get("clean", []))
+
+
+def _clean_verification_dirs(root: Path, config: dict) -> None:
+    """Remove directories listed in verification.clean before running verification.
+
+    The developer role runs inside a sandbox (pi2) that may remap paths.
+    Build artifacts created there contain sandbox-internal paths that are
+    invalid when verification runs outside the sandbox. Cleaning ensures
+    verification rebuilds from the correct path.
+    """
+    for d in config_clean_dirs(config):
+        target = root / d
+        if target.is_dir():
+            shutil.rmtree(target, ignore_errors=True)
+
+
 def find_runner_for_capability(runners: list, capability: str) -> Runner | None:
     """Return the first runner declaring the given capability."""
     for runner in runners:
@@ -168,6 +188,7 @@ def _finalize_success(plan: Plan, config: dict, env: dict, args,
     """
     commit = gitutil.current_commit(ROOT)
     vcmd = config_verify_command(config)
+    _clean_verification_dirs(ROOT, config)
     local = Runner(
         name="local", transport="local", ssh_config_alias="",
         working_directory="", capabilities=[], verify_command="",
@@ -272,6 +293,7 @@ def run_campaign(args, config: dict, env: dict) -> int:
 
                     state.current_phase = "verification"
                     save(STATE_PATH, state)
+                    _clean_verification_dirs(ROOT, config)
                     vresult = run_task_verification(task, env["runners"],
                                                     ROOT, commit)
                     if vresult.exit_code == 0:
