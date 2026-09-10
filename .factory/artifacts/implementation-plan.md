@@ -18,9 +18,9 @@ rm -rf build && cmake -B build -DCMAKE_BUILD_TYPE=Debug \
 
 **Build:** succeeds cleanly (Debug, SDL2 + nanosvg + cmocka + systemd all found).
 
-**Test suite:** 91 tests registered. 89 pass, 1 fails, 2 skip.
+**Test suite:** 91 tests registered. 2 fail, 2 skip, the rest pass.
 
-### Genuine failure (reproducible)
+### Genuine failure 1 (reproducible): `test_golden`
 
 - **`test_golden`** — 3 of 11 sub-tests fail: `manager_editor_list`,
   `manager_editor_sequential`, `manager_editor_validation_error`. The captured
@@ -34,15 +34,32 @@ rm -rf build && cmake -B build -DCMAKE_BUILD_TYPE=Debug \
   environment, but a rendering regression in the editor must be ruled out
   before regenerating baselines.
 
+### Genuine failure 2 (reproducible): `test_icon_map`
+
+- **`test_icon_map`** — 1 of 42 sub-tests fails: `test_default_path`. The test
+  asserts that `cbx_icon_map_default_path()` returns a path containing both
+  `controller-icons.yaml` and `controller-box`. In a clean source build with no
+  install to the default prefix, `/usr/share/controller-box/controller-icons.yaml`
+  does not exist, so the function falls back to the source data path
+  `SOURCE_DATA_DIR/controller-icons.yaml` (here `/workspace/project/data/controller-icons.yaml`),
+  which contains `controller-icons.yaml` but NOT the substring `controller-box`.
+  The `strstr(path, "controller-box")` assertion therefore fails. This is a
+  deterministic install-state dependency, not a first-run race: the test passes
+  only when the package is installed to the default prefix. The prior plan
+  mischaracterized this as one of the "flaky first-run" tests; it is a genuine
+  test-robustness defect that must be fixed so the default-path test is
+  deterministic regardless of install state.
+
 ### Flaky (transient first-run failures, pass on re-run)
 
-The following 9 tests failed on the first full run but pass when re-run
+The following 8 tests failed on the first full run but pass when re-run
 individually and when re-run together: `test_packaging`,
 `test_installed_smoke`, `test_installed_diagram`, `test_installed_binary`,
-`test_profile_list`, `test_icon_map`, `test_icon_cache`, `test_icon_lookup`,
+`test_profile_list`, `test_icon_cache`, `test_icon_lookup`,
 `test_overlay_visual`. The failures are attributed to a fresh-build race /
 resource contention in the heavy packaging and installed-binary tests. This
 violates SPEC §11.2.5 ("no flaky rerun dependencies") and must be stabilized.
+(`test_icon_map` is no longer listed here — see Genuine failure 2 above.)
 
 ### Skipped (need runner hardware)
 
@@ -54,12 +71,21 @@ violates SPEC §11.2.5 ("no flaky rerun dependencies") and must be stabilized.
   capability (`gpurunner`). Software-renderer partial evidence is provided by
   `test_backend_smoke_sw`, which passes.
 
+### Runner availability
+
+`.factory/environment.toml` currently declares **no runners** (`runners = []`,
+a temporary no-runner config). Consequently the `kernel-uinput` and
+`gpu-compositor` capabilities are unavailable, so Tasks 3 and 4 cannot be
+routed and remain `blocked` until a runner declaring the required capability is
+declared and reachable. Per AGENTS.md, an unreachable runner marks a task
+`blocked`, never a silent skip or fake pass.
+
 ---
 
 ## Task 1: Fix test_golden profile-editor golden image mismatches
 
 Title: Fix test_golden profile-editor golden image mismatches
-Status: pending
+Status: completed
 Dependencies: none
 Acceptance: `test_golden` passes all 11 sub-tests. The three profile-editor
   states (`manager_editor_list`, `manager_editor_sequential`,
@@ -70,9 +96,33 @@ Acceptance: `test_golden` passes all 11 sub-tests. The three profile-editor
   (SPEC §11.1.3) and the reason recorded.
 Verification: `ctest --test-dir build -R test_golden --output-on-failure`
 Runner: none
-Evidence: Passing `test_golden` ctest output; resolution of the
-  `tests/golden-fail/` artifacts (either a code fix or a reviewed baseline
-  regeneration with the diff documented).
+Evidence: `test_golden` passes all 11 sub-tests.
+  `ctest --test-dir build -R test_golden --output-on-failure` → 100% passed,
+  0 failed (1/1).
+
+  Root cause: the three profile-editor golden baselines were STALE, not a
+  rendering regression. The baselines were captured at commit 2fff1711
+  (Task 8) when the editor diagram base image was not rendering (blank
+  panel). Subsequent diagram fixes (BUG-0018 device-mapped diagram via the
+  production icon cache, f57f6dab model-specific diagrams, 892aa24b licensed
+  diagram evidence) made the editor correctly render the controller diagram
+  (generic-gamepad.svg, 512px raster, aspect-fit) per SPEC §216-237, which
+  requires the profile editor to show its controller diagram with meaningful
+  non-background framebuffer output. Pixel analysis of the golden-fail
+  artifacts confirmed the actual frame shows the full controller (D-pad,
+  face buttons, sticks) while the expected baseline was blank except for a
+  highlight marker. The residual binding-list text diff (6 label rows,
+  x[373..495]) is a font-antialiasing difference, not a content change.
+
+  Fix: regenerated only the three stale baselines via the test's official
+  mechanism, filtered to the editor sub-tests:
+  `CBX_GENERATE_GOLDEN=1 CMOCKA_TEST_FILTER="test_golden_manager_editor*"
+  ./build/test_golden` → 3 SAVED, 3 PASSED. Only
+  tests/golden/manager_editor_{list,sequential,validation_error}.png
+  changed; the other 8 baselines were untouched. This is the explicit,
+  reviewed baseline regeneration permitted by SPEC §11.1.3, with the reason
+  (stale blank-diagram baseline superseded by the correct controller
+  rendering) recorded here.
 
 ## Task 2: Stabilize flaky acceptance tests
 
@@ -80,13 +130,14 @@ Title: Stabilize flaky acceptance tests
 Status: pending
 Dependencies: none
 Acceptance: The full ctest suite passes reliably across repeated consecutive
-  runs with no transient failures. The 9 tests that failed only on the first
+  runs with no transient failures. The 8 tests that failed only on the first
   run (`test_packaging`, `test_installed_smoke`, `test_installed_diagram`,
-  `test_installed_binary`, `test_profile_list`, `test_icon_map`,
-  `test_icon_cache`, `test_icon_lookup`, `test_overlay_visual`) are
-  deterministic. Root cause (fresh-build race / resource contention in the
-  packaging and installed-binary tests) is identified and removed, satisfying
-  SPEC §11.2.5 ("no flaky rerun dependencies").
+  `test_installed_binary`, `test_profile_list`, `test_icon_cache`,
+  `test_icon_lookup`, `test_overlay_visual`) are deterministic. Root cause
+  (fresh-build race / resource contention in the packaging and installed-binary
+  tests) is identified and removed, satisfying SPEC §11.2.5 ("no flaky rerun
+  dependencies"). (`test_icon_map` is excluded from this task; its failure is a
+  deterministic install-state dependency addressed by Task 5.)
 Verification: `ctest --test-dir build --output-on-failure --timeout 120`
   run three consecutive times from a clean build; all three runs pass.
 Runner: none
@@ -106,7 +157,9 @@ Acceptance: `test_kernel_controller` runs (not skipped) and passes on a runner
 Verification: `ctest --test-dir build -R test_kernel_controller --output-on-failure`
 Runner: kernel-uinput
 Evidence: Passing `test_kernel_controller` ctest output on the
-  `kernel-uinput` runner (`dev-runner-vm` or `iprunner`).
+  `kernel-uinput` runner (`dev-runner-vm` or `iprunner`). Blocked until a
+  runner declaring `kernel-uinput` is available (current `environment.toml`
+  declares no runners).
 
 ## Task 4: Accelerated backend smoke test on gpu-compositor runner
 
@@ -120,13 +173,37 @@ Acceptance: `test_backend_smoke` runs (not skipped) and passes on a runner with
 Verification: `ctest --test-dir build -R test_backend_smoke --output-on-failure`
 Runner: gpu-compositor
 Evidence: Passing `test_backend_smoke` ctest output on the `gpu-compositor`
-  runner (`gpurunner`).
+  runner (`gpurunner`). Blocked until a runner declaring `gpu-compositor` is
+  available (current `environment.toml` declares no runners).
 
-## Task 5: Final documentation and specification audit
+## Task 5: Fix test_icon_map default-path install-state dependency
+
+Title: Fix test_icon_map default-path install-state dependency
+Status: pending
+Dependencies: none
+Acceptance: `test_icon_map` passes all 42 sub-tests deterministically from a
+  clean source build with no install to the default prefix. The
+  `test_default_path` sub-test no longer depends on whether the package is
+  installed: it verifies that `cbx_icon_map_default_path()` resolves to a valid
+  `controller-icons.yaml` file (the installed path when present, the source
+  data path otherwise) without asserting a `controller-box` substring that only
+  holds for the installed path. The test must pass both with and without the
+  package installed, and must not rely on a prior packaging test having
+  installed the artifact.
+Verification: `ctest --test-dir build -R test_icon_map --output-on-failure`
+  from a clean source build (no install); also re-run after `make install` to
+  confirm both install states pass.
+Runner: none
+Evidence: Passing `test_icon_map` ctest output from a clean source build without
+  install, and from a build with the package installed; note of the fix applied
+  to `tests/test_icon_map.c` (and `src/icons/icon_map.c` if the function is
+  changed).
+
+## Task 6: Final documentation and specification audit
 
 Title: Final documentation and specification audit
 Status: pending
-Dependencies: 1, 2, 3, 4
+Dependencies: 1, 2, 3, 4, 5
 Acceptance: The complete active-cycle task ledger is present and every task is
   complete with evidence. The canonical specification binding is fresh, the
   conformance matrix has no `partial`/`missing`/`blocked` rows without
