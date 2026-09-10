@@ -1,50 +1,35 @@
 schema_version = 1
 
-# Declare only capabilities that are available to the factory now. Keep secrets,
-# credentials, private-key paths, hostnames, usernames, and tokens outside Git.
-# An empty file beyond this schema marker means that no external tools or runners
-# are available; workers must not infer or invent them.
+# Minimal Ralph factory — runner declarations.
+# SSH aliases, credentials, and provisioning stay outside the repository.
+# Capabilities are strings; the factory does not infer or invent them.
 
-# [[tools]]
-# name = "example-local-tool"
-# command = "example-tool"
-# capabilities = ["example-capability"]
-
+# dev-runner-vm: general-purpose dev VM with systemd, uinput, and packages.
 [[runners]]
 name = "dev-runner-vm"
 transport = "ssh"
 ssh_config_alias = "dev-runner-vm"
 working_directory = "/srv/dev-runner/workspaces/controller-box"
-# Claims remain limited to capabilities proven by exact-commit runner receipts.
-# Hardware, device, GPU, package, system-bus, and target-consumer capabilities
-# must not be added until both their capability-specific acceptance contract and
-# the runner provisioning have produced a matching non-skipped receipt.
 capabilities = ["remote-project-gate", "systemd-user", "kernel-uinput", "installed-package"]
-verify_argv = ["./scripts/verify-project.sh"]
+verify_command = "./scripts/verify-project.sh"
 
-# iprunner is the dedicated class for the physical InputPlumber system-bus,
+# iprunner: dedicated runner for the physical InputPlumber system-bus,
 # physical-controller, target-consumer, and controller-production-routing
-# capabilities. Historical class-bound probes exist for these capabilities;
-# the class is declared here so the runner-class binding is explicit, while
-# provisioning, SSH policy, and credentials remain outside this repository.
-# A declared class is not provisioned or evidenced evidence: a capability is
-# evidenced only by an exact-commit, non-skipped, signed runner receipt.
+# capabilities. Hardware probes live in scripts/runner-probes/iprunner-probes/.
 [[runners]]
 name = "iprunner"
 transport = "ssh"
 ssh_config_alias = "iprunner"
 working_directory = "/srv/dev-runner/workspaces/iprunner"
 capabilities = ["inputplumber-system-dbus", "physical-controller", "target-consumer", "controller-production-routing"]
-verify_argv = ["./scripts/verify-project.sh"]
+verify_command = "./scripts/verify-project.sh"
 
-# gpurunner is the dedicated class for the gpu-compositor capability. As with
-# iprunner, declaring the class makes the runner-class binding explicit;
-# it is not a provisioned/evidenced claim until a matching signed receipt
-# exists. Hostnames, keys, and credentials stay out of Git.
+# gpurunner: dedicated runner for the gpu-compositor capability.
+# Hardware probes live in scripts/runner-probes/gpurunner-probes/.
 [[runners]]
 name = "gpurunner"
 transport = "ssh"
 ssh_config_alias = "gpurunner"
 working_directory = "/srv/dev-runner/workspaces/gpurunner"
 capabilities = ["gpu-compositor", "installed-licensed-diagram"]
-verify_argv = ["./scripts/verify-project.sh"]
+verify_command = "./scripts/verify-project.sh"
