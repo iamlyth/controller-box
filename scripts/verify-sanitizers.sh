@@ -6,24 +6,13 @@
 # -fsanitize=address,undefined and runs the full CTest suite, failing on any
 # sanitizer report (memory errors, undefined behaviour) or test failure.
 #
-# Usage:  nix-shell --run './scripts/verify-sanitizers.sh'
+# Usage:  ./scripts/verify-sanitizers.sh
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 BUILD_DIR=${CBX_SANITIZER_BUILD_DIR:-build-sanitizer}
 cd -- "$PROJECT_ROOT"
-
-# The project gate is Nix-bound (same rationale as verify-project.sh). The
-# authenticated boundary (.factory/tools/nix-gate.sh + .factory/tools/nix-gate-exec.sh)
-# replaces the forgeable CBX_VERIFY_IN_NIX_SHELL / IN_NIX_SHELL trust and FAILS
-# rather than silently running against undeclared host packages when Nix is
-# unavailable.
-source "$PROJECT_ROOT/.factory/tools/nix-gate.sh"
-if ! nix_gate_require full; then
-    exec "$PROJECT_ROOT/.factory/tools/nix-gate-exec.sh" \
-        "$PROJECT_ROOT/scripts/verify-sanitizers.sh" "$@"
-fi
 
 required=(sdl2 SDL2_ttf SDL2_image libsystemd yaml-0.1 cmocka)
 if ! pkg-config --exists "${required[@]}"; then

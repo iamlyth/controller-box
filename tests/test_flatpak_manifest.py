@@ -2,7 +2,7 @@
 """tests/test_flatpak_manifest.py — validate Flatpak manifest.
 
 Validates packaging/org.shadowblip.ControllerBox.yaml against the acceptance
-criteria from .factory/artifacts/implementation-plan.md Task 42 and SPEC §9.1.
+SPEC §9.1.
 
 Run: python3 tests/test_flatpak_manifest.py
 Exit: 0 on success, 1 on failure.

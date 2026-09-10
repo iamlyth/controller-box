@@ -2,8 +2,7 @@
  * test_backend_smoke.c — Accelerated backend smoke test (Task 10,
  * SPEC §11.1.6).
  *
- * Deferral notice: This test requires a GPU-accelerated compositor
- * (capability `gpu-compositor`, undeclared in .factory/environment.toml).
+ * Deferral notice: This test requires a GPU-accelerated compositor.
  * It skips with exit 77 in headless environments. Software-renderer
  * partial evidence is provided by test_backend_smoke_sw.c. The skip
  * and deferral are documented in docs/OPERATIONS.md § Hardware-deferred

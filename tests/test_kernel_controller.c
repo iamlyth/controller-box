@@ -151,7 +151,7 @@ static int uinput_create_gamepad(void)
                 "      A kernel-backed evdev controller test requires the\n"
                 "      uinput kernel module and write access to /dev/uinput.\n"
                 "      This capability is not declared in the factory runner\n"
-                "      environment (.factory/environment.toml). The test is\n"
+                "      environment. The test is\n"
                 "      classified as 'partial' pending a runner with\n"
                 "      'kernel-uinput' capability.\n",
                 strerror(errno));

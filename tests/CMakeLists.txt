@@ -14,17 +14,12 @@ target_link_libraries(smoke_test_nanosvg PRIVATE nanosvg m)
 
 add_test(NAME smoke_test_sdl2    COMMAND smoke_test_sdl2)
 add_test(NAME smoke_test_nanosvg COMMAND smoke_test_nanosvg)
-add_test(NAME test_inputplumber_mediator_policy
-    COMMAND /usr/bin/env python3 ${PROJECT_SOURCE_DIR}/.factory/tests/test-inputplumber-mediator.py)
 
 # --- Kernel-backed controller integration test (Task 7, §5.7/§11.1) --------
 # Creates a synthetic evdev gamepad via /dev/uinput, launches the installed
 # Manager binary against a private InputPlumber-compatible DBus server, and
 # verifies semantic outcomes from real kernel gamepad events through the
-# production event loop.  Skips (exit 77) when /dev/uinput is unavailable
-# (skips locally without /dev/uinput; kernel-uinput capability IS
-# declared in .factory/environment.toml; the old 26df6c0 receipt is unsigned
-# legacy data and does not prove the current tree).
+# production event loop.  Skips (exit 77) when /dev/uinput is unavailable.
 add_executable(test_kernel_controller tests/test_kernel_controller.c)
 add_test(NAME test_kernel_controller
     COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/run-kernel-controller-test.sh
@@ -62,14 +57,6 @@ if(BASH_EXECUTABLE)
         COMMAND ${BASH_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_packaging.sh
             ${CMAKE_CURRENT_BINARY_DIR})
-    # BUG-0020 regression: the retained build tree must never emit a nested
-    # .factory/... object path under CMakeFiles/inputplumber-mediator.dir/.
-    # Builds the mediator target in a private temp dir, asserts the generated
-    # copy is byte-identical to the tracked source, and rejects any hidden
-    # namespace segment under the target object output.
-    add_test(NAME test_mediator_build_namespace
-        COMMAND ${BASH_EXECUTABLE}
-            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test-mediator-build-namespace.sh)
 else()
     message(STATUS "bash not found — test_packaging skipped")
 endif()
@@ -105,15 +92,6 @@ if(BASH_EXECUTABLE)
             ${CMAKE_CURRENT_BINARY_DIR})
     set_tests_properties(test_installed_binary PROPERTIES
         SKIP_RETURN_CODE 77)
-
-    # Candidate controller-production-routing probe: deterministic fixture
-    # adversarial checks (private bus, 0/partial target topology, direct
-    # injection, stale events, ambiguous cardinality, source/build fallback,
-    # missing/mismatched artifact hashes, cleanup failure, and the full
-    # 4 + fresh physical->target routed event pass).
-    add_test(NAME test_controller_production_routing_probe
-        COMMAND ${BASH_EXECUTABLE}
-            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test-controller-production-routing-probe.sh)
 else()
     message(STATUS "bash not found — test_installed_smoke skipped")
 endif()

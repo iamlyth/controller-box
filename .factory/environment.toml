@@ -5,31 +5,32 @@ schema_version = 1
 # Capabilities are strings; the factory does not infer or invent them.
 
 # dev-runner-vm: general-purpose dev VM with systemd, uinput, and packages.
+# Runs the full ctest suite; tests requiring missing hardware skip (exit 77).
 [[runners]]
 name = "dev-runner-vm"
 transport = "ssh"
 ssh_config_alias = "dev-runner-vm"
 working_directory = "/srv/dev-runner/workspaces/controller-box"
 capabilities = ["remote-project-gate", "systemd-user", "kernel-uinput", "installed-package"]
-verify_command = "./scripts/verify-project.sh"
+verify_command = "./scripts/verify.sh"
 
 # iprunner: dedicated runner for the physical InputPlumber system-bus,
 # physical-controller, target-consumer, and controller-production-routing
-# capabilities. Hardware probes live in scripts/runner-probes/iprunner-probes/.
+# capabilities.  The kernel-controller test runs here (has /dev/uinput).
 [[runners]]
 name = "iprunner"
 transport = "ssh"
 ssh_config_alias = "iprunner"
 working_directory = "/srv/dev-runner/workspaces/iprunner"
 capabilities = ["inputplumber-system-dbus", "physical-controller", "target-consumer", "controller-production-routing"]
-verify_command = "./scripts/verify-project.sh"
+verify_command = "./scripts/verify.sh"
 
 # gpurunner: dedicated runner for the gpu-compositor capability.
-# Hardware probes live in scripts/runner-probes/gpurunner-probes/.
+# The backend-smoke accelerated rendering test runs here (has GPU).
 [[runners]]
 name = "gpurunner"
 transport = "ssh"
 ssh_config_alias = "gpurunner"
 working_directory = "/srv/dev-runner/workspaces/gpurunner"
 capabilities = ["gpu-compositor", "installed-licensed-diagram"]
-verify_command = "./scripts/verify-project.sh"
+verify_command = "./scripts/verify.sh"
