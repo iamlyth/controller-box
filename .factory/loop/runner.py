@@ -15,7 +15,13 @@ import subprocess
 import tomllib
 from typing import Any
 
-SSH_OPTIONS = ("-o", "ConnectTimeout=5", "-o", "BatchMode=yes")
+FACTORY_SSH_CONFIG = str(
+    Path.home() / ".local/share/pi2-ssh-runner/ssh_config"
+)
+SSH_OPTIONS = (
+    "-F", FACTORY_SSH_CONFIG,
+    "-o", "ConnectTimeout=5", "-o", "BatchMode=yes",
+)
 
 # Never sync VCS metadata, mutable control state, or local-only artifacts.
 RSYNC_EXCLUDES = (".git", ".factory-state", ".factory-state/", "__pycache__")
@@ -105,7 +111,8 @@ def sync_to_runner(runner: Runner, root: str | Path) -> bool:
         return False
     source = f"{Path(root)}/"
     destination = f"{runner.ssh_config_alias}:{runner.working_directory}/"
-    argv = ["rsync", "-az", "--delete"]
+    argv = ["rsync", "-az", "--delete",
+           "-e", f"ssh -F {FACTORY_SSH_CONFIG}"]
     for exclude in RSYNC_EXCLUDES:
         argv.append(f"--exclude={exclude}")
     argv.extend([source, destination])
