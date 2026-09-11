@@ -147,7 +147,7 @@ Evidence: Three consecutive clean full-suite ctest runs; root-cause note for
 ## Task 3: Kernel-backed controller integration test on kernel-uinput runner
 
 Title: Kernel-backed controller integration test on kernel-uinput runner
-Status: blocked
+Status: pending
 Dependencies: none
 Acceptance: `test_kernel_controller` runs (not skipped) and passes on a runner
   with the `kernel-uinput` capability. It creates a synthetic evdev gamepad via
@@ -164,7 +164,7 @@ Evidence: Passing `test_kernel_controller` ctest output on the
 ## Task 4: Accelerated backend smoke test on gpu-compositor runner
 
 Title: Accelerated backend smoke test on gpu-compositor runner
-Status: blocked
+Status: pending
 Dependencies: none
 Acceptance: `test_backend_smoke` runs (not skipped) and passes on a runner with
   the `gpu-compositor` capability. It verifies that rendering through an
