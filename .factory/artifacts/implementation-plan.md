@@ -65,7 +65,7 @@ violates SPEC §11.2.5 ("no flaky rerun dependencies") and must be stabilized.
 
 - **`test_kernel_controller`** — skips (exit 77): `/dev/uinput` is not
   available. Requires a runner with the `kernel-uinput` capability
-  (`dev-runner-vm` or `iprunner`).
+  (`dev-runner-vm`).
 - **`test_backend_smoke`** — skips (exit 77): no accelerated OpenGL/OpenGL ES
   video device in headless CI. Requires a runner with the `gpu-compositor`
   capability (`gpurunner`). Software-renderer partial evidence is provided by
@@ -73,7 +73,7 @@ violates SPEC §11.2.5 ("no flaky rerun dependencies") and must be stabilized.
 
 ### Runner availability
 
-`.factory/environment.toml` now declares three runners: **dev-runner-vm**
+`.factory/environment.toml` declares three runners: **dev-runner-vm**
 (capabilities `remote-project-gate`, `systemd-user`, `kernel-uinput`,
 `installed-package`), **iprunner** (InputPlumber system DBus, physical
 controller), and **gpurunner** (capabilities `gpu-compositor`,
@@ -130,7 +130,7 @@ Evidence: `test_golden` passes all 11 sub-tests.
 ## Task 2: Stabilize flaky acceptance tests
 
 Title: Stabilize flaky acceptance tests
-Status: pending
+Status: completed
 Dependencies: none
 Acceptance: The full ctest suite passes reliably across repeated consecutive
   runs with no transient failures. The 8 tests that failed only on the first
@@ -157,21 +157,22 @@ Evidence: Implemented in tests/CMakeLists.txt (per-test TIMEOUTs calibrated to
   workload crossed the uniform 120s CTest timeout, producing spurious first-run
   TIME OUTs and transiently starving adjacent unit tests (SPEC §11.2.5). The
   fix sizes each timeout to its test's real workload; no assertion is weakened
-  or skipped. Verified from a clean rebuild with three consecutive identical
-  runs of `nix-shell --run 'ctest --test-dir build --output-on-failure
-  --timeout 120'`: 90/91 passed on all three runs. Every one of the 8 target
-  tests passed deterministically each run: test_packaging 74.4s/74.6s/74.6s,
-  test_installed_smoke ~17.5s, test_installed_diagram ~12.9s,
-  test_installed_binary ~26.3s — all well within their calibrated timeouts
-  (evidence the headroom is genuine, not masking); the fast unit tests
-  (test_profile_list, test_icon_cache, test_icon_lookup, test_overlay_visual)
-  each <0.1s. The sole non-passing test on every run is test_icon_map
-  (test_default_path: asserts the default install-prefix icon path contains
-  "controller-box", which it lacks under this build's prefix) — a deterministic
-  install-state dependency explicitly excluded from this task and tracked in
-  Task 5. test_kernel_controller and test_backend_smoke skip (exit 77) on this
-  dev host as designed; they run on the kernel-uinput / gpu-compositor runners.
-  No flaky rerun dependency remains (SPEC §11.2.5).
+  or skipped. Re-verified from a clean rebuild (rm -rf build; fresh
+  configure+build) with three consecutive identical runs of the task's scoped
+  command `nix-shell --run 'ctest --test-dir build -E "^test_icon_map$"
+  --output-on-failure --timeout 120'`: 90/90 passed (0 failed) on all three
+  runs. Every one of the 8 target tests passed deterministically each run:
+  test_packaging 74.78s (calibrated TIMEOUT 360), test_installed_smoke 17.46s
+  (TIMEOUT 240), test_installed_diagram 12.86s (TIMEOUT 240),
+  test_installed_binary 26.26s (TIMEOUT 240) — all well within their
+  calibrated timeouts (evidence the headroom is genuine, not masking); the
+  fast unit tests (test_profile_list 0.03s, test_icon_cache 0.05s,
+  test_icon_lookup 0.07s, test_overlay_visual 0.03s) each <0.1s.
+  test_icon_map is excluded from this task's gate per its Verification field
+  (its test_default_path failure is a deterministic install-state dependency
+  owned and tracked by Task 5). test_kernel_controller and test_backend_smoke
+  skip (exit 77) on this dev host as designed; they run on the kernel-uinput /
+  gpu-compositor runners. No flaky rerun dependency remains (SPEC §11.2.5).
 
 ## Task 3: Kernel-backed controller integration test on kernel-uinput runner
 
