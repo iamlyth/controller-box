@@ -112,13 +112,26 @@ Evidence: Implementation is complete and committed. `tests/test_kernel_controlle
   - Semantic persistence path that the assert depends on verified via
     `ctest --test-dir build -R test_settings_tab --output-on-failure` → Passed
     (incl. `test_save_writes_settings`), proving settings save writes to disk.
-  Blocker (precise): the Acceptance criterion — `test_kernel_controller` runs
+  Round-3 fresh re-verification at this bound commit: `build/CMakeCache.txt`
+  was bound to the deprecated sandbox path `/workspace/controller-box`, so a
+  clean reconfigure (`cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug`) was
+  required; then `cmake --build build --target test_kernel_controller
+  test_ip_server controller-box --parallel` compiled cleanly (0 errors,
+  100% built). The task verification command
+  `ctest --test-dir build -R test_kernel_controller --output-on-failure`
+  returned `***Skipped` (exit 77, ctest exits 0) — the designed capability
+  skip: `/dev/uinput` is not accessible in this workspace (no device node, no
+  CAP_MKNOD, no root; modprobe/udev provisioning unavailable).
+Blocker (precise): the Acceptance criterion — `test_kernel_controller` runs
   (not skipped) and passes — can only be satisfied on a runner with the
   `kernel-uinput` capability. It cannot be exercised from this workspace:
-  `/dev/uinput` is not present (no root/module available) and the declared
-  kernel-uinput runner aliases (`dev-runner-vm`, `iprunner`) are not
+  `/dev/uinput` is not present (no root/CAP_MKNOD, module node absent), the
+  uinput kernel module cannot create the node without privilege, and the
+  declared kernel-uinput runner aliases (`dev-runner-vm`, `iprunner`) are not
   resolvable/reachable here. Status remains `pending` pending execution of the
-  real verification command on a declared `kernel-uinput` runner.
+  real verification command on a declared `kernel-uinput` runner. Refusing to
+  fake a pass here per AGENTS.md ("an unreachable runner marks the task
+  blocked, never a silent skip or fake pass").
 
 ## Task 4: Accelerated backend smoke test on gpu-compositor runner
 Title: Accelerated backend smoke test on gpu-compositor runner
