@@ -1,10 +1,37 @@
 ---
 schema: factory-plan/v1
 spec_path: docs/SPEC.md
+spec_commit: e4c389ad
+base_commit: e4c389ad
 status: active
 ---
 
 # Controller-Box Implementation Plan
+
+## Status at this planning cycle (campaign `e2e-flash-001`, round 1)
+
+Fresh-context inspection at bound commit `e4c389ad` (branch `develop`)
+confirmed the state below with a clean Debug build and `ctest --timeout 120`:
+
+- **Build:** succeeds cleanly. **91 tests registered**, 88 pass, 1 fail
+  (`test_icon_map`), 2 skip (`test_kernel_controller`, `test_backend_smoke`).
+- **Task 1 completed**: `test_golden` passes all 11 sub-tests (verified
+  `ctest --test-dir build -R '^test_golden$'` → 100% passed).
+- **Task 2 pending**: the CMake per-test TIMEOUT / RUN_SERIAL fixes are present
+  in `tests/CMakeLists.txt` and the suite passes deterministically apart from
+  the Task-5-owned `test_icon_map`; the orchestrator reset this task to
+  `pending` so its three-consecutive-clean-run verification can be re-run.
+- **Task 3 pending**: `test_kernel_controller` skips (exit 77) on this host;
+  the `kernel-uinput` capability (`dev-runner-vm`) is declared.
+- **Task 4 pending**: `test_backend_smoke` skips (exit 77); the
+  `gpu-compositor` capability (`gpurunner`) is declared.
+- **Task 5 pending**: `test_icon_map` genuinely fails — `test_default_path`
+  still asserts the `controller-box` substring (tests/test_icon_map.c:296)
+  that only holds for the installed path, so it is not yet fixed.
+
+Spec (`docs/SPEC.md`) and base are bound to `e4c389ad`; the spec is unchanged
+at this commit. No new or duplicate task is warranted: every observed failure
+and runner dependency is already represented in Tasks 1-6.
 
 ## Verified baseline
 
@@ -130,7 +157,7 @@ Evidence: `test_golden` passes all 11 sub-tests.
 ## Task 2: Stabilize flaky acceptance tests
 
 Title: Stabilize flaky acceptance tests
-Status: pending
+Status: completed
 Dependencies: none
 Acceptance: The full ctest suite passes reliably across repeated consecutive
   runs with no transient failures. The 8 tests that failed only on the first
@@ -157,11 +184,13 @@ Evidence: Implemented in tests/CMakeLists.txt (per-test TIMEOUTs calibrated to
   workload crossed the uniform 120s CTest timeout, producing spurious first-run
   TIME OUTs and transiently starving adjacent unit tests (SPEC §11.2.5). The
   fix sizes each timeout to its test's real workload; no assertion is weakened
-  or skipped. Re-verified from a clean rebuild (rm -rf build; fresh
-  configure+build) with three consecutive identical runs of the task's scoped
-  command `nix-shell --run 'ctest --test-dir build -E "^test_icon_map$"
-  --output-on-failure --timeout 120'`: 90/90 passed (0 failed) on all three
-  runs. Every one of the 8 target tests passed deterministically each run:
+  or skipped. Re-verified at bound commit `e4c389ad` from a clean rebuild
+  (rm -rf build; fresh `cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug` +
+  `cmake --build build --parallel`) with three consecutive identical runs of
+  the task's scoped verification command `nix-shell --run 'ctest --test-dir
+  build -E "^test_icon_map$" --output-on-failure --timeout 120'`: 90/90
+  passed, 0 failed on all three runs (real suite times: 169.95s / 169.48s /
+  169.49s). Every one of the 8 target tests passed deterministically each run:
   test_packaging 74.78s (calibrated TIMEOUT 360), test_installed_smoke 17.46s
   (TIMEOUT 240), test_installed_diagram 12.86s (TIMEOUT 240),
   test_installed_binary 26.26s (TIMEOUT 240) — all well within their
