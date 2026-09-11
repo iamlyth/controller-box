@@ -57,6 +57,17 @@ if(BASH_EXECUTABLE)
         COMMAND ${BASH_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_packaging.sh
             ${CMAKE_CURRENT_BINARY_DIR})
+    # This test performs a full clean Release configure+build of the entire
+    # project on every invocation (end-to-end packaging pipeline, incl. a
+    # simulated source-tarball clean build and an optional Flatpak build).
+    # On a cold page-cache first run after a fresh product build it can take
+    # well beyond the 120s uniform default timeout under load, which caused
+    # spurious first-run-only TIME OUT failures (SPEC §11.2.5). Calibrate the
+    # timeout to the test's genuine full-build workload instead of the uniform
+    # bound; the assertions are unchanged.
+    set_tests_properties(test_packaging PROPERTIES
+        TIMEOUT 360
+        RUN_SERIAL TRUE)
 else()
     message(STATUS "bash not found — test_packaging skipped")
 endif()
@@ -70,8 +81,14 @@ if(BASH_EXECUTABLE)
         COMMAND ${BASH_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_installed_smoke.sh
             ${CMAKE_CURRENT_BINARY_DIR})
+    # Runs the real installed binary under Xvfb with a full staging-prefix
+    # install. Calibrate the timeout over the uniform 120s default so a
+    # cold-cache install under load cannot cause a spurious first-run TIME
+    # OUT (SPEC §11.2.5); the assertions are unchanged.
     set_tests_properties(test_installed_smoke PROPERTIES
-        SKIP_RETURN_CODE 77)
+        SKIP_RETURN_CODE 77
+        TIMEOUT 240
+        RUN_SERIAL TRUE)
     # Installed production-window controller diagram semantic acceptance
     # (BUG-0014, Task 5). Drives the installed binary through a real X11
     # window to the profile editor and asserts recognizable diagram content.
@@ -79,8 +96,15 @@ if(BASH_EXECUTABLE)
         COMMAND ${BASH_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_installed_diagram.sh
             ${CMAKE_CURRENT_BINARY_DIR})
+    # Builds a dedicated custom-prefix install (full project build) before
+    # exercising the installed diagram under Xvfb. Its genuine workload is a
+    # full rebuild, so give it a calibrated timeout instead of the uniform 120s
+    # default that a cold-cache first run can exceed under load (SPEC §11.2.5);
+    # the assertions are unchanged.
     set_tests_properties(test_installed_diagram PROPERTIES
-        SKIP_RETURN_CODE 77)
+        SKIP_RETURN_CODE 77
+        TIMEOUT 240
+        RUN_SERIAL TRUE)
     # Task 7 — Installed binary functional acceptance test (§11.1.5).
     # Executes the installed `controller-box` binary as a subprocess
     # against a private native-signature DBus server.  Does NOT link
@@ -90,8 +114,15 @@ if(BASH_EXECUTABLE)
         COMMAND ${BASH_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_installed_binary.sh
             ${CMAKE_CURRENT_BINARY_DIR})
+    # Rebuilds/installs the product to a staging prefix and drives the real
+    # installed binary against a private InputPlumber-compatible DBus server
+    # under Xvfb. Calibrate the timeout over the uniform 120s default so a
+    # cold-cache build+install under load cannot cause a spurious first-run
+    # TIME OUT (SPEC §11.2.5); the assertions are unchanged.
     set_tests_properties(test_installed_binary PROPERTIES
-        SKIP_RETURN_CODE 77)
+        SKIP_RETURN_CODE 77
+        TIMEOUT 240
+        RUN_SERIAL TRUE)
 else()
     message(STATUS "bash not found — test_installed_smoke skipped")
 endif()

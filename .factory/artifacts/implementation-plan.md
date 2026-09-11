@@ -73,12 +73,15 @@ violates SPEC §11.2.5 ("no flaky rerun dependencies") and must be stabilized.
 
 ### Runner availability
 
-`.factory/environment.toml` currently declares **no runners** (`runners = []`,
-a temporary no-runner config). Consequently the `kernel-uinput` and
-`gpu-compositor` capabilities are unavailable, so Tasks 3 and 4 cannot be
-routed and remain `blocked` until a runner declaring the required capability is
-declared and reachable. Per AGENTS.md, an unreachable runner marks a task
-`blocked`, never a silent skip or fake pass.
+`.factory/environment.toml` now declares three runners: **dev-runner-vm**
+(capabilities `remote-project-gate`, `systemd-user`, `kernel-uinput`,
+`installed-package`), **iprunner** (InputPlumber system DBus, physical
+controller), and **gpurunner** (capabilities `gpu-compositor`,
+`installed-licensed-diagram`). The `kernel-uinput` capability (required by
+Task 3) is declared by **dev-runner-vm**; the `gpu-compositor` capability
+(required by Task 4) is declared by **gpurunner**. Both Tasks 3 and 4 are
+routable and are therefore `pending`. Per AGENTS.md, an unreachable or
+non-declaring runner marks a task `blocked`, never a silent skip or fake pass.
 
 ---
 
@@ -157,9 +160,8 @@ Acceptance: `test_kernel_controller` runs (not skipped) and passes on a runner
 Verification: `ctest --test-dir build -R test_kernel_controller --output-on-failure`
 Runner: kernel-uinput
 Evidence: Passing `test_kernel_controller` ctest output on the
-  `kernel-uinput` runner (`dev-runner-vm` or `iprunner`). Blocked until a
-  runner declaring `kernel-uinput` is available (current `environment.toml`
-  declares no runners).
+  `kernel-uinput` runner (`dev-runner-vm`). Runner is declared and reachable;
+  test is pending execution.
 
 ## Task 4: Accelerated backend smoke test on gpu-compositor runner
 
@@ -173,8 +175,8 @@ Acceptance: `test_backend_smoke` runs (not skipped) and passes on a runner with
 Verification: `ctest --test-dir build -R test_backend_smoke --output-on-failure`
 Runner: gpu-compositor
 Evidence: Passing `test_backend_smoke` ctest output on the `gpu-compositor`
-  runner (`gpurunner`). Blocked until a runner declaring `gpu-compositor` is
-  available (current `environment.toml` declares no runners).
+  runner (`gpurunner`). Runner is declared and reachable; test is pending
+  execution.
 
 ## Task 5: Fix test_icon_map default-path install-state dependency
 
