@@ -130,7 +130,7 @@ Evidence: `test_golden` passes all 11 sub-tests.
 ## Task 2: Stabilize flaky acceptance tests
 
 Title: Stabilize flaky acceptance tests
-Status: completed
+Status: pending
 Dependencies: none
 Acceptance: The full ctest suite passes reliably across repeated consecutive
   runs with no transient failures. The 8 tests that failed only on the first

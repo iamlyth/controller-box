@@ -170,10 +170,34 @@ def find_runner_for_capability(runners: list, capability: str) -> Runner | None:
     return None
 
 
+def _strip_markdown_ticks(command: str) -> str:
+    """Remove Markdown code-span backticks from a verification command.
+
+    The canonical plan formats every Verification/Runner command as a Markdown
+    code span (e.g. `` `ctest ... --output-on-failure` ``). If passed verbatim
+    to a shell, the backticks are interpreted as command substitution, which
+    breaks (or hangs) the run and can never pass. Strip surrounding backticks
+    (and any stray ones used purely as Markdown delimiters) so the command is
+    actually executed.
+    """
+    return command.replace("`", "").strip() if command else ""
+
+
 def run_task_verification(task: Task, runners: list, root: Path,
                           commit: str) -> VerificationResult:
     """Run a task's verification locally or on a runner (spec 8.3)."""
+    command = _strip_markdown_ticks(task.verification)
     if task.runner:
+        runner = find_runner_for_capability(runners, task.runner)
+        if runner is None:
+            return VerificationResult(
+                exit_code=127,
+                stdout="",
+                stderr=f"runner-unavailable: {task.runner}",
+                runner=task.runner,
+                command=task.verification,
+            )
+        return run_verification(runner, command, root, commit)
         runner = find_runner_for_capability(runners, task.runner)
         if runner is None:
             return VerificationResult(
@@ -192,7 +216,7 @@ def run_task_verification(task: Task, runners: list, root: Path,
         capabilities=[],
         verify_command="",
     )
-    return run_verification(local, task.verification, root, commit)
+    return run_verification(local, command, root, commit)
 
 
 def _finalize_success(plan: Plan, config: dict, env: dict, args,
