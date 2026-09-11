@@ -184,7 +184,7 @@ def _strip_markdown_ticks(command: str) -> str:
 
 
 def run_task_verification(task: Task, runners: list, root: Path,
-                          commit: str) -> VerificationResult:
+                          commit: str, build_command: str = "") -> VerificationResult:
     """Run a task's verification locally or on a runner (spec 8.3)."""
     command = _strip_markdown_ticks(task.verification)
     if task.runner:
@@ -197,17 +197,8 @@ def run_task_verification(task: Task, runners: list, root: Path,
                 runner=task.runner,
                 command=task.verification,
             )
-        return run_verification(runner, command, root, commit)
-        runner = find_runner_for_capability(runners, task.runner)
-        if runner is None:
-            return VerificationResult(
-                exit_code=127,
-                stdout="",
-                stderr=f"runner-unavailable: {task.runner}",
-                runner=task.runner,
-                command=task.verification,
-            )
-        return run_verification(runner, task.verification, root, commit)
+        return run_verification(runner, command, root, commit,
+                                build_command=build_command)
     local = Runner(
         name="local",
         transport="local",
@@ -334,7 +325,8 @@ def run_campaign(args, config: dict, env: dict) -> int:
                     save(STATE_PATH, state)
                     _clean_verification_dirs(ROOT, config)
                     vresult = run_task_verification(task, env["runners"],
-                                                    ROOT, commit)
+                                                    ROOT, commit,
+                                                    config_build_command(config))
                     if vresult.exit_code == 0:
                         verified = True
                         break
