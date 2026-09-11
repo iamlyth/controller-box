@@ -130,7 +130,7 @@ Evidence: `test_golden` passes all 11 sub-tests.
 ## Task 2: Stabilize flaky acceptance tests
 
 Title: Stabilize flaky acceptance tests
-Status: completed
+Status: pending
 Dependencies: none
 Acceptance: The full ctest suite passes reliably across repeated consecutive
   runs with no transient failures. The 8 tests that failed only on the first
@@ -141,8 +141,13 @@ Acceptance: The full ctest suite passes reliably across repeated consecutive
   tests) is identified and removed, satisfying SPEC §11.2.5 ("no flaky rerun
   dependencies"). (`test_icon_map` is excluded from this task; its failure is a
   deterministic install-state dependency addressed by Task 5.)
-Verification: `ctest --test-dir build --output-on-failure --timeout 120`
-  run three consecutive times from a clean build; all three runs pass.
+Verification: `ctest --test-dir build -E '^test_icon_map$' --output-on-failure
+  --timeout 120` run three consecutive times from a clean build; all three
+  runs pass. (`test_icon_map` is excluded here because, per this task's
+  Acceptance, its `test_default_path` failure is a deterministic
+  install-state dependency owned by Task 5, not by this task; including it in
+  the whole-suite gate would make this task impossible to verify before
+  Task 5 lands.)
 Runner: none
 Evidence: Implemented in tests/CMakeLists.txt (per-test TIMEOUTs calibrated to
   240s / 360s plus RUN_SERIAL on the heavyweight packaging/installed-binary
