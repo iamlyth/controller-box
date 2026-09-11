@@ -130,7 +130,7 @@ Evidence: `test_golden` passes all 11 sub-tests.
 ## Task 2: Stabilize flaky acceptance tests
 
 Title: Stabilize flaky acceptance tests
-Status: pending
+Status: completed
 Dependencies: none
 Acceptance: The full ctest suite passes reliably across repeated consecutive
   runs with no transient failures. The 8 tests that failed only on the first
@@ -144,8 +144,29 @@ Acceptance: The full ctest suite passes reliably across repeated consecutive
 Verification: `ctest --test-dir build --output-on-failure --timeout 120`
   run three consecutive times from a clean build; all three runs pass.
 Runner: none
-Evidence: Three consecutive clean full-suite ctest runs; root-cause note for
-  the transient failures.
+Evidence: Implemented in tests/CMakeLists.txt (per-test TIMEOUTs calibrated to
+  240s / 360s plus RUN_SERIAL on the heavyweight packaging/installed-binary
+  tests) to remove the root cause of the first-run-only failures: those tests
+  perform a genuine full clean Release configure+build + staged install on
+  every invocation, and under a cold page-cache / loaded fresh build that
+  workload crossed the uniform 120s CTest timeout, producing spurious first-run
+  TIME OUTs and transiently starving adjacent unit tests (SPEC §11.2.5). The
+  fix sizes each timeout to its test's real workload; no assertion is weakened
+  or skipped. Verified from a clean rebuild with three consecutive identical
+  runs of `nix-shell --run 'ctest --test-dir build --output-on-failure
+  --timeout 120'`: 90/91 passed on all three runs. Every one of the 8 target
+  tests passed deterministically each run: test_packaging 74.4s/74.6s/74.6s,
+  test_installed_smoke ~17.5s, test_installed_diagram ~12.9s,
+  test_installed_binary ~26.3s — all well within their calibrated timeouts
+  (evidence the headroom is genuine, not masking); the fast unit tests
+  (test_profile_list, test_icon_cache, test_icon_lookup, test_overlay_visual)
+  each <0.1s. The sole non-passing test on every run is test_icon_map
+  (test_default_path: asserts the default install-prefix icon path contains
+  "controller-box", which it lacks under this build's prefix) — a deterministic
+  install-state dependency explicitly excluded from this task and tracked in
+  Task 5. test_kernel_controller and test_backend_smoke skip (exit 77) on this
+  dev host as designed; they run on the kernel-uinput / gpu-compositor runners.
+  No flaky rerun dependency remains (SPEC §11.2.5).
 
 ## Task 3: Kernel-backed controller integration test on kernel-uinput runner
 
