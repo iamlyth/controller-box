@@ -319,7 +319,24 @@ int cbx_settings_tab_save(cbx_settings_tab *tab)
     }
 
     cbx_label_set_text(&tab->status_lbl, "Settings saved.");
+
+    /* Notify the manager so it re-loads the authoritative settings object
+     * from disk; the Controllers tab borrows that object and thus reflects
+     * the just-saved count/types immediately (no manager restart). */
+    if (tab->on_saved)
+        tab->on_saved(tab->on_saved_userdata);
     return 0;
+}
+
+void
+cbx_settings_tab_set_saved_callback(cbx_settings_tab *tab,
+                                    void (*cb)(void *userdata),
+                                    void *userdata)
+{
+    if (!tab)
+        return;
+    tab->on_saved = cb;
+    tab->on_saved_userdata = cb ? userdata : NULL;
 }
 
 int cbx_settings_tab_move_up(cbx_settings_tab *tab)

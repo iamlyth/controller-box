@@ -83,6 +83,14 @@ typedef struct {
     cbx_st_mode    mode;
     int            selected;       /* index in settings_list, 0-based */
     int            icon_preset_idx; /* current preset index for icon override edit */
+
+    /* --- Post-save notification (borrowed) ------------------------- */
+    /* Invoked after a successful save.  The manager registers this so it
+     * can re-load the authoritative settings object (mgr->settings) from
+     * disk; the Controllers tab borrows that object, so the just-saved
+     * count/types become visible there without a manager restart. */
+    void (*on_saved)(void *userdata);
+    void  *on_saved_userdata;
 } cbx_settings_tab;
 
 /* ------------------------------------------------------------------ */
@@ -132,6 +140,16 @@ void cbx_settings_tab_shutdown(cbx_settings_tab *tab);
  * Returns 0 on success, negative errno on error.
  */
 int cbx_settings_tab_save(cbx_settings_tab *tab);
+
+/*
+ * Register a callback invoked (with @p userdata) after the settings tab
+ * successfully writes settings to disk.  The manager uses this hook to
+ * re-load the authoritative settings so dependent tabs (Controllers)
+ * reflect the saved values immediately.  Pass a NULL @p cb to clear.
+ */
+void cbx_settings_tab_set_saved_callback(cbx_settings_tab *tab,
+                                         void (*cb)(void *userdata),
+                                         void *userdata);
 
 /*
  * Move selection up (wraps around).
