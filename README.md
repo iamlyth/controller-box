@@ -318,10 +318,11 @@ python3 .factory/bin/factory-campaign run \
   --provider ollama --model deepseek-v4-flash
 ```
 
-Each round runs `planning → implementation → verification → audit`:
+The campaign **plan once** happens at startup, then runs an **implementation loop**:
 
-1. **Plan** — the planner creates or revises the canonical plan
-   (`.factory/artifacts/implementation-plan.md`), the sole task ledger.
+1. **Plan** — at campaign start, the planner creates the canonical plan
+   (`.factory/artifacts/implementation-plan.md`), the sole task ledger. The
+   plan is written a single time and is **not** re-planned on every round.
 2. **Select** — the trusted selector deterministically picks exactly one
    runnable task; the model never chooses among tasks.
 3. **Implement** — the developer implements only the selected task.
