@@ -3,7 +3,6 @@ spec_path: docs/SPEC.md
 spec_commit: HEAD
 base_commit: HEAD
 status: active
-roles_override: {"skip_auditors": ["compatibility", "functional", "spec-compliance"]}
 ---
 
 ## Task 1: Fix test_golden profile-editor golden image mismatches
@@ -51,16 +50,47 @@ Verification: ctest --test-dir build -R test_icon_map --output-on-failure
 Runner: none
 Evidence: Completed. Install-state dependency fixed with access() check.
 
-## Task 6: Final documentation and specification audit
+## Task 6: Update README to reflect plan-once architecture
+Title: Update README to reflect plan-once architecture
+Status: pending
+Dependencies: none
+Acceptance: README.md accurately describes the campaign as planning once then looping implementation. No mention of per-round planning.
+Verification: grep -q "plan once" README.md && grep -q "implementation loop" README.md
+Runner: none
+Evidence: Pending.
+
+## Task 7: Update FACTORY-LOOP-SPEC requirement registry
+Title: Update FACTORY-LOOP-SPEC requirement registry
+Status: pending
+Dependencies: none
+Acceptance: The requirement registry in §16 of FACTORY-LOOP-SPEC.md has no entries referencing per-round planning or roles_override per round.
+Verification: grep -c "per round" docs/FACTORY-LOOP-SPEC.md | grep -q "^0$"
+Runner: none
+Evidence: Pending.
+
+## Task 8: Verify all harness modules compile
+Title: Verify all harness modules compile
+Status: pending
+Dependencies: none
+Acceptance: All Python modules in .factory/loop/ compile without errors.
+Verification: python3 -c "import py_compile; [py_compile.compile(f'.factory/loop/{m}', doraise=True) for m in ['campaign.py','parallel.py','state.py','selector.py','plan_parser.py','metrics.py','issues.py','runner.py','preflight.py','gitutil.py','lock.py','__init__.py']]"
+Runner: none
+Evidence: Pending.
+
+## Task 9: Verify full test suite passes
+Title: Verify full test suite passes
+Status: pending
+Dependencies: none
+Acceptance: Full ctest suite passes with 0 failures (hardware tests may skip with exit 77).
+Verification: ./scripts/verify.sh
+Runner: none
+Evidence: Pending.
+
+## Task 10: Final documentation and specification audit
 Title: Final documentation and specification audit
-Status: completed
-Dependencies: 1, 2, 3, 4, 5
+Status: pending
+Dependencies: 1, 2, 3, 4, 5, 6, 7, 8, 9
 Acceptance: The full verification suite passes and the Git tree is clean on develop.
-  All completed tasks have evidence recorded. The README and FACTORY-LOOP-SPEC
-  are consistent with the implemented harness.
 Verification: ./scripts/verify.sh && git status --porcelain
 Runner: none
-Evidence: Completed. Full verification suite passes (91/91 tests, 0 failures,
-  2 hardware-dependent tests skipped). Git tree clean on develop. All tasks
-  1-5 have evidence recorded in the plan. README and FACTORY-LOOP-SPEC
-  consistent with the implemented harness.
+Evidence: Pending.
