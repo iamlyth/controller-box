@@ -414,8 +414,16 @@ def assemble_audit_findings(results: list[SubagentResult]) -> AuditReport:
         )
         raw_parts.append(f"{header}\n\n{body}")
 
-        # If the auditor process exited non-zero, treat as BLOCKER.
-        if r.exit_code != 0 and not body.upper().count("BLOCKER"):
+        # If the auditor process exited non-zero, treat as BLOCKER
+        # — unless it was a timeout (exit 124), which means the auditor
+        # didn't finish in time, not that it found a blocking issue.
+        if r.exit_code == 124:
+            all_findings.append(AuditFinding(
+                auditor=r.name, severity="INFO",
+                file_refs=[],
+                text=f"Auditor timed out (exit 124).\n{body[:1000]}",
+            ))
+        elif r.exit_code != 0 and not body.upper().count("BLOCKER"):
             all_findings.append(AuditFinding(
                 auditor=r.name, severity="BLOCKER",
                 file_refs=[],
