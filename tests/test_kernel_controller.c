@@ -197,6 +197,60 @@ static int uinput_create_gamepad(void)
         }
     }
 
+    /* Configure abs axis ranges so SDL2 interprets them correctly.
+     * Without explicit ranges the kernel defaults (0..0) would cause
+     * hat-axis events to be silently clamped/ignored. */
+    struct uinput_abs_setup abs_setup;
+    memset(&abs_setup, 0, sizeof(abs_setup));
+    /* Sticks: -32768..32767 */
+    int stick_axes[] = {ABS_X, ABS_Y, ABS_RX, ABS_RY};
+    for (size_t i = 0; i < sizeof(stick_axes)/sizeof(stick_axes[0]); i++) {
+        abs_setup.code = stick_axes[i];
+        abs_setup.absinfo.minimum = -32768;
+        abs_setup.absinfo.maximum = 32767;
+        abs_setup.absinfo.fuzz = 16;
+        abs_setup.absinfo.flat = 128;
+        if (ioctl(g_uinput_fd, UI_ABS_SETUP, &abs_setup) < 0) {
+            fprintf(stderr, "FAIL: UI_ABS_SETUP axis %d: %s\n",
+                    stick_axes[i], strerror(errno));
+            close(g_uinput_fd);
+            g_uinput_fd = -1;
+            return -1;
+        }
+    }
+    /* Triggers: 0..255 */
+    int trigger_axes[] = {ABS_Z, ABS_RZ};
+    for (size_t i = 0; i < sizeof(trigger_axes)/sizeof(trigger_axes[0]); i++) {
+        abs_setup.code = trigger_axes[i];
+        abs_setup.absinfo.minimum = 0;
+        abs_setup.absinfo.maximum = 255;
+        abs_setup.absinfo.fuzz = 0;
+        abs_setup.absinfo.flat = 0;
+        if (ioctl(g_uinput_fd, UI_ABS_SETUP, &abs_setup) < 0) {
+            fprintf(stderr, "FAIL: UI_ABS_SETUP axis %d: %s\n",
+                    trigger_axes[i], strerror(errno));
+            close(g_uinput_fd);
+            g_uinput_fd = -1;
+            return -1;
+        }
+    }
+    /* Hat axes (D-pad): -1..1 */
+    int hat_axes[] = {ABS_HAT0X, ABS_HAT0Y};
+    for (size_t i = 0; i < sizeof(hat_axes)/sizeof(hat_axes[0]); i++) {
+        abs_setup.code = hat_axes[i];
+        abs_setup.absinfo.minimum = -1;
+        abs_setup.absinfo.maximum = 1;
+        abs_setup.absinfo.fuzz = 0;
+        abs_setup.absinfo.flat = 0;
+        if (ioctl(g_uinput_fd, UI_ABS_SETUP, &abs_setup) < 0) {
+            fprintf(stderr, "FAIL: UI_ABS_SETUP axis %d: %s\n",
+                    hat_axes[i], strerror(errno));
+            close(g_uinput_fd);
+            g_uinput_fd = -1;
+            return -1;
+        }
+    }
+
     /* Configure the device via uinput_setup (modern API). */
     struct uinput_setup setup;
     memset(&setup, 0, sizeof(setup));
@@ -262,18 +316,41 @@ static void uinput_press_button(int btn)
     msleep(50);
 }
 
-/* Send a D-pad direction press + release. */
+/* Send a D-pad direction press + release via ABS_HAT0X/ABS_HAT0Y hat axes.
+ *
+ * SDL2's built-in Xbox 360 controller mapping (vendor 0x045E, product
+ * 0x028E) interprets the D-pad as the ABS_HAT0X/ABS_HAT0Y hat axes, NOT
+ * as BTN_DPAD_* button events.  Sending BTN_DPAD_* events through a
+ * device that SDL recognises as an Xbox 360 pad will not produce D-pad
+ * navigation in the game-controller API — the events are silently
+ * ignored because they are not part of the mapping's axis/button table.
+ * Using the hat axes ensures the manager receives the D-pad input through
+ * the same path a real Xbox 360 controller would use. */
 static void uinput_dpad(int direction)
 {
-    int btn;
     switch (direction) {
-        case 0: btn = BTN_DPAD_UP;    break;
-        case 1: btn = BTN_DPAD_DOWN;  break;
-        case 2: btn = BTN_DPAD_LEFT;  break;
-        case 3: btn = BTN_DPAD_RIGHT; break;
-        default: return;
+        case 0:  /* UP */
+            uinput_write_event(EV_ABS, ABS_HAT0Y, -1);
+            break;
+        case 1:  /* DOWN */
+            uinput_write_event(EV_ABS, ABS_HAT0Y, 1);
+            break;
+        case 2:  /* LEFT */
+            uinput_write_event(EV_ABS, ABS_HAT0X, -1);
+            break;
+        case 3:  /* RIGHT */
+            uinput_write_event(EV_ABS, ABS_HAT0X, 1);
+            break;
+        default:
+            return;
     }
-    uinput_press_button(btn);
+    uinput_write_event(EV_SYN, SYN_REPORT, 0);
+    msleep(50);
+    /* Reset hat axes to centre. */
+    uinput_write_event(EV_ABS, ABS_HAT0X, 0);
+    uinput_write_event(EV_ABS, ABS_HAT0Y, 0);
+    uinput_write_event(EV_SYN, SYN_REPORT, 0);
+    msleep(50);
 }
 
 /* ------------------------------------------------------------------ */
@@ -420,6 +497,23 @@ static int setup_tmp_home(void)
     /* Create config directory. */
     snprintf(path, sizeof(path), "%s/.config/controller-box", g_tmp_home);
     mkdir_p(path);
+
+    /* Pre-create the systemd user service unit file so the manager's
+     * first-run installation dialog (SPEC §9.1) is skipped.  Without
+     * this, on runners where systemd is available, the modal first-run
+     * dialog intercepts all keyboard/gamepad events and prevents the
+     * D-pad navigation from reaching the tab bar — settings.yaml is
+     * never written and the test fails spuriously. */
+    snprintf(path, sizeof(path), "%s/.config/systemd/user", g_tmp_home);
+    mkdir_p(path);
+    snprintf(path, sizeof(path), "%s/.config/systemd/user/controller-box.service", g_tmp_home);
+    FILE *sf = fopen(path, "w");
+    if (sf) {
+        fprintf(sf, "[Unit]\nDescription=Controller-Box Overlay\n\n"
+                    "[Service]\nExecStart=/bin/true\n\n"
+                    "[Install]\nWantedBy=default.target\n");
+        fclose(sf);
+    }
 
     /* Create data directory for InputPlumber profiles. */
     snprintf(path, sizeof(path), "%s/.local/share/inputplumber/profiles", g_tmp_home);
@@ -602,37 +696,49 @@ static int run_integration_test(const char *build_dir)
      *
      * Navigation sequence (drives the manager to write settings.yaml as a
      * persisted semantic outcome):
-     * 1. D-pad RIGHT × 3 → Settings tab
-     * 2. D-pad DOWN → focus first setting (Launch at Boot)
-     * 3. A button → toggle the setting (marks it changed)
-     * 4. D-pad DOWN → focus the list's "Save" entry
+     * 1. D-pad RIGHT × 2 → Settings tab (Controllers → Profiles → Settings)
+     * 2. D-pad DOWN → move focus from tab bar to settings list (index 0)
+     * 3. A button → toggle Launch at Boot (marks a setting changed)
+     * 4. D-pad DOWN × 10 → navigate settings list to "Save" entry (index 10)
      * 5. A button → activate Save → cbx_settings_tab_save → writes
      *    settings.yaml to disk
+     *
+     * The settings list has 11 entries (indices 0–10):
+     *   0=Launch at Boot, 1=Theme, 2=Opacity, 3=VC Count, 4–7=VC Types,
+     *   8=Trigger, 9=Icon Override, 10=Save.
      */
 
-    /* Navigate tabs with D-pad RIGHT to the Settings tab. */
-    for (int i = 0; i < 3; i++) {
+    /* Navigate tabs with D-pad RIGHT to the Settings tab.
+     * The tab bar has 3 tabs: Controllers (0), Profiles (1), Settings (2).
+     * Focus starts on the tab bar, so RIGHT switches tabs directly. */
+    for (int i = 0; i < 2; i++) {
         uinput_dpad(3);  /* RIGHT */
         msleep(200);
     }
     pass("D-pad RIGHT events sent (navigated to Settings tab)");
 
-    /* Focus the first setting in the list. */
+    /* D-pad DOWN → move focus from tab bar to the settings list.
+     * The list's initial selection is index 0 (Launch at Boot). */
     uinput_dpad(1);  /* DOWN */
     msleep(200);
 
-    /* A → toggle the first setting. */
+    /* A → toggle the first setting (Launch at Boot). */
     uinput_press_button(BTN_SOUTH);
     msleep(300);
-    pass("A button press sent (toggled setting)");
+    pass("A button press sent (toggled Launch at Boot)");
 
-    /* DOWN → focus the settings list's "Save" entry. */
-    uinput_dpad(1);  /* DOWN */
-    msleep(200);
+    /* D-pad DOWN × 10 → navigate the settings list from index 0 (Launch
+     * at Boot) to index 10 (Save).  The list widget handles DOWN
+     * internally, moving its selection cursor. */
+    for (int i = 0; i < 10; i++) {
+        uinput_dpad(1);  /* DOWN */
+        msleep(100);
+    }
+    pass("D-pad DOWN events sent (navigated to Save entry)");
 
     /* A → activate Save → persists settings.yaml. */
     uinput_press_button(BTN_SOUTH);
-    msleep(300);
+    msleep(500);
     pass("A button press sent (activated Save)");
 
     /* B button (cancel/back). */
@@ -646,7 +752,7 @@ static int run_integration_test(const char *build_dir)
     pass("Start button press sent");
 
     /* Navigate left back. */
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 2; i++) {
         uinput_dpad(2);  /* LEFT */
         msleep(200);
     }
