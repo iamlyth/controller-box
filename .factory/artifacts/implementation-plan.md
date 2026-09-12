@@ -79,12 +79,12 @@ Evidence: Repair (cycle 2): applied linting cleanup for the harness modules in s
 
 ## Task 9: Verify full test suite passes
 Title: Verify full test suite passes
-Status: pending
+Status: completed
 Dependencies: none
 Acceptance: Full ctest suite passes with 0 failures (hardware tests may skip with exit 77).
 Verification: ./scripts/verify.sh
 Runner: none
-Evidence: Pending.
+Evidence: Completed. Ran `./scripts/verify.sh` (exit 0) on develop. Full configure + build succeeded (100% of targets, incl. controllerbox, controller-box, test_installed_*). CTest: 91/91 passed, 0 failed, 0 skipped-as-fail; total time 167.93 sec. Two hardware-dependent tests skipped with exit 77 as permitted: test_kernel_controller (no /dev/uinput — kernel-uinput capability) and test_backend_smoke (no accelerated GPU backend — gpu-compositor capability). Both skip paths are genuine environment checks (test_kernel_controller.c:843, test_backend_smoke.c:624-677), not weakened assertions.
 
 ## Task 10: Final documentation and specification audit
 Title: Final documentation and specification audit
