@@ -50,12 +50,89 @@ Verification: `ctest --test-dir build -R test_icon_map --output-on-failure`
 Runner: none
 Evidence: test_icon_map passes all 42 sub-tests. Fix applied.
 
-## Task 6: Final documentation and specification audit
+## Task 6: Resolve orphaned study-report files to keep `git status` clean
+Title: Resolve orphaned study-report files to keep `git status` clean
+Status: completed
+Dependencies: none
+Acceptance: The repo root contains no untracked files. The two study artifacts
+  currently at the repo root (`architecture-study.md`, `subsystem-ui-report.md`)
+  are either relocated under `.factory/artifacts/` (per the AGENTS.md artifact
+  convention), committed deliberately, or removed. `./scripts/verify.sh` completes
+  and `git status --porcelain` reports a clean tree, satisfying the final audit's
+  clean-tree gate. Do not silently delete valuable evidence; preserve the analysis
+  in `.factory/artifacts/` by moving, not discarding.
+Verification: `git status --porcelain` shows no untracked files after the change;
+  `./scripts/verify.sh` passes.
+Runner: none
+Evidence: (unassigned) tester records clean `git status --porcelain` plus passing `./scripts/verify.sh`.
+
+## Task 7: Create missing docs/OPERATIONS.md and fix referenced documentation
+Title: Create missing docs/OPERATIONS.md and fix referenced documentation
+Status: pending
+Dependencies: 6
+Acceptance: `docs/OPERATIONS.md` exists and is referenced as the authoritative
+  operational guide. README.md (lines ~28, ~256, ~352) and REVIEW.md finding D-2
+  reference it and must no longer point at a missing file. The document records:
+  service architecture (overlay user service, InputPlumber system service,
+  ordered-with-session, bounded restart backoff, NameOwnerChanged recovery ~2s),
+  the golden-image workflow and tolerance values referenced by README, the
+  systemd management/troubleshooting commands, and the actual icon naming
+  convention (custom icons use the `cc-` prefix and the cache strips it before
+  file lookup — correcting the D-2 discrepancy). Also address README/D-1 by
+  documenting the `-h`/`--help` flag. Any `docs/OPERATIONS.md` link in README and
+  REVIEW verifies (file exists, target content present, no stale path).
+Verification: `test -f docs/OPERATIONS.md && grep -q 'OPERATIONS.md' README.md &&
+  grep -qE '--help|-h ' README.md`; `./scripts/verify.sh` still passes.
+Runner: none
+Evidence: (unassigned) tester records the file present and the doc-link checks passing.
+
+## Task 8: Fix config overlay_opacity serialization precision drift
+Title: Fix config overlay_opacity serialization precision drift
+Status: pending
+Dependencies: 6
+Acceptance: `overlay_opacity` round-trips without precision loss. The serializer
+  in `src/config/config_settings.c` (`emit_settings_yaml`, currently `%.2f`) must
+  preserve the parsed value (e.g. 0.855 stays 0.855, not drifting to 0.86) while
+  still writing well-formed YAML. A regression test asserts the round-trip for
+  non-multiples of 0.01 (e.g. 0.855, 0.333). The in-memory default and validation
+  bounds (0.0..1.0) are unchanged. No behavior change for values that are exact
+  multiples of 0.01.
+Verification: `ctest --test-dir build -R test_settings --output-on-failure`
+  including a new round-trip precision case; `./scripts/verify.sh` passes.
+Runner: none
+Evidence: (unassigned) tester records `test_settings` pass plus the new precision case.
+  Optional: `git diff` of the serializer confirms the format change.
+
+## Task 9: Wire identify connect-time orchestration into production connect path
+Title: Wire identify connect-time orchestration into production connect path
+Status: pending
+Dependencies: 6
+Acceptance: The controller-connect pipeline that SPEC §6.2–6.3 and §10.3 describe is
+  invoked from production code, not only from tests. Verify whether
+  `cbx_identity_extract`, `cbx_identity_downgrade_*`/`cbx_downgrade_resolve`,
+  `cbx_assign_persist_auto_assign`, and `cbx_gamepad_order_restore` are genuinely
+  unreferenced in production (the subsystem study reports they have no production
+  call sites) and, if that is confirmed, wire them into the overlay/manager
+  connect/on_save/recovery flow so that a reconnect (same controller, possibly a
+  weaker identity) resolves its assignment via the identity ladder and gamepad
+  order is restored per §10.3 gap #2. If the gap is intentional and the flow is
+  instead handled positionally elsewhere, record the exact routing (file/function)
+  in the plan evidence and do NOT add dead code; the acceptance is then the
+  documented proof that assignment is restored on connect. No weakened assertions,
+  no test-only bypass: any new wiring must be exercised by a production-path
+  integration test (real init/DBus) that survives under a mock/native backend.
+Verification: `ctest --test-dir build -R 'test_identity|test_assign|test_order_restore|test_overlay_native' --output-on-failure`;
+  `./scripts/verify.sh` passes. A targeted note in plan evidence states whether the
+  wiring was added or proven positionally-routed, with concrete file/function refs.
+Runner: none
+Evidence: (unassigned) tester records the targeted and full test results plus the
+  routing note.
+
+## Task 10: Final documentation and specification audit
 Title: Final documentation and specification audit
 Status: pending
-Dependencies: 1, 2, 3, 4, 5
+Dependencies: 1, 2, 3, 4, 5, 6, 7, 8, 9
 Acceptance: The complete active-cycle task ledger is present and every task is
 Verification: ./scripts/verify.sh
 Runner: none
 Evidence: Passing verification-gate output; clean `git status`; conformance
-
