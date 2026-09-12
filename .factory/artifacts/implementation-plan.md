@@ -57,7 +57,7 @@ Dependencies: none
 Acceptance: The canonical `build/` directory's CMake cache resolves `CMAKE_HOME_DIRECTORY` to the real project root `/workspace/project` (not the phantom `/workspace/controller-box`), and `ctest --test-dir build` executes real test binaries (no wholesale "Not Run"/file-not-found) for representative tests.
 Verification: `cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug && cmake --build build --parallel && grep CMAKE_HOME_DIRECTORY build/CMakeCache.txt && ctest --test-dir build -R '^test_settings$' --output-on-failure`
 Runner: none
-Evidence: verification exit 0 on local
+Evidence: verification exit 0 on local. Confirmed under nix-shell: `CMAKE_HOME_DIRECTORY:INTERNAL=/workspace/project` (real root, not phantom /workspace/controller-box); `ctest --test-dir build -R "^test_settings$"` and `ctest --test-dir build -R "^test_icon_map$"` each execute the real binary and Pass (0.03s / 0.01s); full suite `ctest --test-dir build` runs all 91 tests against real binaries with only 2 legitimate hardware skips (test_kernel_controller uinput, test_backend_smoke system-dbus) — no wholesale file-not-found/Not Run.
 
 ## Task 7: Final documentation and specification audit
 Title: Final documentation and specification audit
