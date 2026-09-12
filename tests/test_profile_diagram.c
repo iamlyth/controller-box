@@ -473,6 +473,7 @@ static void test_svg_outline_reaches_framebuffer(void **state)
 {
     pd_fixture *f = *state;
     char svg_path[PATH_MAX];
+    (void)svg_path;
     snprintf(svg_path, sizeof(svg_path), "%s/svg/generic-gamepad.svg",
              cbx_icon_dir());
 
@@ -536,6 +537,7 @@ static void test_transparent_svg_rejected(void **state)
 {
     pd_fixture *f = *state;
     char path[PATH_MAX];
+    (void)path;
     snprintf(path, sizeof(path), "/tmp/cbx-profile-diagram-transparent-%ld.svg",
              (long)getpid());
     FILE *svg = fopen(path, "wb");
@@ -578,6 +580,7 @@ static void test_geometry_pixelation_and_stretch(void **state)
 
     /* Load the production diagram SVG through the production rasteriser. */
     char svg_path[PATH_MAX];
+    (void)svg_path;
     snprintf(svg_path, sizeof(svg_path), "%s/svg/generic-gamepad.svg",
              cbx_icon_dir());
 
@@ -622,6 +625,7 @@ static void test_geometry_square_widget_letterboxes(void **state)
 {
     pd_fixture *f = *state;
     char svg_path[PATH_MAX];
+    (void)svg_path;
     snprintf(svg_path, sizeof(svg_path), "%s/svg/generic-gamepad.svg",
              cbx_icon_dir());
 
@@ -661,6 +665,7 @@ static void test_geometry_marker_control_alignment(void **state)
     pd_fixture *f = *state;
 
     char icon_path[PATH_MAX];
+    (void)icon_path;
     snprintf(icon_path, sizeof(icon_path), "%s/svg/generic-gamepad.svg",
              cbx_icon_dir());
 
@@ -820,6 +825,7 @@ static void test_set_base_image_same_owned_is_noop(void **state)
 {
     pd_fixture *f = *state;
     char svg_path[PATH_MAX];
+    (void)svg_path;
     snprintf(svg_path, sizeof(svg_path), "%s/svg/generic-gamepad.svg",
              cbx_icon_dir());
 
@@ -850,6 +856,7 @@ static void test_set_base_image_borrowed(void **state)
      * borrowed adoption frees the previously owned texture and switches
      * ownership to the cache. */
     char svg_path[PATH_MAX];
+    (void)svg_path;
     snprintf(svg_path, sizeof(svg_path), "%s/svg/generic-gamepad.svg",
              cbx_icon_dir());
     cbx_theme theme;

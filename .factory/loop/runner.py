@@ -172,11 +172,14 @@ def run_verification(
         parts.append(build_command)
     parts.append(command)
     remote_command = " && ".join(parts)
-    # Wrap in nix-shell if the runner has shell.nix and nix-shell available.
-    # The check runs remotely; if not available, the command runs as-is.
+    # Wrap in nix-shell if the runner has shell.nix and nix-shell is
+    # functional.  The check runs remotely; if nix-shell is not available
+    # or the nix daemon is unresponsive, the command runs as-is with
+    # system packages.
     nix_check = (
         f"test -f {runner.working_directory}/shell.nix "
-        f"&& command -v nix-shell >/dev/null 2>&1"
+        f"&& command -v nix-shell >/dev/null 2>&1 "
+        f"&& nix-instantiate --eval -E '1' >/dev/null 2>&1"
     )
     escaped = remote_command.replace("'", "'\\''")
     # nix-shell resolves its nix expression (./shell.nix) from the cwd at

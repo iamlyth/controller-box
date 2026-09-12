@@ -36,4 +36,11 @@ int test_harness_sdl_init(TestSdlState *state);
 /* Tear down SDL2 resources allocated by test_harness_sdl_init(). */
 void test_harness_sdl_shutdown(TestSdlState *state);
 
+/* cmocka 2.x compatibility: assert_int_in_range is assert_in_range
+ * in system cmocka 1.1.7 (e.g. Debian). */
+#ifndef assert_int_in_range
+#define assert_int_in_range(value, minimum, maximum) \
+    assert_in_range((value), (minimum), (maximum))
+#endif
+
 #endif /* CBX_TEST_HARNESS_H */

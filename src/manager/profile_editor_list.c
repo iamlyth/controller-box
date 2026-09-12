@@ -89,13 +89,16 @@ format_binding_label(char *buf, size_t buflen,
 
     /* Build targets string */
     char targets_str[128] = "";
+    size_t offset = 0;
     for (int i = 0; i < m->target_event_count && i < 8; i++) {
-        char tmp[64];
-        if (i > 0)
-            snprintf(tmp, sizeof(tmp), ", %s", m->target_events[i].value);
+        const char *sep = (i > 0) ? ", " : "";
+        int written = snprintf(targets_str + offset,
+                               sizeof(targets_str) - offset,
+                               "%s%s", sep, m->target_events[i].value);
+        if (written > 0 && (size_t)written < sizeof(targets_str) - offset)
+            offset += (size_t)written;
         else
-            snprintf(tmp, sizeof(tmp), "%s", m->target_events[i].value);
-        strncat(targets_str, tmp, sizeof(targets_str) - strlen(targets_str) - 1);
+            break;  /* buffer full */
     }
     if (targets_str[0] == '\0')
         snprintf(targets_str, sizeof(targets_str), "(none)");

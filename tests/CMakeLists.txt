@@ -132,7 +132,14 @@ endif()
 # and the shared test harness (test_harness + dbus_mock).
 if(CMOCKA_FOUND)
 
-    # Shared test support library: SDL2 dummy-driver utility + DBus mock
+    # Some system cmocka packages (e.g. Debian's libcmocka-dev 1.1.7)
+    # do not include their own prerequisite headers (stddef.h for size_t,
+    # stdarg.h for va_list, setjmp.h for jmp_buf).  Force-include them
+    # so all cmocka-based test targets compile on both nix-shell and
+    # system-package environments.
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -include stddef.h -include stdarg.h -include setjmp.h -include limits.h -include ${CMAKE_SOURCE_DIR}/tests/cmocka_compat.h")
+
+    # Shared test library: SDL2 dummy-driver utility + DBus mock
     # + framebuffer pixel assertion utilities (Task 1).
     add_library(cbx_test_support STATIC
         tests/test_harness.c

@@ -734,8 +734,13 @@ cbx_profiles_tab_begin_delete(cbx_profiles_tab *tab, int profile_index)
     tab->delete_target = profile_index;
 
     char prompt[CBX_PT_LABEL_LEN];
+    const char *del_name = e->display_name[0] ? e->display_name : e->filename;
+    /* Truncate to avoid format-truncation warnings with -Werror on GCC 14. */
+    char trunc_name[224];
+    strncpy(trunc_name, del_name, sizeof(trunc_name) - 1);
+    trunc_name[sizeof(trunc_name) - 1] = '\0';
     snprintf(prompt, sizeof(prompt), "Delete \"%s\"?  A=Yes  B=No",
-             e->display_name[0] ? e->display_name : e->filename);
+             trunc_name);
     cbx_label_set_text(&tab->status_lbl, prompt);
     cbx_widget_set_visible(&tab->status_lbl.base, true);
 
