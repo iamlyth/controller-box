@@ -416,12 +416,15 @@ def assemble_audit_findings(results: list[SubagentResult]) -> AuditReport:
 
         # If the auditor process exited non-zero, treat as BLOCKER
         # — unless it was a timeout (exit 124), which means the auditor
-        # didn't finish in time, not that it found a blocking issue.
+        # didn't finish in time.  A timeout is treated as WARN: the
+        # audit is incomplete for this auditor, but we don't block the
+        # campaign on it (the other auditors may have covered the area).
         if r.exit_code == 124:
             all_findings.append(AuditFinding(
-                auditor=r.name, severity="INFO",
+                auditor=r.name, severity="WARN",
                 file_refs=[],
-                text=f"Auditor timed out (exit 124).\n{body[:1000]}",
+                text=f"Auditor timed out (exit 124) — audit incomplete "
+                     f"for this auditor.\n{body[:1000]}",
             ))
         elif r.exit_code != 0 and not body.upper().count("BLOCKER"):
             all_findings.append(AuditFinding(
