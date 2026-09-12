@@ -1,226 +1,212 @@
-# Audit findings (round 1, task 6)
-
-## efficiency Audit
-
-## Efficiency Audit — Task 6: Resolve orphaned study-report files
-
-**Branch:** `develop` | **Working tree:** 0 untracked files
-
-### Scope analysis
-
-Task 6's deliverable is repo hygiene: removing orphaned/untracked study-report files. I verified the current state:
-
-- `git status --porcelain --untracked-files=all` shows **0 untracked files** (`^??` count = 0).
-- Both study artifacts (`architecture-study.md`, `subsystem-manager-study.md`) are tracked in Git (`git ls-files --error-unmatch` confirms both).
-- The only working-tree change is the **tracked** `.factory/artifacts/implementation-plan.md` (factory-loop planning document — legitimate, ongoing loop state, not an orphaned artifact).
-
-### Efficiency assessment
-
-This task made **no production-code changes** — commit `9ab5eef0` and `db20d2bd` touch only markdown artifacts under `.factory/`, plus a cleanup reverting earlier incidental edits. There is no algorithmic-code, hot-path, allocation, I/O, or build-efficiency surface introduced or modified by this task.
-
-From a performance/resource standpoint there is nothing to audit: no `src/` code, no event-loop/render paths, no allocation/free/DBus-lifecycle concerns, and no CI/build steps were added. The repository root is clean with respect to the acceptance criterion.
-
-**No findings.**
-
-
----
+# Audit findings (round 1, task 6, repair 1)
 
 ## security Audit
 
-I've completed the security audit of Task 6. Let me summarize my analysis.
+## Security Audit — Task 6: Resolve orphaned study-report files
 
-## Security Audit: Task 6 — Resolve orphaned study-report files
+**No findings** (no BLOCKER or WARN issues).
 
-**Scope.** Task 6 is a documentation-housekeeping task: it relocated two orphaned study-report markdown files (`architecture-study.md`, `subsystem-ui-report.md`) from the repo root into `.factory/artifacts/` and committed them. The change (`9ab5eef0`) contains **only** three markdown files — no C source, no build changes, no dependencies, no configuration, no schemas. There is no new attack surface introduced by this change.
+### What I verified
 
-**Verified state:**
-- `git status --porcelain` shows **no untracked files** anywhere (repo root and tree are clean per the acceptance criterion).
-- The two study reports are now tracked under `.factory/artifacts/` and removed from the repo root.
-- No credentials/secrets (`api_key`, `password`, `secret`, `token`, private keys) present in the moved files.
-- Mutable factory state (`.factory-state/factory-loop.json`) and `build/` are correctly gitignored — not accidentally version-controlled.
-- The only working-tree modification is `.factory/artifacts/implementation-plan.md` — the orchestrator's living-plan document per `AGENTS.md`, not a security concern.
+Task 6 is a documentation-housekeeping task. It relocated three orphaned study-report files into `.factory/artifacts/` and committed them, and reverted incidental production-code edits that had leaked into the tree.
 
-**Conclusion for the task's own code/change:** No security findings. No input validation, buffer-safety, privilege-boundary, DBus-authentication, filesystem, error-handling, or dependency concerns are touched by this pure documentation relocation.
+- `git status --porcelain --untracked-files=all` → **0 untracked files** (empty output). The acceptance criterion ("repo root contains no untracked files") is met.
+- The three study artifacts are tracked under `.factory/artifacts/`; prior strays (`docs/subsystem-study-overlay.md`, `.factory/artifacts/substudy-identify.md`) were removed.
+- The change adds **no** C source, no input parsing, no buffers, no network/DBus surface, no privilege boundary, no runtime filesystem writes, and no dependency changes. Production-acceptance surface is untouched.
+- No credentials/secrets in the moved files (the only `token` grep hit was the substring `csv_token_count`, a CSV helper name in docs, not a secret).
+- Mutable state (`build/`, `.factory-state/`, `.pi/output/`, `.ralph/`) is properly gitignored, not accidentally version-controlled.
 
----
+### INFO observations (non-blocking, out of Task-6 scope)
 
-### INFO observations (pre-existing, out of Task-6 scope, already tracked)
+Pre-existing `src/ui/` weaknesses surfaced by the relocated reports — already tracked as separate planner work, not introduced here:
+- `src/ui/text.c` — texture leak on cache-full / over-length path (`render_to_texture`).
+- `src/ui/widget_list.c` — unguarded `y / item_h` divide in `list_handle_event` (currently safe; no setter exists).
+- `src/ui/widget_button.c` — `SDLK_a` triggers focus activation without the controller-event marker check (input-reliability nit, not a privilege issue).
 
-The relocated `subsystem-ui-report.md` (its "Potential issues / gaps" §10) documents pre-existing weaknesses in `src/ui/` that are scheduled as planner work. They are not introduced by Task 6, are defensive/minor (require local display/driver access, not remotely reachable), but are worth noting:
-
-- **INFO — `src/ui/text.c` texture leak on cache-full / over-length path.** `render_to_texture` returns an uncached, untracked texture when the cache is full or text ≥ `CBX_TEXT_MAX_LEN`, leaking over long-running overlays with many unique strings. A slow-accumulation memory-exhaustion risk in a resident systemd service.
-- **INFO — `src/ui/widget_list.c` unguarded divide in `list_handle_event` MOUSEBUTTONUP.** `y / lst->item_h` divides by `item_h` with no zero guard (currently safe only because `DEFAULT_ITEM_H=32` and no setter exists).
-- **INFO — `src/ui/widget_button.c` `SDLK_a` activation.** A real keyboard `'a'` activates focused buttons because the `CBX_CONTROLLER_EVENT_WINDOW_ID` marker isn't checked in the button handler — a local input-collision/reliability nit, not a privilege issue.
-
-These match the study report's own findings and are slated for later planner tasks; they do not affect this task's completion.
-
----
-
-**Result:** No `BLOCKER` or `WARN` findings for Task 6. The task is a safe, evidence-preserving documentation move with a clean tree and properly gitignored mutable state. Exiting accordingly.
+The audit report is written to `.factory/artifacts/audit-findings-task6-security.md`. Exiting 0.
 
 
 ---
 
 ## compatibility Audit
 
-Based on my audit of the current repository state (branch `develop`, HEAD `9ab5eef0` "factory: task 6 implementation"), here is my compatibility assessment.
+My audit is complete. Here is my report.
 
-## Compatibility Audit — Task 6: Resolve orphaned study-report files
+---
 
-### Verification of repository state (task context)
+# Compatibility Audit — Task 6: Resolve orphaned study-report files
 
-`git status --porcelain` currently shows only the tracked, modified plan file:
-```
- M .factory/artifacts/implementation-plan.md
-```
-(no `??` untracked entries). The two prior orphaned study artifacts — `architecture-study.md` and `subsystem-ui-report.md` — were made tracked by commit `9ab5eef0` (both added under `.factory/artifacts/`), and the earlier stray files (`substudy-identify.md`, `docs/subsystem-study-overlay.md`) were removed in the preceding "clean" commit `db20d2bd`. The `settings_tab.c/.h` files referenced by the new study report still exist on disk, so the documentation is consistent with the source tree. The acceptance criteria ("repo root contains no untracked files") is met.
+**Branch:** `develop` · **HEAD:** `686045b4` (factory: task 6 repair)
 
-### Scope of task 6 changes
+## Scope of the change
 
-The entire task-6 diff (`git show --name-status HEAD`) touches only three files, all documentation:
-- `A .factory/artifacts/architecture-study.md`
-- `A .factory/artifacts/subsystem-ui-report.md`
-- `M .factory/artifacts/implementation-plan.md`
+Task 6 is a repository-hygiene task: relocate two orphaned study-report markdown files out of the repo root so `git status` is clean. The resolution commits (`6cdf52da` → `db20d2bd` revert → `9ab5eef0` → `686045b4`) touched **only** markdown artifacts under `.factory/artifacts/` plus reverts of incidental intermediate source edits.
 
-No production code, `CMakeLists.txt`, `shell.nix`, headers, or dependency manifests were modified. Consequently there is **no new platform, dependency, or ABI/API compatibility surface** introduced by this task.
+## Verification I performed
 
-### Findings
+1. **Clean-tree gate (task acceptance):** `git status --porcelain --untracked-files=all` → **empty, exit 0**; `git ls-files --others --exclude-standard` → **0 untracked files**; repo root (excl `.factory/`) → **0 untracked files**. ✅
+2. **No dangling references from the revert:** `settings_tab.c/.h` are present at HEAD, referenced by `manager.c`, and compiled in both `controllerbox` and `controllerbox_testing` libraries in `CMakeLists.txt`; `test_settings_tab` is still registered in `tests/CMakeLists.txt`. The intermediate removal of these files (which could have broken the build/link) was fully reverted.
+3. **Compatibility-critical files unchanged vs. pre-task baseline (`313ae0af`):** `git diff --stat` for `shell.nix`, `cross-shell.nix`, `CMakeLists.txt`, `tests/CMakeLists.txt`, `.factory/environment.toml`, `docs/SPEC.md` → **empty** (byte-identical). The only `src/`/`tests/` deltas from baseline are from a prior task (`test_icon_map.c`), not task 6.
+4. **No build-system / dependency / platform delta:** no changes to Nix dependency pins, pkg-config modules, CMake commands, SDL2/DBus API usage, or runner capability declarations (`environment.toml`) result from this task.
 
-- **File**: `.factory/artifacts/architecture-study.md` (line 4)
-- **Severity**: **INFO**
-- **Description**: The committed study report hardcodes an absolute, run-specific workspace path: `**Root:** /workspace/project (the task brief's /workspace/controller-box does not exist...)`. This is a documentation artifact, not code, so it has no runtime/build impact. However, the path is specific to the current harness environment and will be stale/incorrect on any other runner, machine, or future task, which contradicts the factory guidance that documentation records *why* a thing matters rather than environment-specific iteration detail.
-- **Recommendation**: Reword to refer to "the repository" portably (e.g. "repo root") instead of the literal `/workspace/project`, or remove the path entirely. Non-blocking.
+## Findings
 
-- **File**: `.factory/artifacts/architecture-study.md` and `.factory/artifacts/subsystem-ui-report.md` (both, verbatim)
-- **Severity**: **INFO**
-- **Description**: Both committed reports are large (119 and 230 lines) "study reports" describing architecture and `src/ui/` internals. Committing them satisfies the "no untracked files" acceptance, but the task title and its prior repair commits suggest the intended resolution direction was *removing* orphaned study artifacts rather than promoting new ones into the tracked tree. From a compatibility/consistency standpoint they are harmless (documentation only), but they now permanently live in `.factory/artifacts/` and will be part of every future `git add -A`.
-- **Recommendation**: This is a process/judgment observation, not a compatibility defect. If the project's convention is that generated study reports should not be committed, delete them and add the pattern to `.gitignore`; otherwise leave as committed. Either way it does not affect build, dependency, or API compatibility.
+**No BLOCKER or WARN compatibility findings.**
 
-### Conclusion
+Task 6 introduces no new platform, dependency, ABI/API, or build-system surface. All compatibility-critical files were verified identical to the pre-task baseline, and no code or build configuration was left in a broken intermediate state after the revert. The clean-tree acceptance criterion is met.
 
-No **BLOCKER** or **WARN** compatibility findings. The task resolves the orphaned-file condition without altering any build, dependency, platform, or API surface. Only two non-blocking **INFO** observations (environment-specific path embedded in a doc; doc-commit-vs-remove process choice).
+**INFO** (non-blocking observation, already noted in the committed `audit-findings.md`):
+- **File:** `.factory/artifacts/architecture-study.md` (line 4)
+- **Severity:** INFO
+- **Description:** The committed study report hardcodes the run-specific absolute workspace path `/workspace/project` (and references a nonexistent `/workspace/controller-box`). This is documentation-only and has zero runtime/build/API impact, but it is environment-specific and will be stale on any other runner or future task.
+- **Recommendation:** Reword to a portable reference such as "the repository root" instead of the literal `/workspace/project`. Non-blocking.
 
-I will exit 0.
+No compatibility issues found. **Exit 0.** ✅
 
 
 ---
 
 ## linting Audit
 
-## Linting Audit — Task 6: Orphaned study-report files
-
-I audited the task's deliverables (the two new study artifacts committed in `9ab5eef0` under `.factory/artifacts/`), the repo hygiene state, and consistency with the existing source tree and sibling studies.
-
-### Verification of the task's own acceptance (clean-tree gate)
-
-- `git status --porcelain` → **0 untracked files**. Repo root contains no orphaned files (only tracked `AGENTS.md`, `README.md`).
-- `architecture-study.md` and `subsystem-ui-report.md` were committed deliberately under `.factory/artifacts/` per the AGENTS artifact convention, rather than deleted — evidence preserved. ✔
-- Cross-checked the reports against the live tree: referenced modules (`src/manager/settings_tab.*`, `src/identify/*`, `src/ui/widget_*`, etc.) all exist; no dead file references found. ✔
-
-The task's documented verification passes. **No BLOCKER findings.**
+I've completed my audit. The task acceptance is satisfied — the working tree is clean, `git status --porcelain` returns empty, both orphaned study artifacts (`architecture-study.md`, `subsystem-ui-report.md`) are relocated under `.factory/artifacts/` and tracked. This is a documentation-only change (no C/CMake/scripts touched), so my lint findings are scoped to the markdown artifacts it added/committed.
 
 ---
 
-### WARN
+# Lint Audit Report — Task 6: Resolve orphaned study-report files
 
-**1. Working tree is not literally "clean" — track a second modified file**
-`git status --porcelain` shows ` M .factory/artifacts/implementation-plan.md` (uncommitted, from the last implementation cycle).
-- The task's *verification line* checks only for **untracked** files (0 → passes), so the acceptance is met.
-- But the task's *acceptance prose* says `git status --porcelain reports a clean tree`. Under a strict reading a tracked modification counts as a dirty tree. This is expected factory-loop state (the orchestrator is the sole git writer and commits the plan), so it is **not** a task-6 defect — flagging only so the final Task-10 clean-tree gate does not get tripped if the auditor counts tracked `M` entries. Recommendation: let the orchestrator commit the plan update (`factory: task 6 round N`) before Task-10.
+**Scope.** Task 6 relocated two study-report markdown files from the repo root into `.factory/artifacts/` and committed them (`9ab5eef0`, plus audit documentation in `686045b4`). No production source, build, or test files changed. Verified: `git status --porcelain` empty; `git ls-files --others` in repo root empty; both artifacts tracked under `.factory/artifacts/`; no stale references to the old root-level paths outside `.factory/`.
 
-**2. Plan edit trimmed task-scope prose for pending tasks 7–9**
-The same `implementation-plan.md` edit condensed the acceptance text, removing substantive guidance — e.g. Task 8's `emit_settings_yaml`/`%.2f` detail and round-trip test intent, Task 9's wiring-vs-positional-routing decision, Task 7's documented-content list. Concision is preferred, but ensure none of that scoping was uniquely lost, or the pending tasks risk being under-specified. Recommendation: if the detail is not recoverable from `docs/` or the commit history, restore the minimal operational facts.
+## Findings
+
+### WARN-1 — Study report omits its own sibling report in the "notes for the planner"
+- **File:** `.factory/artifacts/architecture-study.md` (§5 "Notes for the planner", ~line 119)
+- **Issue:** The prior-studies note reads `(subsystem-manager-study.md, subsystem-report-app.md)` but omits `subsystem-ui-report.md`, which was created in the **same commit**. A planner studying `src/ui/` would not discover the dedicated UI report. This is a documentation-completeness/consistency gap. It was independently flagged as audit-findings finding #3 but remains unaddressed in the source document.
+- **Recommendation:** Add `subsystem-ui-report.md` to the referenced list so the note is complete: `(subsystem-manager-study.md, subsystem-report-app.md, subsystem-ui-report.md)`.
+
+### WARN-2 — Stale task-anchor references from a prior cycle
+- **File:** `.factory/artifacts/subsystem-ui-report.md`
+- **Issue:** Lines 8 and 188 anchor files to "Tasks 19–24" and "Task 22". The active factory cycle is Tasks 1–10 (see `.factory/artifacts/implementation-plan.md`); Tasks 19–24 belong to a prior cycle. These anchors are dead references that can mislead a reader who looks them up in the current plan.
+- **Recommendation:** Either drop the task-anchor numbers, qualify them as belonging to a prior cycle, or re-anchor to the active Task 9 identity/input wiring work (which the report's §Potential-issues #2 directly relates to).
+
+### INFO-1 — Inconsistent naming among sibling report files
+- **File:** `.factory/artifacts/`
+- **Issue:** The four sibling reports use three different naming patterns: `subsystem-manager-study.md`, `subsystem-report-app.md`, `subsystem-ui-report.md`, and `architecture-study.md` (`audit-findings.md`/`implementation-plan.md` are a different class). Pattern drift across sibling artifacts makes the directory harder to scan.
+- **Recommendation:** For future study runs, adopt one consistent pattern (e.g. `subsystem-<area>.md` or `<area>-study.md`). Non-blocking; the existing files are fine to keep as-is.
+
+### INFO-2 — Study outputs are now permanently version-controlled
+- **File:** `.factory/artifacts/audit-findings.md` (finding #2) — observation echoed here.
+- **Issue:** Relocating the orphaned reports under `.factory/artifacts/` and committing them means every future study-run output will accumulate as part of the tracked history. The task acceptance explicitly sanctioned this ("committed deliberately"), so it is not a violation, but it is a growth policy decision worth making explicit.
+- **Recommendation:** Document the convention (or add a gitignore for future `subsystem-*/architecture-*/study-*` outputs) if the intent is to track only the canonical `implementation-plan.md`.
+
+## BLOCKERs
+
+None. The task acceptance is met (clean `git status --porcelain`, empty repo-root untracked set, both artifacts relocated and committed).
 
 ---
 
-### INFO
+**Verdict:** No blocking issues. Two WARN-level documentation-consistency improvements (WARN-1, WARN-2) and two INFO observations. All findings are confined to the markdown artifacts this task added; no code readability or language-convention concerns because the task touched no source code.
 
-**3. "Consult prior studies" note omits its own sibling study** — `.factory/artifacts/architecture-study.md:119`
-> Prior subsystem studies already exist at `.factory/artifacts/` (`subsystem-manager-study.md`, `subsystem-report-app.md`) — consult them before duplicating module analysis.
-
-`subsystem-ui-report.md` (created in the same commit) is missing from the list. A planner studying `src/ui/` would not discover the dedicated UI report. Recommendation: add `subsystem-ui-report.md`.
-
-**4. Task-anchor reference outside the active cycle** — `.factory/artifacts/subsystem-ui-report.md` ("All UI files are Task-anchored (Tasks 19–24)").
-The current plan ledger only contains Tasks 1–10, so "Tasks 19–24" point outside the active cycle. Likely provenance from an older cycle; harmless but potentially confusing. Recommendation: clarify whether the anchor refers to a prior cycle or the source-of-truth task registry.
-
-**5. Pre-existing dead-code gap already tracked** — `subsystem-ui-report.md` §Potential issues notes `cbx_input_map_to_sdl_event` ("bridge", Task 22) has no production consumer and `input_map.c` never emits KEYUP on return-to-center. This was filed as a planner gap within the report itself and is out of Task-6 scope; ensure it is captured as a follow-up task (identity/input wiring, cf. pending Task 9) rather than left unactioned.
 
 ---
 
-**Conclusion:** No blocking issues. Task 6's core acceptance (no untracked files, artifacts relocated and committed under `.factory/artifacts/`) is met. The WARN/INFO items above are hygiene and cross-reference polish for the docs the task produced.
+## efficiency Audit
 
-Exit 0.
+I've completed my investigation. Here's my efficiency audit for Task 6.
+
+## Summary of the audit
+
+The task 6 acceptance criterion — `git status --porcelain` shows **zero untracked files** — is genuinely met (verified: `git status --porcelain` exit 0, empty; `git ls-files --others --exclude-standard` empty; the two study artifacts `architecture-study.md` / `subsystem-ui-report.md` are preserved under `.factory/artifacts/` and tracked). No production source or build config is affected by the final resolution (the `src/manager` fix was correctly reverted in `db20d2bd`; only `.md` documentation was added by the final commits `9ab5eef0` / `686045b4`).
+
+There are **no BLOCKERs**. There is one efficiency finding.
+
+---
+
+## Findings
+
+### 1. **WARN** — Orphaned, unbuilt test file left in the tree (dead code / redundant work)
+
+**Files:** `tests/test_settings_controllers_sync.c` (161 lines, new), added by commit `6cdf52da`; never re-added to build in `tests/CMakeLists.txt`.
+
+**Description:** The task that was meant to *resolve orphaned files* actually leaves behind a new orphan. A 161-line regression test ("Regression test for Task 6") was written against the `src/manager` settings-tab save-path fix, but that entire `src/manager` fix was reverted in `db20d2bd` ("clean: restore tree"). The test source file was **not** reverted and is **not registered** in `tests/CMakeLists.txt` — there is no `add_executable`/`add_test` for `test_settings_controllers_sync` anywhere in the tree. The result is dead code: it is never compiled, never linked, and never run (CTest `91/91 pass, 2 skip` confirms it contributes zero test coverage), yet it is committed to the repository and will keep building confusion.
+
+The test even claims to "Eliminate the stale dual-settings-copy problem" and drives the exact save-path reload that was reverted — so it documents behavior that no longer exists in the shipped code.
+
+**Recommendation:** Either (a) wire it into `tests/CMakeLists.txt` (`add_executable` + `add_test`, matching the `test_settings_tab` pattern) and make its assertions hold against the current `src/manager` behavior, **or** (b) delete the file. Given the fix it tests was deliberately reverted, option (b) is the cleaner outcome and is squarely within the task's own mandate of keeping the tree free of orphaned artifacts. Do not silently carry an unbuilt test into the next task.
+
+---
+
+### 2. **INFO** — Repetitive redo-churn across the task-6 series (redundant work)
+
+**Files:** `.factory/artifacts/implementation-plan.md`, commit history.
+
+**Description:** Task 6 required an unusually high number of cycles: `1788c658`, `6dd7a095`, `a96a9a7f` (blocked "after 3 repairs"), `16bf9bf1`, `6cdf52da`, `9ab5eef0`, `686045b4` — an implementation (`6cdf52da`, src changes) that was then wholly reverted (`db20d2bd`), then re-implemented as documentation-only. Much of this was redundant work that did not contribute to the final state.
+
+**Recommendation:** This is a process observation, not a code fix. It is surfaced because it is the root cause of Finding 1 (the reverted implementation's test was dropped rather than deliberately deleted). Capture the "restore tree / revert" decision explicitly in the plan so future tasks do not re-synthesize reverted changes, and run an explicit orphan-audit (any committed file missing from the build) as part of the clean-tree gate.
+
+---
+
+### Not-in-scope / verified clean
+
+- **Algorithmic complexity:** No production code changed in the final task-6 resolution; nothing to audit.
+- **Resource leaks / hot paths / I/O patterns:** No runtime code touched.
+- **Build efficiency:** No build targets added; `./scripts/verify.sh` reuses normal incremental CMake build. Note: if Finding 1 is resolved by registering the test, it adds one small build target only — no efficiency concern.
+- **Acceptance:** `git status --porcelain` is clean (exit 0, no untracked files) — the task's own gate passes.
+
+**Exit code:** 0 (findings are non-blocking; no BLOCKERs raised).
 
 
 ---
 
 ## spec-compliance Audit
 
-# Spec Compliance Audit — Task 6
+## Audit Complete
 
-**Task:** Resolve orphaned study-report files to keep `git status` clean
-**Branch:** `develop` · **Status:** completed
+Task 6 is **compliant** with the specification. The core work is done correctly:
 
-## Scope assessment
+- **Repo root clean** — `git ls-files --others --exclude-standard` (excluding `.factory/`) returns empty.
+- **Both study artifacts relocated & tracked** — `architecture-study.md` (119 lines) and `subsystem-ui-report.md` (230 lines) now live under `.factory/artifacts/` with substantive content preserved (moved, not discarded).
+- **No dangling references** — no `architecture-study` / `subsystem-ui-report` strings remain in `src/`, `tests/CMakeLists.txt`, `CMakeLists.txt`, or `docs/`.
+- **Production tree reverted cleanly** — the incidental `manager.c` / `settings_tab.*` / `tests/CMakeLists.txt` edits were stripped; no residual `test_settings_controllers_sync` or subsystem-study references remain.
+- **Build/state dirs correctly ignored** — `build/`, `.factory-state/`, `.ralph/`, etc. are gitignored.
 
-This is a repository-hygiene task, not a product-feature task. The product spec (`docs/SPEC.md`, 639 lines) makes **no mention of "study" reports, repo-root artifacts, or `.factory` hygiene** — the only adjacent requirement is §11.2 "Repository integrity… the Git tree is clean on develop." Task 6's authority therefore comes from the task acceptance text plus the artifact conventions in `AGENTS.md` / `docs/FACTORY-LOOP-SPEC.md`, not from the product SPEC.
+### One WARN (not a Task-6 defect)
 
-## Verification outcome
+**Path:** `.factory/artifacts/audit-findings-task6-security.md`
 
-- `git status --porcelain` → `M .factory/artifacts/implementation-plan.md` only. **Untracked count = 0** (verified with `--untracked-files=all`). Exit code 0. ✅
-- The two orphaned study artifacts (`architecture-study.md`, `subsystem-ui-report.md`) that were at the repo root were **relocated under `.factory/artifacts/`** and deliberately committed (commit `9ab5eef0`), preserving their full content (119 and 230 lines respectively — confirmed real analysis, not stubs). This matches the committed acceptance text: *"relocated under `.factory/artifacts/` (per the AGENTS.md artifact convention)… preserve the analysis… by moving, not discarding."* ✅
-- No production code changed in the final resolution (the `6cdf52da` code changes were reverted in `db20d2bd`), and `.factory/artifacts/` is the FACTORY-LOOP-SPEC-designated home for committed artifacts (orchestrator commits via `git add -A`). No scope creep, no spec contradiction. ✅
+The advertised verification `git status --porcelain` is not strictly empty right now — it shows `?? .factory/artifacts/audit-findings-task6-security.md`. This is a leftover from a *concurrent security-auditor* run (produced after the final task-6 commit `686045b`), not something Task 6 introduced. It's under `.factory/artifacts/` so it doesn't violate the "repo root clean" acceptance, but to make the verification literally empty, that audit output file should be committed (or removed) as audit-accounting hygiene.
 
-## Findings
+**Recommendation:** commit that audit-output file so `git status --porcelain` returns empty, matching the Task-6 verification exactly. No fix needed in the Task-6 change itself.
 
-No **BLOCKER** and no **WARN** findings. The acceptance and verification are met, the resolution follows the documented artifact convention, and evidence is preserved rather than deleted.
-
-**INFO**
-
-1. **`.factory/artifacts/implementation-plan.md`** (uncommitted working-tree diff): the detailed Acceptance/Verification/Evidence text for tasks 6–9 (including the explicit "preserve by moving, not discarding" instruction and the `docs/OPERATIONS.md` / README-link substance for task 7) has been downgraded to terse one-liners versus the last commit. This is factory state that the orchestrator will commit, but confirm the trim is intentional — losing the cross-referenced acceptance detail for the pending tasks 7–9 makes later audits harder. Not blocking per the stated task-6 verification (which targets *untracked* files, satisfied).
-
-2. **`.factory/artifacts/architecture-study.md`, `.factory/artifacts/subsystem-ui-report.md`**: transient study-subagent outputs are now permanently version-controlled. The acceptance explicitly sanctions this ("committed deliberately"), so it is not a violation, but consider that every future study run will add more such files. If the intent is to keep only the canonical plan as tracked history, an alternative would be to `gitignore` future `study-*/subsystem-*/architecture-*` outputs and keep only `implementation-plan.md` tracked — the acceptance permitted this option too ("or removed").
-
-## Conclusion
-
-No spec-compliance issues in scope for task 6. The two orphaned study reports are resolved per the documented artifact convention, `git status` is clean of untracked files (exit 0), and no spec requirements are contradicted.
-
-(Note: my role's requested exit framing — *"If you find no issues, say 'No findings.' and exit 0"* — applies to the spec-requirements check, which is clean. I've listed the two INFO observations above for completeness, but neither blocks completion.)
+No BLOCKERs. Report saved to `.factory/artifacts/audit-findings-task6.md`.
 
 
 ---
 
 ## functional Audit
 
-## Functional Audit Report — Task 6: Resolve orphaned study-report files
+## Functional Audit — Task 6: Resolve orphaned study-report files
+
+**Verdict: PASS.** No blocking or warning issues found. The task is functionally correct.
 
 ### Verification performed
 
-| Check | Command | Result |
-|-------|---------|--------|
-| Clean-tree gate | `git status --porcelain -uall` | **Pass** — no untracked (`??`) entries anywhere |
-| Orphaned-file relocation | Root listing / `git ls-files .factory/artifacts/` | **Pass** — `architecture-study.md` + `subsystem-ui-report.md` now live under `.factory/artifacts/` and are tracked |
-| Content integrity | `wc -l`, tail of each moved file | **Pass** — 119-line and 230-line markdown, well-formed, ending on coherent content (not truncated) |
-| Stale references | `grep -rn 'architecture-study\|subsystem-ui-report\|study-report'` across md/py/sh/toml/scripts/bin/CMake | **Pass** — no references to the old root paths anywhere; nothing in `verify.sh` depends on the removed names |
-| Build | clean `cmake` Debug build, `-j$(nproc)` | **Pass** — exit 0, **0 warnings** (with `-Werror` active in Debug) |
-| Tests | `ctest --test-dir build --output-on-failure` | **Pass** — 91/91 passed, 0 failed; only 2 runner-gated skips (`test_kernel_controller`, `test_backend_smoke`) which use exit-77 correctly and are not expected on this runner |
+**1. Relocation is complete and correct (the core change)**
+- `architecture-study.md` and `subsystem-ui-report.md` are now **tracked** under `.factory/artifacts/` (AGENTS.md artifact convention), confirmed via `git ls-files`.
+- Both files are **absent** from the repo root (`ls` → "No such file or directory").
+- No source, test, CMake, script, config, or documentation file outside `.factory/artifacts/` and `.factory/prompts/` references the old root filenames (`grep` returned no matches) — the move introduced no dangling references.
+- `git ls-files --others --exclude-standard | grep -v '^\.factory/'` → **empty**: the repo root holds no untracked files, satisfying the acceptance criterion exactly as written and as established in the task's evidence.
+
+**2. Build + test suite (acceptance requires `./scripts/verify.sh` to pass)**
+- Ran `nix-shell --run './scripts/verify.sh'`: build completed and **100% tests passed, 0 failed out of 91**.
+- The only 2 non-run tests are **skips**, not failures: `test_kernel_controller` and `test_backend_smoke`, each exiting 77 because their `kernel-uinput` / `gpu-compositor` capabilities are absent on this runner — correct per-runner behavior per AGENTS.md, not a regression.
+
+**3. Clean-tree / orphan audit**
+- `git status --porcelain` is clean apart from factory-loop audit outputs (see INFO below).
 
 ### Findings
 
-**No findings (no BLOCKER or WARN issues).** The task's acceptance criteria are functionally met:
+**INFO** — `.factory/artifacts/audit-findings-task6.md` and `.factory/artifacts/audit-findings-task6-security.md` are currently untracked and appear during the audit cycle. These are **not** orphaned study reports and are **not** at the repo root (so they do not violate the task's "no untracked files at repo root" acceptance). They are factory-loop audit outputs generated alongside this review, not by `scripts/verify.sh` (no reference to them exists there). Per the factory process, the orchestrator is the sole Git writer and will sweep them up in the next `git add -A && git commit` cycle. **No action required for task 6** — this is expected transient loop state, not a defect in the change.
 
-- ✅ Repo root contains **no untracked files**.
-- ✅ Both study artifacts were **relocated to `.factory/artifacts/`** (the AGENTS.md artifact convention) rather than being deleted — valuable evidence preserved, content complete.
-- ✅ `git status --porcelain` shows **no untracked files**.
-- ✅ Build and full test suite are **green**; nothing regressed from the file move.
-
-The task was purely a relocation/housekeeping change, and no code paths, build inputs, or test registrations reference the old root-level names, so no integration or logic-level risk was introduced.
-
----
-
-**INFO** (non-blocking observation): the working tree carries an **uncommitted tracked modification** to `.factory/artifacts/implementation-plan.md` (a 45-line trim that strips descriptive detail from task entries 6–9, leaving status/verification/evidence stubs). This is ledger bookkeeping rather than an orphaned/untracked file, so it does **not** violate the "no untracked files" acceptance and is consistent with the factory's mutable-loop-state model in `.factory-state/`. The orchestrator should include it in its next `git add -A` commit before task 7, otherwise `git status` will continue to show a non-clean tracked diff — cosmetic only, not blocking.
-
-**Recommendation:** no action required for task 6 to be considered complete. Orchestrator should simply stage/commit the plan ledger along with the next cycle as normal.
-
-No findings. Exit 0.
+### Recommendation
+None — the acceptance criteria (relocate the two study artifacts under `.factory/artifacts/`, preserve by moving not discarding, root tree clean, `./scripts/verify.sh` passes) are all met and verified with real command evidence.
 
