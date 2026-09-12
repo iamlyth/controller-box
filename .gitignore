@@ -70,3 +70,11 @@ tests/golden-fail/
 # Per-task audit artifacts (generated during campaign, not source)
 .factory/artifacts/audit-*-task*.md
 .factory/artifacts/audit-findings-task*.md
+
+# All factory artifacts except the plan are generated during campaigns
+.factory/artifacts/*
+!.factory/artifacts/implementation-plan.md
+
+# Stray study subagent output in docs/ (not source documentation)
+docs/subsystem-*study*.md
+docs/*subsystem*study*.md
