@@ -7,12 +7,12 @@ status: active
 
 ## Task 1: Enforce host-mode freeze in the production dispatch path (B1)
 Title: Enforce host-mode freeze in the production dispatch path (B1)
-Status: pending
+Status: completed
 Dependencies: none
 Acceptance: In src/app/overlay_service.c (cbx_overlay_input_cb DBus path and cbx_overlay_service_step SDL keyboard path), the actual sending row row_idx (from cbx_overlay_input_find_row) is passed to cbx_host_mode_handle, not the host row. A frozen (non-host) controller can no longer move the host's selected row across columns, navigate the host's profile, or exit host mode via R3. The intended freeze guard in cbx_host_mode_handle (row_idx != hm->host_row -> CBX_HM_RESULT_FROZEN) is actually exercised.
 Verification: scripts/verify.sh; ctest --test-dir build -R 'test_host_mode|test_overlay_interaction|test_overlay_native' --output-on-failure. Extended interaction tests must assert the host's selected row/column is unchanged after a non-host controller navigates and that a non-host R3 does not exit host mode.
 Runner: none
-Evidence: updated interaction tests asserting host selection stability.
+Evidence: fixed src/app/overlay_service.c so both dispatch paths pass the actual sending row to cbx_host_mode_handle (DBus cbx_overlay_input_cb passes row_idx from cbx_overlay_input_find_row; SDL cbx_overlay_service_step keyboard passes row 0), so the freeze guard row_idx != host_row -> CBX_HM_RESULT_FROZEN is exercised. Added interaction tests test_o11e_non_host_nav_keeps_host_selection and test_o11f_non_host_r3_keeps_host_mode to tests/test_overlay_interaction.c; both fail under the previous host_row-passing bug and pass after the fix. Verification run: nix-shell --run 'cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug && cmake --build build --parallel' OK; ctest --test-dir build -R 'test_host_mode|test_overlay_interaction|test_overlay_native' --output-on-failure -> 100% passed (3/3); ./scripts/verify.sh -> 100% passed (91/91, 0 failures; only runner-gated skips test_kernel_controller and test_backend_smoke).
 
 ## Task 2: Make overlay virtual-device-icon visual assertions non-vacuous (B2)
 Title: Make overlay virtual-device-icon visual assertions non-vacuous (B2)

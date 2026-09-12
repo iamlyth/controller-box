@@ -721,6 +721,71 @@ test_o11b_host_mode_via_dbus_input(void **state)
 }
 
 /* ================================================================== */
+/*  O11e — Non-host controller cannot move the host's selection        */
+/* ================================================================== */
+
+static void
+test_o11e_non_host_nav_keeps_host_selection(void **state)
+{
+    interaction_fixture *f = *state;
+    make_visible(f);
+
+    /* Establish a baseline host selection: move row 0 (the host) to col 1,
+     * then enter host so host_row = 0 / selected_row = 0. */
+    inject_input(f, EXP_SENDER, DEV_PATH_0, "Right", 1.0);
+    cbx_overlay_service_step(f->svc);
+    assert_int_equal(cbx_select_grid_get_cur_col(&f->svc->grid, 0), 1);
+
+    inject_input(f, EXP_SENDER, DEV_PATH_0, "R3", 1.0);
+    cbx_overlay_service_step(f->svc);
+    assert_true(cbx_host_mode_is_active(&f->svc->hm));
+    assert_int_equal(cbx_host_mode_get_host_row(&f->svc->hm), 0);
+    assert_int_equal(cbx_host_mode_get_selected_row(&f->svc->hm), 0);
+
+    /* Non-host controller (row 1) navigates: Right, Down, Left.  Under the
+     * freeze guard these must all be ignored — the host's selected row and
+     * its column are unchanged, and frozen rows are untouched. */
+    inject_input(f, EXP_SENDER, DEV_PATH_1, "Right", 1.0);
+    cbx_overlay_service_step(f->svc);
+    inject_input(f, EXP_SENDER, DEV_PATH_1, "Down", 1.0);
+    cbx_overlay_service_step(f->svc);
+    inject_input(f, EXP_SENDER, DEV_PATH_1, "Left", 1.0);
+    cbx_overlay_service_step(f->svc);
+
+    /* Host selection stable: selected_row still 0, host row 0 still col 1. */
+    assert_int_equal(cbx_host_mode_get_selected_row(&f->svc->hm), 0);
+    assert_int_equal(cbx_select_grid_get_cur_col(&f->svc->grid, 0), 1);
+    /* Frozen row 1 was not moved by any of its own inputs. */
+    assert_int_equal(cbx_select_grid_get_cur_col(&f->svc->grid, 1), 0);
+}
+
+/* ================================================================== */
+/*  O11f — Non-host R3 does not exit host mode                         */
+/* ================================================================== */
+
+static void
+test_o11f_non_host_r3_keeps_host_mode(void **state)
+{
+    interaction_fixture *f = *state;
+    make_visible(f);
+
+    /* Enter host mode via controller 0 (host). */
+    inject_input(f, EXP_SENDER, DEV_PATH_0, "R3", 1.0);
+    cbx_overlay_service_step(f->svc);
+    assert_true(cbx_host_mode_is_active(&f->svc->hm));
+    assert_int_equal(cbx_host_mode_get_host_row(&f->svc->hm), 0);
+
+    /* Non-host controller (row 1) presses R3 — must be frozen; host mode
+     * must remain active instead of exiting. */
+    inject_input(f, EXP_SENDER, DEV_PATH_1, "R3", 1.0);
+    cbx_overlay_service_step(f->svc);
+
+    assert_true(cbx_host_mode_is_active(&f->svc->hm));
+    assert_int_equal(cbx_host_mode_get_host_row(&f->svc->hm), 0);
+    assert_int_equal(cbx_select_grid_get_cur_col(&f->svc->grid, 1), 0);
+}
+
+/* ================================================================== */
 /*  O11c — Unknown device path dropped via step                        */
 /* ================================================================== */
 
@@ -1046,6 +1111,10 @@ static const struct CMUnitTest tests[] = {
     cmocka_unit_test_setup_teardown(test_o11_multi_controller_independent,
                                      interaction_setup, interaction_teardown),
     cmocka_unit_test_setup_teardown(test_o11b_host_mode_via_dbus_input,
+                                     interaction_setup, interaction_teardown),
+    cmocka_unit_test_setup_teardown(test_o11e_non_host_nav_keeps_host_selection,
+                                     interaction_setup, interaction_teardown),
+    cmocka_unit_test_setup_teardown(test_o11f_non_host_r3_keeps_host_mode,
                                      interaction_setup, interaction_teardown),
     cmocka_unit_test_setup_teardown(test_o11c_unknown_device_dropped,
                                      interaction_setup, interaction_teardown),

@@ -1225,8 +1225,12 @@ cbx_overlay_input_cb(ip_input_id input,
         if (!cbx_ip_input_to_hm(input, &hm_in))
             return;
 
-        int host_row = cbx_host_mode_get_host_row(ctx->hm);
-        int result = cbx_host_mode_handle(ctx->hm, host_row, hm_in,
+        /* Pass the actual sending row (row_idx from the device path map),
+         * not the host row.  This lets cbx_host_mode_handle apply its
+         * freeze guard (row_idx != host_row -> FROZEN) so a frozen
+         * (non-host) controller cannot move the host's selected row across
+         * columns, navigate the host's profile, or exit host mode via R3. */
+        int result = cbx_host_mode_handle(ctx->hm, row_idx, hm_in,
                                             ctx->grid);
         if (result == CBX_HM_RESULT_EXIT) {
             cbx_host_mode_exit(ctx->hm);
@@ -1278,9 +1282,14 @@ cbx_overlay_service_step(cbx_overlay_service_ctx *svc)
                 /* Host Mode: host navigates rows + slots. */
                 cbx_hm_input hm_in;
                 if (sdl_key_to_hm_input(key, &hm_in)) {
-                    int host_row = cbx_host_mode_get_host_row(&svc->hm);
+                    /* The SDL keyboard always represents the primary
+                     * controller (row 0), matching the Player Mode keyboard
+                     * path.  Pass that actual sending row rather than the
+                     * host row so the freeze guard in cbx_host_mode_handle
+                     * is exercised: a frozen (non-host) controller can no
+                     * longer drive the host's selection or exit host mode. */
                     int result = cbx_host_mode_handle(
-                        &svc->hm, host_row, hm_in, &svc->grid);
+                        &svc->hm, 0, hm_in, &svc->grid);
 
                     if (result == CBX_HM_RESULT_EXIT) {
                         cbx_host_mode_exit(&svc->hm);
