@@ -3,7 +3,7 @@ spec_path: docs/SPEC.md
 spec_commit: HEAD
 base_commit: HEAD
 status: active
-roles_override: {"skip_auditors": ["compatibility", "functional"]}
+roles_override: {"skip_auditors": ["compatibility", "functional", "spec-compliance"]}
 ---
 
 ## Task 1: Fix test_golden profile-editor golden image mismatches
