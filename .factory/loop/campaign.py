@@ -637,6 +637,27 @@ def run_campaign(args, config: dict, env: dict) -> int:
 
                 print(f"\n=== Round {round_num} ===", file=sys.stderr)
 
+                # ── 0. PRE-PLANNING CHECK ──
+                # If all tasks in the committed plan are already completed,
+                # skip the planning phase entirely and go straight to the
+                # final verification + audit.  The planner is advisory; when
+                # the plan is terminal there is nothing to plan.
+                try:
+                    pre_plan = parse(PLAN_PATH)
+                    pre_sel = select(pre_plan.tasks, caps)
+                    if pre_sel.status == "work_exhausted":
+                        print("  pre-check: all tasks complete, "
+                              "skipping planning", file=sys.stderr)
+                        pre_roles = apply_roles_override(
+                            base_roles, pre_plan.roles_override)
+                        outcome = _finalize_success(
+                            pre_plan, config, env, args,
+                            pre_roles, state)
+                        reason = "all tasks complete (pre-planning)"
+                        break
+                except ValueError:
+                    pass  # Plan might be malformed; let planning handle it
+
                 # ── 1. PLANNING (parallel study → planner) ──
                 planning_start = time.time()
                 ok = run_planning_phase(
