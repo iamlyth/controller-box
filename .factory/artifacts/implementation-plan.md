@@ -52,12 +52,12 @@ Evidence: Completed. Install-state dependency fixed with access() check.
 
 ## Task 6: Update README to reflect plan-once architecture
 Title: Update README to reflect plan-once architecture
-Status: implemented
+Status: completed
 Dependencies: none
 Acceptance: README.md accurately describes the campaign as planning once then looping implementation. No mention of per-round planning.
 Verification: grep -q "plan once" README.md && grep -q "implementation loop" README.md
 Runner: none
-Evidence: Rewrote the "Finite factory campaign" section of README.md to state the campaign "plan once" at startup then runs an "implementation loop", removing the per-round `planning → implementation → verification → audit` framing and the per-round "creates or revises the canonical plan" language. Ran `grep -q "plan once" README.md && grep -q "implementation loop" README.md` from the repo root; exit code 0.
+Evidence: verification exit 0 on local
 
 ## Task 7: Update FACTORY-LOOP-SPEC requirement registry
 Title: Update FACTORY-LOOP-SPEC requirement registry
@@ -94,3 +94,4 @@ Acceptance: The full verification suite passes and the Git tree is clean on deve
 Verification: ./scripts/verify.sh && git status --porcelain
 Runner: none
 Evidence: Pending.
+
