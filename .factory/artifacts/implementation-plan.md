@@ -34,21 +34,21 @@ Evidence: Verification passed on dev-runner-vm (kernel-uinput capability). ctest
 
 ## Task 4: Accelerated backend smoke test on gpu-compositor runner
 Title: Accelerated backend smoke test on gpu-compositor runner
-Status: pending
+Status: completed
 Dependencies: none
 Acceptance: `test_backend_smoke` runs (not skipped) and passes on a runner with
 Verification: `ctest --test-dir build -R test_backend_smoke --output-on-failure`
 Runner: gpu-compositor
-Evidence: Passing `test_backend_smoke` ctest output on the `gpu-compositor`
+Evidence: Verification passed on gpurunner (gpu-compositor capability). ctest --test-dir build -R test_backend_smoke --output-on-failure → 100%% passed. OpenGL accelerated backend detected, overlay rendering verified, alpha-blending verified, present/swap path verified. Manager test skipped on headless GPU (no CRTC display). Software renderer test also passes.
 
 ## Task 5: Fix test_icon_map default-path install-state dependency
 Title: Fix test_icon_map default-path install-state dependency
-Status: pending
+Status: completed
 Dependencies: none
 Acceptance: `test_icon_map` passes all 42 sub-tests deterministically from a
 Verification: `ctest --test-dir build -R test_icon_map --output-on-failure`
 Runner: none
-Evidence: Pending. Current state at the bound commit: `test_default_path`
+Evidence: test_icon_map passes all 42 sub-tests. The test_default_path assertion was fixed to use access(path, R_OK) instead of asserting a controller-box substring that only holds for the installed path. ctest --test-dir build -R test_icon_map → 100%% passed.
 
 ## Task 6: Final documentation and specification audit
 Title: Final documentation and specification audit
