@@ -644,7 +644,8 @@ def run_campaign(args, config: dict, env: dict) -> int:
                 # the plan is terminal there is nothing to plan.
                 try:
                     pre_plan = parse(PLAN_PATH)
-                    pre_sel = select(pre_plan.tasks, caps)
+                    pre_caps = get_available_capabilities(env["runners"])
+                    pre_sel = select(pre_plan.tasks, pre_caps)
                     if pre_sel.status == "work_exhausted":
                         print("  pre-check: all tasks complete, "
                               "skipping planning", file=sys.stderr)
