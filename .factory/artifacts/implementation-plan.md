@@ -75,7 +75,7 @@ Dependencies: none
 Acceptance: All Python modules in .factory/loop/ compile without errors.
 Verification: python3 -c "import py_compile; [py_compile.compile(f'.factory/loop/{m}', doraise=True) for m in ['campaign.py','parallel.py','state.py','selector.py','plan_parser.py','metrics.py','issues.py','runner.py','preflight.py','gitutil.py','lock.py','__init__.py']]"
 Runner: none
-Evidence: verification exit 0 on local
+Evidence: Repair (cycle 2): applied linting cleanup for the harness modules in scope (removed unused `RoundMetrics`/`Issue` imports in campaign.py, dead `min_round` param in issues.py, duplicate banner + unreachable `audit_findings` branch + redundant no-op in campaign.py, duplicate rsync exclude in runner.py). Re-ran the exact verification command; all 12 modules compile with exit 0, full `.factory/loop` package imports cleanly.
 
 ## Task 9: Verify full test suite passes
 Title: Verify full test suite passes

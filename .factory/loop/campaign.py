@@ -62,12 +62,10 @@ from .parallel import (
     _resolve_model,
 )
 from .metrics import (
-    RoundMetrics,
     MetricsLog,
     build_round_metrics,
 )
 from .issues import (
-    Issue,
     IssueTracker,
     write_round_scratchpad,
     read_round_scratchpads,
@@ -339,9 +337,6 @@ def run_planning_phase(roles: dict, config: dict, args, root: Path,
         subsystems = discover_subsystems(root)
         studies.extend(subsystems)
 
-    if not studies:
-        studies = []
-
     print(f"  planning: {len(studies)} study subagents", file=sys.stderr)
 
     # Launch study subagents in parallel (read-only, approve=False).
@@ -605,8 +600,6 @@ def _finalize_success(plan: Plan, config: dict, env: dict, args,
     )
     return "findings" if report.has_blockers else "success"
 
-
-# ─── Main campaign loop ──────────────────────────────────────────────
 
 # ─── Main campaign loop ──────────────────────────────────────────────
 
@@ -1066,9 +1059,6 @@ def run_campaign(args, config: dict, env: dict) -> int:
             elif state.last_outcome == "audit_findings_resolved":
                 outcome = "findings"
                 reason = "rounds exhausted after repair cycles"
-            elif state.last_outcome == "audit_findings":
-                outcome = "findings"
-                reason = "rounds exhausted with audit findings"
             else:
                 outcome = "findings"
                 reason = "rounds exhausted before completion"

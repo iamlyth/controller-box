@@ -301,7 +301,6 @@ def write_round_scratchpad(
 def read_round_scratchpads(
     root: str | Path,
     last_n: int = 3,
-    min_round: int = 1,
 ) -> str:
     """Read recent round scratchpads and format them for the planner.
 

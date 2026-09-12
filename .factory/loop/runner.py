@@ -31,7 +31,7 @@ SSH_OPTIONS = (
 # Never sync VCS metadata, mutable control state, local-only artifacts, or
 # build directories (build artifacts contain local/sandbox paths invalid on
 # the runner — the runner rebuilds from source after sync).
-RSYNC_EXCLUDES = (".git", ".factory-state", ".factory-state/", "__pycache__", "build")
+RSYNC_EXCLUDES = (".git", ".factory-state", "__pycache__", "build")
 
 
 @dataclass
