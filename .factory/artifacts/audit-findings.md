@@ -1,193 +1,215 @@
-# Audit findings (round 1, task 6, repair 2)
+# Audit findings (round 1, task 6, repair 3)
 
 ## efficiency Audit
 
-The working tree is clean, the two study-report artifacts are relocated and tracked under `.factory/artifacts/`, and the src/tests edits seen in history were reverted per the audit notes (confirmed by the clean working tree). This is a pure git-hygiene/plumbing task with no hot paths, no algorithms, no resource lifecycle, and no I/O or build-pipeline changes to evaluate.
+## Efficiency Audit — Task 6: Resolve orphaned study-report files
 
-From an efficiency standpoint, the outcome is sound:
-- **No redundant work**: the two artifacts exist once, in their canonical `.factory/artifacts/` location (349 lines of substantive analysis, not stub copies mirrored elsewhere).
-- **No leak**: no stray untracked files at the root; `build/`, `build-*/`, `.factory-state/`, and other volatile/generated dirs are correctly gitignored rather than accidentally version-controlled (no repo bloat or forced rebuilds).
-- **No hot-path or I/O concerns** introduced — production sources are untouched.
+**No findings.**
 
-## Findings
+### Basis
 
-**No findings.** Task 6 is a repository-housekeeping change; there is no algorithmic complexity, resource allocation, hot-path computation, redundant work, I/O-pattern, or build-efficiency issue to report. The acceptance criterion (`git status --porcelain` → empty) is satisfied and verified.
+Task 6 is a repository-housekeeping task, not a code change. The acceptance criterion (`git status --porcelain` shows no untracked files) is met — the current tree reports **0 untracked files**.
+
+I verified the complete scope of the change in the final commit (`3bd4eab1`):
+
+- **`.gitignore`**: one added entry (`.test-install-bin/`) ignoring a generated build-artifact staging directory.
+- **`tests/test_settings_controllers_sync.c`**: removed an **untracked orphan** file. I confirmed it is not registered anywhere in the build system (`grep` across CMakeLists/CMake config returned no references), so its removal cannot break incremental builds or leave dangling test registrations. No build-efficiency regression.
+- **Docs only**: `.factory/artifacts/` audit findings and the implementation plan.
+
+No production code, event loop, render path, allocation, DBus, or I/O surface was touched, so none of the six audit categories (algorithmic complexity, resource leaks, hot paths, redundant work, I/O patterns, build efficiency) has anything to flag:
+
+1. **Algorithmic complexity** — n/a; no algorithmic code changed.
+2. **Resource leaks** — n/a; no allocation/fd/DBus code changed.
+3. **Hot paths** — n/a; no per-frame/per-event code touched.
+4. **Redundant work** — n/a.
+5. **I/O patterns** — n/a; only housekeeping edits.
+6. **Build efficiency** — the changes are *net positive*: removing the orphaned untracked `.c` removes the risk of a stale/uncompiled source being tracked, and the `.gitignore` addition (`build/-ignore` already present; `.test-install-bin/` added) keeps generated staging out of the index. The `build/` tree remains properly ignored.
+
+Exit code: 0 (no findings).
 
 
 ---
 
 ## security Audit
 
-I've completed my security audit of Task 6.
+Audit complete. Recorded my findings to `.factory/artifacts/audit-findings-task6-security.md` (a tracked file — `git status` shows it as `M`, no untracked files introduced).
 
-## Summary
+## Security Audit Report — Task 6
 
-Task 6 is a documentation-housekeeping task: it relocated orphaned study-report markdown files under `.factory/artifacts/`, tracked them, removed prior incidental production-code edits that had leaked into the tree, and left the working tree clean.
+**Verdict: No findings.** No `BLOCKER` or `WARN` items. Exiting 0.
 
-### What I verified
+### What I verified (independently, at HEAD `3bd4eab1`)
+- `git status --porcelain --untracked-files=all` → **0 untracked files**. Acceptance criterion met.
+- All study-report artifacts are tracked under `.factory/artifacts/` (`architecture-study.md`, `subsystem-manager-study.md`, `subsystem-ui-report.md`, `subsystem-report-app.md`, plus loop/audit metadata).
+- I confirmed by direct inspection that the incidental production-code edits that appeared in intermediate commit `6cdf52da` were **reverted at HEAD**: `src/manager/settings_tab.c/h`, `manager.c`, `tests/CMakeLists.txt` are free of the `on_saved` / `cbx_settings_tab_set_saved_callback` code, and `tests/test_settings_controllers_sync.c` no longer exists. (The prior audit's claim held up.)
+- No credentials/secrets in the moved artifacts — the only `token` matches are the self-referential scan note and the `csv_token_count` CSV-helper function name, neither a secret.
+- Mutable runtime state (`build/`, `.factory-state/`, `.pi/output/`) is gitignored, not version-controlled.
 
-- **Clean tree**: `git status --porcelain` returns empty output — the task's acceptance criterion ("repo root contains no untracked files") is literally satisfied, including the prior WARN about the concurrent audit file, which was subsequently committed.
-- **No runtime attack surface introduced**: The change touches only markdown artifacts and reverts code edits. It adds no C source, no input parsing, no buffers, no DBus/network surface, no privilege boundary, no runtime filesystem writes, no error paths, and no dependency manifests.
-- **No secrets**: The moved study artifacts (`architecture-study.md`, `subsystem-ui-report.md`) contain no credentials. The only `token`/`secret` grep matches were the words "secret"/"token" in the audit reports' own prose (referencing `csv_token_count`, a CSV helper name in documentation) — false positives, not credential material.
-- **Code revert confirmed clean**: No residual `test_settings_controllers_sync` or `subsystem-study` references remain in `src/`, `tests/CMakeLists.txt`, `CMakeLists.txt`, or `docs/`.
-- **Runtime state correctly ignored**: `build/`, `.factory-state/`, `.pi/output/`, `.ralph/` are gitignored, not version-controlled.
+### Why no security findings
+The task is pure documentation/version-control housekeeping: it adds no C source, no input parsing, no buffers, no network/DBus surface, no privilege boundary, no runtime filesystem writes, no error paths, and no dependency changes. None of the focus areas (input validation, buffer safety, privilege boundaries, DBus auth, filesystem safety, error handling, dependencies) are touched.
 
-### Findings
+### INFO (pre-existing, out of Task-6 scope)
+Three weaknesses in `src/ui/` surfaced by the relocated reports — already scheduled elsewhere, not introduced here:
+- `src/ui/text.c` — texture leak on the cache-full/over-length path (slow memory growth in a resident service).
+- `src/ui/widget_list.c` — unguarded `y / item_h` divide in `list_handle_event` (currently safe, no setter exists).
+- `src/ui/widget_button.c` — `SDLK_a` focus activation ignores the controller-event window marker (local input nit, not a privilege issue).
 
-**No BLOCKER or WARN findings for Task 6.**
-
-The change introduces no attack surface across any of the security focus areas (input validation, buffer safety, privilege boundaries, DBus authentication, filesystem safety, error handling, dependencies).
-
-**INFO (pre-existing, out of Task-6 scope, already documented):** The relocated study reports surface prior, already-known weaknesses in `src/ui/` that are scheduled as separate planner work and not introduced by this task:
-- `src/ui/text.c` — texture leak on cache-full/over-length path in `render_to_texture`.
-- `src/ui/widget_list.c` — unguarded `y / item_h` divide in `list_handle_event` (currently safe: no `item_h` setter exists).
-- `src/ui/widget_button.c` — `SDLK_a` activates focus without checking the controller-event window-ID marker.
-
-None of these affect Task 6 completion.
-
-**Result: No security findings for Task 6.** The working tree is clean and the change is security-neutral. Exiting 0.
-
-
----
-
-## compatibility Audit
-
-I've completed the compatibility audit of task 6.
-
-## Audit scope
-
-Task 6 ("Resolve orphaned study-report files to keep `git status` clean") is a **documentation/git housekeeping task**. It relocated two orphaned study reports (`architecture-study.md`, `subsystem-ui-report.md`) from the repo root into `.factory/artifacts/` and committed them.
-
-## What I verified
-
-1. **Working tree state**: `git status --porcelain` returns empty (0 lines); `git ls-files --others --exclude-standard` returns nothing. No untracked files remain at the repo root. Acceptance met.
-2. **Artifact disposition**: All four study reports (`architecture-study.md`, `subsystem-manager-study.md`, `subsystem-report-app.md`, `subsystem-ui-report.md`) are tracked under `.factory/artifacts/` — moved, not discarded.
-3. **Platform/dependency/API surface**: Grepping the codebase for `architecture-study`, `subsystem-ui-report`, `subsystem-manager-study`, `subsystem-report-app` shows **zero references outside `.factory/artifacts/`** (only the plan/audit markdown documents mention the historical root filenames). No C source, CMakeLists, scripts, or test registrations reference the old root-level paths.
-4. **Build/system impact**: The change is documentation-only — it touches no C, CMake, `shell.nix`, package declarations, pkg-config modules, DBus/sd-bus usage, SDL2/3 calls, or test-environment assumptions. `.gitignore` already excludes `build/`, `build-*/`, and runtime state, so the committed tree is clean.
-5. **Ignored-path hygiene**: Verified `.gitignore` correctly covers build and factory runtime state; nothing that would need to be compiled or linked was moved or renamed.
-
-## Findings
-
-**No findings.**
-
-This task introduced no platform, dependency, API-usage, ABI, build-system, or test-environment compatibility issues. It is a pure documentation/git-hygiene change with the required clean working tree.
-
-Exit 0.
+None affect Task 6 completion.
 
 
 ---
 
 ## linting Audit
 
-I have completed my audit. Let me compile the final report.
+## Linting Audit — Task 6: Resolve orphaned study-report files
+
+**Repo state verified (on `develop`):** `git status --porcelain` is clean; the two named study reports (`architecture-study.md`, `subsystem-ui-report.md`) are relocated under `.factory/artifacts/` and tracked; the dead, never-built test `tests/test_settings_controllers_sync.c` has been removed from both the working tree and Git tracking; the `.gitignore` entry `.test-install-bin/` is consistent with sibling entries (`.test-install-diagram/`, `.install-prefix/`, `.diag-prefix-build/`, `.test-diag-inspect/`). No placeholder/TODO markers, no trailing whitespace, no dangling `test_settings_controllers_sync` code references remain.
+
+No **BLOCKER**-level issues found. The task's acceptance criteria are met. Two non-blocking observations follow.
+
+### Finding 1 — WARN: unreferenced binary `diff.png` left at repo root
+- **File(s):** `/workspace/project/diff.png` (1280×720 RGBA PNG, 34 KB, committed in `6a225704 "factory: task 1 round 1 attempt 3"`)
+- **Description:** A stray debug/diff screenshot binary sits at the repo root. It is **tracked** (so it does not trip the "no untracked files" acceptance gate), but it is referenced **nowhere** — no doc, code, or test. The only `diff.png` mentions in the tree are `tests/test_fb_assert.c` (`/tmp/cbx_test_diff.png`) and `tests/test_golden.c` (`FAIL_DIR/name.diff.png`), which are different files. This is exactly the class of orphaned root-level artifact Task 6 exists to sweep, just a committed rather than untracked instance. Leaving it contradicts the task's stated intent ("keep the repo root clean").
+- **Recommendation:** `git rm diff.png` (or relocate it under `.factory/artifacts/` if it has evidentiary value) as part of the same housekeeping pass. Non-blocking because the acceptance gate nominally targets *untracked* files only.
+
+### Finding 2 — INFO: evidence narrative undercounts the relocated study artifacts
+- **File(s):** `.factory/artifacts/implementation-plan.md` (Task 6 "Evidence" and "Acceptance") ; also mirrored in `.factory/artifacts/audit-findings*.md`
+- **Description:** The plan's evidence repeatedly refers to "the **two** study artifacts" and only names `architecture-study.md`/`subsystem-ui-report.md`, but **four** substantive study reports now live under `.factory/artifacts/` (also `subsystem-manager-study.md`, `subsystem-report-app.md`). This is a stale/undercounted narrative, not a functional defect. Already independently noted at `audit-findings.md:111`.
+- **Recommendation:** Adjust the "two" wording to reflect all four reports, or explicitly state the other two pre-existed and were out of scope, so the evidence is internally consistent.
+
+### Verified-clean (no action needed)
+- **Dead code:** Deleted test is gone from tree and `git ls-files`; zero build/test references remain (`add_executable`/`add_test` registrations were reverted with the feature).
+- **`.gitignore`:** The added `.test-install-bin/` line matches the pre-existing staging-prefix naming convention and does not ignore any tracked file (`git ls-files | grep test-install-bin` → empty).
+- **Moved docs:** `architecture-study.md` and `subsystem-ui-report.md` are substantive, well-structured markdown with consistent heading levels, no placeholders, no trailing whitespace. They are documentation, not code, so no C-language-convention concerns apply.
+- **Comments/readability:** No production C was added or altered in the final task state (the mis-scoped `src/manager` feature was reverted), so no code-comment issues introduced.
+
+**Verdict:** Findings 1–2 are non-blocking; neither affects the task's clean-tree acceptance. **No BLOCKERs.**
+
 
 ---
 
-# Linting Audit — Task 6: Resolve orphaned study-report files
+## compatibility Audit
 
-## Verdict
-
-Task 6's stated acceptance criteria are **met**: `git status --porcelain` is empty (working tree clean), the repo root contains no untracked files, and the two study artifacts (`architecture-study.md`, `subsystem-ui-report.md`) are relocated under `.factory/artifacts/` and tracked. The study reports themselves are substantive, well-structured documentation with no placeholder/stub/TODO markers and no trailing-whitespace pollution.
-
-However, the task introduced **dead code** that contradicts both its own intent ("resolve orphaned files") and the evidence recorded in its audit reports.
+I've completed the platform, dependency, and API compatibility audit for task 6. Here is my report.
 
 ---
+# Compatibility Audit Report — Task 6: Resolve orphaned study-report files
+
+## Scope Reviewed
+The task is a git/documentation-housekeeping change. The only substantive source change in the repair commit (`3bd4eab1`) is:
+- **Deletion** of `tests/test_settings_controllers_sync.c` (161 lines, dead code)
+- **`.gitignore`** addition of `.test-install-bin/`
+
+I verified the current tree state and build compatibility directly.
 
 ## Findings
 
-### 1. BLOCKER — Orphaned, unbuilt test source left committed
-- **File:** `tests/test_settings_controllers_sync.c` (161 lines), plus the misleading reference in `.factory/artifacts/audit-findings.md:169` and `.factory/artifacts/audit-findings-task6.md:23`
-- **Description:** During the first attempt at this task (commit `6cdf52da`), a 161-line regression test was written against a `src/manager` settings-tab save-path fix. The `src/manager` fix and the CMake registration were later reverted in `db20d2bd` ("clean: restore tree"), **but the test source file itself was never reverted.** The file is committed and tracked, yet it is **not referenced by any `add_executable`/`add_test`** in `tests/CMakeLists.txt`, has **zero references** in the build tree (confirmed: `grep -rn settings_controllers_sync` returns matches only in its own file and the audit docs), and is **never compiled, linked, or run**. CTest reports `91/91 pass` → this file contributes zero test coverage. The audit reports even describe this as a finding, yet the file remains in the tree, directly contradicting the "no residual `test_settings_controllers_sync`" claim on those same evidence lines.
-- **Rationale for BLOCKER:** This is dead code that the task itself was explicitly created to eliminate, and it makes the evidence in `audit-findings.md`/`audit-findings-task6.md` factually wrong. The task cannot be considered genuinely complete while the tree carries a committed, unbuilt, unreferenced 161-line source file claiming to be "Regression test for Task 6."
-- **Recommendation:** Delete the file with `git rm tests/test_settings_controllers_sync.c` and re-verify `git status --porcelain` is clean. Optionally update the audit evidence lines to reflect that the dead file was removed. (Do not re-add it to CMakeLists — the associated `src/manager` fix it targets was legitimately reverted.)
+### No BLOCKER findings
 
-### 2. WARN — Misleading file header comment on the orphaned test
-- **File:** `tests/test_settings_controllers_sync.c` (lines 1–13)
-- **Description:** The file's banner comment says "Regression test for Task 6 … The fix makes the Settings-tab save path reload …" describing a feature/fix that **does not exist** in the current tree (the fix was reverted). Even ignoring the dead-code issue, this comment misrepresents the state of the codebase.
-- **Recommendation:** This is resolved automatically by deleting the file (finding 1). If the file were instead retained and re-registered, the banner must be rewritten to describe reality.
+Task 6 introduces no platform, dependency, API-usage, ABI/API, build-system, or test-environment compatibility issues. Evidence:
 
-### 3. INFO — Inconsistent artifact accounting in task evidence
-- **File:** `.factory/artifacts/implementation-plan.md` (lines 53–54, evidence block)
-- **Description:** Task 6 is titled/described around "two study artifacts," and four study/report files now live under `.factory/artifacts/` (`architecture-study.md`, `subsystem-manager-study.md`, `subsystem-report-app.md`, `subsystem-ui-report.md`). The plan's evidence narrative only accounts for two. This is cosmetic, not blocking.
-- **Recommendation:** Clarify in the evidence which artifacts are the required deliverables vs. supporting study reports, so a future reader isn't misled.
+- **Platform compatibility** — No new platform-specific API (uinput, evdev, systemd, DBus, SDL) is introduced; the change only deletes a source file and ignores a build-artifact directory.
+- **Dependency versions** — `shell.nix` / `cross-shell.nix` untouched; no dependency changes.
+- **API usage / ABI** — No production-code API changes. The deleted test was never wired into any target; its referenced headers (`manager/`, `settings_tab.h`, `controllers_tab.h`, `config_settings.h`) are untouched.
+- **Build system** — Confirmed no reference to `test_settings_controllers_sync` in `tests/CMakeLists.txt` or root `CMakeLists.txt` (no `GLOB`, no `add_executable`/`add_test`), and no dangling source reference persists in the cached build tree. Re-ran `cmake -S . -B build && cmake --build build --parallel` under `nix-shell` with CMake 4.3.4: **configure + build exit 0**, all targets compile.
+- **Test environment** — CTest suite unaffected (no target removed, 91/91 suite intact); the removed file was never compiled/run, so it contributed zero coverage and its removal cannot regress the environment.
 
----
+**BLOCKER resolved correctly**: the previously identified dead, committed, never-built test (`tests/test_settings_controllers_sync.c`) is now deleted from the tree, and `git status --porcelain` returns clean (verified — no untracked files). The `.gitignore` addition for `.test-install-bin/` is an appropriate hygiene measure and does not over-broadly exclude project sources.
 
-## No additional findings
+### INFO
+- **File(s):** `.factory/artifacts/audit-findings.md` (lines 99–105, 120, 136–139, 179–190), `.factory/artifacts/audit-functional-task6.md` (lines 53, 65–66, 87, 91, 167), `.factory/artifacts/audit-findings-task6.md` (line 23)
+  - **Description:** Several artifact documents were written *before* the repair commit and still describe `tests/test_settings_controllers_sync.c` as currently tracked and present, concluding "Exit 1" and "BLOCKER remains." Line 32 of `audit-findings.md` now (correctly) states the reference is gone, but the findings sections on lines 99–190 still assert the file is present — internally contradictory/stale evidence relative to HEAD. This does not affect code compatibility, but it can mislead future auditors/verification.
+  - **Recommendation:** Update these evidence lines to record that the dead test was removed by commit `3bd4eab1` (and that the earlier "BLOCKER" is now closed), so the artifact reflects the repaired state.
 
-The study reports and audit markdown are otherwise clean: no verbose filler comments, no TODO/FIXME/stub markers, no trailing whitespace in the deliverables, and no other dead includes/imports. The `git status` cleanliness criterion at the repo root is satisfied.
+## Conclusion
+**No blocking compatibility issues.** The change is confined to source-file deletion plus a build-artifact `.gitignore` entry; it builds cleanly under the installed CMake, leaves the working tree clean, and removes an orphaned test rather than introducing any cross-platform or API risk. One INFO-level documentation-staleness note is appended.
 
-**Required action before task 6 can be considered complete:** remove `tests/test_settings_controllers_sync.c` (finding 1).
+Exit code 0.
 
 
 ---
 
 ## spec-compliance Audit
 
-# Spec Compliance Audit — Task 6: Resolve orphaned study-report files
+I have completed my audit. Let me summarize the evidence and produce the report.
 
-## Summary
+**Evidence gathered:**
+- `git status --porcelain` → clean (0 untracked, ignored files excluded); `git ls-files --others --exclude-standard` → **0** untracked non-ignored files. Repo root contains no untracked files. ✓
+- Both previously-orphaned study reports (`architecture-study.md`, `subsystem-ui-report.md`) plus `subsystem-manager-study.md` and `subsystem-report-app.md` are tracked under `.factory/artifacts/` (12–13 KB each, preserved not discarded). ✓
+- `./scripts/verify.sh` exits **0**: 91/91 tests pass, 2 skips (`test_kernel_controller`, `test_backend_smoke`) exit 77 due to absent kernel-uinput/gpu-compositor capabilities — documented correct per-runner behavior, not a regression.
+- The audit BLOCKER repair is verified: dead `tests/test_settings_controllers_sync.c` no longer tracked; `.test-install-bin/` added to `.gitignore` (and the dir it creates is properly ignored by verify teardown).
+- Task 6 commits touch only `.factory/artifacts/*.md`, `.gitignore`, and the dead-test removal — **no production source, build, or test-registration changes**.
 
-The task's **primary acceptance criterion is met**: the working tree is clean (`git status --porcelain` exits 0 with no output), and the two named study artifacts (`architecture-study.md`, `subsystem-ui-report.md`) are preserved — **moved, not discarded** — under `.factory/artifacts/` and tracked in Git, consistent with the AGENTS.md artifact convention. No production source, build, or test registration references the old root-level filenames.
+---
+
+# Task 6 Spec Compliance Audit
+
+**Task:** Resolve orphaned study-report files to keep `git status` clean
 
 ## Findings
 
-### WARN 1 — Orphaned tracked test source left behind by the tree-restore commit
-- **File(s):** `tests/test_settings_controllers_sync.c`
-- **Description:** Commit `db20d2bd` ("clean: restore tree") reverted a mis-scoped manager feature and removed its CMake target from `CMakeLists.txt`, but left `tests/test_settings_controllers_sync.c` **tracked in Git with no build target**. Verified:
-  - `grep settings_controllers_sync CMakeLists.txt tests/CMakeLists.txt` → no reference
-  - `find build -name test_settings_controllers_sync*` → empty (never compiled)
-  - The file is still tracked (`git ls-files` → listed)
-- This is precisely the class of "orphaned" artifact task 6's clean-tree intent is meant to eliminate — except this one is orphaned *inside* the tree rather than at the repo root, so it doesn't trip the acceptance gate.
-- **Recommendation:** Either restore its build target (if the settings-save→Controllers-tab sync behavior is genuinely wanted) or delete the file. As-is it is dead, unreferenced code that will bit-rot against API drift.
+**No BLOCKER or WARN findings.** The implementation is compliant with the task specification and acceptance criteria.
 
-### WARN 2 — `test_installed_binary.sh` staging prefix not gitignored
-- **File(s):** `tests/test_installed_binary.sh` (line 39, `STAGING_DIR="$PROJECT_ROOT/.test-install-bin"`); `.gitignore`
-- **Description:** Running `./scripts/verify.sh` (which invokes `test_installed_binary`) created an **untracked repo-root directory** `.test-install-bin/` containing dozens of files, and `.gitignore` has **no** entry for it (verified count = 0; only `.test-install-diagram/` and similar are ignored). It appears because the test's Xvfb-on-`:98` step fails/competes in this environment and the `cleanup` trap did not fully remove the tree in my run.
-- This means the "git status stays clean" acceptance can regress simply by running the documented verification. It is an environmental/teardown leak, but the fix is trivial and belongs in-scope.
-- **Recommendation:** Add `.test-install-bin/` to `.gitignore` (alongside `.test-install-diagram/`, `.test-diag-inspect/`, etc.). Optionally harden the script so a non-starting Xvfb triggers `exit 77`/cleanup rather than leaving the staging tree behind.
+- **Acceptance met**: Repo root holds zero untracked files (`git ls-files --others --exclude-standard` → 0). Git status is clean.
+- **Relocation preserved**: Study artifacts were moved into `.factory/artifacts/` (per AGENTS.md convention) and committed — not discarded. Content is non-empty and intact.
+- **Verification gate passes**: `./scripts/verify.sh` exit 0, 91/91 passing (2 hardware-dependent skips are correct per-runner behavior).
+- **No scope creep / no production impact**: Task 6 commits alter only markdown artifacts, the `.gitignore`, and a removed dead test file. No source, build, or test registration changes; the incidental code leak was fully reverted.
+- **Repair BLOCKER resolved**: Dead `test_settings_controllers_sync.c` removed from tree; `.test-install-bin/` gitignored so verify teardown cannot regress the clean-tree gate.
 
-### INFO 3 — `verify.sh` does not reproducibly exit 0 on this runner
-- **File(s):** `tests/test_installed_binary.sh` (Xvfb `:98` handling); `.factory/artifacts/implementation-plan.md` (task 6 evidence claiming "91/91 passed, 0 failed")
-- **Description:** In my runs `verify.sh` returned exit 2 (transient parallel-build dependency-file race) and exit 8 (ctest: 90/91 pass, `test_installed_binary` failed because "an X server is already running" on `:98`, plus the two expected capability skips). These are environmental/flakiness issues, **not** task-6 regressions (task 6 is documentation-only), and the build does compile cleanly. The recorded evidence "91/91 passed, 0 failed … only two skips" overstates the current runner state given the `test_installed_binary` flake.
-- **Recommendation:** No code change required for compliance. If audit evidence is meant to be reproducible, re-record the exit code on a clean runner or note the Xvfb port-conflict as an environment precondition.
+### INFO
+- `.factory/artifacts/audit-findings-task6-security.md` currently shows `M` in the working tree (uncommitted 42+/32− edit, mtime 02:33 during the audit window). This is a **concurrent parallel security-auditor agent** writing its report, **not** a result of `verify.sh` (which never writes to `.factory/artifacts/`) nor of task 6's implementation. It is a transient tracked-file edit that the orchestrator will commit in the next cycle; it does **not** violate task 6's acceptance (which concerns *untracked* files at the repo root).
 
-### INFO 4 — Spec impact of the reverted settings feature is not a violation
-- **File(s):** `src/manager/manager.c`, `src/manager/settings_tab.c`, `src/manager/settings_tab.h` (removed `cbx_manager_settings_saved` / `cbx_settings_tab_set_saved_callback`)
-- **Description:** Commit `db20d2bd` restored the tree by removing a mis-scoped manager feature (saving Settings re-loaded authoritative settings so the Controllers tab reflects new VC count without restart). SPEC §5.3/§5.7 require "Settings change and persistence," which is satisfied by save-to-disk + post-restart durability; immediate in-session tab reflection is a UX nicety not unambiguously required, and the overlay's refresh-on-open contract (§5.2, line 157) is handled separately. No dangling references to the removed API remain (verified across `src/`, `tests/`). Not a BLOCKER.
-
-## Conclusion
-
-**No findings rise to BLOCKER.** Task 6's acceptance (clean tree, both study artifacts preserved under `.factory/artifacts/` and tracked) is verifiably satisfied. The two WARNs concern dead/orphaned code left behind by the tree-restore commit and a missing gitignore entry for a verification artifact — both are cheap, in-spirit cleanups worth doing.
+No actionable changes required for task 6. Exiting 0.
 
 
 ---
 
 ## functional Audit
 
-I've completed the functional audit and written the report to `.factory/artifacts/audit-functional-task6.md`. Here is my summary.
+## Functional Audit — Task 6: Resolve orphaned study-report files
 
-## Functional Audit — Task 6
+**Scope audited:** `3bd4eab1` (HEAD, `develop`). Independently ran a complete clean build and the full CTest suite, and re-ran every acceptance criterion against the live tree.
 
-### What I actually ran (real commands, real exit codes)
-- **Build:** `cmake -B build && cmake --build build -j$(nproc)` → **exit 0, 0 warnings, 0 errors**. (The `sysprof-capture-4/glib` configure message is benign — glib isn't used anywhere in the project.)
-- **Tests:** full `ctest` → first run 3 failures, but all pass in isolation and a clean full re-run gives **100% (91/91, 2 legitimate per-runner skips), exit 0**.
-- **Clean-tree:** `git status --porcelain -uall` empty; **0 untracked files**; study reports correctly relocated to `.factory/artifacts/` (moved, not discarded).
+### Verdict
+
+No **BLOCKER**. Task 6 is functionally complete: its acceptance criteria are met, and the BLOCKER raised by the prior functional audit was genuinely resolved. Two non-blocking observations follow.
+
+### Acceptance criteria verified (real commands, real outcomes)
+
+1. **Repo root holds no untracked files** — `git ls-files --others --exclude-standard` → **0** untracked files anywhere; `grep -v '^\.factory/'` → empty. ✔
+2. **Study artifacts relocated & tracked** — `.factory/artifacts/architecture-study.md` and `.factory/artifacts/subsystem-ui-report.md` are tracked; root-level files `architecture-study.md`/`subsystem-ui-report.md` are gone. Moved, not discarded. ✔
+3. **Build** — Clean `cmake -B build -S . -DCMAKE_BUILD_TYPE=Debug && cmake --build build -j32` → **exit 0** (see WARN-1 for a transient first-run link race).
+4. **`./scripts/verify.sh` test surface** — `ctest --test-dir build --output-on-failure --timeout 120` → **91/91 passed, 0 failed** (exit 0). The only two skips (`test_kernel_controller`, `test_backend_smoke`) exit 77 due to absent `kernel-uinput`/`gpu-compositor` capabilities on this runner — expected per-runner behavior, not a regression. ✔
+5. **`git status --porcelain`** — no untracked files (only one *modified tracked* audit-evidence file, see WARN-2). ✔
+
+### Prior BLOCKER genuinely resolved
+
+`tests/test_settings_controllers_sync.c` — the committed, never-built test asserting the deliberately-reverted settings-save feature — has been fully cleaned up:
+- `git ls-files` → not tracked; file absent on disk; no references in `tests/CMakeLists.txt`, `CMakeLists.txt`, or `scripts/`.
+- The prior evidence's false "no residual file remains" claim is corrected (audit-findings now states it was *deleted*).
+- `.gitignore` gained `.test-install-bin/` (commit `3bd4eab1`), confirmed to mask no committed file (0 tracked paths under it) — a legitimate guard against the clean-tree gate being regressed by verify teardown.
 
 ### Findings
 
-**BLOCKER** — `tests/test_settings_controllers_sync.c` (committed, never-built dead test)
-- This 161-line regression test was added in task 6's implementation, but the `src/manager` feature it tests (settings-save propagation / `on_saved` reload hook) was **deliberately reverted** in `db20d2bd` — yet the test source was **not** reverted.
-- It's tracked in git but has **no `add_executable`/`add_test`** anywhere (`tests/CMakeLists.txt` uses explicit registration, no glob), is never compiled, and its core assertion relies on the removed reload behavior — **if wired into the build today it would FAIL**.
-- Critically, task 6's own evidence (`audit-findings.md` line 169) *falsely claims* "no residual `test_settings_controllers_sync` remains" — the file is present and tracked. This directly contradicts the task's mandate to resolve orphaned files.
-- **Recommendation:** `git rm tests/test_settings_controllers_sync.c` (it tests a feature that was decided against; rewiring it would mean re-implementing the revert).
+**1. WARN — Transient "undefined reference to `main`" link error on a full parallel clean build**
+- **Files:** full build graph; surfaced at `CMakeFiles/test_manager_native_prof.dir/build.make:126`; root cause is environmental, not task-6.
+- One clean `-j$(nproc)` build failed with `undefined reference to 'main'` from `Scrt1.o`, yet the freshly-compiled object `build/CMakeFiles/test_manager_native_prof.dir/tests/test_manager_native_prof.c.o` contains `T main`, the `link.txt` includes it, and `test_manager_native` (identical source, minus `cbx_test_support`) linked fine. Two subsequent full clean rebuilds at `-j32` passed with 0 errors. Conclusion: a parallel write/link race on a loaded machine, not a code defect and not introduced by task 6 (task 6's only net change to build registration was *removing* the orphaned test).
+- **Recommendation:** Optionally cap build parallelism in `verify.sh` (e.g. `-j$(nproc)` bounded) or make the link step order-aware, since the full-suite gate could flap under load. Do not weaken assertions to mask it.
 
-**WARN** — `test_installed_smoke/diagram/binary` are flaky under a full serialized run (all 3 failed once, passed in isolation and on re-run). Environmental/load-sensitive, pre-dates task 6, not task 6's fault. Tracked separately; don't weaken assertions to hide it.
+**2. INFO — One tracked audit-evidence file is modified in the current working tree (post-commit, concurrent-write churn)**
+- **File:** `.factory/artifacts/audit-findings-task6-security.md` — a security-auditor evidence file, modified once at `mtime 02:33:35` during this audit session (the last task commit is `02:32:52`), stable since, with no factory process currently writing. It is **not** produced by task 6's implementation and **not** produced by my build/test commands (`src`, `tests`, CMake, and root remain unmodified). It is a tracked file, so it does not violate the "no **untracked** files" acceptance.
+- **Recommendation:** For strict hygiene, commit or revert this concurrent audit rewrite before promoting; otherwise treat it as live loop state, not a task-6 defect.
 
-**INFO** — Task 6's revert decision isn't recorded in the plan evidence; that's the root cause of the BLOCKER (the reverted feature's test was dropped from the build instead of explicitly deleted).
+### Not in scope / clean
+- No off-by-one, comparison-operator, uninitialized-variable, use-after-free, or null-deref risk in the task's net change: the only production change (manager settings-save) was fully reverted; the final resolution touches `.md`/git housekeeping only.
+- No dangling references to the old root-level study-report filenames in `src/`, `tests/`, `CMakeLists.txt`, `scripts/`, or `docs/`.
 
-### Bottom line
-The task's *literal* acceptance (clean tree + relocation + verify.sh passing) is met and the build is clean — but one **BLOCKER** remains that is squarely in scope for a task titled "resolve orphaned files": it ships a committed, unbuilt test that asserts a reverted feature and whose own evidence falsely declares it gone. Delete `tests/test_settings_controllers_sync.c` to close it. **Exit 1.**
+### Summary
 
-Note: my report file (`.factory/artifacts/audit-functional-task6.md`) is untracked, which transiently dirties `git status` — that's consistent with the normal factory sweep cycle (the orchestrator is the sole Git writer and commits audit outputs).
+| # | Severity | Finding |
+|---|----------|---------|
+| 1 | WARN | Transient `undefined reference to main` on a first full parallel clean build (object & link command are correct); not reproducible; environmental link race, not a task-6 regression. |
+| 2 | INFO | One concurrent security-audit evidence file modified post-commit; tracked (not untracked); not from task 6. |
+
+**Exit code:** 0 — no blocker; task 6 fulfills its acceptance (no untracked files, build clean, 91/91 tests pass) and the prior BLOCKER is resolved.
 
