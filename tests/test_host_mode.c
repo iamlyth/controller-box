@@ -727,7 +727,7 @@ test_state_change_on_enter_exit(void **state)
     assert_int_equal(cb.transitions, 1);
     assert_true(cb.last_active);
 
-    /* Navigate (M0VED) must NOT fire a state-change transition. */
+    /* Navigate (MOVED) must NOT fire a state-change transition. */
     cbx_host_mode_handle(&hm, 0, CBX_HM_DOWN, &g);
     assert_int_equal(cb.transitions, 1);
     assert_true(cb.last_active);

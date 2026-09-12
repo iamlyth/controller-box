@@ -1250,9 +1250,11 @@ cbx_overlay_input_cb(ip_input_id input,
          * columns, navigate the host's profile, or exit host mode via R3. */
         int result = cbx_host_mode_handle(ctx->hm, row_idx, hm_in,
                                             ctx->grid);
-        if (result == CBX_HM_RESULT_EXIT) {
-            cbx_host_mode_exit(ctx->hm);
-        } else if (result == CBX_HM_RESULT_CLOSE) {
+        /* CBX_HM_RESULT_EXIT: cbx_host_mode_handle already exited host mode
+         * (R3 case) and fired on_state_change exactly once so the surface is
+         * dirty.  Do not exit again here — a second cbx_host_mode_exit would
+         * double-fire the dirty trigger (W2: deliberate/consistent triggers). */
+        if (result == CBX_HM_RESULT_CLOSE) {
             cbx_overlay_lifecycle_close(ctx->lifecycle);
         } else if (result == CBX_HM_RESULT_MOVED ||
                    result == CBX_HM_RESULT_SLOT) {
@@ -1309,9 +1311,11 @@ cbx_overlay_service_step(cbx_overlay_service_ctx *svc)
                     int result = cbx_host_mode_handle(
                         &svc->hm, 0, hm_in, &svc->grid);
 
-                    if (result == CBX_HM_RESULT_EXIT) {
-                        cbx_host_mode_exit(&svc->hm);
-                    } else if (result == CBX_HM_RESULT_CLOSE) {
+                    /* CBX_HM_RESULT_EXIT is handled inside handle (R3 case):
+                     * it already exited host mode and fired on_state_change to
+                     * dirty the surface once.  Re-exiting here would double-
+                     * fire the trigger (W2: deliberate/consistent). */
+                    if (result == CBX_HM_RESULT_CLOSE) {
                         cbx_overlay_lifecycle_close(&svc->lifecycle);
                     } else if (result == CBX_HM_RESULT_MOVED ||
                                result == CBX_HM_RESULT_SLOT) {
