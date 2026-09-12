@@ -179,8 +179,15 @@ def run_verification(
         f"&& command -v nix-shell >/dev/null 2>&1"
     )
     escaped = remote_command.replace("'", "'\\''")
+    # nix-shell resolves its nix expression (./shell.nix) from the cwd at
+    # launch, but an SSH session starts in the login directory — not the
+    # runner's working_directory.  The `cd <wd> && ...` inside `--run` is too
+    # late for that resolution, so cd into the working_directory before invoking
+    # nix-shell (otherwise nix-shell errors: "no 'shell.nix' ... found in the
+    # working directory").
     remote_command = (
-        f"if {nix_check}; then nix-shell --run '{escaped}'; "
+        f"if {nix_check}; then cd {runner.working_directory} && "
+        f"nix-shell --run '{escaped}'; "
         f"else {remote_command}; fi"
     )
     try:
