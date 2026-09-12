@@ -75,6 +75,9 @@ tests/golden-fail/
 .factory/artifacts/*
 !.factory/artifacts/implementation-plan.md
 
-# Stray study subagent output in docs/ (not source documentation)
-docs/subsystem-*study*.md
-docs/*subsystem*study*.md
+# Stray study/audit subagent output in docs/ and src/ (not source documentation)
+docs/subsystem-*.md
+docs/*-audit-*.md
+docs/*-study-*.md
+src/*/SUBSYSTEM-*.md
+src/*/subsystem-study-*.md
