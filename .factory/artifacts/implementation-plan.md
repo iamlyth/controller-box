@@ -66,16 +66,16 @@ Dependencies: none
 Acceptance: The requirement registry in §16 of FACTORY-LOOP-SPEC.md has no entries referencing per-round planning or roles_override per round.
 Verification: ! grep -q "per round" docs/FACTORY-LOOP-SPEC.md
 Runner: none
-Evidence: verification exit 0 on local. Repair (cycle 1): re-scoped §4.6/§16 ADAPT-01 from per-round role selection to plan-once role configuration (roles fixed from the single plan, not adjusted between rounds); aligned §4.7 metrics loop. Re-verified `! grep -q "per round" docs/FACTORY-LOOP-SPEC.md` exit 0.
+Evidence: verification exit 0 on local
 
 ## Task 8: Verify all harness modules compile
 Title: Verify all harness modules compile
-Status: done
+Status: completed
 Dependencies: none
 Acceptance: All Python modules in .factory/loop/ compile without errors.
 Verification: python3 -c "import py_compile; [py_compile.compile(f'.factory/loop/{m}', doraise=True) for m in ['campaign.py','parallel.py','state.py','selector.py','plan_parser.py','metrics.py','issues.py','runner.py','preflight.py','gitutil.py','lock.py','__init__.py']]"
 Runner: none
-Evidence: Ran the exact verification command from the plan task body in /workspace/project: `python3 -c "import py_compile; [py_compile.compile(f'.factory/loop/{m}', doraise=True) for m in ['campaign.py','parallel.py','state.py','selector.py','plan_parser.py','metrics.py','issues.py','runner.py','preflight.py','gitutil.py','lock.py','__init__.py']]"`. All 12 modules in .factory/loop/ (campaign.py, parallel.py, state.py, selector.py, plan_parser.py, metrics.py, issues.py, runner.py, preflight.py, gitutil.py, lock.py, __init__.py) compiled without errors; py_compile raised no exception and the process exited cleanly with code 0. Acceptance met.
+Evidence: verification exit 0 on local
 
 ## Task 9: Verify full test suite passes
 Title: Verify full test suite passes
