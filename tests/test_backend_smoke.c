@@ -20,15 +20,24 @@
  *   2. Detects the backend name via SDL_GetRendererInfo.
  *   3. If no accelerated backend is available, exits with code 77
  *      (ctest SKIP_RETURN_CODE) so CI does not fail.
- *   4. If an accelerated backend is available:
- *      a. Renders a representative overlay grid frame via
+ *   4. If an accelerated backend is available, proves on the real GPU:
+ *      a. accelerated renderer init (SDL_GetRendererInfo flags),
+ *      b. target-texture support via the production helper
+ *         cbx_renderer_check_target_texture(),
+ *      c. alpha-blending via the production cbx_renderer_verify_blending()
+ *         (draws a semi-transparent primitive and reads back the
+ *         composited result),
+ *      d. the present/swap path via SDL_RenderPresent on a composed
+ *         overlay frame, confirmed by a post-present content readback.
+ *   Then it renders through the accelerated pipeline:
+ *      e. Renders a representative overlay grid frame via
  *         cbx_overlay_surface_render + cbx_select_grid_render_cb.
- *      b. Renders a manager tab frame via cbx_manager_render().
- *      c. Reads back pixels via fb_read_pixels.
- *      d. Asserts fb_region_has_content in expected regions (grid
+ *      f. Renders a manager tab frame via cbx_manager_render().
+ *      g. Reads back pixels via fb_read_pixels.
+ *      h. Asserts fb_region_has_content in expected regions (grid
  *         cells, tab bar, body).
- *      e. Asserts no all-black or all-background frames.
- *      f. Asserts the accelerated output is broadly consistent with
+ *      i. Asserts no all-black or all-background frames.
+ *      j. Asserts the accelerated output is broadly consistent with
  *         the software-renderer golden baselines (fb_golden_compare
  *         with ±3 per-channel, <2% image tolerance).
  *
@@ -47,6 +56,7 @@
 #include "icons/icon_cache.h"
 #include "icons/icon_map.h"
 #include "manager/manager.h"
+#include "ui/renderer.h"
 #include "fb_assert.h"
 
 #include <SDL2/SDL.h>
@@ -398,6 +408,31 @@ test_overlay_accelerated(SDL_Renderer *renderer)
         }
     }
 
+    /* ── Present (swap) path ─────────────────────────────────── */
+    /* Compose the rendered overlay texture onto the window and swap
+     * buffers via SDL_RenderPresent — the real present path used by
+     * cbx_overlay_surface_show (SPEC §4.9).  SDL_RenderPresent has a void
+     * return, so to prove the swap left the pipeline healthy we re-draw the
+     * same frame afterward and read back a buffer that still carries
+     * content. */
+    SDL_SetRenderTarget(renderer, NULL);
+    SDL_RenderClear(renderer);
+    SDL_RenderCopy(renderer, cbx_overlay_surface_get_texture(&surface),
+                   NULL, NULL);
+    SDL_RenderPresent(renderer);
+
+    SDL_RenderClear(renderer);
+    SDL_RenderCopy(renderer, cbx_overlay_surface_get_texture(&surface),
+                   NULL, NULL);
+    int prc = fb_read_pixels(renderer, NULL, buf, VIS_W * VIS_H * 4);
+    if (prc != 0) {
+        fprintf(stderr, "  [FAIL] fb_read_pixels after present\n");
+        goto cleanup;
+    }
+    if (check(frame_not_all_black(buf, VIS_W, VIS_H),
+              "overlay: frame has content after present") != 0)
+        goto cleanup;
+
     ret = 0;  /* success */
 
 cleanup:
@@ -641,6 +676,26 @@ main(void)
 
     printf("test_backend_smoke: accelerated backend available (%s)\n",
            info.name ? info.name : "unknown");
+
+    /* Prove accelerated init + target-texture support through the production
+     * renderer helpers, not only the SDL_GetRendererInfo flag bits checked
+     * above (SPEC §11.1.6).  cbx_renderer_verify_blending actually creates a
+     * target texture, draws a semi-transparent primitive, and reads back the
+     * alpha-composited result on the real GPU. */
+    if (check(cbx_renderer_check_target_texture(renderer),
+              "backend reports TARGETTEXTURE support") != 0) {
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 1;
+    }
+    if (check(cbx_renderer_verify_blending(renderer) == 0,
+              "backend passes alpha-blending verify") != 0) {
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 1;
+    }
 
     /* ── Overlay test ─────────────────────────────────────────── */
     printf("[overlay]\n");
