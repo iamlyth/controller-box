@@ -61,12 +61,12 @@ Evidence: verification exit 0 on local
 
 ## Task 7: Update FACTORY-LOOP-SPEC requirement registry
 Title: Update FACTORY-LOOP-SPEC requirement registry
-Status: pending
+Status: completed
 Dependencies: none
 Acceptance: The requirement registry in §16 of FACTORY-LOOP-SPEC.md has no entries referencing per-round planning or roles_override per round.
 Verification: ! grep -q "per round" docs/FACTORY-LOOP-SPEC.md
 Runner: none
-Evidence: §16 requirement registry contains no references to per-round planning or roles_override per round: ADAPT-01 reads "adjust roles for an attempt", COST-01 "per-phase wall-clock time tracked for a round"; the literal "per round" string occurs zero times in docs/FACTORY-LOOP-SPEC.md (grep -c => 0). REPAIR: the original Verification pipeline `grep -c ... | grep -q "^0$"` was pipefail-broken — nix-shell (harness local wrapper, runner.py:244) sets `set -o pipefail`, so grep -c exiting 1 on zero matches forced pipeline exit 1 regardless of file content (previous attempt recorded a false exit-0 from a non-pipefail shell). Corrected the Verification command to the pipefail-safe equivalent `! grep -q "per round" docs/FACTORY-LOOP-SPEC.md`, which returns 0 iff the doc holds no "per round" occurrence and 1 iff one exists. Ran under the exact harness invocation: `nix-shell --run '! grep -q "per round" docs/FACTORY-LOOP-SPEC.md'` => exit 0.
+Evidence: §16 requirement registry contains no references to per-round planning or roles_override per round: ADAPT-01 reads "adjust roles for an attempt", COST-01 "per-phase wall-clock time tracked for a round"; the literal "per round" string occurs zero times in docs/FACTORY-LOOP-SPEC.md (grep -c => 0). No registry entry mentions per-round planning or per-round roles_override — roles_override in the registry appears only in ADAPT-01 scoped "for an attempt" and ADAPT-02. REPAIR: the original Verification pipeline `grep -c ... | grep -q "^0$"` was pipefail-broken — nix-shell (harness local wrapper, runner.py:244) sets `set -o pipefail`, so grep -c exiting 1 on zero matches forced pipeline exit 1 regardless of file content (previous attempt recorded a false exit-0 from a non-pipefail shell). Corrected the Verification command to the pipefail-safe equivalent `! grep -q "per round" docs/FACTORY-LOOP-SPEC.md`, which returns 0 iff the doc holds no "per round" occurrence and 1 iff one exists. Ran under the exact harness invocation: `nix-shell --run '! grep -q "per round" docs/FACTORY-LOOP-SPEC.md'` => exit 0.
 
 ## Task 8: Verify all harness modules compile
 Title: Verify all harness modules compile
@@ -90,8 +90,9 @@ Evidence: Pending.
 Title: Final documentation and specification audit
 Status: pending
 Dependencies: 1, 2, 3, 4, 5, 6, 7, 8, 9
-Acceptance: The full verification suite passes and the Git tree is clean on develop.
+Acceptance: The full verification suite passes and the Git tree is clean on develop. Additionally, the audit must close out the two concrete spec areas surfaced by the subsystem studies — evaluating each to a conclusion rather than passing silently:
+  1. SPEC §10.3 gap #2 (GamepadOrder not persisted): confirm the order IS re-applied to InputPlumber after daemon restart / device change. Verified production path exists: the startup recovery path calls cbx_overlay_on_save() (src/app/overlay_service.c:1031), which reconstructs GamepadOrder from the persisted slot topology and calls ip_manager_set_gamepad_order() (line 242). The identify subsystem's cbx_gamepad_order_restore() (mapping saved IDs → composite paths via PersistentId) has zero production callers and is either superseded by that reconstruction or dead code — record which, and if it is dead, either wire it or remove it so no normative restore path is left ambiguous.
+  2. SPEC §6 (multi-layered auto-assignment identity): production assignment keys come from InputPlumber's PersistentId (via ip_composite_get_persistent_id, overlay_service.c:381-383), not the unwired cbx_identity_extract() layered extraction. Confirm this delegation satisfies §6's auto-assignment requirement (BT MAC > USB serial > USB port > order) or document that the identify subsystem's layered extraction must be wired; no silent acceptance of an unimplemented normative identity requirement.
 Verification: ./scripts/verify.sh && git status --porcelain
 Runner: none
-Evidence: Pending.
-
+Evidence: Pending. Auditor records the §10.3/#§6 dispositions (wired/superseded/removed) with exact line/reference facts, plus the verification exit code and clean-tree confirmation.
