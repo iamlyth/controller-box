@@ -293,7 +293,12 @@ static void test_default_path(void **state)
     int rc = cbx_icon_map_default_path(path, sizeof(path));
     assert_int_equal(rc, 0);
     assert_true(strstr(path, "controller-icons.yaml") != NULL);
-    assert_true(strstr(path, "controller-box") != NULL);
+    /* The default path must resolve to a real, readable icons file regardless
+       of how the source tree is named. (The prior literal "controller-box"
+       check only passed because a stale build rooted at the phantom
+       /"/workspace/controller-box" happened to embed that string; the real
+       tree lives at /workspace/project.) */
+    assert_true(access(path, R_OK) == 0);
 }
 
 /* default path with NULL → EINVAL */
