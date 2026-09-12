@@ -179,7 +179,8 @@ def run_verification(
     nix_check = (
         f"test -f {runner.working_directory}/shell.nix "
         f"&& command -v nix-shell >/dev/null 2>&1 "
-        f"&& nix-instantiate --eval -E '1' >/dev/null 2>&1"
+        f"&& cd {runner.working_directory} && "
+        f"timeout 15 nix-shell --run 'true' >/dev/null 2>&1"
     )
     escaped = remote_command.replace("'", "'\\''")
     # nix-shell resolves its nix expression (./shell.nix) from the cwd at
