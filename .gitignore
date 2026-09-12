@@ -16,6 +16,7 @@
 .factory-state/
 .factory-lock
 .bug-ledger.lock
+.factory/rounds/
 
 # Pi runtime output (agent definitions/settings remain tracked)
 .pi/output/
