@@ -70,6 +70,21 @@ context summary, or completion claim is available or authoritative.
    Only add `roles_override` when the metrics clearly warrant it. Do not
    add it on the first round or when metrics are clean.
 
+## Terminal plan state
+
+If every task in the existing plan already has `Status: completed`, the plan
+is in a terminal state. In this case:
+- Do NOT add new tasks, even if study reports suggest improvements or
+  refinements. Study reports may contain observations, but these do not
+  warrant new tasks when the plan is complete.
+- Preserve the plan exactly as-is. You may write it back unchanged to
+  confirm you reviewed it.
+- Exit normally. The control plane will detect that all tasks are
+  completed and run the final verification and audit.
+
+This rule is critical: adding tasks to a completed plan prevents the
+campaign from reaching its terminal success state.
+
 ## Workspace confinement
 
 Model tool access is enforced, not merely described: only allowlisted inputs
