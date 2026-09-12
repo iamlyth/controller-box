@@ -16,12 +16,12 @@ Evidence: fixed src/app/overlay_service.c so both dispatch paths pass the actual
 
 ## Task 2: Make overlay virtual-device-icon visual assertions non-vacuous (B2)
 Title: Make overlay virtual-device-icon visual assertions non-vacuous (B2)
-Status: pending
+Status: completed
 Dependencies: none
 Acceptance: tests/test_overlay_visual.c icon-region content checks must fail when the icon texture is absent. Replace has-content vs theme background assertions (which pass because the plain-cell highlight/dim fill already differs from background) with assertions that icon pixels differ from the plain cell fill color, or by reading back the specific pixels/dimensions of the rendered icon texture. Golden baselines tests/golden/overlay_*.png are regenerated deliberately (reviewed change, gated by CBX_GENERATE_GOLDEN), never merely to force a pass.
 Verification: ctest --test-dir build -R 'test_overlay_visual|test_golden' --output-on-failure; scripts/verify.sh.
 Runner: none
-Evidence: a test that demonstrably fails when icons are dropped.
+Evidence: tests/test_overlay_visual.c icon-region content checks now compare against the plain cell fill colour, not the theme background. Added player_cell_fill_color() mirroring the production precedence block in cbx_select_grid_render() (current column = theme.border_focus, others = theme.border) and switched the icon-region assertions in test_player_mode_grid and test_virtual_device_icons from fb_region_has_content(.., bg, ..) to fb_region_has_content(.., fill, ..). Demonstrably non-vacuous: with the icon assets genuinely dropped (icon cache dir pointed at a non-existent path so both the fixture batch load and cbx_icon_lookup's on-demand load_one fail), test_virtual_device_icons and test_player_mode_grid FAIL — the region is left uniformly filled with the highlight colour, which the OLD background-based check falsely passed. Production rendering unchanged, so golden baselines tests/golden/overlay_*.png are unaffected (no regeneration needed). Verification run: cmake --build build --parallel OK; ctest --test-dir build -R 'test_overlay_visual|test_golden' --output-on-failure -> 100% passed (2/2); ./scripts/verify.sh -> 100% passed (91/91, 0 failures; only runner-gated skips test_kernel_controller and test_backend_smoke).
 
 ## Task 3: Add pointer-reachable confirm/cancel to profile dialogs (B3)
 Title: Add pointer-reachable confirm/cancel to profile dialogs (B3)

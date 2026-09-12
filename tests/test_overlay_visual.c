@@ -410,6 +410,30 @@ header_rect(int col, int col_count)
     return r;
 }
 
+/*
+ * Return the plain-cell fill color that grid_render.c draws for the given
+ * (row, col) in Player Mode (no host-mode row state, no conflict): the
+ * current column is filled with the highlight color (theme.border_focus),
+ * every other column is filled with the dim color (theme.border).  This
+ * mirrors the production precedence block in cbx_select_grid_render(), so
+ * a visual assertion can distinguish a rendered icon (whose pixels differ
+ * from this fill) from an empty cell (which is uniformly this fill even
+ * though it may already differ from the window background).  Using this
+ * fill colour — rather than the window background — for the icon-region
+ * content check makes the assertion non-vacuous: an absent icon leaves the
+ * region monotonically filled with this colour and the check fails.
+ */
+static void
+player_cell_fill_color(const cbx_theme *theme, const cbx_select_grid *g,
+                       int row, int col, uint8_t out[3])
+{
+    int cur = cbx_select_grid_get_cur_col(g, row);
+    SDL_Color fill = (col == cur) ? theme->border_focus : theme->border;
+    out[0] = fill.r;
+    out[1] = fill.g;
+    out[2] = fill.b;
+}
+
 /* Compute the icon center region for a cell (inner area, excluding
  * the position indicator at the bottom). */
 static SDL_Rect
@@ -489,14 +513,22 @@ test_player_mode_grid(void **state)
         }
     }
 
-    /* Assert content in icon regions for player slots. */
+    /* Assert content in icon regions for player slots.  The icon pixels
+     * must differ from the plain cell fill colour (theme.border_focus for
+     * the current column) — NOT merely from the window background, which
+     * the plain-cell highlight fill already differs from.  This is what
+     * makes the icon assertion non-vacuous: strip the icon texture and the
+     * region is left uniformly coloured by the cell fill, so the check
+     * fails. */
     if (f->has_icons) {
         for (int row = 0; row < 3; row++) {
             int col = cbx_select_grid_get_cur_col(&g, row);
             if (col > 0) {
+                uint8_t fill[3];
+                player_cell_fill_color(&f->theme, &g, row, col, fill);
                 SDL_Rect ir = icon_region(row, col, 3, g.col_count);
                 assert_true(fb_region_has_content(buf, VIS_W, VIS_H, &ir,
-                                                  bg, VIS_TOL));
+                                                  fill, VIS_TOL));
             }
         }
     }
@@ -811,15 +843,23 @@ test_virtual_device_icons(void **state)
     uint8_t *buf = render_and_readback(f, &ctx);
     assert_non_null(buf);
 
-    uint8_t bg[3] = { f->theme.bg.r, f->theme.bg.g, f->theme.bg.b };
-
-    /* Assert content in icon regions for each occupied player slot. */
+    /* Assert content in icon regions for each occupied player slot.  As
+     * in test_player_mode_grid, the icon pixels must differ from the plain
+     * cell fill colour.  The icon itself is a black (or otherwise non-fill)
+     * silhouette drawn centered on the highlight-filled current cell; if the
+     * icon texture is absent (lookup fails or the asset drops), nothing is
+     * drawn on top of the fill and fb_region_has_content() with the fill
+     * colour returns false — so this check demonstrably fails when icons are
+     * dropped rather than passing because the highlight fill already differs
+     * from the window background. */
     for (int row = 0; row < 3; row++) {
         int col = cbx_select_grid_get_cur_col(&g, row);
         if (col > 0) {
+            uint8_t fill[3];
+            player_cell_fill_color(&f->theme, &g, row, col, fill);
             SDL_Rect ir = icon_region(row, col, 3, g.col_count);
             assert_true(fb_region_has_content(buf, VIS_W, VIS_H, &ir,
-                                              bg, VIS_TOL));
+                                              fill, VIS_TOL));
         }
     }
 
