@@ -61,7 +61,7 @@ Evidence: verification exit 0 on local
 
 ## Task 7: Update FACTORY-LOOP-SPEC requirement registry
 Title: Update FACTORY-LOOP-SPEC requirement registry
-Status: completed
+Status: pending
 Dependencies: none
 Acceptance: The requirement registry in §16 of FACTORY-LOOP-SPEC.md has no entries referencing per-round planning or roles_override per round.
 Verification: ! grep -q "per round" docs/FACTORY-LOOP-SPEC.md
