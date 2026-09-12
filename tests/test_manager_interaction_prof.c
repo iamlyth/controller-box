@@ -908,6 +908,90 @@ test_prof_delete_cancel_pointer(void **state)
 }
 
 /* ------------------------------------------------------------------ */
+/*  Task 3 (B3, security): modal isolation for the dialog modes.
+ *  While a name-input or delete-confirm dialog is active, the always-
+ *  present list / Create / Edit / Delete action buttons are hidden, so
+ *  a stray pointer click on them cannot abandon or corrupt the dialog.
+ * ------------------------------------------------------------------ */
+
+/* During name-input mode the Create/Edit/Delete buttons and the profile
+ * list are hidden, so a pointer click on the Delete button's (hidden)
+ * rect does not escape into a fresh delete-confirm dialog. */
+static void
+test_prof_name_input_modal_isolation(void **state)
+{
+    mip_fixture *f = *state;
+    cbx_manager *mgr = &f->mgr;
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(mgr);
+
+    switch_to_profiles(mgr);
+    prof_nav_to_button(mgr, 2, 0);
+    send_key_press(mgr, SDLK_a);  /* Create */
+    send_key_press(mgr, SDLK_a);  /* Confirm "Default copy" */
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_NAME_INPUT);
+
+    /* The action buttons and list are hidden while the dialog is modal. */
+    assert_false(cbx_widget_is_visible(&pt->create_btn.base));
+    assert_false(cbx_widget_is_visible(&pt->edit_btn.base));
+    assert_false(cbx_widget_is_visible(&pt->delete_btn.base));
+    assert_false(cbx_widget_is_visible(&pt->profile_list_w.base));
+
+    /* Pointer-click the (hidden) Delete button rect: hit-testing only
+     * dispatches to visible children, so the mode must be untouched. */
+    int cx, cy;
+    widget_center(&pt->delete_btn.base, &cx, &cy);
+    send_mouse_click(mgr, cx, cy);
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_NAME_INPUT);
+
+    /* Cancel restores the list and action buttons. */
+    send_key_dn(mgr, SDLK_ESCAPE);
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_LIST);
+    assert_true(cbx_widget_is_visible(&pt->create_btn.base));
+    assert_true(cbx_widget_is_visible(&pt->delete_btn.base));
+    assert_true(cbx_widget_is_visible(&pt->profile_list_w.base));
+}
+
+/* During delete-confirm mode the Create/Edit/Delete buttons and the list
+ * are hidden, so a pointer click on the Create button's (hidden) rect
+ * cannot abandon the confirmation and start a fresh name-input. */
+static void
+test_prof_delete_confirm_modal_isolation(void **state)
+{
+    mip_fixture *f = *state;
+    cbx_manager *mgr = &f->mgr;
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(mgr);
+
+    switch_to_profiles(mgr);
+
+    /* Select the user profile and open confirm-delete via the Delete
+     * button (pointer path). */
+    int px = list_center_x(&pt->profile_list_w);
+    int py = list_item_y(&pt->profile_list_w, 1);
+    send_mouse_click(mgr, px, py);
+    int cx, cy;
+    widget_center(&pt->delete_btn.base, &cx, &cy);
+    send_mouse_click(mgr, cx, cy);
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_CONFIRM_DELETE);
+
+    /* The action buttons and list are hidden while the dialog is modal. */
+    assert_false(cbx_widget_is_visible(&pt->create_btn.base));
+    assert_false(cbx_widget_is_visible(&pt->delete_btn.base));
+    assert_false(cbx_widget_is_visible(&pt->profile_list_w.base));
+
+    /* Pointer-click the (hidden) Create button rect: no mode change. */
+    widget_center(&pt->create_btn.base, &cx, &cy);
+    send_mouse_click(mgr, cx, cy);
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_CONFIRM_DELETE);
+
+    /* Cancel restores the list and action buttons. */
+    send_key_dn(mgr, SDLK_b);
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_LIST);
+    assert_true(cbx_widget_is_visible(&pt->create_btn.base));
+    assert_true(cbx_widget_is_visible(&pt->delete_btn.base));
+    assert_true(cbx_widget_is_visible(&pt->profile_list_w.base));
+}
+
+/* ------------------------------------------------------------------ */
 /*  Profile editor — Binding list navigation (M28)                   */
 /* ------------------------------------------------------------------ */
 
@@ -1986,6 +2070,10 @@ main(void)
             test_prof_delete_confirm_pointer, mip_setup, mip_teardown),
         cmocka_unit_test_setup_teardown(
             test_prof_delete_cancel_pointer, mip_setup, mip_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_prof_name_input_modal_isolation, mip_setup, mip_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_prof_delete_confirm_modal_isolation, mip_setup, mip_teardown),
 
         /* Profile editor — binding list (M28) */
         cmocka_unit_test_setup_teardown(

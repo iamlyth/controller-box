@@ -93,6 +93,7 @@ static int  cbx_profiles_tab_open_editor(cbx_profiles_tab *tab,
                                             bool is_new);
 static void cbx_profiles_tab_close_editor(cbx_profiles_tab *tab);
 static int  cbx_profiles_tab_save_editor(cbx_profiles_tab *tab);
+static void show_tab_widgets(cbx_profiles_tab *tab);
 
 static void
 on_save_editor_pressed(cbx_widget *w, void *user_data)
@@ -674,6 +675,19 @@ cbx_profiles_tab_begin_create(cbx_profiles_tab *tab,
     cbx_widget_set_visible(&tab->dialog_confirm_btn.base, true);
     cbx_widget_set_visible(&tab->dialog_cancel_btn.base, false);
 
+    /* Modal isolation (Task 3 B3, security): while typing a name the
+     * always-present list / Create / Edit / Delete action buttons are
+     * hidden, exactly as done for the create picker.  This keeps the
+     * name-input dialog modal on the pointer path — cbx_manager_hit_test
+     * dispatches only to visible panel children, so a stray click on an
+     * action button cannot abandon the name input and start a fresh flow
+     * without feedback.  The buttons are restored in
+     * cbx_profiles_tab_name_input_cancel(). */
+    cbx_widget_set_visible(&tab->profile_list_w.base, false);
+    cbx_widget_set_visible(&tab->create_btn.base, false);
+    cbx_widget_set_visible(&tab->edit_btn.base, false);
+    cbx_widget_set_visible(&tab->delete_btn.base, false);
+
     return 0;
 }
 
@@ -804,6 +818,9 @@ cbx_profiles_tab_name_input_cancel(cbx_profiles_tab *tab)
     cbx_label_set_text(&tab->status_lbl, "");
     cbx_widget_set_visible(&tab->dialog_confirm_btn.base, false);
     cbx_widget_set_visible(&tab->dialog_cancel_btn.base, false);
+
+    /* Restore the list / action buttons hidden at dialog entry. */
+    show_tab_widgets(tab);
 }
 
 /* ------------------------------------------------------------------ */
@@ -841,6 +858,18 @@ cbx_profiles_tab_begin_delete(cbx_profiles_tab *tab, int profile_index)
     cbx_widget_set_visible(&tab->dialog_confirm_btn.base, true);
     cbx_widget_set_visible(&tab->dialog_cancel_btn.base, true);
 
+    /* Modal isolation (Task 3 B3, security): while the delete-confirm is
+     * shown the always-present list / Create / Edit / Delete action
+     * buttons are hidden, exactly as done for the create picker, so the
+     * dialog stays modal on the pointer path.  A click on "Delete Profile"
+     * or "Create Profile" while a confirmation is visible cannot silently
+     * start a fresh dialog without feedback.  The buttons are restored in
+     * cbx_profiles_tab_cancel_delete(). */
+    cbx_widget_set_visible(&tab->profile_list_w.base, false);
+    cbx_widget_set_visible(&tab->create_btn.base, false);
+    cbx_widget_set_visible(&tab->edit_btn.base, false);
+    cbx_widget_set_visible(&tab->delete_btn.base, false);
+
     return 0;
 }
 
@@ -871,6 +900,9 @@ cbx_profiles_tab_cancel_delete(cbx_profiles_tab *tab)
     cbx_label_set_text(&tab->status_lbl, "");
     cbx_widget_set_visible(&tab->dialog_confirm_btn.base, false);
     cbx_widget_set_visible(&tab->dialog_cancel_btn.base, false);
+
+    /* Restore the list / action buttons hidden at dialog entry. */
+    show_tab_widgets(tab);
 }
 
 /*
