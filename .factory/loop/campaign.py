@@ -577,7 +577,10 @@ def _finalize_success(plan: Plan, config: dict, env: dict, args,
         working_directory="", capabilities=[], verify_command="",
     )
     vresult = run_verification(local, vcmd, ROOT, commit)
+    print(f"  finalize: verify exit={vresult.exit_code}", file=sys.stderr)
     if vresult.exit_code != 0:
+        print(f"  finalize: verify stdout: {vresult.stdout[-3000:]}", file=sys.stderr)
+        print(f"  finalize: verify stderr: {vresult.stderr[-3000:]}", file=sys.stderr)
         return "failed"
 
     dummy_task = Task(id=0, title="Final audit", status="completed",
