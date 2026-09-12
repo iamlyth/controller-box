@@ -19,6 +19,13 @@ cbx_host_mode_init(cbx_host_mode *hm)
     hm->selected_row = -1;
 }
 
+static void
+fire_state_change(cbx_host_mode *hm, bool active)
+{
+    if (hm->on_state_change)
+        hm->on_state_change(active, hm->state_change_data);
+}
+
 int
 cbx_host_mode_enter(cbx_host_mode *hm, int row_idx)
 {
@@ -27,6 +34,7 @@ cbx_host_mode_enter(cbx_host_mode *hm, int row_idx)
     hm->active       = true;
     hm->host_row     = row_idx;
     hm->selected_row = row_idx;
+    fire_state_change(hm, true);
     return 0;
 }
 
@@ -38,6 +46,7 @@ cbx_host_mode_exit(cbx_host_mode *hm)
     hm->active       = false;
     hm->host_row     = -1;
     hm->selected_row = -1;
+    fire_state_change(hm, false);
     return 0;
 }
 

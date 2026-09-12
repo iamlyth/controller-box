@@ -317,6 +317,14 @@ int cbx_overlay_on_profile_change(int row_idx, const char *profile,
                                      const char *composite_path,
                                      void *userdata);
 
+/*
+ * Host-mode state-transition callback: marks the overlay surface dirty on
+ * host-mode enter and exit so the pre-built surface is re-rendered to
+ * reflect the HOST/SELECTED/FROZEN row visuals (SPEC §4.4/§4.9).  Fired by
+ * cbx_host_mode_enter()/cbx_host_mode_exit().
+ */
+int cbx_overlay_on_host_mode_change(bool active, void *userdata);
+
 /* --- Production InterceptMode poll callbacks (Task 13) ---------------- */
 
 /*

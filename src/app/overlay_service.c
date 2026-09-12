@@ -364,6 +364,24 @@ on_host_slot_change(int row_idx, int new_slot, void *userdata)
     return cbx_overlay_on_slot_change(row_idx, new_slot, userdata);
 }
 
+/*
+ * Host-mode state-transition callback: fired on host-mode enter and exit
+ * (SPEC §4.4/§4.9).  Entering/exiting host mode materially changes the
+ * rendered row visuals — HOST/SELECTED/FROZEN rows appear on entry and
+ * revert to normal Player Mode on exit — so the pre-built surface must be
+ * marked dirty so the next presentation reflects the transition.
+ */
+int
+cbx_overlay_on_host_mode_change(bool active, void *userdata)
+{
+    (void)active;
+    cbx_overlay_service_ctx *svc = (cbx_overlay_service_ctx *)userdata;
+    if (!svc)
+        return -EINVAL;
+    cbx_overlay_surface_mark_dirty_all(&svc->surface);
+    return 0;
+}
+
 /* ================================================================== */
 /*  Helper: fill cbx_grid_composite_info from the device model + DBus  */
 /* ================================================================== */
@@ -1591,6 +1609,11 @@ int run_overlay_service(int dry_run)
     cbx_host_mode_init(&svc->hm);
     svc->hm.on_slot_change    = on_host_slot_change;
     svc->hm.slot_change_data  = svc;
+    /* Host-mode enter/exit marks the pre-built surface dirty so the
+     * presented frame reflects the HOST/SELECTED/FROZEN row visuals on
+     * entry and reverts to Player Mode on exit (SPEC §4.4/§4.9). */
+    svc->hm.on_state_change   = cbx_overlay_on_host_mode_change;
+    svc->hm.state_change_data = svc;
 
     /* Lifecycle on_save callback: conflict resolution + assignment save. */
     svc->lifecycle.on_save       = cbx_overlay_on_save;

@@ -49,6 +49,29 @@ on_slot_change(int row_idx, int new_slot, void *userdata)
     return 0;
 }
 
+/* --- Dirty-surface trigger (W1) -------------------------------------- */
+
+typedef struct {
+    int transitions;
+    bool last_active;
+} hm_state_cb;
+
+/*
+ * Mirrors cbx_overlay_on_host_mode_change: a consumer marks the overlay
+ * surface dirty on every host-mode state transition.  Recording the args
+ * lets us assert that entering and exiting both fire the trigger.
+ */
+static int
+on_state_change(bool active, void *userdata)
+{
+    hm_state_cb *cb = (hm_state_cb *)userdata;
+    if (cb) {
+        cb->transitions++;
+        cb->last_active = active;
+    }
+    return 0;
+}
+
 /* --- Helpers ---------------------------------------------------------- */
 
 static cbx_grid_composite_info
@@ -680,6 +703,69 @@ test_full_lifecycle(void **state)
 
 /* --- Main ------------------------------------------------------------ */
 
+/* --- State-change dirty trigger (W1) ---------------------------------- */
+
+/*
+ * Every host-mode state transition fires on_state_change — the dirty
+ * trigger a consumer wires to mark the overlay surface dirty (SPEC §4.4/§4.9).
+ * Entering and exiting via both the direct API and the toggle must fire it.
+ */
+static void
+test_state_change_on_enter_exit(void **state)
+{
+    (void)state;
+    cbx_select_grid g;
+    build_test_grid(&g, 2);
+    cbx_host_mode hm;
+    cbx_host_mode_init(&hm);
+    hm_state_cb cb = {0, false};
+    hm.on_state_change   = on_state_change;
+    hm.state_change_data = &cb;
+
+    /* Enter host mode → transition with active=true. */
+    cbx_host_mode_enter(&hm, 0);
+    assert_int_equal(cb.transitions, 1);
+    assert_true(cb.last_active);
+
+    /* Navigate (M0VED) must NOT fire a state-change transition. */
+    cbx_host_mode_handle(&hm, 0, CBX_HM_DOWN, &g);
+    assert_int_equal(cb.transitions, 1);
+    assert_true(cb.last_active);
+
+    /* Exit host mode (R3) → transition with active=false. */
+    assert_int_equal(cbx_host_mode_handle(&hm, 0, CBX_HM_R3, &g),
+                     CBX_HM_RESULT_EXIT);
+    assert_int_equal(cb.transitions, 2);
+    assert_false(cb.last_active);
+}
+
+static void
+test_state_change_on_toggle(void **state)
+{
+    (void)state;
+    cbx_host_mode hm;
+    cbx_host_mode_init(&hm);
+    hm_state_cb cb = {0, false};
+    hm.on_state_change   = on_state_change;
+    hm.state_change_data = &cb;
+
+    /* Toggle in → fires. */
+    assert_int_equal(cbx_host_mode_toggle(&hm, 1), 1);
+    assert_int_equal(cb.transitions, 1);
+    assert_true(cb.last_active);
+
+    /* Toggle out → fires. */
+    assert_int_equal(cbx_host_mode_toggle(&hm, 1), 0);
+    assert_int_equal(cb.transitions, 2);
+    assert_false(cb.last_active);
+
+    /* Frozen controller toggle → ignored, no transition. */
+    assert_int_equal(cbx_host_mode_toggle(&hm, 1), 1); /* re-enter */
+    assert_int_equal(cb.transitions, 3);
+    assert_int_equal(cbx_host_mode_toggle(&hm, 2), -1); /* frozen */
+    assert_int_equal(cb.transitions, 3);
+}
+
 int
 main(void)
 {
@@ -739,6 +825,9 @@ main(void)
         cmocka_unit_test(test_is_frozen_null),
         /* Full lifecycle */
         cmocka_unit_test(test_full_lifecycle),
+        /* Dirty-surface trigger (W1) */
+        cmocka_unit_test(test_state_change_on_enter_exit),
+        cmocka_unit_test(test_state_change_on_toggle),
     };
 
     return cmocka_run_group_tests(tests, NULL, NULL);

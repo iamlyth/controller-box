@@ -355,6 +355,23 @@ setup_ctx(struct vis_fixture *f, cbx_grid_render_ctx *ctx,
     }
 }
 
+/*
+ * Equivalent of the production cbx_overlay_on_host_mode_change callback:
+ * a host-mode state transition marks the overlay surface dirty (SPEC
+ * §4.4/§4.9, W1).  Used to prove that W1 re-render actually changes the
+ * presented frame.
+ */
+static int
+mark_surface_dirty_on_host_change(bool active, void *userdata)
+{
+    (void)active;
+    cbx_overlay_surface *s = (cbx_overlay_surface *)userdata;
+    if (!s)
+        return -EINVAL;
+    cbx_overlay_surface_mark_dirty_all(s);
+    return 0;
+}
+
 /* ------------------------------------------------------------------ */
 /*  Layout helpers                                                    */
 /* ------------------------------------------------------------------ */
@@ -926,6 +943,67 @@ test_state_transitions_differ(void **state)
     free(buf_c);
 }
 
+/*
+ * 8. W1 — Entering host mode marks the pre-built surface dirty and the
+ *    re-rendered on-entry frame is materially different from the Player
+ *    Mode frame (visual region diff).  Wire the production-equivalent
+ *    on_state_change dirty trigger, enter host mode, confirm the surface
+ *    becomes dirty, re-render, and assert the HOST/SELECTED/FROZEN row
+ *    visuals produce a different frame (SPEC §4.4/§4.9, plan Task 4 W1).
+ */
+static void
+test_host_entry_dirty_render_differs(void **state)
+{
+    struct vis_fixture *f = *state;
+
+    cbx_select_grid g;
+    build_grid(&g, 3);
+    move_to_col(&g, 0, 1);
+    move_to_col(&g, 1, 2);
+    move_to_col(&g, 2, 3);
+
+    cbx_conflict_list conflicts;
+    cbx_conflict_detect(&g, &conflicts);
+
+    cbx_grid_render_ctx ctx;
+    setup_ctx(f, &ctx, &g, &conflicts);
+
+    /* Player Mode frame. */
+    cbx_overlay_surface surface;
+    memset(&surface, 0, sizeof(surface));
+    uint8_t *buf_player = malloc(VIS_W * VIS_H * 4);
+    assert_non_null(buf_player);
+    assert_int_equal(render_with_surface(f, &ctx, &surface, buf_player), 0);
+    assert_false(cbx_overlay_surface_is_dirty(&surface)); /* clean */
+
+    /* Wire the production-equivalent host-mode dirty trigger. */
+    cbx_host_mode hm;
+    cbx_host_mode_init(&hm);
+    hm.on_state_change   = mark_surface_dirty_on_host_change;
+    hm.state_change_data = &surface;
+    ctx.hm = &hm;
+
+    /* Enter host mode and select a different row → surface marked dirty. */
+    cbx_host_mode_enter(&hm, 0);
+    cbx_host_mode_handle(&hm, 0, CBX_HM_DOWN, &g);
+    assert_true(cbx_overlay_surface_is_dirty(&surface));
+
+    /* Re-render the now-dirty surface and read back the Host Mode frame. */
+    uint8_t *buf_host = malloc(VIS_W * VIS_H * 4);
+    assert_non_null(buf_host);
+    re_render_and_readback(f, &ctx, &surface, buf_host);
+    /* Re-render consumes the dirty flag. */
+    assert_false(cbx_overlay_surface_is_dirty(&surface));
+
+    /* The Host Mode frame on entry must differ materially from Player Mode
+     * — HOST (green), SELECTED (blue border), FROZEN (dimmed) row visuals. */
+    assert_true(fb_frames_differ(buf_player, buf_host, VIS_W, VIS_H, 5));
+
+    cbx_overlay_surface_destroy(&surface);
+    free(buf_player);
+    free(buf_host);
+}
+
 /* ------------------------------------------------------------------ */
 /*  Main                                                              */
 /* ------------------------------------------------------------------ */
@@ -949,6 +1027,8 @@ main(void)
         cmocka_unit_test_setup_teardown(test_virtual_device_icons,
                                         vis_setup, vis_teardown),
         cmocka_unit_test_setup_teardown(test_state_transitions_differ,
+                                        vis_setup, vis_teardown),
+        cmocka_unit_test_setup_teardown(test_host_entry_dirty_render_differs,
                                         vis_setup, vis_teardown),
     };
 

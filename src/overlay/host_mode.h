@@ -47,6 +47,15 @@ typedef enum {
 
 typedef int (*cbx_hm_slot_change_cb)(int row_idx, int new_slot, void *userdata);
 
+/*
+ * Fired whenever host mode transitions between inactive and active (and
+ * back).  The new `active` state is passed so a consumer can, for example,
+ * mark the overlay surface dirty: entering/exiting host mode materially
+ * changes the rendered row visuals (HOST/SELECTED/FROZEN vs. normal Player
+ * Mode — SPEC §4.4/§4.10), so the pre-built surface must be re-rendered.
+ */
+typedef int (*cbx_hm_state_change_cb)(bool active, void *userdata);
+
 /* --- Host Mode state -------------------------------------------------- */
 
 struct cbx_host_mode {
@@ -56,6 +65,10 @@ struct cbx_host_mode {
 
     cbx_hm_slot_change_cb on_slot_change;
     void                 *slot_change_data;
+
+    /* Dirty-surface trigger for host-mode state transitions. */
+    cbx_hm_state_change_cb on_state_change;
+    void                  *state_change_data;
 };
 
 /* --- API -------------------------------------------------------------- */

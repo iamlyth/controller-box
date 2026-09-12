@@ -228,6 +228,10 @@ interaction_setup(void **state)
     cbx_host_mode_init(&f->svc->hm);
     f->svc->hm.on_slot_change     = cbx_overlay_on_slot_change;
     f->svc->hm.slot_change_data   = f->svc;
+    /* Mirror production wiring (run_overlay_service): host-mode enter/exit
+     * marks the surface dirty so the frame reflects the transition (W1). */
+    f->svc->hm.on_state_change    = cbx_overlay_on_host_mode_change;
+    f->svc->hm.state_change_data  = f->svc;
 
     /* Lifecycle — use instant transitions (fade = 0) for deterministic tests. */
     cbx_overlay_lifecycle_init(&f->svc->lifecycle, f->backend, f->mock.bus,
@@ -553,6 +557,67 @@ test_o09_exit_host_mode(void **state)
 
     /* Host mode should be inactive. */
     assert_false(cbx_host_mode_is_active(&f->svc->hm));
+}
+
+/* ================================================================== */
+/*  O13 — Host-mode entry/exit marks the surface dirty (W1)          */
+/*      Entering/exiting host mode must set the pre-built surface    */
+/*      dirty so the presented frame reflects the HOST/SELECTED/     */
+/*      FROZEN row visuals on entry (SPEC §4.4/§4.9).  This drives    */
+/*      the toggle through the production DBus dispatch path          */
+/*      (cbx_overlay_input_cb) with the lifecycle inactive so the    */
+/*      step's re-render does not consume the flag before we check    */
+/*      it — isolating the dirty-trigger itself.                     */
+/* ================================================================== */
+
+static void
+test_o13_host_entry_marks_dirty_dbus(void **state)
+{
+    interaction_fixture *f = *state;
+
+    /* Lifecycle IDLE: the step must not consume the dirty flag via the
+     * active-only re-render, so we observe the trigger directly. */
+    assert_int_equal(f->svc->lifecycle.state, CBX_OVERLAY_IDLE);
+
+    /* Start from a clean (not dirty) surface. */
+    cbx_overlay_surface_clear_dirty(&f->svc->surface);
+    assert_false(cbx_overlay_surface_is_dirty(&f->svc->surface));
+
+    /* Controller 0 presses R3 via DBus → player_mode toggles host mode. */
+    inject_input(f, EXP_SENDER, DEV_PATH_0, "R3", 1.0);
+    cbx_overlay_service_step(f->svc);
+
+    assert_true(cbx_host_mode_is_active(&f->svc->hm));
+    assert_int_equal(cbx_host_mode_get_host_row(&f->svc->hm), 0);
+    /* Host-mode entry must have marked the surface dirty (W1). */
+    assert_true(cbx_overlay_surface_is_dirty(&f->svc->surface));
+}
+
+static void
+test_o13b_host_exit_marks_dirty_dbus(void **state)
+{
+    interaction_fixture *f = *state;
+
+    assert_int_equal(f->svc->lifecycle.state, CBX_OVERLAY_IDLE);
+
+    /* Enter host mode via DBus (dirties the surface). */
+    inject_input(f, EXP_SENDER, DEV_PATH_0, "R3", 1.0);
+    cbx_overlay_service_step(f->svc);
+    assert_true(cbx_host_mode_is_active(&f->svc->hm));
+    assert_true(cbx_overlay_surface_is_dirty(&f->svc->surface));
+
+    /* Clean the flag so exit is the only dirtying event we observe. */
+    cbx_overlay_surface_clear_dirty(&f->svc->surface);
+    assert_false(cbx_overlay_surface_is_dirty(&f->svc->surface));
+
+    /* Host (row 0) presses R3 again → host_mode_handle routes to the
+     * host path and exits via cbx_host_mode_exit → marks surface dirty. */
+    inject_input(f, EXP_SENDER, DEV_PATH_0, "R3", 1.0);
+    cbx_overlay_service_step(f->svc);
+
+    assert_false(cbx_host_mode_is_active(&f->svc->hm));
+    /* Host-mode exit must have marked the surface dirty (W1). */
+    assert_true(cbx_overlay_surface_is_dirty(&f->svc->surface));
 }
 
 /* ================================================================== */
@@ -1097,6 +1162,10 @@ static const struct CMUnitTest tests[] = {
     cmocka_unit_test_setup_teardown(test_o08_host_move_slot,
                                      interaction_setup, interaction_teardown),
     cmocka_unit_test_setup_teardown(test_o09_exit_host_mode,
+                                     interaction_setup, interaction_teardown),
+    cmocka_unit_test_setup_teardown(test_o13_host_entry_marks_dirty_dbus,
+                                     interaction_setup, interaction_teardown),
+    cmocka_unit_test_setup_teardown(test_o13b_host_exit_marks_dirty_dbus,
                                      interaction_setup, interaction_teardown),
 
     /* O10 — Close */
