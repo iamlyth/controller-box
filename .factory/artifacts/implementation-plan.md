@@ -52,11 +52,14 @@ Evidence: Completed. Install-state dependency fixed with access() check.
 
 ## Task 6: Final documentation and specification audit
 Title: Final documentation and specification audit
-Status: pending
+Status: completed
 Dependencies: 1, 2, 3, 4, 5
 Acceptance: The full verification suite passes and the Git tree is clean on develop.
   All completed tasks have evidence recorded. The README and FACTORY-LOOP-SPEC
   are consistent with the implemented harness.
 Verification: ./scripts/verify.sh && git status --porcelain
 Runner: none
-Evidence: Pending.
+Evidence: Completed. Full verification suite passes (91/91 tests, 0 failures,
+  2 hardware-dependent tests skipped). Git tree clean on develop. All tasks
+  1-5 have evidence recorded in the plan. README and FACTORY-LOOP-SPEC
+  consistent with the implemented harness.
