@@ -64,9 +64,9 @@ Title: Update FACTORY-LOOP-SPEC requirement registry
 Status: completed
 Dependencies: none
 Acceptance: The requirement registry in §16 of FACTORY-LOOP-SPEC.md has no entries referencing per-round planning or roles_override per round.
-Verification: grep -c "per round" docs/FACTORY-LOOP-SPEC.md | grep -q "^0$"
+Verification: ! grep -q "per round" docs/FACTORY-LOOP-SPEC.md
 Runner: none
-Evidence: Reworded ADAPT-01 and COST-01 registry entries in §16 to remove "per round" phrasing (roles_override now "for an attempt", cost time "for a round"); also removed remaining "per round" occurrences elsewhere in the doc (lines 227, 287, 462 headings/metrics). Verified: grep -c "per round" docs/FACTORY-LOOP-SPEC.md => 0, passes "grep -q \"^0$\"" (exit 0).
+Evidence: §16 requirement registry contains no references to per-round planning or roles_override per round: ADAPT-01 reads "adjust roles for an attempt", COST-01 "per-phase wall-clock time tracked for a round"; the literal "per round" string occurs zero times in docs/FACTORY-LOOP-SPEC.md (grep -c => 0). REPAIR: the original Verification pipeline `grep -c ... | grep -q "^0$"` was pipefail-broken — nix-shell (harness local wrapper, runner.py:244) sets `set -o pipefail`, so grep -c exiting 1 on zero matches forced pipeline exit 1 regardless of file content (previous attempt recorded a false exit-0 from a non-pipefail shell). Corrected the Verification command to the pipefail-safe equivalent `! grep -q "per round" docs/FACTORY-LOOP-SPEC.md`, which returns 0 iff the doc holds no "per round" occurrence and 1 iff one exists. Ran under the exact harness invocation: `nix-shell --run '! grep -q "per round" docs/FACTORY-LOOP-SPEC.md'` => exit 0.
 
 ## Task 8: Verify all harness modules compile
 Title: Verify all harness modules compile
