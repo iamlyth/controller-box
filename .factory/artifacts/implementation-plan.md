@@ -77,7 +77,7 @@ Evidence: Implemented in tests/CMakeLists.txt (per-test TIMEOUTs calibrated to
 
 ## Task 3: Kernel-backed controller integration test on kernel-uinput runner
 Title: Kernel-backed controller integration test on kernel-uinput runner
-Status: pending
+Status: blocked
 Dependencies: none
 Acceptance: `test_kernel_controller` runs (not skipped) and passes on a runner
   with the `kernel-uinput` capability. It creates a synthetic evdev gamepad via
@@ -133,16 +133,41 @@ Evidence: Implementation is complete and committed. `tests/test_kernel_controlle
   install staging for the same condition. All three (no node, no module
   load, no privileged provisioning) confirm the skip is the genuine
   capability skip, never a fake pass.
+  Round-5 fresh re-verification at this bound commit (develop @ 2d87009e):
+  after a clean reconfigure (`rm -rf build && nix-shell --run 'cmake -S . -B
+  build -DCMAKE_BUILD_TYPE=Debug && cmake --build build --target
+  test_kernel_controller test_ip_server controller-box --parallel'`) the
+  targets compile cleanly (0 errors, 100% built). `ctest --test-dir build -R
+  test_kernel_controller --output-on-failure` → `***Skipped` (exit 77, ctest
+  exits 0); direct `./build/test_kernel_controller build` prints the
+  `/dev/uinput is not available (No such file or directory)` SKIP diagnostic
+  and returns `77`. The test's semantic path was re-checked against production
+  code at this commit: `src/manager/manager.c` maps SDL controller DPAD→arrow
+  keys and A/B→a/b and START→TAB (lines 146-167), the three-tab manager
+  reaches the Settings tab (index 2) via D-pad right, and
+  `src/manager/settings_tab.c` `cbx_settings_tab_activate`/`cbx_settings_tab_save`
+  (index `CBX_ST_SET_COUNT` save entry) writes `settings.yaml` to
+  `$XDG_CONFIG_HOME/controller-box/` (`src/config/config_settings.c`
+  `cbx_settings_save`), so the asserted semantic outcome is achievable by the
+  driven event sequence. The run-and-pass acceptance still cannot be exercised
+  from this workspace.
 Blocker (precise): the Acceptance criterion — `test_kernel_controller` runs
   (not skipped) and passes — can only be satisfied on a runner with the
   `kernel-uinput` capability. It cannot be exercised from this workspace:
   `/dev/uinput` is not present (no root/CAP_MKNOD, module node absent), the
   uinput kernel module cannot create the node without privilege, and the
   declared kernel-uinput runner aliases (`dev-runner-vm`, `iprunner`) are not
-  resolvable/reachable here. Status remains `pending` pending execution of the
-  real verification command on a declared `kernel-uinput` runner. Refusing to
-  fake a pass here per AGENTS.md ("an unreachable runner marks the task
-  blocked, never a silent skip or fake pass").
+  resolvable/reachable here. Status is marked `blocked` per AGENTS.md and
+  FACTORY-LOOP-SPEC RUNNER-03 ("unreachable runners cause blocked status, never
+  silent skip or fake pass"). Unblocking requires a reachable declared runner
+  with a functional `/dev/uinput` (module loaded, node writable) and a
+  verification wrapper that changes into the workspace before invoking
+  `nix-shell` (the prior runner attempt failed at the nix-shell bootstrap with
+  "no argument specified and no 'shell.nix' … found in the working directory"
+  because the wrapper called `nix-shell --run 'cd … && …'` from the SSH login
+  CWD — nix-shell resolves its expression against the login CWD, so `shell.nix`
+  was not found; unlike `scripts/verify.sh` which `cd`s into the repo before
+  invoking `nix-shell`). Refusing to fake a pass here per AGENTS.md.
 
 ## Task 4: Accelerated backend smoke test on gpu-compositor runner
 Title: Accelerated backend smoke test on gpu-compositor runner
