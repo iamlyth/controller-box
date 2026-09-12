@@ -25,12 +25,12 @@ Evidence: tests/test_overlay_visual.c icon-region content checks now compare aga
 
 ## Task 3: Add pointer-reachable confirm/cancel to profile dialogs (B3)
 Title: Add pointer-reachable confirm/cancel to profile dialogs (B3)
-Status: pending
+Status: completed
 Dependencies: none
 Acceptance: The name-input and delete-confirm modal dialogs in src/manager/profiles_tab.c expose clickable confirm/cancel controls routed through cbx_manager_handle_mouse_event. The requirement that every visible enabled dialog action respond to pointer hover + left-button click is met. The interaction inventory (tests/interaction_inventory.c M15/M19/M20) reflects the real, pointer-reachable controls, and pointer-path tests are added.
 Verification: scripts/verify.sh; ctest --test-dir build -R 'test_manager_interaction_prof|test_profiles_tab|test_interaction_inventory|test_manager_visual' --output-on-failure
 Runner: none
-Evidence: passing pointer-path tests for name-input and delete-confirm dialogs.
+Evidence: Added pointer-reachable dialog_confirm_btn/dialog_cancel_btn to src/manager/profiles_tab.c, wired into the panel and positioned in cbx_profiles_tab_layout, shown only while a modal dialog is active (name-input: Confirm button, M15; delete-confirm: Confirm + Cancel, M19/M20) and hidden on cancel/editor-open/shutdown. They route through cbx_manager_handle_mouse_event → panel hit-test → button on_press → the same production actions as A/B (cbx_profiles_tab_name_input_confirm / confirm_delete / cancel_delete), so controller and pointer paths are semantically identical. Every visible dialog action (Confirm button in name-input; Confirm/Cancel in delete-confirm) responds to pointer hover (cbx_manager_update_hover sets base.hover) + left-button click. Name-input cancel stays keyboard-only (B/ESC; inventory M16 unchanged). Added hover+left-click pointer tests test_prof_name_input_confirm_pointer, test_prof_delete_confirm_pointer, test_prof_delete_cancel_pointer in tests/test_manager_interaction_prof.c, each asserting semantic outcomes (editor opens with 6-bindings Default copy; profile file unlinked+list refreshed; profile retained+no deletion) and marking M15/M19/M20 verified in the runtime ledger (asserted is_verified in main epilogue). Updated inventory dispatch paths M15/M19/M20 to the real mouse→button routing. test_profiles_tab panel child count assertions updated 8→10 for the new buttons. Verification run: cmake build OK; ctest -R 'test_manager_interaction_prof|test_profiles_tab|test_interaction_inventory|test_manager_visual' --output-on-failure -> 100% passed (4/4); ./scripts/verify.sh -> 100% passed (91/91, 0 failures; only runner-gated skips test_kernel_controller and test_backend_smoke).
 
 ## Task 4: Re-render overlay on host-mode entry and reconcile dirty triggers (W1, W2)
 Title: Re-render overlay on host-mode entry and reconcile dirty triggers (W1, W2)

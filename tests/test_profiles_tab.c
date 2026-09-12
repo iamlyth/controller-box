@@ -330,9 +330,10 @@ test_init_populates_panel(void **state)
 {
     pt_fixture *f = FIX(state);
     init_tab(f);
-    /* List controls plus explicit editor Save/Discard actions. */
+    /* List controls plus explicit editor Save/Discard actions plus the
+     * pointer-reachable dialog Confirm/Cancel buttons (Task 3/B3). */
     cbx_panel *panel = &f->mgr.panels[CBX_MGR_TAB_PROFILES];
-    assert_int_equal(cbx_panel_child_count(panel), 8);
+    assert_int_equal(cbx_panel_child_count(panel), 10);
 }
 
 static void
@@ -992,7 +993,7 @@ test_shutdown_removes_children(void **state)
     pt_fixture *f = FIX(state);
     init_tab(f);
     cbx_panel *panel = &f->mgr.panels[CBX_MGR_TAB_PROFILES];
-    assert_int_equal(cbx_panel_child_count(panel), 8);
+    assert_int_equal(cbx_panel_child_count(panel), 10);
 
     cbx_profiles_tab_shutdown(&f->tab);
     assert_int_equal(cbx_panel_child_count(panel), 0);

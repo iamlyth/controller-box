@@ -164,7 +164,7 @@ static const cbx_interaction_entry inventory[] = {
       "A/Return while in name-input mode",
       AVAIL, "Mouse click on confirm button in name-input dialog",
       "Editor opens with new in-memory profile (Default copy or Clone bindings, or Empty); no file written yet",
-      "cbx_manager_handle_event → cbx_profiles_tab_name_input_confirm → editor init",
+      "cbx_manager_handle_event → mouse → dialog_confirm_btn → cbx_profiles_tab_name_input_confirm → editor init",
       CBX_VERIFY_VERIFIED, "Task 5" },
 
     { "M16", CBX_CAT_MANAGER_PROF, "Profiles tab",
@@ -196,7 +196,7 @@ static const cbx_interaction_entry inventory[] = {
       "A while in confirm-delete mode",
       AVAIL, "Mouse click on confirm (delete) button",
       "Profile file unlinked; sidecar deleted; list refreshes",
-      "cbx_manager_handle_event → cbx_profiles_tab_confirm_delete",
+      "cbx_manager_handle_event → mouse → dialog_confirm_btn → cbx_profiles_tab_confirm_delete",
       CBX_VERIFY_VERIFIED, "Task 5" },
 
     { "M20", CBX_CAT_MANAGER_PROF, "Profiles tab",
@@ -204,7 +204,7 @@ static const cbx_interaction_entry inventory[] = {
       "B while in confirm-delete mode",
       AVAIL, "Mouse click on cancel (don't delete) button",
       "Returns to normal mode, no deletion",
-      "cbx_manager_handle_event → cbx_profiles_tab_cancel_delete",
+      "cbx_manager_handle_event → mouse → dialog_cancel_btn → cbx_profiles_tab_cancel_delete",
       CBX_VERIFY_VERIFIED, "Task 5" },
 
     /* ---- Manager — Settings tab (M21–M27) ---- */

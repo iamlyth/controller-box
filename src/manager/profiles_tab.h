@@ -71,6 +71,8 @@ typedef struct {
     cbx_button edit_btn;          /* "Edit Profile" (opens editor)      */
     cbx_button save_btn;          /* explicit editor Save action          */
     cbx_button discard_btn;       /* explicit editor Discard action       */
+    cbx_button dialog_confirm_btn; /* pointer-reachable dialog Confirm   */
+    cbx_button dialog_cancel_btn;  /* pointer-reachable dialog Cancel    */
     cbx_label  status_lbl;        /* status / prompt text                */
 
     /* --- Panel (borrowed) ------------------------------------------ */

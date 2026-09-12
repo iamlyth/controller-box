@@ -113,6 +113,48 @@ on_discard_editor_pressed(cbx_widget *w, void *user_data)
 }
 
 /* ------------------------------------------------------------------ */
+/*  Modal-dialog Confirm / Cancel (Task 3, B3)                        */
+/* ------------------------------------------------------------------ */
+
+/* Pointer-reachable confirm for the name-input and delete-confirm modal
+ * dialogs (inventory M15 / M19).  These buttons are shown only while a
+ * dialog is active and route through the same production actions as the
+ * A-key keyboard path, so the pointer path matches the controller path
+ * semantically (SPEC §5.7). */
+static void
+on_dialog_confirm_pressed(cbx_widget *w, void *user_data)
+{
+    (void)w;
+    cbx_profiles_tab *tab = (cbx_profiles_tab *)user_data;
+    if (!tab)
+        return;
+    switch (tab->mode) {
+    case CBX_PT_MODE_NAME_INPUT:
+        cbx_profiles_tab_name_input_confirm(tab);
+        break;
+    case CBX_PT_MODE_CONFIRM_DELETE:
+        cbx_profiles_tab_confirm_delete(tab);
+        break;
+    default:
+        break;
+    }
+}
+
+/* Pointer-reachable cancel for the delete-confirm dialog (inventory M20).
+ * The name-input dialog has no cancel button (name-input cancel is
+ * keyboard-only B/ESC; inventory M16), so M20 only fires here. */
+static void
+on_dialog_cancel_pressed(cbx_widget *w, void *user_data)
+{
+    (void)w;
+    cbx_profiles_tab *tab = (cbx_profiles_tab *)user_data;
+    if (!tab)
+        return;
+    if (tab->mode == CBX_PT_MODE_CONFIRM_DELETE)
+        cbx_profiles_tab_cancel_delete(tab);
+}
+
+/* ------------------------------------------------------------------ */
 /*  Button callbacks                                                   */
 /* ------------------------------------------------------------------ */
 
@@ -258,6 +300,27 @@ cbx_profiles_tab_init(cbx_profiles_tab *tab,
     cbx_widget_set_visible(&tab->save_btn.base, false);
     cbx_widget_set_visible(&tab->discard_btn.base, false);
 
+    /* Modal-dialog Confirm/Cancel buttons (Task 3, B3).  Hidden until a
+     * name-input or delete-confirm dialog makes them visible and pointer-
+     * reachable through cbx_manager_handle_mouse_event. */
+    rc = cbx_button_init(&tab->dialog_confirm_btn, "Confirm", font_id,
+                          cache, theme, on_dialog_confirm_pressed, tab);
+    if (rc != 0) {
+        cbx_widget_destroy(&tab->discard_btn.base);
+        cbx_widget_destroy(&tab->save_btn.base);
+        goto editor_button_fail;
+    }
+    rc = cbx_button_init(&tab->dialog_cancel_btn, "Cancel", font_id,
+                          cache, theme, on_dialog_cancel_pressed, tab);
+    if (rc != 0) {
+        cbx_widget_destroy(&tab->dialog_confirm_btn.base);
+        cbx_widget_destroy(&tab->discard_btn.base);
+        cbx_widget_destroy(&tab->save_btn.base);
+        goto editor_button_fail;
+    }
+    cbx_widget_set_visible(&tab->dialog_confirm_btn.base, false);
+    cbx_widget_set_visible(&tab->dialog_cancel_btn.base, false);
+
     /* --- Add widgets to panel ------------------------------------- */
     cbx_panel_add_child(panel, &tab->profile_list_w.base);
     cbx_panel_add_child(panel, &tab->create_btn.base);
@@ -267,6 +330,8 @@ cbx_profiles_tab_init(cbx_profiles_tab *tab,
     cbx_panel_add_child(panel, &tab->create_picker.base);
     cbx_panel_add_child(panel, &tab->save_btn.base);
     cbx_panel_add_child(panel, &tab->discard_btn.base);
+    cbx_panel_add_child(panel, &tab->dialog_confirm_btn.base);
+    cbx_panel_add_child(panel, &tab->dialog_cancel_btn.base);
 
 /* --- Layout --------------------------------------------------- */    cbx_profiles_tab_layout(tab);
     /* NOTE: caller must call cbx_profiles_tab_refresh() after init.
@@ -305,6 +370,8 @@ cbx_profiles_tab_shutdown(cbx_profiles_tab *tab)
         cbx_panel_remove_child(tab->panel, &tab->create_picker.base);
         cbx_panel_remove_child(tab->panel, &tab->save_btn.base);
         cbx_panel_remove_child(tab->panel, &tab->discard_btn.base);
+        cbx_panel_remove_child(tab->panel, &tab->dialog_confirm_btn.base);
+        cbx_panel_remove_child(tab->panel, &tab->dialog_cancel_btn.base);
     }
 
     cbx_widget_destroy(&tab->profile_list_w.base);
@@ -315,6 +382,8 @@ cbx_profiles_tab_shutdown(cbx_profiles_tab *tab)
     cbx_widget_destroy(&tab->status_lbl.base);
     cbx_widget_destroy(&tab->save_btn.base);
     cbx_widget_destroy(&tab->discard_btn.base);
+    cbx_widget_destroy(&tab->dialog_confirm_btn.base);
+    cbx_widget_destroy(&tab->dialog_cancel_btn.base);
 
     memset(tab, 0, sizeof(*tab));
 }
@@ -378,6 +447,20 @@ cbx_profiles_tab_layout(cbx_profiles_tab *tab)
                               .h = CBX_PT_BTN_H };
     cbx_widget_set_rect(&tab->save_btn.base, &save_rect);
     cbx_widget_set_rect(&tab->discard_btn.base, &discard_rect);
+
+    /* Modal-dialog Confirm/Cancel buttons (Task 3, B3): a dedicated row
+     * below the status label.  Only visible while a name-input or delete-
+     * confirm dialog is active, so they never overlap the always-present
+     * list / action buttons, and are always pointer-reachable via hit-
+     * testing when shown. */
+    int dlg_y = pr.y + CBX_PT_LIST_Y + CBX_PT_LIST_H + CBX_PT_BTN_GAP * 2
+                + CBX_PT_BTN_H * 2;
+    SDL_Rect dlg_cf = { .x = pr.x + CBX_PT_LIST_Y, .y = dlg_y,
+                        .w = CBX_PT_BTN_W, .h = CBX_PT_BTN_H };
+    cbx_widget_set_rect(&tab->dialog_confirm_btn.base, &dlg_cf);
+    SDL_Rect dlg_cc = { .x = dlg_cf.x + CBX_PT_BTN_W + CBX_PT_BTN_GAP,
+                        .y = dlg_y, .w = CBX_PT_BTN_W, .h = CBX_PT_BTN_H };
+    cbx_widget_set_rect(&tab->dialog_cancel_btn.base, &dlg_cc);
 
 }
 
@@ -584,6 +667,13 @@ cbx_profiles_tab_begin_create(cbx_profiles_tab *tab,
     cbx_label_set_text(&tab->status_lbl, prompt);
     cbx_widget_set_visible(&tab->status_lbl.base, true);
 
+    /* Pointer-reachable Confirm control (Task 3, B3).  Name-input cancel
+     * stays keyboard-only (B/ESC; inventory M16), so no Cancel button is
+     * shown while typing a name — every visible enabled action here is
+     * pointer-reachable (the Confirm button). */
+    cbx_widget_set_visible(&tab->dialog_confirm_btn.base, true);
+    cbx_widget_set_visible(&tab->dialog_cancel_btn.base, false);
+
     return 0;
 }
 
@@ -712,6 +802,8 @@ cbx_profiles_tab_name_input_cancel(cbx_profiles_tab *tab)
     tab->name_buf[0] = '\0';
     cbx_widget_set_visible(&tab->status_lbl.base, false);
     cbx_label_set_text(&tab->status_lbl, "");
+    cbx_widget_set_visible(&tab->dialog_confirm_btn.base, false);
+    cbx_widget_set_visible(&tab->dialog_cancel_btn.base, false);
 }
 
 /* ------------------------------------------------------------------ */
@@ -739,10 +831,15 @@ cbx_profiles_tab_begin_delete(cbx_profiles_tab *tab, int profile_index)
     char trunc_name[224];
     strncpy(trunc_name, del_name, sizeof(trunc_name) - 1);
     trunc_name[sizeof(trunc_name) - 1] = '\0';
-    snprintf(prompt, sizeof(prompt), "Delete \"%s\"?  A=Yes  B=No",
-             trunc_name);
+    snprintf(prompt, sizeof(prompt), "Delete \"%s\"?", trunc_name);
     cbx_label_set_text(&tab->status_lbl, prompt);
     cbx_widget_set_visible(&tab->status_lbl.base, true);
+
+    /* Pointer-reachable Confirm and Cancel controls (Task 3, B3): both
+     * visible dialog actions respond to pointer hover + left-click, and
+     * route through the same production actions as A/B (M19 / M20). */
+    cbx_widget_set_visible(&tab->dialog_confirm_btn.base, true);
+    cbx_widget_set_visible(&tab->dialog_cancel_btn.base, true);
 
     return 0;
 }
@@ -772,6 +869,8 @@ cbx_profiles_tab_cancel_delete(cbx_profiles_tab *tab)
     tab->delete_target = -1;
     cbx_widget_set_visible(&tab->status_lbl.base, false);
     cbx_label_set_text(&tab->status_lbl, "");
+    cbx_widget_set_visible(&tab->dialog_confirm_btn.base, false);
+    cbx_widget_set_visible(&tab->dialog_cancel_btn.base, false);
 }
 
 /*
@@ -1107,6 +1206,8 @@ hide_tab_widgets(cbx_profiles_tab *tab)
     cbx_widget_set_visible(&tab->delete_btn.base, false);
     cbx_widget_set_visible(&tab->status_lbl.base, false);
     cbx_widget_set_visible(&tab->create_picker.base, false);
+    cbx_widget_set_visible(&tab->dialog_confirm_btn.base, false);
+    cbx_widget_set_visible(&tab->dialog_cancel_btn.base, false);
 }
 
 static void

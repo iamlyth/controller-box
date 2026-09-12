@@ -107,6 +107,16 @@ send_mouse_click(cbx_manager *mgr, int x, int y)
 }
 
 static void
+send_mouse_motion(cbx_manager *mgr, int x, int y)
+{
+    SDL_Event ev = {0};
+    ev.type = SDL_MOUSEMOTION;
+    ev.motion.x = x;
+    ev.motion.y = y;
+    cbx_manager_handle_event(mgr, &ev);
+}
+
+static void
 widget_center(const cbx_widget *w, int *cx, int *cy)
 {
     assert_non_null(w);
@@ -773,6 +783,128 @@ test_prof_delete_cancel(void **state)
     char path[PATH_MAX + 128];
     snprintf(path, sizeof(path), "%s/myprof.yaml", f->user_dir);
     assert_int_equal(access(path, F_OK), 0);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Task 3 (B3): pointer-reachable modal-dialog controls             */
+/*  M15 / M19 / M20 — confirm/cancel via mouse hover + left-click     */
+/*  routed through cbx_manager_handle_mouse_event.                    */
+/* ------------------------------------------------------------------ */
+
+/* M15 pointer path: in name-input mode, hover + left-click the dialog
+ * Confirm button → editor opens with the new in-memory profile. */
+static void
+test_prof_name_input_confirm_pointer(void **state)
+{
+    mip_fixture *f = *state;
+    cbx_manager *mgr = &f->mgr;
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(mgr);
+
+    switch_to_profiles(mgr);
+    prof_nav_to_button(mgr, 2, 0);
+    send_key_press(mgr, SDLK_a);  /* Create */
+    send_key_press(mgr, SDLK_a);  /* Confirm "Default copy" */
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_NAME_INPUT);
+
+    /* The dialog Confirm button is visible and pointer-reachable. */
+    assert_true(cbx_widget_is_visible(&pt->dialog_confirm_btn.base));
+
+    /* Type a name (keyboard letters — not the path under test). */
+    send_key_dn(mgr, SDLK_t);
+    send_key_dn(mgr, SDLK_e);
+    send_key_dn(mgr, SDLK_s);
+    send_key_dn(mgr, SDLK_t);
+    assert_string_equal(cbx_profiles_tab_name_buffer(pt), "test");
+
+    /* Hover over the Confirm button, then left-click it. */
+    int cx, cy;
+    widget_center(&pt->dialog_confirm_btn.base, &cx, &cy);
+    send_mouse_motion(mgr, cx, cy);
+    assert_true(pt->dialog_confirm_btn.base.hover);
+    send_mouse_click(mgr, cx, cy);
+
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_EDITOR);
+    assert_true(pt->editor_initialized);
+    /* Default copy has 6 NES bindings. */
+    assert_int_equal(cbx_profile_editor_binding_count(&pt->editor), 6);
+    assert_int_equal(cbx_interaction_inventory_mark_verified("M15"), 0);
+}
+
+/* M19 pointer path: in delete-confirm mode, hover + left-click the dialog
+ * Confirm button → profile file unlinked, list refreshes. */
+static void
+test_prof_delete_confirm_pointer(void **state)
+{
+    mip_fixture *f = *state;
+    cbx_manager *mgr = &f->mgr;
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(mgr);
+
+    switch_to_profiles(mgr);
+
+    /* Select the user profile (index 1) and open confirm-delete via the
+     * Delete button (pointer path). */
+    int px = list_center_x(&pt->profile_list_w);
+    int py = list_item_y(&pt->profile_list_w, 1);
+    send_mouse_click(mgr, px, py);
+    int cx, cy;
+    widget_center(&pt->delete_btn.base, &cx, &cy);
+    send_mouse_click(mgr, cx, cy);
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_CONFIRM_DELETE);
+
+    int before = cbx_profiles_tab_profile_count(pt);
+    assert_true(cbx_widget_is_visible(&pt->dialog_confirm_btn.base));
+    assert_true(cbx_widget_is_visible(&pt->dialog_cancel_btn.base));
+
+    /* Hover then left-click the Confirm button. */
+    widget_center(&pt->dialog_confirm_btn.base, &cx, &cy);
+    send_mouse_motion(mgr, cx, cy);
+    assert_true(pt->dialog_confirm_btn.base.hover);
+    send_mouse_click(mgr, cx, cy);
+
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_LIST);
+    assert_int_equal(cbx_profiles_tab_profile_count(pt), before - 1);
+    char path[PATH_MAX + 128];
+    snprintf(path, sizeof(path), "%s/myprof.yaml", f->user_dir);
+    assert_int_not_equal(access(path, F_OK), 0);
+    assert_int_equal(cbx_interaction_inventory_mark_verified("M19"), 0);
+}
+
+/* M20 pointer path: in delete-confirm mode, hover + left-click the dialog
+ * Cancel button → returns to list, no deletion. */
+static void
+test_prof_delete_cancel_pointer(void **state)
+{
+    mip_fixture *f = *state;
+    cbx_manager *mgr = &f->mgr;
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(mgr);
+
+    switch_to_profiles(mgr);
+
+    /* Select the user profile and open confirm-delete via the Delete
+     * button (pointer path). */
+    int px = list_center_x(&pt->profile_list_w);
+    int py = list_item_y(&pt->profile_list_w, 1);
+    send_mouse_click(mgr, px, py);
+    int cx, cy;
+    widget_center(&pt->delete_btn.base, &cx, &cy);
+    send_mouse_click(mgr, cx, cy);
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_CONFIRM_DELETE);
+
+    int before = cbx_profiles_tab_profile_count(pt);
+    assert_true(cbx_widget_is_visible(&pt->dialog_cancel_btn.base));
+
+    /* Hover then left-click the Cancel button. */
+    widget_center(&pt->dialog_cancel_btn.base, &cx, &cy);
+    send_mouse_motion(mgr, cx, cy);
+    assert_true(pt->dialog_cancel_btn.base.hover);
+    send_mouse_click(mgr, cx, cy);
+
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_LIST);
+    assert_int_equal(cbx_profiles_tab_profile_count(pt), before);
+    char path[PATH_MAX + 128];
+    snprintf(path, sizeof(path), "%s/myprof.yaml", f->user_dir);
+    assert_int_equal(access(path, F_OK), 0);
+    assert_int_equal(cbx_interaction_inventory_mark_verified("M20"), 0);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1847,6 +1979,14 @@ main(void)
         cmocka_unit_test_setup_teardown(
             test_prof_delete_cancel, mip_setup, mip_teardown),
 
+        /* Task 3 (B3): pointer-reachable dialog confirm/cancel */
+        cmocka_unit_test_setup_teardown(
+            test_prof_name_input_confirm_pointer, mip_setup, mip_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_prof_delete_confirm_pointer, mip_setup, mip_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_prof_delete_cancel_pointer, mip_setup, mip_teardown),
+
         /* Profile editor — binding list (M28) */
         cmocka_unit_test_setup_teardown(
             test_editor_list_nav, mip_setup, mip_teardown),
@@ -1933,5 +2073,16 @@ main(void)
             test_capability_scoped_binding, mip_setup, mip_teardown),
     };
 
-    return cmocka_run_group_tests(tests, NULL, NULL);
+    int rc = cmocka_run_group_tests(tests, NULL, NULL);
+
+    if (rc == 0) {
+        /* Task 3 (B3): the pointer-path tests above must have recorded
+         * M15/M19/M20 as verified in the runtime ledger (via
+         * mark_verified() inside each passing test) — proving the
+         * inventory reflects the real, pointer-reachable dialog controls. */
+        assert_int_equal(cbx_interaction_inventory_is_verified("M15"), 1);
+        assert_int_equal(cbx_interaction_inventory_is_verified("M19"), 1);
+        assert_int_equal(cbx_interaction_inventory_is_verified("M20"), 1);
+    }
+    return rc;
 }
