@@ -70,12 +70,12 @@ Evidence: verification exit 0 on local. Repair (cycle 1): re-scoped §4.6/§16 A
 
 ## Task 8: Verify all harness modules compile
 Title: Verify all harness modules compile
-Status: pending
+Status: done
 Dependencies: none
 Acceptance: All Python modules in .factory/loop/ compile without errors.
 Verification: python3 -c "import py_compile; [py_compile.compile(f'.factory/loop/{m}', doraise=True) for m in ['campaign.py','parallel.py','state.py','selector.py','plan_parser.py','metrics.py','issues.py','runner.py','preflight.py','gitutil.py','lock.py','__init__.py']]"
 Runner: none
-Evidence: Pending.
+Evidence: Ran the exact verification command from the plan task body in /workspace/project: `python3 -c "import py_compile; [py_compile.compile(f'.factory/loop/{m}', doraise=True) for m in ['campaign.py','parallel.py','state.py','selector.py','plan_parser.py','metrics.py','issues.py','runner.py','preflight.py','gitutil.py','lock.py','__init__.py']]"`. All 12 modules in .factory/loop/ (campaign.py, parallel.py, state.py, selector.py, plan_parser.py, metrics.py, issues.py, runner.py, preflight.py, gitutil.py, lock.py, __init__.py) compiled without errors; py_compile raised no exception and the process exited cleanly with code 0. Acceptance met.
 
 ## Task 9: Verify full test suite passes
 Title: Verify full test suite passes
