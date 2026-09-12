@@ -37,7 +37,7 @@ cd -- "$PROJECT_ROOT"
 
 BUILD_DIR="${1:-${BUILD_DIR:-build-check}}"
 STAGING_DIR="$PROJECT_ROOT/.test-install-bin"
-XVFB_DISPLAY=":98"
+XVFB_DISPLAY=""
 XVFB_PID=""
 IP_SERVER_PID=""
 MANAGER_PID=""
@@ -214,10 +214,24 @@ fi
 # Step 3: Start Xvfb (headless X11 server)
 # ---------------------------------------------------------------------------
 echo ""
-echo "--- Starting Xvfb on $XVFB_DISPLAY ---"
+echo "--- Starting Xvfb ---"
 
-pkill -f "Xvfb $XVFB_DISPLAY" 2>/dev/null || true
-sleep 0.3
+# Pick an unused display instead of killing a process by a global pattern.
+# A fixed display can belong to another test (or another user's session),
+# and a global pkill can terminate unrelated work.
+display_number=90
+while [ "$display_number" -le 199 ]; do
+    if [ ! -e "/tmp/.X11-unix/X${display_number}" ] &&
+       [ ! -e "/tmp/.X${display_number}-lock" ]; then
+        XVFB_DISPLAY=":${display_number}"
+        break
+    fi
+    display_number=$((display_number + 1))
+done
+if [ -z "$XVFB_DISPLAY" ]; then
+    fail "no unused X11 display is available"
+    exit 1
+fi
 
 Xvfb "$XVFB_DISPLAY" -screen 0 1280x720x24 &
 XVFB_PID=$!
@@ -227,7 +241,7 @@ if ! kill -0 "$XVFB_PID" 2>/dev/null; then
     fail "Xvfb failed to start on $XVFB_DISPLAY"
     exit 1
 fi
-pass "Xvfb running (PID $XVFB_PID)"
+pass "Xvfb running on $XVFB_DISPLAY (PID $XVFB_PID)"
 
 export DISPLAY="$XVFB_DISPLAY"
 export SDL_VIDEODRIVER="x11"

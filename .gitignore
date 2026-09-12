@@ -62,3 +62,11 @@ tests/golden-fail/
 
 # Factory runner SSH keys (never commit)
 .factory/ssh/
+
+# Stray study subagent output at repo root (belongs in .factory/artifacts/)
+/*SUBSYSTEM*.md
+/*subsystem*study*.md
+
+# Per-task audit artifacts (generated during campaign, not source)
+.factory/artifacts/audit-*-task*.md
+.factory/artifacts/audit-findings-task*.md
