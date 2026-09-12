@@ -61,12 +61,12 @@ Evidence: verification exit 0 on local
 
 ## Task 7: Update FACTORY-LOOP-SPEC requirement registry
 Title: Update FACTORY-LOOP-SPEC requirement registry
-Status: pending
+Status: completed
 Dependencies: none
 Acceptance: The requirement registry in §16 of FACTORY-LOOP-SPEC.md has no entries referencing per-round planning or roles_override per round.
 Verification: grep -c "per round" docs/FACTORY-LOOP-SPEC.md | grep -q "^0$"
 Runner: none
-Evidence: Pending.
+Evidence: Reworded ADAPT-01 and COST-01 registry entries in §16 to remove "per round" phrasing (roles_override now "for an attempt", cost time "for a round"); also removed remaining "per round" occurrences elsewhere in the doc (lines 227, 287, 462 headings/metrics). Verified: grep -c "per round" docs/FACTORY-LOOP-SPEC.md => 0, passes "grep -q \"^0$\"" (exit 0).
 
 ## Task 8: Verify all harness modules compile
 Title: Verify all harness modules compile

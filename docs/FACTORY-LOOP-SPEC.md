@@ -224,7 +224,7 @@ The harness logs per-round metrics to `.factory-state/metrics.jsonl`:
 - **Developer rejection rate**: fraction of proposals rejected by the
   integration developer. Developers with rejection rates above 50% are
   flagged.
-- **Repair cycle stats**: average repair cycles per round, fraction
+- **Repair cycle stats**: average repair cycles across rounds, fraction
   resolved by repair.
 - **Round outcomes**: count of completed, blocked, and failed rounds.
 
@@ -284,7 +284,7 @@ mechanism is not working and a different approach is needed.
 
 ### 4.11 Cost accounting per phase
 
-The harness tracks wall-clock time per phase per round:
+The harness tracks wall-clock time per phase in each round:
 
 - `planning_time_s`: study subagents + planner.
 - `implementation_time_s`: developers + integration.
@@ -459,7 +459,7 @@ reports into the canonical plan. If all tasks in an existing plan are
 already completed, planning is skipped and the campaign goes straight to
 finalisation.
 
-**Phase 1 — Implementation loop (per round):**
+**Phase 1 — Implementation loop (for a round):**
 ```
 selection → implementation → verification → audit
   → if clean audit: checkpoint → next round
@@ -672,12 +672,12 @@ no SSH key enrollment, no 34 schemas. Just spec, plan, loop, runners, done.
 | AUDIT-05 | Unresolvable BLOCKERs after max_repairs → task marked blocked, not silently passed |
 | METRIC-01 | Per-round metrics logged to JSONL: auditor precision, developer rejection rate, repair stats |
 | METRIC-02 | Metrics summary fed to planner to enable feedback-driven role tuning |
-| ADAPT-01 | Planner may emit roles_override in plan front matter to adjust roles per round |
+| ADAPT-01 | Planner may emit roles_override in plan front matter to adjust roles for an attempt |
 | ADAPT-02 | Supported overrides: skip/add auditors, studies, developers; model overrides per role |
 | TIER-01 | roles.toml supports per-role model field for cost-optimized model tiering |
 | STALE-01 | stale_rounds threshold: campaign stops after K consecutive rounds with no audit improvement |
 | STALE-02 | escalation_threshold: same issue recurring N times → campaign terminates as escalated |
-| COST-01 | Per-phase wall-clock time tracked per round (planning, implementation, verification, audit, repair) |
+| COST-01 | Per-phase wall-clock time tracked for a round (planning, implementation, verification, audit, repair) |
 | COST-02 | Cost data included in metrics summary; planning > implementation triggers fan-out warning |
 | SCRATCH-01 | Round scratchpad written to .factory/rounds/N.md after each round |
 | SCRATCH-02 | Prior round scratchpads (last 3) fed to planner for iteration continuity |
