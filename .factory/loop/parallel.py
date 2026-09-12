@@ -324,7 +324,11 @@ def _extract_findings(auditor_name: str, output: str) -> list[AuditFinding]:
         if not block:
             continue
         upper = block.upper()
-        if "BLOCKER" in upper:
+        # Check for negative BLOCKER statements first (e.g. "No BLOCKERs",
+        # "BLOCKERs: none", "No blocking findings") to avoid false positives.
+        has_negative_blocker = bool(re.search(
+            r'NO\s+BLOCKER|BLOCKER[s]?\s*:?\s*NONE|NO\s+BLOCKING', upper))
+        if "BLOCKER" in upper and not has_negative_blocker:
             severity = "BLOCKER"
         elif "WARN" in upper:
             severity = "WARN"
