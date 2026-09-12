@@ -190,17 +190,19 @@ If all auditors return no BLOCKER findings, the repair cycle is skipped
 entirely. The task is marked complete and the round checkpoints immediately.
 No repair cycles are wasted on clean code.
 
-### 4.6 Round-adaptive role selection
+### 4.6 Role configuration via plan overrides
 
 The planner may emit a `roles_override` field in the plan's YAML front
-matter (JSON-encoded) to adjust roles for the next round. This allows the
-factory to adapt its role configuration based on what the metrics show.
+matter (JSON-encoded) to configure roles for the implementation loop.
+Roles are fixed once from the single plan and are not adjusted between
+rounds. This lets the factory set its role configuration up front against
+the plan's scope rather than adapting roles round by round.
 
 Supported override keys:
 
 | Key | Description |
 |---|---|
-| `skip_auditors` | List of auditor names to skip next round |
+| `skip_auditors` | List of auditor names to skip in the implementation loop |
 | `skip_studies` | List of study subagent names to skip |
 | `add_auditors` | List of auditor dicts to add |
 | `add_studies` | List of study dicts to add |
@@ -210,9 +212,10 @@ Supported override keys:
 | `developer_models` | Dict of developer name → model override |
 | `planner_model` | Model override for the planner |
 
-Example: if round 1's audit found zero security issues but 4 efficiency
-issues, the planner can drop the security auditor and add a second
-efficiency-focused developer for round 2.
+Example: if the plan's study found the work to be heavy on efficiency
+concerns with little security exposure, the planner can drop a security
+auditor and add a second efficiency-focused developer before the
+implementation loop begins.
 
 ### 4.7 Metrics feedback loop
 
@@ -228,9 +231,11 @@ The harness logs per-round metrics to `.factory-state/metrics.jsonl`:
   resolved by repair.
 - **Round outcomes**: count of completed, blocked, and failed rounds.
 
-The metrics summary is fed to the planner at the start of each round. The
-planner can use it to emit `roles_override` adjustments. Without this
-loop, roles.toml tuning is guesswork.
+The metrics summary is available to inform the plan's `roles_override`
+configuration. Because roles are fixed from the single plan, metrics do
+not trigger mid-loop role changes; any adjustment requires a plan
+revision rather than per-round tuning. Without these signals, roles.toml
+configuration would be guesswork.
 
 ### 4.8 Model tiering
 
@@ -672,7 +677,7 @@ no SSH key enrollment, no 34 schemas. Just spec, plan, loop, runners, done.
 | AUDIT-05 | Unresolvable BLOCKERs after max_repairs → task marked blocked, not silently passed |
 | METRIC-01 | Per-round metrics logged to JSONL: auditor precision, developer rejection rate, repair stats |
 | METRIC-02 | Metrics summary fed to planner to enable feedback-driven role tuning |
-| ADAPT-01 | Planner may emit roles_override in plan front matter to adjust roles for an attempt |
+| ADAPT-01 | Planner may emit roles_override in plan front matter to configure roles for the implementation loop; roles are fixed from the single plan and are not adjusted between rounds |
 | ADAPT-02 | Supported overrides: skip/add auditors, studies, developers; model overrides per role |
 | TIER-01 | roles.toml supports per-role model field for cost-optimized model tiering |
 | STALE-01 | stale_rounds threshold: campaign stops after K consecutive rounds with no audit improvement |
