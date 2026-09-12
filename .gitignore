@@ -78,6 +78,8 @@ tests/golden-fail/
 # Stray study/audit subagent output in docs/ and src/ (not source documentation)
 docs/subsystem-*.md
 docs/*-audit-*.md
+docs/audit-*.md
 docs/*-study-*.md
+docs/review-audit-*.md
 src/*/SUBSYSTEM-*.md
 src/*/subsystem-study-*.md
