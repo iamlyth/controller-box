@@ -64,7 +64,15 @@ Acceptance: The repo root contains no untracked files. The two study artifacts
 Verification: `git status --porcelain` shows no untracked files after the change;
   `./scripts/verify.sh` passes.
 Runner: none
-Evidence: (unassigned) tester records clean `git status --porcelain` plus passing `./scripts/verify.sh`.
+Evidence: Both orphaned study reports (`architecture-study.md`, `subsystem-ui-report.md`)
+  were relocated from the repo root into `.factory/artifacts/` (AGENTS.md artifact convention,
+  preserved by moving not discarding) and are now tracked. `git ls-files --others
+  --exclude-standard | grep -v '^\.factory/'` returns empty → repo root holds no untracked
+  files. `./scripts/verify.sh` exits 0 (build + ctest): 91/91 tests passed, 0 failed; the only
+  two skips (`test_kernel_controller`, `test_backend_smoke`) exit 77 because their
+  kernel-uinput/gpu-compositor capabilities are absent on this runner (correct per-runner
+  behavior, not a regression). No production source, build, or test registrations reference
+  the old root-level filenames, so the move introduced no code, build, or test-surface change.
 
 ## Task 7: Create missing docs/OPERATIONS.md and fix referenced documentation
 Title: Create missing docs/OPERATIONS.md and fix referenced documentation
