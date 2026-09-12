@@ -74,6 +74,18 @@ Evidence: Both orphaned study reports (`architecture-study.md`, `subsystem-ui-re
   behavior, not a regression). No production source, build, or test registrations reference
   the old root-level filenames, so the move introduced no code, build, or test-surface change.
 
+Task 6 repair (audit BLOCKER): commit `6cdf52da` had leaked a mis-scoped `src/manager`
+  settings-save feature (`cbx_manager_settings_saved` reload hook) plus `tests/
+  test_settings_controllers_sync.c` asserting it. Commit `db20d2bd` correctly reverted the
+  `src/manager` feature and its CMake target, but the committed test source was left behind
+  as a tracked, never-built dead file (no `add_executable`/`add_test`). Decision: the feature
+  was deliberately not pursued (SPEC §5.3/§5.7 durability satisfies the acceptance; the sync
+  test cannot pass against the reverted API), so the dead test was deleted rather than
+  rewired. Repaired by removing `tests/test_settings_controllers_sync.c` from the tree and
+  adding `.test-install-bin/` to `.gitignore` so the acceptance clean-tree gate cannot be
+  regressed by `verify.sh` teardown. `git status --porcelain` shows no untracked files at the
+  repo root after the change.
+
 ## Task 7: Create missing docs/OPERATIONS.md and fix referenced documentation
 Title: Create missing docs/OPERATIONS.md and fix referenced documentation
 Status: pending

@@ -57,6 +57,7 @@ tests/golden-fail/
 .install-prefix/
 .build-install-diagram/
 .test-install-diagram/
+.test-install-bin/
 
 # Factory runner SSH keys (never commit)
 .factory/ssh/
