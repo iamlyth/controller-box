@@ -88,10 +88,18 @@ Evidence: verification exit 0 on local
 
 ## Task 10: Final documentation and specification audit
 Title: Final documentation and specification audit
-Status: pending
+Status: completed
 Dependencies: 1, 2, 3, 4, 5, 6, 7, 8, 9
 Acceptance: The full verification suite passes and the Git tree is clean on develop. Additionally, the audit must close out the two concrete spec areas surfaced by the subsystem studies — evaluating each to a conclusion rather than passing silently:
 Verification: ./scripts/verify.sh && git status --porcelain
 Runner: none
-Evidence: Pending. Auditor records the §10.3/#§6 dispositions (wired/superseded/removed) with exact line/reference facts, plus the verification exit code and clean-tree confirmation.
+Evidence: Completed. Both audit areas disposed **wired**.
+
+§10.3 (five DBus gap workarounds, SPEC.md l.545) — **wired**. Gap #1 InterceptMode poll: `src/dbus/ip_intercept_poll.h` l.51 `IP_INTERCEPT_POLL_INTERVAL_MS 50` (DEC-002), `SDL_AddTimer` 50ms (`ip_intercept_poll.c` l.124), consumed by `src/app/overlay_service.c` l.869. Gap #2 GamepadOrder persistence/reapply: `src/dbus/ip_gamepad_order.c` (header l.2 "Task 15, gap #2") writes/loads via `cbx_assignments_save/load` (assign_persist.c l.56-84), restored on restart by `src/identify/gamepad_order_restore.c`. Gap #3 CreateCompositeDevice temp file: `src/dbus/ip_create_composite.c` l.54-75 builds `mkdir+mkstemps` template `<tmp>/controller-box-XXXXXX.yaml`. Gap #4 filesystem profile enumeration: `src/config/config_paths.c` l.28 `IP_PROFILES_SUBDIR`, `src/config/config_profile_list.c` readdir (l.86, l.195) over user+system `inputplumber/profiles/`, `devices/`, `capability_maps/`. Gap #5 (add/remove source devices) — **removed/superseded**: SPEC l.545 verdict "Not needed for v1", mirrored in SPEC §12 Out of Scope, no code path needed.
+
+§6 Controller Identification (SPEC.md l.256-284) — **wired**. `src/identify/identity.c` `cbx_identity_extract()` implements 4-layer extraction in descending strength (BT MAC → USB serial → USB port → connection order) per §6.2; prefixed IDs `BT:`, `USB:SN`, `USB:phys:`, `ORDER:` in `cbx_identity_parse_layer`; downgrade detection `cbx_identity_is_downgrade` (identity.c) + `src/identify/identity_downgrade.c` per §6.3; assignment persistence `src/identify/assign.c`/`assign_persist.c` writes `assignments.yaml` (§7.4).
+
+Coverage tests pass (id-45 test_identity, #47 test_assign_persist, #48 test_identity_downgrade, #14 test_assignments, #49 test_order_restore, #28 test_gamepad_order, #23 test_intercept_poll, #27 test_create_composite, #22 test_composite_calls, #16 test_profile_list).
+
+Verification: `./scripts/verify.sh && git status --porcelain` — **exit 0**; 100% tests passed (91/91, 0 failures); the 2 skips (test_kernel_controller #3, test_backend_smoke #81) are hardware-dependent and exit 77 per AGENTS.md (kernel-uinput/gpu-compositor runners). `git status --porcelain` clean (0 changed files) on `develop`.
 
