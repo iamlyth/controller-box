@@ -574,15 +574,6 @@ if(CMOCKA_FOUND)
     set_tests_properties(test_settings_tab PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy")
 
-    # Task 6 — Settings-tab save propagates to Controllers tab (stale dual
-    # settings copy regression).
-    add_executable(test_settings_controllers_sync tests/test_settings_controllers_sync.c)
-    target_link_libraries(test_settings_controllers_sync PRIVATE controllerbox PkgConfig::CMOCKA)
-    target_compile_definitions(test_settings_controllers_sync PRIVATE CBX_FONT_PATH="${CBX_FONT_PATH}")
-    add_test(NAME test_settings_controllers_sync COMMAND test_settings_controllers_sync)
-    set_tests_properties(test_settings_controllers_sync PROPERTIES
-        ENVIRONMENT "SDL_VIDEODRIVER=dummy")
-
     # Task 40 — Systemd service installation and manager integration test.
     add_executable(test_service_install tests/test_service_install.c)
     target_link_libraries(test_service_install PRIVATE controllerbox_testing cbx_test_support PkgConfig::CMOCKA)

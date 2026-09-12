@@ -56,7 +56,6 @@ static bool cbx_manager_tab_handle_key(cbx_manager *mgr,
                                           const SDL_Event *ev);
 static bool cbx_manager_tab_activate(cbx_manager *mgr);
 static bool cbx_manager_tab_cancel(cbx_manager *mgr);
-static void cbx_manager_settings_saved(void *userdata);
 static void cbx_manager_check_mode_change(cbx_manager *mgr,
                                             int prev_mode);
 static void cbx_manager_open_gamecontroller(cbx_manager *mgr,
@@ -559,12 +558,6 @@ cbx_manager_init_with_dbus(cbx_manager *mgr, const char *font_path,
         cbx_renderer_shutdown(&mgr->rend);
         return rc;
     }
-    /* Task 6: when the Settings tab saves, re-load the manager's
-     * authoritative settings object (borrowed by the Controllers tab as
-     * mgr->ct.settings) so the saved VC count/types are visible there
-     * immediately, without a manager restart. */
-    cbx_settings_tab_set_saved_callback(&mgr->st,
-                                         cbx_manager_settings_saved, mgr);
 
     /* --- Focus chain (depends on tab modules being initialised) ----- */
     cbx_focus_chain_init(&mgr->focus);
@@ -1129,24 +1122,6 @@ cbx_manager_tab_cancel(cbx_manager *mgr)
     default:
         return false;
     }
-}
-
-/* Task 6: registered as the Settings tab's post-save hook.  The Settings
- * tab wrote its working copy to settings.yaml; re-load that file into the
- * manager's authoritative settings object (mg->settings) and re-propagate
- * the expected virtual-controller count to the Controllers tab, which
- * borrows mg->settings.  This makes the saved VC count/types visible in
- * the Controllers tab for the remainder of the session without a restart. */
-static void
-cbx_manager_settings_saved(void *userdata)
-{
-    cbx_manager *mgr = userdata;
-    if (!mgr)
-        return;
-
-    cbx_settings_load(&mgr->settings);
-    cbx_controllers_tab_set_expected_count(&mgr->ct,
-        mgr->settings.virtual_controllers.count);
 }
 
 static void
