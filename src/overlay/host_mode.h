@@ -52,7 +52,7 @@ typedef int (*cbx_hm_slot_change_cb)(int row_idx, int new_slot, void *userdata);
  * back).  The new `active` state is passed so a consumer can, for example,
  * mark the overlay surface dirty: entering/exiting host mode materially
  * changes the rendered row visuals (HOST/SELECTED/FROZEN vs. normal Player
- * Mode — SPEC §4.4/§4.10), so the pre-built surface must be re-rendered.
+ * Mode — SPEC §4.4/§4.9), so the pre-built surface must be re-rendered.
  */
 typedef int (*cbx_hm_state_change_cb)(bool active, void *userdata);
 
