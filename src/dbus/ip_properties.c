@@ -106,10 +106,8 @@ validate_array(const char *value, size_t max_element_len, int max_elems)
         p = comma + 1;
     }
 
-    /* Handle empty string: zero elements is valid. */
-    if (count == 0 && value[0] != '\0')
-        count = 1;  /* single element with no comma */
-
+    /* An empty string yields zero elements (valid); any non-empty string
+     * yields count >= 1 from the loop above, so no special-casing here. */
     return count;
 }
 
@@ -149,7 +147,7 @@ ip_properties_init(ip_properties *props, const ip_dbus_backend *backend,
 int
 ip_properties_subscribe(ip_properties *props)
 {
-    if (!props || !props->backend)
+    if (!props || !props->backend || !props->backend->subscribe_signal)
         return -EINVAL;
 
     return props->backend->subscribe_signal(
