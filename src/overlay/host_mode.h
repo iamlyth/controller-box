@@ -84,6 +84,12 @@ int cbx_host_mode_enter(cbx_host_mode *hm, int row_idx);
 
 /*
  * Exit host mode. Resets to inactive.
+ *
+ * W2 no-op contract: exiting a host-mode object that is already inactive
+ * is a no-op transition and does NOT fire on_state_change (the dirty
+ * trigger).  on_state_change fires only on an actual active->inactive
+ * transition, so a redundant exit never emits a spurious dirty trigger.
+ *
  * Returns 0, -EINVAL.
  */
 int cbx_host_mode_exit(cbx_host_mode *hm);

@@ -6,6 +6,9 @@
  * verifying semantic outcomes: grid state, profile changes, assignment
  * sync, lifecycle transitions, and DBus mock expectations.  O13 (Player
  * Mode conflict) is covered by test_overlay_native.c with native DBus.
+ * This file also covers the W1/W2 host-mode dirty triggers (surface
+ * re-render on host-mode entry/exit) — these are NOT the O13 inventory ID
+ * (see note at the Host-mode dirty-trigger section below).
  *
  * SPEC §5.7, §4.3–4.5, §11.2 item 3.
  */
@@ -560,18 +563,21 @@ test_o09_exit_host_mode(void **state)
 }
 
 /* ================================================================== */
-/*  O13 — Host-mode entry/exit marks the surface dirty (W1)          */
+/*  Host-mode dirty triggers W1/W2 (surface re-render on enter/exit)    */
 /*      Entering/exiting host mode must set the pre-built surface    */
 /*      dirty so the presented frame reflects the HOST/SELECTED/     */
 /*      FROZEN row visuals on entry (SPEC §4.4/§4.9).  This drives    */
 /*      the toggle through the production DBus dispatch path          */
 /*      (cbx_overlay_input_cb) with the lifecycle inactive so the    */
 /*      step's re-render does not consume the flag before we check    */
-/*      it — isolating the dirty-trigger itself.                     */
+/*      it — isolating the dirty-trigger itself.                      */
+/*      NOTE: these are W1/W2 dirty-trigger tests.  They are NOT the   */
+/*      O13 inventory ID (Player Mode conflict), which lives in        */
+/*      test_overlay_native.c.                                       */
 /* ================================================================== */
 
 static void
-test_o13_host_entry_marks_dirty_dbus(void **state)
+test_hm_entry_marks_dirty_dbus(void **state)
 {
     interaction_fixture *f = *state;
 
@@ -594,7 +600,7 @@ test_o13_host_entry_marks_dirty_dbus(void **state)
 }
 
 static void
-test_o13b_host_exit_marks_dirty_dbus(void **state)
+test_hm_exit_marks_dirty_dbus(void **state)
 {
     interaction_fixture *f = *state;
 
@@ -644,7 +650,7 @@ hm_count_and_mark(bool active, void *userdata)
 }
 
 static void
-test_o13c_host_transition_fires_once(void **state)
+test_hm_transition_fires_once(void **state)
 {
     interaction_fixture *f = *state;
 
@@ -1222,11 +1228,11 @@ static const struct CMUnitTest tests[] = {
                                      interaction_setup, interaction_teardown),
     cmocka_unit_test_setup_teardown(test_o09_exit_host_mode,
                                      interaction_setup, interaction_teardown),
-    cmocka_unit_test_setup_teardown(test_o13_host_entry_marks_dirty_dbus,
+    cmocka_unit_test_setup_teardown(test_hm_entry_marks_dirty_dbus,
                                      interaction_setup, interaction_teardown),
-    cmocka_unit_test_setup_teardown(test_o13b_host_exit_marks_dirty_dbus,
+    cmocka_unit_test_setup_teardown(test_hm_exit_marks_dirty_dbus,
                                      interaction_setup, interaction_teardown),
-    cmocka_unit_test_setup_teardown(test_o13c_host_transition_fires_once,
+    cmocka_unit_test_setup_teardown(test_hm_transition_fires_once,
                                      interaction_setup, interaction_teardown),
 
     /* O10 — Close */

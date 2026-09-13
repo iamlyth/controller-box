@@ -309,6 +309,9 @@ cbx_overlay_on_save(void *userdata)
     if (rc != 0)
         return rc;
 
+    /* Save/close path: the presented frame reflects the persisted and
+     * conflict-resolved topology, so it is part of the dirty-trigger set
+     * (SPEC §4.9) — re-render rather than present a stale pre-built frame. */
     cbx_overlay_surface_mark_dirty_all(&svc->surface);
     return 0;
 }
@@ -327,7 +330,8 @@ cbx_overlay_on_slot_change(int row_idx, int new_slot, void *userdata)
      * Re-detect conflicts so the re-render shows red highlights (SPEC §4.5). */
     cbx_conflict_list_init(&svc->conflicts);
     cbx_conflict_detect(&svc->grid, &svc->conflicts);
-    /* Mark surface dirty for re-render. */
+    /* Slot change is a dirty trigger (SPEC §4.9): re-render so the
+     * presented frame reflects the new column assignment. */
     cbx_overlay_surface_mark_dirty_all(&svc->surface);
     return 0;
 }
@@ -350,6 +354,8 @@ cbx_overlay_on_profile_change(int row_idx, const char *profile,
     if (rc != 0)
         return rc;
 
+    /* Profile change is a dirty trigger (SPEC §4.9): re-render so the
+     * presented frame reflects the newly applied profile/composite. */
     cbx_overlay_surface_mark_dirty_all(&svc->surface);
     return 0;
 }
