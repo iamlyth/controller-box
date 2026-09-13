@@ -766,6 +766,35 @@ test_state_change_on_toggle(void **state)
     assert_int_equal(cb.transitions, 3);
 }
 
+/*
+ * W2 no-op guard: exiting an already-idle host-mode object is not a real
+ * state transition, so it must not fire the dirty trigger.  A redundant
+ * exit on an inactive host-mode object emits no spurious state change.
+ */
+static void
+test_exit_noop_no_transition(void **state)
+{
+    (void)state;
+    cbx_host_mode hm;
+    cbx_host_mode_init(&hm);
+    hm_state_cb cb = {0, false};
+    hm.on_state_change   = on_state_change;
+    hm.state_change_data = &cb;
+
+    /* Exit on an already-idle host-mode object (no prior enter): no fire. */
+    assert_int_equal(cbx_host_mode_exit(&hm), 0);
+    assert_int_equal(cb.transitions, 0);
+
+    /* Enter once then exit twice: only the real exit fires (the redundant
+     * second exit is a no-op). */
+    assert_int_equal(cbx_host_mode_enter(&hm, 0), 0);
+    assert_int_equal(cb.transitions, 1);
+    assert_int_equal(cbx_host_mode_exit(&hm), 0);
+    assert_int_equal(cb.transitions, 2);
+    assert_int_equal(cbx_host_mode_exit(&hm), 0); /* no-op */
+    assert_int_equal(cb.transitions, 2);
+}
+
 int
 main(void)
 {
@@ -828,6 +857,7 @@ main(void)
         /* Dirty-surface trigger (W1) */
         cmocka_unit_test(test_state_change_on_enter_exit),
         cmocka_unit_test(test_state_change_on_toggle),
+        cmocka_unit_test(test_exit_noop_no_transition),
     };
 
     return cmocka_run_group_tests(tests, NULL, NULL);

@@ -43,10 +43,16 @@ cbx_host_mode_exit(cbx_host_mode *hm)
 {
     if (!hm)
         return -EINVAL;
+    bool was_active = hm->active;
     hm->active       = false;
     hm->host_row     = -1;
     hm->selected_row = -1;
-    fire_state_change(hm, false);
+    /* Fire the dirty trigger only on a real active→inactive transition.
+     * A no-op exit on an already-idle host-mode object must not emit a
+     * spurious state change (W2: deliberate/consistent triggers — dirty
+     * only on an actual host-mode state transition). */
+    if (was_active)
+        fire_state_change(hm, false);
     return 0;
 }
 

@@ -620,6 +620,65 @@ test_o13b_host_exit_marks_dirty_dbus(void **state)
     assert_true(cbx_overlay_surface_is_dirty(&f->svc->surface));
 }
 
+/* --- Single-fire dirty-trigger counter (W2 regression) ------------- */
+
+typedef struct {
+    int transitions;                    /* host-mode state-change fires    */
+    cbx_overlay_service_ctx *svc;       /* forwarded to production callback */
+} hm_transition_counter;
+
+/*
+ * Wraps the production dirty-trigger callback with a counter so a test can
+ * assert that entering/exiting host mode fires the state-change transition
+ * exactly once through the production dispatch path (W2: deliberate,
+ * consistent triggers — no double-fire on the R3-exit path).
+ */
+static int
+hm_count_and_mark(bool active, void *userdata)
+{
+    hm_transition_counter *c = (hm_transition_counter *)userdata;
+    if (!c)
+        return -EINVAL;
+    c->transitions++;
+    return cbx_overlay_on_host_mode_change(active, c->svc);
+}
+
+static void
+test_o13c_host_transition_fires_once(void **state)
+{
+    interaction_fixture *f = *state;
+
+    /* Install the counting wrapper over the production dirty-trigger so we
+     * can prove single-fire on enter/exit (and no-op on redundant exit). */
+    hm_transition_counter c = {0, f->svc};
+    f->svc->hm.on_state_change   = hm_count_and_mark;
+    f->svc->hm.state_change_data = &c;
+
+    assert_int_equal(f->svc->lifecycle.state, CBX_OVERLAY_IDLE);
+
+    /* Enter host mode: R3 → player mode → toggle → enter → one transition. */
+    inject_input(f, EXP_SENDER, DEV_PATH_0, "R3", 1.0);
+    cbx_overlay_service_step(f->svc);
+    assert_true(cbx_host_mode_is_active(&f->svc->hm));
+    assert_int_equal(c.transitions, 1);
+
+    /* Exit host mode: R3 → host_mode_handle → cbx_host_mode_exit fires
+     * exactly once; the production wrapper must NOT re-exit/double-fire. */
+    inject_input(f, EXP_SENDER, DEV_PATH_0, "R3", 1.0);
+    cbx_overlay_service_step(f->svc);
+    assert_false(cbx_host_mode_is_active(&f->svc->hm));
+    assert_int_equal(c.transitions, 2);
+
+    /* A redundant exit on the now-idle object is a no-op transition: the
+     * dirty trigger must NOT fire on it (W2: dirt only on actual state
+     * transitions). */
+    cbx_host_mode_exit(&f->svc->hm);
+    assert_int_equal(c.transitions, 2);
+
+    /* Sanity: the production dirty-trigger still works through the wrapper. */
+    assert_true(cbx_overlay_surface_is_dirty(&f->svc->surface));
+}
+
 /* ================================================================== */
 /*  O10 — Close (B): saves, conflict-resolves, sets PASS, hides        */
 /* ================================================================== */
@@ -1166,6 +1225,8 @@ static const struct CMUnitTest tests[] = {
     cmocka_unit_test_setup_teardown(test_o13_host_entry_marks_dirty_dbus,
                                      interaction_setup, interaction_teardown),
     cmocka_unit_test_setup_teardown(test_o13b_host_exit_marks_dirty_dbus,
+                                     interaction_setup, interaction_teardown),
+    cmocka_unit_test_setup_teardown(test_o13c_host_transition_fires_once,
                                      interaction_setup, interaction_teardown),
 
     /* O10 — Close */
