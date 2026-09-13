@@ -308,35 +308,39 @@ to human release acceptance per SPEC §11.1.7:
 
 ## Finite factory campaign
 
-A predetermined, finite sequence of fresh-context rounds — planning,
-implementation, verification, and independent audit — runs through the
-minimal Python control plane (methodology: [docs/FACTORY-LOOP-SPEC.md](docs/FACTORY-LOOP-SPEC.md)):
+The factory uses a **stateless, two-command** architecture. The plan IS the
+state — there is no control-state file. If interrupted, just run again.
 
 ```bash
+# 1. Create the plan (manual, independent)
+python3 .factory/bin/factory-campaign plan \
+  --campaign-id controller-box-v1 --branch develop \
+  --provider ollama --model deepseek-v4-flash
+
+# 2. Run the implementation loop (stateless, resumable)
 python3 .factory/bin/factory-campaign run \
   --campaign-id controller-box-v1 --rounds 20 --branch develop \
-  --provider ollama --model deepseek-v4-flash
+  --provider ollama --model deepseek-v4-flash --attempts 2 --max-repairs 3
 ```
 
-The campaign **plan once** happens at startup, then runs an **implementation loop**:
+`factory-campaign plan` runs 11 parallel study subagents → planner → plan file.
+`factory-campaign run` reads the plan and loops: select → implement → verify →
+audit → repair → checkpoint. Six specialist auditors (security, functional,
+spec-compliance, compatibility, efficiency, linting) review in parallel. If
+auditors find BLOCKERs, the developer is re-invoked with repair context
+(Generator-Critic pattern, capped at `max_repairs`). Cross-auditor conflicts
+are resolved by priority (security > functional > spec > compatibility >
+efficiency > linting).
 
-1. **Plan** — at campaign start, the planner creates the canonical plan
-   (`.factory/artifacts/implementation-plan.md`), the sole task ledger. The
-   plan is written a single time and is **not** re-planned on every round.
-2. **Select** — the trusted selector deterministically picks exactly one
-   runnable task; the model never chooses among tasks.
-3. **Implement** — the developer implements only the selected task.
-4. **Verify** — the tester independently runs `./scripts/verify.sh` on the
-   appropriate runner and reports the actual exit code.
-5. **Audit** — the auditor performs a read-only audit for weakened assertions,
-   skipped tests, or fake passes.
-6. **Commit** — the orchestrator (sole Git writer) commits the checkpoint.
-7. **Repeat** — until all tasks complete or a budget is exhausted.
+Model tiering via `.factory/roles.toml`: study subagents and auditors can use
+cheaper models; the planner and developer use the strongest model.
 
-A campaign always terminates with one of six outcomes: `success`, `findings`,
-`blocked`, `failed`, `infrastructure_failure`, `interrupted`. Reaching a
-budget ceiling is never success. Runner-dependent tasks run on the declared
-runner; an unreachable runner marks the task `blocked`, never a silent skip.
+A campaign terminates with one of eight outcomes: `success`, `findings`,
+`blocked`, `failed`, `escalated`, `interrupted`, `infrastructure_failure`.
+Reaching a budget ceiling is never success. Runner-dependent tasks run on the
+declared runner; an unreachable runner marks the task `blocked`, never a
+silent skip. See [docs/FACTORY-LOOP-SPEC.md](docs/FACTORY-LOOP-SPEC.md) for
+the full specification.
 
 ## Bug maintenance
 
