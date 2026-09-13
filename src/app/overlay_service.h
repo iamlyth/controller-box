@@ -35,6 +35,7 @@
 #include "overlay/profile_cycle.h"
 #include "overlay/dynamic_columns.h"
 #include "dbus/ip_hotplug.h"
+#include "dbus/ip_properties.h"
 
 /* --- Per-composite activation context (Task 9) ----------------------- */
 
@@ -47,6 +48,33 @@ typedef struct {
     cbx_overlay_lifecycle *lifecycle;
     char composite_path[CBX_MAX_PATH_LEN];
 } cbx_poll_activation_ctx;
+
+/* --- Reactive InputPlumber property state (Task 5) -------------------- */
+
+/*
+ * Last-known validated values for the InputPlumber properties the overlay
+ * observes reactively through org.freedesktop.DBus.Properties.
+ * PropertiesChanged (SPEC §10.1).  GamepadOrder is a Manager property;
+ * ProfileName, ProfilePath, TargetDevices and SourceDevicePaths are
+ * CompositeDevice properties.  Each entry caches the most recent validated
+ * value; an INVALIDATED change clears the entry.  Array properties store
+ * the comma-separated element list.  The per-property `_observed` flag
+ * records that a validated value has been received at least once.
+ */
+#define CBX_REACTIVE_ORDER_LEN (CBX_MAX_COMPOSITES * (CBX_MAX_PATH_LEN + 1))
+
+typedef struct {
+    bool  gamepad_order_observed;      /* a validated GamepadOrder was seen */
+    bool  profile_name_observed;       /* a validated ProfileName was seen */
+    bool  profile_path_observed;       /* a validated ProfilePath was seen */
+    bool  target_devices_observed;     /* a validated TargetDevices was seen */
+    bool  source_paths_observed;       /* a validated SourceDevicePaths was seen */
+    char  gamepad_order[CBX_REACTIVE_ORDER_LEN];
+    char  profile_name[IP_PROP_MAX_NAME_LEN];
+    char  profile_path[IP_PROP_MAX_PATH_LEN];
+    char  target_devices[CBX_REACTIVE_ORDER_LEN];
+    char  source_device_paths[CBX_REACTIVE_ORDER_LEN];
+} cbx_reactive_props;
 
 /* --- Overlay input event handling (Task 6) ---------------------------- */
 
@@ -177,6 +205,10 @@ typedef struct cbx_overlay_service_ctx {
 
     /* --- Hotplug --- */
     ip_hotplug             hp;             /* ObjectManager signal handler       */
+
+    /* --- Reactive PropertiesChanged handling (Task 5) --- */
+    ip_properties         props;          /* PropertiesChanged subscription    */
+    cbx_reactive_props    props_state;    /* last-known property values        */
 
     /* --- Reconciliation status ------------------------------------ */
     struct {
@@ -324,6 +356,25 @@ int cbx_overlay_on_profile_change(int row_idx, const char *profile,
  * cbx_host_mode_enter()/cbx_host_mode_exit().
  */
 int cbx_overlay_on_host_mode_change(bool active, void *userdata);
+
+/*
+ * Production PropertiesChanged callback: updates cbx_reactive_props with
+ * the validated new value for the relevant tracked property (GamepadOrder,
+ * ProfileName, ProfilePath, TargetDevices, SourceDevicePaths) and marks
+ * the overlay surface dirty so a re-render reflects InputPlumber's live
+ * property state (SPEC §10.1).  Wired by cbx_overlay_props_wire().
+ */
+void cbx_overlay_on_prop_change(const char *prop_name, ip_prop_type type,
+                                const char *value, int count, void *userdata);
+
+/*
+ * Wire the PropertiesChanged subscription into the live connection using
+ * the exact production init/subscribe path (ip_properties_init +
+ * ip_properties_subscribe).  Must be called after conn.backend/conn.bus and
+ * expected_sender are set; safe to call again after a backend reacquisition.
+ * Returns 0 on success, negative errno on failure.
+ */
+int cbx_overlay_props_wire(cbx_overlay_service_ctx *svc);
 
 /* --- Production InterceptMode poll callbacks (Task 13) ---------------- */
 

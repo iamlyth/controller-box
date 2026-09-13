@@ -31,6 +31,7 @@
 #include "dbus/ip_target.h"
 #include "dbus/ip_device_model.h"
 #include "dbus/ip_input_signal.h"
+#include "dbus/ip_properties.h"
 #include "config/config_settings.h"
 #include "config/config_assignments.h"
 #include "ui/renderer.h"
@@ -869,6 +870,205 @@ test_reconcile_shrink(void **state)
 
 
 /* ------------------------------------------------------------------ */
+/*  Task 5: reactive PropertiesChanged wiring                          */
+/* ------------------------------------------------------------------ */
+
+/* Fixture: a service context wired through the exact production
+ * cbx_overlay_props_wire() path against the mock bus.  This proves that
+ * ip_properties_init()/subscribe() are actually wired into the overlay
+ * backend wiring, not left as dead code. */
+typedef struct {
+    cbx_overlay_service_ctx *svc;
+    ip_dbus_mock            mock;
+    const ip_dbus_backend  *backend;
+} props_fixture;
+
+static int
+props_setup(void **state)
+{
+    props_fixture *f = calloc(1, sizeof(*f));
+    assert_non_null(f);
+
+    f->svc = calloc(1, sizeof(cbx_overlay_service_ctx));
+    assert_non_null(f->svc);
+
+    ip_dbus_mock_init(&f->mock);
+    f->backend = ip_dbus_mock_backend(&f->mock);
+    f->svc->conn.backend = f->backend;
+    f->svc->conn.bus = f->mock.bus;
+    snprintf(f->svc->expected_sender, sizeof(f->svc->expected_sender),
+             "%s", EXP_SENDER);
+    f->svc->initialized = true;
+
+    *state = f;
+    return 0;
+}
+
+static int
+props_teardown(void **state)
+{
+    props_fixture *f = *state;
+    if (f) {
+        if (f->svc)
+            free(f->svc);
+        ip_dbus_mock_reset(&f->mock);
+        free(f);
+    }
+    return 0;
+}
+
+/* cbx_overlay_props_wire registers the PropertiesChanged subscription. */
+static void
+test_props_wire_subscribes(void **state)
+{
+    props_fixture *f = *state;
+
+    int rc = cbx_overlay_props_wire(f->svc);
+    assert_int_equal(rc, 0);
+    assert_int_equal(f->mock.sub_count, 1);
+    assert_string_equal(f->mock.subscriptions[0].iface, IP_IFACE_PROPERTIES);
+    assert_string_equal(f->mock.subscriptions[0].member, "PropertiesChanged");
+}
+
+/* cbx_overlay_props_wire fails cleanly without a connection. */
+static void
+test_props_wire_no_backend(void **state)
+{
+    props_fixture *f = *state;
+
+    f->svc->conn.backend = NULL;
+    int rc = cbx_overlay_props_wire(f->svc);
+    assert_int_equal(rc, -EINVAL);
+}
+
+/* An externally-injected GamepadOrder PropertiesChanged updates the
+ * overlay's internal reactive state through the production path. */
+static void
+test_props_inject_gamepadorder_updates_state(void **state)
+{
+    props_fixture *f = *state;
+    cbx_overlay_props_wire(f->svc);
+
+    ip_properties_changed_payload p = {
+        .sender      = EXP_SENDER,
+        .iface_name  = IP_IFACE_MANAGER,
+        .prop_name   = "GamepadOrder",
+        .prop_type   = IP_PROP_TYPE_ARRAY,
+        .value       = "gp0,gp1",
+        .array_count = 2,
+    };
+    int rc = f->backend->inject_signal(f->mock.bus,
+        IP_IFACE_PROPERTIES, "PropertiesChanged", &p);
+    assert_int_equal(rc, 0);
+
+    assert_true(f->svc->props_state.gamepad_order_observed);
+    assert_string_equal(f->svc->props_state.gamepad_order, "gp0,gp1");
+}
+
+/* The production callback handles each tracked property class. */
+static void
+test_props_inject_all_slots(void **state)
+{
+    props_fixture *f = *state;
+    cbx_overlay_props_wire(f->svc);
+
+    /* CompositeDevice string properties. */
+    ip_properties_changed_payload pname = {
+        .sender = EXP_SENDER, .iface_name = IP_IFACE_COMPOSITE,
+        .prop_name = "ProfileName", .prop_type = IP_PROP_TYPE_STRING,
+        .value = "Default Profile", .array_count = 0,
+    };
+    f->backend->inject_signal(f->mock.bus,
+        IP_IFACE_PROPERTIES, "PropertiesChanged", &pname);
+    assert_true(f->svc->props_state.profile_name_observed);
+    assert_string_equal(f->svc->props_state.profile_name, "Default Profile");
+
+    ip_properties_changed_payload ppath = {
+        .sender = EXP_SENDER, .iface_name = IP_IFACE_COMPOSITE,
+        .prop_name = "ProfilePath", .prop_type = IP_PROP_TYPE_STRING,
+        .value = "/usr/share/inputplumber/profiles/a.yaml", .array_count = 0,
+    };
+    f->backend->inject_signal(f->mock.bus,
+        IP_IFACE_PROPERTIES, "PropertiesChanged", &ppath);
+    assert_true(f->svc->props_state.profile_path_observed);
+    assert_string_equal(f->svc->props_state.profile_path,
+                        "/usr/share/inputplumber/profiles/a.yaml");
+
+    /* CompositeDevice array properties. */
+    ip_properties_changed_payload td = {
+        .sender = EXP_SENDER, .iface_name = IP_IFACE_COMPOSITE,
+        .prop_name = "TargetDevices", .prop_type = IP_PROP_TYPE_ARRAY,
+        .value = "gamepad0", .array_count = 1,
+    };
+    f->backend->inject_signal(f->mock.bus,
+        IP_IFACE_PROPERTIES, "PropertiesChanged", &td);
+    assert_true(f->svc->props_state.target_devices_observed);
+    assert_string_equal(f->svc->props_state.target_devices, "gamepad0");
+
+    ip_properties_changed_payload sp = {
+        .sender = EXP_SENDER, .iface_name = IP_IFACE_COMPOSITE,
+        .prop_name = "SourceDevicePaths", .prop_type = IP_PROP_TYPE_ARRAY,
+        .value = "/dev/input/event0", .array_count = 1,
+    };
+    f->backend->inject_signal(f->mock.bus,
+        IP_IFACE_PROPERTIES, "PropertiesChanged", &sp);
+    assert_true(f->svc->props_state.source_paths_observed);
+    assert_string_equal(f->svc->props_state.source_device_paths,
+                        "/dev/input/event0");
+}
+
+/* A spoofed sender must not update internal reactive state (fail-closed). */
+static void
+test_props_inject_wrong_sender_no_update(void **state)
+{
+    props_fixture *f = *state;
+    cbx_overlay_props_wire(f->svc);
+
+    ip_properties_changed_payload p = {
+        .sender      = ":1.999",
+        .iface_name  = IP_IFACE_MANAGER,
+        .prop_name   = "GamepadOrder",
+        .prop_type   = IP_PROP_TYPE_ARRAY,
+        .value       = "gpX,gpY",
+        .array_count = 2,
+    };
+    f->backend->inject_signal(f->mock.bus,
+        IP_IFACE_PROPERTIES, "PropertiesChanged", &p);
+
+    assert_false(f->svc->props_state.gamepad_order_observed);
+    assert_string_equal(f->svc->props_state.gamepad_order, "");
+}
+
+/* An INVALIDATED change clears the cached entry. */
+static void
+test_props_inject_invalidated_clears(void **state)
+{
+    props_fixture *f = *state;
+    cbx_overlay_props_wire(f->svc);
+
+    ip_properties_changed_payload set = {
+        .sender = EXP_SENDER, .iface_name = IP_IFACE_MANAGER,
+        .prop_name = "GamepadOrder", .prop_type = IP_PROP_TYPE_ARRAY,
+        .value = "gp0", .array_count = 1,
+    };
+    f->backend->inject_signal(f->mock.bus,
+        IP_IFACE_PROPERTIES, "PropertiesChanged", &set);
+    assert_string_equal(f->svc->props_state.gamepad_order, "gp0");
+
+    ip_properties_changed_payload inv = {
+        .sender = EXP_SENDER, .iface_name = IP_IFACE_MANAGER,
+        .prop_name = "GamepadOrder", .prop_type = IP_PROP_TYPE_INVALIDATED,
+        .value = NULL, .array_count = 0,
+    };
+    f->backend->inject_signal(f->mock.bus,
+        IP_IFACE_PROPERTIES, "PropertiesChanged", &inv);
+
+    assert_true(f->svc->props_state.gamepad_order_observed);
+    assert_string_equal(f->svc->props_state.gamepad_order, "");
+}
+
+
+/* ------------------------------------------------------------------ */
 /*  Test runner                                                        */
 /* ------------------------------------------------------------------ */
 static const struct CMUnitTest tests[] = {
@@ -909,6 +1109,19 @@ static const struct CMUnitTest tests[] = {
                                      reconcile_setup, reconcile_teardown),
     cmocka_unit_test_setup_teardown(test_reconcile_shrink,
                                      reconcile_setup, reconcile_teardown),
+    /* Task 5: reactive PropertiesChanged wiring */
+    cmocka_unit_test_setup_teardown(test_props_wire_subscribes,
+                                     props_setup, props_teardown),
+    cmocka_unit_test_setup_teardown(test_props_wire_no_backend,
+                                     props_setup, props_teardown),
+    cmocka_unit_test_setup_teardown(test_props_inject_gamepadorder_updates_state,
+                                     props_setup, props_teardown),
+    cmocka_unit_test_setup_teardown(test_props_inject_all_slots,
+                                     props_setup, props_teardown),
+    cmocka_unit_test_setup_teardown(test_props_inject_wrong_sender_no_update,
+                                     props_setup, props_teardown),
+    cmocka_unit_test_setup_teardown(test_props_inject_invalidated_clears,
+                                     props_setup, props_teardown),
 };
 
 int main(void)

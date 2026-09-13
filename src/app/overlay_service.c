@@ -40,6 +40,7 @@
 #include "overlay/profile_cycle.h"
 #include "overlay/dynamic_columns.h"
 #include "dbus/ip_hotplug.h"
+#include "dbus/ip_properties.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -154,6 +155,72 @@ on_intercept_error(int error_code, void *userdata)
 /* Exact attachment confirmation is shared with startup reconciliation. */
 static int wait_for_attachment(cbx_overlay_service_ctx *svc,
                                const char *composite, const char *target);
+
+/* ================================================================== */
+/*  Reactive PropertiesChanged handling (Task 5)                        */
+/* ================================================================== */
+
+/*
+ * Production PropertiesChanged callback.  For each validated change to a
+ * tracked InputPlumber property (GamepadOrder, ProfileName, ProfilePath,
+ * TargetDevices, SourceDevicePaths — SPEC §10.1) it refreshes the matching
+ * entry in props_state so external property changes are observed reactively
+ * rather than leaving ip_properties as dead code.  An INVALIDATED change
+ * clears the entry.  Only validated changes reach here (sender + type +
+ * length checked in ip_properties_handle_changed).
+ */
+void
+cbx_overlay_on_prop_change(const char *prop_name, ip_prop_type type,
+                           const char *value, int count, void *userdata)
+{
+    (void)count;
+    cbx_overlay_service_ctx *svc = (cbx_overlay_service_ctx *)userdata;
+    if (!svc || !prop_name)
+        return;
+
+    const char *v = (type == IP_PROP_TYPE_INVALIDATED || !value) ? "" : value;
+
+    if (strcmp(prop_name, "GamepadOrder") == 0) {
+        snprintf(svc->props_state.gamepad_order,
+                 sizeof(svc->props_state.gamepad_order), "%s", v);
+        svc->props_state.gamepad_order_observed = true;
+    } else if (strcmp(prop_name, "ProfileName") == 0) {
+        snprintf(svc->props_state.profile_name,
+                 sizeof(svc->props_state.profile_name), "%s", v);
+        svc->props_state.profile_name_observed = true;
+    } else if (strcmp(prop_name, "ProfilePath") == 0) {
+        snprintf(svc->props_state.profile_path,
+                 sizeof(svc->props_state.profile_path), "%s", v);
+        svc->props_state.profile_path_observed = true;
+    } else if (strcmp(prop_name, "TargetDevices") == 0) {
+        snprintf(svc->props_state.target_devices,
+                 sizeof(svc->props_state.target_devices), "%s", v);
+        svc->props_state.target_devices_observed = true;
+    } else if (strcmp(prop_name, "SourceDevicePaths") == 0) {
+        snprintf(svc->props_state.source_device_paths,
+                 sizeof(svc->props_state.source_device_paths), "%s", v);
+        svc->props_state.source_paths_observed = true;
+    } else {
+        return;  /* not a tracked property — do not dirty the surface */
+    }
+
+    /* A validated change to a tracked property is a dirty trigger: re-render
+     * so the presented frame reflects InputPlumber's live property state. */
+    if (svc->initialized)
+        cbx_overlay_surface_mark_dirty_all(&svc->surface);
+}
+
+int
+cbx_overlay_props_wire(cbx_overlay_service_ctx *svc)
+{
+    if (!svc || !svc->conn.backend || !svc->conn.bus ||
+        !svc->expected_sender[0])
+        return -EINVAL;
+
+    ip_properties_init(&svc->props, svc->conn.backend, svc->conn.bus,
+                       svc->expected_sender, cbx_overlay_on_prop_change, svc);
+    return ip_properties_subscribe(&svc->props);
+}
 
 /* ================================================================== */
 /*  Lifecycle on_save callback: conflict resolution + assignment save */
@@ -1086,6 +1153,11 @@ overlay_backend_ready(void *userdata)
                      svc->expected_sender, &svc->model);
     ip_hotplug_subscribe(&svc->hp);
 
+    /* Reactive PropertiesChanged subscription (Task 5): observe GamepadOrder,
+     * ProfileName, ProfilePath, TargetDevices, SourceDevicePaths changes on
+     * the recovered backend (SPEC §10.1). */
+    cbx_overlay_props_wire(svc);
+
     svc->backend_ready = true;
     cbx_overlay_surface_mark_dirty_all(&svc->surface);
 }
@@ -1654,6 +1726,11 @@ int run_overlay_service(int dry_run)
     svc->input_events_ready = false;
     if (ip_input_events_subscribe(&svc->input_events) == 0)
         svc->input_events_ready = true;
+
+    /* Reactive PropertiesChanged subscription (Task 5): observe GamepadOrder,
+     * ProfileName, ProfilePath, TargetDevices, SourceDevicePaths changes on
+     * the live connection (SPEC §10.1). */
+    cbx_overlay_props_wire(svc);
 
     /* --- 11. Set up InterceptMode polling --------------------------- */
     svc->poll_event_type = SDL_RegisterEvents(1);
