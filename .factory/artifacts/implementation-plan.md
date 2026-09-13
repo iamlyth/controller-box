@@ -34,38 +34,12 @@ Evidence: verification exit 0 on local
 
 ## Task 4: Re-render overlay on host-mode entry and reconcile dirty triggers (W1, W2)
 Title: Re-render overlay on host-mode entry and reconcile dirty triggers (W1, W2)
-Status: completed
+Status: blocked
 Dependencies: 1
 Acceptance: Entering/exiting host mode marks the pre-built surface dirty so the presented frame reflects Host Mode as a materially different state on entry (W1). Surface dirtied-trigger policy is reconciled to spec section 4.9: dirt is triggered by device/slot/profile change and by host-mode state transitions, and the inconsistent show/save/close mark_dirty_all calls are reviewed and made deliberate/consistent rather than ad hoc.
 Verification: scripts/verify.sh; ctest --test-dir build -R 'test_overlay_visual|test_overlay_interaction|test_golden' --output-on-failure
 Runner: none
-Evidence: W1/W2 implemented on the production paths. W1 — host-mode entry/exit dirties the pre-built surface: cbx_overlay_on_host_mode_change (src/app/overlay_service.c) is wired as hm.on_state_change in run_overlay_service and fires mark_dirty_all on every real enter/exit transition, and cbx_host_mode_enter/exit fire it through cbx_host_mode_toggle and the CBX_HM_R3 handle path. The on-entry frame is proven materially different from Player Mode via fb_frames_differ in test_overlay_visual, and the enter/exit dirty triggers are asserted through the production DBus dispatch path (cbx_overlay_input_cb) in test_hm_entry_marks_dirty_dbus / test_hm_exit_marks_dirty_dbus. W2 — dirty-trigger policy reconciled to SPEC §4.9: dirty fires on device change, slot change, profile change, and host-mode state transitions; the show/save/close mark_dirty_all calls are deliberate (lifecycle show_surface/begin_fade_in re-render on show, cbx_overlay_on_save re-renders after a committed save) and each carries a SPEC §4.9 dirty-trigger comment. The R3-exit dirty trigger fires exactly once: neither the DBus (cbx_overlay_input_cb) nor the SDL (cbx_overlay_service_step) dispatch re-exits host mode on CBX_HM_RESULT_EXIT, and cbx_host_mode_exit fires the transition only on a real active→inactive change (no spurious no-op dirty trigger). Linting repair (WARNs): host-mode dirty-trigger tests relabeled from the colliding O13 inventory ID (O13 = Player Mode conflict) to test_hm_* so test_overlay_interaction.c no longer reuses an inventory ID; W2 no-op exit contract documented in src/overlay/host_mode.h; dirty-trigger comments made consistent across save/slot/profile/host-mode. Regression tests: tests/test_host_mode.c test_exit_noop_no_transition; tests/test_overlay_interaction.c test_hm_transition_fires_once (single-fire enter+exit through production dispatch + no-op redundant exit). Verification: cmake build OK; ctest -R 'test_overlay_visual|test_overlay_interaction|test_golden' 100% (3/3); ./scripts/verify.sh 100% passed (91/91, exit 0; only runner-gated skips test_kernel_controller, test_backend_smoke). 
-Repair Cycle 2 (compatibility WARN): scripts/verify.sh was flaky on shared 
-hosts because the installed-binary tests (tests/test_installed_smoke.sh, 
-test_installed_diagram.sh, test_installed_binary.sh) picked "first free" 
-displays by filesystem-only scan, then started Xvfb once and failed hard — a 
-foreign tenant's abstract socket (@/tmp/.X11-unix/X<n>, kernel-shared 
-namespace, mount-ns-hidden file) collides at bind() with no filesystem trace. 
-Each script now probes candidates :90-:199 by actually starting Xvfb and 
-health-checking the PID after a settle sleep, reaping and removing artifacts on 
-immediate death and advancing to the next display; cleanup also reaps the Xvfb 
-PID so an early-terminated server cannot leave a zombie. `-nolisten local` was 
-deliberately not used (it disables the unix/local transport clients rely on). 
-Verified: retry loop selects the first truly-free display (foreign-occupied 
-:90/:91 -> :92, PID live), `bash -n` and shellcheck exit 0 on all three scripts.
-Repair Cycle 3 (linting/compat audit: 0 BLOCKER): cleaned up the SPEC §4.9 
-citation overstatement at the save/close and host-mode dirty-trigger sites. 
-§4.9's literal text says the surface is "dirtied only on device/slot/profile 
-change events", so the comments now phrase the W2 extension honestly: save/close 
-and host-mode transitions are "deliberately kept in the dirty-trigger set as 
-part of the W2 reconciliation of the §4.9 pre-build policy" rather than cited as 
-§4.9-enumerated events (slot-change and profile-change comments remain direct 
-§4.9 citations since those are enumerated). src/app/overlay_service.c: comment-only 
-changes; no behavior/ABI change. Verification: nix-shell --run
-'cmake --build build --parallel' OK; ctest --test-dir build -R 
-'test_overlay_visual|test_overlay_interaction|test_golden' --output-on-failure 
--> 100% passed (3/3); nix-shell --run './scripts/verify.sh' -> 100% passed (91/91, 
-exit 0; only runner-gated skips test_kernel_controller, test_backend_smoke).
+Evidence: verification passed but audit BLOCKERs unresolved after 3 repair cycles
 
 ## Task 5: Subscribe PropertiesChanged in the production binary (W3)
 Title: Subscribe PropertiesChanged in the production binary (W3)
