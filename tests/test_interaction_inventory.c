@@ -175,12 +175,14 @@ static void test_inventory_specific_entries(void **state)
     assert_int_equal(m05->widget_type, CBX_WIDGET_BUTTON);
     assert_true(m05->pointer_path_avail == CBX_PATH_AVAILABLE);
 
-    /* M16 — Name input cancel: pointer path not applicable (keyboard-only
-     * action: B/ESC; no cancel button widget exists in name input mode) */
+    /* M16 — Name input cancel: pointer path available (a Cancel button is
+     * shown while the name-input dialog is active; Task 3 added the real
+     * pointer-reachable dialog_cancel_btn -> cbx_profiles_tab_name_input_cancel
+     * path, exercised by test_prof_name_input_cancel_pointer) */
     const cbx_interaction_entry *m16 = cbx_interaction_inventory_find("M16");
     assert_non_null(m16);
-    assert_int_equal(m16->pointer_path_avail, CBX_PATH_NA);
-    assert_int_equal(m16->verify_status, CBX_VERIFY_NOT_APPLICABLE);
+    assert_int_equal(m16->pointer_path_avail, CBX_PATH_AVAILABLE);
+    assert_int_equal(m16->verify_status, CBX_VERIFY_VERIFIED);
 
     /* M37 — Save and close editor: pointer path available (Save button) */
     const cbx_interaction_entry *m37 = cbx_interaction_inventory_find("M37");
