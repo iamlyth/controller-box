@@ -53,6 +53,19 @@ PID so an early-terminated server cannot leave a zombie. `-nolisten local` was
 deliberately not used (it disables the unix/local transport clients rely on). 
 Verified: retry loop selects the first truly-free display (foreign-occupied 
 :90/:91 -> :92, PID live), `bash -n` and shellcheck exit 0 on all three scripts.
+Repair Cycle 3 (linting/compat audit: 0 BLOCKER): cleaned up the SPEC §4.9 
+citation overstatement at the save/close and host-mode dirty-trigger sites. 
+§4.9's literal text says the surface is "dirtied only on device/slot/profile 
+change events", so the comments now phrase the W2 extension honestly: save/close 
+and host-mode transitions are "deliberately kept in the dirty-trigger set as 
+part of the W2 reconciliation of the §4.9 pre-build policy" rather than cited as 
+§4.9-enumerated events (slot-change and profile-change comments remain direct 
+§4.9 citations since those are enumerated). src/app/overlay_service.c: comment-only 
+changes; no behavior/ABI change. Verification: nix-shell --run
+'cmake --build build --parallel' OK; ctest --test-dir build -R 
+'test_overlay_visual|test_overlay_interaction|test_golden' --output-on-failure 
+-> 100% passed (3/3); nix-shell --run './scripts/verify.sh' -> 100% passed (91/91, 
+exit 0; only runner-gated skips test_kernel_controller, test_backend_smoke).
 
 ## Task 5: Subscribe PropertiesChanged in the production binary (W3)
 Title: Subscribe PropertiesChanged in the production binary (W3)

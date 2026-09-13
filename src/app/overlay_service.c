@@ -310,8 +310,10 @@ cbx_overlay_on_save(void *userdata)
         return rc;
 
     /* Save/close path: the presented frame reflects the persisted and
-     * conflict-resolved topology, so it is part of the dirty-trigger set
-     * (SPEC §4.9) — re-render rather than present a stale pre-built frame. */
+     * conflict-resolved topology, so it is deliberately kept in the
+     * dirty-trigger set as part of the W2 reconciliation of the §4.9
+     * pre-build policy — re-render rather than present a stale pre-built
+     * frame. */
     cbx_overlay_surface_mark_dirty_all(&svc->surface);
     return 0;
 }
@@ -372,10 +374,13 @@ on_host_slot_change(int row_idx, int new_slot, void *userdata)
 
 /*
  * Host-mode state-transition callback: fired on host-mode enter and exit
- * (SPEC §4.4/§4.9).  Entering/exiting host mode materially changes the
+ * (SPEC §4.4).  Entering/exiting host mode materially changes the
  * rendered row visuals — HOST/SELECTED/FROZEN rows appear on entry and
  * revert to normal Player Mode on exit — so the pre-built surface must be
- * marked dirty so the next presentation reflects the transition.
+ * marked dirty so the next presentation reflects the transition.  Host-mode
+ * transitions are a deliberate W2 extension of the §4.9 pre-build dirty
+ * policy (which enumerates device/slot/profile change events), not a
+ * device/slot/profile change themselves.
  */
 int
 cbx_overlay_on_host_mode_change(bool active, void *userdata)
@@ -1621,7 +1626,8 @@ int run_overlay_service(int dry_run)
     svc->hm.slot_change_data  = svc;
     /* Host-mode enter/exit marks the pre-built surface dirty so the
      * presented frame reflects the HOST/SELECTED/FROZEN row visuals on
-     * entry and reverts to Player Mode on exit (SPEC §4.4/§4.9). */
+     * entry and reverts to Player Mode on exit (SPEC §4.4).  This is a
+     * deliberate W2 extension of the §4.9 pre-build dirty policy. */
     svc->hm.on_state_change   = cbx_overlay_on_host_mode_change;
     svc->hm.state_change_data = svc;
 
