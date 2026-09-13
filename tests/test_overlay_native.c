@@ -1318,6 +1318,87 @@ static void test_assignment_replaces_p1_through_p4_then_clears(void **state)
     assert_exact_target_set(svc, COMP_PATH_0, NULL);
 }
 
+/* --- Reactive PropertiesChanged via the real sd-bus path (Task 5) --------
+ * Task 5 wires ip_properties into the overlay backend so that external
+ * changes to GamepadOrder/ProfileName/ProfilePath/TargetDevices/
+ * SourceDevicePaths (SPEC §10.1) are observed reactively instead of leaving
+ * the fully-implemented handler as dead code.  These tests emit a faithful
+ * org.freedesktop.DBus.Properties PropertiesChanged (sa{sv}as) signal from
+ * the native server and drive the client's sd-bus process loop so the real
+ * production parse path (sd_properties_changed_callback -> ip_properties ->
+ * cbx_overlay_on_prop_change) is exercised, not a mock bypass. */
+
+static void test_properties_changed_reactive_string(void **state)
+{
+    native_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    /* Wire the production PropertiesChanged subscription. */
+    assert_int_equal(cbx_overlay_props_wire(svc), 0);
+
+    /* Externally emit a ProfileName string change on composite path 1. */
+    int rc = svc->conn.backend->call_method(svc->conn.bus, IP_DBUS_NAME,
+        COMP_PATH_1, IP_IFACE_DBUS_DEVICE, "EmitStringProp",
+        "ss", "ProfileName", "Reactive Name", NULL);
+    assert_int_equal(rc, 0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
+    cbx_overlay_service_step(svc);
+
+    assert_true(svc->props_state.profile_name_observed);
+    assert_string_equal(svc->props_state.profile_name, "Reactive Name");
+
+    /* And ProfilePath — also a tracked string property. */
+    rc = svc->conn.backend->call_method(svc->conn.bus, IP_DBUS_NAME,
+        COMP_PATH_1, IP_IFACE_DBUS_DEVICE, "EmitStringProp",
+        "ss", "ProfilePath", "/tmp/some/profile.yaml", NULL);
+    assert_int_equal(rc, 0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
+    cbx_overlay_service_step(svc);
+    assert_true(svc->props_state.profile_path_observed);
+    assert_string_equal(svc->props_state.profile_path,
+                        "/tmp/some/profile.yaml");
+}
+
+static void test_properties_changed_reactive_array(void **state)
+{
+    native_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    assert_int_equal(cbx_overlay_props_wire(svc), 0);
+
+    /* GamepadOrder — a string-array property (Manager). */
+    int rc = svc->conn.backend->call_method(svc->conn.bus, IP_DBUS_NAME,
+        COMP_PATH_1, IP_IFACE_DBUS_DEVICE, "EmitArrayProp",
+        "sas", "GamepadOrder", "gp2,gp3,gp4,gp5", NULL);
+    assert_int_equal(rc, 0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
+    cbx_overlay_service_step(svc);
+
+    assert_true(svc->props_state.gamepad_order_observed);
+    assert_string_equal(svc->props_state.gamepad_order, "gp2,gp3,gp4,gp5");
+
+    /* TargetDevices — a tracked array property. */
+    rc = svc->conn.backend->call_method(svc->conn.bus, IP_DBUS_NAME,
+        COMP_PATH_1, IP_IFACE_DBUS_DEVICE, "EmitArrayProp",
+        "sas", "TargetDevices", "gamepad0", NULL);
+    assert_int_equal(rc, 0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
+    cbx_overlay_service_step(svc);
+    assert_true(svc->props_state.target_devices_observed);
+    assert_string_equal(svc->props_state.target_devices, "gamepad0");
+
+    /* SourceDevicePaths — a tracked array property. */
+    rc = svc->conn.backend->call_method(svc->conn.bus, IP_DBUS_NAME,
+        COMP_PATH_1, IP_IFACE_DBUS_DEVICE, "EmitArrayProp",
+        "sas", "SourceDevicePaths", "/dev/input/event9", NULL);
+    assert_int_equal(rc, 0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
+    cbx_overlay_service_step(svc);
+    assert_true(svc->props_state.source_paths_observed);
+    assert_string_equal(svc->props_state.source_device_paths,
+                        "/dev/input/event9");
+}
+
 /* --- O13: Conflict detection + auto-resolution on save --- */
 
 static void test_o13_conflict_resolution_on_save(void **state)
@@ -1433,6 +1514,12 @@ static const struct CMUnitTest tests[] = {
     cmocka_unit_test_setup_teardown(
         test_assignment_replaces_p1_through_p4_then_clears,
         native_setup, native_teardown),
+
+    /* Reactive PropertiesChanged via the real sd-bus path (Task 5) */
+    cmocka_unit_test_setup_teardown(test_properties_changed_reactive_string,
+                                     native_setup, native_teardown),
+    cmocka_unit_test_setup_teardown(test_properties_changed_reactive_array,
+                                     native_setup, native_teardown),
 
     /* O13 — Conflict resolution on save */
     cmocka_unit_test_setup_teardown(test_o13_conflict_resolution_on_save,

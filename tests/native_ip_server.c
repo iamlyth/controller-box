@@ -409,10 +409,134 @@ method_emit_input_event(sd_bus_message *m, void *userdata, sd_bus_error *error)
     return sd_bus_reply_method_return(m, "");
 }
 
+/* ================================================================== */
+/*  PropertiesChanged emission (native sa{sv}as signature)             */
+/* ================================================================== */
+
+/* Build and emit a real org.freedesktop.DBus.Properties PropertiesChanged
+ * signal (signature: sa{sv}as) on `path` for a single changed property.
+ *
+ * elem_type 's': emit a string-typed variant (ProfileName/ProfilePath).
+ * elem_type 'a': emit a string-array-typed variant (GamepadOrder /
+ *                TargetDevices / SourceDevicePaths) from arr_vals[0..n).
+ * This exercises the client's production sd-bus parse path
+ * (sd_properties_changed_callback) with a faithful wire message rather than
+ * a mock bypass. */
+static int
+emit_properties_changed(sd_bus *bus, const char *path, const char *iface,
+                        const char *prop, char elem_type, const char *str_val,
+                        const char *const *arr_vals, unsigned arr_count)
+{
+    sd_bus_message *sig = NULL;
+    int rc = sd_bus_message_new_signal(bus, &sig, path,
+                                       "org.freedesktop.DBus.Properties",
+                                       "PropertiesChanged");
+    if (rc < 0) return rc;
+
+    rc = sd_bus_message_append(sig, "s", iface);
+    if (rc < 0) goto out;
+
+    /* a{sv}: changed-properties dict. */
+    rc = sd_bus_message_open_container(sig, 'a', "{sv}");
+    if (rc < 0) goto out;
+    rc = sd_bus_message_open_container(sig, 'e', "sv");
+    if (rc < 0) goto out;
+    rc = sd_bus_message_append(sig, "s", prop);
+    if (rc < 0) goto out;
+
+    if (elem_type == 's') {
+        rc = sd_bus_message_open_container(sig, 'v', "s");
+        if (rc < 0) goto out;
+        rc = sd_bus_message_append(sig, "s", str_val);
+        if (rc < 0) goto out;
+        rc = sd_bus_message_close_container(sig); /* v */
+        if (rc < 0) goto out;
+    } else { /* 'a' — string array variant */
+        rc = sd_bus_message_open_container(sig, 'v', "as");
+        if (rc < 0) goto out;
+        rc = sd_bus_message_open_container(sig, 'a', "s");
+        if (rc < 0) goto out;
+        for (unsigned i = 0; i < arr_count; i++) {
+            rc = sd_bus_message_append(sig, "s", arr_vals[i]);
+            if (rc < 0) goto out;
+        }
+        rc = sd_bus_message_close_container(sig); /* a */
+        if (rc < 0) goto out;
+        rc = sd_bus_message_close_container(sig); /* v */
+        if (rc < 0) goto out;
+    }
+
+    rc = sd_bus_message_close_container(sig); /* e */
+    if (rc < 0) goto out;
+    rc = sd_bus_message_close_container(sig); /* a{sv} */
+    if (rc < 0) goto out;
+
+    /* as: invalidated properties (empty). */
+    rc = sd_bus_message_open_container(sig, 'a', "s");
+    if (rc < 0) goto out;
+    rc = sd_bus_message_close_container(sig);
+    if (rc < 0) goto out;
+
+    rc = sd_bus_send(bus, sig, NULL);
+out:
+    sd_bus_message_unref(sig);
+    return rc;
+}
+
+/* EmitStringProp(ss): emit a string-typed PropertiesChanged for `prop` with
+ * value `value`, originating on the method's object path. */
+static int
+method_emit_string_prop(sd_bus_message *m, void *userdata, sd_bus_error *error)
+{
+    (void)userdata; (void)error;
+    const char *prop = NULL, *value = NULL;
+    int rc = sd_bus_message_read(m, "ss", &prop, &value);
+    if (rc < 0) return rc;
+
+    sd_bus *bus = sd_bus_message_get_bus(m);
+    const char *path = sd_bus_message_get_path(m);
+    rc = emit_properties_changed(bus, path, IP_IFACE_COMPOSITE, prop,
+                                 's', value ? value : "", NULL, 0);
+    if (rc < 0) return rc;
+    return sd_bus_reply_method_return(m, "");
+}
+
+/* EmitArrayProp(sas): emit a string-array-typed PropertiesChanged for `prop`
+ * from the supplied string array. */
+static int
+method_emit_array_prop(sd_bus_message *m, void *userdata, sd_bus_error *error)
+{
+    (void)userdata; (void)error;
+    const char *prop = NULL;
+    const char *elems[64];
+    unsigned count = 0;
+    int rc = sd_bus_message_read(m, "s", &prop);
+    if (rc < 0) return rc;
+
+    rc = sd_bus_message_enter_container(m, 'a', "s");
+    if (rc < 0) return rc;
+    const char *s = NULL;
+    while (count < 64 &&
+           (rc = sd_bus_message_read_basic(m, 's', &s)) > 0)
+        elems[count++] = s;
+    if (rc < 0) { sd_bus_message_exit_container(m); return rc; }
+    rc = sd_bus_message_exit_container(m);
+    if (rc < 0) return rc;
+
+    sd_bus *bus = sd_bus_message_get_bus(m);
+    const char *path = sd_bus_message_get_path(m);
+    rc = emit_properties_changed(bus, path, IP_IFACE_COMPOSITE, prop,
+                                 'a', NULL, elems, count);
+    if (rc < 0) return rc;
+    return sd_bus_reply_method_return(m, "");
+}
+
 static const sd_bus_vtable dbus_device_vtable[] = {
     SD_BUS_VTABLE_START(0),
     SD_BUS_SIGNAL("InputEvent", "sd", 0),
     SD_BUS_METHOD("EmitInputEvent", "ss", "", method_emit_input_event, 0),
+    SD_BUS_METHOD("EmitStringProp", "ss", "", method_emit_string_prop, 0),
+    SD_BUS_METHOD("EmitArrayProp", "sas", "", method_emit_array_prop, 0),
     SD_BUS_VTABLE_END
 };
 

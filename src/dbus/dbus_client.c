@@ -336,10 +336,16 @@ sd_properties_changed_callback(sd_bus_message *msg, void *userdata,
         if (r < 0)
             break;
 
-        /* Peek at the variant to determine the inner type. */
+        /* Peek at the variant to determine the inner type.
+         * sd_bus_message_peek_type writes the element type character into
+         * the first out-param (ret_type) and only returns a status code
+         * (1 present, 0 EOF, or negative errno).  Capturing the type char
+         * is required so the 'v' branch below actually fires for each
+         * changed property in the a{sv} dict. */
+        char    vtype        = 0;
         const char *contents_ptr = NULL;
-        int vtype = sd_bus_message_peek_type(msg, NULL, &contents_ptr);
-        if (vtype < 0)
+        r = sd_bus_message_peek_type(msg, &vtype, &contents_ptr);
+        if (r < 0)
             break;
 
         if (vtype == 'v' && contents_ptr) {
