@@ -91,31 +91,23 @@ directly, bypassing the DBus/InterceptMode path entirely.
 
 ---
 
-## BUG-0018: Virtual controllers not visible in Steam
+## BUG-0018: Virtual controllers not visible in Steam (RESOLVED — not a bug)
 
-**Severity:** Minor
-**Component:** external / InputPlumber integration
+**Severity:** N/A
+**Component:** external / Steam configuration
 **Date discovered:** 2026-09-13
+**Date resolved:** 2026-09-13
 
 ### Description
 
 Controller-box manager reports "2 virtual slots ready" and InputPlumber
-is running, but the virtual controllers do not appear in Steam's
+is running, but the virtual controllers did not appear in Steam's
 Controller Settings.
 
-### Likely cause
+### Resolution
 
-This is most likely an InputPlumber configuration issue, not a
-controller-box bug. InputPlumber may be creating virtual evdev devices
-that Steam doesn't recognize, or the devices may not have the right
-uinput/evdev attributes for Steam's controller detection. Could also be
-a udev permissions issue on the virtual device nodes.
-
-### Investigation needed
-
-- Check if InputPlumber actually creates `/dev/input/event*` devices
-  when controller-box requests virtual controllers
-- Verify `evtest` sees the virtual devices
-- Check if Steam needs the devices to have specific evdev key/abs bits
-- May need InputPlumber target device type set to "xbox" (Steam's
-  preferred controller layout)
+Not a controller-box bug. `evtest` confirms InputPlumber creates the
+virtual devices at the kernel level as "Microsoft X-Box 360 pad" evdev
+devices (`/dev/input/event23-26`). Steam needs to be restarted to
+rescan for new controllers, or the user must enable generic controller
+support in Steam settings.
