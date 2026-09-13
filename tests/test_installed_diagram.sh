@@ -195,27 +195,39 @@ fi
 # Pick an unused display instead of killing a process by a global pattern.  A
 # fixed display can belong to another test (or another user's session), and a
 # global pkill can terminate unrelated work.  Xvfb creates both the socket and
-# lock below, so reject either one before starting our owned server.
+# lock below.  The filesystem scan alone is not sufficient on shared hosts: a
+# foreign X server's abstract socket (@/tmp/.X11-unix/X<n>) shares the kernel
+# socket namespace but its socket file lives in another mount namespace, so
+# [ -e ] misses it yet bind() still collides.  Probe each candidate by actually
+# starting Xvfb and health-checking the PID; on immediate death, clean up its
+# artifacts and advance the display.
+XVFB_DISPLAY=""
 display_number=90
 while [ "$display_number" -le 199 ]; do
-    if [ ! -e "/tmp/.X11-unix/X${display_number}" ] &&
-       [ ! -e "/tmp/.X${display_number}-lock" ]; then
+    if [ -e "/tmp/.X11-unix/X${display_number}" ] ||
+       [ -e "/tmp/.X${display_number}-lock" ]; then
+        display_number=$((display_number + 1))
+        continue
+    fi
+    Xvfb ":${display_number}" -screen 0 1280x720x24 &
+    XVFB_PID=$!
+    sleep 1.0
+    if kill -0 "$XVFB_PID" 2>/dev/null; then
         XVFB_DISPLAY=":${display_number}"
         break
     fi
+    # Server died immediately (e.g. abstract-socket bind collision with a
+    # foreign tenant).  Reap it and remove any artifacts it created.
+    wait "$XVFB_PID" 2>/dev/null || true
+    rm -f "/tmp/.X11-unix/X${display_number}" "/tmp/.X${display_number}-lock"
+    XVFB_PID=""
     display_number=$((display_number + 1))
 done
 if [ -z "$XVFB_DISPLAY" ]; then
-    fail "no unused X11 display is available"
+    fail "no usable X11 display available across :90-:199"
     exit 1
 fi
-Xvfb "$XVFB_DISPLAY" -screen 0 1280x720x24 &
-XVFB_PID=$!
-sleep 1.0
-if ! kill -0 "$XVFB_PID" 2>/dev/null; then
-    fail "Xvfb failed to start on $XVFB_DISPLAY"
-    exit 1
-fi
+pass "Xvfb running on $XVFB_DISPLAY (PID $XVFB_PID)"
 export DISPLAY="$XVFB_DISPLAY"
 export SDL_VIDEODRIVER="x11"
 export SDL_RENDER_DRIVER="software"
