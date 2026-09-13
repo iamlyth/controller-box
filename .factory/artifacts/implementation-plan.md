@@ -25,7 +25,7 @@ Evidence: tests/test_overlay_visual.c icon-region content checks now compare aga
 
 ## Task 3: Add pointer-reachable confirm/cancel to profile dialogs (B3)
 Title: Add pointer-reachable confirm/cancel to profile dialogs (B3)
-Status: blocked
+Status: pending
 Dependencies: none
 Acceptance: The name-input and delete-confirm modal dialogs in src/manager/profiles_tab.c expose clickable confirm/cancel controls routed through cbx_manager_handle_mouse_event. The requirement that every visible enabled dialog action respond to pointer hover + left-button click is met. The interaction inventory (tests/interaction_inventory.c M15/M19/M20) reflects the real, pointer-reachable controls, and pointer-path tests are added.
 Verification: scripts/verify.sh; ctest --test-dir build -R 'test_manager_interaction_prof|test_profiles_tab|test_interaction_inventory|test_manager_visual' --output-on-failure
@@ -34,7 +34,7 @@ Evidence: verification passed but audit BLOCKERs unresolved after 3 repair cycle
 
 ## Task 4: Re-render overlay on host-mode entry and reconcile dirty triggers (W1, W2)
 Title: Re-render overlay on host-mode entry and reconcile dirty triggers (W1, W2)
-Status: blocked
+Status: pending
 Dependencies: 1
 Acceptance: Entering/exiting host mode marks the pre-built surface dirty so the presented frame reflects Host Mode as a materially different state on entry (W1). Surface dirtied-trigger policy is reconciled to spec section 4.9: dirt is triggered by device/slot/profile change and by host-mode state transitions, and the inconsistent show/save/close mark_dirty_all calls are reviewed and made deliberate/consistent rather than ad hoc.
 Verification: scripts/verify.sh; ctest --test-dir build -R 'test_overlay_visual|test_overlay_interaction|test_golden' --output-on-failure
