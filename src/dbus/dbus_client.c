@@ -50,6 +50,8 @@ typedef struct {
     ip_signal_cb     cb;
     void            *userdata;
     sd_bus_wrapper   *wrapper;  /* bus handle for sender verification */
+    char            *iface;     /* strdup'd interface (idempotent re-subscription) */
+    char            *member;    /* strdup'd member (idempotent re-subscription) */
 } sd_signal_data;
 
 /* --- sd-bus signal callback for NameOwnerChanged ------------------------- */
@@ -520,6 +522,11 @@ sd_disconnect(ip_bus_handle bus)
     for (int i = 0; i < w->slot_count; i++) {
         if (w->slots[i])
             w->slots[i] = sd_bus_slot_unref(w->slots[i]);
+        sd_signal_data *sd = (sd_signal_data *)w->slot_data[i];
+        if (sd) {
+            free(sd->iface);
+            free(sd->member);
+        }
         free(w->slot_data[i]);
         w->slot_data[i] = NULL;
     }
@@ -715,6 +722,30 @@ sd_subscribe_signal(ip_bus_handle bus, const char *iface,
     sd_bus_wrapper *w = (sd_bus_wrapper *)bus;
     if (!w || !iface || !member || !cb)
         return -EINVAL;
+
+    /* Idempotent re-subscription: if a match rule for this exact
+     * (interface, member) is already registered, do not allocate a new
+     * sd-bus slot, malloc a new callback record, or register another
+     * daemon-side match rule.  The overlay/manager backend re-runs its
+     * full subscription sequence on every InputPlumber restart; a naive
+     * re-subscribe would leak one slot + one malloc + one daemon match
+     * rule per restart and, after enough restarts, dispatch every signal
+     * N times (once per stale slot pointing at the same re-initialised
+     * structures).  Instead we refresh the existing binding's callback
+     * and target: callers re-initialise their (stable-address) payload
+     * structs before re-subscribing, so the refreshed pointers observe
+     * the update while no duplicate is added. */
+    for (int i = 0; i < w->slot_count; i++) {
+        sd_signal_data *sd = w->slot_data[i];
+        if (sd && sd->iface && sd->member &&
+            strcmp(sd->iface, iface) == 0 &&
+            strcmp(sd->member, member) == 0) {
+            sd->cb       = cb;
+            sd->userdata = userdata;
+            return 0;
+        }
+    }
+
     if (w->slot_count >= MAX_SD_SLOTS)
         return -ENOMEM;
 
@@ -724,6 +755,14 @@ sd_subscribe_signal(ip_bus_handle bus, const char *iface,
     data->cb       = cb;
     data->userdata = userdata;
     data->wrapper  = w;
+    data->iface    = strdup(iface);
+    data->member   = strdup(member);
+    if (!data->iface || !data->member) {
+        free(data->iface);
+        free(data->member);
+        free(data);
+        return -ENOMEM;
+    }
 
     sd_bus_slot *slot = NULL;
     int r;

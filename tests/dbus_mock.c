@@ -309,6 +309,20 @@ static int mock_subscribe_signal(ip_bus_handle bus, const char *iface,
     if (mock->subscribe_fail_rc != 0)
         return mock->subscribe_fail_rc;
 
+    /* Idempotent re-subscription: a repeat subscribe for the same
+     * (interface, member) refreshes the existing binding instead of
+     * appending a duplicate entry.  Mirrors sd_subscribe_signal so the
+     * recovery re-wire path (startup + each InputPlumber restart) never
+     * grows the subscription array or double-dispatches signals. */
+    for (int i = 0; i < mock->sub_count; i++) {
+        if (strcmp(mock->subscriptions[i].iface, iface) == 0 &&
+            strcmp(mock->subscriptions[i].member, member) == 0) {
+            mock->subscriptions[i].cb       = cb;
+            mock->subscriptions[i].userdata = userdata;
+            return 0;
+        }
+    }
+
     if (mock->sub_count >= IP_MOCK_MAX_SUBSCRIPTIONS) return -ENOMEM;
 
     mock->subscriptions[mock->sub_count].iface    = iface;

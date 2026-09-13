@@ -930,6 +930,45 @@ test_props_wire_subscribes(void **state)
     assert_string_equal(f->mock.subscriptions[0].member, "PropertiesChanged");
 }
 
+/* Re-wiring after InputPlumber restarts must be idempotent: repeating
+ * cbx_overlay_props_wire (the startup + recovery path) must not grow the
+ * backend subscription array or leak duplicate registrations, so signals
+ * are never dispatched more than once per daemon restart. */
+static void
+test_props_wire_idempotent_rewire(void **state)
+{
+    props_fixture *f = *state;
+
+    int rc = cbx_overlay_props_wire(f->svc);
+    assert_int_equal(rc, 0);
+    assert_int_equal(f->mock.sub_count, 1);
+
+    /* Simulate a daemon restart: the recovery path re-inits the props
+     * struct and re-subscribes through the exact production path.  The
+     * backend must refresh the existing binding rather than append a new
+     * one (the leak that previously grew slot/match-rule counts). */
+    rc = cbx_overlay_props_wire(f->svc);
+    assert_int_equal(rc, 0);
+    assert_int_equal(f->mock.sub_count, 1);  /* no duplicate registration */
+    assert_string_equal(f->mock.subscriptions[0].iface, IP_IFACE_PROPERTIES);
+    assert_string_equal(f->mock.subscriptions[0].member, "PropertiesChanged");
+
+    /* A single injected change is observed through the refreshed binding. */
+    ip_properties_changed_payload p = {
+        .sender      = EXP_SENDER,
+        .iface_name  = IP_IFACE_MANAGER,
+        .prop_name   = "GamepadOrder",
+        .prop_type   = IP_PROP_TYPE_ARRAY,
+        .value       = "gp0",
+        .array_count = 1,
+    };
+    f->backend->inject_signal(f->mock.bus,
+        IP_IFACE_PROPERTIES, "PropertiesChanged", &p);
+
+    assert_true(f->svc->props_state.gamepad_order_observed);
+    assert_string_equal(f->svc->props_state.gamepad_order, "gp0");
+}
+
 /* cbx_overlay_props_wire fails cleanly without a connection. */
 static void
 test_props_wire_no_backend(void **state)
@@ -1111,6 +1150,8 @@ static const struct CMUnitTest tests[] = {
                                      reconcile_setup, reconcile_teardown),
     /* Task 5: reactive PropertiesChanged wiring */
     cmocka_unit_test_setup_teardown(test_props_wire_subscribes,
+                                     props_setup, props_teardown),
+    cmocka_unit_test_setup_teardown(test_props_wire_idempotent_rewire,
                                      props_setup, props_teardown),
     cmocka_unit_test_setup_teardown(test_props_wire_no_backend,
                                      props_setup, props_teardown),
