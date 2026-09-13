@@ -830,6 +830,40 @@ test_prof_name_input_confirm_pointer(void **state)
     assert_int_equal(cbx_interaction_inventory_mark_verified("M15"), 0);
 }
 
+/* M16 pointer path: in name-input mode, hover + left-click the dialog
+ * Cancel button → returns to the profile list, no file created. */
+static void
+test_prof_name_input_cancel_pointer(void **state)
+{
+    mip_fixture *f = *state;
+    cbx_manager *mgr = &f->mgr;
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(mgr);
+
+    switch_to_profiles(mgr);
+    prof_nav_to_button(mgr, 2, 0);
+    send_key_press(mgr, SDLK_a);  /* Create */
+    send_key_press(mgr, SDLK_a);  /* Confirm "Default copy" */
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_NAME_INPUT);
+    int before = cbx_profiles_tab_profile_count(pt);
+
+    /* Both name-input dialog actions are visible and pointer-reachable. */
+    assert_true(cbx_widget_is_visible(&pt->dialog_confirm_btn.base));
+    assert_true(cbx_widget_is_visible(&pt->dialog_cancel_btn.base));
+
+    /* Hover over the Cancel button, then left-click it. */
+    int cx, cy;
+    widget_center(&pt->dialog_cancel_btn.base, &cx, &cy);
+    send_mouse_motion(mgr, cx, cy);
+    assert_true(pt->dialog_cancel_btn.base.hover);
+    send_mouse_click(mgr, cx, cy);
+
+    /* Cancel returns to the list; no profile file was created. */
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_LIST);
+    assert_int_equal(cbx_profiles_tab_profile_count(pt), before);
+    assert_string_equal(cbx_profiles_tab_name_buffer(pt), "");
+    assert_int_equal(cbx_interaction_inventory_mark_verified("M16"), 0);
+}
+
 /* M19 pointer path: in delete-confirm mode, hover + left-click the dialog
  * Confirm button → profile file unlinked, list refreshes. */
 static void
@@ -2067,6 +2101,8 @@ main(void)
         cmocka_unit_test_setup_teardown(
             test_prof_name_input_confirm_pointer, mip_setup, mip_teardown),
         cmocka_unit_test_setup_teardown(
+            test_prof_name_input_cancel_pointer, mip_setup, mip_teardown),
+        cmocka_unit_test_setup_teardown(
             test_prof_delete_confirm_pointer, mip_setup, mip_teardown),
         cmocka_unit_test_setup_teardown(
             test_prof_delete_cancel_pointer, mip_setup, mip_teardown),
@@ -2165,10 +2201,12 @@ main(void)
 
     if (rc == 0) {
         /* Task 3 (B3): the pointer-path tests above must have recorded
-         * M15/M19/M20 as verified in the runtime ledger (via
+         * M15/M16/M19/M20 as verified in the runtime ledger (via
          * mark_verified() inside each passing test) — proving the
-         * inventory reflects the real, pointer-reachable dialog controls. */
+         * inventory reflects the real, pointer-reachable dialog
+         * confirm/cancel controls on both dialogs. */
         assert_int_equal(cbx_interaction_inventory_is_verified("M15"), 1);
+        assert_int_equal(cbx_interaction_inventory_is_verified("M16"), 1);
         assert_int_equal(cbx_interaction_inventory_is_verified("M19"), 1);
         assert_int_equal(cbx_interaction_inventory_is_verified("M20"), 1);
     }

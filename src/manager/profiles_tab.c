@@ -141,9 +141,10 @@ on_dialog_confirm_pressed(cbx_widget *w, void *user_data)
     }
 }
 
-/* Pointer-reachable cancel for the delete-confirm dialog (inventory M20).
- * The name-input dialog has no cancel button (name-input cancel is
- * keyboard-only B/ESC; inventory M16), so M20 only fires here. */
+/* Pointer-reachable cancel for the name-input and delete-confirm modal
+ * dialogs (inventory M16 / M20).  Both dialogs expose a visible Cancel
+ * button while they are active, so a pointer left-click can abandon the
+ * dialog, exactly as B/ESC does on the keyboard path. */
 static void
 on_dialog_cancel_pressed(cbx_widget *w, void *user_data)
 {
@@ -151,8 +152,16 @@ on_dialog_cancel_pressed(cbx_widget *w, void *user_data)
     cbx_profiles_tab *tab = (cbx_profiles_tab *)user_data;
     if (!tab)
         return;
-    if (tab->mode == CBX_PT_MODE_CONFIRM_DELETE)
+    switch (tab->mode) {
+    case CBX_PT_MODE_NAME_INPUT:
+        cbx_profiles_tab_name_input_cancel(tab);
+        break;
+    case CBX_PT_MODE_CONFIRM_DELETE:
         cbx_profiles_tab_cancel_delete(tab);
+        break;
+    default:
+        break;
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -668,12 +677,14 @@ cbx_profiles_tab_begin_create(cbx_profiles_tab *tab,
     cbx_label_set_text(&tab->status_lbl, prompt);
     cbx_widget_set_visible(&tab->status_lbl.base, true);
 
-    /* Pointer-reachable Confirm control (Task 3, B3).  Name-input cancel
-     * stays keyboard-only (B/ESC; inventory M16), so no Cancel button is
-     * shown while typing a name — every visible enabled action here is
-     * pointer-reachable (the Confirm button). */
+    /* Pointer-reachable Confirm and Cancel controls (Task 3, B3).  Both
+     * visible name-input actions (Confirm and Cancel) respond to pointer
+     * hover + left-button click and route through the same production
+     * actions as A/B (inventory M15 / M16).  The Cancel button here is as
+     * pointer-accessible as the delete-confirm dialog's (M20), so the
+     * name-input dialog fully exposes confirm/cancel via the pointer. */
     cbx_widget_set_visible(&tab->dialog_confirm_btn.base, true);
-    cbx_widget_set_visible(&tab->dialog_cancel_btn.base, false);
+    cbx_widget_set_visible(&tab->dialog_cancel_btn.base, true);
 
     /* Modal isolation (Task 3 B3, security): while typing a name the
      * always-present list / Create / Edit / Delete action buttons are

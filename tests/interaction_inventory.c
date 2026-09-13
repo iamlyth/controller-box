@@ -170,10 +170,10 @@ static const cbx_interaction_entry inventory[] = {
     { "M16", CBX_CAT_MANAGER_PROF, "Profiles tab",
       CBX_WIDGET_NAME_INPUT,
       "B while in name-input mode",
-      NA, "n/a — name input cancel is keyboard-only (B/ESC); no cancel button widget",
+      AVAIL, "Mouse click on cancel button in name-input dialog",
       "Returns to profile list; no file created",
-      "cbx_manager_handle_event → KEYDOWN B (controller_event) or KEYUP B → cbx_profiles_tab_name_input_cancel",
-      CBX_VERIFY_NOT_APPLICABLE, "Task 4" },
+      "cbx_manager_handle_event → mouse → dialog_cancel_btn → cbx_profiles_tab_name_input_cancel",
+      CBX_VERIFY_VERIFIED, "Task 3" },
 
     { "M17", CBX_CAT_MANAGER_PROF, "Profiles tab",
       CBX_WIDGET_BUTTON,
