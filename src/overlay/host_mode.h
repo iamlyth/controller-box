@@ -90,6 +90,16 @@ struct cbx_host_mode {
     int  host_row;       /* row_idx of the host controller      */
     int  selected_row;   /* row the host is currently editing    */
 
+    /* Persistent identity of the host and selected rows, recorded when
+     * host mode is entered and refreshed as the selection moves.  A
+     * hotplug grid rebuild can re-resolve the row indices by persistent
+     * ID instead of trusting an index that may now name a different
+     * physical controller (SPEC §4.4/§10.1). */
+    char host_id[CBX_MAX_ID_LEN];
+    char host_composite_path[CBX_MAX_PATH_LEN];
+    char selected_id[CBX_MAX_ID_LEN];
+    char selected_composite_path[CBX_MAX_PATH_LEN];
+
     cbx_hm_slot_change_cb on_slot_change;
     void                 *slot_change_data;
 
@@ -118,6 +128,19 @@ void cbx_host_mode_init(cbx_host_mode *hm);
 int cbx_host_mode_enter(cbx_host_mode *hm, int row_idx);
 
 /*
+ * Grid-aware enter: identical to cbx_host_mode_enter, but also records the
+ * host controller's persistent identity from `grid` (row id + composite
+ * path) so host mode can be re-resolved across a hotplug grid rebuild
+ * (cbx_host_mode_reconcile, SPEC §4.4/§10.1).  Production entry MUST use
+ * this variant.  A non-NULL grid also bounds-checks row_idx against
+ * grid->row_count.
+ *
+ * Returns 0, -EINVAL.
+ */
+int cbx_host_mode_enter_with_grid(cbx_host_mode *hm,
+                                  const cbx_select_grid *grid, int row_idx);
+
+/*
  * Exit host mode. Resets to inactive.
  *
  * W2 no-op contract: exiting a host-mode object that is already inactive
@@ -143,6 +166,17 @@ int cbx_host_mode_exit(cbx_host_mode *hm);
 int cbx_host_mode_toggle(cbx_host_mode *hm, int row_idx);
 
 /*
+ * Grid-aware toggle: identical to cbx_host_mode_toggle, but records the
+ * host's persistent identity from `grid` when entering.  Production entry
+ * MUST use this variant so hotplug reconciliation can re-resolve the host.
+ * A non-NULL grid bounds-checks row_idx against grid->row_count.
+ *
+ * Returns the same codes as cbx_host_mode_toggle.
+ */
+int cbx_host_mode_toggle_with_grid(cbx_host_mode *hm,
+                                   const cbx_select_grid *grid, int row_idx);
+
+/*
  * Handle an input in host mode. Only the host controller can act.
  * Non-host controllers get CBX_HM_RESULT_FROZEN.
  *
@@ -161,6 +195,26 @@ int cbx_host_mode_toggle(cbx_host_mode *hm, int row_idx);
  */
 int cbx_host_mode_handle(cbx_host_mode *hm, int row_idx,
                          cbx_hm_input input, cbx_select_grid *grid);
+
+/*
+ * Reconcile host mode after the select grid rows were rebuilt by a hotplug
+ * event or backend recovery (SPEC §10.1).  The stored host/selected
+ * persistent identities are re-resolved against the rebuilt grid:
+ *
+ *   - Host still present: host_row/selected_row are updated to their new
+ *     indices and host mode stays active.  If the edited row disappeared,
+ *     the selection falls back to the host row.
+ *   - Host removed, or its identity was never recorded: host mode is
+ *     exited (firing the state-change dirty trigger once), so no other
+ *     controller inherits host privileges and no input stays frozen.
+ *   - Grid empty: host mode is exited.
+ *
+ * No-op that returns 0 when host mode is inactive.
+ *
+ * Returns 1 if host mode remains active, 0 if it is now inactive,
+ * -EINVAL on bad args.
+ */
+int cbx_host_mode_reconcile(cbx_host_mode *hm, const cbx_select_grid *grid);
 
 /* --- Accessors -------------------------------------------------------- */
 

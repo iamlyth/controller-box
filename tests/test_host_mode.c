@@ -138,6 +138,41 @@ build_test_grid(cbx_select_grid *g, int rows)
     cbx_select_grid_add_profile(g, "default");
 }
 
+/* Build a grid with caller-supplied persistent ids and composite paths.
+ * Used by the hotplug-reconcile tests: the id models InputPlumber's
+ * PersistentId (stable across a rebuild) while the path can be reused by a
+ * different controller, so identity re-resolution can be distinguished
+ * from stale-index lookup. */
+static void
+build_grid_ids_paths(cbx_select_grid *g,
+                     const char *const *ids,
+                     const char *const *paths, int n)
+{
+    cbx_grid_composite_info comps[CBX_GRID_MAX_ROWS];
+    memset(comps, 0, sizeof(comps));
+    for (int i = 0; i < n; i++) {
+        snprintf(comps[i].id, sizeof(comps[i].id), "%s", ids[i]);
+        snprintf(comps[i].model_name, sizeof(comps[i].model_name),
+                 "Ctrl %d", i);
+        snprintf(comps[i].composite_path, sizeof(comps[i].composite_path),
+                 "/org/shadowblip/InputPlumber/%s",
+                 paths ? paths[i] : ids[i]);
+    }
+
+    cbx_settings s;
+    memset(&s, 0, sizeof(s));
+    s.virtual_controllers.count = 4;
+    for (int i = 0; i < 4; i++)
+        strncpy(s.virtual_controllers.types[i], "xb360",
+                CBX_MAX_TYPE_LEN - 1);
+
+    cbx_assignments a;
+    cbx_assignments_init(&a);
+
+    cbx_select_grid_build(g, comps, n, &s, &a);
+    cbx_select_grid_add_profile(g, "default");
+}
+
 /* --- Init tests ------------------------------------------------------ */
 
 static void
@@ -968,6 +1003,261 @@ test_exit_noop_no_transition(void **state)
     assert_int_equal(cb.transitions, 2);
 }
 
+/* =================================================================== */
+/*  Hotplug reconcile (SPEC §4.4/§10.1)                                 */
+/* =================================================================== */
+/*
+ * A hotplug rebuild re-derives grid rows from composite order, so stored
+ * row indices can shift or disappear.  cbx_host_mode_reconcile must
+ * re-resolve the host (and selected) row by persistent id, preserving
+ * exclusivity, and must exit host mode when the host controller is gone
+ * rather than freezing everyone or handing host privileges to whatever
+ * controller lands on the old index.
+ */
+
+/* Host's row shifts because an earlier controller was removed. */
+static void
+test_reconcile_host_row_shifted(void **state)
+{
+    (void)state;
+    static const char *ids3[]  = { "A", "B", "C" };
+    static const char *paths3[] = { "pa", "pb", "pc" };
+    static const char *ids2[]  = { "B", "C" };
+    static const char *paths2[] = { "pb", "pc" };
+    cbx_select_grid g;
+    build_grid_ids_paths(&g, ids3, paths3, 3);
+
+    cbx_host_mode hm;
+    cbx_host_mode_init(&hm);
+    /* B (row 1) is host and has navigated to edit C (row 2). */
+    assert_int_equal(cbx_host_mode_enter_with_grid(&hm, &g, 1), 0);
+    assert_int_equal(cbx_host_mode_handle(&hm, 1, CBX_HM_DOWN, &g),
+                     CBX_HM_RESULT_MOVED);
+    assert_int_equal(hm.selected_row, 2);
+
+    /* Remove A: B shifts to row 0, C to row 1. */
+    build_grid_ids_paths(&g, ids2, paths2, 2);
+    assert_int_equal(cbx_host_mode_reconcile(&hm, &g), 1);
+
+    assert_true(cbx_host_mode_is_active(&hm));
+    assert_int_equal(cbx_host_mode_get_host_row(&hm), 0);
+    assert_int_equal(cbx_host_mode_get_selected_row(&hm), 1);
+    assert_string_equal(g.rows[0].id, "B");
+    assert_string_equal(g.rows[1].id, "C");
+
+    /* Host still acts; the other row stays frozen. */
+    assert_int_equal(cbx_host_mode_handle(&hm, 0, CBX_HM_RIGHT, &g),
+                     CBX_HM_RESULT_SLOT);
+    assert_int_equal(cbx_host_mode_handle(&hm, 1, CBX_HM_RIGHT, &g),
+                     CBX_HM_RESULT_FROZEN);
+}
+
+/* Production entry path (toggle_with_grid) also records the identity. */
+static void
+test_reconcile_after_toggle_with_grid(void **state)
+{
+    (void)state;
+    static const char *ids3[]  = { "A", "B", "C" };
+    static const char *paths3[] = { "pa", "pb", "pc" };
+    static const char *ids2[]  = { "B", "C" };
+    static const char *paths2[] = { "pb", "pc" };
+    cbx_select_grid g;
+    build_grid_ids_paths(&g, ids3, paths3, 3);
+
+    cbx_host_mode hm;
+    cbx_host_mode_init(&hm);
+    assert_int_equal(cbx_host_mode_toggle_with_grid(&hm, &g, 1), 1);
+
+    build_grid_ids_paths(&g, ids2, paths2, 2);
+    assert_int_equal(cbx_host_mode_reconcile(&hm, &g), 1);
+    assert_true(cbx_host_mode_is_active(&hm));
+    assert_int_equal(cbx_host_mode_get_host_row(&hm), 0);
+    assert_string_equal(g.rows[0].id, "B");
+}
+
+/* Host removed → host mode exits (no privilege shift, no input freeze). */
+static void
+test_reconcile_host_removed_exits(void **state)
+{
+    (void)state;
+    static const char *ids3[]  = { "A", "B", "C" };
+    static const char *paths3[] = { "pa", "pb", "pc" };
+    static const char *ids2[]  = { "A", "C" };
+    static const char *paths2[] = { "pa", "pc" };
+    cbx_select_grid g;
+    build_grid_ids_paths(&g, ids3, paths3, 3);
+
+    cbx_host_mode hm;
+    cbx_host_mode_init(&hm);
+    hm_state_cb cb = {0, false};
+    hm.on_state_change   = on_state_change;
+    hm.state_change_data = &cb;
+    assert_int_equal(cbx_host_mode_enter_with_grid(&hm, &g, 1), 0); /* B */
+    assert_int_equal(cb.transitions, 1);
+
+    /* Remove B (the host). */
+    build_grid_ids_paths(&g, ids2, paths2, 2);
+    assert_int_equal(cbx_host_mode_reconcile(&hm, &g), 0);
+
+    assert_false(cbx_host_mode_is_active(&hm));
+    assert_int_equal(hm.host_row, -1);
+    /* Exiting fired the dirty trigger exactly once. */
+    assert_int_equal(cb.transitions, 2);
+    assert_false(cb.last_active);
+}
+
+/* The selected (edited) row is removed → selection falls back to the host. */
+static void
+test_reconcile_selected_removed_falls_back(void **state)
+{
+    (void)state;
+    static const char *ids3[]  = { "A", "B", "C" };
+    static const char *paths3[] = { "pa", "pb", "pc" };
+    static const char *ids2[]  = { "A", "B" };
+    static const char *paths2[] = { "pa", "pb" };
+    cbx_select_grid g;
+    build_grid_ids_paths(&g, ids3, paths3, 3);
+
+    cbx_host_mode hm;
+    cbx_host_mode_init(&hm);
+    cbx_host_mode_enter_with_grid(&hm, &g, 0); /* host A */
+    cbx_host_mode_handle(&hm, 0, CBX_HM_DOWN, &g);
+    cbx_host_mode_handle(&hm, 0, CBX_HM_DOWN, &g);
+    assert_int_equal(hm.selected_row, 2); /* editing C */
+
+    /* Remove C (the edited row), keep the host. */
+    build_grid_ids_paths(&g, ids2, paths2, 2);
+    assert_int_equal(cbx_host_mode_reconcile(&hm, &g), 1);
+
+    assert_true(cbx_host_mode_is_active(&hm));
+    assert_int_equal(cbx_host_mode_get_host_row(&hm), 0);
+    assert_int_equal(cbx_host_mode_get_selected_row(&hm), 0);
+}
+
+/* Empty grid (all controllers gone) → exit rather than freeze. */
+static void
+test_reconcile_empty_grid_exits(void **state)
+{
+    (void)state;
+    static const char *ids1[]  = { "A" };
+    static const char *paths1[] = { "pa" };
+    cbx_select_grid g;
+    build_grid_ids_paths(&g, ids1, paths1, 1);
+
+    cbx_host_mode hm;
+    cbx_host_mode_init(&hm);
+    cbx_host_mode_enter_with_grid(&hm, &g, 0);
+
+    cbx_settings s;
+    memset(&s, 0, sizeof(s));
+    s.virtual_controllers.count = 1;
+    snprintf(s.virtual_controllers.types[0], CBX_MAX_TYPE_LEN, "xb360");
+    cbx_assignments a;
+    cbx_assignments_init(&a);
+    cbx_select_grid_build(&g, NULL, 0, &s, &a);
+    assert_int_equal(g.row_count, 0);
+
+    assert_int_equal(cbx_host_mode_reconcile(&hm, &g), 0);
+    assert_false(cbx_host_mode_is_active(&hm));
+}
+
+/*
+ * Persistent id wins over the composite path: a different controller that
+ * reuses the old host's path must not inherit host privileges.
+ */
+static void
+test_reconcile_prefers_persistent_id_over_path(void **state)
+{
+    (void)state;
+    static const char *ids3[]  = { "A", "B", "C" };
+    static const char *paths3[] = { "pa", "pb", "pc" };
+    static const char *ids2[]  = { "X", "B" };
+    static const char *paths2[] = { "pb", "pb2" }; /* pb reused by X */
+    cbx_select_grid g;
+    build_grid_ids_paths(&g, ids3, paths3, 3);
+
+    cbx_host_mode hm;
+    cbx_host_mode_init(&hm);
+    assert_int_equal(cbx_host_mode_enter_with_grid(&hm, &g, 1), 0); /* B */
+
+    build_grid_ids_paths(&g, ids2, paths2, 2);
+    assert_int_equal(cbx_host_mode_reconcile(&hm, &g), 1);
+
+    /* Followed B's persistent id (row 1), not X on the reused path. */
+    assert_int_equal(cbx_host_mode_get_host_row(&hm), 1);
+    assert_string_equal(g.rows[1].id, "B");
+    assert_true(cbx_host_mode_is_frozen(&hm, 0));
+    assert_false(cbx_host_mode_is_frozen(&hm, 1));
+}
+
+/* Inactive host mode is a no-op reconcile. */
+static void
+test_reconcile_inactive_noop(void **state)
+{
+    (void)state;
+    static const char *ids1[]  = { "A" };
+    static const char *paths1[] = { "pa" };
+    cbx_select_grid g;
+    build_grid_ids_paths(&g, ids1, paths1, 1);
+    cbx_host_mode hm;
+    cbx_host_mode_init(&hm);
+
+    assert_int_equal(cbx_host_mode_reconcile(&hm, &g), 0);
+    assert_false(cbx_host_mode_is_active(&hm));
+}
+
+/* NULL args are rejected, not dereferenced. */
+static void
+test_reconcile_null(void **state)
+{
+    (void)state;
+    static const char *ids1[]  = { "A" };
+    static const char *paths1[] = { "pa" };
+    cbx_select_grid g;
+    build_grid_ids_paths(&g, ids1, paths1, 1);
+    cbx_host_mode hm;
+    cbx_host_mode_init(&hm);
+
+    assert_int_equal(cbx_host_mode_reconcile(NULL, &g), -EINVAL);
+    assert_int_equal(cbx_host_mode_reconcile(&hm, NULL), -EINVAL);
+}
+
+/* Grid-aware entry bounds-checks the host row. */
+static void
+test_enter_with_grid_bounds(void **state)
+{
+    (void)state;
+    static const char *ids1[]  = { "A" };
+    static const char *paths1[] = { "pa" };
+    cbx_select_grid g;
+    build_grid_ids_paths(&g, ids1, paths1, 1);
+    cbx_host_mode hm;
+    cbx_host_mode_init(&hm);
+
+    assert_int_equal(cbx_host_mode_enter_with_grid(&hm, &g, 1), -EINVAL);
+    assert_false(cbx_host_mode_is_active(&hm));
+    assert_int_equal(cbx_host_mode_toggle_with_grid(&hm, &g, 5), -2);
+    assert_false(cbx_host_mode_is_active(&hm));
+}
+
+/* An out-of-range sender cannot act (hardening). */
+static void
+test_handle_sender_out_of_range(void **state)
+{
+    (void)state;
+    static const char *ids1[]  = { "A" };
+    static const char *paths1[] = { "pa" };
+    cbx_select_grid g;
+    build_grid_ids_paths(&g, ids1, paths1, 1);
+    cbx_host_mode hm;
+    cbx_host_mode_init(&hm);
+    cbx_host_mode_enter_with_grid(&hm, &g, 0);
+
+    assert_int_equal(cbx_host_mode_handle(&hm, 9, CBX_HM_DOWN, &g),
+                     CBX_HM_RESULT_ERROR);
+    assert_true(cbx_host_mode_is_active(&hm));
+}
+
 /* --- Main ------------------------------------------------------------ */
 
 int
@@ -1040,6 +1330,17 @@ main(void)
         cmocka_unit_test(test_state_change_on_enter_exit),
         cmocka_unit_test(test_state_change_on_toggle),
         cmocka_unit_test(test_exit_noop_no_transition),
+        /* Hotplug reconcile (SPEC §4.4/§10.1) */
+        cmocka_unit_test(test_reconcile_host_row_shifted),
+        cmocka_unit_test(test_reconcile_after_toggle_with_grid),
+        cmocka_unit_test(test_reconcile_host_removed_exits),
+        cmocka_unit_test(test_reconcile_selected_removed_falls_back),
+        cmocka_unit_test(test_reconcile_empty_grid_exits),
+        cmocka_unit_test(test_reconcile_prefers_persistent_id_over_path),
+        cmocka_unit_test(test_reconcile_inactive_noop),
+        cmocka_unit_test(test_reconcile_null),
+        cmocka_unit_test(test_enter_with_grid_bounds),
+        cmocka_unit_test(test_handle_sender_out_of_range),
     };
 
     return cmocka_run_group_tests(tests, NULL, NULL);

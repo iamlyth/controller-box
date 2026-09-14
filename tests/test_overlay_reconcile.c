@@ -221,8 +221,10 @@ reconcile_setup(void **state)
     f->svc->model.composite_count = 2;
     snprintf(f->svc->model.composites[0].path,
              sizeof(f->svc->model.composites[0].path), "%s", COMP_PATH_0);
+    f->svc->model.composites[0].index = 0;
     snprintf(f->svc->model.composites[1].path,
              sizeof(f->svc->model.composites[1].path), "%s", COMP_PATH_1);
+    f->svc->model.composites[1].index = 1;
 
     /* Render context. */
     f->svc->render_ctx = (cbx_grid_render_ctx){
@@ -511,6 +513,119 @@ test_hotplug_target_remove_clamps_positions(void **state)
 }
 
 /* ====================================================================== */
+/*  Test 4b: Hotplug while Host Mode is active (SPEC §4.4/§10.1)          */
+/* ====================================================================== */
+
+/*
+ * Align the fixture grid's persistent ids with what the hotplug rebuild
+ * will derive from the device model.  With no PersistentId expectation the
+ * mock returns -ENXIO, so fill_composite_info falls back to the
+ * composite-<index> identity keyed on the DBus path.  Setting the grid to
+ * the same identity lets these tests distinguish a real re-resolution from
+ * a stale-index lookup.
+ */
+static void
+sync_grid_identity_from_model(cbx_overlay_service_ctx *svc)
+{
+    for (int i = 0; i < svc->grid.row_count &&
+                    i < svc->model.composite_count; i++) {
+        snprintf(svc->grid.rows[i].id, CBX_MAX_ID_LEN, "composite-%d",
+                 svc->model.composites[i].index);
+        snprintf(svc->grid.rows[i].composite_path, CBX_MAX_PATH_LEN, "%s",
+                 svc->model.composites[i].path);
+    }
+}
+
+static void
+stage_composite_reconcile_expectations(ip_dbus_mock *mock)
+{
+    ip_dbus_mock_reset(mock);
+    ip_dbus_mock_expect_ok(mock, IP_IFACE_COMPOSITE, "InterceptMode", "1");
+    ip_dbus_mock_expect_ok(mock, IP_IFACE_COMPOSITE,
+                            "SetInterceptActivation", NULL);
+}
+
+/* Hot-unplugging the host must exit Host Mode, not freeze every input. */
+static void
+test_hotplug_host_removed_exits_host_mode(void **state)
+{
+    reconcile_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    sync_grid_identity_from_model(svc);
+
+    /* Controller 0 (composite-0) enters host mode. */
+    assert_int_equal(
+        cbx_host_mode_toggle_with_grid(&svc->hm, &svc->grid, 0), 1);
+    assert_true(cbx_host_mode_is_active(&svc->hm));
+    assert_int_equal(cbx_host_mode_get_host_row(&svc->hm), 0);
+
+    /* Hot-unplug the host composite via the production hotplug handler. */
+    ip_interfaces_changed_payload payload;
+    memset(&payload, 0, sizeof(payload));
+    payload.sender     = ":1.42";
+    payload.path       = COMP_PATH_0;
+    payload.interfaces = IP_IFACE_COMPOSITE;
+    ip_hotplug_handle_removed(&svc->hp, &payload);
+    assert_true(svc->hp.model_changed);
+    assert_int_equal(svc->model.composite_count, 1);
+
+    stage_composite_reconcile_expectations(&f->mock);
+
+    flush_events();
+    cbx_overlay_service_step(svc);
+
+    assert_false(svc->hp.model_changed);
+    assert_int_equal(svc->grid.row_count, 1);
+    assert_string_equal(svc->grid.rows[0].id, "composite-1");
+    /* Host gone → host mode exited; the surviving controller is not frozen. */
+    assert_false(cbx_host_mode_is_active(&svc->hm));
+    assert_false(cbx_host_mode_is_frozen(&svc->hm, 0));
+}
+
+/*
+ * Removing a controller before the host shifts the host's row index.  The
+ * reconcile must follow the host's persistent identity so host privilege
+ * never lands on a different physical controller.
+ */
+static void
+test_hotplug_host_row_shift_preserves_host(void **state)
+{
+    reconcile_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    sync_grid_identity_from_model(svc);
+
+    /* Controller 1 (composite-1) is the host. */
+    assert_int_equal(
+        cbx_host_mode_toggle_with_grid(&svc->hm, &svc->grid, 1), 1);
+    assert_int_equal(cbx_host_mode_get_host_row(&svc->hm), 1);
+
+    /* Hot-unplug composite-0 (not the host). */
+    ip_interfaces_changed_payload payload;
+    memset(&payload, 0, sizeof(payload));
+    payload.sender     = ":1.42";
+    payload.path       = COMP_PATH_0;
+    payload.interfaces = IP_IFACE_COMPOSITE;
+    ip_hotplug_handle_removed(&svc->hp, &payload);
+    assert_true(svc->hp.model_changed);
+
+    stage_composite_reconcile_expectations(&f->mock);
+
+    flush_events();
+    cbx_overlay_service_step(svc);
+
+    assert_false(svc->hp.model_changed);
+    assert_int_equal(svc->grid.row_count, 1);
+    /* Host followed its persistent id to the new row 0; privilege did not
+     * shift to any other controller and the host is not frozen. */
+    assert_true(cbx_host_mode_is_active(&svc->hm));
+    assert_int_equal(cbx_host_mode_get_host_row(&svc->hm), 0);
+    assert_string_equal(svc->grid.rows[0].id, "composite-1");
+    assert_false(cbx_host_mode_is_frozen(&svc->hm, 0));
+}
+
+/* ====================================================================== */
 /*  Test 5: Overlay visibility tracks lifecycle                           */
 /* ====================================================================== */
 
@@ -661,6 +776,12 @@ main(void)
             reconcile_setup, reconcile_teardown),
         cmocka_unit_test_setup_teardown(
             test_hotplug_target_remove_clamps_positions,
+            reconcile_setup, reconcile_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_hotplug_host_removed_exits_host_mode,
+            reconcile_setup, reconcile_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_hotplug_host_row_shift_preserves_host,
             reconcile_setup, reconcile_teardown),
         cmocka_unit_test_setup_teardown(
             test_window_visibility_tracks_lifecycle,

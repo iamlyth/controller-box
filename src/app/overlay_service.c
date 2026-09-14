@@ -1039,6 +1039,14 @@ cbx_overlay_reconcile_hotplug(cbx_overlay_service_ctx *svc)
     /* Restore profiles onto the rebuilt grid. */
     cbx_profile_cycle_load_profiles(&svc->grid, &svc->profiles);
 
+    /* Re-resolve host-mode row indices against the rebuilt grid.  A
+     * hotplug add/remove can shift or delete rows, so the stored host and
+     * selected indices may no longer name the same physical controller.
+     * Reconcile by persistent identity, exiting host mode when the host is
+     * gone so no other controller inherits host privileges and input never
+     * freezes (SPEC §4.4/§10.1). */
+    cbx_host_mode_reconcile(&svc->hm, &svc->grid);
+
     /* Re-detect conflicts after grid rebuild (SPEC §4.5). */
     cbx_conflict_list_init(&svc->conflicts);
     cbx_conflict_detect(&svc->grid, &svc->conflicts);
@@ -1111,6 +1119,11 @@ overlay_backend_ready(void *userdata)
     cbx_select_grid_build(&svc->grid, svc->composites, svc->comp_count,
                            &svc->settings, &svc->assignments);
     cbx_profile_cycle_load_profiles(&svc->grid, &svc->profiles);
+
+    /* Backend recovery rebuilt the grid from a fresh enumeration.  Re-resolve
+     * host mode by persistent identity for the same reason as a hotplug
+     * rebuild (SPEC §4.4/§10.1). */
+    cbx_host_mode_reconcile(&svc->hm, &svc->grid);
 
     /* Re-detect conflicts after grid rebuild (SPEC §4.5). */
     cbx_conflict_list_init(&svc->conflicts);
@@ -1370,7 +1383,7 @@ cbx_overlay_input_cb(ip_input_id input,
         if (result == CBX_PM_RESULT_CLOSE) {
             cbx_overlay_lifecycle_close(ctx->lifecycle);
         } else if (result == CBX_PM_RESULT_HOST) {
-            cbx_host_mode_toggle(ctx->hm, row_idx);
+            cbx_host_mode_toggle_with_grid(ctx->hm, ctx->grid, row_idx);
         }
         /* Surface dirty flag is set by callbacks. */
     }
@@ -1437,7 +1450,7 @@ cbx_overlay_service_step(cbx_overlay_service_ctx *svc)
                     if (result == CBX_PM_RESULT_CLOSE) {
                         cbx_overlay_lifecycle_close(&svc->lifecycle);
                     } else if (result == CBX_PM_RESULT_HOST) {
-                        cbx_host_mode_toggle(&svc->hm, 0);
+                        cbx_host_mode_toggle_with_grid(&svc->hm, &svc->grid, 0);
                     }
                     /* Surface dirty flag is set by callbacks. */
                 }
