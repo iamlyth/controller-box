@@ -358,6 +358,14 @@ int cbx_overlay_on_profile_change(int row_idx, const char *profile,
 int cbx_overlay_on_host_mode_change(bool active, void *userdata);
 
 /*
+ * Lifecycle on_closed callback: ends Host Mode when the overlay reaches
+ * IDLE so host state cannot leak across overlay sessions (SPEC §4.4).
+ * Wired as lifecycle.on_closed in run_overlay_service(); exposed so tests
+ * can mirror the exact production wiring.
+ */
+void cbx_overlay_on_lifecycle_closed(void *userdata);
+
+/*
  * Production PropertiesChanged callback: updates cbx_reactive_props with
  * the validated new value for the relevant tracked property (GamepadOrder,
  * ProfileName, ProfilePath, TargetDevices, SourceDevicePaths) and marks

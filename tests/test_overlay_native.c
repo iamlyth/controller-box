@@ -385,6 +385,12 @@ static int native_setup(void **state)
     f->svc->lifecycle.on_save = cbx_overlay_on_save;
     f->svc->lifecycle.on_save_data = f->svc;
 
+    /* 17b. End Host Mode when the overlay closes (SPEC §4.4) — the exact
+     * production wiring, so close/reopen is exercised on the real DBus
+     * transport. */
+    f->svc->lifecycle.on_closed = cbx_overlay_on_lifecycle_closed;
+    f->svc->lifecycle.on_closed_data = f->svc;
+
     /* 18. Player mode + callbacks. */
     cbx_player_mode_init(&f->svc->pm, &f->svc->grid);
     f->svc->pm.on_slot_change = cbx_overlay_on_slot_change;
@@ -1133,6 +1139,60 @@ static void test_o10b_close_conflict_resolution(void **state)
     assert_int_equal(cbx_interaction_inventory_mark_verified("O10"), 0);
 }
 
+/* --- O10c: Host Mode ends with the overlay (SPEC §4.4) --- */
+/*
+ * Host Mode is scoped to one overlay session: the first controller to press
+ * R3 becomes the exclusive host.  Closing the overlay from Host Mode must
+ * end it, or the next activation presents every non-host controller frozen
+ * even though no controller pressed R3 in the new session.  Drives the real
+ * native DBus InputEvent transport for entry and B-close, then re-activates
+ * through the production lifecycle API.
+ */
+static void
+test_host_mode_exits_on_close_native(void **state)
+{
+    native_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    activate_overlay(f);
+
+    /* Controller 0 enters Host Mode via the real DBus InputEvent path. */
+    emit_input_event(svc->conn.backend, svc->conn.bus, COMP_PATH_0, "R3", 1.0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
+    cbx_overlay_service_step(svc);
+    assert_true(cbx_host_mode_is_active(&svc->hm));
+    assert_int_equal(cbx_host_mode_get_host_row(&svc->hm), 0);
+    /* Host Mode visuals are live: row 0 selected, row 1 frozen. */
+    assert_int_equal(cbx_host_mode_row_state(&svc->hm, 0), CBX_ROW_SELECTED);
+    assert_int_equal(cbx_host_mode_row_state(&svc->hm, 1), CBX_ROW_FROZEN);
+
+    /* Host presses B via the real DBus path → close → IDLE.  on_closed ends
+     * Host Mode so no frozen row leaks into the next session. */
+    emit_input_event(svc->conn.backend, svc->conn.bus, COMP_PATH_0, "B", 1.0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
+    cbx_overlay_service_step(svc);
+    assert_int_equal(svc->lifecycle.state, CBX_OVERLAY_IDLE);
+    assert_false(cbx_host_mode_is_active(&svc->hm));
+    for (int i = 0; i < svc->grid.row_count; i++) {
+        assert_int_equal(cbx_host_mode_row_state(&svc->hm, i),
+                         CBX_ROW_NORMAL);
+        assert_false(cbx_host_mode_is_frozen(&svc->hm, i));
+    }
+
+    /* Re-activate: the new session starts in Player Mode, so controller 1
+     * (frozen last session) can become the new host. */
+    assert_int_equal(cbx_overlay_lifecycle_activate(&svc->lifecycle), 0);
+    cbx_overlay_service_step(svc);
+    assert_int_equal(svc->lifecycle.state, CBX_OVERLAY_VISIBLE);
+    assert_false(cbx_host_mode_is_active(&svc->hm));
+
+    emit_input_event(svc->conn.backend, svc->conn.bus, COMP_PATH_1, "R3", 1.0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
+    cbx_overlay_service_step(svc);
+    assert_true(cbx_host_mode_is_active(&svc->hm));
+    assert_int_equal(cbx_host_mode_get_host_row(&svc->hm), 1);
+}
+
 /* --- O11: Multi-controller independence via DBus InputEvent --- */
 
 static void test_o11_multi_controller_independent(void **state)
@@ -1591,6 +1651,8 @@ static const struct CMUnitTest tests[] = {
     cmocka_unit_test_setup_teardown(test_o10_close_saves_and_sets_pass,
                                      native_setup, native_teardown),
     cmocka_unit_test_setup_teardown(test_o10b_close_conflict_resolution,
+                                     native_setup, native_teardown),
+    cmocka_unit_test_setup_teardown(test_host_mode_exits_on_close_native,
                                      native_setup, native_teardown),
 
     /* O11 — Multi-controller independence */

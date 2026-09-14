@@ -252,6 +252,11 @@ interaction_setup(void **state)
     f->svc->lifecycle.on_save      = cbx_overlay_on_save;
     f->svc->lifecycle.on_save_data = f->svc;
 
+    /* Wire on_closed to end Host Mode with the overlay (SPEC §4.4) — the
+     * exact production wiring, so the close/reopen path is exercised. */
+    f->svc->lifecycle.on_closed      = cbx_overlay_on_lifecycle_closed;
+    f->svc->lifecycle.on_closed_data = f->svc;
+
     /* Input context: device path → row mappings. */
     f->svc->input_ctx.pm       = &f->svc->pm;
     f->svc->input_ctx.hm       = &f->svc->hm;
@@ -687,6 +692,72 @@ test_hm_transition_fires_once(void **state)
 
     /* Sanity: the production dirty-trigger still works through the wrapper. */
     assert_true(cbx_overlay_surface_is_dirty(&f->svc->surface));
+}
+
+/* ================================================================== */
+/*  Host Mode must not leak across overlay close/reopen (SPEC §4.4)     */
+/*      Host Mode is scoped to one overlay session: the first           */
+/*      controller to press R3 becomes the exclusive host.  Closing the  */
+/*      overlay (B, deactivation, timeout, force-close) must end Host    */
+/*      Mode; otherwise reopening presents every non-host controller     */
+/*      frozen even though no controller pressed R3 in the new session,  */
+/*      and only the stale host can exit.                                */
+/* ================================================================== */
+
+static void
+assert_all_rows_player_mode(interaction_fixture *f)
+{
+    /* Substantive, not tautological: this is asserted while the previous
+     * session had left rows frozen, so it proves the leak is gone. */
+    assert_false(cbx_host_mode_is_active(&f->svc->hm));
+    for (int i = 0; i < f->svc->grid.row_count; i++) {
+        assert_int_equal(cbx_host_mode_row_state(&f->svc->hm, i),
+                         CBX_ROW_NORMAL);
+        assert_false(cbx_host_mode_is_frozen(&f->svc->hm, i));
+    }
+}
+
+static void
+test_host_mode_exits_on_close_and_reopen(void **state)
+{
+    interaction_fixture *f = *state;
+    make_visible(f);
+
+    /* Enter Host Mode from controller 0 through the production DBus path. */
+    inject_input(f, EXP_SENDER, DEV_PATH_0, "R3", 1.0);
+    cbx_overlay_service_step(f->svc);
+    assert_true(cbx_host_mode_is_active(&f->svc->hm));
+    assert_int_equal(cbx_host_mode_get_host_row(&f->svc->hm), 0);
+    /* Host Mode visuals are live: host/selected row 0, frozen row 1. */
+    assert_int_equal(cbx_host_mode_row_state(&f->svc->hm, 0),
+                     CBX_ROW_SELECTED);
+    assert_int_equal(cbx_host_mode_row_state(&f->svc->hm, 1),
+                     CBX_ROW_FROZEN);
+    assert_true(cbx_host_mode_is_frozen(&f->svc->hm, 1));
+
+    /* The host presses B: the production close path runs (save, PASS,
+     * IDLE).  fade_out_ms == 0, so IDLE — and on_closed — happen in-step. */
+    inject_input(f, EXP_SENDER, DEV_PATH_0, "B", 1.0);
+    cbx_overlay_service_step(f->svc);
+    assert_int_equal(f->svc->lifecycle.state, CBX_OVERLAY_IDLE);
+
+    /* Host Mode ended with the overlay; no frozen row survives the close. */
+    assert_all_rows_player_mode(f);
+
+    /* Re-activate the overlay through the production lifecycle API.  The
+     * new session must start in Player Mode: no controller is frozen and
+     * every row renders normal. */
+    assert_int_equal(cbx_overlay_lifecycle_activate(&f->svc->lifecycle), 0);
+    cbx_overlay_service_step(f->svc);
+    assert_int_equal(f->svc->lifecycle.state, CBX_OVERLAY_VISIBLE);
+    assert_all_rows_player_mode(f);
+
+    /* A controller that was frozen in the previous session is not frozen
+     * now: controller 1's R3 makes it the new exclusive host. */
+    inject_input(f, EXP_SENDER, DEV_PATH_1, "R3", 1.0);
+    cbx_overlay_service_step(f->svc);
+    assert_true(cbx_host_mode_is_active(&f->svc->hm));
+    assert_int_equal(cbx_host_mode_get_host_row(&f->svc->hm), 1);
 }
 
 /* ================================================================== */
@@ -1322,6 +1393,9 @@ static const struct CMUnitTest tests[] = {
                                      interaction_setup, interaction_teardown),
     cmocka_unit_test_setup_teardown(test_hm_transition_fires_once,
                                      interaction_setup, interaction_teardown),
+    cmocka_unit_test_setup_teardown(
+        test_host_mode_exits_on_close_and_reopen,
+        interaction_setup, interaction_teardown),
 
     /* O10 — Close */
     cmocka_unit_test_setup_teardown(test_o10_close_saves_and_sets_pass,

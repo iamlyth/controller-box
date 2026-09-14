@@ -460,6 +460,28 @@ cbx_overlay_on_host_mode_change(bool active, void *userdata)
     return 0;
 }
 
+/*
+ * Lifecycle on_closed callback: end Host Mode when the overlay reaches
+ * IDLE (SPEC §4.4).  Host Mode is scoped to one overlay session — the
+ * first controller to press R3 becomes the exclusive host — so a close
+ * (B-press, deactivation, timeout, backend loss, or shutdown) must end it.
+ * Without this, reopening the overlay would present every non-host
+ * controller frozen even though none of them pressed R3 in the new session,
+ * and only the stale host could exit.  cbx_host_mode_exit is a no-op on an
+ * already-idle object (W2), so this never double-fires the dirty trigger;
+ * when it does exit, the state-change callback marks the surface dirty so
+ * the next activation renders normal rows.  on_save has already persisted
+ * the session's edits by the time IDLE is reached.
+ */
+void
+cbx_overlay_on_lifecycle_closed(void *userdata)
+{
+    cbx_overlay_service_ctx *svc = (cbx_overlay_service_ctx *)userdata;
+    if (!svc)
+        return;
+    cbx_host_mode_exit(&svc->hm);
+}
+
 /* ================================================================== */
 /*  Helper: fill cbx_grid_composite_info from the device model + DBus  */
 /* ================================================================== */
@@ -1743,6 +1765,11 @@ int run_overlay_service(int dry_run)
     /* Lifecycle on_save callback: conflict resolution + assignment save. */
     svc->lifecycle.on_save       = cbx_overlay_on_save;
     svc->lifecycle.on_save_data  = svc;
+
+    /* Lifecycle on_closed callback: end Host Mode with the overlay so its
+     * state cannot leak into the next activation (SPEC §4.4). */
+    svc->lifecycle.on_closed      = cbx_overlay_on_lifecycle_closed;
+    svc->lifecycle.on_closed_data = svc;
 
     /* --- 10b. Set up DBus InputEvent signal handling (Task 6) ------- */
     svc->input_ctx.pm        = &svc->pm;
