@@ -453,11 +453,11 @@ static const cbx_interaction_entry inventory[] = {
 
     { "O12", CBX_CAT_OVERLAY, "Overlay",
       CBX_WIDGET_OVERLAY_ACTION,
-      "TBD (Up/Down repurposed for row nav in Host Mode; spec §4.4 says host can 'edit slot/profile' but cbx_hm_input has no profile-cycle input)",
+      "L1/R1 bumpers / DBus InputEvent",
       NA, "n/a",
-      "Host changes the profile of the selected row",
-      "poll loop → cbx_host_mode_handle (not yet implemented)",
-      CBX_VERIFY_DEFERRED, "Task 3 (deferred per §13)" },
+      "Host cycles the selected row's profile (previous/next); profile follows the controller and LoadProfilePath is applied",
+      "poll loop → ip_input_events → device_path→row → cbx_host_mode_handle → cbx_overlay_on_profile_change → cbx_profile_cycle_apply",
+      CBX_VERIFY_VERIFIED, "Task 4" },
 
     { "O13", CBX_CAT_OVERLAY, "Overlay",
       CBX_WIDGET_OVERLAY_ACTION,

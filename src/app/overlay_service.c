@@ -1059,7 +1059,9 @@ cbx_overlay_reconcile_hotplug(cbx_overlay_service_ctx *svc)
     /* Re-arm polls for current composites (SPEC §2.5, §10.1). */
     cbx_overlay_rearm_polls(svc);
 
-    /* Mark surface dirty for re-render. */
+    /* Hotplug reconcile rebuilt grid rows, columns and input mappings, so
+     * the surface is stale: dirty it to re-render from the new device model
+     * (SPEC §4.9 device-change trigger). */
     cbx_overlay_surface_mark_dirty_all(&svc->surface);
 }
 
@@ -1159,6 +1161,9 @@ overlay_backend_ready(void *userdata)
     cbx_overlay_props_wire(svc);
 
     svc->backend_ready = true;
+    /* Backend recovery re-enumerated the device model: dirty the surface so
+     * the next step re-renders from the recovered state (SPEC §4.9
+     * device-change trigger). */
     cbx_overlay_surface_mark_dirty_all(&svc->surface);
 }
 
@@ -1183,12 +1188,16 @@ static int
 sdl_key_to_hm_input(SDL_Keycode key, cbx_hm_input *out)
 {
     switch (key) {
-    case SDLK_LEFT:   *out = CBX_HM_LEFT;  return 1;
-    case SDLK_RIGHT:  *out = CBX_HM_RIGHT; return 1;
-    case SDLK_UP:     *out = CBX_HM_UP;    return 1;
-    case SDLK_DOWN:   *out = CBX_HM_DOWN;  return 1;
-    case SDLK_b:      *out = CBX_HM_B;     return 1;
-    case SDLK_r:      *out = CBX_HM_R3;    return 1;
+    case SDLK_LEFT:   *out = CBX_HM_LEFT;         return 1;
+    case SDLK_RIGHT:  *out = CBX_HM_RIGHT;        return 1;
+    case SDLK_UP:     *out = CBX_HM_UP;           return 1;
+    case SDLK_DOWN:   *out = CBX_HM_DOWN;         return 1;
+    /* Keyboard equivalents of the Host Mode L1/R1 profile-cycle affordance
+     * (documented in host_mode.h): Q = previous, E = next. */
+    case SDLK_q:      *out = CBX_HM_PROFILE_PREV; return 1;
+    case SDLK_e:      *out = CBX_HM_PROFILE_NEXT; return 1;
+    case SDLK_b:      *out = CBX_HM_B;            return 1;
+    case SDLK_r:      *out = CBX_HM_R3;           return 1;
     default:          return 0;
     }
 }
@@ -1283,12 +1292,16 @@ int
 cbx_ip_input_to_hm(ip_input_id input, cbx_hm_input *out)
 {
     switch (input) {
-    case IP_INPUT_LEFT:  *out = CBX_HM_LEFT;  return 1;
-    case IP_INPUT_RIGHT: *out = CBX_HM_RIGHT; return 1;
-    case IP_INPUT_UP:    *out = CBX_HM_UP;    return 1;
-    case IP_INPUT_DOWN:  *out = CBX_HM_DOWN;  return 1;
-    case IP_INPUT_B:     *out = CBX_HM_B;     return 1;
-    case IP_INPUT_R3:    *out = CBX_HM_R3;    return 1;
+    case IP_INPUT_LEFT:  *out = CBX_HM_LEFT;         return 1;
+    case IP_INPUT_RIGHT: *out = CBX_HM_RIGHT;        return 1;
+    case IP_INPUT_UP:    *out = CBX_HM_UP;           return 1;
+    case IP_INPUT_DOWN:  *out = CBX_HM_DOWN;         return 1;
+    /* Host Mode profile-cycle affordance (SPEC §4.4): L1 cycles to the
+     * previous profile, R1 to the next, for the selected row. */
+    case IP_INPUT_L1:    *out = CBX_HM_PROFILE_PREV; return 1;
+    case IP_INPUT_R1:    *out = CBX_HM_PROFILE_NEXT; return 1;
+    case IP_INPUT_B:     *out = CBX_HM_B;            return 1;
+    case IP_INPUT_R3:    *out = CBX_HM_R3;           return 1;
     default:             return 0;
     }
 }
@@ -1339,8 +1352,12 @@ cbx_overlay_input_cb(ip_input_id input,
          * double-fire the dirty trigger (W2: deliberate/consistent triggers). */
         if (result == CBX_HM_RESULT_CLOSE) {
             cbx_overlay_lifecycle_close(ctx->lifecycle);
-        } else if (result == CBX_HM_RESULT_MOVED ||
-                   result == CBX_HM_RESULT_SLOT) {
+        } else if (result == CBX_HM_RESULT_MOVED) {
+            /* Row navigation fires no callback, so the dispatch dirties the
+             * surface to reflect the moved SELECTED-row highlight (§4.10
+             * transition).  SLOT and PROFILE are dirtied by their own
+             * callbacks (on_slot_change / on_profile_change) and are
+             * deliberately not double-marked here (W2 reconciliation). */
             cbx_overlay_surface_mark_dirty_all(ctx->lifecycle->surface);
         }
     } else {
@@ -1400,8 +1417,10 @@ cbx_overlay_service_step(cbx_overlay_service_ctx *svc)
                      * fire the trigger (W2: deliberate/consistent). */
                     if (result == CBX_HM_RESULT_CLOSE) {
                         cbx_overlay_lifecycle_close(&svc->lifecycle);
-                    } else if (result == CBX_HM_RESULT_MOVED ||
-                               result == CBX_HM_RESULT_SLOT) {
+                    } else if (result == CBX_HM_RESULT_MOVED) {
+                        /* Row navigation fires no callback (see DBus path
+                         * above); SLOT/PROFILE are covered by their
+                         * callbacks and deliberately not double-marked. */
                         cbx_overlay_surface_mark_dirty_all(&svc->surface);
                     }
                 }
@@ -1696,6 +1715,11 @@ int run_overlay_service(int dry_run)
     cbx_host_mode_init(&svc->hm);
     svc->hm.on_slot_change    = on_host_slot_change;
     svc->hm.slot_change_data  = svc;
+    /* Host Mode can edit the selected row's profile too (SPEC §4.4): reuse
+     * the production profile-change callback (LoadProfilePath + assignment
+     * persist + dirty trigger) exactly as Player Mode does. */
+    svc->hm.on_profile_change   = cbx_overlay_on_profile_change;
+    svc->hm.profile_change_data = svc;
     /* Host-mode enter/exit marks the pre-built surface dirty so the
      * presented frame reflects the HOST/SELECTED/FROZEN row visuals on
      * entry and reverts to Player Mode on exit (SPEC §4.4).  This is a

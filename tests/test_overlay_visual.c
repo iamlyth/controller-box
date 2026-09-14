@@ -18,6 +18,12 @@
  *   5. Controller model/profile text — text-colored pixels in label region
  *   6. Virtual-device icons — content in icon regions for each slot
  *   7. State transitions — fb_frames_differ between materially different states
+ *   8. Host Mode entry — the W1 dirty trigger re-renders a materially
+ *      different HOST/SELECTED/FROZEN frame
+ *   9. Host Mode selected-row change — the HOST/SELECTED highlight regions
+ *      change materially when the host cursor moves
+ *  10. Host Mode profile edit — the profile text region changes pixel
+ *      content when the host cycles the selected row's profile (L1/R1)
  *
  * Each assertion checks pixel content, not struct fields.  Tests fail if
  * text, icons, rows, columns, or highlights are absent even when in-memory
@@ -471,6 +477,35 @@ icon_region(int row, int col, int row_count, int col_count)
         .h = icon_area_h > 0 ? icon_area_h : cell_h / 2,
     };
     return r;
+}
+
+/*
+ * Returns true if at least min_pixels pixels inside `rect` differ between
+ * buf_a and buf_b.  Unlike fb_frames_differ (whole frame), this proves a
+ * specific region (a row's highlight cell or profile-text label) actually
+ * changed — a substantive region difference, not a global repaint.
+ */
+static bool
+region_differs(const uint8_t *a, const uint8_t *b, int w, int h,
+               const SDL_Rect *rect, int min_pixels)
+{
+    int x0 = rect->x < 0 ? 0 : rect->x;
+    int y0 = rect->y < 0 ? 0 : rect->y;
+    int x1 = rect->x + rect->w > w ? w : rect->x + rect->w;
+    int y1 = rect->y + rect->h > h ? h : rect->y + rect->h;
+    int count = 0;
+    for (int y = y0; y < y1; y++) {
+        for (int x = x0; x < x1; x++) {
+            const uint8_t *pa = a + (size_t)(y * w + x) * 4;
+            const uint8_t *pb = b + (size_t)(y * w + x) * 4;
+            if (pa[0] != pb[0] || pa[1] != pb[1] ||
+                pa[2] != pb[2] || pa[3] != pb[3]) {
+                if (++count >= min_pixels)
+                    return true;
+            }
+        }
+    }
+    return false;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1004,6 +1039,127 @@ test_host_entry_dirty_render_differs(void **state)
     free(buf_host);
 }
 
+/*
+ * 9. Host Mode selected-row change — moving the host cursor from one row
+ *    to another must re-render the HOST (green) and SELECTED (blue border)
+ *    highlights in the affected regions.  Proves §4.10's "transitions must
+ *    produce a materially different frame" for selected-row change, not
+ *    just entry/exit.
+ */
+static void
+test_host_selected_row_change_differs(void **state)
+{
+    struct vis_fixture *f = *state;
+
+    cbx_select_grid g;
+    build_grid(&g, 3);
+    move_to_col(&g, 0, 1);
+    move_to_col(&g, 1, 2);
+    move_to_col(&g, 2, 3);
+
+    cbx_conflict_list conflicts;
+    cbx_conflict_detect(&g, &conflicts);
+
+    cbx_host_mode hm;
+    cbx_host_mode_init(&hm);
+    cbx_host_mode_enter(&hm, 0);   /* host = selected = row 0 */
+
+    cbx_grid_render_ctx ctx;
+    setup_ctx(f, &ctx, &g, &conflicts);
+    ctx.hm = &hm;
+
+    cbx_overlay_surface surface;
+    memset(&surface, 0, sizeof(surface));
+    uint8_t *buf_a = malloc(VIS_W * VIS_H * 4);
+    assert_non_null(buf_a);
+    assert_int_equal(render_with_surface(f, &ctx, &surface, buf_a), 0);
+
+    /* Move the host cursor to row 1 (row 0 becomes HOST, row 1 SELECTED). */
+    assert_int_equal(cbx_host_mode_handle(&hm, 0, CBX_HM_DOWN, &g),
+                     CBX_HM_RESULT_MOVED);
+    assert_int_equal(cbx_host_mode_get_selected_row(&hm), 1);
+
+    uint8_t *buf_b = malloc(VIS_W * VIS_H * 4);
+    assert_non_null(buf_b);
+    re_render_and_readback(f, &ctx, &surface, buf_b);
+
+    /* Whole frame differs materially. */
+    assert_true(fb_frames_differ(buf_a, buf_b, VIS_W, VIS_H, 5));
+    /* And the two affected cell regions changed substantively (the row-0
+     * HOST cell and the row-1 SELECTED cell). */
+    SDL_Rect host_cell  = cell_rect(0, 1, 3, g.col_count);
+    SDL_Rect sel_cell   = cell_rect(1, 2, 3, g.col_count);
+    assert_true(region_differs(buf_a, buf_b, VIS_W, VIS_H,
+                               &host_cell, 20));
+    assert_true(region_differs(buf_a, buf_b, VIS_W, VIS_H,
+                               &sel_cell, 20));
+
+    cbx_overlay_surface_destroy(&surface);
+    free(buf_a);
+    free(buf_b);
+}
+
+/*
+ * 10. Host Mode profile edit — the host cycles the selected row's profile
+ *     (L1/R1).  Proves the profile text region actually changes pixel
+ *     content (not merely the in-memory profile string) through the real
+ *     composition path, satisfying §4.10's text/region requirement for the
+ *     Host Mode edit capability (§4.4).
+ */
+static void
+test_host_profile_edit_text_differs(void **state)
+{
+    struct vis_fixture *f = *state;
+    assert_true(f->has_text);
+
+    cbx_select_grid g;
+    build_grid(&g, 3);
+    move_to_col(&g, 0, 1);
+    move_to_col(&g, 1, 2);
+    move_to_col(&g, 2, 3);
+
+    cbx_conflict_list conflicts;
+    cbx_conflict_detect(&g, &conflicts);
+
+    /* Host enters on row 0 and selects row 1, whose profile is "default". */
+    cbx_host_mode hm;
+    cbx_host_mode_init(&hm);
+    cbx_host_mode_enter(&hm, 0);
+    cbx_host_mode_handle(&hm, 0, CBX_HM_DOWN, &g);
+    assert_int_equal(cbx_host_mode_get_selected_row(&hm), 1);
+    assert_string_equal(cbx_select_grid_get_profile(&g, 1), "default");
+
+    cbx_grid_render_ctx ctx;
+    setup_ctx(f, &ctx, &g, &conflicts);
+    ctx.hm = &hm;
+
+    cbx_overlay_surface surface;
+    memset(&surface, 0, sizeof(surface));
+    uint8_t *buf_a = malloc(VIS_W * VIS_H * 4);
+    assert_non_null(buf_a);
+    assert_int_equal(render_with_surface(f, &ctx, &surface, buf_a), 0);
+
+    /* Cycle the selected row's profile (R1 equivalent). */
+    assert_int_equal(cbx_host_mode_handle(&hm, 0, CBX_HM_PROFILE_NEXT, &g),
+                     CBX_HM_RESULT_PROFILE);
+    assert_string_equal(cbx_select_grid_get_profile(&g, 1), "fps");
+
+    uint8_t *buf_b = malloc(VIS_W * VIS_H * 4);
+    assert_non_null(buf_b);
+    re_render_and_readback(f, &ctx, &surface, buf_b);
+
+    /* A profile-name change is a text-only edit, so the whole-frame delta
+     * is small: require that the frames differ at all, and prove the change
+     * substantively in the row-1 label region (model + profile text). */
+    assert_true(fb_frames_differ(buf_a, buf_b, VIS_W, VIS_H, 0));
+    SDL_Rect label = label_rect(1, 3);
+    assert_true(region_differs(buf_a, buf_b, VIS_W, VIS_H, &label, 10));
+
+    cbx_overlay_surface_destroy(&surface);
+    free(buf_a);
+    free(buf_b);
+}
+
 /* ------------------------------------------------------------------ */
 /*  Main                                                              */
 /* ------------------------------------------------------------------ */
@@ -1029,6 +1185,10 @@ main(void)
         cmocka_unit_test_setup_teardown(test_state_transitions_differ,
                                         vis_setup, vis_teardown),
         cmocka_unit_test_setup_teardown(test_host_entry_dirty_render_differs,
+                                        vis_setup, vis_teardown),
+        cmocka_unit_test_setup_teardown(test_host_selected_row_change_differs,
+                                        vis_setup, vis_teardown),
+        cmocka_unit_test_setup_teardown(test_host_profile_edit_text_differs,
                                         vis_setup, vis_teardown),
     };
 

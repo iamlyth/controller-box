@@ -197,10 +197,12 @@ static void test_inventory_specific_entries(void **state)
     assert_int_equal(m39->pointer_path_avail, CBX_PATH_AVAILABLE);
     assert_int_equal(m39->verify_status, CBX_VERIFY_VERIFIED);
 
-    /* O12 — Host cycle profile: verification status deferred */
+    /* O12 — Host cycle profile: verified by Task 4 (L1/R1 production path) */
     const cbx_interaction_entry *o12 = cbx_interaction_inventory_find("O12");
     assert_non_null(o12);
-    assert_int_equal(o12->verify_status, CBX_VERIFY_DEFERRED);
+    assert_int_equal(o12->verify_status, CBX_VERIFY_VERIFIED);
+    assert_non_null(strstr(o12->controller_path, "L1"));
+    assert_non_null(strstr(o12->controller_path, "R1"));
 
     /* O01 — Open: pointer path n/a (overlay is controller-driven) */
     const cbx_interaction_entry *o01 = cbx_interaction_inventory_find("O01");
@@ -331,7 +333,7 @@ static void test_inventory_verified_flags_are_runtime_marks(void **state)
         "M19", "M20", "M21", "M22", "M23", "M24", "M25", "M26",
         "M27", "M28", "M29", "M30", "M31", "M33", "M39",
         "O01", "O02", "O03", "O04", "O05", "O06", "O07", "O08",
-        "O09", "O10", "O11", "O13",
+        "O09", "O10", "O11", "O12", "O13",
         "D01", "D02", "D03", "D04", "D05", "D06", "D07", "D08"
     };
     for (size_t i = 0; i < sizeof(declared_verified)/sizeof(declared_verified[0]); i++) {

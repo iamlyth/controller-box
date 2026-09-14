@@ -4,8 +4,20 @@
  * Task 30 — Host Mode and conflict detection/resolution.
  *
  * When a controller presses R3, it becomes the exclusive host. All other
- * controllers freeze. The host can navigate to any row (Up/Down) and edit
- * the slot within that row (Left/Right). R3 again exits back to Player Mode.
+ * controllers freeze. The host can navigate to any row (Up/Down), edit the
+ * slot within that row (Left/Right), and cycle the selected row's profile
+ * (L1 = previous profile, R1 = next profile). R3 again exits back to Player
+ * Mode.
+ *
+ * Host Mode editing affordance (SPEC §4.4; interior UX deferred by §13):
+ *   - Up / Down    : move the selected row
+ *   - Left / Right : move the selected row across columns (slot)
+ *   - L1 / R1      : cycle the selected row's profile (prev / next)
+ *   - R3           : exit Host Mode
+ *   - B            : close the overlay
+ * The host may apply slot/profile edits to ANY row, not just its own
+ * (SPEC §4.4). Non-host controllers are frozen: every input they send is
+ * rejected with CBX_HM_RESULT_FROZEN and can never mutate another row.
  */
 #ifndef CBX_OVERLAY_HOST_MODE_H
 #define CBX_OVERLAY_HOST_MODE_H
@@ -21,6 +33,7 @@
 #define CBX_HM_RESULT_EXIT    3   /* R3 pressed — exiting host mode     */
 #define CBX_HM_RESULT_CLOSE   4   /* B pressed — close overlay         */
 #define CBX_HM_RESULT_FROZEN  5   /* non-host controller input (ignored) */
+#define CBX_HM_RESULT_PROFILE 6   /* selected row's profile changed     */
 #define CBX_HM_RESULT_ERROR   (-1)
 
 /* --- Input enum (mirrors player_mode) --------------------------------- */
@@ -30,6 +43,8 @@ typedef enum {
     CBX_HM_RIGHT,
     CBX_HM_UP,
     CBX_HM_DOWN,
+    CBX_HM_PROFILE_PREV,   /* L1 — previous profile for selected row */
+    CBX_HM_PROFILE_NEXT,   /* R1 — next profile for selected row     */
     CBX_HM_B,
     CBX_HM_R3,
 } cbx_hm_input;
@@ -46,6 +61,18 @@ typedef enum {
 /* --- Callbacks -------------------------------------------------------- */
 
 typedef int (*cbx_hm_slot_change_cb)(int row_idx, int new_slot, void *userdata);
+
+/*
+ * Fired when the host cycles the selected row's profile.  The new profile
+ * name (filename without .yaml) and the row's composite DBus path are
+ * passed so a consumer can load the profile via LoadProfilePath and update
+ * the persisted assignment — mirroring cbx_pm_profile_change_cb for Player
+ * Mode.  The row is the selected row, which may not be the host's own row
+ * (SPEC §4.4).
+ */
+typedef int (*cbx_hm_profile_change_cb)(int row_idx, const char *profile,
+                                        const char *composite_path,
+                                        void *userdata);
 
 /*
  * Fired whenever host mode transitions between inactive and active (and
@@ -66,6 +93,9 @@ struct cbx_host_mode {
     cbx_hm_slot_change_cb on_slot_change;
     void                 *slot_change_data;
 
+    cbx_hm_profile_change_cb on_profile_change;
+    void                     *profile_change_data;
+
     /* Dirty-surface trigger for host-mode state transitions. */
     cbx_hm_state_change_cb on_state_change;
     void                  *state_change_data;
@@ -78,6 +108,11 @@ void cbx_host_mode_init(cbx_host_mode *hm);
 /*
  * Enter host mode. The given row_idx becomes the host.
  * selected_row is initialized to host_row.
+ *
+ * W2 no-op contract: entering an already-active host-mode object is not a
+ * state transition and does NOT fire on_state_change (the dirty trigger);
+ * on_state_change fires only on an actual inactive->active transition.
+ *
  * Returns 0, -EINVAL.
  */
 int cbx_host_mode_enter(cbx_host_mode *hm, int row_idx);
@@ -113,11 +148,14 @@ int cbx_host_mode_toggle(cbx_host_mode *hm, int row_idx);
  *
  * Up/Down: change selected_row (navigate between rows, clamped)
  * Left/Right: move within selected row's columns
+ * L1/R1: cycle the selected row's profile (previous/next)
  * R3: exit host mode
  * B: close overlay
  *
  * on_slot_change is fired when Left/Right changes the selected row's
  * column, with the selected_row's row_idx and new slot.
+ * on_profile_change is fired when L1/R1 changes the selected row's profile,
+ * with the selected_row's row_idx, new profile name and composite path.
  *
  * Returns CBX_HM_RESULT_* code.
  */

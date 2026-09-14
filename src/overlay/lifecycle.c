@@ -55,7 +55,11 @@ begin_fade_out(cbx_overlay_lifecycle *lc)
 }
 
 /*
- * Show the surface: mark dirty, render (if renderer available), show.
+ * Show the surface: mark it dirty and present the pre-built texture.
+ * The function never renders — it marks the surface so
+ * cbx_overlay_service_step()'s active+dirty branch re-renders from current
+ * state on the next step, while the already-built texture is presented
+ * immediately for zero-latency visibility (SPEC §4.9/§11).
  * Called when entering VISIBLE state.
  */
 static void

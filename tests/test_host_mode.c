@@ -17,6 +17,7 @@
  *   - Visual state (NORMAL, HOST, SELECTED, FROZEN)
  *   - is_frozen
  *   - Host edits any row (not just its own)
+ *   - Host edits any row's profile (L1/R1 profile cycle)
  *   - Full lifecycle: enter → navigate → edit → exit
  */
 #include "overlay/host_mode.h"
@@ -45,6 +46,32 @@ on_slot_change(int row_idx, int new_slot, void *userdata)
         cb->count++;
         cb->row  = row_idx;
         cb->slot = new_slot;
+    }
+    return 0;
+}
+
+/* --- Profile-change callback tracking -------------------------------- */
+
+typedef struct {
+    int  count;
+    int  row;
+    char profile[CBX_GRID_PROFILE_LEN];
+    char composite_path[CBX_MAX_PATH_LEN];
+} hm_profile_callbacks;
+
+static int
+on_profile_change(int row_idx, const char *profile,
+                  const char *composite_path, void *userdata)
+{
+    hm_profile_callbacks *cb = (hm_profile_callbacks *)userdata;
+    if (cb) {
+        cb->count++;
+        cb->row = row_idx;
+        if (profile)
+            snprintf(cb->profile, sizeof(cb->profile), "%s", profile);
+        if (composite_path)
+            snprintf(cb->composite_path, sizeof(cb->composite_path),
+                     "%s", composite_path);
     }
     return 0;
 }
@@ -434,6 +461,154 @@ test_host_edits_other_row(void **state)
     assert_int_equal(cbx_select_grid_get_cur_col(&g, 0), 0);
 }
 
+/* --- Handle: host edits any row's profile (L1/R1) ------------------- */
+
+static void
+test_handle_profile_prev(void **state)
+{
+    (void)state;
+    cbx_select_grid g;
+    build_test_grid(&g, 2);
+    cbx_select_grid_add_profile(&g, "alt");
+
+    cbx_host_mode hm;
+    cbx_host_mode_init(&hm);
+    hm_profile_callbacks cb;
+    memset(&cb, 0, sizeof(cb));
+    hm.on_profile_change   = on_profile_change;
+    hm.profile_change_data = &cb;
+    cbx_host_mode_enter(&hm, 0);
+
+    /* Row 0 starts on "default" (list index 0); PREV moves to the
+     * previous list entry ("alt"). */
+    assert_string_equal(cbx_select_grid_get_profile(&g, 0), "default");
+    int rc = cbx_host_mode_handle(&hm, 0, CBX_HM_PROFILE_PREV, &g);
+    assert_int_equal(rc, CBX_HM_RESULT_PROFILE);
+    assert_int_equal(cb.count, 1);
+    assert_int_equal(cb.row, 0);
+    assert_string_equal(cbx_select_grid_get_profile(&g, 0), "alt");
+    /* Callback carried the new profile name and the row's composite path. */
+    assert_string_equal(cb.profile, "alt");
+    assert_string_equal(cb.composite_path, g.rows[0].composite_path);
+}
+
+static void
+test_handle_profile_next(void **state)
+{
+    (void)state;
+    cbx_select_grid g;
+    build_test_grid(&g, 2);
+    cbx_select_grid_add_profile(&g, "alt");
+    /* Start row 0 on "alt" so NEXT wraps back to "default". */
+    snprintf(g.rows[0].profile, CBX_GRID_PROFILE_LEN, "alt");
+
+    cbx_host_mode hm;
+    cbx_host_mode_init(&hm);
+    hm_profile_callbacks cb;
+    memset(&cb, 0, sizeof(cb));
+    hm.on_profile_change   = on_profile_change;
+    hm.profile_change_data = &cb;
+    cbx_host_mode_enter(&hm, 0);
+
+    int rc = cbx_host_mode_handle(&hm, 0, CBX_HM_PROFILE_NEXT, &g);
+    assert_int_equal(rc, CBX_HM_RESULT_PROFILE);
+    assert_int_equal(cb.count, 1);
+    assert_int_equal(cb.row, 0);
+    assert_string_equal(cbx_select_grid_get_profile(&g, 0), "default");
+    assert_string_equal(cb.profile, "default");
+}
+
+static void
+test_host_edits_other_row_profile(void **state)
+{
+    (void)state;
+    cbx_select_grid g;
+    build_test_grid(&g, 3);
+    cbx_select_grid_add_profile(&g, "alt");
+    /* Give row 1 a known starting profile distinct from row 0. */
+    snprintf(g.rows[1].profile, CBX_GRID_PROFILE_LEN, "alt");
+
+    cbx_host_mode hm;
+    cbx_host_mode_init(&hm);
+    hm_profile_callbacks cb;
+    memset(&cb, 0, sizeof(cb));
+    hm.on_profile_change   = on_profile_change;
+    hm.profile_change_data = &cb;
+    cbx_host_mode_enter(&hm, 0);
+
+    /* Host (row 0) navigates to row 1 and cycles its profile. */
+    cbx_host_mode_handle(&hm, 0, CBX_HM_DOWN, &g);
+    assert_int_equal(hm.selected_row, 1);
+    int rc = cbx_host_mode_handle(&hm, 0, CBX_HM_PROFILE_NEXT, &g);
+    assert_int_equal(rc, CBX_HM_RESULT_PROFILE);
+    assert_int_equal(cb.row, 1);
+    /* Row 1's profile changed; row 0's did not. */
+    assert_string_equal(cbx_select_grid_get_profile(&g, 1), "default");
+    assert_string_equal(cbx_select_grid_get_profile(&g, 0), "default");
+    assert_string_equal(cb.composite_path, g.rows[1].composite_path);
+}
+
+static void
+test_handle_profile_frozen(void **state)
+{
+    (void)state;
+    cbx_select_grid g;
+    build_test_grid(&g, 3);
+    cbx_select_grid_add_profile(&g, "alt");
+
+    cbx_host_mode hm;
+    cbx_host_mode_init(&hm);
+    hm_profile_callbacks cb;
+    memset(&cb, 0, sizeof(cb));
+    hm.on_profile_change   = on_profile_change;
+    hm.profile_change_data = &cb;
+    cbx_host_mode_enter(&hm, 0); /* controller 0 is host */
+
+    /* Frozen controller 1 sends a profile-cycle input: rejected, and the
+     * frozen row's profile is untouched. */
+    int rc = cbx_host_mode_handle(&hm, 1, CBX_HM_PROFILE_NEXT, &g);
+    assert_int_equal(rc, CBX_HM_RESULT_FROZEN);
+    assert_int_equal(cb.count, 0);
+    assert_string_equal(cbx_select_grid_get_profile(&g, 1), "default");
+    /* The host's own row is untouched too. */
+    assert_string_equal(cbx_select_grid_get_profile(&g, 0), "default");
+}
+
+static void
+test_handle_profile_no_callback(void **state)
+{
+    (void)state;
+    cbx_select_grid g;
+    build_test_grid(&g, 2);
+    cbx_select_grid_add_profile(&g, "alt");
+
+    cbx_host_mode hm;
+    cbx_host_mode_init(&hm);
+    /* No on_profile_change set. */
+    cbx_host_mode_enter(&hm, 0);
+
+    int rc = cbx_host_mode_handle(&hm, 0, CBX_HM_PROFILE_PREV, &g);
+    assert_int_equal(rc, CBX_HM_RESULT_PROFILE);
+    assert_string_equal(cbx_select_grid_get_profile(&g, 0), "alt");
+}
+
+static void
+test_handle_profile_no_profiles(void **state)
+{
+    (void)state;
+    cbx_select_grid g;
+    build_test_grid(&g, 2);
+    cbx_select_grid_clear_profiles(&g);
+
+    cbx_host_mode hm;
+    cbx_host_mode_init(&hm);
+    cbx_host_mode_enter(&hm, 0);
+
+    /* No profiles to cycle: a no-op (NONE), never a bogus profile change. */
+    int rc = cbx_host_mode_handle(&hm, 0, CBX_HM_PROFILE_NEXT, &g);
+    assert_int_equal(rc, CBX_HM_RESULT_NONE);
+}
+
 /* --- Handle: R3 (exit) ---------------------------------------------- */
 
 static void
@@ -701,8 +876,6 @@ test_full_lifecycle(void **state)
     assert_false(cbx_host_mode_is_active(&hm));
 }
 
-/* --- Main ------------------------------------------------------------ */
-
 /* --- State-change dirty trigger (W1) ---------------------------------- */
 
 /*
@@ -795,6 +968,8 @@ test_exit_noop_no_transition(void **state)
     assert_int_equal(cb.transitions, 2);
 }
 
+/* --- Main ------------------------------------------------------------ */
+
 int
 main(void)
 {
@@ -827,6 +1002,13 @@ main(void)
         cmocka_unit_test(test_handle_right_no_callback),
         /* Host edits any row */
         cmocka_unit_test(test_host_edits_other_row),
+        /* Host edits any row's profile (L1/R1) */
+        cmocka_unit_test(test_handle_profile_prev),
+        cmocka_unit_test(test_handle_profile_next),
+        cmocka_unit_test(test_host_edits_other_row_profile),
+        cmocka_unit_test(test_handle_profile_frozen),
+        cmocka_unit_test(test_handle_profile_no_callback),
+        cmocka_unit_test(test_handle_profile_no_profiles),
         /* R3 exit */
         cmocka_unit_test(test_handle_r3_exit),
         /* B close */

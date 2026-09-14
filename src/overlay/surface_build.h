@@ -11,10 +11,20 @@
  * path (SPEC §11: <10 ms from button press to visible).
  *
  * Dirty-rect tracking (built on cbx_dirty_rect from Task 23) enables
- * incremental re-rendering of only changed cells when device/slot/profile
- * state changes (SPEC §4.9).  Task 29 provides the render callback that
- * draws grid content into the target texture; this module manages render
- * target switching and clip-rect scissoring.
+ * incremental re-rendering of only changed cells.  The reconciled dirty
+ * policy (SPEC §4.9, W2) marks the surface dirty on:
+ *   - device changes (hotplug reconcile, backend re-enumeration);
+ *   - slot changes and profile changes (device/slot/profile events);
+ *   - Host Mode state transitions (enter/exit) and Host Mode row
+ *     navigation (SELECTED highlight moves) — deliberate extensions of the
+ *     §4.9 pre-build policy, required by §4.10 "transitions must produce a
+ *     materially different frame";
+ *   - deliberate lifecycle points: show/fade-in (present a fresh frame)
+ *     and save/close (persisted, conflict-resolved topology).
+ * A close/hide deliberately does not mark dirty: the surface is hidden, not
+ * destroyed, and the next show re-dirties unconditionally.  Task 29 provides
+ * the render callback that draws grid content into the target texture; this
+ * module manages render target switching and clip-rect scissoring.
  *
  * Opacity from settings.overlay_opacity (0.0–1.0) is applied via
  * SDL_SetTextureAlphaMod so the composited overlay is semi-transparent.

@@ -231,6 +231,10 @@ interaction_setup(void **state)
     cbx_host_mode_init(&f->svc->hm);
     f->svc->hm.on_slot_change     = cbx_overlay_on_slot_change;
     f->svc->hm.slot_change_data   = f->svc;
+    /* Host Mode edits the selected row's profile too (SPEC §4.4, L1/R1);
+     * reuse the production profile-change callback. */
+    f->svc->hm.on_profile_change   = cbx_overlay_on_profile_change;
+    f->svc->hm.profile_change_data = f->svc;
     /* Mirror production wiring (run_overlay_service): host-mode enter/exit
      * marks the surface dirty so the frame reflects the transition (W1). */
     f->svc->hm.on_state_change    = cbx_overlay_on_host_mode_change;
@@ -686,6 +690,85 @@ test_hm_transition_fires_once(void **state)
 }
 
 /* ================================================================== */
+/*  O12 — Host cycles the selected row's profile (L1/R1, DBus path)   */
+/*      SPEC §4.4: the exclusive host can navigate to any row and     */
+/*      edit both slot and profile.  Documented affordance: L1 =      */
+/*      previous profile, R1 = next profile for the selected row.     */
+/* ================================================================== */
+
+static void
+test_o12_host_profile_cycle_dbus(void **state)
+{
+    interaction_fixture *f = *state;
+
+    /* Row 1 starts on a known profile in the list ("Default"). */
+    snprintf(f->svc->grid.rows[1].profile, CBX_GRID_PROFILE_LEN, "Default");
+
+    /* Enter host mode from controller 0 via DBus. */
+    inject_input(f, EXP_SENDER, DEV_PATH_0, "R3", 1.0);
+    cbx_overlay_service_step(f->svc);
+    assert_true(cbx_host_mode_is_active(&f->svc->hm));
+    assert_int_equal(cbx_host_mode_get_host_row(&f->svc->hm), 0);
+
+    /* Host navigates down to row 1 (not its own row). */
+    inject_input(f, EXP_SENDER, DEV_PATH_0, "Down", 1.0);
+    cbx_overlay_service_step(f->svc);
+    assert_int_equal(cbx_host_mode_get_selected_row(&f->svc->hm), 1);
+
+    char row0_before[CBX_GRID_PROFILE_LEN];
+    snprintf(row0_before, sizeof(row0_before), "%s",
+             cbx_select_grid_get_profile(&f->svc->grid, 0));
+
+    /* R1 (right bumper) cycles the selected row's profile to the next. */
+    inject_input(f, EXP_SENDER, DEV_PATH_0, "R1", 1.0);
+    cbx_overlay_service_step(f->svc);
+    assert_string_equal(cbx_select_grid_get_profile(&f->svc->grid, 1),
+                        "Custom");
+    /* Only the selected row changed; the host's own row is untouched. */
+    assert_string_equal(cbx_select_grid_get_profile(&f->svc->grid, 0),
+                        row0_before);
+
+    /* L1 (left bumper) cycles back to the previous profile. */
+    inject_input(f, EXP_SENDER, DEV_PATH_0, "L1", 1.0);
+    cbx_overlay_service_step(f->svc);
+    assert_string_equal(cbx_select_grid_get_profile(&f->svc->grid, 1),
+                        "Default");
+}
+
+static void
+test_o12_host_profile_frozen_dbus(void **state)
+{
+    interaction_fixture *f = *state;
+
+    /* Enter host mode from controller 0. */
+    inject_input(f, EXP_SENDER, DEV_PATH_0, "R3", 1.0);
+    cbx_overlay_service_step(f->svc);
+    assert_true(cbx_host_mode_is_active(&f->svc->hm));
+
+    char row0_before[CBX_GRID_PROFILE_LEN];
+    char row1_before[CBX_GRID_PROFILE_LEN];
+    snprintf(row0_before, sizeof(row0_before), "%s",
+             cbx_select_grid_get_profile(&f->svc->grid, 0));
+    snprintf(row1_before, sizeof(row1_before), "%s",
+             cbx_select_grid_get_profile(&f->svc->grid, 1));
+
+    /* Frozen controller 1 sends R1/L1: both are rejected; no profile (of
+     * the host or the frozen controller) changes, and the host owner and
+     * selected row are unchanged. */
+    inject_input(f, EXP_SENDER, DEV_PATH_1, "R1", 1.0);
+    cbx_overlay_service_step(f->svc);
+    inject_input(f, EXP_SENDER, DEV_PATH_1, "L1", 1.0);
+    cbx_overlay_service_step(f->svc);
+
+    assert_string_equal(cbx_select_grid_get_profile(&f->svc->grid, 0),
+                        row0_before);
+    assert_string_equal(cbx_select_grid_get_profile(&f->svc->grid, 1),
+                        row1_before);
+    assert_int_equal(cbx_host_mode_get_host_row(&f->svc->hm), 0);
+    assert_int_equal(cbx_host_mode_get_selected_row(&f->svc->hm), 0);
+}
+
+/* ================================================================== */
 /*  O10 — Close (B): saves, conflict-resolves, sets PASS, hides        */
 /* ================================================================== */
 
@@ -961,36 +1044,41 @@ test_o11d_wrong_sender_rejected(void **state)
 }
 
 /* ================================================================== */
-/*  O12 — Host: cycle profile (not-yet-implemented, deferred per §13)  */
+/*  O12 — Host: cycle the selected row's profile (SDL keyboard path)   */
+/*      Keyboard equivalents of the documented L1/R1 affordance:       */
+/*      Q = previous profile, E = next profile.                        */
 /* ================================================================== */
 
 static void
-test_o12_host_profile_cycle_deferred(void **state)
+test_o12_host_profile_cycle_sdl(void **state)
 {
     interaction_fixture *f = *state;
     make_visible(f);
+
+    /* Row 0 starts on "Default" (profile list: Default, Custom). */
+    snprintf(f->svc->grid.rows[0].profile, CBX_GRID_PROFILE_LEN, "Default");
 
     /* Enter host mode. */
     push_keydown(SDLK_r);
     cbx_overlay_service_step(f->svc);
     assert_true(cbx_host_mode_is_active(&f->svc->hm));
 
-    /* In host mode, Up/Down navigate rows (not cycle profiles).
-     * This is the current implemented behavior.
-     * Host-mode profile cycling is deferred per SPEC §13. */
-    const char *profile_before = cbx_select_grid_get_profile(
-        &f->svc->grid, 0);
+    const char *before = cbx_select_grid_get_profile(&f->svc->grid, 0);
+    char before_copy[CBX_GRID_PROFILE_LEN];
+    snprintf(before_copy, sizeof(before_copy), "%s", before);
 
-    push_keydown(SDLK_DOWN);
+    /* E (R1 equivalent) cycles to the next profile. */
+    push_keydown(SDLK_e);
     cbx_overlay_service_step(f->svc);
+    const char *after = cbx_select_grid_get_profile(&f->svc->grid, 0);
+    assert_non_null(after);
+    assert_string_not_equal(after, before_copy);
 
-    /* selected_row should have changed (row navigation, not profile cycle). */
-    assert_int_equal(cbx_host_mode_get_selected_row(&f->svc->hm), 1);
-
-    /* Row 0's profile should be unchanged (no profile cycling in host mode). */
-    const char *profile_after = cbx_select_grid_get_profile(
-        &f->svc->grid, 0);
-    assert_string_equal(profile_after, profile_before);
+    /* Q (L1 equivalent) cycles back to the previous profile. */
+    push_keydown(SDLK_q);
+    cbx_overlay_service_step(f->svc);
+    assert_string_equal(cbx_select_grid_get_profile(&f->svc->grid, 0),
+                        before_copy);
 }
 
 /* ================================================================== */
@@ -1257,8 +1345,11 @@ static const struct CMUnitTest tests[] = {
     cmocka_unit_test_setup_teardown(test_o11d_wrong_sender_rejected,
                                      interaction_setup, interaction_teardown),
 
-    /* O12 — Host profile cycle (deferred per §13) */
-    cmocka_unit_test_setup_teardown(test_o12_host_profile_cycle_deferred,
+    cmocka_unit_test_setup_teardown(test_o12_host_profile_cycle_dbus,
+                                     interaction_setup, interaction_teardown),
+    cmocka_unit_test_setup_teardown(test_o12_host_profile_frozen_dbus,
+                                     interaction_setup, interaction_teardown),
+    cmocka_unit_test_setup_teardown(test_o12_host_profile_cycle_sdl,
                                      interaction_setup, interaction_teardown),
 
     /* Hotplug — Dynamic columns rebuild through production dispatch */

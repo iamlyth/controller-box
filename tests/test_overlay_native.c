@@ -396,6 +396,13 @@ static int native_setup(void **state)
     cbx_host_mode_init(&f->svc->hm);
     f->svc->hm.on_slot_change = cbx_overlay_on_slot_change;
     f->svc->hm.slot_change_data = f->svc;
+    /* Host Mode edits the selected row's profile too (L1/R1); reuse the
+     * production profile-change callback exactly as Player Mode does. */
+    f->svc->hm.on_profile_change = cbx_overlay_on_profile_change;
+    f->svc->hm.profile_change_data = f->svc;
+    /* Host-mode enter/exit marks the surface dirty (W1). */
+    f->svc->hm.on_state_change = cbx_overlay_on_host_mode_change;
+    f->svc->hm.state_change_data = f->svc;
 
     /* 20. Build input map from real DBus (queries DbusDevices property). */
     f->svc->input_ctx.pm = &f->svc->pm;
@@ -1226,30 +1233,118 @@ static void test_o11c_unknown_device_dropped(void **state)
     assert_int_equal(cbx_select_grid_get_cur_col(&svc->grid, 1), col1_before);
 }
 
-/* --- O12: Host profile cycle deferred (pin current behavior) --- */
+/* --- O12: Host profile cycle (L1/R1) via production DBus InputEvent ---
+ *
+ * SPEC §4.4: the exclusive host can navigate to any row and edit both the
+ * slot and the profile.  Host Mode's documented profile affordance is
+ * L1 = previous profile, R1 = next profile for the selected row. */
 
-static void test_o12_host_profile_cycle_deferred(void **state)
+static void test_o12_host_profile_cycle_dbus(void **state)
+{
+    native_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    activate_overlay(f);
+    assert_true(svc->grid.profile_count >= 2);
+
+    /* Enter host mode from controller 0 (COMP_PATH_0 -> row 0). */
+    emit_input_event(svc->conn.backend, svc->conn.bus,
+                     COMP_PATH_0, "R3", 1.0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
+    cbx_overlay_service_step(svc);
+    assert_true(cbx_host_mode_is_active(&svc->hm));
+    assert_int_equal(cbx_host_mode_get_selected_row(&svc->hm), 0);
+
+    /* Host navigates to row 1 (not its own row). */
+    emit_input_event(svc->conn.backend, svc->conn.bus,
+                     COMP_PATH_0, "Down", 1.0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
+    cbx_overlay_service_step(svc);
+    assert_int_equal(cbx_host_mode_get_selected_row(&svc->hm), 1);
+
+    char prof_row0_before[CBX_GRID_PROFILE_LEN];
+    char prof_before[CBX_GRID_PROFILE_LEN];
+    snprintf(prof_row0_before, sizeof(prof_row0_before), "%s",
+             cbx_select_grid_get_profile(&svc->grid, 0));
+    snprintf(prof_before, sizeof(prof_before), "%s",
+             cbx_select_grid_get_profile(&svc->grid, 1));
+
+    /* R1 (right bumper) cycles the selected row's profile to the next. */
+    emit_input_event(svc->conn.backend, svc->conn.bus,
+                     COMP_PATH_0, "R1", 1.0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
+    cbx_overlay_service_step(svc);
+
+    const char *after = cbx_select_grid_get_profile(&svc->grid, 1);
+    assert_non_null(after);
+    assert_string_not_equal(after, prof_before);
+    /* The host's own row was not touched — only the selected row changed. */
+    assert_string_equal(cbx_select_grid_get_profile(&svc->grid, 0),
+                        prof_row0_before);
+
+    /* LoadProfilePath reached the engine for row 1's composite path. */
+    char *engine_path = NULL;
+    int rc = ip_composite_get_profile_path(svc->conn.backend,
+                                             svc->conn.bus,
+                                             COMP_PATH_1, &engine_path);
+    assert_int_equal(rc, 0);
+    assert_non_null(engine_path);
+    assert_non_null(strstr(engine_path, after));
+    free(engine_path);
+
+    /* L1 cycles back to the previous profile. */
+    emit_input_event(svc->conn.backend, svc->conn.bus,
+                     COMP_PATH_0, "L1", 1.0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
+    cbx_overlay_service_step(svc);
+    assert_string_equal(cbx_select_grid_get_profile(&svc->grid, 1),
+                        prof_before);
+
+    /* The passing production-dispatch test flips the O12 runtime ledger. */
+    assert_int_equal(cbx_interaction_inventory_mark_verified("O12"), 0);
+}
+
+/* --- O12b: a frozen controller cannot cycle any profile --- */
+
+static void test_o12_host_profile_frozen_dbus(void **state)
 {
     native_fixture *f = *state;
     cbx_overlay_service_ctx *svc = f->svc;
 
     activate_overlay(f);
 
-    /* Enter host mode. */
-    push_keydown(SDLK_r);
+    /* Controller 0 becomes the host. */
+    emit_input_event(svc->conn.backend, svc->conn.bus,
+                     COMP_PATH_0, "R3", 1.0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
     cbx_overlay_service_step(svc);
     assert_true(cbx_host_mode_is_active(&svc->hm));
 
-    const char *prof_before = cbx_select_grid_get_profile(&svc->grid, 0);
+    char prof_row0[CBX_GRID_PROFILE_LEN];
+    char prof_row1[CBX_GRID_PROFILE_LEN];
+    snprintf(prof_row0, sizeof(prof_row0), "%s",
+             cbx_select_grid_get_profile(&svc->grid, 0));
+    snprintf(prof_row1, sizeof(prof_row1), "%s",
+             cbx_select_grid_get_profile(&svc->grid, 1));
 
-    /* Down in host mode navigates rows, not cycles profiles. */
-    push_keydown(SDLK_DOWN);
+    /* Frozen controller 1 sends R1/L1: both must be rejected and no row
+     * profile (host or frozen) may change. */
+    emit_input_event(svc->conn.backend, svc->conn.bus,
+                     COMP_PATH_1, "R1", 1.0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
     cbx_overlay_service_step(svc);
-    assert_int_equal(cbx_host_mode_get_selected_row(&svc->hm), 1);
+    emit_input_event(svc->conn.backend, svc->conn.bus,
+                     COMP_PATH_1, "L1", 1.0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
+    cbx_overlay_service_step(svc);
 
-    /* Profile unchanged. */
-    const char *prof_after = cbx_select_grid_get_profile(&svc->grid, 0);
-    assert_string_equal(prof_after, prof_before);
+    assert_string_equal(cbx_select_grid_get_profile(&svc->grid, 0),
+                        prof_row0);
+    assert_string_equal(cbx_select_grid_get_profile(&svc->grid, 1),
+                        prof_row1);
+    /* Host mode is still owned by controller 0. */
+    assert_true(cbx_host_mode_is_active(&svc->hm));
+    assert_int_equal(cbx_host_mode_get_host_row(&svc->hm), 0);
 }
 
 /* --- Exact P1->P4 replacement and Unassigned clear --- */
@@ -1506,8 +1601,10 @@ static const struct CMUnitTest tests[] = {
     cmocka_unit_test_setup_teardown(test_o11c_unknown_device_dropped,
                                      native_setup, native_teardown),
 
-    /* O12 — Host profile cycle (deferred per §13) */
-    cmocka_unit_test_setup_teardown(test_o12_host_profile_cycle_deferred,
+    /* O12 — Host profile cycle (L1/R1) via production DBus InputEvent */
+    cmocka_unit_test_setup_teardown(test_o12_host_profile_cycle_dbus,
+                                     native_setup, native_teardown),
+    cmocka_unit_test_setup_teardown(test_o12_host_profile_frozen_dbus,
                                      native_setup, native_teardown),
 
     /* Exact replacement assignment and authoritative Unassigned clear */

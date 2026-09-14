@@ -95,6 +95,20 @@ navigates its own row. In **Host Mode** (press R3), the first controller to
 press R3 becomes the exclusive host; all others freeze. Press R3 again to
 exit Host Mode.
 
+In Host Mode the host can navigate to any row and edit both its slot and
+profile:
+
+| Host Mode action | Button |
+|------------------|--------|
+| Move the selected row | Up / Down |
+| Move the selected row's slot | Left / Right |
+| Cycle the selected row's profile | **L1** (previous) / **R1** (next) |
+| Exit Host Mode | R3 |
+| Close overlay | B |
+
+Only the host's inputs are accepted; a frozen controller's input can never
+change another row's slot or profile.
+
 If two controllers land on the same slot, the cell turns red. On close, the
 conflicted controller is automatically moved to the lowest unoccupied slot.
 

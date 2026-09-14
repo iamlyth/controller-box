@@ -31,10 +31,16 @@ cbx_host_mode_enter(cbx_host_mode *hm, int row_idx)
 {
     if (!hm || row_idx < 0)
         return -EINVAL;
+    bool was_active  = hm->active;
     hm->active       = true;
     hm->host_row     = row_idx;
     hm->selected_row = row_idx;
-    fire_state_change(hm, true);
+    /* Fire the dirty trigger only on a real inactive->active transition.
+     * Re-entering an already-active host-mode object is a no-op transition
+     * and must not emit a spurious state change (W2: dirty only on an
+     * actual host-mode state transition). */
+    if (!was_active)
+        fire_state_change(hm, true);
     return 0;
 }
 
@@ -132,6 +138,32 @@ cbx_host_mode_handle(cbx_host_mode *hm, int row_idx,
             return CBX_HM_RESULT_SLOT;
         }
         return CBX_HM_RESULT_NONE;
+    }
+
+    case CBX_HM_PROFILE_PREV: {
+        int rc = cbx_select_grid_cycle_profile_up(grid, hm->selected_row);
+        if (rc == 0) {
+            if (hm->on_profile_change)
+                hm->on_profile_change(hm->selected_row,
+                    grid->rows[hm->selected_row].profile,
+                    grid->rows[hm->selected_row].composite_path,
+                    hm->profile_change_data);
+            return CBX_HM_RESULT_PROFILE;
+        }
+        return CBX_HM_RESULT_NONE;  /* no profiles or error */
+    }
+
+    case CBX_HM_PROFILE_NEXT: {
+        int rc = cbx_select_grid_cycle_profile_down(grid, hm->selected_row);
+        if (rc == 0) {
+            if (hm->on_profile_change)
+                hm->on_profile_change(hm->selected_row,
+                    grid->rows[hm->selected_row].profile,
+                    grid->rows[hm->selected_row].composite_path,
+                    hm->profile_change_data);
+            return CBX_HM_RESULT_PROFILE;
+        }
+        return CBX_HM_RESULT_NONE;  /* no profiles or error */
     }
 
     case CBX_HM_R3:
