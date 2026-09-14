@@ -34,7 +34,7 @@ Evidence: Retained prior-plan record: verification exit 0 on local. This limited
 
 ## Task 4: Finish Host Mode editing and visible transition rendering
 Title: Finish Host Mode editing and visible transition rendering
-Status: blocked
+Status: pending
 Dependencies: 1, 14
 Acceptance: SPEC §§4.4, 4.10: the exclusive host can select any row and edit both slot and profile through production events, with a documented controller affordance. Entry, selected-row change and exit visibly update host/frozen highlights without enabling non-host mutation. Existing host callbacks and dirty-trigger changes are reused, not blindly rewritten. Reconcile state-driven invalidation with §4.9 and prove substantive region differences, text/icons and frozen-row semantics through the production composition path. Evaluate the prior audit blockers against current source and close actual defects with independent review, rather than treating historical issue labels as proof.
 Verification: ./scripts/verify.sh; ctest --test-dir build -R 'test_host_mode|test_overlay_interaction|test_overlay_native|test_overlay_visual|test_golden' --output-on-failure
