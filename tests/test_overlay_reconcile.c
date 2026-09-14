@@ -519,10 +519,12 @@ test_hotplug_target_remove_clamps_positions(void **state)
 /*
  * Align the fixture grid's persistent ids with what the hotplug rebuild
  * will derive from the device model.  With no PersistentId expectation the
- * mock returns -ENXIO, so fill_composite_info falls back to the
- * composite-<index> identity keyed on the DBus path.  Setting the grid to
- * the same identity lets these tests distinguish a real re-resolution from
- * a stale-index lookup.
+ * mock returns -ENXIO, so fill_composite_info falls back to the degraded
+ * composite-<index> identity keyed on the DBus path (id_stable = false).
+ * Host Mode re-resolves such degraded rows by composite path, so these
+ * tests still prove privilege follows the same physical path rather than a
+ * stale row index — while a row with a real PersistentId would be matched
+ * by that stable id instead.
  */
 static void
 sync_grid_identity_from_model(cbx_overlay_service_ctx *svc)
@@ -531,6 +533,7 @@ sync_grid_identity_from_model(cbx_overlay_service_ctx *svc)
                     i < svc->model.composite_count; i++) {
         snprintf(svc->grid.rows[i].id, CBX_MAX_ID_LEN, "composite-%d",
                  svc->model.composites[i].index);
+        svc->grid.rows[i].id_stable = false;  /* degraded fallback id */
         snprintf(svc->grid.rows[i].composite_path, CBX_MAX_PATH_LEN, "%s",
                  svc->model.composites[i].path);
     }

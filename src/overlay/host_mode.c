@@ -27,10 +27,14 @@ fire_state_change(cbx_host_mode *hm, bool active)
         hm->on_state_change(active, hm->state_change_data);
 }
 
-/* Copy a grid row's persistent identity into the given buffers (empty when
- * the row is out of range or the grid is absent).  The row id is the
- * PersistentId reported by InputPlumber; composite_path is the fallback
- * used when no persistent id is available. */
+/* Copy a grid row's persistent identity into the given buffers.  When the
+ * row has a stable InputPlumber PersistentId, only `id` is recorded — the
+ * composite path is NOT an identity and is deliberately left empty so
+ * resolve_row_identity can never re-grant host privileges through a path
+ * that a different physical controller may now occupy (SPEC §4.4).  For a
+ * degraded row (no stable PersistentId) the composite path is the only
+ * local identity, so it is recorded and `id` is left empty.  Buffers are
+ * cleared when the row is out of range or the grid is absent. */
 static void
 record_row_identity(char *id, size_t id_size,
                     char *path, size_t path_size,
@@ -42,16 +46,26 @@ record_row_identity(char *id, size_t id_size,
         path[0] = '\0';
     if (!grid || row_idx < 0 || row_idx >= grid->row_count)
         return;
-    if (id && id_size)
-        snprintf(id, id_size, "%s", grid->rows[row_idx].id);
-    if (path && path_size)
+    if (grid->rows[row_idx].id_stable) {
+        if (id && id_size)
+            snprintf(id, id_size, "%s", grid->rows[row_idx].id);
+    } else if (path && path_size) {
         snprintf(path, path_size, "%s",
                  grid->rows[row_idx].composite_path);
+    }
 }
 
-/* Re-resolve a persisted row identity against a rebuilt grid.  The
- * persistent id is authoritative (SPEC §4.4); the composite path is only a
- * fallback when the id is unavailable.  Returns the row index or -1. */
+/* Re-resolve a persisted row identity against a rebuilt grid.  The stable
+ * PersistentId is authoritative (SPEC §4.4); the composite path is only a
+ * degraded fallback when no stable id was recorded.  Returns the row index
+ * or -1.
+ *
+ * No-privilege-inheritance invariant: when a stable id was recorded but no
+ * longer matches a row, the host is gone and we must NOT fall back to the
+ * composite path — a different controller may have reused it.  Likewise a
+ * degraded (path-only) identity may only match a row that is itself
+ * degraded; a controller that now reports a stable PersistentId is a
+ * different physical device and must not inherit host privileges. */
 static int
 resolve_row_identity(const cbx_select_grid *grid,
                      const char *id, const char *path)
@@ -60,13 +74,18 @@ resolve_row_identity(const cbx_select_grid *grid,
         return -1;
     if (id && id[0]) {
         for (int i = 0; i < grid->row_count; i++)
-            if (strcmp(grid->rows[i].id, id) == 0)
+            if (grid->rows[i].id_stable &&
+                strcmp(grid->rows[i].id, id) == 0)
                 return i;
+        return -1;
     }
     if (path && path[0]) {
-        for (int i = 0; i < grid->row_count; i++)
+        for (int i = 0; i < grid->row_count; i++) {
+            if (grid->rows[i].id_stable)
+                continue;
             if (strcmp(grid->rows[i].composite_path, path) == 0)
                 return i;
+        }
     }
     return -1;
 }

@@ -78,6 +78,7 @@ cbx_select_grid_build(cbx_select_grid *g,
 
         strncpy(row->id, composites[i].id, CBX_MAX_ID_LEN - 1);
         row->id[CBX_MAX_ID_LEN - 1] = '\0';
+        row->id_stable = composites[i].id_stable;
 
         strncpy(row->model_name, composites[i].model_name,
                 CBX_MAX_NAME_LEN - 1);

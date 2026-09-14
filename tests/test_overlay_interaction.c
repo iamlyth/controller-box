@@ -840,6 +840,70 @@ test_o12_host_profile_frozen_dbus(void **state)
 }
 
 /* ================================================================== */
+/*  O12b — Profile apply failure: dirty + engine-consistent rollback    */
+/*      SPEC §4.9: a profile-change event must dirty the pre-built      */
+/*      surface even when the engine apply fails, so a rejected profile */
+/*      never leaves a stale presented frame.  The displayed profile is */
+/*      rolled back to the engine's authoritative profile so the grid   */
+/*      does not diverge from live engine state.                        */
+/* ================================================================== */
+
+static void
+test_o12b_profile_apply_failure_rolls_back_and_dirties(void **state)
+{
+    interaction_fixture *f = *state;
+
+    /* Configure a real profile list so the apply path reaches the engine
+     * (LoadProfilePath).  The interaction fixture deliberately leaves
+     * profile_cycle unconfigured for the success-path grid tests. */
+    static cbx_profile_list list;
+    memset(&list, 0, sizeof(list));
+    snprintf(list.entries[0].filename, CBX_LIST_NAME_LEN, "Default");
+    snprintf(list.entries[0].path, sizeof(list.entries[0].path),
+             "/profiles/Default.yaml");
+    snprintf(list.entries[1].filename, CBX_LIST_NAME_LEN, "Custom");
+    snprintf(list.entries[1].path, sizeof(list.entries[1].path),
+             "/profiles/Custom.yaml");
+    list.count = 2;
+    cbx_profile_cycle_init(&f->svc->profile_cycle, f->backend, f->mock.bus,
+                           &f->svc->assignments, &list);
+
+    /* Row 0 is on "Default". */
+    snprintf(f->svc->grid.rows[0].profile, CBX_GRID_PROFILE_LEN, "Default");
+
+    /* Lifecycle IDLE so the step's active-only re-render cannot consume the
+     * dirty flag before we observe it. */
+    assert_int_equal(f->svc->lifecycle.state, CBX_OVERLAY_IDLE);
+
+    /* Engine rejects LoadProfilePath; its current ProfilePath is still the
+     * old profile (the rollback read-back below). */
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_COMPOSITE,
+                              "LoadProfilePath", -EIO);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE, "ProfilePath",
+                           "/profiles/Default.yaml");
+    /* ip_dbus_mock_reset clears the mock's signal-subscription table, so
+     * re-register the production InputEvent subscription to keep driving
+     * the dispatch path through inject_input. */
+    assert_int_equal(ip_input_events_subscribe(&f->svc->input_events), 0);
+
+    /* Clean surface so this profile-change event is the only dirtying one. */
+    cbx_overlay_surface_clear_dirty(&f->svc->surface);
+    assert_false(cbx_overlay_surface_is_dirty(&f->svc->surface));
+
+    /* Player Mode UP cycles row 0's profile (Default -> Custom) through the
+     * production DBus dispatch path; the engine apply fails. */
+    inject_input(f, EXP_SENDER, DEV_PATH_0, "Up", 1.0);
+    cbx_overlay_service_step(f->svc);
+
+    /* Displayed profile rolled back to engine truth (not the rejected
+     * cycle), and the surface was dirtied so the frame is never stale. */
+    assert_string_equal(cbx_select_grid_get_profile(&f->svc->grid, 0),
+                        "Default");
+    assert_true(cbx_overlay_surface_is_dirty(&f->svc->surface));
+}
+
+/* ================================================================== */
 /*  O10 — Close (B): saves, conflict-resolves, sets PASS, hides        */
 /* ================================================================== */
 
@@ -1425,6 +1489,9 @@ static const struct CMUnitTest tests[] = {
                                      interaction_setup, interaction_teardown),
     cmocka_unit_test_setup_teardown(test_o12_host_profile_cycle_sdl,
                                      interaction_setup, interaction_teardown),
+    cmocka_unit_test_setup_teardown(
+        test_o12b_profile_apply_failure_rolls_back_and_dirties,
+        interaction_setup, interaction_teardown),
 
     /* Hotplug — Dynamic columns rebuild through production dispatch */
     cmocka_unit_test_setup_teardown(

@@ -106,7 +106,10 @@ make_comp(const char *id, const char *name, const char *path)
 {
     cbx_grid_composite_info c;
     memset(&c, 0, sizeof(c));
-    if (id) strncpy(c.id, id, CBX_MAX_ID_LEN - 1);
+    if (id) {
+        strncpy(c.id, id, CBX_MAX_ID_LEN - 1);
+        c.id_stable = true;  /* test ids model real PersistentIds */
+    }
     if (name) strncpy(c.model_name, name, CBX_MAX_NAME_LEN - 1);
     if (path) strncpy(c.composite_path, path, CBX_MAX_PATH_LEN - 1);
     return c;
@@ -142,11 +145,13 @@ build_test_grid(cbx_select_grid *g, int rows)
  * Used by the hotplug-reconcile tests: the id models InputPlumber's
  * PersistentId (stable across a rebuild) while the path can be reused by a
  * different controller, so identity re-resolution can be distinguished
- * from stale-index lookup. */
+ * from stale-index lookup.  `stable[i]` selects whether row i's id is a
+ * real PersistentId or the degraded (path-only) fallback. */
 static void
-build_grid_ids_paths(cbx_select_grid *g,
-                     const char *const *ids,
-                     const char *const *paths, int n)
+build_grid_ids_paths_stable(cbx_select_grid *g,
+                            const char *const *ids,
+                            const char *const *paths,
+                            const bool *stable, int n)
 {
     cbx_grid_composite_info comps[CBX_GRID_MAX_ROWS];
     memset(comps, 0, sizeof(comps));
@@ -157,6 +162,7 @@ build_grid_ids_paths(cbx_select_grid *g,
         snprintf(comps[i].composite_path, sizeof(comps[i].composite_path),
                  "/org/shadowblip/InputPlumber/%s",
                  paths ? paths[i] : ids[i]);
+        comps[i].id_stable = stable ? stable[i] : true;
     }
 
     cbx_settings s;
@@ -171,6 +177,26 @@ build_grid_ids_paths(cbx_select_grid *g,
 
     cbx_select_grid_build(g, comps, n, &s, &a);
     cbx_select_grid_add_profile(g, "default");
+}
+
+static void
+build_grid_ids_paths(cbx_select_grid *g,
+                     const char *const *ids,
+                     const char *const *paths, int n)
+{
+    build_grid_ids_paths_stable(g, ids, paths, NULL, n);
+}
+
+/* Build a grid whose rows have no stable PersistentId (degraded identity). */
+static void
+build_grid_degraded(cbx_select_grid *g,
+                    const char *const *ids,
+                    const char *const *paths, int n)
+{
+    bool stable[CBX_GRID_MAX_ROWS];
+    for (int i = 0; i < n && i < CBX_GRID_MAX_ROWS; i++)
+        stable[i] = false;
+    build_grid_ids_paths_stable(g, ids, paths, stable, n);
 }
 
 /* --- Init tests ------------------------------------------------------ */
@@ -1190,6 +1216,98 @@ test_reconcile_prefers_persistent_id_over_path(void **state)
     assert_false(cbx_host_mode_is_frozen(&hm, 1));
 }
 
+/*
+ * A stable PersistentId is authoritative.  When the host device is gone, a
+ * different controller that reused its composite path must NOT inherit host
+ * privileges: the stored stable id no longer matches any row, so host mode
+ * exits instead of falling back to the reused path (SPEC §4.4).
+ */
+static void
+test_reconcile_stable_id_reused_path_exits(void **state)
+{
+    (void)state;
+    static const char *ids2[]  = { "A", "B" };
+    static const char *paths2[] = { "pa", "pb" };
+    static const char *ids_after[]  = { "A", "X" };
+    static const char *paths_after[] = { "pa", "pb" }; /* X reuses pb */
+    cbx_select_grid g;
+    build_grid_ids_paths(&g, ids2, paths2, 2);
+
+    cbx_host_mode hm;
+    cbx_host_mode_init(&hm);
+    hm_state_cb cb = {0, false};
+    hm.on_state_change   = on_state_change;
+    hm.state_change_data = &cb;
+    /* B (row 1, stable id) is the host. */
+    assert_int_equal(cbx_host_mode_enter_with_grid(&hm, &g, 1), 0);
+    assert_string_equal(hm.host_id, "B");
+    assert_string_equal(hm.host_composite_path, "");
+    assert_int_equal(cb.transitions, 1);
+
+    /* B unplugged; X (a different controller) takes the pb path. */
+    build_grid_ids_paths(&g, ids_after, paths_after, 2);
+    assert_int_equal(cbx_host_mode_reconcile(&hm, &g), 0);
+
+    assert_false(cbx_host_mode_is_active(&hm));
+    assert_int_equal(cb.transitions, 2);
+    /* X on the reused path must NOT be frozen-as-host or granted input. */
+    assert_false(cbx_host_mode_is_frozen(&hm, 1));
+}
+
+/*
+ * A degraded (no stable PersistentId) host is re-resolved by composite path
+ * against another degraded row: a re-enumerated degraded device at the same
+ * path keeps host mode and the path fallback still works.
+ */
+static void
+test_reconcile_degraded_id_matches_same_path(void **state)
+{
+    (void)state;
+    static const char *ids1[]  = { "" };
+    static const char *paths1[] = { "pa" };
+    cbx_select_grid g;
+    build_grid_degraded(&g, ids1, paths1, 1);
+
+    cbx_host_mode hm;
+    cbx_host_mode_init(&hm);
+    assert_int_equal(cbx_host_mode_enter_with_grid(&hm, &g, 0), 0);
+    assert_string_equal(hm.host_id, "");            /* degraded */
+    assert_string_equal(hm.host_composite_path,
+                        g.rows[0].composite_path);
+
+    /* Rebuild with the same degraded path. */
+    build_grid_degraded(&g, ids1, paths1, 1);
+    assert_int_equal(cbx_host_mode_reconcile(&hm, &g), 1);
+    assert_true(cbx_host_mode_is_active(&hm));
+    assert_int_equal(cbx_host_mode_get_host_row(&hm), 0);
+}
+
+/*
+ * A degraded host must not hand privileges to a controller that now reports
+ * a stable PersistentId at the same path: the path belongs to a different
+ * physical device, so host mode exits.
+ */
+static void
+test_reconcile_degraded_id_stable_row_exits(void **state)
+{
+    (void)state;
+    static const char *ids1[]  = { "" };
+    static const char *paths1[] = { "pa" };
+    static const char *ids_after[]  = { "X" };
+    static const char *paths_after[] = { "pa" }; /* X now reports an id */
+    cbx_select_grid g;
+    build_grid_degraded(&g, ids1, paths1, 1);
+
+    cbx_host_mode hm;
+    cbx_host_mode_init(&hm);
+    assert_int_equal(cbx_host_mode_enter_with_grid(&hm, &g, 0), 0);
+    assert_string_equal(hm.host_id, "");
+
+    build_grid_ids_paths(&g, ids_after, paths_after, 1);
+    assert_int_equal(cbx_host_mode_reconcile(&hm, &g), 0);
+    assert_false(cbx_host_mode_is_active(&hm));
+}
+
 /* Inactive host mode is a no-op reconcile. */
 static void
 test_reconcile_inactive_noop(void **state)
@@ -1337,6 +1455,9 @@ main(void)
         cmocka_unit_test(test_reconcile_selected_removed_falls_back),
         cmocka_unit_test(test_reconcile_empty_grid_exits),
         cmocka_unit_test(test_reconcile_prefers_persistent_id_over_path),
+        cmocka_unit_test(test_reconcile_stable_id_reused_path_exits),
+        cmocka_unit_test(test_reconcile_degraded_id_matches_same_path),
+        cmocka_unit_test(test_reconcile_degraded_id_stable_row_exits),
         cmocka_unit_test(test_reconcile_inactive_noop),
         cmocka_unit_test(test_reconcile_null),
         cmocka_unit_test(test_enter_with_grid_bounds),

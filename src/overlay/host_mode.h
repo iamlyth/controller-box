@@ -90,11 +90,15 @@ struct cbx_host_mode {
     int  host_row;       /* row_idx of the host controller      */
     int  selected_row;   /* row the host is currently editing    */
 
-    /* Persistent identity of the host and selected rows, recorded when
-     * host mode is entered and refreshed as the selection moves.  A
-     * hotplug grid rebuild can re-resolve the row indices by persistent
-     * ID instead of trusting an index that may now name a different
-     * physical controller (SPEC §4.4/§10.1). */
+    /* Identity of the host and selected rows, recorded when host mode is
+     * entered and refreshed as the selection moves.  For a row with a
+     * stable InputPlumber PersistentId the id buffer holds that id and the
+     * path buffer is empty; for a degraded row (no stable PersistentId)
+     * the id buffer is empty and the composite path buffer holds the only
+     * local identity.  A hotplug grid rebuild re-resolves the row indices
+     * by stable id, and only falls back to the path for degraded rows, so
+     * one physical controller cannot inherit another's host privileges
+     * (SPEC §4.4/§10.1). */
     char host_id[CBX_MAX_ID_LEN];
     char host_composite_path[CBX_MAX_PATH_LEN];
     char selected_id[CBX_MAX_ID_LEN];
@@ -198,15 +202,19 @@ int cbx_host_mode_handle(cbx_host_mode *hm, int row_idx,
 
 /*
  * Reconcile host mode after the select grid rows were rebuilt by a hotplug
- * event or backend recovery (SPEC §10.1).  The stored host/selected
- * persistent identities are re-resolved against the rebuilt grid:
+ * event or backend recovery (SPEC §10.1).  The stored host/selected stable
+ * PersistentIds are re-resolved against the rebuilt grid:
  *
  *   - Host still present: host_row/selected_row are updated to their new
  *     indices and host mode stays active.  If the edited row disappeared,
  *     the selection falls back to the host row.
- *   - Host removed, or its identity was never recorded: host mode is
- *     exited (firing the state-change dirty trigger once), so no other
- *     controller inherits host privileges and no input stays frozen.
+ *   - Host removed, or its identity was never recorded, or its stable id no
+ *     longer matches any row (even one that reused its composite path):
+ *     host mode is exited (firing the state-change dirty trigger once), so
+ *     no other controller inherits host privileges and no input stays
+ *     frozen.  A degraded (path-only) host is only re-resolved against
+ *     another degraded row at the same path; a row that now reports a
+ *     stable PersistentId is treated as a different physical controller.
  *   - Grid empty: host mode is exited.
  *
  * No-op that returns 0 when host mode is inactive.

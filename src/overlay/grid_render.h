@@ -64,6 +64,12 @@ typedef struct {
     char id[CBX_MAX_ID_LEN];               /* identity ID (or "" if unknown) */
     char model_name[CBX_MAX_NAME_LEN];      /* controller model display name */
     char composite_path[CBX_MAX_PATH_LEN];  /* DBus object path */
+    /* True when `id` came from a real, stable InputPlumber PersistentId;
+     * false when it is the synthetic index-derived fallback (or unknown).
+     * Consumers that must not let one physical controller inherit another's
+     * identity across a hotplug rebuild (e.g. Host Mode host re-resolution)
+     * MUST check this flag: a degraded id is not a stable identity. */
+    bool id_stable;
 } cbx_grid_composite_info;
 
 /* A controller row in the grid. */
@@ -73,6 +79,9 @@ typedef struct {
     char profile[CBX_GRID_PROFILE_LEN];     /* current profile name */
     int  cur_col;                            /* 0=Unassigned, 1+=Pn */
     char composite_path[CBX_MAX_PATH_LEN];  /* DBus path for LoadProfilePath */
+    /* Mirrors cbx_grid_composite_info.id_stable: true only when `id` is a
+     * stable PersistentId and therefore safe as a re-resolution key. */
+    bool id_stable;
 } cbx_grid_row;
 
 /* A column definition (player slot). */

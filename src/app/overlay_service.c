@@ -405,28 +405,82 @@ cbx_overlay_on_slot_change(int row_idx, int new_slot, void *userdata)
     return 0;
 }
 
+/*
+ * Restore the displayed profile of `row_idx` to the profile the engine
+ * currently holds.  Used only when an engine apply fails: the mode handler
+ * (Player or Host) cycled the grid's profile string before firing the
+ * profile-change callback, so on failure the grid would otherwise display a
+ * profile the engine rejected and diverge from real engine state.  The
+ * engine's ProfilePath is authoritative; it is reverse-mapped through the
+ * loaded profile list to a filename for the grid.
+ */
+static void
+revert_grid_profile_to_engine(cbx_overlay_service_ctx *svc, int row_idx,
+                              const char *composite_path)
+{
+    if (!svc || row_idx < 0 || row_idx >= svc->grid.row_count)
+        return;
+    if (!svc->conn.backend || !svc->conn.bus)
+        return;
+
+    char *engine_path = NULL;
+    if (ip_composite_get_profile_path(svc->conn.backend, svc->conn.bus,
+                                      composite_path, &engine_path) != 0 ||
+        !engine_path) {
+        free(engine_path);
+        return;
+    }
+
+    const cbx_profile_list *list = svc->profile_cycle.profiles;
+    if (list) {
+        for (int i = 0; i < list->count; i++) {
+            if (strcmp(list->entries[i].path, engine_path) == 0) {
+                snprintf(svc->grid.rows[row_idx].profile,
+                         CBX_GRID_PROFILE_LEN, "%s",
+                         list->entries[i].filename);
+                break;
+            }
+        }
+    }
+    free(engine_path);
+}
+
 int
 cbx_overlay_on_profile_change(int row_idx, const char *profile,
                    const char *composite_path, void *userdata)
 {
     cbx_overlay_service_ctx *svc = (cbx_overlay_service_ctx *)userdata;
-    (void)row_idx;
+    if (!svc)
+        return -EINVAL;
+
+    /* The mode handler has already cycled the grid row's displayed profile
+     * before firing this callback, so the profile-change event has occurred
+     * from the user's perspective.  SPEC §4.9 requires the pre-built surface
+     * to be dirtied so the next presentation reflects it; mark it here,
+     * before any early return, so a failed apply can never leave a stale
+     * presented frame. */
+    cbx_overlay_surface_mark_dirty_all(&svc->surface);
 
     if (!svc->conn.backend || !composite_path || !profile || !profile[0])
         return -EINVAL;
 
     int rc = cbx_profile_cycle_apply(&svc->profile_cycle, &svc->grid,
                                       row_idx, profile, composite_path);
-    if (rc != 0)
+    if (rc != 0) {
+        /* Engine apply failed: roll the displayed profile back to the
+         * engine's actual profile so the overlay never misrepresents live
+         * state (SPEC §4.4/§4.9).  The dirty mark above already covers the
+         * re-render.  When no profile list is loaded the apply never reached
+         * the engine, so there is no authoritative profile to map back. */
+        if (svc->profile_cycle.profiles)
+            revert_grid_profile_to_engine(svc, row_idx, composite_path);
         return rc;
-    rc = cbx_assignments_save(&svc->assignments);
-    if (rc != 0)
-        return rc;
+    }
 
-    /* Profile change is a dirty trigger (SPEC §4.9): re-render so the
-     * presented frame reflects the newly applied profile/composite. */
-    cbx_overlay_surface_mark_dirty_all(&svc->surface);
-    return 0;
+    rc = cbx_assignments_save(&svc->assignments);
+    /* The dirty trigger already fired above.  A persistence failure does
+     * not undo the engine-applied profile, so the grid remains truthful. */
+    return rc;
 }
 
 /* ================================================================== */
@@ -494,14 +548,21 @@ static void fill_composite_info(cbx_grid_composite_info *info,
     snprintf(info->composite_path, sizeof(info->composite_path),
              "%s", entry->path);
 
-    /* Persistent ID (best-effort) */
+    /* Persistent ID (best-effort).  The synthetic `composite-<index>`
+     * fallback is index-derived, not a real identity: it is NOT stable
+     * across a hotplug rebuild (a different controller can land on the same
+     * index).  Mark it degraded so consumers such as Host Mode never use it
+     * to hand one physical controller another's privileges (SPEC §4.4). */
     char *id = NULL;
     if (ip_composite_get_persistent_id(backend, bus, entry->path, &id) == 0
-        && id) {
+        && id && id[0]) {
         snprintf(info->id, sizeof(info->id), "%s", id);
+        info->id_stable = true;
         free(id);
     } else {
         snprintf(info->id, sizeof(info->id), "composite-%d", entry->index);
+        info->id_stable = false;
+        free(id);
     }
 
     /* Model name (best-effort) */
