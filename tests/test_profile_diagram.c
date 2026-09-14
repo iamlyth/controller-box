@@ -753,8 +753,11 @@ static int
 build_cache_resolved_diagram(pd_fixture *f, cbx_icon_cache *cache,
                              cbx_profile_diagram *diag, const char *icon)
 {
-    cbx_theme theme;
-    cbx_theme_default(&theme);
+    /* The diagram borrows the theme for its lifetime (see the header
+     * contract), so use the fixture-owned theme rather than a local that
+     * dies when this helper returns: diag_draw would otherwise read a
+     * dangling pointer (ASan stack-use-after-return). */
+    cbx_theme *theme = &f->theme;
 
     int rc = cbx_icon_cache_init(cache, f->sdl.renderer, cbx_icon_dir(), 512);
     if (rc != 0)
@@ -774,7 +777,7 @@ build_cache_resolved_diagram(pd_fixture *f, cbx_icon_cache *cache,
         cbx_icon_cache_cleanup(cache);
         return -ENOENT;
     }
-    rc = cbx_profile_diagram_init(diag, f->sdl.renderer, NULL, &theme);
+    rc = cbx_profile_diagram_init(diag, f->sdl.renderer, NULL, theme);
     if (rc != 0) {
         cbx_icon_cache_cleanup(cache);
         return rc;

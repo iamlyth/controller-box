@@ -27,7 +27,7 @@ PROJECT_ROOT=$(cd -- "$PWD" && pwd -P)
 # a clean checkout regardless of prior build history.
 if [ "$BUILD_DIR" = "build" ] && \
    [ -f "$BUILD_DIR/CMakeCache.txt" ] && \
-   ! grep -q "^CMAKE_HOME_DIRECTORY:INTERNAL=$PROJECT_ROOT\$" "$BUILD_DIR/CMakeCache.txt" 2>/dev/null; then
+   ! grep -qxF "CMAKE_HOME_DIRECTORY:INTERNAL=$PROJECT_ROOT" "$BUILD_DIR/CMakeCache.txt" 2>/dev/null; then
     echo "verify.sh: canonical $BUILD_DIR cache pinned to a stale source root; rebuilding tree" >&2
     cmake -E remove_directory "$BUILD_DIR"
 fi
