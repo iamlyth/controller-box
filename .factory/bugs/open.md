@@ -111,3 +111,36 @@ virtual devices at the kernel level as "Microsoft X-Box 360 pad" evdev
 devices (`/dev/input/event23-26`). Steam needs to be restarted to
 rescan for new controllers, or the user must enable generic controller
 support in Steam settings.
+## BUG-0019: Audit parser records "no BLOCKER" findings as BLOCKERs
+
+**Severity:** Major
+**Component:** factory harness / parallel.py audit parser
+**Date discovered:** 2026-09-13
+
+### Description
+
+When auditors return a report that explicitly says "No BLOCKER issues" or
+"No findings at BLOCKER severity," the audit parser in `parallel.py`
+still records these as BLOCKER findings in the issue tracker. This causes
+false-positive BLOCKERs that trigger unnecessary repair cycles.
+
+Observed during astra-run-001 campaign:
+- issue-004 (efficiency): "No BLOCKER issues" → recorded as BLOCKER
+- issue-005 (functional): "No findings at BLOCKER severity" → recorded as BLOCKER
+- issue-008 (efficiency): "INFO" severity → recorded as BLOCKER
+- issue-010 (security): "Codebase is defensively written" → recorded as BLOCKER
+
+### Fix
+
+The audit parser needs to distinguish between:
+1. An auditor reporting BLOCKER findings (should be recorded as BLOCKER)
+2. An auditor reporting no findings or INFO/WARN only (should NOT be recorded as BLOCKER)
+
+The parser likely matches too broadly on the audit output text. It should
+only record BLOCKERs when the auditor explicitly flags findings as BLOCKER
+severity, not when the auditor says "No BLOCKER" or "INFO".
+
+### Note
+
+Do not fix while a campaign is running — the parser is live infrastructure.
+Fix after campaign completion and test with a targeted unit test.
