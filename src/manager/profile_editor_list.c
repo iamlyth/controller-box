@@ -107,20 +107,107 @@ format_binding_label(char *buf, size_t buflen,
 }
 
 /*
- * Map a source event's button name to a diagram button.
- * Uses cbx_profile_diagram_button_from_name which matches canonical names.
+ * Presentation order for the supported virtual-button catalog (BUG-0016).
+ * The NES-minimum buttons used by profile_validate.c come first, then the
+ * remaining cbx_diag_button entries in enum order.  Every one of the
+ * CBX_DIAG_BTN_COUNT supported buttons appears exactly once, so the binding
+ * list can show and edit a profile for any button, bound or not.
  */
-static cbx_diag_button
-source_to_diag_button(const cbx_source_event *se)
+static const cbx_diag_button s_catalog_order[CBX_DIAG_BTN_COUNT] = {
+    CBX_DIAG_BTN_A, CBX_DIAG_BTN_B,
+    CBX_DIAG_BTN_UP, CBX_DIAG_BTN_DOWN, CBX_DIAG_BTN_LEFT, CBX_DIAG_BTN_RIGHT,
+    CBX_DIAG_BTN_X, CBX_DIAG_BTN_Y,
+    CBX_DIAG_BTN_START, CBX_DIAG_BTN_SELECT, CBX_DIAG_BTN_GUIDE,
+    CBX_DIAG_BTN_L1, CBX_DIAG_BTN_R1, CBX_DIAG_BTN_L2, CBX_DIAG_BTN_R2,
+    CBX_DIAG_BTN_L3, CBX_DIAG_BTN_R3,
+};
+
+/* True if the mapping's source event binds `btn` on any button/axis prop. */
+static bool
+mapping_has_button(const cbx_profile_mapping *m, cbx_diag_button btn)
 {
-    const char *btn = source_event_button(se);
-    if (!btn)
+    if (!m || btn <= CBX_DIAG_BTN_NONE || btn >= CBX_DIAG_BTN_COUNT)
+        return false;
+    const char *name = cbx_profile_diagram_button_name(btn);
+    if (!name)
+        return false;
+    for (int i = 0; i < m->source_event.prop_count; i++) {
+        const char *key = m->source_event.props[i].key;
+        if ((strcmp(key, "button") == 0 || strcmp(key, "axis") == 0) &&
+            strcmp(m->source_event.props[i].value, name) == 0)
+            return true;
+    }
+    return false;
+}
+
+/* First mapping in `p` that binds `btn`, or -1 when none does. */
+static int
+find_mapping_index_for_button(const cbx_profile *p, cbx_diag_button btn)
+{
+    if (!p)
+        return -1;
+    for (int i = 0; i < p->mapping_count; i++)
+        if (mapping_has_button(&p->mappings[i], btn))
+            return i;
+    return -1;
+}
+
+/* First supported catalog button bound by the mapping, or NONE. */
+static cbx_diag_button
+mapping_button(const cbx_profile_mapping *m)
+{
+    if (!m)
         return CBX_DIAG_BTN_NONE;
-    return cbx_profile_diagram_button_from_name(btn);
+    for (int i = 0; i < m->source_event.prop_count; i++) {
+        const char *key = m->source_event.props[i].key;
+        if (strcmp(key, "button") == 0 || strcmp(key, "axis") == 0) {
+            cbx_diag_button b = cbx_profile_diagram_button_from_name(
+                m->source_event.props[i].value);
+            if (b != CBX_DIAG_BTN_NONE)
+                return b;
+        }
+    }
+    return CBX_DIAG_BTN_NONE;
+}
+
+int
+cbx_profile_editor_find_or_create_mapping(cbx_profile *p, cbx_diag_button btn)
+{
+    if (!p || btn <= CBX_DIAG_BTN_NONE || btn >= CBX_DIAG_BTN_COUNT)
+        return -1;
+
+    const char *btn_name = cbx_profile_diagram_button_name(btn);
+    if (!btn_name)
+        return -1;
+
+    int existing = find_mapping_index_for_button(p, btn);
+    if (existing >= 0)
+        return existing;
+
+    if (p->mapping_count >= CBX_MAX_MAPPINGS)
+        return -1;
+
+    int idx = p->mapping_count;
+    cbx_profile_mapping *m = &p->mappings[idx];
+    memset(m, 0, sizeof(*m));
+
+    /* Set the mapping name to the button name and source to a gamepad
+     * button.  The intended target event is chosen by the caller. */
+    strncpy(m->name, btn_name, sizeof(m->name) - 1);
+    strncpy(m->source_event.device_class, "gamepad",
+            sizeof(m->source_event.device_class) - 1);
+    m->source_event.prop_count = 1;
+    strncpy(m->source_event.props[0].key, "button",
+            sizeof(m->source_event.props[0].key) - 1);
+    strncpy(m->source_event.props[0].value, btn_name,
+            sizeof(m->source_event.props[0].value) - 1);
+
+    p->mapping_count++;
+    return idx;
 }
 
 /*
- * Update the diagram highlight to match the current list selection.
+ * Update the editor title label from the profile name and model label.
  */
 static void
 update_editor_title(cbx_profile_editor *ed)
@@ -144,14 +231,15 @@ sync_diagram_highlight(cbx_profile_editor *ed)
     if (!ed)
         return;
 
-    if (ed->selected_index < 0 || ed->selected_index >= ed->profile.mapping_count) {
+    if (ed->selected_index < 0 || ed->selected_index >= ed->row_count) {
         cbx_profile_diagram_clear_highlight(&ed->diagram);
         return;
     }
 
-    cbx_diag_button btn = source_to_diag_button(
-        &ed->profile.mappings[ed->selected_index].source_event);
-    cbx_profile_diagram_highlight(&ed->diagram, btn);
+    /* The row's catalog button, so selecting an unbound row still lights
+     * up the control the user is editing. */
+    cbx_profile_diagram_highlight(&ed->diagram,
+                                  ed->rows[ed->selected_index].button);
 }
 
 /*
@@ -209,15 +297,21 @@ parse_capabilities_csv(const char *csv, cbx_pe_target *targets,
 
 /* Fires when the binding list is activated via mouse click or A-KEYUP.
  * Calls the same activate function the controller path reaches via
- * cbx_profiles_tab_activate, so both paths produce the same outcome. */
+ * cbx_profiles_tab_activate, so both paths produce the same outcome.
+ * The pointer path clicks an arbitrary row, so the editor selection must
+ * be synced to the clicked row before activating it. */
 static void
 on_binding_selected(cbx_widget *w, int index, void *user_data)
 {
     (void)w;
-    (void)index;
     cbx_profile_editor *ed = (cbx_profile_editor *)user_data;
-    if (ed)
-        cbx_profile_editor_activate(ed);
+    if (!ed)
+        return;
+    if (index >= 0 && index < ed->row_count) {
+        ed->selected_index = index;
+        sync_diagram_highlight(ed);
+    }
+    cbx_profile_editor_activate(ed);
 }
 
 /* Fires when the target list is activated via mouse click or A-KEYUP.
@@ -682,20 +776,51 @@ cbx_profile_editor_refresh(cbx_profile_editor *ed)
         return -EINVAL;
 
     cbx_list_clear(&ed->binding_list);
+    ed->row_count = 0;
 
-    for (int i = 0; i < ed->profile.mapping_count; i++) {
+    /* 1. Every supported virtual button, bound or unbound (BUG-0016).
+     *    The list is the catalog, not merely the loaded profile's mappings,
+     *    so a user can bind a button the profile does not yet contain. */
+    for (int i = 0; i < CBX_DIAG_BTN_COUNT && ed->row_count < CBX_PE_MAX_ROWS; i++) {
+        cbx_diag_button btn = s_catalog_order[i];
+        const char *name = cbx_profile_diagram_button_name(btn);
+        int m = find_mapping_index_for_button(&ed->profile, btn);
         char label[CBX_PE_LABEL_LEN];
-        format_binding_label(label, sizeof(label),
-                               &ed->profile.mappings[i]);
+        if (m >= 0) {
+            format_binding_label(label, sizeof(label),
+                                   &ed->profile.mappings[m]);
+        } else {
+            snprintf(label, sizeof(label), "%s → (unbound)",
+                     name ? name : "?");
+        }
+        ed->rows[ed->row_count].button = btn;
+        ed->rows[ed->row_count].mapping_index = m;
         cbx_list_add_item(&ed->binding_list, label, NULL, ed);
+        ed->row_count++;
     }
 
-    /* Set selection */
-    if (ed->profile.mapping_count > 0) {
+    /* 2. Any remaining mapping whose source is not the catalog row for its
+     *    button, so advanced sources stay visible and editable. */
+    for (int i = 0; i < ed->profile.mapping_count && ed->row_count < CBX_PE_MAX_ROWS; i++) {
+        cbx_diag_button b = mapping_button(&ed->profile.mappings[i]);
+        if (b != CBX_DIAG_BTN_NONE &&
+            find_mapping_index_for_button(&ed->profile, b) == i)
+            continue;  /* already shown as that button's catalog row */
+        char label[CBX_PE_LABEL_LEN];
+        format_binding_label(label, sizeof(label), &ed->profile.mappings[i]);
+        ed->rows[ed->row_count].button = b;
+        ed->rows[ed->row_count].mapping_index = i;
+        cbx_list_add_item(&ed->binding_list, label, NULL, ed);
+        ed->row_count++;
+    }
+
+    /* Set selection.  The catalog is never empty, but an unloaded editor
+     * (init before any load) has no rows and therefore no selection. */
+    if (ed->row_count > 0) {
         if (ed->selected_index < 0)
             ed->selected_index = 0;
-        if (ed->selected_index >= ed->profile.mapping_count)
-            ed->selected_index = ed->profile.mapping_count - 1;
+        if (ed->selected_index >= ed->row_count)
+            ed->selected_index = ed->row_count - 1;
     } else {
         ed->selected_index = -1;
     }
@@ -713,7 +838,7 @@ cbx_profile_editor_refresh(cbx_profile_editor *ed)
 int
 cbx_profile_editor_move_up(cbx_profile_editor *ed)
 {
-    if (!ed || ed->profile.mapping_count <= 0)
+    if (!ed)
         return -1;
 
     if (ed->mode == CBX_EDITOR_MODE_TARGET_PICK ||
@@ -724,10 +849,13 @@ cbx_profile_editor_move_up(cbx_profile_editor *ed)
         return cbx_list_get_selected(&ed->target_list);
     }
 
+    if (ed->row_count <= 0)
+        return -1;
+
     if (ed->selected_index > 0)
         ed->selected_index--;
     else
-        ed->selected_index = ed->profile.mapping_count - 1;  /* wrap */
+        ed->selected_index = ed->row_count - 1;  /* wrap */
 
     cbx_list_set_selected(&ed->binding_list, ed->selected_index);
     sync_diagram_highlight(ed);
@@ -737,7 +865,7 @@ cbx_profile_editor_move_up(cbx_profile_editor *ed)
 int
 cbx_profile_editor_move_down(cbx_profile_editor *ed)
 {
-    if (!ed || ed->profile.mapping_count <= 0)
+    if (!ed)
         return -1;
 
     if (ed->mode == CBX_EDITOR_MODE_TARGET_PICK ||
@@ -749,7 +877,10 @@ cbx_profile_editor_move_down(cbx_profile_editor *ed)
         return cbx_list_get_selected(&ed->target_list);
     }
 
-    if (ed->selected_index < ed->profile.mapping_count - 1)
+    if (ed->row_count <= 0)
+        return -1;
+
+    if (ed->selected_index < ed->row_count - 1)
         ed->selected_index++;
     else
         ed->selected_index = 0;  /* wrap */
@@ -803,15 +934,41 @@ cbx_profile_editor_activate(cbx_profile_editor *ed)
         return 0;
     }
 
-    /* LIST mode: an Empty profile has no row from which to open the edit
-     * menu.  A is therefore the explicit add-first-binding action and starts
-     * sequential capture, which creates mappings as input arrives. */
+    /* LIST mode: an Empty profile has no mapping to edit, so A is the
+     * explicit add-first-binding action and starts sequential capture,
+     * which creates mappings as input arrives.  This keeps the empty
+     * profile's add/sequential action reachable (SPEC \u00a75.3). */
     if (ed->profile.mapping_count == 0)
         return cbx_profile_editor_begin_sequential(ed);
-    if (ed->selected_index < 0 || ed->selected_index >= ed->profile.mapping_count)
+
+    if (ed->selected_index < 0 || ed->selected_index >= ed->row_count)
         return -EINVAL;
 
-    ed->editing_index = ed->selected_index;
+    /* Activating an unbound catalog row creates the intended mapping
+     * (find-or-create, never a duplicate) so the user can bind a button
+     * the profile does not contain yet. */
+    int map_idx = ed->rows[ed->selected_index].mapping_index;
+    cbx_diag_button row_btn = ed->rows[ed->selected_index].button;
+    if (map_idx < 0 && row_btn != CBX_DIAG_BTN_NONE) {
+        map_idx = cbx_profile_editor_find_or_create_mapping(&ed->profile,
+                                                             row_btn);
+        if (map_idx < 0) {
+            cbx_label_set_text(&ed->status_lbl, "Profile is full");
+            return -ENOSPC;
+        }
+        ed->dirty = true;
+        /* Rebuild rows so this row now shows as bound, and keep the
+         * cursor on the same row. */
+        int keep = ed->selected_index;
+        cbx_profile_editor_refresh(ed);
+        ed->selected_index = keep;
+        cbx_list_set_selected(&ed->binding_list, keep);
+        sync_diagram_highlight(ed);
+    }
+    if (map_idx < 0 || map_idx >= ed->profile.mapping_count)
+        return -EINVAL;
+
+    ed->editing_index = map_idx;
     ed->mode = CBX_EDITOR_MODE_BINDING_EDIT;
 
     /* Populate target list with the three edit options. */
@@ -868,11 +1025,29 @@ cbx_profile_editor_cancel(cbx_profile_editor *ed)
 /*  Target pick mode                                                   */
 /* ------------------------------------------------------------------ */
 
+/*
+ * Resolve the profile mapping index the editor is editing.  In BINDING_EDIT
+ * the mapping was selected by cbx_profile_editor_activate(); when called
+ * directly in LIST mode it comes from the selected row.  Returns -1 when
+ * the selection has no mapping (an unbound row or an unloaded editor).
+ */
+static int
+editor_editing_mapping(cbx_profile_editor *ed)
+{
+    if (!ed)
+        return -1;
+    if (ed->editing_index >= 0 && ed->editing_index < ed->profile.mapping_count)
+        return ed->editing_index;
+    if (ed->selected_index >= 0 && ed->selected_index < ed->row_count)
+        return ed->rows[ed->selected_index].mapping_index;
+    return -1;
+}
+
 int
 cbx_profile_editor_begin_target_pick(cbx_profile_editor *ed)
 {
-    if (!ed || ed->selected_index < 0
-        || ed->selected_index >= ed->profile.mapping_count)
+    int map_idx = editor_editing_mapping(ed);
+    if (!ed || map_idx < 0)
         return -EINVAL;
 
     /* Ensure we have targets */
@@ -897,7 +1072,7 @@ cbx_profile_editor_begin_target_pick(cbx_profile_editor *ed)
     cbx_widget_set_visible(&ed->binding_list.base, false);
     cbx_widget_set_visible(&ed->target_list.base, true);
 
-    ed->editing_index = ed->selected_index;
+    ed->editing_index = map_idx;
     ed->mode = CBX_EDITOR_MODE_TARGET_PICK;
     cbx_label_set_text(&ed->status_lbl,
                          "Select target event.  A=Confirm  B=Cancel");
@@ -967,11 +1142,11 @@ cbx_profile_editor_cancel_target_pick(cbx_profile_editor *ed)
 int
 cbx_profile_editor_begin_capture(cbx_profile_editor *ed)
 {
-    if (!ed || ed->selected_index < 0
-        || ed->selected_index >= ed->profile.mapping_count)
+    int map_idx = editor_editing_mapping(ed);
+    if (!ed || map_idx < 0)
         return -EINVAL;
 
-    ed->editing_index = ed->selected_index;
+    ed->editing_index = map_idx;
     ed->capture_active = true;
     ed->captured_button = CBX_DIAG_BTN_NONE;
     ed->mode = CBX_EDITOR_MODE_CAPTURE;
@@ -1102,6 +1277,28 @@ cbx_profile_editor_binding_count(const cbx_profile_editor *ed)
     if (!ed)
         return 0;
     return ed->profile.mapping_count;
+}
+
+int
+cbx_profile_editor_row_count(const cbx_profile_editor *ed)
+{
+    return ed ? ed->row_count : 0;
+}
+
+cbx_diag_button
+cbx_profile_editor_row_button(const cbx_profile_editor *ed, int row)
+{
+    if (!ed || row < 0 || row >= ed->row_count)
+        return CBX_DIAG_BTN_NONE;
+    return ed->rows[row].button;
+}
+
+int
+cbx_profile_editor_row_mapping(const cbx_profile_editor *ed, int row)
+{
+    if (!ed || row < 0 || row >= ed->row_count)
+        return -1;
+    return ed->rows[row].mapping_index;
 }
 
 int

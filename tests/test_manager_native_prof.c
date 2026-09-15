@@ -957,6 +957,84 @@ test_m29_binding_edit_ctrl(void **state)
     cbx_manager_shutdown(&mgr);
 }
 
+/* M29b controller path: A on an UNBOUND catalog row creates the intended
+ * mapping and opens the binding-edit sub-menu (BUG-0016).  The list
+ * enumerates the supported-button catalog, so the X row exists even though
+ * the loaded 6-NES profile does not bind X. */
+static void
+test_m29b_unbound_row_activation_ctrl(void **state)
+{
+    mnp_fixture *f = *state;
+    cbx_manager mgr;
+    mnp_init_manager(f, &mgr);
+
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+
+    open_editor_ctrl(&mgr, f->joystick, 2);
+    assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
+                     CBX_EDITOR_MODE_LIST);
+    assert_int_equal(cbx_profile_editor_binding_count(&pt->editor), 6);
+
+    /* Catalog order is A, B, Up, Down, Left, Right, X, ... */
+    for (int i = 0; i < 6; i++)
+        ctrl_press(&mgr, f->joystick, 12);  /* D-pad Down */
+    assert_int_equal(cbx_profile_editor_row_button(&pt->editor,
+                     cbx_profile_editor_get_selected(&pt->editor)),
+                     CBX_DIAG_BTN_X);
+    assert_int_equal(cbx_profile_editor_get_diagram_highlight(&pt->editor),
+                     CBX_DIAG_BTN_X);
+
+    /* A (button 0) activates the unbound row. */
+    ctrl_press(&mgr, f->joystick, 0);
+    assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
+                     CBX_EDITOR_MODE_BINDING_EDIT);
+    assert_int_equal(cbx_profile_editor_binding_count(&pt->editor), 7);
+    const cbx_profile *prof = cbx_profile_editor_get_profile(&pt->editor);
+    assert_non_null(prof);
+    int idx = cbx_profile_editor_get_editing_index(&pt->editor);
+    assert_true(idx >= 0 && idx < prof->mapping_count);
+    assert_string_equal(prof->mappings[idx].source_event.props[0].value, "X");
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* M29c pointer path: a mouse click on the unbound X row creates the
+ * intended mapping through the real manager hit-test + list on_select
+ * dispatch, symmetric with the controller path above. */
+static void
+test_m29c_unbound_row_activation_pointer(void **state)
+{
+    mnp_fixture *f = *state;
+    cbx_manager mgr;
+    mnp_init_manager(f, &mgr);
+
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+
+    open_editor_ptr(&mgr);
+    assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
+                     CBX_EDITOR_MODE_LIST);
+    assert_int_equal(cbx_profile_editor_binding_count(&pt->editor), 6);
+
+    /* Click the X catalog row (index 6). */
+    int px = list_center_x(&pt->editor.binding_list);
+    int py = list_item_y(&pt->editor.binding_list, 6);
+    send_mouse_click(&mgr, px, py);
+
+    assert_int_equal(cbx_profile_editor_get_selected(&pt->editor), 6);
+    assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
+                     CBX_EDITOR_MODE_BINDING_EDIT);
+    assert_int_equal(cbx_profile_editor_binding_count(&pt->editor), 7);
+    assert_int_equal(cbx_profile_editor_get_diagram_highlight(&pt->editor),
+                     CBX_DIAG_BTN_X);
+    const cbx_profile *prof = cbx_profile_editor_get_profile(&pt->editor);
+    assert_non_null(prof);
+    int idx = cbx_profile_editor_get_editing_index(&pt->editor);
+    assert_true(idx >= 0 && idx < prof->mapping_count);
+    assert_string_equal(prof->mappings[idx].source_event.props[0].value, "X");
+
+    cbx_manager_shutdown(&mgr);
+}
+
 /* ================================================================== */
 /*  M30 — Target picker confirm                                       */
 /* ================================================================== */
@@ -2119,6 +2197,10 @@ main(void)
         /* M29 — Binding edit sub-menu */
         cmocka_unit_test_setup_teardown(test_m29_binding_edit_ctrl,
                                         mnp_setup, mnp_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_m29b_unbound_row_activation_ctrl, mnp_setup, mnp_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_m29c_unbound_row_activation_pointer, mnp_setup, mnp_teardown),
         /* M30 — Target picker confirm */
         cmocka_unit_test_setup_teardown(test_m30_target_pick_controller,
                                         mnp_setup, mnp_teardown),

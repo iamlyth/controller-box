@@ -45,6 +45,7 @@
 
 #define CBX_PE_MAX_TARGETS  128   /* max target entries in picker */
 #define CBX_PE_LABEL_LEN   256
+#define CBX_PE_MAX_ROWS    CBX_LIST_MAX_ITEMS  /* binding-list rows (catalog + extras) */
 
 /* ------------------------------------------------------------------ */
 /*  Editor modes                                                      */
@@ -67,6 +68,21 @@ typedef struct {
     char value[128];         /* e.g. "KeyEsc", "ButtonLeft" */
     char label[CBX_PE_LABEL_LEN];  /* display label */
 } cbx_pe_target;
+
+/* ------------------------------------------------------------------ */
+/*  Binding-list row (BUG-0016)                                       */
+/* ------------------------------------------------------------------ */
+/*
+ * One visible row of the binding list.  The list enumerates the whole
+ * supported virtual-button catalog (every CBX_DIAG_BTN_COUNT button,
+ * bound or unbound) so a profile can be edited for any button even when
+ * it has no mapping yet.  Rows after the catalog expose any mapping whose
+ * source is not a catalog button, so no binding is hidden.
+ */
+typedef struct {
+    cbx_diag_button button;   /* catalog button for this row, NONE if unknown */
+    int mapping_index;        /* profile.mappings index, -1 when unbound   */
+} cbx_pe_row;
 
 /* ------------------------------------------------------------------ */
 /*  Profile editor state                                              */
@@ -117,8 +133,10 @@ typedef struct {
 
     /* --- UI state ------------------------------------------------- */
     cbx_editor_mode mode;
-    int             selected_index;  /* selected binding in list, -1 = none */
+    int             selected_index;  /* selected row in binding list, -1 = none */
     int             editing_index;  /* binding being edited, -1 = none */
+    cbx_pe_row      rows[CBX_PE_MAX_ROWS]; /* row -> button/mapping table */
+    int             row_count;       /* populated rows in rows[] */
 
     /* --- Capture mode state -------------------------------------- */
     ip_input_events input_events;
@@ -227,13 +245,26 @@ int cbx_profile_editor_load_capabilities(cbx_profile_editor *ed);
 /* ------------------------------------------------------------------ */
 
 /*
- * Rebuild the binding list from the loaded profile's mappings.
- * Each list item shows "source → target" text.  Resets selection to 0
- * (or -1 if no mappings).  Updates the diagram highlight.
+ * Rebuild the binding list from the supported virtual-button catalog
+ * (BUG-0016): every CBX_DIAG_BTN_COUNT button becomes a row, bound rows
+ * show "source → targets" and unbound rows show "button → (unbound)".
+ * Mappings whose source is not a catalog button follow as extra rows so
+ * no binding is hidden.  Selection is clamped into range (0 when the
+ * catalog is non-empty) and the diagram highlight follows it.
  *
  * @return 0 on success, negative errno on error.
  */
 int cbx_profile_editor_refresh(cbx_profile_editor *ed);
+
+/*
+ * Find an existing mapping whose source event binds `btn`, or append a new
+ * mapping (source = gamepad button btn) to `p`.  Never duplicates an
+ * existing mapping.  Returns the mapping index, or -1 if the profile is
+ * full or the button is invalid.  Shared by the binding list and
+ * sequential binding modes.
+ */
+int cbx_profile_editor_find_or_create_mapping(cbx_profile *p,
+                                               cbx_diag_button btn);
 
 /* ------------------------------------------------------------------ */
 /*  Navigation                                                         */
@@ -315,6 +346,16 @@ cbx_diag_button cbx_profile_editor_get_diagram_highlight(
     const cbx_profile_editor *ed);
 int             cbx_profile_editor_get_target_count(
     const cbx_profile_editor *ed);
+
+/* Binding-list row accessors (BUG-0016).  row_count is the number of
+ * visible rows (catalog + non-catalog extras); row_button returns the
+ * catalog button a row edits (or NONE); row_mapping returns the profile
+ * mapping index (or -1 for an unbound catalog row). */
+int             cbx_profile_editor_row_count(const cbx_profile_editor *ed);
+cbx_diag_button cbx_profile_editor_row_button(const cbx_profile_editor *ed,
+                                              int row);
+int             cbx_profile_editor_row_mapping(const cbx_profile_editor *ed,
+                                               int row);
 const char     *cbx_profile_editor_get_status(const cbx_profile_editor *ed);
 int             cbx_profile_editor_get_editing_index(
     const cbx_profile_editor *ed);

@@ -39,59 +39,11 @@
  * UP=0, DOWN=1, LEFT=2, RIGHT=3, A=4, B=5, X=6, Y=7,
  * START=8, SELECT=9, GUIDE=10, L1=11, R1=12, L2=13, R2=14, L3=15, R3=16.
  * Total: CBX_DIAG_BTN_COUNT (17).
+ *
+ * Mapping lookup/creation is shared with binding-list mode via
+ * cbx_profile_editor_find_or_create_mapping() (BUG-0016), so sequential
+ * capture and unbound-row activation never duplicate a mapping.
  */
-
-/*
- * Find or create a mapping for a given button in the profile.
- * Returns the mapping index, or -1 if the profile is full.
- */
-static int
-find_or_create_mapping(cbx_profile *p, cbx_diag_button btn)
-{
-    if (!p || btn == CBX_DIAG_BTN_NONE)
-        return -1;
-
-    const char *btn_name = cbx_profile_diagram_button_name(btn);
-    if (!btn_name)
-        return -1;
-
-    /* Search for an existing mapping with this button */
-    for (int i = 0; i < p->mapping_count; i++) {
-        for (int j = 0; j < p->mappings[i].source_event.prop_count; j++) {
-            if ((strcmp(p->mappings[i].source_event.props[j].key,
-                         "button") == 0
-                 || strcmp(p->mappings[i].source_event.props[j].key,
-                            "axis") == 0)
-                && strcmp(p->mappings[i].source_event.props[j].value,
-                           btn_name) == 0) {
-                return i;
-            }
-        }
-    }
-
-    /* Create a new mapping */
-    if (p->mapping_count >= CBX_MAX_MAPPINGS)
-        return -1;
-
-    int idx = p->mapping_count;
-    cbx_profile_mapping *m = &p->mappings[idx];
-    memset(m, 0, sizeof(*m));
-
-    /* Set the mapping name to the button name */
-    strncpy(m->name, btn_name, sizeof(m->name) - 1);
-
-    /* Set source event: gamepad button */
-    strncpy(m->source_event.device_class, "gamepad",
-             sizeof(m->source_event.device_class) - 1);
-    m->source_event.prop_count = 1;
-    strncpy(m->source_event.props[0].key, "button",
-             sizeof(m->source_event.props[0].key) - 1);
-    strncpy(m->source_event.props[0].value, btn_name,
-             sizeof(m->source_event.props[0].value) - 1);
-
-    p->mapping_count++;
-    return idx;
-}
 
 /*
  * Update the UI for the current sequential step:
@@ -250,8 +202,9 @@ cbx_profile_editor_seq_on_input(ip_input_id input,
     if (!current_name)
         return;
 
-    /* Create or find the mapping for the current button */
-    int map_idx = find_or_create_mapping(&ed->profile, current_btn);
+    /* Create or find the mapping for the current button. */
+    int map_idx = cbx_profile_editor_find_or_create_mapping(&ed->profile,
+                                                             current_btn);
     if (map_idx < 0)
         return;
 

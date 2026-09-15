@@ -19,6 +19,7 @@
 #include "manager/profile_editor_list.h"
 #include "manager/profile_diagram.h"
 #include "dbus/ip_input_signal.h"
+#include "config/config_paths.h"
 #include "ui/theme.h"
 #include "ui/widget.h"
 #include "test_harness.h"
@@ -304,8 +305,16 @@ static void test_load_profile_empty(void **state)
 
     int rc = cbx_profile_editor_load_profile(&f->ed, &p);
     assert_int_equal(rc, 0);
+    /* No mappings, but the binding list still enumerates the whole
+     * supported-button catalog (BUG-0016), so an empty profile has 17
+     * unbound rows and a reachable add/sequential action. */
     assert_int_equal(cbx_profile_editor_binding_count(&f->ed), 0);
-    assert_int_equal(cbx_profile_editor_get_selected(&f->ed), -1);
+    assert_int_equal(cbx_profile_editor_row_count(&f->ed), CBX_DIAG_BTN_COUNT);
+    assert_int_equal(cbx_list_item_count(&f->ed.binding_list),
+                     CBX_DIAG_BTN_COUNT);
+    assert_int_equal(cbx_profile_editor_get_selected(&f->ed), 0);
+    for (int r = 0; r < cbx_profile_editor_row_count(&f->ed); r++)
+        assert_int_equal(cbx_profile_editor_row_mapping(&f->ed, r), -1);
 }
 
 /* ------------------------------------------------------------------ */
@@ -349,14 +358,15 @@ static void test_move_wrap_down(void **state)
     cbx_profile p = make_test_profile(3);
     cbx_profile_editor_load_profile(&f->ed, &p);
 
-    /* Move to last */
-    cbx_profile_editor_move_down(&f->ed);
-    cbx_profile_editor_move_down(&f->ed);
-    assert_int_equal(cbx_profile_editor_get_selected(&f->ed), 2);
+    int rows = cbx_profile_editor_row_count(&f->ed);
+    assert_int_equal(rows, CBX_DIAG_BTN_COUNT);
 
-    /* Wrap to first */
-    int idx = cbx_profile_editor_move_down(&f->ed);
-    assert_int_equal(idx, 0);
+    /* Walk to the last row. */
+    for (int i = 1; i < rows; i++)
+        assert_int_equal(cbx_profile_editor_move_down(&f->ed), i);
+
+    /* Wrap to first. */
+    assert_int_equal(cbx_profile_editor_move_down(&f->ed), 0);
 }
 
 static void test_move_wrap_up(void **state)
@@ -366,9 +376,11 @@ static void test_move_wrap_up(void **state)
     cbx_profile p = make_test_profile(3);
     cbx_profile_editor_load_profile(&f->ed, &p);
 
-    /* At first (0), move up wraps to last */
+    assert_int_equal(cbx_profile_editor_get_selected(&f->ed), 0);
+
+    /* At first row, move up wraps to the last catalog row. */
     int idx = cbx_profile_editor_move_up(&f->ed);
-    assert_int_equal(idx, 2);
+    assert_int_equal(idx, cbx_profile_editor_row_count(&f->ed) - 1);
 }
 
 static void test_move_empty_list(void **state)
@@ -379,11 +391,12 @@ static void test_move_empty_list(void **state)
     cbx_profile_init(&p);
     cbx_profile_editor_load_profile(&f->ed, &p);
 
-    int idx = cbx_profile_editor_move_down(&f->ed);
-    assert_int_equal(idx, -1);
-
-    idx = cbx_profile_editor_move_up(&f->ed);
-    assert_int_equal(idx, -1);
+    /* An empty profile still exposes all 17 catalog rows, so navigation
+     * works even though there are no mappings. */
+    assert_int_equal(cbx_profile_editor_move_down(&f->ed), 1);
+    assert_int_equal(cbx_profile_editor_move_up(&f->ed), 0);
+    assert_int_equal(cbx_profile_editor_move_up(&f->ed),
+                     CBX_DIAG_BTN_COUNT - 1);
 }
 
 /* ------------------------------------------------------------------ */
@@ -410,15 +423,21 @@ static void test_diagram_sync_on_move(void **state)
     cbx_profile p = make_test_profile(3);
     cbx_profile_editor_load_profile(&f->ed, &p);
 
-    /* Move to binding 1 (button "B") */
+    /* Row 1 is button "B". */
     cbx_profile_editor_move_down(&f->ed);
+    assert_int_equal(cbx_profile_editor_get_selected(&f->ed), 1);
     assert_int_equal(cbx_profile_editor_get_diagram_highlight(&f->ed),
                        CBX_DIAG_BTN_B);
 
-    /* Move to binding 2 (button "Start") */
-    cbx_profile_editor_move_down(&f->ed);
+    /* Move to the "Start" catalog row (mapping 2), wherever it sits in the
+     * catalog order. */
+    while (cbx_profile_editor_row_button(&f->ed,
+              cbx_profile_editor_get_selected(&f->ed)) != CBX_DIAG_BTN_START)
+        cbx_profile_editor_move_down(&f->ed);
     assert_int_equal(cbx_profile_editor_get_diagram_highlight(&f->ed),
                        CBX_DIAG_BTN_START);
+    assert_int_equal(cbx_profile_editor_row_mapping(&f->ed,
+              cbx_profile_editor_get_selected(&f->ed)), 2);
 }
 
 static void test_diagram_sync_empty(void **state)
@@ -429,8 +448,12 @@ static void test_diagram_sync_empty(void **state)
     cbx_profile_init(&p);
     cbx_profile_editor_load_profile(&f->ed, &p);
 
+    /* The catalog is never empty; selection lands on the first supported
+     * button and lights it up. */
+    assert_int_equal(cbx_profile_editor_get_selected(&f->ed), 0);
+    assert_int_equal(cbx_profile_editor_row_button(&f->ed, 0), CBX_DIAG_BTN_A);
     assert_int_equal(cbx_profile_editor_get_diagram_highlight(&f->ed),
-                       CBX_DIAG_BTN_NONE);
+                       CBX_DIAG_BTN_A);
 }
 
 static void test_diagram_sync_unknown_button(void **state)
@@ -438,7 +461,7 @@ static void test_diagram_sync_unknown_button(void **state)
     pe_fixture *f = *state;
 
     cbx_profile p = make_test_profile(1);
-    /* Change button name to something unknown */
+    /* Change button name to something unknown. */
     strncpy(p.mappings[0].source_event.props[0].value, "FooButton",
              sizeof(p.mappings[0].source_event.props[0].value) - 1);
     p.mappings[0].source_event.props[0].value
@@ -446,7 +469,22 @@ static void test_diagram_sync_unknown_button(void **state)
 
     cbx_profile_editor_load_profile(&f->ed, &p);
 
-    /* Unknown button → NONE */
+    /* Every catalog button still has a row; A is now unbound. */
+    assert_int_equal(cbx_profile_editor_row_button(&f->ed, 0), CBX_DIAG_BTN_A);
+    assert_int_equal(cbx_profile_editor_row_mapping(&f->ed, 0), -1);
+    assert_int_equal(cbx_profile_editor_get_diagram_highlight(&f->ed),
+                       CBX_DIAG_BTN_A);
+
+    /* The unknown-source mapping is preserved as a trailing row that
+     * cannot light up a diagram button. */
+    int extra = CBX_DIAG_BTN_COUNT;
+    assert_int_equal(cbx_profile_editor_row_count(&f->ed), extra + 1);
+    assert_int_equal(cbx_profile_editor_row_mapping(&f->ed, extra), 0);
+    assert_int_equal(cbx_profile_editor_row_button(&f->ed, extra),
+                     CBX_DIAG_BTN_NONE);
+    for (int i = 0; i < extra; i++)
+        cbx_profile_editor_move_down(&f->ed);
+    assert_int_equal(cbx_profile_editor_get_selected(&f->ed), extra);
     assert_int_equal(cbx_profile_editor_get_diagram_highlight(&f->ed),
                        CBX_DIAG_BTN_NONE);
 }
@@ -958,8 +996,9 @@ static void test_full_workflow(void **state)
     cbx_profile p = make_test_profile(3);
     cbx_profile_editor_load_profile(&f->ed, &p);
     assert_int_equal(cbx_profile_editor_binding_count(&f->ed), 3);
+    assert_int_equal(cbx_profile_editor_row_count(&f->ed), CBX_DIAG_BTN_COUNT);
 
-    /* Navigate */
+    /* Navigate to row 1 (button "B"). */
     cbx_profile_editor_move_down(&f->ed);
     assert_int_equal(cbx_profile_editor_get_selected(&f->ed), 1);
     assert_int_equal(cbx_profile_editor_get_diagram_highlight(&f->ed),
@@ -972,20 +1011,25 @@ static void test_full_workflow(void **state)
     cbx_profile_editor_activate(&f->ed);
     assert_int_equal(cbx_profile_editor_get_mode(&f->ed),
                        CBX_EDITOR_MODE_TARGET_PICK);
+    assert_int_equal(cbx_profile_editor_get_editing_index(&f->ed), 1);
 
     cbx_profile_editor_activate(&f->ed);  /* confirm */
     assert_int_equal(cbx_profile_editor_get_mode(&f->ed),
                        CBX_EDITOR_MODE_LIST);
 
-    /* Navigate again */
-    cbx_profile_editor_move_down(&f->ed);
-    assert_int_equal(cbx_profile_editor_get_selected(&f->ed), 2);
+    /* Navigate to the "Start" catalog row (mapping 2). */
+    while (cbx_profile_editor_row_button(&f->ed,
+              cbx_profile_editor_get_selected(&f->ed)) != CBX_DIAG_BTN_START)
+        cbx_profile_editor_move_down(&f->ed);
     assert_int_equal(cbx_profile_editor_get_diagram_highlight(&f->ed),
                        CBX_DIAG_BTN_START);
+    assert_int_equal(cbx_profile_editor_row_mapping(&f->ed,
+              cbx_profile_editor_get_selected(&f->ed)), 2);
 
     /* Capture mode */
     cbx_profile_editor_begin_capture(&f->ed);
     assert_true(cbx_profile_editor_is_capture_active(&f->ed));
+    assert_int_equal(cbx_profile_editor_get_editing_index(&f->ed), 2);
 
     /* Simulate button press */
     cbx_profile_editor_on_input_event(IP_INPUT_UP, IP_INPUT_CAT_BUTTON,
@@ -996,6 +1040,311 @@ static void test_full_workflow(void **state)
     const cbx_profile *prof = cbx_profile_editor_get_profile(&f->ed);
     assert_string_equal(prof->mappings[2].source_event.props[0].value,
                           "Up");
+}
+
+/* ------------------------------------------------------------------ */
+/*  Tests: catalog enumeration and unbound-row activation (BUG-0016)  */
+/* ------------------------------------------------------------------ */
+
+/* Build a 6-mapping NES profile (A, B, D-pad) like the shipped Default. */
+static cbx_profile make_nes_profile(void)
+{
+    static const char *btns[6] = {"A", "B", "Up", "Down", "Left", "Right"};
+    cbx_profile p;
+    cbx_profile_init(&p);
+    strncpy(p.name, "NES", sizeof(p.name) - 1);
+    for (int i = 0; i < 6; i++) {
+        cbx_profile_mapping *m = &p.mappings[p.mapping_count];
+        memset(m, 0, sizeof(*m));
+        strncpy(m->name, btns[i], sizeof(m->name) - 1);
+        strncpy(m->source_event.device_class, "gamepad",
+                 sizeof(m->source_event.device_class) - 1);
+        m->source_event.prop_count = 1;
+        strncpy(m->source_event.props[0].key, "button",
+                 sizeof(m->source_event.props[0].key) - 1);
+        snprintf(m->source_event.props[0].value,
+                  sizeof(m->source_event.props[0].value), "%s", btns[i]);
+        m->target_event_count = 1;
+        strncpy(m->target_events[0].device_class, "keyboard",
+                 sizeof(m->target_events[0].device_class) - 1);
+        snprintf(m->target_events[0].value,
+                  sizeof(m->target_events[0].value), "Key%s", btns[i]);
+        p.mapping_count++;
+    }
+    return p;
+}
+
+/* Index of the catalog row for a supported button, or -1. */
+static int
+row_for_button(const cbx_profile_editor *ed, cbx_diag_button btn)
+{
+    for (int r = 0; r < cbx_profile_editor_row_count(ed); r++)
+        if (cbx_profile_editor_row_button(ed, r) == btn)
+            return r;
+    return -1;
+}
+
+/* True if any pixel in a region differs between two full frames. */
+static bool
+pe_region_differs(const uint8_t *a, const uint8_t *b, int w, int h,
+                  const SDL_Rect *r)
+{
+    for (int y = r->y; y < r->y + r->h && y < h; y++) {
+        for (int x = r->x; x < r->x + r->w && x < w; x++) {
+            int idx = (y * w + x) * 4;
+            if (a[idx] != b[idx] || a[idx + 1] != b[idx + 1] ||
+                a[idx + 2] != b[idx + 2] || a[idx + 3] != b[idx + 3])
+                return true;
+        }
+    }
+    return false;
+}
+
+/* The binding list enumerates the whole supported virtual-button catalog
+ * (BUG-0016): every one of the 17 buttons is a row, whether the loaded
+ * profile binds it or not. */
+static void test_catalog_enumerates_all_seventeen(void **state)
+{
+    pe_fixture *f = *state;
+    cbx_profile p = make_nes_profile();
+    cbx_profile_editor_load_profile(&f->ed, &p);
+
+    assert_int_equal(cbx_profile_editor_row_count(&f->ed), CBX_DIAG_BTN_COUNT);
+    assert_int_equal(cbx_list_item_count(&f->ed.binding_list),
+                     CBX_DIAG_BTN_COUNT);
+
+    static const char *nes[6] = {"A", "B", "Up", "Down", "Left", "Right"};
+    bool seen[CBX_DIAG_BTN_COUNT] = { false };
+    for (int r = 0; r < CBX_DIAG_BTN_COUNT; r++) {
+        cbx_diag_button b = cbx_profile_editor_row_button(&f->ed, r);
+        assert_true(b >= 0 && b < CBX_DIAG_BTN_COUNT);
+        assert_false(seen[b]);
+        seen[b] = true;
+
+        const char *name = cbx_profile_diagram_button_name(b);
+        bool bound = false;
+        for (int i = 0; i < 6; i++)
+            if (strcmp(name, nes[i]) == 0)
+                bound = true;
+        if (bound)
+            assert_true(cbx_profile_editor_row_mapping(&f->ed, r) >= 0);
+        else
+            assert_int_equal(cbx_profile_editor_row_mapping(&f->ed, r), -1);
+    }
+    for (int b = 0; b < CBX_DIAG_BTN_COUNT; b++)
+        assert_true(seen[b]);
+}
+
+/* Enumerating the catalog must not mutate a loaded profile: the shipped
+ * Default stays exactly as loaded (immutable) while its 11 unbound buttons
+ * are still shown as editable rows. */
+static void test_default_profile_immutable_under_catalog(void **state)
+{
+    pe_fixture *f = *state;
+
+    char path[512];
+    snprintf(path, sizeof(path), "%s/default.yaml",
+             cbx_builtin_profiles_dir());
+    cbx_profile def;
+    cbx_profile_init(&def);
+    int rc = cbx_profile_load(&def, path);
+    assert_int_equal(rc, 0);
+    assert_int_equal(def.mapping_count, 6);
+
+    cbx_profile_editor_load_profile(&f->ed, &def);
+    assert_false(cbx_profile_editor_is_dirty(&f->ed));
+    assert_int_equal(cbx_profile_editor_binding_count(&f->ed), 6);
+    assert_int_equal(cbx_profile_editor_row_count(&f->ed), CBX_DIAG_BTN_COUNT);
+
+    const cbx_profile *loaded = cbx_profile_editor_get_profile(&f->ed);
+    assert_non_null(loaded);
+    assert_int_equal(loaded->mapping_count, 6);
+
+    int unbound = 0;
+    for (int r = 0; r < cbx_profile_editor_row_count(&f->ed); r++)
+        if (cbx_profile_editor_row_mapping(&f->ed, r) < 0)
+            unbound++;
+    assert_int_equal(unbound, 11);
+}
+
+/* Activating an unbound row creates exactly the intended mapping. */
+static void test_activate_unbound_row_creates_mapping(void **state)
+{
+    pe_fixture *f = *state;
+    cbx_profile p = make_nes_profile();
+    cbx_profile_editor_load_profile(&f->ed, &p);
+    assert_int_equal(cbx_profile_editor_binding_count(&f->ed), 6);
+
+    int xrow = row_for_button(&f->ed, CBX_DIAG_BTN_X);
+    assert_true(xrow >= 0);
+    assert_int_equal(cbx_profile_editor_row_mapping(&f->ed, xrow), -1);
+    while (cbx_profile_editor_get_selected(&f->ed) != xrow)
+        cbx_profile_editor_move_down(&f->ed);
+
+    assert_int_equal(cbx_profile_editor_activate(&f->ed), 0);
+    assert_int_equal(cbx_profile_editor_get_mode(&f->ed),
+                     CBX_EDITOR_MODE_BINDING_EDIT);
+    assert_int_equal(cbx_profile_editor_binding_count(&f->ed), 7);
+    assert_true(cbx_profile_editor_is_dirty(&f->ed));
+
+    const cbx_profile *prof = cbx_profile_editor_get_profile(&f->ed);
+    int idx = cbx_profile_editor_get_editing_index(&f->ed);
+    assert_true(idx >= 0 && idx < prof->mapping_count);
+    assert_string_equal(prof->mappings[idx].source_event.props[0].value, "X");
+    /* The X row now points at the new mapping. */
+    assert_int_equal(cbx_profile_editor_row_mapping(&f->ed, xrow), idx);
+
+    /* Exactly one X mapping exists (no duplicate). */
+    int xcount = 0;
+    for (int i = 0; i < prof->mapping_count; i++)
+        for (int j = 0; j < prof->mappings[i].source_event.prop_count; j++)
+            if ((strcmp(prof->mappings[i].source_event.props[j].key,
+                        "button") == 0 ||
+                 strcmp(prof->mappings[i].source_event.props[j].key,
+                        "axis") == 0) &&
+                strcmp(prof->mappings[i].source_event.props[j].value,
+                       "X") == 0)
+                xcount++;
+    assert_int_equal(xcount, 1);
+}
+
+/* Re-activating an already-created row never duplicates the mapping. */
+static void test_activate_existing_row_no_duplicate(void **state)
+{
+    pe_fixture *f = *state;
+    cbx_profile p = make_nes_profile();
+    cbx_profile_editor_load_profile(&f->ed, &p);
+
+    int xrow = row_for_button(&f->ed, CBX_DIAG_BTN_X);
+    while (cbx_profile_editor_get_selected(&f->ed) != xrow)
+        cbx_profile_editor_move_down(&f->ed);
+
+    cbx_profile_editor_activate(&f->ed);       /* creates X */
+    assert_int_equal(cbx_profile_editor_binding_count(&f->ed), 7);
+    cbx_profile_editor_cancel(&f->ed);          /* back to LIST */
+    assert_int_equal(cbx_profile_editor_get_mode(&f->ed), CBX_EDITOR_MODE_LIST);
+
+    /* Selection is preserved on the same row; activating again edits the
+     * existing X mapping instead of appending a duplicate. */
+    assert_int_equal(cbx_profile_editor_get_selected(&f->ed), xrow);
+    assert_int_equal(cbx_profile_editor_activate(&f->ed), 0);
+    assert_int_equal(cbx_profile_editor_binding_count(&f->ed), 7);
+}
+
+/* Pointer path: a mouse click on an unbound row activates that exact row
+ * through the list widget's production on_select callback. */
+static void test_activate_unbound_row_pointer_path(void **state)
+{
+    pe_fixture *f = *state;
+    cbx_profile p = make_nes_profile();
+    cbx_profile_editor_load_profile(&f->ed, &p);
+
+    int xrow = row_for_button(&f->ed, CBX_DIAG_BTN_X);
+    assert_true(xrow >= 0 && xrow < f->ed.binding_list.visible_count);
+
+    SDL_Event ev = {0};
+    ev.type = SDL_MOUSEBUTTONDOWN;
+    ev.button.button = SDL_BUTTON_LEFT;
+    ev.button.x = f->ed.binding_list.base.rect.x + 4;
+    ev.button.y = f->ed.binding_list.base.rect.y
+                  + xrow * f->ed.binding_list.item_h + 1;
+    assert_true(cbx_widget_handle_event(&f->ed.binding_list.base, &ev));
+    ev.type = SDL_MOUSEBUTTONUP;
+    assert_true(cbx_widget_handle_event(&f->ed.binding_list.base, &ev));
+
+    assert_int_equal(cbx_profile_editor_get_selected(&f->ed), xrow);
+    assert_int_equal(cbx_profile_editor_get_mode(&f->ed),
+                     CBX_EDITOR_MODE_BINDING_EDIT);
+    assert_int_equal(cbx_profile_editor_binding_count(&f->ed), 7);
+    assert_int_equal(cbx_profile_editor_get_diagram_highlight(&f->ed),
+                     CBX_DIAG_BTN_X);
+}
+
+/* The 17-row list scrolls so the selected row stays visible. */
+static void test_catalog_scrolling(void **state)
+{
+    pe_fixture *f = *state;
+    cbx_profile p;
+    cbx_profile_init(&p);
+    cbx_profile_editor_load_profile(&f->ed, &p);
+
+    cbx_list *lst = &f->ed.binding_list;
+    assert_int_equal(lst->item_count, CBX_DIAG_BTN_COUNT);
+    assert_true(lst->visible_count > 0);
+    assert_true(lst->visible_count < CBX_DIAG_BTN_COUNT);
+
+    for (int i = 0; i < CBX_DIAG_BTN_COUNT - 1; i++)
+        cbx_profile_editor_move_down(&f->ed);
+    assert_int_equal(cbx_profile_editor_get_selected(&f->ed),
+                     CBX_DIAG_BTN_COUNT - 1);
+    assert_true(lst->scroll_offset > 0);
+    assert_true(cbx_profile_editor_get_selected(&f->ed) >= lst->scroll_offset);
+    assert_true(cbx_profile_editor_get_selected(&f->ed)
+                < lst->scroll_offset + lst->visible_count);
+}
+
+/* Every catalog selection paints its highlight in that button's diagram
+ * region (the always-visible diagram stays synchronised with the list). */
+static void test_diagram_regions_all_buttons(void **state)
+{
+    pe_fixture *f = *state;
+    cbx_profile p;
+    cbx_profile_init(&p);
+    cbx_profile_editor_load_profile(&f->ed, &p);
+
+    SDL_Rect diag_rect;
+    cbx_widget_get_rect(&f->ed.diagram.base, &diag_rect);
+    /* The renderer anchors markers inside the aspect-fitted content box. */
+    SDL_Rect content = diag_rect;
+    cbx_profile_diagram_content_rect(&f->ed.diagram, &diag_rect, &content);
+    int w = 0, h = 0;
+    SDL_GetRendererOutputSize(f->sdl.renderer, &w, &h);
+    uint8_t *with_hl = malloc((size_t)w * h * 4);
+    uint8_t *no_hl   = malloc((size_t)w * h * 4);
+    assert_non_null(with_hl);
+    assert_non_null(no_hl);
+
+    for (int b = 0; b < CBX_DIAG_BTN_COUNT; b++) {
+        int r = row_for_button(&f->ed, (cbx_diag_button)b);
+        assert_true(r >= 0);
+        while (cbx_profile_editor_get_selected(&f->ed) != r)
+            cbx_profile_editor_move_down(&f->ed);
+        assert_int_equal(cbx_profile_editor_get_diagram_highlight(&f->ed), b);
+
+        /* Frame with the row selected (highlight on). */
+        SDL_SetRenderDrawColor(f->sdl.renderer, 255, 255, 255, 255);
+        SDL_RenderClear(f->sdl.renderer);
+        cbx_widget_draw(&f->ed.diagram.base, f->sdl.renderer);
+        assert_int_equal(fb_read_pixels(f->sdl.renderer, NULL, with_hl,
+                                        (size_t)w * h * 4), 0);
+
+        /* Same diagram with the highlight cleared. */
+        cbx_profile_diagram_clear_highlight(&f->ed.diagram);
+        SDL_SetRenderDrawColor(f->sdl.renderer, 255, 255, 255, 255);
+        SDL_RenderClear(f->sdl.renderer);
+        cbx_widget_draw(&f->ed.diagram.base, f->sdl.renderer);
+        assert_int_equal(fb_read_pixels(f->sdl.renderer, NULL, no_hl,
+                                        (size_t)w * h * 4), 0);
+
+        const cbx_diag_button_pos *pos =
+            cbx_profile_diagram_active_button_pos(&f->ed.diagram,
+                                                  (cbx_diag_button)b);
+        assert_non_null(pos);
+        SDL_Rect br;
+        br.x = content.x + (int)(pos->x * (float)content.w);
+        br.y = content.y + (int)(pos->y * (float)content.h);
+        br.w = (int)(pos->w * (float)content.w);
+        if (br.w < 1) br.w = 1;
+        br.h = (int)(pos->h * (float)content.h);
+        if (br.h < 1) br.h = 1;
+        assert_true(pe_region_differs(with_hl, no_hl, w, h, &br));
+
+        /* Restore the highlight for the next iteration's bookkeeping. */
+        cbx_profile_diagram_highlight(&f->ed.diagram, (cbx_diag_button)b);
+    }
+
+    free(with_hl);
+    free(no_hl);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1064,6 +1413,21 @@ int main(void)
 
         /* Full workflow */
         cmocka_unit_test_setup_teardown(test_full_workflow, setup, teardown),
+
+        /* Catalog enumeration and unbound-row activation (BUG-0016) */
+        cmocka_unit_test_setup_teardown(
+            test_catalog_enumerates_all_seventeen, setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            test_default_profile_immutable_under_catalog, setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            test_activate_unbound_row_creates_mapping, setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            test_activate_existing_row_no_duplicate, setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            test_activate_unbound_row_pointer_path, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_catalog_scrolling, setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            test_diagram_regions_all_buttons, setup, teardown),
 
         /* Device-mapped diagram resolution (BUG-0018) */
         cmocka_unit_test_setup_teardown(
