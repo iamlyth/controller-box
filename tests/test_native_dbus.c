@@ -25,6 +25,7 @@
 #include "dbus/ip_input_signal.h"
 #include "dbus/dbus_interface.h"             /* IP_DBUS_PATH, IP_IFACE_* */
 #include "config/config_settings.h"
+#include "config/config_profile.h"
 #include "app/overlay_service.h"   /* cbx_reconcile_startup_targets */
 #include "native_ip_server.h"
 
@@ -1188,6 +1189,131 @@ test_native_absent_service_then_appears(void **state)
     unsetenv("DBUS_SYSTEM_BUS_ADDRESS");
 }
 
+/* ================================================================== */
+/*  Semantic DeviceProfile round trip over the native DBus load path    */
+/* ================================================================== */
+
+static void test_native_profile_yaml_semantic_round_trip(void **state)
+{
+    (void)state;
+    nip_server_handle sh;
+    const nip_server_config cfg = { .num_composites = 1, .version = "9.8.7" };
+    nip_reset_server_state(1);
+    assert_int_equal(nip_start_server(&sh, &cfg), 0);
+
+    const ip_dbus_backend *backend = ip_dbus_sd_backend();
+    ip_bus_handle bus = NULL;
+    assert_int_equal(backend->connect(&bus), 0);
+    assert_int_equal(wait_for_server(backend, bus, NULL), 0);
+
+    const char *comp0 = "/org/shadowblip/InputPlumber/CompositeDevice0";
+
+    /* Simple gamepad/keyboard/mouse/touch mappings plus a scalar source. */
+    const char *yaml =
+        "version: 1\n"
+        "kind: DeviceProfile\n"
+        "name: NativeRoundTrip\n"
+        "description: native semantic round trip\n"
+        "mapping:\n"
+        "  - name: Menu\n"
+        "    source_event:\n"
+        "      gamepad:\n"
+        "        button: Start\n"
+        "    target_events:\n"
+        "      - keyboard: KeyEsc\n"
+        "  - name: Aim\n"
+        "    source_event:\n"
+        "      gamepad:\n"
+        "        axis: RightX\n"
+        "        direction: Positive\n"
+        "    target_events:\n"
+        "      - mouse: MoveRight\n"
+        "  - name: Tap\n"
+        "    source_event:\n"
+        "      keyboard: KeySpace\n"
+        "    target_events:\n"
+        "      - touch: Tap\n";
+
+    cbx_profile prof;
+    assert_int_equal(cbx_profile_parse(&prof, yaml, 0), 0);
+    assert_false(prof.has_unsupported_content);
+
+    char *serialized = NULL;
+    size_t len = 0;
+    assert_int_equal(cbx_profile_serialize(&prof, &serialized, &len), 0);
+    assert_non_null(serialized);
+
+    /* Load the serialized document through the real DBus method. */
+    assert_int_equal(ip_composite_load_profile_from_yaml(backend, bus, comp0,
+                       serialized), 0);
+
+    char *got = NULL;
+    assert_int_equal(ip_composite_get_profile_yaml(backend, bus, comp0, &got),
+                     0);
+    assert_non_null(got);
+
+    /* The native service received the exact serialized document... */
+    assert_string_equal(got, serialized);
+
+    /* ...and parsing what it returned preserves source/target meaning. */
+    cbx_profile back;
+    assert_int_equal(cbx_profile_parse(&back, got, 0), 0);
+    assert_int_equal(back.mapping_count, 3);
+    assert_string_equal(back.mappings[0].source_event.device_class, "gamepad");
+    assert_string_equal(back.mappings[0].source_event.props[0].value, "Start");
+    assert_string_equal(back.mappings[0].target_events[0].device_class,
+                        "keyboard");
+    assert_string_equal(back.mappings[0].target_events[0].value, "KeyEsc");
+    assert_string_equal(back.mappings[1].source_event.device_class, "gamepad");
+    assert_string_equal(back.mappings[1].source_event.props[0].value, "RightX");
+    assert_string_equal(back.mappings[1].target_events[0].device_class, "mouse");
+    assert_string_equal(back.mappings[1].target_events[0].value, "MoveRight");
+    assert_string_equal(back.mappings[2].source_event.device_class, "keyboard");
+    assert_string_equal(back.mappings[2].source_event.props[0].value,
+                        "KeySpace");
+    assert_string_equal(back.mappings[2].target_events[0].device_class, "touch");
+    assert_string_equal(back.mappings[2].target_events[0].value, "Tap");
+    free(got);
+    free(serialized);
+
+    /* An advanced/complex-target profile loaded natively comes back
+     * byte-for-byte unchanged, so InputPlumber keeps the structures the v1
+     * editor cannot represent.  The GUI parser flags it and would refuse to
+     * re-serialize it. */
+    const char *advanced =
+        "version: 1\n"
+        "kind: DeviceProfile\n"
+        "name: Advanced\n"
+        "description: chord\n"
+        "mapping:\n"
+        "  - name: Chord\n"
+        "    source_event:\n"
+        "      gamepad:\n"
+        "        button: A\n"
+        "    target_events:\n"
+        "      - keyboard:\n"
+        "          key: KeyEsc\n"
+        "          modifier: Shift\n";
+    assert_int_equal(ip_composite_load_profile_from_yaml(backend, bus, comp0,
+                       advanced), 0);
+    char *got_adv = NULL;
+    assert_int_equal(ip_composite_get_profile_yaml(backend, bus, comp0,
+                       &got_adv), 0);
+    assert_string_equal(got_adv, advanced);
+    cbx_profile adv_prof;
+    assert_int_equal(cbx_profile_parse(&adv_prof, got_adv, 0), 0);
+    assert_true(adv_prof.has_unsupported_content);
+    char *rserialized = NULL;
+    size_t rlen = 0;
+    assert_int_equal(cbx_profile_serialize(&adv_prof, &rserialized, &rlen),
+                     -ENOTSUP);
+    assert_null(rserialized);
+    free(got_adv);
+
+    backend->disconnect(bus);
+    nip_stop_server(&sh);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -1196,6 +1322,7 @@ int main(void)
         cmocka_unit_test(test_native_reenumeration_timing),
         cmocka_unit_test(test_native_absent_service_then_appears),
         cmocka_unit_test(test_native_target_operations),
+        cmocka_unit_test(test_native_profile_yaml_semantic_round_trip),
         cmocka_unit_test(test_native_topology_reconciliation),
         cmocka_unit_test(test_native_assignment_application),
         cmocka_unit_test(test_native_startup_reconciliation_prod_path),

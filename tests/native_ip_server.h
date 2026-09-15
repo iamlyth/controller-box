@@ -22,6 +22,7 @@
 #define NIP_MAX_COMPOSITES  16
 #define NIP_MAX_TARGETS     16
 #define NIP_MAX_ATTACHED    16
+#define NIP_MAX_PROFILE_YAML 65536
 
 /* --- Server configuration --- */
 typedef struct {
@@ -47,6 +48,11 @@ typedef struct {
 
 extern char   g_nip_profile_path[NIP_MAX_COMPOSITES][256];
 extern char   g_nip_profile_name[NIP_MAX_COMPOSITES][64];
+
+/* Profile YAML most recently loaded through LoadProfileFromYaml on each
+ * composite.  The forked server stores it and GetProfileYaml returns it so
+ * the parent can verify a semantic round trip over the real DBus path. */
+extern char   g_nip_profile_yaml[NIP_MAX_COMPOSITES][NIP_MAX_PROFILE_YAML];
 extern char   g_nip_gamepad_order[NIP_MAX_COMPOSITES][256];
 extern int    g_nip_gamepad_order_count;
 

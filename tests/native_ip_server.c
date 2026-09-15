@@ -20,6 +20,7 @@
 
 char   g_nip_profile_path[NIP_MAX_COMPOSITES][256];
 char   g_nip_profile_name[NIP_MAX_COMPOSITES][64];
+char   g_nip_profile_yaml[NIP_MAX_COMPOSITES][NIP_MAX_PROFILE_YAML];
 char   g_nip_gamepad_order[NIP_MAX_COMPOSITES][256];
 int    g_nip_gamepad_order_count = 0;
 
@@ -371,6 +372,39 @@ method_load_profile_path(sd_bus_message *m, void *userdata, sd_bus_error *error)
 }
 
 static int
+method_load_profile_from_yaml(sd_bus_message *m, void *userdata,
+                              sd_bus_error *error)
+{
+    (void)userdata;
+    const char *yaml = NULL;
+    int rc = sd_bus_message_read(m, "s", &yaml);
+    if (rc < 0) return rc;
+    if (!yaml) yaml = "";
+    const char *obj_path = sd_bus_message_get_path(m);
+    int ci = composite_idx_from_path(obj_path);
+    if (ci < 0 || ci >= NIP_MAX_COMPOSITES)
+        return sd_bus_error_set(error,
+            "org.freedesktop.DBus.Error.UnknownObject", "composite not found");
+    if (strlen(yaml) >= NIP_MAX_PROFILE_YAML)
+        return sd_bus_error_set(error,
+            "org.freedesktop.DBus.Error.InvalidArgs", "profile YAML too large");
+    snprintf(g_nip_profile_yaml[ci], NIP_MAX_PROFILE_YAML, "%s", yaml);
+    return sd_bus_reply_method_return(m, "");
+}
+
+static int
+method_get_profile_yaml(sd_bus_message *m, void *userdata, sd_bus_error *error)
+{
+    (void)userdata; (void)error;
+    const char *obj_path = sd_bus_message_get_path(m);
+    int ci = composite_idx_from_path(obj_path);
+    if (ci < 0 || ci >= NIP_MAX_COMPOSITES)
+        return sd_bus_error_set(error,
+            "org.freedesktop.DBus.Error.UnknownObject", "composite not found");
+    return sd_bus_reply_method_return(m, "s", g_nip_profile_yaml[ci]);
+}
+
+static int
 method_set_intercept_activation(sd_bus_message *m, void *userdata,
                                   sd_bus_error *error)
 {
@@ -617,6 +651,9 @@ static const sd_bus_vtable composite_vtable[] = {
     SD_BUS_WRITABLE_PROPERTY("InterceptMode", "u", composite_property_get,
                               composite_property_set, 0, 0),
     SD_BUS_METHOD("LoadProfilePath", "s", "", method_load_profile_path, 0),
+    SD_BUS_METHOD("LoadProfileFromYaml", "s", "",
+                  method_load_profile_from_yaml, 0),
+    SD_BUS_METHOD("GetProfileYaml", "", "s", method_get_profile_yaml, 0),
     SD_BUS_METHOD("SetInterceptActivation", "ass", "",
                   method_set_intercept_activation, 0),
     SD_BUS_VTABLE_END
@@ -943,6 +980,7 @@ void nip_reset_server_state(int num_composites)
 
     memset(g_nip_profile_path, 0, sizeof(g_nip_profile_path));
     memset(g_nip_profile_name, 0, sizeof(g_nip_profile_name));
+    memset(g_nip_profile_yaml, 0, sizeof(g_nip_profile_yaml));
 
     g_nip_gamepad_order_count = 0;
     memset(g_nip_gamepad_order, 0, sizeof(g_nip_gamepad_order));

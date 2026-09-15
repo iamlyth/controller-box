@@ -15,6 +15,7 @@
 #ifndef CBX_CONFIG_PROFILE_H
 #define CBX_CONFIG_PROFILE_H
 
+#include <stdbool.h>
 #include <stddef.h>
 
 #ifdef __cplusplus
@@ -73,7 +74,16 @@ typedef struct {
     int target_event_count;
 } cbx_profile_mapping;
 
-/* A complete InputPlumber device_profile_v1 document. */
+/* A complete InputPlumber device_profile_v1 document.
+ *
+ * `has_unsupported_content` is set by the parser when the source YAML held
+ * structures the simple v1 editor model cannot represent (for example an
+ * advanced `chord`/`delayed_chord` target event, or an unknown key that the
+ * serializer would silently drop).  Such profiles are still loadable and
+ * displayable, but they must never be re-serialized: doing so would destroy
+ * the unsupported content.  Every write path (`cbx_profile_save`,
+ * `cbx_profile_save_to_dir`, `cbx_profile_serialize`) rejects them with
+ * -ENOTSUP, and the UI refuses to open or clone such a profile. */
 typedef struct {
     int version;                                   /* must be 1 */
     char kind[CBX_MAX_PROFILE_NAME_LEN];            /* "DeviceProfile" */
@@ -81,6 +91,7 @@ typedef struct {
     char description[CBX_MAX_PROFILE_NAME_LEN];
     cbx_profile_mapping mappings[CBX_MAX_MAPPINGS];
     int mapping_count;
+    bool has_unsupported_content;
 } cbx_profile;
 
 /*
@@ -112,11 +123,22 @@ int cbx_profile_load(cbx_profile *p, const char *path);
 int cbx_profile_parse(cbx_profile *p, const char *yaml, size_t len);
 
 /*
- * Validate a profile: version must be 1, kind must be "DeviceProfile".
+ * Validate a profile's in-memory structure before it is serialized or
+ * written: version must be 1, kind must be "DeviceProfile", mapping_count
+ * and every mapping's source-property/target-event counts must be within
+ * their fixed capacities, and the profile must not carry unsupported
+ * content that serialization would silently drop.
  *
- * @return 0 if valid; -EINVAL if invalid.
+ * @return 0 if valid; -EINVAL if malformed; -ENOTSUP if the profile can
+ *         only be loaded, not re-serialized.
  */
 int cbx_profile_validate(const cbx_profile *p);
+
+/*
+ * Returns true when the profile has no unsupported structures recorded
+ * from parsing and can therefore be re-serialized without losing meaning.
+ */
+bool cbx_profile_is_lossless(const cbx_profile *p);
 
 /*
  * Save a profile to a file path (atomic write: temp file + rename, mode 0644).

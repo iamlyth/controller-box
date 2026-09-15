@@ -80,6 +80,22 @@ delete_sidecar(cbx_profiles_tab *tab, const char *profile_name)
         unlink(path);  /* ignore errors: file may not exist */
 }
 
+/* Refuse to edit or clone a profile whose YAML contains structures the
+ * simple v1 model cannot represent (advanced chord/delayed_chord targets,
+ * unknown keys).  Loading and display are fine, but any edit round-trips
+ * through the serializer and would silently destroy that content, so the
+ * original is left intact and the user is told why. */
+static int
+refuse_lossy_profile(cbx_profiles_tab *tab)
+{
+    if (tab) {
+        cbx_label_set_text(&tab->status_lbl,
+            "Advanced mappings unsupported: edit would lose data");
+        cbx_widget_set_visible(&tab->status_lbl.base, true);
+    }
+    return -ENOTSUP;
+}
+
 /* ------------------------------------------------------------------ */
 /*  Forward declarations for on_select callbacks                       */
 /* ------------------------------------------------------------------ */
@@ -227,6 +243,14 @@ on_edit_pressed(cbx_widget *w, void *user_data)
     int rc = cbx_profile_load(&prof, e->path);
     if (rc != 0)
         return;
+
+    /* Advanced mappings are loadable but not editable losslessly; reject
+     * before the editor can append/change a mapping and save a copy that
+     * drops the original's unsupported structures. */
+    if (!cbx_profile_is_lossless(&prof)) {
+        refuse_lossy_profile(tab);
+        return;
+    }
 
     /* Open the editor with the loaded profile. */
     cbx_profiles_tab_open_editor(tab, &prof, e->filename, e->icon, false,
@@ -584,6 +608,11 @@ cbx_profiles_tab_create(cbx_profiles_tab *tab,
         if (rc != 0)
             return rc;
 
+        /* Never clone a profile we cannot represent losslessly: the new
+         * file would silently drop the source's advanced structures. */
+        if (!cbx_profile_is_lossless(&src_prof))
+            return refuse_lossy_profile(tab);
+
         /* Copy mappings. */
         prof.mapping_count = src_prof.mapping_count;
         for (int i = 0; i < src_prof.mapping_count; i++)
@@ -815,6 +844,10 @@ cbx_profiles_tab_name_input_confirm(cbx_profiles_tab *tab)
         int rc = cbx_profile_load(&src_prof, src_entry->path);
         if (rc != 0)
             return rc;
+
+        /* Never clone a profile we cannot represent losslessly. */
+        if (!cbx_profile_is_lossless(&src_prof))
+            return refuse_lossy_profile(tab);
 
         prof.mapping_count = src_prof.mapping_count;
         for (int i = 0; i < src_prof.mapping_count; i++)
@@ -1298,6 +1331,11 @@ cbx_profiles_tab_open_editor(cbx_profiles_tab *tab,
     if (read_only || (!is_new && strcmp(name, "default") == 0))
         return -EACCES;
 
+    /* A profile carrying unsupported structures must never be loaded into
+     * the editor: saving it would rewrite (and destroy) the original. */
+    if (!cbx_profile_is_lossless(profile))
+        return refuse_lossy_profile(tab);
+
     /* Lazy-initialise the editor on first use. */
     if (!tab->editor_initialized) {
         if (!tab->renderer)
@@ -1441,6 +1479,9 @@ cbx_profiles_tab_save_editor(cbx_profiles_tab *tab)
             cbx_label_set_text(&tab->editor.status_lbl, msg);
             cbx_label_set_color(&tab->editor.status_lbl,
                                  tab->editor.theme->conflict);
+        } else if (rc == -ENOTSUP) {
+            cbx_label_set_text(&tab->editor.status_lbl,
+                                 "Advanced mappings unsupported: not saved.");
         } else {
             cbx_label_set_text(&tab->editor.status_lbl,
                                  "Save failed.");

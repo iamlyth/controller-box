@@ -628,6 +628,45 @@ test_profile_portability_same_result(void **state)
     assert_int_equal(roundtrip.mapping_count, loaded.mapping_count);
 }
 
+/* A profile containing advanced structures must be rejected by the
+ * manager save path before any bytes are written.  The advanced profile
+ * also satisfies the NES minimum, so the rejection is specifically the
+ * unsupported-content gate, not the NES-minimum check. */
+static void
+test_save_rejects_unsupported_content(void **state)
+{
+    (void)state;
+    const char *yaml =
+        "version: 1\nkind: DeviceProfile\nname: AdvancedSave\n"
+        "description: advanced save\nmapping:\n"
+        "  - name: A\n    source_event:\n      gamepad:\n        button: A\n"
+        "    target_events:\n      - keyboard: KeyA\n"
+        "  - name: B\n    source_event:\n      gamepad:\n        button: B\n"
+        "    target_events:\n      - keyboard: KeyB\n"
+        "  - name: Up\n    source_event:\n      gamepad:\n        button: Up\n"
+        "    target_events:\n      - keyboard: KeyUp\n"
+        "  - name: Down\n    source_event:\n      gamepad:\n        button: Down\n"
+        "    target_events:\n      - keyboard: KeyDown\n"
+        "  - name: Left\n    source_event:\n      gamepad:\n        button: Left\n"
+        "    target_events:\n      - keyboard: KeyLeft\n"
+        "  - name: Right\n    source_event:\n      gamepad:\n        button: Right\n"
+        "    target_events:\n      - keyboard: KeyRight\n"
+        "  - name: Chord\n    source_event:\n      gamepad:\n        button: Guide\n"
+        "    target_events:\n      - keyboard:\n          key: KeyEsc\n"
+        "          modifier: Shift\n";
+    cbx_profile p;
+    assert_int_equal(cbx_profile_parse(&p, yaml, 0), 0);
+    assert_true(p.has_unsupported_content);
+
+    char path[PATH_MAX + 128];
+    snprintf(path, sizeof(path), "%s/advanced.yaml", test_home);
+    assert_int_equal(cbx_profile_save_to_dir(&p, "advanced", NULL,
+                                              test_home, NULL, 0),
+                     -ENOTSUP);
+    struct stat st;
+    assert_true(stat(path, &st) != 0);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -663,6 +702,8 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_profile_determinism_load_twice,
             setup_home, teardown_home),
         cmocka_unit_test_setup_teardown(test_profile_portability_same_result,
+            setup_home, teardown_home),
+        cmocka_unit_test_setup_teardown(test_save_rejects_unsupported_content,
             setup_home, teardown_home),
     };
 

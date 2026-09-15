@@ -639,6 +639,384 @@ static void test_complex_target_event(void **state)
         "keyboard");
 }
 
+/* --- Tests: nested-count validation (serializer safety) ------------------ */
+
+static void test_validate_rejects_bad_nested_counts(void **state)
+{
+    (void)state;
+    cbx_profile p;
+    char *buf = NULL;
+    size_t len = 0;
+
+    /* A source prop_count past the fixed array must be rejected by both
+     * validate() and serialize() before emit_mapping() walks the array.
+     * A regression here reads past props[CBX_MAX_EVENT_PROPS] under ASan. */
+    cbx_profile_init(&p);
+    p.mapping_count = 1;
+    p.mappings[0].source_event.prop_count = CBX_MAX_EVENT_PROPS + 1;
+    assert_int_equal(cbx_profile_validate(&p), -EINVAL);
+    assert_int_equal(cbx_profile_serialize(&p, &buf, &len), -EINVAL);
+    assert_null(buf);
+
+    /* A target_event_count past the fixed array. */
+    cbx_profile_init(&p);
+    p.mapping_count = 1;
+    p.mappings[0].target_event_count = CBX_MAX_TARGET_EVENTS + 1;
+    assert_int_equal(cbx_profile_validate(&p), -EINVAL);
+    buf = NULL;
+    len = 0;
+    assert_int_equal(cbx_profile_serialize(&p, &buf, &len), -EINVAL);
+    assert_null(buf);
+
+    /* Negative nested counts are malformed too. */
+    cbx_profile_init(&p);
+    p.mapping_count = 1;
+    p.mappings[0].source_event.prop_count = -1;
+    assert_int_equal(cbx_profile_validate(&p), -EINVAL);
+    p.mappings[0].source_event.prop_count = 0;
+    p.mappings[0].target_event_count = -1;
+    assert_int_equal(cbx_profile_validate(&p), -EINVAL);
+
+    /* A mapping_count past the fixed array. */
+    cbx_profile_init(&p);
+    p.mapping_count = CBX_MAX_MAPPINGS + 1;
+    assert_int_equal(cbx_profile_validate(&p), -EINVAL);
+}
+
+/* --- Tests: field-capacity enforcement ----------------------------------- */
+
+static void test_parse_target_capacity_rejected(void **state)
+{
+    (void)state;
+    char yaml[8192];
+    int pos = 0;
+    pos += snprintf(yaml + pos, sizeof(yaml) - pos,
+        "version: 1\nkind: DeviceProfile\nname: Cap\ndescription: cap\n"
+        "mapping:\n  - name: A\n    source_event:\n      gamepad:\n"
+        "        button: A\n    target_events:\n");
+    for (int i = 0; i <= CBX_MAX_TARGET_EVENTS; i++) {
+        if (pos < 0 || (size_t)pos >= sizeof(yaml) - 64)
+            break;
+        pos += snprintf(yaml + pos, sizeof(yaml) - pos,
+                        "      - keyboard: Key%d\n", i);
+    }
+    cbx_profile p;
+    assert_int_equal(cbx_profile_parse(&p, yaml, 0), -E2BIG);
+}
+
+static void test_parse_source_prop_capacity_rejected(void **state)
+{
+    (void)state;
+    char yaml[8192];
+    int pos = 0;
+    pos += snprintf(yaml + pos, sizeof(yaml) - pos,
+        "version: 1\nkind: DeviceProfile\nname: Cap\ndescription: cap\n"
+        "mapping:\n  - name: A\n    source_event:\n      gamepad:\n");
+    for (int i = 0; i <= CBX_MAX_EVENT_PROPS; i++) {
+        if (pos < 0 || (size_t)pos >= sizeof(yaml) - 128)
+            break;
+        pos += snprintf(yaml + pos, sizeof(yaml) - pos,
+                        "        prop%d: v%d\n", i, i);
+    }
+    pos += snprintf(yaml + pos, sizeof(yaml) - pos,
+        "    target_events:\n      - keyboard: KeyA\n");
+    cbx_profile p;
+    assert_int_equal(cbx_profile_parse(&p, yaml, 0), -E2BIG);
+}
+
+static void test_parse_mapping_capacity_rejected(void **state)
+{
+    (void)state;
+    char yaml[32768];
+    int pos = 0;
+    pos += snprintf(yaml + pos, sizeof(yaml) - pos,
+        "version: 1\nkind: DeviceProfile\nname: Cap\ndescription: cap\n"
+        "mapping:\n");
+    for (int i = 0; i <= CBX_MAX_MAPPINGS; i++) {
+        if (pos < 0 || (size_t)pos >= sizeof(yaml) - 256)
+            break;
+        pos += snprintf(yaml + pos, sizeof(yaml) - pos,
+            "  - name: m%d\n    source_event:\n      gamepad:\n"
+            "        button: A\n    target_events:\n"
+            "      - keyboard: KeyA\n", i);
+    }
+    cbx_profile p;
+    assert_int_equal(cbx_profile_parse(&p, yaml, 0), -E2BIG);
+}
+
+static void test_parse_skipped_complex_target_capacity_rejected(void **state)
+{
+    (void)state;
+    /* Complex (skipped) target events still count against the fixed target
+     * capacity, so an over-capacity advanced profile is rejected rather
+     * than silently truncated. */
+    char yaml[8192];
+    int pos = 0;
+    pos += snprintf(yaml + pos, sizeof(yaml) - pos,
+        "version: 1\nkind: DeviceProfile\nname: Cap\ndescription: cap\n"
+        "mapping:\n  - name: A\n    source_event:\n      gamepad:\n"
+        "        button: A\n    target_events:\n");
+    for (int i = 0; i <= CBX_MAX_TARGET_EVENTS; i++) {
+        if (pos < 0 || (size_t)pos >= sizeof(yaml) - 128)
+            break;
+        pos += snprintf(yaml + pos, sizeof(yaml) - pos,
+            "      - keyboard:\n          key: Key%d\n", i);
+    }
+    cbx_profile p;
+    assert_int_equal(cbx_profile_parse(&p, yaml, 0), -E2BIG);
+}
+
+/* --- Tests: unsupported content is loadable but never rewritten ---------- */
+
+static void test_advanced_target_loadable_but_not_serializable(void **state)
+{
+    (void)state;
+    const char *yaml =
+        "version: 1\n"
+        "kind: DeviceProfile\n"
+        "name: Advanced\n"
+        "description: Advanced chord mapping\n"
+        "mapping:\n"
+        "  - name: Chord\n"
+        "    source_event:\n"
+        "      gamepad:\n"
+        "        button: A\n"
+        "    target_events:\n"
+        "      - keyboard:\n"
+        "          key: KeyEsc\n"
+        "          modifier: Shift\n";
+    cbx_profile p;
+    /* Advanced mappings remain loadable... */
+    assert_int_equal(cbx_profile_parse(&p, yaml, 0), 0);
+    assert_int_equal(p.mapping_count, 1);
+    assert_int_equal(p.mappings[0].target_event_count, 1);
+    assert_string_equal(p.mappings[0].target_events[0].device_class,
+                        "keyboard");
+    /* ...but are flagged and rejected before any write. */
+    assert_true(p.has_unsupported_content);
+    assert_false(cbx_profile_is_lossless(&p));
+    assert_int_equal(cbx_profile_validate(&p), -ENOTSUP);
+
+    char *buf = NULL;
+    size_t len = 0;
+    assert_int_equal(cbx_profile_serialize(&p, &buf, &len), -ENOTSUP);
+    assert_null(buf);
+}
+
+static void test_unknown_key_marks_unsupported(void **state)
+{
+    (void)state;
+    const char *yaml =
+        "version: 1\n"
+        "kind: DeviceProfile\n"
+        "name: Extra\n"
+        "description: Unknown top-level key\n"
+        "mapping: []\n"
+        "future_field: value\n";
+    cbx_profile p;
+    assert_int_equal(cbx_profile_parse(&p, yaml, 0), 0);
+    assert_true(p.has_unsupported_content);
+    char *buf = NULL;
+    size_t len = 0;
+    assert_int_equal(cbx_profile_serialize(&p, &buf, &len), -ENOTSUP);
+    assert_null(buf);
+}
+
+static void test_parse_failure_publishes_no_partial(void **state)
+{
+    (void)state;
+    /* A valid mapping is parsed first, then the document exceeds the depth
+     * limit.  A naive parser would leave the caller holding the partial
+     * mapping; the publish contract must leave the output at defaults. */
+    char yaml[16384];
+    int pos = 0;
+    pos += snprintf(yaml + pos, sizeof(yaml) - pos,
+        "version: 1\nkind: DeviceProfile\nname: Partial\n"
+        "mapping:\n"
+        "  - name: A\n"
+        "    source_event:\n"
+        "      gamepad:\n"
+        "        button: A\n"
+        "    target_events:\n"
+        "      - keyboard: KeyA\n"
+        "extra:\n");
+    for (int i = 0; i < 60; i++) {
+        if (pos < 0 || (size_t)pos >= sizeof(yaml) - 32)
+            break;
+        for (int j = 0; j <= i + 1; j++)
+            pos += snprintf(yaml + pos, sizeof(yaml) - pos, "  ");
+        pos += snprintf(yaml + pos, sizeof(yaml) - pos, "a:\n");
+    }
+    cbx_profile p;
+    assert_int_equal(cbx_profile_parse(&p, yaml, 0), -EFBIG);
+    assert_int_equal(p.mapping_count, 0);
+    assert_string_equal(p.name, "");
+    assert_string_equal(p.kind, "DeviceProfile");
+    assert_false(p.has_unsupported_content);
+}
+
+/* --- Tests: aliases and document boundaries ------------------------------ */
+
+static void test_alias_rejected(void **state)
+{
+    (void)state;
+    /* An anchor that is actually referenced is rejected. */
+    const char *yaml =
+        "version: 1\nkind: DeviceProfile\nname: Alias\n"
+        "description: alias\nmapping: []\nshared: &a value\nref: *a\n";
+    cbx_profile p;
+    assert_int_equal(cbx_profile_parse(&p, yaml, 0), -EPERM);
+}
+
+static void test_standalone_anchor_accepted(void **state)
+{
+    (void)state;
+    /* An anchor with no alias is inert and must not block loading. */
+    const char *yaml =
+        "version: 1\nkind: DeviceProfile\nname: &a Anchor\n"
+        "description: anchor\nmapping: []\n";
+    cbx_profile p;
+    assert_int_equal(cbx_profile_parse(&p, yaml, 0), 0);
+    assert_false(p.has_unsupported_content);
+    assert_string_equal(p.name, "Anchor");
+}
+
+static void test_alias_in_skipped_content_rejected(void **state)
+{
+    (void)state;
+    /* The alias sits inside a complex target value the v1 model skips;
+     * it must still be rejected rather than silently ignored. */
+    const char *yaml =
+        "version: 1\nkind: DeviceProfile\nname: AliasChord\n"
+        "description: alias in skipped content\n"
+        "mapping:\n"
+        "  - name: Chord\n"
+        "    source_event:\n"
+        "      gamepad:\n"
+        "        button: A\n"
+        "    target_events:\n"
+        "      - keyboard:\n"
+        "          key: KeyEsc\n"
+        "          modifier: *shared\n";
+    cbx_profile p;
+    assert_int_equal(cbx_profile_parse(&p, yaml, 0), -EPERM);
+}
+
+static void test_multiple_documents_rejected(void **state)
+{
+    (void)state;
+    const char *yaml =
+        "version: 1\nkind: DeviceProfile\nname: One\ndescription: first\n"
+        "mapping: []\n"
+        "---\n"
+        "version: 1\nkind: DeviceProfile\nname: Two\ndescription: second\n"
+        "mapping: []\n";
+    cbx_profile p;
+    assert_int_equal(cbx_profile_parse(&p, yaml, 0), -EINVAL);
+}
+
+static void test_scalar_in_mapping_sequence_rejected(void **state)
+{
+    (void)state;
+    /* Each entry of the top-level mapping sequence must be a mapping. */
+    const char *yaml =
+        "version: 1\nkind: DeviceProfile\nname: Shape\n"
+        "description: bad shape\nmapping:\n  - not_a_mapping\n";
+    cbx_profile p;
+    assert_int_equal(cbx_profile_parse(&p, yaml, 0), -EINVAL);
+}
+
+/* --- Tests: semantic round trip for mouse/touch/scalar sources ----------- */
+
+static void test_round_trip_mouse_touch_scalar_source(void **state)
+{
+    (void)state;
+    const char *yaml =
+        "version: 1\n"
+        "kind: DeviceProfile\n"
+        "name: Mixed\n"
+        "description: mouse, touch and scalar source\n"
+        "mapping:\n"
+        "  - name: Aim\n"
+        "    source_event:\n"
+        "      gamepad:\n"
+        "        axis: RightX\n"
+        "        direction: Positive\n"
+        "    target_events:\n"
+        "      - mouse: MoveRight\n"
+        "  - name: Tap\n"
+        "    source_event:\n"
+        "      keyboard: KeySpace\n"
+        "    target_events:\n"
+        "      - touch: Tap\n";
+    cbx_profile p1, p2;
+    assert_int_equal(cbx_profile_parse(&p1, yaml, 0), 0);
+    assert_false(p1.has_unsupported_content);
+    assert_string_equal(p1.mappings[0].source_event.device_class, "gamepad");
+    assert_int_equal(p1.mappings[0].source_event.prop_count, 2);
+    assert_string_equal(p1.mappings[0].target_events[0].device_class, "mouse");
+    assert_string_equal(p1.mappings[1].source_event.device_class, "keyboard");
+    /* Scalar source is normalized into the equivalent "value" property. */
+    assert_int_equal(p1.mappings[1].source_event.prop_count, 1);
+    assert_string_equal(p1.mappings[1].source_event.props[0].key, "value");
+    assert_string_equal(p1.mappings[1].source_event.props[0].value, "KeySpace");
+
+    char *buf = NULL;
+    size_t len = 0;
+    assert_int_equal(cbx_profile_serialize(&p1, &buf, &len), 0);
+    assert_non_null(buf);
+    assert_int_equal(cbx_profile_parse(&p2, buf, len), 0);
+    free(buf);
+
+    assert_int_equal(p2.mapping_count, 2);
+    assert_false(p2.has_unsupported_content);
+    assert_string_equal(p2.mappings[0].source_event.device_class, "gamepad");
+    assert_string_equal(p2.mappings[0].source_event.props[0].key, "axis");
+    assert_string_equal(p2.mappings[0].source_event.props[0].value, "RightX");
+    assert_string_equal(p2.mappings[0].target_events[0].device_class, "mouse");
+    assert_string_equal(p2.mappings[0].target_events[0].value, "MoveRight");
+    assert_string_equal(p2.mappings[1].source_event.device_class, "keyboard");
+    assert_string_equal(p2.mappings[1].source_event.props[0].value, "KeySpace");
+    assert_string_equal(p2.mappings[1].target_events[0].device_class, "touch");
+    assert_string_equal(p2.mappings[1].target_events[0].value, "Tap");
+}
+
+static void test_save_unsupported_leaves_original(void **state)
+{
+    (void)state;
+    char path[PATH_MAX + 64];
+    snprintf(path, sizeof(path), "%s/preserve.yaml", test_dir);
+
+    /* Write a valid profile first. */
+    cbx_profile simple;
+    assert_int_equal(cbx_profile_parse(&simple, spec_example_yaml, 0), 0);
+    assert_int_equal(cbx_profile_save(&simple, path), 0);
+
+    struct stat st;
+    assert_int_equal(stat(path, &st), 0);
+    off_t before_size = st.st_size;
+
+    /* Attempt to overwrite it with a profile carrying advanced content. */
+    const char *adv =
+        "version: 1\nkind: DeviceProfile\nname: Adv\ndescription: adv\n"
+        "mapping:\n  - name: Chord\n    source_event:\n      gamepad:\n"
+        "        button: A\n    target_events:\n"
+        "      - keyboard:\n          key: KeyEsc\n";
+    cbx_profile p;
+    assert_int_equal(cbx_profile_parse(&p, adv, 0), 0);
+    assert_true(p.has_unsupported_content);
+    assert_int_equal(cbx_profile_save(&p, path), -ENOTSUP);
+
+    /* The original file must be byte-for-byte intact and still valid. */
+    struct stat st2;
+    assert_int_equal(stat(path, &st2), 0);
+    assert_int_equal(st2.st_size, before_size);
+    cbx_profile back;
+    assert_int_equal(cbx_profile_load(&back, path), 0);
+    assert_string_equal(back.name, "Start Button to Escape Key");
+    assert_int_equal(back.mapping_count, 1);
+}
+
 /* --- Main ---------------------------------------------------------------- */
 
 int main(void)
@@ -688,6 +1066,32 @@ int main(void)
         /* Edge cases */
         cmocka_unit_test(test_serialize_null_args),
         cmocka_unit_test(test_complex_target_event),
+
+        /* Nested-count validation (serializer safety) */
+        cmocka_unit_test(test_validate_rejects_bad_nested_counts),
+
+        /* Field-capacity enforcement */
+        cmocka_unit_test(test_parse_target_capacity_rejected),
+        cmocka_unit_test(test_parse_source_prop_capacity_rejected),
+        cmocka_unit_test(test_parse_mapping_capacity_rejected),
+        cmocka_unit_test(test_parse_skipped_complex_target_capacity_rejected),
+
+        /* Unsupported content: loadable but never rewritten */
+        cmocka_unit_test(test_advanced_target_loadable_but_not_serializable),
+        cmocka_unit_test(test_unknown_key_marks_unsupported),
+        cmocka_unit_test(test_parse_failure_publishes_no_partial),
+
+        /* Aliases and document boundaries */
+        cmocka_unit_test(test_alias_rejected),
+        cmocka_unit_test(test_standalone_anchor_accepted),
+        cmocka_unit_test(test_alias_in_skipped_content_rejected),
+        cmocka_unit_test(test_multiple_documents_rejected),
+        cmocka_unit_test(test_scalar_in_mapping_sequence_rejected),
+
+        /* Semantic round trip for mouse/touch/scalar sources */
+        cmocka_unit_test(test_round_trip_mouse_touch_scalar_source),
+        cmocka_unit_test_setup_teardown(test_save_unsupported_leaves_original,
+            setup_tmpdir, teardown_tmpdir),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

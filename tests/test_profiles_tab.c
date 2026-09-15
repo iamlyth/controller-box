@@ -165,6 +165,42 @@ write_nes_profile_yaml(const char *path, const char *name)
     fclose(f);
 }
 
+/* Write a profile with the six NES-minimum bindings plus one advanced
+ * chord target the v1 editor model cannot represent.  Such a profile is
+ * valid for InputPlumber and passes NES validation, so it isolates the
+ * unsupported-content rejection from the NES-minimum check. */
+static void
+write_advanced_nes_profile_yaml(const char *path, const char *name)
+{
+    static const char *btns[] = {"A", "B", "Up", "Down", "Left", "Right"};
+    static const char *keys[] = {"KeyA", "KeyB", "KeyUp", "KeyDown",
+                                  "KeyLeft", "KeyRight"};
+    FILE *f = fopen(path, "w");
+    if (!f)
+        return;
+    fprintf(f, "version: 1\nkind: DeviceProfile\nname: %s\n"
+               "description: Advanced test profile\nmapping:\n", name);
+    for (int i = 0; i < 6; i++)
+        fprintf(f,
+            "  - name: btn_%s\n"
+            "    source_event:\n"
+            "      gamepad:\n"
+            "        button: %s\n"
+            "    target_events:\n"
+            "      - keyboard: %s\n",
+            btns[i], btns[i], keys[i]);
+    fprintf(f,
+        "  - name: Chord\n"
+        "    source_event:\n"
+        "      gamepad:\n"
+        "        button: Guide\n"
+        "    target_events:\n"
+        "      - keyboard:\n"
+        "          key: KeyEsc\n"
+        "          modifier: Shift\n");
+    fclose(f);
+}
+
 /* Check if a file exists. */
 static bool
 file_exists(const char *path)
@@ -1600,6 +1636,118 @@ test_editor_submode_reset_capture_pointer(void **state)
 }
 
 /* ================================================================== */
+/*  Advanced profiles: loadable but never edited/cloned destructively   */
+/* ================================================================== */
+
+/* The production Edit path must refuse to open a profile containing
+ * advanced structures: editing it and saving would silently drop them.
+ * The editor must stay in LIST mode and the original file untouched. */
+static void
+test_edit_advanced_profile_rejected_via_dispatch(void **state)
+{
+    (void)state;
+    pt_env env;
+    env_setup(&env);
+
+    char def_path[PATH_MAX + 128];
+    snprintf(def_path, sizeof(def_path), "%s/default.yaml", env.system_dir);
+    write_nes_profile_yaml(def_path, "Default");
+
+    char adv_path[PATH_MAX + 128];
+    snprintf(adv_path, sizeof(adv_path), "%s/advanced.yaml", env.user_dir);
+    write_advanced_nes_profile_yaml(adv_path, "advanced");
+
+    /* Snapshot the original bytes. */
+    FILE *bf = fopen(adv_path, "r");
+    assert_non_null(bf);
+    char before[8192];
+    size_t bn = fread(before, 1, sizeof(before) - 1, bf);
+    before[bn] = '\0';
+    fclose(bf);
+
+    ensure_dummy_driver();
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+    cbx_profiles_tab_set_test_dirs(pt, env.user_dir, env.system_dir,
+                                    env.meta_dir);
+    cbx_profiles_tab_refresh(pt);
+    pt_send_key_dn(&mgr, SDLK_RIGHT);
+
+    int idx = pt_profile_index(pt, "advanced");
+    assert_true(idx >= 0);
+
+    /* Open it through the production pointer Edit path. */
+    pt_open_profile_pointer(&mgr, idx);
+
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_LIST);
+    assert_true(strstr(pt->status_lbl.text, "Advanced") != NULL);
+
+    /* The original file is byte-for-byte intact. */
+    FILE *af = fopen(adv_path, "r");
+    assert_non_null(af);
+    char after[8192];
+    size_t an = fread(after, 1, sizeof(after) - 1, af);
+    after[an] = '\0';
+    fclose(af);
+    assert_int_equal(an, bn);
+    assert_string_equal(after, before);
+
+    cbx_manager_shutdown(&mgr);
+    env_teardown(&env);
+}
+
+/* Cloning an advanced profile must be rejected before any file is written;
+ * a clone that dropped the chord would look valid but change behavior. */
+static void
+test_clone_advanced_profile_rejected(void **state)
+{
+    (void)state;
+    pt_env env;
+    env_setup(&env);
+
+    char def_path[PATH_MAX + 128];
+    snprintf(def_path, sizeof(def_path), "%s/default.yaml", env.system_dir);
+    write_nes_profile_yaml(def_path, "Default");
+
+    char adv_path[PATH_MAX + 128];
+    snprintf(adv_path, sizeof(adv_path), "%s/advanced.yaml", env.user_dir);
+    write_advanced_nes_profile_yaml(adv_path, "advanced");
+
+    ensure_dummy_driver();
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+    cbx_profiles_tab_set_test_dirs(pt, env.user_dir, env.system_dir,
+                                    env.meta_dir);
+    cbx_profiles_tab_refresh(pt);
+
+    int idx = pt_profile_index(pt, "advanced");
+    assert_true(idx >= 0);
+    pt->selected_profile = idx;
+    cbx_list_set_selected(&pt->profile_list_w, idx);
+
+    assert_int_equal(cbx_profiles_tab_create(pt, "clone",
+                                             CBX_PT_CREATE_CLONE),
+                     -ENOTSUP);
+
+    /* No clone file was written. */
+    char clone_path[PATH_MAX + 128];
+    snprintf(clone_path, sizeof(clone_path), "%s/clone.yaml", env.user_dir);
+    struct stat st;
+    assert_true(stat(clone_path, &st) != 0);
+
+    /* And the source profile is unchanged. */
+    cbx_profile src;
+    assert_int_equal(cbx_profile_load(&src, adv_path), 0);
+    assert_true(src.has_unsupported_content);
+    assert_int_equal(src.mapping_count, 7);
+
+    cbx_manager_shutdown(&mgr);
+    env_teardown(&env);
+}
+
+/* ================================================================== */
 /*  Test runner                                                        */
 /* ================================================================== */
 
@@ -1675,6 +1823,8 @@ static const struct CMUnitTest tests[] = {
     cmocka_unit_test(test_name_input_via_dispatch),
     cmocka_unit_test(test_confirm_delete_via_dispatch),
     cmocka_unit_test(test_edit_default_rejected_via_dispatch),
+    cmocka_unit_test(test_edit_advanced_profile_rejected_via_dispatch),
+    cmocka_unit_test(test_clone_advanced_profile_rejected),
     cmocka_unit_test(test_profile_sidecar_diagram_identity_via_dispatch),
     cmocka_unit_test(test_editor_submode_reset_target_pick_pointer),
     cmocka_unit_test(test_editor_submode_reset_capture_pointer),

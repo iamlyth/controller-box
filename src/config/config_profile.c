@@ -72,7 +72,32 @@ int cbx_profile_validate(const cbx_profile *p)
     if (p->mapping_count < 0 || p->mapping_count > CBX_MAX_MAPPINGS)
         return -EINVAL;
 
+    /* Validate the nested counts before any serializer walks the arrays.
+     * A malformed in-memory count (for example a corrupted prop_count or
+     * target_event_count) must never reach emit_mapping()/emit_profile_yaml()
+     * where it would read past the fixed arrays. */
+    for (int i = 0; i < p->mapping_count; i++) {
+        const cbx_profile_mapping *m = &p->mappings[i];
+        if (m->source_event.prop_count < 0 ||
+            m->source_event.prop_count > CBX_MAX_EVENT_PROPS)
+            return -EINVAL;
+        if (m->target_event_count < 0 ||
+            m->target_event_count > CBX_MAX_TARGET_EVENTS)
+            return -EINVAL;
+    }
+
+    /* A profile that parsed unsupported structures may be loaded and
+     * displayed, but re-serializing it would destroy content.  Reject it
+     * here so every write path fails closed before touching the originals. */
+    if (p->has_unsupported_content)
+        return -ENOTSUP;
+
     return 0;
+}
+
+bool cbx_profile_is_lossless(const cbx_profile *p)
+{
+    return p != NULL && !p->has_unsupported_content;
 }
 
 /* --- YAML parsing (event-based) ------------------------------------------ */
@@ -109,36 +134,94 @@ static int check_event_tags(const yaml_event_t *ev)
     return 0;
 }
 
-/* Parser state machine context. */
+/* Check an event for the full set of YAML security constraints that apply to
+ * every event, including content inside containers that are otherwise
+ * skipped: no custom tags and no aliases.  Aliases are rejected because the
+ * event-based parser would otherwise let a document reference arbitrary
+ * earlier nodes, defeating the bounded fixed-field model.  A standalone
+ * anchor is harmless (it cannot be referenced once aliases are refused).
+ * Returns 0 if OK, -EPERM if a forbidden construct is found. */
+static int check_event_security(const yaml_event_t *ev)
+{
+    int rc = check_event_tags(ev);
+    if (rc < 0)
+        return rc;
+
+    if (ev->type == YAML_ALIAS_EVENT)
+        return -EPERM;
+
+    return 0;
+}
+
+/*
+ * Parser state machine.
+ *
+ * The parser walks the flat libyaml event stream with an explicit stack of
+ * container frames.  Tracking the container kind (rather than a handful of
+ * booleans) lets depth, shape, document boundaries and field capacities be
+ * enforced uniformly, including inside unsupported ("advanced") content
+ * that the simple v1 model cannot represent and therefore discards.
+ */
+typedef enum {
+    PST_ROOT_MAP = 0,   /* the document's root mapping */
+    PST_MAPPING_SEQ,    /* the top-level "mapping" sequence */
+    PST_MAPPING_ITEM,   /* one entry inside the "mapping" sequence */
+    PST_SOURCE_EVENT,   /* the "source_event" mapping */
+    PST_SOURCE_PROPS,   /* the device-class property mapping */
+    PST_TARGET_SEQ,     /* the "target_events" sequence */
+    PST_TARGET_ITEM,    /* one entry inside "target_events" */
+    PST_SKIP            /* unsupported/unknown container (content discarded) */
+} parse_state;
+
+#define PST_STACK_MAX (MAX_YAML_DEPTH + 4)
+
 typedef struct {
     cbx_profile *p;
 
-    int depth;
+    int  depth;
     bool root_started;
+    bool document_started;
+    bool document_ended;
+    bool got_stream_end;
+
     bool have_key;
     char current_key[CBX_MAX_EVENT_KEY_LEN];
 
-    /* Context flags — set when entering, cleared when leaving */
-    bool in_mapping_seq;      /* inside the "mapping" sequence (depth 2) */
-    bool in_mapping_item;     /* inside a single mapping item (depth 3) */
-    bool in_source_event;     /* inside source_event mapping (depth 4) */
-    bool in_source_props;     /* inside device-class props mapping (depth 5) */
-    bool in_target_seq;       /* inside target_events sequence (depth 4) */
-    bool in_target_item;      /* inside a single target_event mapping (depth 5) */
+    parse_state stack[PST_STACK_MAX];
+    int stack_top;
 
-    /* Current mapping entry being built */
+    /* Current mapping entry being built. */
     cbx_profile_mapping current_mapping;
-
-    /* Source-event device class (stored when entering props) */
-    char source_class[CBX_MAX_EVENT_KEY_LEN];
-
-    /* Skip mode: when > 0, ignore content inside complex target-event values
-     * (mapping instead of scalar).  Advanced InputPlumber mappings (chord,
-     * delayed_chord) are accepted but not fully parsed by the v1 GUI. */
-    int skip_depth;
-
-    bool got_stream_end;
 } parse_ctx;
+
+static parse_state ctx_top(const parse_ctx *ctx)
+{
+    if (ctx->stack_top <= 0)
+        return PST_ROOT_MAP;
+    return ctx->stack[ctx->stack_top - 1];
+}
+
+static void ctx_push(parse_ctx *ctx, parse_state st)
+{
+    if (ctx->stack_top < PST_STACK_MAX)
+        ctx->stack[ctx->stack_top] = st;
+    ctx->stack_top++;
+}
+
+static void ctx_pop(parse_ctx *ctx)
+{
+    if (ctx->stack_top > 0)
+        ctx->stack_top--;
+}
+
+/* Record that the document contains structures the simple v1 model cannot
+ * represent.  Such a profile may still be loaded and displayed, but every
+ * write path refuses to re-serialize it so the original content survives. */
+static void mark_unsupported(parse_ctx *ctx)
+{
+    if (ctx->p)
+        ctx->p->has_unsupported_content = true;
+}
 
 /* Copy a string safely into a fixed-size buffer. */
 static void safe_copy(char *dst, size_t dst_size, const char *src)
@@ -151,73 +234,72 @@ static void safe_copy(char *dst, size_t dst_size, const char *src)
     snprintf(dst, dst_size, "%s", src);
 }
 
-/* Add a property to the current mapping's source event. */
-static void add_source_prop(parse_ctx *ctx, const char *key, const char *val)
+/* Add a property to the current mapping's source event.
+ * Returns 0, or -E2BIG when the fixed field capacity is exceeded (never a
+ * silent drop, which would corrupt the profile meaning). */
+static int add_source_prop(parse_ctx *ctx, const char *key, const char *val)
 {
     cbx_source_event *se = &ctx->current_mapping.source_event;
-    if (se->prop_count < CBX_MAX_EVENT_PROPS) {
-        safe_copy(se->props[se->prop_count].key,
-                  sizeof(se->props[se->prop_count].key), key);
-        safe_copy(se->props[se->prop_count].value,
-                  sizeof(se->props[se->prop_count].value), val);
-        se->prop_count++;
-    }
+    if (se->prop_count < 0 || se->prop_count >= CBX_MAX_EVENT_PROPS)
+        return -E2BIG;
+    safe_copy(se->props[se->prop_count].key,
+              sizeof(se->props[se->prop_count].key), key);
+    safe_copy(se->props[se->prop_count].value,
+              sizeof(se->props[se->prop_count].value), val);
+    se->prop_count++;
+    return 0;
 }
 
-/* Add a target event to the current mapping. */
-static void add_target_event(parse_ctx *ctx, const char *dev_class,
+/* Add a target event to the current mapping.
+ * Returns 0, or -E2BIG when the fixed field capacity is exceeded. */
+static int add_target_event(parse_ctx *ctx, const char *dev_class,
                               const char *val)
 {
-    if (ctx->current_mapping.target_event_count < CBX_MAX_TARGET_EVENTS) {
-        int idx = ctx->current_mapping.target_event_count;
-        safe_copy(ctx->current_mapping.target_events[idx].device_class,
-                  sizeof(ctx->current_mapping.target_events[idx].device_class),
-                  dev_class);
-        safe_copy(ctx->current_mapping.target_events[idx].value,
-                  sizeof(ctx->current_mapping.target_events[idx].value), val);
-        ctx->current_mapping.target_event_count++;
-    }
+    if (ctx->current_mapping.target_event_count < 0 ||
+        ctx->current_mapping.target_event_count >= CBX_MAX_TARGET_EVENTS)
+        return -E2BIG;
+    int idx = ctx->current_mapping.target_event_count;
+    safe_copy(ctx->current_mapping.target_events[idx].device_class,
+              sizeof(ctx->current_mapping.target_events[idx].device_class),
+              dev_class);
+    safe_copy(ctx->current_mapping.target_events[idx].value,
+              sizeof(ctx->current_mapping.target_events[idx].value), val);
+    ctx->current_mapping.target_event_count++;
+    return 0;
 }
 
-/* Process a scalar based on current context. */
-static void process_scalar(parse_ctx *ctx, const char *val)
+/* Process a scalar based on the current container.
+ * Returns 0 on success, negative errno on malformed shape or capacity
+ * overflow. */
+static int process_scalar(parse_ctx *ctx, const char *val)
 {
     if (!val)
         val = "";
 
-    if (ctx->in_source_props) {
-        /* Inside device-class props: key-value pairs */
+    switch (ctx_top(ctx)) {
+    case PST_ROOT_MAP:
         if (!ctx->have_key) {
             safe_copy(ctx->current_key, sizeof(ctx->current_key), val);
             ctx->have_key = true;
         } else {
-            add_source_prop(ctx, ctx->current_key, val);
+            if (strcmp(ctx->current_key, "version") == 0) {
+                ctx->p->version = atoi(val);
+            } else if (strcmp(ctx->current_key, "kind") == 0) {
+                safe_copy(ctx->p->kind, sizeof(ctx->p->kind), val);
+            } else if (strcmp(ctx->current_key, "name") == 0) {
+                safe_copy(ctx->p->name, sizeof(ctx->p->name), val);
+            } else if (strcmp(ctx->current_key, "description") == 0) {
+                safe_copy(ctx->p->description, sizeof(ctx->p->description),
+                          val);
+            } else {
+                /* Unknown top-level field: serializer would drop it. */
+                mark_unsupported(ctx);
+            }
             ctx->have_key = false;
         }
-    } else if (ctx->in_source_event) {
-        /* Inside source_event mapping: first scalar is device class key */
-        if (!ctx->have_key) {
-            safe_copy(ctx->current_key, sizeof(ctx->current_key), val);
-            ctx->have_key = true;
-        } else {
-            /* Scalar value for device class (not a mapping) */
-            safe_copy(ctx->current_mapping.source_event.device_class,
-                      sizeof(ctx->current_mapping.source_event.device_class),
-                      ctx->current_key);
-            add_source_prop(ctx, "value", val);
-            ctx->have_key = false;
-        }
-    } else if (ctx->in_target_item) {
-        /* Inside a target_event mapping: key=device class, value=specifier */
-        if (!ctx->have_key) {
-            safe_copy(ctx->current_key, sizeof(ctx->current_key), val);
-            ctx->have_key = true;
-        } else {
-            add_target_event(ctx, ctx->current_key, val);
-            ctx->have_key = false;
-        }
-    } else if (ctx->in_mapping_item) {
-        /* Inside a mapping item: name, source_event, target_events keys */
+        return 0;
+
+    case PST_MAPPING_ITEM:
         if (!ctx->have_key) {
             safe_copy(ctx->current_key, sizeof(ctx->current_key), val);
             ctx->have_key = true;
@@ -225,27 +307,61 @@ static void process_scalar(parse_ctx *ctx, const char *val)
             if (strcmp(ctx->current_key, "name") == 0) {
                 safe_copy(ctx->current_mapping.name,
                           sizeof(ctx->current_mapping.name), val);
+            } else {
+                /* Unknown mapping field: serializer would drop it. */
+                mark_unsupported(ctx);
             }
             ctx->have_key = false;
         }
-    } else if (!ctx->root_started) {
-        /* Root-level scalar before root mapping: ignore */
-    } else if (!ctx->have_key) {
-        /* Top-level key */
-        safe_copy(ctx->current_key, sizeof(ctx->current_key), val);
-        ctx->have_key = true;
-    } else {
-        /* Top-level scalar value */
-        if (strcmp(ctx->current_key, "version") == 0) {
-            ctx->p->version = atoi(val);
-        } else if (strcmp(ctx->current_key, "kind") == 0) {
-            safe_copy(ctx->p->kind, sizeof(ctx->p->kind), val);
-        } else if (strcmp(ctx->current_key, "name") == 0) {
-            safe_copy(ctx->p->name, sizeof(ctx->p->name), val);
-        } else if (strcmp(ctx->current_key, "description") == 0) {
-            safe_copy(ctx->p->description, sizeof(ctx->p->description), val);
+        return 0;
+
+    case PST_SOURCE_EVENT:
+        if (!ctx->have_key) {
+            safe_copy(ctx->current_key, sizeof(ctx->current_key), val);
+            ctx->have_key = true;
+        } else {
+            /* Scalar source: <device_class>: <specifier> */
+            safe_copy(ctx->current_mapping.source_event.device_class,
+                      sizeof(ctx->current_mapping.source_event.device_class),
+                      ctx->current_key);
+            int rc = add_source_prop(ctx, "value", val);
+            ctx->have_key = false;
+            return rc;
         }
-        ctx->have_key = false;
+        return 0;
+
+    case PST_SOURCE_PROPS:
+        if (!ctx->have_key) {
+            safe_copy(ctx->current_key, sizeof(ctx->current_key), val);
+            ctx->have_key = true;
+        } else {
+            int rc = add_source_prop(ctx, ctx->current_key, val);
+            ctx->have_key = false;
+            return rc;
+        }
+        return 0;
+
+    case PST_TARGET_ITEM:
+        if (!ctx->have_key) {
+            safe_copy(ctx->current_key, sizeof(ctx->current_key), val);
+            ctx->have_key = true;
+        } else {
+            int rc = add_target_event(ctx, ctx->current_key, val);
+            ctx->have_key = false;
+            return rc;
+        }
+        return 0;
+
+    case PST_MAPPING_SEQ:
+    case PST_TARGET_SEQ:
+        /* A bare scalar where a mapping item is required is malformed. */
+        return -EINVAL;
+
+    case PST_SKIP:
+        return 0;
+
+    default:
+        return -EINVAL;
     }
 }
 
@@ -262,129 +378,184 @@ static int parse_profile_events(cbx_profile *p, yaml_parser_t *parser)
 
     memset(&ctx, 0, sizeof(ctx));
     ctx.p = p;
+    ctx_push(&ctx, PST_ROOT_MAP);
 
     while (yaml_parser_parse(parser, &ev)) {
-        int tag_rc = check_event_tags(&ev);
-        if (tag_rc < 0) {
-            rc = tag_rc;
+        /* Reject tags and aliases on every event, including content inside
+         * containers that are otherwise skipped. */
+        rc = check_event_security(&ev);
+        if (rc < 0) {
             yaml_event_delete(&ev);
             break;
         }
 
-        /* Skip mode: ignore content inside complex target-event values. */
-        if (ctx.skip_depth > 0) {
-            if (ev.type == YAML_MAPPING_START_EVENT ||
-                ev.type == YAML_SEQUENCE_START_EVENT) {
-                ctx.depth++;
-            } else if (ev.type == YAML_MAPPING_END_EVENT ||
-                       ev.type == YAML_SEQUENCE_END_EVENT) {
-                ctx.depth--;
-                if (ctx.depth < ctx.skip_depth)
-                    ctx.skip_depth = 0;
-            }
+        /* Enforce the single-document boundary: nothing may follow the
+         * document end except the stream end. */
+        if (ctx.document_ended && ev.type != YAML_STREAM_END_EVENT) {
+            rc = -EINVAL;
             yaml_event_delete(&ev);
-            continue;
+            break;
         }
+
+        parse_state top = ctx_top(&ctx);
 
         switch (ev.type) {
         case YAML_STREAM_START_EVENT:
             break;
 
         case YAML_DOCUMENT_START_EVENT:
+            /* Exactly one document per profile. */
+            if (ctx.document_started) {
+                rc = -EINVAL;
+                goto fail_event;
+            }
+            ctx.document_started = true;
             break;
 
-        case YAML_MAPPING_START_EVENT:
+        case YAML_DOCUMENT_END_EVENT:
+            ctx.document_ended = true;
+            break;
+
+        case YAML_MAPPING_START_EVENT: {
             ctx.depth++;
             if (ctx.depth > MAX_YAML_DEPTH) {
                 rc = -EFBIG;
-                yaml_event_delete(&ev);
-                goto done;
+                goto fail_event;
             }
-            if (!ctx.root_started) {
+
+            parse_state child = PST_SKIP;
+            bool push = true;
+
+            if (top == PST_ROOT_MAP && !ctx.have_key && !ctx.root_started) {
+                /* The document's root mapping; the sentinel frame already
+                 * represents it, so do not push another frame. */
                 ctx.root_started = true;
-            } else if (ctx.in_source_event && ctx.have_key) {
-                /* Entering device-class props mapping */
-                safe_copy(ctx.source_class,
-                          sizeof(ctx.source_class), ctx.current_key);
+                push = false;
+            } else if (top == PST_MAPPING_SEQ) {
+                /* A new mapping entry. */
+                child = PST_MAPPING_ITEM;
+                memset(&ctx.current_mapping, 0, sizeof(ctx.current_mapping));
+            } else if (top == PST_TARGET_SEQ) {
+                /* A new target-event entry. */
+                child = PST_TARGET_ITEM;
+                ctx.have_key = false;
+            } else if (top == PST_SOURCE_EVENT && ctx.have_key) {
+                /* <device_class>: { props } */
                 safe_copy(ctx.current_mapping.source_event.device_class,
                           sizeof(ctx.current_mapping.source_event.device_class),
                           ctx.current_key);
-                ctx.in_source_props = true;
+                child = PST_SOURCE_PROPS;
                 ctx.have_key = false;
-            } else if (ctx.in_mapping_item && ctx.have_key) {
-                /* Entering source_event mapping */
-                if (strcmp(ctx.current_key, "source_event") == 0) {
-                    ctx.in_source_event = true;
-                    ctx.have_key = false;
-                }
-            }
-            /* Complex target event: value is a mapping (not a scalar).
-             * Store device class with empty value and skip the nested content. */
-            if (ctx.in_target_item && ctx.have_key) {
-                add_target_event(&ctx, ctx.current_key, "");
+            } else if (top == PST_MAPPING_ITEM && ctx.have_key &&
+                       strcmp(ctx.current_key, "source_event") == 0) {
+                child = PST_SOURCE_EVENT;
                 ctx.have_key = false;
-                ctx.skip_depth = ctx.depth;
+            } else if (top == PST_TARGET_ITEM && ctx.have_key) {
+                /* Advanced/complex target event (chord, delayed_chord,
+                 * gamepad->mouse, ...).  It remains loadable, but the v1
+                 * model stores only the device class and marks the profile
+                 * unsupported so it is never destructively re-serialized. */
+                rc = add_target_event(&ctx, ctx.current_key, "");
+                if (rc < 0)
+                    goto fail_event;
+                mark_unsupported(&ctx);
+                ctx.have_key = false;
+            } else if (ctx.have_key) {
+                /* Unknown key with a mapping value (root, mapping item or a
+                 * source property): the serializer cannot represent it. */
+                mark_unsupported(&ctx);
+                ctx.have_key = false;
+            } else {
+                /* A mapping where none is allowed. */
+                mark_unsupported(&ctx);
             }
-            break;
 
-        case YAML_SEQUENCE_START_EVENT:
+            if (push)
+                ctx_push(&ctx, child);
+            break;
+        }
+
+        case YAML_SEQUENCE_START_EVENT: {
             ctx.depth++;
             if (ctx.depth > MAX_YAML_DEPTH) {
                 rc = -EFBIG;
-                yaml_event_delete(&ev);
-                goto done;
+                goto fail_event;
             }
-            if (ctx.have_key) {
-                if (!ctx.in_mapping_item) {
-                    /* Top-level "mapping" key */
-                    if (strcmp(ctx.current_key, "mapping") == 0)
-                        ctx.in_mapping_seq = true;
-                } else {
-                    /* "target_events" inside a mapping item */
-                    if (strcmp(ctx.current_key, "target_events") == 0)
-                        ctx.in_target_seq = true;
-                }
+
+            parse_state child = PST_SKIP;
+            if (top == PST_ROOT_MAP && ctx.have_key &&
+                strcmp(ctx.current_key, "mapping") == 0) {
+                child = PST_MAPPING_SEQ;
                 ctx.have_key = false;
+            } else if (top == PST_MAPPING_ITEM && ctx.have_key &&
+                       strcmp(ctx.current_key, "target_events") == 0) {
+                child = PST_TARGET_SEQ;
+                ctx.have_key = false;
+            } else if (ctx.have_key) {
+                /* A sequence value the model cannot represent. */
+                mark_unsupported(&ctx);
+                ctx.have_key = false;
+            } else {
+                mark_unsupported(&ctx);
             }
+            ctx_push(&ctx, child);
             break;
+        }
 
         case YAML_SCALAR_EVENT: {
             const char *val = (const char *)ev.data.scalar.value;
             if (!val)
                 val = "";
-            process_scalar(&ctx, val);
+            rc = process_scalar(&ctx, val);
+            if (rc < 0)
+                goto fail_event;
             break;
         }
 
         case YAML_SEQUENCE_END_EVENT:
+            if (ctx.depth <= 0) {
+                rc = -EINVAL;
+                goto fail_event;
+            }
             ctx.depth--;
-            if (ctx.in_target_seq)
-                ctx.in_target_seq = false;
-            else if (ctx.in_mapping_seq)
-                ctx.in_mapping_seq = false;
-            break;
-
-        case YAML_MAPPING_END_EVENT:
-            ctx.depth--;
-            if (ctx.in_target_item) {
-                ctx.in_target_item = false;
-            } else if (ctx.in_source_props) {
-                ctx.in_source_props = false;
-            } else if (ctx.in_source_event) {
-                ctx.in_source_event = false;
-            } else if (ctx.in_mapping_item) {
-                /* Commit the current mapping entry */
-                if (ctx.p->mapping_count < CBX_MAX_MAPPINGS) {
-                    ctx.p->mappings[ctx.p->mapping_count] =
-                        ctx.current_mapping;
-                    ctx.p->mapping_count++;
-                }
-                memset(&ctx.current_mapping, 0, sizeof(ctx.current_mapping));
-                ctx.in_mapping_item = false;
+            if (top == PST_MAPPING_SEQ || top == PST_TARGET_SEQ ||
+                top == PST_SKIP) {
+                ctx_pop(&ctx);
+            } else {
+                rc = -EINVAL;
+                goto fail_event;
             }
             break;
 
-        case YAML_DOCUMENT_END_EVENT:
+        case YAML_MAPPING_END_EVENT:
+            if (ctx.depth <= 0) {
+                rc = -EINVAL;
+                goto fail_event;
+            }
+            ctx.depth--;
+            if (top == PST_MAPPING_ITEM) {
+                /* Commit the completed entry, refusing to silently drop
+                 * entries beyond the fixed capacity. */
+                if (ctx.p->mapping_count < 0 ||
+                    ctx.p->mapping_count >= CBX_MAX_MAPPINGS) {
+                    rc = -E2BIG;
+                    goto fail_event;
+                }
+                ctx.p->mappings[ctx.p->mapping_count] = ctx.current_mapping;
+                ctx.p->mapping_count++;
+                memset(&ctx.current_mapping, 0, sizeof(ctx.current_mapping));
+                ctx_pop(&ctx);
+            } else if (top == PST_ROOT_MAP) {
+                ctx.root_started = false;
+                ctx_pop(&ctx);
+            } else if (top == PST_TARGET_ITEM || top == PST_SOURCE_EVENT ||
+                       top == PST_SOURCE_PROPS || top == PST_SKIP) {
+                ctx_pop(&ctx);
+                ctx.have_key = false;
+            } else {
+                rc = -EINVAL;
+                goto fail_event;
+            }
             break;
 
         case YAML_STREAM_END_EVENT:
@@ -394,31 +565,19 @@ static int parse_profile_events(cbx_profile *p, yaml_parser_t *parser)
 
         case YAML_NO_EVENT:
             rc = -EIO;
-            yaml_event_delete(&ev);
-            goto done;
+            goto fail_event;
 
         default:
             rc = -EINVAL;
-            yaml_event_delete(&ev);
-            goto done;
-        }
-
-        /* Handle mapping items in the "mapping" sequence: detect entry */
-        if (ev.type == YAML_MAPPING_START_EVENT && ctx.in_mapping_seq &&
-            !ctx.in_mapping_item && !ctx.have_key) {
-            /* Entering a new mapping item */
-            ctx.in_mapping_item = true;
-            memset(&ctx.current_mapping, 0, sizeof(ctx.current_mapping));
-        }
-
-        /* Handle target event items: detect entry from sequence */
-        if (ev.type == YAML_MAPPING_START_EVENT && ctx.in_target_seq &&
-            !ctx.in_target_item) {
-            ctx.in_target_item = true;
-            ctx.have_key = false;
+            goto fail_event;
         }
 
         yaml_event_delete(&ev);
+        continue;
+
+fail_event:
+        yaml_event_delete(&ev);
+        break;
     }
 
     if (!ctx.got_stream_end && rc == 0)
@@ -505,7 +664,13 @@ int cbx_profile_load(cbx_profile *p, const char *path)
     }
     yaml_parser_set_input_file(&parser, f);
 
-    rc = parse_profile_events(p, &parser);
+    /* Parse into a scratch profile and publish it only on success, so a
+     * malformed document never leaves the caller holding partial data. */
+    cbx_profile tmp;
+    cbx_profile_init(&tmp);
+    rc = parse_profile_events(&tmp, &parser);
+    if (rc == 0)
+        *p = tmp;
 
     yaml_parser_delete(&parser);
     fclose(f);
@@ -519,7 +684,15 @@ int cbx_profile_parse(cbx_profile *p, const char *yaml, size_t len)
         return -EINVAL;
 
     cbx_profile_init(p);
-    return parse_profile_from_string(p, yaml, len);
+
+    /* Same fail-closed publish contract as cbx_profile_load(): parse into
+     * a scratch profile, copy out only on success. */
+    cbx_profile tmp;
+    cbx_profile_init(&tmp);
+    int rc = parse_profile_from_string(&tmp, yaml, len);
+    if (rc == 0)
+        *p = tmp;
+    return rc;
 }
 
 /* --- Serialization (document-based emitter) ------------------------------- */
@@ -531,6 +704,14 @@ int cbx_profile_parse(cbx_profile *p, const char *yaml, size_t len)
 static int emit_mapping(yaml_document_t *doc, int parent_seq,
                          const cbx_profile_mapping *m)
 {
+    /* Defense-in-depth: never walk the fixed arrays with a malformed count,
+     * even if a future caller bypasses cbx_profile_validate(). */
+    if (m->source_event.prop_count < 0 ||
+        m->source_event.prop_count > CBX_MAX_EVENT_PROPS ||
+        m->target_event_count < 0 ||
+        m->target_event_count > CBX_MAX_TARGET_EVENTS)
+        return -EINVAL;
+
     int item_map = yaml_document_add_mapping(doc, NULL,
         YAML_BLOCK_MAPPING_STYLE);
     if (!item_map)
@@ -621,6 +802,12 @@ static int emit_mapping(yaml_document_t *doc, int parent_seq,
  */
 static int emit_profile_yaml(const cbx_profile *p, FILE *f)
 {
+    /* Validate the whole in-memory structure (including nested source/target
+     * counts) before any serializer access. */
+    int vrc = cbx_profile_validate(p);
+    if (vrc < 0)
+        return vrc;
+
     yaml_emitter_t emitter;
     yaml_document_t doc;
     int rc = 0;
@@ -714,6 +901,12 @@ int cbx_profile_serialize(const cbx_profile *p, char **buf, size_t *len)
 {
     if (!p || !buf)
         return -EINVAL;
+
+    /* Validate before touching the serializer: rejects malformed nested
+     * counts and profiles that cannot be round-tripped losslessly. */
+    int vrc = cbx_profile_validate(p);
+    if (vrc < 0)
+        return vrc;
 
     /* Use open_memstream for a growable memory buffer. */
     FILE *f = open_memstream(buf, len);
