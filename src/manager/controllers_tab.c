@@ -353,6 +353,26 @@ csv_is_exact_singleton_path(const char *csv, const char *path)
     return tokens == 1 && matches == 1;
 }
 
+/* True when `path` is an exact CSV element of `csv` (not a substring of a
+ * longer path). */
+static bool
+csv_contains_path(const char *csv, const char *path)
+{
+    if (!csv || !path || !path[0]) return false;
+    size_t plen = strlen(path);
+    for (const char *p = csv; *p;) {
+        while (*p == ' ' || *p == '\t' || *p == ',') p++;
+        if (!*p) break;
+        const char *end = strchr(p, ',');
+        if (!end) end = p + strlen(p);
+        while (end > p && (end[-1] == ' ' || end[-1] == '\t')) end--;
+        if ((size_t)(end - p) == plen && memcmp(p, path, plen) == 0)
+            return true;
+        p = *end ? end + 1 : end;
+    }
+    return false;
+}
+
 /* Preserve already-established slot identities across unordered/reordered
  * ObjectManager dictionaries.  Newly returned CreateTargetDevice paths are
  * inserted explicitly by the operation that created them.  Across a fresh
@@ -1218,6 +1238,42 @@ int
 cbx_controllers_tab_selected_device(const cbx_controllers_tab *tab)
 {
     return tab ? tab->selected_device : -1;
+}
+
+int
+cbx_controllers_tab_selected_composite(const cbx_controllers_tab *tab,
+                                        char *out, size_t outsz)
+{
+    if (!tab || !out || outsz == 0)
+        return 0;
+    out[0] = '\0';
+    if (tab->selected_device < 0 ||
+        tab->selected_device >= tab->model.target_count)
+        return 0;
+    const char *target = tab->model.targets[tab->selected_device].path;
+    if (!target[0])
+        return 0;
+
+    for (int ci = 0; ci < tab->model.composite_count; ci++) {
+        const cbx_composite_entry *e = &tab->model.composites[ci];
+        bool match = false;
+        char *csv = NULL;
+        if (tab->backend && tab->bus &&
+            ip_composite_get_target_devices(tab->backend, tab->bus,
+                                             e->path, &csv) == 0 && csv) {
+            match = csv_contains_path(csv, target);
+        } else if (e->has_target_devices) {
+            /* Authoritative read unavailable: fall back to the last
+             * validated reactive value rather than guessing. */
+            match = csv_contains_path(e->target_devices, target);
+        }
+        free(csv);
+        if (match) {
+            snprintf(out, outsz, "%s", e->path);
+            return 1;
+        }
+    }
+    return 0;
 }
 
 cbx_ct_mode

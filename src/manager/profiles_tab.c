@@ -1121,8 +1121,13 @@ cbx_profiles_tab_cancel(cbx_profiles_tab *tab)
                 cbx_profiles_tab_save_editor(tab);
                 return true;
             } else if (em == CBX_EDITOR_MODE_SEQUENTIAL) {
-                /* B in SEQUENTIAL: skip current binding. */
-                cbx_profile_editor_seq_skip(&tab->editor);
+                /* B in SEQUENTIAL: skip current binding — unless the user
+                 * is being asked to bind B itself, in which case the SDL
+                 * navigation stream must not consume the press the
+                 * InputEvent capture path needs. */
+                if (cbx_profile_editor_seq_current_button(&tab->editor) !=
+                    CBX_DIAG_BTN_B)
+                    cbx_profile_editor_seq_skip(&tab->editor);
                 return true;
             } else {
                 /* B in TARGET_PICK / CAPTURE / BINDING_EDIT:
@@ -1214,13 +1219,18 @@ cbx_profiles_tab_handle_key(cbx_profiles_tab *tab, const SDL_Event *ev)
         return false;
 
     case CBX_PT_MODE_EDITOR:
-        /* Start (TAB) key: cancel editor (discard) or cancel sequential. */
+        /* Start (TAB) key: cancel editor (discard) or cancel sequential —
+         * unless the prompted button is Start itself, so the required
+         * Start binding remains capturable. */
         if (key == SDLK_TAB) {
             cbx_editor_mode em = cbx_profile_editor_get_mode(&tab->editor);
-            if (em == CBX_EDITOR_MODE_SEQUENTIAL)
-                cbx_profile_editor_cancel_sequential(&tab->editor);
-            else if (em == CBX_EDITOR_MODE_LIST)
+            if (em == CBX_EDITOR_MODE_SEQUENTIAL) {
+                if (cbx_profile_editor_seq_current_button(&tab->editor) !=
+                    CBX_DIAG_BTN_START)
+                    cbx_profile_editor_cancel_sequential(&tab->editor);
+            } else if (em == CBX_EDITOR_MODE_LIST) {
                 cbx_profiles_tab_close_editor(tab);
+            }
             return true;
         }
         /* Up/Down: editor navigation (intercept before the list widget
@@ -1270,6 +1280,23 @@ cbx_profiles_tab_set_device_type(cbx_profiles_tab *tab,
 }
 
 void
+cbx_profiles_tab_set_composite(cbx_profiles_tab *tab,
+                                const char *composite_path)
+{
+    if (!tab)
+        return;
+    snprintf(tab->current_composite_path, sizeof(tab->current_composite_path),
+             "%s", composite_path ? composite_path : "");
+    /* An open editor must immediately stop trusting the previous
+     * composite's target and use the new selection. */
+    if (tab->editor_initialized)
+        cbx_profile_editor_set_dbus(&tab->editor, tab->dbus_backend,
+                                    tab->dbus_bus,
+                                    tab->current_composite_path[0]
+                                    ? tab->current_composite_path : NULL);
+}
+
+void
 cbx_profiles_tab_set_context(cbx_profiles_tab *tab,
                                 SDL_Renderer *renderer,
                                 const ip_dbus_backend *backend,
@@ -1280,6 +1307,12 @@ cbx_profiles_tab_set_context(cbx_profiles_tab *tab,
     tab->renderer     = renderer;
     tab->dbus_backend = backend;
     tab->dbus_bus     = bus;
+    /* Propagate backend loss/replacement to an already-open editor so it
+     * restores interception and drops a dead connection's device filter. */
+    if (tab->editor_initialized)
+        cbx_profile_editor_set_dbus(&tab->editor, backend, bus,
+                                    tab->current_composite_path[0]
+                                    ? tab->current_composite_path : NULL);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1371,14 +1404,23 @@ cbx_profiles_tab_open_editor(cbx_profiles_tab *tab,
             (icon_override && icon_override[0]) ? "true" : "false",
             tab->current_device_type[0] ? tab->current_device_type : "none");
 
-    /* Set DBus info (for capture mode and capabilities). */
+    /* Set DBus info (for capture mode and capabilities).  The explicitly
+     * selected composite is required for interception and device
+     * authentication; without one the editor stays in degraded mode. */
     if (tab->dbus_backend && tab->dbus_bus)
         cbx_profile_editor_set_dbus(&tab->editor,
                                       tab->dbus_backend,
-                                      tab->dbus_bus, NULL);
+                                      tab->dbus_bus,
+                                      tab->current_composite_path[0]
+                                      ? tab->current_composite_path : NULL);
 
     /* Refresh to populate the binding list. */
     cbx_profile_editor_refresh(&tab->editor);
+
+    /* Load the selected composite's virtual capabilities so the target
+     * picker has real targets.  Degraded (no DBus/composite) editors fall
+     * back to the built-in default target set. */
+    cbx_profile_editor_load_capabilities(&tab->editor);
 
     /* Store the profile name for saving. */
     snprintf(tab->editor_profile_name, sizeof(tab->editor_profile_name),

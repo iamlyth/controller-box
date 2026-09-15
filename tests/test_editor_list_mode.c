@@ -1025,6 +1025,154 @@ static void test_expected_sender_rejects_mismatch(void **state)
 }
 
 /* ------------------------------------------------------------------ */
+/*  Tests: capture interception ownership (Task 16)                   */
+/* ------------------------------------------------------------------ */
+
+#define PE_TEST_COMPOSITE "/org/shadowblip/InputPlumber/CompositeDevice0"
+#define PE_TEST_DBUS_DEVICE \
+    "/org/shadowblip/InputPlumber/CompositeDevice0/dbus0"
+
+static void
+pe_set_composite_context(pe_fixture *f, const char *prior_mode)
+{
+    assert_int_equal(ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                                              "InterceptMode", prior_mode),
+                     0);
+    assert_int_equal(ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                                              "DbusDevices",
+                                              PE_TEST_DBUS_DEVICE),
+                     0);
+    cbx_profile_editor_set_dbus(&f->ed, f->backend, &f->mock,
+                                  PE_TEST_COMPOSITE);
+}
+
+/* List capture saves the composite's InterceptMode, switches to
+ * GAMEPAD_ONLY for the capture, and restores the prior value on cancel. */
+static void test_capture_acquires_and_restores_interception(void **state)
+{
+    pe_fixture *f = *state;
+    cbx_profile p = make_test_profile(1);
+    cbx_profile_editor_load_profile(&f->ed, &p);
+    pe_set_composite_context(f, "1");
+
+    assert_int_equal(cbx_profile_editor_begin_capture(&f->ed), 0);
+    assert_true(cbx_profile_editor_is_capture_active(&f->ed));
+    assert_true(cbx_profile_editor_intercept_active(&f->ed));
+    assert_string_equal(f->mock.last_set_prop, "InterceptMode");
+    assert_string_equal(f->mock.last_set_value, "3");
+
+    /* The composite's DBusDevice list was resolved for authentication. */
+    assert_int_equal(cbx_profile_editor_dbus_device_count(&f->ed), 1);
+    assert_string_equal(cbx_profile_editor_dbus_device(&f->ed, 0),
+                          PE_TEST_DBUS_DEVICE);
+
+    assert_int_equal(cbx_profile_editor_cancel(&f->ed), 0);
+    assert_false(cbx_profile_editor_is_capture_active(&f->ed));
+    assert_false(cbx_profile_editor_intercept_active(&f->ed));
+    assert_string_equal(f->mock.last_set_value, "1");
+}
+
+/* The restore target is the exact prior mode, not a hardcoded PASS: an
+ * overlay that had the composite in ALL is returned to ALL. */
+static void test_capture_restores_exact_prior_mode(void **state)
+{
+    pe_fixture *f = *state;
+    cbx_profile p = make_test_profile(1);
+    cbx_profile_editor_load_profile(&f->ed, &p);
+    pe_set_composite_context(f, "2");
+
+    assert_int_equal(cbx_profile_editor_begin_capture(&f->ed), 0);
+    assert_string_equal(f->mock.last_set_value, "3");
+    cbx_profile_editor_cancel_capture(&f->ed);
+    assert_string_equal(f->mock.last_set_value, "2");
+}
+
+/* InputEvents from a device path outside the selected composite's
+ * DbusDevices are rejected (BUG-0017: reject other devices' events). */
+static void test_capture_rejects_foreign_device_path(void **state)
+{
+    pe_fixture *f = *state;
+    cbx_profile p = make_test_profile(1);
+    cbx_profile_editor_load_profile(&f->ed, &p);
+    pe_set_composite_context(f, "1");
+    assert_int_equal(cbx_profile_editor_begin_capture(&f->ed), 0);
+
+    cbx_profile_editor_on_input_event(IP_INPUT_A, IP_INPUT_CAT_BUTTON, 1.0,
+                                        "A",
+                                        "/org/shadowblip/InputPlumber/CompositeDevice1/dbus0",
+                                        &f->ed);
+    assert_true(cbx_profile_editor_is_capture_active(&f->ed));
+
+    /* A matching device path still captures. */
+    cbx_profile_editor_on_input_event(IP_INPUT_A, IP_INPUT_CAT_BUTTON, 1.0,
+                                        "A", PE_TEST_DBUS_DEVICE, &f->ed);
+    assert_false(cbx_profile_editor_is_capture_active(&f->ed));
+}
+
+/* A subscription failure aborts capture before mode is changed, so no
+ * interception is left owned by a broken editor. */
+static void test_capture_subscription_failure_aborts(void **state)
+{
+    pe_fixture *f = *state;
+    cbx_profile p = make_test_profile(1);
+    cbx_profile_editor_load_profile(&f->ed, &p);
+    pe_set_composite_context(f, "1");
+    f->mock.subscribe_fail_rc = -EIO;
+
+    assert_int_equal(cbx_profile_editor_begin_capture(&f->ed), -EIO);
+    assert_false(cbx_profile_editor_is_capture_active(&f->ed));
+    assert_false(cbx_profile_editor_intercept_active(&f->ed));
+    assert_int_equal(cbx_profile_editor_get_mode(&f->ed),
+                       CBX_EDITOR_MODE_LIST);
+    /* InterceptMode was never written. */
+    assert_int_not_equal(strcmp(f->mock.last_set_prop, "InterceptMode"), 0);
+}
+
+/* Sequential capture also owns interception and restores it on cancel. */
+static void test_sequential_acquires_and_restores_interception(void **state)
+{
+    pe_fixture *f = *state;
+    cbx_profile p = make_test_profile(1);
+    cbx_profile_editor_load_profile(&f->ed, &p);
+    pe_set_composite_context(f, "1");
+
+    assert_int_equal(cbx_profile_editor_begin_sequential(&f->ed), 0);
+    assert_true(cbx_profile_editor_intercept_active(&f->ed));
+    assert_string_equal(f->mock.last_set_value, "3");
+
+    cbx_profile_editor_cancel_sequential(&f->ed);
+    assert_false(cbx_profile_editor_intercept_active(&f->ed));
+    assert_string_equal(f->mock.last_set_value, "1");
+}
+
+/* A backend replacement while capture is open restores the old owner and
+ * drops the previous composite's device filter. */
+static void test_backend_replacement_releases_and_repoints(void **state)
+{
+    pe_fixture *f = *state;
+    cbx_profile p = make_test_profile(1);
+    cbx_profile_editor_load_profile(&f->ed, &p);
+    pe_set_composite_context(f, "1");
+    assert_int_equal(cbx_profile_editor_begin_capture(&f->ed), 0);
+    assert_true(cbx_profile_editor_intercept_active(&f->ed));
+
+    /* Repoint at another composite on the same backend. */
+    assert_int_equal(ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                                              "InterceptMode", "1"), 0);
+    assert_int_equal(ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                                              "DbusDevices",
+                                              PE_TEST_DBUS_DEVICE), 0);
+    cbx_profile_editor_set_dbus(&f->ed, f->backend, &f->mock,
+        "/org/shadowblip/InputPlumber/CompositeDevice1");
+    assert_string_equal(cbx_profile_editor_composite_path(&f->ed),
+        "/org/shadowblip/InputPlumber/CompositeDevice1");
+    assert_true(cbx_profile_editor_intercept_active(&f->ed));
+
+    cbx_profile_editor_cancel_capture(&f->ed);
+    assert_false(cbx_profile_editor_intercept_active(&f->ed));
+}
+
+/* ------------------------------------------------------------------ */
 /*  Tests: full workflow                                               */
 /* ------------------------------------------------------------------ */
 
@@ -1444,6 +1592,20 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_expected_sender_resolved, setup, teardown),
         cmocka_unit_test_setup_teardown(test_expected_sender_accepts_match, setup, teardown),
         cmocka_unit_test_setup_teardown(test_expected_sender_rejects_mismatch, setup, teardown),
+
+        /* Capture interception ownership (Task 16) */
+        cmocka_unit_test_setup_teardown(
+            test_capture_acquires_and_restores_interception, setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            test_capture_restores_exact_prior_mode, setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            test_capture_rejects_foreign_device_path, setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            test_capture_subscription_failure_aborts, setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            test_sequential_acquires_and_restores_interception, setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            test_backend_replacement_releases_and_repoints, setup, teardown),
 
         /* Accessors */
         cmocka_unit_test(test_accessors_null_safe),

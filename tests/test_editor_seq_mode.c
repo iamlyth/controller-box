@@ -441,6 +441,108 @@ static void test_seq_cancel_null_safe(void **state)
 }
 
 /* ------------------------------------------------------------------ */
+/*  Tests: prompted virtual target and B/Start bindability (Task 16)  */
+/* ------------------------------------------------------------------ */
+
+/* Sequential capture on a clean empty profile records both the pressed
+ * physical source and the prompted virtual target, so the resulting
+ * mapping actually produces the button the user was asked for. */
+static void test_seq_records_pressed_source_and_prompted_target(void **state)
+{
+    seq_fixture *f = *state;
+
+    cbx_profile p = make_test_profile(0);
+    cbx_profile_editor_load_profile(&f->ed, &p);
+    cbx_profile_editor_begin_sequential(&f->ed);
+
+    /* Step 0 = UP; press X (a remap). */
+    cbx_profile_editor_on_input_event(IP_INPUT_X, IP_INPUT_CAT_BUTTON,
+                                        1.0, "X", NULL, &f->ed);
+
+    const cbx_profile *prof = cbx_profile_editor_get_profile(&f->ed);
+    assert_non_null(prof);
+    assert_int_equal(prof->mapping_count, 1);
+
+    const cbx_profile_mapping *m = &prof->mappings[0];
+    assert_string_equal(m->name, "Up");
+    assert_string_equal(m->source_event.props[0].value, "X");
+    assert_int_equal(m->target_event_count, 1);
+    assert_string_equal(m->target_events[0].device_class, "gamepad");
+    assert_string_equal(m->target_events[0].value, "Up");
+}
+
+/* The required NES B binding must be capturable: when B is the prompted
+ * button the press is captured instead of skipping. */
+static void test_seq_b_bindable_when_prompted(void **state)
+{
+    seq_fixture *f = *state;
+
+    cbx_profile p = make_test_profile(0);
+    cbx_profile_editor_load_profile(&f->ed, &p);
+    cbx_profile_editor_begin_sequential(&f->ed);
+
+    /* Advance to the B step (UP, DOWN, LEFT, RIGHT, A, B). */
+    for (int i = 0; i < 5; i++)
+        cbx_profile_editor_seq_skip(&f->ed);
+    assert_int_equal(cbx_profile_editor_seq_current_button(&f->ed),
+                       CBX_DIAG_BTN_B);
+
+    /* Press B: it must be captured, not treated as skip. */
+    cbx_profile_editor_on_input_event(IP_INPUT_B, IP_INPUT_CAT_BUTTON,
+                                        1.0, "B", NULL, &f->ed);
+    assert_int_equal(cbx_profile_editor_seq_get_step(&f->ed), 6);
+
+    const cbx_profile *prof = cbx_profile_editor_get_profile(&f->ed);
+    assert_non_null(prof);
+    assert_int_equal(prof->mapping_count, 1);
+    assert_string_equal(prof->mappings[0].name, "B");
+    assert_string_equal(prof->mappings[0].source_event.props[0].value, "B");
+    assert_string_equal(prof->mappings[0].target_events[0].value, "B");
+}
+
+/* B still skips while another button is prompted. */
+static void test_seq_b_still_skips_when_not_prompted(void **state)
+{
+    seq_fixture *f = *state;
+
+    cbx_profile p = make_test_profile(0);
+    cbx_profile_editor_load_profile(&f->ed, &p);
+    cbx_profile_editor_begin_sequential(&f->ed);
+
+    cbx_profile_editor_on_input_event(IP_INPUT_B, IP_INPUT_CAT_BUTTON,
+                                        1.0, "B", NULL, &f->ed);
+    assert_int_equal(cbx_profile_editor_seq_get_step(&f->ed), 1);
+    const cbx_profile *prof = cbx_profile_editor_get_profile(&f->ed);
+    assert_int_equal(prof->mapping_count, 0);
+}
+
+/* Start is capturable when it is the prompted button; otherwise it still
+ * cancels. */
+static void test_seq_start_bindable_when_prompted(void **state)
+{
+    seq_fixture *f = *state;
+
+    cbx_profile p = make_test_profile(0);
+    cbx_profile_editor_load_profile(&f->ed, &p);
+    cbx_profile_editor_begin_sequential(&f->ed);
+
+    for (int i = 0; i < 8; i++)
+        cbx_profile_editor_seq_skip(&f->ed);
+    assert_int_equal(cbx_profile_editor_seq_current_button(&f->ed),
+                       CBX_DIAG_BTN_START);
+
+    cbx_profile_editor_on_input_event(IP_INPUT_START, IP_INPUT_CAT_BUTTON,
+                                        1.0, "Start", NULL, &f->ed);
+    assert_true(cbx_profile_editor_seq_is_active(&f->ed));
+    assert_int_equal(cbx_profile_editor_seq_get_step(&f->ed), 9);
+
+    const cbx_profile *prof = cbx_profile_editor_get_profile(&f->ed);
+    assert_non_null(prof);
+    assert_int_equal(prof->mapping_count, 1);
+    assert_string_equal(prof->mappings[0].target_events[0].value, "Start");
+}
+
+/* ------------------------------------------------------------------ */
 /*  Tests: complete all steps                                          */
 /* ------------------------------------------------------------------ */
 
@@ -684,6 +786,16 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_seq_cancel_via_editor_cancel, setup, teardown),
         cmocka_unit_test_setup_teardown(test_seq_cancel_shows_binding_list, setup, teardown),
         cmocka_unit_test(test_seq_cancel_null_safe),
+
+        /* Prompted virtual target and B/Start bindability (Task 16) */
+        cmocka_unit_test_setup_teardown(
+            test_seq_records_pressed_source_and_prompted_target, setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            test_seq_b_bindable_when_prompted, setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            test_seq_b_still_skips_when_not_prompted, setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            test_seq_start_bindable_when_prompted, setup, teardown),
 
         /* Complete all steps */
         cmocka_unit_test_setup_teardown(test_seq_complete_all, setup, teardown),

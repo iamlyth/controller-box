@@ -1496,7 +1496,14 @@ cbx_manager_on_tab_change(cbx_widget *w, int new_tab, void *user_data)
             mgr->ct.selected_device < mgr->ct.device_type_count)
             device_type = cbx_controllers_tab_device_type(
                 &mgr->ct, mgr->ct.selected_device);
+        /* Resolve the composite that owns the explicitly selected target so
+         * the editor can intercept and authenticate the right device. */
+        char composite_path[512];
+        int has_composite = cbx_controllers_tab_selected_composite(
+            &mgr->ct, composite_path, sizeof(composite_path));
         cbx_profiles_tab_set_device_type(&mgr->pt, device_type);
+        cbx_profiles_tab_set_composite(&mgr->pt,
+            has_composite ? composite_path : NULL);
         cbx_profiles_tab_refresh(&mgr->pt);
         break;
     }

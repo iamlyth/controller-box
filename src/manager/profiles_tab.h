@@ -116,6 +116,10 @@ typedef struct {
     /* User-visible virtual target context selected on Controllers.  Empty is
      * an explicit no-model/generic state; it is never inferred from a slot. */
     char current_device_type[CBX_ICON_TYPE_LEN];
+    /* DBus path of the composite that owns the explicitly selected virtual
+     * target.  Empty means no valid composite was resolved; capture then
+     * cannot acquire interception or authenticate a device. */
+    char current_composite_path[512];
 } cbx_profiles_tab;
 
 /* ------------------------------------------------------------------ */
@@ -166,6 +170,11 @@ void cbx_profiles_tab_set_test_dirs(cbx_profiles_tab *tab,
  * editor path.  NULL/empty means explicit no-model (generic). */
 void cbx_profiles_tab_set_device_type(cbx_profiles_tab *tab,
                                       const char *device_type);
+
+/* Set the composite device that owns the explicitly selected virtual target.
+ * NULL/empty clears it, disabling interception/device authentication. */
+void cbx_profiles_tab_set_composite(cbx_profiles_tab *tab,
+                                    const char *composite_path);
 
 void cbx_profiles_tab_set_context(cbx_profiles_tab *tab,
                                     SDL_Renderer *renderer,

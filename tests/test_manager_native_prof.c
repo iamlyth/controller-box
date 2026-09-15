@@ -60,6 +60,7 @@
 #include "manager/profiles_tab.h"
 #include "manager/profile_editor_list.h"
 #include "manager/profile_editor_seq.h"
+#include "manager/profile_validate.h"
 #include "manager/settings_tab.h"
 #include "ui/widget.h"
 
@@ -173,6 +174,25 @@ widget_center(const cbx_widget *w, int *cx, int *cy)
     assert_non_null(w);
     *cx = w->rect.x + w->rect.w / 2;
     *cy = w->rect.y + w->rect.h / 2;
+}
+
+/* Read an entire file into a heap buffer (NULL on failure). */
+static char *
+read_file_alloc(const char *path)
+{
+    FILE *fp = fopen(path, "rb");
+    if (!fp)
+        return NULL;
+    if (fseek(fp, 0, SEEK_END) != 0) { fclose(fp); return NULL; }
+    long n = ftell(fp);
+    if (n < 0) { fclose(fp); return NULL; }
+    rewind(fp);
+    char *buf = malloc((size_t)n + 1);
+    if (!buf) { fclose(fp); return NULL; }
+    size_t got = fread(buf, 1, (size_t)n, fp);
+    buf[got] = '\0';
+    fclose(fp);
+    return buf;
 }
 
 /* Drain pending DBus messages on a bus connection for ms milliseconds. */
@@ -528,6 +548,24 @@ mnp_init_manager(mnp_fixture *f, cbx_manager *mgr)
     cbx_profiles_tab_set_test_dirs(pt, f->user_dir, f->system_dir,
                                     f->meta_dir);
     cbx_profiles_tab_refresh(pt);
+}
+
+/* Create a virtual target, attach it to CompositeDevice0 through the real
+ * DBus property setter, then refresh the Controllers tab so the target is
+ * the explicitly selected virtual target.  This is what lets the profile
+ * editor resolve a valid composite (Task 16). */
+static void
+create_attached_target(mnp_fixture *f, cbx_manager *mgr, const char *type)
+{
+    char *path = NULL;
+    assert_int_equal(ip_manager_create_target_device(f->backend, f->bus,
+                                                       type, &path), 0);
+    assert_non_null(path);
+    assert_int_equal(ip_composite_set_target_device_paths(f->backend,
+        f->bus, "/org/shadowblip/InputPlumber/CompositeDevice0", path), 0);
+    free(path);
+    assert_int_equal(cbx_controllers_tab_refresh(&mgr->ct), 0);
+    assert_int_equal(cbx_controllers_tab_selected_device(&mgr->ct), 0);
 }
 
 /* ================================================================== */
@@ -1506,6 +1544,284 @@ test_m34_seq_capture_dbus_signal(void **state)
 }
 
 /* ================================================================== */
+/*  Task 16 — native interception + device-authenticated capture      */
+/* ================================================================== */
+
+static const char *const NIP_COMP0 =
+    "/org/shadowblip/InputPlumber/CompositeDevice0";
+static const char *const NIP_COMP1 =
+    "/org/shadowblip/InputPlumber/CompositeDevice1";
+
+/* Enter the profile editor through the production Edit path with an
+ * explicitly selected, attached virtual target so the editor has a valid
+ * composite to intercept and authenticate. */
+static void
+open_editor_with_composite(mnp_fixture *f, cbx_manager *mgr)
+{
+    create_attached_target(f, mgr, "xb360");
+    open_editor_ctrl(mgr, f->joystick, 2);
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(mgr);
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_EDITOR);
+    assert_string_equal(cbx_profile_editor_composite_path(&pt->editor),
+                          NIP_COMP0);
+}
+
+/* List-mode capture through the production controller path acquires
+ * InterceptMode=GAMEPAD_ONLY on the exact selected composite (observed on
+ * the native service, not a mock), then restores the prior PASS when the
+ * capture is cancelled. */
+static void
+test_t16_capture_interception_native(void **state)
+{
+    mnp_fixture *f = *state;
+    cbx_manager mgr;
+    mnp_init_manager(f, &mgr);
+
+    open_editor_with_composite(f, &mgr);
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+
+    /* Enter capture: binding -> BINDING_EDIT -> Capture -> CAPTURE. */
+    ctrl_press(&mgr, f->joystick, 0);
+    ctrl_press(&mgr, f->joystick, 12);
+    ctrl_press(&mgr, f->joystick, 0);
+    assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
+                     CBX_EDITOR_MODE_CAPTURE);
+    assert_true(cbx_profile_editor_intercept_active(&pt->editor));
+
+    char *mode = NULL;
+    assert_int_equal(ip_composite_get_intercept_mode(f->backend, f->bus,
+                                                     NIP_COMP0, &mode), 0);
+    assert_string_equal(mode, "3");
+    free(mode); mode = NULL;
+
+    /* The composite's DBusDevice list was authenticated. */
+    assert_true(cbx_profile_editor_dbus_device_count(&pt->editor) >= 1);
+
+    /* B cancels; the prior PASS ownership is restored exactly. */
+    ctrl_press(&mgr, f->joystick, 1);
+    assert_false(cbx_profile_editor_is_capture_active(&pt->editor));
+    assert_false(cbx_profile_editor_intercept_active(&pt->editor));
+    assert_int_equal(ip_composite_get_intercept_mode(f->backend, f->bus,
+                                                     NIP_COMP0, &mode), 0);
+    assert_string_equal(mode, "0");  /* restore the exact prior mode */
+    free(mode);
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* A physical InputEvent emitted by the native service for the selected
+ * composite is dispatched through the full DBus chain and updates the
+ * binding; an event from a different composite's DBusDevice is rejected. */
+static void
+test_t16_capture_input_dispatch_and_reject_foreign(void **state)
+{
+    mnp_fixture *f = *state;
+    cbx_manager mgr;
+    mnp_init_manager(f, &mgr);
+
+    open_editor_with_composite(f, &mgr);
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+
+    ctrl_press(&mgr, f->joystick, 0);
+    ctrl_press(&mgr, f->joystick, 12);
+    ctrl_press(&mgr, f->joystick, 0);
+    assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
+                     CBX_EDITOR_MODE_CAPTURE);
+    int editing_idx = cbx_profile_editor_get_editing_index(&pt->editor);
+    assert_true(editing_idx >= 0);
+
+    /* Foreign composite's InputEvent must be rejected. */
+    emit_input_event(f->backend, f->bus, NIP_COMP1, "Y", 1.0);
+    drain_bus(mgr.dbus_backend, mgr.dbus_bus, 200);
+    assert_true(cbx_profile_editor_is_capture_active(&pt->editor));
+
+    /* Selected composite's InputEvent captures and ends the mode. */
+    emit_input_event(f->backend, f->bus, NIP_COMP0, "X", 1.0);
+    drain_bus(mgr.dbus_backend, mgr.dbus_bus, 200);
+    assert_false(cbx_profile_editor_is_capture_active(&pt->editor));
+    assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
+                     CBX_EDITOR_MODE_LIST);
+
+    const cbx_profile *prof = cbx_profile_editor_get_profile(&pt->editor);
+    assert_non_null(prof);
+    bool found = false;
+    for (int j = 0; j < prof->mappings[editing_idx].source_event.prop_count;
+         j++) {
+        if (strcmp(prof->mappings[editing_idx].source_event.props[j].key,
+                   "button") == 0) {
+            assert_string_equal(
+                prof->mappings[editing_idx].source_event.props[j].value, "X");
+            found = true;
+            break;
+        }
+    }
+    assert_true(found);
+
+    char *mode = NULL;
+    assert_int_equal(ip_composite_get_intercept_mode(f->backend, f->bus,
+                                                     NIP_COMP0, &mode), 0);
+    assert_string_equal(mode, "0");  /* restore the exact prior mode */
+    free(mode);
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* Sequential mode also acquires interception on the selected composite and
+ * the B prompt remains capturable: at the B step the SDL navigation press
+ * does not skip, and the native InputEvent captures the required binding. */
+static void
+test_t16_sequential_interception_and_b_bindable(void **state)
+{
+    mnp_fixture *f = *state;
+    cbx_manager mgr;
+    mnp_init_manager(f, &mgr);
+
+    open_editor_with_composite(f, &mgr);
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+
+    /* Enter sequential: binding -> BINDING_EDIT -> Sequential -> SEQUENTIAL. */
+    ctrl_press(&mgr, f->joystick, 0);
+    ctrl_press(&mgr, f->joystick, 12);
+    ctrl_press(&mgr, f->joystick, 12);
+    ctrl_press(&mgr, f->joystick, 0);
+    assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
+                     CBX_EDITOR_MODE_SEQUENTIAL);
+
+    char *mode = NULL;
+    assert_int_equal(ip_composite_get_intercept_mode(f->backend, f->bus,
+                                                     NIP_COMP0, &mode), 0);
+    assert_string_equal(mode, "3");
+    free(mode); mode = NULL;
+
+    /* Skip UP..A with B (SDL navigation) until the B prompt is reached. */
+    for (int i = 0; i < 5; i++)
+        ctrl_press(&mgr, f->joystick, 1);
+    assert_int_equal(cbx_profile_editor_seq_current_button(&pt->editor),
+                     CBX_DIAG_BTN_B);
+    assert_int_equal(cbx_profile_editor_seq_get_step(&pt->editor), 5);
+
+    /* At the B prompt the SDL navigation press must NOT skip. */
+    ctrl_press(&mgr, f->joystick, 1);
+    assert_int_equal(cbx_profile_editor_seq_get_step(&pt->editor), 5);
+
+    /* The native InputEvent for B is captured and advances. */
+    emit_input_event(f->backend, f->bus, NIP_COMP0, "B", 1.0);
+    drain_bus(mgr.dbus_backend, mgr.dbus_bus, 200);
+    assert_int_equal(cbx_profile_editor_seq_get_step(&pt->editor), 6);
+
+    const cbx_profile *prof = cbx_profile_editor_get_profile(&pt->editor);
+    assert_non_null(prof);
+    bool found_b = false;
+    for (int i = 0; i < prof->mapping_count; i++) {
+        if (strcmp(prof->mappings[i].name, "btn_B") != 0)
+            continue;
+        assert_string_equal(prof->mappings[i].source_event.props[0].value, "B");
+        found_b = true;
+    }
+    assert_true(found_b);
+
+    /* Start (Tab) cancels and restores the prior ownership. */
+    ctrl_press(&mgr, f->joystick, 6);
+    assert_false(cbx_profile_editor_seq_is_active(&pt->editor));
+    assert_int_equal(ip_composite_get_intercept_mode(f->backend, f->bus,
+                                                     NIP_COMP0, &mode), 0);
+    assert_string_equal(mode, "0");  /* restore the exact prior mode */
+    free(mode);
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* A clean empty profile acquires the six NES bindings through sequential
+ * capture (each mapping records the pressed source and prompted virtual
+ * target), saves through the production path, and round-trips through the
+ * native service and a fresh parse — the load/save/restart contract. */
+static void
+test_t16_empty_profile_sequential_save_native_reload(void **state)
+{
+    mnp_fixture *f = *state;
+    cbx_manager mgr;
+    mnp_init_manager(f, &mgr);
+    create_attached_target(f, &mgr, "xb360");
+
+    /* Switch to the Profiles tab through the production controller path
+     * so the manager resolves and passes the selected composite context. */
+    nav_to_profiles_ctrl(&mgr, f->joystick);
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+
+    /* Clean empty profile through the production create-name flow, which
+     * opens the editor without writing until the user saves. */
+    assert_int_equal(cbx_profiles_tab_begin_create(pt, CBX_PT_CREATE_EMPTY),
+                     0);
+    assert_int_equal(cbx_profiles_tab_name_input_char(pt, 'n'), 0);
+    assert_int_equal(cbx_profiles_tab_name_input_char(pt, 'e'), 0);
+    assert_int_equal(cbx_profiles_tab_name_input_char(pt, 'w'), 0);
+    assert_int_equal(cbx_profiles_tab_name_input_confirm(pt), 0);
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_EDITOR);
+    assert_int_equal(cbx_profile_editor_binding_count(&pt->editor), 0);
+
+    /* Empty profile: the reachable add-first-binding action starts
+     * sequential capture through the production tab activation. */
+    assert_int_equal(cbx_profiles_tab_activate(pt), 0);
+    assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
+                     CBX_EDITOR_MODE_SEQUENTIAL);
+
+    static const char *const nes[] = {
+        "Up", "Down", "Left", "Right", "A", "B"
+    };
+    for (int i = 0; i < 6; i++) {
+        emit_input_event(f->backend, f->bus, NIP_COMP0, nes[i], 1.0);
+        drain_bus(mgr.dbus_backend, mgr.dbus_bus, 200);
+        assert_int_equal(cbx_profile_editor_seq_get_step(&pt->editor), i + 1);
+    }
+
+    /* Cancel the remaining prompts with Start. */
+    emit_input_event(f->backend, f->bus, NIP_COMP0, "Start", 1.0);
+    drain_bus(mgr.dbus_backend, mgr.dbus_bus, 200);
+    assert_false(cbx_profile_editor_seq_is_active(&pt->editor));
+    assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
+                     CBX_EDITOR_MODE_LIST);
+
+    /* Save through the production B-in-LIST path. */
+    ctrl_press(&mgr, f->joystick, 1);
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_LIST);
+
+    char new_path[PATH_MAX + 128];
+    snprintf(new_path, sizeof(new_path), "%s/new.yaml", f->user_dir);
+    assert_int_equal(access(new_path, F_OK), 0);
+
+    /* The persisted profile is a valid NES profile with real targets. */
+    cbx_profile loaded;
+    cbx_profile_init(&loaded);
+    assert_int_equal(cbx_profile_load(&loaded, new_path), 0);
+    assert_int_equal(loaded.mapping_count, 6);
+    char missing[256];
+    assert_int_equal(cbx_profile_validate_nes_minimum(&loaded, missing,
+                                                       sizeof(missing)), 0);
+    for (int i = 0; i < loaded.mapping_count; i++)
+        assert_true(loaded.mappings[i].target_event_count >= 1);
+
+    /* Native service load + reload round trip (restart). */
+    char *yaml = read_file_alloc(new_path);
+    assert_non_null(yaml);
+    assert_int_equal(ip_composite_load_profile_from_yaml(f->backend, f->bus,
+                                                          NIP_COMP0, yaml), 0);
+    char *round = NULL;
+    assert_int_equal(ip_composite_get_profile_yaml(f->backend, f->bus,
+                                                    NIP_COMP0, &round), 0);
+    assert_non_null(round);
+    assert_non_null(strstr(round, "button: Up"));
+    assert_non_null(strstr(round, "button: Down"));
+    assert_non_null(strstr(round, "button: Left"));
+    assert_non_null(strstr(round, "button: Right"));
+    assert_non_null(strstr(round, "button: A"));
+    assert_non_null(strstr(round, "button: B"));
+    free(round);
+    free(yaml);
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* ================================================================== */
 /*  M35 — Sequential skip (B → skip current button)                  */
 /* ================================================================== */
 
@@ -2268,6 +2584,18 @@ main(void)
                                         mnp_setup, mnp_teardown),
         cmocka_unit_test_setup_teardown(test_m34_seq_capture_dbus_signal,
                                         mnp_setup, mnp_teardown),
+        /* Task 16 — native interception and authenticated capture */
+        cmocka_unit_test_setup_teardown(
+            test_t16_capture_interception_native, mnp_setup, mnp_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_t16_capture_input_dispatch_and_reject_foreign,
+            mnp_setup, mnp_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_t16_sequential_interception_and_b_bindable,
+            mnp_setup, mnp_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_t16_empty_profile_sequential_save_native_reload,
+            mnp_setup, mnp_teardown),
         /* M35 — Sequential skip */
         cmocka_unit_test_setup_teardown(test_m35_seq_skip,
                                         mnp_setup, mnp_teardown),

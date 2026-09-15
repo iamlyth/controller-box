@@ -298,6 +298,14 @@ static int mock_set_property(ip_bus_handle bus, const char *dest,
         mock->set_property_count++;
     ip_mock_expectation *e = mock_find_mut(mock, iface, prop);
     if (e) e->calls++;
+    if (mock) {
+        snprintf(mock->last_set_iface, sizeof(mock->last_set_iface), "%s",
+                 iface ? iface : "");
+        snprintf(mock->last_set_prop, sizeof(mock->last_set_prop), "%s",
+                 prop ? prop : "");
+        snprintf(mock->last_set_value, sizeof(mock->last_set_value), "%s",
+                 value ? value : "");
+    }
     if (e && e->rc == 0 && strcmp(iface, IP_IFACE_COMPOSITE) == 0 &&
         strcmp(prop, "TargetDevices") == 0) {
         snprintf(mock->target_devices_value,

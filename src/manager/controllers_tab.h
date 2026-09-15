@@ -260,4 +260,12 @@ void cbx_controllers_tab_sync_selection(cbx_controllers_tab *tab);
 int  cbx_controllers_tab_selected_device(const cbx_controllers_tab *tab);
 cbx_ct_mode cbx_controllers_tab_mode(const cbx_controllers_tab *tab);
 
+/* Resolve the composite device that owns the explicitly selected virtual
+ * target by exact TargetDevices membership.  Returns 1 and fills `out`
+ * with the composite object path on success, 0 when no selection/mapping
+ * exists.  Used to route the profile editor's interception and DBus target
+ * authentication; it never guesses a composite from a slot index. */
+int cbx_controllers_tab_selected_composite(const cbx_controllers_tab *tab,
+                                            char *out, size_t outsz);
+
 #endif /* CBX_CONTROLLERS_TAB_H */

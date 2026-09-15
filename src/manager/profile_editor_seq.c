@@ -92,6 +92,17 @@ cbx_profile_editor_begin_sequential(cbx_profile_editor *ed)
     if (!ed->profile_loaded)
         return -EINVAL;
 
+    /* Acquire interception before entering the mode so a subscription or
+     * intercept-mode failure aborts cleanly with the prior mode restored. */
+    int rc = cbx_profile_editor_acquire_interception(ed);
+    if (rc != 0) {
+        ed->seq_active = false;
+        ed->mode = CBX_EDITOR_MODE_LIST;
+        cbx_label_set_text(&ed->status_lbl,
+                             "Sequential unavailable: input intercept failed");
+        return rc;
+    }
+
     ed->seq_step = 0;
     ed->seq_active = true;
     ed->mode = CBX_EDITOR_MODE_SEQUENTIAL;
@@ -106,16 +117,6 @@ cbx_profile_editor_begin_sequential(cbx_profile_editor *ed)
     cbx_widget_set_visible(&ed->binding_list.base, false);
     cbx_widget_set_visible(&ed->target_list.base, false);
 
-    /* Initialize input event handler — use the unique bus name
-     * (expected_sender) resolved in set_dbus(), NOT the well-known
-     * name (IP_DBUS_NAME).  See profile_editor_list.c for rationale. */
-    if (ed->backend && ed->bus) {
-        ip_input_events_init(&ed->input_events, ed->backend, ed->bus,
-                              ed->expected_sender[0] ? ed->expected_sender : NULL,
-                              cbx_profile_editor_on_input_event, ed);
-        ip_input_events_subscribe(&ed->input_events);
-    }
-
     update_seq_ui(ed);
 
     return 0;
@@ -126,6 +127,9 @@ cbx_profile_editor_cancel_sequential(cbx_profile_editor *ed)
 {
     if (!ed)
         return;
+
+    /* Restore the interception this sequential run owned. */
+    cbx_profile_editor_release_interception(ed);
 
     ed->seq_active = false;
     ed->seq_step = 0;
@@ -184,39 +188,39 @@ cbx_profile_editor_seq_on_input(ip_input_id input,
     if (!raw_event)
         return;
 
-    /* If the user pressed Start, cancel sequential mode */
-    if (strcmp(raw_event, "Start") == 0) {
-        cbx_profile_editor_cancel_sequential(ed);
-        return;
-    }
-
-    /* If the user pressed B, skip the current button */
-    if (strcmp(raw_event, "B") == 0) {
-        cbx_profile_editor_seq_skip(ed);
-        return;
-    }
-
-    /* Get the current button being prompted */
+    /* Get the current button being prompted. */
     cbx_diag_button current_btn = (cbx_diag_button)ed->seq_step;
     const char *current_name = cbx_profile_diagram_button_name(current_btn);
     if (!current_name)
         return;
 
-    /* Create or find the mapping for the current button. */
+    /* B skips and Start cancels — but only while they are not the button
+     * the user is being asked to bind.  Otherwise the required NES "B"
+     * binding (and Start) could never be captured.  The SDL navigation
+     * stream is filtered separately by the profiles tab, so a captured
+     * press is never confused with navigation. */
+    if (strcmp(raw_event, "Start") == 0 &&
+        current_btn != CBX_DIAG_BTN_START) {
+        cbx_profile_editor_cancel_sequential(ed);
+        return;
+    }
+    if (strcmp(raw_event, "B") == 0 && current_btn != CBX_DIAG_BTN_B) {
+        cbx_profile_editor_seq_skip(ed);
+        return;
+    }
+
+    /* Find or create the mapping for the prompted virtual target.  The
+     * prompt names the virtual button the game must see; the pressed
+     * button is the physical source.  Source-keyed lookup preserves an
+     * existing mapping's chosen output target. */
     int map_idx = cbx_profile_editor_find_or_create_mapping(&ed->profile,
                                                              current_btn);
     if (map_idx < 0)
         return;
 
-    /*
-     * Set the source event's button to the captured raw event.
-     * This allows remapping (e.g., pressing X when prompted for A
-     * maps X to the A slot).  The mapping's name stays as the
-     * canonical button name; the source event gets the physical button.
-     */
     cbx_profile_mapping *m = &ed->profile.mappings[map_idx];
 
-    /* Find or create the source prop that names the captured button. */
+    /* Record the pressed physical source. */
     int prop_idx = cbx_profile_editor_source_button_prop(m);
     if (prop_idx < 0)
         return;
@@ -225,6 +229,22 @@ cbx_profile_editor_seq_on_input(ip_input_id input,
              sizeof(m->source_event.props[prop_idx].value) - 1);
     m->source_event.props[prop_idx].value
         [sizeof(m->source_event.props[prop_idx].value) - 1] = '\0';
+
+    /* Record the prompted virtual target (identity gamepad event) for a
+     * newly created mapping so a clean empty profile produces the button
+     * the user was asked for.  An existing mapping keeps the output the
+     * user already chose; sequential capture only re-records its source. */
+    if (m->target_event_count == 0) {
+        m->target_event_count = 1;
+        strncpy(m->target_events[0].device_class, "gamepad",
+                sizeof(m->target_events[0].device_class) - 1);
+        m->target_events[0].device_class
+            [sizeof(m->target_events[0].device_class) - 1] = '\0';
+        strncpy(m->target_events[0].value, current_name,
+                sizeof(m->target_events[0].value) - 1);
+        m->target_events[0].value
+            [sizeof(m->target_events[0].value) - 1] = '\0';
+    }
 
     /* Auto-advance to next step */
     ed->dirty = true;           /* sequential capture modified the profile */

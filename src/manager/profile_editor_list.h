@@ -46,6 +46,7 @@
 #define CBX_PE_MAX_TARGETS  128   /* max target entries in picker */
 #define CBX_PE_LABEL_LEN   256
 #define CBX_PE_MAX_ROWS    CBX_LIST_MAX_ITEMS  /* binding-list rows (catalog + extras) */
+#define CBX_PE_MAX_DBUS_DEVICES 32 /* DBusDevice paths owned by the selected composite */
 
 /* ------------------------------------------------------------------ */
 /*  Editor modes                                                      */
@@ -149,6 +150,16 @@ typedef struct {
 
     /* --- Expected sender for InputEvent verification (Task 5) ----- */
     char          expected_sender[128]; /* unique bus name (e.g. ":1.42"), not well-known */
+
+    /* --- Capture interception ownership (Task 16) ----------------- */
+    /* true when this editor switched the composite's InterceptMode and
+     * therefore owns restoring prior_intercept_mode on exit. */
+    bool          intercept_active;
+    char          prior_intercept_mode[16]; /* saved "0".."3" before capture */
+    /* DBusDevice object paths owned by the selected composite.  InputEvents
+     * from any other device path are rejected during capture. */
+    char          dbus_devices[CBX_PE_MAX_DBUS_DEVICES][256];
+    int           dbus_device_count;
 
     /* --- Dirty flag: true when the profile has unsaved edits ------- */
     bool          dirty;
@@ -340,6 +351,21 @@ int cbx_profile_editor_begin_capture(cbx_profile_editor *ed);
 void cbx_profile_editor_cancel_capture(cbx_profile_editor *ed);
 
 /*
+ * Acquire the interception + InputEvent subscription needed to capture
+ * physical input.  Saves the composite's current InterceptMode, subscribes
+ * to InputEvent (idempotent on the production/mock backend), then sets
+ * InterceptMode = GAMEPAD_ONLY (3) and resolves the composite's
+ * DBusDevice paths.  On failure the prior mode is restored / not changed
+ * and a negative errno is returned so the caller can abort capture.
+ * With no DBus backend the call is a no-op success (degraded capture).
+ */
+int  cbx_profile_editor_acquire_interception(cbx_profile_editor *ed);
+
+/* Restore the InterceptMode this editor changed during capture, if any.
+ * Safe to call repeatedly and on a zeroed editor. */
+void cbx_profile_editor_release_interception(cbx_profile_editor *ed);
+
+/*
  * InputEvent callback — called when a physical button is pressed during
  * capture mode.  Sets the source event for the editing binding and
  * returns to list mode.
@@ -376,6 +402,14 @@ const char     *cbx_profile_editor_get_status(const cbx_profile_editor *ed);
 int             cbx_profile_editor_get_editing_index(
     const cbx_profile_editor *ed);
 bool            cbx_profile_editor_is_capture_active(
+    const cbx_profile_editor *ed);
+bool            cbx_profile_editor_intercept_active(
+    const cbx_profile_editor *ed);
+int             cbx_profile_editor_dbus_device_count(
+    const cbx_profile_editor *ed);
+const char     *cbx_profile_editor_dbus_device(
+    const cbx_profile_editor *ed, int index);
+const char     *cbx_profile_editor_composite_path(
     const cbx_profile_editor *ed);
 
 /* Check if the profile has unsaved edits (dirty flag). */

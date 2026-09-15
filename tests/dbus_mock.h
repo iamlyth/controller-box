@@ -98,6 +98,9 @@ typedef struct {
     ip_mock_last_call    last_call;   /* most recent method call's string args */
     int                  get_property_count; /* number of get_property calls */
     int                  set_property_count; /* number of set_property calls */
+    char  last_set_iface[64];  /* iface of the most recent set_property */
+    char  last_set_prop[64];   /* property of the most recent set_property */
+    char  last_set_value[128]; /* value of the most recent set_property */
     char target_devices_value[IP_MOCK_LAST_ARGS_LEN]; /* writable as property state */
     bool target_devices_written;
 } ip_dbus_mock;
