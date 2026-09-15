@@ -8,8 +8,11 @@
  *
  *   IDLE → start() → PASS_WAIT (polling at 50ms, PASS expected)
  *                    → detect ALL → fire activating_cb → ACTIVE
- *   ACTIVE → detect PASS → fire deactivating_cb → IDLE
- *          → timeout (mode stuck at ALL) → fire error_cb → IDLE
+ *   ACTIVE → detect PASS/NONE → fire deactivating_cb → IDLE
+ *
+ *   ACTIVE has no watchdog: a legitimate overlay session may stay ACTIVE
+ *   indefinitely (SPEC §2.5).  Only PASS_WAIT has one — an unexpected NONE
+ *   for ~10s fires error_cb and resets to IDLE.
  *
  * SDL integration:
  *   start() creates an SDL_AddTimer (50ms interval).  The timer callback
@@ -25,6 +28,7 @@
 #include "ip_device_model.h"     /* CBX_MAX_PATH_LEN */
 
 #include <SDL2/SDL.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 
 /* --- Poll states --------------------------------------------------------- */
@@ -67,8 +71,8 @@ typedef struct {
     ip_poll_state          state;
     int                    error_count;       /* consecutive poll errors */
     int                    max_errors;         /* threshold before error reset */
-    int                    timeout_ticks;      /* ticks in current state */
-    int                    max_timeout_ticks;  /* max ticks in ACTIVE before timeout */
+    int                    timeout_ticks;      /* consecutive NONE reads in PASS_WAIT */
+    int                    max_timeout_ticks;  /* NONE-read budget before error reset */
 
     /* Callbacks */
     ip_poll_activating_cb   activating_cb;
@@ -80,13 +84,16 @@ typedef struct {
 
     /* SDL timer */
     SDL_TimerID             timer_id;          /* 0 = no timer running */
-    uint32_t                sdl_event_type;    /* custom SDL event type */
-    /* Arm generation.  Incremented on every start and stop so a timer event
-     * queued by a previous arm (or by a rebuild that reused this slot for a
-     * different composite) can be rejected: the event carries the generation
-     * observed when it was pushed and the step loop only ticks the poll when
-     * that generation still matches the live arm. */
-    uint32_t                generation;
+    _Atomic uint32_t        sdl_event_type;    /* custom SDL event type */
+    /* Arm generation.  Monotonic for the lifetime of the slot: it survives
+     * ip_intercept_poll_init (which preserves it across its memset) and is
+     * advanced on every start and stop.  A timer event carries the
+     * generation observed when it was pushed; the step loop ticks a poll
+     * only while that value still matches the live arm, so an event queued
+     * before a stop/rearm/rebuild — when the slot may now hold a different
+     * composite — can never tick the new arm.  Atomic because the SDL timer
+     * thread reads it while the main thread advances it. */
+    _Atomic uint32_t        generation;
 } ip_intercept_poll;
 
 /* --- Lifecycle ----------------------------------------------------------- */
@@ -95,6 +102,12 @@ typedef struct {
  * Initialise the poll state machine.  Does NOT start polling.
  * `composite_path` is copied into the struct (max CBX_MAX_PATH_LEN).
  * Callbacks may be NULL (events are silently ignored).
+ *
+ * The arm generation is preserved across re-initialization and never reset,
+ * so a stale timer event queued by a previous arm cannot be accepted after
+ * a stop/re-init/start rebuild.  Any SDL timer still armed from a previous
+ * arm is removed, so re-initialization cannot leak a timer.  The struct
+ * must be zero-initialized on its first use.
  */
 void ip_intercept_poll_init(ip_intercept_poll *poll,
                               const ip_dbus_backend *backend,

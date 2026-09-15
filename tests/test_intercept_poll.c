@@ -659,6 +659,35 @@ test_timer_error_removes_timer(void **state)
     assert_int_equal(f->callbacks.error_fired, 1);
 }
 
+/* A production rebuild re-initializes the slot between stopping the old arm
+ * and starting the new one.  init must preserve the arm generation (and
+ * start must advance it) so an event queued before the rebuild cannot
+ * collide with a generation that was reset to a previously used value. */
+static void
+test_timer_reinit_preserves_generation(void **state)
+{
+    timer_fixture *f = TIMER_FIX(state);
+
+    assert_int_equal(ip_intercept_poll_start(&f->poll,
+                        IP_INTERCEPT_POLL_INTERVAL_MS, f->event_type), 0);
+    uint32_t first_arm = f->poll.generation;
+
+    /* Exact rebuild sequence used by cbx_overlay_rearm_polls. */
+    ip_intercept_poll_stop(&f->poll);
+    ip_intercept_poll_init(&f->poll, f->backend, f->mock.bus, COMP_PATH,
+                            on_activating, &f->callbacks,
+                            on_deactivating, &f->callbacks,
+                            on_error, &f->callbacks);
+
+    /* Re-init must not reset to a previously used arm value. */
+    assert_true(f->poll.generation >= first_arm);
+
+    assert_int_equal(ip_intercept_poll_start(&f->poll,
+                        IP_INTERCEPT_POLL_INTERVAL_MS, f->event_type), 0);
+    assert_true(f->poll.generation > first_arm);
+    ip_intercept_poll_stop(&f->poll);
+}
+
 /* --- Test runner -------------------------------------------------------- */
 
 int
@@ -730,6 +759,8 @@ main(void)
             test_timer_rearm_invalidates_previous_generation,
             timer_setup, timer_teardown),
         cmocka_unit_test_setup_teardown(test_timer_error_removes_timer,
+                                          timer_setup, timer_teardown),
+        cmocka_unit_test_setup_teardown(test_timer_reinit_preserves_generation,
                                           timer_setup, timer_teardown),
     };
 

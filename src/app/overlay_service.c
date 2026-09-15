@@ -1130,11 +1130,11 @@ cbx_overlay_rearm_polls(cbx_overlay_service_ctx *svc)
     if (svc->poll_event_type == (uint32_t)-1)
         return -EIO;
 
-    int target = svc->comp_count;
-    if (target > CBX_MAX_COMPOSITES)
+    int polls_to_arm = svc->comp_count;
+    if (polls_to_arm > CBX_MAX_COMPOSITES)
         return -EIO;
 
-    for (int i = 0; i < target; i++) {
+    for (int i = 0; i < polls_to_arm; i++) {
         svc->poll_acts[i].lifecycle = &svc->lifecycle;
         snprintf(svc->poll_acts[i].composite_path,
                  sizeof(svc->poll_acts[i].composite_path),
@@ -1155,8 +1155,8 @@ cbx_overlay_rearm_polls(cbx_overlay_service_ctx *svc)
             overlay_stop_all_polls(svc);
             return -EIO;
         }
-        svc->poll_count = i + 1;
     }
+    svc->poll_count = polls_to_arm;
 
     return 0;
 }
@@ -1814,6 +1814,30 @@ cbx_overlay_input_cb(ip_input_id input,
 /*  Step function: process one iteration of the poll loop (Task 10)   */
 /* ================================================================== */
 
+/*
+ * Decide whether a queued poll timer event may tick its poll.  The event is
+ * accepted only when event.user.data1 names one of the service's fixed poll
+ * slots (ownership — the array lives for the service lifetime, so the
+ * pointer cannot dangle) and event.user.code still matches that slot's
+ * current arm generation (a stop/rearm/rebuild advances it).  Naming the
+ * policy makes the step loop read as intent and gives the generation load a
+ * single race-free site.
+ */
+static bool
+poll_event_targets_live_poll(cbx_overlay_service_ctx *svc,
+                             const SDL_Event *ev)
+{
+    ip_intercept_poll *owner = (ip_intercept_poll *)ev->user.data1;
+    if (!owner)
+        return false;
+    for (int i = 0; i < CBX_MAX_COMPOSITES; i++) {
+        if (owner == &svc->polls[i])
+            return (uint32_t)ev->user.code ==
+                   atomic_load(&owner->generation);
+    }
+    return false;
+}
+
 void
 cbx_overlay_service_step(cbx_overlay_service_ctx *svc)
 {
@@ -1822,26 +1846,12 @@ cbx_overlay_service_step(cbx_overlay_service_ctx *svc)
     /* 1. Process all pending SDL events. */
     while (SDL_PollEvent(&ev)) {
         if (ev.type == svc->poll_event_type) {
-            /* Tick only the poll that armed this timer event.  Each armed
-             * poll carries its own pointer in event.user.data1 (set by
-             * ip_intercept_poll's SDL timer callback); ticking every poll
-             * once per timer event multiplied each 50 ms event by the
-             * composite count, so steady-state DBus reads grew
-             * quadratically and starved this render loop that must present
-             * host-mode transition frames within the SPEC §4.9 latency
-             * budget.  The pointer is matched against the live poll array
-             * (ownership) and the event's arm generation must still match
-             * the live arm (generation), so an event queued before a
-             * stop/rearm/rebuild — when this slot may now hold a different
-             * composite — cannot tick the newly armed poll. */
-            ip_intercept_poll *owner = (ip_intercept_poll *)ev.user.data1;
-            for (int i = 0; owner && i < CBX_MAX_COMPOSITES; i++) {
-                if (owner == &svc->polls[i]) {
-                    if ((uint32_t)ev.user.code == owner->generation)
-                        ip_intercept_poll_tick(owner);
-                    break;
-                }
-            }
+            /* Tick only the poll that armed this timer event, so one 50 ms
+             * event performs exactly one DBus read per device (linear reads).
+             * The ownership+generation policy is in
+             * poll_event_targets_live_poll. */
+            if (poll_event_targets_live_poll(svc, &ev))
+                ip_intercept_poll_tick((ip_intercept_poll *)ev.user.data1);
         } else if (ev.type == SDL_QUIT) {
             g_running = 0;
         } else if (ev.type == SDL_KEYDOWN &&

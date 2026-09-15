@@ -480,6 +480,59 @@ test_rearm_partial_start_failure_stops_all_timers(void **state)
     }
 }
 
+/* Regression for the generation reset across rebuilds: the production
+ * rebuild path (stop_all → init → start, exactly what cbx_overlay_rearm_polls
+ * runs for hotplug/recovery) must not reset a slot's arm generation to a
+ * value already carried by events queued before the rebuild, or the step
+ * loop accepts a stale pre-rebuild event and ticks a poll that now belongs
+ * to a different composite.  The older generation+7 test could not catch
+ * this because it never re-initialized the slot between arms. */
+static void
+test_rearm_rejects_pre_rebuild_stale_event(void **state)
+{
+    reconcile_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    /* Arm slot 0 through the real production path and record the first
+     * arm's generation. */
+    int rc = cbx_overlay_rearm_polls(svc);
+    assert_int_equal(rc, 0);
+    uint32_t first_gen = svc->polls[0].generation;
+
+    /* The old timer queued this event before the rebuild. */
+    SDL_Event stale;
+    SDL_zero(stale);
+    stale.user.code  = (Sint32)first_gen;
+    stale.user.data1 = &svc->polls[0];
+
+    /* Rebuild through the real production path (stop_all → init → start);
+     * slot 0 is now reused for a different composite. */
+    snprintf(svc->composites[0].composite_path,
+             sizeof(svc->composites[0].composite_path), "%s", COMP_PATH_1);
+    rc = cbx_overlay_rearm_polls(svc);
+    assert_int_equal(rc, 0);
+    assert_int_not_equal(svc->polls[0].generation, first_gen);
+
+    /* Isolate the synthetic stale event from the freshly armed real timers:
+     * those timers still push the event type captured by start(), while the
+     * step is told to recognize a distinct type.  A live timer event can
+     * therefore not tick a poll here, so a non-zero read count can only come
+     * from an accepted stale event. */
+    svc->poll_event_type = SDL_RegisterEvents(1);
+    assert_int_not_equal(svc->poll_event_type, (uint32_t)-1);
+    stale.type = svc->poll_event_type;
+
+    ip_dbus_mock_reset(&f->mock);
+
+    SDL_PushEvent(&stale);
+    cbx_overlay_service_step(svc);
+
+    /* Stale pre-rebuild event rejected: the rebuilt slot was not ticked. */
+    assert_int_equal(f->mock.get_property_count, 0);
+    assert_int_equal(svc->polls[0].error_count, 0);
+    assert_int_equal(svc->polls[0].state, IP_POLL_PASS_WAIT);
+}
+
 /* ====================================================================== */
 /*  Test 3: Hotplug target add triggers column rebuild                    */
 /* ====================================================================== */
@@ -828,6 +881,9 @@ main(void)
             reconcile_setup, reconcile_teardown),
         cmocka_unit_test_setup_teardown(
             test_rearm_partial_start_failure_stops_all_timers,
+            reconcile_setup, reconcile_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_rearm_rejects_pre_rebuild_stale_event,
             reconcile_setup, reconcile_teardown),
         cmocka_unit_test_setup_teardown(
             test_hotplug_target_add_rebuilds_columns,

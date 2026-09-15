@@ -21,18 +21,21 @@
 
 /* SDL timer callback: pushes a custom user event onto the queue. */
 static uint32_t
- sdl_timer_cb(uint32_t interval, void *userdata)
+sdl_timer_cb(uint32_t interval, void *userdata)
 {
     ip_intercept_poll *poll = (ip_intercept_poll *)userdata;
-    if (!poll || !poll->sdl_event_type)
+    uint32_t event_type = poll ? atomic_load(&poll->sdl_event_type) : 0;
+    if (!event_type)
         return 0;  /* stop timer */
 
     SDL_Event event;
     SDL_zero(event);
-    event.type = poll->sdl_event_type;
+    event.type = event_type;
     /* Carry the arm generation so the step loop can reject an event that was
-     * queued before a stop/restart (see ip_intercept_poll.generation). */
-    event.user.code = (Sint32)poll->generation;
+     * queued before a stop/restart (see ip_intercept_poll.generation).  The
+     * load is atomic because the main thread advances the generation in
+     * start/stop while this callback runs on the SDL timer thread. */
+    event.user.code = (Sint32)atomic_load(&poll->generation);
     event.user.data1 = poll;
     event.user.data2 = NULL;
     SDL_PushEvent(&event);
@@ -88,7 +91,19 @@ ip_intercept_poll_init(ip_intercept_poll *poll,
     if (!poll)
         return;
 
+    /* Preserve the lifetime arm generation and tear down any timer still
+     * armed by a previous arm before wiping the struct.  Without this, a
+     * rebuild path (stop_all → init → start) would reset the generation to
+     * the value already carried by events queued before the rebuild, so the
+     * step loop would accept a stale event; and an armed timer would leak
+     * because the memset would erase timer_id.  Callers must zero-initialize
+     * the struct on first use. */
+    uint32_t generation = atomic_load(&poll->generation);
+    if (poll->timer_id)
+        SDL_RemoveTimer(poll->timer_id);
+
     memset(poll, 0, sizeof(*poll));
+    atomic_store(&poll->generation, generation);
     poll->backend  = backend;
     poll->bus      = bus;
     if (composite_path) {
@@ -125,14 +140,13 @@ ip_intercept_poll_start(ip_intercept_poll *poll,
     /* Stay IDLE until SDL confirms the timer.  If SDL_AddTimer fails the
      * poll must not be advertised as PASS_WAIT with no timer armed. */
     poll->state          = IP_POLL_IDLE;
-    /* Invalidate any event already queued by a previous arm. */
-    poll->generation++;
+    /* Advance the arm generation so any event already queued by a previous
+     * arm is rejected by the step loop. */
+    atomic_fetch_add(&poll->generation, 1);
 
     poll->timer_id = SDL_AddTimer(interval_ms, sdl_timer_cb, poll);
-    if (!poll->timer_id) {
-        poll->state = IP_POLL_IDLE;
+    if (!poll->timer_id)
         return -EIO;  /* SDL_AddTimer doesn't set errno */
-    }
 
     poll->state = IP_POLL_PASS_WAIT;
     return 0;
@@ -150,7 +164,7 @@ ip_intercept_poll_stop(ip_intercept_poll *poll)
     }
 
     /* Any event the removed timer already queued is now stale. */
-    poll->generation++;
+    atomic_fetch_add(&poll->generation, 1);
     poll->state = IP_POLL_IDLE;
     poll->error_count = 0;
     poll->timeout_ticks = 0;
@@ -199,9 +213,8 @@ ip_intercept_poll_tick(ip_intercept_poll *poll)
     free(mode_str);
 
     if (mode < 0) {
-        /* Parse failure — treat as transient error.  Don't reset
-         * error_count here: the property read succeeded but the value
-         * is garbage, so the error is persistent until a valid read. */
+        /* Garbage value counts toward the same consecutive-error budget as
+         * a transport failure; a later valid read resets the budget. */
         poll->error_count++;
         if (poll->error_count >= poll->max_errors)
             poll_error_reset(poll, -EIO);
