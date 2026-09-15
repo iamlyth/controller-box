@@ -199,6 +199,11 @@ typedef struct {
     bool got_stream_end;
 
     bool have_key;
+    /* True once the current target_events list item has produced its single
+     * device_class:value pair.  A second pair in the same item would be
+     * rewritten as a separate list item (a meaning-changing restructure),
+     * so it flags the profile unsupported instead. */
+    bool target_item_has_pair;
     char current_key[CBX_MAX_EVENT_KEY_LEN];
 
     parse_state stack[PST_STACK_MAX];
@@ -417,11 +422,20 @@ static int process_scalar(parse_ctx *ctx, const char *val)
 
     case PST_TARGET_ITEM:
         if (!ctx->have_key) {
+            /* A second device-class pair inside a single target_events item.
+             * The v1 model stores each list item as exactly one
+             * device_class:value pair, so rewriting this map as two separate
+             * list items changes the document's meaning.  Flag the profile
+             * unsupported (still loadable, never rewritten) rather than
+             * silently restructuring it. */
+            if (ctx->target_item_has_pair)
+                mark_unsupported(ctx);
             copy_field(ctx, ctx->current_key, sizeof(ctx->current_key), val);
             ctx->have_key = true;
         } else {
             int rc = add_target_event(ctx, ctx->current_key, val);
             ctx->have_key = false;
+            ctx->target_item_has_pair = true;
             return rc;
         }
         return 0;
@@ -514,6 +528,7 @@ static int parse_profile_events(cbx_profile *p, yaml_parser_t *parser)
                 /* A new target-event entry. */
                 child = PST_TARGET_ITEM;
                 ctx.have_key = false;
+                ctx.target_item_has_pair = false;
             } else if (top == PST_SOURCE_EVENT && ctx.have_key) {
                 /* <device_class>: { props } */
                 if (ctx.current_mapping.source_event.device_class[0] != '\0') {
@@ -546,6 +561,7 @@ static int parse_profile_events(cbx_profile *p, yaml_parser_t *parser)
                 if (rc < 0)
                     goto fail_event;
                 mark_unsupported(&ctx);
+                ctx.target_item_has_pair = true;
                 ctx.have_key = false;
             } else if (ctx.have_key) {
                 /* Unknown key with a mapping value (root, mapping item or a

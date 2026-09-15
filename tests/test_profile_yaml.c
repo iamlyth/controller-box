@@ -877,6 +877,59 @@ static void test_multi_device_class_source_marks_unsupported(void **state)
     }
 }
 
+static void test_multi_key_target_item_marks_unsupported(void **state)
+{
+    (void)state;
+    /* The v1 model stores each target_events list item as exactly one
+     * device_class:value pair.  A single item carrying a second pair would be
+     * rewritten as two separate list items, changing the document's meaning,
+     * so it must be flagged unsupported (loadable, never rewritten). */
+    const char *scalar_scalar =
+        "version: 1\nkind: DeviceProfile\nname: TSS\ndescription: tss\n"
+        "mapping:\n  - name: M\n    source_event:\n      keyboard: KeyA\n"
+        "    target_events:\n      - keyboard: KeyEsc\n        mouse: left\n";
+    const char *scalar_map =
+        "version: 1\nkind: DeviceProfile\nname: TSM\ndescription: tsm\n"
+        "mapping:\n  - name: M\n    source_event:\n      keyboard: KeyA\n"
+        "    target_events:\n      - keyboard: KeyEsc\n"
+        "        mouse:\n          button: left\n";
+    const char *map_scalar =
+        "version: 1\nkind: DeviceProfile\nname: TMS\ndescription: tms\n"
+        "mapping:\n  - name: M\n    source_event:\n      keyboard: KeyA\n"
+        "    target_events:\n      - keyboard:\n          key: KeyEsc\n"
+        "        mouse: left\n";
+    const char *shapes[] = { scalar_scalar, scalar_map, map_scalar };
+    char path[PATH_MAX + 64];
+    snprintf(path, sizeof(path), "%s/multi-key-target.yaml", test_dir);
+
+    for (size_t i = 0; i < sizeof(shapes) / sizeof(shapes[0]); i++) {
+        cbx_profile p;
+        /* Still loadable (never a hard parse failure)... */
+        assert_int_equal(cbx_profile_parse(&p, shapes[i], 0), 0);
+        /* ...but flagged unsupported and rejected before any write. */
+        assert_true(p.has_unsupported_content);
+        assert_false(cbx_profile_is_lossless(&p));
+        assert_int_equal(cbx_profile_validate(&p), -ENOTSUP);
+
+        char *buf = NULL;
+        size_t len = 0;
+        assert_int_equal(cbx_profile_serialize(&p, &buf, &len), -ENOTSUP);
+        assert_null(buf);
+
+        /* Saving over a valid original must fail and leave it intact. */
+        cbx_profile original;
+        assert_int_equal(cbx_profile_parse(&original, spec_example_yaml, 0),
+                         0);
+        assert_int_equal(cbx_profile_save(&original, path), 0);
+        struct stat before;
+        assert_int_equal(stat(path, &before), 0);
+        assert_int_equal(cbx_profile_save(&p, path), -ENOTSUP);
+        struct stat after;
+        assert_int_equal(stat(path, &after), 0);
+        assert_int_equal(after.st_size, before.st_size);
+    }
+}
+
 static void test_duplicate_keys_mark_unsupported(void **state)
 {
     (void)state;
@@ -1228,6 +1281,9 @@ int main(void)
         cmocka_unit_test(test_unknown_key_marks_unsupported),
         cmocka_unit_test_setup_teardown(
             test_multi_device_class_source_marks_unsupported,
+            setup_tmpdir, teardown_tmpdir),
+        cmocka_unit_test_setup_teardown(
+            test_multi_key_target_item_marks_unsupported,
             setup_tmpdir, teardown_tmpdir),
         cmocka_unit_test(test_duplicate_keys_mark_unsupported),
         cmocka_unit_test(test_overlength_fields_mark_unsupported),
