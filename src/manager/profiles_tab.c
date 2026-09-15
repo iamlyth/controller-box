@@ -1383,6 +1383,12 @@ cbx_profiles_tab_close_editor(cbx_profiles_tab *tab)
         cbx_widget_set_visible(&tab->editor.target_list.base, false);
         cbx_widget_set_visible(&tab->editor.status_lbl.base, false);
         cbx_widget_set_visible(&tab->editor.progress_bar.base, false);
+
+        /* Drop any in-progress sub-mode.  The editor instance is reused
+         * for every profile, so a stale target-pick/capture/sequential
+         * mode would otherwise be inherited by the next profile opened
+         * through the production Edit path. */
+        cbx_profile_editor_reset_mode(&tab->editor);
     }
 
     cbx_widget_set_visible(&tab->save_btn.base, false);

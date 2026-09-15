@@ -216,26 +216,10 @@ cbx_profile_editor_seq_on_input(ip_input_id input,
      */
     cbx_profile_mapping *m = &ed->profile.mappings[map_idx];
 
-    /* Find or create the "button" prop */
-    int prop_idx = -1;
-    for (int i = 0; i < m->source_event.prop_count; i++) {
-        if (strcmp(m->source_event.props[i].key, "button") == 0
-            || strcmp(m->source_event.props[i].key, "axis") == 0) {
-            prop_idx = i;
-            break;
-        }
-    }
-    if (prop_idx < 0) {
-        if (m->source_event.prop_count < CBX_MAX_EVENT_PROPS) {
-            prop_idx = m->source_event.prop_count++;
-            strncpy(m->source_event.props[prop_idx].key, "button",
-                     sizeof(m->source_event.props[prop_idx].key) - 1);
-            m->source_event.props[prop_idx].key
-                [sizeof(m->source_event.props[prop_idx].key) - 1] = '\0';
-        } else {
-            return;
-        }
-    }
+    /* Find or create the source prop that names the captured button. */
+    int prop_idx = cbx_profile_editor_source_button_prop(m);
+    if (prop_idx < 0)
+        return;
 
     strncpy(m->source_event.props[prop_idx].value, raw_event,
              sizeof(m->source_event.props[prop_idx].value) - 1);

@@ -141,7 +141,6 @@ typedef struct {
     /* --- Capture mode state -------------------------------------- */
     ip_input_events input_events;
     bool            capture_active;
-    cbx_diag_button captured_button;
 
     /* --- Sequential binding mode state (Task 38) ------------------ */
     cbx_progress progress_bar;     /* completion progress bar */
@@ -213,6 +212,15 @@ int cbx_profile_editor_load_profile(cbx_profile_editor *ed,
                                        const cbx_profile *profile);
 
 /*
+ * Reset the editor to a clean LIST baseline: leave any in-progress
+ * capture/sequential/binding-edit sub-mode, clear the edit cursor and
+ * the list selection.  State only — callers keep managing widget
+ * visibility.  Called on every profile load and on editor close so a
+ * lazily-reused editor never inherits a stale sub-mode.
+ */
+void cbx_profile_editor_reset_mode(cbx_profile_editor *ed);
+
+/*
  * Get the current profile being edited (read-only accessor).
  * Returns NULL if no profile is loaded.
  */
@@ -265,6 +273,14 @@ int cbx_profile_editor_refresh(cbx_profile_editor *ed);
  */
 int cbx_profile_editor_find_or_create_mapping(cbx_profile *p,
                                                cbx_diag_button btn);
+
+/*
+ * Find the source prop that names a virtual button/axis in `m`, or append
+ * a new "button" prop when none exists.  Returns the prop index, or -1 when
+ * `m` is NULL or its prop array is full.  Shared with sequential capture so
+ * the button/axis source-prop handling lives in one place.
+ */
+int cbx_profile_editor_source_button_prop(cbx_profile_mapping *m);
 
 /* ------------------------------------------------------------------ */
 /*  Navigation                                                         */

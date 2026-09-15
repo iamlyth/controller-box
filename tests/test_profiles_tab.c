@@ -1396,6 +1396,210 @@ test_edit_default_rejected_via_dispatch(void **state)
 }
 
 /* ================================================================== */
+/*  Editor sub-mode reset regression (repair cycle 3 BLOCKER)          */
+/* ================================================================== */
+
+/* Enumerated index of the profile with the given base filename, or -1. */
+static int
+pt_profile_index(const cbx_profiles_tab *pt, const char *filename)
+{
+    int n = cbx_profiles_tab_profile_count(pt);
+    for (int i = 0; i < n; i++) {
+        const cbx_profile_entry *e = cbx_profiles_tab_entry(pt, i);
+        if (e && strcmp(e->filename, filename) == 0)
+            return i;
+    }
+    return -1;
+}
+
+/* Open the profile at `idx` through the production pointer path: select
+ * the list row, then click the real "Edit Profile" button. */
+static void
+pt_open_profile_pointer(cbx_manager *mgr, int idx)
+{
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(mgr);
+    SDL_Rect list_rect, edit_rect;
+    cbx_widget_get_rect(&pt->profile_list_w.base, &list_rect);
+    cbx_widget_get_rect(&pt->edit_btn.base, &edit_rect);
+    send_pointer_click(mgr, list_rect.x + 30,
+                       list_rect.y + idx * pt->profile_list_w.item_h + 8);
+    send_pointer_click(mgr, edit_rect.x + edit_rect.w / 2,
+                       edit_rect.y + edit_rect.h / 2);
+}
+
+/* BLOCKER regression: closing the editor from inside a sub-mode must not
+ * let that sub-mode survive into the next profile opened through the
+ * production Edit path.  Before the fix the reused editor kept
+ * TARGET_PICK mode plus the stale editing index, so the first A press on
+ * the reopened profile silently applied the previous session's picked
+ * target to mappings[0] instead of opening the edit sub-menu. */
+static void
+test_editor_submode_reset_target_pick_pointer(void **state)
+{
+    (void)state;
+    pt_env env;
+    env_setup(&env);
+
+    char def_path[PATH_MAX + 128];
+    snprintf(def_path, sizeof(def_path), "%s/default.yaml", env.system_dir);
+    write_nes_profile_yaml(def_path, "Default");
+
+    char alpha_path[PATH_MAX + 128], beta_path[PATH_MAX + 128];
+    snprintf(alpha_path, sizeof(alpha_path), "%s/alpha.yaml", env.user_dir);
+    snprintf(beta_path, sizeof(beta_path), "%s/beta.yaml", env.user_dir);
+    write_nes_profile_yaml(alpha_path, "alpha");
+    write_nes_profile_yaml(beta_path, "beta");
+
+    ensure_dummy_driver();
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+    cbx_profiles_tab_set_test_dirs(pt, env.user_dir, env.system_dir,
+                                    env.meta_dir);
+    cbx_profiles_tab_refresh(pt);
+    pt_send_key_dn(&mgr, SDLK_RIGHT);
+
+    int ai = pt_profile_index(pt, "alpha");
+    int bi = pt_profile_index(pt, "beta");
+    assert_true(ai >= 0);
+    assert_true(bi >= 0);
+
+    /* Open alpha and enter TARGET_PICK via the production A path:
+     * A -> BINDING_EDIT, A -> TARGET_PICK. */
+    pt_open_profile_pointer(&mgr, ai);
+    assert_int_equal(pt->mode, CBX_PT_MODE_EDITOR);
+    pt_send_key_dn(&mgr, SDLK_a);
+    pt_send_key_up(&mgr, SDLK_a);
+    assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
+                     CBX_EDITOR_MODE_BINDING_EDIT);
+    pt_send_key_dn(&mgr, SDLK_a);
+    pt_send_key_up(&mgr, SDLK_a);
+    assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
+                     CBX_EDITOR_MODE_TARGET_PICK);
+
+    /* Move the picker off the first target so a stale confirm is
+     * observable as a changed target in the next profile. */
+    assert_true(cbx_list_item_count(&pt->editor.target_list) > 1);
+    pt_send_key_dn(&mgr, SDLK_DOWN);
+    assert_int_equal(cbx_list_get_selected(&pt->editor.target_list), 1);
+
+    /* Discard from inside the sub-mode through the visible button. */
+    SDL_Rect disc_rect;
+    cbx_widget_get_rect(&pt->discard_btn.base, &disc_rect);
+    assert_true(cbx_widget_is_visible(&pt->discard_btn.base));
+    send_pointer_click(&mgr, disc_rect.x + disc_rect.w / 2,
+                       disc_rect.y + disc_rect.h / 2);
+    assert_int_equal(pt->mode, CBX_PT_MODE_LIST);
+
+    /* Reopen a different profile. */
+    pt_open_profile_pointer(&mgr, bi);
+    assert_int_equal(pt->mode, CBX_PT_MODE_EDITOR);
+
+    /* The reused editor must start from a clean LIST baseline. */
+    assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
+                     CBX_EDITOR_MODE_LIST);
+    assert_int_equal(cbx_profile_editor_get_editing_index(&pt->editor), -1);
+    assert_false(cbx_profile_editor_is_capture_active(&pt->editor));
+
+    const cbx_profile *before = cbx_profile_editor_get_profile(&pt->editor);
+    assert_non_null(before);
+    assert_true(before->mapping_count > 0);
+    char target_before[128];
+    snprintf(target_before, sizeof(target_before), "%s",
+             before->mappings[0].target_events[0].value);
+
+    /* A must open the binding edit sub-menu, not apply the stale picker. */
+    pt_send_key_dn(&mgr, SDLK_a);
+    pt_send_key_up(&mgr, SDLK_a);
+    assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
+                     CBX_EDITOR_MODE_BINDING_EDIT);
+
+    const cbx_profile *after = cbx_profile_editor_get_profile(&pt->editor);
+    assert_string_equal(after->mappings[0].target_events[0].value,
+                        target_before);
+
+    /* B back to LIST, then TAB discards the editor. */
+    pt_send_key_dn(&mgr, SDLK_b);
+    pt_send_key_up(&mgr, SDLK_b);
+    pt_send_key_dn(&mgr, SDLK_TAB);
+    assert_int_equal(pt->mode, CBX_PT_MODE_LIST);
+
+    cbx_manager_shutdown(&mgr);
+    env_teardown(&env);
+}
+
+/* Same reset guarantee for capture mode: a discarded capture session must
+ * not leave capture_active set (or the editor in CAPTURE) for the next
+ * profile, where a later controller press would be captured into it. */
+static void
+test_editor_submode_reset_capture_pointer(void **state)
+{
+    (void)state;
+    pt_env env;
+    env_setup(&env);
+
+    char def_path[PATH_MAX + 128];
+    snprintf(def_path, sizeof(def_path), "%s/default.yaml", env.system_dir);
+    write_nes_profile_yaml(def_path, "Default");
+
+    char alpha_path[PATH_MAX + 128], beta_path[PATH_MAX + 128];
+    snprintf(alpha_path, sizeof(alpha_path), "%s/alpha.yaml", env.user_dir);
+    snprintf(beta_path, sizeof(beta_path), "%s/beta.yaml", env.user_dir);
+    write_nes_profile_yaml(alpha_path, "alpha");
+    write_nes_profile_yaml(beta_path, "beta");
+
+    ensure_dummy_driver();
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+    cbx_profiles_tab_set_test_dirs(pt, env.user_dir, env.system_dir,
+                                    env.meta_dir);
+    cbx_profiles_tab_refresh(pt);
+    pt_send_key_dn(&mgr, SDLK_RIGHT);
+
+    int ai = pt_profile_index(pt, "alpha");
+    int bi = pt_profile_index(pt, "beta");
+    assert_true(ai >= 0);
+    assert_true(bi >= 0);
+
+    /* Open alpha, A -> BINDING_EDIT, DOWN to Capture, A -> CAPTURE. */
+    pt_open_profile_pointer(&mgr, ai);
+    pt_send_key_dn(&mgr, SDLK_a);
+    pt_send_key_up(&mgr, SDLK_a);
+    assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
+                     CBX_EDITOR_MODE_BINDING_EDIT);
+    pt_send_key_dn(&mgr, SDLK_DOWN);
+    assert_int_equal(cbx_list_get_selected(&pt->editor.target_list), 1);
+    pt_send_key_dn(&mgr, SDLK_a);
+    pt_send_key_up(&mgr, SDLK_a);
+    assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
+                     CBX_EDITOR_MODE_CAPTURE);
+    assert_true(cbx_profile_editor_is_capture_active(&pt->editor));
+
+    /* Discard while capture is active. */
+    SDL_Rect disc_rect;
+    cbx_widget_get_rect(&pt->discard_btn.base, &disc_rect);
+    assert_true(cbx_widget_is_visible(&pt->discard_btn.base));
+    send_pointer_click(&mgr, disc_rect.x + disc_rect.w / 2,
+                       disc_rect.y + disc_rect.h / 2);
+    assert_int_equal(pt->mode, CBX_PT_MODE_LIST);
+
+    /* Reopen beta: no lingering capture session. */
+    pt_open_profile_pointer(&mgr, bi);
+    assert_int_equal(pt->mode, CBX_PT_MODE_EDITOR);
+    assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
+                     CBX_EDITOR_MODE_LIST);
+    assert_false(cbx_profile_editor_is_capture_active(&pt->editor));
+    assert_int_equal(cbx_profile_editor_get_editing_index(&pt->editor), -1);
+
+    pt_send_key_dn(&mgr, SDLK_TAB);
+    assert_int_equal(pt->mode, CBX_PT_MODE_LIST);
+
+    cbx_manager_shutdown(&mgr);
+    env_teardown(&env);
+}
+
+/* ================================================================== */
 /*  Test runner                                                        */
 /* ================================================================== */
 
@@ -1472,6 +1676,8 @@ static const struct CMUnitTest tests[] = {
     cmocka_unit_test(test_confirm_delete_via_dispatch),
     cmocka_unit_test(test_edit_default_rejected_via_dispatch),
     cmocka_unit_test(test_profile_sidecar_diagram_identity_via_dispatch),
+    cmocka_unit_test(test_editor_submode_reset_target_pick_pointer),
+    cmocka_unit_test(test_editor_submode_reset_capture_pointer),
 };
 
 int

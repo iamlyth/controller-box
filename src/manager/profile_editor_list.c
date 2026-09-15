@@ -53,6 +53,48 @@
 /* ------------------------------------------------------------------ */
 
 /*
+ * True if a source-event prop key names a virtual button or axis.  This is
+ * the single predicate the list and sequential modes share, so adding a
+ * future source-prop key happens in one place.
+ */
+static bool
+source_button_key(const char *key)
+{
+    return key && (strcmp(key, "button") == 0 || strcmp(key, "axis") == 0);
+}
+
+/* Index of the mapping's source prop that names a button/axis, or -1. */
+static int
+source_button_prop_index(const cbx_profile_mapping *m)
+{
+    if (!m)
+        return -1;
+    for (int i = 0; i < m->source_event.prop_count; i++)
+        if (source_button_key(m->source_event.props[i].key))
+            return i;
+    return -1;
+}
+
+/* Find (or append) the source prop that names a button/axis in `m`.
+ * Returns the prop index, or -1 when `m` is NULL or its prop array is full.
+ * Shared with the sequential binding mode (BUG-0016). */
+int
+cbx_profile_editor_source_button_prop(cbx_profile_mapping *m)
+{
+    int idx = source_button_prop_index(m);
+    if (idx >= 0)
+        return idx;
+    if (!m || m->source_event.prop_count >= CBX_MAX_EVENT_PROPS)
+        return -1;
+    idx = m->source_event.prop_count++;
+    strncpy(m->source_event.props[idx].key, "button",
+            sizeof(m->source_event.props[idx].key) - 1);
+    m->source_event.props[idx].key
+        [sizeof(m->source_event.props[idx].key) - 1] = '\0';
+    return idx;
+}
+
+/*
  * Find the "button" property in a source event's props.
  * Returns the value string, or NULL if not found.
  */
@@ -132,8 +174,7 @@ mapping_has_button(const cbx_profile_mapping *m, cbx_diag_button btn)
     if (!name)
         return false;
     for (int i = 0; i < m->source_event.prop_count; i++) {
-        const char *key = m->source_event.props[i].key;
-        if ((strcmp(key, "button") == 0 || strcmp(key, "axis") == 0) &&
+        if (source_button_key(m->source_event.props[i].key) &&
             strcmp(m->source_event.props[i].value, name) == 0)
             return true;
     }
@@ -159,13 +200,12 @@ mapping_button(const cbx_profile_mapping *m)
     if (!m)
         return CBX_DIAG_BTN_NONE;
     for (int i = 0; i < m->source_event.prop_count; i++) {
-        const char *key = m->source_event.props[i].key;
-        if (strcmp(key, "button") == 0 || strcmp(key, "axis") == 0) {
-            cbx_diag_button b = cbx_profile_diagram_button_from_name(
-                m->source_event.props[i].value);
-            if (b != CBX_DIAG_BTN_NONE)
-                return b;
-        }
+        if (!source_button_key(m->source_event.props[i].key))
+            continue;
+        cbx_diag_button b = cbx_profile_diagram_button_from_name(
+            m->source_event.props[i].value);
+        if (b != CBX_DIAG_BTN_NONE)
+            return b;
     }
     return CBX_DIAG_BTN_NONE;
 }
@@ -240,6 +280,24 @@ sync_diagram_highlight(cbx_profile_editor *ed)
      * up the control the user is editing. */
     cbx_profile_diagram_highlight(&ed->diagram,
                                   ed->rows[ed->selected_index].button);
+}
+
+/*
+ * Restore the binding-list baseline shared by every "leave a sub-mode"
+ * path: the target picker and progress bar are hidden, the binding list
+ * is shown, the edit cursor is cleared, and the editor returns to LIST.
+ */
+static void
+editor_return_to_list(cbx_profile_editor *ed)
+{
+    if (!ed)
+        return;
+    cbx_widget_set_visible(&ed->target_list.base, false);
+    cbx_widget_set_visible(&ed->binding_list.base, true);
+    cbx_widget_set_visible(&ed->progress_bar.base, false);
+    ed->editing_index = -1;
+    ed->mode = CBX_EDITOR_MODE_LIST;
+    cbx_label_set_text(&ed->status_lbl, "");
 }
 
 /*
@@ -357,7 +415,6 @@ cbx_profile_editor_init(cbx_profile_editor *ed,
     ed->selected_index = -1;
     ed->editing_index = -1;
     ed->capture_active = false;
-    ed->captured_button = CBX_DIAG_BTN_NONE;
 
     cbx_profile_init(&ed->profile);
 
@@ -638,12 +695,32 @@ cbx_profile_editor_load_profile(cbx_profile_editor *ed,
     if (!ed || !profile)
         return -EINVAL;
 
+    /* A load always starts from a clean LIST baseline: the editor is
+     * lazily reused across profiles, so any sub-mode left over from a
+     * previous session (target pick, capture, sequential) must not
+     * survive into the newly loaded profile. */
+    cbx_profile_editor_reset_mode(ed);
+
     ed->profile = *profile;
     ed->profile_loaded = true;
     ed->dirty = false;             /* fresh load: no unsaved edits */
 
     update_editor_title(ed);
     return cbx_profile_editor_refresh(ed);
+}
+
+void
+cbx_profile_editor_reset_mode(cbx_profile_editor *ed)
+{
+    if (!ed)
+        return;
+
+    ed->capture_active = false;
+    ed->seq_active = false;
+    ed->seq_step = 0;
+    ed->selected_index = -1;
+    ed->editing_index = -1;
+    ed->mode = CBX_EDITOR_MODE_LIST;
 }
 
 const cbx_profile *
@@ -793,8 +870,7 @@ cbx_profile_editor_refresh(cbx_profile_editor *ed)
     for (int i = 0; i < ed->profile.mapping_count; i++) {
         const cbx_profile_mapping *m = &ed->profile.mappings[i];
         for (int j = 0; j < m->source_event.prop_count; j++) {
-            const char *key = m->source_event.props[j].key;
-            if (strcmp(key, "button") != 0 && strcmp(key, "axis") != 0)
+            if (!source_button_key(m->source_event.props[j].key))
                 continue;
             cbx_diag_button b = cbx_profile_diagram_button_from_name(
                 m->source_event.props[j].value);
@@ -946,9 +1022,7 @@ cbx_profile_editor_activate(cbx_profile_editor *ed)
         case 2:  /* Sequential (All Buttons) */
             return cbx_profile_editor_begin_sequential(ed);
         default:
-            ed->mode = CBX_EDITOR_MODE_LIST;
-            ed->editing_index = -1;
-            cbx_label_set_text(&ed->status_lbl, "");
+            editor_return_to_list(ed);
             return -EINVAL;
         }
     }
@@ -981,13 +1055,10 @@ cbx_profile_editor_activate(cbx_profile_editor *ed)
             return -ENOSPC;
         }
         ed->dirty = true;
-        /* Rebuild rows so this row now shows as bound, and keep the
-         * cursor on the same row. */
-        int keep = ed->selected_index;
+        /* Rebuild rows so this row now shows as bound; refresh() keeps
+         * the cursor on the same row (it only clamps the selection) and
+         * re-syncs the diagram highlight. */
         cbx_profile_editor_refresh(ed);
-        ed->selected_index = keep;
-        cbx_list_set_selected(&ed->binding_list, keep);
-        sync_diagram_highlight(ed);
     }
     if (map_idx < 0 || map_idx >= ed->profile.mapping_count)
         return -EINVAL;
@@ -1034,11 +1105,7 @@ cbx_profile_editor_cancel(cbx_profile_editor *ed)
 
     if (ed->mode == CBX_EDITOR_MODE_BINDING_EDIT) {
         /* Cancel binding edit sub-menu, return to list mode. */
-        cbx_widget_set_visible(&ed->target_list.base, false);
-        cbx_widget_set_visible(&ed->binding_list.base, true);
-        ed->mode = CBX_EDITOR_MODE_LIST;
-        ed->editing_index = -1;
-        cbx_label_set_text(&ed->status_lbl, "");
+        editor_return_to_list(ed);
         return 0;
     }
 
@@ -1070,8 +1137,10 @@ editor_editing_mapping(cbx_profile_editor *ed)
 int
 cbx_profile_editor_begin_target_pick(cbx_profile_editor *ed)
 {
+    if (!ed)
+        return -EINVAL;
     int map_idx = editor_editing_mapping(ed);
-    if (!ed || map_idx < 0)
+    if (map_idx < 0)
         return -EINVAL;
 
     /* Ensure we have targets */
@@ -1148,15 +1217,7 @@ cbx_profile_editor_confirm_target_pick(cbx_profile_editor *ed)
 void
 cbx_profile_editor_cancel_target_pick(cbx_profile_editor *ed)
 {
-    if (!ed)
-        return;
-
-    cbx_widget_set_visible(&ed->target_list.base, false);
-    cbx_widget_set_visible(&ed->binding_list.base, true);
-
-    ed->editing_index = -1;
-    ed->mode = CBX_EDITOR_MODE_LIST;
-    cbx_label_set_text(&ed->status_lbl, "");
+    editor_return_to_list(ed);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1166,13 +1227,14 @@ cbx_profile_editor_cancel_target_pick(cbx_profile_editor *ed)
 int
 cbx_profile_editor_begin_capture(cbx_profile_editor *ed)
 {
+    if (!ed)
+        return -EINVAL;
     int map_idx = editor_editing_mapping(ed);
-    if (!ed || map_idx < 0)
+    if (map_idx < 0)
         return -EINVAL;
 
     ed->editing_index = map_idx;
     ed->capture_active = true;
-    ed->captured_button = CBX_DIAG_BTN_NONE;
     ed->mode = CBX_EDITOR_MODE_CAPTURE;
     cbx_label_set_text(&ed->status_lbl,
                          "Press a button to capture...  B=Cancel");
@@ -1199,10 +1261,7 @@ cbx_profile_editor_cancel_capture(cbx_profile_editor *ed)
         return;
 
     ed->capture_active = false;
-    ed->editing_index = -1;
-    ed->captured_button = CBX_DIAG_BTN_NONE;
-    ed->mode = CBX_EDITOR_MODE_LIST;
-    cbx_label_set_text(&ed->status_lbl, "");
+    editor_return_to_list(ed);
 }
 
 void
@@ -1242,35 +1301,15 @@ cbx_profile_editor_on_input_event(ip_input_id input,
     /* Set the source event's button to the captured event */
     cbx_profile_mapping *m = &ed->profile.mappings[map_idx];
 
-    /* Find or create the "button" prop */
-    int prop_idx = -1;
-    for (int i = 0; i < m->source_event.prop_count; i++) {
-        if (strcmp(m->source_event.props[i].key, "button") == 0
-            || strcmp(m->source_event.props[i].key, "axis") == 0) {
-            prop_idx = i;
-            break;
-        }
-    }
-
-    if (prop_idx < 0) {
-        if (m->source_event.prop_count < CBX_MAX_EVENT_PROPS) {
-            prop_idx = m->source_event.prop_count++;
-            strncpy(m->source_event.props[prop_idx].key, "button",
-                     sizeof(m->source_event.props[prop_idx].key) - 1);
-            m->source_event.props[prop_idx].key
-                [sizeof(m->source_event.props[prop_idx].key) - 1] = '\0';
-        } else {
-            return;
-        }
-    }
+    /* Find or create the source prop that names the captured button. */
+    int prop_idx = cbx_profile_editor_source_button_prop(m);
+    if (prop_idx < 0)
+        return;
 
     strncpy(m->source_event.props[prop_idx].value, raw_event,
              sizeof(m->source_event.props[prop_idx].value) - 1);
     m->source_event.props[prop_idx].value
         [sizeof(m->source_event.props[prop_idx].value) - 1] = '\0';
-
-    /* Store the captured button for diagram highlight */
-    ed->captured_button = cbx_profile_diagram_button_from_name(raw_event);
 
     /* Exit capture mode */
     ed->capture_active = false;
