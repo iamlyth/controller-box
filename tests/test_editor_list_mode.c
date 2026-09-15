@@ -662,6 +662,46 @@ static void test_load_capabilities_dbus_error(void **state)
     assert_true(cbx_profile_editor_get_target_count(&f->ed) > 0);
 }
 
+/* Regression (security): the three capability sources append to the same
+ * targets[] array, so the bound must be the cumulative count and not this
+ * call's additions.  A source returning more than CBX_PE_MAX_TARGETS
+ * entries used to fill the array and the next source's first write went
+ * out of bounds past targets[CBX_PE_MAX_TARGETS-1]. */
+static void test_load_capabilities_multi_source_bounded(void **state)
+{
+    pe_fixture *f = *state;
+
+    cbx_profile_editor_set_dbus(&f->ed, f->backend, &f->mock,
+                                  "/org/shadowblip/InputPlumber/CompositeDevice0");
+
+    /* One source alone exceeds the picker capacity; the other two then
+     * each append at least one more token. */
+    char csv[8192];
+    size_t off = 0;
+    for (int i = 0; i < CBX_PE_MAX_TARGETS + 40; i++) {
+        int n = snprintf(csv + off, sizeof(csv) - off, "%sgamepad:b%d",
+                         i ? "," : "", i);
+        assert_true(n > 0 && (size_t)n < sizeof(csv) - off);
+        off += (size_t)n;
+    }
+
+    assert_int_equal(ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                                             "Capabilities", csv), 0);
+    assert_int_equal(ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                                             "OutputCapabilities", "mouse"),
+                     0);
+    assert_int_equal(ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                                             "TargetCapabilities", "xb360"),
+                     0);
+
+    int rc = cbx_profile_editor_load_capabilities(&f->ed);
+    assert_int_equal(rc, 0);
+
+    /* Exactly the array capacity — no overflow, no over-capacity count. */
+    assert_int_equal(cbx_profile_editor_get_target_count(&f->ed),
+                     CBX_PE_MAX_TARGETS);
+}
+
 /* ------------------------------------------------------------------ */
 /*  Tests: capture mode                                                */
 /* ------------------------------------------------------------------ */
@@ -1389,6 +1429,8 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_load_capabilities_defaults, setup, teardown),
         cmocka_unit_test_setup_teardown(test_load_capabilities_dbus, setup, teardown),
         cmocka_unit_test_setup_teardown(test_load_capabilities_dbus_error, setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            test_load_capabilities_multi_source_bounded, setup, teardown),
 
         /* Capture mode */
         cmocka_unit_test_setup_teardown(test_begin_capture, setup, teardown),

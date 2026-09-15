@@ -104,6 +104,7 @@ typedef struct {
     cbx_profile_editor editor;      /* editor instance (owned)           */
     bool editor_initialized;        /* editor has been initialised        */
     bool editor_is_new;             /* creating new profile (vs editing) */
+    bool editor_read_only;          /* editing a read-only (default/system) profile */
     char editor_profile_name[CBX_PT_NAME_LEN]; /* name for saving       */
     char editor_icon_override[CBX_LIST_NAME_LEN]; /* selected sidecar icon */
     bool quit_after_action;         /* set by CONFIRM_QUIT to request manager exit */

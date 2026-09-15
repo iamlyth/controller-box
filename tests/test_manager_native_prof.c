@@ -2149,6 +2149,45 @@ test_mixed_second_xb360_pointer_context(void **state)
     cbx_manager_shutdown(&mgr);
 }
 
+/* BLOCKER regression (controller path): selecting the read-only system
+ * Default and activating "Edit Profile" with A must not open the editor,
+ * so the immutable Default cannot be edited or shadowed by a user save.
+ * With only the Default present, navigating the list to the button row
+ * leaves the Default selected (there is no ordinary user profile). */
+static void
+test_edit_default_rejected_ctrl(void **state)
+{
+    mnp_fixture *f = *state;
+    cbx_manager mgr;
+    mnp_init_manager(f, &mgr);
+
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+
+    /* Leave only the read-only system Default. */
+    char prof_path[PATH_MAX + 128];
+    snprintf(prof_path, sizeof(prof_path), "%s/myprof.yaml", f->user_dir);
+    unlink(prof_path);
+    assert_int_equal(cbx_profiles_tab_refresh(pt), 0);
+    assert_int_equal(cbx_profiles_tab_profile_count(pt), 1);
+    assert_true(cbx_profiles_tab_entry(pt, 0)->read_only);
+
+    nav_to_profiles_ctrl(&mgr, f->joystick);
+    /* 1 profile: tabbar → list (Default stays selected), list → buttons,
+     * Left → Edit, A → production Edit activation. */
+    prof_nav_to_button_ctrl(&mgr, f->joystick, 1, 1);
+    ctrl_press(&mgr, f->joystick, 0);
+
+    /* The read-only Default is never opened. */
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_LIST);
+
+    /* No user copy of the shipped Default is written. */
+    snprintf(prof_path, sizeof(prof_path), "%s/default.yaml", f->user_dir);
+    struct stat st;
+    assert_true(stat(prof_path, &st) != 0);
+
+    cbx_manager_shutdown(&mgr);
+}
+
 /* ================================================================== */
 /*  Test registration                                                  */
 /* ================================================================== */
@@ -2161,6 +2200,9 @@ main(void)
         cmocka_unit_test_setup_teardown(test_mixed_second_ds5_controller_context,
                                         mnp_setup, mnp_teardown),
         cmocka_unit_test_setup_teardown(test_mixed_second_xb360_pointer_context,
+                                        mnp_setup, mnp_teardown),
+        /* Read-only Default is not editable (BLOCKER regression) */
+        cmocka_unit_test_setup_teardown(test_edit_default_rejected_ctrl,
                                         mnp_setup, mnp_teardown),
         /* M10 — Profile list select */
         cmocka_unit_test_setup_teardown(test_m10_list_select_controller,

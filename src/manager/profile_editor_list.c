@@ -257,7 +257,12 @@ parse_capabilities_csv(const char *csv, cbx_pe_target *targets,
     int added = 0;
     const char *p = csv;
 
-    while (*p && added < max) {
+    /* Bound by the cumulative count, not this call's additions: the
+     * function is invoked once per capability source (Capabilities,
+     * OutputCapabilities, TargetCapabilities) against the same shared
+     * targets[] array, so a per-call bound would let a later call write
+     * past targets[max-1]. */
+    while (*p && *count < max) {
         while (*p == ' ' || *p == '\t')
             p++;
         if (*p == '\0')

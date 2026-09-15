@@ -90,7 +90,8 @@ static int  cbx_profiles_tab_open_editor(cbx_profiles_tab *tab,
                                             const cbx_profile *profile,
                                             const char *name,
                                             const char *icon_override,
-                                            bool is_new);
+                                            bool is_new,
+                                            bool read_only);
 static void cbx_profiles_tab_close_editor(cbx_profiles_tab *tab);
 static int  cbx_profiles_tab_save_editor(cbx_profiles_tab *tab);
 static void show_tab_widgets(cbx_profiles_tab *tab);
@@ -209,6 +210,17 @@ on_edit_pressed(cbx_widget *w, void *user_data)
 
     const cbx_profile_entry *e = &tab->profiles.entries[idx];
 
+    /* The built-in Default and any system profile are immutable: the
+     * Edit button (focus-activated with A and pointer-clickable) must
+     * never open the editor on a read-only entry, or activating an
+     * unbound row would append a mapping and saving it would write a
+     * user copy that shadows the shipped profile. */
+    if (e->read_only) {
+        cbx_label_set_text(&tab->status_lbl, "Read-only profile");
+        cbx_widget_set_visible(&tab->status_lbl.base, true);
+        return;
+    }
+
     /* Load the profile from disk. */
     cbx_profile prof;
     cbx_profile_init(&prof);
@@ -217,7 +229,8 @@ on_edit_pressed(cbx_widget *w, void *user_data)
         return;
 
     /* Open the editor with the loaded profile. */
-    cbx_profiles_tab_open_editor(tab, &prof, e->filename, e->icon, false);
+    cbx_profiles_tab_open_editor(tab, &prof, e->filename, e->icon, false,
+                                  e->read_only);
 }
 
 /* ------------------------------------------------------------------ */
@@ -813,7 +826,7 @@ cbx_profiles_tab_name_input_confirm(cbx_profiles_tab *tab)
      * written until the user saves from the editor (which
      * validates NES minimum bindings via cbx_profile_save_to_dir). */
     return cbx_profiles_tab_open_editor(tab, &prof, name,
-                                         inherited_icon, true);
+                                         inherited_icon, true, false);
 }
 
 void
@@ -1272,10 +1285,18 @@ cbx_profiles_tab_open_editor(cbx_profiles_tab *tab,
                               const cbx_profile *profile,
                               const char *name,
                               const char *icon_override,
-                              bool is_new)
+                              bool is_new,
+                              bool read_only)
 {
     if (!tab || !tab->panel || !profile || !name)
         return -EINVAL;
+
+    /* Defense-in-depth: the built-in Default and system profiles are
+     * immutable.  Every entry point funnels through here, so a read-only
+     * request is rejected before any editor state is touched.  New
+     * profiles are always editable (read_only == false). */
+    if (read_only || (!is_new && strcmp(name, "default") == 0))
+        return -EACCES;
 
     /* Lazy-initialise the editor on first use. */
     if (!tab->editor_initialized) {
@@ -1325,6 +1346,7 @@ cbx_profiles_tab_open_editor(cbx_profiles_tab *tab,
     snprintf(tab->editor_profile_name, sizeof(tab->editor_profile_name),
               "%s", name);
     tab->editor_is_new = is_new;
+    tab->editor_read_only = read_only;
     snprintf(tab->editor_icon_override, sizeof(tab->editor_icon_override),
              "%s", icon_override ? icon_override : "");
 
@@ -1381,6 +1403,16 @@ cbx_profiles_tab_save_editor(cbx_profiles_tab *tab)
 {
     if (!tab || !tab->editor_initialized)
         return -EINVAL;
+
+    /* Defense-in-depth: never write a user profile that would shadow the
+     * immutable built-in Default, and never save from an editor that was
+     * opened on a read-only entry. */
+    if (tab->editor_read_only ||
+        strcmp(tab->editor_profile_name, "default") == 0) {
+        cbx_label_set_text(&tab->editor.status_lbl,
+                           "Read-only profile: not saved.");
+        return -EACCES;
+    }
 
     const cbx_profile *prof = cbx_profile_editor_get_profile(&tab->editor);
     if (!prof)

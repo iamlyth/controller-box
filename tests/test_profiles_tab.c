@@ -1345,6 +1345,56 @@ test_profile_sidecar_diagram_identity_via_dispatch(void **state)
     env_teardown(&env);
 }
 
+/* BLOCKER regression: the read-only built-in Default must not open the
+ * editor through the production pointer path.  If it did, activating an
+ * unbound row would append a mapping and saving would write a user
+ * default.yaml that shadows the shipped immutable Default. */
+static void
+test_edit_default_rejected_via_dispatch(void **state)
+{
+    (void)state;
+    pt_env env;
+    env_setup(&env);
+    char def_path[PATH_MAX + 128];
+    snprintf(def_path, sizeof(def_path), "%s/default.yaml", env.system_dir);
+    write_nes_profile_yaml(def_path, "Default");
+
+    ensure_dummy_driver();
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+    cbx_profiles_tab_set_test_dirs(pt, env.user_dir, env.system_dir, env.meta_dir);
+    cbx_profiles_tab_refresh(pt);
+
+    pt_send_key_dn(&mgr, SDLK_RIGHT);
+
+    /* Select the shipped Default (index 0) via the pointer. */
+    SDL_Rect list_rect;
+    cbx_widget_get_rect(&pt->profile_list_w.base, &list_rect);
+    send_pointer_click(&mgr, list_rect.x + 30, list_rect.y + 8);
+    assert_int_equal(cbx_profiles_tab_selected(pt), 0);
+    assert_true(cbx_profiles_tab_entry(pt, 0)->read_only);
+
+    /* Click "Edit Profile" on the read-only entry. */
+    SDL_Rect edit_rect;
+    cbx_widget_get_rect(&pt->edit_btn.base, &edit_rect);
+    send_pointer_click(&mgr, edit_rect.x + edit_rect.w / 2,
+                       edit_rect.y + edit_rect.h / 2);
+
+    /* The editor must not open on the immutable Default. */
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_LIST);
+
+    /* No user-level default.yaml was written to shadow the shipped one. */
+    char user_def[PATH_MAX + 128];
+    snprintf(user_def, sizeof(user_def), "%s/default.yaml", env.user_dir);
+    struct stat st;
+    assert_true(stat(user_def, &st) != 0);
+
+    cbx_manager_shutdown(&mgr);
+    env_teardown(&env);
+}
+
 /* ================================================================== */
 /*  Test runner                                                        */
 /* ================================================================== */
@@ -1420,6 +1470,7 @@ static const struct CMUnitTest tests[] = {
     cmocka_unit_test(test_create_picker_via_dispatch),
     cmocka_unit_test(test_name_input_via_dispatch),
     cmocka_unit_test(test_confirm_delete_via_dispatch),
+    cmocka_unit_test(test_edit_default_rejected_via_dispatch),
     cmocka_unit_test(test_profile_sidecar_diagram_identity_via_dispatch),
 };
 
