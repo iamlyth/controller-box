@@ -1777,6 +1777,79 @@ static void test_o13_conflict_resolution_on_save(void **state)
 }
 
 /* ================================================================== */
+/*  Task 7 — readiness fails closed and recovers within two seconds     */
+/* ================================================================== */
+
+/* Restart the InputPlumber-compatible server on the fixture's private bus
+ * with the same fixture configuration.  Returns the new server pid. */
+static pid_t
+restart_native_server(native_fixture *f)
+{
+    nip_reset_server_state(2);
+    for (int i = 0; i < 2; i++) {
+        snprintf(g_nip_comp_names[i], sizeof(g_nip_comp_names[i]),
+                 "TestController%d", i);
+        snprintf(g_nip_persistent_ids[i], sizeof(g_nip_persistent_ids[i]),
+                 "ORDER:%d", i);
+        snprintf(g_nip_dbus_devices[i], sizeof(g_nip_dbus_devices[i]),
+                 "/org/shadowblip/InputPlumber/CompositeDevice%d", i);
+        g_nip_intercept_mode[i] = IP_INTERCEPT_PASS;
+    }
+    const nip_server_config cfg = { .num_composites = 2,
+                                    .version = "0.78.0" };
+    return nip_fork_server(f->bus_address, &cfg);
+}
+
+/* Owner loss must clear readiness (no trusted sender), and a healthy
+ * reacquisition must become operational within two seconds.  A transient
+ * first recovery failure must be retried (bounded) rather than leaving the
+ * overlay permanently disabled. */
+static void
+test_readiness_fail_closed_and_recovery(void **state)
+{
+    native_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    /* Use the exact production recovery callbacks. */
+    cbx_overlay_install_recovery_callbacks(svc);
+    assert_true(svc->backend_ready);
+    assert_true(ip_connection_is_sender_verified(&svc->conn));
+
+    /* Phase 1: owner loss → fail closed. */
+    kill(f->server_pid, SIGTERM);
+    waitpid(f->server_pid, NULL, 0);
+    f->server_pid = -1;
+
+    uint32_t t0 = SDL_GetTicks();
+    while (svc->backend_ready && SDL_GetTicks() - t0 < 2000) {
+        svc->conn.backend->process(svc->conn.bus);
+        SDL_Delay(10);
+    }
+    assert_false(svc->backend_ready);
+    assert_false(ip_connection_is_sender_verified(&svc->conn));
+    assert_null(ip_connection_get_unique_name(&svc->conn));
+    assert_true(svc->readiness_detail[0] != '\0');
+
+    /* Phase 2: restart, but inject a transient reconcile failure so the
+     * first recovery attempt fails.  The bounded retry in
+     * cbx_overlay_service_step must then bring the overlay ready. */
+    g_nip_fail_next_create = 1;
+    f->server_pid = restart_native_server(f);
+    assert_true(f->server_pid > 0);
+
+    t0 = SDL_GetTicks();
+    while (!svc->backend_ready && SDL_GetTicks() - t0 < 2000) {
+        cbx_overlay_service_step(svc);
+        SDL_Delay(10);
+    }
+    assert_true(svc->backend_ready);
+    assert_true(SDL_GetTicks() - t0 <= 2000);
+    assert_true(ip_connection_is_sender_verified(&svc->conn));
+    assert_true(svc->input_events_ready);
+    assert_true(svc->poll_count == svc->comp_count);
+}
+
+/* ================================================================== */
 /*  Main                                                               */
 /* ================================================================== */
 
@@ -1872,6 +1945,11 @@ static const struct CMUnitTest tests[] = {
 
     /* O13 — Conflict resolution on save */
     cmocka_unit_test_setup_teardown(test_o13_conflict_resolution_on_save,
+                                     native_setup, native_teardown),
+
+    /* Task 7 — readiness fails closed on owner loss, recovers within 2s,
+     * and retries a transient recovery failure. */
+    cmocka_unit_test_setup_teardown(test_readiness_fail_closed_and_recovery,
                                      native_setup, native_teardown),
 };
 

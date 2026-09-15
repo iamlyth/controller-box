@@ -215,6 +215,17 @@ typedef struct cbx_overlay_service_ctx {
     /* --- Status --- */
     bool                   initialized;   /* true after full init              */
     bool                   backend_ready; /* Version + enumeration succeeded   */
+
+    /* --- Bounded recovery retry (Task 7) --------------------------------- */
+    /* When a startup/recovery attempt fails in a required step (owner,
+     * enumeration, subscriptions, trigger registration, mapping, assignment
+     * restoration, type probes), operations stay disabled and the service
+     * retries within the two-second readiness window before waiting for the
+     * next NameOwnerChanged. */
+    bool                   recovery_pending;
+    int                    recovery_attempts;
+    uint64_t               recovery_deadline_ms;
+    char                   readiness_detail[256];
 } cbx_overlay_service_ctx;
 
 /*
@@ -236,14 +247,20 @@ void cbx_overlay_service_step(cbx_overlay_service_ctx *svc);
 /* Finite production defaults.  Tests may override the per-context values. */
 #define CBX_RECONCILE_TIMEOUT_MS 2000u
 #define CBX_RECONCILE_POLL_MS      10u
+#define CBX_RECOVERY_MAX_ATTEMPTS     8
 
 /*
  * (Re)initialize all intercept polls for the current composites.
  * Stops any existing polls first, then creates one per composite with
  * per-composite activation context so close sets PASS on the correct
  * composite (SPEC §2.5).  Exposed for test setup.
+ *
+ * Returns 0 when every required poll was armed (or there are no composites);
+ * negative errno when the poll event type is unavailable or an expected poll
+ * could not be started, so a caller can keep operations disabled rather than
+ * silently running without intercept detection.
  */
-void cbx_overlay_rearm_polls(cbx_overlay_service_ctx *svc);
+int cbx_overlay_rearm_polls(cbx_overlay_service_ctx *svc);
 
 /*
  * Reconcile InputPlumber's live target topology to match the configured
@@ -386,6 +403,11 @@ int cbx_overlay_props_wire(cbx_overlay_service_ctx *svc);
 void on_intercept_activating(void *userdata);
 void on_intercept_deactivating(void *userdata);
 void on_intercept_error(int error_code, void *userdata);
+
+/* Install the exact production recovery callbacks (overlay_backend_ready /
+ * overlay_backend_degraded) on the context's connection so native tests can
+ * exercise owner loss/reacquisition through the production callback path. */
+void cbx_overlay_install_recovery_callbacks(cbx_overlay_service_ctx *svc);
 #endif /* CBX_TESTING */
 
 #endif /* CBX_OVERLAY_SERVICE_H */

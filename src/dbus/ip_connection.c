@@ -55,6 +55,8 @@ ip_connection_reason_for_error(int rc)
         return "InputPlumber version incompatible \xe2\x80\x94 update required";
     case IP_ERR_INCOMPATIBLE:
         return "InputPlumber version incompatible \xe2\x80\x94 update required";
+    case IP_ERR_UNVERIFIED:
+        return "InputPlumber owner could not be verified \xe2\x80\x94 check service identity";
     case IP_ERR_NOT_CONNECTED:
         return "System DBus not connected";
     default:
@@ -92,29 +94,52 @@ ip_connection_uid_is_trusted(uint32_t uid)
 
 /* Verify the owner of `unique_name` by querying GetConnectionCredentials
  * and applying the anti-squatting UID policy.  On success records the
- * credential fingerprint and marks the sender verified. */
-static bool
+ * credential fingerprint and marks the sender verified.
+ *
+ * Returns 0 when the owner is verified, IP_ERR_ACCESS_DENIED when the
+ * owner's UID is untrusted, and IP_ERR_UNVERIFIED when the credential
+ * fingerprint cannot be obtained.  Credential state is only published
+ * (sender_verified/expected_pid/expected_uid) after every check passes. */
+static int
 verify_sender(ip_connection *conn, const char *unique_name)
 {
+    if (!conn)
+        return IP_ERR_INTERNAL;
+
     conn->sender_verified = false;
     conn->expected_pid    = 0;
     conn->expected_uid    = 0;
 
-    if (!conn || !conn->backend || !conn->backend->get_connection_creds ||
+    if (!conn->backend || !conn->backend->get_connection_creds ||
         !unique_name)
-        return false;
+        return IP_ERR_UNVERIFIED;
 
     uint32_t pid = 0, uid = 0;
     if (conn->backend->get_connection_creds(conn->bus, unique_name,
                                             &pid, &uid) != 0)
-        return false;
+        return IP_ERR_UNVERIFIED;
     if (!ip_connection_uid_is_trusted(uid))
-        return false;
+        return IP_ERR_ACCESS_DENIED;
 
     conn->expected_pid    = pid;
     conn->expected_uid    = uid;
     conn->sender_verified = true;
-    return true;
+    return 0;
+}
+
+/* Clear all owner/credential trust state.  Called on disconnect, name loss,
+ * and any failed (re)validation so a former or unverified owner can never
+ * remain the trusted signal sender. */
+static void
+clear_owner_state(ip_connection *conn)
+{
+    if (!conn)
+        return;
+    conn->sender_verified = false;
+    conn->expected_pid    = 0;
+    conn->expected_uid    = 0;
+    free(conn->unique_name);
+    conn->unique_name = NULL;
 }
 
 /* --- Public API ---------------------------------------------------------- */
@@ -142,6 +167,12 @@ ip_connection_connect(ip_connection *conn)
 {
     if (!conn || !conn->backend)
         return IP_ERR_INTERNAL;
+
+    /* Drop any stale owner/credential/version state from a previous session
+     * so a reconnect never inherits a former owner's trust. */
+    clear_owner_state(conn);
+    free(conn->version);
+    conn->version = NULL;
 
     int rc;
 
@@ -176,35 +207,35 @@ ip_connection_connect(ip_connection *conn)
             conn->state = IP_CONN_DEGRADED;
             return IP_ERR_INCOMPATIBLE;
         }
-        conn->version = version;
 
-        /* Get InputPlumber's unique bus name for sender verification. */
+        /* Readiness requires a verified current owner.  Resolve the unique
+         * names and credential-verify it BEFORE publishing anything as
+         * trusted or connected; an unverified owner is never reported as
+         * ready and no unique name is advertised for signal sender checks. */
         char *unique = NULL;
         rc = conn->backend->get_unique_name(conn->bus, IP_DBUS_NAME, &unique);
-        if (rc == 0 && unique) {
-            /* Credential-verify the owner before trusting any signal or
-             * method reply from it (F3, prevents name squatting). */
-            if (verify_sender(conn, unique)) {
-                conn->unique_name = unique;
-                conn->state = IP_CONN_CONNECTED;
-                return 0;
-            }
-            /* Owner present but unverified (untrusted UID / creds lookup
-             * failed): stay on the bus watching NameOwnerChanged, but do
-             * not report readiness and do not advertise a trusted sender. */
+        if (rc != 0 || !unique) {
             free(unique);
-            conn->unique_name = NULL;
+            free(version);
             conn->state = IP_CONN_DEGRADED;
-            return IP_ERR_ACCESS_DENIED;
-        } else {
-            /* Non-fatal: unique name is used for signal sender verification
-             * in later tasks. If unavailable, we're still connected but the
-             * sender cannot be verified. */
-            conn->sender_verified = false;
-            free(unique);
-            conn->state = IP_CONN_CONNECTED;
-            return 0;
+            return IP_ERR_UNVERIFIED;
         }
+
+        int vrc = verify_sender(conn, unique);
+        if (vrc != 0) {
+            free(unique);
+            free(version);
+            /* Stay on the bus watching NameOwnerChanged, but do not report
+             * readiness and do not advertise a trusted sender. */
+            clear_owner_state(conn);
+            conn->state = IP_CONN_DEGRADED;
+            return vrc;
+        }
+
+        conn->version     = version;
+        conn->unique_name = unique;
+        conn->state       = IP_CONN_CONNECTED;
+        return 0;
     }
 
     /* Version read failed. */
@@ -248,6 +279,7 @@ ip_connection_disconnect(ip_connection *conn)
     free(conn->version);
     conn->version = NULL;
 
+    clear_owner_state(conn);
     conn->state = IP_CONN_DISCONNECTED;
 }
 
@@ -320,61 +352,66 @@ ip_connection_handle_name_changed(ip_connection *conn,
                      (!new_owner || new_owner[0] == '\0'));
 
     if (acquired) {
-        /* InputPlumber's bus name was (re-)acquired.  Credential-verify the
-         * new owner before trusting it; if verification fails, treat the
-         * owner as untrusted (stay degraded, no trusted sender). */
-        char *new_name = strdup(new_owner);
-        if (new_name) {
-            if (verify_sender(conn, new_owner)) {
-                free(conn->unique_name);
-                conn->unique_name = new_name;
-            } else {
-                free(new_name);
-                free(conn->unique_name);
-                conn->unique_name = NULL;
-                conn->state = IP_CONN_DEGRADED;
-                if (conn->degraded_cb)
-                    conn->degraded_cb("InputPlumber owner could not be verified",
-                                      conn->degraded_ud);
-                return;
-            }
-        } else {
-            conn->sender_verified = false;
+        /* Verify the new owner's credentials before publishing any trust.
+         * A name-squatting process that grabbed the well-known name is
+         * rejected here and no unique name/sender trust is advertised. */
+        int vrc = verify_sender(conn, new_owner);
+        if (vrc != 0) {
+            free(conn->version);
+            conn->version = NULL;
+            clear_owner_state(conn);
+            conn->state = IP_CONN_DEGRADED;
+            if (conn->degraded_cb)
+                conn->degraded_cb(ip_connection_reason_for_error(vrc),
+                                  conn->degraded_ud);
+            return;
         }
 
-        /* Re-read the Version property. */
+        /* Re-read the Version property; trust is published only after both
+         * the credential check and the version check succeed. */
         char *version = NULL;
         int rc = conn->backend->get_property(
             conn->bus, IP_DBUS_NAME, IP_DBUS_MANAGER_PATH,
             IP_IFACE_MANAGER, "Version", &version);
         if (rc == 0 && ip_version_is_compatible(version)) {
+            char *new_name = strdup(new_owner);
+            if (!new_name) {
+                free(version);
+                clear_owner_state(conn);
+                conn->state = IP_CONN_DEGRADED;
+                if (conn->degraded_cb)
+                    conn->degraded_cb(ip_connection_reason_for_error(IP_ERR_UNVERIFIED),
+                                      conn->degraded_ud);
+                return;
+            }
             free(conn->version);
             conn->version = version;
+            free(conn->unique_name);
+            conn->unique_name = new_name;
             conn->state = IP_CONN_CONNECTED;
             if (conn->reenumerate_cb)
                 conn->reenumerate_cb(conn->reenumerate_ud);
         } else if (rc == 0) {
             /* Version read succeeded but is incompatible. */
             free(version);
+            clear_owner_state(conn);
             conn->state = IP_CONN_DEGRADED;
             if (conn->degraded_cb)
                 conn->degraded_cb("InputPlumber version incompatible \xe2\x80\x94 update required",
                                   conn->degraded_ud);
         } else {
             free(version);
+            clear_owner_state(conn);
             conn->state = IP_CONN_DEGRADED;
             if (conn->degraded_cb)
                 conn->degraded_cb(ip_connection_reason_for_error(rc),
                                   conn->degraded_ud);
         }
     } else if (lost) {
-        /* InputPlumber's bus name was lost — daemon stopped. */
-        free(conn->unique_name);
-        conn->unique_name = NULL;
-
-        conn->sender_verified = false;
-        conn->expected_pid    = 0;
-        conn->expected_uid    = 0;
+        /* InputPlumber's bus name was lost — daemon stopped.  Clear the
+         * former owner's unique name and credentials so its late signals
+         * are rejected rather than trusted. */
+        clear_owner_state(conn);
 
         free(conn->version);
         conn->version = NULL;

@@ -104,6 +104,61 @@ sd_query_owner_creds(const sd_bus_wrapper *w, const char *unique_name,
     return 0;
 }
 
+/* Drop all transport-level sender trust.  Called on name loss, disconnect,
+ * and any failed (re)verification so a former or unverified owner can never
+ * keep its signal callbacks accepted. */
+static void
+sd_clear_trusted_owner(sd_bus_wrapper *w)
+{
+    if (!w)
+        return;
+    free(w->expected_sender);
+    w->expected_sender  = NULL;
+    w->expected_pid     = 0;
+    w->expected_pid_set = false;
+}
+
+/* Publish the trusted owner only after the credential query proves the
+ * connection belongs to the legitimate InputPlumber identity.  This is the
+ * single place the backend's signal-trust store is populated; the initial
+ * connect path and the NameOwnerChanged re-acquisition path both reach it
+ * through get_connection_creds, so trust is never advertised before
+ * validation. */
+static int
+sd_trust_owner_creds(sd_bus_wrapper *w, const char *unique_name,
+                     uint32_t *out_pid, uint32_t *out_uid)
+{
+    if (!w || !unique_name)
+        return -EINVAL;
+
+    uint32_t pid = 0, uid = 0;
+    int r = sd_query_owner_creds(w, unique_name, &pid, &uid);
+    if (r < 0) {
+        sd_clear_trusted_owner(w);
+        return r;
+    }
+    if (out_pid)
+        *out_pid = pid;
+    if (out_uid)
+        *out_uid = uid;
+
+    if (!ip_connection_uid_is_trusted(uid)) {
+        sd_clear_trusted_owner(w);
+        return 0;  /* creds read succeeded; caller applies the UID policy */
+    }
+
+    char *new_sender = strdup(unique_name);
+    if (!new_sender) {
+        sd_clear_trusted_owner(w);
+        return -ENOMEM;
+    }
+    free(w->expected_sender);
+    w->expected_sender  = new_sender;
+    w->expected_pid     = pid;
+    w->expected_pid_set = true;
+    return 0;
+}
+
 static int
 sd_noc_callback(sd_bus_message *msg, void *userdata, sd_bus_error *ret_error)
 {
@@ -117,22 +172,13 @@ sd_noc_callback(sd_bus_message *msg, void *userdata, sd_bus_error *ret_error)
     if (r < 0)
         return 0;  /* ignore parse errors — don't kill the bus */
 
-    /* Update the wrapper's expected sender when InputPlumber (re-)acquires
-     * its bus name, so that InterfacesAdded/Removed callbacks can verify
-     * signal senders against the current unique name.  The PID fingerprint
-     * is refreshed alongside so the (sender, pid) pair stays consistent. */
-    if (data->wrapper && new_owner && new_owner[0] != '\0') {
-        char *new_sender = strdup(new_owner);
-        if (new_sender) {
-            free(data->wrapper->expected_sender);
-            data->wrapper->expected_sender = new_sender;
-        }
-        uint32_t pid = 0, uid = 0;
-        if (sd_query_owner_creds(data->wrapper, new_owner, &pid, &uid) == 0) {
-            data->wrapper->expected_pid     = pid;
-            data->wrapper->expected_pid_set = true;
-        }
-    }
+    /* When InputPlumber's name is lost, immediately drop the former
+     * owner's transport trust so its late signals are rejected.  When the
+     * name is (re-)acquired, do NOT publish trust here: the validated
+     * get_connection_creds path below sets it only after the credential
+     * check succeeds.  The callback below drives that validation. */
+    if (data->wrapper && (!new_owner || new_owner[0] == '\0'))
+        sd_clear_trusted_owner(data->wrapper);
 
     ip_owner_changed_payload payload = {
         .name      = name,
@@ -590,17 +636,10 @@ sd_get_unique_name(ip_bus_handle bus, const char *well_known,
 
     *out_unique = strdup(unique);
 
-    /* Store the unique name for sender verification in signal callbacks. */
-    free(w->expected_sender);
-    w->expected_sender = strdup(unique);
-
-    /* Capture the owning connection's credential fingerprint (PID) so the
-     * (sender, pid) pair can be re-verified across name changes (F3). */
-    uint32_t pid = 0, uid = 0;
-    if (sd_query_owner_creds(w, unique, &pid, &uid) == 0) {
-        w->expected_pid     = pid;
-        w->expected_pid_set = true;
-    }
+    /* Do NOT publish sender trust here.  Trust is established only by
+     * sd_get_connection_creds() after the credential query validates the
+     * owner, so a get_unique_name() call cannot advertise a trusted sender
+     * before verification. */
 
     sd_bus_message_unref(reply);
     sd_bus_error_free(&error);
@@ -615,7 +654,13 @@ sd_get_connection_creds(ip_bus_handle bus, const char *unique_name,
                         uint32_t *pid, uint32_t *uid)
 {
     sd_bus_wrapper *w = (sd_bus_wrapper *)bus;
-    return sd_query_owner_creds(w, unique_name, pid, uid);
+    if (!w || !unique_name || !pid || !uid)
+        return -EINVAL;
+
+    /* Query credentials, then update the transport trust store: a trusted
+     * owner is published only after the query succeeds, and an untrusted or
+     * unqueryable owner clears any previous trust (fail closed). */
+    return sd_trust_owner_creds(w, unique_name, pid, uid);
 }
 
 /* --- Vtable: get_property ------------------------------------------------ */

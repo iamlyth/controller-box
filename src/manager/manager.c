@@ -106,6 +106,41 @@ cbx_manager_close_gamecontroller(cbx_manager *mgr,
     }
 }
 
+/* One full manager readiness pass.  Required steps: enumeration/type query,
+ * profiles context, and the PropertiesChanged subscription.  Returns 0 when
+ * the manager is operational; on failure fills readiness_detail. */
+static int
+cbx_manager_try_ready(cbx_manager *mgr)
+{
+    if (!mgr || !mgr->dbus_backend || !mgr->dbus_bus)
+        return -EINVAL;
+
+    mgr->ct.backend = mgr->dbus_backend;
+    mgr->ct.bus = mgr->dbus_bus;
+    cbx_controllers_tab_set_available(&mgr->ct, true, NULL);
+    if (cbx_controllers_tab_refresh(&mgr->ct) != 0) {
+        snprintf(mgr->readiness_detail, sizeof(mgr->readiness_detail),
+                 "InputPlumber enumeration/type query failed");
+        cbx_controllers_tab_set_available(&mgr->ct, false,
+            "InputPlumber enumeration/type query failed");
+        return -EIO;
+    }
+    mgr->last_controller_refresh_ms = SDL_GetTicks();
+    cbx_profiles_tab_set_context(&mgr->pt, mgr->rend.renderer,
+                                  mgr->dbus_backend, mgr->dbus_bus);
+
+    /* Reactive PropertiesChanged: observe InputPlumber's live per-device
+     * property state after every (re)acquisition (SPEC §10.1). */
+    int rc = cbx_manager_props_wire(mgr);
+    if (rc != 0) {
+        snprintf(mgr->readiness_detail, sizeof(mgr->readiness_detail),
+                 "PropertiesChanged subscription failed (%d)", rc);
+        return rc;
+    }
+    mgr->dbus_connected = true;
+    return 0;
+}
+
 void
 cbx_manager_backend_ready(void *userdata)
 {
@@ -113,20 +148,41 @@ cbx_manager_backend_ready(void *userdata)
     if (!mgr)
         return;
     mgr->dbus_connected = true;
-    mgr->ct.backend = mgr->dbus_backend;
-    mgr->ct.bus = mgr->dbus_bus;
-    cbx_controllers_tab_set_available(&mgr->ct, true, NULL);
-    if (cbx_controllers_tab_refresh(&mgr->ct) != 0)
-        cbx_controllers_tab_set_available(&mgr->ct, false,
-            "InputPlumber enumeration/type query failed");
-    else
-        mgr->last_controller_refresh_ms = SDL_GetTicks();
-    cbx_profiles_tab_set_context(&mgr->pt, mgr->rend.renderer,
-                                  mgr->dbus_backend, mgr->dbus_bus);
+    int rc = cbx_manager_try_ready(mgr);
+    if (rc != 0) {
+        cbx_manager_backend_degraded(mgr->readiness_detail, mgr);
+        mgr->recovery_pending   = true;
+        mgr->recovery_attempts  = 0;
+        mgr->recovery_deadline_ms = SDL_GetTicks() + 2000u;
+        return;
+    }
+    mgr->recovery_pending  = false;
+    mgr->recovery_attempts = 0;
+    mgr->readiness_detail[0] = '\0';
+}
 
-    /* Reactive PropertiesChanged: observe InputPlumber's live per-device
-     * property state after every (re)acquisition (SPEC §10.1). */
-    cbx_manager_props_wire(mgr);
+void
+cbx_manager_recovery_tick(cbx_manager *mgr, uint32_t now_ms)
+{
+    if (!mgr || !mgr->recovery_pending)
+        return;
+    if (mgr->recovery_attempts >= CBX_MANAGER_RECOVERY_MAX_ATTEMPTS ||
+        (int32_t)(now_ms - mgr->recovery_deadline_ms) >= 0) {
+        mgr->recovery_pending = false;
+        fprintf(stderr, "controller-box: manager recovery retries exhausted: %s\n",
+                mgr->readiness_detail[0] ? mgr->readiness_detail : "unknown");
+        return;
+    }
+    if (!mgr->dbus_backend || !mgr->dbus_bus) {
+        mgr->recovery_pending = false;
+        return;
+    }
+    mgr->recovery_attempts++;
+    if (cbx_manager_try_ready(mgr) == 0) {
+        mgr->recovery_pending  = false;
+        mgr->recovery_attempts = 0;
+        mgr->readiness_detail[0] = '\0';
+    }
 }
 
 /*
@@ -175,26 +231,36 @@ cbx_manager_props_wire(cbx_manager *mgr)
     if (!mgr || !mgr->dbus_backend || !mgr->dbus_bus)
         return -EINVAL;
 
-    /* Resolve InputPlumber's unique name for sender verification.  The
-     * owned-connection path already tracked it during connect; the injected
-     * backend path resolves it here.  Re-resolve on every wire so a
-     * restarted InputPlumber's new unique name replaces the old one. */
+    /* A degraded/not-yet-ready backend has no trusted sender; wiring must
+     * wait for a successful readiness pass. */
+    if (!mgr->dbus_connected)
+        return -EAGAIN;
+
+    char resolved[128] = {0};
     const char *uniq = ip_connection_get_unique_name(&mgr->connection);
-    if (uniq && uniq[0]) {
-        snprintf(mgr->expected_sender, sizeof(mgr->expected_sender),
-                 "%s", uniq);
+    if (mgr->owns_dbus_connection) {
+        /* The owned connection only publishes a unique name after the owner
+         * has been credential-verified, so refuse to wire without it. */
+        if (!ip_connection_is_sender_verified(&mgr->connection) ||
+            !uniq || !uniq[0])
+            return -EACCES;
+        snprintf(resolved, sizeof(resolved), "%s", uniq);
+    } else if (uniq && uniq[0]) {
+        snprintf(resolved, sizeof(resolved), "%s", uniq);
     } else if (mgr->dbus_backend->get_unique_name) {
+        /* Injected/pre-connected fixture backend: resolve the unique name
+         * for sender verification. */
         char *unique = NULL;
         if (mgr->dbus_backend->get_unique_name(mgr->dbus_bus, IP_DBUS_NAME,
-                                                &unique) == 0 && unique) {
-            snprintf(mgr->expected_sender, sizeof(mgr->expected_sender),
-                     "%s", unique);
-        }
+                                                &unique) == 0 && unique)
+            snprintf(resolved, sizeof(resolved), "%s", unique);
         free(unique);
     }
-    if (!mgr->expected_sender[0])
+    if (!resolved[0])
         return -EINVAL;
 
+    snprintf(mgr->expected_sender, sizeof(mgr->expected_sender),
+             "%s", resolved);
     ip_properties_init(&mgr->props, mgr->dbus_backend, mgr->dbus_bus,
                        mgr->expected_sender, cbx_manager_on_prop_change, mgr);
     return ip_properties_subscribe(&mgr->props);
@@ -206,8 +272,13 @@ cbx_manager_backend_degraded(const char *reason, void *userdata)
     cbx_manager *mgr = userdata;
     if (!mgr)
         return;
-    fprintf(stderr, "controller-box: %s\n",
-            reason ? reason : "InputPlumber unavailable");
+    const char *msg = reason ? reason : "InputPlumber unavailable";
+    fprintf(stderr, "controller-box: %s\n", msg);
+    /* Callers may pass mgr->readiness_detail itself as `reason`; avoid an
+     * overlapping snprintf (source == destination is undefined). */
+    if (msg != mgr->readiness_detail)
+        snprintf(mgr->readiness_detail, sizeof(mgr->readiness_detail),
+                 "%s", msg);
     mgr->dbus_connected = false;
     mgr->ct.backend = NULL;
     mgr->ct.bus = NULL;
@@ -642,8 +713,17 @@ cbx_manager_init_with_dbus(cbx_manager *mgr, const char *font_path,
     /* Reactive PropertiesChanged subscription (Task 5): observe the live
      * per-device property state in the Manager as well as the overlay
      * (SPEC §10.1).  Best-effort — a degraded bus has no trusted sender yet
-     * and is wired on the next backend-ready event. */
-    cbx_manager_props_wire(mgr);
+     * and is wired on the next backend-ready event.  A subscription failure
+     * after readiness is a required-step failure: disable and retry. */
+    int wire_rc = cbx_manager_props_wire(mgr);
+    if (wire_rc != 0 && mgr->dbus_connected) {
+        snprintf(mgr->readiness_detail, sizeof(mgr->readiness_detail),
+                 "PropertiesChanged subscription failed (%d)", wire_rc);
+        cbx_manager_backend_degraded(mgr->readiness_detail, mgr);
+        mgr->recovery_pending   = true;
+        mgr->recovery_attempts  = 0;
+        mgr->recovery_deadline_ms = SDL_GetTicks() + 2000u;
+    }
 
     /* --- Focus chain (depends on tab modules being initialised) ----- */
     cbx_focus_chain_init(&mgr->focus);
@@ -745,16 +825,24 @@ cbx_manager_run(cbx_manager *mgr)
         }
         /* Dispatch InputPlumber signals used by capture/sequential editing
          * and connection/hotplug recovery.  Unit tests that inject signals
-         * synchronously keep process() as a no-op. */
+         * synchronously keep process() as a no-op.  Bounded so a signal flood
+         * cannot starve rendering, and processing errors enter degraded mode
+         * instead of being silently ignored. */
         if (mgr->dbus_backend && mgr->dbus_bus &&
             mgr->dbus_backend->process) {
             for (int i = 0; i < 64; i++) {
                 int processed = mgr->dbus_backend->process(mgr->dbus_bus);
-                if (processed <= 0)
+                if (processed < 0) {
+                    cbx_manager_backend_degraded(
+                        ip_connection_reason_for_error(processed), mgr);
+                    break;
+                }
+                if (processed == 0)
                     break;
             }
         }
         cbx_manager_refresh_controllers_if_due(mgr, SDL_GetTicks());
+        cbx_manager_recovery_tick(mgr, SDL_GetTicks());
         cbx_manager_render(mgr);
         cbx_renderer_present(&mgr->rend);
     }

@@ -398,7 +398,11 @@ refresh_until_path(cbx_controllers_tab *tab, const char *path, bool present,
         if ((uint32_t)(SDL_GetTicks() - started) >=
             CBX_CT_OPERATION_TIMEOUT_MS)
             return -EIO;
-        if (tab->backend->process) tab->backend->process(tab->bus);
+        if (tab->backend->process) {
+            int prc = tab->backend->process(tab->bus);
+            if (prc < 0)
+                return prc;
+        }
         SDL_Delay(CBX_CT_OPERATION_POLL_MS);
     }
 }
@@ -420,7 +424,11 @@ wait_exact_attachment(cbx_controllers_tab *tab, const char *composite,
         if ((uint32_t)(SDL_GetTicks() - started) >=
             CBX_CT_OPERATION_TIMEOUT_MS)
             return -EIO;
-        if (tab->backend->process) tab->backend->process(tab->bus);
+        if (tab->backend->process) {
+            int prc = tab->backend->process(tab->bus);
+            if (prc < 0)
+                return prc;
+        }
         SDL_Delay(CBX_CT_OPERATION_POLL_MS);
     }
 }

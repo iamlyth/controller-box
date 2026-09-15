@@ -34,6 +34,7 @@
 #define IP_ERR_NOT_CONNECTED    (-ENOTCONN)  /* no bus connection                          */
 #define IP_ERR_INTERNAL         (-EIO)       /* other / unexpected sd-bus failure          */
 #define IP_ERR_INCOMPATIBLE      (-ENOSYS)    /* version too old / incompatible              */
+#define IP_ERR_UNVERIFIED        (-EKEYREJECTED) /* owner present but not credential-verified */
 
 /* Minimum compatible InputPlumber version (§2.4, plan compat ref 0.78.0). */
 #define IP_COMPAT_MIN_MAJOR  0

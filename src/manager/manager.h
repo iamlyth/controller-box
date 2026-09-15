@@ -98,6 +98,14 @@ typedef struct {
     SDL_GameController    *gamecontrollers[CBX_MGR_MAX_GAMECONTROLLERS];
     int                    gamecontroller_count;
 
+    /* Bounded recovery retry (Task 7): a failed startup/recovery pass keeps
+     * backend-dependent controls disabled with an actionable diagnostic and
+     * retries within the two-second readiness window. */
+    bool                   recovery_pending;
+    int                    recovery_attempts;
+    uint32_t               recovery_deadline_ms;
+    char                   readiness_detail[256];
+
     /* First-run service installation dialog (SPEC §9.1). */
     bool          first_run_active;       /* dialog is showing        */
     bool          first_run_initialized;  /* dialog widgets created   */
@@ -216,6 +224,17 @@ cbx_settings_tab    *cbx_manager_settings_tab(cbx_manager *mgr);
 /* Called when InputPlumber's bus name is (re-)acquired — re-enumerates
  * devices and enables the controllers tab. */
 void cbx_manager_backend_ready(void *userdata);
+
+/* Maximum number of bounded recovery attempts within the readiness window. */
+#define CBX_MANAGER_RECOVERY_MAX_ATTEMPTS 8
+
+/*
+ * Bounded recovery retry: called from the manager run loop.  While a ready
+ * pass is pending and the two-second retry budget is not exhausted, re-runs
+ * the full readiness pass so a transient startup/recovery failure becomes
+ * operational without restarting the manager.
+ */
+void cbx_manager_recovery_tick(cbx_manager *mgr, uint32_t now_ms);
 
 /* Called when InputPlumber's bus name is lost — disables controls and
  * shows a degraded reason in the controllers tab. */

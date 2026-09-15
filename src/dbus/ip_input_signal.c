@@ -292,9 +292,19 @@ ip_input_events_process(ip_input_events *ie)
     if (!ie || !ie->backend || !ie->backend->process)
         return 0;
 
+    /* Bounded drain: at most IP_INPUT_DRAIN_MAX messages are dispatched per
+     * call so a signal flood cannot starve SDL/UI work.  A negative return is
+     * a real DBus processing error and is propagated to the caller instead of
+     * being collapsed into the "nothing pending" (0) result. */
     int total = 0;
     int rc;
-    while ((rc = ie->backend->process(ie->bus)) > 0)
+    for (int i = 0; i < IP_INPUT_DRAIN_MAX; i++) {
+        rc = ie->backend->process(ie->bus);
+        if (rc < 0)
+            return rc;
+        if (rc == 0)
+            break;
         total += rc;
+    }
     return total;
 }

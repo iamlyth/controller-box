@@ -661,6 +661,68 @@ test_inject_axis(void **state)
     assert_float_equal(f->captured.value, -0.7, 0.001);
 }
 
+/* --- Bounded draining / DBus process error propagation ------------------- */
+
+typedef struct {
+    int calls;
+    int rc_after;   /* return -EIO on this call number (0 = never) */
+} drain_probe;
+
+static int
+probe_process(ip_bus_handle bus)
+{
+    drain_probe *p = (drain_probe *)bus;
+    p->calls++;
+    if (p->rc_after > 0 && p->calls >= p->rc_after)
+        return -EIO;
+    return 1;  /* always more messages pending (flood) */
+}
+
+/* A signal flood is drained at most IP_INPUT_DRAIN_MAX messages per call so
+ * UI work cannot be starved. */
+static void
+test_process_bounded_drain(void **state)
+{
+    (void)state;
+    drain_probe probe = { .calls = 0, .rc_after = 0 };
+    ip_dbus_backend backend = {0};
+    backend.process = probe_process;
+
+    ip_input_events ie;
+    ip_input_events_init(&ie, &backend, &probe, EXP_SENDER, capture_cb, NULL);
+
+    int rc = ip_input_events_process(&ie);
+    assert_int_equal(rc, IP_INPUT_DRAIN_MAX);
+    assert_int_equal(probe.calls, IP_INPUT_DRAIN_MAX);
+}
+
+/* A negative DBus process return is propagated, not collapsed to 0. */
+static void
+test_process_propagates_error(void **state)
+{
+    (void)state;
+    drain_probe probe = { .calls = 0, .rc_after = 3 };
+    ip_dbus_backend backend = {0};
+    backend.process = probe_process;
+
+    ip_input_events ie;
+    ip_input_events_init(&ie, &backend, &probe, EXP_SENDER, capture_cb, NULL);
+
+    int rc = ip_input_events_process(&ie);
+    assert_int_equal(rc, -EIO);
+    assert_int_equal(probe.calls, 3);
+}
+
+/* A NULL process vtable entry is a no-op. */
+static void
+test_process_null_backend(void **state)
+{
+    (void)state;
+    ip_input_events ie;
+    ip_input_events_init(&ie, NULL, NULL, EXP_SENDER, capture_cb, NULL);
+    assert_int_equal(ip_input_events_process(&ie), 0);
+}
+
 /* --- Test runner --------------------------------------------------------- */
 
 int
@@ -719,6 +781,11 @@ main(void)
         cmocka_unit_test_setup_teardown(test_inject_wrong_sender, setup, teardown),
         cmocka_unit_test_setup_teardown(test_inject_multiple, setup, teardown),
         cmocka_unit_test_setup_teardown(test_inject_axis, setup, teardown),
+
+        /* Bounded draining / DBus process error propagation */
+        cmocka_unit_test(test_process_bounded_drain),
+        cmocka_unit_test(test_process_propagates_error),
+        cmocka_unit_test(test_process_null_backend),
     };
 
     return cmocka_run_group_tests(tests, NULL, NULL);

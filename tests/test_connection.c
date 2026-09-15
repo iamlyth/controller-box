@@ -139,7 +139,8 @@ test_connect_untrusted_owner_rejected(void **state)
     assert_null(ip_connection_get_unique_name(&ctx->conn));
 }
 
-/* Test: a creds lookup failure leaves the owner unverified. */
+/* Test: a creds lookup failure leaves the owner unverified and is not
+ * reported as connected (fail closed — readiness requires a verified owner). */
 static void
 test_connect_creds_lookup_failure(void **state)
 {
@@ -148,9 +149,56 @@ test_connect_creds_lookup_failure(void **state)
     ip_dbus_mock_expect_ok(&ctx->mock, IP_IFACE_MANAGER, "Version", "1.2.3");
 
     int rc = ip_connection_connect(&ctx->conn);
-    assert_int_equal(rc, IP_ERR_ACCESS_DENIED);
+    assert_int_equal(rc, IP_ERR_UNVERIFIED);
+    assert_false(ip_connection_is_connected(&ctx->conn));
+    assert_true(ip_connection_is_degraded(&ctx->conn));
     assert_false(ip_connection_is_sender_verified(&ctx->conn));
     assert_null(ip_connection_get_unique_name(&ctx->conn));
+}
+
+/* Test: disconnect clears the verified owner's credential state, so a
+ * former owner can never remain the trusted sender. */
+static void
+test_disconnect_clears_credentials(void **state)
+{
+    struct test_ctx *ctx = *state;
+
+    ip_dbus_mock_set_creds(&ctx->mock, 4242, 0);
+    ip_dbus_mock_expect_ok(&ctx->mock, IP_IFACE_MANAGER, "Version", "1.0.0");
+    assert_int_equal(ip_connection_connect(&ctx->conn), 0);
+    assert_true(ip_connection_is_sender_verified(&ctx->conn));
+    assert_non_null(ip_connection_get_unique_name(&ctx->conn));
+
+    ip_connection_disconnect(&ctx->conn);
+
+    assert_false(ip_connection_is_sender_verified(&ctx->conn));
+    assert_null(ip_connection_get_unique_name(&ctx->conn));
+    assert_int_equal(ctx->conn.expected_pid, 0);
+    assert_int_equal(ctx->conn.expected_uid, 0);
+}
+
+/* Test: a version failure during reacquisition clears the newly verified
+ * owner's credential state instead of leaving trust published. */
+static void
+test_reacquire_version_failure_clears_owner(void **state)
+{
+    struct test_ctx *ctx = *state;
+
+    ip_dbus_mock_expect_ok(&ctx->mock, IP_IFACE_MANAGER, "Version", "1.2.3");
+    assert_int_equal(ip_connection_connect(&ctx->conn), 0);
+    assert_true(ip_connection_is_sender_verified(&ctx->conn));
+    ip_connection_set_degraded_cb(&ctx->conn, test_degraded_cb, NULL);
+
+    /* New owner is credential-trusted, but the Version read fails. */
+    ip_dbus_mock_set_creds(&ctx->mock, 9999, 0);
+    ip_dbus_mock_expect_error(&ctx->mock, IP_IFACE_MANAGER, "Version",
+                              IP_ERR_NO_REPLY);
+    inject_noc(ctx, ":1.42", ":1.99");
+
+    assert_false(ip_connection_is_sender_verified(&ctx->conn));
+    assert_null(ip_connection_get_unique_name(&ctx->conn));
+    assert_true(ip_connection_is_degraded(&ctx->conn));
+    assert_int_equal(s_degraded_called, 1);
 }
 
 /* Test: re-verification on NameOwnerChanged rejects an untrusted new owner. */
@@ -284,7 +332,9 @@ test_name_lost(void **state)
     assert_null(ip_connection_get_version(&ctx->conn));
 }
 
-/* Name acquisition alone is not readiness when Version still fails. */
+/* Name acquisition alone is not readiness when Version still fails.  A
+ * failed version validation after owner verification clears the owner and
+ * credential state, so the acquired name is not advertised as trusted. */
 static void
 test_name_acquired_from_degraded(void **state)
 {
@@ -296,12 +346,14 @@ test_name_acquired_from_degraded(void **state)
     ip_connection_connect(&ctx->conn);
     assert_true(ip_connection_is_degraded(&ctx->conn));
 
-    /* InputPlumber starts → name acquired. */
+    /* InputPlumber starts → name acquired, but the Version read is not yet
+     * available (no expectation registered). */
     inject_noc(ctx, "", ":1.99");
 
     assert_int_equal(ip_connection_get_state(&ctx->conn), IP_CONN_DEGRADED);
     assert_true(ip_connection_is_degraded(&ctx->conn));
-    assert_string_equal(ip_connection_get_unique_name(&ctx->conn), ":1.99");
+    assert_false(ip_connection_is_sender_verified(&ctx->conn));
+    assert_null(ip_connection_get_unique_name(&ctx->conn));
 }
 
 /* Test: NameOwnerChanged — name acquired from degraded with version re-read. */
@@ -545,8 +597,9 @@ test_connect_invalid_args(void **state)
     assert_int_equal(ip_connection_get_state(&ctx->conn), IP_CONN_DISCONNECTED);
 }
 
-/* Test: get_unique_name failure during connect is non-fatal (sender
- * unverified, but still connected and watching NameOwnerChanged). */
+/* Test: get_unique_name failure during connect is a fail-closed condition:
+ * readiness requires a credential-verified owner, so no unique name is
+ * advertised and the connection is degraded, not connected. */
 static void
 test_connect_unique_name_fail(void **state)
 {
@@ -556,11 +609,9 @@ test_connect_unique_name_fail(void **state)
     ip_dbus_mock_set_unique_name_fail(&ctx->mock, -EIO);
 
     int rc = ip_connection_connect(&ctx->conn);
-    assert_int_equal(rc, 0);
-    assert_int_equal(ip_connection_get_state(&ctx->conn), IP_CONN_CONNECTED);
-    assert_true(ip_connection_is_connected(&ctx->conn));
-    /* Unique name could not be resolved → sender is not verified, and no
-     * unique name is advertised for later sender checks. */
+    assert_int_equal(rc, IP_ERR_UNVERIFIED);
+    assert_int_equal(ip_connection_get_state(&ctx->conn), IP_CONN_DEGRADED);
+    assert_false(ip_connection_is_connected(&ctx->conn));
     assert_false(ip_connection_is_sender_verified(&ctx->conn));
     assert_null(ip_connection_get_unique_name(&ctx->conn));
 }
@@ -720,6 +771,8 @@ test_reason_for_error_mapping(void **state)
                         "InputPlumber version incompatible \xe2\x80\x94 update required");
     assert_string_equal(ip_connection_reason_for_error(IP_ERR_INCOMPATIBLE),
                         "InputPlumber version incompatible \xe2\x80\x94 update required");
+    assert_string_equal(ip_connection_reason_for_error(IP_ERR_UNVERIFIED),
+                        "InputPlumber owner could not be verified \xe2\x80\x94 check service identity");
     assert_non_null(ip_connection_reason_for_error(-999));
 }
 
@@ -836,6 +889,10 @@ main(void)
         cmocka_unit_test_setup_teardown(test_connect_untrusted_owner_rejected,
                                         setup_basic, teardown_basic),
         cmocka_unit_test_setup_teardown(test_connect_creds_lookup_failure,
+                                        setup_basic, teardown_basic),
+        cmocka_unit_test_setup_teardown(test_disconnect_clears_credentials,
+                                        setup_basic, teardown_basic),
+        cmocka_unit_test_setup_teardown(test_reacquire_version_failure_clears_owner,
                                         setup_basic, teardown_basic),
         cmocka_unit_test_setup_teardown(test_reacquire_untrusted_owner_rejected,
                                         setup_basic, teardown_basic),

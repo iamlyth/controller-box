@@ -1069,6 +1069,14 @@ static void test_native_input_event_signal(void **state)
     assert_int_equal(backend->get_unique_name(bus, IP_DBUS_NAME, &unique_name), 0);
     assert_non_null(unique_name);
 
+    /* Credential-verify the owner through the validated path.  Sender trust
+     * is published by get_connection_creds(), not by get_unique_name(), so
+     * the production subscriptions below accept the owner's signals. */
+    uint32_t owner_pid = 0, owner_uid = 0;
+    assert_int_equal(backend->get_connection_creds(bus, unique_name,
+                                                     &owner_pid, &owner_uid), 0);
+    assert_true(ip_connection_uid_is_trusted(owner_uid));
+
     /* Subscribe to InputEvent signals via the production path. */
     ip_input_events ie;
     ip_input_events_init(&ie, backend, bus, unique_name,
@@ -1121,12 +1129,72 @@ static void test_native_input_event_signal(void **state)
 /*  Main                                                                */
 /* ================================================================== */
 
+/* An absent service at first connect must be degraded (never reported as
+ * ready), and a later appearance must become connected within two seconds. */
+static void
+test_native_absent_service_then_appears(void **state)
+{
+    (void)state;
+    char address[512];
+    pid_t daemon_pid = 0;
+    assert_int_equal(nip_start_private_bus(address, sizeof(address),
+                                             &daemon_pid), 0);
+    setenv("DBUS_SYSTEM_BUS_ADDRESS", address, 1);
+
+    const ip_dbus_backend *backend = ip_dbus_sd_backend();
+    ip_connection conn;
+    ip_connection_init(&conn, backend);
+    s_native_reenum_called = 0;
+
+    /* No InputPlumber server yet: not connected, no trusted sender. */
+    int rc = ip_connection_connect(&conn);
+    assert_int_equal(rc, IP_ERR_SERVICE_UNKNOWN);
+    assert_true(ip_connection_is_degraded(&conn));
+    assert_false(ip_connection_is_sender_verified(&conn));
+    assert_null(ip_connection_get_unique_name(&conn));
+
+    ip_connection_set_reenumerate_cb(&conn, native_reenumerate_cb, NULL);
+
+    /* Start InputPlumber and wait for re-enumeration. */
+    const nip_server_config cfg = { .num_composites = 1, .version = "9.8.7" };
+    nip_reset_server_state(1);
+    pid_t server_pid = nip_fork_server(address, &cfg);
+    assert_true(server_pid > 0);
+
+    struct timespec t_start;
+    clock_gettime(CLOCK_MONOTONIC, &t_start);
+    for (int i = 0; i < 500 && s_native_reenum_called == 0; i++) {
+        int processed = backend->process(conn.bus);
+        if (processed <= 0)
+            usleep(10000);
+    }
+
+    assert_int_equal(s_native_reenum_called, 1);
+    assert_true(ip_connection_is_connected(&conn));
+    assert_true(ip_connection_is_sender_verified(&conn));
+    assert_non_null(ip_connection_get_unique_name(&conn));
+
+    struct timespec t_end;
+    clock_gettime(CLOCK_MONOTONIC, &t_end);
+    long elapsed_ms = (t_end.tv_sec - t_start.tv_sec) * 1000L
+                    + (t_end.tv_nsec - t_start.tv_nsec) / 1000000L;
+    assert_true(elapsed_ms <= 2000);
+
+    ip_connection_disconnect(&conn);
+    kill(server_pid, SIGTERM);
+    waitpid(server_pid, NULL, 0);
+    kill(daemon_pid, SIGTERM);
+    waitpid(daemon_pid, NULL, 0);
+    unsetenv("DBUS_SYSTEM_BUS_ADDRESS");
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_production_backend_native_roundtrip),
         cmocka_unit_test(test_native_owner_loss_and_reacquisition),
         cmocka_unit_test(test_native_reenumeration_timing),
+        cmocka_unit_test(test_native_absent_service_then_appears),
         cmocka_unit_test(test_native_target_operations),
         cmocka_unit_test(test_native_topology_reconciliation),
         cmocka_unit_test(test_native_assignment_application),

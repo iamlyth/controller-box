@@ -94,6 +94,10 @@ typedef enum {
 /* Maximum number of devices tracked by the rate limiter. */
 #define IP_INPUT_MAX_DEVICES 64
 
+/* Maximum number of DBus messages drained by one ip_input_events_process()
+ * call.  Bounds the work a signal flood can force on the UI loop. */
+#define IP_INPUT_DRAIN_MAX 64
+
 /* --- Callback type ------------------------------------------------------ */
 
 /*
@@ -161,6 +165,8 @@ void ip_input_events_handle(ip_input_events *ie,
  * which triggers ip_input_events_handle for each InputEvent signal.
  * In tests, this is a no-op (signals are injected via inject_signal).
  * Returns the number of messages processed, or negative errno on error.
+ * At most IP_INPUT_DRAIN_MAX messages are dispatched per call so a signal
+ * flood cannot starve UI work.
  */
 int ip_input_events_process(ip_input_events *ie);
 

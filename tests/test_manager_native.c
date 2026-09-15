@@ -1242,6 +1242,72 @@ test_manager_property_change_preserves_selection(void **state)
 }
 
 /* ================================================================== */
+/*  Task 7 — Manager readiness fails closed and recovers                */
+/* ================================================================== */
+
+/* Restart the InputPlumber-compatible server on the fixture's private bus. */
+static pid_t
+restart_manager_server(mn_fixture *f)
+{
+    nip_reset_server_state(2);
+    for (int i = 0; i < 2; i++) {
+        snprintf(g_nip_comp_names[i], sizeof(g_nip_comp_names[i]),
+                 "TestController%d", i);
+        snprintf(g_nip_dbus_devices[i], sizeof(g_nip_dbus_devices[i]),
+                 "/org/shadowblip/InputPlumber/CompositeDevice%d", i);
+        snprintf(g_nip_persistent_ids[i], sizeof(g_nip_persistent_ids[i]),
+                 "ORDER:%d", i);
+    }
+    const nip_server_config cfg = { .num_composites = 2,
+                                    .version = "0.78.0" };
+    return nip_fork_server(f->bus_address, &cfg);
+}
+
+static void
+test_manager_readiness_fail_closed_and_recovery(void **state)
+{
+    mn_fixture *f = *state;
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+    assert_true(mgr.dbus_connected);
+    assert_non_null(mgr.ct.backend);
+
+    /* Owner loss → degraded: backend-dependent controls disabled and an
+     * actionable diagnostic recorded. */
+    kill(f->server_pid, SIGTERM);
+    waitpid(f->server_pid, NULL, 0);
+    f->server_pid = -1;
+
+    uint32_t t0 = SDL_GetTicks();
+    while (mgr.dbus_connected && SDL_GetTicks() - t0 < 2000) {
+        mgr.dbus_backend->process(mgr.dbus_bus);
+        SDL_Delay(10);
+    }
+    assert_false(mgr.dbus_connected);
+    assert_null(mgr.ct.backend);
+    assert_null(mgr.ct.bus);
+    assert_true(mgr.readiness_detail[0] != '\0');
+
+    /* Restart → ready again within the two-second window, with the
+     * PropertiesChanged subscription re-wired to the new owner. */
+    f->server_pid = restart_manager_server(f);
+    assert_true(f->server_pid > 0);
+
+    t0 = SDL_GetTicks();
+    while (!mgr.dbus_connected && SDL_GetTicks() - t0 < 2000) {
+        mgr.dbus_backend->process(mgr.dbus_bus);
+        cbx_manager_recovery_tick(&mgr, SDL_GetTicks());
+        SDL_Delay(10);
+    }
+    assert_true(mgr.dbus_connected);
+    assert_true(SDL_GetTicks() - t0 <= 2000);
+    assert_non_null(mgr.ct.backend);
+    assert_true(mgr.expected_sender[0] != '\0');
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* ================================================================== */
 /*  Test registration                                                  */
 /* ================================================================== */
 
@@ -1307,6 +1373,10 @@ main(void)
                                         mn_setup_fail, mn_teardown),
         cmocka_unit_test_setup_teardown(test_d06_dbus_failure_pointer,
                                         mn_setup_fail, mn_teardown),
+        /* Task 7 — readiness fails closed and recovers */
+        cmocka_unit_test_setup_teardown(
+            test_manager_readiness_fail_closed_and_recovery,
+            mn_setup, mn_teardown),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }
