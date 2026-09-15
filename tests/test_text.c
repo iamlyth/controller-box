@@ -607,15 +607,61 @@ static void test_render_long_text(void **state)
     int font = cbx_text_load_font(&cache, CBX_FONT_PATH, 16);
 
     SDL_Color white = {255, 255, 255, 255};
-    /* Text longer than CBX_TEXT_MAX_LEN should still render (just not cached). */
+    /* Text longer than CBX_TEXT_MAX_LEN is retained with a heap-allocated
+     * key so it is still cached and evicted like any other entry.  The
+     * cache owns the returned texture, so there is no uncached per-frame
+     * texture leak. */
     char long_text[CBX_TEXT_MAX_LEN + 64];
     memset(long_text, 'A', sizeof(long_text) - 1);
     long_text[sizeof(long_text) - 1] = '\0';
 
     SDL_Texture *tex = cbx_text_render(&cache, font, long_text, white);
     assert_non_null(tex);
-    /* Should not be cached (exceeds CBX_TEXT_MAX_LEN). */
-    assert_int_equal(cache.entry_count, 0);
+    assert_int_equal(cache.entry_count, 1);
+
+    /* A second render of the same long text is a cache hit. */
+    SDL_Texture *tex2 = cbx_text_render(&cache, font, long_text, white);
+    assert_ptr_equal(tex, tex2);
+    assert_int_equal(cache.entry_count, 1);
+
+    cbx_text_cache_cleanup(&cache);
+    test_teardown(&ctx);
+}
+
+/*
+ * Regression for the uncached-text leak: once the cache reached its cap,
+ * cbx_text_render returned a fresh texture the caller never frees.  The
+ * bounded cache must evict instead, keeping entry_count <= cap and always
+ * returning a cache-owned texture.
+ */
+static void test_cache_eviction_bounded(void **state)
+{
+    (void)state;
+    if (!font_available()) { skip(); return; }
+
+    TestCtx ctx;
+    assert_int_equal(test_setup(&ctx), 0);
+
+    cbx_text_cache cache;
+    cbx_text_cache_init(&cache, ctx.renderer);
+    int font = cbx_text_load_font(&cache, CBX_FONT_PATH, 16);
+
+    SDL_Color white = {255, 255, 255, 255};
+
+    for (int i = 0; i < CBX_TEXT_CACHE_MAX + 64; i++) {
+        char s[32];
+        snprintf(s, sizeof(s), "evict-entry-%d", i);
+        SDL_Texture *t = cbx_text_render(&cache, font, s, white);
+        assert_non_null(t);
+        assert_true(cache.entry_count <= CBX_TEXT_CACHE_MAX);
+    }
+    assert_int_equal(cache.entry_count, CBX_TEXT_CACHE_MAX);
+
+    /* The oldest entry was evicted; re-rendering re-creates it while the
+     * count stays bounded, proving eviction rather than a growing leak. */
+    SDL_Texture *re = cbx_text_render(&cache, font, "evict-entry-0", white);
+    assert_non_null(re);
+    assert_int_equal(cache.entry_count, CBX_TEXT_CACHE_MAX);
 
     cbx_text_cache_cleanup(&cache);
     test_teardown(&ctx);
@@ -756,6 +802,7 @@ static const struct CMUnitTest text_tests[] = {
     cmocka_unit_test(test_render_null_args),
     cmocka_unit_test(test_render_long_text),
     cmocka_unit_test(test_render_multiple_fonts),
+    cmocka_unit_test(test_cache_eviction_bounded),
 
     /* Dimensions */
     cmocka_unit_test(test_get_dims),

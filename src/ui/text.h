@@ -18,6 +18,12 @@
  *     unfocused) produces separate textures.
  *   - On cache miss, the text is rendered via TTF_RenderUTF8_Blended
  *     and uploaded to an SDL_Texture.  The surface is freed immediately.
+ *   - The cache is bounded by CBX_TEXT_CACHE_MAX entries.  When adding a
+ *     new string would exceed the bound, the least-recently-used entry is
+ *     evicted and its texture destroyed, so every texture returned by
+ *     cbx_text_render() is cache-owned and no per-frame texture leak can
+ *     occur.  Strings longer than CBX_TEXT_MAX_LEN are retained with a
+ *     heap-allocated key but are still cached and evicted like any other.
  *   - Multi-line text is wrapped to a max pixel width using
  *     TTF_FontHeight for line spacing.
  *
@@ -59,10 +65,13 @@ typedef struct {
 } cbx_font_entry;
 
 typedef struct {
-    uint32_t hash;            /* composite hash (0 = empty slot)         */
+    uint32_t hash;            /* composite hash (0 = empty, 1 = tombstone) */
+    uint32_t last_use;        /* monotonic tick for LRU eviction          */
     int font_id;              /* font used to render this text           */
     SDL_Color color;          /* colour used to render this text          */
-    char text[CBX_TEXT_MAX_LEN]; /* the text string (key)                */
+    char text[CBX_TEXT_MAX_LEN]; /* key for text shorter than the limit  */
+    char *long_text;          /* heap copy for text >= CBX_TEXT_MAX_LEN;  */
+                              /* NULL otherwise (owned by the cache)      */
     SDL_Texture *texture;     /* cached texture                          */
     int width;                /* texture pixel width                     */
     int height;               /* texture pixel height                    */
@@ -74,6 +83,7 @@ typedef struct cbx_text_cache {
     int font_count;
     cbx_text_cache_entry entries[CBX_TEXT_HASH_SIZE];
     int entry_count;
+    uint32_t tick;            /* monotonic clock for LRU bookkeeping     */
 } cbx_text_cache;
 
 /*
@@ -102,15 +112,18 @@ int cbx_text_default_font(const cbx_text_cache *cache);
  * Render text to an SDL_Texture.  If the (font_id, text, colour)
  * combination is already cached, returns the cached texture.
  * Otherwise renders via TTF_RenderUTF8_Blended, uploads to a texture,
- * and caches it.
+ * and caches it (evicting the least-recently-used entry if the cache is
+ * at capacity).  The returned texture is owned by the cache and must not
+ * be freed by the caller; it stays valid until the entry is evicted or
+ * the cache is cleared/reinitialised.
  *
  * @param cache    Text cache.
  * @param font_id  Font ID from cbx_text_load_font.
  * @param text     UTF-8 text string (NULL-terminated).
  * @param color    Text colour (alpha channel is ignored by TTF; the
  *                 surface uses the colour's RGB and full alpha).
- * @return SDL_Texture* on success, NULL on error (including bad font_id,
- *         empty text, or cache full).
+ * @return SDL_Texture* on success, NULL on error (bad font_id, empty
+ *         text, or texture allocation failure).
  */
 SDL_Texture *cbx_text_render(cbx_text_cache *cache, int font_id,
                                const char *text, SDL_Color color);

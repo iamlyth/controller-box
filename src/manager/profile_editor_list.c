@@ -551,6 +551,10 @@ cbx_profile_editor_set_diagram_selection(cbx_profile_editor *ed,
 
     char icon_name[CBX_ICON_ICON_LEN] = CBX_ICON_DEFAULT_ICON;
     cbx_diag_provenance provenance = CBX_DIAG_PROVENANCE_EXPLICIT_GENERIC;
+    /* Resolve the device's mapped entry once and reuse it for both the
+     * geometry check and the asset-consistency check below. */
+    const cbx_icon_entry *mapped_entry = map_entry_for_type(
+        &ed->icon_map, ed->device_type);
     if (ed->icon_override[0]) {
         if (cbx_profile_diagram_device_geometry_known(ed->icon_override)) {
             snprintf(icon_name, sizeof(icon_name), "%s", ed->icon_override);
@@ -568,8 +572,6 @@ cbx_profile_editor_set_diagram_selection(cbx_profile_editor *ed,
             update_editor_title(ed);
             return ed->icon_map_status;
         }
-        const cbx_icon_entry *mapped_entry = map_entry_for_type(
-            &ed->icon_map, ed->device_type);
         bool mapped = mapped_entry != NULL;
         char display[CBX_ICON_NAME_LEN];
         cbx_icon_map_lookup(&ed->icon_map, ed->device_type,
@@ -588,8 +590,6 @@ cbx_profile_editor_set_diagram_selection(cbx_profile_editor *ed,
     const char *asset = NULL;
     if (!cbx_profile_diagram_catalog_asset(icon_name, &asset, NULL))
         return -ENOENT;
-    const cbx_icon_entry *mapped_entry = map_entry_for_type(
-        &ed->icon_map, ed->device_type);
     if (!ed->icon_override[0] && mapped_entry && mapped_entry->asset[0] &&
         strcmp(mapped_entry->asset, asset) != 0) {
         cbx_profile_diagram_apply_selection(&ed->diagram, NULL, icon_name,
@@ -783,13 +783,33 @@ cbx_profile_editor_refresh(cbx_profile_editor *ed)
     cbx_list_clear(&ed->binding_list);
     ed->row_count = 0;
 
+    /* Build a button -> first-mapping index table in one O(M*P) pass so
+     * the catalog and extra-row passes never rescan every mapping for
+     * every button.  This matches find_mapping_index_for_button(): the
+     * earliest mapping that binds the button on any button/axis prop. */
+    int button_to_mapping[CBX_DIAG_BTN_COUNT];
+    for (int b = 0; b < CBX_DIAG_BTN_COUNT; b++)
+        button_to_mapping[b] = -1;
+    for (int i = 0; i < ed->profile.mapping_count; i++) {
+        const cbx_profile_mapping *m = &ed->profile.mappings[i];
+        for (int j = 0; j < m->source_event.prop_count; j++) {
+            const char *key = m->source_event.props[j].key;
+            if (strcmp(key, "button") != 0 && strcmp(key, "axis") != 0)
+                continue;
+            cbx_diag_button b = cbx_profile_diagram_button_from_name(
+                m->source_event.props[j].value);
+            if (b != CBX_DIAG_BTN_NONE && button_to_mapping[b] < 0)
+                button_to_mapping[b] = i;
+        }
+    }
+
     /* 1. Every supported virtual button, bound or unbound (BUG-0016).
      *    The list is the catalog, not merely the loaded profile's mappings,
      *    so a user can bind a button the profile does not yet contain. */
     for (int i = 0; i < CBX_DIAG_BTN_COUNT && ed->row_count < CBX_PE_MAX_ROWS; i++) {
         cbx_diag_button btn = s_catalog_order[i];
         const char *name = cbx_profile_diagram_button_name(btn);
-        int m = find_mapping_index_for_button(&ed->profile, btn);
+        int m = button_to_mapping[btn];
         char label[CBX_PE_LABEL_LEN];
         if (m >= 0) {
             format_binding_label(label, sizeof(label),
@@ -808,8 +828,7 @@ cbx_profile_editor_refresh(cbx_profile_editor *ed)
      *    button, so advanced sources stay visible and editable. */
     for (int i = 0; i < ed->profile.mapping_count && ed->row_count < CBX_PE_MAX_ROWS; i++) {
         cbx_diag_button b = mapping_button(&ed->profile.mappings[i]);
-        if (b != CBX_DIAG_BTN_NONE &&
-            find_mapping_index_for_button(&ed->profile, b) == i)
+        if (b != CBX_DIAG_BTN_NONE && button_to_mapping[b] == i)
             continue;  /* already shown as that button's catalog row */
         char label[CBX_PE_LABEL_LEN];
         format_binding_label(label, sizeof(label), &ed->profile.mappings[i]);

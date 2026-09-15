@@ -16,13 +16,17 @@
  *   - Tombstone entries (hash=1, text="") allow probing to continue
  *     past deleted entries without false stops.  Hash value 0 = empty,
  *     hash value 1 = tombstone.
- *   - The cache does NOT evict entries.  If the cache is full, render
- *     returns NULL (caller should call cbx_text_cache_clear to free
- *     old textures, e.g. on theme change).
+ *   - The cache is bounded by CBX_TEXT_CACHE_MAX.  When inserting would
+ *     exceed the bound, the least-recently-used entry (smallest last_use
+ *     tick) is evicted and its texture destroyed.  Because the live entry
+ *     count never rises above 256 in a 512-slot table, an insertion slot
+ *     always exists and cbx_text_render never has to return an uncached
+ *     (leaked) texture.
  */
 #include "ui/text.h"
 
 #include <errno.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -51,6 +55,22 @@ static uint32_t hash_slot(uint32_t hash)
 /* --- Cache internals ----------------------------------------------------- */
 
 /*
+ * Compare a cache entry's key with the requested one.  Long strings are
+ * stored in the heap-allocated `long_text` field; short strings inline.
+ */
+static bool
+entry_key_matches(const cbx_text_cache_entry *e, uint32_t hash,
+                  int font_id, const char *text, SDL_Color color)
+{
+    if (e->hash != hash || e->font_id != font_id ||
+        e->color.r != color.r || e->color.g != color.g ||
+        e->color.b != color.b)
+        return false;
+    const char *stored = e->long_text ? e->long_text : e->text;
+    return strcmp(stored, text) == 0;
+}
+
+/*
  * Find the slot for a given key (font_id, text, color).  Returns the
  * index of the matching entry, or -1 if not found.
  */
@@ -63,12 +83,7 @@ static int find_entry(cbx_text_cache *cache, uint32_t hash,
         cbx_text_cache_entry *e = &cache->entries[idx];
         if (e->hash == 0)
             return -1;  /* empty — not found */
-        if (e->hash == hash &&
-            e->font_id == font_id &&
-            e->color.r == color.r &&
-            e->color.g == color.g &&
-            e->color.b == color.b &&
-            strcmp(e->text, text) == 0)
+        if (entry_key_matches(e, hash, font_id, text, color))
             return (int)idx;
         /* tombstone (hash==1) or mismatch — continue probing */
     }
@@ -89,6 +104,44 @@ static int find_free_slot(cbx_text_cache *cache, uint32_t hash)
             return (int)idx;  /* empty or tombstone */
     }
     return -1;  /* full */
+}
+
+/* Release the resources owned by one entry and turn it into a tombstone. */
+static void evict_entry(cbx_text_cache *cache, int idx)
+{
+    cbx_text_cache_entry *e = &cache->entries[idx];
+    if (e->texture) {
+        SDL_DestroyTexture(e->texture);
+        e->texture = NULL;
+    }
+    free(e->long_text);
+    e->long_text = NULL;
+    e->hash = 1;   /* tombstone: keep the probe chain alive */
+    e->text[0] = '\0';
+    e->width = 0;
+    e->height = 0;
+    cache->entry_count--;
+}
+
+/*
+ * Evict the least-recently-used live entry.  Returns 0 on success, -1 if
+ * there is nothing to evict.
+ */
+static int evict_lru(cbx_text_cache *cache)
+{
+    int victim = -1;
+    uint32_t best = UINT32_MAX;
+    for (int i = 0; i < CBX_TEXT_HASH_SIZE; i++) {
+        cbx_text_cache_entry *e = &cache->entries[i];
+        if (e->hash > 1 && e->last_use < best) {
+            best = e->last_use;
+            victim = i;
+        }
+    }
+    if (victim < 0)
+        return -1;
+    evict_entry(cache, victim);
+    return 0;
 }
 
 /* --- Public API ---------------------------------------------------------- */
@@ -189,20 +242,27 @@ SDL_Texture *cbx_text_render(cbx_text_cache *cache, int font_id,
     /* Check the cache first. */
     uint32_t h = djb2_hash(font_id, text, color);
     int idx = find_entry(cache, h, font_id, text, color);
-    if (idx >= 0)
+    if (idx >= 0) {
+        cache->entries[idx].last_use = ++cache->tick;
         return cache->entries[idx].texture;
+    }
 
-    /* Check if text is too long for the cache entry. */
-    if (strlen(text) >= CBX_TEXT_MAX_LEN) {
-        /* Render without caching. */
-        return render_to_texture(cache, font, text, color);
+    /* Keep the cache bounded.  The hash table is twice the entry cap, so
+     * after evicting down to the cap an insertion slot always exists. */
+    while (cache->entry_count >= CBX_TEXT_CACHE_MAX) {
+        if (evict_lru(cache) != 0)
+            break;  /* nothing evictable — fall through and fail safely */
     }
 
     /* Find a free slot. */
     idx = find_free_slot(cache, h);
     if (idx < 0) {
-        /* Cache full — render without caching. */
-        return render_to_texture(cache, font, text, color);
+        /* Should be unreachable while entry_count < CBX_TEXT_HASH_SIZE.
+         * Fail closed rather than return a texture the cache cannot own
+         * (which the caller would never free). */
+        fprintf(stderr, "cbx_text: no cache slot for text (count=%d)\n",
+                cache->entry_count);
+        return NULL;
     }
 
     /* Render and cache. */
@@ -214,9 +274,22 @@ SDL_Texture *cbx_text_render(cbx_text_cache *cache, int font_id,
     e->hash = h;
     e->font_id = font_id;
     e->color = color;
-    strncpy(e->text, text, CBX_TEXT_MAX_LEN - 1);
-    e->text[CBX_TEXT_MAX_LEN - 1] = '\0';
+    e->long_text = NULL;
+    if (strlen(text) < CBX_TEXT_MAX_LEN) {
+        strncpy(e->text, text, CBX_TEXT_MAX_LEN - 1);
+        e->text[CBX_TEXT_MAX_LEN - 1] = '\0';
+    } else {
+        /* Preserve the full key for lookup and comparison. */
+        e->text[0] = '\0';
+        e->long_text = strdup(text);
+        if (!e->long_text) {
+            SDL_DestroyTexture(tex);
+            e->hash = 1;   /* leave the slot as a tombstone */
+            return NULL;
+        }
+    }
     e->texture = tex;
+    e->last_use = ++cache->tick;
 
     /* Query texture dimensions. */
     SDL_QueryTexture(tex, NULL, NULL, &e->width, &e->height);
@@ -240,12 +313,7 @@ int cbx_text_get_dims(const cbx_text_cache *cache, int font_id,
         const cbx_text_cache_entry *e = &cache->entries[idx];
         if (e->hash == 0)
             break;  /* empty — not found */
-        if (e->hash == h &&
-            e->font_id == font_id &&
-            e->color.r == color.r &&
-            e->color.g == color.g &&
-            e->color.b == color.b &&
-            strcmp(e->text, text) == 0) {
+        if (entry_key_matches(e, h, font_id, text, color)) {
             if (out_w) *out_w = e->width;
             if (out_h) *out_h = e->height;
             return 0;
@@ -487,12 +555,16 @@ void cbx_text_cache_clear(cbx_text_cache *cache)
             SDL_DestroyTexture(e->texture);
             e->texture = NULL;
         }
+        free(e->long_text);
+        e->long_text = NULL;
         e->hash = 0;
+        e->last_use = 0;
         e->text[0] = '\0';
         e->width = 0;
         e->height = 0;
     }
     cache->entry_count = 0;
+    cache->tick = 0;
 }
 
 void cbx_text_cache_cleanup(cbx_text_cache *cache)
