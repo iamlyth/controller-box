@@ -153,8 +153,19 @@ cbx_manager_on_prop_change(const char *object_path, const char *iface_name,
                                           invalidated))
         return;  /* unknown device/property — do not touch the UI */
 
+    /* Only properties the Controllers list actually renders require a
+     * label rebuild.  GamepadOrder/SourceDevicePaths update the per-device
+     * model but are not displayed here; rebuilding for them would churn
+     * the widget (and its selection) for no visible change. */
+    bool affects_label = strcmp(prop_name, "ProfileName") == 0 ||
+                         strcmp(prop_name, "ProfilePath") == 0 ||
+                         strcmp(prop_name, "TargetDevices") == 0;
+    if (!affects_label)
+        return;
+
     /* Rebuild the displayed list from the updated model without a
-     * re-enumeration that would discard the reactive per-device state. */
+     * re-enumeration that would discard the reactive per-device state.
+     * refresh_labels preserves the selected target across the rebuild. */
     cbx_controllers_tab_refresh_labels(&mgr->ct);
 }
 

@@ -34,6 +34,11 @@ ensure_scroll_visible(cbx_list *lst)
 {
     if (lst->selected < 0)
         return;
+    /* visible_count is 0 until the list has been laid out and measured;
+     * scrolling against it would compute a bogus offset that hides the
+     * selected row once the real height is known. */
+    if (lst->visible_count <= 0)
+        return;
     if (lst->selected < lst->scroll_offset)
         lst->scroll_offset = lst->selected;
     else if (lst->selected >= lst->scroll_offset + lst->visible_count)

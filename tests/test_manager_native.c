@@ -1185,6 +1185,62 @@ test_manager_property_updates_list_label(void **state)
     cbx_manager_shutdown(&mgr);
 }
 
+/* BLOCKER regression: a live PropertiesChanged must not move the
+ * Controllers-tab selection, so the production Remove callback still acts
+ * on the device the user highlighted. */
+static void
+test_manager_property_change_preserves_selection(void **state)
+{
+    (void)state;
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+    cbx_controllers_tab *ct = cbx_manager_controllers_tab(&mgr);
+
+    for (int i = 0; i < 3; i++)
+        assert_int_equal(cbx_controllers_tab_add(ct, "xb360"), 0);
+    assert_int_equal(cbx_controllers_tab_device_count(ct), 3);
+
+    char path0[CBX_MAX_PATH_LEN], path1[CBX_MAX_PATH_LEN],
+         path2[CBX_MAX_PATH_LEN];
+    snprintf(path0, sizeof(path0), "%s",
+             cbx_controllers_tab_device_path(ct, 0));
+    snprintf(path1, sizeof(path1), "%s",
+             cbx_controllers_tab_device_path(ct, 1));
+    snprintf(path2, sizeof(path2), "%s",
+             cbx_controllers_tab_device_path(ct, 2));
+
+    /* Production pointer path: click row 2 so on_device_selected syncs the
+     * tab's selected_device to the third controller. */
+    send_mouse_click(&mgr, list_center_x(&ct->device_list),
+                     list_item_y(&ct->device_list, 2));
+    assert_int_equal(ct->selected_device, 2);
+
+    /* A validated ProfileName change rebuilds the displayed labels. */
+    assert_int_equal(mgr.dbus_backend->call_method(mgr.dbus_bus, IP_DBUS_NAME,
+        MGR_PROP_COMP0, IP_IFACE_DBUS_DEVICE, "EmitStringProp",
+        "ss", "ProfileName", "Alpha", NULL), 0);
+    pump_dbus(&mgr, 100);
+
+    /* The highlight and the tab's model selection are unchanged. */
+    assert_int_equal(cbx_list_get_selected(&ct->device_list), 2);
+    assert_int_equal(ct->selected_device, 2);
+
+    /* The production Remove callback syncs from the widget and must remove
+     * the third controller, not row 0. */
+    int rx, ry;
+    widget_center(&ct->remove_btn.base, &rx, &ry);
+    send_mouse_click(&mgr, rx, ry);
+
+    assert_int_equal(cbx_controllers_tab_device_count(ct), 2);
+    for (int i = 0; i < cbx_controllers_tab_device_count(ct); i++) {
+        const char *p = cbx_controllers_tab_device_path(ct, i);
+        assert_non_null(p);
+        assert_int_not_equal(strcmp(p, path2), 0);
+        assert_true(strcmp(p, path0) == 0 || strcmp(p, path1) == 0);
+    }
+    cbx_manager_shutdown(&mgr);
+}
+
 /* ================================================================== */
 /*  Test registration                                                  */
 /* ================================================================== */
@@ -1237,6 +1293,8 @@ main(void)
         cmocka_unit_test_setup_teardown(test_manager_properties_per_device,
                                         mn_setup, mn_teardown),
         cmocka_unit_test_setup_teardown(test_manager_property_updates_list_label,
+                                        mn_setup, mn_teardown),
+        cmocka_unit_test_setup_teardown(test_manager_property_change_preserves_selection,
                                         mn_setup, mn_teardown),
         /* MG-04 — Topology failure */
         cmocka_unit_test_setup_teardown(test_mg04_topology_failure,

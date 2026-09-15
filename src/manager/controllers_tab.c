@@ -536,6 +536,22 @@ cbx_controllers_tab_refresh_labels(cbx_controllers_tab *tab)
     if (!tab)
         return;
 
+    /* A live PropertiesChanged rebuilds the row labels but must not move
+     * the user's highlight.  Remember the selected target by exact path
+     * (the model order does not change on a property update) and restore it
+     * after the rebuild.  Without this the widget silently drops to row 0
+     * while tab->selected_device keeps its stale index, and the next
+     * Remove/Change-Type sync from the widget would act on the wrong
+     * device.  Prefer the widget's own highlight (what the user sees) and
+     * fall back to the tab's synced index. */
+    int keep = cbx_list_get_selected(&tab->device_list);
+    if (keep < 0 || keep >= tab->model.target_count)
+        keep = tab->selected_device;
+    char selected_path[CBX_MAX_PATH_LEN] = "";
+    if (keep >= 0 && keep < tab->model.target_count)
+        snprintf(selected_path, sizeof(selected_path), "%s",
+                 tab->model.targets[keep].path);
+
     cbx_list_clear(&tab->device_list);
     for (int i = 0; i < tab->model.target_count; i++) {
         char label[CBX_CT_LABEL_LEN];
@@ -559,6 +575,19 @@ cbx_controllers_tab_refresh_labels(cbx_controllers_tab *tab)
         /* Selection callback receives its owning tab through item user_data. */
         cbx_list_add_item(&tab->device_list, label, NULL, tab);
     }
+
+    int restored = -1;
+    if (selected_path[0]) {
+        for (int i = 0; i < tab->model.target_count; i++)
+            if (strcmp(tab->model.targets[i].path, selected_path) == 0) {
+                restored = i;
+                break;
+            }
+    }
+    if (restored < 0 && tab->model.target_count > 0)
+        restored = 0;
+    cbx_list_set_selected(&tab->device_list, restored);
+    tab->selected_device = restored;
 }
 
 void
