@@ -1352,6 +1352,41 @@ test_manager_transient_recovery_retries_without_owner_loss(void **state)
     cbx_manager_shutdown(&mgr);
 }
 
+/* Regression: recovery attempts are paced across the readiness window
+ * instead of being burned in consecutive run-loop frames, so the whole
+ * two-second window is usable for a transient failure. */
+static void
+test_manager_recovery_attempts_are_paced(void **state)
+{
+    (void)state;
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+    assert_true(mgr.dbus_connected);
+
+    uint32_t now = SDL_GetTicks();
+    mgr.recovery_pending     = true;
+    mgr.recovery_attempts    = 0;
+    mgr.recovery_deadline_ms = now + CBX_MANAGER_RECOVERY_WINDOW_MS;
+    mgr.recovery_next_attempt_ms =
+        now + CBX_MANAGER_RECOVERY_ATTEMPT_INTERVAL_MS;
+
+    /* One tick just inside the pacing interval must not consume an attempt
+     * nor clear the pending retry. */
+    cbx_manager_recovery_tick(
+        &mgr, now + CBX_MANAGER_RECOVERY_ATTEMPT_INTERVAL_MS - 1);
+    assert_true(mgr.recovery_pending);
+    assert_int_equal(mgr.recovery_attempts, 0);
+
+    /* Once the interval elapses the owner (still healthy) is re-validated and
+     * the manager becomes ready again. */
+    cbx_manager_recovery_tick(
+        &mgr, now + CBX_MANAGER_RECOVERY_ATTEMPT_INTERVAL_MS);
+    assert_true(mgr.dbus_connected);
+    assert_false(mgr.recovery_pending);
+
+    cbx_manager_shutdown(&mgr);
+}
+
 /* Fail closed: when the bounded retry budget is exhausted, no
  * backend-dependent control may remain enabled and the diagnostic must
  * survive so the operator can act on it. */
@@ -1457,6 +1492,9 @@ main(void)
             mn_setup, mn_teardown),
         cmocka_unit_test_setup_teardown(
             test_manager_transient_recovery_retries_without_owner_loss,
+            mn_setup, mn_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_manager_recovery_attempts_are_paced,
             mn_setup, mn_teardown),
         cmocka_unit_test_setup_teardown(
             test_manager_recovery_exhaustion_fails_closed,

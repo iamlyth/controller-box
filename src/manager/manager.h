@@ -104,6 +104,9 @@ typedef struct {
     bool                   recovery_pending;
     int                    recovery_attempts;
     uint32_t               recovery_deadline_ms;
+    /* SDL tick of the next paced retry attempt; 0 means "attempt
+     * immediately" so a manually seeded budget retries without waiting. */
+    uint32_t               recovery_next_attempt_ms;
     char                   readiness_detail[256];
 
     /* First-run service installation dialog (SPEC §9.1). */
@@ -227,6 +230,10 @@ void cbx_manager_backend_ready(void *userdata);
 
 /* Maximum number of bounded recovery attempts within the readiness window. */
 #define CBX_MANAGER_RECOVERY_MAX_ATTEMPTS 8
+/* Two-second readiness window (SPEC §2.4) with attempts paced across it so
+ * the window is actually usable rather than spent in consecutive frames. */
+#define CBX_MANAGER_RECOVERY_WINDOW_MS 2000u
+#define CBX_MANAGER_RECOVERY_ATTEMPT_INTERVAL_MS 250u
 
 /*
  * Bounded recovery retry: called from the manager run loop.  While a ready

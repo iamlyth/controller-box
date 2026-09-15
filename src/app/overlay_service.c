@@ -1278,14 +1278,103 @@ overlay_set_readiness_detail(cbx_overlay_service_ctx *svc, const char *phase,
 }
 
 /*
- * Perform one full backend recovery/readiness pass.  Every step that the
- * overlay needs to be operational is treated as required: owner identity,
- * complete enumeration, target reconciliation, assignment restoration,
- * required signal subscriptions (InputEvent, hotplug, PropertiesChanged),
- * trigger registration, and intercept-poll arming.  A failure stops at the
- * first failing step, leaves svc->readiness_detail describing the exact
- * phase, and returns a negative errno so the caller can keep operations
- * disabled and retry within a bounded window.
+ * Run every required post-rebuild step once the owner is verified and the
+ * device model/grid are current.  This is the single definition of the
+ * fail-closed readiness sequence shared by startup and recovery: assignment
+ * restoration, input mapping, both required signal subscriptions, trigger
+ * registration, intercept-poll arming and the PropertiesChanged wiring.
+ *
+ * Stops at the first failure, records the failing phase in
+ * svc->readiness_detail, and returns the negative errno so the caller keeps
+ * operations disabled and retries within the bounded readiness window.
+ * Returns 0 when the service is fully wired.
+ */
+static int
+overlay_wire_required_steps(cbx_overlay_service_ctx *svc)
+{
+    if (!svc || !svc->conn.backend || !svc->conn.bus)
+        return -EINVAL;
+
+    /* Restore persisted slot/profile topology to the live engine before
+     * advertising the overlay as ready (SPEC §§4.1-4.7: startup/restart
+     * restores order/profile).  A restoration failure is a required-step
+     * failure: operations stay disabled rather than running with stale or
+     * partial routing. */
+    int rc = cbx_overlay_on_save(svc);
+    if (rc != 0) {
+        overlay_set_readiness_detail(svc, "assignment restoration", rc);
+        return rc;
+    }
+
+    cbx_overlay_input_build_map(svc->conn.backend, svc->conn.bus,
+                                 svc->composites, svc->comp_count,
+                                 &svc->input_ctx);
+
+    const char *uniq = ip_connection_get_unique_name(&svc->conn);
+    snprintf(svc->expected_sender, sizeof(svc->expected_sender), "%s",
+             uniq ? uniq : "");
+
+    /* Required input subscription: without it the overlay cannot receive
+     * navigation events over the intercept channel. */
+    ip_input_events_init(&svc->input_events, svc->conn.backend, svc->conn.bus,
+                          svc->expected_sender, cbx_overlay_input_cb,
+                          &svc->input_ctx);
+    rc = ip_input_events_subscribe(&svc->input_events);
+    if (rc != 0) {
+        svc->input_events_ready = false;
+        overlay_set_readiness_detail(svc, "InputEvent subscription", rc);
+        return rc;
+    }
+    svc->input_events_ready = true;
+
+    /* Required hotplug subscription: device add/remove must be observed. */
+    ip_hotplug_init(&svc->hp, svc->conn.backend, svc->conn.bus,
+                     svc->expected_sender, &svc->model);
+    rc = ip_hotplug_subscribe(&svc->hp);
+    if (rc != 0) {
+        overlay_set_readiness_detail(svc, "hotplug subscription", rc);
+        return rc;
+    }
+
+    /* Required trigger registration + PASS on every composite. */
+    set_all_pass(svc->conn.backend, svc->conn.bus,
+                  svc->model.composites, svc->comp_count);
+    for (int i = 0; i < svc->comp_count; i++) {
+        rc = cbx_trigger_register(svc->conn.backend, svc->conn.bus,
+                                   svc->composites[i].composite_path,
+                                   svc->settings.overlay_trigger);
+        if (rc != 0) {
+            overlay_set_readiness_detail(svc, "trigger registration", rc);
+            return rc;
+        }
+    }
+
+    /* Required intercept-poll arming. */
+    rc = cbx_overlay_rearm_polls(svc);
+    if (rc != 0) {
+        overlay_set_readiness_detail(svc, "intercept poll arming", rc);
+        return rc;
+    }
+
+    /* Reactive PropertiesChanged subscription: observe GamepadOrder,
+     * ProfileName, ProfilePath, TargetDevices, SourceDevicePaths changes on
+     * the live backend (SPEC §10.1). */
+    rc = cbx_overlay_props_wire(svc);
+    if (rc != 0) {
+        overlay_set_readiness_detail(svc, "PropertiesChanged subscription", rc);
+        return rc;
+    }
+
+    return 0;
+}
+
+/*
+ * Perform one full backend recovery/readiness pass.  Owner identity, complete
+ * enumeration, target reconciliation and the grid rebuild are required before
+ * overlay_wire_required_steps() owns the post-rebuild readiness sequence.  A
+ * failure stops at the first failing step, leaves svc->readiness_detail
+ * describing the exact phase, and returns a negative errno so the caller can
+ * keep operations disabled and retry within a bounded window.
  *
  * Returns 0 when the service is fully ready.
  */
@@ -1346,89 +1435,25 @@ overlay_recover(cbx_overlay_service_ctx *svc)
     cbx_profile_cycle_init(&svc->profile_cycle, svc->conn.backend,
                             svc->conn.bus, &svc->assignments, &svc->profiles);
 
-    /* Restore persisted slot/profile topology to the live engine before
-     * advertising the overlay as ready (SPEC §§4.1-4.7: startup/restart
-     * restores order/profile).  A restoration failure is a required-step
-     * failure: operations stay disabled rather than running with stale or
-     * partial routing. */
-    rc = cbx_overlay_on_save(svc);
-    if (rc != 0) {
-        overlay_set_readiness_detail(svc, "assignment restoration", rc);
-        return rc;
-    }
-
-    cbx_overlay_input_build_map(svc->conn.backend, svc->conn.bus,
-                                 svc->composites, svc->comp_count,
-                                 &svc->input_ctx);
-
-    const char *uniq = ip_connection_get_unique_name(&svc->conn);
-    snprintf(svc->expected_sender, sizeof(svc->expected_sender), "%s",
-             uniq ? uniq : "");
-
-    /* Required input subscription: without it the overlay cannot receive
-     * navigation events over the intercept channel. */
-    ip_input_events_init(&svc->input_events, svc->conn.backend, svc->conn.bus,
-                          svc->expected_sender, cbx_overlay_input_cb,
-                          &svc->input_ctx);
-    rc = ip_input_events_subscribe(&svc->input_events);
-    if (rc != 0) {
-        svc->input_events_ready = false;
-        overlay_set_readiness_detail(svc, "InputEvent subscription", rc);
-        return rc;
-    }
-    svc->input_events_ready = true;
-
-    /* Required hotplug subscription: device add/remove must be observed. */
-    ip_hotplug_init(&svc->hp, svc->conn.backend, svc->conn.bus,
-                     svc->expected_sender, &svc->model);
-    rc = ip_hotplug_subscribe(&svc->hp);
-    if (rc != 0) {
-        overlay_set_readiness_detail(svc, "hotplug subscription", rc);
-        return rc;
-    }
-
-    /* Required trigger registration + PASS on every composite. */
-    set_all_pass(svc->conn.backend, svc->conn.bus,
-                  svc->model.composites, svc->comp_count);
-    for (int i = 0; i < svc->comp_count; i++) {
-        rc = cbx_trigger_register(svc->conn.backend, svc->conn.bus,
-                                   svc->composites[i].composite_path,
-                                   svc->settings.overlay_trigger);
-        if (rc != 0) {
-            overlay_set_readiness_detail(svc, "trigger registration", rc);
-            return rc;
-        }
-    }
-
-    /* Required intercept-poll arming. */
-    rc = cbx_overlay_rearm_polls(svc);
-    if (rc != 0) {
-        overlay_set_readiness_detail(svc, "intercept poll arming", rc);
-        return rc;
-    }
-
-    /* Reactive PropertiesChanged subscription (Task 5): observe GamepadOrder,
-     * ProfileName, ProfilePath, TargetDevices, SourceDevicePaths changes on
-     * the recovered backend (SPEC §10.1). */
-    rc = cbx_overlay_props_wire(svc);
-    if (rc != 0) {
-        overlay_set_readiness_detail(svc, "PropertiesChanged subscription", rc);
-        return rc;
-    }
-
-    return 0;
+    return overlay_wire_required_steps(svc);
 }
 
-/* Common retry scheduler used after a failed recovery attempt. */
+/* Arm the bounded retry window after any failed readiness or DBus
+ * processing step.  Re-arming is a no-op while a retry is already pending;
+ * otherwise a failure that recurs every loop iteration would reset the
+ * attempt budget each frame and the retry would never be bounded.  Attempts
+ * are spaced across the two-second window so a transient failure that clears
+ * in a few hundred ms is still retried. */
 static void
 overlay_schedule_recovery(cbx_overlay_service_ctx *svc)
 {
-    if (!svc)
+    if (!svc || svc->recovery_pending)
         return;
+    uint64_t now = reconcile_now_ms();
     svc->recovery_pending   = true;
     svc->recovery_attempts  = 0;
-    svc->recovery_deadline_ms =
-        reconcile_now_ms() + CBX_RECONCILE_TIMEOUT_MS;
+    svc->recovery_deadline_ms = now + CBX_RECONCILE_TIMEOUT_MS;
+    svc->recovery_next_attempt_ms = now + CBX_RECOVERY_ATTEMPT_INTERVAL_MS;
 }
 
 static void
@@ -1471,14 +1496,23 @@ overlay_recovery_tick(cbx_overlay_service_ctx *svc)
         !svc->recovery_pending)
         return false;
 
+    uint64_t now = reconcile_now_ms();
     if (svc->recovery_attempts >= CBX_RECOVERY_MAX_ATTEMPTS ||
-        reconcile_now_ms() >= (uint64_t)svc->recovery_deadline_ms) {
+        now >= svc->recovery_deadline_ms) {
         svc->recovery_pending = false;
         fprintf(stderr, "controller-box: recovery retries exhausted: %s\n",
                 svc->readiness_detail[0] ? svc->readiness_detail
                                          : "unknown");
         return false;
     }
+
+    /* Pace attempts across the readiness window so a transient failure that
+     * clears in a few hundred ms is still retried instead of burning the
+     * whole budget in consecutive UI frames.  A zero next-attempt time (a
+     * manually seeded budget) attempts immediately. */
+    if (svc->recovery_next_attempt_ms != 0 &&
+        now < svc->recovery_next_attempt_ms)
+        return false;
 
     /* If the owner vanished again, stop retrying until NameOwnerChanged
      * signals a new acquisition. */
@@ -1488,6 +1522,8 @@ overlay_recovery_tick(cbx_overlay_service_ctx *svc)
     }
 
     svc->recovery_attempts++;
+    svc->recovery_next_attempt_ms =
+        now + CBX_RECOVERY_ATTEMPT_INTERVAL_MS;
     if (overlay_recover(svc) != 0)
         return false;
 
@@ -1830,7 +1866,13 @@ cbx_overlay_service_step(cbx_overlay_service_ctx *svc)
             drain_rc = prc;
     }
     if (drain_rc < 0) {
-        overlay_backend_degraded(ip_connection_reason_for_error(drain_rc), svc);
+        /* Degrade/notify only on the transition: a persistent processing
+         * error must not re-run the degraded work and flood stderr every
+         * frame.  overlay_schedule_recovery() also refuses to reset an
+         * in-flight retry budget, so the retry stays bounded. */
+        if (svc->backend_ready)
+            overlay_backend_degraded(
+                ip_connection_reason_for_error(drain_rc), svc);
         overlay_schedule_recovery(svc);
     }
 
@@ -1941,8 +1983,10 @@ int run_overlay_service(int dry_run)
      * recover it without depending on a system/user unit relationship. */
     cbx_device_model_init(&svc->model);
     if (svc->backend_ready) {
-        rc = cbx_objectmanager_enumerate(svc->conn.backend, svc->conn.bus,
-                                          &svc->model);
+        /* Use the same enumeration path as recovery so startup and recovery
+         * cannot diverge (reconcile_enumerate preserves reactive property
+         * state on a non-empty model; the model is empty here). */
+        rc = reconcile_enumerate(svc, NULL);
         if (rc != 0) {
             fprintf(stderr,
                     "controller-box: failed to enumerate devices: %d\n", rc);
@@ -2047,35 +2091,10 @@ int run_overlay_service(int dry_run)
     cbx_overlay_surface_render(&svc->surface, svc->rend.renderer,
                                 cbx_select_grid_render_cb, &svc->render_ctx);
 
-    /* Restore persisted slot/profile topology to the live engine before
-     * advertising the overlay as ready.  A restoration failure leaves
-     * operations disabled with a diagnostic and a bounded retry rather than
-     * exiting the service. */
-    if (svc->backend_ready) {
-        rc = cbx_overlay_on_save(svc);
-        if (rc != 0) {
-            fprintf(stderr, "controller-box: failed to restore assignments: %d\n",
-                    rc);
-            svc->backend_ready = false;
-            overlay_set_readiness_detail(svc, "assignment restoration", rc);
-        }
-    }
-
-    /* --- 8. Register overlay triggers + set PASS --------------------- */
-    if (svc->backend_ready && svc->comp_count > 0) {
-        const char *paths[CBX_MAX_COMPOSITES];
-        for (int i = 0; i < svc->comp_count; i++)
-            paths[i] = svc->composites[i].composite_path;
-        rc = cbx_trigger_register_all(svc->conn.backend, svc->conn.bus,
-                                  paths, svc->comp_count,
-                                  svc->settings.overlay_trigger);
-        if (rc != 0) {
-            svc->backend_ready = false;
-            overlay_set_readiness_detail(svc, "trigger registration", rc);
-        }
-    }
-    set_all_pass(svc->conn.backend, svc->conn.bus,
-                  svc->model.composites, svc->comp_count);
+    /* Assignment restoration, trigger registration and PASS are required
+     * readiness steps; they run once after the mode/lifecycle setup below so
+     * startup and recovery share one fail-closed sequence
+     * (overlay_wire_required_steps). */
 
     /* --- 9. Initialise overlay lifecycle ----------------------------- */
     const char *primary_path =
@@ -2116,72 +2135,30 @@ int run_overlay_service(int dry_run)
     svc->lifecycle.on_closed      = cbx_overlay_on_lifecycle_closed;
     svc->lifecycle.on_closed_data = svc;
 
-    /* --- 10b. Set up DBus InputEvent signal handling (Task 6) ------- */
-    svc->input_ctx.pm        = &svc->pm;
-    svc->input_ctx.hm        = &svc->hm;
-    svc->input_ctx.grid      = &svc->grid;
+    /* --- 10b. Point the input map at the live mode/lifecycle objects -- */
+    svc->input_ctx.pm         = &svc->pm;
+    svc->input_ctx.hm         = &svc->hm;
+    svc->input_ctx.grid       = &svc->grid;
     svc->input_ctx.lifecycle  = &svc->lifecycle;
     svc->input_ctx.path_count = 0;
-    cbx_overlay_input_build_map(svc->conn.backend, svc->conn.bus,
-                                  svc->composites, svc->comp_count,
-                                  &svc->input_ctx);
-
-    const char *uniq = ip_connection_get_unique_name(&svc->conn);
-    snprintf(svc->expected_sender, sizeof(svc->expected_sender),
-             "%s", uniq ? uniq : "");
-    ip_input_events_init(&svc->input_events, svc->conn.backend, svc->conn.bus,
-                          svc->expected_sender,
-                          cbx_overlay_input_cb, &svc->input_ctx);
-    svc->input_events_ready = false;
-    if (svc->backend_ready) {
-        rc = ip_input_events_subscribe(&svc->input_events);
-        if (rc == 0) {
-            svc->input_events_ready = true;
-        } else {
-            svc->backend_ready = false;
-            overlay_set_readiness_detail(svc, "InputEvent subscription", rc);
-        }
-    }
-
-    /* Reactive PropertiesChanged subscription (Task 5): observe GamepadOrder,
-     * ProfileName, ProfilePath, TargetDevices, SourceDevicePaths changes on
-     * the live connection (SPEC §10.1).  Skipped once readiness has already
-     * failed so the root-cause diagnostic is preserved for the bounded retry. */
-    if (svc->backend_ready) {
-        rc = cbx_overlay_props_wire(svc);
-        if (rc != 0) {
-            svc->backend_ready = false;
-            overlay_set_readiness_detail(svc, "PropertiesChanged subscription", rc);
-        }
-    }
 
     /* --- 11. Set up InterceptMode polling --------------------------- */
     svc->poll_event_type = SDL_RegisterEvents(1);
     svc->poll_count = 0;
 
-    if (svc->backend_ready) {
-        rc = cbx_overlay_rearm_polls(svc);
-        if (rc != 0) {
-            svc->backend_ready = false;
-            overlay_set_readiness_detail(svc, "intercept poll arming", rc);
-        }
-    }
-
-    /* Subscribe to ObjectManager hotplug signals for incremental
-     * device updates (SPEC §10.1: InterfacesAdded/InterfacesRemoved). */
-    ip_hotplug_init(&svc->hp, svc->conn.backend, svc->conn.bus,
-                     svc->expected_sender, &svc->model);
-    if (svc->backend_ready) {
-        rc = ip_hotplug_subscribe(&svc->hp);
-        if (rc != 0) {
-            svc->backend_ready = false;
-            overlay_set_readiness_detail(svc, "hotplug subscription", rc);
-        }
-    }
-
+    /* Install the production recovery callbacks before the shared readiness
+     * sequence runs, so a required-step failure is observable and retryable. */
     svc->initialized = true;
     ip_connection_set_reenumerate_cb(&svc->conn, overlay_backend_ready, svc);
     ip_connection_set_degraded_cb(&svc->conn, overlay_backend_degraded, svc);
+
+    /* The required readiness sequence (assignment restoration, input map,
+     * required subscriptions, trigger registration, poll arming and
+     * PropertiesChanged wiring) is defined once in
+     * overlay_wire_required_steps() and shared with overlay_recover(). */
+    if (svc->backend_ready && overlay_wire_required_steps(svc) != 0)
+        svc->backend_ready = false;
+
     if (!svc->backend_ready) {
         const char *reason = svc->readiness_detail[0]
             ? svc->readiness_detail

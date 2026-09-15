@@ -158,6 +158,32 @@ cbx_manager_try_ready(cbx_manager *mgr)
     return 0;
 }
 
+/* Arm the bounded retry window after any failed readiness or DBus processing
+ * step.  Re-arming is a no-op while a retry is already pending; otherwise a
+ * failure that recurs every run-loop frame would reset the attempt budget
+ * each frame and the retry would never be bounded. */
+static void
+cbx_manager_schedule_recovery(cbx_manager *mgr, uint32_t now_ms)
+{
+    if (!mgr || mgr->recovery_pending)
+        return;
+    mgr->recovery_pending   = true;
+    mgr->recovery_attempts  = 0;
+    mgr->recovery_deadline_ms = now_ms + CBX_MANAGER_RECOVERY_WINDOW_MS;
+    mgr->recovery_next_attempt_ms =
+        now_ms + CBX_MANAGER_RECOVERY_ATTEMPT_INTERVAL_MS;
+}
+
+static void
+cbx_manager_clear_recovery(cbx_manager *mgr)
+{
+    if (!mgr)
+        return;
+    mgr->recovery_pending  = false;
+    mgr->recovery_attempts = 0;
+    mgr->readiness_detail[0] = '\0';
+}
+
 void
 cbx_manager_backend_ready(void *userdata)
 {
@@ -166,16 +192,11 @@ cbx_manager_backend_ready(void *userdata)
         return;
     /* dbus_connected is published by try_ready only after its full pass
      * succeeds.  A failure already fails closed inside try_ready. */
-    int rc = cbx_manager_try_ready(mgr);
-    if (rc != 0) {
-        mgr->recovery_pending   = true;
-        mgr->recovery_attempts  = 0;
-        mgr->recovery_deadline_ms = SDL_GetTicks() + 2000u;
+    if (cbx_manager_try_ready(mgr) != 0) {
+        cbx_manager_schedule_recovery(mgr, SDL_GetTicks());
         return;
     }
-    mgr->recovery_pending  = false;
-    mgr->recovery_attempts = 0;
-    mgr->readiness_detail[0] = '\0';
+    cbx_manager_clear_recovery(mgr);
 }
 
 void
@@ -195,6 +216,12 @@ cbx_manager_recovery_tick(cbx_manager *mgr, uint32_t now_ms)
                 mgr->readiness_detail[0] ? mgr->readiness_detail : "unknown");
         return;
     }
+    /* Pace attempts across the readiness window so a transient failure that
+     * clears in a few hundred ms is still retried.  A zero next-attempt time
+     * (a manually seeded budget) attempts immediately. */
+    if (mgr->recovery_next_attempt_ms != 0 &&
+        (int32_t)(now_ms - mgr->recovery_next_attempt_ms) < 0)
+        return;
     if (!mgr->dbus_backend || !mgr->dbus_bus) {
         mgr->recovery_pending = false;
         return;
@@ -208,11 +235,10 @@ cbx_manager_recovery_tick(cbx_manager *mgr, uint32_t now_ms)
         return;
     }
     mgr->recovery_attempts++;
-    if (cbx_manager_try_ready(mgr) == 0) {
-        mgr->recovery_pending  = false;
-        mgr->recovery_attempts = 0;
-        mgr->readiness_detail[0] = '\0';
-    }
+    mgr->recovery_next_attempt_ms =
+        now_ms + CBX_MANAGER_RECOVERY_ATTEMPT_INTERVAL_MS;
+    if (cbx_manager_try_ready(mgr) == 0)
+        cbx_manager_clear_recovery(mgr);
 }
 
 /*
@@ -863,8 +889,14 @@ cbx_manager_run(cbx_manager *mgr)
             for (int i = 0; i < 64; i++) {
                 int processed = mgr->dbus_backend->process(mgr->dbus_bus);
                 if (processed < 0) {
-                    cbx_manager_backend_degraded(
-                        ip_connection_reason_for_error(processed), mgr);
+                    /* Degrade/notify only on the transition: a persistent
+                     * processing error must not rebuild the degraded UI and
+                     * flood stderr every frame.  Arm the bounded retry so a
+                     * transient error still recovers. */
+                    if (mgr->dbus_connected)
+                        cbx_manager_backend_degraded(
+                            ip_connection_reason_for_error(processed), mgr);
+                    cbx_manager_schedule_recovery(mgr, SDL_GetTicks());
                     break;
                 }
                 if (processed == 0)

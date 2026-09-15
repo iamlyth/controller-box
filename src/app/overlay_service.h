@@ -225,6 +225,10 @@ typedef struct cbx_overlay_service_ctx {
     bool                   recovery_pending;
     int                    recovery_attempts;
     uint64_t               recovery_deadline_ms;
+    /* Monotonic time of the next paced retry attempt; 0 means "attempt
+     * immediately" so a freshly armed or manually seeded budget retries
+     * without waiting for the first interval. */
+    uint64_t               recovery_next_attempt_ms;
     char                   readiness_detail[256];
 } cbx_overlay_service_ctx;
 
@@ -248,6 +252,10 @@ void cbx_overlay_service_step(cbx_overlay_service_ctx *svc);
 #define CBX_RECONCILE_TIMEOUT_MS 2000u
 #define CBX_RECONCILE_POLL_MS      10u
 #define CBX_RECOVERY_MAX_ATTEMPTS     8
+/* Space retries across the two-second readiness window (2000 / 8) so a
+ * transient failure that clears in a few hundred ms is still retried
+ * instead of burning the attempt budget in consecutive UI frames. */
+#define CBX_RECOVERY_ATTEMPT_INTERVAL_MS 250u
 
 /*
  * (Re)initialize all intercept polls for the current composites.
