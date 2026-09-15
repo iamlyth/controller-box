@@ -23,6 +23,8 @@
 
 /* Captured callback data. */
 typedef struct {
+    char          object_path[256];
+    char          iface_name[64];
     char          prop_name[64];
     ip_prop_type  type;
     char          value[8192];
@@ -31,12 +33,17 @@ typedef struct {
 } captured_change;
 
 static void
-capture_cb(const char *prop_name, ip_prop_type type,
+capture_cb(const char *object_path, const char *iface_name,
+           const char *prop_name, ip_prop_type type,
            const char *value, int count, void *userdata)
 {
     captured_change *c = (captured_change *)userdata;
     if (!c || !prop_name)
         return;
+    snprintf(c->object_path, sizeof(c->object_path), "%s",
+             object_path ? object_path : "");
+    snprintf(c->iface_name, sizeof(c->iface_name), "%s",
+             iface_name ? iface_name : "");
     snprintf(c->prop_name, sizeof(c->prop_name), "%s", prop_name);
     c->type = type;
     snprintf(c->value, sizeof(c->value), "%s", value ? value : "");
@@ -142,6 +149,7 @@ test_handle_profilename(void **state)
     ip_properties_changed_payload p = {
         .sender      = EXP_SENDER,
         .iface_name  = IP_IFACE_COMPOSITE,
+        .object_path = IP_DBUS_PATH "/CompositeDevice0",
         .prop_name   = "ProfileName",
         .prop_type   = IP_PROP_TYPE_STRING,
         .value       = "Default Profile",
@@ -165,6 +173,7 @@ test_handle_profilepath(void **state)
     ip_properties_changed_payload p = {
         .sender      = EXP_SENDER,
         .iface_name  = IP_IFACE_COMPOSITE,
+        .object_path = IP_DBUS_PATH "/CompositeDevice0",
         .prop_name   = "ProfilePath",
         .prop_type   = IP_PROP_TYPE_STRING,
         .value       = "/usr/share/inputplumber/profiles/default.yaml",
@@ -191,6 +200,7 @@ test_handle_profilename_too_long(void **state)
     ip_properties_changed_payload p = {
         .sender      = EXP_SENDER,
         .iface_name  = IP_IFACE_COMPOSITE,
+        .object_path = IP_DBUS_PATH "/CompositeDevice0",
         .prop_name   = "ProfileName",
         .prop_type   = IP_PROP_TYPE_STRING,
         .value       = long_name,
@@ -214,6 +224,7 @@ test_handle_profilepath_too_long(void **state)
     ip_properties_changed_payload p = {
         .sender      = EXP_SENDER,
         .iface_name  = IP_IFACE_COMPOSITE,
+        .object_path = IP_DBUS_PATH "/CompositeDevice0",
         .prop_name   = "ProfilePath",
         .prop_type   = IP_PROP_TYPE_STRING,
         .value       = long_path,
@@ -235,6 +246,7 @@ test_handle_gamepadorder(void **state)
     ip_properties_changed_payload p = {
         .sender      = EXP_SENDER,
         .iface_name  = IP_IFACE_MANAGER,
+        .object_path = IP_DBUS_PATH "/Manager",
         .prop_name   = "GamepadOrder",
         .prop_type   = IP_PROP_TYPE_ARRAY,
         .value       = "gamepad0,gamepad1,gamepad2",
@@ -258,6 +270,7 @@ test_handle_targetdevices(void **state)
     ip_properties_changed_payload p = {
         .sender      = EXP_SENDER,
         .iface_name  = IP_IFACE_COMPOSITE,
+        .object_path = IP_DBUS_PATH "/CompositeDevice0",
         .prop_name   = "TargetDevices",
         .prop_type   = IP_PROP_TYPE_ARRAY,
         .value       = "gamepad0,keyboard0",
@@ -279,6 +292,7 @@ test_handle_sourcedevicepaths(void **state)
     ip_properties_changed_payload p = {
         .sender      = EXP_SENDER,
         .iface_name  = IP_IFACE_COMPOSITE,
+        .object_path = IP_DBUS_PATH "/CompositeDevice0",
         .prop_name   = "SourceDevicePaths",
         .prop_type   = IP_PROP_TYPE_ARRAY,
         .value       = "/dev/input/event0,/dev/input/event1",
@@ -299,6 +313,7 @@ test_handle_array_single(void **state)
     ip_properties_changed_payload p = {
         .sender      = EXP_SENDER,
         .iface_name  = IP_IFACE_MANAGER,
+        .object_path = IP_DBUS_PATH "/Manager",
         .prop_name   = "GamepadOrder",
         .prop_type   = IP_PROP_TYPE_ARRAY,
         .value       = "gamepad0",
@@ -319,6 +334,7 @@ test_handle_array_empty(void **state)
     ip_properties_changed_payload p = {
         .sender      = EXP_SENDER,
         .iface_name  = IP_IFACE_MANAGER,
+        .object_path = IP_DBUS_PATH "/Manager",
         .prop_name   = "GamepadOrder",
         .prop_type   = IP_PROP_TYPE_ARRAY,
         .value       = "",
@@ -344,6 +360,7 @@ test_handle_array_elem_too_long_name(void **state)
     ip_properties_changed_payload p = {
         .sender      = EXP_SENDER,
         .iface_name  = IP_IFACE_MANAGER,
+        .object_path = IP_DBUS_PATH "/Manager",
         .prop_name   = "GamepadOrder",
         .prop_type   = IP_PROP_TYPE_ARRAY,
         .value       = long_elem,
@@ -373,6 +390,7 @@ test_handle_array_too_many(void **state)
     ip_properties_changed_payload p = {
         .sender      = EXP_SENDER,
         .iface_name  = IP_IFACE_MANAGER,
+        .object_path = IP_DBUS_PATH "/Manager",
         .prop_name   = "GamepadOrder",
         .prop_type   = IP_PROP_TYPE_ARRAY,
         .value       = buf,
@@ -401,6 +419,7 @@ test_handle_array_max_elems(void **state)
     ip_properties_changed_payload p = {
         .sender      = EXP_SENDER,
         .iface_name  = IP_IFACE_MANAGER,
+        .object_path = IP_DBUS_PATH "/Manager",
         .prop_name   = "GamepadOrder",
         .prop_type   = IP_PROP_TYPE_ARRAY,
         .value       = buf,
@@ -425,6 +444,7 @@ test_handle_array_path_long_elem(void **state)
     ip_properties_changed_payload p = {
         .sender      = EXP_SENDER,
         .iface_name  = IP_IFACE_COMPOSITE,
+        .object_path = IP_DBUS_PATH "/CompositeDevice0",
         .prop_name   = "SourceDevicePaths",
         .prop_type   = IP_PROP_TYPE_ARRAY,
         .value       = long_path,
@@ -448,6 +468,7 @@ test_handle_array_path_elem_too_long(void **state)
     ip_properties_changed_payload p = {
         .sender      = EXP_SENDER,
         .iface_name  = IP_IFACE_COMPOSITE,
+        .object_path = IP_DBUS_PATH "/CompositeDevice0",
         .prop_name   = "SourceDevicePaths",
         .prop_type   = IP_PROP_TYPE_ARRAY,
         .value       = long_path,
@@ -469,6 +490,7 @@ test_handle_type_mismatch_string_expected(void **state)
     ip_properties_changed_payload p = {
         .sender      = EXP_SENDER,
         .iface_name  = IP_IFACE_COMPOSITE,
+        .object_path = IP_DBUS_PATH "/CompositeDevice0",
         .prop_name   = "ProfileName",
         .prop_type   = IP_PROP_TYPE_ARRAY,
         .value       = "something",
@@ -488,6 +510,7 @@ test_handle_type_mismatch_array_expected(void **state)
     ip_properties_changed_payload p = {
         .sender      = EXP_SENDER,
         .iface_name  = IP_IFACE_MANAGER,
+        .object_path = IP_DBUS_PATH "/Manager",
         .prop_name   = "GamepadOrder",
         .prop_type   = IP_PROP_TYPE_STRING,
         .value       = "gamepad0",
@@ -509,6 +532,7 @@ test_handle_invalidated(void **state)
     ip_properties_changed_payload p = {
         .sender      = EXP_SENDER,
         .iface_name  = IP_IFACE_COMPOSITE,
+        .object_path = IP_DBUS_PATH "/CompositeDevice0",
         .prop_name   = "ProfileName",
         .prop_type   = IP_PROP_TYPE_INVALIDATED,
         .value       = NULL,
@@ -531,6 +555,7 @@ test_handle_invalidated_untracked(void **state)
     ip_properties_changed_payload p = {
         .sender      = EXP_SENDER,
         .iface_name  = IP_IFACE_MANAGER,
+        .object_path = IP_DBUS_PATH "/Manager",
         .prop_name   = "InterceptMode",
         .prop_type   = IP_PROP_TYPE_INVALIDATED,
         .value       = NULL,
@@ -552,6 +577,7 @@ test_handle_wrong_sender(void **state)
     ip_properties_changed_payload p = {
         .sender      = ":1.999",
         .iface_name  = IP_IFACE_COMPOSITE,
+        .object_path = IP_DBUS_PATH "/CompositeDevice0",
         .prop_name   = "ProfileName",
         .prop_type   = IP_PROP_TYPE_STRING,
         .value       = "test",
@@ -571,6 +597,7 @@ test_handle_null_sender(void **state)
     ip_properties_changed_payload p = {
         .sender      = NULL,
         .iface_name  = IP_IFACE_COMPOSITE,
+        .object_path = IP_DBUS_PATH "/CompositeDevice0",
         .prop_name   = "ProfileName",
         .prop_type   = IP_PROP_TYPE_STRING,
         .value       = "test",
@@ -579,6 +606,175 @@ test_handle_null_sender(void **state)
     ip_properties_handle_changed(&f->props, &p);
 
     assert_int_equal(f->captured.call_count, 0);
+}
+
+/* --- Handle Changed: interface + object-path validation ---------------- */
+
+/* A validated change propagates the object path and interface. */
+static void
+test_handle_propagates_identity(void **state)
+{
+    props_fixture *f = *state;
+
+    ip_properties_changed_payload p = {
+        .sender      = EXP_SENDER,
+        .iface_name  = IP_IFACE_COMPOSITE,
+        .object_path = IP_DBUS_PATH "/CompositeDevice3",
+        .prop_name   = "ProfileName",
+        .prop_type   = IP_PROP_TYPE_STRING,
+        .value       = "Pad Three",
+        .array_count = 0,
+    };
+    ip_properties_handle_changed(&f->props, &p);
+
+    assert_int_equal(f->captured.call_count, 1);
+    assert_string_equal(f->captured.object_path,
+                        IP_DBUS_PATH "/CompositeDevice3");
+    assert_string_equal(f->captured.iface_name, IP_IFACE_COMPOSITE);
+}
+
+/* ProfileName arriving on the Manager interface is rejected. */
+static void
+test_handle_wrong_interface(void **state)
+{
+    props_fixture *f = *state;
+
+    ip_properties_changed_payload p = {
+        .sender      = EXP_SENDER,
+        .iface_name  = IP_IFACE_MANAGER,
+        .object_path = IP_DBUS_PATH "/Manager",
+        .prop_name   = "ProfileName",
+        .prop_type   = IP_PROP_TYPE_STRING,
+        .value       = "spoofed",
+        .array_count = 0,
+    };
+    ip_properties_handle_changed(&f->props, &p);
+
+    assert_int_equal(f->captured.call_count, 0);
+}
+
+/* GamepadOrder on a composite path is rejected (wrong object-path class). */
+static void
+test_handle_gamepadorder_wrong_path(void **state)
+{
+    props_fixture *f = *state;
+
+    ip_properties_changed_payload p = {
+        .sender      = EXP_SENDER,
+        .iface_name  = IP_IFACE_MANAGER,
+        .object_path = IP_DBUS_PATH "/CompositeDevice0",
+        .prop_name   = "GamepadOrder",
+        .prop_type   = IP_PROP_TYPE_ARRAY,
+        .value       = "gp0,gp1",
+        .array_count = 2,
+    };
+    ip_properties_handle_changed(&f->props, &p);
+
+    assert_int_equal(f->captured.call_count, 0);
+}
+
+/* CompositeDevice properties on the Manager path are rejected. */
+static void
+test_handle_composite_prop_wrong_path(void **state)
+{
+    props_fixture *f = *state;
+
+    ip_properties_changed_payload p = {
+        .sender      = EXP_SENDER,
+        .iface_name  = IP_IFACE_COMPOSITE,
+        .object_path = IP_DBUS_PATH "/Manager",
+        .prop_name   = "ProfilePath",
+        .prop_type   = IP_PROP_TYPE_STRING,
+        .value       = "/tmp/x.yaml",
+        .array_count = 0,
+    };
+    ip_properties_handle_changed(&f->props, &p);
+
+    assert_int_equal(f->captured.call_count, 0);
+}
+
+/* A malformed object path is rejected. */
+static void
+test_handle_malformed_path(void **state)
+{
+    props_fixture *f = *state;
+
+    static const char *bad[] = {
+        NULL,
+        "",
+        "not/a/dbus/path",
+        IP_DBUS_PATH "/CompositeDeviceX",
+        IP_DBUS_PATH "/CompositeDevice",
+        IP_DBUS_PATH "/CompositeDevice0/extra",
+    };
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        ip_properties_changed_payload p = {
+            .sender      = EXP_SENDER,
+            .iface_name  = IP_IFACE_COMPOSITE,
+            .object_path = bad[i],
+            .prop_name   = "ProfileName",
+            .prop_type   = IP_PROP_TYPE_STRING,
+            .value       = "x",
+            .array_count = 0,
+        };
+        ip_properties_handle_changed(&f->props, &p);
+    }
+
+    assert_int_equal(f->captured.call_count, 0);
+}
+
+/* An invalidated property issues exactly one bounded authoritative read and
+ * dispatches the refreshed value. */
+static void
+test_handle_invalidated_authoritative_read(void **state)
+{
+    props_fixture *f = *state;
+
+    assert_int_equal(ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                                             "ProfileName",
+                                             "Authoritative Name"), 0);
+
+    ip_properties_changed_payload p = {
+        .sender      = EXP_SENDER,
+        .iface_name  = IP_IFACE_COMPOSITE,
+        .object_path = IP_DBUS_PATH "/CompositeDevice0",
+        .prop_name   = "ProfileName",
+        .prop_type   = IP_PROP_TYPE_INVALIDATED,
+        .value       = NULL,
+        .array_count = 0,
+    };
+    ip_properties_handle_changed(&f->props, &p);
+
+    assert_int_equal(f->mock.get_property_count, 1);
+    assert_int_equal(f->captured.call_count, 1);
+    assert_int_equal(f->captured.type, IP_PROP_TYPE_STRING);
+    assert_string_equal(f->captured.value, "Authoritative Name");
+    assert_string_equal(f->captured.object_path,
+                        IP_DBUS_PATH "/CompositeDevice0");
+}
+
+/* When the authoritative read fails, the invalidation is propagated so the
+ * consumer clears its per-device entry. */
+static void
+test_handle_invalidated_read_failure(void **state)
+{
+    props_fixture *f = *state;
+
+    ip_properties_changed_payload p = {
+        .sender      = EXP_SENDER,
+        .iface_name  = IP_IFACE_COMPOSITE,
+        .object_path = IP_DBUS_PATH "/CompositeDevice0",
+        .prop_name   = "ProfilePath",
+        .prop_type   = IP_PROP_TYPE_INVALIDATED,
+        .value       = NULL,
+        .array_count = 0,
+    };
+    ip_properties_handle_changed(&f->props, &p);
+
+    assert_int_equal(f->mock.get_property_count, 1);
+    assert_int_equal(f->captured.call_count, 1);
+    assert_int_equal(f->captured.type, IP_PROP_TYPE_INVALIDATED);
+    assert_int_equal(f->captured.count, -1);
 }
 
 /* --- Handle Changed: edge cases ------------------------------------------ */
@@ -592,6 +788,7 @@ test_handle_untracked_prop(void **state)
     ip_properties_changed_payload p = {
         .sender      = EXP_SENDER,
         .iface_name  = IP_IFACE_MANAGER,
+        .object_path = IP_DBUS_PATH "/Manager",
         .prop_name   = "InterceptMode",
         .prop_type   = IP_PROP_TYPE_STRING,
         .value       = "1",
@@ -619,6 +816,7 @@ test_handle_null_handler(void **state)
     ip_properties_changed_payload p = {
         .sender      = EXP_SENDER,
         .iface_name  = IP_IFACE_MANAGER,
+        .object_path = IP_DBUS_PATH "/Manager",
         .prop_name   = "GamepadOrder",
         .prop_type   = IP_PROP_TYPE_ARRAY,
         .value       = "gp0",
@@ -642,6 +840,7 @@ test_handle_null_callback(void **state)
     ip_properties_changed_payload p = {
         .sender      = EXP_SENDER,
         .iface_name  = IP_IFACE_MANAGER,
+        .object_path = IP_DBUS_PATH "/Manager",
         .prop_name   = "GamepadOrder",
         .prop_type   = IP_PROP_TYPE_ARRAY,
         .value       = "gp0",
@@ -661,6 +860,7 @@ test_handle_string_null_value(void **state)
     ip_properties_changed_payload p = {
         .sender      = EXP_SENDER,
         .iface_name  = IP_IFACE_COMPOSITE,
+        .object_path = IP_DBUS_PATH "/CompositeDevice0",
         .prop_name   = "ProfileName",
         .prop_type   = IP_PROP_TYPE_STRING,
         .value       = NULL,
@@ -680,6 +880,7 @@ test_handle_array_null_value(void **state)
     ip_properties_changed_payload p = {
         .sender      = EXP_SENDER,
         .iface_name  = IP_IFACE_MANAGER,
+        .object_path = IP_DBUS_PATH "/Manager",
         .prop_name   = "GamepadOrder",
         .prop_type   = IP_PROP_TYPE_ARRAY,
         .value       = NULL,
@@ -702,6 +903,7 @@ test_inject_properties_changed(void **state)
     ip_properties_changed_payload p = {
         .sender      = EXP_SENDER,
         .iface_name  = IP_IFACE_COMPOSITE,
+        .object_path = IP_DBUS_PATH "/CompositeDevice0",
         .prop_name   = "ProfileName",
         .prop_type   = IP_PROP_TYPE_STRING,
         .value       = "My Profile",
@@ -726,6 +928,7 @@ test_inject_array_property(void **state)
     ip_properties_changed_payload p = {
         .sender      = EXP_SENDER,
         .iface_name  = IP_IFACE_MANAGER,
+        .object_path = IP_DBUS_PATH "/Manager",
         .prop_name   = "GamepadOrder",
         .prop_type   = IP_PROP_TYPE_ARRAY,
         .value       = "gp0,gp1,gp2,gp3",
@@ -750,6 +953,7 @@ test_multiple_changes(void **state)
     ip_properties_changed_payload p1 = {
         .sender      = EXP_SENDER,
         .iface_name  = IP_IFACE_COMPOSITE,
+        .object_path = IP_DBUS_PATH "/CompositeDevice0",
         .prop_name   = "ProfileName",
         .prop_type   = IP_PROP_TYPE_STRING,
         .value       = "Profile A",
@@ -764,6 +968,7 @@ test_multiple_changes(void **state)
     ip_properties_changed_payload p2 = {
         .sender      = EXP_SENDER,
         .iface_name  = IP_IFACE_COMPOSITE,
+        .object_path = IP_DBUS_PATH "/CompositeDevice0",
         .prop_name   = "ProfilePath",
         .prop_type   = IP_PROP_TYPE_STRING,
         .value       = "/path/to/profile.yaml",
@@ -836,6 +1041,22 @@ main(void)
         cmocka_unit_test_setup_teardown(test_handle_wrong_sender,
             setup_props, teardown_props),
         cmocka_unit_test_setup_teardown(test_handle_null_sender,
+            setup_props, teardown_props),
+
+        /* Interface + object-path validation */
+        cmocka_unit_test_setup_teardown(test_handle_propagates_identity,
+            setup_props, teardown_props),
+        cmocka_unit_test_setup_teardown(test_handle_wrong_interface,
+            setup_props, teardown_props),
+        cmocka_unit_test_setup_teardown(test_handle_gamepadorder_wrong_path,
+            setup_props, teardown_props),
+        cmocka_unit_test_setup_teardown(test_handle_composite_prop_wrong_path,
+            setup_props, teardown_props),
+        cmocka_unit_test_setup_teardown(test_handle_malformed_path,
+            setup_props, teardown_props),
+        cmocka_unit_test_setup_teardown(test_handle_invalidated_authoritative_read,
+            setup_props, teardown_props),
+        cmocka_unit_test_setup_teardown(test_handle_invalidated_read_failure,
             setup_props, teardown_props),
 
         /* Edge cases */

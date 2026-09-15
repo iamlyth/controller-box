@@ -31,11 +31,16 @@
 
 /* --- Callback type -------------------------------------------------------- */
 
-/* Called for each validated property change.  `prop_name` is one of the
- * tracked property names.  `type` indicates the value type.  `value` is
- * the string value (for s) or comma-separated values (for as).  `count`
- * is the array element count (for as), 0 for strings, -1 for invalidated. */
-typedef void (*ip_prop_changed_cb)(const char *prop_name,
+/* Called for each validated property change.  `object_path` is the
+ * emitting object path and `iface_name` the emitting interface (both
+ * validated against the property's expected interface and path class).
+ * `prop_name` is one of the tracked property names.  `type` indicates the
+ * value type.  `value` is the string value (for s) or comma-separated
+ * values (for as).  `count` is the array element count (for as), 0 for
+ * strings, -1 for invalidated. */
+typedef void (*ip_prop_changed_cb)(const char *object_path,
+                                    const char *iface_name,
+                                    const char *prop_name,
                                     ip_prop_type type,
                                     const char *value,
                                     int count,
@@ -61,9 +66,13 @@ void ip_properties_init(ip_properties *props, const ip_dbus_backend *backend,
 int ip_properties_subscribe(ip_properties *props);
 
 /* Process a PropertiesChanged payload (single property change).
- * Validates sender, property name, type, and value limits.
- * On success, fires the user callback.  On any validation failure,
- * silently drops the change. */
+ * Validates sender, property name, emitting interface, object path class,
+ * type, and value limits.  On success, fires the user callback with the
+ * validated object path and interface.  On any validation failure, silently
+ * drops the change.  An IP_PROP_TYPE_INVALIDATED change issues one bounded
+ * authoritative property read (backend->get_property) and dispatches the
+ * refreshed value when the read succeeds; otherwise it propagates the
+ * invalidation so the consumer clears its per-device entry. */
 void ip_properties_handle_changed(ip_properties *props,
                                     const ip_properties_changed_payload *payload);
 

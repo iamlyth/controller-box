@@ -27,6 +27,15 @@
 #define CBX_MAX_COMPOSITES    16
 #define CBX_MAX_DEVICES      64   /* source or target devices */
 
+/* --- Reactive property storage (SPEC §10.1 PropertiesChanged) ------------ */
+/* Bounds mirror the ip_properties validation limits: strings up to 4096
+ * bytes and arrays up to 256 elements.  Storing them on the per-device
+ * model (rather than a process-global cache) is what lets a change for one
+ * composite update only that composite's entry. */
+#define CBX_MODEL_PROP_NAME_LEN   256
+#define CBX_MODEL_PROP_PATH_LEN  4096
+#define CBX_MODEL_PROP_ARRAY_LEN 4096
+
 /* --- Entries -------------------------------------------------------------- */
 
 /* Generic device entry (source or target).  `name` is the last path
@@ -37,10 +46,32 @@ typedef struct {
 } cbx_device_entry;
 
 /* Composite device entry.  `index` is the trailing integer parsed from
- * the path (CompositeDevice0 → 0). */
+ * the path (CompositeDevice0 → 0).
+ *
+ * The reactive property fields hold the last validated value delivered by
+ * org.freedesktop.DBus.Properties.PropertiesChanged for this exact object
+ * path, so a Manager GamepadOrder change and a CompositeDevice
+ * ProfileName/ProfilePath/TargetDevices/SourceDevicePaths change land on
+ * the device they name (SPEC §10.1).  The `has_*` flags record that a
+ * validated value (or an authoritative invalidation) has been applied.
+ * `invalidated` is true when the last applied update was an authoritative
+ * clear rather than a value. */
 typedef struct {
     char path[CBX_MAX_PATH_LEN];
     int  index;
+
+    bool has_profile_name;
+    bool has_profile_path;
+    bool has_target_devices;
+    bool has_source_device_paths;
+    bool profile_name_invalidated;
+    bool profile_path_invalidated;
+    bool target_devices_invalidated;
+    bool source_device_paths_invalidated;
+    char profile_name[CBX_MODEL_PROP_NAME_LEN];
+    char profile_path[CBX_MODEL_PROP_PATH_LEN];
+    char target_devices[CBX_MODEL_PROP_ARRAY_LEN];
+    char source_device_paths[CBX_MODEL_PROP_ARRAY_LEN];
 } cbx_composite_entry;
 
 /* --- Device model --------------------------------------------------------- */
@@ -49,6 +80,12 @@ typedef struct {
     /* Manager — at most one, always at /org/shadowblip/InputPlumber/Manager */
     bool has_manager;
     char manager_path[CBX_MAX_PATH_LEN];
+
+    /* Manager GamepadOrder property (SPEC §10.1) — a single global ordering,
+     * so it lives on the model rather than on a composite entry. */
+    bool has_gamepad_order;
+    bool gamepad_order_invalidated;
+    char gamepad_order[CBX_MODEL_PROP_ARRAY_LEN];
 
     /* Composite devices — sorted by index */
     cbx_composite_entry composites[CBX_MAX_COMPOSITES];
@@ -122,5 +159,37 @@ bool cbx_device_model_add_target(cbx_device_model *model, const char *path);
 /* Remove a target device entry by path. */
 bool cbx_device_model_remove_target(cbx_device_model *model,
                                      const char *path);
+
+/* --- Reactive property application (SPEC §10.1) --------------------------- */
+
+/* Apply a validated PropertiesChanged value to the per-device model.
+ *
+ * `object_path`, `iface_name`, and `prop_name` must already have passed
+ * ip_properties validation (sender, interface, and path class).  This
+ * function additionally rejects data that does not name a known object in
+ * this model, so a composite change can never overwrite another device and
+ * a Manager property can never land on a composite (and vice versa):
+ *
+ *   - GamepadOrder on the Manager interface updates model->gamepad_order
+ *     only when object_path equals the known manager_path.
+ *   - ProfileName/ProfilePath/TargetDevices/SourceDevicePaths on the
+ *     CompositeDevice interface update only the matching composite entry.
+ *
+ * When `invalidated` is true the entry is cleared but the `has_*` flag is
+ * still set — an authoritative "no value" was applied.  Returns true when
+ * the model was updated (a known object/property), false otherwise. */
+bool cbx_device_model_apply_property(cbx_device_model *model,
+                                     const char *object_path,
+                                     const char *iface_name,
+                                     const char *prop_name,
+                                     const char *value,
+                                     bool invalidated);
+
+/* Copy reactive property state for composites present in both models from
+ * `prior` onto `next` by exact object path.  Used after a full
+ * re-enumeration so a device that survived the rebuild keeps the property
+ * values already observed reactively. */
+void cbx_device_model_preserve_props(cbx_device_model *next,
+                                     const cbx_device_model *prior);
 
 #endif /* CBX_IP_DEVICE_MODEL_H */

@@ -495,6 +495,72 @@ check_orphan_columns(cbx_controllers_tab *tab)
     }
 }
 
+/* Return the validated profile currently routed through `target_path` by
+ * any composite's reactive TargetDevices set, else "".  Matching is by
+ * exact CSV element so one target cannot match a substring of another. */
+static const char *
+composite_profile_for_target(const cbx_controllers_tab *tab,
+                             const char *target_path)
+{
+    if (!tab || !target_path || !target_path[0])
+        return "";
+    for (int i = 0; i < tab->model.composite_count; i++) {
+        const cbx_composite_entry *e = &tab->model.composites[i];
+        if (!e->has_target_devices || e->target_devices[0] == '\0')
+            continue;
+        const char *p = e->target_devices;
+        while (*p) {
+            const char *comma = strchr(p, ',');
+            size_t len = comma ? (size_t)(comma - p) : strlen(p);
+            if (len == strlen(target_path) &&
+                strncmp(p, target_path, len) == 0) {
+                if (e->has_profile_name && e->profile_name[0])
+                    return e->profile_name;
+                if (e->has_profile_path && e->profile_path[0]) {
+                    const char *base = strrchr(e->profile_path, '/');
+                    return base ? base + 1 : e->profile_path;
+                }
+                return "";
+            }
+            if (!comma)
+                break;
+            p = comma + 1;
+        }
+    }
+    return "";
+}
+
+void
+cbx_controllers_tab_refresh_labels(cbx_controllers_tab *tab)
+{
+    if (!tab)
+        return;
+
+    cbx_list_clear(&tab->device_list);
+    for (int i = 0; i < tab->model.target_count; i++) {
+        char label[CBX_CT_LABEL_LEN];
+        const char *type = (i < tab->device_type_count)
+                            ? tab->device_types[i] : NULL;
+        format_device_label(label, sizeof(label),
+                              tab->model.targets[i].name, type);
+
+        /* Annotate the routed physical controller's profile when the
+         * reactive per-device model knows it, so a PropertiesChanged for
+         * ProfileName/ProfilePath/TargetDevices updates the displayed row. */
+        const char *profile =
+            composite_profile_for_target(tab, tab->model.targets[i].path);
+        if (profile && profile[0]) {
+            size_t used = strlen(label);
+            if (used < sizeof(label))
+                snprintf(label + used, sizeof(label) - used,
+                         " [%s]", profile);
+        }
+
+        /* Selection callback receives its owning tab through item user_data. */
+        cbx_list_add_item(&tab->device_list, label, NULL, tab);
+    }
+}
+
 void
 cbx_controllers_tab_set_expected_count(cbx_controllers_tab *tab,
                                          int count)
@@ -572,6 +638,10 @@ cbx_controllers_tab_refresh(cbx_controllers_tab *tab)
     if (rc != 0)
         return rc;
     preserve_target_order(&next, &prior);
+    /* Carry already-observed reactive per-device properties (profile/routing)
+     * across the re-enumeration so an authoritative refresh does not discard
+     * validated PropertiesChanged state. */
+    cbx_device_model_preserve_props(&next, &prior);
     tab->model = next;
 
     /* Query each target's DeviceType.  A connected bus is not available
@@ -594,17 +664,8 @@ cbx_controllers_tab_refresh(cbx_controllers_tab *tab)
         tab->device_type_count++;
     }
 
-    /* Rebuild the list widget. */
-    cbx_list_clear(&tab->device_list);
-    for (int i = 0; i < tab->model.target_count; i++) {
-        char label[CBX_CT_LABEL_LEN];
-        const char *type = (i < tab->device_type_count)
-                            ? tab->device_types[i] : NULL;
-        format_device_label(label, sizeof(label),
-                              tab->model.targets[i].name, type);
-        /* Selection callback receives its owning tab through item user_data. */
-        cbx_list_add_item(&tab->device_list, label, NULL, tab);
-    }
+    /* Rebuild the list widget from the refreshed model. */
+    cbx_controllers_tab_refresh_labels(tab);
 
     /* Restore the same selected target after reorder.  If it disappeared,
      * clamp to the nearest surviving row; an empty topology selects none. */

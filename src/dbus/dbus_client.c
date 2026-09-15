@@ -319,6 +319,7 @@ sd_properties_changed_callback(sd_bus_message *msg, void *userdata,
     if (!sd_sender_ok(data, sender))
         return 0;
 
+    const char *path = sd_bus_message_get_path(msg);
     const char *iface_name = NULL;
 
     int r = sd_bus_message_read(msg, "s", &iface_name);
@@ -370,6 +371,7 @@ sd_properties_changed_callback(sd_bus_message *msg, void *userdata,
                 if (r >= 0) {
                     ip_properties_changed_payload payload = {
                         .sender      = sender,
+                        .object_path = path,
                         .iface_name  = iface_name,
                         .prop_name   = prop_name,
                         .prop_type   = IP_PROP_TYPE_STRING,
@@ -402,6 +404,7 @@ sd_properties_changed_callback(sd_bus_message *msg, void *userdata,
 
                         ip_properties_changed_payload payload = {
                             .sender      = sender,
+                            .object_path = path,
                             .iface_name  = iface_name,
                             .prop_name   = prop_name,
                             .prop_type   = IP_PROP_TYPE_ARRAY,
@@ -439,6 +442,7 @@ sd_properties_changed_callback(sd_bus_message *msg, void *userdata,
         while ((r = sd_bus_message_read(msg, "s", &inv_name)) > 0) {
             ip_properties_changed_payload payload = {
                 .sender      = sender,
+                .object_path = path,
                 .iface_name  = iface_name,
                 .prop_name   = inv_name,
                 .prop_type   = IP_PROP_TYPE_INVALIDATED,

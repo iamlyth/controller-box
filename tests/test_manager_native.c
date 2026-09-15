@@ -1089,6 +1089,103 @@ test_native_manager_exact_path_lifecycle(void **state)
 }
 
 /* ================================================================== */
+/*  Reactive PropertiesChanged in the Manager (Task 5)                 */
+/* ================================================================== */
+
+/* Drive the manager's production DBus process loop until signals drain. */
+static void
+pump_dbus(cbx_manager *mgr, int ms)
+{
+    for (int i = 0; i < ms / 10; i++) {
+        int processed = mgr->dbus_backend->process(mgr->dbus_bus);
+        if (processed <= 0)
+            usleep(10000);
+    }
+}
+
+#define MGR_PROP_MGR_PATH "/org/shadowblip/InputPlumber/Manager"
+#define MGR_PROP_COMP0    "/org/shadowblip/InputPlumber/CompositeDevice0"
+#define MGR_PROP_COMP1    "/org/shadowblip/InputPlumber/CompositeDevice1"
+
+/* A per-device property change updates only the reported device's model
+ * entry (and a Manager GamepadOrder updates only the Manager ordering). */
+static void
+test_manager_properties_per_device(void **state)
+{
+    (void)state;
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+    assert_true(mgr.dbus_connected);
+    assert_int_equal(mgr.ct.model.composite_count, 2);
+
+    /* ProfileName on composite 0 and composite 1 land independently. */
+    assert_int_equal(mgr.dbus_backend->call_method(mgr.dbus_bus, IP_DBUS_NAME,
+        MGR_PROP_COMP0, IP_IFACE_DBUS_DEVICE, "EmitStringProp",
+        "ss", "ProfileName", "Alpha", NULL), 0);
+    assert_int_equal(mgr.dbus_backend->call_method(mgr.dbus_bus, IP_DBUS_NAME,
+        MGR_PROP_COMP1, IP_IFACE_DBUS_DEVICE, "EmitStringProp",
+        "ss", "ProfileName", "Beta", NULL), 0);
+    pump_dbus(&mgr, 100);
+
+    const cbx_composite_entry *e0 =
+        cbx_device_model_find_composite(&mgr.ct.model, MGR_PROP_COMP0);
+    const cbx_composite_entry *e1 =
+        cbx_device_model_find_composite(&mgr.ct.model, MGR_PROP_COMP1);
+    assert_non_null(e0);
+    assert_non_null(e1);
+    assert_string_equal(e0->profile_name, "Alpha");
+    assert_string_equal(e1->profile_name, "Beta");
+
+    /* GamepadOrder is a Manager property. */
+    assert_int_equal(mgr.dbus_backend->call_method(mgr.dbus_bus, IP_DBUS_NAME,
+        MGR_PROP_MGR_PATH, IP_IFACE_DBUS_DEVICE, "EmitArrayProp",
+        "sas", "GamepadOrder", "gp0,gp1", NULL), 0);
+    pump_dbus(&mgr, 100);
+    assert_true(mgr.ct.model.has_gamepad_order);
+    assert_string_equal(mgr.ct.model.gamepad_order, "gp0,gp1");
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* A ProfileName/routing change updates the rendered Controllers list label
+ * for the routed controller only. */
+static void
+test_manager_property_updates_list_label(void **state)
+{
+    (void)state;
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+    cbx_controllers_tab *ct = cbx_manager_controllers_tab(&mgr);
+
+    /* Create one target and route composite 1 to it. */
+    assert_int_equal(cbx_controllers_tab_add(ct, "xb360"), 0);
+    assert_int_equal(cbx_controllers_tab_device_count(ct), 1);
+    const char *tpath = cbx_controllers_tab_device_path(ct, 0);
+    assert_non_null(tpath);
+
+    assert_int_equal(mgr.dbus_backend->call_method(mgr.dbus_bus, IP_DBUS_NAME,
+        MGR_PROP_COMP1, IP_IFACE_DBUS_DEVICE, "EmitArrayProp",
+        "sas", "TargetDevices", tpath, NULL), 0);
+    assert_int_equal(mgr.dbus_backend->call_method(mgr.dbus_bus, IP_DBUS_NAME,
+        MGR_PROP_COMP1, IP_IFACE_DBUS_DEVICE, "EmitStringProp",
+        "ss", "ProfileName", "custom", NULL), 0);
+    pump_dbus(&mgr, 100);
+
+    /* The single list label now carries the routed profile annotation. */
+    assert_int_equal(ct->device_list.item_count, 1);
+    assert_non_null(strstr(ct->device_list.items[0].label, "[custom]"));
+
+    /* A change on the other composite does not retarget the label. */
+    assert_int_equal(mgr.dbus_backend->call_method(mgr.dbus_bus, IP_DBUS_NAME,
+        MGR_PROP_COMP0, IP_IFACE_DBUS_DEVICE, "EmitArrayProp",
+        "sas", "TargetDevices", "", NULL), 0);
+    pump_dbus(&mgr, 100);
+    assert_non_null(strstr(ct->device_list.items[0].label, "[custom]"));
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* ================================================================== */
 /*  Test registration                                                  */
 /* ================================================================== */
 
@@ -1135,6 +1232,11 @@ main(void)
         cmocka_unit_test_setup_teardown(test_m26_cancel_edit_pointer,
                                         mn_setup, mn_teardown),
         cmocka_unit_test_setup_teardown(test_native_manager_exact_path_lifecycle,
+                                        mn_setup, mn_teardown),
+        /* Reactive PropertiesChanged in the Manager (Task 5) */
+        cmocka_unit_test_setup_teardown(test_manager_properties_per_device,
+                                        mn_setup, mn_teardown),
+        cmocka_unit_test_setup_teardown(test_manager_property_updates_list_label,
                                         mn_setup, mn_teardown),
         /* MG-04 — Topology failure */
         cmocka_unit_test_setup_teardown(test_mg04_topology_failure,

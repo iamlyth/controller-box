@@ -956,6 +956,16 @@ props_setup(void **state)
              "%s", EXP_SENDER);
     f->svc->initialized = true;
 
+    /* Per-device model entries so property changes have a target device to
+     * land on and one composite cannot overwrite another. */
+    f->svc->model.has_manager = true;
+    snprintf(f->svc->model.manager_path, sizeof(f->svc->model.manager_path),
+             "%s/Manager", IP_DBUS_PATH);
+    cbx_device_model_add_composite(&f->svc->model,
+                                    IP_DBUS_PATH "/CompositeDevice0");
+    cbx_device_model_add_composite(&f->svc->model,
+                                    IP_DBUS_PATH "/CompositeDevice1");
+
     *state = f;
     return 0;
 }
@@ -1013,6 +1023,7 @@ test_props_wire_idempotent_rewire(void **state)
     ip_properties_changed_payload p = {
         .sender      = EXP_SENDER,
         .iface_name  = IP_IFACE_MANAGER,
+        .object_path = IP_DBUS_PATH "/Manager",
         .prop_name   = "GamepadOrder",
         .prop_type   = IP_PROP_TYPE_ARRAY,
         .value       = "gp0",
@@ -1021,8 +1032,8 @@ test_props_wire_idempotent_rewire(void **state)
     f->backend->inject_signal(f->mock.bus,
         IP_IFACE_PROPERTIES, "PropertiesChanged", &p);
 
-    assert_true(f->svc->props_state.gamepad_order_observed);
-    assert_string_equal(f->svc->props_state.gamepad_order, "gp0");
+    assert_true(f->svc->model.has_gamepad_order);
+    assert_string_equal(f->svc->model.gamepad_order, "gp0");
 }
 
 /* cbx_overlay_props_wire fails cleanly without a connection. */
@@ -1047,6 +1058,7 @@ test_props_inject_gamepadorder_updates_state(void **state)
     ip_properties_changed_payload p = {
         .sender      = EXP_SENDER,
         .iface_name  = IP_IFACE_MANAGER,
+        .object_path = IP_DBUS_PATH "/Manager",
         .prop_name   = "GamepadOrder",
         .prop_type   = IP_PROP_TYPE_ARRAY,
         .value       = "gp0,gp1",
@@ -1056,63 +1068,117 @@ test_props_inject_gamepadorder_updates_state(void **state)
         IP_IFACE_PROPERTIES, "PropertiesChanged", &p);
     assert_int_equal(rc, 0);
 
-    assert_true(f->svc->props_state.gamepad_order_observed);
-    assert_string_equal(f->svc->props_state.gamepad_order, "gp0,gp1");
+    assert_true(f->svc->model.has_gamepad_order);
+    assert_string_equal(f->svc->model.gamepad_order, "gp0,gp1");
 }
 
-/* The production callback handles each tracked property class. */
+/* The production callback handles each tracked property class and applies it
+ * to the matching per-device model entry. */
 static void
 test_props_inject_all_slots(void **state)
 {
     props_fixture *f = *state;
     cbx_overlay_props_wire(f->svc);
 
-    /* CompositeDevice string properties. */
+    const char *path0 = IP_DBUS_PATH "/CompositeDevice0";
+    const char *path1 = IP_DBUS_PATH "/CompositeDevice1";
+
+    /* CompositeDevice string properties on device 0. */
     ip_properties_changed_payload pname = {
         .sender = EXP_SENDER, .iface_name = IP_IFACE_COMPOSITE,
+        .object_path = path0,
         .prop_name = "ProfileName", .prop_type = IP_PROP_TYPE_STRING,
         .value = "Default Profile", .array_count = 0,
     };
     f->backend->inject_signal(f->mock.bus,
         IP_IFACE_PROPERTIES, "PropertiesChanged", &pname);
-    assert_true(f->svc->props_state.profile_name_observed);
-    assert_string_equal(f->svc->props_state.profile_name, "Default Profile");
+    const cbx_composite_entry *e0 =
+        cbx_device_model_find_composite(&f->svc->model, path0);
+    const cbx_composite_entry *e1 =
+        cbx_device_model_find_composite(&f->svc->model, path1);
+    assert_non_null(e0);
+    assert_non_null(e1);
+    assert_true(e0->has_profile_name);
+    assert_string_equal(e0->profile_name, "Default Profile");
+    assert_false(e1->has_profile_name);  /* device 1 untouched */
 
     ip_properties_changed_payload ppath = {
         .sender = EXP_SENDER, .iface_name = IP_IFACE_COMPOSITE,
+        .object_path = path0,
         .prop_name = "ProfilePath", .prop_type = IP_PROP_TYPE_STRING,
         .value = "/usr/share/inputplumber/profiles/a.yaml", .array_count = 0,
     };
     f->backend->inject_signal(f->mock.bus,
         IP_IFACE_PROPERTIES, "PropertiesChanged", &ppath);
-    assert_true(f->svc->props_state.profile_path_observed);
-    assert_string_equal(f->svc->props_state.profile_path,
+    e0 = cbx_device_model_find_composite(&f->svc->model, path0);
+    assert_true(e0->has_profile_path);
+    assert_string_equal(e0->profile_path,
                         "/usr/share/inputplumber/profiles/a.yaml");
 
     /* CompositeDevice array properties. */
     ip_properties_changed_payload td = {
         .sender = EXP_SENDER, .iface_name = IP_IFACE_COMPOSITE,
+        .object_path = path1,
         .prop_name = "TargetDevices", .prop_type = IP_PROP_TYPE_ARRAY,
         .value = "gamepad0", .array_count = 1,
     };
     f->backend->inject_signal(f->mock.bus,
         IP_IFACE_PROPERTIES, "PropertiesChanged", &td);
-    assert_true(f->svc->props_state.target_devices_observed);
-    assert_string_equal(f->svc->props_state.target_devices, "gamepad0");
+    e1 = cbx_device_model_find_composite(&f->svc->model, path1);
+    assert_true(e1->has_target_devices);
+    assert_string_equal(e1->target_devices, "gamepad0");
+    e0 = cbx_device_model_find_composite(&f->svc->model, path0);
+    assert_false(e0->has_target_devices);  /* device 0 untouched */
 
     ip_properties_changed_payload sp = {
         .sender = EXP_SENDER, .iface_name = IP_IFACE_COMPOSITE,
+        .object_path = path1,
         .prop_name = "SourceDevicePaths", .prop_type = IP_PROP_TYPE_ARRAY,
         .value = "/dev/input/event0", .array_count = 1,
     };
     f->backend->inject_signal(f->mock.bus,
         IP_IFACE_PROPERTIES, "PropertiesChanged", &sp);
-    assert_true(f->svc->props_state.source_paths_observed);
-    assert_string_equal(f->svc->props_state.source_device_paths,
-                        "/dev/input/event0");
+    e1 = cbx_device_model_find_composite(&f->svc->model, path1);
+    assert_true(e1->has_source_device_paths);
+    assert_string_equal(e1->source_device_paths, "/dev/input/event0");
 }
 
-/* A spoofed sender must not update internal reactive state (fail-closed). */
+/* A change for one device must not overwrite another device's model entry. */
+static void
+test_props_two_devices_isolated(void **state)
+{
+    props_fixture *f = *state;
+    cbx_overlay_props_wire(f->svc);
+
+    const char *path0 = IP_DBUS_PATH "/CompositeDevice0";
+    const char *path1 = IP_DBUS_PATH "/CompositeDevice1";
+
+    ip_properties_changed_payload a = {
+        .sender = EXP_SENDER, .iface_name = IP_IFACE_COMPOSITE,
+        .object_path = path0,
+        .prop_name = "ProfileName", .prop_type = IP_PROP_TYPE_STRING,
+        .value = "Alpha", .array_count = 0,
+    };
+    ip_properties_changed_payload b = {
+        .sender = EXP_SENDER, .iface_name = IP_IFACE_COMPOSITE,
+        .object_path = path1,
+        .prop_name = "ProfileName", .prop_type = IP_PROP_TYPE_STRING,
+        .value = "Beta", .array_count = 0,
+    };
+    f->backend->inject_signal(f->mock.bus,
+        IP_IFACE_PROPERTIES, "PropertiesChanged", &a);
+    f->backend->inject_signal(f->mock.bus,
+        IP_IFACE_PROPERTIES, "PropertiesChanged", &b);
+
+    const cbx_composite_entry *e0 =
+        cbx_device_model_find_composite(&f->svc->model, path0);
+    const cbx_composite_entry *e1 =
+        cbx_device_model_find_composite(&f->svc->model, path1);
+    assert_string_equal(e0->profile_name, "Alpha");
+    assert_string_equal(e1->profile_name, "Beta");
+}
+
+/* A spoofed sender must not update any per-device state (fail-closed). */
 static void
 test_props_inject_wrong_sender_no_update(void **state)
 {
@@ -1122,6 +1188,7 @@ test_props_inject_wrong_sender_no_update(void **state)
     ip_properties_changed_payload p = {
         .sender      = ":1.999",
         .iface_name  = IP_IFACE_MANAGER,
+        .object_path = IP_DBUS_PATH "/Manager",
         .prop_name   = "GamepadOrder",
         .prop_type   = IP_PROP_TYPE_ARRAY,
         .value       = "gpX,gpY",
@@ -1130,11 +1197,34 @@ test_props_inject_wrong_sender_no_update(void **state)
     f->backend->inject_signal(f->mock.bus,
         IP_IFACE_PROPERTIES, "PropertiesChanged", &p);
 
-    assert_false(f->svc->props_state.gamepad_order_observed);
-    assert_string_equal(f->svc->props_state.gamepad_order, "");
+    assert_false(f->svc->model.has_gamepad_order);
+    assert_string_equal(f->svc->model.gamepad_order, "");
 }
 
-/* An INVALIDATED change clears the cached entry. */
+/* A change naming an unknown object path is rejected. */
+static void
+test_props_unknown_path_no_update(void **state)
+{
+    props_fixture *f = *state;
+    cbx_overlay_props_wire(f->svc);
+
+    ip_properties_changed_payload p = {
+        .sender = EXP_SENDER, .iface_name = IP_IFACE_COMPOSITE,
+        .object_path = IP_DBUS_PATH "/CompositeDevice7",
+        .prop_name = "ProfileName", .prop_type = IP_PROP_TYPE_STRING,
+        .value = "Ghost", .array_count = 0,
+    };
+    f->backend->inject_signal(f->mock.bus,
+        IP_IFACE_PROPERTIES, "PropertiesChanged", &p);
+
+    /* No known entry was touched, and no unknown entry was created. */
+    assert_int_equal(f->svc->model.composite_count, 2);
+    assert_null(cbx_device_model_find_composite(&f->svc->model,
+                                                 IP_DBUS_PATH "/CompositeDevice7"));
+}
+
+/* An INVALIDATED change with no readable authoritative value clears the
+ * per-device entry but records that an authoritative clear was applied. */
 static void
 test_props_inject_invalidated_clears(void **state)
 {
@@ -1143,23 +1233,26 @@ test_props_inject_invalidated_clears(void **state)
 
     ip_properties_changed_payload set = {
         .sender = EXP_SENDER, .iface_name = IP_IFACE_MANAGER,
+        .object_path = IP_DBUS_PATH "/Manager",
         .prop_name = "GamepadOrder", .prop_type = IP_PROP_TYPE_ARRAY,
         .value = "gp0", .array_count = 1,
     };
     f->backend->inject_signal(f->mock.bus,
         IP_IFACE_PROPERTIES, "PropertiesChanged", &set);
-    assert_string_equal(f->svc->props_state.gamepad_order, "gp0");
+    assert_string_equal(f->svc->model.gamepad_order, "gp0");
 
     ip_properties_changed_payload inv = {
         .sender = EXP_SENDER, .iface_name = IP_IFACE_MANAGER,
+        .object_path = IP_DBUS_PATH "/Manager",
         .prop_name = "GamepadOrder", .prop_type = IP_PROP_TYPE_INVALIDATED,
         .value = NULL, .array_count = 0,
     };
     f->backend->inject_signal(f->mock.bus,
         IP_IFACE_PROPERTIES, "PropertiesChanged", &inv);
 
-    assert_true(f->svc->props_state.gamepad_order_observed);
-    assert_string_equal(f->svc->props_state.gamepad_order, "");
+    assert_true(f->svc->model.has_gamepad_order);
+    assert_true(f->svc->model.gamepad_order_invalidated);
+    assert_string_equal(f->svc->model.gamepad_order, "");
 }
 
 
@@ -1216,6 +1309,10 @@ static const struct CMUnitTest tests[] = {
     cmocka_unit_test_setup_teardown(test_props_inject_gamepadorder_updates_state,
                                      props_setup, props_teardown),
     cmocka_unit_test_setup_teardown(test_props_inject_all_slots,
+                                     props_setup, props_teardown),
+    cmocka_unit_test_setup_teardown(test_props_two_devices_isolated,
+                                     props_setup, props_teardown),
+    cmocka_unit_test_setup_teardown(test_props_unknown_path_no_update,
                                      props_setup, props_teardown),
     cmocka_unit_test_setup_teardown(test_props_inject_wrong_sender_no_update,
                                      props_setup, props_teardown),

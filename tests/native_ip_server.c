@@ -484,7 +484,9 @@ out:
 }
 
 /* EmitStringProp(ss): emit a string-typed PropertiesChanged for `prop` with
- * value `value`, originating on the method's object path. */
+ * value `value`, originating on the method's object path.  The emitting
+ * interface follows the object: the Manager object emits on
+ * org.shadowblip.InputManager, composite objects on CompositeDevice. */
 static int
 method_emit_string_prop(sd_bus_message *m, void *userdata, sd_bus_error *error)
 {
@@ -495,7 +497,9 @@ method_emit_string_prop(sd_bus_message *m, void *userdata, sd_bus_error *error)
 
     sd_bus *bus = sd_bus_message_get_bus(m);
     const char *path = sd_bus_message_get_path(m);
-    rc = emit_properties_changed(bus, path, IP_IFACE_COMPOSITE, prop,
+    const char *iface = (strcmp(path, IP_DBUS_PATH "/Manager") == 0)
+                            ? IP_IFACE_MANAGER : IP_IFACE_COMPOSITE;
+    rc = emit_properties_changed(bus, path, iface, prop,
                                  's', value ? value : "", NULL, 0);
     if (rc < 0) return rc;
     return sd_bus_reply_method_return(m, "");
@@ -525,8 +529,51 @@ method_emit_array_prop(sd_bus_message *m, void *userdata, sd_bus_error *error)
 
     sd_bus *bus = sd_bus_message_get_bus(m);
     const char *path = sd_bus_message_get_path(m);
-    rc = emit_properties_changed(bus, path, IP_IFACE_COMPOSITE, prop,
+    const char *iface = (strcmp(path, IP_DBUS_PATH "/Manager") == 0)
+                            ? IP_IFACE_MANAGER : IP_IFACE_COMPOSITE;
+    rc = emit_properties_changed(bus, path, iface, prop,
                                  'a', NULL, elems, count);
+    if (rc < 0) return rc;
+    return sd_bus_reply_method_return(m, "");
+}
+
+/* EmitInvalidatedProp(s): emit a PropertiesChanged whose invalidated list
+ * names `prop` on the method's object path.  Lets native tests drive the
+ * client's bounded authoritative-read path. */
+static int
+method_emit_invalidated_prop(sd_bus_message *m, void *userdata,
+                             sd_bus_error *error)
+{
+    (void)userdata; (void)error;
+    const char *prop = NULL;
+    int rc = sd_bus_message_read(m, "s", &prop);
+    if (rc < 0) return rc;
+
+    sd_bus *bus = sd_bus_message_get_bus(m);
+    const char *path = sd_bus_message_get_path(m);
+    const char *iface = (strcmp(path, IP_DBUS_PATH "/Manager") == 0)
+                            ? IP_IFACE_MANAGER : IP_IFACE_COMPOSITE;
+
+    sd_bus_message *sig = NULL;
+    rc = sd_bus_message_new_signal(bus, &sig, path,
+                                   "org.freedesktop.DBus.Properties",
+                                   "PropertiesChanged");
+    if (rc < 0) return rc;
+    rc = sd_bus_message_append(sig, "s", iface);
+    if (rc < 0) goto inv_out;
+    rc = sd_bus_message_open_container(sig, 'a', "{sv}");
+    if (rc < 0) goto inv_out;
+    rc = sd_bus_message_close_container(sig);   /* no changed properties */
+    if (rc < 0) goto inv_out;
+    rc = sd_bus_message_open_container(sig, 'a', "s");
+    if (rc < 0) goto inv_out;
+    rc = sd_bus_message_append(sig, "s", prop);
+    if (rc < 0) goto inv_out;
+    rc = sd_bus_message_close_container(sig);
+    if (rc < 0) goto inv_out;
+    rc = sd_bus_send(bus, sig, NULL);
+inv_out:
+    sd_bus_message_unref(sig);
     if (rc < 0) return rc;
     return sd_bus_reply_method_return(m, "");
 }
@@ -537,6 +584,8 @@ static const sd_bus_vtable dbus_device_vtable[] = {
     SD_BUS_METHOD("EmitInputEvent", "ss", "", method_emit_input_event, 0),
     SD_BUS_METHOD("EmitStringProp", "ss", "", method_emit_string_prop, 0),
     SD_BUS_METHOD("EmitArrayProp", "sas", "", method_emit_array_prop, 0),
+    SD_BUS_METHOD("EmitInvalidatedProp", "s", "",
+                  method_emit_invalidated_prop, 0),
     SD_BUS_VTABLE_END
 };
 
@@ -812,6 +861,11 @@ run_server(const char *address)
         (rc = sd_bus_add_object_vtable(bus, NULL,
               "/org/shadowblip/InputPlumber/Manager",
               "org.shadowblip.InputManager", manager_vtable, NULL)) < 0 ||
+        /* Emit helpers are also reachable on the Manager object so tests
+         * can drive Manager-interface PropertiesChanged signals. */
+        (rc = sd_bus_add_object_vtable(bus, NULL,
+              "/org/shadowblip/InputPlumber/Manager",
+              IP_IFACE_DBUS_DEVICE, dbus_device_vtable, NULL)) < 0 ||
         /* ObjectManager root */
         (rc = sd_bus_add_object(bus, NULL,
               "/org/shadowblip/InputPlumber",

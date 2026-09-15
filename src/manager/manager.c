@@ -34,6 +34,7 @@
 #include <SDL2/SDL_ttf.h>
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -122,6 +123,70 @@ cbx_manager_backend_ready(void *userdata)
         mgr->last_controller_refresh_ms = SDL_GetTicks();
     cbx_profiles_tab_set_context(&mgr->pt, mgr->rend.renderer,
                                   mgr->dbus_backend, mgr->dbus_bus);
+
+    /* Reactive PropertiesChanged: observe InputPlumber's live per-device
+     * property state after every (re)acquisition (SPEC §10.1). */
+    cbx_manager_props_wire(mgr);
+}
+
+/*
+ * Production PropertiesChanged callback for the Manager.  Applies the
+ * validated change to the controllers-tab per-device model and rebuilds the
+ * list labels from the updated model, so a ProfileName/ProfilePath/
+ * TargetDevices change on one composite updates only that composite's
+ * displayed controller and a Manager GamepadOrder updates only the model's
+ * Manager ordering (SPEC §10.1).
+ */
+void
+cbx_manager_on_prop_change(const char *object_path, const char *iface_name,
+                           const char *prop_name, ip_prop_type type,
+                           const char *value, int count, void *userdata)
+{
+    (void)count;
+    cbx_manager *mgr = (cbx_manager *)userdata;
+    if (!mgr || !object_path || !iface_name || !prop_name)
+        return;
+
+    bool invalidated = (type == IP_PROP_TYPE_INVALIDATED);
+    if (!cbx_device_model_apply_property(&mgr->ct.model, object_path,
+                                          iface_name, prop_name, value,
+                                          invalidated))
+        return;  /* unknown device/property — do not touch the UI */
+
+    /* Rebuild the displayed list from the updated model without a
+     * re-enumeration that would discard the reactive per-device state. */
+    cbx_controllers_tab_refresh_labels(&mgr->ct);
+}
+
+int
+cbx_manager_props_wire(cbx_manager *mgr)
+{
+    if (!mgr || !mgr->dbus_backend || !mgr->dbus_bus)
+        return -EINVAL;
+
+    /* Resolve InputPlumber's unique name for sender verification.  The
+     * owned-connection path already tracked it during connect; the injected
+     * backend path resolves it here.  Re-resolve on every wire so a
+     * restarted InputPlumber's new unique name replaces the old one. */
+    const char *uniq = ip_connection_get_unique_name(&mgr->connection);
+    if (uniq && uniq[0]) {
+        snprintf(mgr->expected_sender, sizeof(mgr->expected_sender),
+                 "%s", uniq);
+    } else if (mgr->dbus_backend->get_unique_name) {
+        char *unique = NULL;
+        if (mgr->dbus_backend->get_unique_name(mgr->dbus_bus, IP_DBUS_NAME,
+                                                &unique) == 0 && unique) {
+            snprintf(mgr->expected_sender, sizeof(mgr->expected_sender),
+                     "%s", unique);
+        }
+        free(unique);
+    }
+    if (!mgr->expected_sender[0])
+        return -EINVAL;
+
+    ip_properties_init(&mgr->props, mgr->dbus_backend, mgr->dbus_bus,
+                       mgr->expected_sender, cbx_manager_on_prop_change, mgr);
+    return ip_properties_subscribe(&mgr->props);
 }
 
 void
@@ -134,6 +199,10 @@ cbx_manager_backend_degraded(const char *reason, void *userdata)
             reason ? reason : "InputPlumber unavailable");
     mgr->dbus_connected = false;
     mgr->ct.backend = NULL;
+    mgr->ct.bus = NULL;
+    /* A lost owner must not leave a stale unique name trusted for signal
+     * sender verification. */
+    mgr->expected_sender[0] = '\0';
     cbx_device_model_init(&mgr->ct.model);
     cbx_controllers_tab_set_available(&mgr->ct, false, reason);
     cbx_profiles_tab_set_context(&mgr->pt, mgr->rend.renderer, NULL, NULL);
@@ -558,6 +627,12 @@ cbx_manager_init_with_dbus(cbx_manager *mgr, const char *font_path,
         cbx_renderer_shutdown(&mgr->rend);
         return rc;
     }
+
+    /* Reactive PropertiesChanged subscription (Task 5): observe the live
+     * per-device property state in the Manager as well as the overlay
+     * (SPEC §10.1).  Best-effort — a degraded bus has no trusted sender yet
+     * and is wired on the next backend-ready event. */
+    cbx_manager_props_wire(mgr);
 
     /* --- Focus chain (depends on tab modules being initialised) ----- */
     cbx_focus_chain_init(&mgr->focus);

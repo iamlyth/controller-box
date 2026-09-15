@@ -45,6 +45,7 @@ void ip_dbus_mock_reset(ip_dbus_mock *mock) {
     mock->creds_uid = 0;
     mock->creds_rc  = 0;
     mock->unique_name_rc = 0;
+    mock->get_property_count = 0;
     memset(&mock->last_call, 0, sizeof(mock->last_call));
 }
 
@@ -247,6 +248,8 @@ static int mock_get_property(ip_bus_handle bus, const char *dest,
                              const char *prop, char **out_value) {
     (void)dest; (void)path;
     ip_dbus_mock *mock = (ip_dbus_mock *)bus;
+    if (mock)
+        mock->get_property_count++;
     const ip_mock_expectation *e = ip_dbus_mock_find(mock, iface, prop);
     if (!e) return -ENXIO;
     if (out_value) {

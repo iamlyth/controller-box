@@ -1479,8 +1479,9 @@ static void test_assignment_replaces_p1_through_p4_then_clears(void **state)
 /* --- Reactive PropertiesChanged via the real sd-bus path (Task 5) --------
  * Task 5 wires ip_properties into the overlay backend so that external
  * changes to GamepadOrder/ProfileName/ProfilePath/TargetDevices/
- * SourceDevicePaths (SPEC §10.1) are observed reactively instead of leaving
- * the fully-implemented handler as dead code.  These tests emit a faithful
+ * SourceDevicePaths (SPEC §10.1) are applied to the per-device model — the
+ * matching composite entry, or the model's Manager ordering — instead of a
+ * process-global cache.  These tests emit a faithful
  * org.freedesktop.DBus.Properties PropertiesChanged (sa{sv}as) signal from
  * the native server and drive the client's sd-bus process loop so the real
  * production parse path (sd_properties_changed_callback -> ip_properties ->
@@ -1502,8 +1503,15 @@ static void test_properties_changed_reactive_string(void **state)
     drain_bus(svc->conn.backend, svc->conn.bus, 100);
     cbx_overlay_service_step(svc);
 
-    assert_true(svc->props_state.profile_name_observed);
-    assert_string_equal(svc->props_state.profile_name, "Reactive Name");
+    const cbx_composite_entry *e0 =
+        cbx_device_model_find_composite(&svc->model, COMP_PATH_0);
+    const cbx_composite_entry *e1 =
+        cbx_device_model_find_composite(&svc->model, COMP_PATH_1);
+    assert_non_null(e0);
+    assert_non_null(e1);
+    assert_true(e1->has_profile_name);
+    assert_string_equal(e1->profile_name, "Reactive Name");
+    assert_false(e0->has_profile_name);  /* other device untouched */
 
     /* And ProfilePath — also a tracked string property. */
     rc = svc->conn.backend->call_method(svc->conn.bus, IP_DBUS_NAME,
@@ -1512,9 +1520,12 @@ static void test_properties_changed_reactive_string(void **state)
     assert_int_equal(rc, 0);
     drain_bus(svc->conn.backend, svc->conn.bus, 100);
     cbx_overlay_service_step(svc);
-    assert_true(svc->props_state.profile_path_observed);
-    assert_string_equal(svc->props_state.profile_path,
-                        "/tmp/some/profile.yaml");
+
+    e1 = cbx_device_model_find_composite(&svc->model, COMP_PATH_1);
+    e0 = cbx_device_model_find_composite(&svc->model, COMP_PATH_0);
+    assert_true(e1->has_profile_path);
+    assert_string_equal(e1->profile_path, "/tmp/some/profile.yaml");
+    assert_false(e0->has_profile_path);
 }
 
 static void test_properties_changed_reactive_array(void **state)
@@ -1524,37 +1535,205 @@ static void test_properties_changed_reactive_array(void **state)
 
     assert_int_equal(cbx_overlay_props_wire(svc), 0);
 
-    /* GamepadOrder — a string-array property (Manager). */
+    /* GamepadOrder — a Manager property: emit on the Manager path so the
+     * interface/object-path validation accepts it. */
     int rc = svc->conn.backend->call_method(svc->conn.bus, IP_DBUS_NAME,
-        COMP_PATH_1, IP_IFACE_DBUS_DEVICE, "EmitArrayProp",
+        MGR_PATH, IP_IFACE_DBUS_DEVICE, "EmitArrayProp",
         "sas", "GamepadOrder", "gp2,gp3,gp4,gp5", NULL);
     assert_int_equal(rc, 0);
     drain_bus(svc->conn.backend, svc->conn.bus, 100);
     cbx_overlay_service_step(svc);
 
-    assert_true(svc->props_state.gamepad_order_observed);
-    assert_string_equal(svc->props_state.gamepad_order, "gp2,gp3,gp4,gp5");
+    assert_true(svc->model.has_gamepad_order);
+    assert_string_equal(svc->model.gamepad_order, "gp2,gp3,gp4,gp5");
 
-    /* TargetDevices — a tracked array property. */
+    /* TargetDevices — a per-composite array property on device 1. */
     rc = svc->conn.backend->call_method(svc->conn.bus, IP_DBUS_NAME,
         COMP_PATH_1, IP_IFACE_DBUS_DEVICE, "EmitArrayProp",
         "sas", "TargetDevices", "gamepad0", NULL);
     assert_int_equal(rc, 0);
     drain_bus(svc->conn.backend, svc->conn.bus, 100);
     cbx_overlay_service_step(svc);
-    assert_true(svc->props_state.target_devices_observed);
-    assert_string_equal(svc->props_state.target_devices, "gamepad0");
 
-    /* SourceDevicePaths — a tracked array property. */
+    const cbx_composite_entry *e1 =
+        cbx_device_model_find_composite(&svc->model, COMP_PATH_1);
+    const cbx_composite_entry *e0 =
+        cbx_device_model_find_composite(&svc->model, COMP_PATH_0);
+    assert_true(e1->has_target_devices);
+    assert_string_equal(e1->target_devices, "gamepad0");
+    assert_false(e0->has_target_devices);
+
+    /* SourceDevicePaths — a per-composite array property on device 1. */
     rc = svc->conn.backend->call_method(svc->conn.bus, IP_DBUS_NAME,
         COMP_PATH_1, IP_IFACE_DBUS_DEVICE, "EmitArrayProp",
         "sas", "SourceDevicePaths", "/dev/input/event9", NULL);
     assert_int_equal(rc, 0);
     drain_bus(svc->conn.backend, svc->conn.bus, 100);
     cbx_overlay_service_step(svc);
-    assert_true(svc->props_state.source_paths_observed);
-    assert_string_equal(svc->props_state.source_device_paths,
-                        "/dev/input/event9");
+
+    e1 = cbx_device_model_find_composite(&svc->model, COMP_PATH_1);
+    assert_true(e1->has_source_device_paths);
+    assert_string_equal(e1->source_device_paths, "/dev/input/event9");
+}
+
+/* Two composites: a change for one device must not overwrite the other. */
+static void test_properties_changed_two_devices_isolated(void **state)
+{
+    native_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    assert_int_equal(cbx_overlay_props_wire(svc), 0);
+
+    assert_int_equal(svc->conn.backend->call_method(svc->conn.bus, IP_DBUS_NAME,
+        COMP_PATH_0, IP_IFACE_DBUS_DEVICE, "EmitStringProp",
+        "ss", "ProfileName", "Alpha", NULL), 0);
+    assert_int_equal(svc->conn.backend->call_method(svc->conn.bus, IP_DBUS_NAME,
+        COMP_PATH_1, IP_IFACE_DBUS_DEVICE, "EmitStringProp",
+        "ss", "ProfileName", "Beta", NULL), 0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
+    cbx_overlay_service_step(svc);
+
+    const cbx_composite_entry *e0 =
+        cbx_device_model_find_composite(&svc->model, COMP_PATH_0);
+    const cbx_composite_entry *e1 =
+        cbx_device_model_find_composite(&svc->model, COMP_PATH_1);
+    assert_string_equal(e0->profile_name, "Alpha");
+    assert_string_equal(e1->profile_name, "Beta");
+
+    /* A later change on device 0 still leaves device 1 alone. */
+    assert_int_equal(svc->conn.backend->call_method(svc->conn.bus, IP_DBUS_NAME,
+        COMP_PATH_0, IP_IFACE_DBUS_DEVICE, "EmitStringProp",
+        "ss", "ProfileName", "Alpha2", NULL), 0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
+    cbx_overlay_service_step(svc);
+
+    e0 = cbx_device_model_find_composite(&svc->model, COMP_PATH_0);
+    e1 = cbx_device_model_find_composite(&svc->model, COMP_PATH_1);
+    assert_string_equal(e0->profile_name, "Alpha2");
+    assert_string_equal(e1->profile_name, "Beta");
+}
+
+/* A ProfilePath change updates the rendered grid row for the correct device
+ * only, proving the displayed device follows the reported object path. */
+static void test_properties_changed_grid_profile(void **state)
+{
+    native_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    assert_int_equal(cbx_overlay_props_wire(svc), 0);
+
+    /* Find the enumerated "custom" profile and the two grid rows. */
+    const char *custom_path = NULL;
+    for (int i = 0; i < svc->profiles.count; i++)
+        if (strcmp(svc->profiles.entries[i].filename, "custom") == 0)
+            custom_path = svc->profiles.entries[i].path;
+    assert_non_null(custom_path);
+
+    int row0 = -1, row1 = -1;
+    for (int i = 0; i < svc->grid.row_count; i++) {
+        if (strcmp(svc->grid.rows[i].composite_path, COMP_PATH_0) == 0)
+            row0 = i;
+        if (strcmp(svc->grid.rows[i].composite_path, COMP_PATH_1) == 0)
+            row1 = i;
+    }
+    assert_true(row0 >= 0);
+    assert_true(row1 >= 0);
+    char before0[CBX_GRID_PROFILE_LEN];
+    snprintf(before0, sizeof(before0), "%s", svc->grid.rows[row0].profile);
+
+    assert_int_equal(svc->conn.backend->call_method(svc->conn.bus, IP_DBUS_NAME,
+        COMP_PATH_1, IP_IFACE_DBUS_DEVICE, "EmitStringProp",
+        "ss", "ProfilePath", custom_path, NULL), 0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
+    cbx_overlay_service_step(svc);
+
+    assert_string_equal(svc->grid.rows[row1].profile, "custom");
+    assert_string_equal(svc->grid.rows[row0].profile, before0);
+}
+
+/* An invalidated property triggers exactly one bounded authoritative read
+ * and applies the device's real current value. */
+static void test_properties_changed_invalidation_reads(void **state)
+{
+    native_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    assert_int_equal(cbx_overlay_props_wire(svc), 0);
+
+    const char *custom_path = NULL;
+    for (int i = 0; i < svc->profiles.count; i++)
+        if (strcmp(svc->profiles.entries[i].filename, "custom") == 0)
+            custom_path = svc->profiles.entries[i].path;
+    assert_non_null(custom_path);
+
+    /* Load a known profile on composite 1 so the server reports a real
+     * authoritative ProfileName. */
+    assert_int_equal(svc->conn.backend->call_method(svc->conn.bus, IP_DBUS_NAME,
+        COMP_PATH_1, IP_IFACE_COMPOSITE, "LoadProfilePath",
+        "s", custom_path, NULL), 0);
+
+    assert_int_equal(svc->conn.backend->call_method(svc->conn.bus, IP_DBUS_NAME,
+        COMP_PATH_1, IP_IFACE_DBUS_DEVICE, "EmitInvalidatedProp",
+        "s", "ProfileName", NULL), 0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
+    cbx_overlay_service_step(svc);
+
+    const cbx_composite_entry *e1 =
+        cbx_device_model_find_composite(&svc->model, COMP_PATH_1);
+    const cbx_composite_entry *e0 =
+        cbx_device_model_find_composite(&svc->model, COMP_PATH_0);
+    assert_true(e1->has_profile_name);
+    assert_string_equal(e1->profile_name, "custom");
+    assert_false(e0->has_profile_name);  /* authoritative read stayed scoped */
+}
+
+/* Subscription replacement must not retain the previous callback. */
+static int s_stale_prop_calls = 0;
+static int s_fresh_prop_calls = 0;
+
+static void stale_prop_cb(const char *object_path, const char *iface_name,
+                          const char *prop_name, ip_prop_type type,
+                          const char *value, int count, void *userdata)
+{
+    (void)object_path; (void)iface_name; (void)prop_name; (void)type;
+    (void)value; (void)count; (void)userdata;
+    s_stale_prop_calls++;
+}
+
+static void fresh_prop_cb(const char *object_path, const char *iface_name,
+                          const char *prop_name, ip_prop_type type,
+                          const char *value, int count, void *userdata)
+{
+    (void)object_path; (void)iface_name; (void)prop_name; (void)type;
+    (void)value; (void)count; (void)userdata;
+    s_fresh_prop_calls++;
+}
+
+static void test_props_subscription_replacement_no_stale(void **state)
+{
+    native_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    s_stale_prop_calls = 0;
+    s_fresh_prop_calls = 0;
+
+    ip_properties stale, fresh;
+    ip_properties_init(&stale, svc->conn.backend, svc->conn.bus,
+                       svc->expected_sender, stale_prop_cb, NULL);
+    assert_int_equal(ip_properties_subscribe(&stale), 0);
+
+    /* Re-wire (as recovery does) with a different callback. */
+    ip_properties_init(&fresh, svc->conn.backend, svc->conn.bus,
+                       svc->expected_sender, fresh_prop_cb, NULL);
+    assert_int_equal(ip_properties_subscribe(&fresh), 0);
+
+    assert_int_equal(svc->conn.backend->call_method(svc->conn.bus, IP_DBUS_NAME,
+        COMP_PATH_0, IP_IFACE_DBUS_DEVICE, "EmitStringProp",
+        "ss", "ProfileName", "Once", NULL), 0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
+
+    assert_int_equal(s_stale_prop_calls, 0);  /* stale callback not retained */
+    assert_int_equal(s_fresh_prop_calls, 1);
 }
 
 /* --- O13: Conflict detection + auto-resolution on save --- */
@@ -1681,6 +1860,14 @@ static const struct CMUnitTest tests[] = {
     cmocka_unit_test_setup_teardown(test_properties_changed_reactive_string,
                                      native_setup, native_teardown),
     cmocka_unit_test_setup_teardown(test_properties_changed_reactive_array,
+                                     native_setup, native_teardown),
+    cmocka_unit_test_setup_teardown(test_properties_changed_two_devices_isolated,
+                                     native_setup, native_teardown),
+    cmocka_unit_test_setup_teardown(test_properties_changed_grid_profile,
+                                     native_setup, native_teardown),
+    cmocka_unit_test_setup_teardown(test_properties_changed_invalidation_reads,
+                                     native_setup, native_teardown),
+    cmocka_unit_test_setup_teardown(test_props_subscription_replacement_no_stale,
                                      native_setup, native_teardown),
 
     /* O13 — Conflict resolution on save */

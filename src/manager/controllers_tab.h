@@ -135,6 +135,15 @@ void cbx_controllers_tab_layout(cbx_controllers_tab *tab);
 
 int cbx_controllers_tab_refresh(cbx_controllers_tab *tab);
 
+/*
+ * Rebuild the device list widget text from the tab's current in-memory
+ * model without re-enumerating.  Used after a reactive PropertiesChanged
+ * applies a validated per-device value (profile/routing) to the model so
+ * the rendered Controllers tab reflects it without an authoritative read
+ * that would discard the reactive state.
+ */
+void cbx_controllers_tab_refresh_labels(cbx_controllers_tab *tab);
+
 /* Enable/disable backend actions and expose a user-visible reason. */
 void cbx_controllers_tab_set_available(cbx_controllers_tab *tab,
                                         bool available,

@@ -32,6 +32,7 @@
 #include "manager/service_install.h"
 #include "dbus/dbus_interface.h"  /* ip_dbus_backend, ip_bus_handle, ip_dbus_sd_backend */
 #include "dbus/ip_connection.h"
+#include "dbus/ip_properties.h"    /* ip_properties, ip_prop_changed_cb */
 
 /* ------------------------------------------------------------------ */
 /*  Tab identifiers                                                   */
@@ -85,6 +86,13 @@ typedef struct {
     int                    dbus_init_rc;  /* saved connect rc for degraded reason */
     ip_connection          connection;
     uint32_t               last_controller_refresh_ms;
+
+    /* Reactive PropertiesChanged handling (Task 5).  The manager applies
+     * validated InputPlumber property changes to the controllers-tab device
+     * model so the Manager observes the same per-device state as the
+     * overlay (SPEC §10.1). */
+    ip_properties          props;
+    char                   expected_sender[128];
 
     /* Real SDL game-controller transport (keyboard is supplemental only). */
     SDL_GameController    *gamecontrollers[CBX_MGR_MAX_GAMECONTROLLERS];
@@ -212,5 +220,25 @@ void cbx_manager_backend_ready(void *userdata);
 /* Called when InputPlumber's bus name is lost — disables controls and
  * shows a degraded reason in the controllers tab. */
 void cbx_manager_backend_degraded(const char *reason, void *userdata);
+
+/*
+ * Production PropertiesChanged callback for the Manager: applies the
+ * validated change to the controllers-tab per-device model and repaints the
+ * Controllers tab so the displayed state reflects InputPlumber (SPEC §10.1).
+ * Exposed for testing.
+ */
+void cbx_manager_on_prop_change(const char *object_path, const char *iface_name,
+                                const char *prop_name, ip_prop_type type,
+                                const char *value, int count, void *userdata);
+
+/*
+ * Wire the PropertiesChanged subscription into the Manager's live
+ * connection using the exact production init/subscribe path.  Resolves
+ * InputPlumber's unique name for sender verification when the connection
+ * does not already track it.  Safe to call again after a backend
+ * reacquisition (idempotent re-subscribe refreshes the binding).  Returns 0
+ * on success, negative errno on failure.
+ */
+int cbx_manager_props_wire(cbx_manager *mgr);
 
 #endif /* CBX_MANAGER_H */

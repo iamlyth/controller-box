@@ -229,3 +229,130 @@ cbx_device_model_remove_target(cbx_device_model *model, const char *path)
     }
     return false;
 }
+
+/* --- Public API: reactive property application (SPEC §10.1) -------------- */
+
+/* Look up a mutable composite entry by exact object path. */
+static cbx_composite_entry *
+find_composite_mut(cbx_device_model *model, const char *path)
+{
+    if (!model || !path)
+        return NULL;
+    for (int i = 0; i < model->composite_count; i++) {
+        if (strcmp(model->composites[i].path, path) == 0)
+            return &model->composites[i];
+    }
+    return NULL;
+}
+
+/* Copy only the reactive property fields (never path/index). */
+static void
+copy_composite_props(cbx_composite_entry *dst, const cbx_composite_entry *src)
+{
+    dst->has_profile_name       = src->has_profile_name;
+    dst->has_profile_path       = src->has_profile_path;
+    dst->has_target_devices     = src->has_target_devices;
+    dst->has_source_device_paths = src->has_source_device_paths;
+    dst->profile_name_invalidated       = src->profile_name_invalidated;
+    dst->profile_path_invalidated       = src->profile_path_invalidated;
+    dst->target_devices_invalidated     = src->target_devices_invalidated;
+    dst->source_device_paths_invalidated = src->source_device_paths_invalidated;
+    memcpy(dst->profile_name, src->profile_name, sizeof(dst->profile_name));
+    memcpy(dst->profile_path, src->profile_path, sizeof(dst->profile_path));
+    memcpy(dst->target_devices, src->target_devices,
+           sizeof(dst->target_devices));
+    memcpy(dst->source_device_paths, src->source_device_paths,
+           sizeof(dst->source_device_paths));
+}
+
+/* Copy a bounded string into a fixed field, clearing it when invalidated. */
+static void
+set_prop_string(char *dst, size_t dst_len, const char *value, bool invalidated)
+{
+    if (invalidated || !value)
+        dst[0] = '\0';
+    else
+        snprintf(dst, dst_len, "%s", value);
+}
+
+bool
+cbx_device_model_apply_property(cbx_device_model *model,
+                                const char *object_path,
+                                const char *iface_name,
+                                const char *prop_name,
+                                const char *value,
+                                bool invalidated)
+{
+    if (!model || !object_path || !iface_name || !prop_name)
+        return false;
+
+    if (strcmp(iface_name, IP_IFACE_MANAGER) == 0 &&
+        strcmp(prop_name, "GamepadOrder") == 0) {
+        /* A Manager property only lands on the known Manager object; a
+         * spoofed/renamed path is rejected rather than silently stored. */
+        if (!model->has_manager ||
+            strcmp(model->manager_path, object_path) != 0)
+            return false;
+        model->has_gamepad_order = true;
+        model->gamepad_order_invalidated = invalidated;
+        set_prop_string(model->gamepad_order, sizeof(model->gamepad_order),
+                        value, invalidated);
+        return true;
+    }
+
+    if (strcmp(iface_name, IP_IFACE_COMPOSITE) != 0)
+        return false;
+
+    cbx_composite_entry *e = find_composite_mut(model, object_path);
+    if (!e)
+        return false;  /* unknown composite — do not create or overwrite */
+
+    if (strcmp(prop_name, "ProfileName") == 0) {
+        e->has_profile_name = true;
+        e->profile_name_invalidated = invalidated;
+        set_prop_string(e->profile_name, sizeof(e->profile_name),
+                        value, invalidated);
+    } else if (strcmp(prop_name, "ProfilePath") == 0) {
+        e->has_profile_path = true;
+        e->profile_path_invalidated = invalidated;
+        set_prop_string(e->profile_path, sizeof(e->profile_path),
+                        value, invalidated);
+    } else if (strcmp(prop_name, "TargetDevices") == 0) {
+        e->has_target_devices = true;
+        e->target_devices_invalidated = invalidated;
+        set_prop_string(e->target_devices, sizeof(e->target_devices),
+                        value, invalidated);
+    } else if (strcmp(prop_name, "SourceDevicePaths") == 0) {
+        e->has_source_device_paths = true;
+        e->source_device_paths_invalidated = invalidated;
+        set_prop_string(e->source_device_paths,
+                        sizeof(e->source_device_paths), value, invalidated);
+    } else {
+        return false;  /* unknown CompositeDevice property */
+    }
+
+    return true;
+}
+
+void
+cbx_device_model_preserve_props(cbx_device_model *next,
+                                const cbx_device_model *prior)
+{
+    if (!next || !prior)
+        return;
+
+    for (int i = 0; i < next->composite_count; i++) {
+        const cbx_composite_entry *src =
+            cbx_device_model_find_composite(prior, next->composites[i].path);
+        if (src)
+            copy_composite_props(&next->composites[i], src);
+    }
+
+    if (next->has_manager && prior->has_manager &&
+        strcmp(next->manager_path, prior->manager_path) == 0) {
+        next->has_gamepad_order = prior->has_gamepad_order;
+        next->gamepad_order_invalidated = prior->gamepad_order_invalidated;
+        memcpy(next->gamepad_order, prior->gamepad_order,
+               sizeof(next->gamepad_order));
+    }
+}

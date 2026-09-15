@@ -161,47 +161,118 @@ static int wait_for_attachment(cbx_overlay_service_ctx *svc,
 /* ================================================================== */
 
 /*
- * Production PropertiesChanged callback.  For each validated change to a
- * tracked InputPlumber property (GamepadOrder, ProfileName, ProfilePath,
- * TargetDevices, SourceDevicePaths — SPEC §10.1) it refreshes the matching
- * entry in props_state so external property changes are observed reactively
- * rather than leaving ip_properties as dead code.  An INVALIDATED change
- * clears the entry.  Only validated changes reach here (sender + type +
- * length checked in ip_properties_handle_changed).
+ * Map a profile filesystem path back to the enumerated profile filename
+ * used by the grid.  Falls back to the basename without a .yaml suffix when
+ * the path is not in the loaded profile list.
+ */
+static void
+overlay_profile_name_from_path(const cbx_overlay_service_ctx *svc,
+                               const char *path, char *out, size_t out_len)
+{
+    if (!out || out_len == 0)
+        return;
+    out[0] = '\0';
+    if (!path || !path[0])
+        return;
+
+    const cbx_profile_list *list = svc->profile_cycle.profiles;
+    if (list) {
+        for (int i = 0; i < list->count; i++) {
+            if (strcmp(list->entries[i].path, path) == 0) {
+                snprintf(out, out_len, "%s", list->entries[i].filename);
+                return;
+            }
+        }
+    }
+
+    const char *base = strrchr(path, '/');
+    base = base ? base + 1 : path;
+    snprintf(out, out_len, "%.*s", (int)(out_len - 1), base);
+    char *dot = strrchr(out, '.');
+    if (dot && strcmp(dot, ".yaml") == 0)
+        *dot = '\0';
+}
+
+/*
+ * Update the displayed profile of the grid row that names `object_path`
+ * from the composite's validated reactive ProfilePath/ProfileName.  This is
+ * the rendered-UI half of per-device property application: only the row for
+ * the reported composite changes, so one device's signal cannot overwrite
+ * another's displayed profile.
+ */
+static void
+overlay_apply_grid_profile(cbx_overlay_service_ctx *svc,
+                           const char *object_path)
+{
+    const cbx_composite_entry *ce =
+        cbx_device_model_find_composite(&svc->model, object_path);
+    if (!ce)
+        return;
+
+    char name[CBX_GRID_PROFILE_LEN] = "";
+    if (ce->has_profile_path && ce->profile_path[0])
+        overlay_profile_name_from_path(svc, ce->profile_path,
+                                       name, sizeof(name));
+
+    /* Fall back to ProfileName (display name) matched against the loaded
+     * profile list; if nothing matches, leave the current displayed value. */
+    if (name[0] == '\0' && ce->has_profile_name && ce->profile_name[0]) {
+        const cbx_profile_list *list = svc->profile_cycle.profiles;
+        if (list) {
+            for (int i = 0; i < list->count; i++) {
+                if (strcmp(list->entries[i].display_name, ce->profile_name) == 0 ||
+                    strcmp(list->entries[i].filename, ce->profile_name) == 0) {
+                    snprintf(name, sizeof(name), "%s",
+                             list->entries[i].filename);
+                    break;
+                }
+            }
+        }
+    }
+
+    if (name[0] == '\0')
+        return;
+
+    for (int i = 0; i < svc->grid.row_count; i++) {
+        if (strcmp(svc->grid.rows[i].composite_path, object_path) == 0) {
+            snprintf(svc->grid.rows[i].profile,
+                     sizeof(svc->grid.rows[i].profile), "%s", name);
+            break;
+        }
+    }
+}
+
+/*
+ * Production PropertiesChanged callback.  Applies each validated change to
+ * the per-device overlay model (cbx_device_model_apply_property), so a
+ * change for one composite updates only that composite and a Manager
+ * GamepadOrder updates only the model's Manager ordering.  A ProfilePath or
+ * ProfileName change also refreshes the matching grid row's displayed
+ * profile.  Unknown object paths, wrong interfaces, and spoofed senders
+ * were already rejected upstream (ip_properties_handle_changed); this
+ * callback additionally rejects paths absent from the live model.  Finally
+ * the surface is marked dirty so the presented frame reflects the change.
  */
 void
-cbx_overlay_on_prop_change(const char *prop_name, ip_prop_type type,
+cbx_overlay_on_prop_change(const char *object_path, const char *iface_name,
+                           const char *prop_name, ip_prop_type type,
                            const char *value, int count, void *userdata)
 {
     (void)count;
     cbx_overlay_service_ctx *svc = (cbx_overlay_service_ctx *)userdata;
-    if (!svc || !prop_name)
+    if (!svc || !object_path || !iface_name || !prop_name)
         return;
 
-    const char *v = (type == IP_PROP_TYPE_INVALIDATED || !value) ? "" : value;
+    bool invalidated = (type == IP_PROP_TYPE_INVALIDATED);
+    if (!cbx_device_model_apply_property(&svc->model, object_path,
+                                          iface_name, prop_name, value,
+                                          invalidated))
+        return;  /* unknown device/property — do not dirty the surface */
 
-    if (strcmp(prop_name, "GamepadOrder") == 0) {
-        snprintf(svc->props_state.gamepad_order,
-                 sizeof(svc->props_state.gamepad_order), "%s", v);
-        svc->props_state.gamepad_order_observed = true;
-    } else if (strcmp(prop_name, "ProfileName") == 0) {
-        snprintf(svc->props_state.profile_name,
-                 sizeof(svc->props_state.profile_name), "%s", v);
-        svc->props_state.profile_name_observed = true;
-    } else if (strcmp(prop_name, "ProfilePath") == 0) {
-        snprintf(svc->props_state.profile_path,
-                 sizeof(svc->props_state.profile_path), "%s", v);
-        svc->props_state.profile_path_observed = true;
-    } else if (strcmp(prop_name, "TargetDevices") == 0) {
-        snprintf(svc->props_state.target_devices,
-                 sizeof(svc->props_state.target_devices), "%s", v);
-        svc->props_state.target_devices_observed = true;
-    } else if (strcmp(prop_name, "SourceDevicePaths") == 0) {
-        snprintf(svc->props_state.source_device_paths,
-                 sizeof(svc->props_state.source_device_paths), "%s", v);
-        svc->props_state.source_paths_observed = true;
-    } else {
-        return;  /* not a tracked property — do not dirty the surface */
+    if (!invalidated && strcmp(iface_name, IP_IFACE_COMPOSITE) == 0 &&
+        (strcmp(prop_name, "ProfileName") == 0 ||
+         strcmp(prop_name, "ProfilePath") == 0)) {
+        overlay_apply_grid_profile(svc, object_path);
     }
 
     /* A validated change to a tracked property is a dirty trigger: re-render
@@ -714,6 +785,9 @@ reconcile_enumerate(cbx_overlay_service_ctx *svc, cbx_device_model *out)
     int rc = cbx_objectmanager_enumerate(svc->conn.backend, svc->conn.bus,
                                           &next);
     if (rc == 0) {
+        /* A re-enumeration must not discard reactive per-device property
+         * state already applied for composites that survived the rebuild. */
+        cbx_device_model_preserve_props(&next, &svc->model);
         svc->model = next;
         if (out) *out = next;
     }
@@ -1181,12 +1255,10 @@ overlay_backend_ready(void *userdata)
         ip_intercept_poll_stop(&svc->polls[i]);
     svc->poll_count = 0;
 
-    if (cbx_objectmanager_enumerate(svc->conn.backend, svc->conn.bus,
-                                     &svc->model) != 0) {
+    if (reconcile_enumerate(svc, NULL) != 0) {
         overlay_backend_degraded("InputPlumber enumeration failed", svc);
         return;
-    }
-    if (cbx_reconcile_startup_targets(svc) != 0) {
+    }    if (cbx_reconcile_startup_targets(svc) != 0) {
         overlay_backend_degraded(svc->reconcile_status.detail[0] ?
             svc->reconcile_status.detail :
             "InputPlumber virtual-controller reconciliation failed", svc);

@@ -87,6 +87,7 @@ typedef enum {
 
 typedef struct {
     const char  *sender;       /* unique bus name of the signal sender */
+    const char  *object_path;  /* object path that emitted the change */
     const char  *iface_name;   /* interface that emitted the change */
     const char  *prop_name;    /* property name */
     ip_prop_type prop_type;    /* value type */
