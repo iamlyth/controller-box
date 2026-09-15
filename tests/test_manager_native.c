@@ -1307,6 +1307,84 @@ test_manager_readiness_fail_closed_and_recovery(void **state)
     cbx_manager_shutdown(&mgr);
 }
 
+/* Regression: a transient required-step failure must be recoverable by the
+ * bounded tick retry while the owner is still alive (so no NameOwnerChanged
+ * fires).  The retry must resolve the still-verified owner directly instead
+ * of being blocked by the stale dbus_connected flag. */
+static void
+test_manager_transient_recovery_retries_without_owner_loss(void **state)
+{
+    (void)state;
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+    assert_true(mgr.dbus_connected);
+    assert_true(mgr.owns_dbus_connection);
+    assert_true(ip_connection_is_sender_verified(&mgr.connection));
+
+    /* Simulate a required-step failure (e.g. a failed subscription) while
+     * the InputPlumber owner remains current and credential-verified. */
+    cbx_manager_backend_degraded(
+        "PropertiesChanged subscription failed (-5)", &mgr);
+    assert_false(mgr.dbus_connected);
+    assert_null(mgr.ct.backend);
+    assert_false(mgr.ct.add_btn.base.interactive);
+    assert_true(ip_connection_is_sender_verified(&mgr.connection));
+
+    mgr.recovery_pending     = true;
+    mgr.recovery_attempts    = 0;
+    mgr.recovery_deadline_ms = SDL_GetTicks() + 2000u;
+
+    uint32_t t0 = SDL_GetTicks();
+    while (!mgr.dbus_connected && SDL_GetTicks() - t0 < 2000) {
+        mgr.dbus_backend->process(mgr.dbus_bus);
+        cbx_manager_recovery_tick(&mgr, SDL_GetTicks());
+        SDL_Delay(10);
+    }
+
+    assert_true(mgr.dbus_connected);
+    assert_true(SDL_GetTicks() - t0 <= 2000);
+    assert_false(mgr.recovery_pending);
+    assert_non_null(mgr.ct.backend);
+    assert_true(mgr.ct.add_btn.base.interactive);
+    assert_true(mgr.expected_sender[0] != '\0');
+    assert_true(mgr.readiness_detail[0] == '\0');
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* Fail closed: when the bounded retry budget is exhausted, no
+ * backend-dependent control may remain enabled and the diagnostic must
+ * survive so the operator can act on it. */
+static void
+test_manager_recovery_exhaustion_fails_closed(void **state)
+{
+    (void)state;
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+    assert_true(mgr.dbus_connected);
+
+    cbx_manager_backend_degraded(
+        "PropertiesChanged subscription failed (-5)", &mgr);
+    assert_false(mgr.ct.add_btn.base.interactive);
+
+    mgr.recovery_pending     = true;
+    mgr.recovery_attempts    = CBX_MANAGER_RECOVERY_MAX_ATTEMPTS;
+    mgr.recovery_deadline_ms = SDL_GetTicks() + 2000u;
+
+    cbx_manager_recovery_tick(&mgr, SDL_GetTicks());
+
+    assert_false(mgr.recovery_pending);
+    assert_false(mgr.dbus_connected);
+    assert_null(mgr.ct.backend);
+    assert_null(mgr.ct.bus);
+    assert_false(mgr.ct.add_btn.base.interactive);
+    assert_false(mgr.ct.remove_btn.base.interactive);
+    assert_false(mgr.ct.change_type_btn.base.interactive);
+    assert_true(mgr.readiness_detail[0] != '\0');
+
+    cbx_manager_shutdown(&mgr);
+}
+
 /* ================================================================== */
 /*  Test registration                                                  */
 /* ================================================================== */
@@ -1376,6 +1454,12 @@ main(void)
         /* Task 7 — readiness fails closed and recovers */
         cmocka_unit_test_setup_teardown(
             test_manager_readiness_fail_closed_and_recovery,
+            mn_setup, mn_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_manager_transient_recovery_retries_without_owner_loss,
+            mn_setup, mn_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_manager_recovery_exhaustion_fails_closed,
             mn_setup, mn_teardown),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);

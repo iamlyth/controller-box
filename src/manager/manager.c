@@ -106,14 +106,29 @@ cbx_manager_close_gamecontroller(cbx_manager *mgr,
     }
 }
 
-/* One full manager readiness pass.  Required steps: enumeration/type query,
- * profiles context, and the PropertiesChanged subscription.  Returns 0 when
- * the manager is operational; on failure fills readiness_detail. */
+/* One full manager readiness pass.  Required steps: owner verification,
+ * enumeration/type query, profiles context, and the PropertiesChanged
+ * subscription.  Returns 0 when the manager is operational.  Any failure
+ * fails closed: the owner/sender trust state is cleared, backend-dependent
+ * controls stay disabled, and readiness_detail carries an actionable
+ * diagnostic so the caller can retry within the bounded readiness window. */
 static int
 cbx_manager_try_ready(cbx_manager *mgr)
 {
     if (!mgr || !mgr->dbus_backend || !mgr->dbus_bus)
         return -EINVAL;
+
+    /* A ready manager requires a current, credential-verified owner.  Never
+     * enumerate or publish sender trust against an unverified owner. */
+    if (mgr->owns_dbus_connection &&
+        (!ip_connection_is_sender_verified(&mgr->connection) ||
+         !ip_connection_get_unique_name(&mgr->connection))) {
+        snprintf(mgr->readiness_detail, sizeof(mgr->readiness_detail),
+                 "owner verification failed: %s",
+                 ip_connection_reason_for_error(IP_ERR_UNVERIFIED));
+        cbx_manager_backend_degraded(mgr->readiness_detail, mgr);
+        return IP_ERR_UNVERIFIED;
+    }
 
     mgr->ct.backend = mgr->dbus_backend;
     mgr->ct.bus = mgr->dbus_bus;
@@ -121,8 +136,7 @@ cbx_manager_try_ready(cbx_manager *mgr)
     if (cbx_controllers_tab_refresh(&mgr->ct) != 0) {
         snprintf(mgr->readiness_detail, sizeof(mgr->readiness_detail),
                  "InputPlumber enumeration/type query failed");
-        cbx_controllers_tab_set_available(&mgr->ct, false,
-            "InputPlumber enumeration/type query failed");
+        cbx_manager_backend_degraded(mgr->readiness_detail, mgr);
         return -EIO;
     }
     mgr->last_controller_refresh_ms = SDL_GetTicks();
@@ -135,6 +149,9 @@ cbx_manager_try_ready(cbx_manager *mgr)
     if (rc != 0) {
         snprintf(mgr->readiness_detail, sizeof(mgr->readiness_detail),
                  "PropertiesChanged subscription failed (%d)", rc);
+        /* A required step failed: clear sender trust and keep every
+         * backend-dependent control disabled (fail closed). */
+        cbx_manager_backend_degraded(mgr->readiness_detail, mgr);
         return rc;
     }
     mgr->dbus_connected = true;
@@ -147,10 +164,10 @@ cbx_manager_backend_ready(void *userdata)
     cbx_manager *mgr = userdata;
     if (!mgr)
         return;
-    mgr->dbus_connected = true;
+    /* dbus_connected is published by try_ready only after its full pass
+     * succeeds.  A failure already fails closed inside try_ready. */
     int rc = cbx_manager_try_ready(mgr);
     if (rc != 0) {
-        cbx_manager_backend_degraded(mgr->readiness_detail, mgr);
         mgr->recovery_pending   = true;
         mgr->recovery_attempts  = 0;
         mgr->recovery_deadline_ms = SDL_GetTicks() + 2000u;
@@ -169,11 +186,24 @@ cbx_manager_recovery_tick(cbx_manager *mgr, uint32_t now_ms)
     if (mgr->recovery_attempts >= CBX_MANAGER_RECOVERY_MAX_ATTEMPTS ||
         (int32_t)(now_ms - mgr->recovery_deadline_ms) >= 0) {
         mgr->recovery_pending = false;
+        /* Retries exhausted: fail closed so no stale backend-dependent
+         * control remains enabled with an actionable diagnostic. */
+        cbx_manager_backend_degraded(
+            mgr->readiness_detail[0] ? mgr->readiness_detail
+                                     : "InputPlumber unavailable", mgr);
         fprintf(stderr, "controller-box: manager recovery retries exhausted: %s\n",
                 mgr->readiness_detail[0] ? mgr->readiness_detail : "unknown");
         return;
     }
     if (!mgr->dbus_backend || !mgr->dbus_bus) {
+        mgr->recovery_pending = false;
+        return;
+    }
+    /* If the owner vanished, a fresh NameOwnerChanged runs the full
+     * readiness pass via cbx_manager_backend_ready; stop the timer-driven
+     * retry until then. */
+    if (mgr->owns_dbus_connection &&
+        !ip_connection_is_sender_verified(&mgr->connection)) {
         mgr->recovery_pending = false;
         return;
     }
@@ -231,11 +261,11 @@ cbx_manager_props_wire(cbx_manager *mgr)
     if (!mgr || !mgr->dbus_backend || !mgr->dbus_bus)
         return -EINVAL;
 
-    /* A degraded/not-yet-ready backend has no trusted sender; wiring must
-     * wait for a successful readiness pass. */
-    if (!mgr->dbus_connected)
-        return -EAGAIN;
-
+    /* Resolve the trusted sender from the live owner rather than from the
+     * dbus_connected readiness flag.  The bounded recovery retry calls this
+     * while dbus_connected is still false, and a live verified owner must be
+     * able to re-wire its subscription.  An unverified/lost owner is
+     * rejected below before any trust is published. */
     char resolved[128] = {0};
     const char *uniq = ip_connection_get_unique_name(&mgr->connection);
     if (mgr->owns_dbus_connection) {
