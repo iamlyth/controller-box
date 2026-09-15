@@ -106,9 +106,10 @@ push_poll_event(uint32_t event_type, ip_intercept_poll *owner)
     SDL_Event ev;
     SDL_zero(ev);
     ev.type       = event_type;
-    ev.user.code  = 0;
     /* Match the production SDL timer callback: the owning poll travels in
-     * event.user.data1, and the step loop ticks only that poll. */
+     * event.user.data1 and the arm generation in event.user.code, and the
+     * step loop ticks only that live poll. */
+    ev.user.code  = (Sint32)owner->generation;
     ev.user.data1 = owner;
     ev.user.data2 = NULL;
     SDL_PushEvent(&ev);
@@ -431,6 +432,52 @@ test_poll_rearm_after_close(void **state)
     cbx_overlay_service_step(svc);
     assert_int_equal(cbx_overlay_lifecycle_get_state(&svc->lifecycle),
                       CBX_OVERLAY_VISIBLE);
+}
+
+/* ====================================================================== */
+/*  Test 2b: Rearm timer ownership and rollback                           */
+/* ====================================================================== */
+
+/* A successful rearm arms exactly one timer per composite and covers the
+ * whole managed poll range, so cleanup/dispatch can never miss an armed
+ * poll. */
+static void
+test_rearm_success_arms_every_composite(void **state)
+{
+    reconcile_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    int rc = cbx_overlay_rearm_polls(svc);
+    assert_int_equal(rc, 0);
+    assert_int_equal(svc->poll_count, svc->comp_count);
+    for (int i = 0; i < svc->comp_count; i++) {
+        assert_int_not_equal(svc->polls[i].timer_id, 0);
+        assert_int_equal(svc->polls[i].state, IP_POLL_PASS_WAIT);
+    }
+}
+
+/* If one composite cannot arm its timer, the earlier successful arm must be
+ * rolled back: a sparse partial arming cannot leave an active poll outside
+ * poll_count/cleanup bounds.  Composite 1 is made unstartable with an empty
+ * composite path (start() returns -EINVAL) after composite 0 would have
+ * armed successfully. */
+static void
+test_rearm_partial_start_failure_stops_all_timers(void **state)
+{
+    reconcile_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    snprintf(svc->composites[1].composite_path,
+             sizeof(svc->composites[1].composite_path), "%s", "");
+
+    int rc = cbx_overlay_rearm_polls(svc);
+    assert_int_equal(rc, -EIO);
+    assert_int_equal(svc->poll_count, 0);
+
+    for (int i = 0; i < CBX_MAX_COMPOSITES; i++) {
+        assert_int_equal(svc->polls[i].timer_id, 0);
+        assert_int_equal(svc->polls[i].state, IP_POLL_IDLE);
+    }
 }
 
 /* ====================================================================== */
@@ -775,6 +822,12 @@ main(void)
             reconcile_setup, reconcile_teardown),
         cmocka_unit_test_setup_teardown(
             test_poll_rearm_after_close,
+            reconcile_setup, reconcile_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_rearm_success_arms_every_composite,
+            reconcile_setup, reconcile_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_rearm_partial_start_failure_stops_all_timers,
             reconcile_setup, reconcile_teardown),
         cmocka_unit_test_setup_teardown(
             test_hotplug_target_add_rebuilds_columns,

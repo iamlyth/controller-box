@@ -46,6 +46,9 @@ void ip_dbus_mock_reset(ip_dbus_mock *mock) {
     mock->creds_rc  = 0;
     mock->unique_name_rc = 0;
     mock->get_property_count = 0;
+    mock->set_property_count = 0;
+    for (int i = 0; i < mock->count; i++)
+        mock->expectations[i].calls = 0;
     memset(&mock->last_call, 0, sizeof(mock->last_call));
 }
 
@@ -103,6 +106,7 @@ int ip_dbus_mock_expect(ip_dbus_mock *mock, const char *iface,
             free(mock->expectations[i].value);
             mock->expectations[i].rc    = rc;
             mock->expectations[i].value = value ? strdup(value) : NULL;
+            mock->expectations[i].calls = 0;
             return 0;
         }
     }
@@ -112,6 +116,7 @@ int ip_dbus_mock_expect(ip_dbus_mock *mock, const char *iface,
     e->member = member;
     e->rc     = rc;
     e->value  = value ? strdup(value) : NULL;
+    e->calls  = 0;
     return 0;
 }
 
@@ -136,6 +141,25 @@ const ip_mock_expectation *ip_dbus_mock_find(ip_dbus_mock *mock,
         }
     }
     return NULL;
+}
+
+/* Mutable lookup used by the vtable callbacks to record consumption. */
+static ip_mock_expectation *
+mock_find_mut(ip_dbus_mock *mock, const char *iface, const char *member)
+{
+    if (!mock || !iface || !member) return NULL;
+    for (int i = 0; i < mock->count; i++) {
+        if (strcmp(mock->expectations[i].iface, iface) == 0 &&
+            strcmp(mock->expectations[i].member, member) == 0)
+            return &mock->expectations[i];
+    }
+    return NULL;
+}
+
+int ip_dbus_mock_call_count(ip_dbus_mock *mock, const char *iface,
+                            const char *member) {
+    const ip_mock_expectation *e = ip_dbus_mock_find(mock, iface, member);
+    return e ? e->calls : 0;
 }
 
 /* --- Mock vtable callbacks ------------------------------------------------- */
@@ -198,7 +222,8 @@ static int mock_call_method(ip_bus_handle bus, const char *dest,
                             const char *method, const char *sig, ...) {
     (void)dest; (void)path;
     ip_dbus_mock *mock = (ip_dbus_mock *)bus;
-    const ip_mock_expectation *e = ip_dbus_mock_find(mock, iface, method);
+    ip_mock_expectation *e = mock_find_mut(mock, iface, method);
+    if (e) e->calls++;
     int rc = e ? e->rc : -ENXIO;
 
     /* Process variadic args: capture input args, then read output ptr. */
@@ -250,7 +275,8 @@ static int mock_get_property(ip_bus_handle bus, const char *dest,
     ip_dbus_mock *mock = (ip_dbus_mock *)bus;
     if (mock)
         mock->get_property_count++;
-    const ip_mock_expectation *e = ip_dbus_mock_find(mock, iface, prop);
+    ip_mock_expectation *e = mock_find_mut(mock, iface, prop);
+    if (e) e->calls++;
     if (!e) return -ENXIO;
     if (out_value) {
         if (strcmp(iface, IP_IFACE_COMPOSITE) == 0 &&
@@ -268,7 +294,10 @@ static int mock_set_property(ip_bus_handle bus, const char *dest,
                              const char *prop, const char *value) {
     (void)dest; (void)path;
     ip_dbus_mock *mock = (ip_dbus_mock *)bus;
-    const ip_mock_expectation *e = ip_dbus_mock_find(mock, iface, prop);
+    if (mock)
+        mock->set_property_count++;
+    ip_mock_expectation *e = mock_find_mut(mock, iface, prop);
+    if (e) e->calls++;
     if (e && e->rc == 0 && strcmp(iface, IP_IFACE_COMPOSITE) == 0 &&
         strcmp(prop, "TargetDevices") == 0) {
         snprintf(mock->target_devices_value,
@@ -295,8 +324,9 @@ static int mock_get_managed_objects(ip_bus_handle bus, const char *dest,
                                     const char *path, char **out_reply) {
     (void)dest; (void)path;
     ip_dbus_mock *mock = (ip_dbus_mock *)bus;
-    const ip_mock_expectation *e = ip_dbus_mock_find(
+    ip_mock_expectation *e = mock_find_mut(
         mock, IP_IFACE_OBJECT_MANAGER, "GetManagedObjects");
+    if (e) e->calls++;
     if (!e) return -ENXIO;
     if (out_reply) *out_reply = e->value ? strdup(e->value) : NULL;
     return e->rc;

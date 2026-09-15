@@ -550,6 +550,7 @@ test_step_ticks_only_owning_poll(void **state)
     SDL_Event ev;
     SDL_zero(ev);
     ev.type = ev_type;
+    ev.user.code = (Sint32)f->svc->polls[1].generation;
     ev.user.data1 = &f->svc->polls[1];
     SDL_PushEvent(&ev);
 
@@ -563,6 +564,151 @@ test_step_ticks_only_owning_poll(void **state)
 
     ip_dbus_mock_free(&m0);
     ip_dbus_mock_free(&m1);
+}
+
+/* Test (m): a stale queued poll event (wrong arm generation) is rejected.
+ *
+ * After a stop/rearm/rebuild the same fixed poll slot can hold a different
+ * composite.  An event queued by a previous arm must not tick the newly
+ * armed poll, so the step loop checks the event's generation against the
+ * live arm's generation in addition to pointer ownership. */
+static void
+test_step_rejects_stale_poll_event(void **state)
+{
+    step_fixture *f = *state;
+    ip_dbus_mock m;
+    ip_dbus_mock_init(&m);
+
+    ip_intercept_poll_init(&f->svc->polls[0], ip_dbus_mock_backend(&m), m.bus,
+                            "/org/shadowblip/InputPlumber/CompositeDevice0",
+                            NULL, NULL, NULL, NULL, NULL, NULL);
+    f->svc->polls[0].state = IP_POLL_PASS_WAIT;
+    f->svc->poll_event_type = SDL_RegisterEvents(1);
+    assert_int_not_equal(f->svc->poll_event_type, (uint32_t)-1);
+    f->svc->poll_count = 1;
+
+    SDL_Event ev;
+    SDL_zero(ev);
+    ev.type = f->svc->poll_event_type;
+    ev.user.code = (Sint32)(f->svc->polls[0].generation + 7); /* stale */
+    ev.user.data1 = &f->svc->polls[0];
+    SDL_PushEvent(&ev);
+
+    cbx_overlay_service_step(f->svc);
+
+    assert_int_equal(f->svc->polls[0].state, IP_POLL_PASS_WAIT);
+    assert_int_equal(m.get_property_count, 0);
+    assert_int_equal(f->svc->polls[0].error_count, 0);
+
+    /* The live generation is still accepted. */
+    ip_dbus_mock_expect_ok(&m, IP_IFACE_COMPOSITE, "InterceptMode", "2");
+    SDL_zero(ev);
+    ev.type = f->svc->poll_event_type;
+    ev.user.code = (Sint32)f->svc->polls[0].generation;
+    ev.user.data1 = &f->svc->polls[0];
+    SDL_PushEvent(&ev);
+    cbx_overlay_service_step(f->svc);
+
+    assert_int_equal(f->svc->polls[0].state, IP_POLL_ACTIVE);
+    assert_int_equal(m.get_property_count, 1);
+
+    ip_dbus_mock_free(&m);
+}
+
+/* Test (n): one 50 ms timer event per device yields exactly one read per
+ * device — steady-state DBus traffic is linear in the composite count. */
+static void
+test_step_linear_per_device_poll_reads(void **state)
+{
+    step_fixture *f = *state;
+    ip_dbus_mock m0, m1;
+    ip_dbus_mock_init(&m0);
+    ip_dbus_mock_init(&m1);
+
+    ip_intercept_poll_init(&f->svc->polls[0], ip_dbus_mock_backend(&m0),
+                            m0.bus,
+                            "/org/shadowblip/InputPlumber/CompositeDevice0",
+                            NULL, NULL, NULL, NULL, NULL, NULL);
+    ip_intercept_poll_init(&f->svc->polls[1], ip_dbus_mock_backend(&m1),
+                            m1.bus,
+                            "/org/shadowblip/InputPlumber/CompositeDevice1",
+                            NULL, NULL, NULL, NULL, NULL, NULL);
+    f->svc->polls[0].state = IP_POLL_PASS_WAIT;
+    f->svc->polls[1].state = IP_POLL_PASS_WAIT;
+    f->svc->poll_event_type = SDL_RegisterEvents(1);
+    assert_int_not_equal(f->svc->poll_event_type, (uint32_t)-1);
+    f->svc->poll_count = 2;
+
+    ip_dbus_mock_expect_ok(&m0, IP_IFACE_COMPOSITE, "InterceptMode", "2");
+    ip_dbus_mock_expect_ok(&m1, IP_IFACE_COMPOSITE, "InterceptMode", "1");
+
+    SDL_Event ev;
+    SDL_zero(ev);
+    ev.type = f->svc->poll_event_type;
+    ev.user.code = (Sint32)f->svc->polls[0].generation;
+    ev.user.data1 = &f->svc->polls[0];
+    SDL_PushEvent(&ev);
+
+    SDL_zero(ev);
+    ev.type = f->svc->poll_event_type;
+    ev.user.code = (Sint32)f->svc->polls[1].generation;
+    ev.user.data1 = &f->svc->polls[1];
+    SDL_PushEvent(&ev);
+
+    cbx_overlay_service_step(f->svc);
+
+    assert_int_equal(m0.get_property_count, 1);
+    assert_int_equal(m1.get_property_count, 1);
+    assert_int_equal(f->svc->polls[0].state, IP_POLL_ACTIVE);
+    assert_int_equal(f->svc->polls[1].state, IP_POLL_PASS_WAIT);
+
+    /* Three more events for device 0 only; device 1 is untouched. */
+    for (int i = 0; i < 3; i++) {
+        ip_dbus_mock_expect_ok(&m0, IP_IFACE_COMPOSITE, "InterceptMode", "2");
+        SDL_zero(ev);
+        ev.type = f->svc->poll_event_type;
+        ev.user.code = (Sint32)f->svc->polls[0].generation;
+        ev.user.data1 = &f->svc->polls[0];
+        SDL_PushEvent(&ev);
+    }
+    cbx_overlay_service_step(f->svc);
+
+    assert_int_equal(m0.get_property_count, 4);
+    assert_int_equal(m1.get_property_count, 1);
+
+    ip_dbus_mock_free(&m0);
+    ip_dbus_mock_free(&m1);
+}
+
+/* Test (o): an IDLE poll event performs no DBus read (bounded idle traffic). */
+static void
+test_step_idle_poll_event_no_dbus_read(void **state)
+{
+    step_fixture *f = *state;
+    ip_dbus_mock m;
+    ip_dbus_mock_init(&m);
+
+    ip_intercept_poll_init(&f->svc->polls[0], ip_dbus_mock_backend(&m), m.bus,
+                            "/org/shadowblip/InputPlumber/CompositeDevice0",
+                            NULL, NULL, NULL, NULL, NULL, NULL);
+    f->svc->polls[0].state = IP_POLL_IDLE;
+    f->svc->poll_event_type = SDL_RegisterEvents(1);
+    assert_int_not_equal(f->svc->poll_event_type, (uint32_t)-1);
+    f->svc->poll_count = 1;
+
+    SDL_Event ev;
+    SDL_zero(ev);
+    ev.type = f->svc->poll_event_type;
+    ev.user.code = (Sint32)f->svc->polls[0].generation;
+    ev.user.data1 = &f->svc->polls[0];
+    SDL_PushEvent(&ev);
+
+    cbx_overlay_service_step(f->svc);
+
+    assert_int_equal(m.get_property_count, 0);
+    assert_int_equal(f->svc->polls[0].state, IP_POLL_IDLE);
+
+    ip_dbus_mock_free(&m);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1284,6 +1430,12 @@ static const struct CMUnitTest tests[] = {
     cmocka_unit_test_setup_teardown(test_step_empty_queue_no_crash,
                                      step_setup, step_teardown),
     cmocka_unit_test_setup_teardown(test_step_ticks_only_owning_poll,
+                                     step_setup, step_teardown),
+    cmocka_unit_test_setup_teardown(test_step_rejects_stale_poll_event,
+                                     step_setup, step_teardown),
+    cmocka_unit_test_setup_teardown(test_step_linear_per_device_poll_reads,
+                                     step_setup, step_teardown),
+    cmocka_unit_test_setup_teardown(test_step_idle_poll_event_no_dbus_read,
                                      step_setup, step_teardown),
     /* Task 2: unconditional DBus process + degraded recovery via step */
     cmocka_unit_test_setup_teardown(test_step_drains_dbus_when_not_ready,

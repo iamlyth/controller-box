@@ -15,9 +15,11 @@
  *   - state_name helper
  *   - stop resets to IDLE
  *
- * SDL timer (start/stop) is NOT tested here — it requires SDL_Init which
- * is not needed for state machine logic.  The tick function is the core
- * logic and is tested directly.
+ * SDL timer start/stop is exercised in the timer-fixture tests at the end:
+ *   - start arms a timer, sets PASS_WAIT, and advances the arm generation
+ *   - SDL_AddTimer failure (injected via --wrap) leaves IDLE with no timer
+ *   - stop removes the timer and invalidates the arm generation
+ *   - an error resets to IDLE and removes the timer (no leaked timers)
  */
 #include "dbus_mock.h"
 #include "dbus/ip_connection.h"
@@ -121,6 +123,7 @@ test_poll_init(void **state)
     assert_int_equal(f->poll.max_errors, IP_INTERCEPT_POLL_MAX_ERRORS);
     assert_int_equal(f->poll.max_timeout_ticks, IP_INTERCEPT_POLL_TIMEOUT_TICKS);
     assert_int_equal(f->poll.timer_id, 0);
+    assert_int_equal(f->poll.generation, 0);
 }
 
 static void
@@ -269,22 +272,33 @@ test_tick_active_mode_none(void **state)
 }
 
 static void
-test_tick_active_timeout(void **state)
+test_tick_active_long_session_no_timeout(void **state)
 {
     poll_fixture *f = FIX(state);
     f->poll.state = IP_POLL_ACTIVE;
+    /* A watchdog threshold smaller than the number of ticks proves that
+     * ACTIVE time alone never triggers the timeout. */
     f->poll.max_timeout_ticks = 3;
 
-    /* Mode stays at ALL for max_timeout_ticks → timeout fires. */
-    for (int i = 0; i < 3; i++) {
+    /* Mode stays at ALL for well beyond any historical watchdog.  A
+     * legitimate overlay session must remain ACTIVE indefinitely; elapsed
+     * ACTIVE time is never a failed close (SPEC §2.5). */
+    for (int i = 0; i < 10; i++) {
         ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
                                "InterceptMode", "2");
         ip_intercept_poll_tick(&f->poll);
+        assert_int_equal(f->poll.state, IP_POLL_ACTIVE);
     }
 
+    assert_int_equal(f->callbacks.error_fired, 0);
+    assert_int_equal(f->callbacks.deactivating_fired, 0);
+
+    /* A later PASS is still recognised as deactivation. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                           "InterceptMode", "1");
+    ip_intercept_poll_tick(&f->poll);
     assert_int_equal(f->poll.state, IP_POLL_IDLE);
-    assert_int_equal(f->callbacks.error_fired, 1);
-    assert_int_equal(f->callbacks.error_code, -ETIMEDOUT);
+    assert_int_equal(f->callbacks.deactivating_fired, 1);
 }
 
 /* --- Error handling tests ------------------------------------------------ */
@@ -429,12 +443,16 @@ test_poll_stop(void **state)
     f->poll.state = IP_POLL_ACTIVE;
     f->poll.timeout_ticks = 5;
     f->poll.error_count = 2;
+    uint32_t gen_before = f->poll.generation;
 
     ip_intercept_poll_stop(&f->poll);
 
     assert_int_equal(f->poll.state, IP_POLL_IDLE);
     assert_int_equal(f->poll.timeout_ticks, 0);
     assert_int_equal(f->poll.error_count, 0);
+    assert_int_equal(f->poll.timer_id, 0);
+    /* Stopping invalidates any queued arm event. */
+    assert_int_equal(f->poll.generation, gen_before + 1);
 }
 
 /* --- State name helper --------------------------------------------------- */
@@ -490,6 +508,157 @@ test_tick_no_callbacks_error(void **state)
     assert_int_equal(f->poll.state, IP_POLL_IDLE);
 }
 
+/* --- SDL timer ownership tests ------------------------------------------- */
+/*
+ * Injecting an SDL_AddTimer failure through the linker's --wrap mechanism
+ * (wired in tests/CMakeLists.txt for this target only) lets us exercise the
+ * real production failure path without a test-only hook inside production
+ * code: start() must return -EIO and leave the poll IDLE with no timer.
+ */
+extern SDL_TimerID __real_SDL_AddTimer(Uint32 interval,
+                                        SDL_TimerCallback callback,
+                                        void *param);
+
+static bool g_fail_add_timer = false;
+
+SDL_TimerID
+__wrap_SDL_AddTimer(Uint32 interval, SDL_TimerCallback callback, void *param)
+{
+    if (g_fail_add_timer)
+        return 0;
+    return __real_SDL_AddTimer(interval, callback, param);
+}
+
+typedef struct {
+    ip_dbus_mock          mock;
+    const ip_dbus_backend *backend;
+    ip_intercept_poll     poll;
+    poll_callbacks        callbacks;
+    uint32_t              event_type;
+} timer_fixture;
+
+static int
+timer_setup(void **state)
+{
+    timer_fixture *f = malloc(sizeof(*f));
+    if (!f)
+        return -1;
+    memset(f, 0, sizeof(*f));
+
+    SDL_Init(SDL_INIT_TIMER | SDL_INIT_EVENTS);
+    ip_dbus_mock_init(&f->mock);
+    f->backend = ip_dbus_mock_backend(&f->mock);
+    memset(&f->callbacks, 0, sizeof(f->callbacks));
+    ip_intercept_poll_init(&f->poll, f->backend, f->mock.bus,
+                            COMP_PATH,
+                            on_activating, &f->callbacks,
+                            on_deactivating, &f->callbacks,
+                            on_error, &f->callbacks);
+    f->event_type = SDL_RegisterEvents(1);
+    *state = f;
+    return 0;
+}
+
+static int
+timer_teardown(void **state)
+{
+    timer_fixture *f = *state;
+    if (f) {
+        ip_intercept_poll_stop(&f->poll);
+        ip_dbus_mock_free(&f->mock);
+        SDL_Quit();
+        free(f);
+    }
+    SDL_Event ev;
+    while (SDL_PollEvent(&ev))
+        ;
+    return 0;
+}
+
+#define TIMER_FIX(state) (*(timer_fixture **)(state))
+
+static void
+test_timer_start_arms_and_stop_removes(void **state)
+{
+    timer_fixture *f = TIMER_FIX(state);
+    uint32_t gen0 = f->poll.generation;
+
+    int rc = ip_intercept_poll_start(&f->poll, IP_INTERCEPT_POLL_INTERVAL_MS,
+                                      f->event_type);
+    assert_int_equal(rc, 0);
+    assert_int_equal(f->poll.state, IP_POLL_PASS_WAIT);
+    assert_int_not_equal(f->poll.timer_id, 0);
+    assert_true(f->poll.generation > gen0);
+
+    uint32_t gen1 = f->poll.generation;
+    ip_intercept_poll_stop(&f->poll);
+    assert_int_equal(f->poll.timer_id, 0);
+    assert_int_equal(f->poll.state, IP_POLL_IDLE);
+    /* Stopping advances the arm generation so queued events go stale. */
+    assert_true(f->poll.generation > gen1);
+}
+
+static void
+test_timer_start_failure_leaves_idle(void **state)
+{
+    timer_fixture *f = TIMER_FIX(state);
+
+    g_fail_add_timer = true;
+    int rc = ip_intercept_poll_start(&f->poll, IP_INTERCEPT_POLL_INTERVAL_MS,
+                                      f->event_type);
+    g_fail_add_timer = false;
+
+    assert_int_equal(rc, -EIO);
+    assert_int_equal(f->poll.state, IP_POLL_IDLE);
+    assert_int_equal(f->poll.timer_id, 0);
+
+    /* A subsequent successful arm must still work and be clean. */
+    rc = ip_intercept_poll_start(&f->poll, IP_INTERCEPT_POLL_INTERVAL_MS,
+                                  f->event_type);
+    assert_int_equal(rc, 0);
+    assert_int_equal(f->poll.state, IP_POLL_PASS_WAIT);
+    assert_int_not_equal(f->poll.timer_id, 0);
+    ip_intercept_poll_stop(&f->poll);
+}
+
+static void
+test_timer_rearm_invalidates_previous_generation(void **state)
+{
+    timer_fixture *f = TIMER_FIX(state);
+
+    assert_int_equal(ip_intercept_poll_start(&f->poll,
+                        IP_INTERCEPT_POLL_INTERVAL_MS, f->event_type), 0);
+    uint32_t first_arm = f->poll.generation;
+
+    /* Re-arming the same slot (as a rebuild/rearm does) must advance the
+     * generation so an event queued by the first timer is rejected. */
+    assert_int_equal(ip_intercept_poll_start(&f->poll,
+                        IP_INTERCEPT_POLL_INTERVAL_MS, f->event_type), 0);
+    assert_int_not_equal(first_arm, f->poll.generation);
+    ip_intercept_poll_stop(&f->poll);
+}
+
+static void
+test_timer_error_removes_timer(void **state)
+{
+    timer_fixture *f = TIMER_FIX(state);
+
+    assert_int_equal(ip_intercept_poll_start(&f->poll,
+                        IP_INTERCEPT_POLL_INTERVAL_MS, f->event_type), 0);
+    assert_int_not_equal(f->poll.timer_id, 0);
+
+    f->poll.max_errors = 1;
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_COMPOSITE,
+                               "InterceptMode", IP_ERR_NO_REPLY);
+    ip_intercept_poll_tick(&f->poll);
+
+    /* An unrecoverable error resets to IDLE and removes the timer, so a
+     * failed poll cannot keep queuing events or leaking an SDL timer. */
+    assert_int_equal(f->poll.state, IP_POLL_IDLE);
+    assert_int_equal(f->poll.timer_id, 0);
+    assert_int_equal(f->callbacks.error_fired, 1);
+}
+
 /* --- Test runner -------------------------------------------------------- */
 
 int
@@ -521,7 +690,7 @@ main(void)
                                           setup, teardown),
         cmocka_unit_test_setup_teardown(test_tick_active_mode_none,
                                           setup, teardown),
-        cmocka_unit_test_setup_teardown(test_tick_active_timeout,
+        cmocka_unit_test_setup_teardown(test_tick_active_long_session_no_timeout,
                                           setup, teardown),
 
         /* Error handling tests. */
@@ -552,6 +721,16 @@ main(void)
                                           setup, teardown),
         cmocka_unit_test_setup_teardown(test_tick_no_callbacks_error,
                                           setup, teardown),
+        /* SDL timer ownership tests. */
+        cmocka_unit_test_setup_teardown(test_timer_start_arms_and_stop_removes,
+                                          timer_setup, timer_teardown),
+        cmocka_unit_test_setup_teardown(test_timer_start_failure_leaves_idle,
+                                          timer_setup, timer_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_timer_rearm_invalidates_previous_generation,
+            timer_setup, timer_teardown),
+        cmocka_unit_test_setup_teardown(test_timer_error_removes_timer,
+                                          timer_setup, timer_teardown),
     };
 
     return cmocka_run_group_tests(tests, NULL, NULL);

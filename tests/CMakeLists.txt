@@ -256,6 +256,9 @@ if(CMOCKA_FOUND)
     # error handling, parse failures, full lifecycle simulation.
     add_executable(test_intercept_poll tests/test_intercept_poll.c)
     target_link_libraries(test_intercept_poll PRIVATE controllerbox cbx_test_support)
+    # Fault-inject SDL_AddTimer so the real start() failure path (leaves the
+    # poll IDLE with no timer) is exercised without a production test hook.
+    target_link_options(test_intercept_poll PRIVATE -Wl,--wrap=SDL_AddTimer)
 
     add_test(NAME test_intercept_poll COMMAND test_intercept_poll)
 

@@ -120,9 +120,10 @@ static void push_poll_event(uint32_t event_type, ip_intercept_poll *owner)
     SDL_Event ev;
     SDL_zero(ev);
     ev.type = event_type;
-    ev.user.code = 0;
+    ev.user.code = (Sint32)owner->generation;
     /* Match the production SDL timer callback: the owning poll travels in
-     * event.user.data1, and the step loop ticks only that poll. */
+     * event.user.data1, the arm generation in event.user.code, and the step
+     * loop ticks only that live poll. */
     ev.user.data1 = owner;
     ev.user.data2 = NULL;
     SDL_PushEvent(&ev);

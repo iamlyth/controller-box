@@ -34,6 +34,7 @@ typedef struct {
     const char *member;   /* method name, property name, or signal name */
     int         rc;       /* canned return code */
     char       *value;   /* canned string value (heap-owned by mock, or NULL) */
+    int         calls;   /* times a backend call matched this expectation */
 } ip_mock_expectation;
 
 /*
@@ -96,6 +97,7 @@ typedef struct {
     int                  unique_name_rc; /* 0 = success; <0 to simulate get_unique_name failure */
     ip_mock_last_call    last_call;   /* most recent method call's string args */
     int                  get_property_count; /* number of get_property calls */
+    int                  set_property_count; /* number of set_property calls */
     char target_devices_value[IP_MOCK_LAST_ARGS_LEN]; /* writable as property state */
     bool target_devices_written;
 } ip_dbus_mock;
@@ -132,6 +134,16 @@ int ip_dbus_mock_expect_error(ip_dbus_mock *mock, const char *iface,
 const ip_mock_expectation *ip_dbus_mock_find(ip_dbus_mock *mock,
                                              const char *iface,
                                              const char *member);
+
+/*
+ * Return how many backend calls matched the (iface, member) expectation.
+ * This lets a test replace an unconsumed expectation with an exact
+ * real-operation assertion: a validation path that must reject before any
+ * DBus write asserts a count of 0 instead of registering an expectation
+ * that is never checked.  Returns 0 when the key is unknown.
+ */
+int ip_dbus_mock_call_count(ip_dbus_mock *mock, const char *iface,
+                            const char *member);
 
 /* Reset the mock to its initial (empty) state, freeing canned values. */
 void ip_dbus_mock_reset(ip_dbus_mock *mock);

@@ -50,7 +50,12 @@ typedef void (*ip_poll_error_cb)(int error_code, void *userdata);
 
 #define IP_INTERCEPT_POLL_INTERVAL_MS  50    /* poll interval (DEC-002) */
 #define IP_INTERCEPT_POLL_MAX_ERRORS    5    /* consecutive poll errors before reset */
-#define IP_INTERCEPT_POLL_TIMEOUT_TICKS 200  /* ~10s in ACTIVE before timeout (200 * 50ms) */
+/* PASS_WAIT watchdog: if InterceptMode stays NONE (InputPlumber reset) for
+ * this many ticks the poll is considered unrecoverable and resets to IDLE.
+ * There is deliberately NO ACTIVE watchdog: a legitimate overlay session is
+ * allowed to stay ACTIVE indefinitely until the user closes it (SPEC §2.5),
+ * so elapsed ACTIVE time is never treated as a failed close. */
+#define IP_INTERCEPT_POLL_TIMEOUT_TICKS 200  /* ~10s of unexpected NONE in PASS_WAIT */
 
 typedef struct {
     /* DBus connection */
@@ -76,6 +81,12 @@ typedef struct {
     /* SDL timer */
     SDL_TimerID             timer_id;          /* 0 = no timer running */
     uint32_t                sdl_event_type;    /* custom SDL event type */
+    /* Arm generation.  Incremented on every start and stop so a timer event
+     * queued by a previous arm (or by a rebuild that reused this slot for a
+     * different composite) can be rejected: the event carries the generation
+     * observed when it was pushed and the step loop only ticks the poll when
+     * that generation still matches the live arm. */
+    uint32_t                generation;
 } ip_intercept_poll;
 
 /* --- Lifecycle ----------------------------------------------------------- */
@@ -102,7 +113,9 @@ void ip_intercept_poll_init(ip_intercept_poll *poll,
  * `sdl_event_type` is a custom SDL event type registered via
  * SDL_RegisterEvents().  The timer callback pushes this event; the main
  * loop calls ip_intercept_poll_tick() when it sees the event.
- * Returns 0 on success, negative errno on failure.
+ * Returns 0 on success, negative errno on failure.  On any failure (invalid
+ * arguments or SDL_AddTimer failure) the poll is left in IDLE with no timer
+ * armed, so a failed arm can never leave a half-armed poll behind.
  */
 int ip_intercept_poll_start(ip_intercept_poll *poll,
                               uint32_t interval_ms,

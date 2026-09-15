@@ -30,7 +30,9 @@ static uint32_t
     SDL_Event event;
     SDL_zero(event);
     event.type = poll->sdl_event_type;
-    event.user.code = 0;
+    /* Carry the arm generation so the step loop can reject an event that was
+     * queued before a stop/restart (see ip_intercept_poll.generation). */
+    event.user.code = (Sint32)poll->generation;
     event.user.data1 = poll;
     event.user.data2 = NULL;
     SDL_PushEvent(&event);
@@ -56,17 +58,17 @@ parse_intercept_mode(const char *str)
 
 /*
  * Fire the error callback and reset to IDLE.
+ * The SDL timer is removed and the arm generation invalidated so an error
+ * cannot leave a live timer (or a stale queued event) behind: a poll that
+ * has failed must not keep generating DBus reads or overwrite a later arm.
  * `code` is the error code passed to the callback.
  */
 static void
 poll_error_reset(ip_intercept_poll *poll, int code)
 {
+    ip_intercept_poll_stop(poll);
     if (poll->error_cb)
         poll->error_cb(code, poll->error_data);
-
-    poll->state = IP_POLL_IDLE;
-    poll->error_count = 0;
-    poll->timeout_ticks = 0;
 }
 
 /* --- Lifecycle ----------------------------------------------------------- */
@@ -112,19 +114,27 @@ ip_intercept_poll_start(ip_intercept_poll *poll,
     if (!poll || !poll->backend || !poll->composite_path[0])
         return -EINVAL;
 
-    /* If already polling, stop the existing timer first. */
+    /* If already polling, stop the existing timer first.  stop() also
+     * invalidates the previous arm generation. */
     if (poll->timer_id)
         ip_intercept_poll_stop(poll);
 
     poll->sdl_event_type = sdl_event_type;
-    poll->state          = IP_POLL_PASS_WAIT;
     poll->error_count    = 0;
     poll->timeout_ticks  = 0;
+    /* Stay IDLE until SDL confirms the timer.  If SDL_AddTimer fails the
+     * poll must not be advertised as PASS_WAIT with no timer armed. */
+    poll->state          = IP_POLL_IDLE;
+    /* Invalidate any event already queued by a previous arm. */
+    poll->generation++;
 
     poll->timer_id = SDL_AddTimer(interval_ms, sdl_timer_cb, poll);
-    if (!poll->timer_id)
+    if (!poll->timer_id) {
+        poll->state = IP_POLL_IDLE;
         return -EIO;  /* SDL_AddTimer doesn't set errno */
+    }
 
+    poll->state = IP_POLL_PASS_WAIT;
     return 0;
 }
 
@@ -139,6 +149,8 @@ ip_intercept_poll_stop(ip_intercept_poll *poll)
         poll->timer_id = 0;
     }
 
+    /* Any event the removed timer already queued is now stale. */
+    poll->generation++;
     poll->state = IP_POLL_IDLE;
     poll->error_count = 0;
     poll->timeout_ticks = 0;
@@ -228,8 +240,10 @@ ip_intercept_poll_tick(ip_intercept_poll *poll)
         /*
          * Overlay is active.  Expect ALL (or GAMEPAD_ONLY).
          * On PASS (1) or NONE (0): deactivation detected.
-         * Timeout if mode stays at ALL/GAMEPAD_ONLY for too long
-         * (GUI set PASS but InputPlumber didn't switch — gap #1 edge case).
+         *
+         * There is no ACTIVE watchdog: a legitimate overlay session may last
+         * arbitrarily long, so elapsed ACTIVE time must never be interpreted
+         * as a failed close (SPEC §2.5).  Only a PASS/NONE read ends ACTIVE.
          */
         if (mode == IP_INTERCEPT_PASS || mode == IP_INTERCEPT_NONE) {
             /* Deactivation detected! */
@@ -237,11 +251,6 @@ ip_intercept_poll_tick(ip_intercept_poll *poll)
             poll->timeout_ticks = 0;
             if (poll->deactivating_cb)
                 poll->deactivating_cb(poll->deactivating_data);
-        } else {
-            /* Still active — check timeout. */
-            poll->timeout_ticks++;
-            if (poll->timeout_ticks >= poll->max_timeout_ticks)
-                poll_error_reset(poll, -ETIMEDOUT);
         }
         break;
 

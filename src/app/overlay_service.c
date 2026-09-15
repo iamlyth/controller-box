@@ -1099,6 +1099,21 @@ fail: {
 /* ================================================================== */
 
 /*
+ * Stop every intercept poll and clear the managed count.  Iterating the full
+ * fixed poll array (not poll_count) guarantees that no armed timer survives a
+ * partial/failed rearm, a rebuild, or shutdown even if an earlier sparse
+ * start left a poll armed at a non-contiguous index.  stop() is a no-op for
+ * a slot that was never armed.
+ */
+static void
+overlay_stop_all_polls(cbx_overlay_service_ctx *svc)
+{
+    for (int i = 0; i < CBX_MAX_COMPOSITES; i++)
+        ip_intercept_poll_stop(&svc->polls[i]);
+    svc->poll_count = 0;
+}
+
+/*
  * Helper: (re)initialize all intercept polls for the current composites.
  * Stops any existing polls first, then creates one per composite with
  * per-composite activation context so close sets PASS on the correct
@@ -1110,14 +1125,16 @@ cbx_overlay_rearm_polls(cbx_overlay_service_ctx *svc)
     if (!svc)
         return -EINVAL;
 
-    for (int i = 0; i < svc->poll_count; i++)
-        ip_intercept_poll_stop(&svc->polls[i]);
-    svc->poll_count = 0;
+    overlay_stop_all_polls(svc);
 
     if (svc->poll_event_type == (uint32_t)-1)
         return -EIO;
 
-    for (int i = 0; i < svc->comp_count && i < CBX_MAX_COMPOSITES; i++) {
+    int target = svc->comp_count;
+    if (target > CBX_MAX_COMPOSITES)
+        return -EIO;
+
+    for (int i = 0; i < target; i++) {
         svc->poll_acts[i].lifecycle = &svc->lifecycle;
         snprintf(svc->poll_acts[i].composite_path,
                  sizeof(svc->poll_acts[i].composite_path),
@@ -1130,14 +1147,17 @@ cbx_overlay_rearm_polls(cbx_overlay_service_ctx *svc)
                                 on_intercept_error, NULL);
         if (ip_intercept_poll_start(&svc->polls[i],
                                      IP_INTERCEPT_POLL_INTERVAL_MS,
-                                     svc->poll_event_type) == 0)
-            svc->poll_count++;
+                                     svc->poll_event_type) != 0) {
+            /* A sparse partial arming is not readiness: a successfully
+             * started poll at an earlier index must not stay armed outside
+             * the managed poll_count/cleanup bounds.  Tear every timer down
+             * so the caller sees a clean IDLE state to retry from. */
+            overlay_stop_all_polls(svc);
+            return -EIO;
+        }
+        svc->poll_count = i + 1;
     }
 
-    /* Every composite needs a live poll for the overlay to be activatable.
-     * Partial success (or none) is a failed initialization, not readiness. */
-    if (svc->comp_count > 0 && svc->poll_count != svc->comp_count)
-        return -EIO;
     return 0;
 }
 
@@ -1410,9 +1430,7 @@ overlay_recover(cbx_overlay_service_ctx *svc)
     if (!svc || !svc->conn.backend || !svc->conn.bus)
         return -EINVAL;
 
-    for (int i = 0; i < svc->poll_count; i++)
-        ip_intercept_poll_stop(&svc->polls[i]);
-    svc->poll_count = 0;
+    overlay_stop_all_polls(svc);
 
     /* The owner must be current and credential-verified; without a trusted
      * sender there is no safe endpoint to subscribe or route against. */
@@ -1812,11 +1830,15 @@ cbx_overlay_service_step(cbx_overlay_service_ctx *svc)
              * quadratically and starved this render loop that must present
              * host-mode transition frames within the SPEC §4.9 latency
              * budget.  The pointer is matched against the live poll array
-             * so a stale event cannot tick an unrelated object. */
+             * (ownership) and the event's arm generation must still match
+             * the live arm (generation), so an event queued before a
+             * stop/rearm/rebuild — when this slot may now hold a different
+             * composite — cannot tick the newly armed poll. */
             ip_intercept_poll *owner = (ip_intercept_poll *)ev.user.data1;
             for (int i = 0; owner && i < CBX_MAX_COMPOSITES; i++) {
                 if (owner == &svc->polls[i]) {
-                    ip_intercept_poll_tick(owner);
+                    if ((uint32_t)ev.user.code == owner->generation)
+                        ip_intercept_poll_tick(owner);
                     break;
                 }
             }
@@ -2217,9 +2239,9 @@ int run_overlay_service(int dry_run)
     }
 
     /* --- 13. Clean shutdown ------------------------------------------- */
-    /* Stop all InterceptMode poll timers. */
-    for (int i = 0; i < svc->poll_count; i++)
-        ip_intercept_poll_stop(&svc->polls[i]);
+    /* Stop all InterceptMode poll timers (full fixed array, so a poll left
+     * armed by a partial rearm cannot leak past shutdown). */
+    overlay_stop_all_polls(svc);
 
     /* Force-close the overlay if still visible. */
     cbx_overlay_lifecycle_force_close(&svc->lifecycle);

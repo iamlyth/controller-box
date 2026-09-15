@@ -379,8 +379,9 @@ test_set_gamepad_order_invalid_path(void **state)
     cbx_device_model_add_composite(&f->model,
       "/org/shadowblip/InputPlumber/CompositeDevice0");
 
-    /* Should NOT register an expectation — the validation should reject
-     * before the DBus call is made. */
+    /* Register the expectation so that, if validation is bypassed, the
+     * canned success would mask the bug.  The real-operation assertion is
+     * the call count below: validation must reject before any DBus write. */
     ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
                            "GamepadOrder", NULL);
 
@@ -388,6 +389,8 @@ test_set_gamepad_order_invalid_path(void **state)
       "/org/shadowblip/InputPlumber/CompositeDevice99",
       &f->model);
     assert_int_equal(rc, -EINVAL);
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_MANAGER,
+                                             "GamepadOrder"), 0);
 }
 
 static void
@@ -406,6 +409,8 @@ test_set_gamepad_order_partial_invalid(void **state)
       "/org/shadowblip/InputPlumber/CompositeDevice99",
       &f->model);
     assert_int_equal(rc, -EINVAL);
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_MANAGER,
+                                             "GamepadOrder"), 0);
 }
 
 static void
