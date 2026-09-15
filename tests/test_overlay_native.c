@@ -115,13 +115,16 @@ static void push_keydown(SDL_Keycode sym)
     SDL_PushEvent(&ev);
 }
 
-static void push_poll_event(uint32_t event_type)
+static void push_poll_event(uint32_t event_type, ip_intercept_poll *owner)
 {
     SDL_Event ev;
     SDL_zero(ev);
     ev.type = event_type;
     ev.user.code = 0;
-    ev.user.data1 = ev.user.data2 = NULL;
+    /* Match the production SDL timer callback: the owning poll travels in
+     * event.user.data1, and the step loop ticks only that poll. */
+    ev.user.data1 = owner;
+    ev.user.data2 = NULL;
     SDL_PushEvent(&ev);
 }
 
@@ -144,7 +147,7 @@ static void activate_overlay(native_fixture *f)
     assert_int_equal(svc->polls[0].state, IP_POLL_PASS_WAIT);
     assert_int_equal(ip_composite_set_intercept_mode(
         svc->conn.backend, svc->conn.bus, COMP_PATH_0, "2"), 0);
-    push_poll_event(svc->poll_event_type);
+    push_poll_event(svc->poll_event_type, &svc->polls[0]);
     cbx_overlay_service_step(svc);
     assert_int_equal(svc->lifecycle.state, CBX_OVERLAY_VISIBLE);
 }
@@ -554,7 +557,7 @@ static void test_o01_open_activates(void **state)
     free(mode_str);
 
     /* Push poll event and step. */
-    push_poll_event(svc->poll_event_type);
+    push_poll_event(svc->poll_event_type, &svc->polls[0]);
     cbx_overlay_service_step(svc);
 
     /* Overlay should be visible. */
@@ -578,7 +581,7 @@ static void test_o01b_deactivation_closes(void **state)
     assert_int_equal(ip_composite_set_intercept_mode(
         svc->conn.backend, svc->conn.bus, COMP_PATH_0, "1"), 0);
 
-    push_poll_event(svc->poll_event_type);
+    push_poll_event(svc->poll_event_type, &svc->polls[0]);
     cbx_overlay_service_step(svc);
 
     assert_int_equal(svc->lifecycle.state, CBX_OVERLAY_IDLE);

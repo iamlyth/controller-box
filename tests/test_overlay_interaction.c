@@ -100,13 +100,15 @@ push_keydown(SDL_Keycode sym)
 }
 
 static void
-push_poll_event(uint32_t event_type)
+push_poll_event(uint32_t event_type, ip_intercept_poll *owner)
 {
     SDL_Event ev;
     SDL_zero(ev);
     ev.type       = event_type;
     ev.user.code  = 0;
-    ev.user.data1 = NULL;
+    /* The production SDL timer callback carries the owning poll in
+     * event.user.data1; the step loop ticks only that poll. */
+    ev.user.data1 = owner;
     ev.user.data2 = NULL;
     SDL_PushEvent(&ev);
 }
@@ -361,7 +363,7 @@ test_o01_open_lifecycle_activates(void **state)
     f->svc->polls[0].state = IP_POLL_PASS_WAIT;
 
     /* Push poll-timer event; mock will return InterceptMode "2" = ALL. */
-    push_poll_event(f->svc->poll_event_type);
+    push_poll_event(f->svc->poll_event_type, &f->svc->polls[0]);
 
     /* Run one step. */
     cbx_overlay_service_step(f->svc);
@@ -1267,7 +1269,7 @@ test_o01b_deactivation_closes_overlay(void **state)
     ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
                             "InterceptMode", "1");
 
-    push_poll_event(f->svc->poll_event_type);
+    push_poll_event(f->svc->poll_event_type, &f->svc->polls[0]);
     cbx_overlay_service_step(f->svc);
 
     /* Deactivation should close the overlay (instant with fade_out=0). */

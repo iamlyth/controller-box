@@ -689,13 +689,16 @@ send_mouse_click(cbx_manager *mgr, int x, int y)
 
 /* Push a custom SDL event (used to simulate the InterceptMode poll timer). */
 static void
-push_poll_event(uint32_t event_type)
+push_poll_event(uint32_t event_type, ip_intercept_poll *owner)
 {
     SDL_Event ev;
     SDL_zero(ev);
     ev.type = event_type;
     ev.user.code = 0;
-    ev.user.data1 = ev.user.data2 = NULL;
+    /* Match the production SDL timer callback: the owning poll travels in
+     * event.user.data1, and the step loop ticks only that poll. */
+    ev.user.data1 = owner;
+    ev.user.data2 = NULL;
     SDL_PushEvent(&ev);
 }
 
@@ -1227,7 +1230,7 @@ test_installed_functional(void **state)
     free(mode_str);
 
     /* Push poll event and step — this is the production poll path. */
-    push_poll_event(svc->poll_event_type);
+    push_poll_event(svc->poll_event_type, &svc->polls[0]);
     cbx_overlay_service_step(svc);
 
     /* Overlay should be visible (activated via poll detection). */

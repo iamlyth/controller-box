@@ -1484,9 +1484,22 @@ cbx_overlay_service_step(cbx_overlay_service_ctx *svc)
     /* 1. Process all pending SDL events. */
     while (SDL_PollEvent(&ev)) {
         if (ev.type == svc->poll_event_type) {
-            /* InterceptMode poll timer fired — tick all polls. */
-            for (int i = 0; i < svc->poll_count; i++)
-                ip_intercept_poll_tick(&svc->polls[i]);
+            /* Tick only the poll that armed this timer event.  Each armed
+             * poll carries its own pointer in event.user.data1 (set by
+             * ip_intercept_poll's SDL timer callback); ticking every poll
+             * once per timer event multiplied each 50 ms event by the
+             * composite count, so steady-state DBus reads grew
+             * quadratically and starved this render loop that must present
+             * host-mode transition frames within the SPEC §4.9 latency
+             * budget.  The pointer is matched against the live poll array
+             * so a stale event cannot tick an unrelated object. */
+            ip_intercept_poll *owner = (ip_intercept_poll *)ev.user.data1;
+            for (int i = 0; owner && i < CBX_MAX_COMPOSITES; i++) {
+                if (owner == &svc->polls[i]) {
+                    ip_intercept_poll_tick(owner);
+                    break;
+                }
+            }
         } else if (ev.type == SDL_QUIT) {
             g_running = 0;
         } else if (ev.type == SDL_KEYDOWN &&

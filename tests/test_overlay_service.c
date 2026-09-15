@@ -31,6 +31,7 @@
 #include "dbus/ip_target.h"
 #include "dbus/ip_device_model.h"
 #include "dbus/ip_input_signal.h"
+#include "dbus/ip_intercept_poll.h"
 #include "dbus/ip_properties.h"
 #include "config/config_settings.h"
 #include "config/config_assignments.h"
@@ -507,6 +508,61 @@ static void test_step_empty_queue_no_crash(void **state)
     assert_int_equal(cbx_select_grid_get_cur_col(&f->svc->grid, 0), 0);
     /* No shutdown requested. */
     assert_false(cbx_overlay_service_shutdown_requested());
+}
+
+/* Test (l): a 50 ms poll timer event ticks only the poll that armed it.
+ *
+ * Each armed InterceptMode poll owns its own SDL timer and carries its own
+ * pointer in event.user.data1.  The step loop must tick only that poll:
+ * ticking every poll once per event made steady-state DBus reads quadratic
+ * in the composite count and starved the render path.  This drives the real
+ * cbx_overlay_service_step loop with two polls sharing one event type. */
+static void
+test_step_ticks_only_owning_poll(void **state)
+{
+    step_fixture *f = *state;
+
+    ip_dbus_mock m0, m1;
+    ip_dbus_mock_init(&m0);
+    ip_dbus_mock_init(&m1);
+
+    ip_intercept_poll_init(&f->svc->polls[0], ip_dbus_mock_backend(&m0),
+                            m0.bus,
+                            "/org/shadowblip/InputPlumber/CompositeDevice0",
+                            NULL, NULL, NULL, NULL, NULL, NULL);
+    ip_intercept_poll_init(&f->svc->polls[1], ip_dbus_mock_backend(&m1),
+                            m1.bus,
+                            "/org/shadowblip/InputPlumber/CompositeDevice1",
+                            NULL, NULL, NULL, NULL, NULL, NULL);
+    f->svc->polls[0].state = IP_POLL_PASS_WAIT;
+    f->svc->polls[1].state = IP_POLL_PASS_WAIT;
+
+    uint32_t ev_type = SDL_RegisterEvents(1);
+    assert_int_not_equal(ev_type, (uint32_t)-1);
+    f->svc->poll_event_type = ev_type;
+    f->svc->poll_count = 2;
+
+    /* Only poll[1] can service its read; ALL activates it.  poll[0] has no
+     * expectation, so if the loop ticks it the mock returns -ENXIO and its
+     * error_count rises. */
+    ip_dbus_mock_expect_ok(&m1, IP_IFACE_COMPOSITE, "InterceptMode", "2");
+
+    SDL_Event ev;
+    SDL_zero(ev);
+    ev.type = ev_type;
+    ev.user.data1 = &f->svc->polls[1];
+    SDL_PushEvent(&ev);
+
+    cbx_overlay_service_step(f->svc);
+
+    /* The owning poll was ticked (PASS_WAIT -> ACTIVE)... */
+    assert_int_equal(f->svc->polls[1].state, IP_POLL_ACTIVE);
+    /* ...and the non-owning poll was not ticked at all. */
+    assert_int_equal(f->svc->polls[0].error_count, 0);
+    assert_int_equal(f->svc->polls[0].state, IP_POLL_PASS_WAIT);
+
+    ip_dbus_mock_free(&m0);
+    ip_dbus_mock_free(&m1);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1133,6 +1189,8 @@ static const struct CMUnitTest tests[] = {
     cmocka_unit_test_setup_teardown(test_step_keydown_updates_grid,
                                      step_setup, step_teardown),
     cmocka_unit_test_setup_teardown(test_step_empty_queue_no_crash,
+                                     step_setup, step_teardown),
+    cmocka_unit_test_setup_teardown(test_step_ticks_only_owning_poll,
                                      step_setup, step_teardown),
     /* Task 2: unconditional DBus process + degraded recovery via step */
     cmocka_unit_test_setup_teardown(test_step_drains_dbus_when_not_ready,

@@ -101,13 +101,15 @@ push_keydown(SDL_Keycode sym)
 }
 
 static void
-push_poll_event(uint32_t event_type)
+push_poll_event(uint32_t event_type, ip_intercept_poll *owner)
 {
     SDL_Event ev;
     SDL_zero(ev);
     ev.type       = event_type;
     ev.user.code  = 0;
-    ev.user.data1 = NULL;
+    /* Match the production SDL timer callback: the owning poll travels in
+     * event.user.data1, and the step loop ticks only that poll. */
+    ev.user.data1 = owner;
     ev.user.data2 = NULL;
     SDL_PushEvent(&ev);
 }
@@ -355,7 +357,7 @@ test_per_composite_activation_close_sets_pass_on_activating(void **state)
     flush_events();
     svc->polls[1].state = IP_POLL_PASS_WAIT;
 
-    push_poll_event(svc->poll_event_type);
+    push_poll_event(svc->poll_event_type, &svc->polls[1]);
     cbx_overlay_service_step(svc);
 
     /* Lifecycle should now be VISIBLE. */
@@ -393,7 +395,7 @@ test_poll_rearm_after_close(void **state)
     /* Stage 1: activation. */
     expect_activation(&f->mock);
 
-    push_poll_event(svc->poll_event_type);
+    push_poll_event(svc->poll_event_type, &svc->polls[0]);
     cbx_overlay_service_step(svc);
     assert_int_equal(cbx_overlay_lifecycle_get_state(&svc->lifecycle),
                       CBX_OVERLAY_VISIBLE);
@@ -414,7 +416,7 @@ test_poll_rearm_after_close(void **state)
     expect_pass_mode(&f->mock);
 
     flush_events();
-    push_poll_event(svc->poll_event_type);
+    push_poll_event(svc->poll_event_type, &svc->polls[0]);
     cbx_overlay_service_step(svc);
 
     /* Poll 0 should already be re-armed to PASS_WAIT (deactivation +
@@ -425,7 +427,7 @@ test_poll_rearm_after_close(void **state)
     expect_activation(&f->mock);
 
     flush_events();
-    push_poll_event(svc->poll_event_type);
+    push_poll_event(svc->poll_event_type, &svc->polls[0]);
     cbx_overlay_service_step(svc);
     assert_int_equal(cbx_overlay_lifecycle_get_state(&svc->lifecycle),
                       CBX_OVERLAY_VISIBLE);
@@ -650,7 +652,7 @@ test_window_visibility_tracks_lifecycle(void **state)
     expect_activation(&f->mock);
     svc->polls[0].state = IP_POLL_PASS_WAIT;
     flush_events();
-    push_poll_event(svc->poll_event_type);
+    push_poll_event(svc->poll_event_type, &svc->polls[0]);
     cbx_overlay_service_step(svc);
 
     assert_int_equal(cbx_overlay_lifecycle_get_state(&svc->lifecycle),
@@ -684,7 +686,7 @@ test_surface_reuse_across_cycles(void **state)
     expect_activation(&f->mock);
     flush_events();
     svc->polls[0].state = IP_POLL_PASS_WAIT;
-    push_poll_event(svc->poll_event_type);
+    push_poll_event(svc->poll_event_type, &svc->polls[0]);
     cbx_overlay_service_step(svc);
     assert_int_equal(cbx_overlay_lifecycle_get_state(&svc->lifecycle),
                       CBX_OVERLAY_VISIBLE);
@@ -702,13 +704,13 @@ test_surface_reuse_across_cycles(void **state)
     /* Let the poll detect PASS and re-arm. */
     expect_pass_mode(&f->mock);
     flush_events();
-    push_poll_event(svc->poll_event_type);
+    push_poll_event(svc->poll_event_type, &svc->polls[0]);
     cbx_overlay_service_step(svc);
 
     /* Cycle 2: activate again. */
     expect_activation(&f->mock);
     flush_events();
-    push_poll_event(svc->poll_event_type);
+    push_poll_event(svc->poll_event_type, &svc->polls[0]);
     cbx_overlay_service_step(svc);
     assert_int_equal(cbx_overlay_lifecycle_get_state(&svc->lifecycle),
                       CBX_OVERLAY_VISIBLE);
@@ -743,7 +745,7 @@ test_primary_composite_activation_close_sets_pass_on_comp0(void **state)
     flush_events();
     svc->polls[0].state = IP_POLL_PASS_WAIT;
 
-    push_poll_event(svc->poll_event_type);
+    push_poll_event(svc->poll_event_type, &svc->polls[0]);
     cbx_overlay_service_step(svc);
 
     assert_int_equal(cbx_overlay_lifecycle_get_state(&svc->lifecycle),
