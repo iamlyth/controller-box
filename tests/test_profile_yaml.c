@@ -822,6 +822,153 @@ static void test_unknown_key_marks_unsupported(void **state)
     assert_null(buf);
 }
 
+static void test_multi_device_class_source_marks_unsupported(void **state)
+{
+    (void)state;
+    /* The v1 model has exactly one device_class slot per source_event.  Each
+     * of these shapes carries a second device-class key (scalar or mapping)
+     * under a single source_event and must be flagged unsupported so the
+     * first device class is never silently destroyed by a rewrite. */
+    const char *scalar_scalar =
+        "version: 1\nkind: DeviceProfile\nname: SS\ndescription: ss\n"
+        "mapping:\n  - name: M\n    source_event:\n"
+        "      keyboard: KeyA\n      dbus: Echo\n"
+        "    target_events:\n      - keyboard: KeyB\n";
+    const char *scalar_map =
+        "version: 1\nkind: DeviceProfile\nname: SM\ndescription: sm\n"
+        "mapping:\n  - name: M\n    source_event:\n"
+        "      keyboard: KeyA\n      gamepad:\n        button: Start\n"
+        "    target_events:\n      - keyboard: KeyB\n";
+    const char *map_map =
+        "version: 1\nkind: DeviceProfile\nname: MM\ndescription: mm\n"
+        "mapping:\n  - name: M\n    source_event:\n"
+        "      gamepad:\n        button: Start\n"
+        "      keyboard:\n        code: X\n"
+        "    target_events:\n      - keyboard: KeyB\n";
+    const char *shapes[] = { scalar_scalar, scalar_map, map_map };
+    char path[PATH_MAX + 64];
+    snprintf(path, sizeof(path), "%s/multi-class.yaml", test_dir);
+
+    for (size_t i = 0; i < sizeof(shapes) / sizeof(shapes[0]); i++) {
+        cbx_profile p;
+        /* Still loadable (never a hard parse failure)... */
+        assert_int_equal(cbx_profile_parse(&p, shapes[i], 0), 0);
+        /* ...but flagged unsupported and rejected before any write. */
+        assert_true(p.has_unsupported_content);
+        assert_false(cbx_profile_is_lossless(&p));
+        assert_int_equal(cbx_profile_validate(&p), -ENOTSUP);
+
+        char *buf = NULL;
+        size_t len = 0;
+        assert_int_equal(cbx_profile_serialize(&p, &buf, &len), -ENOTSUP);
+        assert_null(buf);
+
+        /* Saving over a valid original must fail and leave it intact. */
+        cbx_profile original;
+        assert_int_equal(cbx_profile_parse(&original, spec_example_yaml, 0),
+                         0);
+        assert_int_equal(cbx_profile_save(&original, path), 0);
+        struct stat before;
+        assert_int_equal(stat(path, &before), 0);
+        assert_int_equal(cbx_profile_save(&p, path), -ENOTSUP);
+        struct stat after;
+        assert_int_equal(stat(path, &after), 0);
+        assert_int_equal(after.st_size, before.st_size);
+    }
+}
+
+static void test_duplicate_keys_mark_unsupported(void **state)
+{
+    (void)state;
+    /* Duplicate keys within a container the v1 model controls change meaning
+     * across a round trip, so they must flag the profile unsupported. */
+    const char *root_dup =
+        "version: 1\nkind: DeviceProfile\nname: A\nname: B\n"
+        "description: dup\nmapping: []\n";
+    const char *item_dup =
+        "version: 1\nkind: DeviceProfile\nname: I\ndescription: dup\n"
+        "mapping:\n  - name: A\n    name: B\n    source_event:\n"
+        "      gamepad:\n        button: Start\n    target_events:\n"
+        "      - keyboard: KeyA\n";
+    const char *prop_dup =
+        "version: 1\nkind: DeviceProfile\nname: P\ndescription: dup\n"
+        "mapping:\n  - name: A\n    source_event:\n      gamepad:\n"
+        "        button: A\n        button: B\n    target_events:\n"
+        "      - keyboard: KeyA\n";
+    const char *mapping_dup =
+        "version: 1\nkind: DeviceProfile\nname: D\ndescription: dup\n"
+        "mapping: []\nmapping: []\n";
+    const char *shapes[] = { root_dup, item_dup, prop_dup, mapping_dup };
+    for (size_t i = 0; i < sizeof(shapes) / sizeof(shapes[0]); i++) {
+        cbx_profile p;
+        assert_int_equal(cbx_profile_parse(&p, shapes[i], 0), 0);
+        assert_true(p.has_unsupported_content);
+        assert_int_equal(cbx_profile_validate(&p), -ENOTSUP);
+        char *buf = NULL;
+        size_t len = 0;
+        assert_int_equal(cbx_profile_serialize(&p, &buf, &len), -ENOTSUP);
+        assert_null(buf);
+    }
+}
+
+static void test_overlength_fields_mark_unsupported(void **state)
+{
+    (void)state;
+    char long_field[512];
+    memset(long_field, 'x', sizeof(long_field) - 1);
+    long_field[sizeof(long_field) - 1] = '\0';
+
+    char yaml[2048];
+    cbx_profile p;
+
+    /* Over-capacity profile name. */
+    snprintf(yaml, sizeof(yaml),
+        "version: 1\nkind: DeviceProfile\nname: %s\ndescription: d\n"
+        "mapping:\n  - name: M\n    source_event:\n      keyboard: KeyA\n"
+        "    target_events:\n      - keyboard: KeyB\n", long_field);
+    assert_int_equal(cbx_profile_parse(&p, yaml, 0), 0);
+    assert_true(p.has_unsupported_content);
+    assert_int_equal(cbx_profile_validate(&p), -ENOTSUP);
+
+    /* Over-capacity source-property value. */
+    snprintf(yaml, sizeof(yaml),
+        "version: 1\nkind: DeviceProfile\nname: T\ndescription: d\n"
+        "mapping:\n  - name: M\n    source_event:\n      gamepad:\n"
+        "        button: %s\n    target_events:\n      - keyboard: KeyB\n",
+        long_field);
+    assert_int_equal(cbx_profile_parse(&p, yaml, 0), 0);
+    assert_true(p.has_unsupported_content);
+    assert_int_equal(cbx_profile_validate(&p), -ENOTSUP);
+
+    /* Over-capacity target-event value. */
+    snprintf(yaml, sizeof(yaml),
+        "version: 1\nkind: DeviceProfile\nname: T\ndescription: d\n"
+        "mapping:\n  - name: M\n    source_event:\n      keyboard: KeyA\n"
+        "    target_events:\n      - keyboard: %s\n", long_field);
+    assert_int_equal(cbx_profile_parse(&p, yaml, 0), 0);
+    assert_true(p.has_unsupported_content);
+    assert_int_equal(cbx_profile_validate(&p), -ENOTSUP);
+}
+
+static void test_invalid_version_marks_unsupported(void **state)
+{
+    (void)state;
+    /* Out-of-range and non-numeric versions must not invoke atoi() undefined
+     * behavior; they flag the profile so it is never rewritten. */
+    const char *shapes[] = {
+        "version: 99999999999999999999999999\nkind: DeviceProfile\n"
+        "name: V\ndescription: d\nmapping: []\n",
+        "version: abc\nkind: DeviceProfile\nname: V\ndescription: d\n"
+        "mapping: []\n",
+    };
+    for (size_t i = 0; i < sizeof(shapes) / sizeof(shapes[0]); i++) {
+        cbx_profile p;
+        assert_int_equal(cbx_profile_parse(&p, shapes[i], 0), 0);
+        assert_true(p.has_unsupported_content);
+        assert_int_equal(cbx_profile_validate(&p), -ENOTSUP);
+    }
+}
+
 static void test_parse_failure_publishes_no_partial(void **state)
 {
     (void)state;
@@ -1079,6 +1226,12 @@ int main(void)
         /* Unsupported content: loadable but never rewritten */
         cmocka_unit_test(test_advanced_target_loadable_but_not_serializable),
         cmocka_unit_test(test_unknown_key_marks_unsupported),
+        cmocka_unit_test_setup_teardown(
+            test_multi_device_class_source_marks_unsupported,
+            setup_tmpdir, teardown_tmpdir),
+        cmocka_unit_test(test_duplicate_keys_mark_unsupported),
+        cmocka_unit_test(test_overlength_fields_mark_unsupported),
+        cmocka_unit_test(test_invalid_version_marks_unsupported),
         cmocka_unit_test(test_parse_failure_publishes_no_partial),
 
         /* Aliases and document boundaries */

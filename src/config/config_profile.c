@@ -175,6 +175,20 @@ typedef enum {
 
 #define PST_STACK_MAX (MAX_YAML_DEPTH + 4)
 
+/* Recognized-key bitmasks for containers the v1 model fully controls.  A
+ * repeated key silently changes meaning on the next write (the serializer
+ * emits duplicate keys and the in-memory lookup disagrees with native YAML
+ * about which wins), so duplicates mark the profile unsupported. */
+#define RK_VERSION     (1u << 0)
+#define RK_KIND        (1u << 1)
+#define RK_NAME        (1u << 2)
+#define RK_DESCRIPTION (1u << 3)
+#define RK_MAPPING     (1u << 4)
+
+#define IK_NAME          (1u << 0)
+#define IK_SOURCE_EVENT  (1u << 1)
+#define IK_TARGET_EVENTS (1u << 2)
+
 typedef struct {
     cbx_profile *p;
 
@@ -189,6 +203,11 @@ typedef struct {
 
     parse_state stack[PST_STACK_MAX];
     int stack_top;
+
+    /* Recognized keys already seen in the root mapping / current mapping
+     * item, used to detect duplicates. */
+    unsigned root_keys_seen;
+    unsigned item_keys_seen;
 
     /* Current mapping entry being built. */
     cbx_profile_mapping current_mapping;
@@ -234,6 +253,26 @@ static void safe_copy(char *dst, size_t dst_size, const char *src)
     snprintf(dst, dst_size, "%s", src);
 }
 
+/* Record that a recognized key was seen in a container; a repeat means the
+ * document carries duplicate keys the v1 model cannot preserve. */
+static void note_seen_key(parse_ctx *ctx, unsigned *seen, unsigned bit)
+{
+    if (*seen & bit)
+        mark_unsupported(ctx);
+    *seen |= bit;
+}
+
+/* Copy a parse-time string into a fixed field, flagging the profile when the
+ * source does not fit.  Silently truncating and later rewriting the shortened
+ * value is a destructive round trip, so it must fail closed instead. */
+static void copy_field(parse_ctx *ctx, char *dst, size_t dst_size,
+                       const char *src)
+{
+    if (src && strlen(src) >= dst_size)
+        mark_unsupported(ctx);
+    safe_copy(dst, dst_size, src);
+}
+
 /* Add a property to the current mapping's source event.
  * Returns 0, or -E2BIG when the fixed field capacity is exceeded (never a
  * silent drop, which would corrupt the profile meaning). */
@@ -242,10 +281,19 @@ static int add_source_prop(parse_ctx *ctx, const char *key, const char *val)
     cbx_source_event *se = &ctx->current_mapping.source_event;
     if (se->prop_count < 0 || se->prop_count >= CBX_MAX_EVENT_PROPS)
         return -E2BIG;
-    safe_copy(se->props[se->prop_count].key,
-              sizeof(se->props[se->prop_count].key), key);
-    safe_copy(se->props[se->prop_count].value,
-              sizeof(se->props[se->prop_count].value), val);
+    /* A repeated property key within one device class changes meaning across
+     * a round trip (the in-memory lookup takes the first, native YAML the
+     * last), so flag it unsupported instead of emitting duplicate keys. */
+    for (int i = 0; i < se->prop_count; i++) {
+        if (strcmp(se->props[i].key, key) == 0) {
+            mark_unsupported(ctx);
+            break;
+        }
+    }
+    copy_field(ctx, se->props[se->prop_count].key,
+               sizeof(se->props[se->prop_count].key), key);
+    copy_field(ctx, se->props[se->prop_count].value,
+               sizeof(se->props[se->prop_count].value), val);
     se->prop_count++;
     return 0;
 }
@@ -259,11 +307,11 @@ static int add_target_event(parse_ctx *ctx, const char *dev_class,
         ctx->current_mapping.target_event_count >= CBX_MAX_TARGET_EVENTS)
         return -E2BIG;
     int idx = ctx->current_mapping.target_event_count;
-    safe_copy(ctx->current_mapping.target_events[idx].device_class,
-              sizeof(ctx->current_mapping.target_events[idx].device_class),
-              dev_class);
-    safe_copy(ctx->current_mapping.target_events[idx].value,
-              sizeof(ctx->current_mapping.target_events[idx].value), val);
+    copy_field(ctx, ctx->current_mapping.target_events[idx].device_class,
+               sizeof(ctx->current_mapping.target_events[idx].device_class),
+               dev_class);
+    copy_field(ctx, ctx->current_mapping.target_events[idx].value,
+               sizeof(ctx->current_mapping.target_events[idx].value), val);
     ctx->current_mapping.target_event_count++;
     return 0;
 }
@@ -279,18 +327,32 @@ static int process_scalar(parse_ctx *ctx, const char *val)
     switch (ctx_top(ctx)) {
     case PST_ROOT_MAP:
         if (!ctx->have_key) {
-            safe_copy(ctx->current_key, sizeof(ctx->current_key), val);
+            copy_field(ctx, ctx->current_key, sizeof(ctx->current_key), val);
             ctx->have_key = true;
         } else {
             if (strcmp(ctx->current_key, "version") == 0) {
-                ctx->p->version = atoi(val);
+                note_seen_key(ctx, &ctx->root_keys_seen, RK_VERSION);
+                errno = 0;
+                char *end = NULL;
+                long v = strtol(val, &end, 10);
+                if (errno != 0 || end == val || *end != '\0' ||
+                    v < INT_MIN || v > INT_MAX) {
+                    /* Never invoke undefined behavior via atoi() on
+                     * untrusted input; flag the profile instead. */
+                    mark_unsupported(ctx);
+                } else {
+                    ctx->p->version = (int)v;
+                }
             } else if (strcmp(ctx->current_key, "kind") == 0) {
-                safe_copy(ctx->p->kind, sizeof(ctx->p->kind), val);
+                note_seen_key(ctx, &ctx->root_keys_seen, RK_KIND);
+                copy_field(ctx, ctx->p->kind, sizeof(ctx->p->kind), val);
             } else if (strcmp(ctx->current_key, "name") == 0) {
-                safe_copy(ctx->p->name, sizeof(ctx->p->name), val);
+                note_seen_key(ctx, &ctx->root_keys_seen, RK_NAME);
+                copy_field(ctx, ctx->p->name, sizeof(ctx->p->name), val);
             } else if (strcmp(ctx->current_key, "description") == 0) {
-                safe_copy(ctx->p->description, sizeof(ctx->p->description),
-                          val);
+                note_seen_key(ctx, &ctx->root_keys_seen, RK_DESCRIPTION);
+                copy_field(ctx, ctx->p->description,
+                           sizeof(ctx->p->description), val);
             } else {
                 /* Unknown top-level field: serializer would drop it. */
                 mark_unsupported(ctx);
@@ -301,12 +363,13 @@ static int process_scalar(parse_ctx *ctx, const char *val)
 
     case PST_MAPPING_ITEM:
         if (!ctx->have_key) {
-            safe_copy(ctx->current_key, sizeof(ctx->current_key), val);
+            copy_field(ctx, ctx->current_key, sizeof(ctx->current_key), val);
             ctx->have_key = true;
         } else {
             if (strcmp(ctx->current_key, "name") == 0) {
-                safe_copy(ctx->current_mapping.name,
-                          sizeof(ctx->current_mapping.name), val);
+                note_seen_key(ctx, &ctx->item_keys_seen, IK_NAME);
+                copy_field(ctx, ctx->current_mapping.name,
+                           sizeof(ctx->current_mapping.name), val);
             } else {
                 /* Unknown mapping field: serializer would drop it. */
                 mark_unsupported(ctx);
@@ -317,11 +380,22 @@ static int process_scalar(parse_ctx *ctx, const char *val)
 
     case PST_SOURCE_EVENT:
         if (!ctx->have_key) {
-            safe_copy(ctx->current_key, sizeof(ctx->current_key), val);
+            copy_field(ctx, ctx->current_key, sizeof(ctx->current_key), val);
             ctx->have_key = true;
         } else {
-            /* Scalar source: <device_class>: <specifier> */
-            safe_copy(ctx->current_mapping.source_event.device_class,
+            /* Scalar source: <device_class>: <specifier>.
+             * The v1 model has exactly one device_class slot per
+             * source_event.  A second device-class key (scalar or mapping)
+             * would overwrite the first and silently destroy it on rewrite,
+             * so flag the profile unsupported instead of merging.  It stays
+             * loadable but every write path refuses it. */
+            if (ctx->current_mapping.source_event.device_class[0] != '\0') {
+                mark_unsupported(ctx);
+                ctx->have_key = false;
+                return 0;
+            }
+            copy_field(ctx,
+                      ctx->current_mapping.source_event.device_class,
                       sizeof(ctx->current_mapping.source_event.device_class),
                       ctx->current_key);
             int rc = add_source_prop(ctx, "value", val);
@@ -332,7 +406,7 @@ static int process_scalar(parse_ctx *ctx, const char *val)
 
     case PST_SOURCE_PROPS:
         if (!ctx->have_key) {
-            safe_copy(ctx->current_key, sizeof(ctx->current_key), val);
+            copy_field(ctx, ctx->current_key, sizeof(ctx->current_key), val);
             ctx->have_key = true;
         } else {
             int rc = add_source_prop(ctx, ctx->current_key, val);
@@ -343,7 +417,7 @@ static int process_scalar(parse_ctx *ctx, const char *val)
 
     case PST_TARGET_ITEM:
         if (!ctx->have_key) {
-            safe_copy(ctx->current_key, sizeof(ctx->current_key), val);
+            copy_field(ctx, ctx->current_key, sizeof(ctx->current_key), val);
             ctx->have_key = true;
         } else {
             int rc = add_target_event(ctx, ctx->current_key, val);
@@ -435,19 +509,32 @@ static int parse_profile_events(cbx_profile *p, yaml_parser_t *parser)
                 /* A new mapping entry. */
                 child = PST_MAPPING_ITEM;
                 memset(&ctx.current_mapping, 0, sizeof(ctx.current_mapping));
+                ctx.item_keys_seen = 0;
             } else if (top == PST_TARGET_SEQ) {
                 /* A new target-event entry. */
                 child = PST_TARGET_ITEM;
                 ctx.have_key = false;
             } else if (top == PST_SOURCE_EVENT && ctx.have_key) {
                 /* <device_class>: { props } */
-                safe_copy(ctx.current_mapping.source_event.device_class,
-                          sizeof(ctx.current_mapping.source_event.device_class),
-                          ctx.current_key);
-                child = PST_SOURCE_PROPS;
-                ctx.have_key = false;
+                if (ctx.current_mapping.source_event.device_class[0] != '\0') {
+                    /* A second device class under one source_event: the v1
+                     * model cannot represent it.  Skip its content and mark
+                     * the profile unsupported (loadable, never re-serialized)
+                     * instead of merging it over the first class. */
+                    mark_unsupported(&ctx);
+                    ctx.have_key = false;
+                    child = PST_SKIP;
+                } else {
+                    copy_field(&ctx,
+                               ctx.current_mapping.source_event.device_class,
+                               sizeof(ctx.current_mapping.source_event.device_class),
+                               ctx.current_key);
+                    child = PST_SOURCE_PROPS;
+                    ctx.have_key = false;
+                }
             } else if (top == PST_MAPPING_ITEM && ctx.have_key &&
                        strcmp(ctx.current_key, "source_event") == 0) {
+                note_seen_key(&ctx, &ctx.item_keys_seen, IK_SOURCE_EVENT);
                 child = PST_SOURCE_EVENT;
                 ctx.have_key = false;
             } else if (top == PST_TARGET_ITEM && ctx.have_key) {
@@ -485,10 +572,12 @@ static int parse_profile_events(cbx_profile *p, yaml_parser_t *parser)
             parse_state child = PST_SKIP;
             if (top == PST_ROOT_MAP && ctx.have_key &&
                 strcmp(ctx.current_key, "mapping") == 0) {
+                note_seen_key(&ctx, &ctx.root_keys_seen, RK_MAPPING);
                 child = PST_MAPPING_SEQ;
                 ctx.have_key = false;
             } else if (top == PST_MAPPING_ITEM && ctx.have_key &&
                        strcmp(ctx.current_key, "target_events") == 0) {
+                note_seen_key(&ctx, &ctx.item_keys_seen, IK_TARGET_EVENTS);
                 child = PST_TARGET_SEQ;
                 ctx.have_key = false;
             } else if (ctx.have_key) {
