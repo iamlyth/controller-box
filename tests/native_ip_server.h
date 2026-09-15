@@ -70,6 +70,11 @@ extern int    g_nip_manage_all_devices;
  * to simulate a transient backend failure. */
 extern volatile sig_atomic_t g_nip_fail_next_create;
 
+/* When non-zero, the next DbusDevices property read returns a DBus error
+ * and auto-resets to 0.  Set before nip_fork_server/nip_start_server
+ * to simulate a transient backend probe failure in the forked child. */
+extern volatile sig_atomic_t g_nip_fail_next_dbus_devices;
+
 /* --- API --- */
 
 /*

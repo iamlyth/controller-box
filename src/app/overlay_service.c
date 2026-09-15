@@ -1141,6 +1141,11 @@ cbx_overlay_rearm_polls(cbx_overlay_service_ctx *svc)
     return 0;
 }
 
+/* Forward declaration: the readiness diagnostic helper is defined below,
+ * after the hotplug reconciler that also records required-step failures. */
+static void overlay_set_readiness_detail(cbx_overlay_service_ctx *svc,
+                                         const char *phase, int rc);
+
 /*
  * Reconcile the overlay state after a hotplug event modifies the device
  * model (SPEC §10.1: InterfacesAdded/InterfacesRemoved).  Re-enumerates,
@@ -1148,12 +1153,17 @@ cbx_overlay_rearm_polls(cbx_overlay_service_ctx *svc)
  *
  * If the overlay is visible, the grid is rebuilt with dynamic columns
  * preserving profiles.  If idle, a full rebuild from assignments is safe.
+ *
+ * Returns 0 when every required step succeeded.  A DbusDevices probe
+ * failure fails closed: the stale input map is abandoned, the failing phase
+ * is recorded in svc->readiness_detail, and the negative errno lets the
+ * caller keep operations disabled and schedule a bounded retry.
  */
-static void
+static int
 cbx_overlay_reconcile_hotplug(cbx_overlay_service_ctx *svc)
 {
     if (!svc || !svc->conn.backend || !svc->conn.bus)
-        return;
+        return -EINVAL;
 
     /* The device model was already updated incrementally by ip_hotplug
      * (SPEC §10.1: InterfacesAdded/InterfacesRemoved).  No full
@@ -1224,10 +1234,17 @@ cbx_overlay_reconcile_hotplug(cbx_overlay_service_ctx *svc)
     cbx_conflict_list_init(&svc->conflicts);
     cbx_conflict_detect(&svc->grid, &svc->conflicts);
 
-    /* Rebuild input map. */
-    cbx_overlay_input_build_map(svc->conn.backend, svc->conn.bus,
-                                 svc->composites, svc->comp_count,
-                                 &svc->input_ctx);
+    /* Rebuild input map.  A DbusDevices probe failure is a required-step
+     * failure (SPEC §10.1): without the path→row map this controller's
+     * InputEvent navigation would be silently dropped, so fail closed
+     * instead of presenting a ready overlay that ignores input. */
+    int rc = cbx_overlay_input_build_map(svc->conn.backend, svc->conn.bus,
+                                          svc->composites, svc->comp_count,
+                                          &svc->input_ctx);
+    if (rc != 0) {
+        overlay_set_readiness_detail(svc, "input mapping", rc);
+        return rc;
+    }
 
     /* Re-register triggers on all composites and set PASS (SPEC §2.5). */
     set_all_pass(svc->conn.backend, svc->conn.bus,
@@ -1244,6 +1261,7 @@ cbx_overlay_reconcile_hotplug(cbx_overlay_service_ctx *svc)
      * the surface is stale: dirty it to re-render from the new device model
      * (SPEC §4.9 device-change trigger). */
     cbx_overlay_surface_mark_dirty_all(&svc->surface);
+    return 0;
 }
 
 static void
@@ -1306,9 +1324,17 @@ overlay_wire_required_steps(cbx_overlay_service_ctx *svc)
         return rc;
     }
 
-    cbx_overlay_input_build_map(svc->conn.backend, svc->conn.bus,
-                                 svc->composites, svc->comp_count,
-                                 &svc->input_ctx);
+    /* Required input mapping.  A DbusDevices probe failure is distinct
+     * from a legitimately empty device list: without the path→row map the
+     * controller's navigation events are dropped, so record the failure and
+     * keep the service disabled rather than advertising readiness. */
+    rc = cbx_overlay_input_build_map(svc->conn.backend, svc->conn.bus,
+                                      svc->composites, svc->comp_count,
+                                      &svc->input_ctx);
+    if (rc != 0) {
+        overlay_set_readiness_detail(svc, "input mapping", rc);
+        return rc;
+    }
 
     const char *uniq = ip_connection_get_unique_name(&svc->conn);
     snprintf(svc->expected_sender, sizeof(svc->expected_sender), "%s",
@@ -1626,14 +1652,25 @@ cbx_overlay_input_build_map(const ip_dbus_backend *backend,
         return -EINVAL;
 
     ctx->path_count = 0;
+    int first_error = 0;
 
     for (int i = 0; i < comp_count; i++) {
         char *dbus_devices = NULL;
         int rc = ip_composite_get_dbus_devices(backend, bus,
                                                 composites[i].composite_path,
                                                 &dbus_devices);
-        if (rc != 0 || !dbus_devices)
-            continue;  /* best-effort */
+        if (rc != 0) {
+            /* Probe failure (e.g. transient AccessDenied/NoReply), not an
+             * empty device list: surface the error so the caller fails
+             * closed and retries.  Mappings already resolved for earlier
+             * composites are retained (the header documents partial
+             * population), but readiness never uses a partial map. */
+            if (first_error == 0)
+                first_error = rc;
+            continue;
+        }
+        if (!dbus_devices)
+            continue;  /* legitimate empty DbusDevices */
 
         /* Parse comma-separated DBusDevice paths. */
         char *saveptr = NULL;
@@ -1650,7 +1687,7 @@ cbx_overlay_input_build_map(const ip_dbus_backend *backend,
         free(dbus_devices);
     }
 
-    return 0;
+    return first_error;
 }
 
 int
@@ -1886,7 +1923,13 @@ cbx_overlay_service_step(cbx_overlay_service_ctx *svc)
      *    (SPEC §10.1: InterfacesAdded/InterfacesRemoved). */
     if (svc->hp.model_changed) {
         svc->hp.model_changed = false;
-        cbx_overlay_reconcile_hotplug(svc);
+        if (cbx_overlay_reconcile_hotplug(svc) != 0) {
+            overlay_backend_degraded(
+                svc->readiness_detail[0] ? svc->readiness_detail
+                                         : "hotplug reconciliation failed",
+                svc);
+            overlay_schedule_recovery(svc);
+        }
     }
 
     /* 5. Advance lifecycle (fade animation, timeout). */

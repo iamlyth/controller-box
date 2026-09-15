@@ -1781,9 +1781,15 @@ static void test_o13_conflict_resolution_on_save(void **state)
 /* ================================================================== */
 
 /* Restart the InputPlumber-compatible server on the fixture's private bus
- * with the same fixture configuration.  Returns the new server pid. */
+ * with the same fixture configuration.  `fail_create` and
+ * `fail_dbus_devices` inject a one-shot transient fault that the forked
+ * server observes on its first CreateTargetDevice / DbusDevices read.  The
+ * flags are applied after nip_reset_server_state() (which clears them), so
+ * the injected fault actually reaches the child.  Returns the new server
+ * pid. */
 static pid_t
-restart_native_server(native_fixture *f)
+restart_native_server(native_fixture *f, int fail_create,
+                      int fail_dbus_devices)
 {
     nip_reset_server_state(2);
     for (int i = 0; i < 2; i++) {
@@ -1795,6 +1801,8 @@ restart_native_server(native_fixture *f)
                  "/org/shadowblip/InputPlumber/CompositeDevice%d", i);
         g_nip_intercept_mode[i] = IP_INTERCEPT_PASS;
     }
+    g_nip_fail_next_create = fail_create;
+    g_nip_fail_next_dbus_devices = fail_dbus_devices;
     const nip_server_config cfg = { .num_composites = 2,
                                     .version = "0.78.0" };
     return nip_fork_server(f->bus_address, &cfg);
@@ -1833,8 +1841,7 @@ test_readiness_fail_closed_and_recovery(void **state)
     /* Phase 2: restart, but inject a transient reconcile failure so the
      * first recovery attempt fails.  The bounded retry in
      * cbx_overlay_service_step must then bring the overlay ready. */
-    g_nip_fail_next_create = 1;
-    f->server_pid = restart_native_server(f);
+    f->server_pid = restart_native_server(f, 1, 0);
     assert_true(f->server_pid > 0);
 
     t0 = SDL_GetTicks();
@@ -1847,6 +1854,60 @@ test_readiness_fail_closed_and_recovery(void **state)
     assert_true(ip_connection_is_sender_verified(&svc->conn));
     assert_true(svc->input_events_ready);
     assert_true(svc->poll_count == svc->comp_count);
+}
+
+/* A DbusDevices probe failure during recovery must fail closed: the overlay
+ * must not report ready, must record an actionable "input mapping"
+ * diagnostic, and must recover on the bounded retry once the probe succeeds
+ * within the two-second readiness window (SPEC §§2.4, 10.1). */
+static void
+test_readiness_input_mapping_failure_recovers(void **state)
+{
+    native_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    cbx_overlay_install_recovery_callbacks(svc);
+    assert_true(svc->backend_ready);
+
+    /* Phase 1: owner loss → fail closed. */
+    kill(f->server_pid, SIGTERM);
+    waitpid(f->server_pid, NULL, 0);
+    f->server_pid = -1;
+
+    uint32_t t0 = SDL_GetTicks();
+    while (svc->backend_ready && SDL_GetTicks() - t0 < 2000) {
+        svc->conn.backend->process(svc->conn.bus);
+        SDL_Delay(10);
+    }
+    assert_false(svc->backend_ready);
+
+    /* Phase 2: restart and inject a one-shot DbusDevices probe failure.  The
+     * first recovery attempt must stop at the input-mapping step, leaving
+     * operations disabled with an actionable diagnostic. */
+    f->server_pid = restart_native_server(f, 0, 1);
+    assert_true(f->server_pid > 0);
+
+    bool saw_mapping_failure = false;
+    bool observed_disabled = false;
+    t0 = SDL_GetTicks();
+    while (!svc->backend_ready && SDL_GetTicks() - t0 < 2000) {
+        cbx_overlay_service_step(svc);
+        if (!svc->backend_ready) {
+            observed_disabled = true;
+            if (strstr(svc->readiness_detail, "input mapping"))
+                saw_mapping_failure = true;
+        }
+        SDL_Delay(10);
+    }
+
+    assert_true(observed_disabled);
+    assert_true(saw_mapping_failure);
+    assert_true(svc->backend_ready);
+    assert_true(SDL_GetTicks() - t0 <= 2000);
+    assert_true(ip_connection_is_sender_verified(&svc->conn));
+    assert_true(svc->input_events_ready);
+    /* Recovery rebuilt a complete map: every composite maps to a row. */
+    assert_int_equal(svc->input_ctx.path_count, svc->comp_count);
 }
 
 /* ================================================================== */
@@ -1951,6 +2012,9 @@ static const struct CMUnitTest tests[] = {
      * and retries a transient recovery failure. */
     cmocka_unit_test_setup_teardown(test_readiness_fail_closed_and_recovery,
                                      native_setup, native_teardown),
+    cmocka_unit_test_setup_teardown(
+        test_readiness_input_mapping_failure_recovers,
+        native_setup, native_teardown),
 };
 
 int main(void)

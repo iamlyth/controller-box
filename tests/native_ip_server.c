@@ -36,6 +36,7 @@ char   g_nip_comp_names[NIP_MAX_COMPOSITES][64];
 char   g_nip_persistent_ids[NIP_MAX_COMPOSITES][32];
 int    g_nip_manage_all_devices = 0;
 volatile sig_atomic_t g_nip_fail_next_create = 0;
+volatile sig_atomic_t g_nip_fail_next_dbus_devices = 0;
 
 /* Server configuration (set by parent before fork, read by child) */
 static int      s_num_composites = 1;
@@ -260,6 +261,12 @@ composite_property_get(sd_bus *bus, const char *path, const char *interface,
     if (strcmp(property, "InterceptMode") == 0)
         return sd_bus_message_append(reply, "u", g_nip_intercept_mode[ci]);
     if (strcmp(property, "DbusDevices") == 0) {
+        if (g_nip_fail_next_dbus_devices) {
+            g_nip_fail_next_dbus_devices = 0;
+            return sd_bus_error_set(error,
+                "org.freedesktop.DBus.Error.Failed",
+                "simulated DbusDevices read failure");
+        }
         int rc = sd_bus_message_open_container(reply, 'a', "s");
         if (rc < 0) return rc;
         if (g_nip_dbus_devices[ci][0]) {
@@ -945,6 +952,7 @@ void nip_reset_server_state(int num_composites)
     memset(g_nip_comp_names, 0, sizeof(g_nip_comp_names));
     memset(g_nip_persistent_ids, 0, sizeof(g_nip_persistent_ids));
     g_nip_fail_next_create = 0;
+    g_nip_fail_next_dbus_devices = 0;
     g_nip_manage_all_devices = 0;
 
     /* Initialize composite names and persistent IDs. */
