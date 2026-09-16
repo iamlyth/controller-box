@@ -469,7 +469,7 @@ int cbx_settings_tab_move_up(cbx_settings_tab *tab)
 
     tab->selected--;
     if (tab->selected < 0)
-        tab->selected = CBX_ST_SET_COUNT - 1;
+        tab->selected = cbx_settings_tab_setting_count(tab) - 1;
     cbx_list_set_selected(&tab->settings_list, tab->selected);
     return 0;
 }
@@ -483,7 +483,7 @@ int cbx_settings_tab_move_down(cbx_settings_tab *tab)
         return cbx_settings_tab_edit_down(tab);
 
     tab->selected++;
-    if (tab->selected >= CBX_ST_SET_COUNT)
+    if (tab->selected >= cbx_settings_tab_setting_count(tab))
         tab->selected = 0;
     cbx_list_set_selected(&tab->settings_list, tab->selected);
     return 0;

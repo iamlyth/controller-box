@@ -171,7 +171,9 @@ static void test_shutdown_removes_children(void **state)
 
 /* --- Navigation tests --------------------------------------------------- */
 
-/* Move down wraps around. */
+/* Move down wraps around at the dynamic row count for the minimum (1-slot),
+ * default (4-slot), and maximum (16-slot / 23-row) layouts.  Exercising the
+ * non-default layouts proves the bound is not the fixed enum count. */
 static void test_move_down_wrap(void **state)
 {
     st_fixture *f = FIX(state);
@@ -179,19 +181,27 @@ static void test_move_down_wrap(void **state)
     cbx_settings_tab_init(&f->tab, panel, &f->mgr.text_cache,
                             &f->mgr.theme, f->mgr.font_id);
 
-    int count = cbx_settings_tab_setting_count(&f->tab);
-    f->tab.selected = 0;
+    const int slot_counts[] = { 1, 4, CBX_MAX_CONTROLLERS };
+    for (size_t c = 0; c < sizeof(slot_counts) / sizeof(slot_counts[0]); c++) {
+        f->tab.settings.virtual_controllers.count = slot_counts[c];
+        assert_int_equal(cbx_settings_tab_refresh(&f->tab), 0);
+        int count = cbx_settings_tab_setting_count(&f->tab);
 
-    for (int i = 1; i < count; i++) {
+        f->tab.selected = 0;
+        for (int i = 1; i < count; i++) {
+            cbx_settings_tab_move_down(&f->tab);
+            assert_int_equal(cbx_settings_tab_selected(&f->tab), i);
+            assert_int_equal(cbx_list_get_selected(&f->tab.settings_list), i);
+        }
+        /* One more wraps to 0. */
         cbx_settings_tab_move_down(&f->tab);
-        assert_int_equal(cbx_settings_tab_selected(&f->tab), i);
+        assert_int_equal(cbx_settings_tab_selected(&f->tab), 0);
+        assert_int_equal(cbx_list_get_selected(&f->tab.settings_list), 0);
     }
-    /* One more wraps to 0. */
-    cbx_settings_tab_move_down(&f->tab);
-    assert_int_equal(cbx_settings_tab_selected(&f->tab), 0);
 }
 
-/* Move up wraps around. */
+/* Move up wraps around at the dynamic row count for the minimum (1-slot),
+ * default (4-slot), and maximum (16-slot / 23-row) layouts. */
 static void test_move_up_wrap(void **state)
 {
     st_fixture *f = FIX(state);
@@ -199,10 +209,18 @@ static void test_move_up_wrap(void **state)
     cbx_settings_tab_init(&f->tab, panel, &f->mgr.text_cache,
                             &f->mgr.theme, f->mgr.font_id);
 
-    f->tab.selected = 0;
-    cbx_settings_tab_move_up(&f->tab);
-    int count = cbx_settings_tab_setting_count(&f->tab);
-    assert_int_equal(cbx_settings_tab_selected(&f->tab), count - 1);
+    const int slot_counts[] = { 1, 4, CBX_MAX_CONTROLLERS };
+    for (size_t c = 0; c < sizeof(slot_counts) / sizeof(slot_counts[0]); c++) {
+        f->tab.settings.virtual_controllers.count = slot_counts[c];
+        assert_int_equal(cbx_settings_tab_refresh(&f->tab), 0);
+        int count = cbx_settings_tab_setting_count(&f->tab);
+
+        f->tab.selected = 0;
+        cbx_settings_tab_move_up(&f->tab);
+        assert_int_equal(cbx_settings_tab_selected(&f->tab), count - 1);
+        assert_int_equal(cbx_list_get_selected(&f->tab.settings_list),
+                         count - 1);
+    }
 }
 
 /* --- Toggle test -------------------------------------------------------- */
