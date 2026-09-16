@@ -53,6 +53,29 @@ typedef struct {
 } cbx_composite_identity_entry;
 
 /*
+ * Single acceptance predicate for "may this extracted identity be used to
+ * match a saved assignment / order entry?".
+ *
+ * True only when the query completed (a transient QUERY_FAILED read is never
+ * matchable — a DBus hiccup must not reroute a controller or erase saved
+ * state) and a real layer was extracted (including the ORDER:n fallback).
+ * Every assignment/order matcher uses this so the absence-vs-failure rule
+ * cannot drift between call sites (task 6 acceptance).
+ */
+bool cbx_composite_identity_is_matchable(const cbx_identity *ident,
+                                         cbx_composite_identity_status status);
+
+/*
+ * Connection-order value for one composite's ORDER:n fallback (SPEC §6.2
+ * layer 4).  Prefer the composite's parsed model index; use `fallback_index`
+ * (the caller's enumeration position) only when the model carries none, so
+ * every call site derives the same ORDER:n instead of drifting between 0 and
+ * the loop position.
+ */
+int cbx_composite_identity_order(const cbx_composite_entry *entry,
+                                 int fallback_index);
+
+/*
  * Classify a source device object path by its interface subtype, derived
  * from the last path component (SPEC §10.2):
  *   - "hidrawN"                    → HIDRawDevice

@@ -3,7 +3,7 @@
  *
  * Tests all 4 identity layers, edge cases (empty uniq for BT, HIDRaw
  * serial fallback, MAC-like strings on USB bus, invalid characters),
- * parse_layer, downgrade detection, and helper functions.
+ * and helper functions.
  */
 #include "identify/identity.h"
 
@@ -494,162 +494,44 @@ test_extract_no_bustype_with_mac(void **state)
     assert_int_equal(ident.layer, CBX_IDENTITY_LAYER_USB_PORT);
 }
 
-/* --- parse_layer tests --------------------------------------------------- */
-
-static void
-test_parse_layer_bt(void **state)
-{
-    (void)state;
-    assert_int_equal(cbx_identity_parse_layer("BT:AB:CD:01:EF:23:45"),
-                     CBX_IDENTITY_LAYER_BT_MAC);
-    assert_int_equal(cbx_identity_parse_layer("BT:ab:cd:01:ef:23:45"),
-                     CBX_IDENTITY_LAYER_BT_MAC);
-}
-
-static void
-test_parse_layer_usb_serial(void **state)
-{
-    (void)state;
-    assert_int_equal(cbx_identity_parse_layer("USB:SN12345"),
-                     CBX_IDENTITY_LAYER_USB_SERIAL);
-    assert_int_equal(cbx_identity_parse_layer("USB:SN_12-34"),
-                     CBX_IDENTITY_LAYER_USB_SERIAL);
-}
-
-static void
-test_parse_layer_usb_phys(void **state)
-{
-    (void)state;
-    assert_int_equal(cbx_identity_parse_layer("USB:phys:usb-3-2"),
-                     CBX_IDENTITY_LAYER_USB_PORT);
-    assert_int_equal(cbx_identity_parse_layer("USB:phys:usb-1-3.2:1.0"),
-                     CBX_IDENTITY_LAYER_USB_PORT);
-}
-
-static void
-test_parse_layer_order(void **state)
-{
-    (void)state;
-    assert_int_equal(cbx_identity_parse_layer("ORDER:0"),
-                     CBX_IDENTITY_LAYER_ORDER);
-    assert_int_equal(cbx_identity_parse_layer("ORDER:42"),
-                     CBX_IDENTITY_LAYER_ORDER);
-}
-
-static void
-test_parse_layer_invalid(void **state)
-{
-    (void)state;
-    assert_int_equal(cbx_identity_parse_layer(NULL), CBX_IDENTITY_LAYER_NONE);
-    assert_int_equal(cbx_identity_parse_layer(""), CBX_IDENTITY_LAYER_NONE);
-    assert_int_equal(cbx_identity_parse_layer("BT:"), CBX_IDENTITY_LAYER_NONE);
-    assert_int_equal(cbx_identity_parse_layer("USB:"), CBX_IDENTITY_LAYER_NONE);
-    assert_int_equal(cbx_identity_parse_layer("USB:phys:"), CBX_IDENTITY_LAYER_NONE);
-    assert_int_equal(cbx_identity_parse_layer("ORDER:"), CBX_IDENTITY_LAYER_NONE);
-    assert_int_equal(cbx_identity_parse_layer("UNKNOWN:foo"), CBX_IDENTITY_LAYER_NONE);
-    assert_int_equal(cbx_identity_parse_layer("BT:AB:CD:01:EF:23"), CBX_IDENTITY_LAYER_NONE);
-    assert_int_equal(cbx_identity_parse_layer("USB:SN 123"), CBX_IDENTITY_LAYER_NONE);
-    assert_int_equal(cbx_identity_parse_layer("USB:phys:has space"), CBX_IDENTITY_LAYER_NONE);
-    assert_int_equal(cbx_identity_parse_layer("ORDER:-1"), CBX_IDENTITY_LAYER_NONE);
-    assert_int_equal(cbx_identity_parse_layer("ORDER:abc"), CBX_IDENTITY_LAYER_NONE);
-}
-
-static void
-test_parse_layer_roundtrip(void **state)
-{
-    (void)state;
-    /* Extract then parse should give the same layer */
-    cbx_source_props p = make_props(CBX_SOURCE_IFACE_EVDEV,
-                                     "ab:cd:01:ef:23:45",
-                                     NULL, NULL, "5");
-    cbx_identity ident;
-    cbx_identity_extract(&p, 0, &ident);
-    assert_int_equal(cbx_identity_parse_layer(ident.id), ident.layer);
-
-    p = make_props(CBX_SOURCE_IFACE_EVDEV, "SN12345", NULL, NULL, "3");
-    cbx_identity_extract(&p, 0, &ident);
-    assert_int_equal(cbx_identity_parse_layer(ident.id), ident.layer);
-
-    p = make_props(CBX_SOURCE_IFACE_EVDEV, NULL, "usb-3-2", NULL, "3");
-    cbx_identity_extract(&p, 0, &ident);
-    assert_int_equal(cbx_identity_parse_layer(ident.id), ident.layer);
-
-    p = make_props(CBX_SOURCE_IFACE_EVDEV, NULL, NULL, NULL, NULL);
-    cbx_identity_extract(&p, 9, &ident);
-    assert_int_equal(cbx_identity_parse_layer(ident.id), ident.layer);
-}
-
-/* --- Downgrade detection tests ------------------------------------------- */
-
-static void
-test_is_downgrade_yes(void **state)
-{
-    (void)state;
-    /* Layer 1 → 2 is a downgrade */
-    assert_true(cbx_identity_is_downgrade(CBX_IDENTITY_LAYER_BT_MAC,
-                                          CBX_IDENTITY_LAYER_USB_SERIAL));
-    /* Layer 2 → 3 is a downgrade */
-    assert_true(cbx_identity_is_downgrade(CBX_IDENTITY_LAYER_USB_SERIAL,
-                                          CBX_IDENTITY_LAYER_USB_PORT));
-    /* Layer 1 → 4 is a downgrade */
-    assert_true(cbx_identity_is_downgrade(CBX_IDENTITY_LAYER_BT_MAC,
-                                          CBX_IDENTITY_LAYER_ORDER));
-}
-
-static void
-test_is_downgrade_no(void **state)
-{
-    (void)state;
-    /* Same layer → not a downgrade */
-    assert_false(cbx_identity_is_downgrade(CBX_IDENTITY_LAYER_BT_MAC,
-                                           CBX_IDENTITY_LAYER_BT_MAC));
-    /* Upgrade (weaker → stronger) → not a downgrade */
-    assert_false(cbx_identity_is_downgrade(CBX_IDENTITY_LAYER_ORDER,
-                                           CBX_IDENTITY_LAYER_BT_MAC));
-    assert_false(cbx_identity_is_downgrade(CBX_IDENTITY_LAYER_USB_PORT,
-                                           CBX_IDENTITY_LAYER_USB_SERIAL));
-    /* NONE is not a valid comparison */
-    assert_false(cbx_identity_is_downgrade(CBX_IDENTITY_LAYER_NONE,
-                                           CBX_IDENTITY_LAYER_BT_MAC));
-    assert_false(cbx_identity_is_downgrade(CBX_IDENTITY_LAYER_BT_MAC,
-                                           CBX_IDENTITY_LAYER_NONE));
-}
-
-/* --- Integration: extract + validate with cbx_validate_id ---------------- */
+/* --- Integration: every extracted layer ------------------------------- */
 
 /*
- * Verify that all extracted IDs pass the existing cbx_validate_id validator.
- * This requires linking with config_assignments.  We test via parse_layer
- * which mirrors the same validation logic.
+ * Verify that all four layers extract with the expected layer tag and
+ * prefixed id.  The id format is independently validated by
+ * cbx_validate_id() in tests/test_assignments.c.
  */
 
 static void
-test_extract_and_parse_all_layers(void **state)
+test_extract_all_layers(void **state)
 {
     (void)state;
-    /* Test all 4 layers extract and parse correctly */
     cbx_source_props p;
     cbx_identity ident;
 
     /* Layer 1: BT */
     p = make_props(CBX_SOURCE_IFACE_EVDEV, "ab:cd:01:ef:23:45", NULL, NULL, "5");
     assert_int_equal(cbx_identity_extract(&p, 0, &ident), 0);
-    assert_int_equal(cbx_identity_parse_layer(ident.id), CBX_IDENTITY_LAYER_BT_MAC);
+    assert_int_equal(ident.layer, CBX_IDENTITY_LAYER_BT_MAC);
+    assert_string_equal(ident.id, "BT:AB:CD:01:EF:23:45");
 
     /* Layer 2: USB serial */
     p = make_props(CBX_SOURCE_IFACE_EVDEV, "SN12345", NULL, NULL, "3");
     assert_int_equal(cbx_identity_extract(&p, 0, &ident), 0);
-    assert_int_equal(cbx_identity_parse_layer(ident.id), CBX_IDENTITY_LAYER_USB_SERIAL);
+    assert_int_equal(ident.layer, CBX_IDENTITY_LAYER_USB_SERIAL);
+    assert_string_equal(ident.id, "USB:SN12345");
 
     /* Layer 3: USB phys */
     p = make_props(CBX_SOURCE_IFACE_EVDEV, NULL, "usb-3-2", NULL, "3");
     assert_int_equal(cbx_identity_extract(&p, 0, &ident), 0);
-    assert_int_equal(cbx_identity_parse_layer(ident.id), CBX_IDENTITY_LAYER_USB_PORT);
+    assert_int_equal(ident.layer, CBX_IDENTITY_LAYER_USB_PORT);
+    assert_string_equal(ident.id, "USB:phys:usb-3-2");
 
     /* Layer 4: Order */
     p = make_props(CBX_SOURCE_IFACE_EVDEV, NULL, NULL, NULL, NULL);
     assert_int_equal(cbx_identity_extract(&p, 7, &ident), 0);
-    assert_int_equal(cbx_identity_parse_layer(ident.id), CBX_IDENTITY_LAYER_ORDER);
+    assert_int_equal(ident.layer, CBX_IDENTITY_LAYER_ORDER);
+    assert_string_equal(ident.id, "ORDER:7");
 }
 
 /* --- Main ---------------------------------------------------------------- */
@@ -711,20 +593,8 @@ main(void)
         cmocka_unit_test(test_extract_no_bustype_with_serial),
         cmocka_unit_test(test_extract_no_bustype_with_mac),
 
-        /* parse_layer */
-        cmocka_unit_test(test_parse_layer_bt),
-        cmocka_unit_test(test_parse_layer_usb_serial),
-        cmocka_unit_test(test_parse_layer_usb_phys),
-        cmocka_unit_test(test_parse_layer_order),
-        cmocka_unit_test(test_parse_layer_invalid),
-        cmocka_unit_test(test_parse_layer_roundtrip),
-
-        /* Downgrade detection */
-        cmocka_unit_test(test_is_downgrade_yes),
-        cmocka_unit_test(test_is_downgrade_no),
-
         /* Integration */
-        cmocka_unit_test(test_extract_and_parse_all_layers),
+        cmocka_unit_test(test_extract_all_layers),
     };
 
     return cmocka_run_group_tests(tests, NULL, NULL);

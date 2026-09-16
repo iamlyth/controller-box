@@ -483,17 +483,16 @@ composite_path_for_id(cbx_controllers_tab *tab, const char *id,
 
     for (int ci = 0; ci < tab->model.composite_count; ci++) {
         const cbx_composite_entry *comp = &tab->model.composites[ci];
-        int order = comp->index >= 0 ? comp->index : ci;
+        int order = cbx_composite_identity_order(comp, ci);
         cbx_identity ident;
         cbx_composite_identity_status status = CBX_COMPOSITE_IDENTITY_OK;
         if (cbx_composite_identity_extract(tab->backend, tab->bus,
                                            comp->path, order, &ident,
                                            &status) != 0)
             continue;
-        if (status == CBX_COMPOSITE_IDENTITY_QUERY_FAILED)
+        if (!cbx_composite_identity_is_matchable(&ident, status))
             continue;
-        if (ident.layer != CBX_IDENTITY_LAYER_NONE &&
-            strcmp(ident.id, id) == 0) {
+        if (strcmp(ident.id, id) == 0) {
             snprintf(out, CBX_MAX_PATH_LEN, "%s", comp->path);
             return true;
         }

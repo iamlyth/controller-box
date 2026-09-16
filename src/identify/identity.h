@@ -14,6 +14,18 @@
  * The caller gathers source device properties via ip_source_get_* (Task 14)
  * and passes them to cbx_identity_extract(), which picks the strongest
  * available layer and formats the prefixed ID string.
+ *
+ * Downgrade policy (SPEC §6.3): the prefix scheme records identity strength
+ * so a reconnect with a weaker identity is *visible*, but production
+ * restoration is deliberately exact-match-only.  A controller whose identity
+ * weakened (serial became unavailable, USB port changed) simply fails to
+ * match its saved key and lands Unassigned — it is never inferred onto a
+ * stored stronger key, so an unrelated stronger preference can never be
+ * mismatched onto the wrong controller.  The user re-assigns it manually (or
+ * the overlay is the manual override), and no uncertainty is silently
+ * converted into a permanent weak assignment.  Keeping this policy explicit
+ * prevents a future change from assuming a runtime downgrade-inference API
+ * exists.
  */
 #ifndef CBX_IDENTITY_H
 #define CBX_IDENTITY_H
@@ -107,25 +119,6 @@ void cbx_identity_init(cbx_identity *ident);
 int cbx_identity_extract(const cbx_source_props *props,
                           int connection_order,
                           cbx_identity *out_ident);
-
-/*
- * Determine the identity layer from a prefixed ID string.
- * Parses the prefix and validates the format.
- *
- * @param id  Prefixed ID string (e.g. "BT:AB:CD:01:EF:23").
- * @return    Identity layer (1–4), or CBX_IDENTITY_LAYER_NONE if
- *            the string is invalid or unrecognised.
- */
-cbx_identity_layer cbx_identity_parse_layer(const char *id);
-
-/*
- * Check whether two identity layers represent a downgrade
- * (new_layer is weaker than old_layer).
- *
- * @return true if new_layer > old_layer (weaker), false otherwise.
- */
-bool cbx_identity_is_downgrade(cbx_identity_layer old_layer,
-                                cbx_identity_layer new_layer);
 
 /*
  * Check whether a string looks like a Bluetooth MAC address.

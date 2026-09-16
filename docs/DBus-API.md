@@ -552,8 +552,9 @@ int ip_gamepad_order_load(char **out_csv);
 2. Clears the existing `gamepad_order` array (replaces, not appends).
 3. Iterates comma-separated composite device paths:
    - Verifies each path exists in the device model (**stale paths skipped**).
-   - Queries `PersistentId` via `ip_composite_get_persistent_id()`.
-   - If the query fails, the entry is **skipped** (not an error).
+   - Extracts the composite's source-derived physical identity
+     (`BT:`/`USB:`/`USB:phys:`/`ORDER:`) via `cbx_composite_identity_extract()`.
+   - If the query fails transiently, the entry is **skipped** (not an error).
    - Validates the ID via `cbx_validate_id()` (skips invalid IDs).
    - Deduplicates (same ID not added twice).
 4. Saves `assignments.yaml` atomically (mkstemp + rename, mode 0600).
@@ -568,10 +569,12 @@ int ip_gamepad_order_load(char **out_csv);
 
 The save/load functions are the **persistence layer only**. The orchestration
 of when to save (on every GamepadOrder change) and when to restore (after
-daemon restart, mapping IDs back to composite paths via the device model) is
-handled by the identity downgrade detection layer (Task 27). The ID-to-path
-mapping on restore requires querying `PersistentId` for each composite in
-the device model and matching against saved IDs.
+daemon restart, mapping saved source-derived identities back to composite
+paths) is handled by the startup/recovery restore pass
+(`src/identify/gamepad_order_restore.c`). The ID-to-path mapping on restore
+re-extracts each composite's physical identity through the same
+`cbx_composite_identity_extract()` path and matches against the saved IDs;
+the opaque `PersistentId` is never used as the identity contract.
 
 ## Five DBus Gaps Summary
 
@@ -581,7 +584,7 @@ a workaround sufficient for v1; no upstream changes are required.
 | # | Gap | Workaround | Where Documented |
 |---|-----|------------|------------------|
 | 1 | No `PropertiesChanged` signal for `InterceptMode` | Poll at 50 ms interval (DEC-002); state machine with timeout handling | CompositeDevice section above |
-| 2 | `GamepadOrder` not persisted (in-memory only, resets on restart) | Save to `assignments.yaml` keyed by `PersistentId`; re-apply after restart | GamepadOrder Persistence section above |
+| 2 | `GamepadOrder` not persisted (in-memory only, resets on restart) | Save to `assignments.yaml` keyed by the source-derived physical identity; re-apply after restart | GamepadOrder Persistence section above |
 | 3 | `CreateCompositeDevice` requires YAML file path (no string variant) | Write temp YAML via `mkstemp` (mode 0600), pass path, unlink after call | CreateCompositeDevice section above |
 | 4 | No DBus method to enumerate profiles/configs/capability maps on disk | Read filesystem directly: `~/.local/share/inputplumber/profiles/`, `/usr/share/inputplumber/profiles/`, `/usr/share/inputplumber/devices/`, `/usr/share/inputplumber/capability_maps/` | PACKAGING.md (Flatpak filesystem permissions) |
 | 5 | No DBus method to add/remove source devices on running composites | Not needed for v1; InputPlumber auto-manages composites from device configs | SPEC §12 (out of scope) |

@@ -838,6 +838,7 @@ cbx_overlay_on_lifecycle_closed(void *userdata)
 /* ================================================================== */
 static void fill_composite_info(cbx_grid_composite_info *info,
                                  const cbx_composite_entry *entry,
+                                 int fallback_index,
                                  const ip_dbus_backend *backend,
                                  ip_bus_handle bus)
 {
@@ -858,13 +859,12 @@ static void fill_composite_info(cbx_grid_composite_info *info,
      * Mode. */
     cbx_identity ident;
     cbx_composite_identity_status ident_status = CBX_COMPOSITE_IDENTITY_OK;
-    int order = entry->index >= 0 ? entry->index : 0;
+    int order = cbx_composite_identity_order(entry, fallback_index);
     int ident_rc = cbx_composite_identity_extract(backend, bus, entry->path,
                                                   order, &ident,
                                                   &ident_status);
     if (ident_rc == 0 &&
-        ident_status != CBX_COMPOSITE_IDENTITY_QUERY_FAILED &&
-        ident.layer != CBX_IDENTITY_LAYER_NONE) {
+        cbx_composite_identity_is_matchable(&ident, ident_status)) {
         snprintf(info->id, sizeof(info->id), "%s", ident.id);
         info->id_stable = (ident.layer == CBX_IDENTITY_LAYER_BT_MAC ||
                            ident.layer == CBX_IDENTITY_LAYER_USB_SERIAL ||
@@ -1034,9 +1034,8 @@ assigned_composite_for_slot(const cbx_composite_identity_entry *entries,
         const cbx_assignment *a = &assignments->assignments[ai];
         if (a->slot != slot) continue;
         for (int ci = 0; ci < entry_count; ci++) {
-            if (entries[ci].status == CBX_COMPOSITE_IDENTITY_QUERY_FAILED)
-                continue;
-            if (entries[ci].ident.layer == CBX_IDENTITY_LAYER_NONE)
+            if (!cbx_composite_identity_is_matchable(&entries[ci].ident,
+                                                     entries[ci].status))
                 continue;
             if (strcmp(entries[ci].ident.id, a->id) == 0)
                 return entries[ci].path;
@@ -1500,7 +1499,7 @@ cbx_overlay_reconcile_hotplug(cbx_overlay_service_ctx *svc)
     svc->comp_count = new_comp_count;
     for (int i = 0; i < new_comp_count; i++)
         fill_composite_info(&svc->composites[i], &svc->model.composites[i],
-                             svc->conn.backend, svc->conn.bus);
+                             i, svc->conn.backend, svc->conn.bus);
 
     /* Check if target count changed → rebuild with dynamic columns
      * (SPEC §4.7).  Otherwise just rebuild the grid rows. */
@@ -1812,7 +1811,7 @@ overlay_recover(cbx_overlay_service_ctx *svc)
         svc->comp_count = CBX_MAX_COMPOSITES;
     for (int i = 0; i < svc->comp_count; i++)
         fill_composite_info(&svc->composites[i], &svc->model.composites[i],
-                             svc->conn.backend, svc->conn.bus);
+                             i, svc->conn.backend, svc->conn.bus);
     cbx_select_grid_build(&svc->grid, svc->composites, svc->comp_count,
                            &svc->settings, &svc->assignments);
     cbx_profile_cycle_load_profiles(&svc->grid, &svc->profiles);
@@ -2479,7 +2478,7 @@ int run_overlay_service(int dry_run)
         overlay_set_call_deadline(svc, overlay_pass_deadline_ms(svc));
     for (int i = 0; i < svc->comp_count; i++)
         fill_composite_info(&svc->composites[i], &svc->model.composites[i],
-                             svc->conn.backend, svc->conn.bus);
+                             i, svc->conn.backend, svc->conn.bus);
     overlay_set_call_deadline(svc, 0);
 
     cbx_select_grid_init(&svc->grid);

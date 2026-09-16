@@ -61,6 +61,45 @@ copy_trimmed_token(const char *begin, const char *end, char *out, size_t out_siz
 /* --- Per-source extraction ------------------------------------------------ */
 
 /*
+ * Probe the shared evdev/udev identification property set
+ * (UniqueId/PhysPath/IdBustype, SPEC §10.2) on one interface subtype.
+ * `iface` is IP_IFACE_SOURCE_EVENT or IP_IFACE_SOURCE_UDEV.  Returns true
+ * when at least one read succeeded, and sets *out_read_failed when any read
+ * failed so a partial/transient failure can be distinguished from a
+ * confirmed identity-less device.  The three values are heap-allocated on
+ * success; the caller owns them.
+ */
+static bool
+probe_evdev_props(const ip_dbus_backend *backend, ip_bus_handle bus,
+                  const char *source_path, const char *iface,
+                  char **unique_id, char **phys_path, char **id_bustype,
+                  bool *out_read_failed)
+{
+    bool any_ok = false;
+    bool failed = false;
+
+    if (ip_source_get_unique_id(backend, bus, source_path, iface,
+                                unique_id) != 0)
+        failed = true;
+    else
+        any_ok = true;
+    if (ip_source_get_phys_path(backend, bus, source_path, iface,
+                                phys_path) != 0)
+        failed = true;
+    else
+        any_ok = true;
+    if (ip_source_get_id_bustype(backend, bus, source_path, iface,
+                                 id_bustype) != 0)
+        failed = true;
+    else
+        any_ok = true;
+
+    if (out_read_failed)
+        *out_read_failed = failed;
+    return any_ok;
+}
+
+/*
  * Read one source device's interface-appropriate properties and extract its
  * strongest identity.  `connection_order` is -1 here: the composite-level
  * ORDER fallback is applied once, after every source has been considered.
@@ -80,7 +119,6 @@ extract_from_source(const ip_dbus_backend *backend, ip_bus_handle bus,
     char *phys_path = NULL;
     char *serial_number = NULL;
     char *id_bustype = NULL;
-    bool any_ok = false;
     bool read_failed = false;
 
     if (iface == CBX_SOURCE_IFACE_HIDRAW) {
@@ -88,54 +126,22 @@ extract_from_source(const ip_dbus_backend *backend, ip_bus_handle bus,
                                         IP_IFACE_SOURCE_HIDRAW,
                                         &serial_number) != 0)
             read_failed = true;
-        else
-            any_ok = true;
     } else {
         /* EventDevice and UdevDevice expose the same identification property
          * set (SPEC §10.2); probe EventDevice first and fall back to
          * UdevDevice so a non-event source (e.g. iio:deviceN) is not lost. */
-        if (ip_source_get_unique_id(backend, bus, source_path,
-                                    IP_IFACE_SOURCE_EVENT,
-                                    &unique_id) != 0)
-            read_failed = true;
-        else
-            any_ok = true;
-        if (ip_source_get_phys_path(backend, bus, source_path,
-                                    IP_IFACE_SOURCE_EVENT,
-                                    &phys_path) != 0)
-            read_failed = true;
-        else
-            any_ok = true;
-        if (ip_source_get_id_bustype(backend, bus, source_path,
-                                     IP_IFACE_SOURCE_EVENT,
-                                     &id_bustype) != 0)
-            read_failed = true;
-        else
-            any_ok = true;
-
-        if (!any_ok) {
+        bool event_ok = probe_evdev_props(backend, bus, source_path,
+                                          IP_IFACE_SOURCE_EVENT,
+                                          &unique_id, &phys_path,
+                                          &id_bustype, &read_failed);
+        if (!event_ok) {
             /* No EventDevice property was readable: retry the same set on
              * UdevDevice.  The retry supersedes the EventDevice attempt, so
              * only the retry's failures are reported. */
-            read_failed = false;
-            if (ip_source_get_unique_id(backend, bus, source_path,
-                                        IP_IFACE_SOURCE_UDEV,
-                                        &unique_id) != 0)
-                read_failed = true;
-            else
-                any_ok = true;
-            if (ip_source_get_phys_path(backend, bus, source_path,
-                                        IP_IFACE_SOURCE_UDEV,
-                                        &phys_path) != 0)
-                read_failed = true;
-            else
-                any_ok = true;
-            if (ip_source_get_id_bustype(backend, bus, source_path,
-                                         IP_IFACE_SOURCE_UDEV,
-                                         &id_bustype) != 0)
-                read_failed = true;
-            else
-                any_ok = true;
+            (void)probe_evdev_props(backend, bus, source_path,
+                                    IP_IFACE_SOURCE_UDEV,
+                                    &unique_id, &phys_path,
+                                    &id_bustype, &read_failed);
         }
     }
 
@@ -161,6 +167,21 @@ extract_from_source(const ip_dbus_backend *backend, ip_bus_handle bus,
 }
 
 /* --- Public API ----------------------------------------------------------- */
+
+bool
+cbx_composite_identity_is_matchable(const cbx_identity *ident,
+                                     cbx_composite_identity_status status)
+{
+    return ident && status != CBX_COMPOSITE_IDENTITY_QUERY_FAILED &&
+           ident->layer != CBX_IDENTITY_LAYER_NONE;
+}
+
+int
+cbx_composite_identity_order(const cbx_composite_entry *entry,
+                             int fallback_index)
+{
+    return (entry && entry->index >= 0) ? entry->index : fallback_index;
+}
 
 int
 cbx_composite_identity_extract(const ip_dbus_backend *backend,
@@ -283,7 +304,7 @@ cbx_model_extract_identities(const ip_dbus_backend *backend,
         memset(e, 0, sizeof(*e));
         snprintf(e->path, sizeof(e->path), "%s", comp->path);
 
-        int order = comp->index >= 0 ? comp->index : i;
+        int order = cbx_composite_identity_order(comp, i);
         (void)cbx_composite_identity_extract(backend, bus, comp->path, order,
                                              &e->ident, &e->status);
         (*out_count)++;

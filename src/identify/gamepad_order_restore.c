@@ -117,15 +117,15 @@ cbx_gamepad_order_map_ids(const ip_dbus_backend *backend,
             const char *match = NULL;
             bool any_failed = false;
             for (int i = 0; i < entry_count; i++) {
-                if (entries[i].status ==
-                    CBX_COMPOSITE_IDENTITY_QUERY_FAILED) {
+                if (cbx_composite_identity_is_matchable(&entries[i].ident,
+                                                        entries[i].status)) {
+                    if (strcmp(entries[i].ident.id, saved_id) == 0) {
+                        match = entries[i].path;
+                        break;
+                    }
+                } else if (entries[i].status ==
+                           CBX_COMPOSITE_IDENTITY_QUERY_FAILED) {
                     any_failed = true;
-                    continue;
-                }
-                if (entries[i].ident.layer != CBX_IDENTITY_LAYER_NONE &&
-                    strcmp(entries[i].ident.id, saved_id) == 0) {
-                    match = entries[i].path;
-                    break;
                 }
             }
 

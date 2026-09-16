@@ -71,13 +71,12 @@ ip_gamepad_order_save(const ip_dbus_backend *backend,
         const cbx_composite_entry *comp =
             cbx_device_model_find_composite(model, path);
         if (comp) {
-            int order = comp->index >= 0 ? comp->index : 0;
+            int order = cbx_composite_identity_order(comp, 0);
             cbx_identity ident;
             cbx_composite_identity_status status = CBX_COMPOSITE_IDENTITY_OK;
             if (cbx_composite_identity_extract(backend, bus, path, order,
                                                &ident, &status) == 0 &&
-                status != CBX_COMPOSITE_IDENTITY_QUERY_FAILED &&
-                ident.layer != CBX_IDENTITY_LAYER_NONE &&
+                cbx_composite_identity_is_matchable(&ident, status) &&
                 cbx_validate_id(ident.id) &&
                 args.count < CBX_MAX_GAMEPAD_ORDER) {
                 bool duplicate = false;
