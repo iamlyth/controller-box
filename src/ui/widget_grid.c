@@ -109,12 +109,31 @@ grid_handle_event(cbx_widget *w, const SDL_Event *ev)
         case SDLK_RIGHT:
             return cbx_grid_move_right(grid) == 0;
         case SDLK_RETURN:
-        case SDLK_SPACE: {
+        case SDLK_SPACE:
+        case SDLK_a: {
             int i = idx(grid, grid->cur_row, grid->cur_col);
             if (i >= 0 && i < grid->cell_count && grid->cells[i]) {
-                /* Forward the event to the cell. */
+                /* Forward the press to the focused cell (Button, List,
+                 * TabBar) so its pressed visual state is set.  The release
+                 * below fires the cell's activation callback. */
                 return cbx_widget_handle_event(grid->cells[i], ev);
             }
+            break;
+        }
+        default:
+            break;
+        }
+        break;
+    case SDL_KEYUP:
+        switch (ev->key.keysym.sym) {
+        case SDLK_RETURN:
+        case SDLK_SPACE:
+        case SDLK_a: {
+            /* Activation keys fire on release.  Dropping KEYUP here left
+             * cell widgets stuck pressed and never activated them. */
+            int i = idx(grid, grid->cur_row, grid->cur_col);
+            if (i >= 0 && i < grid->cell_count && grid->cells[i])
+                return cbx_widget_handle_event(grid->cells[i], ev);
             break;
         }
         default:

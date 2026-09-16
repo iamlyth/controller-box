@@ -522,7 +522,10 @@ int cbx_text_render_wrapped(cbx_text_cache *cache, int font_id,
                 cap *= 2;
                 SDL_Texture **tmp = realloc(texs, cap * sizeof(SDL_Texture *));
                 if (!tmp) {
-                    for (int j = 0; j < wcount; j++)
+                    /* wrapped[0..i-1] were already freed after being
+                     * stored; free the current and remaining entries only,
+                     * otherwise this path double-frees. */
+                    for (int j = i; j < wcount; j++)
                         free(wrapped[j]);
                     free(wrapped);
                     free(texs);

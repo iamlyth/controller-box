@@ -138,8 +138,10 @@ cbx_image_set_texture(cbx_image *img, SDL_Texture *texture,
 {
     if (!img)
         return;
-    /* Free previous owned texture. */
-    if (img->owns_texture && img->texture)
+    /* Free the previously owned texture, but never destroy the incoming
+     * pointer: re-applying the same texture is a legitimate no-op and
+     * destroying it would leave img->texture pointing at freed memory. */
+    if (img->owns_texture && img->texture && img->texture != texture)
         SDL_DestroyTexture(img->texture);
     img->texture = texture;
     img->owns_texture = owns_texture;

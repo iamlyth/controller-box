@@ -623,6 +623,69 @@ test_list_mouse_wheel(void **state)
     test_teardown(&ctx);
 }
 
+/* Regression: wheel scrolling on a list shorter than the viewport (including
+ * an empty list) must clamp to zero instead of producing a negative
+ * scroll_offset that list_draw would use as a negative items[] index. */
+static void
+test_list_mouse_wheel_short_and_empty(void **state)
+{
+    (void)state;
+    TestCtx ctx = {0};
+    assert_int_equal(test_setup(&ctx), 0);
+    cbx_theme theme;
+    cbx_theme_default(&theme);
+    cbx_text_cache cache;
+    assert_int_equal(cbx_text_cache_init(&cache, ctx.renderer), 0);
+
+    cbx_list lst;
+    assert_int_equal(cbx_list_init(&lst, 0, &cache, &theme), 0);
+    cbx_list_add_item(&lst, "A", NULL, NULL);
+    cbx_list_add_item(&lst, "B", NULL, NULL);
+
+    /* 320/32 = 10 visible rows > 2 items, so max scroll is 0, not -8. */
+    SDL_Rect r = {0, 0, 200, 320};
+    cbx_widget_set_rect(&lst.base, &r);
+    assert_int_equal(lst.visible_count, 10);
+
+    SDL_Event ev = {0};
+    ev.type = SDL_MOUSEWHEEL;
+    ev.wheel.y = -1;   /* scroll down */
+    assert_true(cbx_widget_handle_event(&lst.base, &ev));
+    assert_true(lst.scroll_offset >= 0);
+    assert_int_equal(lst.scroll_offset, 0);
+
+    ev.wheel.y = -5;
+    assert_true(cbx_widget_handle_event(&lst.base, &ev));
+    assert_true(lst.scroll_offset >= 0);
+    assert_int_equal(lst.scroll_offset, 0);
+
+    ev.wheel.y = 3;    /* scroll up */
+    assert_true(cbx_widget_handle_event(&lst.base, &ev));
+    assert_int_equal(lst.scroll_offset, 0);
+
+    /* Drawing after the wheel must render the first rows, not negative ones. */
+    SDL_RenderClear(ctx.renderer);
+    cbx_widget_focus(&lst.base);
+    cbx_widget_draw(&lst.base, ctx.renderer);
+
+    /* Empty list: wheel must not move the offset below zero either. */
+    cbx_list_clear(&lst);
+    ev.wheel.y = -2;
+    assert_true(cbx_widget_handle_event(&lst.base, &ev));
+    assert_int_equal(lst.scroll_offset, 0);
+    cbx_widget_draw(&lst.base, ctx.renderer);
+
+    /* A defensively negative offset (from any source) must not index
+     * items[] out of bounds when drawn. */
+    cbx_list_add_item(&lst, "C", NULL, NULL);
+    lst.scroll_offset = -7;
+    cbx_widget_draw(&lst.base, ctx.renderer);
+
+    cbx_widget_destroy(&lst.base);
+    cbx_text_cache_cleanup(&cache);
+    test_teardown(&ctx);
+}
+
 static void
 test_list_mouse_click(void **state)
 {
@@ -883,6 +946,7 @@ main(void)
         cmocka_unit_test(test_list_scroll),
         cmocka_unit_test(test_list_scroll_auto_on_nav),
         cmocka_unit_test(test_list_mouse_wheel),
+        cmocka_unit_test(test_list_mouse_wheel_short_and_empty),
         cmocka_unit_test(test_list_mouse_click),
         cmocka_unit_test(test_list_draw),
         cmocka_unit_test(test_list_draw_with_font),

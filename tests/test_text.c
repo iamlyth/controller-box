@@ -74,6 +74,41 @@ static bool font_available(void)
     return CBX_FONT_PATH[0] != '\0' && access(CBX_FONT_PATH, R_OK) == 0;
 }
 
+/* --- Fault injection for allocation failure ------------------------------ */
+
+/*
+ * Target the wrapped-text renderer's texture-pointer array so its growth
+ * realloc can be failed deterministically.  The array is the only
+ * 8-pointer malloc in this path, so wrap malloc to remember it and wrap
+ * realloc to fail that exact allocation once.  This drives the real
+ * -ENOMEM cleanup path, which previously double-freed already-consumed
+ * line strings.  Installed via -Wl,--wrap=malloc,--wrap=realloc below.
+ */
+static void *g_texs_ptr = NULL;
+static int g_arm_texs = 0;
+static int g_fail_texs = 0;
+
+void *__real_malloc(size_t size);
+void *__wrap_malloc(size_t size)
+{
+    void *p = __real_malloc(size);
+    if (g_arm_texs && p && size == 8 * sizeof(void *)) {
+        g_texs_ptr = p;
+        g_arm_texs = 0;
+    }
+    return p;
+}
+
+void *__real_realloc(void *ptr, size_t size);
+void *__wrap_realloc(void *ptr, size_t size)
+{
+    if (g_fail_texs && ptr && ptr == g_texs_ptr) {
+        g_fail_texs = 0;
+        return NULL;
+    }
+    return __real_realloc(ptr, size);
+}
+
 /* --- Text cache tests ---------------------------------------------------- */
 
 static void test_init_basic(void **state)
@@ -537,6 +572,56 @@ static void test_render_wrapped_null(void **state)
     assert_int_equal(rc, -EINVAL);
 }
 
+/* Regression: when growing the wrapped-line texture array fails, every
+ * intermediate line string must be freed exactly once (the old cleanup
+ * re-freed strings that earlier iterations had already consumed). */
+static void test_render_wrapped_alloc_failure_no_double_free(void **state)
+{
+    (void)state;
+    if (!font_available()) { skip(); return; }
+
+    TestCtx ctx;
+    assert_int_equal(test_setup(&ctx), 0);
+
+    cbx_text_cache cache;
+    cbx_text_cache_init(&cache, ctx.renderer);
+    int font = cbx_text_load_font(&cache, CBX_FONT_PATH, 16);
+
+    SDL_Color white = {255, 255, 255, 255};
+
+    /* Width of one glyph forces the hard-wrap path to emit one segment per
+     * character, producing more than eight segments from a single logical
+     * line.  The texture-array growth realloc on the ninth segment is then
+     * failed, exercising the cleanup path that frees every intermediate
+     * string exactly once. */
+    int char_w = 0, char_h = 0;
+    assert_int_equal(cbx_text_measure(&cache, font, "W", &char_w, &char_h), 0);
+    assert_true(char_w > 0);
+
+    SDL_Texture **lines = NULL;
+    int count = 0, total_h = 0;
+    g_texs_ptr = NULL;
+    g_arm_texs = 1;
+    g_fail_texs = 1;
+    int rc = cbx_text_render_wrapped(&cache, font,
+                                     "WWWWWWWWWWWW",
+                                     white, char_w, &lines, &count, &total_h);
+    g_arm_texs = 0;
+    g_fail_texs = 0;
+
+    assert_int_equal(rc, -ENOMEM);
+    assert_null(lines);
+    assert_int_equal(count, 0);
+    assert_int_equal(total_h, 0);
+
+    /* The cache remains usable after the failed render. */
+    SDL_Texture *tex = cbx_text_render(&cache, font, "ok", white);
+    assert_non_null(tex);
+
+    cbx_text_cache_cleanup(&cache);
+    test_teardown(&ctx);
+}
+
 static void test_cache_clear(void **state)
 {
     (void)state;
@@ -818,6 +903,7 @@ static const struct CMUnitTest text_tests[] = {
     cmocka_unit_test(test_render_wrapped_multiline),
     cmocka_unit_test(test_render_wrapped_word_wrap),
     cmocka_unit_test(test_render_wrapped_null),
+    cmocka_unit_test(test_render_wrapped_alloc_failure_no_double_free),
 
     /* Cache management */
     cmocka_unit_test(test_cache_clear),

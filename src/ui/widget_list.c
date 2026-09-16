@@ -66,12 +66,20 @@ list_draw(cbx_widget *w, SDL_Renderer *r)
         SDL_RenderFillRect(r, &lst->base.rect);
     }
 
-    int y = lst->base.rect.y;
-    int max = lst->scroll_offset + lst->visible_count;
+    /* Defensive lower-bound clamp: a stale/negative scroll_offset must never
+     * index items[] below zero.  This mirrors the clamp in the wheel handler
+     * so a bad offset from any source cannot read out of bounds. */
+    int first = lst->scroll_offset;
+    if (first < 0)
+        first = 0;
+    if (first > lst->item_count)
+        first = lst->item_count;
+    int y = lst->base.rect.y + (first - lst->scroll_offset) * lst->item_h;
+    int max = first + lst->visible_count;
     if (max > lst->item_count)
         max = lst->item_count;
 
-    for (int i = lst->scroll_offset; i < max; i++) {
+    for (int i = first; i < max; i++) {
         SDL_Rect row = {
             .x = lst->base.rect.x,
             .y = y,
@@ -198,14 +206,22 @@ list_handle_event(cbx_widget *w, const SDL_Event *ev)
             break;
         }
         break;
-    case SDL_MOUSEWHEEL:
+    case SDL_MOUSEWHEEL: {
         /* SDL: wheel.y > 0 = scroll up (earlier items), < 0 = scroll down. */
+        compute_visible(lst);
         lst->scroll_offset -= ev->wheel.y;
+        /* A list shorter than the viewport (including an empty list) has
+         * max_scroll == 0, not a negative bound.  Clamp to zero so the
+         * offset can never go negative and drive negative draw indices. */
+        int max_scroll = lst->item_count - lst->visible_count;
+        if (max_scroll < 0)
+            max_scroll = 0;
         if (lst->scroll_offset < 0)
             lst->scroll_offset = 0;
-        if (lst->scroll_offset > lst->item_count - lst->visible_count)
-            lst->scroll_offset = lst->item_count - lst->visible_count;
+        if (lst->scroll_offset > max_scroll)
+            lst->scroll_offset = max_scroll;
         return true;
+    }
     case SDL_MOUSEBUTTONDOWN:
         if (ev->button.button == SDL_BUTTON_LEFT) {
             SDL_Point p = { ev->button.x, ev->button.y };

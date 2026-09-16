@@ -349,6 +349,9 @@ if(CMOCKA_FOUND)
     endforeach()
     add_executable(test_text tests/test_text.c)
     target_link_libraries(test_text PRIVATE controllerbox PkgConfig::CMOCKA)
+    # Fault-inject realloc so the wrapped-text allocation-failure cleanup
+    # path is exercised without a production test hook.
+    target_link_options(test_text PRIVATE -Wl,--wrap=malloc,--wrap=realloc)
     target_compile_definitions(test_text PRIVATE
         CBX_FONT_PATH="${CBX_FONT_PATH}")
     add_test(NAME test_text COMMAND test_text)

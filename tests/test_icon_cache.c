@@ -386,6 +386,113 @@ static void test_cleanup_null(void **state)
     cbx_icon_cache_cleanup(NULL);
 }
 
+/* An oversized key cannot be stored inline; it must be rejected rather than
+ * silently truncated into an entry that can never be looked up. */
+static void test_insert_oversized_key_rejected(void **state)
+{
+    struct test_state *s = *state;
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, cbx_icon_dir(), 64), 0);
+
+    char key[CBX_ICON_ICON_LEN + 32];
+    memset(key, 'k', sizeof(key) - 1);
+    key[sizeof(key) - 1] = '\0';
+
+    SDL_Texture *tex = SDL_CreateTexture(s->sdl.renderer,
+        SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_STATIC, 8, 8);
+    assert_non_null(tex);
+
+    assert_int_equal(cbx_icon_cache_insert(&s->cache, key, tex, 8, 8),
+                     -ENAMETOOLONG);
+    assert_int_equal(s->cache.count, 0);
+    assert_null(cbx_icon_cache_get(&s->cache, key));
+
+    SDL_DestroyTexture(tex);
+    cbx_icon_cache_cleanup(&s->cache);
+}
+
+/* A full cache must still accept a replacement of an existing key while
+ * rejecting brand-new keys. */
+static void test_insert_full_cache_replacement(void **state)
+{
+    struct test_state *s = *state;
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, cbx_icon_dir(), 64), 0);
+
+    char keys[CBX_ICON_CACHE_MAX][32];
+    for (int i = 0; i < CBX_ICON_CACHE_MAX; i++) {
+        snprintf(keys[i], sizeof(keys[i]), "cap-key-%d", i);
+        SDL_Texture *t = SDL_CreateTexture(s->sdl.renderer,
+            SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_STATIC, 8, 8);
+        assert_non_null(t);
+        assert_int_equal(cbx_icon_cache_insert(&s->cache, keys[i], t, 8, 8), 0);
+    }
+    assert_int_equal(s->cache.count, CBX_ICON_CACHE_MAX);
+
+    SDL_Texture *extra = SDL_CreateTexture(s->sdl.renderer,
+        SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_STATIC, 8, 8);
+    assert_non_null(extra);
+    assert_int_equal(cbx_icon_cache_insert(&s->cache, "cap-overflow", extra, 8, 8),
+                     -ENOMEM);
+    SDL_DestroyTexture(extra);
+
+    SDL_Texture *repl = SDL_CreateTexture(s->sdl.renderer,
+        SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_STATIC, 16, 16);
+    assert_non_null(repl);
+    assert_int_equal(cbx_icon_cache_insert(&s->cache, keys[0], repl, 16, 16), 0);
+    assert_ptr_equal(cbx_icon_cache_get(&s->cache, keys[0]), repl);
+    int w = 0, h = 0;
+    assert_int_equal(cbx_icon_cache_get_dims(&s->cache, keys[0], &w, &h), 0);
+    assert_int_equal(w, 16);
+    assert_int_equal(h, 16);
+    assert_int_equal(s->cache.count, CBX_ICON_CACHE_MAX);
+
+    cbx_icon_cache_cleanup(&s->cache);
+}
+
+/* Re-inserting the same texture pointer must not destroy the live texture. */
+static void test_insert_same_pointer_replacement(void **state)
+{
+    struct test_state *s = *state;
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, cbx_icon_dir(), 64), 0);
+
+    SDL_Texture *tex = SDL_CreateTexture(s->sdl.renderer,
+        SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_STATIC, 16, 16);
+    assert_non_null(tex);
+
+    assert_int_equal(cbx_icon_cache_insert(&s->cache, "same-key", tex, 16, 16), 0);
+    assert_int_equal(cbx_icon_cache_insert(&s->cache, "same-key", tex, 16, 16), 0);
+    assert_ptr_equal(cbx_icon_cache_get(&s->cache, "same-key"), tex);
+
+    int qw = 0, qh = 0;
+    assert_int_equal(SDL_QueryTexture(tex, NULL, NULL, &qw, &qh), 0);
+    assert_int_equal(qw, 16);
+    int w = 0, h = 0;
+    assert_int_equal(cbx_icon_cache_get_dims(&s->cache, "same-key", &w, &h), 0);
+    assert_int_equal(w, 16);
+    assert_int_equal(h, 16);
+
+    cbx_icon_cache_cleanup(&s->cache);
+}
+
+/* Re-initialising an already-initialised cache releases the previous
+ * rasterizer/textures and leaves a clean, usable cache. */
+static void test_reinit_releases_previous_state(void **state)
+{
+    struct test_state *s = *state;
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, cbx_icon_dir(), 64), 0);
+    assert_int_equal(cbx_icon_cache_load_one(&s->cache, "cc-ps5"), 0);
+    assert_true(s->cache.count > 0);
+
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer, cbx_icon_dir(), 32), 0);
+    assert_non_null(s->cache.rasterizer);
+    assert_int_equal(s->cache.count, 0);
+    assert_int_equal(s->cache.target_size, 32);
+
+    assert_int_equal(cbx_icon_cache_load_one(&s->cache, "cc-ps5"), 0);
+    assert_int_equal(s->cache.count, 1);
+
+    cbx_icon_cache_cleanup(&s->cache);
+}
+
 /* --- Shared icon dedup test --------------------------------------- */
 
 static void test_shared_icons_deduplicated(void **state)
@@ -541,6 +648,10 @@ int main(void)
         /* Cleanup */
         cmocka_unit_test(test_cleanup),
         cmocka_unit_test(test_cleanup_null),
+        cmocka_unit_test(test_insert_oversized_key_rejected),
+        cmocka_unit_test(test_insert_full_cache_replacement),
+        cmocka_unit_test(test_insert_same_pointer_replacement),
+        cmocka_unit_test(test_reinit_releases_previous_state),
         /* Dedup + sizes + collisions */
         cmocka_unit_test(test_shared_icons_deduplicated),
         cmocka_unit_test(test_different_target_size),

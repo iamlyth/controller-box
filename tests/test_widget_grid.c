@@ -428,6 +428,74 @@ test_grid_unrelated_event(void **state)
     cbx_widget_destroy(&grid.base);
 }
 
+/* A grid cell (Button) fires on the release event; the grid must forward
+ * both the press and the release, not drop the release. */
+static int grid_press_count;
+static void grid_cell_press(cbx_widget *w, void *user_data)
+{
+    (void)w;
+    (void)user_data;
+    grid_press_count++;
+}
+
+static void
+test_grid_forwards_press_and_release(void **state)
+{
+    (void)state;
+    TestCtx ctx = {0};
+    assert_int_equal(test_setup(&ctx), 0);
+    cbx_theme theme;
+    cbx_theme_default(&theme);
+    cbx_text_cache cache;
+    assert_int_equal(cbx_text_cache_init(&cache, ctx.renderer), 0);
+
+    cbx_grid grid;
+    assert_int_equal(cbx_grid_init(&grid, &theme), 0);
+    assert_int_equal(cbx_grid_set_dims(&grid, 1, 2), 0);
+    SDL_Rect r = {0, 0, 200, 100};
+    cbx_widget_set_rect(&grid.base, &r);
+
+    grid_press_count = 0;
+    cbx_button btn;
+    assert_int_equal(cbx_button_init(&btn, "Go", 0, &cache, &theme,
+                                      grid_cell_press, NULL), 0);
+    assert_int_equal(cbx_grid_set_cell(&grid, 0, 0, &btn.base), 0);
+    cbx_widget_focus(&grid.base);
+
+    SDL_Event ev = {0};
+    ev.type = SDL_KEYDOWN;
+    ev.key.keysym.sym = SDLK_a;
+    assert_true(cbx_widget_handle_event(&grid.base, &ev));
+    assert_true(btn.pressed);
+    assert_int_equal(grid_press_count, 0);
+
+    ev.type = SDL_KEYUP;
+    ev.key.keysym.sym = SDLK_a;
+    assert_true(cbx_widget_handle_event(&grid.base, &ev));
+    assert_false(btn.pressed);
+    assert_int_equal(grid_press_count, 1);
+
+    /* Return works the same way. */
+    ev.type = SDL_KEYDOWN;
+    ev.key.keysym.sym = SDLK_RETURN;
+    assert_true(cbx_widget_handle_event(&grid.base, &ev));
+    ev.type = SDL_KEYUP;
+    ev.key.keysym.sym = SDLK_RETURN;
+    assert_true(cbx_widget_handle_event(&grid.base, &ev));
+    assert_int_equal(grid_press_count, 2);
+
+    /* A release without a preceding press does not activate. */
+    ev.type = SDL_KEYUP;
+    ev.key.keysym.sym = SDLK_a;
+    assert_false(cbx_widget_handle_event(&grid.base, &ev));
+    assert_int_equal(grid_press_count, 2);
+
+    cbx_widget_destroy(&btn.base);
+    cbx_widget_destroy(&grid.base);
+    cbx_text_cache_cleanup(&cache);
+    test_teardown(&ctx);
+}
+
 /* --- main ---------------------------------------------------------- */
 
 int
@@ -450,6 +518,7 @@ main(void)
         cmocka_unit_test(test_grid_focus_blur),
         cmocka_unit_test(test_grid_null_args),
         cmocka_unit_test(test_grid_unrelated_event),
+        cmocka_unit_test(test_grid_forwards_press_and_release),
     };
 
     return cmocka_run_group_tests(tests, NULL, NULL);

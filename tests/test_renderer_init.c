@@ -98,6 +98,54 @@ static void test_target_texture_check(void **state)
     cbx_renderer_shutdown(&r);
 }
 
+/* The recorded capability metadata must match the backend SDL actually
+ * created, not the flags that were requested. */
+static void test_metadata_matches_sdl(void **state)
+{
+    (void)state;
+    ensure_dummy_driver();
+
+    cbx_renderer r;
+    int rc = cbx_renderer_init(&r, "test", 320, 240, false);
+    assert_int_equal(rc, 0);
+    assert_non_null(r.renderer);
+
+    SDL_RendererInfo info;
+    assert_int_equal(SDL_GetRendererInfo(r.renderer, &info), 0);
+    assert_int_equal(r.renderer_flags, info.flags);
+    assert_int_equal(r.has_target_texture,
+                     (info.flags & SDL_RENDERER_TARGETTEXTURE) != 0);
+    assert_int_equal((r.renderer_flags & SDL_RENDERER_TARGETTEXTURE) != 0,
+                     r.has_target_texture);
+
+    cbx_renderer_shutdown(&r);
+}
+
+/* After a forced software fallback the metadata must still come from the
+ * real software backend (including its target-texture support). */
+static void test_software_fallback_metadata(void **state)
+{
+    (void)state;
+    ensure_dummy_driver();
+
+    SDL_SetHint(SDL_HINT_RENDER_DRIVER, "software");
+    cbx_renderer r;
+    int rc = cbx_renderer_init(&r, "test", 320, 240, false);
+    SDL_SetHint(SDL_HINT_RENDER_DRIVER, "");
+    assert_int_equal(rc, 0);
+    assert_non_null(r.renderer);
+
+    SDL_RendererInfo info;
+    assert_int_equal(SDL_GetRendererInfo(r.renderer, &info), 0);
+    assert_int_equal(r.renderer_flags, info.flags);
+    assert_int_equal(r.has_target_texture,
+                     (info.flags & SDL_RENDERER_TARGETTEXTURE) != 0);
+    if ((info.flags & SDL_RENDERER_TARGETTEXTURE) != 0)
+        assert_true(r.has_target_texture);
+
+    cbx_renderer_shutdown(&r);
+}
+
 static void test_check_target_texture_null(void **state)
 {
     (void)state;
@@ -245,6 +293,8 @@ static const struct CMUnitTest renderer_tests[] = {
     cmocka_unit_test(test_init_null_title),
     cmocka_unit_test(test_init_null_struct),
     cmocka_unit_test(test_target_texture_check),
+    cmocka_unit_test(test_metadata_matches_sdl),
+    cmocka_unit_test(test_software_fallback_metadata),
     cmocka_unit_test(test_check_target_texture_null),
     cmocka_unit_test(test_verify_blending),
     cmocka_unit_test(test_verify_blending_null),

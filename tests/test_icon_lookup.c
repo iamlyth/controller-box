@@ -646,6 +646,78 @@ static void test_cache_insert_replace(void **state)
     /* tex1 was destroyed by insert_entry's replace logic. */
 }
 
+/* Two equivalent spellings of one custom image must share a single cached
+ * texture (the canonical resolved path is the cache key). */
+static void test_override_png_canonical_key_dedup(void **state)
+{
+    struct test_state *s = *state;
+    cbx_icon_result r1, r2;
+
+    char safe_png[PATH_MAX + 64];
+    if (copy_png_to_safe_dir(safe_png, sizeof(safe_png)) != 0) {
+        skip();
+        return;
+    }
+
+    int before = s->cache.count;
+    int rc1 = cbx_icon_lookup(&s->cache, &s->map, "xb360", safe_png, &r1);
+    assert_int_equal(rc1, 0);
+    assert_non_null(r1.texture);
+    int after_first = s->cache.count;
+    assert_int_equal(after_first, before + 1);
+
+    /* Same file with a redundant "./" component. */
+    const char *slash = strrchr(safe_png, '/');
+    assert_non_null(slash);
+    char dot_png[PATH_MAX + 128];
+    snprintf(dot_png, sizeof(dot_png), "%.*s/./%s",
+             (int)(slash - safe_png), safe_png, slash + 1);
+
+    int rc2 = cbx_icon_lookup(&s->cache, &s->map, "xb360", dot_png, &r2);
+    assert_int_equal(rc2, 0);
+    assert_non_null(r2.texture);
+    assert_ptr_equal(r2.texture, r1.texture);
+    assert_int_equal(s->cache.count, after_first);
+
+    unlink(safe_png);
+}
+
+/* A custom image larger than the accepted bound is rejected and the lookup
+ * falls back to the device-type icon instead of allocating a huge texture. */
+static void test_override_png_oversized_rejected(void **state)
+{
+    struct test_state *s = *state;
+    cbx_icon_result res;
+
+    char config_dir[PATH_MAX];
+    if (cbx_resolve_config_dir(config_dir, sizeof(config_dir)) != 0) {
+        skip();
+        return;
+    }
+    cbx_ensure_dir(config_dir, 0700);
+    char big_path[PATH_MAX + 64];
+    snprintf(big_path, sizeof(big_path), "%s/test_icon_lookup_big.png",
+             config_dir);
+
+    SDL_Surface *surf = SDL_CreateRGBSurfaceWithFormat(
+        0, 5000, 4, 32, SDL_PIXELFORMAT_RGBA32);
+    if (!surf) { skip(); return; }
+    SDL_FillRect(surf, NULL, SDL_MapRGBA(surf->format, 255, 0, 0, 255));
+    int save_rc = IMG_SavePNG(surf, big_path);
+    SDL_FreeSurface(surf);
+    if (save_rc != 0) { unlink(big_path); skip(); return; }
+    chmod(big_path, 0600);
+
+    int rc = cbx_icon_lookup(&s->cache, &s->map, "xb360", big_path, &res);
+    assert_int_equal(rc, 0);
+    assert_non_null(res.texture);
+    /* Oversized override rejected → small device-type icon is returned. */
+    assert_true(res.width > 0 && res.width <= 128);
+    assert_true(res.height > 0 && res.height <= 128);
+
+    unlink(big_path);
+}
+
 /* ------------------------------------------------------------------ */
 /*  Main                                                              */
 /* ------------------------------------------------------------------ */
@@ -703,6 +775,8 @@ int main(void)
 
         /* Safe directory PNG */
         cmocka_unit_test_setup_teardown(test_png_in_user_config_dir, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_override_png_canonical_key_dedup, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_override_png_oversized_rejected, setup, teardown),
 
         /* Icon cache insert API */
         cmocka_unit_test_setup_teardown(test_cache_insert, setup, teardown),

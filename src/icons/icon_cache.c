@@ -43,25 +43,37 @@ static unsigned int icon_hash(const char *name)
 static int insert_entry(cbx_icon_cache *cache, const char *name,
                          SDL_Texture *tex, int w, int h)
 {
-    if (cache->count >= CBX_ICON_CACHE_MAX)
-        return -ENOMEM;
+    if (!cache || !name)
+        return -EINVAL;
+
+    /* The key is stored inline; reject keys that cannot be stored intact so
+     * an oversized key is never inserted-but-unfindable (which would consume
+     * a cache slot and defeat deduplication). */
+    if (strlen(name) >= CBX_ICON_ICON_LEN)
+        return -ENAMETOOLONG;
 
     unsigned int start = icon_hash(name) & (CBX_ICON_CACHE_HASH_SIZE - 1);
     for (int i = 0; i < CBX_ICON_CACHE_HASH_SIZE; i++) {
         int slot = (int)((start + (unsigned int)i) & (CBX_ICON_CACHE_HASH_SIZE - 1));
         if (cache->entries[slot].texture == NULL) {
-            /* Empty or tombstone slot — claim it. */
+            /* Empty or tombstone slot — claim it.  Only a truly empty slot
+             * consumes capacity; replacing an existing key must still work
+             * when the cache is already at CBX_ICON_CACHE_MAX. */
+            bool empty = cache->entries[slot].name[0] == '\0';
+            if (empty && cache->count >= CBX_ICON_CACHE_MAX)
+                return -ENOMEM;
             snprintf(cache->entries[slot].name, sizeof(cache->entries[slot].name),
                      "%s", name);
             cache->entries[slot].texture = tex;
             cache->entries[slot].width  = w;
             cache->entries[slot].height = h;
-            cache->count++;
+            if (empty)
+                cache->count++;
             return 0;
         }
         /* If already present with the same name, replace. */
         if (strcmp(cache->entries[slot].name, name) == 0) {
-            if (cache->entries[slot].texture)
+            if (cache->entries[slot].texture != tex)
                 SDL_DestroyTexture(cache->entries[slot].texture);
             cache->entries[slot].texture = tex;
             cache->entries[slot].width  = w;
@@ -225,17 +237,21 @@ int cbx_icon_cache_init(cbx_icon_cache *cache, SDL_Renderer *renderer,
     if (!cache || !renderer || !icon_dir || target_size <= 0)
         return -EINVAL;
 
-    /* Clean up any existing state to avoid leaking the rasterizer / textures
-     * when init is called on an already-initialised cache. */
+    /* Release any previous state.  Only do so when the cache actually looks
+     * initialized; a freshly zeroed struct has nothing to free. */
     if (cache->rasterizer || cache->count > 0)
         cbx_icon_cache_cleanup(cache);
 
-    memset(cache, 0, sizeof(*cache));
-    cache->renderer = renderer;
-    cache->rasterizer = nsvgCreateRasterizer();
-    if (!cache->rasterizer)
+    /* Allocate the rasterizer before publishing it so a failed init leaves
+     * a consistently-empty cache rather than one with a live renderer and
+     * no rasterizer. */
+    struct NSVGrasterizer *rasterizer = nsvgCreateRasterizer();
+    if (!rasterizer)
         return -ENOMEM;
 
+    memset(cache, 0, sizeof(*cache));
+    cache->renderer = renderer;
+    cache->rasterizer = rasterizer;
     snprintf(cache->icon_dir, sizeof(cache->icon_dir), "%s", icon_dir);
     cache->target_size = target_size;
     cache->count = 0;
@@ -314,6 +330,9 @@ int cbx_icon_cache_load_asset(cbx_icon_cache *cache, const char *icon_name,
     if (!cache || !cache->rasterizer || !icon_name || !filename ||
         icon_name[0] == '\0' || filename[0] == '\0')
         return -EINVAL;
+    /* Reject keys that cannot be stored intact before doing expensive work. */
+    if (strlen(icon_name) >= CBX_ICON_ICON_LEN)
+        return -ENAMETOOLONG;
     if (cbx_icon_cache_get(cache, icon_name) != NULL)
         return 0;
     return rasterize_svg_file(cache, icon_name, filename);

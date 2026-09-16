@@ -614,6 +614,42 @@ static void test_reparse_resets(void **state)
     assert_int_equal(map.count, 2);
 }
 
+/* A custom_icons entry that happens to carry a "type" field must not be
+ * promoted into the DeviceType mapping, and a following virtual_types
+ * section must still parse after a custom_icons section. */
+static void test_custom_entry_with_type_not_promoted(void **state)
+{
+    (void)state;
+    const char *yaml =
+        "virtual_types:\n"
+        "  - type: \"xb360\"\n"
+        "    icon: \"cc-xbox-360\"\n"
+        "    name: \"Xbox 360 Controller\"\n"
+        "custom_icons:\n"
+        "  - type: \"not-a-device\"\n"
+        "    icon: \"arcade-stick\"\n"
+        "    name: \"Arcade Stick\"\n"
+        "virtual_types:\n"
+        "  - type: \"ds5\"\n"
+        "    icon: \"cc-ps5\"\n"
+        "    name: \"DualSense\"\n";
+
+    cbx_icon_map map;
+    int rc = cbx_icon_map_parse(&map, yaml, 0);
+    assert_int_equal(rc, 0);
+    assert_int_equal(map.count, 2);
+    assert_string_equal(map.entries[0].type, "xb360");
+    assert_string_equal(map.entries[1].type, "ds5");
+
+    /* The custom_icons "type" is not a device mapping. */
+    char icon[CBX_ICON_ICON_LEN];
+    char name[CBX_ICON_NAME_LEN];
+    cbx_icon_map_lookup(&map, "not-a-device", icon, sizeof(icon),
+                        name, sizeof(name));
+    assert_string_equal(icon, "generic-gamepad");
+    assert_string_equal(name, "not-a-device");
+}
+
 /* --- nanosvg compatibility verification ----------------------------------- */
 
 /* Verify a single SVG parses and rasterizes to non-zero dimensions. */
@@ -839,6 +875,7 @@ int main(void)
         cmocka_unit_test(test_entry_missing_type),
         cmocka_unit_test(test_long_type_truncated),
         cmocka_unit_test(test_reparse_resets),
+        cmocka_unit_test(test_custom_entry_with_type_not_promoted),
         cmocka_unit_test(test_svg_ps5),
         cmocka_unit_test(test_svg_xbox360),
         cmocka_unit_test(test_svg_steam_deck),

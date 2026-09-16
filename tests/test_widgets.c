@@ -605,6 +605,56 @@ test_button_with_font(void **state)
     test_teardown(&ctx);
 }
 
+/* Regression: a button borrows its label texture from the text cache.  When
+ * the cache is cleared/evicts entries the texture is destroyed; the button
+ * must re-resolve it on the next draw instead of drawing a stale pointer. */
+static void
+test_button_label_refreshes_after_cache_clear(void **state)
+{
+    (void)state;
+    if (!font_available()) { skip(); return; }
+    TestCtx ctx;
+    assert_int_equal(test_setup(&ctx), 0);
+    cbx_theme theme;
+    cbx_theme_default(&theme);
+    cbx_text_cache cache;
+    assert_int_equal(cbx_text_cache_init(&cache, ctx.renderer), 0);
+    int fid = cbx_text_load_font(&cache, CBX_FONT_PATH, 16);
+    assert_true(fid >= 0);
+
+    cbx_button btn;
+    assert_int_equal(cbx_button_init(&btn, "Hello", fid, &cache, &theme,
+                                      NULL, NULL), 0);
+    assert_non_null(btn.label_tex);
+
+    /* Clearing the cache destroys cached textures; the button's borrowed
+     * pointer becomes dangling. */
+    cbx_text_cache_clear(&cache);
+    assert_int_equal(cache.entry_count, 0);
+
+    SDL_Rect r = {0, 0, 200, 60};
+    cbx_widget_set_rect(&btn.base, &r);
+    SDL_RenderClear(ctx.renderer);
+    cbx_widget_draw(&btn.base, ctx.renderer);   /* must re-resolve the label */
+
+    /* Drawing must have re-rendered the label into the live cache rather
+     * than reusing the destroyed pointer. */
+    assert_int_equal(cache.entry_count, 1);
+    assert_non_null(btn.label_tex);
+    int qw = 0, qh = 0;
+    assert_int_equal(SDL_QueryTexture(btn.label_tex, NULL, NULL, &qw, &qh), 0);
+    assert_true(qw > 0 && qh > 0);
+
+    /* The live pointer is the cache's current texture for this key. */
+    SDL_Texture *live = cbx_text_render(&cache, fid, "Hello",
+                                        theme.text_primary);
+    assert_ptr_equal(btn.label_tex, live);
+
+    cbx_widget_destroy(&btn.base);
+    cbx_text_cache_cleanup(&cache);
+    test_teardown(&ctx);
+}
+
 /* --- Label tests --------------------------------------------------- */
 
 static void
@@ -923,6 +973,39 @@ test_image_set_texture(void **state)
     cbx_image_set_texture(&img, NULL, false);
     assert_null(img.texture);
     assert_int_equal(img.tex_w, 0);
+
+    cbx_widget_destroy(&img.base);
+    test_teardown(&ctx);
+}
+
+/* Regression: re-applying the image's own texture must not destroy it. */
+static void
+test_image_set_texture_same_pointer(void **state)
+{
+    (void)state;
+    TestCtx ctx;
+    assert_int_equal(test_setup(&ctx), 0);
+
+    SDL_Texture *tex = make_test_texture(ctx.renderer, 32, 48);
+    assert_non_null(tex);
+
+    cbx_image img;
+    assert_int_equal(cbx_image_init(&img, tex, true), 0);
+
+    cbx_image_set_texture(&img, img.texture, true);
+    assert_ptr_equal(img.texture, tex);
+    assert_int_equal(img.tex_w, 32);
+    assert_int_equal(img.tex_h, 48);
+
+    int qw = 0, qh = 0;
+    assert_int_equal(SDL_QueryTexture(img.texture, NULL, NULL, &qw, &qh), 0);
+    assert_int_equal(qw, 32);
+    assert_int_equal(qh, 48);
+
+    SDL_Rect r = {0, 0, 64, 64};
+    cbx_widget_set_rect(&img.base, &r);
+    SDL_RenderClear(ctx.renderer);
+    cbx_widget_draw(&img.base, ctx.renderer);
 
     cbx_widget_destroy(&img.base);
     test_teardown(&ctx);
@@ -1378,6 +1461,7 @@ main(void)
         cmocka_unit_test(test_button_set_press_cb),
         cmocka_unit_test(test_button_unrelated_event),
         cmocka_unit_test(test_button_with_font),
+        cmocka_unit_test(test_button_label_refreshes_after_cache_clear),
         /* Label. */
         cmocka_unit_test(test_label_init_basic),
         cmocka_unit_test(test_label_init_null),
@@ -1393,6 +1477,7 @@ main(void)
         cmocka_unit_test(test_image_draw_center),
         cmocka_unit_test(test_image_no_event),
         cmocka_unit_test(test_image_set_texture),
+        cmocka_unit_test(test_image_set_texture_same_pointer),
         cmocka_unit_test(test_image_set_scale_mode),
         cmocka_unit_test(test_image_get_natural_dims_null),
         cmocka_unit_test(test_image_draw_null_texture),

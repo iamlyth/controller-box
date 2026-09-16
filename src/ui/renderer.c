@@ -92,9 +92,15 @@ int cbx_renderer_init(cbx_renderer *r, const char *title,
         r->is_gles = true;  /* software fallback = likely GLES-limited HW */
     }
 
-    /* Query full renderer info. */
+    /* Query full renderer info.  renderer_flags must be the actual reported
+     * capabilities, not the requested flags, and the software fallback must
+     * publish its real target-texture support (the requested software flag
+     * is not proof the backend accepted it). */
     SDL_RendererInfo info;
     if (SDL_GetRendererInfo(r->renderer, &info) == 0) {
+        r->renderer_flags = info.flags;
+        r->has_target_texture =
+            (info.flags & SDL_RENDERER_TARGETTEXTURE) != 0;
         if (info.flags & SDL_RENDERER_PRESENTVSYNC)
             r->vsync_enabled = true;
         /* Detect GLES backend by name. */

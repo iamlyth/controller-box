@@ -28,8 +28,13 @@ render_label(cbx_button *btn)
         : btn->theme->text_primary;
     SDL_Texture *tex = cbx_text_render(btn->text_cache, btn->font_id,
                                        btn->label, col);
+    /* Always adopt the cache's current answer, including NULL.  A failed
+     * or evicted render must clear the old pointer rather than leave the
+     * button drawing a texture the cache may already have destroyed. */
+    btn->label_tex = tex;
+    btn->label_w = 0;
+    btn->label_h = 0;
     if (tex) {
-        btn->label_tex = tex;
         int w, h;
         if (SDL_QueryTexture(tex, NULL, NULL, &w, &h) == 0) {
             btn->label_w = w;
@@ -46,6 +51,12 @@ button_draw(cbx_widget *w, SDL_Renderer *r)
     cbx_button *btn = (cbx_button *)w;
     if (!r)
         return;
+
+    /* Re-resolve the label every draw.  The texture is borrowed from the
+     * text cache, whose LRU eviction and cache_clear destroy textures; a
+     * pointer cached only at init/focus time would go stale.  Re-rendering
+     * is a cheap cache hit for an unchanged (font,text,colour) key. */
+    render_label(btn);
 
     SDL_Color bg = btn->base.focused
         ? btn->theme->panel_bg_hover

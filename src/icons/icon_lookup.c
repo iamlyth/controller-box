@@ -30,6 +30,10 @@
 #define PATH_MAX 4096
 #endif
 
+/* Reject custom override images larger than this in either dimension so a
+ * user-supplied file cannot force an unbounded texture allocation. */
+#define CBX_ICON_CUSTOM_MAX_DIM 4096
+
 /* ------------------------------------------------------------------ */
 /*  Path validation                                                   */
 /* ------------------------------------------------------------------ */
@@ -182,6 +186,13 @@ static int load_png(cbx_icon_cache *cache, const char *abs_path,
     }
     int w = surface->w;
     int h = surface->h;
+    if (w <= 0 || h <= 0 || w > CBX_ICON_CUSTOM_MAX_DIM ||
+        h > CBX_ICON_CUSTOM_MAX_DIM) {
+        fprintf(stderr, "icon_lookup: rejecting image with unsupported "
+                "dimensions %dx%d for %s\n", w, h, resolved);
+        SDL_FreeSurface(surface);
+        return -EINVAL;
+    }
 
     SDL_Texture *tex = SDL_CreateTextureFromSurface(cache->renderer, surface);
     SDL_FreeSurface(surface);
@@ -246,28 +257,27 @@ int cbx_icon_lookup(cbx_icon_cache *cache, const cbx_icon_map *map,
 
     if (icon_override && icon_override[0] != '\0') {
         if (icon_override[0] == '/') {
-            /* Absolute path → PNG via SDL2_image. */
-            /* Check if already cached (by the path itself). */
-            SDL_Texture *tex = cbx_icon_cache_get(cache, icon_override);
-            if (tex) {
-                result->texture = tex;
-                cbx_icon_cache_get_dims(cache, icon_override,
-                                        &result->width, &result->height);
-                return 0;
-            }
-
-            /* Load and cache the PNG. */
-            int rc = load_png(cache, icon_override, icon_override);
-            if (rc == 0) {
-                result->texture = cbx_icon_cache_get(cache, icon_override);
-                if (result->texture) {
-                    cbx_icon_cache_get_dims(cache, icon_override,
-                                            &result->width,
-                                            &result->height);
+            /* Absolute path → PNG via SDL2_image.  Validate first and use
+             * the canonical resolved path as the cache key so equivalent
+             * spellings of one file deduplicate instead of each consuming a
+             * cache slot. */
+            char canonical[PATH_MAX];
+            if (cbx_icon_validate_path(icon_override, canonical,
+                                       sizeof(canonical)) == 0) {
+                SDL_Texture *tex = cbx_icon_cache_get(cache, canonical);
+                if (!tex) {
+                    int rc = load_png(cache, canonical, canonical);
+                    if (rc == 0)
+                        tex = cbx_icon_cache_get(cache, canonical);
+                }
+                if (tex) {
+                    result->texture = tex;
+                    cbx_icon_cache_get_dims(cache, canonical,
+                                            &result->width, &result->height);
                     return 0;
                 }
             }
-            /* PNG load failed → fall through to device_type lookup. */
+            /* PNG load/validation failed → fall through to device_type lookup. */
         } else {
             /* Built-in icon name override. */
             SDL_Texture *tex = cbx_icon_cache_get(cache, icon_override);

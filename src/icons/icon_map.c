@@ -113,6 +113,11 @@ static int parse_icon_map_events(cbx_icon_map *map, yaml_parser_t *parser)
     int rc = 0;
     int depth = 0;
     map_state state = MAP_STATE_TOP;
+    /* Sequence section the current entry was opened from.  MAPPING_END must
+     * return to this section (virtual_types vs custom_icons) instead of
+     * assuming virtual_types, otherwise a custom_icons entry carrying a
+     * "type" field would be stored as a device-type mapping. */
+    map_state entry_parent = MAP_STATE_TOP;
 
     /* Current entry being built. */
     cbx_icon_entry cur_entry;
@@ -145,6 +150,7 @@ static int parse_icon_map_events(cbx_icon_map *map, yaml_parser_t *parser)
             }
             /* A mapping start inside a sequence = new entry. */
             if (state == MAP_STATE_VIRTUAL_TYPES || state == MAP_STATE_CUSTOM_ICONS) {
+                entry_parent = state;
                 state = MAP_STATE_ENTRY;
                 memset(&cur_entry, 0, sizeof(cur_entry));
             }
@@ -206,16 +212,18 @@ static int parse_icon_map_events(cbx_icon_map *map, yaml_parser_t *parser)
         case YAML_MAPPING_END_EVENT:
             depth--;
             if (state == MAP_STATE_ENTRY) {
-                /* Entry complete — store it if it has a type field. */
-                if (cur_entry.type[0] != '\0' &&
+                /* Entry complete.  Only virtual_types entries become
+                 * DeviceType→icon mappings; custom_icons are informational. */
+                if (entry_parent == MAP_STATE_VIRTUAL_TYPES &&
+                    cur_entry.type[0] != '\0' &&
                     map->count < CBX_ICON_MAP_MAX_ENTRIES) {
-                    /* Only store entries from virtual_types (those with type field). */
                     memcpy(&map->entries[map->count], &cur_entry,
                            sizeof(cur_entry));
                     map->count++;
                 }
-                /* Return to the sequence state. */
-                state = MAP_STATE_VIRTUAL_TYPES;
+                /* Return to the sequence this entry belongs to. */
+                state = entry_parent;
+                entry_parent = MAP_STATE_TOP;
                 memset(&cur_entry, 0, sizeof(cur_entry));
             }
             break;
