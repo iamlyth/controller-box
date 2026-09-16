@@ -289,6 +289,35 @@ test_map_ids_query_failure_reports_uncertain(void **state)
     assert_string_equal(paths_csv, "");
 }
 
+/*
+ * The source list reads but every per-source property read fails: an ORDER:n
+ * fallback is produced for display, yet it must not be matched to a saved
+ * ORDER:n preference (that would reroute a different weak controller).
+ */
+static void
+test_map_ids_per_source_read_failure_uncertain(void **state)
+{
+    restore_fixture *f = FIX(state);
+
+    assert_true(cbx_device_model_add_composite(&f->model,
+        "/org/shadowblip/InputPlumber/CompositeDevice0"));
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                           "SourceDevicePaths",
+                           "/org/shadowblip/InputPlumber/devices/source/event0");
+
+    char paths_csv[CBX_MAX_PATH_LEN * CBX_MAX_GAMEPAD_ORDER];
+    int restored = 0, skipped = 0;
+    bool failed = false;
+    int rc = cbx_gamepad_order_map_ids(f->backend, f->mock.bus, &f->model,
+        "ORDER:0", paths_csv, sizeof(paths_csv), &restored, &skipped,
+        &failed);
+    assert_int_equal(rc, 0);
+    assert_int_equal(restored, 0);
+    assert_int_equal(skipped, 0);
+    assert_true(failed);
+    assert_string_equal(paths_csv, "");
+}
+
 static void
 test_map_ids_order_id(void **state)
 {
@@ -637,6 +666,8 @@ main(void)
         cmocka_unit_test_setup_teardown(test_map_ids_null_counts_ok,
                                          setup, teardown),
         cmocka_unit_test_setup_teardown(test_map_ids_query_failure_reports_uncertain,
+                                         setup, teardown),
+        cmocka_unit_test_setup_teardown(test_map_ids_per_source_read_failure_uncertain,
                                          setup, teardown),
         cmocka_unit_test_setup_teardown(test_map_ids_order_id,
                                          setup, teardown),

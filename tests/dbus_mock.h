@@ -98,6 +98,8 @@ typedef struct {
     ip_mock_last_call    last_call;   /* most recent method call's string args */
     int                  get_property_count; /* number of get_property calls */
     int                  set_property_count; /* number of set_property calls */
+    uint64_t             deadline_ms;  /* last value passed to set_deadline (0 = none) */
+    int                  set_deadline_count; /* number of set_deadline calls */
     char  last_set_iface[64];  /* iface of the most recent set_property */
     char  last_set_prop[64];   /* property of the most recent set_property */
     char  last_set_value[128]; /* value of the most recent set_property */

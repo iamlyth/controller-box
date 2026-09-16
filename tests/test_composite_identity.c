@@ -220,6 +220,54 @@ test_extract_query_failure_is_uncertain(void **state)
 }
 
 static void
+test_extract_source_with_empty_props_is_confirmed_weak(void **state)
+{
+    ci_fixture *f = FIX(state);
+    /* Source present, all reads succeed but carry no stable identifier: a
+     * confirmed weak identity, distinguishable from a transient failure. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                           "SourceDevicePaths",
+                           "/org/shadowblip/InputPlumber/devices/source/event0");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_SOURCE_EVENT, "UniqueId", "");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_SOURCE_EVENT, "PhysPath", "");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_SOURCE_EVENT, "IdBustype", "");
+
+    cbx_identity ident;
+    cbx_composite_identity_status status = CBX_COMPOSITE_IDENTITY_OK;
+    int rc = cbx_composite_identity_extract(f->backend, f->mock.bus,
+                                            COMP_PATH, 3, &ident, &status);
+    assert_int_equal(rc, 0);
+    assert_int_equal(status, CBX_COMPOSITE_IDENTITY_OK);
+    assert_int_equal(ident.layer, CBX_IDENTITY_LAYER_ORDER);
+    assert_string_equal(ident.id, "ORDER:3");
+}
+
+/*
+ * The source list reads, but every per-source property read fails
+ * transiently (e.g. the source vanished mid-enumeration).  That is not a
+ * confirmed weak identity: the ORDER fallback is returned for display, but
+ * the status must be QUERY_FAILED so matchers never bind it to a saved
+ * ORDER:n preference and reroute a different controller.
+ */
+static void
+test_extract_per_source_read_failure_is_uncertain(void **state)
+{
+    ci_fixture *f = FIX(state);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                           "SourceDevicePaths",
+                           "/org/shadowblip/InputPlumber/devices/source/event0");
+
+    cbx_identity ident;
+    cbx_composite_identity_status status = CBX_COMPOSITE_IDENTITY_OK;
+    int rc = cbx_composite_identity_extract(f->backend, f->mock.bus,
+                                            COMP_PATH, 7, &ident, &status);
+    assert_int_equal(rc, 0);
+    assert_int_equal(status, CBX_COMPOSITE_IDENTITY_QUERY_FAILED);
+    assert_int_equal(ident.layer, CBX_IDENTITY_LAYER_ORDER);
+    assert_string_equal(ident.id, "ORDER:7");
+}
+
+static void
 test_extract_no_order_no_identity(void **state)
 {
     ci_fixture *f = FIX(state);
@@ -295,6 +343,10 @@ main(void)
         cmocka_unit_test_setup_teardown(test_extract_order_fallback_absent,
                                          setup, teardown),
         cmocka_unit_test_setup_teardown(test_extract_query_failure_is_uncertain,
+                                         setup, teardown),
+        cmocka_unit_test_setup_teardown(test_extract_source_with_empty_props_is_confirmed_weak,
+                                         setup, teardown),
+        cmocka_unit_test_setup_teardown(test_extract_per_source_read_failure_is_uncertain,
                                          setup, teardown),
         cmocka_unit_test_setup_teardown(test_extract_no_order_no_identity,
                                          setup, teardown),

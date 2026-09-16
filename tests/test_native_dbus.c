@@ -1314,6 +1314,62 @@ static void test_native_profile_yaml_semantic_round_trip(void **state)
     nip_stop_server(&sh);
 }
 
+/* ================================================================== */
+/*  Test: an active call deadline bounds a hung synchronous reply       */
+/* ================================================================== */
+
+static uint64_t
+test_monotonic_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
+}
+
+static void
+test_native_call_deadline_bounds_hung_reply(void **state)
+{
+    (void)state;
+    nip_server_handle sh;
+    const nip_server_config cfg = {
+        .num_composites = 1,
+        .version = "9.8.7",
+        .stall_managed_objects_ms = 1000,
+    };
+    assert_int_equal(nip_start_server(&sh, &cfg), 0);
+
+    const ip_dbus_backend *backend = ip_dbus_sd_backend();
+    ip_bus_handle bus = NULL;
+    assert_int_equal(backend->connect(&bus), 0);
+    assert_int_equal(wait_for_server(backend, bus, "9.8.7"), 0);
+
+    /* A deadline shorter than the server's reply stall must bound the
+     * synchronous call instead of waiting on the 25 s bus default. */
+    assert_int_equal(backend->set_deadline(bus, test_monotonic_ms() + 150), 0);
+
+    cbx_device_model model;
+    cbx_device_model_init(&model);
+    uint64_t started = test_monotonic_ms();
+    int rc = cbx_objectmanager_enumerate(backend, bus, &model);
+    uint64_t elapsed = test_monotonic_ms() - started;
+
+    assert_int_equal(rc, -ETIMEDOUT);
+    assert_true(elapsed < 800);
+
+    /* Let the stalled server finish and return to its event loop, then
+     * clearing the deadline restores normal (bounded-default) operation. */
+    usleep(1200 * 1000);
+    assert_int_equal(backend->set_deadline(bus, 0), 0);
+    char *version = NULL;
+    assert_int_equal(backend->get_property(bus, IP_DBUS_NAME,
+        IP_DBUS_MANAGER_PATH, IP_IFACE_MANAGER, "Version", &version), 0);
+    assert_string_equal(version, "9.8.7");
+    free(version);
+
+    backend->disconnect(bus);
+    nip_stop_server(&sh);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -1334,6 +1390,7 @@ int main(void)
         cmocka_unit_test(test_native_intercept_mode_writable),
         cmocka_unit_test(test_native_boolean_property_set),
         cmocka_unit_test(test_native_input_event_signal),
+        cmocka_unit_test(test_native_call_deadline_bounds_hung_reply),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

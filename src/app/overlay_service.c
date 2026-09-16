@@ -787,6 +787,29 @@ reconcile_now_ms(void)
     return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
 }
 
+/*
+ * Apply (or clear, with 0) the bus-wide synchronous-call deadline that bounds
+ * a readiness/recovery/hotplug pass.  The production sd-bus backend scales
+ * every method call down to the remaining budget and fails an already-expired
+ * call with -ETIMEDOUT, so the pass cannot blow its advertised window inside
+ * a single slow/hung reply.  Backends that do not implement set_deadline are
+ * left alone.
+ */
+static void
+overlay_set_call_deadline(cbx_overlay_service_ctx *svc, uint64_t deadline_ms)
+{
+    if (svc && svc->conn.backend && svc->conn.backend->set_deadline)
+        (void)svc->conn.backend->set_deadline(svc->conn.bus, deadline_ms);
+}
+
+static uint64_t
+overlay_pass_deadline_ms(const cbx_overlay_service_ctx *svc)
+{
+    uint32_t timeout = svc->reconcile_timeout_ms ? svc->reconcile_timeout_ms :
+        CBX_RECONCILE_TIMEOUT_MS;
+    return reconcile_now_ms() + timeout;
+}
+
 static const char *
 reconcile_error_category(int rc)
 {
@@ -977,6 +1000,10 @@ wait_for_exact_target(cbx_overlay_service_ctx *svc, const char *path,
                     return last_rc;
             }
         }
+        /* The bus-wide pass deadline expired inside a call: abort instead of
+         * spinning against a backend that will keep failing fast. */
+        if (last_rc == -ETIMEDOUT)
+            return -ETIMEDOUT;
         if (reconcile_now_ms() >= deadline)
             return -ETIMEDOUT;
         /* Dispatch ObjectManager traffic between bounded polls; sleeping is
@@ -1015,6 +1042,9 @@ wait_for_attachment(cbx_overlay_service_ctx *svc, const char *composite,
         free(paths);
         if (found)
             return 0;
+        /* See wait_for_exact_target: honour the bus-wide pass deadline. */
+        if (last_rc == -ETIMEDOUT)
+            return -ETIMEDOUT;
         if (reconcile_now_ms() >= deadline)
             return -ETIMEDOUT;
         if (svc->conn.backend->process) {
@@ -1324,6 +1354,11 @@ cbx_overlay_reconcile_hotplug(cbx_overlay_service_ctx *svc)
     if (!svc || !svc->conn.backend || !svc->conn.bus)
         return -EINVAL;
 
+    /* Bound the whole hotplug pass: identity extraction, grid rebuild, input
+     * map, PASS writes and trigger registration all issue synchronous DBus
+     * calls on the UI thread. */
+    overlay_set_call_deadline(svc, overlay_pass_deadline_ms(svc));
+
     /* The device model was already updated incrementally by ip_hotplug
      * (SPEC §10.1: InterfacesAdded/InterfacesRemoved).  No full
      * re-enumeration needed — use the current model state directly. */
@@ -1402,6 +1437,7 @@ cbx_overlay_reconcile_hotplug(cbx_overlay_service_ctx *svc)
                                           &svc->input_ctx);
     if (rc != 0) {
         overlay_set_readiness_detail(svc, "input mapping", rc);
+        overlay_set_call_deadline(svc, 0);
         return rc;
     }
 
@@ -1420,6 +1456,7 @@ cbx_overlay_reconcile_hotplug(cbx_overlay_service_ctx *svc)
      * the surface is stale: dirty it to re-render from the new device model
      * (SPEC §4.9 device-change trigger). */
     cbx_overlay_surface_mark_dirty_all(&svc->surface);
+    overlay_set_call_deadline(svc, 0);
     return 0;
 }
 
@@ -1601,27 +1638,36 @@ overlay_recover(cbx_overlay_service_ctx *svc)
 
     overlay_stop_all_polls(svc);
 
+    /* One wall-clock deadline for the whole recovery pass: enumeration,
+     * virtual-controller reconciliation, identity extraction, gamepad-order
+     * restore and the required wiring steps are all synchronous DBus work on
+     * the UI thread (SPEC §2.4: operational within two seconds). */
+    overlay_set_call_deadline(svc, overlay_pass_deadline_ms(svc));
+    int rc;
+
     /* The owner must be current and credential-verified; without a trusted
      * sender there is no safe endpoint to subscribe or route against. */
     if (!ip_connection_is_sender_verified(&svc->conn) ||
         !ip_connection_get_unique_name(&svc->conn)) {
         overlay_set_readiness_detail(svc, "owner verification",
                                      IP_ERR_UNVERIFIED);
-        return IP_ERR_UNVERIFIED;
+        rc = IP_ERR_UNVERIFIED;
+        goto out;
     }
 
     if (reconcile_enumerate(svc, NULL) != 0) {
         overlay_set_readiness_detail(svc, "enumeration", -EIO);
-        return -EIO;
+        rc = -EIO;
+        goto out;
     }
 
-    int rc = cbx_reconcile_startup_targets(svc);
+    rc = cbx_reconcile_startup_targets(svc);
     if (rc != 0) {
         snprintf(svc->readiness_detail, sizeof(svc->readiness_detail), "%s",
                  svc->reconcile_status.detail[0]
                      ? svc->reconcile_status.detail
                      : "virtual-controller reconciliation failed");
-        return rc;
+        goto out;
     }
 
     svc->comp_count = svc->model.composite_count;
@@ -1648,7 +1694,11 @@ overlay_recover(cbx_overlay_service_ctx *svc)
     cbx_profile_cycle_init(&svc->profile_cycle, svc->conn.backend,
                             svc->conn.bus, &svc->assignments, &svc->profiles);
 
-    return overlay_wire_required_steps(svc);
+    rc = overlay_wire_required_steps(svc);
+
+out:
+    overlay_set_call_deadline(svc, 0);
+    return rc;
 }
 
 /* Arm the bounded retry window after any failed readiness or DBus
@@ -2245,7 +2295,14 @@ int run_overlay_service(int dry_run)
     cbx_assignments_init(&svc->assignments);
     cbx_assignments_load(&svc->assignments);  /* best-effort */
 
-    rc = svc->backend_ready ? cbx_reconcile_startup_targets(svc) : 0;
+    if (svc->backend_ready) {
+        /* Bound the synchronous topology reconciliation. */
+        overlay_set_call_deadline(svc, overlay_pass_deadline_ms(svc));
+        rc = cbx_reconcile_startup_targets(svc);
+        overlay_set_call_deadline(svc, 0);
+    } else {
+        rc = 0;
+    }
     if (rc != 0) {
         fprintf(stderr,
                 "controller-box: failed to reconcile virtual controllers: %d\n",
@@ -2281,9 +2338,12 @@ int run_overlay_service(int dry_run)
     svc->comp_count = svc->model.composite_count;
     if (svc->comp_count > CBX_MAX_COMPOSITES)
         svc->comp_count = CBX_MAX_COMPOSITES;
+    if (svc->comp_count > 0)
+        overlay_set_call_deadline(svc, overlay_pass_deadline_ms(svc));
     for (int i = 0; i < svc->comp_count; i++)
         fill_composite_info(&svc->composites[i], &svc->model.composites[i],
                              svc->conn.backend, svc->conn.bus);
+    overlay_set_call_deadline(svc, 0);
 
     cbx_select_grid_init(&svc->grid);
     cbx_select_grid_build(&svc->grid, svc->composites, svc->comp_count,
@@ -2399,9 +2459,16 @@ int run_overlay_service(int dry_run)
     /* The required readiness sequence (assignment restoration, input map,
      * required subscriptions, trigger registration, poll arming and
      * PropertiesChanged wiring) is defined once in
-     * overlay_wire_required_steps() and shared with overlay_recover(). */
-    if (svc->backend_ready && overlay_wire_required_steps(svc) != 0)
-        svc->backend_ready = false;
+     * overlay_wire_required_steps() and shared with overlay_recover().  Bound
+     * it with the same wall-clock budget as recovery so a hung reply cannot
+     * stall startup past the advertised window. */
+    if (svc->backend_ready) {
+        overlay_set_call_deadline(svc, overlay_pass_deadline_ms(svc));
+        int wire_rc = overlay_wire_required_steps(svc);
+        overlay_set_call_deadline(svc, 0);
+        if (wire_rc != 0)
+            svc->backend_ready = false;
+    }
 
     if (!svc->backend_ready) {
         const char *reason = svc->readiness_detail[0]

@@ -58,6 +58,8 @@ static volatile sig_atomic_t s_service_running = 1;
 static unsigned s_publication_delay_ms;
 static unsigned s_removal_delay_ms;
 static unsigned s_attachment_delay_ms;
+/* Delay the first GetManagedObjects reply once (per-call deadline test). */
+static unsigned s_stall_managed_objects_ms;
 static bool     s_reverse_object_order;
 static bool     s_fail_stop;
 static bool     s_fail_attach;
@@ -866,6 +868,14 @@ static int
 method_get_managed_objects(sd_bus_message *m, void *userdata, sd_bus_error *error)
 {
     (void)userdata; (void)error;
+
+    /* One-shot reply stall so a client with an active deadline can prove the
+     * synchronous call is bounded rather than waiting on the bus default. */
+    if (s_stall_managed_objects_ms) {
+        usleep(s_stall_managed_objects_ms * 1000);
+        s_stall_managed_objects_ms = 0;
+    }
+
     sd_bus_message *reply = NULL;
     int rc = sd_bus_message_new_method_return(m, &reply);
     if (rc < 0) return rc;
@@ -1181,6 +1191,7 @@ pid_t nip_fork_server(const char *address, const nip_server_config *cfg)
     s_publication_delay_ms = cfg ? cfg->publication_delay_ms : 0;
     s_removal_delay_ms = cfg ? cfg->removal_delay_ms : 0;
     s_attachment_delay_ms = cfg ? cfg->attachment_delay_ms : 0;
+    s_stall_managed_objects_ms = cfg ? cfg->stall_managed_objects_ms : 0;
     s_reverse_object_order = cfg && cfg->reverse_object_order;
     s_fail_stop = cfg && cfg->fail_stop;
     s_fail_attach = cfg && cfg->fail_attach;

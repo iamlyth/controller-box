@@ -570,6 +570,12 @@ test_hotplug_target_add_rebuilds_columns(void **state)
 
     assert_false(svc->hp.model_changed);
     assert_int_equal(svc->grid.col_count, 4);
+
+    /* The hotplug pass bounds its synchronous DBus chain with a nonzero
+     * deadline and clears it on exit (efficiency BLOCKER: no unbounded
+     * per-call/per-pass chain). */
+    assert_true(f->mock.set_deadline_count >= 2);
+    assert_int_equal(f->mock.deadline_ms, 0);
 }
 
 /* ====================================================================== */

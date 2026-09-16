@@ -182,6 +182,14 @@ typedef struct ip_dbus_backend {
      * negative errno on error.  Mock implementations return 0 (no-op:
      * signals are injected directly via inject_signal). */
     int  (*process)(ip_bus_handle bus);
+
+    /* Set/clear the wall-clock deadline (CLOCK_MONOTONIC milliseconds, 0 =
+     * clear) that bounds the remaining synchronous calls on this bus.
+     * Production scales each method call's timeout to the remaining budget
+     * and fails an already-expired call with -ETIMEDOUT, so a single hung
+     * reply cannot stall a readiness/recovery pass past its budget.
+     * Implementations may leave this NULL; callers treat NULL as a no-op. */
+    int  (*set_deadline)(ip_bus_handle bus, uint64_t deadline_ms);
 } ip_dbus_backend;
 
 /*

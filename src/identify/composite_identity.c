@@ -65,14 +65,15 @@ copy_trimmed_token(const char *begin, const char *end, char *out, size_t out_siz
  * strongest identity.  `connection_order` is -1 here: the composite-level
  * ORDER fallback is applied once, after every source has been considered.
  *
- * `out_read_ok` is set when at least one property read succeeded, which
- * distinguishes "device present but without stable identity" from "all reads
- * failed".
+ * `out_read_failed` is set when any attempted property read failed.  With no
+ * stable identity available, that distinguishes "device present but without
+ * stable identity" (all reads succeeded with empty values) from a transient
+ * read failure that must be reported as uncertain rather than matched.
  */
 static int
 extract_from_source(const ip_dbus_backend *backend, ip_bus_handle bus,
                     const char *source_path, cbx_identity *out_ident,
-                    bool *out_read_ok)
+                    bool *out_read_failed)
 {
     cbx_source_iface iface = cbx_source_iface_for_path(source_path);
     char *unique_id = NULL;
@@ -80,11 +81,14 @@ extract_from_source(const ip_dbus_backend *backend, ip_bus_handle bus,
     char *serial_number = NULL;
     char *id_bustype = NULL;
     bool any_ok = false;
+    bool read_failed = false;
 
     if (iface == CBX_SOURCE_IFACE_HIDRAW) {
         if (ip_source_get_serial_number(backend, bus, source_path,
                                         IP_IFACE_SOURCE_HIDRAW,
-                                        &serial_number) == 0)
+                                        &serial_number) != 0)
+            read_failed = true;
+        else
             any_ok = true;
     } else {
         /* EventDevice and UdevDevice expose the same identification property
@@ -92,29 +96,45 @@ extract_from_source(const ip_dbus_backend *backend, ip_bus_handle bus,
          * UdevDevice so a non-event source (e.g. iio:deviceN) is not lost. */
         if (ip_source_get_unique_id(backend, bus, source_path,
                                     IP_IFACE_SOURCE_EVENT,
-                                    &unique_id) == 0)
+                                    &unique_id) != 0)
+            read_failed = true;
+        else
             any_ok = true;
         if (ip_source_get_phys_path(backend, bus, source_path,
                                     IP_IFACE_SOURCE_EVENT,
-                                    &phys_path) == 0)
+                                    &phys_path) != 0)
+            read_failed = true;
+        else
             any_ok = true;
         if (ip_source_get_id_bustype(backend, bus, source_path,
                                      IP_IFACE_SOURCE_EVENT,
-                                     &id_bustype) == 0)
+                                     &id_bustype) != 0)
+            read_failed = true;
+        else
             any_ok = true;
 
         if (!any_ok) {
+            /* No EventDevice property was readable: retry the same set on
+             * UdevDevice.  The retry supersedes the EventDevice attempt, so
+             * only the retry's failures are reported. */
+            read_failed = false;
             if (ip_source_get_unique_id(backend, bus, source_path,
                                         IP_IFACE_SOURCE_UDEV,
-                                        &unique_id) == 0)
+                                        &unique_id) != 0)
+                read_failed = true;
+            else
                 any_ok = true;
             if (ip_source_get_phys_path(backend, bus, source_path,
                                         IP_IFACE_SOURCE_UDEV,
-                                        &phys_path) == 0)
+                                        &phys_path) != 0)
+                read_failed = true;
+            else
                 any_ok = true;
             if (ip_source_get_id_bustype(backend, bus, source_path,
                                          IP_IFACE_SOURCE_UDEV,
-                                         &id_bustype) == 0)
+                                         &id_bustype) != 0)
+                read_failed = true;
+            else
                 any_ok = true;
         }
     }
@@ -134,8 +154,8 @@ extract_from_source(const ip_dbus_backend *backend, ip_bus_handle bus,
     free(serial_number);
     free(id_bustype);
 
-    if (out_read_ok)
-        *out_read_ok = any_ok;
+    if (out_read_failed)
+        *out_read_failed = read_failed;
 
     return rc;
 }
@@ -189,6 +209,7 @@ cbx_composite_identity_extract(const ip_dbus_backend *backend,
     }
 
     bool saw_source = false;
+    bool read_failed_any = false;
     if (paths && paths[0]) {
         const char *p = paths;
         while (*p) {
@@ -200,15 +221,16 @@ cbx_composite_identity_extract(const ip_dbus_backend *backend,
                                    sizeof(source_path)) > 0) {
                 saw_source = true;
                 cbx_identity candidate;
-                bool read_ok = false;
+                bool source_read_failed = false;
                 if (extract_from_source(backend, bus, source_path,
-                                        &candidate, &read_ok) == 0) {
+                                        &candidate, &source_read_failed) == 0) {
                     /* Keep the strongest (lowest layer number). */
                     if (out_ident->layer == CBX_IDENTITY_LAYER_NONE ||
                         (int)candidate.layer < (int)out_ident->layer)
                         *out_ident = candidate;
                 }
-                (void)read_ok;
+                if (source_read_failed)
+                    read_failed_any = true;
             }
 
             if (!comma)
@@ -221,9 +243,17 @@ cbx_composite_identity_extract(const ip_dbus_backend *backend,
     if (out_ident->layer != CBX_IDENTITY_LAYER_NONE)
         return 0;
 
+    /* No stable identity was obtained from any source.  A source that was
+     * present but whose properties could not all be read is a transient
+     * failure, not a confirmed weak identity: report it as uncertain so
+     * assignment/order matchers skip the entry instead of letting the
+     * ORDER fallback match another controller's saved weak preference. */
     if (!saw_source) {
         if (out_status)
             *out_status = CBX_COMPOSITE_IDENTITY_ABSENT;
+    } else if (read_failed_any) {
+        if (out_status)
+            *out_status = CBX_COMPOSITE_IDENTITY_QUERY_FAILED;
     }
 
     if (have_order) {

@@ -174,6 +174,14 @@ static void mock_disconnect(ip_bus_handle bus) {
     (void)bus;  /* nothing to free at the handle level */
 }
 
+static int mock_set_deadline(ip_bus_handle bus, uint64_t deadline_ms) {
+    ip_dbus_mock *mock = (ip_dbus_mock *)bus;
+    if (!mock) return -EINVAL;
+    mock->deadline_ms = deadline_ms;
+    mock->set_deadline_count++;
+    return 0;
+}
+
 static int mock_get_unique_name(ip_bus_handle bus, const char *well_known,
                                 char **out_unique) {
     (void)well_known;
@@ -474,5 +482,6 @@ const ip_dbus_backend *ip_dbus_mock_backend(ip_dbus_mock *mock) {
     s_mock_backend.unsubscribe_signal    = mock_unsubscribe_signal;
     s_mock_backend.inject_signal         = mock_inject_signal;
     s_mock_backend.process               = mock_process;
+    s_mock_backend.set_deadline          = mock_set_deadline;
     return &s_mock_backend;
 }

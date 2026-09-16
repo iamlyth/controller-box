@@ -6,9 +6,11 @@
  * empty on daemon restart (gap #2).  The persistence layer
  * (ip_gamepad_order_save/load, Task 15) saves/loads the order as
  * identity IDs in assignments.yaml.  This module provides the
- * orchestration: after InputPlumber restart and re-enumeration, map
- * the saved IDs back to composite device paths by querying PersistentId
- * on each composite, and re-apply the order via ip_manager_set_gamepad_order().
+ * orchestration: after InputPlumber restart and re-enumeration, map the
+ * saved IDs back to composite device paths by extracting each composite's
+ * source-derived physical identity (composite_identity.h) — never the
+ * opaque PersistentId — and re-apply the order via
+ * ip_manager_set_gamepad_order().
  *
  * Stale IDs (saved IDs with no matching composite after restart) are
  * skipped.  The caller is informed of restored and skipped counts.
@@ -77,9 +79,12 @@ int cbx_gamepad_order_restore(const ip_dbus_backend *backend,
 /*
  * Map saved gamepad_order IDs to composite device paths.
  *
- * For each saved ID, iterates composites in the device model and queries
- * PersistentId to find a match.  Builds a CSV of composite paths in the
- * saved order.  Stale IDs (no match) are counted in *out_skipped_count.
+ * For each saved ID, matches against the identities extracted once for the
+ * whole model via cbx_model_extract_identities() (BT MAC → USB serial → USB
+ * port path → connection order, SPEC §6.2).  Builds a CSV of composite
+ * paths in the saved order.  Stale IDs (no match) are counted in
+ * *out_skipped_count; a transient identity query failure is reported via
+ * *out_query_failed instead of being treated as absence.
  *
  * This is the core mapping logic, exposed for testing.  The caller
  * normally uses cbx_gamepad_order_restore() instead.

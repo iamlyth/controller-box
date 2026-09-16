@@ -81,7 +81,12 @@ cbx_source_iface cbx_source_iface_for_path(const char *source_path);
  * @return 0 when an identity was extracted (including ORDER:n);
  *         -ENOENT when no identity could be extracted;
  *         negative errno when required args are NULL or the source list
- *         read failed (out_status is QUERY_FAILED in that case).
+ *         read failed (out_status is QUERY_FAILED in that case).  When the
+ *         source list reads successfully but no stable identity is obtained
+ *         from any source whose property reads failed, out_status is also
+ *         QUERY_FAILED (the ORDER:n fallback is still produced for display
+ *         continuity, but matchers must not treat it as a confirmed
+ *         identity).
  */
 int cbx_composite_identity_extract(const ip_dbus_backend *backend,
                                    ip_bus_handle bus,

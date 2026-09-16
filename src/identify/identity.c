@@ -6,11 +6,10 @@
  * Task 14) and passes them to cbx_identity_extract(), which selects the
  * strongest available identity layer and formats the prefixed ID string.
  *
- * Linux input subsystem bus type constants (from linux/input.h):
- *   BUS_USB       = 0x03
+ * Linux input subsystem bus type constant (from linux/input.h):
  *   BUS_BLUETOOTH = 0x05
- *   BUS_I8042     = 0x11
- *   (others are irrelevant for controller identification)
+ * Other bus types need no constant here: the layer ladder keys Bluetooth
+ * off BUS_BLUETOOTH and treats every other bus by its property values.
  */
 #include "identity.h"
 
@@ -23,7 +22,6 @@
 /* --- Constants ----------------------------------------------------------- */
 
 /* Linux input subsystem bus types. */
-#define BUS_USB       0x03
 #define BUS_BLUETOOTH 0x05
 
 /* --- Init ---------------------------------------------------------------- */
@@ -268,37 +266,12 @@ cbx_identity_extract(const cbx_source_props *props,
      * Also, if the bus type is USB, we have higher confidence this is
      * a real serial number rather than something else. */
     const char *serial = get_serial(props);
-    if (serial && *serial) {
-        /* A MAC address is handled by layer 1 (or falls here for non-BT
-         * devices). If it IS a MAC and the bus is NOT Bluetooth, we still
-         * treat it as layer 2 (USB serial) since it's a valid unique
-         * identifier — just format it as USB:SNxxxxx if it passes the
-         * serial character check, or skip it if it contains colons. */
-        bool is_mac = cbx_identity_is_mac_address(serial);
-
-        if (!is_mac) {
-            /* Regular USB serial */
-            if (format_usb_serial(serial, out_ident) == 0)
-                return 0;
-        } else if (bustype != BUS_BLUETOOTH) {
-            /* MAC-like string on a non-BT bus: treat as serial.
-             * But MAC contains colons which aren't valid serial chars,
-             * so format it differently — use the raw string as the serial
-             * value. Actually, colons are not in is_serial_char(), so
-             * format_usb_serial will reject it. We need to handle this
-             * case: a USB device reporting a MAC-like unique ID.
-             *
-             * Per SPEC §6.2: "USB serial" is from evdev uniq. Some USB
-             * devices (e.g. Bluetooth dongles) may report MAC-like strings.
-             * For pure USB devices, a MAC-format uniq is unusual but valid
-             * as a unique identifier. We'll format it as USB:SNxxxxx only
-             * if the characters are valid; otherwise skip to layer 3.
-             *
-             * In practice, if is_mac is true and bus is USB, this is likely
-             * a composite device or mis-reported bustype. Skip to layer 3.
-             */
-            /* Skip — can't format MAC as USB serial due to colons */
-        }
+    if (serial && *serial && !cbx_identity_is_mac_address(serial)) {
+        /* A regular USB serial.  A MAC-format serial contains ':' and never
+         * passes the serial character check, so it simply falls through to
+         * the phys/order layers below (SPEC §6.2 layers 3/4). */
+        if (format_usb_serial(serial, out_ident) == 0)
+            return 0;
     }
 
     /* Layer 3: USB port path (phys). */

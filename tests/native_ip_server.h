@@ -31,6 +31,8 @@ typedef struct {
     unsigned    publication_delay_ms; /* Create reply precedes OM publication */
     unsigned    removal_delay_ms;     /* Stop reply precedes OM disappearance */
     unsigned    attachment_delay_ms;  /* replacement precedes TargetDevices state */
+    unsigned    stall_managed_objects_ms; /* delay the first GetManagedObjects
+                                           * reply (per-call deadline test) */
     bool        reverse_object_order; /* exercise unordered OM dictionaries */
     bool        fail_stop;
     bool        fail_attach;

@@ -23,11 +23,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 /* --- Production bus handle wrapper --------------------------------------- */
 /* ip_bus_handle is void *; in production it points to this struct. */
 
 #define MAX_SD_SLOTS 16
+
+/* Bound every synchronous sd-bus call.  sd-bus's 25 s default would let a
+ * hung InputPlumber freeze the single-threaded UI/service far past its
+ * recovery window; a caller-set deadline scales this down further. */
+#define CBX_DBUS_METHOD_CALL_TIMEOUT_US (2000ULL * 1000ULL)
 
 typedef struct {
     sd_bus      *bus;
@@ -37,6 +43,7 @@ typedef struct {
     char        *expected_sender;  /* InputPlumber's unique bus name for sender verification */
     uint32_t     expected_pid;     /* verified PID of the InputPlumber owner (0 = unverified) */
     bool         expected_pid_set; /* whether expected_pid carries a verified value */
+    uint64_t     deadline_ms;      /* active pass deadline (0 = none) */
 } sd_bus_wrapper;
 
 /* Forward declarations — defined with the property setter below. */
@@ -44,6 +51,50 @@ static int translate_sd_error(int rc, const sd_bus_error *error);
 static bool sd_is_array_property(const char *prop);
 static bool sd_is_uint_property(const char *prop);
 static bool sd_is_bool_property(const char *prop);
+
+/* --- Wall-clock call deadline -------------------------------------------- */
+
+static uint64_t
+sd_monotonic_ms(void)
+{
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+        return 0;
+    return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
+}
+
+/* Apply the active deadline to the bus's method-call timeout.  Returns
+ * -ETIMEDOUT when the deadline has already passed (the caller must not issue
+ * the call), otherwise 0 (or a negative sd-bus error). */
+static int
+sd_apply_call_deadline(sd_bus_wrapper *w)
+{
+    if (!w || !w->bus)
+        return -EINVAL;
+
+    uint64_t usec = CBX_DBUS_METHOD_CALL_TIMEOUT_US;
+    if (w->deadline_ms != 0) {
+        uint64_t now = sd_monotonic_ms();
+        if (now >= w->deadline_ms)
+            return -ETIMEDOUT;
+        uint64_t remaining_usec = (w->deadline_ms - now) * 1000u;
+        if (remaining_usec < usec)
+            usec = remaining_usec;
+    }
+
+    int r = sd_bus_set_method_call_timeout(w->bus, usec);
+    return r < 0 ? r : 0;
+}
+
+static int
+sd_set_deadline(ip_bus_handle bus, uint64_t deadline_ms)
+{
+    sd_bus_wrapper *w = (sd_bus_wrapper *)bus;
+    if (!w)
+        return -EINVAL;
+    w->deadline_ms = deadline_ms;
+    return 0;
+}
 
 /* Callback data for signal subscriptions. */
 typedef struct {
@@ -88,7 +139,10 @@ sd_query_owner_creds(const sd_bus_wrapper *w, const char *unique_name,
         return -EINVAL;
 
     sd_bus_creds *creds = NULL;
-    int r = sd_bus_get_name_creds(w->bus, unique_name,
+    int r = sd_apply_call_deadline((sd_bus_wrapper *)w);
+    if (r < 0)
+        return r;
+    r = sd_bus_get_name_creds(w->bus, unique_name,
                                   SD_BUS_CREDS_PID | SD_BUS_CREDS_EUID,
                                   &creds);
     if (r < 0)
@@ -562,6 +616,11 @@ sd_connect(ip_bus_handle *bus)
         return r;
     }
 
+    /* Cap the transport default (25 s) so a hung peer cannot stall a call
+     * indefinitely even outside a bounded pass. */
+    (void)sd_bus_set_method_call_timeout(w->bus,
+                                         CBX_DBUS_METHOD_CALL_TIMEOUT_US);
+
     *bus = w;
     return 0;
 }
@@ -608,7 +667,13 @@ sd_get_unique_name(ip_bus_handle bus, const char *well_known,
     sd_bus_error   error = SD_BUS_ERROR_NULL;
     sd_bus_message *reply = NULL;
 
-    int r = sd_bus_call_method(w->bus,
+    int r = sd_apply_call_deadline(w);
+    if (r < 0) {
+        sd_bus_error_free(&error);
+        return r;
+    }
+
+    r = sd_bus_call_method(w->bus,
         "org.freedesktop.DBus",      /* destination */
         "/org/freedesktop/DBus",     /* path */
         "org.freedesktop.DBus",      /* interface */
@@ -717,7 +782,12 @@ sd_get_property(ip_bus_handle bus, const char *dest,
     sd_bus_error error = SD_BUS_ERROR_NULL;
     sd_bus_message *reply = NULL;
     const char *signature = ip_dbus_property_signature(prop);
-    int r = sd_bus_get_property(w->bus, dest, path, iface, prop,
+    int r = sd_apply_call_deadline(w);
+    if (r < 0) {
+        sd_bus_error_free(&error);
+        return r;
+    }
+    r = sd_bus_get_property(w->bus, dest, path, iface, prop,
                                 &error, &reply, signature);
     if (r < 0) {
         r = translate_sd_error(r, &error);
@@ -1032,6 +1102,10 @@ sd_call_method(ip_bus_handle bus, const char *dest,
     char **out = va_arg(ap, char **);
     va_end(ap);
 
+    r = sd_apply_call_deadline(w);
+    if (r < 0)
+        goto fail;
+
     r = sd_bus_call(w->bus, m, 0, &error, &reply);
     if (r < 0) {
         r = translate_sd_error(r, &error);
@@ -1207,6 +1281,10 @@ sd_set_property(ip_bus_handle bus, const char *dest,
             goto fail;
     }
 
+    r = sd_apply_call_deadline(w);
+    if (r < 0)
+        goto fail;
+
     r = sd_bus_call(w->bus, m, 0, &error, &reply);
     if (r < 0) {
         r = translate_sd_error(r, &error);
@@ -1270,7 +1348,11 @@ sd_get_managed_objects(ip_bus_handle bus, const char *dest,
     sd_bus_error   error = SD_BUS_ERROR_NULL;
     sd_bus_message *reply = NULL;
 
-    int r = sd_bus_call_method(w->bus, dest, path,
+    int r = sd_apply_call_deadline(w);
+    if (r < 0)
+        goto cleanup;
+
+    r = sd_bus_call_method(w->bus, dest, path,
                                IP_IFACE_OBJECT_MANAGER, "GetManagedObjects",
                                &error, &reply, "");
     if (r < 0) {
@@ -1433,6 +1515,7 @@ static const ip_dbus_backend s_sd_backend = {
     .unsubscribe_signal   = sd_unsubscribe_signal,
     .inject_signal        = sd_inject_signal,
     .process              = sd_process,
+    .set_deadline         = sd_set_deadline,
 };
 
 const ip_dbus_backend *
