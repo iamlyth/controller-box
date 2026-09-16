@@ -1123,8 +1123,8 @@ test_installed_functional(void **state)
     svc->lifecycle.fade_out_ms = 0;
     svc->lifecycle.state = CBX_OVERLAY_IDLE;
 
-    /* 8n: Wire on_save (production callback). */
-    svc->lifecycle.on_save = cbx_overlay_on_save;
+    /* 8n: Wire on_save (production close-path callback, deadline-bounded). */
+    svc->lifecycle.on_save = cbx_overlay_on_save_bounded;
     svc->lifecycle.on_save_data = svc;
 
     /* 8o: Player mode + callbacks. */

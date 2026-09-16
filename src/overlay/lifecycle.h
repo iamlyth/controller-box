@@ -12,10 +12,13 @@
  *   CLOSING → IDLE  (fade-out animation complete, or instant if 0 ms)
  *
  * On close (VISIBLE → CLOSING):
- *   1. Save assignments (via on_save callback — caller handles persistence
- *      and conflict resolution per SPEC §4.5).
- *   2. Set InterceptMode back to PASS (1) via DBus so input flows to the game
- *      in <1 ms (SPEC §11).
+ *   1. Set InterceptMode back to PASS (1) via DBus so input flows to the game
+ *      in <1 ms (SPEC §11).  This MUST be the first work close does: the save
+ *      callback performs a full engine apply plus persistence and can take
+ *      many synchronous bus round trips.
+ *   2. Save assignments (via on_save callback — caller handles persistence
+ *      and conflict resolution per SPEC §4.5), bounded by the caller's
+ *      wall-clock deadline.
  *   3. Start fade-out animation (if configured).
  *   4. On animation complete: hide surface (not destroy — SPEC §11), → IDLE.
  *
@@ -137,9 +140,11 @@ int cbx_overlay_lifecycle_activate(cbx_overlay_lifecycle *lc);
 
 /*
  * Request close: VISIBLE → CLOSING.
- * Fires on_save callback, sets InterceptMode=PASS via DBus, starts
- * fade-out animation (if fade_out_ms > 0) or transitions directly to
- * IDLE (if fade_out_ms == 0).  Hides surface when IDLE is reached.
+ * Sets InterceptMode=PASS via DBus FIRST (so input flows to the game in
+ * <1 ms — SPEC §11), then fires the on_save callback (persistence +
+ * conflict resolution), then starts the fade-out animation (if
+ * fade_out_ms > 0) or transitions directly to IDLE (if fade_out_ms == 0).
+ * Hides surface when IDLE is reached.
  *
  * Returns 0 on success, -EINVAL if lc is NULL, -EPERM if not in VISIBLE
  * or ACTIVATING (close during ACTIVATING cancels the activation).

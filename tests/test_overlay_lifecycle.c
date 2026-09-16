@@ -464,6 +464,58 @@ test_save_fail_reports_error(void **state)
     assert_int_equal(f->lc.state, CBX_OVERLAY_IDLE);
 }
 
+/* --- Close ordering: PASS before save (SPEC §11) ---------------------- */
+
+typedef struct {
+    ip_dbus_mock *mock;
+    int           intercept_calls_at_save;
+    int           save_fired;
+} close_order_ctx;
+
+static int
+on_save_record_intercept(void *userdata)
+{
+    close_order_ctx *ctx = (close_order_ctx *)userdata;
+    ctx->save_fired++;
+    ctx->intercept_calls_at_save = ip_dbus_mock_call_count(
+        ctx->mock, IP_IFACE_COMPOSITE, "InterceptMode");
+    return 0;
+}
+
+/*
+ * SPEC §11 requires input to reach the game in <1 ms on close, which is a
+ * single InterceptMode=PASS property set.  The save callback runs the whole
+ * conflict-resolution/engine-apply/persistence chain and must therefore fire
+ * AFTER PASS.  Assert the ordering at the exact instant the save callback
+ * runs: the mock must already have observed the PASS set, and it must have
+ * observed it exactly once.
+ */
+static void
+test_close_sets_pass_before_save(void **state)
+{
+    lc_fixture *f = FIX(state);
+    cbx_overlay_lifecycle_activate(&f->lc);
+    assert_int_equal(f->lc.state, CBX_OVERLAY_VISIBLE);
+
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                            "InterceptMode", "1");
+
+    close_order_ctx ord;
+    memset(&ord, 0, sizeof(ord));
+    ord.mock = &f->mock;
+    f->lc.on_save      = on_save_record_intercept;
+    f->lc.on_save_data = &ord;
+
+    assert_int_equal(cbx_overlay_lifecycle_close(&f->lc), 0);
+    assert_int_equal(ord.save_fired, 1);
+    /* PASS was already delivered when on_save ran. */
+    assert_int_equal(ord.intercept_calls_at_save, 1);
+    assert_int_equal(ord.intercept_calls_at_save,
+                     ip_dbus_mock_call_count(&f->mock, IP_IFACE_COMPOSITE,
+                                             "InterceptMode"));
+    assert_int_equal(f->lc.state, CBX_OVERLAY_IDLE);
+}
+
 /* --- No callback tests ------------------------------------------------ */
 
 static void
@@ -729,6 +781,8 @@ main(void)
         cmocka_unit_test_setup_teardown(test_close_intercept_mode_fail,
                                           setup, teardown),
         cmocka_unit_test_setup_teardown(test_save_fail_reports_error,
+                                          setup, teardown),
+        cmocka_unit_test_setup_teardown(test_close_sets_pass_before_save,
                                           setup, teardown),
 
         /* No callback tests. */

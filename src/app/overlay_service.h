@@ -349,6 +349,17 @@ void cbx_overlay_service_reset_shutdown(void);
 int cbx_overlay_on_save(void *userdata);
 
 /*
+ * Close-path on_save callback.  Wires the same bounded sequence as
+ * cbx_overlay_on_save but arms the bus-wide synchronous-call deadline for
+ * the duration of the engine apply + persistence, then clears it.  The
+ * lifecycle writes InterceptMode=PASS before this runs, so gameplay input
+ * already flows; the deadline keeps a stalled InputPlumber from holding the
+ * single UI thread (and the overlay hide/fade) for an unbounded time.
+ * Wired as lifecycle.on_save in run_overlay_service().
+ */
+int cbx_overlay_on_save_bounded(void *userdata);
+
+/*
  * Player-mode slot-change callback: marks the overlay surface dirty
  * so the next step re-renders.  Fired by cbx_player_mode_handle().
  */

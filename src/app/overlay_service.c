@@ -929,6 +929,31 @@ overlay_pass_deadline_ms(const cbx_overlay_service_ctx *svc)
     return reconcile_now_ms() + timeout;
 }
 
+/*
+ * Bounded close-path on_save.  cbx_overlay_on_save() performs a sequence of
+ * synchronous engine calls (clear-all + per-row LoadProfilePath/verify +
+ * TargetDevices + attachment waits + GamepadOrder) and a persistence
+ * transaction.  The lifecycle writes InterceptMode=PASS before this runs
+ * (SPEC §11: input to the game in <1 ms), but an unbounded save would still
+ * hold the single UI thread (and the overlay hide/fade) for as long as a
+ * wedged InputPlumber takes — and each internal wait honours only its own
+ * per-call budget.  Arm the same wall-clock deadline used by
+ * readiness/recovery/hotplug so the whole save is bounded and every internal
+ * call fails fast once the budget expires.  The deadline is always cleared
+ * on exit so the close path cannot leak it into the next operation.
+ */
+int
+cbx_overlay_on_save_bounded(void *userdata)
+{
+    cbx_overlay_service_ctx *svc = (cbx_overlay_service_ctx *)userdata;
+    if (!svc)
+        return -EINVAL;
+    overlay_set_call_deadline(svc, overlay_pass_deadline_ms(svc));
+    int rc = cbx_overlay_on_save(svc);
+    overlay_set_call_deadline(svc, 0);
+    return rc;
+}
+
 static const char *
 reconcile_error_category(int rc)
 {
@@ -2723,8 +2748,10 @@ int run_overlay_service(int dry_run)
     svc->hm.on_state_change   = cbx_overlay_on_host_mode_change;
     svc->hm.state_change_data = svc;
 
-    /* Lifecycle on_save callback: conflict resolution + assignment save. */
-    svc->lifecycle.on_save       = cbx_overlay_on_save;
+    /* Lifecycle on_save callback: conflict resolution + assignment save.
+     * The close path uses the bounded variant so the engine-apply chain is
+     * deadline-limited after InterceptMode=PASS has already released input. */
+    svc->lifecycle.on_save       = cbx_overlay_on_save_bounded;
     svc->lifecycle.on_save_data  = svc;
 
     /* Lifecycle on_closed callback: end Host Mode with the overlay so its

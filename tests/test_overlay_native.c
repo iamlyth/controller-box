@@ -385,8 +385,9 @@ static int native_setup(void **state)
     f->svc->lifecycle.fade_out_ms = 0;
     f->svc->lifecycle.state = CBX_OVERLAY_IDLE;
 
-    /* 17. Wire on_save. */
-    f->svc->lifecycle.on_save = cbx_overlay_on_save;
+    /* 17. Wire on_save to the bounded close-path callback — the exact
+     * production wiring, so the close deadline is exercised on real DBus. */
+    f->svc->lifecycle.on_save = cbx_overlay_on_save_bounded;
     f->svc->lifecycle.on_save_data = f->svc;
 
     /* 17b. End Host Mode when the overlay closes (SPEC §4.4) — the exact

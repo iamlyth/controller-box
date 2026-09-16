@@ -260,8 +260,10 @@ interaction_setup(void **state)
     f->svc->lifecycle.fade_out_ms = 0;
     f->svc->lifecycle.state      = CBX_OVERLAY_IDLE;
 
-    /* Wire on_save. */
-    f->svc->lifecycle.on_save      = cbx_overlay_on_save;
+    /* Wire on_save to the bounded close-path callback — the exact function
+     * run_overlay_service() installs, so the deadline behaviour is exercised
+     * through the production close path. */
+    f->svc->lifecycle.on_save      = cbx_overlay_on_save_bounded;
     f->svc->lifecycle.on_save_data = f->svc;
 
     /* Wire on_closed to end Host Mode with the overlay (SPEC §4.4) — the
@@ -1073,6 +1075,48 @@ test_o10b_close_conflict_resolution(void **state)
 }
 
 /* ================================================================== */
+/*  O10c — Close save is deadline-bounded (efficiency BLOCKER)        */
+/* ================================================================== */
+
+/*
+ * SPEC §11: the close must return input to the game in <1 ms.  The
+ * lifecycle now delivers InterceptMode=PASS before on_save runs, but the
+ * engine-apply chain inside on_save is still synchronous on the single UI
+ * thread; it must be bounded by the same wall-clock deadline used by
+ * readiness/recovery/hotplug so a wedged InputPlumber cannot hold the thread
+ * (or the overlay hide/fade) for an unbounded time.  This drives the real
+ * production close path (the fixture wires lifecycle.on_save to the same
+ * bounded callback run_overlay_service installs) and asserts the deadline is
+ * armed during the save and cleared afterward — never leaked.
+ */
+static void
+test_o10c_close_save_deadline_bounded(void **state)
+{
+    interaction_fixture *f = *state;
+    make_visible(f);
+
+    /* Move row 0 to P1 so on_save performs a real engine apply. */
+    push_keydown(SDLK_RIGHT);
+    cbx_overlay_service_step(f->svc);
+    assert_int_equal(cbx_select_grid_get_cur_col(&f->svc->grid, 0), 1);
+
+    /* Exact post-attach TargetDevices confirmation. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE, "TargetDevices",
+        "/org/shadowblip/InputPlumber/devices/target/gamepad0");
+
+    int arms_before = f->mock.set_deadline_count;
+
+    /* Press B to close overlay through the production dispatch path. */
+    push_keydown(SDLK_b);
+    cbx_overlay_service_step(f->svc);
+
+    assert_int_equal(f->svc->lifecycle.state, CBX_OVERLAY_IDLE);
+    /* The bounded save armed a deadline and cleared it on exit. */
+    assert_true(f->mock.set_deadline_count > arms_before);
+    assert_int_equal(f->mock.deadline_ms, 0);
+}
+
+/* ================================================================== */
 /*  O11 — Multi-controller independence (DBus InputEvent)             */
 /* ================================================================== */
 
@@ -1635,6 +1679,8 @@ static const struct CMUnitTest tests[] = {
     cmocka_unit_test_setup_teardown(test_o10_close_saves_and_sets_pass,
                                      interaction_setup, interaction_teardown),
     cmocka_unit_test_setup_teardown(test_o10b_close_conflict_resolution,
+                                     interaction_setup, interaction_teardown),
+    cmocka_unit_test_setup_teardown(test_o10c_close_save_deadline_bounded,
                                      interaction_setup, interaction_teardown),
     cmocka_unit_test_setup_teardown(test_o10c_close_via_dbus_b,
                                      interaction_setup, interaction_teardown),

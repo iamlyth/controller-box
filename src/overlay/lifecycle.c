@@ -193,15 +193,25 @@ cbx_overlay_lifecycle_close(cbx_overlay_lifecycle *lc)
 
     lc->state = CBX_OVERLAY_CLOSING;
 
-    /* Fire save callback (caller handles persistence + conflict resolution). */
+    /* Set InterceptMode back to PASS FIRST so input flows to the game in
+     * <1 ms (SPEC §11: "single DBus property set").  The save callback runs
+     * conflict resolution, a full engine apply (per-row clear/attach with
+     * attachment waits) and persistence — dozens of synchronous bus round
+     * trips.  Running it before PASS kept gameplay input intercepted for
+     * that whole window, one to two orders of magnitude over the budget on a
+     * healthy bus and unbounded on a stalled one.  PASS must be the first
+     * work the close performs. */
+    set_intercept_pass(lc);
+
+    /* Fire save callback (caller handles persistence + conflict resolution).
+     * The caller bounds this callback's synchronous DBus chain with the same
+     * wall-clock deadline used by readiness/recovery so a wedged bus cannot
+     * hold the UI thread (or the fade-out/hide) indefinitely. */
     if (lc->on_save) {
         int rc = lc->on_save(lc->on_save_data);
         if (rc < 0 && lc->on_error)
             lc->on_error(rc, lc->on_error_data);
     }
-
-    /* Set InterceptMode back to PASS so input flows to the game. */
-    set_intercept_pass(lc);
 
     if (lc->fade_out_ms == 0) {
         /* Instant close: immediately transition to IDLE. */

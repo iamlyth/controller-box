@@ -7,8 +7,9 @@
  *      (deterministic, automatic — SPEC §4.5).
  *   3. Sync grid state back to assignments (slot + profile per controller).
  *   4. Save assignments to ~/.config/controller-box/assignments.yaml.
- *   5. The lifecycle module handles InterceptMode=PASS + hide surface +
- *      state transition to IDLE.
+ *   5. The lifecycle module sets InterceptMode=PASS FIRST (so input flows to
+ *      the game in <1 ms, SPEC §11) and then hides the surface and
+ *      transitions to IDLE.
  *
  * The on_save callback (cbx_close_on_save) performs steps 1–4 and is
  * designed to be wired into cbx_overlay_lifecycle's on_save field.
@@ -80,10 +81,9 @@ int cbx_close_on_save(void *userdata);
  * Convenience: wire the on_save callback and request lifecycle close.
  *
  * Sets lc->on_save = cbx_close_on_save and lc->on_save_data = &ctx,
- * then calls cbx_overlay_lifecycle_close(lc).  The lifecycle close
- * fires the on_save callback (conflict resolve + assignment sync +
- * save), sets InterceptMode=PASS, hides the surface, and transitions
- * to IDLE.
+ * then calls cbx_overlay_lifecycle_close(lc).  The lifecycle close sets
+ * InterceptMode=PASS first, fires the on_save callback (conflict resolve
+ * + assignment sync + save), hides the surface, and transitions to IDLE.
  *
  * @param lc      Overlay lifecycle.
  * @param grid    Select grid (will be modified by conflict resolution).

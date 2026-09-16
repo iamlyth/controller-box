@@ -654,7 +654,8 @@ test_request_close_intercept_mode_fail(void **state)
     /* lifecycle_close returns 0 even if set_intercept_pass fails
      * (it fires on_error but still proceeds to IDLE for instant close). */
     assert_int_equal(rc, 0);
-    /* Assignment save still happened (on_save fired before PASS set). */
+    /* Assignment save still happened: the lifecycle sets InterceptMode=PASS
+     * first (SPEC §11) but still runs on_save even when that set fails. */
     assert_int_equal(a.assignment_count, 1);
 }
 static void

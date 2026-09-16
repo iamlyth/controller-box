@@ -3,7 +3,8 @@
  *
  * Implements the close-time save sequence: conflict detection +
  * resolution, assignment sync from grid state, and assignment
- * persistence.  The lifecycle module handles InterceptMode=PASS and
+ * persistence.  The lifecycle module sets InterceptMode=PASS first (so
+ * input returns to the game before this work runs) and handles the
  * surface hide/transition.
  */
 #include "overlay/close.h"
