@@ -386,6 +386,51 @@ static void test_cleanup_null(void **state)
     cbx_icon_cache_cleanup(NULL);
 }
 
+/* A graphics device reset must drop every cached texture while keeping the
+ * rasterizer and configuration, so the cache can immediately re-rasterize
+ * valid textures instead of serving stale/blank ones. */
+static void test_reset_clears_textures_keeps_config(void **state)
+{
+    struct test_state *s = *state;
+    assert_int_equal(cbx_icon_cache_init(&s->cache, s->sdl.renderer,
+                                          cbx_icon_dir(), 128), 0);
+    assert_int_equal(cbx_icon_cache_load(&s->cache, &s->map), 0);
+    assert_true(s->cache.count > 0);
+
+    SDL_Texture *before = cbx_icon_cache_get(&s->cache, "cc-ps5");
+    assert_non_null(before);
+    struct NSVGrasterizer *rast_before = s->cache.rasterizer;
+    assert_non_null(rast_before);
+
+    cbx_icon_cache_reset(&s->cache);
+
+    /* Textures are gone and unfindable ... */
+    assert_int_equal(s->cache.count, 0);
+    assert_null(cbx_icon_cache_get(&s->cache, "cc-ps5"));
+    /* ... but the rasterizer and configuration survive for reuse. */
+    assert_ptr_equal(s->cache.rasterizer, rast_before);
+    assert_non_null(s->cache.renderer);
+    assert_string_equal(s->cache.icon_dir, cbx_icon_dir());
+    assert_int_equal(s->cache.target_size, 128);
+
+    /* The reset cache is immediately usable: reload creates a new texture. */
+    assert_int_equal(cbx_icon_cache_load(&s->cache, &s->map), 0);
+    assert_true(s->cache.count > 0);
+    SDL_Texture *after = cbx_icon_cache_get(&s->cache, "cc-ps5");
+    assert_non_null(after);
+    int w = 0, h = 0;
+    assert_int_equal(cbx_icon_cache_get_dims(&s->cache, "cc-ps5", &w, &h), 0);
+    assert_true(w > 0 && h > 0);
+
+    cbx_icon_cache_cleanup(&s->cache);
+}
+
+static void test_reset_null(void **state)
+{
+    (void)state;
+    cbx_icon_cache_reset(NULL);
+}
+
 /* An oversized key cannot be stored inline; it must be rejected rather than
  * silently truncated into an entry that can never be looked up. */
 static void test_insert_oversized_key_rejected(void **state)
@@ -648,6 +693,8 @@ int main(void)
         /* Cleanup */
         cmocka_unit_test(test_cleanup),
         cmocka_unit_test(test_cleanup_null),
+        cmocka_unit_test(test_reset_clears_textures_keeps_config),
+        cmocka_unit_test(test_reset_null),
         cmocka_unit_test(test_insert_oversized_key_rejected),
         cmocka_unit_test(test_insert_full_cache_replacement),
         cmocka_unit_test(test_insert_same_pointer_replacement),

@@ -578,6 +578,68 @@ test_surface_render_null_args(void **state)
     assert_int_equal(-EINVAL, cbx_overlay_surface_render(&s, r, NULL, NULL));
 }
 
+/* --- rebuild (SDL_RENDER_DEVICE_RESET) tests ----------------------- */
+
+/* A device reset invalidates every texture; rebuild must create a genuinely
+ * new target texture, preserve geometry/opacity, and schedule a full repaint
+ * so the caller cannot present undefined contents. */
+static void
+test_surface_rebuild_recreates_texture(void **state)
+{
+    (void)state;
+    TestCtx ctx = {0};
+    assert_int_equal(0, test_setup(&ctx));
+
+    cbx_overlay_surface s;
+    assert_int_equal(0, cbx_overlay_surface_init(&s, ctx.renderer,
+                                                   320, 240, 0.5));
+    SDL_Texture *before = cbx_overlay_surface_get_texture(&s);
+    assert_non_null(before);
+
+    /* Start clean so the rebuild's dirty marking is observable. */
+    cbx_overlay_surface_clear_dirty(&s);
+    assert_false(cbx_overlay_surface_is_dirty(&s));
+
+    assert_int_equal(0, cbx_overlay_surface_rebuild(&s, ctx.renderer));
+    assert_int_equal(1, cbx_overlay_surface_rebuild_count(&s));
+
+    SDL_Texture *after = cbx_overlay_surface_get_texture(&s);
+    assert_non_null(after);
+    assert_true(cbx_overlay_surface_is_built(&s));
+
+    int w = -1, h = -1;
+    cbx_overlay_surface_get_size(&s, &w, &h);
+    assert_int_equal(320, w);
+    assert_int_equal(240, h);
+    assert_int_equal(128, cbx_overlay_surface_get_opacity(&s));
+
+    /* Full repaint is scheduled and renders against the new texture. */
+    assert_true(cbx_overlay_surface_is_dirty(&s));
+    g_render_call_count = 0;
+    memset(&g_last_clip, 0, sizeof(g_last_clip));
+    assert_int_equal(0, cbx_overlay_surface_render(&s, ctx.renderer,
+                                                    test_render_fn, NULL));
+    assert_int_equal(1, g_render_call_count);
+    assert_int_equal(320, g_last_clip.w);
+    assert_int_equal(240, g_last_clip.h);
+    assert_false(cbx_overlay_surface_is_dirty(&s));
+
+    cbx_overlay_surface_destroy(&s);
+    test_teardown(&ctx);
+}
+
+static void
+test_surface_rebuild_null_args(void **state)
+{
+    (void)state;
+    cbx_overlay_surface s = {0};
+    SDL_Renderer *r = (SDL_Renderer *)0x1;
+    assert_int_equal(-EINVAL, cbx_overlay_surface_rebuild(NULL, r));
+    assert_int_equal(-EINVAL, cbx_overlay_surface_rebuild(&s, NULL));
+    /* An unbuilt surface has no geometry to rebuild. */
+    assert_int_equal(-EINVAL, cbx_overlay_surface_rebuild(&s, r));
+}
+
 /* --- accessor tests ------------------------------------------------ */
 
 static void
@@ -711,6 +773,9 @@ main(void)
         cmocka_unit_test(test_surface_render_target_switch),
         cmocka_unit_test(test_surface_render_fail),
         cmocka_unit_test(test_surface_render_null_args),
+        /* rebuild (SDL_RENDER_DEVICE_RESET) */
+        cmocka_unit_test(test_surface_rebuild_recreates_texture),
+        cmocka_unit_test(test_surface_rebuild_null_args),
         /* accessors */
         cmocka_unit_test(test_surface_get_size),
         cmocka_unit_test(test_surface_get_texture_null),

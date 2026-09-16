@@ -256,7 +256,7 @@ test_overlay_software(SDL_Renderer *renderer)
         }
     }
 
-    cbx_icon_cache icon_cache;
+    cbx_icon_cache icon_cache = {0};
     cbx_icon_map icon_map;
     bool has_icons = false;
 

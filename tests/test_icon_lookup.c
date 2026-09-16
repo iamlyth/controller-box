@@ -552,8 +552,10 @@ static void test_load_on_demand(void **state)
     struct test_state *s = *state;
     cbx_icon_result res;
 
-    /* Use a fresh cache that hasn't been pre-loaded. */
-    cbx_icon_cache fresh;
+    /* Use a fresh cache that hasn't been pre-loaded.  Zero-initialise it:
+     * cbx_icon_cache_init() inspects rasterizer/count to release prior
+     * state, so an uninitialised stack struct is undefined behaviour. */
+    cbx_icon_cache fresh = {0};
     assert_int_equal(cbx_icon_cache_init(&fresh, s->sdl.renderer, cbx_icon_dir(), 128), 0);
 
     /* Lookup a known type — should load on demand. */
@@ -569,8 +571,8 @@ static void test_override_load_on_demand(void **state)
     struct test_state *s = *state;
     cbx_icon_result res;
 
-    /* Use a fresh cache. */
-    cbx_icon_cache fresh;
+    /* Use a fresh cache (zero-initialised for cbx_icon_cache_init). */
+    cbx_icon_cache fresh = {0};
     assert_int_equal(cbx_icon_cache_init(&fresh, s->sdl.renderer, cbx_icon_dir(), 128), 0);
 
     /* Override with a known icon not yet in the cache. */

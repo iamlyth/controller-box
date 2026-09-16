@@ -364,11 +364,15 @@ int cbx_icon_cache_insert(cbx_icon_cache *cache, const char *key,
     return insert_entry(cache, key, tex, w, h);
 }
 
-void cbx_icon_cache_cleanup(cbx_icon_cache *cache)
+void cbx_icon_cache_reset(cbx_icon_cache *cache)
 {
     if (!cache)
         return;
 
+    /* A device reset invalidates every texture's GPU backing.  Destroy the
+     * stale SDL handles so no caller can draw a stale texture; keep the
+     * rasterizer, renderer, icon directory and target size so the cache can
+     * immediately re-rasterize on demand. */
     for (int i = 0; i < CBX_ICON_CACHE_HASH_SIZE; i++) {
         if (cache->entries[i].texture) {
             SDL_DestroyTexture(cache->entries[i].texture);
@@ -379,6 +383,14 @@ void cbx_icon_cache_cleanup(cbx_icon_cache *cache)
         cache->entries[i].height = 0;
     }
     cache->count = 0;
+}
+
+void cbx_icon_cache_cleanup(cbx_icon_cache *cache)
+{
+    if (!cache)
+        return;
+
+    cbx_icon_cache_reset(cache);
 
     if (cache->rasterizer) {
         nsvgDeleteRasterizer(cache->rasterizer);

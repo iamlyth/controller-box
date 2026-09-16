@@ -602,6 +602,17 @@ void cbx_text_cache_clear(cbx_text_cache *cache)
     cache->tick = 0;
 }
 
+void cbx_text_cache_reset(cbx_text_cache *cache)
+{
+    /* A graphics device reset (SDL_RENDER_DEVICE_RESET) invalidates every
+     * texture's GPU backing.  Drop the cached textures so each string is
+     * re-rendered and re-uploaded lazily by the next cbx_text_render().
+     * Fonts are CPU-side TTF handles and remain valid, so they are kept.
+     * This is the device-reset entry point; cbx_text_cache_clear() remains
+     * the theme-change entry point but has identical texture ownership. */
+    cbx_text_cache_clear(cache);
+}
+
 void cbx_text_cache_cleanup(cbx_text_cache *cache)
 {
     if (!cache) return;

@@ -59,7 +59,9 @@ typedef struct cbx_icon_cache {
  * cleanup).  target_size is the maximum pixel dimension (width or height)
  * for rasterized icons; the SVG's aspect ratio is preserved.
  * Returns 0 on success, -EINVAL on NULL args, -ENOMEM if rasterizer
- * allocation fails.
+ * allocation fails.  The struct must be zero-initialised before the first
+ * call: init inspects the prior rasterizer/count to release any previous
+ * state, so passing uninitialised memory is undefined behaviour.
  */
 int cbx_icon_cache_init(cbx_icon_cache *cache, SDL_Renderer *renderer,
                          const char *icon_dir, int target_size);
@@ -121,6 +123,16 @@ int cbx_icon_cache_load_asset(cbx_icon_cache *cache, const char *icon_name,
  */
 int cbx_icon_cache_insert(cbx_icon_cache *cache, const char *key,
                            SDL_Texture *tex, int w, int h);
+
+/*
+ * Release every cached icon texture after a graphics device reset
+ * (SDL_RENDER_DEVICE_RESET).  The device contract requires all textures to
+ * be recreated.  Unlike cbx_icon_cache_cleanup(), this keeps the rasterizer,
+ * renderer, icon directory and target size so callers can immediately
+ * re-rasterize (e.g. cbx_icon_cache_load) without a full re-init.  Safe to
+ * call on a zeroed/empty cache.
+ */
+void cbx_icon_cache_reset(cbx_icon_cache *cache);
 
 /*
  * Destroy all cached textures and the rasterizer.  Safe to call on a

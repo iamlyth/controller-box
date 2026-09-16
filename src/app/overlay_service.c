@@ -2302,6 +2302,36 @@ poll_event_targets_live_poll(cbx_overlay_service_ctx *svc,
     return false;
 }
 
+/*
+ * Recreate every GPU-owned asset after SDL_RENDER_DEVICE_RESET.  The SDL2
+ * event contract says the device has been reset and all textures must be
+ * recreated: the pre-built overlay target texture is rebuilt in place, and
+ * the text/icon caches drop their textures so the next render re-uploads
+ * them (fonts and the SVG rasterizer are CPU-side and stay valid).  Without
+ * this, the next activation would present stale or blank text/icon regions
+ * indefinitely, because a successful surface render clears the dirty list
+ * and nothing marks it again.  The surface rebuild schedules a full repaint
+ * so the very next step redraws the grid into the fresh target.
+ */
+static void
+overlay_recover_device_reset(cbx_overlay_service_ctx *svc)
+{
+    int rc = cbx_overlay_surface_rebuild(&svc->surface, svc->rend.renderer);
+    if (rc != 0)
+        fprintf(stderr,
+                "controller-box: overlay surface rebuild after device reset "
+                "failed: %d\n", rc);
+
+    cbx_text_cache_reset(&svc->text_cache);
+
+    /* Keep the rasterizer and reload the mapped icons so grid icons are not
+     * blank.  Custom on-demand PNGs are not in the map and reload lazily
+     * through cbx_icon_lookup() on the next draw. */
+    cbx_icon_cache_reset(&svc->icon_cache);
+    if (svc->icon_cache.rasterizer)
+        cbx_icon_cache_load(&svc->icon_cache, &svc->icon_map);
+}
+
 void
 cbx_overlay_service_step(cbx_overlay_service_ctx *svc)
 {
@@ -2318,6 +2348,16 @@ cbx_overlay_service_step(cbx_overlay_service_ctx *svc)
                 ip_intercept_poll_tick((ip_intercept_poll *)ev.user.data1);
         } else if (ev.type == SDL_QUIT) {
             g_running = 0;
+        } else if (ev.type == SDL_RENDER_TARGETS_RESET) {
+            /* Render targets were reset; their contents are undefined and
+             * must be repainted.  The overlay surface is a render target,
+             * so mark it fully dirty and let the step's render pass below
+             * repaint it before the next present. */
+            cbx_overlay_surface_mark_dirty_all(&svc->surface);
+        } else if (ev.type == SDL_RENDER_DEVICE_RESET) {
+            /* The whole graphics device was reset: every texture is invalid
+             * and must be recreated (see helper). */
+            overlay_recover_device_reset(svc);
         } else if (ev.type == SDL_KEYDOWN &&
                    cbx_overlay_lifecycle_is_active(&svc->lifecycle)) {
             /* Process input only when overlay is visible. */

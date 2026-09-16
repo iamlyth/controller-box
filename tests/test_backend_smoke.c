@@ -288,7 +288,7 @@ test_overlay_accelerated(SDL_Renderer *renderer)
     }
 
     /* Icon cache + map. */
-    cbx_icon_cache icon_cache;
+    cbx_icon_cache icon_cache = {0};
     cbx_icon_map icon_map;
     bool has_icons = false;
 

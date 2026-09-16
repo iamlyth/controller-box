@@ -34,6 +34,29 @@ opacity_to_u8(double opacity)
 /* Lifecycle                                                          */
 /* ------------------------------------------------------------------ */
 
+/*
+ * Create the target texture for the surface's current width/height and
+ * apply the persisted opacity + blend mode.  Shared by init and rebuild so
+ * the two paths cannot drift in pixel format or texture access mode.
+ */
+static int
+surface_create_texture(cbx_overlay_surface *s, SDL_Renderer *renderer)
+{
+    s->texture = SDL_CreateTexture(renderer,
+                                   SDL_PIXELFORMAT_RGBA8888,
+                                   SDL_TEXTUREACCESS_TARGET,
+                                   s->width, s->height);
+    if (!s->texture)
+        return -ENOMEM;
+
+    /* Apply opacity */
+    SDL_SetTextureAlphaMod(s->texture, s->opacity);
+
+    /* Enable blending so alpha modulation composites correctly */
+    SDL_SetTextureBlendMode(s->texture, SDL_BLENDMODE_BLEND);
+    return 0;
+}
+
 int
 cbx_overlay_surface_init(cbx_overlay_surface *s,
                          SDL_Renderer *renderer,
@@ -45,27 +68,45 @@ cbx_overlay_surface_init(cbx_overlay_surface *s,
 
     memset(s, 0, sizeof(*s));
 
-    s->texture = SDL_CreateTexture(renderer,
-                                   SDL_PIXELFORMAT_RGBA8888,
-                                   SDL_TEXTUREACCESS_TARGET,
-                                   width, height);
-    if (!s->texture)
-        return -ENOMEM;
-
     s->width   = width;
     s->height  = height;
     s->visible = false;
     s->opacity = opacity_to_u8(opacity);
-    s->built   = true;
 
+    int rc = surface_create_texture(s, renderer);
+    if (rc != 0)
+        return rc;
+
+    s->built = true;
     cbx_dirty_rect_init(&s->dirty, width, height);
+    return 0;
+}
 
-    /* Apply initial opacity */
-    SDL_SetTextureAlphaMod(s->texture, s->opacity);
+int
+cbx_overlay_surface_rebuild(cbx_overlay_surface *s, SDL_Renderer *renderer)
+{
+    if (!s || !renderer || !s->built)
+        return -EINVAL;
 
-    /* Enable blending so alpha modulation composites correctly */
-    SDL_SetTextureBlendMode(s->texture, SDL_BLENDMODE_BLEND);
+    /* SDL_RENDER_DEVICE_RESET invalidates the GPU backing of every texture.
+     * Destroy the stale SDL handle and create a fresh target texture with
+     * the surface's persisted geometry/opacity rather than presenting
+     * undefined contents. */
+    if (s->texture)
+        SDL_DestroyTexture(s->texture);
+    s->texture = NULL;
 
+    if (surface_create_texture(s, renderer) != 0) {
+        /* The surface can no longer be rendered into; fail closed so the
+         * caller reports the loss instead of drawing into nothing. */
+        s->built = false;
+        return -ENOMEM;
+    }
+
+    /* Texture contents are undefined until the caller re-renders; schedule a
+     * full repaint so the next render call paints every region. */
+    s->rebuilds++;
+    cbx_overlay_surface_mark_dirty_all(s);
     return 0;
 }
 
@@ -142,6 +183,12 @@ uint64_t
 cbx_overlay_surface_present_count(const cbx_overlay_surface *s)
 {
     return s ? s->presents : 0;
+}
+
+uint64_t
+cbx_overlay_surface_rebuild_count(const cbx_overlay_surface *s)
+{
+    return s ? s->rebuilds : 0;
 }
 
 /* ------------------------------------------------------------------ */

@@ -649,6 +649,53 @@ static void test_cache_clear(void **state)
     test_teardown(&ctx);
 }
 
+/* A graphics device reset must release every cached texture while keeping
+ * fonts loaded, so text can be re-rendered and re-uploaded on next use
+ * instead of drawing a stale/blank texture. */
+static void test_cache_reset(void **state)
+{
+    (void)state;
+    if (!font_available()) { skip(); return; }
+
+    TestCtx ctx;
+    assert_int_equal(test_setup(&ctx), 0);
+
+    cbx_text_cache cache;
+    cbx_text_cache_init(&cache, ctx.renderer);
+    int font = cbx_text_load_font(&cache, CBX_FONT_PATH, 16);
+
+    SDL_Color white = {255, 255, 255, 255};
+    SDL_Texture *before = cbx_text_render(&cache, font, "Reset", white);
+    assert_non_null(before);
+    assert_int_equal(cache.entry_count, 1);
+
+    cbx_text_cache_reset(&cache);
+    assert_int_equal(cache.entry_count, 0);
+    /* Fonts survive a device reset (they are CPU-side). */
+    assert_int_equal(cache.font_count, 1);
+    /* The entry is no longer cached. */
+    int w = -1, h = -1;
+    assert_int_equal(cbx_text_get_dims(&cache, font, "Reset", white, &w, &h),
+                     -ENOENT);
+
+    /* Re-rendering lazily recreates a fresh, cache-owned texture. */
+    SDL_Texture *after = cbx_text_render(&cache, font, "Reset", white);
+    assert_non_null(after);
+    assert_int_equal(cache.entry_count, 1);
+    assert_int_equal(cbx_text_get_dims(&cache, font, "Reset", white, &w, &h),
+                     0);
+
+    cbx_text_cache_cleanup(&cache);
+    test_teardown(&ctx);
+}
+
+static void test_cache_reset_null(void **state)
+{
+    (void)state;
+    /* Should not crash. */
+    cbx_text_cache_reset(NULL);
+}
+
 static void test_cleanup(void **state)
 {
     (void)state;
@@ -951,6 +998,8 @@ static const struct CMUnitTest text_tests[] = {
 
     /* Cache management */
     cmocka_unit_test(test_cache_clear),
+    cmocka_unit_test(test_cache_reset),
+    cmocka_unit_test(test_cache_reset_null),
     cmocka_unit_test(test_cleanup),
     cmocka_unit_test(test_cleanup_null),
 

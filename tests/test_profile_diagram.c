@@ -871,8 +871,9 @@ static void test_set_base_image_borrowed(void **state)
     assert_non_null(diag.base_texture);
 
     /* Adopt a cache-owned texture: the diagram must NOT own it and must
-     * not destroy it on shutdown (the icon cache does). */
-    cbx_icon_cache cache;
+     * not destroy it on shutdown (the icon cache does).  Zero-initialise
+     * the cache: cbx_icon_cache_init() reads prior rasterizer/count. */
+    cbx_icon_cache cache = {0};
     assert_int_equal(cbx_icon_cache_init(&cache, f->sdl.renderer, cbx_icon_dir(),
                                          64), 0);
     assert_int_equal(cbx_icon_cache_load_one(&cache, "generic-gamepad"), 0);
@@ -952,7 +953,7 @@ static void test_device_mapped_resolution_geometry(void **state)
     static const char *icons[] = {"generic-gamepad", "cc-xbox-360",
         "cc-xbox-one", "cc-xbox-series-x", "cc-ps5", "cc-steam-deck"};
     for (size_t i = 0; i < sizeof(icons) / sizeof(icons[0]); i++) {
-        cbx_icon_cache cache;
+        cbx_icon_cache cache = {0};
         cbx_profile_diagram diag;
         assert_int_equal(build_cache_resolved_diagram(f, &cache, &diag,
                                                        icons[i]), 0);
@@ -1004,7 +1005,7 @@ static void test_device_mapped_marker_alignment(void **state)
 {
     pd_fixture *f = *state;
 
-    cbx_icon_cache cache;
+    cbx_icon_cache cache = {0};
     cbx_profile_diagram diag;
     assert_int_equal(build_cache_resolved_diagram(f, &cache, &diag, "generic-gamepad"),
                      0);
@@ -1047,7 +1048,7 @@ static void test_lookup_device_diagram_resolves(void **state)
 
     cbx_icon_map map;
     cbx_icon_map_init(&map);
-    cbx_icon_cache cache;
+    cbx_icon_cache cache = {0};
     assert_int_equal(cbx_icon_cache_init(&cache, f->sdl.renderer, cbx_icon_dir(),
                                          512), 0);
 

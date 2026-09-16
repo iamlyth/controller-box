@@ -184,6 +184,15 @@ int cbx_text_line_height(const cbx_text_cache *cache, int font_id);
 void cbx_text_cache_clear(cbx_text_cache *cache);
 
 /*
+ * Release every cached text texture after a graphics device reset
+ * (SDL_RENDER_DEVICE_RESET).  The device contract requires all textures to
+ * be recreated; fonts are CPU-side and stay valid, so each string is
+ * re-rendered and re-uploaded lazily by the next cbx_text_render().  Safe to
+ * call on a zeroed cache.
+ */
+void cbx_text_cache_reset(cbx_text_cache *cache);
+
+/*
  * Shut down and free all resources including fonts.  Safe to call on a
  * zeroed struct.  After cleanup the struct can be re-initialised.
  */

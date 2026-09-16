@@ -49,6 +49,7 @@ typedef struct {
     int             height;    /* texture / screen height              */
     bool            visible;   /* overlay currently shown              */
     uint64_t        presents;  /* successful RenderCopy+Present count  */
+    uint64_t        rebuilds;  /* device-reset target recreations      */
     uint8_t         opacity;   /* 0–255, from settings overlay_opacity */
     cbx_dirty_rect  dirty;     /* dirty-rect tracker                   */
     bool            built;     /* texture successfully created         */
@@ -70,6 +71,21 @@ int  cbx_overlay_surface_init(cbx_overlay_surface *s,
                               SDL_Renderer *renderer,
                               int width, int height,
                               double opacity);
+
+/*
+ * Recreate the target texture after SDL_RENDER_DEVICE_RESET.  The device
+ * contract requires every texture to be recreated; the previous target's
+ * GPU backing is gone, so the stale SDL handle is destroyed and a fresh
+ * target texture is created with the surface's persisted geometry, opacity
+ * and blend mode.  The whole surface is marked dirty because the new
+ * texture's contents are undefined until the caller re-renders.  Fails
+ * closed (built = false) if the replacement texture cannot be created.
+ *
+ * @return 0 on success, -EINVAL on NULL args or an unbuilt surface,
+ *         -ENOMEM if texture creation fails.
+ */
+int  cbx_overlay_surface_rebuild(cbx_overlay_surface *s,
+                                 SDL_Renderer *renderer);
 
 /*
  * Destroy the overlay surface: free the SDL_Texture and zero the struct.
@@ -112,6 +128,14 @@ bool cbx_overlay_surface_is_visible(const cbx_overlay_surface *s);
  * intermediate frames instead of discarding its per-tick work.
  */
 uint64_t cbx_overlay_surface_present_count(const cbx_overlay_surface *s);
+
+/*
+ * Number of target-texture rebuilds performed after a device reset.  Lets
+ * callers/tests prove the GPU asset was actually recreated rather than
+ * merely looking built (SDL can reuse the same address for the replacement
+ * texture, so pointer comparison is not reliable).
+ */
+uint64_t cbx_overlay_surface_rebuild_count(const cbx_overlay_surface *s);
 
 /* --- Dirty-rect management ---------------------------------------- */
 

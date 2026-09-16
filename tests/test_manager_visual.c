@@ -1130,6 +1130,61 @@ test_press_visual_indication(void **state)
 }
 
 /* ------------------------------------------------------------------ */
+/*  GPU device-reset recovery (SDL_RENDER_DEVICE_RESET)                */
+/* ------------------------------------------------------------------ */
+
+/*
+ * A device reset invalidates every texture.  The manager must drop its
+ * text cache and the profile editor's icon cache (whose textures the
+ * diagram borrows) and re-resolve the diagram icon, so required text and
+ * icon regions are repainted instead of left stale or blank (SPEC §5.1,
+ * §5.6).  Before the repair the event had no handler at all.
+ */
+static void
+test_device_reset_recovers_editor_assets(void **state)
+{
+    struct mgr_vis_fixture *f = FIX(state);
+    cbx_manager *mgr = &f->mgr;
+
+    cbx_profile_editor *ed = vis_open_editor(mgr, f->tmp);
+    assert_non_null(ed);
+
+    /* Render once so both caches hold live textures. */
+    render_and_read(mgr, f->buf_a);
+    assert_non_null(ed->diagram.base_texture);
+    if (f->has_font)
+        assert_true(mgr->text_cache.entry_count > 0);
+
+    /* Inject the real SDL device-reset event through the production
+     * dispatch path. */
+    SDL_Event ev = {0};
+    ev.type = SDL_RENDER_DEVICE_RESET;
+    assert_true(cbx_manager_handle_event(mgr, &ev));
+
+    /* Text cache released ... */
+    if (f->has_font)
+        assert_int_equal(mgr->text_cache.entry_count, 0);
+    /* ... and the diagram re-borrowed a freshly re-rasterized icon texture
+     * from the reset cache (not a stale pointer). */
+    assert_non_null(ed->diagram.base_texture);
+    assert_true(ed->icon_cache.count > 0);
+    const char *resolved = cbx_profile_diagram_resolved_icon(&ed->diagram);
+    assert_non_null(resolved);
+    assert_ptr_equal(cbx_icon_cache_get(&ed->icon_cache, resolved),
+                     ed->diagram.base_texture);
+
+    /* A subsequent frame still renders required text/icon regions. */
+    render_and_read(mgr, f->buf_b);
+    uint8_t bg[3] = { mgr->theme.bg.r, mgr->theme.bg.g, mgr->theme.bg.b };
+    SDL_Rect diag_rect;
+    cbx_widget_get_rect(&ed->diagram.base, &diag_rect);
+    assert_true(fb_region_has_content(f->buf_b, MGR_W, MGR_H,
+                                       &diag_rect, bg, MGR_TOL));
+    if (f->has_font)
+        assert_true(mgr->text_cache.entry_count > 0);
+}
+
+/* ------------------------------------------------------------------ */
 /*  Test runner                                                        */
 /* ------------------------------------------------------------------ */
 
@@ -1168,6 +1223,11 @@ main(void)
             test_focus_visual_indication, mgr_vis_setup, mgr_vis_teardown),
         cmocka_unit_test_setup_teardown(
             test_press_visual_indication, mgr_vis_setup, mgr_vis_teardown),
+
+        /* GPU context loss: device reset must rebuild owned caches */
+        cmocka_unit_test_setup_teardown(
+            test_device_reset_recovers_editor_assets,
+            mgr_vis_setup, mgr_vis_teardown),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

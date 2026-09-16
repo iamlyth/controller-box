@@ -330,6 +330,9 @@ interaction_teardown(void **state)
             /* Stop poll timer if started. */
             for (int i = 0; i < f->svc->poll_count; i++)
                 ip_intercept_poll_stop(&f->svc->polls[i]);
+            /* Caches must be released while the renderer is still alive. */
+            cbx_icon_cache_cleanup(&f->svc->icon_cache);
+            cbx_text_cache_cleanup(&f->svc->text_cache);
             cbx_overlay_surface_destroy(&f->svc->surface);
             cbx_renderer_shutdown(&f->svc->rend);
             free(f->svc);
@@ -1498,6 +1501,94 @@ test_hotplug_target_add_remove_through_dispatch(void **state)
     assert_int_equal(svc->grid.rows[0].cur_col, 0);
 }
 
+/* ================================================================== */
+/*  GPU context-loss recovery (SDL_RENDER_TARGETS/DEVICE_RESET)       */
+/* ================================================================== */
+
+static void
+push_render_reset(uint32_t type)
+{
+    SDL_Event ev;
+    SDL_zero(ev);
+    ev.type = type;
+    assert_int_equal(SDL_PushEvent(&ev), 1);
+}
+
+/*
+ * SDL_RENDER_TARGETS_RESET means the render targets were reset and their
+ * contents must be repainted.  The pre-built overlay surface is a render
+ * target, so the service must mark it fully dirty and re-render it before
+ * the next present instead of keeping the undefined contents.
+ */
+static void
+test_targets_reset_forces_full_repaint(void **state)
+{
+    interaction_fixture *f = *state;
+    make_visible(f);
+
+    /* Establish a clean, rendered surface first. */
+    cbx_overlay_surface_mark_dirty_all(&f->svc->surface);
+    cbx_overlay_service_step(f->svc);
+    assert_false(cbx_overlay_surface_is_dirty(&f->svc->surface));
+    uint64_t presents_before = cbx_overlay_surface_present_count(&f->svc->surface);
+
+    push_render_reset(SDL_RENDER_TARGETS_RESET);
+    cbx_overlay_service_step(f->svc);
+
+    /* Reset target was marked dirty and repainted, not left undefined. */
+    assert_false(cbx_overlay_surface_is_dirty(&f->svc->surface));
+    assert_true(cbx_overlay_surface_present_count(&f->svc->surface) >
+                presents_before);
+}
+
+/*
+ * SDL_RENDER_DEVICE_RESET invalidates every GPU texture.  The service must
+ * recreate the pre-built overlay target and purge the icon/text caches so a
+ * later activation cannot present stale or blank text/icon regions.  Before
+ * the repair the event was drained unhandled and the surface kept its old
+ * texture.
+ */
+static void
+test_device_reset_rebuilds_overlay_assets(void **state)
+{
+    interaction_fixture *f = *state;
+
+    /* Populate the icon cache so a texture exists to invalidate. */
+    assert_int_equal(cbx_icon_cache_init(&f->svc->icon_cache,
+                                          f->svc->rend.renderer,
+                                          cbx_icon_dir(), 48), 0);
+    SDL_Texture *sentinel = SDL_CreateTexture(f->svc->rend.renderer,
+        SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_STATIC, 8, 8);
+    assert_non_null(sentinel);
+    assert_int_equal(cbx_icon_cache_insert(&f->svc->icon_cache,
+                                            "dev-reset-icon",
+                                            sentinel, 8, 8), 0);
+    assert_int_equal(f->svc->icon_cache.count, 1);
+
+    make_visible(f);
+    cbx_overlay_surface_mark_dirty_all(&f->svc->surface);
+    cbx_overlay_service_step(f->svc);
+
+    SDL_Texture *surface_before =
+        cbx_overlay_surface_get_texture(&f->svc->surface);
+    assert_non_null(surface_before);
+    assert_int_equal(cbx_overlay_surface_rebuild_count(&f->svc->surface), 0);
+
+    push_render_reset(SDL_RENDER_DEVICE_RESET);
+    cbx_overlay_service_step(f->svc);
+
+    /* The target texture was genuinely recreated (a rebuild was performed),
+     * not left with stale contents. */
+    assert_int_equal(cbx_overlay_surface_rebuild_count(&f->svc->surface), 1);
+    assert_non_null(cbx_overlay_surface_get_texture(&f->svc->surface));
+
+    /* Every icon texture was dropped (and the empty map reloaded). */
+    assert_int_equal(f->svc->icon_cache.count, 0);
+
+    /* The fresh target was fully repainted in the same step. */
+    assert_false(cbx_overlay_surface_is_dirty(&f->svc->surface));
+}
+
 /* --- Test runner ------------------------------------------------------- */
 
 static const struct CMUnitTest tests[] = {
@@ -1578,6 +1669,13 @@ static const struct CMUnitTest tests[] = {
     /* Hotplug — Dynamic columns rebuild through production dispatch */
     cmocka_unit_test_setup_teardown(
         test_hotplug_target_add_remove_through_dispatch,
+        interaction_setup, interaction_teardown),
+
+    /* GPU context loss — render target and full device resets */
+    cmocka_unit_test_setup_teardown(test_targets_reset_forces_full_repaint,
+                                     interaction_setup, interaction_teardown),
+    cmocka_unit_test_setup_teardown(
+        test_device_reset_rebuilds_overlay_assets,
         interaction_setup, interaction_teardown),
 };
 

@@ -65,6 +65,7 @@ static void cbx_manager_close_gamecontroller(cbx_manager *mgr,
                                                SDL_JoystickID instance_id);
 static bool cbx_manager_controller_to_key(const SDL_Event *ev,
                                             SDL_Event *key_event);
+static void cbx_manager_recover_device_reset(cbx_manager *mgr);
 
 /* --- First-run dialog (SPEC §9.1) ---------------------------------- */
 static void on_first_run_yes(cbx_widget *w, void *user_data);
@@ -1002,6 +1003,38 @@ cbx_manager_refresh_controllers_if_due(cbx_manager *mgr, uint32_t now_ms)
 /*  Event handling                                                     */
 /* ------------------------------------------------------------------ */
 
+/*
+ * Recreate every GPU-owned asset after SDL_RENDER_DEVICE_RESET.  The SDL2
+ * device contract requires all textures to be recreated.  The manager owns
+ * a text cache; the profile editor owns an icon cache whose textures the
+ * controller diagram borrows.  Drop the borrowed diagram pointer before
+ * releasing the cache (otherwise the diagram would reference a freed
+ * texture), clear both caches, then re-resolve the mapped diagram icon so
+ * required text and icon regions are repainted instead of left stale or
+ * blank (SPEC §5.1/§5.6).  The manager renders every loop iteration, so no
+ * dirty flag is needed to force the repaint.
+ */
+static void
+cbx_manager_recover_device_reset(cbx_manager *mgr)
+{
+    if (!mgr)
+        return;
+
+    cbx_text_cache_reset(&mgr->text_cache);
+
+    if (mgr->pt.editor_initialized) {
+        cbx_profile_editor *ed = &mgr->pt.editor;
+        /* The diagram borrows its base image from the icon cache; clear the
+         * borrowed pointer before the cache destroys that texture. */
+        cbx_profile_diagram_set_base_image(&ed->diagram, NULL);
+        cbx_icon_cache_reset(&ed->icon_cache);
+        /* Re-resolve and re-borrow the mapped icon so the diagram is not
+         * blank after the reset. */
+        cbx_profile_editor_set_diagram_selection(ed, ed->device_type,
+                                                  ed->icon_override);
+    }
+}
+
 bool
 cbx_manager_handle_event(cbx_manager *mgr, const SDL_Event *ev)
 {
@@ -1025,6 +1058,21 @@ cbx_manager_handle_event(cbx_manager *mgr, const SDL_Event *ev)
             return true;
         }
         mgr->running = false;
+        return true;
+    }
+
+    /* GPU context loss (Pi 4/GLES VT switch, suspend/resume, compositor
+     * restart): SDL reports both render-target and full-device resets. */
+    if (ev->type == SDL_RENDER_DEVICE_RESET) {
+        /* The graphics device was reset: every texture is invalid.  Rebuild
+         * the owned caches so required text/icon regions are not blank. */
+        cbx_manager_recover_device_reset(mgr);
+        return true;
+    }
+    if (ev->type == SDL_RENDER_TARGETS_RESET) {
+        /* Render-target contents are undefined and must be repainted.  The
+         * manager draws its whole frame every iteration, so consuming the
+         * event is sufficient (it owns no target textures). */
         return true;
     }
 
