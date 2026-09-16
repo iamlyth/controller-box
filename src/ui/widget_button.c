@@ -58,11 +58,13 @@ button_draw(cbx_widget *w, SDL_Renderer *r)
      * is a cheap cache hit for an unchanged (font,text,colour) key. */
     render_label(btn);
 
-    SDL_Color bg = btn->base.focused
-        ? btn->theme->panel_bg_hover
-        : btn->theme->panel_bg;
+    SDL_Color bg;
     if (btn->pressed)
         bg = btn->theme->text_accent;   /* pressed = accent-tinted */
+    else if (btn->base.focused || btn->base.hover)
+        bg = btn->theme->panel_bg_hover;
+    else
+        bg = btn->theme->panel_bg;
 
     SDL_Color border = btn->base.focused
         ? btn->theme->border_focus

@@ -111,6 +111,8 @@ int ip_dbus_mock_expect(ip_dbus_mock *mock, const char *iface,
             mock->expectations[i].rc    = rc;
             mock->expectations[i].value = value ? strdup(value) : NULL;
             mock->expectations[i].calls = 0;
+            mock->expectations[i].has_last_args = false;
+            mock->expectations[i].last_args[0] = '\0';
             return 0;
         }
     }
@@ -121,6 +123,8 @@ int ip_dbus_mock_expect(ip_dbus_mock *mock, const char *iface,
     e->rc     = rc;
     e->value  = value ? strdup(value) : NULL;
     e->calls  = 0;
+    e->has_last_args = false;
+    e->last_args[0] = '\0';
     return 0;
 }
 
@@ -164,6 +168,18 @@ int ip_dbus_mock_call_count(ip_dbus_mock *mock, const char *iface,
                             const char *member) {
     const ip_mock_expectation *e = ip_dbus_mock_find(mock, iface, member);
     return e ? e->calls : 0;
+}
+
+int ip_dbus_mock_last_call_args(ip_dbus_mock *mock, const char *iface,
+                                const char *member, char *out,
+                                size_t outsz) {
+    if (!mock || !iface || !member || !out || outsz == 0)
+        return -EINVAL;
+    const ip_mock_expectation *e = ip_dbus_mock_find(mock, iface, member);
+    if (!e || !e->has_last_args)
+        return -ENOENT;
+    snprintf(out, outsz, "%s", e->last_args);
+    return 0;
 }
 
 /* --- Mock vtable callbacks ------------------------------------------------- */
@@ -271,6 +287,11 @@ static int mock_call_method(ip_bus_handle bus, const char *dest,
     } else {
         for (int i = 0; i < nargs; i++)
             (void)va_arg(ap, const char *);
+    }
+    if (e) {
+        snprintf(e->last_args, sizeof(e->last_args), "%s",
+                 mock ? mock->last_call.args : "");
+        e->has_last_args = true;
     }
     char **out = va_arg(ap, char **);
     if (out && e && e->value && rc >= 0)

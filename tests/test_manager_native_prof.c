@@ -1849,10 +1849,13 @@ test_t16_sequential_interception_and_b_bindable(void **state)
     cbx_manager_shutdown(&mgr);
 }
 
-/* A clean empty profile acquires the six NES bindings through sequential
- * capture (each mapping records the pressed source and prompted virtual
- * target), saves through the production path, and round-trips through the
- * native service and a fresh parse — the load/save/restart contract. */
+/* Persistence supplement (not the dispatch acceptance proof — see
+ * test_m45_empty_profile_sequential_ctrl/pointer above for production
+ * controller/pointer dispatch): a clean empty profile acquires the six NES
+ * bindings through sequential capture (each mapping records the pressed
+ * source and prompted virtual target), saves through the production path,
+ * and round-trips through the native service and a fresh parse — the
+ * load/save/restart contract. */
 static void
 test_t16_empty_profile_sequential_save_native_reload(void **state)
 {
@@ -1935,6 +1938,92 @@ test_t16_empty_profile_sequential_save_native_reload(void **state)
     assert_non_null(strstr(round, "button: B"));
     free(round);
     free(yaml);
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* ================================================================== */
+/*  M45 — Empty profile: add first binding (production dispatch)      */
+/* ================================================================== */
+
+/* M45 controller path: create an Empty profile entirely through
+ * production controller dispatch — Create picker, Empty source, D-pad
+ * character-entry naming (M13 flow) and confirmation — then press A on
+ * the zero-mapping binding list.  The editor must enter SEQUENTIAL mode
+ * and prompt for the first virtual button, proving the add-first-binding
+ * action is reachable without a keyboard or a direct callback. */
+static void
+test_m45_empty_profile_sequential_ctrl(void **state)
+{
+    mnp_fixture *f = *state;
+    cbx_manager mgr;
+    mnp_init_manager(f, &mgr);
+    create_attached_target(f, &mgr, "xb360");
+
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+
+    nav_to_profiles_ctrl(&mgr, f->joystick);
+    prof_nav_to_button_ctrl(&mgr, f->joystick, 2, 0);  /* Create */
+    ctrl_press(&mgr, f->joystick, 0);                  /* open picker */
+    ctrl_press(&mgr, f->joystick, 12);                 /* → Empty */
+    ctrl_press(&mgr, f->joystick, 0);                  /* confirm Empty */
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_NAME_INPUT);
+
+    /* Controller-only character entry: D-pad Up appends 'a'. */
+    ctrl_press(&mgr, f->joystick, 11);
+    assert_string_equal(cbx_profiles_tab_name_buffer(pt), "a");
+    ctrl_press(&mgr, f->joystick, 0);                  /* confirm name */
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_EDITOR);
+    assert_int_equal(cbx_profile_editor_binding_count(&pt->editor), 0);
+
+    /* A on the zero-mapping binding list = add first binding. */
+    ctrl_press(&mgr, f->joystick, 0);
+    assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
+                     CBX_EDITOR_MODE_SEQUENTIAL);
+    assert_true(cbx_profile_editor_seq_is_active(&pt->editor));
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* M45 pointer path: reach the same Empty-profile add-first-binding state
+ * through pointer clicks for the creation starting point, D-pad for the
+ * controller-only naming, and a mouse click on the first binding row to
+ * start sequential capture. */
+static void
+test_m45_empty_profile_sequential_pointer(void **state)
+{
+    mnp_fixture *f = *state;
+    cbx_manager mgr;
+    mnp_init_manager(f, &mgr);
+    create_attached_target(f, &mgr, "xb360");
+
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+
+    nav_to_profiles_key(&mgr);
+
+    /* Pointer creation starting point: click Create, then the Empty row. */
+    int cx, cy;
+    widget_center(&pt->create_btn.base, &cx, &cy);
+    send_mouse_click(&mgr, cx, cy);
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_CREATE_PICK);
+    int px = list_center_x(&pt->create_picker);
+    int py = list_item_y(&pt->create_picker, 1);
+    send_mouse_click(&mgr, px, py);
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_NAME_INPUT);
+
+    /* Controller-only character entry, then confirm. */
+    ctrl_press(&mgr, f->joystick, 11);
+    ctrl_press(&mgr, f->joystick, 0);
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_EDITOR);
+    assert_int_equal(cbx_profile_editor_binding_count(&pt->editor), 0);
+
+    /* Pointer add-first-binding: click the first (unbound) binding row. */
+    px = list_center_x(&pt->editor.binding_list);
+    py = list_item_y(&pt->editor.binding_list, 0);
+    send_mouse_click(&mgr, px, py);
+    assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
+                     CBX_EDITOR_MODE_SEQUENTIAL);
+    assert_true(cbx_profile_editor_seq_is_active(&pt->editor));
 
     cbx_manager_shutdown(&mgr);
 }
@@ -3117,6 +3206,13 @@ main(void)
             mnp_setup, mnp_teardown),
         cmocka_unit_test_setup_teardown(
             test_t16_empty_profile_sequential_save_native_reload,
+            mnp_setup, mnp_teardown),
+        /* M45 — Empty-profile add-first-binding through dispatch */
+        cmocka_unit_test_setup_teardown(
+            test_m45_empty_profile_sequential_ctrl,
+            mnp_setup, mnp_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_m45_empty_profile_sequential_pointer,
             mnp_setup, mnp_teardown),
         /* M35 — Sequential skip */
         cmocka_unit_test_setup_teardown(test_m35_seq_skip,

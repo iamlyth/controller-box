@@ -29,12 +29,22 @@
  */
 #define IP_MOCK_MAX_EXPECTATIONS 32
 
+/* --- Last method-call argument capture --------------------------------- */
+/* The mock records the string input arguments of the most recent
+ * call_method so tests can assert the exact values a production caller
+ * sends (e.g. the SetTargetDevices CSV, CreateTargetDevice kind,
+ * AttachTargetDevice paths) — not merely that a call returned OK.  This
+ * is what makes a topology-preservation semantic assertion possible. */
+#define IP_MOCK_LAST_ARGS_LEN 512
+
 typedef struct {
     const char *iface;
     const char *member;   /* method name, property name, or signal name */
     int         rc;       /* canned return code */
     char       *value;   /* canned string value (heap-owned by mock, or NULL) */
     int         calls;   /* times a backend call matched this expectation */
+    bool        has_last_args; /* a call_method matched and recorded args */
+    char        last_args[IP_MOCK_LAST_ARGS_LEN]; /* its joined string args */
 } ip_mock_expectation;
 
 /*
@@ -51,13 +61,6 @@ typedef struct {
 #define IP_MOCK_MAX_QUEUED_SIGNALS 8
 
 /* --- Last method-call argument capture --------------------------------- */
-/* The mock records the string input arguments of the most recent
- * call_method so tests can assert the exact values a production caller
- * sends (e.g. the SetTargetDevices CSV, CreateTargetDevice kind,
- * AttachTargetDevice paths) — not merely that a call returned OK.  This
- * is what makes a topology-preservation semantic assertion possible. */
-#define IP_MOCK_LAST_ARGS_LEN 512
-
 typedef struct {
     bool   has_call;   /* true after a call_method recorded args */
     char   iface[64];
@@ -192,5 +195,19 @@ int ip_dbus_mock_last_call(ip_dbus_mock *mock,
                             const char *member,
                             char *out,
                             size_t outsz);
+
+/*
+ * Return the string input arguments of the most recent call_method that
+ * matched (iface, member), even if other calls happened afterwards.  This
+ * lets a test assert an operation's exact request payload when the same
+ * test then performs further operations that would overwrite the global
+ * last-call record.  Returns 0 and copies the joined args into `out`; -ENOENT
+ * when no call_method has matched the key yet.
+ */
+int ip_dbus_mock_last_call_args(ip_dbus_mock *mock,
+                                const char *iface,
+                                const char *member,
+                                char *out,
+                                size_t outsz);
 
 #endif /* CBX_DBUS_MOCK_H */

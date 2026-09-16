@@ -87,6 +87,21 @@ static const char *FIXTURE_2C2T =
 
 static const char *FIXTURE_EMPTY = "";
 
+/* Fixture after a successful change-type: the old gamepad0 is gone and the
+ * replacement gamepad1 (the exact path CreateTargetDevice returns) is the
+ * only target.  Used to prove the change-type confirm path actually
+ * mutates topology instead of merely returning to LIST. */
+static const char *FIXTURE_CHANGED =
+    "/org/shadowblip/InputPlumber/Manager\t"
+        "org.shadowblip.InputManager\n"
+    "/org/shadowblip/InputPlumber/CompositeDevice0\t"
+        "org.shadowblip.Input.CompositeDevice\n"
+    "/org/shadowblip/InputPlumber/devices/target/gamepad1\t"
+        "org.shadowblip.Input.Target,org.shadowblip.Input.Gamepad\n";
+
+#define CHANGED_TARGET_PATH \
+    "/org/shadowblip/InputPlumber/devices/target/gamepad1"
+
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                           */
 /* ------------------------------------------------------------------ */
@@ -475,6 +490,16 @@ test_ctrl_add_confirm_controller_path(void **state)
 
     assert_int_equal(cbx_controllers_tab_mode(ct), CBX_CT_MODE_LIST);
     assert_int_equal(cbx_controllers_tab_device_count(ct), before + 1);
+
+    /* The exact production Add request was issued once with the selected
+     * type, and the result was consumed (device count grew by one). */
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_MANAGER,
+                                             "CreateTargetDevice"), 1);
+    char args[IP_MOCK_LAST_ARGS_LEN];
+    assert_int_equal(ip_dbus_mock_last_call_args(&f->mock, IP_IFACE_MANAGER,
+                                                 "CreateTargetDevice", args,
+                                                 sizeof(args)), 0);
+    assert_string_equal(args, "ds5");
 }
 
 /* M08 pointer path: click Add → click type item → confirm →
@@ -519,6 +544,14 @@ test_ctrl_add_confirm_pointer_path(void **state)
 
     assert_int_equal(cbx_controllers_tab_mode(ct), CBX_CT_MODE_LIST);
     assert_int_equal(cbx_controllers_tab_device_count(ct), before + 1);
+
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_MANAGER,
+                                             "CreateTargetDevice"), 1);
+    char args[IP_MOCK_LAST_ARGS_LEN];
+    assert_int_equal(ip_dbus_mock_last_call_args(&f->mock, IP_IFACE_MANAGER,
+                                                 "CreateTargetDevice", args,
+                                                 sizeof(args)), 0);
+    assert_string_equal(args, "ds5");
 }
 
 /* ------------------------------------------------------------------ */
@@ -552,6 +585,16 @@ test_ctrl_remove_controller_path(void **state)
     send_key_press(mgr, SDLK_a);
 
     assert_int_equal(cbx_controllers_tab_device_count(ct), 0);
+
+    /* Exactly one StopTargetDevice request for the removed path. */
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_MANAGER,
+                                             "StopTargetDevice"), 1);
+    char args[IP_MOCK_LAST_ARGS_LEN];
+    assert_int_equal(ip_dbus_mock_last_call_args(&f->mock, IP_IFACE_MANAGER,
+                                                 "StopTargetDevice", args,
+                                                 sizeof(args)), 0);
+    assert_string_equal(args,
+        "/org/shadowblip/InputPlumber/devices/target/gamepad0");
 }
 
 /* M06 pointer path: click Remove button → StopTargetDevice →
@@ -587,7 +630,7 @@ test_ctrl_remove_pointer_path(void **state)
 
 /* Helper: write an assignments.yaml with a controller assigned to slot 0. */
 static void
-mi_write_assignment(const char *home, int slot)
+mi_write_assignment_id(const char *home, int slot, const char *id)
 {
     char config_dir[8192];
     snprintf(config_dir, sizeof(config_dir), "%s/.config", home);
@@ -600,9 +643,17 @@ mi_write_assignment(const char *home, int slot)
     FILE *fp = fopen(path, "w");
     assert_non_null(fp);
     fprintf(fp, "assignments:\n");
-    fprintf(fp, "  - id: \"USB:testctrl01\"\n    slot: %d\n    profile: \"test\"\n", slot);
-    fprintf(fp, "gamepad_order:\n  - \"USB:testctrl01\"\n");
+    fprintf(fp, "  - id: \"%s\"\n    slot: %d\n    profile: \"test\"\n",
+            id, slot);
+    fprintf(fp, "gamepad_order:\n  - \"%s\"\n", id);
     fclose(fp);
+}
+
+/* Helper: write an assignments.yaml with a controller assigned to slot 0. */
+static void
+mi_write_assignment(const char *home, int slot)
+{
+    mi_write_assignment_id(home, slot, "USB:testctrl01");
 }
 
 /* Helper: check if an assignment exists for the given id.
@@ -715,8 +766,11 @@ test_ctrl_change_type_open_pointer_path(void **state)
     assert_int_equal(ct->pending_action, CBX_CT_ACTION_CHANGE);
 }
 
-/* M08 controller path (change): open picker → confirm → SetTargetDevices
- * called → mode returns to LIST. */
+/* M08 controller path (change): open picker → select a different type →
+ * confirm → the exact CreateTargetDevice request is issued, the owning
+ * composite route is rewritten to the replacement, the old target is
+ * stopped, and the tab model reflects the new type.  Asserting the exact
+ * mock requests distinguishes a real change from a bare mode reset. */
 static void
 test_ctrl_change_type_confirm_controller_path(void **state)
 {
@@ -724,29 +778,57 @@ test_ctrl_change_type_confirm_controller_path(void **state)
     cbx_manager *mgr = &f->mgr;
     cbx_controllers_tab *ct = cbx_manager_controllers_tab(mgr);
 
+    /* Bind physical composite 0 to slot 0 with connection-order identity so
+     * the confirm path also exercises the routed TargetDevices write. */
+    mi_write_assignment_id(f->tmp_home, 0, "ORDER:0");
+
     /* Open picker via Change Type. */
     nav_to_buttons(mgr);
     nav_to_button(mgr, 2);
     send_key_press(mgr, SDLK_a);
     assert_int_equal(cbx_controllers_tab_mode(ct), CBX_CT_MODE_TYPE_PICK);
 
-    /* Expect SetTargetDevices + refresh. */
     ip_dbus_mock_reset(&f->mock);
-    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
-                           "SetTargetDevices", NULL);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                           "CreateTargetDevice", CHANGED_TARGET_PATH);
     ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_OBJECT_MANAGER,
-                           "GetManagedObjects", FIXTURE_1C1T);
+                           "GetManagedObjects", FIXTURE_CHANGED);
     ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_TARGET,
                            "DeviceType", "ds5");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                           "TargetDevices", "");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                           "SourceDevicePaths", "");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                           "StopTargetDevice", NULL);
 
-    /* Confirm with current selection (type 0 = xb360). */
+    /* Select ds5 (index 1) and confirm. */
+    send_key_dn(mgr, SDLK_DOWN);
+    assert_int_equal(cbx_list_get_selected(&ct->type_picker), 1);
     send_key_press(mgr, SDLK_a);
 
     assert_int_equal(cbx_controllers_tab_mode(ct), CBX_CT_MODE_LIST);
+    assert_string_equal(cbx_controllers_tab_device_type(ct, 0), "ds5");
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_MANAGER,
+                                             "CreateTargetDevice"), 1);
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_MANAGER,
+                                             "StopTargetDevice"), 1);
+
+    char args[IP_MOCK_LAST_ARGS_LEN];
+    assert_int_equal(ip_dbus_mock_last_call_args(&f->mock, IP_IFACE_MANAGER,
+                                            "CreateTargetDevice", args,
+                                            sizeof(args)), 0);
+    assert_string_equal(args, "ds5");
+
+    /* The routed composite now points at the replacement, never the stopped
+     * old target and never a different slot's composite. */
+    assert_string_equal(f->mock.last_set_iface, IP_IFACE_COMPOSITE);
+    assert_string_equal(f->mock.last_set_prop, "TargetDevices");
+    assert_string_equal(f->mock.last_set_value, CHANGED_TARGET_PATH);
 }
 
-/* M08 pointer path (change): click Change Type → click type → confirm →
- * SetTargetDevices called → mode returns to LIST. */
+/* M08 pointer path (change): click Change Type → click a different type →
+ * same exact-request and route assertions as the controller path. */
 static void
 test_ctrl_change_type_confirm_pointer_path(void **state)
 {
@@ -754,27 +836,48 @@ test_ctrl_change_type_confirm_pointer_path(void **state)
     cbx_manager *mgr = &f->mgr;
     cbx_controllers_tab *ct = cbx_manager_controllers_tab(mgr);
 
+    mi_write_assignment_id(f->tmp_home, 0, "ORDER:0");
+
     /* Click Change Type. */
     int cx, cy;
     widget_center(&ct->change_type_btn.base, &cx, &cy);
     send_mouse_click(mgr, cx, cy);
     assert_int_equal(cbx_controllers_tab_mode(ct), CBX_CT_MODE_TYPE_PICK);
 
-    /* Expect SetTargetDevices + refresh. */
     ip_dbus_mock_reset(&f->mock);
-    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
-                           "SetTargetDevices", NULL);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                           "CreateTargetDevice", CHANGED_TARGET_PATH);
     ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_OBJECT_MANAGER,
-                           "GetManagedObjects", FIXTURE_1C1T);
+                           "GetManagedObjects", FIXTURE_CHANGED);
     ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_TARGET,
                            "DeviceType", "ds5");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                           "TargetDevices", "");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                           "SourceDevicePaths", "");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                           "StopTargetDevice", NULL);
 
-    /* Click on first type item. */
+    /* Click on the second type item (ds5). */
     int px = list_center_x(&ct->type_picker);
-    int py = list_item_y(&ct->type_picker, 0);
+    int py = list_item_y(&ct->type_picker, 1);
     send_mouse_click(mgr, px, py);
 
     assert_int_equal(cbx_controllers_tab_mode(ct), CBX_CT_MODE_LIST);
+    assert_string_equal(cbx_controllers_tab_device_type(ct, 0), "ds5");
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_MANAGER,
+                                             "CreateTargetDevice"), 1);
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_MANAGER,
+                                             "StopTargetDevice"), 1);
+
+    char args[IP_MOCK_LAST_ARGS_LEN];
+    assert_int_equal(ip_dbus_mock_last_call_args(&f->mock, IP_IFACE_MANAGER,
+                                            "CreateTargetDevice", args,
+                                            sizeof(args)), 0);
+    assert_string_equal(args, "ds5");
+    assert_string_equal(f->mock.last_set_iface, IP_IFACE_COMPOSITE);
+    assert_string_equal(f->mock.last_set_prop, "TargetDevices");
+    assert_string_equal(f->mock.last_set_value, CHANGED_TARGET_PATH);
 }
 
 /* ------------------------------------------------------------------ */
@@ -796,9 +899,18 @@ test_ctrl_type_pick_cancel_controller_path(void **state)
     assert_int_equal(cbx_controllers_tab_mode(ct), CBX_CT_MODE_TYPE_PICK);
 
     /* B to cancel. */
+    ip_dbus_mock_reset(&f->mock);
     send_key_dn(mgr, SDLK_b);
     assert_int_equal(cbx_controllers_tab_mode(ct), CBX_CT_MODE_LIST);
     assert_int_equal(ct->pending_action, CBX_CT_ACTION_NONE);
+
+    /* Cancelling the picker must issue no topology mutation. */
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_MANAGER,
+                                             "CreateTargetDevice"), 0);
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_MANAGER,
+                                             "StopTargetDevice"), 0);
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_COMPOSITE,
+                                             "TargetDevices"), 0);
 }
 
 /* M09 pointer path: click Change Type to open picker, then ESC to cancel.
@@ -821,9 +933,17 @@ test_ctrl_type_pick_cancel_pointer_path(void **state)
     assert_int_equal(ct->pending_action, CBX_CT_ACTION_CHANGE);
 
     /* ESC to cancel (production dismiss path). */
+    ip_dbus_mock_reset(&f->mock);
     send_key_dn(mgr, SDLK_ESCAPE);
     assert_int_equal(cbx_controllers_tab_mode(ct), CBX_CT_MODE_LIST);
     assert_int_equal(ct->pending_action, CBX_CT_ACTION_NONE);
+
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_MANAGER,
+                                             "CreateTargetDevice"), 0);
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_MANAGER,
+                                             "StopTargetDevice"), 0);
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_COMPOSITE,
+                                             "TargetDevices"), 0);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1966,6 +2086,12 @@ test_d01_inputplumber_unavailable(void **state)
     send_mouse_click(&mgr, cx, cy);
     assert_int_equal(cbx_controllers_tab_mode(ct), CBX_CT_MODE_LIST);
 
+    /* No target mutation may be attempted while InputPlumber is absent. */
+    assert_int_equal(ip_dbus_mock_call_count(&mock, IP_IFACE_MANAGER,
+                                             "CreateTargetDevice"), 0);
+    assert_int_equal(ip_dbus_mock_call_count(&mock, IP_IFACE_MANAGER,
+                                             "StopTargetDevice"), 0);
+
     cbx_manager_shutdown(&mgr);
     ip_dbus_mock_free(&mock);
 }
@@ -2006,6 +2132,10 @@ test_d02_remove_no_device(void **state)
     send_mouse_click(&mgr, cx, cy);
     assert_int_equal(cbx_controllers_tab_device_count(ct), 0);
 
+    /* No Stop request may be issued with no device selected. */
+    assert_int_equal(ip_dbus_mock_call_count(&mock, IP_IFACE_MANAGER,
+                                             "StopTargetDevice"), 0);
+
     cbx_manager_shutdown(&mgr);
     ip_dbus_mock_free(&mock);
 }
@@ -2042,6 +2172,12 @@ test_d06_dbus_failure(void **state)
     assert_true(cbx_widget_is_visible(&ct->status_lbl.base));
     assert_non_null(ct->status_lbl.text);
     assert_true(strstr(ct->status_lbl.text, "Add failed:") != NULL);
+    /* The request was attempted (and consumed) exactly once, and no stop
+     * was issued for a target that was never created. */
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_MANAGER,
+                                             "CreateTargetDevice"), 1);
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_MANAGER,
+                                             "StopTargetDevice"), 0);
 
     /* --- Pointer path --- */
 
@@ -2065,6 +2201,10 @@ test_d06_dbus_failure(void **state)
     assert_true(cbx_widget_is_visible(&ct->status_lbl.base));
     assert_non_null(ct->status_lbl.text);
     assert_true(strstr(ct->status_lbl.text, "Add failed:") != NULL);
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_MANAGER,
+                                             "CreateTargetDevice"), 1);
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_MANAGER,
+                                             "StopTargetDevice"), 0);
 }
 
 

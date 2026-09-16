@@ -458,7 +458,7 @@ test_tabbar_unrelated_event(void **state)
     cbx_tabbar_add_tab(&tb, "A", NULL);
 
     SDL_Event ev = {0};
-    ev.type = SDL_MOUSEMOTION;
+    ev.type = SDL_JOYAXISMOTION;
     assert_false(cbx_widget_handle_event(&tb.base, &ev));
 
     ev.type = SDL_KEYDOWN;

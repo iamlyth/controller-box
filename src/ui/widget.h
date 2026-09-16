@@ -233,6 +233,7 @@ typedef struct {
     int   item_h;            /* pixel height per item */
     int   icon_size;         /* icon dimension (square) */
     bool  pressed;           /* KEYDOWN sets pressed, KEYUP fires on_select */
+    int   hover_index;       /* row under the pointer, -1 = none */
     cbx_list_select_cb on_select;
 } cbx_list;
 
@@ -303,6 +304,7 @@ typedef struct {
     cbx_tab tabs[CBX_TABBAR_MAX_TABS];
     int   tab_count;
     int   active_tab;       /* index, -1 = none */
+    int   hover_tab;        /* tab under the pointer, -1 = none */
     cbx_tabbar_change_cb on_change;
 } cbx_tabbar;
 

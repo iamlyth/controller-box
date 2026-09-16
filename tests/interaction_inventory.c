@@ -106,9 +106,9 @@ static const cbx_interaction_entry inventory[] = {
       CBX_WIDGET_PICKER,
       "Down to picker → A on type item",
       AVAIL, "Mouse click on type item",
-      "CreateTargetDevice or SetTargetDevices DBus call; device type changes; picker closes",
+      "Exact CreateTargetDevice(new type) request issued once; owning composite TargetDevices route rewritten to the replacement; old target stopped; device type changes; picker closes",
       "cbx_manager_handle_event → panel → list on_select → cbx_controllers_tab_confirm_type_pick",
-      CBX_VERIFY_VERIFIED, "—" },
+      CBX_VERIFY_VERIFIED, "test_manager_interaction_ctrl.c (mock: exact request + route, ctrl/pointer); test_manager_native.c::test_m08_change_type_confirm_{controller,pointer}_native (native readback)" },
 
     { "M09", CBX_CAT_MANAGER_CTRL, "Controllers tab",
       CBX_WIDGET_PICKER,
@@ -410,7 +410,7 @@ static const cbx_interaction_entry inventory[] = {
       AVAIL, "Mouse click on the first binding row with zero mappings",
       "Sequential mode begins; the first NES button is prompted",
       "cbx_manager_handle_event → cbx_profile_editor_activate LIST zero-mapping branch → cbx_profile_editor_begin_sequential",
-      CBX_VERIFY_VERIFIED, "test_manager_native_prof.c::test_t16_empty_profile_sequential_save_native_reload" },
+      CBX_VERIFY_VERIFIED, "test_m45_empty_profile_sequential_ctrl (ctrl dispatch); test_m45_empty_profile_sequential_pointer (pointer dispatch); test_t16_empty_profile_sequential_save_native_reload (persistence supplement)" },
 
     /* ---- Overlay actions (O01–O13) ---- */
     { "O01", CBX_CAT_OVERLAY, "Overlay",

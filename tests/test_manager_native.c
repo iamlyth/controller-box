@@ -562,6 +562,97 @@ test_m09_type_picker_cancel_controller(void **state)
 }
 
 /* ================================================================== */
+/*  M08 — Change-type confirm through dispatch + native DBus readback  */
+/* ================================================================== */
+
+/* M08 controller path against the native service: add an xb360 slot,
+ * drive Change Type through production controller dispatch, pick ds5,
+ * confirm, and read the resulting type back from the server through the
+ * production DBus client.  This proves dispatch reaches the real
+ * InputPlumber-compatible topology mutation, not just a mode change. */
+static void
+test_m08_change_type_confirm_controller_native(void **state)
+{
+    mn_fixture *f = *state;
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+    pump_manager(&mgr);
+
+    cbx_controllers_tab *ct = cbx_manager_controllers_tab(&mgr);
+
+    /* Add an xb360 slot through the production pointer path. */
+    pointer_add_first_type(&mgr);
+    assert_int_equal(cbx_controllers_tab_device_count(ct), 1);
+    assert_string_equal(cbx_controllers_tab_device_type(ct, 0), "xb360");
+
+    /* Down → list, Down → button row (rightmost = Change Type), A → picker. */
+    ctrl_press(&mgr, f->joystick, 12);
+    ctrl_press(&mgr, f->joystick, 12);
+    ctrl_press(&mgr, f->joystick, 0);
+    assert_int_equal(cbx_controllers_tab_mode(ct), CBX_CT_MODE_TYPE_PICK);
+
+    /* Select ds5 (index 1) and confirm. */
+    ctrl_press(&mgr, f->joystick, 12);
+    assert_int_equal(cbx_list_get_selected(&ct->type_picker), 1);
+    ctrl_press(&mgr, f->joystick, 0);
+
+    assert_int_equal(cbx_controllers_tab_mode(ct), CBX_CT_MODE_LIST);
+    assert_int_equal(cbx_controllers_tab_device_count(ct), 1);
+    assert_string_equal(cbx_controllers_tab_device_type(ct, 0), "ds5");
+
+    /* Read the server-side type back through production DBus. */
+    char *dtype = NULL;
+    assert_int_equal(ip_target_get_device_type(
+        f->backend, f->bus, cbx_controllers_tab_device_path(ct, 0),
+        &dtype), 0);
+    assert_non_null(dtype);
+    assert_string_equal(dtype, "ds5");
+    free(dtype);
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* M08 pointer path against the native service: same as above but the
+ * Change Type confirmation is driven by mouse clicks. */
+static void
+test_m08_change_type_confirm_pointer_native(void **state)
+{
+    mn_fixture *f = *state;
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+    pump_manager(&mgr);
+
+    cbx_controllers_tab *ct = cbx_manager_controllers_tab(&mgr);
+
+    pointer_add_first_type(&mgr);
+    assert_int_equal(cbx_controllers_tab_device_count(ct), 1);
+    assert_string_equal(cbx_controllers_tab_device_type(ct, 0), "xb360");
+
+    int x, y;
+    widget_center(&ct->change_type_btn.base, &x, &y);
+    send_mouse_click(&mgr, x, y);
+    assert_int_equal(cbx_controllers_tab_mode(ct), CBX_CT_MODE_TYPE_PICK);
+
+    /* Click ds5 (index 1) in the type picker. */
+    send_mouse_click(&mgr, list_center_x(&ct->type_picker),
+                     list_item_y(&ct->type_picker, 1));
+
+    assert_int_equal(cbx_controllers_tab_mode(ct), CBX_CT_MODE_LIST);
+    assert_int_equal(cbx_controllers_tab_device_count(ct), 1);
+    assert_string_equal(cbx_controllers_tab_device_type(ct, 0), "ds5");
+
+    char *dtype = NULL;
+    assert_int_equal(ip_target_get_device_type(
+        f->backend, f->bus, cbx_controllers_tab_device_path(ct, 0),
+        &dtype), 0);
+    assert_non_null(dtype);
+    assert_string_equal(dtype, "ds5");
+    free(dtype);
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* ================================================================== */
 /*  M21 — Settings list select                                         */
 /* ================================================================== */
 
@@ -1856,6 +1947,13 @@ main(void)
         /* M09 — Type picker cancel */
         cmocka_unit_test_setup_teardown(test_m09_type_picker_cancel_controller,
                                         mn_setup, mn_teardown),
+        /* M08 — Change-type confirm via dispatch + native readback */
+        cmocka_unit_test_setup_teardown(
+            test_m08_change_type_confirm_controller_native,
+            mn_setup, mn_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_m08_change_type_confirm_pointer_native,
+            mn_setup, mn_teardown),
         /* M21 — Settings list select */
         cmocka_unit_test_setup_teardown(test_m21_settings_list_select_controller,
                                         mn_setup, mn_teardown),

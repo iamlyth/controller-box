@@ -140,6 +140,7 @@ struct mgr_vis_fixture {
     bool         has_font;
     uint8_t     *buf_a;
     uint8_t     *buf_b;
+    uint8_t     *buf_c;
     char         tmp[256];
     char         saved_home[256];
     bool         saved_home_set;
@@ -254,6 +255,17 @@ send_mouse_btn_down(cbx_manager *mgr, int x, int y)
     return cbx_manager_handle_event(mgr, &ev);
 }
 
+static bool
+send_mouse_btn_up(cbx_manager *mgr, int x, int y)
+{
+    SDL_Event ev = {0};
+    ev.type = SDL_MOUSEBUTTONUP;
+    ev.button.button = SDL_BUTTON_LEFT;
+    ev.button.x = x;
+    ev.button.y = y;
+    return cbx_manager_handle_event(mgr, &ev);
+}
+
 
 
 /*
@@ -344,8 +356,10 @@ mgr_vis_setup(void **state)
 
     f->buf_a = malloc((size_t)MGR_W * MGR_H * 4);
     f->buf_b = malloc((size_t)MGR_W * MGR_H * 4);
+    f->buf_c = malloc((size_t)MGR_W * MGR_H * 4);
     assert_non_null(f->buf_a);
     assert_non_null(f->buf_b);
+    assert_non_null(f->buf_c);
 
     *state = f;
     return 0;
@@ -359,6 +373,7 @@ mgr_vis_teardown(void **state)
         cbx_manager_shutdown(&f->mgr);
         free(f->buf_a);
         free(f->buf_b);
+        free(f->buf_c);
 
         if (f->saved_home_set) setenv("HOME", f->saved_home, 1);
         else unsetenv("HOME");
@@ -1088,6 +1103,124 @@ test_focus_visual_indication(void **state)
     assert_true(region_differs(f->buf_a, f->buf_b, MGR_W, &btn_rect));
 }
 
+/* Prove that a pure pointer hover (motion only, no focus, no press) and a
+ * focus-without-press each change the button's rendered pixels, so neither
+ * state is a struct field that is never painted (SPEC §5.7).  Driven
+ * through the production manager mouse dispatch: SDL_MOUSEMOTION →
+ * cbx_manager_update_hover → cbx_manager_render → framebuffer readback. */
+static void
+test_hover_and_focus_visual_indication(void **state)
+{
+    struct mgr_vis_fixture *f = FIX(state);
+    cbx_manager *mgr = &f->mgr;
+
+    /* Settings tab: the Save button is always present; activating it saves
+     * settings into the isolated HOME, which is harmless. */
+    while (cbx_manager_active_tab(mgr) != CBX_MGR_TAB_SETTINGS)
+        send_key(mgr, SDLK_RIGHT);
+    cbx_settings_tab *st = cbx_manager_settings_tab(mgr);
+
+    SDL_Rect btn_rect;
+    cbx_widget_get_rect(&st->save_btn.base, &btn_rect);
+    int cx = btn_rect.x + btn_rect.w / 2;
+    int cy = btn_rect.y + btn_rect.h / 2;
+
+    /* Resting frame: neither hovered nor focused. */
+    assert_false(st->save_btn.base.hover);
+    assert_false(st->save_btn.base.focused);
+    render_and_read(mgr, f->buf_a);
+
+    /* (a) Pure hover: motion over the button, no press. */
+    send_mouse_motion(mgr, cx, cy);
+    assert_true(st->save_btn.base.hover);
+    assert_false(st->save_btn.base.focused);
+    assert_false(st->save_btn.pressed);
+    render_and_read(mgr, f->buf_b);
+    assert_true(region_differs(f->buf_a, f->buf_b, MGR_W, &btn_rect));
+
+    /* (b) Focus without press: park the pointer off the button, then
+     * press+release it.  Release fires the (harmless) save and clears the
+     * pressed state, leaving the button focused but not hovered. */
+    send_mouse_motion(mgr, 5, 5);
+    assert_false(st->save_btn.base.hover);
+    send_mouse_btn_down(mgr, cx, cy);
+    assert_true(st->save_btn.base.focused);
+    send_mouse_btn_up(mgr, cx, cy);
+    assert_true(st->save_btn.base.focused);
+    assert_false(st->save_btn.base.hover);
+    assert_false(st->save_btn.pressed);
+    render_and_read(mgr, f->buf_c);
+
+    /* Focus changes pixels versus both the resting and the hover-only
+     * frames; hover changes pixels versus the resting frame. */
+    assert_true(region_differs(f->buf_a, f->buf_c, MGR_W, &btn_rect));
+    assert_true(region_differs(f->buf_b, f->buf_c, MGR_W, &btn_rect));
+}
+
+/* Prove a list row under a pure pointer hover is rendered distinctly. */
+static void
+test_list_hover_visual_indication(void **state)
+{
+    struct mgr_vis_fixture *f = FIX(state);
+    cbx_manager *mgr = &f->mgr;
+
+    while (cbx_manager_active_tab(mgr) != CBX_MGR_TAB_PROFILES)
+        send_key(mgr, SDLK_RIGHT);
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(mgr);
+    cbx_list *lst = &pt->profile_list_w;
+
+    /* Render once so the list geometry is laid out. */
+    render_and_read(mgr, f->buf_a);
+    assert_true(lst->item_count >= 1);
+    assert_true(lst->item_h > 0);
+
+    /* Hover a different row than the selected one when one exists so the
+     * list paints a hover highlight; otherwise the whole-list hover border
+     * still changes the perimeter. */
+    int sel = cbx_list_get_selected(lst);
+    int hover = (lst->item_count >= 2 && sel == 0) ? 1 : 0;
+    SDL_Rect region = lst->base.rect;
+    int hx = lst->base.rect.x + lst->base.rect.w / 2;
+    int hy = lst->base.rect.y + hover * lst->item_h + lst->item_h / 2;
+
+    send_mouse_motion(mgr, hx, hy);
+    assert_true(lst->base.hover);
+    assert_int_equal(lst->hover_index, hover);
+    render_and_read(mgr, f->buf_b);
+    assert_true(region_differs(f->buf_a, f->buf_b, MGR_W, &region));
+}
+
+/* Prove an inactive tab under a pure pointer hover is rendered distinctly. */
+static void
+test_tabbar_hover_visual_indication(void **state)
+{
+    struct mgr_vis_fixture *f = FIX(state);
+    cbx_manager *mgr = &f->mgr;
+
+    assert_int_equal(cbx_manager_active_tab(mgr), CBX_MGR_TAB_CONTROLLERS);
+    render_and_read(mgr, f->buf_a);
+
+    cbx_tabbar *tb = &mgr->tabbar;
+    assert_true(tb->tab_count >= 3);
+    int tab = CBX_MGR_TAB_SETTINGS;  /* inactive */
+    int tab_w = tb->base.rect.w / tb->tab_count;
+    assert_true(tab_w > 0);
+    SDL_Rect region = {
+        .x = tb->base.rect.x + tab * tab_w,
+        .y = tb->base.rect.y,
+        .w = tab_w,
+        .h = tb->base.rect.h,
+    };
+    int hx = region.x + tab_w / 2;
+    int hy = region.y + tb->base.rect.h / 2;
+
+    send_mouse_motion(mgr, hx, hy);
+    assert_true(tb->base.hover);
+    assert_int_equal(tb->hover_tab, tab);
+    render_and_read(mgr, f->buf_b);
+    assert_true(region_differs(f->buf_a, f->buf_b, MGR_W, &region));
+}
+
 /* Assert that pressing a button (mouse button down) produces a visible
  * change in the framebuffer — the pressed state (accent-tinted
  * background) must be rendered (SPEC §5.6). */
@@ -1221,6 +1354,15 @@ main(void)
         /* Task 5: Hover/press visual indication */
         cmocka_unit_test_setup_teardown(
             test_focus_visual_indication, mgr_vis_setup, mgr_vis_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_hover_and_focus_visual_indication,
+            mgr_vis_setup, mgr_vis_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_list_hover_visual_indication,
+            mgr_vis_setup, mgr_vis_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_tabbar_hover_visual_indication,
+            mgr_vis_setup, mgr_vis_teardown),
         cmocka_unit_test_setup_teardown(
             test_press_visual_indication, mgr_vis_setup, mgr_vis_teardown),
 

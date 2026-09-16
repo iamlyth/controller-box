@@ -906,7 +906,7 @@ test_list_unrelated_event(void **state)
     cbx_list_add_item(&lst, "A", NULL, NULL);
 
     SDL_Event ev = {0};
-    ev.type = SDL_MOUSEMOTION;
+    ev.type = SDL_JOYAXISMOTION;
     assert_false(cbx_widget_handle_event(&lst.base, &ev));
 
     ev.type = SDL_KEYDOWN;

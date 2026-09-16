@@ -102,6 +102,22 @@ list_draw(cbx_widget *w, SDL_Renderer *r)
                                        lst->theme->border_focus.a);
                 SDL_RenderDrawRect(r, &row);
             }
+        } else if (lst->theme && lst->base.hover &&
+                   i == lst->hover_index) {
+            /* Hovered but not selected: a distinct highlight plus a left
+             * accent bar so a pure pointer hover is visibly different from
+             * both the resting row and the selected row (SPEC §5.7). */
+            SDL_SetRenderDrawColor(r, lst->theme->panel_bg_hover.r,
+                                   lst->theme->panel_bg_hover.g,
+                                   lst->theme->panel_bg_hover.b,
+                                   lst->theme->panel_bg_hover.a);
+            SDL_RenderFillRect(r, &row);
+            SDL_Rect accent = { row.x, row.y, 3, row.h };
+            SDL_SetRenderDrawColor(r, lst->theme->text_accent.r,
+                                   lst->theme->text_accent.g,
+                                   lst->theme->text_accent.b,
+                                   lst->theme->text_accent.a);
+            SDL_RenderFillRect(r, &accent);
         }
 
         /* Draw icon if present. */
@@ -142,12 +158,13 @@ list_draw(cbx_widget *w, SDL_Renderer *r)
         y += lst->item_h;
     }
 
-    /* Border. */
+    /* Border.  A pure pointer hover (not focused) brightens the outline so
+     * hover is visible even when the pointer rests over the selected row. */
     if (lst->theme) {
-        SDL_SetRenderDrawColor(r, lst->theme->border.r,
-                               lst->theme->border.g,
-                               lst->theme->border.b,
-                               lst->theme->border.a);
+        SDL_Color border = (lst->base.hover && !lst->base.focused)
+            ? lst->theme->border_focus
+            : lst->theme->border;
+        SDL_SetRenderDrawColor(r, border.r, border.g, border.b, border.a);
         SDL_RenderDrawRect(r, &lst->base.rect);
     }
 }
@@ -206,6 +223,25 @@ list_handle_event(cbx_widget *w, const SDL_Event *ev)
             break;
         }
         break;
+    case SDL_MOUSEMOTION:
+        /* Track the row under the pointer so list_draw can render a
+         * per-row hover highlight.  The manager only dispatches motion to
+         * the hit widget, so a failed containment check means the pointer
+         * moved off this list. */
+        if (lst->item_h > 0) {
+            SDL_Point p = { ev->motion.x, ev->motion.y };
+            if (SDL_PointInRect(&p, &lst->base.rect)) {
+                int rel_y = p.y - lst->base.rect.y;
+                int idx = lst->scroll_offset + rel_y / lst->item_h;
+                lst->hover_index = (idx >= 0 && idx < lst->item_count)
+                    ? idx : -1;
+            } else {
+                lst->hover_index = -1;
+            }
+        } else {
+            lst->hover_index = -1;
+        }
+        return true;
     case SDL_MOUSEWHEEL: {
         /* SDL: wheel.y > 0 = scroll up (earlier items), < 0 = scroll down.
          * Compute in 64-bit so a pathological INT32_MIN wheel delta cannot
@@ -339,6 +375,7 @@ cbx_list_init(cbx_list *lst, int font_id,
     lst->item_h = DEFAULT_ITEM_H;
     lst->icon_size = DEFAULT_ICON_SIZE;
     lst->pressed = false;
+    lst->hover_index = -1;
     lst->on_select = NULL;
     return 0;
 }
@@ -373,6 +410,7 @@ cbx_list_clear(cbx_list *lst)
     lst->item_count = 0;
     lst->selected = -1;
     lst->scroll_offset = 0;
+    lst->hover_index = -1;
 }
 
 int

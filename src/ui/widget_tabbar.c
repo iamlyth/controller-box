@@ -43,8 +43,12 @@ tabbar_draw(cbx_widget *w, SDL_Renderer *r)
             .h = tb->base.rect.h,
         };
 
-        /* Active tab background. */
-        if (i == tb->active_tab && tb->theme) {
+        /* Active tab and the tab under a pure pointer hover share the
+         * raised background; a hovered inactive tab is additionally marked
+         * with an accent underline so hover is visible (SPEC §5.7). */
+        bool tab_hovered = tb->base.hover && i == tb->hover_tab &&
+                           i != tb->active_tab;
+        if ((i == tb->active_tab || tab_hovered) && tb->theme) {
             SDL_SetRenderDrawColor(r, tb->theme->panel_bg_hover.r,
                                    tb->theme->panel_bg_hover.g,
                                    tb->theme->panel_bg_hover.b,
@@ -88,6 +92,19 @@ tabbar_draw(cbx_widget *w, SDL_Renderer *r)
                                    tb->theme->text_accent.b,
                                    tb->theme->text_accent.a);
             SDL_RenderFillRect(r, &underline);
+        } else if (tab_hovered && tb->theme) {
+            /* Distinct hover marker on the inactive tab under the pointer. */
+            SDL_Rect underline = {
+                .x = tab_rect.x,
+                .y = tab_rect.y + tab_rect.h - 3,
+                .w = tab_rect.w,
+                .h = 3,
+            };
+            SDL_SetRenderDrawColor(r, tb->theme->text_secondary.r,
+                                   tb->theme->text_secondary.g,
+                                   tb->theme->text_secondary.b,
+                                   tb->theme->text_secondary.a);
+            SDL_RenderFillRect(r, &underline);
         }
     }
 
@@ -124,6 +141,23 @@ tabbar_handle_event(cbx_widget *w, const SDL_Event *ev)
             break;
         }
         break;
+    case SDL_MOUSEMOTION:
+        /* Track which tab the pointer is over so the draw path can render
+         * a hover marker on that tab. */
+        if (tb->tab_count > 0) {
+            int tab_w = tb->base.rect.w / tb->tab_count;
+            SDL_Point p = { ev->motion.x, ev->motion.y };
+            if (tab_w > 0 && SDL_PointInRect(&p, &tb->base.rect)) {
+                int over = (p.x - tb->base.rect.x) / tab_w;
+                tb->hover_tab = (over >= 0 && over < tb->tab_count)
+                    ? over : -1;
+            } else {
+                tb->hover_tab = -1;
+            }
+        } else {
+            tb->hover_tab = -1;
+        }
+        return true;
     case SDL_MOUSEBUTTONDOWN:
         if (ev->button.button == SDL_BUTTON_LEFT && tb->tab_count > 0) {
             SDL_Point p = { ev->button.x, ev->button.y };
@@ -208,6 +242,7 @@ cbx_tabbar_init(cbx_tabbar *tb, int font_id,
     tb->font_id = font_id;
     tb->tab_count = 0;
     tb->active_tab = -1;
+    tb->hover_tab = -1;
     tb->on_change = NULL;
     return 0;
 }
