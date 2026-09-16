@@ -222,7 +222,8 @@ wait_for_server(const ip_dbus_backend *backend, ip_bus_handle bus,
 /* ================================================================== */
 
 static void
-mn_setup_common(mn_fixture *f, bool fail_create, bool delayed)
+mn_setup_common(mn_fixture *f, bool fail_create, bool delayed,
+                bool fail_stop, unsigned removal_delay_ms)
 {
     /* Isolated HOME */
     snprintf(f->tmp_home, sizeof(f->tmp_home),
@@ -262,7 +263,9 @@ mn_setup_common(mn_fixture *f, bool fail_create, bool delayed)
     const nip_server_config cfg = {
         .num_composites = 2, .version = "0.78.0",
         .publication_delay_ms = delayed ? 20u : 0u,
-        .removal_delay_ms = delayed ? 20u : 0u
+        .removal_delay_ms = removal_delay_ms ? removal_delay_ms
+                                             : (delayed ? 20u : 0u),
+        .fail_stop = fail_stop
     };
     f->server_pid = nip_fork_server(f->bus_address, &cfg);
     assert_true(f->server_pid > 0);
@@ -303,7 +306,7 @@ mn_setup(void **state)
     f->joy_device_index = -1;
     f->daemon_pid = -1;
     f->server_pid = -1;
-    mn_setup_common(f, false, false);
+    mn_setup_common(f, false, false, false, 0);
     *state = f;
     return 0;
 }
@@ -316,7 +319,7 @@ mn_setup_fail(void **state)
     f->joy_device_index = -1;
     f->daemon_pid = -1;
     f->server_pid = -1;
-    mn_setup_common(f, true, false);
+    mn_setup_common(f, true, false, false, 0);
     *state = f;
     return 0;
 }
@@ -329,7 +332,37 @@ mn_setup_delayed(void **state)
     f->joy_device_index = -1;
     f->daemon_pid = -1;
     f->server_pid = -1;
-    mn_setup_common(f, false, true);
+    mn_setup_common(f, false, true, false, 0);
+    *state = f;
+    return 0;
+}
+
+/* All StopTargetDevice calls fail, so a late cleanup cannot remove the
+ * replacement after the old route has been restored. */
+static int
+mn_setup_fail_stop(void **state)
+{
+    mn_fixture *f = calloc(1, sizeof(*f));
+    assert_non_null(f);
+    f->joy_device_index = -1;
+    f->daemon_pid = -1;
+    f->server_pid = -1;
+    mn_setup_common(f, false, false, true, 0);
+    *state = f;
+    return 0;
+}
+
+/* Stop succeeds but ObjectManager removal is delayed far beyond the tab's
+ * bounded confirm window, exercising a late removal readback. */
+static int
+mn_setup_delayed_removal(void **state)
+{
+    mn_fixture *f = calloc(1, sizeof(*f));
+    assert_non_null(f);
+    f->joy_device_index = -1;
+    f->daemon_pid = -1;
+    f->server_pid = -1;
+    mn_setup_common(f, false, false, false, 3000);
     *state = f;
     return 0;
 }
@@ -1091,6 +1124,145 @@ test_native_manager_exact_path_lifecycle(void **state)
     cbx_manager_shutdown(&mgr);
 }
 
+/* SPEC §5.2: changing one slot's type creates an exact replacement and
+ * preserves every other slot's identity and type. */
+static void
+test_change_type_preserves_other_slot(void **state)
+{
+    (void)state;
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+    cbx_controllers_tab *ct = cbx_manager_controllers_tab(&mgr);
+    pump_manager(&mgr);
+    assert_int_equal(cbx_controllers_tab_device_count(ct), 0);
+
+    assert_int_equal(cbx_controllers_tab_add(ct, "xb360"), 0);
+    assert_int_equal(cbx_controllers_tab_add(ct, "ds5"), 0);
+    assert_int_equal(cbx_controllers_tab_device_count(ct), 2);
+    char slot0[CBX_MAX_PATH_LEN], slot1[CBX_MAX_PATH_LEN];
+    snprintf(slot0, sizeof(slot0), "%s", cbx_controllers_tab_device_path(ct, 0));
+    snprintf(slot1, sizeof(slot1), "%s", cbx_controllers_tab_device_path(ct, 1));
+
+    assert_int_equal(cbx_controllers_tab_change_type(ct, 0, "deck"), 0);
+    assert_int_equal(cbx_controllers_tab_device_count(ct), 2);
+    assert_string_equal(cbx_controllers_tab_device_type(ct, 0), "deck");
+    assert_string_equal(cbx_controllers_tab_device_type(ct, 1), "ds5");
+    assert_string_not_equal(cbx_controllers_tab_device_path(ct, 0), slot0);
+    assert_string_equal(cbx_controllers_tab_device_path(ct, 1), slot1);
+    cbx_manager_shutdown(&mgr);
+}
+
+/* Late failure after the replacement is attached: the old stop fails, so the
+ * composite must be restored to the still-live original; the replacement is
+ * not stopped while the composite routes to it.  Because that stop also
+ * fails, assignment stays disabled until a fresh enumeration confirms. */
+static void
+test_change_type_stop_failure_restores_routing(void **state)
+{
+    mn_fixture *f = *state;
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+    cbx_controllers_tab *ct = cbx_manager_controllers_tab(&mgr);
+    pump_manager(&mgr);
+
+    /* One virtual slot bound to physical composite 0 by stable identity. */
+    assert_int_equal(cbx_controllers_tab_add(ct, "xb360"), 0);
+    assert_int_equal(cbx_controllers_tab_device_count(ct), 1);
+    char old_path[CBX_MAX_PATH_LEN];
+    snprintf(old_path, sizeof(old_path), "%s",
+             cbx_controllers_tab_device_path(ct, 0));
+    const char *comp0 = "/org/shadowblip/InputPlumber/CompositeDevice0";
+    assert_int_equal(ip_composite_set_target_device_paths(f->backend, f->bus,
+        comp0, old_path), 0);
+
+    cbx_assignments a;
+    cbx_assignments_init(&a);
+    snprintf(a.assignments[0].id, CBX_MAX_ID_LEN, "ORDER:0");
+    a.assignments[0].slot = 0;
+    a.assignment_count = 1;
+    assert_int_equal(cbx_assignments_save(&a), 0);
+
+    assert_true(cbx_controllers_tab_change_type(ct, 0, "ds5") < 0);
+
+    /* The composite is back on the original, not on the replacement and not
+     * on a stopped target. */
+    char *td = NULL;
+    assert_int_equal(ip_composite_get_target_devices(f->backend, f->bus,
+        comp0, &td), 0);
+    assert_non_null(td);
+    assert_string_equal(td, old_path);
+    free(td);
+
+    /* Cleanup could not stop the replacement: mutation stays disabled until
+     * re-enumeration confirms recovery. */
+    assert_false(cbx_widget_is_visible(&ct->add_btn.base));
+    cbx_manager_shutdown(&mgr);
+}
+
+/* Late failure after the old target's stop was accepted but its removal
+ * readback is delayed: the replacement stays live and routed, the desired
+ * type is kept, and assignment is disabled rather than advertising the old
+ * target as restored (SPEC §5.2). */
+static void
+test_change_type_removal_unconfirmed_keeps_replacement(void **state)
+{
+    mn_fixture *f = *state;
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+    cbx_controllers_tab *ct = cbx_manager_controllers_tab(&mgr);
+    pump_manager(&mgr);
+
+    assert_int_equal(cbx_controllers_tab_add(ct, "xb360"), 0);
+    assert_int_equal(cbx_controllers_tab_device_count(ct), 1);
+
+    assert_true(cbx_controllers_tab_change_type(ct, 0, "ds5") != 0);
+
+    /* The replacement was never stopped after the old stop was accepted, so
+     * the slot still has a live target of the desired type. */
+    assert_true(native_target_count(f) >= 2);
+    assert_non_null(ct->settings);
+    assert_string_equal(ct->settings->virtual_controllers.types[0], "ds5");
+    assert_false(cbx_widget_is_visible(&ct->add_btn.base));
+    cbx_manager_shutdown(&mgr);
+}
+
+/* A persistence failure while changing one slot's type must leave the
+ * original target, its type and any routing untouched: the desired state is
+ * only published once it can actually be written (SPEC §5.2). */
+static void
+test_change_type_persistence_failure_preserves_old_target(void **state)
+{
+    mn_fixture *f = *state;
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init(&mgr, NULL), 0);
+    cbx_controllers_tab *ct = cbx_manager_controllers_tab(&mgr);
+    pump_manager(&mgr);
+
+    assert_int_equal(cbx_controllers_tab_add(ct, "xb360"), 0);
+    assert_int_equal(cbx_controllers_tab_device_count(ct), 1);
+    char old_path[CBX_MAX_PATH_LEN];
+    snprintf(old_path, sizeof(old_path), "%s",
+             cbx_controllers_tab_device_path(ct, 0));
+    int before = native_target_count(f);
+
+    char blocker[PATH_MAX + 32];
+    snprintf(blocker, sizeof(blocker), "%s/not-a-directory", f->tmp_home);
+    FILE *fp = fopen(blocker, "w");
+    assert_non_null(fp);
+    fclose(fp);
+    setenv("XDG_CONFIG_HOME", blocker, 1);
+
+    assert_true(cbx_controllers_tab_change_type(ct, 0, "ds5") != 0);
+    unsetenv("XDG_CONFIG_HOME");
+
+    /* No replacement was published and the original slot is untouched. */
+    assert_int_equal(native_target_count(f), before);
+    assert_int_equal(cbx_controllers_tab_device_count(ct), 1);
+    assert_string_equal(cbx_controllers_tab_device_path(ct, 0), old_path);
+    assert_string_equal(cbx_controllers_tab_device_type(ct, 0), "xb360");
+    cbx_manager_shutdown(&mgr);
+}
+
 /* ================================================================== */
 /*  Reactive PropertiesChanged in the Manager (Task 5)                 */
 /* ================================================================== */
@@ -1709,6 +1881,17 @@ main(void)
                                         mn_setup, mn_teardown),
         cmocka_unit_test_setup_teardown(test_native_manager_exact_path_lifecycle,
                                         mn_setup, mn_teardown),
+        /* Task 18 — staged topology and late-failure compensation */
+        cmocka_unit_test_setup_teardown(test_change_type_preserves_other_slot,
+                                        mn_setup, mn_teardown),
+        cmocka_unit_test_setup_teardown(test_change_type_stop_failure_restores_routing,
+                                        mn_setup_fail_stop, mn_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_change_type_removal_unconfirmed_keeps_replacement,
+            mn_setup_delayed_removal, mn_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_change_type_persistence_failure_preserves_old_target,
+            mn_setup, mn_teardown),
         /* Reactive PropertiesChanged in the Manager (Task 5) */
         cmocka_unit_test_setup_teardown(test_manager_properties_per_device,
                                         mn_setup, mn_teardown),

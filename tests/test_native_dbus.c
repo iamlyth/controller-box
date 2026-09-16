@@ -849,6 +849,159 @@ static void test_native_reconcile_verifies_every_attachment(void **state)
     backend->disconnect(bus); nip_stop_server(&sh);
 }
 
+/* Same-count type change replaces only the selected slot; every other slot
+ * keeps its exact target path and type (SPEC §5.2). */
+static void test_native_reconcile_same_count_replacement_preserves_others(void **state)
+{
+    (void)state;
+    nip_server_handle sh;
+    const nip_server_config cfg = { .num_composites = 2, .version = "9.8.7" };
+    nip_reset_server_state(2);
+    assert_int_equal(nip_start_server(&sh, &cfg), 0);
+    const ip_dbus_backend *backend = ip_dbus_sd_backend();
+    ip_bus_handle bus = NULL;
+    assert_int_equal(backend->connect(&bus), 0);
+    assert_int_equal(wait_for_server(backend, bus, NULL), 0);
+
+    cbx_overlay_service_ctx svc = {0};
+    svc.conn.backend = backend; svc.conn.bus = bus;
+    cbx_settings_defaults(&svc.settings);
+    svc.settings.virtual_controllers.count = 2;
+    snprintf(svc.settings.virtual_controllers.types[0], CBX_MAX_TYPE_LEN, "xb360");
+    snprintf(svc.settings.virtual_controllers.types[1], CBX_MAX_TYPE_LEN, "ds5");
+
+    assert_int_equal(cbx_objectmanager_enumerate(backend, bus, &svc.model), 0);
+    assert_int_equal(cbx_reconcile_startup_targets(&svc), 0);
+    assert_int_equal(svc.model.target_count, 2);
+    char slot0[CBX_MAX_PATH_LEN], slot1[CBX_MAX_PATH_LEN];
+    snprintf(slot0, sizeof(slot0), "%s", svc.model.targets[0].path);
+    snprintf(slot1, sizeof(slot1), "%s", svc.model.targets[1].path);
+
+    /* Change only slot 0; slot 1 must keep its exact path and type. */
+    snprintf(svc.settings.virtual_controllers.types[0], CBX_MAX_TYPE_LEN, "deck");
+    assert_int_equal(cbx_reconcile_startup_targets(&svc), 0);
+    assert_int_equal(svc.model.target_count, 2);
+    assert_string_not_equal(svc.model.targets[0].path, slot0);
+    assert_string_equal(svc.model.targets[1].path, slot1);
+
+    char *dt0 = NULL, *dt1 = NULL;
+    assert_int_equal(ip_target_get_device_type(backend, bus,
+        svc.model.targets[0].path, &dt0), 0);
+    assert_int_equal(ip_target_get_device_type(backend, bus,
+        svc.model.targets[1].path, &dt1), 0);
+    assert_string_equal(dt0, "deck");
+    assert_string_equal(dt1, "ds5");
+    free(dt0); free(dt1);
+    backend->disconnect(bus); nip_stop_server(&sh);
+}
+
+/* Late failure after the replacement is attached: stopping the old target
+ * fails, so the composite must be restored to the still-live original before
+ * the replacement is stopped.  The replacement stop also fails, so the exact
+ * cleanup operation is surfaced instead of silently left routed. */
+static void test_native_reconcile_late_failure_restores_old_route(void **state)
+{
+    (void)state;
+    nip_server_handle sh;
+    const char *comp0 = "/org/shadowblip/InputPlumber/CompositeDevice0";
+    const nip_server_config cfg = {
+        .num_composites = 1, .version = "9.8.7", .fail_stop = true
+    };
+    nip_reset_server_state(1);
+    assert_int_equal(nip_start_server(&sh, &cfg), 0);
+    const ip_dbus_backend *backend = ip_dbus_sd_backend();
+    ip_bus_handle bus = NULL;
+    assert_int_equal(backend->connect(&bus), 0);
+    assert_int_equal(wait_for_server(backend, bus, NULL), 0);
+
+    cbx_overlay_service_ctx svc = {0};
+    svc.conn.backend = backend; svc.conn.bus = bus;
+    cbx_settings_defaults(&svc.settings);
+    svc.settings.virtual_controllers.count = 1;
+    snprintf(svc.settings.virtual_controllers.types[0], CBX_MAX_TYPE_LEN, "ds5");
+    cbx_assignments_init(&svc.assignments);
+    svc.assignments.assignment_count = 1;
+    snprintf(svc.assignments.assignments[0].id, CBX_MAX_ID_LEN, "ORDER:0");
+    svc.assignments.assignments[0].slot = 0;
+    svc.reconcile_timeout_ms = 60; svc.reconcile_poll_ms = 2;
+
+    char *orig = NULL;
+    assert_int_equal(ip_manager_create_target_device(backend, bus, "xb360",
+        &orig), 0);
+    assert_int_equal(ip_composite_set_target_device_paths(backend, bus, comp0,
+        orig), 0);
+    assert_int_equal(cbx_objectmanager_enumerate(backend, bus, &svc.model), 0);
+
+    assert_true(cbx_reconcile_startup_targets(&svc) < 0);
+    assert_string_equal(svc.reconcile_status.phase, "type-correction");
+    assert_string_equal(svc.reconcile_status.operation, "StopTargetDevice");
+    assert_false(svc.reconcile_status.originals_stopped);
+
+    /* The composite is back on the original, not left on the replacement. */
+    char *td = NULL;
+    assert_int_equal(ip_composite_get_target_devices(backend, bus, comp0, &td), 0);
+    assert_non_null(td);
+    assert_string_equal(td, orig);
+    free(td);
+    assert_int_equal(svc.reconcile_status.cleanup_failures, 1);
+    assert_string_equal(svc.reconcile_status.cleanup_operation, "StopTargetDevice");
+    free(orig);
+    backend->disconnect(bus); nip_stop_server(&sh);
+}
+
+/* Late failure after the old target's stop was accepted but its removal
+ * readback is delayed: the replacement must stay routed and live rather than
+ * being stopped under a live composite route (SPEC §5.2). */
+static void test_native_reconcile_late_old_stop_keeps_replacement_routed(void **state)
+{
+    (void)state;
+    nip_server_handle sh;
+    const char *comp0 = "/org/shadowblip/InputPlumber/CompositeDevice0";
+    const nip_server_config cfg = {
+        .num_composites = 1, .version = "9.8.7", .removal_delay_ms = 500
+    };
+    nip_reset_server_state(1);
+    assert_int_equal(nip_start_server(&sh, &cfg), 0);
+    const ip_dbus_backend *backend = ip_dbus_sd_backend();
+    ip_bus_handle bus = NULL;
+    assert_int_equal(backend->connect(&bus), 0);
+    assert_int_equal(wait_for_server(backend, bus, NULL), 0);
+
+    cbx_overlay_service_ctx svc = {0};
+    svc.conn.backend = backend; svc.conn.bus = bus;
+    cbx_settings_defaults(&svc.settings);
+    svc.settings.virtual_controllers.count = 1;
+    snprintf(svc.settings.virtual_controllers.types[0], CBX_MAX_TYPE_LEN, "ds5");
+    cbx_assignments_init(&svc.assignments);
+    svc.assignments.assignment_count = 1;
+    snprintf(svc.assignments.assignments[0].id, CBX_MAX_ID_LEN, "ORDER:0");
+    svc.assignments.assignments[0].slot = 0;
+    svc.reconcile_timeout_ms = 60; svc.reconcile_poll_ms = 2;
+
+    char *orig = NULL;
+    assert_int_equal(ip_manager_create_target_device(backend, bus, "xb360",
+        &orig), 0);
+    assert_int_equal(ip_composite_set_target_device_paths(backend, bus, comp0,
+        orig), 0);
+    assert_int_equal(cbx_objectmanager_enumerate(backend, bus, &svc.model), 0);
+
+    assert_true(cbx_reconcile_startup_targets(&svc) < 0);
+    assert_string_equal(svc.reconcile_status.operation, "confirm-old-path-removal");
+    assert_true(svc.reconcile_status.originals_stopped);
+
+    /* The replacement stays routed: it is the slot's only confirmed live
+     * target and the pass did not stop it under a live route. */
+    char *td = NULL;
+    assert_int_equal(ip_composite_get_target_devices(backend, bus, comp0, &td), 0);
+    assert_non_null(td);
+    assert_string_not_equal(td, "");
+    assert_string_not_equal(td, orig);
+    free(td);
+    assert_int_equal(svc.reconcile_status.cleanup_failures, 0);
+    free(orig);
+    backend->disconnect(bus); nip_stop_server(&sh);
+}
+
 /* ================================================================== */
 /*  Test 7 (NEW): SetInterceptActivation round-trip                      */
 /* ================================================================== */
@@ -1385,6 +1538,9 @@ int main(void)
         cmocka_unit_test(test_native_reconcile_delays_reorder_and_exact_paths),
         cmocka_unit_test(test_native_reconcile_failure_boundaries),
         cmocka_unit_test(test_native_reconcile_verifies_every_attachment),
+        cmocka_unit_test(test_native_reconcile_same_count_replacement_preserves_others),
+        cmocka_unit_test(test_native_reconcile_late_failure_restores_old_route),
+        cmocka_unit_test(test_native_reconcile_late_old_stop_keeps_replacement_routed),
         /* New round-trip tests for overlay server capabilities. */
         cmocka_unit_test(test_native_set_intercept_activation),
         cmocka_unit_test(test_native_intercept_mode_writable),

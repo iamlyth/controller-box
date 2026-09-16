@@ -1188,6 +1188,17 @@ cbx_reconcile_startup_targets(cbx_overlay_service_ctx *svc)
     int orig_count = svc->model.target_count;
     char slots[CBX_MAX_DEVICES][CBX_MAX_PATH_LEN] = {{0}};
     char created[CBX_MAX_CONTROLLERS][CBX_MAX_PATH_LEN] = {{0}};
+    /* Per-created-target rollback context: the original target a replacement
+     * superseded ("" for a new slot), the composite it was attached to (""
+     * when none), and whether that original's StopTargetDevice was already
+     * issued.  A replacement whose original stop was issued must never be
+     * stopped while the composite still routes to it (SPEC §5.2). */
+    char created_old[CBX_MAX_CONTROLLERS][CBX_MAX_PATH_LEN] = {{0}};
+    char created_composite[CBX_MAX_CONTROLLERS][CBX_MAX_PATH_LEN] = {{0}};
+    bool created_old_stopped[CBX_MAX_CONTROLLERS] = {false};
+    int created_for_slot[CBX_MAX_DEVICES];
+    for (int i = 0; i < CBX_MAX_DEVICES; i++)
+        created_for_slot[i] = -1;
     int created_count = 0;
     for (int i = 0; i < orig_count; i++)
         snprintf(slots[i], sizeof(slots[i]), "%s", svc->model.targets[i].path);
@@ -1226,6 +1237,7 @@ cbx_reconcile_startup_targets(cbx_overlay_service_ctx *svc)
         snprintf(created[created_count], sizeof(created[created_count]), "%s",
                  returned);
         snprintf(slots[slot], sizeof(slots[slot]), "%s", returned);
+        created_for_slot[slot] = created_count;
         snprintf(path, sizeof(path), "%s", created[created_count++]);
         free(returned);
         phase = "publication-timeout"; operation = "confirm-created-path";
@@ -1265,10 +1277,13 @@ cbx_reconcile_startup_targets(cbx_overlay_service_ctx *svc)
             if (rc == 0) rc = -EIO;
             free(returned); goto fail;
         }
-        snprintf(created[created_count], sizeof(created[created_count]), "%s",
-                 returned);
+        int cidx = created_count;
+        snprintf(created[cidx], sizeof(created[cidx]), "%s", returned);
+        snprintf(created_old[cidx], sizeof(created_old[cidx]), "%s", old_path);
         snprintf(slots[slot], sizeof(slots[slot]), "%s", returned);
-        snprintf(path, sizeof(path), "%s", created[created_count++]);
+        created_for_slot[slot] = cidx;
+        snprintf(path, sizeof(path), "%s", created[cidx]);
+        created_count++;
         free(returned);
         operation = "confirm-replacement-publication";
         rc = wait_for_exact_target(svc, path, kind, true);
@@ -1285,6 +1300,8 @@ cbx_reconcile_startup_targets(cbx_overlay_service_ctx *svc)
             operation = "verify-exact-TargetDevices";
             rc = wait_for_attachment(svc, assigned, path);
             if (rc != 0) goto fail;
+            snprintf(created_composite[cidx],
+                     sizeof(created_composite[cidx]), "%s", assigned);
         }
         phase = "type-correction"; operation = "StopTargetDevice";
         snprintf(path, sizeof(path), "%s", old_path);
@@ -1292,6 +1309,7 @@ cbx_reconcile_startup_targets(cbx_overlay_service_ctx *svc)
                                              old_path);
         if (rc != 0) goto fail;
         svc->reconcile_status.originals_stopped = true;
+        created_old_stopped[cidx] = true;
         operation = "confirm-old-path-removal";
         rc = wait_for_exact_target(svc, old_path, kind, false);
         if (rc != 0) goto fail;
@@ -1314,6 +1332,10 @@ cbx_reconcile_startup_targets(cbx_overlay_service_ctx *svc)
         operation = "verify-exact-TargetDevices";
         rc = wait_for_attachment(svc, assigned, path);
         if (rc != 0) goto fail;
+        int cidx = created_for_slot[slot];
+        if (cidx >= 0 && cidx < created_count)
+            snprintf(created_composite[cidx],
+                     sizeof(created_composite[cidx]), "%s", assigned);
     }
 
     /* Destructive shrink is last; stopped originals are not called restored. */
@@ -1356,25 +1378,112 @@ fail: {
                  svc->reconcile_status.detail);
 
         /* Created paths are authoritative even if publication was delayed or
-         * enumeration failed.  Attempt every cleanup independently. */
+         * enumeration failed.  Roll back each one independently.  A target
+         * the composite still routes to is first un-routed, so the engine is
+         * never left pointing at a target this pass then stops:
+         *   - a replacement whose original stop was already issued is kept
+         *     (it is the slot's only live target and matches the desired
+         *     type) instead of being stopped under a live route;
+         *   - a replacement whose original is still live has the composite
+         *     restored to that original before the replacement is stopped;
+         *   - a new slot's target is detached to Unassigned before stopping.
+         * A routing restore that cannot be verified is surfaced with the
+         * exact cleanup operation and leaves the target live. */
         for (int i = created_count - 1; i >= 0; i--) {
+            const char *created_path = created[i];
+            const char *old_path = created_old[i];
+            const char *composite = created_composite[i];
+
+            if (old_path[0] && created_old_stopped[i]) {
+                /* Irreversible type correction: the replaced original's stop
+                 * was accepted.  Keep the replacement routed and live. */
+                svc->reconcile_status.originals_stopped = true;
+                continue;
+            }
+
+            if (composite[0]) {
+                char *td = NULL;
+                int qrc = ip_composite_get_target_devices(svc->conn.backend,
+                    svc->conn.bus, composite, &td);
+                if (qrc != 0) {
+                    /* Cannot confirm routing: do not stop a possibly-routed
+                     * target.  Surface the exact failed lookup. */
+                    svc->reconcile_status.cleanup_failures++;
+                    if (svc->reconcile_status.cleanup_operation[0] == '\0') {
+                        svc->reconcile_status.cleanup_rc = qrc;
+                        snprintf(svc->reconcile_status.cleanup_operation,
+                                 sizeof(svc->reconcile_status.cleanup_operation),
+                                 "%s", "query-TargetDevices");
+                        snprintf(svc->reconcile_status.cleanup_path,
+                                 sizeof(svc->reconcile_status.cleanup_path),
+                                 "%s", composite);
+                    }
+                    fprintf(stderr,
+                        "controller-box: reconcile rollback routing query failed composite=%s failure=%s rc=%d\n",
+                        composite, reconcile_error_category(qrc), qrc);
+                    continue;
+                }
+                bool routed = csv_is_exact_singleton(td, created_path);
+                free(td);
+                if (routed) {
+                    const char *restore = old_path[0] ? old_path : "";
+                    int rrc = ip_composite_set_target_device_paths(
+                        svc->conn.backend, svc->conn.bus, composite, restore);
+                    if (rrc == 0)
+                        rrc = wait_for_attachment(svc, composite,
+                                                  old_path[0] ? old_path : NULL);
+                    if (rrc != 0) {
+                        /* Cannot compensate routing: keep the replacement
+                         * live so the composite is not left pointing at a
+                         * stopped target. */
+                        svc->reconcile_status.cleanup_failures++;
+                        if (svc->reconcile_status.cleanup_operation[0] == '\0') {
+                            svc->reconcile_status.cleanup_rc = rrc;
+                            snprintf(svc->reconcile_status.cleanup_operation,
+                                     sizeof(svc->reconcile_status.cleanup_operation),
+                                     "%s", "restore-routing");
+                            snprintf(svc->reconcile_status.cleanup_path,
+                                     sizeof(svc->reconcile_status.cleanup_path),
+                                     "%s", composite);
+                        }
+                        fprintf(stderr,
+                            "controller-box: reconcile rollback routing restore failed composite=%s target=%s failure=%s rc=%d\n",
+                            composite, created_path,
+                            reconcile_error_category(rrc), rrc);
+                        continue;
+                    }
+                }
+            }
+
             int cleanup_rc = ip_manager_stop_target_device(svc->conn.backend,
-                svc->conn.bus, created[i]);
+                svc->conn.bus, created_path);
             if (cleanup_rc == 0)
-                cleanup_rc = wait_for_exact_target(svc, created[i], "", false);
+                cleanup_rc = wait_for_exact_target(svc, created_path, "", false);
             if (cleanup_rc != 0) {
                 svc->reconcile_status.cleanup_failures++;
+                if (svc->reconcile_status.cleanup_operation[0] == '\0') {
+                    svc->reconcile_status.cleanup_rc = cleanup_rc;
+                    snprintf(svc->reconcile_status.cleanup_operation,
+                             sizeof(svc->reconcile_status.cleanup_operation),
+                             "%s", "StopTargetDevice");
+                    snprintf(svc->reconcile_status.cleanup_path,
+                             sizeof(svc->reconcile_status.cleanup_path),
+                             "%s", created_path);
+                }
                 fprintf(stderr,
                     "controller-box: reconcile rollback cleanup failed path=%s failure=%s rc=%d\n",
-                    created[i], reconcile_error_category(cleanup_rc), cleanup_rc);
+                    created_path, reconcile_error_category(cleanup_rc), cleanup_rc);
             }
         }
-        reconcile_enumerate(svc, NULL);
+        (void)reconcile_enumerate(svc, NULL);
         snprintf(svc->reconcile_status.detail,
                  sizeof(svc->reconcile_status.detail),
-                 "%.*s cleanup_failures=%d originals_stopped=%s",
-                 190, primary_detail, svc->reconcile_status.cleanup_failures,
-                 svc->reconcile_status.originals_stopped ? "yes" : "no");
+                 "%.*s cleanup_failures=%d originals_stopped=%s cleanup_op=%.24s cleanup_rc=%d",
+                 150, primary_detail, svc->reconcile_status.cleanup_failures,
+                 svc->reconcile_status.originals_stopped ? "yes" : "no",
+                 svc->reconcile_status.cleanup_operation[0]
+                     ? svc->reconcile_status.cleanup_operation : "none",
+                 svc->reconcile_status.cleanup_rc);
         fprintf(stderr, "controller-box: virtual-controller reconcile failed: %s\n",
                 svc->reconcile_status.detail);
         return primary_rc;

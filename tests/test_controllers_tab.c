@@ -425,6 +425,9 @@ test_add_rejects_unconfirmed_model(void **state)
                             "/org/shadowblip/InputPlumber/devices/target/gamepad1");
     expect_refresh(&f->mock, FIXTURE_1C1T, "xb360", NULL);
     assert_int_equal(cbx_controllers_tab_add(&f->tab, "ds5"), -EIO);
+    /* The delayed publication could not be cleaned up, so mutation stays
+     * disabled until a fresh enumeration confirms recovery (SPEC §5.2). */
+    assert_false(cbx_widget_is_visible(&f->tab.add_btn.base));
 }
 
 static void
@@ -565,6 +568,10 @@ test_remove_rejects_unconfirmed_model(void **state)
                             "StopTargetDevice", NULL);
     expect_refresh(&f->mock, FIXTURE_1C1T, "xb360", NULL);
     assert_int_equal(cbx_controllers_tab_remove(&f->tab, 0), -EIO);
+    /* The stop was issued but its removal readback is unconfirmed: the
+     * removed slot is not resurrected and mutation stays disabled until a
+     * fresh enumeration confirms recovery (SPEC §5.2). */
+    assert_false(cbx_widget_is_visible(&f->tab.add_btn.base));
 }
 
 static void

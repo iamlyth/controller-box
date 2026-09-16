@@ -207,6 +207,12 @@ typedef struct cbx_overlay_service_ctx {
         bool deadline_expired;
         int cleanup_failures;
         bool originals_stopped;
+        /* Exact compensation step that failed when the backend could not
+         * restore the pre-reconcile routing, so callers and tests can name
+         * the operation rather than only count failures. */
+        char cleanup_operation[48];
+        char cleanup_path[CBX_MAX_PATH_LEN];
+        int  cleanup_rc;
         char detail[256];
     } reconcile_status;
     uint32_t reconcile_timeout_ms; /* 0 = CBX_RECONCILE_TIMEOUT_MS */

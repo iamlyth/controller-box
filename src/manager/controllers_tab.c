@@ -515,6 +515,54 @@ assigned_composite_for_slot(cbx_controllers_tab *tab, int slot,
     return composite_path_for_id(tab, id, out) ? 1 : 0;
 }
 
+/* True when `path` is present in the tab's current (refreshed) model. */
+static bool
+ct_model_has_path(const cbx_controllers_tab *tab, const char *path)
+{
+    if (!tab || !path || !path[0])
+        return false;
+    for (int i = 0; i < tab->model.target_count; i++)
+        if (strcmp(tab->model.targets[i].path, path) == 0)
+            return true;
+    return false;
+}
+
+/* Stop a target created by this operation and confirm its exact removal.
+ * Returns 0 when the target is confirmed gone, negative errno otherwise. */
+static int
+ct_stop_created(cbx_controllers_tab *tab, const char *path)
+{
+    int rc = ip_manager_stop_target_device(tab->backend, tab->bus, path);
+    if (rc == 0)
+        rc = refresh_until_path(tab, path, false, NULL);
+    return rc;
+}
+
+/* Make `composite` route exactly to `path` (NULL/"" clears it) and verify the
+ * readback.  A confirmed route must exist before a replacement is stopped so
+ * the engine is never left pointing at a stopped target (SPEC §5.2). */
+static int
+ct_restore_route(cbx_controllers_tab *tab, const char *composite,
+                 const char *path)
+{
+    int rc = ip_composite_set_target_device_paths(tab->backend, tab->bus,
+                                                   composite,
+                                                   path ? path : "");
+    if (rc == 0)
+        rc = wait_exact_attachment(tab, composite, path);
+    return rc;
+}
+
+/* Disable topology mutation until a fresh enumeration confirms recovery.
+ * Used after an irreversible/late failure so the UI never advertises a
+ * fictitious preserved live target (SPEC §5.2). */
+static void
+ct_disable_until_reenumerated(cbx_controllers_tab *tab, const char *reason)
+{
+    if (tab)
+        cbx_controllers_tab_set_available(tab, false, reason);
+}
+
 /* ------------------------------------------------------------------ */
 /*  Refresh                                                            */
 /* ------------------------------------------------------------------ */
@@ -852,14 +900,14 @@ cbx_controllers_tab_add(cbx_controllers_tab *tab, const char *type)
      * one immediate count refresh or attach it to an unrelated composite. */
     rc = refresh_until_path(tab, out_path, true, type);
     if (rc != 0) {
-        int cleanup = ip_manager_stop_target_device(tab->backend, tab->bus,
-                                                     out_path);
-        if (cleanup == 0)
-            cleanup = refresh_until_path(tab, out_path, false, NULL);
-        if (cleanup != 0)
+        int cleanup = ct_stop_created(tab, out_path);
+        if (cleanup != 0) {
+            ct_disable_until_reenumerated(tab,
+                "Add cleanup failed; assignment disabled until re-enumeration");
             fprintf(stderr,
                 "controller-box: Add cleanup failed for delayed target %s: rc=%d\n",
                 out_path, cleanup);
+        }
     }
     if (rc == 0 && tab->settings) {
         int n = tab->settings->virtual_controllers.count;
@@ -875,12 +923,12 @@ cbx_controllers_tab_add(cbx_controllers_tab *tab, const char *type)
         } else {
             /* Persistence is part of success.  Compensate the published
              * target and confirm its exact path disappeared. */
-            int rollback = ip_manager_stop_target_device(tab->backend,
-                                                           tab->bus, out_path);
-            if (rollback == 0)
-                rollback = refresh_until_path(tab, out_path, false, NULL);
-            if (rollback != 0)
+            int rollback = ct_stop_created(tab, out_path);
+            if (rollback != 0) {
+                ct_disable_until_reenumerated(tab,
+                    "Add reconciliation failed; assignment disabled until re-enumeration");
                 show_action_error(tab, "Add reconciliation", rollback);
+            }
         }
     }
     free(out_path);
@@ -1040,12 +1088,33 @@ cbx_controllers_tab_remove(cbx_controllers_tab *tab, int device_index)
         if (rc == 0)
             rc = wait_exact_attachment(tab, composite, NULL);
     }
-    if (rc == 0)
+    bool stop_issued = false;
+    if (rc == 0) {
         rc = ip_manager_stop_target_device(tab->backend, tab->bus, path);
+        if (rc == 0)
+            stop_issued = true;
+    }
     if (rc == 0)
         rc = refresh_until_path(tab, path, false, NULL);
 
     if (rc != 0) {
+        /* A stop whose late removal readback failed is irreversible: the
+         * target cannot be revived, so keep the post-remove desired topology
+         * instead of resurrecting an assignment/slot for a target that is
+         * already gone, and disable assignment until a fresh enumeration
+         * confirms recovery (SPEC §5.2).  Otherwise roll the pre-remove
+         * state back. */
+        if (stop_issued || !ct_model_has_path(tab, path)) {
+            if (snap.change_settings) {
+                *tab->settings = snap.proposed_settings;
+                tab->expected_target_count =
+                    snap.proposed_settings.virtual_controllers.count;
+            }
+            ct_disable_until_reenumerated(tab,
+                "Remove not confirmed; assignment disabled until re-enumeration");
+            return rc;
+        }
+
         /* Phase 3: restore persisted desired state.  The assignments restore
          * runs through the shared transaction (which takes the config lock
          * itself); taking the lock here and then calling the transaction
@@ -1110,50 +1179,112 @@ cbx_controllers_tab_change_type(cbx_controllers_tab *tab,
     char *replacement = NULL;
     int rc = ip_manager_create_target_device(tab->backend, tab->bus,
                                                new_type, &replacement);
-    if (rc != 0) {
+    if (rc != 0 || !replacement || !replacement[0]) {
+        if (rc == 0) rc = -EIO;
+        free(replacement);
         if (settings_prepared) (void)cbx_settings_save(tab->settings);
         return rc;
     }
-    if (!replacement || !replacement[0]) {
-        free(replacement);
+
+    /* Confirm the exact replacement path and type before touching routing or
+     * stopping the old target (SPEC §5.2: stage until readback succeeds). */
+    rc = refresh_until_path(tab, replacement, true, new_type);
+    if (rc != 0) {
+        int cleanup = ct_stop_created(tab, replacement);
+        if (cleanup != 0)
+            ct_disable_until_reenumerated(tab,
+                "Change type cleanup failed; assignment disabled until re-enumeration");
         if (settings_prepared) (void)cbx_settings_save(tab->settings);
-        return -EIO;
+        free(replacement);
+        return rc;
     }
 
-    rc = refresh_until_path(tab, replacement, true, new_type);
+    /* Attach the replacement to the composite that owns this slot before the
+     * old target is stopped, and verify the exact route. */
     char composite[CBX_MAX_PATH_LEN] = "";
-    if (rc == 0 && assigned_composite_for_slot(tab, device_index, composite)) {
-        rc = ip_composite_set_target_device_paths(tab->backend, tab->bus,
-                                                    composite, replacement);
-        if (rc == 0)
-            rc = wait_exact_attachment(tab, composite, replacement);
+    bool routed = false;
+    if (assigned_composite_for_slot(tab, device_index, composite)) {
+        rc = ct_restore_route(tab, composite, replacement);
+        if (rc != 0) {
+            /* The property write may have applied.  Restore the still-live
+             * old route before stopping the replacement; if compensation
+             * cannot be verified, keep the replacement routed rather than
+             * stopping a target the composite still points at. */
+            int cleanup = ct_restore_route(tab, composite, old_path);
+            if (cleanup == 0)
+                cleanup = ct_stop_created(tab, replacement);
+            if (cleanup != 0)
+                ct_disable_until_reenumerated(tab,
+                    "Change type routing compensation failed; assignment disabled until re-enumeration");
+            if (settings_prepared) (void)cbx_settings_save(tab->settings);
+            free(replacement);
+            return rc;
+        }
+        routed = true;
     }
-    if (rc == 0) {
-        /* Establish replacement as this slot before the old path vanishes,
-         * so later unordered refreshes cannot move unrelated indices. */
-        snprintf(tab->model.targets[device_index].path,
-                 sizeof(tab->model.targets[device_index].path), "%s",
-                 replacement);
-        const char *slash = strrchr(replacement, '/');
-        snprintf(tab->model.targets[device_index].name,
-                 sizeof(tab->model.targets[device_index].name), "%s",
-                 slash ? slash + 1 : replacement);
-        rc = ip_manager_stop_target_device(tab->backend, tab->bus, old_path);
-        if (rc == 0)
-            rc = refresh_until_path(tab, old_path, false, NULL);
-    }
+
+    /* Establish replacement as this slot before the old path vanishes, so
+     * later unordered refreshes cannot move unrelated indices. */
+    snprintf(tab->model.targets[device_index].path,
+             sizeof(tab->model.targets[device_index].path), "%s",
+             replacement);
+    const char *slash = strrchr(replacement, '/');
+    snprintf(tab->model.targets[device_index].name,
+             sizeof(tab->model.targets[device_index].name), "%s",
+             slash ? slash + 1 : replacement);
+
+    rc = ip_manager_stop_target_device(tab->backend, tab->bus, old_path);
     if (rc != 0) {
+        /* The old target is still live: restore its route before stopping the
+         * replacement, then put the old target back as this slot. */
+        if (routed) {
+            int restore = ct_restore_route(tab, composite, old_path);
+            if (restore != 0) {
+                /* Cannot restore routing: keep the replacement routed and
+                 * live, and do not advertise the old topology as restored. */
+                if (settings_prepared) *tab->settings = proposed_settings;
+                ct_disable_until_reenumerated(tab,
+                    "Change type routing rollback failed; assignment disabled until re-enumeration");
+                free(replacement);
+                return rc;
+            }
+        }
+        int cleanup = ct_stop_created(tab, replacement);
+        if (ct_model_has_path(tab, old_path)) {
+            snprintf(tab->model.targets[device_index].path,
+                     sizeof(tab->model.targets[device_index].path), "%s",
+                     old_path);
+            const char *old_slash = strrchr(old_path, '/');
+            snprintf(tab->model.targets[device_index].name,
+                     sizeof(tab->model.targets[device_index].name),
+                     "%.*s",
+                     (int)sizeof(tab->model.targets[device_index].name) - 1,
+                     old_slash ? old_slash + 1 : old_path);
+        }
+        (void)cbx_controllers_tab_refresh(tab);
         if (settings_prepared) (void)cbx_settings_save(tab->settings);
-        int cleanup = ip_manager_stop_target_device(tab->backend, tab->bus,
-                                                     replacement);
-        if (cleanup == 0)
-            cleanup = refresh_until_path(tab, replacement, false, NULL);
         if (cleanup != 0)
-            fprintf(stderr,
-                "controller-box: Change type cleanup failed for %s: rc=%d\n",
-                replacement, cleanup);
+            ct_disable_until_reenumerated(tab,
+                "Change type cleanup failed; assignment disabled until re-enumeration");
+        free(replacement);
+        return rc;
     }
-    if (rc == 0 && settings_prepared)
+
+    /* The old stop was accepted, so the old target cannot be revived.  Confirm
+     * its exact disappearance.  If that readback is late, keep the replacement
+     * routed and the desired type, and disable assignment until a fresh
+     * enumeration confirms the topology instead of advertising the old target
+     * as restored (SPEC §5.2). */
+    rc = refresh_until_path(tab, old_path, false, NULL);
+    if (rc != 0) {
+        if (settings_prepared) *tab->settings = proposed_settings;
+        ct_disable_until_reenumerated(tab,
+            "Change type removal unconfirmed; assignment disabled until re-enumeration");
+        free(replacement);
+        return rc;
+    }
+
+    if (settings_prepared)
         *tab->settings = proposed_settings;
     free(replacement);
     return rc;
