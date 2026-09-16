@@ -657,6 +657,30 @@ test_request_close_intercept_mode_fail(void **state)
     /* Assignment save still happened (on_save fired before PASS set). */
     assert_int_equal(a.assignment_count, 1);
 }
+static void
+test_sync_full_table_enospc(void **state)
+{
+    (void)state;
+    cbx_select_grid g;
+    build_test_grid(&g, 1);
+    move_to_col(&g, 0, 1);  /* controller 0 → slot 0 */
+
+    /* Pre-fill the assignment table so there is no room for the new entry. */
+    cbx_assignments a;
+    cbx_assignments_init(&a);
+    for (int i = 0; i < CBX_MAX_ASSIGNMENTS; i++) {
+        snprintf(a.assignments[i].id, CBX_MAX_ID_LEN, "ORDER:%d", 100 + i);
+        a.assignments[i].slot = i % CBX_MAX_CONTROLLERS;
+        a.assignments[i].profile[0] = '\0';
+    }
+    a.assignment_count = CBX_MAX_ASSIGNMENTS;
+
+    /* The shared sync reports the full table instead of silently dropping
+     * the new assignment (the drift the overlay's old private merge had,
+     * which swallowed -ENOSPC). */
+    assert_int_equal(cbx_close_sync_assignments(&g, &a), -ENOSPC);
+}
+
 
 /* --- Main ------------------------------------------------------------- */
 
@@ -674,6 +698,7 @@ main(void)
         cmocka_unit_test(test_sync_null_args),
         cmocka_unit_test(test_sync_multiple),
         cmocka_unit_test(test_sync_update_profile),
+        cmocka_unit_test(test_sync_full_table_enospc),
         /* on_save null-safety tests (no save called — no fixture needed) */
         cmocka_unit_test(test_on_save_null_userdata),
         cmocka_unit_test(test_on_save_null_grid),

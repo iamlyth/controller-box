@@ -120,6 +120,18 @@ int cbx_assignments_transaction(cbx_assignments_mutator_fn fn, void *userdata,
                                 cbx_assignments *out);
 
 /*
+ * Bounded variant of cbx_assignments_transaction: waits at most `timeout_ms`
+ * milliseconds for the cross-process config lock (0 = fail immediately,
+ * < 0 = wait indefinitely).  Returns -ETIMEDOUT if the lock is held past the
+ * deadline, leaving the file untouched.  Interactive callers on the resident
+ * overlay's single-threaded event loop use a bounded wait so a slow Manager
+ * transaction cannot stall input dispatch.
+ */
+int cbx_assignments_transaction_timeout(cbx_assignments_mutator_fn fn,
+                                        void *userdata, cbx_assignments *out,
+                                        int timeout_ms);
+
+/*
  * Validate an id string format.
  * Allowed formats:
  *   BT:xx:xx:xx:xx:xx:xx   (hex pairs, case-insensitive)

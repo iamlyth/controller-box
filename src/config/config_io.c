@@ -16,6 +16,7 @@
 #include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 
 #ifndef PATH_MAX
@@ -27,6 +28,9 @@
 
 /* Cross-process lock file within the config directory. */
 #define CBX_IO_LOCK_NAME ".controller-box.lock"
+
+/* Poll interval while waiting for a contended config lock. */
+#define CBX_IO_LOCK_POLL_MS 10
 
 /* --- Bounded regular-file read ------------------------------------------- */
 
@@ -63,10 +67,9 @@ int cbx_io_read_regular(const char *path, size_t max_size,
     }
 
     /* Allocate the snapshot size + 1 so a growth race can be detected with
-     * one extra probe byte rather than an unbounded read. */
+     * one extra probe byte rather than an unbounded read.  st.st_size is
+     * already <= max_size (checked above), so no clamp is needed. */
     size_t cap = (size_t)st.st_size;
-    if (cap > max_size)
-        cap = max_size;
 
     char *buf = malloc(cap + 1);
     if (!buf) {
@@ -221,7 +224,9 @@ int cbx_io_write_atomic(const char *path, const void *data, size_t len)
 
 /* --- Cross-process lock -------------------------------------------------- */
 
-int cbx_io_lock(void)
+/* Open (creating if needed) the per-user lock file.  Returns the descriptor
+ * or a negative errno.  Shared by the blocking and bounded lock calls. */
+static int open_lock_file(void)
 {
     char dir[PATH_MAX];
     int rc = cbx_config_dir(dir, sizeof(dir));
@@ -240,16 +245,46 @@ int cbx_io_lock(void)
         return -errno;
 
     (void)fchmod(fd, 0600);
-
-    while (flock(fd, LOCK_EX) != 0) {
-        if (errno == EINTR)
-            continue;
-        int e = errno;
-        close(fd);
-        return -e;
-    }
-
     return fd;
+}
+
+int cbx_io_lock_timeout(int timeout_ms)
+{
+    int fd = open_lock_file();
+    if (fd < 0)
+        return fd;
+
+    for (;;) {
+        if (flock(fd, LOCK_EX | LOCK_NB) == 0)
+            return fd;
+        if (errno != EWOULDBLOCK && errno != EAGAIN && errno != EINTR) {
+            int e = errno;
+            close(fd);
+            return -e;
+        }
+
+        if (timeout_ms == 0) {
+            close(fd);
+            return -ETIMEDOUT;
+        }
+
+        int step = CBX_IO_LOCK_POLL_MS;
+        if (timeout_ms > 0 && timeout_ms < step)
+            step = timeout_ms;
+
+        struct timespec ts = { .tv_sec = 0,
+                               .tv_nsec = (long)step * 1000000L };
+        while (nanosleep(&ts, &ts) != 0 && errno == EINTR)
+            ;
+
+        if (timeout_ms > 0)
+            timeout_ms -= step;
+    }
+}
+
+int cbx_io_lock(void)
+{
+    return cbx_io_lock_timeout(-1);
 }
 
 void cbx_io_unlock(int lock_fd)

@@ -64,6 +64,20 @@ int cbx_io_lock(void);
 /* Release a lock descriptor from cbx_io_lock.  Safe on negative values. */
 void cbx_io_unlock(int lock_fd);
 
+/*
+ * Acquire the exclusive cross-process lock, waiting at most `timeout_ms`
+ * milliseconds (0 = fail immediately, < 0 = wait indefinitely).
+ *
+ * Interactive callers on a latency-critical event loop (the resident overlay
+ * service) use a bounded wait so an unrelated writer holding the lock across
+ * slow work cannot freeze input dispatch; on timeout they receive -ETIMEDOUT
+ * and report the persistence failure rather than blocking.
+ *
+ * @return 0 or a positive lock descriptor on success; -ETIMEDOUT on timeout;
+ *         other negative errno on open/lock failure.
+ */
+int cbx_io_lock_timeout(int timeout_ms);
+
 #ifdef __cplusplus
 }
 #endif

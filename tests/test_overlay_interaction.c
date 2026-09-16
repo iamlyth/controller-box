@@ -922,6 +922,67 @@ test_o12b_profile_apply_failure_rolls_back_and_dirties(void **state)
 }
 
 /* ================================================================== */
+/*  O12c — Profile change on an identity-less row must not erase a     */
+/*      concurrent assignment writer's update (task 21 acceptance).    */
+/*      A row InputPlumber could not give a PersistentId cannot be     */
+/*      keyed in assignments.yaml, so the profile-change path must     */
+/*      skip persistence rather than save the service's stale          */
+/*      in-memory snapshot without the shared config lock.             */
+/* ================================================================== */
+
+static void
+test_o12c_identityless_profile_change_does_not_erase(void **state)
+{
+    interaction_fixture *f = *state;
+
+    static cbx_profile_list list;
+    memset(&list, 0, sizeof(list));
+    snprintf(list.entries[0].filename, CBX_LIST_NAME_LEN, "Default");
+    snprintf(list.entries[0].path, sizeof(list.entries[0].path),
+             "/profiles/Default.yaml");
+    snprintf(list.entries[1].filename, CBX_LIST_NAME_LEN, "Custom");
+    snprintf(list.entries[1].path, sizeof(list.entries[1].path),
+             "/profiles/Custom.yaml");
+    list.count = 2;
+
+    /* No backend/bus in the cycle: the apply skips the engine load and
+     * succeeds without touching DBus, which is enough to reach the
+     * persistence half of on_profile_change. */
+    cbx_profile_cycle_init(&f->svc->profile_cycle, NULL, NULL,
+                           &f->svc->assignments, &list);
+
+    /* A concurrent writer persists controller B in slot 1. */
+    cbx_assignments concurrent;
+    cbx_assignments_init(&concurrent);
+    snprintf(concurrent.assignments[0].id, CBX_MAX_ID_LEN, "ORDER:1");
+    concurrent.assignments[0].slot = 1;
+    snprintf(concurrent.assignments[0].profile, CBX_MAX_PROFILE_LEN,
+             "Default");
+    concurrent.assignment_count = 1;
+    assert_int_equal(cbx_assignments_save(&concurrent), 0);
+
+    /* The service's in-memory snapshot predates that write. */
+    cbx_assignments_init(&f->svc->assignments);
+
+    /* Row 0 has no stable identity (degraded InputPlumber row). */
+    f->svc->grid.rows[0].id[0] = '\0';
+    snprintf(f->svc->grid.rows[0].profile, CBX_GRID_PROFILE_LEN, "Default");
+
+    int rc = cbx_overlay_on_profile_change(
+        0, "Custom", f->svc->grid.rows[0].composite_path, f->svc);
+    assert_int_equal(rc, 0);
+
+    /* The concurrent writer's entry survives on disk; the identity-less row
+     * was never persisted and no unlocked full-table save overwrote it. */
+    cbx_assignments reloaded;
+    cbx_assignments_init(&reloaded);
+    assert_int_equal(cbx_assignments_load(&reloaded), 0);
+    assert_int_equal(reloaded.assignment_count, 1);
+    assert_string_equal(reloaded.assignments[0].id, "ORDER:1");
+    assert_int_equal(reloaded.assignments[0].slot, 1);
+}
+
+/* ================================================================== */
 /*  O10 — Close (B): saves, conflict-resolves, sets PASS, hides        */
 /* ================================================================== */
 
@@ -1509,6 +1570,9 @@ static const struct CMUnitTest tests[] = {
                                      interaction_setup, interaction_teardown),
     cmocka_unit_test_setup_teardown(
         test_o12b_profile_apply_failure_rolls_back_and_dirties,
+        interaction_setup, interaction_teardown),
+    cmocka_unit_test_setup_teardown(
+        test_o12c_identityless_profile_change_does_not_erase,
         interaction_setup, interaction_teardown),
 
     /* Hotplug — Dynamic columns rebuild through production dispatch */

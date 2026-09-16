@@ -21,10 +21,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <sys/types.h>
 
 #include <yaml.h>
 
@@ -359,12 +355,9 @@ static int parse_assignments_yaml(cbx_assignments *a, const char *data,
             if (!ctx.root_started) {
                 ctx.root_started = true;
             } else if (ctx.have_key) {
-                /* Entering a nested mapping; key tells us which one */
-                if (strcmp(ctx.current_key, "assignments") == 0) {
-                    /* This would be a single mapping under "assignments",
-                     * but the spec uses a sequence.  This path handles
-                     * malformed YAML gracefully — treat as no-op. */
-                }
+                /* A nested mapping directly under a top-level key is not a
+                 * shape this schema defines (assignments is a sequence);
+                 * drop the pending key and ignore the malformed shape. */
                 ctx.have_key = false;
             } else if (ctx.in_assignments_seq) {
                 /* Entering a single assignment mapping */
@@ -585,8 +578,7 @@ static int emit_assignments_yaml(const cbx_assignments *a, FILE *f)
                     (yaml_char_t *)"profile", -1, YAML_PLAIN_SCALAR_STYLE);
                 int pv = yaml_document_add_scalar(&doc, NULL,
                     (yaml_char_t *)asgn->profile, -1,
-                    asgn->profile[0] == '\0' ? YAML_PLAIN_SCALAR_STYLE
-                                              : YAML_PLAIN_SCALAR_STYLE);
+                    YAML_PLAIN_SCALAR_STYLE);
                 if (!pk || !pv) { rc = -ENOMEM; goto out; }
                 yaml_document_append_mapping_pair(&doc, item_map, pk, pv);
             }
@@ -671,10 +663,17 @@ int cbx_assignments_save(const cbx_assignments *a)
 int cbx_assignments_transaction(cbx_assignments_mutator_fn fn, void *userdata,
                                 cbx_assignments *out)
 {
+    return cbx_assignments_transaction_timeout(fn, userdata, out, -1);
+}
+
+int cbx_assignments_transaction_timeout(cbx_assignments_mutator_fn fn,
+                                        void *userdata, cbx_assignments *out,
+                                        int timeout_ms)
+{
     if (!fn)
         return -EINVAL;
 
-    int lock_fd = cbx_io_lock();
+    int lock_fd = cbx_io_lock_timeout(timeout_ms);
     if (lock_fd < 0)
         return lock_fd;
 

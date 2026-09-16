@@ -58,7 +58,7 @@ typedef struct {
  * @param assignments  The assignments struct to update.
  * @return 0 on success; -EINVAL on null args.
  */
-int cbx_close_sync_assignments(cbx_select_grid *grid,
+int cbx_close_sync_assignments(const cbx_select_grid *grid,
                                 cbx_assignments *assignments);
 
 /*

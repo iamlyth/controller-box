@@ -39,6 +39,7 @@
 #include "overlay/conflict.h"
 #include "overlay/profile_cycle.h"
 #include "overlay/dynamic_columns.h"
+#include "overlay/close.h"            /* cbx_close_sync_assignments */
 #include "dbus/ip_hotplug.h"
 #include "dbus/ip_properties.h"
 
@@ -297,51 +298,35 @@ cbx_overlay_props_wire(cbx_overlay_service_ctx *svc)
 /*  Serialized assignment persistence helpers                          */
 /* ================================================================== */
 
+/* The overlay service is a resident, single-threaded input/render loop.  It
+ * must never block that loop indefinitely on the cross-process config lock:
+ * a Manager transaction can hold it while polling InputPlumber.  Interactive
+ * overlay writes therefore use a bounded wait and report a persistence
+ * failure (close still returns input to the game) instead of stalling. */
+#define CBX_OVERLAY_CONFIG_LOCK_TIMEOUT_MS 200
+
 /*
  * Merge the overlay grid's assignment/order state onto `a` (a freshly loaded
- * on-disk table).  Only rows present in the grid are touched: entries for
- * controllers that are not currently displayed are preserved, so a concurrent
- * Manager update is not erased by an overlay save.
+ * on-disk table).  The assignment half is the shared close-path sync so the
+ * two overlay save paths cannot drift; only rows present in the grid are
+ * touched, so entries for controllers that are not currently displayed are
+ * preserved and a concurrent Manager update is not erased by an overlay save.
+ * gamepad_order is then rebuilt from the grid's slot ordering (the close-path
+ * sync is deliberately order-agnostic).
  */
 static int
 overlay_merge_grid(cbx_assignments *a, const cbx_select_grid *grid)
 {
-    for (int i = 0; i < grid->row_count; i++) {
-        const cbx_grid_row *row = &grid->rows[i];
-        int slot = cbx_select_grid_col_to_slot(row->cur_col);
+    int rc = cbx_close_sync_assignments(grid, a);
+    if (rc < 0)
+        return rc;
 
-        int found = -1;
-        for (int j = 0; j < a->assignment_count; j++) {
-            if (strcmp(a->assignments[j].id, row->id) == 0) {
-                found = j;
-                break;
-            }
-        }
-
-        if (slot >= 0) {
-            if (found >= 0) {
-                a->assignments[found].slot = slot;
-                snprintf(a->assignments[found].profile,
-                         sizeof(a->assignments[found].profile),
-                         "%s", row->profile);
-            } else if (a->assignment_count < CBX_MAX_ASSIGNMENTS) {
-                cbx_assignment *na =
-                    &a->assignments[a->assignment_count++];
-                snprintf(na->id, sizeof(na->id), "%s", row->id);
-                na->slot = slot;
-                snprintf(na->profile, sizeof(na->profile), "%s",
-                         row->profile);
-            }
-        } else if (found >= 0) {
-            a->assignments[found] = a->assignments[--a->assignment_count];
-        }
-    }
-
-    /* Rebuild gamepad_order from the grid's slot ordering. */
     a->gamepad_order_count = 0;
     for (int slot = 0; slot < CBX_MAX_CONTROLLERS; slot++) {
         for (int i = 0; i < grid->row_count; i++) {
             const cbx_grid_row *row = &grid->rows[i];
+            if (row->id[0] == '\0')
+                continue;
             if (cbx_select_grid_col_to_slot(row->cur_col) != slot)
                 continue;
             if (a->gamepad_order_count < CBX_MAX_GAMEPAD_ORDER) {
@@ -473,8 +458,10 @@ cbx_overlay_on_save(void *userdata)
      * onto the current on-disk table under the shared config lock so a
      * concurrent Manager write is not erased. */
     overlay_grid_txn_args persist_args = { &svc->grid };
-    rc = cbx_assignments_transaction(overlay_txn_merge_grid, &persist_args,
-                                     &svc->assignments);
+    rc = cbx_assignments_transaction_timeout(overlay_txn_merge_grid,
+                                             &persist_args,
+                                             &svc->assignments,
+                                             CBX_OVERLAY_CONFIG_LOCK_TIMEOUT_MS);
     if (rc != 0)
         return rc;
 
@@ -582,7 +569,8 @@ cbx_overlay_on_profile_change(int row_idx, const char *profile,
     /* Persist the profile on the current on-disk table under the shared
      * config lock; the profile-cycle apply already updated svc->assignments
      * in memory, and the transaction merges the single changed row so a
-     * concurrent write to another controller is preserved. */
+     * concurrent write to another controller is preserved.  The wait is
+     * bounded so a slow Manager transaction cannot stall this event loop. */
     if (row_idx >= 0 && row_idx < svc->grid.row_count &&
         svc->grid.rows[row_idx].id[0] != '\0') {
         const cbx_grid_row *row = &svc->grid.rows[row_idx];
@@ -590,10 +578,16 @@ cbx_overlay_on_profile_change(int row_idx, const char *profile,
             row->id,
             row->profile,
         };
-        rc = cbx_assignments_transaction(overlay_txn_set_profile, &args,
-                                         &svc->assignments);
+        rc = cbx_assignments_transaction_timeout(overlay_txn_set_profile, &args,
+                                                 &svc->assignments,
+                                                 CBX_OVERLAY_CONFIG_LOCK_TIMEOUT_MS);
     } else {
-        rc = cbx_assignments_save(&svc->assignments);
+        /* A row without a stable id cannot be keyed in assignments.yaml, so
+         * there is nothing meaningful to persist.  An unlocked full-table
+         * save of the service's stale in-memory snapshot would erase
+         * concurrent Manager/order writes (task 21 acceptance); the engine
+         * already holds the applied profile, so skip persistence. */
+        rc = 0;
     }
     /* The dirty trigger already fired above.  A persistence failure does
      * not undo the engine-applied profile, so the grid remains truthful. */

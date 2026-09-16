@@ -113,30 +113,21 @@ ip_gamepad_order_load(char **out_csv)
     if (rc != 0)
         return rc;
 
-    /* Build a CSV string from the gamepad_order entries. */
-    /* Calculate the total length needed. */
+    /* Build a CSV string from the gamepad_order entries.  The load path
+     * already validated every id via cbx_assignments_validate, so this is a
+     * single pass with exact worst-case sizing (id + separator each). */
     size_t total_len = 1;  /* NUL terminator */
-    for (int i = 0; i < a.gamepad_order_count; i++) {
-        if (!cbx_validate_id(a.gamepad_order[i]))
-            continue;  /* skip invalid IDs */
-        total_len += strlen(a.gamepad_order[i]);
-        if (total_len > 1)
-            total_len++;  /* comma separator */
-    }
+    for (int i = 0; i < a.gamepad_order_count; i++)
+        total_len += strlen(a.gamepad_order[i]) + 1;
 
     char *csv = malloc(total_len);
     if (!csv)
         return -ENOMEM;
 
-    csv[0] = '\0';
     size_t offset = 0;
     for (int i = 0; i < a.gamepad_order_count; i++) {
-        if (!cbx_validate_id(a.gamepad_order[i]))
-            continue;  /* skip invalid IDs */
-        if (offset > 0) {
-            csv[offset] = ',';
-            offset++;
-        }
+        if (offset > 0)
+            csv[offset++] = ',';
         size_t id_len = strlen(a.gamepad_order[i]);
         memcpy(csv + offset, a.gamepad_order[i], id_len);
         offset += id_len;

@@ -17,6 +17,7 @@
 #include "identify/assign_persist.h"
 #include "identify/assign.h"
 #include "config/config_assignments.h"
+#include "config/config_io.h"       /* bounded cross-process lock */
 #include "config/config_settings.h" /* CBX_MAX_CONTROLLERS */
 
 #include <errno.h>
@@ -27,6 +28,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #ifndef PATH_MAX
@@ -724,6 +726,68 @@ static void test_successful_save_no_temp_leak(void **state)
     assert_int_equal(count_owned_temps(dir), 0);
 }
 
+/* --- Bounded interactive lock (task 21 efficiency fix) ------------------- */
+
+static int noop_mutator(cbx_assignments *a, void *userdata)
+{
+    (void)a;
+    (void)userdata;
+    return 1;  /* no change */
+}
+
+/*
+ * An interactive caller that already finds the config lock held by another
+ * open file description must time out in a bounded window instead of
+ * blocking forever.  This is the guarantee that keeps the resident overlay's
+ * single-threaded input loop from stalling on a slow Manager transaction.
+ */
+static void test_transaction_lock_timeout_bounded(void **state)
+{
+    (void)state;
+
+    int held = cbx_io_lock();
+    assert_true(held >= 0);
+
+    struct timespec t0, t1;
+    assert_int_equal(clock_gettime(CLOCK_MONOTONIC, &t0), 0);
+    int rc = cbx_assignments_transaction_timeout(noop_mutator, NULL, NULL,
+                                                 120);
+    assert_int_equal(clock_gettime(CLOCK_MONOTONIC, &t1), 0);
+
+    assert_int_equal(rc, -ETIMEDOUT);
+
+    long elapsed_ms = (t1.tv_sec - t0.tv_sec) * 1000L +
+                      (t1.tv_nsec - t0.tv_nsec) / 1000000L;
+    assert_true(elapsed_ms >= 100);  /* it really waited for the lock */
+    assert_true(elapsed_ms < 1000);  /* but stayed bounded */
+
+    /* The timed-out transaction must not have written anything. */
+    cbx_assignments a;
+    cbx_assignments_init(&a);
+    assert_int_equal(cbx_assignments_load(&a), 0);  /* file absent → empty */
+    assert_int_equal(a.assignment_count, 0);
+
+    cbx_io_unlock(held);
+
+    /* Once the lock is free a normal transaction commits again. */
+    assert_int_equal(cbx_assign_persist_set("ORDER:0", 0, "default"), 0);
+}
+
+/* A zero timeout reports contention immediately. */
+static void test_lock_timeout_zero_immediate(void **state)
+{
+    (void)state;
+
+    int held = cbx_io_lock();
+    assert_true(held >= 0);
+    assert_int_equal(cbx_io_lock_timeout(0), -ETIMEDOUT);
+    cbx_io_unlock(held);
+
+    int locked = cbx_io_lock_timeout(0);
+    assert_true(locked >= 0);
+    cbx_io_unlock(locked);
+}
+
 /* --- Main ---------------------------------------------------------------- */
 
 int main(void)
@@ -784,6 +848,8 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_concurrent_updates_preserved, setup_home, teardown_home),
         cmocka_unit_test_setup_teardown(test_failed_save_preserves_original, setup_home, teardown_home),
         cmocka_unit_test_setup_teardown(test_successful_save_no_temp_leak, setup_home, teardown_home),
+        cmocka_unit_test_setup_teardown(test_transaction_lock_timeout_bounded, setup_home, teardown_home),
+        cmocka_unit_test_setup_teardown(test_lock_timeout_zero_immediate, setup_home, teardown_home),
     };
 
     return cmocka_run_group_tests(tests, NULL, NULL);

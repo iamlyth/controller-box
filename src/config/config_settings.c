@@ -20,10 +20,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <sys/types.h>
 
 #include <yaml.h>
 
@@ -571,18 +567,9 @@ int cbx_settings_load(cbx_settings *settings)
     if (rc < 0)
         return rc;
 
-    /* Clamp finite out-of-range values and pad types to count. */
+    /* Clamp finite out-of-range values and pad the type array to count with
+     * the default type. */
     clamp_settings(&tmp);
-
-    /* Ensure types array has exactly count entries (pad with default). */
-    for (int i = 0; i < tmp.virtual_controllers.count; i++) {
-        if (tmp.virtual_controllers.types[i][0] == '\0') {
-            strncpy(tmp.virtual_controllers.types[i], DEFAULT_TYPE,
-                    sizeof(tmp.virtual_controllers.types[i]) - 1);
-            tmp.virtual_controllers.types[i]
-                [sizeof(tmp.virtual_controllers.types[i]) - 1] = '\0';
-        }
-    }
 
     /* Publish only a complete, validated struct. */
     rc = cbx_settings_validate(&tmp);
@@ -748,9 +735,7 @@ out:
     return rc;
 }
 
-/* --- Icon overrides (helper functions are above) ----------------------- */
-/* The icon override functions (cbx_settings_icon_override, set, remove)
- * are defined above, before the validation section. */
+/* --- Save ---------------------------------------------------------------- */
 
 int cbx_settings_save(const cbx_settings *settings)
 {

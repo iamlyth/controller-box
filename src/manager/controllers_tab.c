@@ -22,6 +22,7 @@
 #include "dbus/ip_connection.h"   /* ip_connection_reason_for_error */
 #include "config/config_assignments.h"  /* cbx_assignments_load/save for auto-Unassign */
 #include "config/config_io.h"          /* cross-process config transaction lock */
+#include "identify/assign.h"           /* cbx_assign_find_index */
 
 /* ------------------------------------------------------------------ */
 /*  Layout constants                                                  */
@@ -454,30 +455,54 @@ wait_exact_attachment(cbx_controllers_tab *tab, const char *composite,
     }
 }
 
+/* Return the id assigned to `slot` in `asgn` (first match), or 0 if none. */
+static int
+assigned_id_for_slot(const cbx_assignments *asgn, int slot,
+                     char out[CBX_MAX_ID_LEN])
+{
+    for (int ai = 0; ai < asgn->assignment_count; ai++) {
+        if (asgn->assignments[ai].slot != slot)
+            continue;
+        snprintf(out, CBX_MAX_ID_LEN, "%s", asgn->assignments[ai].id);
+        return 1;
+    }
+    return 0;
+}
+
+/* Resolve a persistent id to a currently enumerated composite path. */
+static bool
+composite_path_for_id(cbx_controllers_tab *tab, const char *id,
+                      char out[CBX_MAX_PATH_LEN])
+{
+    for (int ci = 0; ci < tab->model.composite_count; ci++) {
+        char *persistent_id = NULL;
+        int rc = ip_composite_get_persistent_id(tab->backend, tab->bus,
+            tab->model.composites[ci].path, &persistent_id);
+        bool match = rc == 0 && persistent_id &&
+            strcmp(persistent_id, id) == 0;
+        free(persistent_id);
+        if (match) {
+            snprintf(out, CBX_MAX_PATH_LEN, "%s",
+                     tab->model.composites[ci].path);
+            return true;
+        }
+    }
+    return false;
+}
+
 static int
 assigned_composite_for_slot(cbx_controllers_tab *tab, int slot,
                             char out[CBX_MAX_PATH_LEN])
 {
     cbx_assignments asgn;
     cbx_assignments_init(&asgn);
-    if (cbx_assignments_load(&asgn) != 0) return 0;
-    for (int ai = 0; ai < asgn.assignment_count; ai++) {
-        if (asgn.assignments[ai].slot != slot) continue;
-        for (int ci = 0; ci < tab->model.composite_count; ci++) {
-            char *id = NULL;
-            int rc = ip_composite_get_persistent_id(tab->backend, tab->bus,
-                tab->model.composites[ci].path, &id);
-            bool match = rc == 0 && id &&
-                strcmp(id, asgn.assignments[ai].id) == 0;
-            free(id);
-            if (match) {
-                snprintf(out, CBX_MAX_PATH_LEN, "%s",
-                         tab->model.composites[ci].path);
-                return 1;
-            }
-        }
-    }
-    return 0;
+    if (cbx_assignments_load(&asgn) != 0)
+        return 0;
+
+    char id[CBX_MAX_ID_LEN];
+    if (!assigned_id_for_slot(&asgn, slot, id))
+        return 0;
+    return composite_path_for_id(tab, id, out) ? 1 : 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -852,93 +877,115 @@ cbx_controllers_tab_add(cbx_controllers_tab *tab, const char *type)
     return rc;
 }
 
-static int
-controllers_tab_remove_locked(cbx_controllers_tab *tab, int device_index)
-{
-    if (!tab || !tab->backend)
-        return -EINVAL;
-    if (device_index < 0 || device_index >= tab->model.target_count)
-        return -EINVAL;
-
-    char path[CBX_MAX_PATH_LEN];
-    snprintf(path, sizeof(path), "%s", tab->model.targets[device_index].path);
-
-    /* Prepare and persist desired state before destructive backend mutation.
-     * If either write fails, restore the first file and leave InputPlumber
-     * untouched rather than reporting a half-success. */
-    cbx_assignments old_asgn, proposed_asgn;
-    cbx_assignments_init(&old_asgn);
-    bool have_asgn = cbx_assignments_load(&old_asgn) == 0;
-    proposed_asgn = old_asgn;
-    for (int i = proposed_asgn.assignment_count - 1; i >= 0; i--) {
-        if (proposed_asgn.assignments[i].slot == device_index)
-            proposed_asgn.assignments[i] =
-                proposed_asgn.assignments[--proposed_asgn.assignment_count];
-        else if (proposed_asgn.assignments[i].slot > device_index)
-            proposed_asgn.assignments[i].slot--;
-    }
-
-    char composite[CBX_MAX_PATH_LEN] = "";
-    bool assigned = assigned_composite_for_slot(tab, device_index, composite);
-
+/* Snapshot of the state persisted before a destructive remove so the
+ * backend-failure path can restore it without re-reading the pre-state. */
+typedef struct {
+    bool have_asgn;
+    cbx_assignments old_asgn;
+    cbx_assignments proposed_asgn;
+    bool change_settings;
+    cbx_settings old_settings;
     cbx_settings proposed_settings;
-    bool change_settings = tab->settings &&
-        device_index < tab->settings->virtual_controllers.count;
-    if (change_settings) {
-        proposed_settings = *tab->settings;
-        int n = proposed_settings.virtual_controllers.count;
-        if (device_index < n - 1)
-            memmove(&proposed_settings.virtual_controllers.types[device_index],
-                    &proposed_settings.virtual_controllers.types[device_index + 1],
-                    (size_t)(n - device_index - 1) * CBX_MAX_TYPE_LEN);
-        proposed_settings.virtual_controllers.types[n - 1][0] = '\0';
-        proposed_settings.virtual_controllers.count = n - 1;
+} ct_remove_snapshot;
+
+/*
+ * Persist the desired post-remove assignment/settings state.  Runs with the
+ * cross-process config lock held, and only for the duration of the file
+ * load-modify-save: the caller runs the DBus mutation (and its compensation)
+ * outside the lock so an unresponsive InputPlumber cannot stall every other
+ * config writer.  On failure the first file is restored before returning.
+ */
+static int
+controllers_tab_remove_persist(cbx_controllers_tab *tab, int device_index,
+                               ct_remove_snapshot *snap)
+{
+    memset(snap, 0, sizeof(*snap));
+    cbx_assignments_init(&snap->old_asgn);
+
+    snap->have_asgn = cbx_assignments_load(&snap->old_asgn) == 0;
+    snap->proposed_asgn = snap->old_asgn;
+    for (int i = snap->proposed_asgn.assignment_count - 1; i >= 0; i--) {
+        if (snap->proposed_asgn.assignments[i].slot == device_index)
+            snap->proposed_asgn.assignments[i] =
+                snap->proposed_asgn.assignments[
+                    --snap->proposed_asgn.assignment_count];
+        else if (snap->proposed_asgn.assignments[i].slot > device_index)
+            snap->proposed_asgn.assignments[i].slot--;
     }
 
+    snap->change_settings = tab->settings &&
+        device_index < tab->settings->virtual_controllers.count;
+    if (snap->change_settings) {
+        snap->old_settings = *tab->settings;
+        snap->proposed_settings = *tab->settings;
+        int n = snap->proposed_settings.virtual_controllers.count;
+        if (device_index < n - 1)
+            memmove(&snap->proposed_settings.virtual_controllers.types[device_index],
+                    &snap->proposed_settings.virtual_controllers.types[device_index + 1],
+                    (size_t)(n - device_index - 1) * CBX_MAX_TYPE_LEN);
+        snap->proposed_settings.virtual_controllers.types[n - 1][0] = '\0';
+        snap->proposed_settings.virtual_controllers.count = n - 1;
+    }
+
+    /* If either write fails, restore the first file and leave InputPlumber
+     * untouched rather than reporting a half-success. */
     int rc = 0;
     bool assignments_written = false;
-    if (have_asgn) {
-        rc = cbx_assignments_save(&proposed_asgn);
+    if (snap->have_asgn) {
+        rc = cbx_assignments_save(&snap->proposed_asgn);
         assignments_written = rc == 0;
     }
-    if (rc == 0 && change_settings)
-        rc = cbx_settings_save(&proposed_settings);
-    if (rc != 0) {
-        if (assignments_written)
-            (void)cbx_assignments_save(&old_asgn);
-        return rc;
-    }
+    if (rc == 0 && snap->change_settings)
+        rc = cbx_settings_save(&snap->proposed_settings);
+    if (rc != 0 && assignments_written)
+        (void)cbx_assignments_save(&snap->old_asgn);
+    return rc;
+}
 
-    if (assigned) {
-        rc = ip_composite_set_target_device_paths(tab->backend, tab->bus,
-                                                    composite, "");
-        if (rc == 0)
-            rc = wait_exact_attachment(tab, composite, NULL);
-    }
-    if (rc == 0)
-        rc = ip_manager_stop_target_device(tab->backend, tab->bus, path);
-    if (rc == 0)
-        rc = refresh_until_path(tab, path, false, NULL);
-    if (rc != 0) {
-        /* Restore persisted desired state.  If the target still exists,
-         * restore its exact singleton route; otherwise expose reconciliation
-         * failure explicitly for startup compensation. */
-        if (have_asgn) (void)cbx_assignments_save(&old_asgn);
-        if (change_settings) (void)cbx_settings_save(tab->settings);
-        if (assigned) {
-            int restore = ip_composite_set_target_device_paths(tab->backend,
-                tab->bus, composite, path);
-            if (restore == 0)
-                restore = wait_exact_attachment(tab, composite, path);
-            if (restore != 0)
-                show_action_error(tab, "Remove reconciliation", restore);
+/*
+ * Restore the pre-remove assignment state by inverting exactly this
+ * operation's delta on the freshly loaded on-disk table: re-add entries the
+ * remove dropped and un-shift the slots it decremented, while leaving any
+ * entries a concurrent writer added or changed in the meantime untouched.
+ */
+typedef struct {
+    const cbx_assignments *old_asgn;
+    const cbx_assignments *proposed_asgn;
+} ct_remove_restore_args;
+
+static int
+ct_remove_restore_assignments(cbx_assignments *a, void *userdata)
+{
+    ct_remove_restore_args *args = userdata;
+
+    for (int i = 0; i < args->old_asgn->assignment_count; i++) {
+        const cbx_assignment *o = &args->old_asgn->assignments[i];
+
+        int p = -1;
+        for (int j = 0; j < args->proposed_asgn->assignment_count; j++) {
+            if (strcmp(args->proposed_asgn->assignments[j].id, o->id) == 0) {
+                p = j;
+                break;
+            }
         }
-        return rc;
-    }
 
-    if (change_settings) {
-        *tab->settings = proposed_settings;
-        tab->expected_target_count = proposed_settings.virtual_controllers.count;
+        if (p < 0) {
+            /* Removed by the forward op: re-add unless a concurrent writer
+             * already (re)created it. */
+            if (cbx_assign_find_index(a, o->id) < 0) {
+                if (a->assignment_count >= CBX_MAX_ASSIGNMENTS)
+                    return -ENOSPC;
+                a->assignments[a->assignment_count++] = *o;
+            }
+        } else if (o->slot != args->proposed_asgn->assignments[p].slot) {
+            /* Shifted by the forward op: revert only if a concurrent writer
+             * has not since changed this entry's slot. */
+            int idx = cbx_assign_find_index(a, o->id);
+            if (idx >= 0 &&
+                a->assignments[idx].slot ==
+                    args->proposed_asgn->assignments[p].slot)
+                a->assignments[idx].slot = o->slot;
+        }
     }
     return 0;
 }
@@ -951,16 +998,78 @@ cbx_controllers_tab_remove(cbx_controllers_tab *tab, int device_index)
     if (device_index < 0 || device_index >= tab->model.target_count)
         return -EINVAL;
 
-    /* Serialize the entire assignment read-modify-write (including the
-     * backend-failure compensation that restores the previous table) against
-     * Manager/overlay config writers, so a concurrent update cannot be
-     * interleaved between our load and save. */
+    char path[CBX_MAX_PATH_LEN];
+    snprintf(path, sizeof(path), "%s", tab->model.targets[device_index].path);
+
+    /* Phase 1: persist the desired state under the config lock.  The lock is
+     * held only for the load-modify-save of the config files; the DBus
+     * mutation below and its compensation run outside it, so a slow
+     * InputPlumber cannot stall every other config writer (e.g. the resident
+     * overlay's input-critical save path). */
+    ct_remove_snapshot snap;
     int lock = cbx_io_lock();
     if (lock < 0)
         return lock;
-    int rc = controllers_tab_remove_locked(tab, device_index);
+    int rc = controllers_tab_remove_persist(tab, device_index, &snap);
     cbx_io_unlock(lock);
-    return rc;
+    if (rc != 0)
+        return rc;
+
+    /* Resolve the routed composite from the pre-remove snapshot outside the
+     * lock (DBus latency must not serialize config writers), then mutate the
+     * backend. */
+    char composite[CBX_MAX_PATH_LEN] = "";
+    char assigned_id[CBX_MAX_ID_LEN];
+    bool assigned = snap.have_asgn &&
+        assigned_id_for_slot(&snap.old_asgn, device_index, assigned_id) &&
+        composite_path_for_id(tab, assigned_id, composite);
+
+    if (assigned) {
+        rc = ip_composite_set_target_device_paths(tab->backend, tab->bus,
+                                                    composite, "");
+        if (rc == 0)
+            rc = wait_exact_attachment(tab, composite, NULL);
+    }
+    if (rc == 0)
+        rc = ip_manager_stop_target_device(tab->backend, tab->bus, path);
+    if (rc == 0)
+        rc = refresh_until_path(tab, path, false, NULL);
+
+    if (rc != 0) {
+        /* Phase 3: restore persisted desired state.  The assignments restore
+         * runs through the shared transaction (which takes the config lock
+         * itself); taking the lock here and then calling the transaction
+         * would self-deadlock on the nested flock.  settings.yaml has a
+         * single writer (the Manager), so it is restored directly. */
+        if (snap.have_asgn) {
+            ct_remove_restore_args restore = {
+                &snap.old_asgn, &snap.proposed_asgn,
+            };
+            (void)cbx_assignments_transaction(
+                ct_remove_restore_assignments, &restore, NULL);
+        }
+        if (snap.change_settings)
+            (void)cbx_settings_save(&snap.old_settings);
+        /* If the target still exists, restore its exact singleton route;
+         * otherwise expose reconciliation failure explicitly for startup
+         * compensation. */
+        if (assigned) {
+            int restore = ip_composite_set_target_device_paths(tab->backend,
+                tab->bus, composite, path);
+            if (restore == 0)
+                restore = wait_exact_attachment(tab, composite, path);
+            if (restore != 0)
+                show_action_error(tab, "Remove reconciliation", restore);
+        }
+        return rc;
+    }
+
+    if (snap.change_settings) {
+        *tab->settings = snap.proposed_settings;
+        tab->expected_target_count =
+            snap.proposed_settings.virtual_controllers.count;
+    }
+    return 0;
 }
 
 int

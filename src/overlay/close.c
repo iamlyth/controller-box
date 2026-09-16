@@ -54,7 +54,7 @@ add_assignment(cbx_assignments *a, const char *id, int slot,
 /* --- Public API -------------------------------------------------------- */
 
 int
-cbx_close_sync_assignments(cbx_select_grid *grid,
+cbx_close_sync_assignments(const cbx_select_grid *grid,
                             cbx_assignments *assignments)
 {
     if (!grid || !assignments)
@@ -101,7 +101,7 @@ cbx_close_sync_assignments(cbx_select_grid *grid,
 /* Transaction mutator: apply the grid's resolved assignment state to the
  * freshly loaded on-disk table under the shared config lock. */
 typedef struct {
-    cbx_select_grid *grid;
+    const cbx_select_grid *grid;
 } close_txn_args;
 
 static int
