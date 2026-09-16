@@ -319,12 +319,15 @@ int cbx_settings_tab_init(cbx_settings_tab *tab,
     cbx_panel_add_child(panel, &tab->save_btn.base);
     cbx_panel_add_child(panel, &tab->status_lbl.base);
 
-/* --- Layout --------------------------------------------------- */    cbx_settings_tab_layout(tab);
+    /* --- Layout --------------------------------------------------- */
+    cbx_settings_tab_layout(tab);
+
     /* Populate the settings list. */
     cbx_settings_tab_refresh(tab);
 
     return 0;
 }
+
 void
 cbx_settings_tab_layout(cbx_settings_tab *tab)
 {
