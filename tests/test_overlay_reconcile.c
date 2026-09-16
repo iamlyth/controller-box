@@ -871,6 +871,185 @@ test_primary_composite_activation_close_sets_pass_on_comp0(void **state)
                       CBX_OVERLAY_IDLE);
 }
 
+/* ====================================================================== */
+/*  Test 8: Hotplug composite add restores the saved assignment on engine  */
+/* ====================================================================== */
+
+/*
+ * A controller that reconnects mid-session with a saved slot/profile must
+ * become effective on the live engine immediately, not merely appear in the
+ * grid.  This drives a composite InterfacesAdded through the production step
+ * loop (cbx_overlay_service_step -> cbx_overlay_reconcile_hotplug) with a
+ * saved phys-path assignment and asserts the exact TargetDevices, the
+ * LoadProfilePath, and the GamepadOrder all reach the engine (SPEC §6.2,
+ * task 6 acceptance: "production startup, hotplug and owner reacquisition").
+ */
+static void
+test_hotplug_composite_add_restores_saved_assignment(void **state)
+{
+    reconcile_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    /* Start from an empty physical topology; the reconnecting composite will
+     * derive its identity from its source devices. */
+    svc->model.composite_count = 0;
+    svc->comp_count = 0;
+
+    /* Saved preference: phys-path identity -> P2 (slot 1) with a profile. */
+    cbx_assignments_init(&svc->assignments);
+    cbx_assignment saved;
+    memset(&saved, 0, sizeof(saved));
+    snprintf(saved.id, sizeof(saved.id), "%s", "USB:phys:usb-3-1");
+    saved.slot = 1;
+    snprintf(saved.profile, sizeof(saved.profile), "%s", "custom");
+    svc->assignments.assignments[0] = saved;
+    svc->assignments.assignment_count = 1;
+
+    /* Profile list so the saved profile resolves to a real path. */
+    memset(&svc->profiles, 0, sizeof(svc->profiles));
+    snprintf(svc->profiles.entries[0].filename,
+             sizeof(svc->profiles.entries[0].filename), "%s", "custom");
+    snprintf(svc->profiles.entries[0].path,
+             sizeof(svc->profiles.entries[0].path), "%s",
+             "/tmp/cbx/custom.yaml");
+    svc->profiles.count = 1;
+    cbx_profile_cycle_init(&svc->profile_cycle, f->backend, f->mock.bus,
+                            &svc->assignments, &svc->profiles);
+
+    /* Source-derived identity for the reconnecting composite. */
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                            "SourceDevicePaths",
+                            "/org/shadowblip/InputPlumber/devices/source/event0");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_SOURCE_EVENT, "UniqueId", "");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_SOURCE_EVENT, "PhysPath",
+                            "usb-3-1");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_SOURCE_EVENT, "IdBustype", "3");
+
+    /* Engine apply expectations: profile load + verified read-back, exact
+     * TargetDevices set + read-back, and GamepadOrder. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE, "LoadProfilePath",
+                            NULL);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE, "ProfilePath",
+                            "/tmp/cbx/custom.yaml");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE, "TargetDevices", "");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER, "GamepadOrder", NULL);
+
+    /* Let the rest of the reconcile complete normally. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE, "DbusDevices", "");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE, "InterceptMode", "1");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                            "SetInterceptActivation", NULL);
+
+    /* Drive the production hotplug handler for a composite add. */
+    ip_interfaces_changed_payload payload;
+    memset(&payload, 0, sizeof(payload));
+    payload.sender     = ":1.42";
+    payload.path       = COMP_PATH_0;
+    payload.interfaces = IP_IFACE_COMPOSITE;
+    ip_hotplug_handle_added(&svc->hp, &payload);
+    assert_true(svc->hp.model_changed);
+    assert_int_equal(svc->model.composite_count, 1);
+
+    flush_events();
+    cbx_overlay_service_step(svc);
+
+    /* The rebuilt row holds the saved slot/profile... */
+    assert_int_equal(svc->grid.row_count, 1);
+    assert_string_equal(svc->grid.rows[0].id, "USB:phys:usb-3-1");
+    assert_int_equal(svc->grid.rows[0].cur_col, 2);   /* slot 1 -> P2 */
+    assert_string_equal(svc->grid.rows[0].profile, "custom");
+
+    /* ...and the engine actually received the restored routing state. */
+    assert_string_equal(f->mock.target_devices_value, TARGET_PATH_1);
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_COMPOSITE,
+                                              "LoadProfilePath"), 1);
+    assert_true(f->mock.gamepad_order_written);
+    assert_string_equal(f->mock.gamepad_order_value, COMP_PATH_0);
+}
+
+/*
+ * A persisted profile that no longer exists on disk must not block
+ * restoration forever when a valid alternative exists (task 6 acceptance:
+ * invalid preferred properties with valid alternatives).  The hotplug
+ * engine apply falls back to the built-in default, loads it, and updates
+ * the row so the UI/persisted table reflects the profile the engine holds.
+ */
+static void
+test_hotplug_composite_add_stale_profile_falls_back(void **state)
+{
+    reconcile_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    svc->model.composite_count = 0;
+    svc->comp_count = 0;
+
+    cbx_assignments_init(&svc->assignments);
+    cbx_assignment saved;
+    memset(&saved, 0, sizeof(saved));
+    snprintf(saved.id, sizeof(saved.id), "%s", "USB:phys:usb-3-1");
+    saved.slot = 1;
+    snprintf(saved.profile, sizeof(saved.profile), "%s", "missing");
+    svc->assignments.assignments[0] = saved;
+    svc->assignments.assignment_count = 1;
+
+    /* The saved profile is not present; default is a valid alternative. */
+    memset(&svc->profiles, 0, sizeof(svc->profiles));
+    snprintf(svc->profiles.entries[0].filename,
+             sizeof(svc->profiles.entries[0].filename), "%s", "default");
+    snprintf(svc->profiles.entries[0].path,
+             sizeof(svc->profiles.entries[0].path), "%s",
+             "/tmp/cbx/default.yaml");
+    snprintf(svc->profiles.entries[1].filename,
+             sizeof(svc->profiles.entries[1].filename), "%s", "custom");
+    snprintf(svc->profiles.entries[1].path,
+             sizeof(svc->profiles.entries[1].path), "%s",
+             "/tmp/cbx/custom.yaml");
+    svc->profiles.count = 2;
+    cbx_profile_cycle_init(&svc->profile_cycle, f->backend, f->mock.bus,
+                            &svc->assignments, &svc->profiles);
+
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                            "SourceDevicePaths",
+                            "/org/shadowblip/InputPlumber/devices/source/event0");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_SOURCE_EVENT, "UniqueId", "");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_SOURCE_EVENT, "PhysPath",
+                            "usb-3-1");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_SOURCE_EVENT, "IdBustype", "3");
+
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE, "LoadProfilePath",
+                            NULL);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE, "ProfilePath",
+                            "/tmp/cbx/default.yaml");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE, "TargetDevices", "");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER, "GamepadOrder", NULL);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE, "DbusDevices", "");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE, "InterceptMode", "1");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                            "SetInterceptActivation", NULL);
+
+    ip_interfaces_changed_payload payload;
+    memset(&payload, 0, sizeof(payload));
+    payload.sender     = ":1.42";
+    payload.path       = COMP_PATH_0;
+    payload.interfaces = IP_IFACE_COMPOSITE;
+    ip_hotplug_handle_added(&svc->hp, &payload);
+    assert_true(svc->hp.model_changed);
+
+    flush_events();
+    cbx_overlay_service_step(svc);
+
+    /* Restoration succeeded with the fallback profile, not a hard failure. */
+    assert_int_equal(svc->backend_ready, true);
+    assert_int_equal(svc->grid.row_count, 1);
+    assert_string_equal(svc->grid.rows[0].profile, "default");
+    assert_string_equal(f->mock.target_devices_value, TARGET_PATH_1);
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_COMPOSITE,
+                                              "LoadProfilePath"), 1);
+    assert_string_equal(f->mock.gamepad_order_value, COMP_PATH_0);
+}
+
 /* --- Test runner ------------------------------------------------------- */
 
 int
@@ -912,6 +1091,12 @@ main(void)
             reconcile_setup, reconcile_teardown),
         cmocka_unit_test_setup_teardown(
             test_primary_composite_activation_close_sets_pass_on_comp0,
+            reconcile_setup, reconcile_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_hotplug_composite_add_restores_saved_assignment,
+            reconcile_setup, reconcile_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_hotplug_composite_add_stale_profile_falls_back,
             reconcile_setup, reconcile_teardown),
     };
 

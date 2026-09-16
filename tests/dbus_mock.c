@@ -47,6 +47,10 @@ void ip_dbus_mock_reset(ip_dbus_mock *mock) {
     mock->unique_name_rc = 0;
     mock->get_property_count = 0;
     mock->set_property_count = 0;
+    mock->gamepad_order_written = false;
+    mock->gamepad_order_value[0] = '\0';
+    mock->target_devices_written = false;
+    mock->target_devices_value[0] = '\0';
     for (int i = 0; i < mock->count; i++)
         mock->expectations[i].calls = 0;
     memset(&mock->last_call, 0, sizeof(mock->last_call));
@@ -319,6 +323,12 @@ static int mock_set_property(ip_bus_handle bus, const char *dest,
         snprintf(mock->target_devices_value,
                  sizeof(mock->target_devices_value), "%s", value ? value : "");
         mock->target_devices_written = true;
+    }
+    if (e && e->rc == 0 && strcmp(iface, IP_IFACE_MANAGER) == 0 &&
+        strcmp(prop, "GamepadOrder") == 0) {
+        snprintf(mock->gamepad_order_value,
+                 sizeof(mock->gamepad_order_value), "%s", value ? value : "");
+        mock->gamepad_order_written = true;
     }
     return e ? e->rc : -ENXIO;
 }

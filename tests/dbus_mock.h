@@ -103,6 +103,8 @@ typedef struct {
     char  last_set_iface[64];  /* iface of the most recent set_property */
     char  last_set_prop[64];   /* property of the most recent set_property */
     char  last_set_value[128]; /* value of the most recent set_property */
+    char  gamepad_order_value[IP_MOCK_LAST_ARGS_LEN]; /* last Manager GamepadOrder write */
+    bool  gamepad_order_written;
     char target_devices_value[IP_MOCK_LAST_ARGS_LEN]; /* writable as property state */
     bool target_devices_written;
 } ip_dbus_mock;

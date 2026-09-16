@@ -42,6 +42,7 @@
 #include "overlay/close.h"            /* cbx_close_sync_assignments */
 #include "dbus/ip_hotplug.h"
 #include "dbus/ip_properties.h"
+#include "identify/assign.h"            /* CBX_DEFAULT_PROFILE */
 #include "identify/composite_identity.h"
 #include "identify/gamepad_order_restore.h"
 
@@ -431,34 +432,34 @@ overlay_txn_set_profile(cbx_assignments *a, void *userdata)
 }
 
 /* ================================================================== */
-/*  Lifecycle on_save callback: conflict resolution + assignment save */
+/*  Grid → engine application (shared by save and hotplug reconcile)   */
 /* ================================================================== */
 
-int
-cbx_overlay_on_save(void *userdata)
+/*
+ * Build the bus-wide comma-separated GamepadOrder from the grid's
+ * player-slot ordering.  Only rows holding an assigned slot contribute
+ * (Unassigned rows are omitted) and rows are emitted in slot order, so the
+ * engine order is exactly the displayed topology.  Returns 0, or
+ * -ENAMETOOLONG when the composite paths cannot fit in `order`.
+ */
+static int
+overlay_build_gamepad_order(const cbx_select_grid *grid,
+                            char *order, size_t order_size)
 {
-    cbx_overlay_service_ctx *svc = (cbx_overlay_service_ctx *)userdata;
+    if (!grid || !order || order_size == 0)
+        return -EINVAL;
 
-    /* Detect and resolve conflicts (SPEC §4.5). */
-    cbx_conflict_list_init(&svc->conflicts);
-    cbx_conflict_detect(&svc->grid, &svc->conflicts);
-    cbx_conflict_resolve(&svc->grid, &svc->conflicts);
-
-    /* Build GamepadOrder from the grid state (needed for engine apply). */
-    char order[CBX_MAX_COMPOSITES * (CBX_MAX_PATH_LEN + 1)];
     order[0] = '\0';
     size_t order_len = 0;
     for (int slot = 0; slot < CBX_MAX_CONTROLLERS; slot++) {
-        for (int i = 0; i < svc->grid.row_count; i++) {
-            const cbx_grid_row *row = &svc->grid.rows[i];
+        for (int i = 0; i < grid->row_count; i++) {
+            const cbx_grid_row *row = &grid->rows[i];
             if (cbx_select_grid_col_to_slot(row->cur_col) != slot)
                 continue;
             size_t path_len = strlen(row->composite_path);
             size_t need = path_len + (order_len > 0 ? 1 : 0);
-            if (order_len + need >= sizeof(order) - 1) {
-                /* Buffer would overflow — abort save to avoid truncation */
+            if (order_len + need >= order_size - 1)
                 return -ENAMETOOLONG;
-            }
             if (order_len > 0)
                 order[order_len++] = ',';
             memcpy(order + order_len, row->composite_path, path_len);
@@ -466,20 +467,100 @@ cbx_overlay_on_save(void *userdata)
             order[order_len] = '\0';
         }
     }
+    return 0;
+}
 
-    /* --- Phase 1: Apply exact replacement routing (SPEC §§4.1-4.7) ---
-     * Clear every composite first, including rows moved to Unassigned.  This
-     * makes P1→P2 transfers and Unassigned authoritative rather than additive.
-     * Each property replacement is bounded and verified as an exact parsed set. */
-    for (int i = 0; i < svc->grid.row_count; i++) {
-        const char *composite = svc->grid.rows[i].composite_path;
-        int clear_rc = ip_composite_set_target_device_paths(
-            svc->conn.backend, svc->conn.bus, composite, "");
-        if (clear_rc != 0)
-            return clear_rc;
-        clear_rc = wait_for_attachment(svc, composite, NULL);
-        if (clear_rc != 0)
-            return clear_rc;
+/* True when at least one grid row holds a player slot (i.e. there is a
+ * persisted assignment to make effective on the engine). */
+static bool
+overlay_grid_has_assigned_row(const cbx_select_grid *grid)
+{
+    if (!grid)
+        return false;
+    for (int i = 0; i < grid->row_count; i++) {
+        if (cbx_select_grid_col_to_slot(grid->rows[i].cur_col) >= 0)
+            return true;
+    }
+    return false;
+}
+
+/*
+ * Choose the profile to load for `row` from the enumerated profile list.
+ *
+ * The saved preference is used when it still exists.  When it does not (the
+ * profile YAML was deleted or renamed) the built-in default — or, failing
+ * that, the first enumerated profile — is a valid alternative, so a stale
+ * preference degrades to a working profile instead of failing restoration
+ * forever and leaving operations disabled.  `out_name` is empty only when no
+ * profile can be applied (no list or an empty list).
+ */
+static void
+overlay_pick_profile(const cbx_overlay_service_ctx *svc,
+                     const cbx_grid_row *row,
+                     char *out_name, size_t out_name_len)
+{
+    if (!out_name || out_name_len == 0)
+        return;
+    out_name[0] = '\0';
+    if (!svc || !row || !svc->profile_cycle.profiles)
+        return;
+
+    const cbx_profile_list *list = svc->profile_cycle.profiles;
+    for (int i = 0; i < list->count; i++) {
+        if (strcmp(list->entries[i].filename, row->profile) == 0) {
+            copy_id(out_name, out_name_len, row->profile);
+            return;
+        }
+    }
+    for (int i = 0; i < list->count; i++) {
+        if (strcmp(list->entries[i].filename, CBX_DEFAULT_PROFILE) == 0) {
+            copy_id(out_name, out_name_len, CBX_DEFAULT_PROFILE);
+            return;
+        }
+    }
+    if (list->count > 0)
+        copy_id(out_name, out_name_len, list->entries[0].filename);
+}
+
+/*
+ * Apply the grid's assignment topology to the live InputPlumber engine:
+ * verified profile load plus exact-singleton TargetDevices replacement for
+ * every assigned row, then the grid-derived GamepadOrder.
+ *
+ * This is the single engine-apply definition shared by the startup/close
+ * save path (cbx_overlay_on_save, which then persists) and the hotplug
+ * reconcile, which must make a reconnected controller's saved slot/profile
+ * effective immediately rather than only displaying it (SPEC §6.2/§10.1).
+ *
+ * `clear_all` preserves the save path's authoritative transfer/Unassigned
+ * semantics: every grid row is detached before reassignment so P1→P2
+ * transfers cannot leave an additive target.  The hotplug path passes
+ * false: adding or removing one controller must not tear down the routing
+ * of the controllers that are already attached.
+ */
+static int
+overlay_apply_grid_engine(cbx_overlay_service_ctx *svc, bool clear_all)
+{
+    if (!svc || !svc->conn.backend || !svc->conn.bus)
+        return -EINVAL;
+
+    char order[CBX_MAX_COMPOSITES * (CBX_MAX_PATH_LEN + 1)];
+    int rc = overlay_build_gamepad_order(&svc->grid, order, sizeof(order));
+    if (rc != 0)
+        return rc;
+
+    /* Phase 1: exact replacement routing (SPEC §§4.1-4.7). */
+    if (clear_all) {
+        for (int i = 0; i < svc->grid.row_count; i++) {
+            const char *composite = svc->grid.rows[i].composite_path;
+            int clear_rc = ip_composite_set_target_device_paths(
+                svc->conn.backend, svc->conn.bus, composite, "");
+            if (clear_rc != 0)
+                return clear_rc;
+            clear_rc = wait_for_attachment(svc, composite, NULL);
+            if (clear_rc != 0)
+                return clear_rc;
+        }
     }
 
     for (int i = 0; i < svc->grid.row_count; i++) {
@@ -492,14 +573,33 @@ cbx_overlay_on_save(void *userdata)
 
         /* Load profile and verify engine state.  Skip if no profile list
          * is available (e.g. degraded/test mode) — slot assignment and
-         * GamepadOrder are still applied. */
+         * GamepadOrder are still applied.  A saved profile that no longer
+         * exists falls back to a valid alternative (built-in default or the
+         * first enumerated profile) instead of failing restoration forever;
+         * the row is then updated to the profile actually loaded so the UI
+         * and persisted table never claim an engine state that is not held
+         * (task 6 acceptance: invalid preferred properties with valid
+         * alternatives). */
         if (row->profile[0] && svc->profile_cycle.profiles) {
-            int profile_rc = cbx_profile_cycle_apply(&svc->profile_cycle,
-                                                       &svc->grid, i,
-                                                       row->profile,
-                                                       row->composite_path);
-            if (profile_rc != 0)
-                return profile_rc;
+            char apply_profile[CBX_GRID_PROFILE_LEN];
+            overlay_pick_profile(svc, row, apply_profile,
+                                 sizeof(apply_profile));
+            if (apply_profile[0] != '\0') {
+                if (strcmp(apply_profile, row->profile) != 0) {
+                    fprintf(stderr,
+                            "controller-box: saved profile '%s' for %s is "
+                            "not available; applying '%s'\n",
+                            row->profile, row->composite_path,
+                            apply_profile);
+                    snprintf(svc->grid.rows[i].profile,
+                             CBX_GRID_PROFILE_LEN, "%s", apply_profile);
+                }
+                int profile_rc = cbx_profile_cycle_apply(
+                    &svc->profile_cycle, &svc->grid, i,
+                    apply_profile, row->composite_path);
+                if (profile_rc != 0)
+                    return profile_rc;
+            }
         }
 
         int attach_rc = ip_composite_set_target_device_paths(
@@ -513,9 +613,28 @@ cbx_overlay_on_save(void *userdata)
             return attach_rc;
     }
 
-    /* --- Phase 2: Set GamepadOrder on the engine --- */
-    int rc = ip_manager_set_gamepad_order(svc->conn.backend, svc->conn.bus,
-                                           order, &svc->model);
+    /* Phase 2: Set GamepadOrder on the engine. */
+    return ip_manager_set_gamepad_order(svc->conn.backend, svc->conn.bus,
+                                        order, &svc->model);
+}
+
+/* ================================================================== */
+/*  Lifecycle on_save callback: conflict resolution + assignment save */
+/* ================================================================== */
+
+int
+cbx_overlay_on_save(void *userdata)
+{
+    cbx_overlay_service_ctx *svc = (cbx_overlay_service_ctx *)userdata;
+
+    /* Detect and resolve conflicts (SPEC §4.5). */
+    cbx_conflict_list_init(&svc->conflicts);
+    cbx_conflict_detect(&svc->grid, &svc->conflicts);
+    cbx_conflict_resolve(&svc->grid, &svc->conflicts);
+
+    /* Apply the conflict-resolved topology to the engine (exact
+     * TargetDevices replacement, verified profile load, GamepadOrder). */
+    int rc = overlay_apply_grid_engine(svc, true);
     if (rc != 0)
         return rc;
 
@@ -1427,6 +1546,24 @@ cbx_overlay_reconcile_hotplug(cbx_overlay_service_ctx *svc)
     /* Re-detect conflicts after grid rebuild (SPEC §4.5). */
     cbx_conflict_list_init(&svc->conflicts);
     cbx_conflict_detect(&svc->grid, &svc->conflicts);
+
+    /* Make the reconnected controller's persisted slot and profile effective
+     * on the live engine immediately (SPEC §6.2/§10.1).  The rebuilt grid
+     * already shows the saved column, but without this engine apply a
+     * controller added mid-session would not control its virtual gamepad
+     * until the overlay is next saved.  Pass clear_all=false so adding or
+     * removing one controller never tears down the routing of controllers
+     * that are already attached.  When no row is assigned there is nothing
+     * to make effective and the engine order cannot change. */
+    if (overlay_grid_has_assigned_row(&svc->grid)) {
+        int apply_rc = overlay_apply_grid_engine(svc, false);
+        if (apply_rc != 0) {
+            overlay_set_readiness_detail(svc, "assignment restoration",
+                                         apply_rc);
+            overlay_set_call_deadline(svc, 0);
+            return apply_rc;
+        }
+    }
 
     /* Rebuild input map.  A DbusDevices probe failure is a required-step
      * failure (SPEC §10.1): without the path→row map this controller's
