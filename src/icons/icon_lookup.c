@@ -22,6 +22,7 @@
 
 #include <errno.h>
 #include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -29,10 +30,6 @@
 #ifndef PATH_MAX
 #define PATH_MAX 4096
 #endif
-
-/* Reject custom override images larger than this in either dimension so a
- * user-supplied file cannot force an unbounded texture allocation. */
-#define CBX_ICON_CUSTOM_MAX_DIM 4096
 
 /* ------------------------------------------------------------------ */
 /*  Path validation                                                   */
@@ -160,6 +157,56 @@ int cbx_icon_validate_path(const char *abs_path,
 /* ------------------------------------------------------------------ */
 
 /*
+ * Read a PNG's declared dimensions from its IHDR chunk without decoding.
+ *
+ * The first 24 bytes of a PNG are: 8-byte signature, 4-byte IHDR length,
+ * "IHDR", 4-byte big-endian width, 4-byte big-endian height.  Reading
+ * these lets us reject oversized images before IMG_Load allocates a
+ * surface, which SDL2_image sizes from the declared (not actual) dims.
+ */
+int cbx_icon_validate_png_dimensions(const char *path,
+                                     int *width, int *height)
+{
+    if (!path || path[0] == '\0')
+        return -EINVAL;
+
+    FILE *fp = fopen(path, "rb");
+    if (!fp)
+        return -ENOENT;
+
+    unsigned char hdr[24];
+    size_t n = fread(hdr, 1, sizeof(hdr), fp);
+    fclose(fp);
+
+    if (n < sizeof(hdr))
+        return -EINVAL;
+
+    static const unsigned char png_sig[8] = {
+        0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'
+    };
+    if (memcmp(hdr, png_sig, sizeof(png_sig)) != 0)
+        return -EINVAL;
+    if (memcmp(hdr + 12, "IHDR", 4) != 0)
+        return -EINVAL;
+
+    uint32_t w = ((uint32_t)hdr[16] << 24) | ((uint32_t)hdr[17] << 16) |
+                 ((uint32_t)hdr[18] << 8) | (uint32_t)hdr[19];
+    uint32_t h = ((uint32_t)hdr[20] << 24) | ((uint32_t)hdr[21] << 16) |
+                 ((uint32_t)hdr[22] << 8) | (uint32_t)hdr[23];
+
+    /* PNG dimensions are positive signed 32-bit; a width/height of 0 or a
+     * negative value (read as a huge unsigned) is rejected here. */
+    if (w == 0 || h == 0 ||
+        w > (uint32_t)CBX_ICON_CUSTOM_MAX_DIM ||
+        h > (uint32_t)CBX_ICON_CUSTOM_MAX_DIM)
+        return -EINVAL;
+
+    if (width)  *width = (int)w;
+    if (height) *height = (int)h;
+    return 0;
+}
+
+/*
  * Load a PNG file as an SDL2 texture and cache it under the canonical
  * path as the key.  Returns 0 on success, negative errno on failure.
  * On success, the texture is stored in the cache and can be retrieved
@@ -172,6 +219,17 @@ static int load_png(cbx_icon_cache *cache, const char *abs_path,
     int rc = cbx_icon_validate_path(abs_path, resolved, sizeof(resolved));
     if (rc != 0)
         return rc;
+
+    /* Reject oversized declared dimensions *before* decoding so a small
+     * crafted PNG declaring enormous dimensions cannot force a multi-
+     * gigabyte surface allocation. */
+    int declared_w = 0, declared_h = 0;
+    rc = cbx_icon_validate_png_dimensions(resolved, &declared_w, &declared_h);
+    if (rc != 0) {
+        fprintf(stderr, "icon_lookup: rejecting PNG with unsupported "
+                "declared dimensions for %s\n", resolved);
+        return rc;
+    }
 
     /* Use SDL2_image to load the image as a surface first, then create a
      * texture from it.  We store the *surface* dimensions (the original

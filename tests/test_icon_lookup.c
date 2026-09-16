@@ -21,6 +21,7 @@
 #include <cmocka.h>
 #include <errno.h>
 #include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -260,6 +261,72 @@ static int copy_png_to_safe_dir(char *out, size_t out_size)
     fclose(src_fp);
     fclose(dst_fp);
     chmod(out, 0600);
+    return 0;
+}
+
+/* Resolve a path for a test-owned file inside the user config safe dir. */
+static int safe_temp_path(char *out, size_t out_size, const char *name)
+{
+    char config_dir[PATH_MAX];
+    if (cbx_resolve_config_dir(config_dir, sizeof(config_dir)) != 0)
+        return -1;
+    cbx_ensure_dir(config_dir, 0700);
+    snprintf(out, out_size, "%s/%s", config_dir, name);
+    return 0;
+}
+
+/* CRC-32 as used by PNG chunks (polynomial 0xedb88320). */
+static uint32_t png_crc32(const unsigned char *buf, size_t len)
+{
+    uint32_t c = 0xffffffffu;
+    for (size_t i = 0; i < len; i++) {
+        c ^= buf[i];
+        for (int k = 0; k < 8; k++)
+            c = (c >> 1) ^
+                (0xedb88320u & (uint32_t)(-(int32_t)(c & 1u)));
+    }
+    return c ^ 0xffffffffu;
+}
+
+/*
+ * Copy the fixture PNG to `dst`, overwriting the IHDR width/height with the
+ * requested values and recomputing the IHDR CRC.  The result is a small,
+ * structurally valid PNG whose header declares the given dimensions — the
+ * exact shape of the resource-exhaustion input the pre-decode bound must
+ * reject.
+ */
+static int make_declared_dim_png(const char *dst,
+                                 uint32_t width, uint32_t height)
+{
+    FILE *fp = fopen(PNG_FIXTURE, "rb");
+    if (!fp) return -1;
+    unsigned char buf[4096];
+    size_t n = fread(buf, 1, sizeof(buf), fp);
+    fclose(fp);
+    if (n < 33) return -1;
+
+    /* IHDR data: width at 16, height at 20.  The IHDR CRC covers the chunk
+     * type + data (offset 12, 17 bytes) and is stored at offset 29. */
+    buf[16] = (unsigned char)(width >> 24);
+    buf[17] = (unsigned char)(width >> 16);
+    buf[18] = (unsigned char)(width >> 8);
+    buf[19] = (unsigned char)(width);
+    buf[20] = (unsigned char)(height >> 24);
+    buf[21] = (unsigned char)(height >> 16);
+    buf[22] = (unsigned char)(height >> 8);
+    buf[23] = (unsigned char)(height);
+    uint32_t crc = png_crc32(buf + 12, 17);
+    buf[29] = (unsigned char)(crc >> 24);
+    buf[30] = (unsigned char)(crc >> 16);
+    buf[31] = (unsigned char)(crc >> 8);
+    buf[32] = (unsigned char)(crc);
+
+    FILE *out = fopen(dst, "wb");
+    if (!out) return -1;
+    size_t wrote = fwrite(buf, 1, n, out);
+    fclose(out);
+    if (wrote != n) return -1;
+    chmod(dst, 0600);
     return 0;
 }
 
@@ -718,6 +785,153 @@ static void test_override_png_oversized_rejected(void **state)
     unlink(big_path);
 }
 
+/* Task 22 repair: a small crafted PNG whose IHDR declares 20000x20000 must
+ * be rejected by the pre-decode bound instead of letting SDL2_image size a
+ * ~1.6 GB surface from the declared dimensions. */
+static void test_validate_png_dims_oversized_header(void **state)
+{
+    (void)state;
+    char path[PATH_MAX + 64];
+    if (safe_temp_path(path, sizeof(path),
+                       "test_icon_lookup_oversized_ihdr.png") != 0) {
+        skip();
+        return;
+    }
+    if (make_declared_dim_png(path, 20000, 20000) != 0) {
+        unlink(path);
+        skip();
+        return;
+    }
+
+    int w = -1, h = -1;
+    int rc = cbx_icon_validate_png_dimensions(path, &w, &h);
+    assert_int_equal(rc, -EINVAL);
+    /* Rejected image must not report accepted dimensions. */
+    assert_int_equal(w, -1);
+    assert_int_equal(h, -1);
+
+    unlink(path);
+}
+
+/* A valid in-bounds PNG passes the pre-decode check and reports its real
+ * IHDR dimensions. */
+static void test_validate_png_dims_valid(void **state)
+{
+    (void)state;
+    int w = 0, h = 0;
+    int rc = cbx_icon_validate_png_dimensions(PNG_FIXTURE, &w, &h);
+    assert_int_equal(rc, 0);
+    assert_int_equal(w, 8);
+    assert_int_equal(h, 8);
+}
+
+/* A declared dimension of zero is invalid PNG and must be rejected. */
+static void test_validate_png_dims_zero(void **state)
+{
+    (void)state;
+    char path[PATH_MAX + 64];
+    if (safe_temp_path(path, sizeof(path),
+                       "test_icon_lookup_zero_dim.png") != 0) {
+        skip();
+        return;
+    }
+    if (make_declared_dim_png(path, 0, 8) != 0) {
+        unlink(path);
+        skip();
+        return;
+    }
+    assert_int_equal(cbx_icon_validate_png_dimensions(path, NULL, NULL),
+                     -EINVAL);
+    unlink(path);
+}
+
+/* A non-PNG file (wrong signature) is rejected before decode. */
+static void test_validate_png_dims_not_png(void **state)
+{
+    (void)state;
+    char path[PATH_MAX + 64];
+    if (safe_temp_path(path, sizeof(path),
+                       "test_icon_lookup_not_png.bin") != 0) {
+        skip();
+        return;
+    }
+    FILE *fp = fopen(path, "wb");
+    if (!fp) { skip(); return; }
+    fputs("this is definitely not a png file", fp);
+    fclose(fp);
+    chmod(path, 0600);
+
+    assert_int_equal(cbx_icon_validate_png_dimensions(path, NULL, NULL),
+                     -EINVAL);
+    unlink(path);
+}
+
+/* A file too short to contain an IHDR is rejected, not read out of bounds. */
+static void test_validate_png_dims_truncated(void **state)
+{
+    (void)state;
+    char path[PATH_MAX + 64];
+    if (safe_temp_path(path, sizeof(path),
+                       "test_icon_lookup_truncated.png") != 0) {
+        skip();
+        return;
+    }
+    FILE *fp = fopen(path, "wb");
+    if (!fp) { skip(); return; }
+    /* Valid PNG signature but nothing after it. */
+    static const unsigned char sig[8] = {
+        0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'
+    };
+    fwrite(sig, 1, sizeof(sig), fp);
+    fclose(fp);
+    chmod(path, 0600);
+
+    assert_int_equal(cbx_icon_validate_png_dimensions(path, NULL, NULL),
+                     -EINVAL);
+    unlink(path);
+}
+
+static void test_validate_png_dims_missing(void **state)
+{
+    (void)state;
+    assert_int_equal(
+        cbx_icon_validate_png_dimensions("/nonexistent/definitely/here.png",
+                                         NULL, NULL),
+        -ENOENT);
+}
+
+/* End-to-end: a crafted oversized-IHDR PNG is rejected before decode and the
+ * override falls back to the small device-type icon without entering the
+ * cache under the custom path. */
+static void test_override_png_oversized_header_rejected(void **state)
+{
+    struct test_state *s = *state;
+    cbx_icon_result res;
+
+    char path[PATH_MAX + 64];
+    if (safe_temp_path(path, sizeof(path),
+                       "test_icon_lookup_oversized_header.png") != 0) {
+        skip();
+        return;
+    }
+    if (make_declared_dim_png(path, 20000, 8) != 0) {
+        unlink(path);
+        skip();
+        return;
+    }
+
+    int rc = cbx_icon_lookup(&s->cache, &s->map, "xb360", path, &res);
+    assert_int_equal(rc, 0);
+    assert_non_null(res.texture);
+    /* Fallback device icon, not the oversized custom image. */
+    assert_true(res.width > 0 && res.width <= 128);
+    assert_true(res.height > 0 && res.height <= 128);
+    /* The oversized image must never have been decoded into the cache. */
+    assert_null(cbx_icon_cache_get(&s->cache, path));
+
+    unlink(path);
+}
+
 /* ------------------------------------------------------------------ */
 /*  Main                                                              */
 /* ------------------------------------------------------------------ */
@@ -777,6 +991,15 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_png_in_user_config_dir, setup, teardown),
         cmocka_unit_test_setup_teardown(test_override_png_canonical_key_dedup, setup, teardown),
         cmocka_unit_test_setup_teardown(test_override_png_oversized_rejected, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_override_png_oversized_header_rejected, setup, teardown),
+
+        /* Pre-decode PNG dimension validation (Task 22 repair) */
+        cmocka_unit_test(test_validate_png_dims_oversized_header),
+        cmocka_unit_test(test_validate_png_dims_valid),
+        cmocka_unit_test(test_validate_png_dims_zero),
+        cmocka_unit_test(test_validate_png_dims_not_png),
+        cmocka_unit_test(test_validate_png_dims_truncated),
+        cmocka_unit_test(test_validate_png_dims_missing),
 
         /* Icon cache insert API */
         cmocka_unit_test_setup_teardown(test_cache_insert, setup, teardown),

@@ -31,6 +31,14 @@ extern "C" {
 /* Maximum label length returned by icon_lookup. */
 #define CBX_ICON_LABEL_LEN 256
 
+/*
+ * Largest accepted custom-image dimension (either axis).  A profile icon
+ * override may point at a user-supplied PNG; the declared IHDR dimensions
+ * are checked against this bound *before* decode so a crafted image cannot
+ * force an unbounded surface allocation.
+ */
+#define CBX_ICON_CUSTOM_MAX_DIM 4096
+
 /* Result of an icon lookup: texture + dimensions + label. */
 typedef struct {
     SDL_Texture *texture;      /* SDL2 texture (owned by the icon cache)  */
@@ -97,6 +105,26 @@ int cbx_icon_lookup(cbx_icon_cache *cache, const cbx_icon_map *map,
  */
 int cbx_icon_validate_path(const char *abs_path,
                             char *resolved, size_t resolved_size);
+
+/*
+ * Validate a custom image's *declared* dimensions without decoding it.
+ *
+ * The supported custom-image format is PNG (SPEC §8.5).  This reads only
+ * the 8-byte PNG signature and the IHDR chunk header (width at byte 16,
+ * height at byte 20 of the stream) so an image declaring e.g. 20000x20000
+ * is rejected before SDL2_image allocates a ~1.6 GB surface for it.
+ *
+ * @param path   Path to the candidate image (already canonicalized).
+ * @param width  Output: declared pixel width (may be NULL).
+ * @param height Output: declared pixel height (may be NULL).
+ * @return 0 when the file is a PNG whose declared dimensions are within
+ *         [1, CBX_ICON_CUSTOM_MAX_DIM]; -EINVAL when the file is not a
+ *         PNG, is too short to contain an IHDR, or declares dimensions
+ *         outside the accepted range; -ENOENT when the file cannot be
+ *         opened.
+ */
+int cbx_icon_validate_png_dimensions(const char *path,
+                                     int *width, int *height);
 
 #ifdef __cplusplus
 }
