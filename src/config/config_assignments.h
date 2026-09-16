@@ -91,6 +91,35 @@ int cbx_assignments_validate(const cbx_assignments *a);
 int cbx_assignments_save(const cbx_assignments *a);
 
 /*
+ * Callback used by cbx_assignments_transaction to mutate a freshly loaded
+ * assignments snapshot while the cross-process config lock is held.
+ *
+ * Return 0 to commit (the transaction saves atomically), a positive value to
+ * finish without writing (no change), or a negative errno to abort without
+ * touching the file.  Outputs intended for the caller may be written through
+ * `userdata` on any return path.
+ */
+typedef int (*cbx_assignments_mutator_fn)(cbx_assignments *a, void *userdata);
+
+/*
+ * Run `fn` as an atomic read-modify-write transaction on assignments.yaml.
+ *
+ * Acquires the per-user config lock, loads the current on-disk state, runs
+ * `fn`, and on a 0 return atomically saves the mutated snapshot.  This is
+ * the shared serialization point for Manager/overlay assignment and gamepad
+ * order writers: two independent updates cannot interleave a load and a save
+ * and erase each other.
+ *
+ * When `out` is non-NULL it receives the committed snapshot (also on the
+ * positive no-write path).
+ *
+ * @return fn's non-negative result (0 committed, >0 no change), or a
+ *         negative errno from locking/loading/saving.
+ */
+int cbx_assignments_transaction(cbx_assignments_mutator_fn fn, void *userdata,
+                                cbx_assignments *out);
+
+/*
  * Validate an id string format.
  * Allowed formats:
  *   BT:xx:xx:xx:xx:xx:xx   (hex pairs, case-insensitive)

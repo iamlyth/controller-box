@@ -11,9 +11,12 @@
 
 /* For path resolution (cbx_resolve_config_dir, cbx_ensure_dir). */
 #include "config_paths.h"
+/* Bounded regular-file read + atomic write + cross-process lock. */
+#include "config_io.h"
 
 #include <errno.h>
 #include <limits.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -250,16 +253,25 @@ static bool parse_yaml_bool(const char *val)
     return false;
 }
 
-/* Process a scalar value based on the current key and context. */
-static void process_scalar_value(cbx_settings *s, const char *key,
-                                  const char *val, bool in_vc)
+/*
+ * Process a scalar value based on the current key and context.
+ * Returns 0 on success (including "field absent/ignored") or -EINVAL when
+ * the value is non-numeric, non-finite or overflows the target field.
+ * Callers abort the whole load on error so a malformed value can never be
+ * published as a partial update.
+ */
+static int process_scalar_value(cbx_settings *s, const char *key,
+                                 const char *val, bool in_vc)
 {
     if (in_vc) {
         if (strcmp(key, "count") == 0) {
             char *endp = NULL;
+            errno = 0;
             long v = strtol(val, &endp, 10);
-            if (endp == val || *endp != '\0' || v < 0)
-                return;  /* malformed — leave default */
+            if (endp == val || *endp != '\0')
+                return -EINVAL;
+            if (errno == ERANGE || v > INT_MAX || v < INT_MIN)
+                return -EINVAL;   /* numeric overflow */
             s->virtual_controllers.count = (int)v;
         }
         /* "types" is handled by sequence, not scalar */
@@ -274,39 +286,50 @@ static void process_scalar_value(cbx_settings *s, const char *key,
             s->theme[sizeof(s->theme) - 1] = '\0';
         } else if (strcmp(key, "overlay_opacity") == 0) {
             char *endp = NULL;
+            errno = 0;
             double v = strtod(val, &endp);
             if (endp == val || *endp != '\0')
-                return;  /* malformed — leave default */
+                return -EINVAL;
+            if (!isfinite(v))
+                return -EINVAL;   /* NaN / inf */
             s->overlay_opacity = v;
         }
     }
+    return 0;
 }
 
-/* Add a type entry from the types sequence. */
-static void add_type_entry(cbx_settings *s, const char *val, int *type_count)
+/* Add a type entry from the types sequence.
+ * Returns 0 on success, -EINVAL once the maximum count is exceeded. */
+static int add_type_entry(cbx_settings *s, const char *val, int *type_count)
 {
-    if (*type_count < CBX_MAX_CONTROLLERS) {
-        strncpy(s->virtual_controllers.types[*type_count], val,
-                sizeof(s->virtual_controllers.types[*type_count]) - 1);
-        s->virtual_controllers.types[*type_count]
-            [sizeof(s->virtual_controllers.types[*type_count]) - 1] = '\0';
-        (*type_count)++;
-    }
+    if (*type_count >= CBX_MAX_CONTROLLERS)
+        return -EINVAL;
+
+    strncpy(s->virtual_controllers.types[*type_count], val,
+            sizeof(s->virtual_controllers.types[*type_count]) - 1);
+    s->virtual_controllers.types[*type_count]
+        [sizeof(s->virtual_controllers.types[*type_count]) - 1] = '\0';
+    (*type_count)++;
+    return 0;
 }
 
 /*
- * Parse the YAML document from an open file into settings.
- * Caller has already applied defaults; this only overwrites fields
- * present in the YAML.
+ * Parse the YAML document from an in-memory buffer into settings.
+ * Caller has already applied defaults to a temporary struct; this only
+ * overwrites fields present in the YAML.  A malformed document (custom tag,
+ * alias, multiple documents, a non-mapping root, an incomplete icon
+ * override, a non-finite/overflowing number, or an over-long sequence)
+ * returns an error so the caller can discard the temporary struct.
  *
  * Returns 0 on success, negative errno on error.
  */
-static int parse_settings_yaml(cbx_settings *s, FILE *f)
+static int parse_settings_yaml(cbx_settings *s, const char *data, size_t len)
 {
     yaml_parser_t parser;
     yaml_event_t ev;
     int rc = 0;
     int depth = 0;
+    int document_count = 0;
     bool root_started = false;
     bool in_vc_map = false;
     bool in_types_seq = false;
@@ -315,13 +338,16 @@ static int parse_settings_yaml(cbx_settings *s, FILE *f)
     bool have_key = false;
     char current_key[CBX_MAX_STR_LEN] = "";
     int type_count = 0;
-    int ovr_type_idx = -1;  /* current override item index */
-    char ovr_key[CBX_ICON_OVR_TYPE_LEN] = "";  /* current override key */
+    bool ovr_have_key = false;
+    char ovr_key[CBX_ICON_OVR_TYPE_LEN] = "";
+    cbx_icon_override cur_ovr;
     bool got_stream_end = false;
+
+    memset(&cur_ovr, 0, sizeof(cur_ovr));
 
     if (!yaml_parser_initialize(&parser))
         return -ENOMEM;
-    yaml_parser_set_input_file(&parser, f);
+    yaml_parser_set_input_string(&parser, (const unsigned char *)data, len);
 
     while (yaml_parser_parse(&parser, &ev)) {
         /* Security: check for custom tags */
@@ -337,6 +363,14 @@ static int parse_settings_yaml(cbx_settings *s, FILE *f)
             break;
 
         case YAML_DOCUMENT_START_EVENT:
+            document_count++;
+            if (document_count > 1) {
+                /* settings.yaml is a single document; extra documents are a
+                 * malformed multi-document stream. */
+                rc = -EINVAL;
+                yaml_event_delete(&ev);
+                goto done;
+            }
             break;
 
         case YAML_MAPPING_START_EVENT:
@@ -348,16 +382,16 @@ static int parse_settings_yaml(cbx_settings *s, FILE *f)
             }
             if (!root_started) {
                 root_started = true;
-            } else if (have_key) {
+            } else if (in_icon_ovr_seq && !in_icon_ovr_item) {
+                /* Enter an icon_override item mapping. */
+                in_icon_ovr_item = true;
+                memset(&cur_ovr, 0, sizeof(cur_ovr));
+                ovr_have_key = false;
+                ovr_key[0] = '\0';
+            } else if (have_key && !in_icon_ovr_item) {
                 if (strcmp(current_key, "virtual_controllers") == 0)
                     in_vc_map = true;
                 have_key = false;
-            }
-            /* Entering an icon_override item mapping (inside the seq). */
-            if (in_icon_ovr_seq && !in_icon_ovr_item) {
-                in_icon_ovr_item = true;
-                ovr_type_idx = -1;
-                ovr_key[0] = '\0';
             }
             break;
 
@@ -368,7 +402,13 @@ static int parse_settings_yaml(cbx_settings *s, FILE *f)
                 yaml_event_delete(&ev);
                 goto done;
             }
-            if (have_key) {
+            if (!root_started) {
+                /* A sequence document root is not a settings mapping. */
+                rc = -EINVAL;
+                yaml_event_delete(&ev);
+                goto done;
+            }
+            if (have_key && !in_icon_ovr_item) {
                 if (strcmp(current_key, "types") == 0)
                     in_types_seq = true;
                 else if (strcmp(current_key, "icon_overrides") == 0)
@@ -381,41 +421,47 @@ static int parse_settings_yaml(cbx_settings *s, FILE *f)
             const char *val = (const char *)ev.data.scalar.value;
             if (!val)
                 val = "";
+            if (!root_started) {
+                /* A scalar document root is not a settings mapping. */
+                rc = -EINVAL;
+                yaml_event_delete(&ev);
+                goto done;
+            }
             if (in_types_seq) {
-                add_type_entry(s, val, &type_count);
+                if (add_type_entry(s, val, &type_count) < 0) {
+                    rc = -EINVAL;
+                    yaml_event_delete(&ev);
+                    goto done;
+                }
             } else if (in_icon_ovr_item) {
-                /* Inside an icon_override item: key-value pairs (type, icon). */
-                if (ovr_type_idx < 0) {
-                    /* This is a key. */
+                /* Inside an icon_override item: key then value.  The item is
+                 * buffered in cur_ovr and only committed on mapping end, so
+                 * an incomplete item can never bleed into the next one. */
+                if (!ovr_have_key) {
                     strncpy(ovr_key, val, sizeof(ovr_key) - 1);
                     ovr_key[sizeof(ovr_key) - 1] = '\0';
-                    ovr_type_idx = 0; /* mark expecting value next */
+                    ovr_have_key = true;
                 } else {
-                    /* This is a value for the key in ovr_key. */
-                    if (s->icon_override_count < CBX_MAX_ICON_OVERRIDES) {
-                        int idx = s->icon_override_count;
-                        if (strcmp(ovr_key, "type") == 0) {
-                            strncpy(s->icon_overrides[idx].type, val,
-                                    sizeof(s->icon_overrides[idx].type) - 1);
-                            s->icon_overrides[idx].type[sizeof(s->icon_overrides[idx].type) - 1] = '\0';
-                        } else if (strcmp(ovr_key, "icon") == 0) {
-                            strncpy(s->icon_overrides[idx].icon, val,
-                                    sizeof(s->icon_overrides[idx].icon) - 1);
-                            s->icon_overrides[idx].icon[sizeof(s->icon_overrides[idx].icon) - 1] = '\0';
-                        }
-                        /* When we have both type and icon, commit the entry. */
-                        if (s->icon_overrides[idx].type[0] != '\0' &&
-                            s->icon_overrides[idx].icon[0] != '\0')
-                            s->icon_override_count++;
+                    if (strcmp(ovr_key, "type") == 0) {
+                        strncpy(cur_ovr.type, val, sizeof(cur_ovr.type) - 1);
+                        cur_ovr.type[sizeof(cur_ovr.type) - 1] = '\0';
+                    } else if (strcmp(ovr_key, "icon") == 0) {
+                        strncpy(cur_ovr.icon, val, sizeof(cur_ovr.icon) - 1);
+                        cur_ovr.icon[sizeof(cur_ovr.icon) - 1] = '\0';
                     }
-                    ovr_type_idx = -1; /* expect key next */
+                    ovr_have_key = false;
                 }
             } else if (!have_key) {
                 strncpy(current_key, val, sizeof(current_key) - 1);
                 current_key[sizeof(current_key) - 1] = '\0';
                 have_key = true;
             } else {
-                process_scalar_value(s, current_key, val, in_vc_map);
+                int vrc = process_scalar_value(s, current_key, val, in_vc_map);
+                if (vrc < 0) {
+                    rc = vrc;
+                    yaml_event_delete(&ev);
+                    goto done;
+                }
                 have_key = false;
             }
             break;
@@ -432,6 +478,19 @@ static int parse_settings_yaml(cbx_settings *s, FILE *f)
         case YAML_MAPPING_END_EVENT:
             depth--;
             if (in_icon_ovr_item) {
+                /* An item is only complete when it carries both fields; a
+                 * partial item must not silently combine with the next. */
+                if (cur_ovr.type[0] == '\0' || cur_ovr.icon[0] == '\0') {
+                    rc = -EINVAL;
+                    yaml_event_delete(&ev);
+                    goto done;
+                }
+                if (s->icon_override_count >= CBX_MAX_ICON_OVERRIDES) {
+                    rc = -EINVAL;
+                    yaml_event_delete(&ev);
+                    goto done;
+                }
+                s->icon_overrides[s->icon_override_count++] = cur_ovr;
                 in_icon_ovr_item = false;
             } else if (in_vc_map) {
                 in_vc_map = false;
@@ -471,23 +530,6 @@ done:
     return rc;
 }
 
-/* --- Helpers: O_NOFOLLOW file open --------------------------------------- */
-
-static FILE *open_read_nofollow(const char *path)
-{
-    int fd = open(path, O_RDONLY | O_NOFOLLOW);
-    if (fd < 0)
-        return NULL;
-    FILE *f = fdopen(fd, "r");
-    if (!f) {
-        int e = errno;
-        close(fd);
-        errno = e;
-        return NULL;
-    }
-    return f;
-}
-
 /* --- Load ---------------------------------------------------------------- */
 
 int cbx_settings_load(cbx_settings *settings)
@@ -495,8 +537,11 @@ int cbx_settings_load(cbx_settings *settings)
     if (!settings)
         return -EINVAL;
 
-    /* Always start with defaults; YAML overwrites what it contains. */
-    cbx_settings_defaults(settings);
+    /* Parse into a temporary so a malformed file never publishes a partial
+     * update: *settings is only overwritten after a complete, validated
+     * parse (or a confirmed ENOENT, where defaults are correct). */
+    cbx_settings tmp;
+    cbx_settings_defaults(&tmp);
 
     /* Resolve config directory path (no side effects). */
     char config_dir[PATH_MAX];
@@ -510,40 +555,41 @@ int cbx_settings_load(cbx_settings *settings)
     if (rc < 0 || (size_t)rc >= sizeof(path))
         return -ENAMETOOLONG;
 
-    /* If file doesn't exist, return with defaults. */
-    struct stat st;
-    if (stat(path, &st) != 0) {
-        if (errno == ENOENT)
-            return 0; /* defaults */
-        return -errno;
+    char *buf = NULL;
+    size_t len = 0;
+    rc = cbx_io_read_regular(path, MAX_DOC_SIZE, &buf, &len);
+    if (rc == -ENOENT) {
+        /* No file: publish defaults. */
+        *settings = tmp;
+        return 0;
     }
-
-    /* Check file size: must be < 1 MB. */
-    if (st.st_size > MAX_DOC_SIZE)
-        return -EFBIG;
-
-    /* Open and parse. */
-    FILE *f = open_read_nofollow(path);
-    if (!f)
-        return -errno;
-
-    rc = parse_settings_yaml(settings, f);
-    fclose(f);
-
     if (rc < 0)
         return rc;
 
-    /* Clamp out-of-range values and pad types to count. */
-    clamp_settings(settings);
+    rc = parse_settings_yaml(&tmp, buf, len);
+    free(buf);
+    if (rc < 0)
+        return rc;
+
+    /* Clamp finite out-of-range values and pad types to count. */
+    clamp_settings(&tmp);
 
     /* Ensure types array has exactly count entries (pad with default). */
-    for (int i = 0; i < settings->virtual_controllers.count; i++) {
-        if (settings->virtual_controllers.types[i][0] == '\0') {
-            strncpy(settings->virtual_controllers.types[i], DEFAULT_TYPE,
-                    sizeof(settings->virtual_controllers.types[i]) - 1);
+    for (int i = 0; i < tmp.virtual_controllers.count; i++) {
+        if (tmp.virtual_controllers.types[i][0] == '\0') {
+            strncpy(tmp.virtual_controllers.types[i], DEFAULT_TYPE,
+                    sizeof(tmp.virtual_controllers.types[i]) - 1);
+            tmp.virtual_controllers.types[i]
+                [sizeof(tmp.virtual_controllers.types[i]) - 1] = '\0';
         }
     }
 
+    /* Publish only a complete, validated struct. */
+    rc = cbx_settings_validate(&tmp);
+    if (rc < 0)
+        return rc;
+
+    *settings = tmp;
     return 0;
 }
 
@@ -728,62 +774,25 @@ int cbx_settings_save(const cbx_settings *settings)
     if (rc < 0 || (size_t)rc >= sizeof(path))
         return -ENAMETOOLONG;
 
-    /* Create temp file in the same directory (for atomic rename). */
-    char tmpl[PATH_MAX + 48];
-    rc = snprintf(tmpl, sizeof(tmpl), "%s/.settings.yaml.XXXXXX", config_dir);
-    if (rc < 0 || (size_t)rc >= sizeof(tmpl))
-        return -ENAMETOOLONG;
-
-    int fd = mkstemp(tmpl);
-    if (fd < 0)
+    /* Emit into a memory buffer, then hand the bytes to the shared atomic
+     * writer (temp + fsync + rename + dir fsync, propagating failures). */
+    char *buf = NULL;
+    size_t len = 0;
+    FILE *f = open_memstream(&buf, &len);
+    if (!f)
         return -errno;
 
-    /* Set file permissions to 0600 immediately. */
-    if (fchmod(fd, 0600) != 0) {
-        rc = -errno;
-        close(fd);
-        unlink(tmpl);
-        return rc;
-    }
-
-    FILE *f = fdopen(fd, "w");
-    if (!f) {
-        rc = -errno;
-        close(fd);
-        unlink(tmpl);
-        return rc;
-    }
-
     rc = emit_settings_yaml(settings, f);
+    if (rc == 0 && fflush(f) != 0)
+        rc = -errno;
+    if (fclose(f) != 0 && rc == 0)
+        rc = -errno;
     if (rc < 0) {
-        fclose(f); /* also closes fd */
-        unlink(tmpl);
+        free(buf);
         return rc;
     }
 
-    /* Flush and sync to disk before rename. */
-    if (fflush(f) != 0) {
-        rc = -errno;
-        fclose(f);
-        unlink(tmpl);
-        return rc;
-    }
-    if (fsync(fileno(f)) != 0) {
-        /* Non-fatal on some systems; continue with rename. */
-    }
-
-    if (fclose(f) != 0) {
-        rc = -errno;
-        unlink(tmpl);
-        return rc;
-    }
-
-    /* Atomic rename. */
-    if (rename(tmpl, path) != 0) {
-        rc = -errno;
-        unlink(tmpl);
-        return rc;
-    }
-
-    return 0;
+    rc = cbx_io_write_atomic(path, buf, len);
+    free(buf);
+    return rc;
 }

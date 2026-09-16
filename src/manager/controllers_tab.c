@@ -21,6 +21,7 @@
 #include "dbus/ip_objectmanager.h"
 #include "dbus/ip_connection.h"   /* ip_connection_reason_for_error */
 #include "config/config_assignments.h"  /* cbx_assignments_load/save for auto-Unassign */
+#include "config/config_io.h"          /* cross-process config transaction lock */
 
 /* ------------------------------------------------------------------ */
 /*  Layout constants                                                  */
@@ -851,8 +852,8 @@ cbx_controllers_tab_add(cbx_controllers_tab *tab, const char *type)
     return rc;
 }
 
-int
-cbx_controllers_tab_remove(cbx_controllers_tab *tab, int device_index)
+static int
+controllers_tab_remove_locked(cbx_controllers_tab *tab, int device_index)
 {
     if (!tab || !tab->backend)
         return -EINVAL;
@@ -940,6 +941,26 @@ cbx_controllers_tab_remove(cbx_controllers_tab *tab, int device_index)
         tab->expected_target_count = proposed_settings.virtual_controllers.count;
     }
     return 0;
+}
+
+int
+cbx_controllers_tab_remove(cbx_controllers_tab *tab, int device_index)
+{
+    if (!tab || !tab->backend)
+        return -EINVAL;
+    if (device_index < 0 || device_index >= tab->model.target_count)
+        return -EINVAL;
+
+    /* Serialize the entire assignment read-modify-write (including the
+     * backend-failure compensation that restores the previous table) against
+     * Manager/overlay config writers, so a concurrent update cannot be
+     * interleaved between our load and save. */
+    int lock = cbx_io_lock();
+    if (lock < 0)
+        return lock;
+    int rc = controllers_tab_remove_locked(tab, device_index);
+    cbx_io_unlock(lock);
+    return rc;
 }
 
 int

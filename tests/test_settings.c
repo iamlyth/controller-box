@@ -19,6 +19,7 @@
 #include "config/config_settings.h"
 
 #include <errno.h>
+#include <dirent.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -492,6 +493,198 @@ static void test_bool_variants(void **state)
     assert_false(s.launch_at_boot);
 }
 
+/* --- Malformed-value / bounded-read hardening (Task 21) ------------------ */
+
+/* Create the config directory without writing a settings file. */
+static void ensure_settings_dir(void)
+{
+    char dir[PATH_MAX + 64];
+    snprintf(dir, sizeof(dir), "%s/.config/controller-box", test_home);
+    char cmd[PATH_MAX * 2 + 32];
+    snprintf(cmd, sizeof(cmd), "mkdir -p '%s'", dir);
+    int r = system(cmd);
+    (void)r;
+}
+
+static void test_nonfinite_opacity_rejected(void **state)
+{
+    (void)state;
+    const char *bad[] = { "nan", ".inf", "-.inf", "inf" };
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        char yaml[64];
+        snprintf(yaml, sizeof(yaml), "overlay_opacity: %s\n", bad[i]);
+        write_raw_settings(yaml);
+
+        cbx_settings s;
+        cbx_settings_defaults(&s);
+        s.overlay_opacity = 0.42;
+        int rc = cbx_settings_load(&s);
+        assert_int_equal(rc, -EINVAL);
+        /* Prior confirmed value is preserved, not replaced by NaN/inf. */
+        assert_float_equal(s.overlay_opacity, 0.42, 0.001);
+    }
+}
+
+static void test_count_overflow_rejected(void **state)
+{
+    (void)state;
+    write_raw_settings(
+        "virtual_controllers:\n"
+        "  count: 999999999999999999999999999\n");
+
+    cbx_settings s;
+    cbx_settings_defaults(&s);
+    int rc = cbx_settings_load(&s);
+    assert_int_equal(rc, -EINVAL);
+    /* Defaults preserved. */
+    assert_int_equal(s.virtual_controllers.count, 4);
+}
+
+static void test_multi_document_rejected(void **state)
+{
+    (void)state;
+    write_raw_settings(
+        "overlay_trigger: \"first\"\n"
+        "---\n"
+        "overlay_trigger: \"second\"\n");
+
+    cbx_settings s;
+    cbx_settings_defaults(&s);
+    int rc = cbx_settings_load(&s);
+    assert_int_equal(rc, -EINVAL);
+    assert_string_equal(s.overlay_trigger, "Select+A");
+}
+
+static void test_scalar_root_rejected(void **state)
+{
+    (void)state;
+    write_raw_settings("just-a-scalar\n");
+
+    cbx_settings s;
+    cbx_settings_defaults(&s);
+    assert_int_equal(cbx_settings_load(&s), -EINVAL);
+}
+
+static void test_incomplete_icon_override_rejected(void **state)
+{
+    (void)state;
+    /* Two partial items: a "type"-only item must not pair with the following
+     * "icon"-only item. */
+    write_raw_settings(
+        "icon_overrides:\n"
+        "  - type: xb360\n"
+        "  - icon: custom-icon\n");
+
+    cbx_settings s;
+    cbx_settings_defaults(&s);
+    int rc = cbx_settings_load(&s);
+    assert_int_equal(rc, -EINVAL);
+    assert_int_equal(s.icon_override_count, 0);
+    assert_null(cbx_settings_icon_override(&s, "xb360"));
+}
+
+static void test_icon_overrides_multi_load(void **state)
+{
+    (void)state;
+    write_raw_settings(
+        "icon_overrides:\n"
+        "  - type: xb360\n"
+        "    icon: custom-xbox\n"
+        "  - type: ds5\n"
+        "    icon: custom-ds5\n");
+
+    cbx_settings s;
+    cbx_settings_defaults(&s);
+    int rc = cbx_settings_load(&s);
+    assert_int_equal(rc, 0);
+    assert_int_equal(s.icon_override_count, 2);
+    assert_string_equal(cbx_settings_icon_override(&s, "xb360"),
+                        "custom-xbox");
+    assert_string_equal(cbx_settings_icon_override(&s, "ds5"),
+                        "custom-ds5");
+}
+
+static void test_fifo_rejected_without_blocking(void **state)
+{
+    (void)state;
+    ensure_settings_dir();
+
+    char path[PATH_MAX + 64];
+    settings_path(path, sizeof(path));
+    unlink(path);
+    assert_int_equal(mkfifo(path, 0600), 0);
+
+    cbx_settings s;
+    cbx_settings_defaults(&s);
+    s.overlay_opacity = 0.33;
+    /* A FIFO with no writer must be rejected as a non-regular file rather
+     * than blocking the read.  Reaching the assertion proves it returned. */
+    int rc = cbx_settings_load(&s);
+    assert_int_equal(rc, -EINVAL);
+    assert_float_equal(s.overlay_opacity, 0.33, 0.001);
+
+    unlink(path);
+}
+
+static void test_types_overflow_rejected(void **state)
+{
+    (void)state;
+    char yaml[4096];
+    int n = snprintf(yaml, sizeof(yaml),
+                     "virtual_controllers:\n  count: 16\n  types:\n");
+    for (int i = 0; i < CBX_MAX_CONTROLLERS + 1; i++)
+        n += snprintf(yaml + n, sizeof(yaml) - (size_t)n, "    - xb360\n");
+    write_raw_settings(yaml);
+
+    cbx_settings s;
+    cbx_settings_defaults(&s);
+    assert_int_equal(cbx_settings_load(&s), -EINVAL);
+    assert_int_equal(s.virtual_controllers.count, 4);
+}
+
+static int count_temps(const char *dir)
+{
+    DIR *d = opendir(dir);
+    if (!d)
+        return -1;
+    int count = 0;
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL) {
+        if (strncmp(de->d_name, ".cbx-tmp-", 9) == 0)
+            count++;
+    }
+    closedir(d);
+    return count;
+}
+
+static void test_save_rename_failure_cleans_temp(void **state)
+{
+    (void)state;
+    ensure_settings_dir();
+
+    char path[PATH_MAX + 64];
+    settings_path(path, sizeof(path));
+
+    /* Place a directory where settings.yaml should be written so the final
+     * rename(2) fails.  The owned temp file must be cleaned up and the
+     * existing object left untouched. */
+    assert_int_equal(mkdir(path, 0700), 0);
+
+    cbx_settings s;
+    cbx_settings_defaults(&s);
+    int rc = cbx_settings_save(&s);
+    assert_true(rc < 0);
+
+    char dir[PATH_MAX + 64];
+    snprintf(dir, sizeof(dir), "%s/.config/controller-box", test_home);
+    assert_int_equal(count_temps(dir), 0);
+
+    struct stat st;
+    assert_int_equal(stat(path, &st), 0);
+    assert_true(S_ISDIR(st.st_mode));
+    assert_int_equal(rmdir(path), 0);
+}
+
 /* --- main ---------------------------------------------------------------- */
 
 int main(void)
@@ -530,6 +723,24 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_empty_file,
             setup_home, teardown_home),
         cmocka_unit_test_setup_teardown(test_bool_variants,
+            setup_home, teardown_home),
+        cmocka_unit_test_setup_teardown(test_nonfinite_opacity_rejected,
+            setup_home, teardown_home),
+        cmocka_unit_test_setup_teardown(test_count_overflow_rejected,
+            setup_home, teardown_home),
+        cmocka_unit_test_setup_teardown(test_multi_document_rejected,
+            setup_home, teardown_home),
+        cmocka_unit_test_setup_teardown(test_scalar_root_rejected,
+            setup_home, teardown_home),
+        cmocka_unit_test_setup_teardown(test_incomplete_icon_override_rejected,
+            setup_home, teardown_home),
+        cmocka_unit_test_setup_teardown(test_icon_overrides_multi_load,
+            setup_home, teardown_home),
+        cmocka_unit_test_setup_teardown(test_fifo_rejected_without_blocking,
+            setup_home, teardown_home),
+        cmocka_unit_test_setup_teardown(test_types_overflow_rejected,
+            setup_home, teardown_home),
+        cmocka_unit_test_setup_teardown(test_save_rename_failure_cleans_temp,
             setup_home, teardown_home),
     };
 

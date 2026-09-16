@@ -12,6 +12,8 @@
 
 /* For path resolution (cbx_resolve_config_dir, cbx_config_dir). */
 #include "config_paths.h"
+/* Bounded regular-file read + atomic write + cross-process lock. */
+#include "config_io.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -227,6 +229,7 @@ typedef struct {
 
     int depth;
     bool root_started;
+    int document_count;
 
     /* "assignments" sequence state */
     bool in_assignments_seq;
@@ -255,9 +258,10 @@ static void process_scalar(parse_ctx *ctx, const char *val)
                 ctx->current.id[sizeof(ctx->current.id) - 1] = '\0';
             } else if (strcmp(ctx->current_key, "slot") == 0) {
                 char *end = NULL;
+                errno = 0;
                 long sl = strtol(val, &end, 10);
-                if (end == val || *end != '\0' || sl < 0 ||
-                    sl >= (long)CBX_MAX_CONTROLLERS) {
+                if (end == val || *end != '\0' || errno == ERANGE ||
+                    sl < 0 || sl >= (long)CBX_MAX_CONTROLLERS) {
                     ctx->parse_error = true;
                     return;
                 }
@@ -276,15 +280,18 @@ static void process_scalar(parse_ctx *ctx, const char *val)
         }
     } else if (ctx->in_gamepad_order_seq) {
         /* This is a gamepad_order entry (an id string) */
-        if (ctx->a->gamepad_order_count < CBX_MAX_GAMEPAD_ORDER) {
-            strncpy(ctx->a->gamepad_order[ctx->a->gamepad_order_count],
-                    val, CBX_MAX_ID_LEN - 1);
-            ctx->a->gamepad_order[ctx->a->gamepad_order_count]
-                [CBX_MAX_ID_LEN - 1] = '\0';
-            ctx->a->gamepad_order_count++;
+        if (ctx->a->gamepad_order_count >= CBX_MAX_GAMEPAD_ORDER) {
+            ctx->parse_error = true;
+            return;
         }
+        strncpy(ctx->a->gamepad_order[ctx->a->gamepad_order_count],
+                val, CBX_MAX_ID_LEN - 1);
+        ctx->a->gamepad_order[ctx->a->gamepad_order_count]
+            [CBX_MAX_ID_LEN - 1] = '\0';
+        ctx->a->gamepad_order_count++;
     } else if (!ctx->root_started) {
-        /* Root-level scalar: can't happen in a valid mapping, ignore */
+        /* A scalar document root is not an assignments mapping. */
+        ctx->parse_error = true;
     } else if (!ctx->have_key) {
         /* This is a top-level key */
         strncpy(ctx->current_key, val, sizeof(ctx->current_key) - 1);
@@ -297,10 +304,15 @@ static void process_scalar(parse_ctx *ctx, const char *val)
 }
 
 /*
- * Parse the YAML document from an open file into assignments.
+ * Parse the YAML document from an in-memory buffer into assignments.
+ * A malformed document (custom tag, alias, multiple documents, non-mapping
+ * root, malformed slot or over-long sequence) returns an error so the caller
+ * can discard the temporary struct.
+ *
  * Returns 0 on success, negative errno on error.
  */
-static int parse_assignments_yaml(cbx_assignments *a, FILE *f)
+static int parse_assignments_yaml(cbx_assignments *a, const char *data,
+                                  size_t len)
 {
     yaml_parser_t parser;
     yaml_event_t ev;
@@ -312,7 +324,7 @@ static int parse_assignments_yaml(cbx_assignments *a, FILE *f)
 
     if (!yaml_parser_initialize(&parser))
         return -ENOMEM;
-    yaml_parser_set_input_file(&parser, f);
+    yaml_parser_set_input_string(&parser, (const unsigned char *)data, len);
 
     while (yaml_parser_parse(&parser, &ev)) {
         /* Security: check for custom tags */
@@ -328,6 +340,13 @@ static int parse_assignments_yaml(cbx_assignments *a, FILE *f)
             break;
 
         case YAML_DOCUMENT_START_EVENT:
+            ctx.document_count++;
+            if (ctx.document_count > 1) {
+                /* assignments.yaml is a single document. */
+                rc = -EINVAL;
+                yaml_event_delete(&ev);
+                goto done;
+            }
             break;
 
         case YAML_MAPPING_START_EVENT:
@@ -358,6 +377,12 @@ static int parse_assignments_yaml(cbx_assignments *a, FILE *f)
             ctx.depth++;
             if (ctx.depth > MAX_YAML_DEPTH) {
                 rc = -EFBIG;
+                yaml_event_delete(&ev);
+                goto done;
+            }
+            if (!ctx.root_started) {
+                /* A sequence document root is not an assignments mapping. */
+                rc = -EINVAL;
                 yaml_event_delete(&ev);
                 goto done;
             }
@@ -395,11 +420,14 @@ static int parse_assignments_yaml(cbx_assignments *a, FILE *f)
             ctx.depth--;
             if (ctx.in_assignment_map) {
                 /* Finish current assignment: store if there's room */
-                if (ctx.a->assignment_count < CBX_MAX_ASSIGNMENTS) {
-                    ctx.a->assignments[ctx.a->assignment_count] =
-                        ctx.current;
-                    ctx.a->assignment_count++;
+                if (ctx.a->assignment_count >= CBX_MAX_ASSIGNMENTS) {
+                    rc = -EINVAL;
+                    yaml_event_delete(&ev);
+                    goto done;
                 }
+                ctx.a->assignments[ctx.a->assignment_count] =
+                    ctx.current;
+                ctx.a->assignment_count++;
                 ctx.in_assignment_map = false;
             }
             break;
@@ -434,23 +462,6 @@ done:
     return rc;
 }
 
-/* --- Helpers: O_NOFOLLOW file open --------------------------------------- */
-
-static FILE *open_read_nofollow(const char *path)
-{
-    int fd = open(path, O_RDONLY | O_NOFOLLOW);
-    if (fd < 0)
-        return NULL;
-    FILE *f = fdopen(fd, "r");
-    if (!f) {
-        int e = errno;
-        close(fd);
-        errno = e;
-        return NULL;
-    }
-    return f;
-}
-
 /* --- Load ---------------------------------------------------------------- */
 
 int cbx_assignments_load(cbx_assignments *a)
@@ -458,7 +469,11 @@ int cbx_assignments_load(cbx_assignments *a)
     if (!a)
         return -EINVAL;
 
-    cbx_assignments_init(a);
+    /* Parse into a temporary so a malformed file never publishes a partial
+     * table: *a is only overwritten after a complete, validated parse (or a
+     * confirmed ENOENT, where an empty table is correct). */
+    cbx_assignments tmp;
+    cbx_assignments_init(&tmp);
 
     /* Resolve config directory path (no side effects). */
     char config_dir[PATH_MAX];
@@ -473,26 +488,29 @@ int cbx_assignments_load(cbx_assignments *a)
     if (rc < 0 || (size_t)rc >= sizeof(path))
         return -ENAMETOOLONG;
 
-    /* If file doesn't exist, return empty. */
-    struct stat st;
-    if (stat(path, &st) != 0) {
-        if (errno == ENOENT)
-            return 0;
-        return -errno;
+    char *buf = NULL;
+    size_t len = 0;
+    rc = cbx_io_read_regular(path, MAX_DOC_SIZE, &buf, &len);
+    if (rc == -ENOENT) {
+        /* No file: publish the empty table. */
+        *a = tmp;
+        return 0;
     }
+    if (rc < 0)
+        return rc;
 
-    /* Check file size: must be < 1 MB. */
-    if (st.st_size > MAX_DOC_SIZE)
-        return -EFBIG;
+    rc = parse_assignments_yaml(&tmp, buf, len);
+    free(buf);
+    if (rc < 0)
+        return rc;
 
-    FILE *f = open_read_nofollow(path);
-    if (!f)
-        return -errno;
+    /* Publish only a complete, validated table. */
+    rc = cbx_assignments_validate(&tmp);
+    if (rc < 0)
+        return rc;
 
-    rc = parse_assignments_yaml(a, f);
-    fclose(f);
-
-    return rc;
+    *a = tmp;
+    return 0;
 }
 
 /* --- Save ---------------------------------------------------------------- */
@@ -625,58 +643,63 @@ int cbx_assignments_save(const cbx_assignments *a)
     if (rc < 0 || (size_t)rc >= sizeof(path))
         return -ENAMETOOLONG;
 
-    /* Create temp file in the same directory (for atomic rename). */
-    char tmpl[PATH_MAX + 48];
-    rc = snprintf(tmpl, sizeof(tmpl), "%s/.assignments.yaml.XXXXXX",
-                  config_dir);
-    if (rc < 0 || (size_t)rc >= sizeof(tmpl))
-        return -ENAMETOOLONG;
-
-    int fd = mkstemp(tmpl);
-    if (fd < 0)
+    /* Emit into a memory buffer, then hand the bytes to the shared atomic
+     * writer (temp + fsync + rename + dir fsync, propagating failures). */
+    char *buf = NULL;
+    size_t len = 0;
+    FILE *f = open_memstream(&buf, &len);
+    if (!f)
         return -errno;
 
-    if (fchmod(fd, 0600) != 0) {
-        rc = -errno;
-        close(fd);
-        unlink(tmpl);
-        return rc;
-    }
-
-    FILE *f = fdopen(fd, "w");
-    if (!f) {
-        rc = -errno;
-        close(fd);
-        unlink(tmpl);
-        return rc;
-    }
-
     rc = emit_assignments_yaml(a, f);
+    if (rc == 0 && fflush(f) != 0)
+        rc = -errno;
+    if (fclose(f) != 0 && rc == 0)
+        rc = -errno;
     if (rc < 0) {
-        fclose(f);
-        unlink(tmpl);
+        free(buf);
         return rc;
     }
 
-    if (fflush(f) != 0) {
-        rc = -errno;
-        fclose(f);
-        unlink(tmpl);
-        return rc;
-    }
-    fsync(fileno(f));
+    rc = cbx_io_write_atomic(path, buf, len);
+    free(buf);
+    return rc;
+}
 
-    if (fclose(f) != 0) {
-        rc = -errno;
-        unlink(tmpl);
-        return rc;
+/* --- Serialized read-modify-write transactions --------------------------- */
+
+int cbx_assignments_transaction(cbx_assignments_mutator_fn fn, void *userdata,
+                                cbx_assignments *out)
+{
+    if (!fn)
+        return -EINVAL;
+
+    int lock_fd = cbx_io_lock();
+    if (lock_fd < 0)
+        return lock_fd;
+
+    cbx_assignments a;
+    cbx_assignments_init(&a);
+    int rc = cbx_assignments_load(&a);
+    if (rc != 0)
+        goto out_unlock;
+
+    rc = fn(&a, userdata);
+    if (rc < 0)
+        goto out_unlock;
+
+    if (rc == 0) {
+        int save_rc = cbx_assignments_save(&a);
+        if (save_rc < 0) {
+            rc = save_rc;
+            goto out_unlock;
+        }
     }
 
-    if (rename(tmpl, path) != 0) {
-        rc = -errno;
-        unlink(tmpl);
-        return rc;
-    }
+    if (out)
+        *out = a;
 
-    return 0;
+out_unlock:
+    cbx_io_unlock(lock_fd);
+    return rc;
 }

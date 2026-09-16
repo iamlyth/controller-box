@@ -20,11 +20,13 @@
 #include "config/config_settings.h" /* CBX_MAX_CONTROLLERS */
 
 #include <errno.h>
+#include <dirent.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #ifndef PATH_MAX
@@ -579,6 +581,149 @@ static void test_auto_assign_then_update_slot(void **state)
     assert_int_equal(a.assignments[0].slot, 3);
 }
 
+/* --- Serialized transaction + failure tests (Task 21) -------------------- */
+
+/*
+ * Independent writers released from a barrier must not erase each other.
+ * Without the cross-process config lock, every child loads the same empty
+ * table and the last save wins (one surviving assignment); with the lock the
+ * load/modify/save of each child is serialized and all N entries persist.
+ */
+static void test_concurrent_updates_preserved(void **state)
+{
+    (void)state;
+    enum { N = 8 };
+
+    int barrier[2];
+    assert_int_equal(pipe(barrier), 0);
+
+    pid_t pids[N];
+    for (int i = 0; i < N; i++) {
+        pid_t pid = fork();
+        assert_true(pid >= 0);
+        if (pid == 0) {
+            close(barrier[1]);
+            char b;
+            ssize_t r;
+            do {
+                r = read(barrier[0], &b, 1);
+            } while (r < 0 && errno == EINTR);
+            close(barrier[0]);
+
+            char id[32];
+            snprintf(id, sizeof(id), "ORDER:%d", i);
+            int rc = cbx_assign_persist_set(id, i % CBX_MAX_CONTROLLERS,
+                                            "default");
+            _exit(rc == 0 ? 0 : 1);
+        }
+        pids[i] = pid;
+    }
+
+    close(barrier[0]);
+    char token = 'x';
+    for (int i = 0; i < N; i++) {
+        ssize_t w;
+        do {
+            w = write(barrier[1], &token, 1);
+        } while (w < 0 && errno == EINTR);
+    }
+    close(barrier[1]);
+
+    int child_failures = 0;
+    for (int i = 0; i < N; i++) {
+        int status = 0;
+        assert_int_equal(waitpid(pids[i], &status, 0), pids[i]);
+        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+            child_failures++;
+    }
+    assert_int_equal(child_failures, 0);
+
+    cbx_assignments a;
+    cbx_assignments_init(&a);
+    assert_int_equal(cbx_assignments_load(&a), 0);
+    assert_int_equal(a.assignment_count, N);
+    for (int i = 0; i < N; i++) {
+        char id[32];
+        snprintf(id, sizeof(id), "ORDER:%d", i);
+        cbx_assignment out;
+        assert_int_equal(cbx_assign_lookup(&a, id, &out), 0);
+    }
+}
+
+/* Count owned temp files inside the test's own config directory. */
+static int count_owned_temps(const char *dir)
+{
+    DIR *d = opendir(dir);
+    if (!d)
+        return -1;
+    int count = 0;
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL) {
+        if (strncmp(de->d_name, ".cbx-tmp-", 9) == 0)
+            count++;
+    }
+    closedir(d);
+    return count;
+}
+
+static void test_failed_save_preserves_original(void **state)
+{
+    (void)state;
+
+    /* Seed a valid, committed file through the real transaction path. */
+    assert_int_equal(cbx_assign_persist_set("ORDER:0", 0, "default"), 0);
+
+    char path[PATH_MAX + 64];
+    assignments_path(path, sizeof(path));
+
+    char dir[PATH_MAX + 64];
+    snprintf(dir, sizeof(dir), "%s/.config/controller-box", test_home);
+
+    /* Snapshot the original bytes. */
+    char original[4096];
+    FILE *f = fopen(path, "r");
+    assert_non_null(f);
+    size_t n = fread(original, 1, sizeof(original) - 1, f);
+    original[n] = '\0';
+    fclose(f);
+
+    /* Make the directory unwritable so the atomic temp create fails. */
+    assert_int_equal(chmod(dir, 0500), 0);
+    int rc = cbx_assign_persist_set("ORDER:1", 1, "fighting");
+    assert_true(rc < 0);
+    assert_int_equal(chmod(dir, 0700), 0);
+
+    /* Original file is byte-identical. */
+    f = fopen(path, "r");
+    assert_non_null(f);
+    char current[4096];
+    size_t n2 = fread(current, 1, sizeof(current) - 1, f);
+    current[n2] = '\0';
+    fclose(f);
+    assert_string_equal(current, original);
+
+    /* No owned temp files were leaked. */
+    assert_int_equal(count_owned_temps(dir), 0);
+
+    /* The failed update did not take effect. */
+    cbx_assignments a;
+    cbx_assignments_init(&a);
+    assert_int_equal(cbx_assignments_load(&a), 0);
+    assert_int_equal(a.assignment_count, 1);
+    assert_string_equal(a.assignments[0].id, "ORDER:0");
+}
+
+/* A successful save leaves no owned temp files behind. */
+static void test_successful_save_no_temp_leak(void **state)
+{
+    (void)state;
+    assert_int_equal(cbx_assign_persist_set("ORDER:0", 0, "default"), 0);
+
+    char dir[PATH_MAX + 64];
+    snprintf(dir, sizeof(dir), "%s/.config/controller-box", test_home);
+    assert_int_equal(count_owned_temps(dir), 0);
+}
+
 /* --- Main ---------------------------------------------------------------- */
 
 int main(void)
@@ -634,6 +779,11 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_set_then_reload_matches, setup_home, teardown_home),
         cmocka_unit_test_setup_teardown(test_set_no_file_load_ok, setup_home, teardown_home),
         cmocka_unit_test_setup_teardown(test_auto_assign_then_update_slot, setup_home, teardown_home),
+
+        /* serialized transactions + failed persistence */
+        cmocka_unit_test_setup_teardown(test_concurrent_updates_preserved, setup_home, teardown_home),
+        cmocka_unit_test_setup_teardown(test_failed_save_preserves_original, setup_home, teardown_home),
+        cmocka_unit_test_setup_teardown(test_successful_save_no_temp_leak, setup_home, teardown_home),
     };
 
     return cmocka_run_group_tests(tests, NULL, NULL);

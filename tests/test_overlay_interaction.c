@@ -54,6 +54,7 @@ typedef struct {
     cbx_overlay_service_ctx *svc;
     ip_dbus_mock             mock;
     const ip_dbus_backend   *backend;
+    char                     temp_home[512];
 
     /* Tracking counters for callbacks. */
     int slot_change_count;
@@ -137,6 +138,14 @@ interaction_setup(void **state)
     interaction_fixture *f = malloc(sizeof(*f));
     memset(f, 0, sizeof(*f));
 
+    /* Isolate the config directory so on_save persistence writes only into
+     * this test's own temp HOME (never the developer's real config). */
+    snprintf(f->temp_home, sizeof(f->temp_home), "/tmp/cbx-oi-XXXXXX");
+    assert_non_null(mkdtemp(f->temp_home));
+    setenv("HOME", f->temp_home, 1);
+    unsetenv("XDG_CONFIG_HOME");
+    unsetenv("XDG_DATA_HOME");
+
     /* SDL with dummy video driver + timer for poll re-arm during reconcile. */
     SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_TIMER);
     SDL_VideoInit("dummy");
@@ -162,11 +171,11 @@ interaction_setup(void **state)
     /* 2 composites (needed for multi-controller and host-mode tests). */
     cbx_grid_composite_info comps[2];
     memset(comps, 0, sizeof(comps));
-    snprintf(comps[0].id,           sizeof(comps[0].id),           "TEST:0");
+    snprintf(comps[0].id,           sizeof(comps[0].id),           "ORDER:0");
     snprintf(comps[0].model_name,   sizeof(comps[0].model_name),   "TestPad0");
     snprintf(comps[0].composite_path,sizeof(comps[0].composite_path),
              "/org/shadowblip/InputPlumber/CompositeDevice0");
-    snprintf(comps[1].id,           sizeof(comps[1].id),           "TEST:1");
+    snprintf(comps[1].id,           sizeof(comps[1].id),           "ORDER:1");
     snprintf(comps[1].model_name,   sizeof(comps[1].model_name),   "TestPad1");
     snprintf(comps[1].composite_path,sizeof(comps[1].composite_path),
              "/org/shadowblip/InputPlumber/CompositeDevice1");
@@ -326,6 +335,12 @@ interaction_teardown(void **state)
             free(f->svc);
         }
         ip_dbus_mock_reset(&f->mock);
+        if (f->temp_home[0]) {
+            char cmd[600];
+            snprintf(cmd, sizeof(cmd), "rm -rf '%s'", f->temp_home);
+            int rc = system(cmd);
+            (void)rc;
+        }
         free(f);
     }
     flush_events();
@@ -939,7 +954,7 @@ test_o10_close_saves_and_sets_pass(void **state)
      * Row 0 at col 1 → slot 0 (P1). */
     assert_int_equal(f->svc->assignments.assignment_count, 1);
     assert_int_equal(f->svc->assignments.assignments[0].slot, 0);
-    assert_string_equal(f->svc->assignments.assignments[0].id, "TEST:0");
+    assert_string_equal(f->svc->assignments.assignments[0].id, "ORDER:0");
 }
 
 /* ================================================================== */

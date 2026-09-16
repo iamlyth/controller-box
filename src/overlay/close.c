@@ -98,6 +98,19 @@ cbx_close_sync_assignments(cbx_select_grid *grid,
     return 0;
 }
 
+/* Transaction mutator: apply the grid's resolved assignment state to the
+ * freshly loaded on-disk table under the shared config lock. */
+typedef struct {
+    cbx_select_grid *grid;
+} close_txn_args;
+
+static int
+close_txn_sync(cbx_assignments *a, void *userdata)
+{
+    close_txn_args *args = userdata;
+    return cbx_close_sync_assignments(args->grid, a);
+}
+
 int
 cbx_close_on_save(void *userdata)
 {
@@ -119,13 +132,12 @@ cbx_close_on_save(void *userdata)
     if (conflicts.count > 0)
         cbx_conflict_resolve(ctx->grid, &conflicts);
 
-    /* 3. Sync grid state back to assignments. */
-    rc = cbx_close_sync_assignments(ctx->grid, ctx->assignments);
-    if (rc < 0)
-        return rc;
-
-    /* 4. Save assignments to disk. */
-    rc = cbx_assignments_save(ctx->assignments);
+    /* 3+4. Sync grid state onto the current on-disk assignments and save in
+     * one serialized transaction, so a concurrent Manager/overlay write is
+     * merged rather than overwritten.  ctx->assignments receives the
+     * committed snapshot. */
+    close_txn_args args = { ctx->grid };
+    rc = cbx_assignments_transaction(close_txn_sync, &args, ctx->assignments);
     if (rc < 0)
         return rc;
 

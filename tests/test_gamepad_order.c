@@ -7,7 +7,7 @@
  *   - Save empty CSV (clears order).
  *   - Load: assignments.yaml → CSV of IDs.
  *   - Load with no saved order.
- *   - Load with invalid IDs (skipped).
+ *   - Load with invalid IDs (rejected — malformed assignments file).
  *   - Round-trip: save then load.
  *   - NULL args.
  *   - DBus error during PersistentId query (skip entry).
@@ -332,21 +332,20 @@ test_load_empty_order(void **state)
 }
 
 static void
-test_load_invalid_id_skipped(void **state)
+test_load_invalid_id_rejected(void **state)
 {
     gamepad_fixture *f = FIX(state);
 
-    /* Write an assignments.yaml with one valid and one invalid ID. */
+    /* assignments.yaml is validated as a whole during load (Task 21): an
+     * invalid ID makes the file malformed, so the load is rejected and no
+     * partial order is published. */
     write_raw_gamepad_order(f->temp_home,
         "gamepad_order:\n  - USB:serial-aaaa\n  - INVALID_ID_FORMAT\n");
 
     char *csv = NULL;
     int rc = ip_gamepad_order_load(&csv);
-    assert_int_equal(rc, 0);
-    assert_non_null(csv);
-    /* Invalid ID should be skipped. */
-    assert_string_equal(csv, "USB:serial-aaaa");
-    free(csv);
+    assert_int_equal(rc, -EINVAL);
+    assert_null(csv);
 }
 
 static void
@@ -444,7 +443,7 @@ main(void)
                                          setup, teardown),
         cmocka_unit_test_setup_teardown(test_load_empty_order,
                                          setup, teardown),
-        cmocka_unit_test_setup_teardown(test_load_invalid_id_skipped,
+        cmocka_unit_test_setup_teardown(test_load_invalid_id_rejected,
                                          setup, teardown),
         cmocka_unit_test_setup_teardown(test_load_null_arg,
                                          setup, teardown),

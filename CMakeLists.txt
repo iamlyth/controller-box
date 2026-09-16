@@ -109,6 +109,7 @@ target_compile_options(nanosvg PRIVATE -w)
 # their .c files here.
 add_library(controllerbox STATIC
     src/config/config_paths.c
+    src/config/config_io.c
     src/config/config_settings.c
     src/config/config_assignments.c
     src/config/config_profile.c
@@ -194,6 +195,7 @@ target_link_libraries(controllerbox
 # the mock override symbols can never appear in a release build (F6).
 add_library(controllerbox_testing STATIC
     src/config/config_paths.c
+    src/config/config_io.c
     src/config/config_settings.c
     src/config/config_assignments.c
     src/config/config_profile.c

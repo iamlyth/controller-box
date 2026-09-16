@@ -11,36 +11,28 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* --- Internal helpers --------------------------------------------------- */
+/* --- Public API --------------------------------------------------------- */
 
-/*
- * Append an ID string to the gamepad_order array in cbx_assignments.
- * Returns 0 on success, -ENOSPC if the array is full.
- */
-static int
-append_order_id(cbx_assignments *a, const char *id)
+/* Assignment-list gamepad_order replacement applied under the config lock. */
+typedef struct {
+    char ids[CBX_MAX_GAMEPAD_ORDER][CBX_MAX_ID_LEN];
+    int  count;
+} order_txn_args;
+
+static int txn_replace_order(cbx_assignments *a, void *userdata)
 {
-    if (a->gamepad_order_count >= CBX_MAX_GAMEPAD_ORDER)
-        return -ENOSPC;
-
-    /* Validate the ID — skip invalid ones. */
-    if (!cbx_validate_id(id))
-        return -EINVAL;
-
-    /* Check for duplicates (idempotent — don't add the same ID twice). */
-    for (int i = 0; i < a->gamepad_order_count; i++) {
-        if (strcmp(a->gamepad_order[i], id) == 0)
-            return 0;  /* already present, not an error */
+    order_txn_args *args = userdata;
+    a->gamepad_order_count = 0;
+    for (int i = 0; i < args->count; i++) {
+        if (a->gamepad_order_count >= CBX_MAX_GAMEPAD_ORDER)
+            break;
+        strncpy(a->gamepad_order[a->gamepad_order_count], args->ids[i],
+                CBX_MAX_ID_LEN - 1);
+        a->gamepad_order[a->gamepad_order_count][CBX_MAX_ID_LEN - 1] = '\0';
+        a->gamepad_order_count++;
     }
-
-    strncpy(a->gamepad_order[a->gamepad_order_count], id,
-            CBX_MAX_ID_LEN - 1);
-    a->gamepad_order[a->gamepad_order_count][CBX_MAX_ID_LEN - 1] = '\0';
-    a->gamepad_order_count++;
     return 0;
 }
-
-/* --- Public API --------------------------------------------------------- */
 
 int
 ip_gamepad_order_save(const ip_dbus_backend *backend,
@@ -51,31 +43,19 @@ ip_gamepad_order_save(const ip_dbus_backend *backend,
     if (!backend || !model || !paths_csv)
         return -EINVAL;
 
-    /* Load existing assignments to preserve the assignment entries. */
-    cbx_assignments a;
-    cbx_assignments_init(&a);
-    int rc = cbx_assignments_load(&a);
-    if (rc != 0)
-        return rc;
+    /* Resolve composite paths → PersistentId outside the config lock (DBus
+     * latency must not serialize config writers).  Stale paths and IDs are
+     * skipped and duplicate IDs are collapsed. */
+    order_txn_args args;
+    memset(&args, 0, sizeof(args));
 
-    /* Clear the existing gamepad_order — we replace it entirely. */
-    a.gamepad_order_count = 0;
-
-    /* Empty CSV = clear the order. */
-    if (paths_csv[0] == '\0') {
-        return cbx_assignments_save(&a);
-    }
-
-    /* Iterate the comma-separated composite paths. */
     const char *p = paths_csv;
     while (*p) {
         const char *comma = strchr(p, ',');
         size_t len = comma ? (size_t)(comma - p) : strlen(p);
 
-        /* Copy the path fragment for lookup. */
         char path[CBX_MAX_PATH_LEN];
         if (len >= sizeof(path)) {
-            /* Path too long — skip (stale/invalid). */
             if (!comma)
                 break;
             p = comma + 1;
@@ -84,38 +64,39 @@ ip_gamepad_order_save(const ip_dbus_backend *backend,
         memcpy(path, p, len);
         path[len] = '\0';
 
-        /* Verify the path exists in the device model (skip stale). */
-        if (!cbx_device_model_find_composite(model, path)) {
-            if (!comma)
-                break;
-            p = comma + 1;
-            continue;
-        }
-
-        /* Query PersistentId for this composite. */
-        char *persistent_id = NULL;
-        rc = ip_composite_get_persistent_id(backend, bus, path,
-                                              &persistent_id);
-        if (rc != 0 || !persistent_id) {
-            /* Failed to get PersistentId — skip this entry. */
+        if (cbx_device_model_find_composite(model, path)) {
+            char *persistent_id = NULL;
+            int rc = ip_composite_get_persistent_id(backend, bus, path,
+                                                    &persistent_id);
+            if (rc == 0 && persistent_id) {
+                if (cbx_validate_id(persistent_id) &&
+                    args.count < CBX_MAX_GAMEPAD_ORDER) {
+                    bool duplicate = false;
+                    for (int i = 0; i < args.count; i++) {
+                        if (strcmp(args.ids[i], persistent_id) == 0) {
+                            duplicate = true;
+                            break;
+                        }
+                    }
+                    if (!duplicate) {
+                        strncpy(args.ids[args.count], persistent_id,
+                                CBX_MAX_ID_LEN - 1);
+                        args.ids[args.count][CBX_MAX_ID_LEN - 1] = '\0';
+                        args.count++;
+                    }
+                }
+            }
             free(persistent_id);
-            if (!comma)
-                break;
-            p = comma + 1;
-            continue;
         }
-
-        /* Append the ID to the gamepad order. */
-        (void)append_order_id(&a, persistent_id);
-        free(persistent_id);
 
         if (!comma)
             break;
         p = comma + 1;
     }
 
-    /* Save the updated assignments. */
-    return cbx_assignments_save(&a);
+    /* Replace the persisted order on top of the current on-disk assignment
+     * entries in one serialized transaction. */
+    return cbx_assignments_transaction(txn_replace_order, &args, NULL);
 }
 
 int

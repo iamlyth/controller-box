@@ -19,6 +19,7 @@
 #include <cmocka.h>
 
 #include "config/config_assignments.h"
+#include "config/config_settings.h" /* CBX_MAX_CONTROLLERS */
 
 #include <errno.h>
 #include <limits.h>
@@ -586,6 +587,143 @@ static void test_validate_null(void **state)
     assert_int_equal(cbx_assignments_validate(NULL), -EINVAL);
 }
 
+/* --- Malformed-value / bounded-read hardening (Task 21) ------------------ */
+
+static void ensure_assignments_dir(void)
+{
+    char dir[PATH_MAX + 64];
+    snprintf(dir, sizeof(dir), "%s/.config/controller-box", test_home);
+    char cmd[PATH_MAX * 2 + 32];
+    snprintf(cmd, sizeof(cmd), "mkdir -p '%s'", dir);
+    int r = system(cmd);
+    (void)r;
+}
+
+static void test_load_slot_overflow_rejected(void **state)
+{
+    (void)state;
+    write_raw_assignments(
+        "assignments:\n"
+        "  - id: \"USB:SN1\"\n"
+        "    slot: 99999999999999999999\n"
+        "    profile: default\n");
+
+    cbx_assignments a;
+    cbx_assignments_init(&a);
+    assert_int_equal(cbx_assignments_load(&a), -EINVAL);
+    assert_int_equal(a.assignment_count, 0);
+}
+
+static void test_load_multi_document_rejected(void **state)
+{
+    (void)state;
+    write_raw_assignments(
+        "assignments: []\n"
+        "---\n"
+        "assignments: []\n");
+
+    cbx_assignments a;
+    cbx_assignments_init(&a);
+    assert_int_equal(cbx_assignments_load(&a), -EINVAL);
+}
+
+static void test_load_invalid_assignment_id_rejected(void **state)
+{
+    (void)state;
+    write_raw_assignments(
+        "assignments:\n"
+        "  - id: \"NOT_AN_ID\"\n"
+        "    slot: 0\n"
+        "    profile: default\n");
+
+    cbx_assignments a;
+    cbx_assignments_init(&a);
+    assert_int_equal(cbx_assignments_load(&a), -EINVAL);
+    assert_int_equal(a.assignment_count, 0);
+}
+
+static void test_load_malformed_keeps_prior(void **state)
+{
+    (void)state;
+    write_raw_assignments(
+        "assignments:\n"
+        "  - id: \"NOT_AN_ID\"\n"
+        "    slot: 0\n"
+        "    profile: default\n");
+
+    /* Caller's prior confirmed table must survive a malformed load. */
+    cbx_assignments a;
+    cbx_assignments_init(&a);
+    strncpy(a.assignments[0].id, "ORDER:7",
+            sizeof(a.assignments[0].id) - 1);
+    a.assignments[0].slot = 1;
+    strncpy(a.assignments[0].profile, "default",
+            sizeof(a.assignments[0].profile) - 1);
+    a.assignment_count = 1;
+    strncpy(a.gamepad_order[0], "ORDER:7", sizeof(a.gamepad_order[0]) - 1);
+    a.gamepad_order_count = 1;
+
+    assert_int_equal(cbx_assignments_load(&a), -EINVAL);
+    assert_int_equal(a.assignment_count, 1);
+    assert_string_equal(a.assignments[0].id, "ORDER:7");
+    assert_int_equal(a.assignments[0].slot, 1);
+    assert_int_equal(a.gamepad_order_count, 1);
+}
+
+static void test_load_fifo_rejected_without_blocking(void **state)
+{
+    (void)state;
+    ensure_assignments_dir();
+
+    char path[PATH_MAX + 64];
+    assignments_path(path, sizeof(path));
+    unlink(path);
+    assert_int_equal(mkfifo(path, 0600), 0);
+
+    cbx_assignments a;
+    cbx_assignments_init(&a);
+    /* A writer-less FIFO must be rejected, not block the read. */
+    assert_int_equal(cbx_assignments_load(&a), -EINVAL);
+    assert_int_equal(a.assignment_count, 0);
+
+    unlink(path);
+}
+
+static void test_load_too_many_order_entries_rejected(void **state)
+{
+    (void)state;
+    char yaml[4096];
+    int n = snprintf(yaml, sizeof(yaml),
+                     "assignments: []\ngamepad_order:\n");
+    for (int i = 0; i < CBX_MAX_GAMEPAD_ORDER + 1; i++)
+        n += snprintf(yaml + n, sizeof(yaml) - (size_t)n,
+                      "  - \"ORDER:%d\"\n", i);
+    write_raw_assignments(yaml);
+
+    cbx_assignments a;
+    cbx_assignments_init(&a);
+    assert_int_equal(cbx_assignments_load(&a), -EINVAL);
+    assert_int_equal(a.gamepad_order_count, 0);
+}
+
+static void test_load_too_many_assignments_rejected(void **state)
+{
+    (void)state;
+    char yaml[8192];
+    int n = snprintf(yaml, sizeof(yaml), "assignments:\n");
+    for (int i = 0; i < CBX_MAX_ASSIGNMENTS + 1; i++)
+        n += snprintf(yaml + n, sizeof(yaml) - (size_t)n,
+                      "  - id: \"ORDER:%d\"\n    slot: %d\n"
+                      "    profile: default\n",
+                      i, i % CBX_MAX_CONTROLLERS);
+    write_raw_assignments(yaml);
+
+    cbx_assignments a;
+    cbx_assignments_init(&a);
+    assert_int_equal(cbx_assignments_load(&a), -EINVAL);
+    assert_int_equal(a.assignment_count, 0);
+}
+
 /* --- Main ---------------------------------------------------------------- */
 
 int main(void)
@@ -639,6 +777,15 @@ int main(void)
         /* Validate struct */
         cmocka_unit_test(test_validate_empty_ok),
         cmocka_unit_test(test_validate_null),
+
+        /* Malformed-value / bounded-read hardening */
+        cmocka_unit_test(test_load_slot_overflow_rejected),
+        cmocka_unit_test(test_load_multi_document_rejected),
+        cmocka_unit_test(test_load_invalid_assignment_id_rejected),
+        cmocka_unit_test(test_load_malformed_keeps_prior),
+        cmocka_unit_test(test_load_fifo_rejected_without_blocking),
+        cmocka_unit_test(test_load_too_many_order_entries_rejected),
+        cmocka_unit_test(test_load_too_many_assignments_rejected),
     };
 
     return cmocka_run_group_tests(tests, setup_home, teardown_home);

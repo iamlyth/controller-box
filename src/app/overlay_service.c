@@ -294,6 +294,91 @@ cbx_overlay_props_wire(cbx_overlay_service_ctx *svc)
 }
 
 /* ================================================================== */
+/*  Serialized assignment persistence helpers                          */
+/* ================================================================== */
+
+/*
+ * Merge the overlay grid's assignment/order state onto `a` (a freshly loaded
+ * on-disk table).  Only rows present in the grid are touched: entries for
+ * controllers that are not currently displayed are preserved, so a concurrent
+ * Manager update is not erased by an overlay save.
+ */
+static int
+overlay_merge_grid(cbx_assignments *a, const cbx_select_grid *grid)
+{
+    for (int i = 0; i < grid->row_count; i++) {
+        const cbx_grid_row *row = &grid->rows[i];
+        int slot = cbx_select_grid_col_to_slot(row->cur_col);
+
+        int found = -1;
+        for (int j = 0; j < a->assignment_count; j++) {
+            if (strcmp(a->assignments[j].id, row->id) == 0) {
+                found = j;
+                break;
+            }
+        }
+
+        if (slot >= 0) {
+            if (found >= 0) {
+                a->assignments[found].slot = slot;
+                snprintf(a->assignments[found].profile,
+                         sizeof(a->assignments[found].profile),
+                         "%s", row->profile);
+            } else if (a->assignment_count < CBX_MAX_ASSIGNMENTS) {
+                cbx_assignment *na =
+                    &a->assignments[a->assignment_count++];
+                snprintf(na->id, sizeof(na->id), "%s", row->id);
+                na->slot = slot;
+                snprintf(na->profile, sizeof(na->profile), "%s",
+                         row->profile);
+            }
+        } else if (found >= 0) {
+            a->assignments[found] = a->assignments[--a->assignment_count];
+        }
+    }
+
+    /* Rebuild gamepad_order from the grid's slot ordering. */
+    a->gamepad_order_count = 0;
+    for (int slot = 0; slot < CBX_MAX_CONTROLLERS; slot++) {
+        for (int i = 0; i < grid->row_count; i++) {
+            const cbx_grid_row *row = &grid->rows[i];
+            if (cbx_select_grid_col_to_slot(row->cur_col) != slot)
+                continue;
+            if (a->gamepad_order_count < CBX_MAX_GAMEPAD_ORDER) {
+                snprintf(a->gamepad_order[a->gamepad_order_count++],
+                         CBX_MAX_ID_LEN, "%s", row->id);
+            }
+        }
+    }
+    return 0;
+}
+
+typedef struct {
+    const cbx_select_grid *grid;
+} overlay_grid_txn_args;
+
+static int
+overlay_txn_merge_grid(cbx_assignments *a, void *userdata)
+{
+    overlay_grid_txn_args *args = userdata;
+    return overlay_merge_grid(a, args->grid);
+}
+
+typedef struct {
+    const char *id;
+    const char *profile;
+} overlay_profile_txn_args;
+
+static int
+overlay_txn_set_profile(cbx_assignments *a, void *userdata)
+{
+    overlay_profile_txn_args *args = userdata;
+    /* Reuse the production assignment-update helper so a new controller gets
+     * a real free slot instead of an invalid -1 slot. */
+    return cbx_profile_cycle_update_assignment(a, args->id, args->profile);
+}
+
+/* ================================================================== */
 /*  Lifecycle on_save callback: conflict resolution + assignment save */
 /* ================================================================== */
 
@@ -382,68 +467,14 @@ cbx_overlay_on_save(void *userdata)
     if (rc != 0)
         return rc;
 
-    /* --- Phase 3: All engine state verified — sync in-memory and persist ---
+    /* --- Phase 3: All engine state verified — persist the merged table ---
      * Only after every LoadProfilePath, exact TargetDevices replacement, and
-     * SetGamepadOrder succeeded do we update the in-memory assignments
-     * and save to disk.  This guarantees that LoadProfile failures do
-     * not appear saved (Task 8 acceptance criterion). */
-    for (int i = 0; i < svc->grid.row_count; i++) {
-        const cbx_grid_row *row = &svc->grid.rows[i];
-        int slot = cbx_select_grid_col_to_slot(row->cur_col);
-
-        /* Find existing assignment by id. */
-        int found = -1;
-        for (int j = 0; j < svc->assignments.assignment_count; j++) {
-            if (strcmp(svc->assignments.assignments[j].id,
-                       row->id) == 0) {
-                found = j;
-                break;
-            }
-        }
-
-        if (slot >= 0) {
-            /* Assigned: update or add. */
-            if (found >= 0) {
-                svc->assignments.assignments[found].slot = slot;
-                snprintf(svc->assignments.assignments[found].profile,
-                         sizeof(svc->assignments.assignments[found].profile),
-                         "%s", row->profile);
-            } else if (svc->assignments.assignment_count <
-                       CBX_MAX_ASSIGNMENTS) {
-                cbx_assignment *a =
-                    &svc->assignments.assignments[
-                        svc->assignments.assignment_count++];
-                snprintf(a->id, sizeof(a->id), "%s", row->id);
-                a->slot = slot;
-                snprintf(a->profile, sizeof(a->profile),
-                         "%s", row->profile);
-            }
-        } else {
-            /* Unassigned: remove entry if present. */
-            if (found >= 0) {
-                svc->assignments.assignments[found] =
-                    svc->assignments.assignments[
-                        --svc->assignments.assignment_count];
-            }
-        }
-    }
-
-    /* Save gamepad_order identity IDs for restart restoration. */
-    svc->assignments.gamepad_order_count = 0;
-    for (int slot = 0; slot < CBX_MAX_CONTROLLERS; slot++) {
-        for (int i = 0; i < svc->grid.row_count; i++) {
-            const cbx_grid_row *row = &svc->grid.rows[i];
-            if (cbx_select_grid_col_to_slot(row->cur_col) != slot)
-                continue;
-            if (svc->assignments.gamepad_order_count < CBX_MAX_GAMEPAD_ORDER) {
-                snprintf(svc->assignments.gamepad_order[
-                             svc->assignments.gamepad_order_count++],
-                         CBX_MAX_ID_LEN, "%s", row->id);
-            }
-        }
-    }
-
-    rc = cbx_assignments_save(&svc->assignments);
+     * SetGamepadOrder succeeded do we publish the assignments, and we merge
+     * onto the current on-disk table under the shared config lock so a
+     * concurrent Manager write is not erased. */
+    overlay_grid_txn_args persist_args = { &svc->grid };
+    rc = cbx_assignments_transaction(overlay_txn_merge_grid, &persist_args,
+                                     &svc->assignments);
     if (rc != 0)
         return rc;
 
@@ -548,7 +579,22 @@ cbx_overlay_on_profile_change(int row_idx, const char *profile,
         return rc;
     }
 
-    rc = cbx_assignments_save(&svc->assignments);
+    /* Persist the profile on the current on-disk table under the shared
+     * config lock; the profile-cycle apply already updated svc->assignments
+     * in memory, and the transaction merges the single changed row so a
+     * concurrent write to another controller is preserved. */
+    if (row_idx >= 0 && row_idx < svc->grid.row_count &&
+        svc->grid.rows[row_idx].id[0] != '\0') {
+        const cbx_grid_row *row = &svc->grid.rows[row_idx];
+        overlay_profile_txn_args args = {
+            row->id,
+            row->profile,
+        };
+        rc = cbx_assignments_transaction(overlay_txn_set_profile, &args,
+                                         &svc->assignments);
+    } else {
+        rc = cbx_assignments_save(&svc->assignments);
+    }
     /* The dirty trigger already fired above.  A persistence failure does
      * not undo the engine-applied profile, so the grid remains truthful. */
     return rc;
