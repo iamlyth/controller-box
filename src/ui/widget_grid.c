@@ -60,8 +60,8 @@ grid_draw(cbx_widget *w, SDL_Renderer *r)
     /* Draw each cell. */
     for (int row = 0; row < grid->rows; row++) {
         for (int col = 0; col < grid->cols; col++) {
-            int i = row * grid->cols + col;
-            if (i >= grid->cell_count || !grid->cells[i])
+            int i = idx(grid, row, col);
+            if (i < 0 || i >= grid->cell_count || !grid->cells[i])
                 continue;
             SDL_Rect cell_rect = {
                 .x = grid->base.rect.x + col * grid->cell_w,
@@ -223,6 +223,13 @@ cbx_grid_set_dims(cbx_grid *grid, int rows, int cols)
 {
     if (!grid || rows <= 0 || cols <= 0)
         return -EINVAL;
+    /* Bound each axis individually before multiplying: rows * cols on two
+     * caller-controlled ints can overflow signed 32-bit (UB) and wrap to a
+     * value <= CBX_GRID_MAX_CELLS, admitting impossible dimensions whose
+     * row * cols cell indexing overflows too.  The cells array holds
+     * CBX_GRID_MAX_CELLS entries, so each axis can never exceed that. */
+    if (rows > CBX_GRID_MAX_CELLS || cols > CBX_GRID_MAX_CELLS)
+        return -ENOMEM;
     if (rows * cols > CBX_GRID_MAX_CELLS)
         return -ENOMEM;
     /* Clear existing cells if dims change. */

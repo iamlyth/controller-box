@@ -15,6 +15,7 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
 #include <errno.h>
+#include <stdint.h>
 #include <unistd.h>
 #include <string.h>
 
@@ -686,6 +687,56 @@ test_list_mouse_wheel_short_and_empty(void **state)
     test_teardown(&ctx);
 }
 
+/* Hardening: item_h <= 0 must never be used as a divisor in the pointer
+ * hit-test paths (a future row-height setter could make it zero), and a
+ * pathological INT32_MIN wheel delta must not overflow the offset
+ * arithmetic before the clamp. */
+static void
+test_list_zero_item_height_and_wheel_overflow(void **state)
+{
+    (void)state;
+    TestCtx ctx = {0};
+    assert_int_equal(test_setup(&ctx), 0);
+    cbx_theme theme;
+    cbx_theme_default(&theme);
+    cbx_text_cache cache;
+    assert_int_equal(cbx_text_cache_init(&cache, ctx.renderer), 0);
+
+    cbx_list lst;
+    assert_int_equal(cbx_list_init(&lst, 0, &cache, &theme), 0);
+    cbx_list_add_item(&lst, "A", NULL, NULL);
+    cbx_list_add_item(&lst, "B", NULL, NULL);
+    SDL_Rect r = {0, 0, 200, 128};
+    cbx_widget_set_rect(&lst.base, &r);
+
+    /* A pathological wheel delta must clamp, not overflow. */
+    SDL_Event ev = {0};
+    ev.type = SDL_MOUSEWHEEL;
+    ev.wheel.y = INT32_MIN;
+    assert_true(cbx_widget_handle_event(&lst.base, &ev));
+    assert_true(lst.scroll_offset >= 0);
+    assert_true(lst.scroll_offset <= lst.item_count);
+
+    /* Zero item height: the mouse path must not divide by zero.  With no
+     * valid row geometry the event is not consumed. */
+    lst.item_h = 0;
+    ev = (SDL_Event){0};
+    ev.type = SDL_MOUSEBUTTONDOWN;
+    ev.button.button = SDL_BUTTON_LEFT;
+    ev.button.x = 10;
+    ev.button.y = 64;
+    assert_false(cbx_widget_handle_event(&lst.base, &ev));
+    assert_false(lst.pressed);
+
+    /* Negative item height likewise. */
+    lst.item_h = -32;
+    assert_false(cbx_widget_handle_event(&lst.base, &ev));
+
+    cbx_widget_destroy(&lst.base);
+    cbx_text_cache_cleanup(&cache);
+    test_teardown(&ctx);
+}
+
 static void
 test_list_mouse_click(void **state)
 {
@@ -948,6 +999,7 @@ main(void)
         cmocka_unit_test(test_list_mouse_wheel),
         cmocka_unit_test(test_list_mouse_wheel_short_and_empty),
         cmocka_unit_test(test_list_mouse_click),
+        cmocka_unit_test(test_list_zero_item_height_and_wheel_overflow),
         cmocka_unit_test(test_list_draw),
         cmocka_unit_test(test_list_draw_with_font),
         cmocka_unit_test(test_list_focus_blur),

@@ -234,11 +234,13 @@ cbx_overlay_lifecycle_tick(cbx_overlay_lifecycle *lc)
                 cbx_overlay_surface_set_opacity(lc->surface, alpha);
             if (cbx_anim_is_complete(&lc->fade)) {
                 enter_visible(lc);
-            } else {
-                /* Still fading in: show the surface so the user sees it. */
-                if (lc->surface && lc->renderer &&
-                    !cbx_overlay_surface_is_visible(lc->surface))
-                    cbx_overlay_surface_show(lc->surface, lc->renderer);
+            } else if (lc->surface && lc->renderer) {
+                /* Present this fade frame.  set_opacity only writes the
+                 * texture's alpha mod; without a present the intermediate
+                 * opacity work is discarded and the overlay stays invisible
+                 * until the fade completes (SPEC §11: first
+                 * compositor-visible frame < 10 ms from ALL detection). */
+                cbx_overlay_surface_show(lc->surface, lc->renderer);
             }
         }
         break;
@@ -260,8 +262,14 @@ cbx_overlay_lifecycle_tick(cbx_overlay_lifecycle *lc)
             enter_idle(lc);
         } else {
             double alpha = cbx_anim_update(&lc->fade);
-            if (lc->surface)
+            if (lc->surface) {
                 cbx_overlay_surface_set_opacity(lc->surface, alpha);
+                /* Present each fade-out frame so the close is an actual
+                 * fade rather than a hard cut (the opacity write alone is
+                 * never presented otherwise). */
+                if (lc->renderer)
+                    cbx_overlay_surface_show(lc->surface, lc->renderer);
+            }
             if (cbx_anim_is_complete(&lc->fade)) {
                 enter_idle(lc);
             }

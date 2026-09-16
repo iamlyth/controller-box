@@ -617,6 +617,67 @@ test_idle_production_step_no_busy_loop(void **state)
 
 /* --- Main --------------------------------------------------------------- */
 
+/*
+ * Regression (efficiency BLOCKER): a configured fade-in must present every
+ * intermediate frame.  Before the fix only the first (near-transparent)
+ * frame and the final full-opacity frame were presented; the per-tick
+ * set_opacity work was discarded and the overlay stayed effectively
+ * invisible for the whole fade, violating SPEC §11's activation latency.
+ * The present counter proves each ACTIVATING tick presented a frame.
+ */
+static void
+test_fade_in_presents_each_frame(void **state)
+{
+    latency_fixture *f = *state;
+
+    /* Fade long enough that it cannot complete during the test, so the
+     * ACTIVATING branch is exercised deterministically on every tick. */
+    f->lifecycle.fade_in_ms = 10000;
+    f->lifecycle.state = CBX_OVERLAY_IDLE;
+    cbx_overlay_surface_hide(&f->surface);
+
+    uint64_t before = cbx_overlay_surface_present_count(&f->surface);
+    assert_int_equal(cbx_overlay_lifecycle_activate(&f->lifecycle), 0);
+    assert_int_equal(f->lifecycle.state, CBX_OVERLAY_ACTIVATING);
+
+    /* First fade tick: the near-transparent frame must be presented. */
+    cbx_overlay_lifecycle_tick(&f->lifecycle);
+    assert_int_equal(f->lifecycle.state, CBX_OVERLAY_ACTIVATING);
+    uint64_t after_first = cbx_overlay_surface_present_count(&f->surface);
+    assert_true(after_first > before);
+    assert_true(cbx_overlay_surface_is_visible(&f->surface));
+
+    /* A later fade tick must present too.  Before the fix the surface was
+     * already visible so no further frame was presented and every
+     * intermediate set_opacity write was discarded. */
+    cbx_overlay_lifecycle_tick(&f->lifecycle);
+    assert_int_equal(f->lifecycle.state, CBX_OVERLAY_ACTIVATING);
+    assert_true(cbx_overlay_surface_present_count(&f->surface) >
+                after_first);
+}
+
+/*
+ * Production activation is instant (run_overlay_service sets
+ * fade_in_ms = 0): the pre-built surface must present within the same
+ * activate() call, giving < 10 ms from ALL detection to the first
+ * compositor-visible frame (SPEC §4.9/§11).
+ */
+static void
+test_instant_activation_presents_immediately(void **state)
+{
+    latency_fixture *f = *state;
+
+    f->lifecycle.fade_in_ms = 0;
+    f->lifecycle.state = CBX_OVERLAY_IDLE;
+    cbx_overlay_surface_hide(&f->surface);
+    uint64_t before = cbx_overlay_surface_present_count(&f->surface);
+
+    assert_int_equal(cbx_overlay_lifecycle_activate(&f->lifecycle), 0);
+    assert_int_equal(f->lifecycle.state, CBX_OVERLAY_VISIBLE);
+    assert_true(cbx_overlay_surface_present_count(&f->surface) > before);
+    assert_true(cbx_overlay_surface_is_visible(&f->surface));
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -650,6 +711,15 @@ int main(void)
             latency_setup, latency_teardown),
         cmocka_unit_test_setup_teardown(
             test_idle_production_step_no_busy_loop,
+            latency_setup, latency_teardown),
+
+        /* Fade activation: every intermediate frame is presented, and the
+         * production instant path presents within activate() itself. */
+        cmocka_unit_test_setup_teardown(
+            test_fade_in_presents_each_frame,
+            latency_setup, latency_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_instant_activation_presents_immediately,
             latency_setup, latency_teardown),
     };
 

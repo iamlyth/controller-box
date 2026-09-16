@@ -14,6 +14,7 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
 #include <errno.h>
+#include <limits.h>
 #include <string.h>
 
 #include "ui/widget.h"
@@ -142,6 +143,19 @@ test_grid_set_dims_too_large(void **state)
 
     /* 16×16=256 — OK. */
     assert_int_equal(cbx_grid_set_dims(&grid, 16, 16), 0);
+
+    /* Signed-overflow attempts must be rejected before any multiply wraps
+     * to a value <= CBX_GRID_MAX_CELLS (which would admit impossible dims
+     * and out-of-bounds row*cols cell indexing). */
+    assert_int_equal(cbx_grid_set_dims(&grid, 65536, 65536), -ENOMEM);
+    assert_int_equal(cbx_grid_set_dims(&grid, INT_MAX, INT_MAX), -ENOMEM);
+    assert_int_equal(cbx_grid_set_dims(&grid, 1, CBX_GRID_MAX_CELLS + 1),
+                     -ENOMEM);
+    assert_int_equal(cbx_grid_set_dims(&grid, CBX_GRID_MAX_CELLS + 1, 1),
+                     -ENOMEM);
+    /* The rejected calls must not have changed the accepted dimensions. */
+    assert_int_equal(grid.rows, 16);
+    assert_int_equal(grid.cols, 16);
 
     cbx_widget_destroy(&grid.base);
 }

@@ -120,6 +120,7 @@ cbx_overlay_surface_show(cbx_overlay_surface *s, SDL_Renderer *r)
 
     SDL_RenderPresent(r);
     s->visible = true;
+    s->presents++;
     return 0;
 }
 
@@ -135,6 +136,12 @@ bool
 cbx_overlay_surface_is_visible(const cbx_overlay_surface *s)
 {
     return s ? s->visible : false;
+}
+
+uint64_t
+cbx_overlay_surface_present_count(const cbx_overlay_surface *s)
+{
+    return s ? s->presents : 0;
 }
 
 /* ------------------------------------------------------------------ */

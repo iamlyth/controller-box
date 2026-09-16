@@ -229,8 +229,18 @@ static SDL_Texture *render_to_texture(cbx_text_cache *cache,
     return tex;
 }
 
-SDL_Texture *cbx_text_render(cbx_text_cache *cache, int font_id,
-                               const char *text, SDL_Color color)
+/*
+ * Core cached render.  `allow_evict` controls what happens when the cache
+ * is at capacity and the key is not present:
+ *   true  — evict the LRU entry and insert (single-render behaviour).
+ *   false — fail closed with NULL.  Callers that collect several results
+ *           into a caller-owned array (cbx_text_render_wrapped) must use
+ *           false so a later line cannot evict an earlier line of the
+ *           same call and leave a dangling pointer in that array.
+ */
+static SDL_Texture *
+text_render_impl(cbx_text_cache *cache, int font_id,
+                 const char *text, SDL_Color color, bool allow_evict)
 {
     if (!cache || !text || text[0] == '\0')
         return NULL;
@@ -249,9 +259,16 @@ SDL_Texture *cbx_text_render(cbx_text_cache *cache, int font_id,
 
     /* Keep the cache bounded.  The hash table is twice the entry cap, so
      * after evicting down to the cap an insertion slot always exists. */
-    while (cache->entry_count >= CBX_TEXT_CACHE_MAX) {
-        if (evict_lru(cache) != 0)
-            break;  /* nothing evictable — fall through and fail safely */
+    if (cache->entry_count >= CBX_TEXT_CACHE_MAX) {
+        if (!allow_evict) {
+            fprintf(stderr, "cbx_text: cache full, refusing to evict a "
+                    "collected line\n");
+            return NULL;
+        }
+        while (cache->entry_count >= CBX_TEXT_CACHE_MAX) {
+            if (evict_lru(cache) != 0)
+                break;  /* nothing evictable — fall through and fail safely */
+        }
     }
 
     /* Find a free slot. */
@@ -296,6 +313,12 @@ SDL_Texture *cbx_text_render(cbx_text_cache *cache, int font_id,
 
     cache->entry_count++;
     return tex;
+}
+
+SDL_Texture *cbx_text_render(cbx_text_cache *cache, int font_id,
+                               const char *text, SDL_Color color)
+{
+    return text_render_impl(cache, font_id, text, color, true);
 }
 
 int cbx_text_get_dims(const cbx_text_cache *cache, int font_id,
@@ -511,12 +534,21 @@ int cbx_text_render_wrapped(cbx_text_cache *cache, int font_id,
         }
 
         for (int i = 0; i < wcount; i++) {
-            SDL_Texture *tex = cbx_text_render(cache, font_id,
-                                                wrapped[i], color);
+            SDL_Texture *tex = text_render_impl(cache, font_id,
+                                                wrapped[i], color, false);
             if (!tex) {
-                /* Render failed for this line — skip it. */
-                free(wrapped[i]);
-                continue;
+                /* Fail closed.  A line that cannot be cached without
+                 * evicting an already-collected line (cache full) — or that
+                 * fails to render — must not be silently dropped and must
+                 * not leave a dangling pointer in texs[].  Only the
+                 * not-yet-consumed wrapped[i..wcount) strings are freed;
+                 * earlier ones were already freed after being stored. */
+                for (int j = i; j < wcount; j++)
+                    free(wrapped[j]);
+                free(wrapped);
+                free(texs);
+                free(text_copy);
+                return -ENOMEM;
             }
             if (total_lines >= cap) {
                 cap *= 2;

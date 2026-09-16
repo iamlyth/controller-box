@@ -48,6 +48,7 @@ typedef struct {
     int             width;     /* texture / screen width               */
     int             height;    /* texture / screen height              */
     bool            visible;   /* overlay currently shown              */
+    uint64_t        presents;  /* successful RenderCopy+Present count  */
     uint8_t         opacity;   /* 0–255, from settings overlay_opacity */
     cbx_dirty_rect  dirty;     /* dirty-rect tracker                   */
     bool            built;     /* texture successfully created         */
@@ -104,6 +105,13 @@ void cbx_overlay_surface_hide(cbx_overlay_surface *s);
  * Is the overlay currently visible?
  */
 bool cbx_overlay_surface_is_visible(const cbx_overlay_surface *s);
+
+/*
+ * Number of successful presents (RenderCopy + SDL_RenderPresent) since
+ * init.  Lets callers/tests prove that an animation actually presented
+ * intermediate frames instead of discarding its per-tick work.
+ */
+uint64_t cbx_overlay_surface_present_count(const cbx_overlay_surface *s);
 
 /* --- Dirty-rect management ---------------------------------------- */
 

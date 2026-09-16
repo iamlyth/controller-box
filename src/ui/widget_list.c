@@ -207,23 +207,27 @@ list_handle_event(cbx_widget *w, const SDL_Event *ev)
         }
         break;
     case SDL_MOUSEWHEEL: {
-        /* SDL: wheel.y > 0 = scroll up (earlier items), < 0 = scroll down. */
+        /* SDL: wheel.y > 0 = scroll up (earlier items), < 0 = scroll down.
+         * Compute in 64-bit so a pathological INT32_MIN wheel delta cannot
+         * overflow the subtraction before the clamp below (UB). */
         compute_visible(lst);
-        lst->scroll_offset -= ev->wheel.y;
+        long long off = (long long)lst->scroll_offset -
+                        (long long)ev->wheel.y;
         /* A list shorter than the viewport (including an empty list) has
          * max_scroll == 0, not a negative bound.  Clamp to zero so the
          * offset can never go negative and drive negative draw indices. */
         int max_scroll = lst->item_count - lst->visible_count;
         if (max_scroll < 0)
             max_scroll = 0;
-        if (lst->scroll_offset < 0)
-            lst->scroll_offset = 0;
-        if (lst->scroll_offset > max_scroll)
-            lst->scroll_offset = max_scroll;
+        if (off < 0)
+            off = 0;
+        if (off > max_scroll)
+            off = max_scroll;
+        lst->scroll_offset = (int)off;
         return true;
     }
     case SDL_MOUSEBUTTONDOWN:
-        if (ev->button.button == SDL_BUTTON_LEFT) {
+        if (ev->button.button == SDL_BUTTON_LEFT && lst->item_h > 0) {
             SDL_Point p = { ev->button.x, ev->button.y };
             if (SDL_PointInRect(&p, &lst->base.rect)) {
                 int rel_y = p.y - lst->base.rect.y;
@@ -241,7 +245,9 @@ list_handle_event(cbx_widget *w, const SDL_Event *ev)
             SDL_Point p = { ev->button.x, ev->button.y };
             bool in_rect = SDL_PointInRect(&p, &lst->base.rect);
             lst->pressed = false;
-            if (in_rect) {
+            /* item_h <= 0 means no row geometry (e.g. zero-height list):
+             * consume the release but never divide by it. */
+            if (in_rect && lst->item_h > 0) {
                 int rel_y = p.y - lst->base.rect.y;
                 int idx = lst->scroll_offset + rel_y / lst->item_h;
                 if (idx >= 0 && idx < lst->item_count &&

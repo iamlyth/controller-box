@@ -752,6 +752,49 @@ static void test_cache_eviction_bounded(void **state)
     test_teardown(&ctx);
 }
 
+static void test_render_wrapped_full_cache_fails_closed(void **state)
+{
+    (void)state;
+    if (!font_available()) { skip(); return; }
+
+    TestCtx ctx;
+    assert_int_equal(test_setup(&ctx), 0);
+
+    cbx_text_cache cache;
+    cbx_text_cache_init(&cache, ctx.renderer);
+    int font = cbx_text_load_font(&cache, CBX_FONT_PATH, 16);
+
+    SDL_Color white = {255, 255, 255, 255};
+
+    /* Fill the cache exactly to capacity with single-render entries. */
+    for (int i = 0; i < CBX_TEXT_CACHE_MAX; i++) {
+        char s[32];
+        snprintf(s, sizeof(s), "full-%d", i);
+        assert_non_null(cbx_text_render(&cache, font, s, white));
+    }
+    assert_int_equal(cache.entry_count, CBX_TEXT_CACHE_MAX);
+
+    /* A new wrapped string cannot be cached without evicting a line from
+     * this same call, so it must fail closed with no output. */
+    SDL_Texture **lines = (SDL_Texture **)0x1;
+    int count = 123;
+    int total_h = 456;
+    int rc = cbx_text_render_wrapped(&cache, font, "never-cached-line",
+                                     white, 0, &lines, &count, &total_h);
+    assert_int_equal(rc, -ENOMEM);
+    assert_null(lines);
+    assert_int_equal(count, 0);
+    assert_int_equal(total_h, 0);
+
+    /* The cache is unchanged and still usable; the single-render path still
+     * evicts to make room (its documented policy). */
+    assert_int_equal(cache.entry_count, CBX_TEXT_CACHE_MAX);
+    assert_non_null(cbx_text_render(&cache, font, "after", white));
+
+    cbx_text_cache_cleanup(&cache);
+    test_teardown(&ctx);
+}
+
 static void test_render_multiple_fonts(void **state)
 {
     (void)state;
@@ -904,6 +947,7 @@ static const struct CMUnitTest text_tests[] = {
     cmocka_unit_test(test_render_wrapped_word_wrap),
     cmocka_unit_test(test_render_wrapped_null),
     cmocka_unit_test(test_render_wrapped_alloc_failure_no_double_free),
+    cmocka_unit_test(test_render_wrapped_full_cache_fails_closed),
 
     /* Cache management */
     cmocka_unit_test(test_cache_clear),

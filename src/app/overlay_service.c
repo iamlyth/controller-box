@@ -2651,6 +2651,14 @@ int run_overlay_service(int dry_run)
     cbx_overlay_lifecycle_init(&svc->lifecycle, svc->conn.backend, svc->conn.bus,
                                primary_path, &svc->surface, svc->rend.renderer);
 
+    /* Activation must present the pre-built surface immediately.  SPEC
+     * §4.9/§11 require ≤ 75 ms p99 / ≤ 100 ms max from button press and
+     * < 10 ms p99 from ALL detection to the first compositor-visible frame;
+     * a fade-in that ramps from alpha 0 would hide the overlay for its
+     * whole duration.  Instant activation matches the pre-built design and
+     * every other production call site (tests use fade_in_ms = 0). */
+    svc->lifecycle.fade_in_ms = 0;
+
     /* --- 10. Set up mode state + callbacks ---------------------------- */
     /* Player Mode (SPEC §4.3). */
     cbx_player_mode_init(&svc->pm, &svc->grid);

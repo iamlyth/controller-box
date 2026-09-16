@@ -72,6 +72,14 @@ static bool path_is_safe(const char *path)
  */
 static bool path_within(const char *resolved_path, const char *base_dir)
 {
+    /* An empty or relative base directory can never contain an absolute
+     * resolved path; without this guard, base_len == 0 would make the
+     * prefix comparison below succeed for every path (base[0] == '\0'
+     * would fail the boundary test, but base[0] == '/' with a truncated
+     * or empty DATA_DIR must not be treated as a safe root). */
+    if (!base_dir || base_dir[0] != '/')
+        return false;
+
     size_t base_len = strlen(base_dir);
     if (strncmp(resolved_path, base_dir, base_len) != 0)
         return false;
@@ -268,8 +276,8 @@ static int load_png(cbx_icon_cache *cache, const char *abs_path,
      * deduplication). */
     rc = cbx_icon_cache_insert(cache, cache_key, tex, w, h);
     if (rc != 0) {
-        fprintf(stderr, "icon_lookup: cache full, cannot store %s\n",
-                cache_key);
+        fprintf(stderr, "icon_lookup: cannot store %s in icon cache: %s\n",
+                cache_key, strerror(-rc));
         SDL_DestroyTexture(tex);
         return rc;
     }
