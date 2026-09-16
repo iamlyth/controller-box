@@ -27,7 +27,7 @@
 #include <stdbool.h>
 
 /* ---- Expected counts ---- */
-#define EXPECTED_MANAGER_COUNT  39  /* M01–M39 */
+#define EXPECTED_MANAGER_COUNT  45  /* M01–M45 */
 #define EXPECTED_OVERLAY_COUNT  13  /* O01–O13 */
 #define EXPECTED_DISABLED_COUNT   8  /* D01–D08 */
 #define EXPECTED_TOTAL         (EXPECTED_MANAGER_COUNT + EXPECTED_OVERLAY_COUNT + EXPECTED_DISABLED_COUNT)
@@ -59,8 +59,8 @@ static void test_inventory_all_fields_populated(void **state)
 static void test_inventory_has_all_manager_controls(void **state)
 {
     (void)state;
-    /* M01 through M39 must all be present */
-    for (int n = 1; n <= 39; n++) {
+    /* M01 through M45 must all be present */
+    for (int n = 1; n <= 45; n++) {
         char id[8];
         snprintf(id, sizeof(id), "M%02d", n);
         const cbx_interaction_entry *e = cbx_interaction_inventory_find(id);
@@ -329,9 +329,10 @@ static void test_inventory_verified_flags_are_runtime_marks(void **state)
 
     const char *declared_verified[] = {
         "M01", "M02", "M03", "M04", "M05", "M06", "M07", "M08",
-        "M09", "M10", "M11", "M12", "M15", "M17", "M18",
+        "M09", "M10", "M11", "M12", "M13", "M14", "M15", "M17", "M18",
         "M19", "M20", "M21", "M22", "M23", "M24", "M25", "M26",
         "M27", "M28", "M29", "M30", "M31", "M33", "M39",
+        "M40", "M41", "M42", "M43", "M44", "M45",
         "O01", "O02", "O03", "O04", "O05", "O06", "O07", "O08",
         "O09", "O10", "O11", "O12", "O13",
         "D01", "D02", "D03", "D04", "D05", "D06", "D07", "D08"
@@ -365,8 +366,8 @@ static void test_inventory_dialog_pointer_paths_available(void **state)
 {
     (void)state;
     const char *avail_ids[] = {
-        "M09", "M15", "M19", "M20", "M24", "M25", "M26", "M39",
-        "D01", "D02", "D03", "D04", "D05", "D06", "D07", "D08"
+        "M15", "M19", "M20", "M39", "M40", "M41", "M42", "M43", "M45",
+        "D01", "D02", "D03", "D04", "D06", "D07", "D08"
     };
     for (size_t i = 0; i < sizeof(avail_ids)/sizeof(avail_ids[0]); i++) {
         const cbx_interaction_entry *e = cbx_interaction_inventory_find(avail_ids[i]);

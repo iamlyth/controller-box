@@ -2471,6 +2471,107 @@ test_first_run_cancel_pointer_path(void **state)
     cleanup_mock_systemctl(script_path, state_path);
 }
 
+/* M39 controller transport: drive the first-run dialog with real SDL
+ * virtual-controller events (SDL_JoystickSetVirtualButton -> SDL_PollEvent
+ * -> SDL_CONTROLLERBUTTONDOWN -> cbx_manager_controller_to_key).  This is
+ * dispatch evidence, not kernel/physical acceptance (SPEC §5.7). */
+static void
+mi_ctrl_press_virtual(cbx_manager *mgr, SDL_Joystick *joy, int button)
+{
+    SDL_Event ev;
+    SDL_JoystickSetVirtualButton(joy, button, 1);
+    SDL_PumpEvents();
+    while (SDL_PollEvent(&ev))
+        cbx_manager_handle_event(mgr, &ev);
+    SDL_JoystickSetVirtualButton(joy, button, 0);
+    SDL_PumpEvents();
+    while (SDL_PollEvent(&ev))
+        cbx_manager_handle_event(mgr, &ev);
+}
+
+static SDL_Joystick *
+mi_attach_virtual_controller(cbx_manager *mgr, int *out_index)
+{
+    int joy_idx = SDL_JoystickAttachVirtual(
+        SDL_JOYSTICK_TYPE_GAMECONTROLLER, 6, 15, 0);
+    assert_true(joy_idx >= 0);
+    SDL_Joystick *joy = SDL_JoystickOpen(joy_idx);
+    assert_non_null(joy);
+
+    char guid[33];
+    SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(joy), guid, sizeof(guid));
+    char mapping[512];
+    snprintf(mapping, sizeof(mapping),
+             "%s,Controller-Box Virtual,a:b0,b:b1,start:b6,"
+             "dpup:b11,dpdown:b12,dpleft:b13,dpright:b14,platform:Linux,",
+             guid);
+    assert_true(SDL_GameControllerAddMapping(mapping) >= 0);
+    SDL_GameControllerEventState(SDL_ENABLE);
+
+    /* Let the production manager observe SDL_CONTROLLERDEVICEADDED and
+     * open the device so SDL delivers SDL_CONTROLLERBUTTON events. */
+    SDL_Event ev;
+    while (SDL_PollEvent(&ev))
+        cbx_manager_handle_event(mgr, &ev);
+
+    *out_index = joy_idx;
+    return joy;
+}
+
+static void
+test_first_run_confirm_virtual_controller(void **state)
+{
+    mi_fixture *f = *state;
+
+    char script_path[256], state_path[256];
+    setup_mock_systemctl(script_path, sizeof(script_path),
+                         state_path, sizeof(state_path));
+
+    int joy_idx = -1;
+    SDL_Joystick *joy = mi_attach_virtual_controller(&f->mgr, &joy_idx);
+
+    cbx_manager_check_first_run(&f->mgr);
+    assert_true(cbx_manager_first_run_active(&f->mgr));
+
+    mi_ctrl_press_virtual(&f->mgr, joy, 0);  /* gamepad A confirms */
+
+    assert_false(cbx_manager_first_run_active(&f->mgr));
+    char unit_path[4096];
+    assert_int_equal(cbx_service_unit_path(unit_path, sizeof(unit_path)), 0);
+    assert_int_equal(access(unit_path, F_OK), 0);
+
+    SDL_JoystickClose(joy);
+    SDL_JoystickDetachVirtual(joy_idx);
+    cleanup_mock_systemctl(script_path, state_path);
+}
+
+static void
+test_first_run_cancel_virtual_controller(void **state)
+{
+    mi_fixture *f = *state;
+
+    char script_path[256], state_path[256];
+    setup_mock_systemctl(script_path, sizeof(script_path),
+                         state_path, sizeof(state_path));
+
+    int joy_idx = -1;
+    SDL_Joystick *joy = mi_attach_virtual_controller(&f->mgr, &joy_idx);
+
+    cbx_manager_check_first_run(&f->mgr);
+    assert_true(cbx_manager_first_run_active(&f->mgr));
+
+    mi_ctrl_press_virtual(&f->mgr, joy, 1);  /* gamepad B cancels */
+
+    assert_false(cbx_manager_first_run_active(&f->mgr));
+    char unit_path[4096];
+    assert_int_equal(cbx_service_unit_path(unit_path, sizeof(unit_path)), 0);
+    assert_int_not_equal(access(unit_path, F_OK), 0);
+
+    SDL_JoystickClose(joy);
+    SDL_JoystickDetachVirtual(joy_idx);
+    cleanup_mock_systemctl(script_path, state_path);
+}
+
 int
 main(void)
 {
@@ -2668,6 +2769,10 @@ main(void)
             test_first_run_confirm_pointer_path, mi_setup, mi_teardown),
         cmocka_unit_test_setup_teardown(
             test_first_run_cancel_pointer_path, mi_setup, mi_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_first_run_confirm_virtual_controller, mi_setup, mi_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_first_run_cancel_virtual_controller, mi_setup, mi_teardown),
     };
 
     return cmocka_run_group_tests(tests, NULL, NULL);

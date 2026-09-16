@@ -90,6 +90,7 @@ typedef struct {
     /* --- Name input (for create) ---------------------------------- */
     char        name_buf[CBX_PT_NAME_LEN];
     int         name_len;
+    int         name_cursor;       /* controller-editable cursor [0,name_len] */
     cbx_pt_create_source create_source;
 
     /* --- Pending delete target ----------------------------------- */
@@ -243,9 +244,29 @@ int cbx_profiles_tab_begin_create(cbx_profiles_tab *tab,
 int cbx_profiles_tab_name_input_char(cbx_profiles_tab *tab, char ch);
 
 /*
- * Backspace one character from the name input buffer.
+ * Backspace one character from the name input buffer.  The character
+ * immediately before the cursor is removed (the last character when the
+ * cursor is at the end, which is the state after keyboard entry).
  */
 int cbx_profiles_tab_name_input_backspace(cbx_profiles_tab *tab);
+
+/*
+ * Move the character-entry cursor within the name buffer.
+ * delta < 0 moves left, delta > 0 moves right; the cursor is clamped to
+ * [0, name_len].  Returns 0 on success, -EINVAL outside name-input mode.
+ */
+int cbx_profiles_tab_name_input_cursor(cbx_profiles_tab *tab, int delta);
+
+/*
+ * Cycle the character at the cursor through the allowed alphabet
+ * (a-z, 0-9, '-', '_').  When the cursor is at the end of the buffer a
+ * new character is appended.  This is the controller-reachable text entry
+ * path (D-pad Up/Down) so profile naming never secretly requires a
+ * keyboard.  delta < 0 cycles backward, delta > 0 forward.
+ * Returns 0 on success, -ENOSPC when the buffer is full, -EINVAL outside
+ * name-input mode.
+ */
+int cbx_profiles_tab_name_input_cycle(cbx_profiles_tab *tab, int delta);
 
 /*
  * Confirm the name input and create the profile.

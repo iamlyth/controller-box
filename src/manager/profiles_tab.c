@@ -96,6 +96,49 @@ refuse_lossy_profile(cbx_profiles_tab *tab)
     return -ENOTSUP;
 }
 
+/* Alphabet for controller-reachable name entry (SPEC §5.1/§5.7: no
+ * required operation may secretly need a keyboard).  D-pad Up/Down
+ * cycles the character at the cursor through this set. */
+static const char CBX_PT_NAME_ALPHABET[] =
+    "abcdefghijklmnopqrstuvwxyz0123456789-_";
+#define CBX_PT_NAME_ALPHABET_LEN \
+    ((int)(sizeof(CBX_PT_NAME_ALPHABET) - 1))
+
+static int
+name_alphabet_index(char ch)
+{
+    const char *p = strchr(CBX_PT_NAME_ALPHABET, ch);
+    return p ? (int)(p - CBX_PT_NAME_ALPHABET) : 0;
+}
+
+/* Render the current name with the entry cursor highlighted so the
+ * controller path visibly indicates where D-pad cycling will act. */
+static void
+refresh_name_status(cbx_profiles_tab *tab)
+{
+    if (!tab)
+        return;
+    char shown[CBX_PT_NAME_LEN + 4];
+    int j = 0;
+    for (int i = 0; i < tab->name_len; i++) {
+        if (i == tab->name_cursor && j < (int)sizeof(shown) - 1)
+            shown[j++] = '[';
+        if (j < (int)sizeof(shown) - 1)
+            shown[j++] = tab->name_buf[i];
+    }
+    if (tab->name_cursor >= tab->name_len && j < (int)sizeof(shown) - 1)
+        shown[j++] = '[';
+    if (j < (int)sizeof(shown) - 1)
+        shown[j++] = ']';
+    shown[j] = '\0';
+
+    char prompt[CBX_PT_LABEL_LEN];
+    snprintf(prompt, sizeof(prompt),
+             "Name: %s  (Up/Down edit, Left/Right move, Back delete)",
+             shown);
+    cbx_label_set_text(&tab->status_lbl, prompt);
+}
+
 /* ------------------------------------------------------------------ */
 /*  Forward declarations for on_select callbacks                       */
 /* ------------------------------------------------------------------ */
@@ -153,6 +196,12 @@ on_dialog_confirm_pressed(cbx_widget *w, void *user_data)
     case CBX_PT_MODE_CONFIRM_DELETE:
         cbx_profiles_tab_confirm_delete(tab);
         break;
+    case CBX_PT_MODE_CONFIRM_QUIT:
+        /* Save & Quit.  A failed save keeps the editor open with the data
+         * intact and does not request exit (SPEC §5.3, inventory M40). */
+        if (cbx_profiles_tab_save_editor(tab) == 0)
+            tab->quit_after_action = true;
+        break;
     default:
         break;
     }
@@ -175,6 +224,14 @@ on_dialog_cancel_pressed(cbx_widget *w, void *user_data)
         break;
     case CBX_PT_MODE_CONFIRM_DELETE:
         cbx_profiles_tab_cancel_delete(tab);
+        break;
+    case CBX_PT_MODE_CREATE_PICK:
+        cbx_profiles_tab_cancel_create_pick(tab);
+        break;
+    case CBX_PT_MODE_CONFIRM_QUIT:
+        /* Discard & Quit (inventory M41). */
+        cbx_profiles_tab_close_editor(tab);
+        tab->quit_after_action = true;
         break;
     default:
         break;
@@ -698,22 +755,26 @@ cbx_profiles_tab_begin_create(cbx_profiles_tab *tab,
     tab->mode = CBX_PT_MODE_NAME_INPUT;
     tab->create_source = source;
     tab->name_len = 0;
+    tab->name_cursor = 0;
     tab->name_buf[0] = '\0';
 
-    /* Show status label with prompt. */
+    /* Show status label with prompt.  The controller can enter a name
+     * without a keyboard (D-pad Up/Down cycles characters, Left/Right
+     * moves the cursor, Start deletes) so profile creation is fully
+     * reachable from a gamepad (SPEC §5.1/§5.7). */
     const char *prompt;
     switch (source) {
     case CBX_PT_CREATE_DEFAULT_COPY:
-        prompt = "Enter name (copy default):";
+        prompt = "Name (copy default) - Up/Down edit, A=OK, B=Cancel";
         break;
     case CBX_PT_CREATE_EMPTY:
-        prompt = "Enter name (empty profile):";
+        prompt = "Name (empty profile) - Up/Down edit, A=OK, B=Cancel";
         break;
     case CBX_PT_CREATE_CLONE:
-        prompt = "Enter name (clone current):";
+        prompt = "Name (clone current) - Up/Down edit, A=OK, B=Cancel";
         break;
     default:
-        prompt = "Enter name:";
+        prompt = "Name - Up/Down edit, A=OK, B=Cancel";
         break;
     }
     cbx_label_set_text(&tab->status_lbl, prompt);
@@ -760,11 +821,9 @@ cbx_profiles_tab_name_input_char(cbx_profiles_tab *tab, char ch)
 
     tab->name_buf[tab->name_len++] = ch;
     tab->name_buf[tab->name_len] = '\0';
+    tab->name_cursor = tab->name_len;
 
-    /* Update status label to show current input. */
-    char prompt[CBX_PT_LABEL_LEN];
-    snprintf(prompt, sizeof(prompt), "Name: %s_", tab->name_buf);
-    cbx_label_set_text(&tab->status_lbl, prompt);
+    refresh_name_status(tab);
 
     return 0;
 }
@@ -775,15 +834,69 @@ cbx_profiles_tab_name_input_backspace(cbx_profiles_tab *tab)
     if (!tab || tab->mode != CBX_PT_MODE_NAME_INPUT)
         return -EINVAL;
 
-    if (tab->name_len > 0) {
-        tab->name_len--;
-        tab->name_buf[tab->name_len] = '\0';
+    if (tab->name_len == 0)
+        return 0;
 
-        char prompt[CBX_PT_LABEL_LEN];
-        snprintf(prompt, sizeof(prompt), "Name: %s_", tab->name_buf);
-        cbx_label_set_text(&tab->status_lbl, prompt);
+    /* Delete the character before the cursor (the last character when the
+     * cursor trails the buffer, the state produced by keyboard entry).
+     * With the cursor at position 0 there is nothing before it, so the
+     * first character is removed instead of silently doing nothing. */
+    int pos = tab->name_cursor > 0 ? tab->name_cursor : 1;
+    memmove(&tab->name_buf[pos - 1], &tab->name_buf[pos],
+            (size_t)(tab->name_len - pos) + 1);
+    tab->name_len--;
+    tab->name_cursor = pos - 1;
+
+    refresh_name_status(tab);
+
+    return 0;
+}
+
+int
+cbx_profiles_tab_name_input_cursor(cbx_profiles_tab *tab, int delta)
+{
+    if (!tab || tab->mode != CBX_PT_MODE_NAME_INPUT)
+        return -EINVAL;
+
+    int c = tab->name_cursor + delta;
+    if (c < 0)
+        c = 0;
+    if (c > tab->name_len)
+        c = tab->name_len;
+    tab->name_cursor = c;
+
+    refresh_name_status(tab);
+    return 0;
+}
+
+int
+cbx_profiles_tab_name_input_cycle(cbx_profiles_tab *tab, int delta)
+{
+    if (!tab || tab->mode != CBX_PT_MODE_NAME_INPUT)
+        return -EINVAL;
+    if (delta == 0)
+        return 0;
+
+    const int n = CBX_PT_NAME_ALPHABET_LEN;
+    const int step = delta > 0 ? 1 : -1;
+
+    if (tab->name_cursor >= tab->name_len) {
+        /* Cursor trails the buffer: append a new character.  A forward
+         * cycle seeds 'a'; a backward cycle seeds the last alphabet
+         * character so both directions produce a visible character. */
+        if (tab->name_len >= CBX_PT_NAME_LEN - 1)
+            return -ENOSPC;
+        char seed = step > 0 ? CBX_PT_NAME_ALPHABET[0]
+                             : CBX_PT_NAME_ALPHABET[n - 1];
+        tab->name_buf[tab->name_len++] = seed;
+        tab->name_buf[tab->name_len] = '\0';
+    } else {
+        int idx = name_alphabet_index(tab->name_buf[tab->name_cursor]);
+        idx = (idx + step + n) % n;
+        tab->name_buf[tab->name_cursor] = CBX_PT_NAME_ALPHABET[idx];
     }
 
+    refresh_name_status(tab);
     return 0;
 }
 
@@ -978,8 +1091,17 @@ cbx_profiles_tab_begin_confirm_quit(cbx_profiles_tab *tab)
     tab->quit_after_action = false;
 
     cbx_label_set_text(&tab->status_lbl,
-                         "Unsaved changes.  A=Save & Quit  B=Discard & Quit");
+        "Unsaved changes.  A/Confirm = Save & Quit, B/Cancel = Discard & Quit");
     cbx_widget_set_visible(&tab->status_lbl.base, true);
+
+    /* Pointer-reachable Save&Quit / Discard&Quit actions (inventory
+     * M40/M41).  The editor's own Save/Discard buttons act only in
+     * CBX_PT_MODE_EDITOR, so hide them while the quit prompt owns the
+     * mode to keep the dialog modal and the visible controls truthful. */
+    cbx_widget_set_visible(&tab->dialog_confirm_btn.base, true);
+    cbx_widget_set_visible(&tab->dialog_cancel_btn.base, true);
+    cbx_widget_set_visible(&tab->save_btn.base, false);
+    cbx_widget_set_visible(&tab->discard_btn.base, false);
 }
 
 /* ------------------------------------------------------------------ */
@@ -999,12 +1121,16 @@ cbx_profiles_tab_begin_create_pick(cbx_profiles_tab *tab)
     cbx_list_add_item(&tab->create_picker, "Clone current", NULL, tab);
     cbx_list_set_selected(&tab->create_picker, 0);
 
-    /* Show the picker, hide the profile list and buttons. */
+    /* Show the picker, hide the profile list and buttons.  The dialog
+     * Cancel button is pointer-reachable so the create picker can be
+     * abandoned with the pointer exactly as B/ESC does (inventory M42). */
     cbx_widget_set_visible(&tab->profile_list_w.base, false);
     cbx_widget_set_visible(&tab->create_btn.base, false);
     cbx_widget_set_visible(&tab->edit_btn.base, false);
     cbx_widget_set_visible(&tab->delete_btn.base, false);
     cbx_widget_set_visible(&tab->create_picker.base, true);
+    cbx_widget_set_visible(&tab->dialog_cancel_btn.base, true);
+    cbx_widget_set_visible(&tab->dialog_confirm_btn.base, false);
 
     tab->mode = CBX_PT_MODE_CREATE_PICK;
 
@@ -1027,6 +1153,8 @@ cbx_profiles_tab_cancel_create_pick(cbx_profiles_tab *tab)
     cbx_widget_set_visible(&tab->edit_btn.base, true);
     cbx_widget_set_visible(&tab->delete_btn.base, true);
     cbx_widget_set_visible(&tab->create_picker.base, false);
+    cbx_widget_set_visible(&tab->dialog_cancel_btn.base, false);
+    cbx_widget_set_visible(&tab->dialog_confirm_btn.base, false);
 
     tab->mode = CBX_PT_MODE_LIST;
     cbx_widget_set_visible(&tab->status_lbl.base, false);
@@ -1054,6 +1182,8 @@ on_create_source_selected(cbx_widget *w, int index, void *user_data)
     cbx_widget_set_visible(&tab->edit_btn.base, true);
     cbx_widget_set_visible(&tab->delete_btn.base, true);
     cbx_widget_set_visible(&tab->create_picker.base, false);
+    cbx_widget_set_visible(&tab->dialog_cancel_btn.base, false);
+    cbx_widget_set_visible(&tab->dialog_confirm_btn.base, false);
 
     cbx_profiles_tab_begin_create(tab, source);
 }
@@ -1166,6 +1296,26 @@ cbx_profiles_tab_handle_key(cbx_profiles_tab *tab, const SDL_Event *ev)
             cbx_profiles_tab_name_input_confirm(tab);
             return true;
         }
+        /* Controller character entry (SPEC §5.1/§5.7): D-pad Up/Down
+         * cycles the character under the cursor, Left/Right moves the
+         * cursor.  This is the gamepad-only naming flow; no keyboard is
+         * required to create a profile. */
+        if (key == SDLK_UP) {
+            cbx_profiles_tab_name_input_cycle(tab, 1);
+            return true;
+        }
+        if (key == SDLK_DOWN) {
+            cbx_profiles_tab_name_input_cycle(tab, -1);
+            return true;
+        }
+        if (key == SDLK_LEFT) {
+            cbx_profiles_tab_name_input_cursor(tab, -1);
+            return true;
+        }
+        if (key == SDLK_RIGHT) {
+            cbx_profiles_tab_name_input_cursor(tab, 1);
+            return true;
+        }
         /* Letter keys: add character to name buffer. */
         if (key >= SDLK_a && key <= SDLK_z) {
             cbx_profiles_tab_name_input_char(tab, (char)key);
@@ -1205,10 +1355,14 @@ cbx_profiles_tab_handle_key(cbx_profiles_tab *tab, const SDL_Event *ev)
         return false;
 
     case CBX_PT_MODE_CONFIRM_QUIT:
-        /* A = save & quit; B = discard & quit */
+        /* A = save & quit; B = discard & quit.  A failed save (NES
+         * validation, unsupported structures, or a write/flush error)
+         * leaves the editor open with the profile data intact and does
+         * NOT request exit, so unsaved work is never silently discarded
+         * (SPEC §5.3). */
         if (key == SDLK_a || key == SDLK_RETURN) {
-            cbx_profiles_tab_save_editor(tab);
-            tab->quit_after_action = true;
+            if (cbx_profiles_tab_save_editor(tab) == 0)
+                tab->quit_after_action = true;
             return true;
         }
         if (key == SDLK_b || key == SDLK_ESCAPE) {
@@ -1473,6 +1627,13 @@ cbx_profiles_tab_close_editor(cbx_profiles_tab *tab)
 
     cbx_widget_set_visible(&tab->save_btn.base, false);
     cbx_widget_set_visible(&tab->discard_btn.base, false);
+
+    /* Drop any quit-prompt / dialog controls and their prompt so the
+     * list view is clean after Save & Quit or Discard & Quit. */
+    cbx_widget_set_visible(&tab->dialog_confirm_btn.base, false);
+    cbx_widget_set_visible(&tab->dialog_cancel_btn.base, false);
+    cbx_widget_set_visible(&tab->status_lbl.base, false);
+    cbx_label_set_text(&tab->status_lbl, "");
 
     /* Show tab widgets. */
     show_tab_widgets(tab);

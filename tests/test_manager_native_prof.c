@@ -121,6 +121,25 @@ ctrl_press(cbx_manager *mgr, SDL_Joystick *joy, int button)
     pump_manager(mgr);
 }
 
+/* Controller press/release split so a test can assert the semantic
+ * outcome of the press before the release is dispatched (used for the
+ * confirm-quit prompt, where the press may request process exit). */
+static void
+ctrl_down(cbx_manager *mgr, SDL_Joystick *joy, int button)
+{
+    SDL_JoystickSetVirtualButton(joy, button, 1);
+    SDL_PumpEvents();
+    pump_manager(mgr);
+}
+
+static void
+ctrl_up(cbx_manager *mgr, SDL_Joystick *joy, int button)
+{
+    SDL_JoystickSetVirtualButton(joy, button, 0);
+    SDL_PumpEvents();
+    pump_manager(mgr);
+}
+
 static bool
 send_key_dn(cbx_manager *mgr, SDL_Keycode sym)
 {
@@ -148,9 +167,25 @@ send_key_press(cbx_manager *mgr, SDL_Keycode sym)
     send_key_up(mgr, sym);
 }
 
+static void
+send_mouse_move(cbx_manager *mgr, int x, int y)
+{
+    SDL_Event mev = {0};
+    mev.type = SDL_MOUSEMOTION;
+    mev.motion.x = x;
+    mev.motion.y = y;
+    SDL_PushEvent(&mev);
+    pump_manager(mgr);
+}
+
 static bool
 send_mouse_click(cbx_manager *mgr, int x, int y)
 {
+    /* Hover first from the control's rendered bounds (SPEC §5.7: send
+     * normal mouse motion before the button press) so the widget's hover
+     * state is exercised on every pointer path. */
+    send_mouse_move(mgr, x, y);
+
     SDL_Event ev = {0};
     ev.type = SDL_MOUSEBUTTONDOWN;
     ev.button.button = SDL_BUTTON_LEFT;
@@ -489,7 +524,7 @@ mnp_setup_common(mnp_fixture *f, bool with_profiles)
                                sizeof(guid));
     char mapping[512];
     snprintf(mapping, sizeof(mapping),
-             "%s,Controller-Box Virtual,a:b0,b:b1,start:b6,"
+             "%s,Controller-Box Virtual,a:b0,b:b1,back:b4,start:b6,"
              "dpup:b11,dpdown:b12,dpleft:b13,dpright:b14,platform:Linux,",
              guid);
     assert_true(SDL_GameControllerAddMapping(mapping) >= 0);
@@ -2588,6 +2623,403 @@ test_edit_default_rejected_ctrl(void **state)
 }
 
 /* ================================================================== */
+/*  M13/M14 — controller-reachable name entry (no keyboard required)   */
+/* ================================================================== */
+
+/* M13 controller path: D-pad Up/Down cycle the character at the cursor
+ * and Left/Right move the cursor, using only SDL virtual-controller
+ * events.  This proves profile naming never secretly needs a keyboard
+ * (SPEC §5.1/§5.7; synthetic keyboard letters are supplemental). */
+static void
+test_m13_name_input_cycle_controller(void **state)
+{
+    mnp_fixture *f = *state;
+    cbx_manager mgr;
+    mnp_init_manager(f, &mgr);
+
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+
+    nav_to_profiles_ctrl(&mgr, f->joystick);
+    prof_nav_to_button_ctrl(&mgr, f->joystick, 2, 0);  /* Create */
+    ctrl_press(&mgr, f->joystick, 0);                  /* open picker */
+    ctrl_press(&mgr, f->joystick, 0);                  /* Default copy */
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_NAME_INPUT);
+
+    ctrl_press(&mgr, f->joystick, 11);  /* Up: append 'a' */
+    assert_string_equal(cbx_profiles_tab_name_buffer(pt), "a");
+    ctrl_press(&mgr, f->joystick, 11);  /* Up: 'a' -> 'b' */
+    assert_string_equal(cbx_profiles_tab_name_buffer(pt), "b");
+    ctrl_press(&mgr, f->joystick, 14);  /* Right: cursor to end */
+    ctrl_press(&mgr, f->joystick, 11);  /* Up: append 'a' -> "ba" */
+    assert_string_equal(cbx_profiles_tab_name_buffer(pt), "ba");
+    ctrl_press(&mgr, f->joystick, 14);  /* Right: cursor stays at end */
+    ctrl_press(&mgr, f->joystick, 13);  /* Left: cursor before last char */
+    ctrl_press(&mgr, f->joystick, 12);  /* Down: 'a' -> '_' */
+    assert_string_equal(cbx_profiles_tab_name_buffer(pt), "b_");
+
+    /* Confirm the controller-entered name -> editor opens with it. */
+    ctrl_press(&mgr, f->joystick, 0);
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_EDITOR);
+    assert_string_equal(pt->editor_profile_name, "b_");
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* M14 controller path: Back/Select (mapped to SDLK_BACKSPACE) deletes a
+ * character using only SDL virtual-controller events. */
+static void
+test_m14_name_input_delete_controller(void **state)
+{
+    mnp_fixture *f = *state;
+    cbx_manager mgr;
+    mnp_init_manager(f, &mgr);
+
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+
+    nav_to_profiles_ctrl(&mgr, f->joystick);
+    prof_nav_to_button_ctrl(&mgr, f->joystick, 2, 0);
+    ctrl_press(&mgr, f->joystick, 0);
+    ctrl_press(&mgr, f->joystick, 0);
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_NAME_INPUT);
+
+    ctrl_press(&mgr, f->joystick, 11);  /* Up: 'a' */
+    ctrl_press(&mgr, f->joystick, 11);  /* Up: 'b' */
+    assert_string_equal(cbx_profiles_tab_name_buffer(pt), "b");
+    ctrl_press(&mgr, f->joystick, 14);  /* Right: end */
+    ctrl_press(&mgr, f->joystick, 11);  /* Up: append 'a' -> "ba" */
+    assert_string_equal(cbx_profiles_tab_name_buffer(pt), "ba");
+
+    ctrl_press(&mgr, f->joystick, 4);   /* Back: delete before cursor */
+    assert_string_equal(cbx_profiles_tab_name_buffer(pt), "a");
+    ctrl_press(&mgr, f->joystick, 4);   /* Back: delete first char */
+    assert_string_equal(cbx_profiles_tab_name_buffer(pt), "");
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* ================================================================== */
+/*  M40/M41 — confirm-quit save/discard prompt (both paths)            */
+/* ================================================================== */
+
+/* Dirty the open editor through the production unbound-row add path:
+ * the profile has six NES bindings, so its seventh catalog row is an
+ * unbound button.  Activating it creates the mapping and marks dirty. */
+static void
+dirty_editor_via_unbound_row(cbx_manager *mgr, SDL_Joystick *joy,
+                             cbx_profiles_tab *pt)
+{
+    assert_int_equal(cbx_profile_editor_binding_count(&pt->editor), 6);
+    for (int i = 0; i < 6; i++)
+        ctrl_press(mgr, joy, 12);  /* D-pad Down to first unbound row */
+    ctrl_press(mgr, joy, 0);       /* A: add mapping (sets dirty) */
+    ctrl_press(mgr, joy, 1);       /* B: leave BINDING_EDIT -> LIST */
+    assert_true(cbx_profile_editor_is_dirty(&pt->editor));
+    assert_int_equal(cbx_profile_editor_binding_count(&pt->editor), 7);
+}
+
+static int
+saved_user_profile_mappings(const mnp_fixture *f)
+{
+    char path[PATH_MAX + 128];
+    snprintf(path, sizeof(path), "%s/myprof.yaml", f->user_dir);
+    cbx_profile prof;
+    memset(&prof, 0, sizeof(prof));
+    if (cbx_profile_load(&prof, path) != 0)
+        return -1;
+    return prof.mapping_count;
+}
+
+/* M40 controller path: SDL_QUIT with a dirty editor prompts, A saves the
+ * profile and requests manager exit. */
+static void
+test_m40_confirm_quit_save_controller(void **state)
+{
+    mnp_fixture *f = *state;
+    cbx_manager mgr;
+    mnp_init_manager(f, &mgr);
+
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+    open_editor_ctrl(&mgr, f->joystick, 2);
+    dirty_editor_via_unbound_row(&mgr, f->joystick, pt);
+
+    /* The run loop owns this flag; set it so an exit request is visible. */
+    mgr.running = true;
+
+    SDL_Event q = {0};
+    q.type = SDL_QUIT;
+    assert_true(cbx_manager_handle_event(&mgr, &q));
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_CONFIRM_QUIT);
+    /* Pointer Save&Quit / Discard&Quit controls are visible in the prompt. */
+    assert_true(cbx_widget_is_visible(&pt->dialog_confirm_btn.base));
+    assert_true(cbx_widget_is_visible(&pt->dialog_cancel_btn.base));
+    assert_false(cbx_widget_is_visible(&pt->save_btn.base));
+
+    ctrl_down(&mgr, f->joystick, 0);  /* A = Save & Quit */
+    assert_false(mgr.running);
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_LIST);
+    ctrl_up(&mgr, f->joystick, 0);
+
+    /* The added mapping was persisted before exit. */
+    assert_int_equal(saved_user_profile_mappings(f), 7);
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* M40 failure path: a failed save during the quit prompt must leave the
+ * editor open with the data intact and must NOT request exit. */
+static void
+test_m40b_confirm_quit_save_failure_keeps_editor(void **state)
+{
+    mnp_fixture *f = *state;
+    cbx_manager mgr;
+    mnp_init_manager(f, &mgr);
+
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+    open_editor_ctrl(&mgr, f->joystick, 2);
+    dirty_editor_via_unbound_row(&mgr, f->joystick, pt);
+
+    /* Force the save to fail at the filesystem boundary. */
+    chmod(f->user_dir, 0555);
+
+    mgr.running = true;
+    SDL_Event q = {0};
+    q.type = SDL_QUIT;
+    assert_true(cbx_manager_handle_event(&mgr, &q));
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_CONFIRM_QUIT);
+
+    ctrl_down(&mgr, f->joystick, 0);  /* A = Save & Quit (fails) */
+    ctrl_up(&mgr, f->joystick, 0);    /* Release is dispatched too */
+    /* Restore write permission before asserting so a failure cannot leave
+     * the fixture dir read-only for later tests. */
+    chmod(f->user_dir, 0700);
+    assert_true(mgr.running);
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_CONFIRM_QUIT);
+    /* Data intact: still dirty, the added mapping is still present. */
+    assert_true(cbx_profile_editor_is_dirty(&pt->editor));
+    assert_int_equal(cbx_profile_editor_binding_count(&pt->editor), 7);
+    const char *status = cbx_profile_editor_get_status(&pt->editor);
+    assert_non_null(status);
+    assert_true(strstr(status, "Save failed") != NULL ||
+                strstr(status, "Missing") != NULL);
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* M40 pointer path: click the Confirm (Save & Quit) dialog control. */
+static void
+test_m40_confirm_quit_save_pointer(void **state)
+{
+    mnp_fixture *f = *state;
+    cbx_manager mgr;
+    mnp_init_manager(f, &mgr);
+
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+    open_editor_ptr(&mgr);
+    dirty_editor_via_unbound_row(&mgr, f->joystick, pt);
+
+    mgr.running = true;
+    SDL_Event q = {0};
+    q.type = SDL_QUIT;
+    assert_true(cbx_manager_handle_event(&mgr, &q));
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_CONFIRM_QUIT);
+
+    int cx, cy;
+    widget_center(&pt->dialog_confirm_btn.base, &cx, &cy);
+    send_mouse_move(&mgr, cx, cy);
+    assert_true(pt->dialog_confirm_btn.base.hover);
+    send_mouse_click(&mgr, cx, cy);
+
+    assert_false(mgr.running);
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_LIST);
+    assert_int_equal(saved_user_profile_mappings(f), 7);
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* M41 controller path: B discards unsaved changes and requests exit. */
+static void
+test_m41_confirm_quit_discard_controller(void **state)
+{
+    mnp_fixture *f = *state;
+    cbx_manager mgr;
+    mnp_init_manager(f, &mgr);
+
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+    open_editor_ctrl(&mgr, f->joystick, 2);
+    dirty_editor_via_unbound_row(&mgr, f->joystick, pt);
+
+    mgr.running = true;
+    SDL_Event q = {0};
+    q.type = SDL_QUIT;
+    assert_true(cbx_manager_handle_event(&mgr, &q));
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_CONFIRM_QUIT);
+
+    ctrl_down(&mgr, f->joystick, 1);  /* B = Discard & Quit */
+    assert_false(mgr.running);
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_LIST);
+    ctrl_up(&mgr, f->joystick, 1);
+
+    /* Discard did not persist the added mapping. */
+    assert_int_equal(saved_user_profile_mappings(f), 6);
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* M41 pointer path: click the Cancel (Discard & Quit) dialog control. */
+static void
+test_m41_confirm_quit_discard_pointer(void **state)
+{
+    mnp_fixture *f = *state;
+    cbx_manager mgr;
+    mnp_init_manager(f, &mgr);
+
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+    open_editor_ptr(&mgr);
+    dirty_editor_via_unbound_row(&mgr, f->joystick, pt);
+
+    mgr.running = true;
+    SDL_Event q = {0};
+    q.type = SDL_QUIT;
+    assert_true(cbx_manager_handle_event(&mgr, &q));
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_CONFIRM_QUIT);
+
+    int cx, cy;
+    widget_center(&pt->dialog_cancel_btn.base, &cx, &cy);
+    send_mouse_move(&mgr, cx, cy);
+    assert_true(pt->dialog_cancel_btn.base.hover);
+    send_mouse_click(&mgr, cx, cy);
+
+    assert_false(mgr.running);
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_LIST);
+    assert_int_equal(saved_user_profile_mappings(f), 6);
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* ================================================================== */
+/*  M42 — create source picker cancel (pointer)                        */
+/* ================================================================== */
+
+static void
+test_m42_create_picker_cancel_pointer(void **state)
+{
+    mnp_fixture *f = *state;
+    cbx_manager mgr;
+    mnp_init_manager(f, &mgr);
+
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+    nav_to_profiles_key(&mgr);
+
+    int before = cbx_profiles_tab_profile_count(pt);
+
+    int cx, cy;
+    widget_center(&pt->create_btn.base, &cx, &cy);
+    send_mouse_click(&mgr, cx, cy);
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_CREATE_PICK);
+    assert_true(cbx_widget_is_visible(&pt->dialog_cancel_btn.base));
+
+    int ccx, ccy;
+    widget_center(&pt->dialog_cancel_btn.base, &ccx, &ccy);
+    send_mouse_move(&mgr, ccx, ccy);
+    assert_true(pt->dialog_cancel_btn.base.hover);
+    send_mouse_click(&mgr, ccx, ccy);
+
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_LIST);
+    assert_true(cbx_widget_is_visible(&pt->create_btn.base));
+    assert_false(cbx_widget_is_visible(&pt->dialog_cancel_btn.base));
+    assert_int_equal(cbx_profiles_tab_profile_count(pt), before);
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* ================================================================== */
+/*  M43 — read-only Default edit rejection (pointer)                   */
+/* ================================================================== */
+
+static void
+test_m43_edit_default_rejected_pointer(void **state)
+{
+    mnp_fixture *f = *state;
+    cbx_manager mgr;
+    mnp_init_manager(f, &mgr);
+
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+
+    /* Leave only the read-only system Default. */
+    char prof_path[PATH_MAX + 128];
+    snprintf(prof_path, sizeof(prof_path), "%s/myprof.yaml", f->user_dir);
+    unlink(prof_path);
+    assert_int_equal(cbx_profiles_tab_refresh(pt), 0);
+    assert_int_equal(cbx_profiles_tab_profile_count(pt), 1);
+    assert_true(cbx_profiles_tab_entry(pt, 0)->read_only);
+
+    nav_to_profiles_key(&mgr);
+    int cx, cy;
+    widget_center(&pt->edit_btn.base, &cx, &cy);
+    send_mouse_move(&mgr, cx, cy);
+    assert_true(pt->edit_btn.base.hover);
+    send_mouse_click(&mgr, cx, cy);
+
+    assert_int_equal(cbx_profiles_tab_mode(pt), CBX_PT_MODE_LIST);
+    snprintf(prof_path, sizeof(prof_path), "%s/default.yaml", f->user_dir);
+    struct stat st;
+    assert_true(stat(prof_path, &st) != 0);
+    const char *status = pt->status_lbl.text;
+    assert_non_null(status);
+    assert_true(strstr(status, "Read-only") != NULL);
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* ================================================================== */
+/*  M44 — editor binding sub-mode cancel (controller)                  */
+/* ================================================================== */
+
+/* M44 controller path: B in the BINDING_EDIT and TARGET_PICK sub-modes
+ * returns to the editor LIST and leaves the profile unmutated.  Driven
+ * entirely through SDL virtual-controller press/release events; the
+ * CAPTURE sub-mode cancel is covered by
+ * test_t16_capture_interception_native. */
+static void
+test_m44_editor_submode_cancel_ctrl(void **state)
+{
+    mnp_fixture *f = *state;
+    cbx_manager mgr;
+    mnp_init_manager(f, &mgr);
+
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+    open_editor_ctrl(&mgr, f->joystick, 2);
+
+    int before = cbx_profile_editor_binding_count(&pt->editor);
+
+    /* BINDING_EDIT: A on the first binding opens the sub-menu; B cancels. */
+    ctrl_press(&mgr, f->joystick, 0);
+    assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
+                     CBX_EDITOR_MODE_BINDING_EDIT);
+    ctrl_press(&mgr, f->joystick, 1);  /* B */
+    assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
+                     CBX_EDITOR_MODE_LIST);
+    assert_int_equal(cbx_profile_editor_get_editing_index(&pt->editor), -1);
+
+    /* TARGET_PICK: A on binding -> A on "Pick Target"; B cancels. */
+    editor_enter_target_pick_ctrl(&mgr, f->joystick);
+    assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
+                     CBX_EDITOR_MODE_TARGET_PICK);
+    ctrl_press(&mgr, f->joystick, 1);  /* B */
+    assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
+                     CBX_EDITOR_MODE_LIST);
+    assert_int_equal(cbx_profile_editor_get_editing_index(&pt->editor), -1);
+
+    /* Cancelled sub-modes mutate nothing. */
+    assert_int_equal(cbx_profile_editor_binding_count(&pt->editor), before);
+    assert_false(cbx_profile_editor_is_dirty(&pt->editor));
+
+    assert_int_equal(cbx_interaction_inventory_mark_verified("M44"), 0);
+
+    cbx_manager_shutdown(&mgr);
+}
+
+/* ================================================================== */
 /*  Test registration                                                  */
 /* ================================================================== */
 
@@ -2616,8 +3048,12 @@ main(void)
         /* M13 — Name input characters */
         cmocka_unit_test_setup_teardown(test_m13_name_input_chars,
                                         mnp_setup, mnp_teardown),
+        cmocka_unit_test_setup_teardown(test_m13_name_input_cycle_controller,
+                                        mnp_setup, mnp_teardown),
         /* M14 — Name input backspace */
         cmocka_unit_test_setup_teardown(test_m14_name_input_backspace,
+                                        mnp_setup, mnp_teardown),
+        cmocka_unit_test_setup_teardown(test_m14_name_input_delete_controller,
                                         mnp_setup, mnp_teardown),
         /* M16 — Name input cancel */
         cmocka_unit_test_setup_teardown(test_m16_name_input_cancel_controller,
@@ -2719,6 +3155,27 @@ main(void)
                                         mnp_setup, mnp_teardown),
         cmocka_unit_test_setup_teardown(test_d08_empty_profile_create_pointer,
                                         mnp_setup, mnp_teardown),
+        /* M40/M41 — confirm-quit save/discard prompt (both paths) */
+        cmocka_unit_test_setup_teardown(test_m40_confirm_quit_save_controller,
+                                        mnp_setup, mnp_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_m40b_confirm_quit_save_failure_keeps_editor,
+            mnp_setup, mnp_teardown),
+        cmocka_unit_test_setup_teardown(test_m40_confirm_quit_save_pointer,
+                                        mnp_setup, mnp_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_m41_confirm_quit_discard_controller, mnp_setup, mnp_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_m41_confirm_quit_discard_pointer, mnp_setup, mnp_teardown),
+        /* M42 — create source picker cancel (pointer) */
+        cmocka_unit_test_setup_teardown(test_m42_create_picker_cancel_pointer,
+                                        mnp_setup, mnp_teardown),
+        /* M43 — read-only Default edit rejection (pointer) */
+        cmocka_unit_test_setup_teardown(
+            test_m43_edit_default_rejected_pointer, mnp_setup, mnp_teardown),
+        /* M44 — editor sub-mode cancel (controller) */
+        cmocka_unit_test_setup_teardown(
+            test_m44_editor_submode_cancel_ctrl, mnp_setup, mnp_teardown),
     };
 
     int rc = cmocka_run_group_tests(tests, NULL, NULL);

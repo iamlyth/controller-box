@@ -364,6 +364,10 @@ cbx_manager_controller_to_key(const SDL_Event *ev, SDL_Event *key_event)
     case SDL_CONTROLLER_BUTTON_A:          key = SDLK_a; break;
     case SDL_CONTROLLER_BUTTON_B:          key = SDLK_b; break;
     case SDL_CONTROLLER_BUTTON_START:      key = SDLK_TAB; break;
+    /* Back/Select maps to Backspace so name entry can delete a character
+     * from the controller (SPEC §5.1: no required operation may need a
+     * keyboard).  Backspace is inert in every other manager mode. */
+    case SDL_CONTROLLER_BUTTON_BACK:       key = SDLK_BACKSPACE; break;
     default: return false;
     }
 
@@ -1139,6 +1143,13 @@ cbx_manager_handle_event(cbx_manager *mgr, const SDL_Event *ev)
         if (mgr->active_tab == CBX_MGR_TAB_CONTROLLERS)
             cbx_controllers_tab_sync_selection(&mgr->ct);
         cbx_manager_check_mode_change(mgr, prev_mode);
+        /* A pointer click on the confirm-quit dialog's Save&Quit or
+         * Discard&Quit button requests exit exactly like the controller
+         * A/B path, so honor it here too (SPEC §5.3, inventory M40/M41). */
+        if (mgr->pt.quit_after_action) {
+            mgr->running = false;
+            mgr->pt.quit_after_action = false;
+        }
         return result;
     }
 

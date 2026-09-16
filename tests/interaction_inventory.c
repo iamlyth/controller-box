@@ -2,7 +2,7 @@
  * interaction_inventory.c — Machine-readable interaction acceptance inventory
  * (Task 1, SPEC §5.7).
  *
- * Static array enumerating every interactive manager control (M01–M39),
+ * Static array enumerating every interactive manager control (M01–M45),
  * overlay action (O01–O13), and disabled/degraded scenario (D01–D08).
  *
  * Each entry records:
@@ -113,10 +113,10 @@ static const cbx_interaction_entry inventory[] = {
     { "M09", CBX_CAT_MANAGER_CTRL, "Controllers tab",
       CBX_WIDGET_PICKER,
       "B while picker open",
-      AVAIL, "Mouse click to open picker, then ESC to cancel (no cancel button widget)",
+      NA, "n/a (cancel is B/ESC; the picker exposes no cancel widget)",
       "Picker closes, no DBus call",
-      "cbx_manager_handle_event (mouse click) + cbx_manager_handle_event (ESC KEYDOWN) -> cbx_controllers_tab_cancel_type_pick",
-      CBX_VERIFY_VERIFIED, "Task 4" },
+      "cbx_manager_handle_event (B/ESC KEYDOWN) → cbx_controllers_tab_cancel_type_pick",
+      CBX_VERIFY_VERIFIED, "Task 4 (controller); pointer n/a" },
 
     /* ---- Manager — Profiles tab (M10–M20) ---- */
     { "M10", CBX_CAT_MANAGER_PROF, "Profiles tab",
@@ -145,19 +145,19 @@ static const cbx_interaction_entry inventory[] = {
 
     { "M13", CBX_CAT_MANAGER_PROF, "Profiles tab",
       CBX_WIDGET_NAME_INPUT,
-      "Letter keys while in name-input mode",
-      NA, "n/a",
-      "Characters appended to profile name",
-      "cbx_manager_handle_event → cbx_profiles_tab_name_input_char",
-      CBX_VERIFY_NOT_APPLICABLE, "Task 5" },
+      "Controller D-pad Up/Down cycles the character at the cursor; Left/Right moves the cursor (no keyboard required)",
+      NA, "n/a (character entry is controller/keyboard-only; dialog confirm/cancel are M15/M16)",
+      "Characters appended/changed in the profile name buffer",
+      "SDL_CONTROLLERBUTTONDOWN → cbx_manager_controller_to_key → SDLK_UP/DOWN → cbx_profiles_tab_name_input_cycle; keyboard letters supplemental",
+      CBX_VERIFY_VERIFIED, "test_manager_native_prof.c (ctrl); test_manager_interaction_prof.c (keyboard supplemental)" },
 
     { "M14", CBX_CAT_MANAGER_PROF, "Profiles tab",
       CBX_WIDGET_NAME_INPUT,
-      "Backspace while in name-input mode",
-      NA, "n/a",
-      "Last char deleted",
-      "cbx_manager_handle_event → cbx_profiles_tab_name_input_backspace",
-      CBX_VERIFY_NOT_APPLICABLE, "Task 5" },
+      "Controller Back/Select (mapped to SDLK_BACKSPACE) deletes the character before the cursor",
+      NA, "n/a (character deletion is controller/keyboard-only)",
+      "Character deleted from the profile name buffer",
+      "SDL_CONTROLLERBUTTONDOWN (BACK) → SDLK_BACKSPACE → cbx_profiles_tab_name_input_backspace; keyboard Backspace supplemental",
+      CBX_VERIFY_VERIFIED, "test_manager_native_prof.c (ctrl); test_manager_interaction_prof.c (keyboard supplemental)" },
 
     { "M15", CBX_CAT_MANAGER_PROF, "Profiles tab",
       CBX_WIDGET_NAME_INPUT,
@@ -234,27 +234,27 @@ static const cbx_interaction_entry inventory[] = {
 
     { "M24", CBX_CAT_MANAGER_SETTINGS, "Settings tab",
       CBX_WIDGET_EDIT_MODE,
-      "Up/Down while in edit mode",
-      AVAIL, "Mouse click on up/down adjust controls in edit mode",
+      "Controller D-pad Up/Down while in edit mode adjusts the value",
+      NA, "n/a (no adjust widget exists; a pointer click on the setting row confirms the edit, M25)",
       "Value cycles/adjusts",
       "cbx_manager_handle_event → cbx_settings_tab_edit_up/edit_down",
-      CBX_VERIFY_VERIFIED, "Task 4" },
+      CBX_VERIFY_VERIFIED, "Task 4 (controller); pointer n/a" },
 
     { "M25", CBX_CAT_MANAGER_SETTINGS, "Settings tab",
       CBX_WIDGET_EDIT_MODE,
       "A while in edit mode",
-      AVAIL, "Mouse click on confirm button in edit mode",
+      AVAIL, "Mouse click on the selected setting row confirms the edit",
       "Edit mode exits, value applied",
-      "cbx_manager_handle_event → cbx_settings_tab_confirm_edit",
+      "cbx_manager_handle_event → settings list on_select → cbx_settings_tab_confirm_edit",
       CBX_VERIFY_VERIFIED, "Task 4" },
 
     { "M26", CBX_CAT_MANAGER_SETTINGS, "Settings tab",
       CBX_WIDGET_EDIT_MODE,
       "B while in edit mode",
-      AVAIL, "Mouse click on cancel button in edit mode",
+      NA, "n/a (cancel is B/ESC; there is no cancel widget)",
       "Edit mode exits, value reverts from disk",
-      "cbx_manager_handle_event → cbx_settings_tab_cancel_edit",
-      CBX_VERIFY_VERIFIED, "Task 4" },
+      "cbx_manager_handle_event (B/ESC KEYDOWN) → cbx_settings_tab_cancel_edit",
+      CBX_VERIFY_VERIFIED, "Task 4 (controller); pointer n/a" },
 
     { "M27", CBX_CAT_MANAGER_SETTINGS, "Settings tab",
       CBX_WIDGET_BUTTON,
@@ -270,8 +270,8 @@ static const cbx_interaction_entry inventory[] = {
       "Up/Down to scroll",
       AVAIL, "Mouse click on item",
       "Binding highlighted; diagram lights corresponding button",
-      "cbx_manager_handle_event → editor panel → list → cbx_profile_editor_move_down/up; controller: ctrl_press test_manager_native_prof.c::test_m28_binding_nav_ctrl; keyboard: test_manager_interaction_prof.c::test_editor_list_nav",
-      CBX_VERIFY_VERIFIED, "test_manager_native_prof.c (ctrl_press); test_manager_interaction_prof.c (keyboard supplemental)" },
+      "cbx_manager_handle_event → editor panel → list → cbx_profile_editor_move_down/up; controller: ctrl_press test_manager_native_prof.c::test_m28_binding_nav_ctrl; pointer: test_manager_native_prof.c::test_m29c_unbound_row_activation_pointer; keyboard: test_manager_interaction_prof.c::test_editor_list_nav",
+      CBX_VERIFY_VERIFIED, "test_manager_native_prof.c (ctrl_press + pointer); test_manager_interaction_prof.c (keyboard supplemental)" },
 
     { "M29", CBX_CAT_MANAGER_EDITOR, "Profile editor",
       CBX_WIDGET_BINDING,
@@ -359,8 +359,58 @@ static const cbx_interaction_entry inventory[] = {
       "A confirms / B cancels from first-run dialog",
       AVAIL, "Mouse click on Yes/No button",
       "A or Yes: systemd service unit written and enabled; B or No: dialog dismissed, no install; dialog closes in both cases",
-      "cbx_manager_check_first_run → cbx_manager_handle_event → dialog → cbx_service_install; pointer: click first_run_yes/first_run_no",
-      CBX_VERIFY_VERIFIED, "test_manager_interaction_ctrl.c (4 tests)" },
+      "cbx_manager_check_first_run → cbx_manager_handle_event → dialog → cbx_service_install; controller: test_manager_interaction_ctrl.c::test_first_run_confirm_virtual_controller (SDL virtual gamepad); pointer: click first_run_yes/first_run_no",
+      CBX_VERIFY_VERIFIED, "test_manager_interaction_ctrl.c (SDL virtual controller + pointer)" },
+
+    /* ---- Manager — Confirm-quit, create-picker cancel, read-only,
+     *      editor sub-mode cancel, empty-profile add action (M40–M45) ---- */
+    { "M40", CBX_CAT_MANAGER_PROF, "Profiles tab — confirm quit",
+      CBX_WIDGET_EDITOR,
+      "SDL_QUIT with a dirty editor → A (Save & Quit)",
+      AVAIL, "Mouse click on the Confirm (Save & Quit) dialog button",
+      "Profile saved; editor closes; manager exits; a failed save leaves the editor open with data intact and does NOT exit",
+      "SDL_QUIT → cbx_profiles_tab_begin_confirm_quit → cbx_profiles_tab_handle_key (A) / on_dialog_confirm_pressed → cbx_profiles_tab_save_editor",
+      CBX_VERIFY_VERIFIED, "test_manager_native_prof.c (ctrl+pointer)" },
+
+    { "M41", CBX_CAT_MANAGER_PROF, "Profiles tab — confirm quit",
+      CBX_WIDGET_EDITOR,
+      "SDL_QUIT with a dirty editor → B (Discard & Quit)",
+      AVAIL, "Mouse click on the Cancel (Discard & Quit) dialog button",
+      "Editor closes; no file written; manager exits",
+      "SDL_QUIT → cbx_profiles_tab_begin_confirm_quit → cbx_profiles_tab_handle_key (B) / on_dialog_cancel_pressed → cbx_profiles_tab_close_editor",
+      CBX_VERIFY_VERIFIED, "test_manager_native_prof.c (ctrl+pointer)" },
+
+    { "M42", CBX_CAT_MANAGER_PROF, "Profiles tab — create source picker",
+      CBX_WIDGET_PICKER,
+      "B while the create source picker is open",
+      AVAIL, "Mouse click on the Cancel button in the create picker",
+      "Picker closes; profile list restored; no file created",
+      "cbx_manager_handle_event (B/ESC) / on_dialog_cancel_pressed → cbx_profiles_tab_cancel_create_pick",
+      CBX_VERIFY_VERIFIED, "test_manager_native_prof.c (ctrl+pointer)" },
+
+    { "M43", CBX_CAT_MANAGER_PROF, "Profiles tab — read-only Default",
+      CBX_WIDGET_BUTTON,
+      "Navigate to Edit with the read-only Default selected → A",
+      AVAIL, "Mouse click on the Edit button with the read-only Default selected",
+      "Read-only rejection: status shows 'Read-only profile'; mode stays LIST; no user default.yaml is written",
+      "cbx_manager_handle_event → on_edit_pressed read_only guard (no editor open, no write)",
+      CBX_VERIFY_VERIFIED, "test_manager_native_prof.c (ctrl); test_profiles_tab.c (pointer)" },
+
+    { "M44", CBX_CAT_MANAGER_EDITOR, "Profile editor",
+      CBX_WIDGET_EDITOR,
+      "B in TARGET_PICK / CAPTURE / BINDING_EDIT sub-mode",
+      NA, "n/a (the editor sub-mode cancel is B/ESC; visible Save/Discard controls are M37/M38)",
+      "Binding sub-mode cancelled; returns to editor LIST; no profile mutation",
+      "cbx_manager_handle_event → cbx_profiles_tab_cancel → cbx_profile_editor_cancel",
+      CBX_VERIFY_VERIFIED, "test_manager_native_prof.c::test_m44_editor_submode_cancel_ctrl (ctrl); test_editor_list_mode.c (direct-callback supplemental)" },
+
+    { "M45", CBX_CAT_MANAGER_EDITOR, "Profile editor — empty profile",
+      CBX_WIDGET_EDITOR,
+      "A on the binding list when the profile has zero mappings (add-first-binding)",
+      AVAIL, "Mouse click on the first binding row with zero mappings",
+      "Sequential mode begins; the first NES button is prompted",
+      "cbx_manager_handle_event → cbx_profile_editor_activate LIST zero-mapping branch → cbx_profile_editor_begin_sequential",
+      CBX_VERIFY_VERIFIED, "test_manager_native_prof.c::test_t16_empty_profile_sequential_save_native_reload" },
 
     /* ---- Overlay actions (O01–O13) ---- */
     { "O01", CBX_CAT_OVERLAY, "Overlay",
@@ -479,17 +529,17 @@ static const cbx_interaction_entry inventory[] = {
     { "D02", CBX_CAT_DISABLED, "Controllers tab — no device selected",
       CBX_WIDGET_SCENARIO,
       "Activate Remove button with no device selected",
-      AVAIL, "Mouse click on disabled Remove button (no effect)",
-      "Disabled; activation produces no DBus side effect",
-      "cbx_manager_handle_event → disabled widget rejection",
+      AVAIL, "Mouse click on Remove with no selection (enabled no-op)",
+      "No selection guard: no DBus side effect, no state change",
+      "cbx_manager_handle_event → on_remove/on_change pressed selection guard",
       CBX_VERIFY_VERIFIED, "Task 6" },
 
     { "D03", CBX_CAT_DISABLED, "Profiles tab — no profile selected",
       CBX_WIDGET_SCENARIO,
       "Activate Delete button with no profile selected",
-      AVAIL, "Mouse click on disabled Delete button (no effect)",
-      "Disabled; activation produces no file deletion",
-      "cbx_manager_handle_event → disabled widget rejection",
+      AVAIL, "Mouse click on Delete with no selection (enabled no-op)",
+      "No selection guard: no file deletion, no state change",
+      "cbx_manager_handle_event → on_delete_pressed selection guard",
       CBX_VERIFY_VERIFIED, "Task 6" },
 
     { "D04", CBX_CAT_DISABLED, "Profile editor — save with missing NES bindings",
@@ -503,10 +553,10 @@ static const cbx_interaction_entry inventory[] = {
     { "D05", CBX_CAT_DISABLED, "Settings tab — edit cancel",
       CBX_WIDGET_SCENARIO,
       "Enter edit mode → B to cancel",
-      AVAIL, "Mouse click on cancel button in edit mode",
+      NA, "n/a (cancel is B/ESC only; M24/M26 document the controller-only edit controls)",
       "Value reverts from disk; no settings.yaml write",
-      "cbx_manager_handle_event → cbx_settings_tab_cancel_edit",
-      CBX_VERIFY_VERIFIED, "Task 6" },
+      "cbx_manager_handle_event (B/ESC) → cbx_settings_tab_cancel_edit",
+      CBX_VERIFY_VERIFIED, "Task 6 (controller); pointer n/a" },
 
     { "D06", CBX_CAT_DISABLED, "Controllers tab — DBus operation failure",
       CBX_WIDGET_SCENARIO,
@@ -569,7 +619,7 @@ const cbx_interaction_entry *cbx_interaction_inventory_find(const char *id)
  * which dispatch tests call after their assertions all pass.  This is
  * what ties the ledger's verified flags to actual test pass status.
  */
-#define CBX_INV_MAX_ENTRIES 64
+#define CBX_INV_MAX_ENTRIES 96
 static bool g_runtime_verified[CBX_INV_MAX_ENTRIES];
 
 int

@@ -1486,29 +1486,6 @@ test_installed_functional(void **state)
 }
 
 /* ================================================================== */
-/*  Helper: send a keyboard KEYDOWN event through the SDL queue.      */
-/*  Used for typing letters in NAME_INPUT mode (gamepad A/B are        */
-/*  mapped to confirm/cancel, not letters, so name typing requires     */
-/*  keyboard events).  windowID=0 ensures these are treated as         */
-/*  regular keyboard events, not controller-derived.                   */
-/* ================================================================== */
-
-static void
-send_key_down(cbx_manager *mgr, SDL_Keycode key)
-{
-    SDL_Event ev;
-    memset(&ev, 0, sizeof(ev));
-    ev.type = SDL_KEYDOWN;
-    ev.key.type = SDL_KEYDOWN;
-    ev.key.keysym.sym = key;
-    ev.key.state = SDL_PRESSED;
-    ev.key.repeat = 0;
-    /* windowID = 0 → not CBX_CONTROLLER_EVENT_WINDOW_ID → keyboard */
-    SDL_PushEvent(&ev);
-    pump_manager(mgr);
-}
-
-/* ================================================================== */
 /*  Helper: drain the manager's own DBus connection to process         */
 /*  pending signals (e.g. NameOwnerChanged for backend recovery).      */
 /* ================================================================== */
@@ -1721,10 +1698,12 @@ test_installed_controller_acceptance(void **state)
     ctrl_press(&mgr, f->joystick, 0);
     assert_int_equal(mgr.pt.mode, CBX_PT_MODE_NAME_INPUT);
 
-    /* Type a name via keyboard events (gamepad A/B map to confirm/cancel) */
-    send_key_down(&mgr, SDLK_n);
-    send_key_down(&mgr, SDLK_e);
-    send_key_down(&mgr, SDLK_w);
+    /* Name the profile using only SDL virtual-controller events: D-pad Up
+     * appends/cycles the character under the cursor.  This proves profile
+     * creation is fully controller-reachable (SPEC §5.1/§5.7); keyboard
+     * letter entry is only supplemental evidence.  Cycle to "a". */
+    ctrl_press(&mgr, f->joystick, 11);  /* D-pad Up → append 'a' */
+    assert_string_equal(cbx_profiles_tab_name_buffer(&mgr.pt), "a");
 
     /* Gamepad A (b0) → confirm name → opens editor with new profile.
      * Note: the A KEYUP also triggers cbx_manager_tab_activate which
@@ -1745,7 +1724,7 @@ test_installed_controller_acceptance(void **state)
     /* Assert new profile file exists on disk */
     char new_prof_path[PATH_MAX + 256];
     snprintf(new_prof_path, sizeof(new_prof_path),
-             "%s/.local/share/inputplumber/profiles/new.yaml", f->tmp_home);
+             "%s/.local/share/inputplumber/profiles/a.yaml", f->tmp_home);
     assert_int_equal(access(new_prof_path, F_OK), 0);
 
     /* Read back the profile YAML and verify it's valid content — not
@@ -1818,7 +1797,7 @@ test_installed_controller_acceptance(void **state)
      * sidecar deleted; list refreshes." */
     char new_meta_path[PATH_MAX + 256];
     snprintf(new_meta_path, sizeof(new_meta_path),
-             "%s/.config/controller-box/profile-metadata/new.meta.yaml",
+             "%s/.config/controller-box/profile-metadata/a.meta.yaml",
              f->tmp_home);
     assert_int_not_equal(access(new_meta_path, F_OK), 0);
 
