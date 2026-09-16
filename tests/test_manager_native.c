@@ -45,6 +45,9 @@
 
 #include "config/config_settings.h"
 #include "config/config_paths.h"
+#include "config/config_assignments.h"
+#include "identify/composite_identity.h"
+#include "identify/gamepad_order_restore.h"
 
 #include "manager/manager.h"
 #include "manager/controllers_tab.h"
@@ -1421,6 +1424,244 @@ test_manager_recovery_exhaustion_fails_closed(void **state)
 }
 
 /* ================================================================== */
+/*  Task 6 — physical identity + durable order restoration (native)     */
+/* ================================================================== */
+
+/*
+ * Seed two *identical* USB controllers that have no serial and differ only
+ * by physical port path.  This is the hardest identification case (SPEC
+ * §6.1): the port path is the only stable discriminator, and the composite
+ * object-path index is NOT an identity.  `reversed` swaps which composite
+ * index the two physical ports enumerate as, modelling a reconnect in the
+ * opposite order.
+ */
+static void
+seed_identical_sources(bool reversed)
+{
+    const char *phys[2];
+    phys[0] = reversed ? "usb-3-2" : "usb-3-1";
+    phys[1] = reversed ? "usb-3-1" : "usb-3-2";
+
+    g_nip_source_count = 0;
+    for (int i = 0; i < 2; i++) {
+        char spath[256];
+        snprintf(spath, sizeof(spath),
+                 "/org/shadowblip/InputPlumber/devices/source/event%d", i);
+        snprintf(g_nip_source_path[i], sizeof(g_nip_source_path[i]),
+                 "%s", spath);
+        g_nip_source_unique_id[i][0] = '\0';
+        snprintf(g_nip_source_phys_path[i], sizeof(g_nip_source_phys_path[i]),
+                 "%s", phys[i]);
+        snprintf(g_nip_source_bustype[i], sizeof(g_nip_source_bustype[i]),
+                 "3");
+        g_nip_source_serial[i][0] = '\0';
+        g_nip_source_hidraw[i] = 0;
+        snprintf(g_nip_source_paths[i], sizeof(g_nip_source_paths[i]),
+                 "%s", spath);
+        g_nip_source_count++;
+    }
+}
+
+static void
+mn_setup_sources_common(mn_fixture *f, bool reversed, bool fail_sources)
+{
+    snprintf(f->tmp_home, sizeof(f->tmp_home),
+             "/tmp/cbx_mn_src_%d", (int)getpid());
+    char cmd[PATH_MAX + 64];
+    snprintf(cmd, sizeof(cmd), "rm -rf %s", f->tmp_home);
+    int sysrc = system(cmd);
+    (void)sysrc;
+    mkdir(f->tmp_home, 0700);
+    setenv("HOME", f->tmp_home, 1);
+    unsetenv("XDG_CONFIG_HOME");
+    unsetenv("XDG_DATA_HOME");
+    unsetenv("FLATPAK_ID");
+
+    assert_int_equal(nip_start_private_bus(f->bus_address,
+                                            sizeof(f->bus_address),
+                                            &f->daemon_pid), 0);
+    setenv("DBUS_SYSTEM_BUS_ADDRESS", f->bus_address, 1);
+
+    nip_reset_server_state(2);
+    for (int i = 0; i < 2; i++) {
+        snprintf(g_nip_comp_names[i], sizeof(g_nip_comp_names[i]),
+                 "Identical Controller %d", i);
+        snprintf(g_nip_dbus_devices[i], sizeof(g_nip_dbus_devices[i]),
+                 "/org/shadowblip/InputPlumber/CompositeDevice%d", i);
+        /* An opaque PersistentId that does NOT match the identity scheme:
+         * restoration must not depend on it. */
+        snprintf(g_nip_persistent_ids[i], sizeof(g_nip_persistent_ids[i]),
+                 "opaque-pid-%d", i);
+    }
+    seed_identical_sources(reversed);
+
+    if (fail_sources) {
+        /* One-shot transient identity read failure in the child, and a
+         * sentinel GamepadOrder that must survive the deferred restore. */
+        g_nip_fail_next_source_paths = 1;
+        snprintf(g_nip_gamepad_order[0], sizeof(g_nip_gamepad_order[0]),
+                 "/sentinel/order");
+        g_nip_gamepad_order_count = 1;
+    }
+
+    const nip_server_config cfg = { .num_composites = 2, .version = "0.78.0" };
+    f->server_pid = nip_fork_server(f->bus_address, &cfg);
+    assert_true(f->server_pid > 0);
+
+    f->backend = ip_dbus_sd_backend();
+    f->bus = NULL;
+    assert_int_equal(f->backend->connect(&f->bus), 0);
+    assert_int_equal(wait_for_server(f->backend, f->bus, "0.78.0"), 0);
+}
+
+static int
+mn_setup_sources(void **state)
+{
+    mn_fixture *f = calloc(1, sizeof(*f));
+    assert_non_null(f);
+    f->joy_device_index = -1;
+    f->daemon_pid = -1;
+    f->server_pid = -1;
+    mn_setup_sources_common(f, false, false);
+    *state = f;
+    return 0;
+}
+
+static int
+mn_setup_sources_reversed(void **state)
+{
+    mn_fixture *f = calloc(1, sizeof(*f));
+    assert_non_null(f);
+    f->joy_device_index = -1;
+    f->daemon_pid = -1;
+    f->server_pid = -1;
+    mn_setup_sources_common(f, true, false);
+    *state = f;
+    return 0;
+}
+
+static int
+mn_setup_sources_fail(void **state)
+{
+    mn_fixture *f = calloc(1, sizeof(*f));
+    assert_non_null(f);
+    f->joy_device_index = -1;
+    f->daemon_pid = -1;
+    f->server_pid = -1;
+    mn_setup_sources_common(f, false, true);
+    *state = f;
+    return 0;
+}
+
+/* Two identical controllers get distinct, source-derived identities. */
+static void
+test_identity_native_distinct_physical_identities(void **state)
+{
+    mn_fixture *f = *state;
+    cbx_device_model model;
+    cbx_device_model_init(&model);
+    assert_int_equal(cbx_objectmanager_enumerate(f->backend, f->bus, &model),
+                     0);
+    assert_int_equal(model.composite_count, 2);
+
+    cbx_composite_identity_entry entries[CBX_MAX_COMPOSITES];
+    int count = 0;
+    assert_int_equal(cbx_model_extract_identities(f->backend, f->bus, &model,
+                                                  entries, &count), 0);
+    assert_int_equal(count, 2);
+    assert_int_equal(entries[0].status, CBX_COMPOSITE_IDENTITY_OK);
+    assert_int_equal(entries[1].status, CBX_COMPOSITE_IDENTITY_OK);
+    assert_string_equal(entries[0].ident.id, "USB:phys:usb-3-1");
+    assert_string_equal(entries[1].ident.id, "USB:phys:usb-3-2");
+}
+
+/*
+ * Reversed reconnect order: the saved gamepad order (usb-3-1 then usb-3-2)
+ * must resolve by physical identity to the *current* composite paths, even
+ * though the port enumerates on the opposite composite index.
+ */
+static void
+test_identity_native_reversed_reconnect_restores_order(void **state)
+{
+    mn_fixture *f = *state;
+
+    cbx_assignments a;
+    cbx_assignments_init(&a);
+    snprintf(a.gamepad_order[0], CBX_MAX_ID_LEN, "USB:phys:usb-3-1");
+    snprintf(a.gamepad_order[1], CBX_MAX_ID_LEN, "USB:phys:usb-3-2");
+    a.gamepad_order_count = 2;
+    assert_int_equal(cbx_assignments_save(&a), 0);
+
+    cbx_device_model model;
+    cbx_device_model_init(&model);
+    assert_int_equal(cbx_objectmanager_enumerate(f->backend, f->bus, &model),
+                     0);
+
+    int restored = 0, skipped = 0;
+    bool failed = false;
+    int rc = cbx_gamepad_order_restore(f->backend, f->bus, &model,
+                                       &restored, &skipped, &failed);
+    assert_int_equal(rc, 0);
+    assert_int_equal(restored, 2);
+    assert_int_equal(skipped, 0);
+    assert_false(failed);
+
+    /* usb-3-1 now lives on CompositeDevice1, usb-3-2 on CompositeDevice0. */
+    char *order = NULL;
+    assert_int_equal(ip_manager_get_gamepad_order(f->backend, f->bus, &order),
+                     0);
+    assert_non_null(order);
+    assert_string_equal(order,
+        "/org/shadowblip/InputPlumber/CompositeDevice1,"
+        "/org/shadowblip/InputPlumber/CompositeDevice0");
+    free(order);
+}
+
+/*
+ * A transient SourceDevicePaths read failure must not apply a misleading
+ * order: the restore defers (-EAGAIN) and the engine GamepadOrder is left
+ * exactly as it was (the sentinel seeded by mn_setup_sources_fail).
+ */
+static void
+test_identity_native_transient_failure_defers_order(void **state)
+{
+    mn_fixture *f = *state;
+
+    cbx_assignments a;
+    cbx_assignments_init(&a);
+    snprintf(a.gamepad_order[0], CBX_MAX_ID_LEN, "USB:phys:usb-3-1");
+    a.gamepad_order_count = 1;
+    assert_int_equal(cbx_assignments_save(&a), 0);
+
+    cbx_device_model model;
+    cbx_device_model_init(&model);
+    assert_int_equal(cbx_objectmanager_enumerate(f->backend, f->bus, &model),
+                     0);
+
+    int restored = 0, skipped = 0;
+    bool failed = false;
+    int rc = cbx_gamepad_order_restore(f->backend, f->bus, &model,
+                                       &restored, &skipped, &failed);
+    assert_int_equal(rc, -EAGAIN);
+    assert_true(failed);
+    assert_int_equal(restored, 0);
+
+    /* Engine order untouched (not cleared to empty). */
+    char *order = NULL;
+    assert_int_equal(ip_manager_get_gamepad_order(f->backend, f->bus, &order),
+                     0);
+    assert_non_null(order);
+    assert_string_equal(order, "/sentinel/order");
+    free(order);
+
+    /* Retrying after the transient failure clears succeeds. */
+    rc = cbx_gamepad_order_restore(f->backend, f->bus, &model,
+                                   &restored, &skipped, &failed);
+    assert_int_equal(rc, 0);
+    assert_int_equal(restored, 1);
+}
+
+/* ================================================================== */
 /*  Test registration                                                  */
 /* ================================================================== */
 
@@ -1499,6 +1740,16 @@ main(void)
         cmocka_unit_test_setup_teardown(
             test_manager_recovery_exhaustion_fails_closed,
             mn_setup, mn_teardown),
+        /* Task 6 — physical identity + order restoration from sources */
+        cmocka_unit_test_setup_teardown(
+            test_identity_native_distinct_physical_identities,
+            mn_setup_sources, mn_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_identity_native_reversed_reconnect_restores_order,
+            mn_setup_sources_reversed, mn_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_identity_native_transient_failure_defers_order,
+            mn_setup_sources_fail, mn_teardown),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

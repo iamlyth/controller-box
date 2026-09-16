@@ -78,10 +78,22 @@ cbx_identity_parse_bustype(const char *bustype_str)
     if (!bustype_str || !*bustype_str)
         return -1;
 
-    /* Parse as decimal integer (evdev IdBustype is a u16) */
+    /* evdev IdBustype is a u16.  InputPlumber has been observed to report it
+     * both as a decimal string ("3") and as a hexadecimal one ("0x0003");
+     * accept either so a Bluetooth controller is not misclassified as USB
+     * merely because of the property's textual encoding. */
+    const char *digits = bustype_str;
+    int base = 10;
+    if (digits[0] == '0' && (digits[1] == 'x' || digits[1] == 'X')) {
+        base = 16;
+        digits += 2;
+        if (*digits == '\0')
+            return -1;
+    }
+
     char *end = NULL;
-    long val = strtol(bustype_str, &end, 10);
-    if (end == bustype_str || *end != '\0' || val < 0 || val > 0xFFFF)
+    long val = strtol(digits, &end, base);
+    if (end == digits || *end != '\0' || val < 0 || val > 0xFFFF)
         return -1;
     return (int)val;
 }

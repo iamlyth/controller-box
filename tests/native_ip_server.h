@@ -68,6 +68,22 @@ extern char   g_nip_dbus_devices[NIP_MAX_COMPOSITES][256];
 extern char   g_nip_comp_names[NIP_MAX_COMPOSITES][64];
 extern char   g_nip_persistent_ids[NIP_MAX_COMPOSITES][32];
 
+/* --- Physical source devices (SPEC §6.2, task 6) ---------------------- *
+ * `g_nip_source_paths[ci]` is the comma-separated SourceDevicePaths list for
+ * composite `ci`.  Each source object's interface-specific properties are
+ * stored in the parallel arrays below, indexed by the position in
+ * `g_nip_source_path` and selected by object path.  Set these before
+ * nip_fork_server/nip_start_server so the forked child inherits them. */
+#define NIP_MAX_SOURCES 32
+extern char   g_nip_source_paths[NIP_MAX_COMPOSITES][256];
+extern char   g_nip_source_path[NIP_MAX_SOURCES][256];
+extern char   g_nip_source_unique_id[NIP_MAX_SOURCES][64];
+extern char   g_nip_source_phys_path[NIP_MAX_SOURCES][64];
+extern char   g_nip_source_bustype[NIP_MAX_SOURCES][16];
+extern char   g_nip_source_serial[NIP_MAX_SOURCES][64];
+extern char   g_nip_source_hidraw[NIP_MAX_SOURCES]; /* 1 = HIDRawDevice */
+extern int    g_nip_source_count;
+
 /* ManageAllDevices is a writable boolean on the Manager interface. */
 extern int    g_nip_manage_all_devices;
 
@@ -80,6 +96,11 @@ extern volatile sig_atomic_t g_nip_fail_next_create;
  * and auto-resets to 0.  Set before nip_fork_server/nip_start_server
  * to simulate a transient backend probe failure in the forked child. */
 extern volatile sig_atomic_t g_nip_fail_next_dbus_devices;
+
+/* When non-zero, the next composite SourceDevicePaths read returns a DBus
+ * error and auto-resets to 0.  Set before nip_fork_server/nip_start_server
+ * to simulate a transient physical-identity read failure (task 6). */
+extern volatile sig_atomic_t g_nip_fail_next_source_paths;
 
 /* --- API --- */
 

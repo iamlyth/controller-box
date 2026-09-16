@@ -1,16 +1,17 @@
 /*
- * test_gamepad_order.c — Unit tests for GamepadOrder persistence (Task 15, gap #2).
+ * test_gamepad_order.c — Unit tests for GamepadOrder persistence (Task 15,
+ *                        gap #2; task 6 identity).
  *
  * Tests:
- *   - Save: composite paths CSV → PersistentId query → assignments.yaml.
+ *   - Save: composite paths CSV → source-derived identity → assignments.yaml.
  *   - Save with stale paths (skipped).
+ *   - Save with a transient identity query failure (skipped, not persisted).
  *   - Save empty CSV (clears order).
  *   - Load: assignments.yaml → CSV of IDs.
  *   - Load with no saved order.
  *   - Load with invalid IDs (rejected — malformed assignments file).
  *   - Round-trip: save then load.
  *   - NULL args.
- *   - DBus error during PersistentId query (skip entry).
  */
 #include "dbus_mock.h"
 #include "dbus/ip_gamepad_order.h"
@@ -97,6 +98,32 @@ write_raw_gamepad_order(const char *home, const char *order_yaml)
     fclose(fp);
 }
 
+/* Every composite reports this single evdev source (the mock is keyed by
+ * iface+member only, so one set of expectations covers all composites). */
+static void
+expect_evdev_source(gamepad_fixture *f, const char *unique_id,
+                    const char *phys_path, const char *bustype)
+{
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+        "SourceDevicePaths",
+        "/org/shadowblip/InputPlumber/devices/source/event0");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_SOURCE_EVENT, "UniqueId",
+                           unique_id);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_SOURCE_EVENT, "PhysPath",
+                           phys_path);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_SOURCE_EVENT, "IdBustype",
+                           bustype);
+}
+
+static cbx_assignments
+load_assignments(void)
+{
+    cbx_assignments a;
+    cbx_assignments_init(&a);
+    assert_int_equal(cbx_assignments_load(&a), 0);
+    return a;
+}
+
 /* --- Save tests ---------------------------------------------------------- */
 
 static void
@@ -104,27 +131,15 @@ test_save_success(void **state)
 {
     gamepad_fixture *f = FIX(state);
 
-    /* Add one composite to the model.  (The mock matches by iface+member
-     * only, so it returns the same value for every PersistentId query.
-     * We test one composite here; multiple-composite paths are tested in
-     * test_save_stale_path_skipped which has one valid + one stale.) */
     assert_true(cbx_device_model_add_composite(&f->model,
         "/org/shadowblip/InputPlumber/CompositeDevice0"));
+    expect_evdev_source(f, "serial-aaaa", "", "3");
 
-    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
-        "PersistentId", "USB:serial-aaaa");
-
-    const char *paths_csv =
-        "/org/shadowblip/InputPlumber/CompositeDevice0";
-
-    int rc = ip_gamepad_order_save(f->backend, f->mock.bus,
-                                    &f->model, paths_csv);
+    int rc = ip_gamepad_order_save(f->backend, f->mock.bus, &f->model,
+        "/org/shadowblip/InputPlumber/CompositeDevice0");
     assert_int_equal(rc, 0);
 
-    /* Verify the saved file has the right gamepad_order. */
-    cbx_assignments a;
-    cbx_assignments_init(&a);
-    assert_int_equal(cbx_assignments_load(&a), 0);
+    cbx_assignments a = load_assignments();
     assert_int_equal(a.gamepad_order_count, 1);
     assert_string_equal(a.gamepad_order[0], "USB:serial-aaaa");
 }
@@ -134,13 +149,10 @@ test_save_empty_csv(void **state)
 {
     gamepad_fixture *f = FIX(state);
 
-    int rc = ip_gamepad_order_save(f->backend, f->mock.bus,
-                                    &f->model, "");
+    int rc = ip_gamepad_order_save(f->backend, f->mock.bus, &f->model, "");
     assert_int_equal(rc, 0);
 
-    cbx_assignments a;
-    cbx_assignments_init(&a);
-    assert_int_equal(cbx_assignments_load(&a), 0);
+    cbx_assignments a = load_assignments();
     assert_int_equal(a.gamepad_order_count, 0);
 }
 
@@ -149,13 +161,9 @@ test_save_stale_path_skipped(void **state)
 {
     gamepad_fixture *f = FIX(state);
 
-    /* Add one composite to the model. */
     assert_true(cbx_device_model_add_composite(&f->model,
         "/org/shadowblip/InputPlumber/CompositeDevice0"));
-
-    /* Expect PersistentId for the valid composite only. */
-    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
-        "PersistentId", "USB:serial-aaaa");
+    expect_evdev_source(f, "serial-aaaa", "", "3");
 
     /* The second path is stale (not in model) — should be skipped. */
     const char *paths_csv =
@@ -166,43 +174,31 @@ test_save_stale_path_skipped(void **state)
                                     &f->model, paths_csv);
     assert_int_equal(rc, 0);
 
-    cbx_assignments a;
-    cbx_assignments_init(&a);
-    assert_int_equal(cbx_assignments_load(&a), 0);
+    cbx_assignments a = load_assignments();
     assert_int_equal(a.gamepad_order_count, 1);
     assert_string_equal(a.gamepad_order[0], "USB:serial-aaaa");
 }
 
+/*
+ * A transient identity query failure must not persist a wrong/opaque id:
+ * the entry is skipped so the saved order is never corrupted.
+ */
 static void
-test_save_dbus_error_skipped(void **state)
+test_save_query_failure_skipped(void **state)
 {
     gamepad_fixture *f = FIX(state);
 
     assert_true(cbx_device_model_add_composite(&f->model,
         "/org/shadowblip/InputPlumber/CompositeDevice0"));
-    assert_true(cbx_device_model_add_composite(&f->model,
-        "/org/shadowblip/InputPlumber/CompositeDevice1"));
-
-    /* First PersistentId query fails, second succeeds. */
     ip_dbus_mock_expect_error(&f->mock, IP_IFACE_COMPOSITE,
-        "PersistentId", -EIO);
-    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
-        "PersistentId", "USB:serial-bbbb");
+        "SourceDevicePaths", -EIO);
 
-    const char *paths_csv =
-        "/org/shadowblip/InputPlumber/CompositeDevice0,"
-        "/org/shadowblip/InputPlumber/CompositeDevice1";
-
-    int rc = ip_gamepad_order_save(f->backend, f->mock.bus,
-                                    &f->model, paths_csv);
+    int rc = ip_gamepad_order_save(f->backend, f->mock.bus, &f->model,
+        "/org/shadowblip/InputPlumber/CompositeDevice0");
     assert_int_equal(rc, 0);
 
-    cbx_assignments a;
-    cbx_assignments_init(&a);
-    assert_int_equal(cbx_assignments_load(&a), 0);
-    /* Only the second composite's ID should be saved. */
-    assert_int_equal(a.gamepad_order_count, 1);
-    assert_string_equal(a.gamepad_order[0], "USB:serial-bbbb");
+    cbx_assignments a = load_assignments();
+    assert_int_equal(a.gamepad_order_count, 0);
 }
 
 static void
@@ -228,17 +224,13 @@ test_save_preserves_assignments(void **state)
 
     assert_true(cbx_device_model_add_composite(&f->model,
         "/org/shadowblip/InputPlumber/CompositeDevice0"));
-    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
-        "PersistentId", "USB:serial-aaaa");
+    expect_evdev_source(f, "serial-aaaa", "", "3");
 
-    int rc = ip_gamepad_order_save(f->backend, f->mock.bus,
-                                    &f->model,
+    int rc = ip_gamepad_order_save(f->backend, f->mock.bus, &f->model,
         "/org/shadowblip/InputPlumber/CompositeDevice0");
     assert_int_equal(rc, 0);
 
-    cbx_assignments a;
-    cbx_assignments_init(&a);
-    assert_int_equal(cbx_assignments_load(&a), 0);
+    cbx_assignments a = load_assignments();
     /* Assignment should still be there. */
     assert_int_equal(a.assignment_count, 1);
     assert_string_equal(a.assignments[0].id, "USB:serial-test");
@@ -261,26 +253,41 @@ test_save_null_args(void **state)
 }
 
 static void
-test_save_order_id(void **state)
+test_save_order_id_when_no_stable_identity(void **state)
 {
     gamepad_fixture *f = FIX(state);
 
-    /* Test ORDER:n ID format. */
+    /* Successfully-read but empty source list → ORDER:<index> fallback. */
     assert_true(cbx_device_model_add_composite(&f->model,
         "/org/shadowblip/InputPlumber/CompositeDevice0"));
     ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
-        "PersistentId", "ORDER:0");
+                           "SourceDevicePaths", "");
 
-    int rc = ip_gamepad_order_save(f->backend, f->mock.bus,
-                                    &f->model,
+    int rc = ip_gamepad_order_save(f->backend, f->mock.bus, &f->model,
         "/org/shadowblip/InputPlumber/CompositeDevice0");
     assert_int_equal(rc, 0);
 
-    cbx_assignments a;
-    cbx_assignments_init(&a);
-    assert_int_equal(cbx_assignments_load(&a), 0);
+    cbx_assignments a = load_assignments();
     assert_int_equal(a.gamepad_order_count, 1);
     assert_string_equal(a.gamepad_order[0], "ORDER:0");
+}
+
+static void
+test_save_bt_identity(void **state)
+{
+    gamepad_fixture *f = FIX(state);
+
+    assert_true(cbx_device_model_add_composite(&f->model,
+        "/org/shadowblip/InputPlumber/CompositeDevice0"));
+    expect_evdev_source(f, "ab:cd:01:ef:23:45", "", "5");
+
+    int rc = ip_gamepad_order_save(f->backend, f->mock.bus, &f->model,
+        "/org/shadowblip/InputPlumber/CompositeDevice0");
+    assert_int_equal(rc, 0);
+
+    cbx_assignments a = load_assignments();
+    assert_int_equal(a.gamepad_order_count, 1);
+    assert_string_equal(a.gamepad_order[0], "BT:AB:CD:01:EF:23:45");
 }
 
 /* --- Load tests ---------------------------------------------------------- */
@@ -363,18 +370,12 @@ test_round_trip(void **state)
 {
     gamepad_fixture *f = FIX(state);
 
-    /* Use one composite (mock returns same PersistentId for all calls). */
     assert_true(cbx_device_model_add_composite(&f->model,
         "/org/shadowblip/InputPlumber/CompositeDevice0"));
+    expect_evdev_source(f, "serial-aaaa", "", "3");
 
-    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
-        "PersistentId", "USB:serial-aaaa");
-
-    const char *paths_csv =
-        "/org/shadowblip/InputPlumber/CompositeDevice0";
-
-    int rc = ip_gamepad_order_save(f->backend, f->mock.bus,
-                                    &f->model, paths_csv);
+    int rc = ip_gamepad_order_save(f->backend, f->mock.bus, &f->model,
+        "/org/shadowblip/InputPlumber/CompositeDevice0");
     assert_int_equal(rc, 0);
 
     char *csv = NULL;
@@ -393,8 +394,7 @@ test_save_replaces_order(void **state)
     /* First save. */
     assert_true(cbx_device_model_add_composite(&f->model,
         "/org/shadowblip/InputPlumber/CompositeDevice0"));
-    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
-        "PersistentId", "USB:serial-aaaa");
+    expect_evdev_source(f, "serial-aaaa", "", "3");
     int rc = ip_gamepad_order_save(f->backend, f->mock.bus,
                                     &f->model,
         "/org/shadowblip/InputPlumber/CompositeDevice0");
@@ -402,19 +402,15 @@ test_save_replaces_order(void **state)
 
     /* Second save — should replace, not append. */
     ip_dbus_mock_reset(&f->mock);
-    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
-        "PersistentId", "BT:11:22:33:44:55:66");
+    expect_evdev_source(f, "ab:cd:01:ef:23:45", "", "5");
     rc = ip_gamepad_order_save(f->backend, f->mock.bus,
                                &f->model,
         "/org/shadowblip/InputPlumber/CompositeDevice0");
     assert_int_equal(rc, 0);
 
-    cbx_assignments a;
-    cbx_assignments_init(&a);
-    assert_int_equal(cbx_assignments_load(&a), 0);
-    /* Should have exactly 1 entry, not 2. */
+    cbx_assignments a = load_assignments();
     assert_int_equal(a.gamepad_order_count, 1);
-    assert_string_equal(a.gamepad_order[0], "BT:11:22:33:44:55:66");
+    assert_string_equal(a.gamepad_order[0], "BT:AB:CD:01:EF:23:45");
 }
 
 /* --- Main ---------------------------------------------------------------- */
@@ -429,13 +425,15 @@ main(void)
                                          setup, teardown),
         cmocka_unit_test_setup_teardown(test_save_stale_path_skipped,
                                          setup, teardown),
-        cmocka_unit_test_setup_teardown(test_save_dbus_error_skipped,
+        cmocka_unit_test_setup_teardown(test_save_query_failure_skipped,
                                          setup, teardown),
         cmocka_unit_test_setup_teardown(test_save_preserves_assignments,
                                          setup, teardown),
         cmocka_unit_test_setup_teardown(test_save_null_args,
                                          setup, teardown),
-        cmocka_unit_test_setup_teardown(test_save_order_id,
+        cmocka_unit_test_setup_teardown(test_save_order_id_when_no_stable_identity,
+                                         setup, teardown),
+        cmocka_unit_test_setup_teardown(test_save_bt_identity,
                                          setup, teardown),
         cmocka_unit_test_setup_teardown(test_load_no_file,
                                          setup, teardown),

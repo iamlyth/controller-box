@@ -416,6 +416,13 @@ void on_intercept_error(int error_code, void *userdata);
  * overlay_backend_degraded) on the context's connection so native tests can
  * exercise owner loss/reacquisition through the production callback path. */
 void cbx_overlay_install_recovery_callbacks(cbx_overlay_service_ctx *svc);
+
+/* Test seam for the production grid→assignments/order merge used by the
+ * startup/close save path.  Exposed only under CBX_TESTING so a test can
+ * prove a disconnected controller's saved gamepad-order position survives a
+ * topology shrink (task 6). */
+int cbx_overlay_merge_grid_for_test(cbx_assignments *a,
+                                    const cbx_select_grid *grid);
 #endif /* CBX_TESTING */
 
 #endif /* CBX_OVERLAY_SERVICE_H */

@@ -42,6 +42,8 @@
 #include "overlay/close.h"            /* cbx_close_sync_assignments */
 #include "dbus/ip_hotplug.h"
 #include "dbus/ip_properties.h"
+#include "identify/composite_identity.h"
+#include "identify/gamepad_order_restore.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -314,6 +316,30 @@ cbx_overlay_props_wire(cbx_overlay_service_ctx *svc)
  * gamepad_order is then rebuilt from the grid's slot ordering (the close-path
  * sync is deliberately order-agnostic).
  */
+static bool
+order_contains(char order[][CBX_MAX_ID_LEN], int count, const char *id)
+{
+    for (int i = 0; i < count; i++)
+        if (strcmp(order[i], id) == 0)
+            return true;
+    return false;
+}
+
+/* Bounded id copy: GCC's format-truncation analysis cannot bound a `%s` read
+ * from another fixed array, so copy explicitly instead. */
+static void
+copy_id(char *dst, size_t dst_size, const char *src)
+{
+    if (dst_size == 0)
+        return;
+    size_t n = src ? strlen(src) : 0;
+    if (n >= dst_size)
+        n = dst_size - 1;
+    if (n > 0)
+        memcpy(dst, src, n);
+    dst[n] = '\0';
+}
+
 static int
 overlay_merge_grid(cbx_assignments *a, const cbx_select_grid *grid)
 {
@@ -321,7 +347,22 @@ overlay_merge_grid(cbx_assignments *a, const cbx_select_grid *grid)
     if (rc < 0)
         return rc;
 
-    a->gamepad_order_count = 0;
+    /* Snapshot the saved order before rewriting it.  Entries whose controller
+     * is not currently connected must survive a topology shrink: rebuilding
+     * the order purely from the live grid would silently drop the preferred
+     * position of a disconnected controller (task 6 acceptance). */
+    char saved[CBX_MAX_GAMEPAD_ORDER][CBX_MAX_ID_LEN];
+    int saved_count = a->gamepad_order_count;
+    if (saved_count > CBX_MAX_GAMEPAD_ORDER)
+        saved_count = CBX_MAX_GAMEPAD_ORDER;
+    for (int i = 0; i < saved_count; i++) {
+        copy_id(saved[i], sizeof(saved[i]), a->gamepad_order[i]);
+    }
+
+    char merged[CBX_MAX_GAMEPAD_ORDER][CBX_MAX_ID_LEN];
+    int merged_count = 0;
+
+    /* Currently connected rows, in player-slot order. */
     for (int slot = 0; slot < CBX_MAX_CONTROLLERS; slot++) {
         for (int i = 0; i < grid->row_count; i++) {
             const cbx_grid_row *row = &grid->rows[i];
@@ -329,14 +370,40 @@ overlay_merge_grid(cbx_assignments *a, const cbx_select_grid *grid)
                 continue;
             if (cbx_select_grid_col_to_slot(row->cur_col) != slot)
                 continue;
-            if (a->gamepad_order_count < CBX_MAX_GAMEPAD_ORDER) {
-                snprintf(a->gamepad_order[a->gamepad_order_count++],
-                         CBX_MAX_ID_LEN, "%s", row->id);
+            if (merged_count < CBX_MAX_GAMEPAD_ORDER &&
+                !order_contains(merged, merged_count, row->id)) {
+                copy_id(merged[merged_count++], CBX_MAX_ID_LEN, row->id);
             }
         }
     }
+
+    /* Then any saved entry for a disconnected controller, preserving its
+     * relative position after the connected players. */
+    for (int i = 0; i < saved_count; i++) {
+        if (saved[i][0] == '\0')
+            continue;
+        if (merged_count < CBX_MAX_GAMEPAD_ORDER &&
+            !order_contains(merged, merged_count, saved[i])) {
+            copy_id(merged[merged_count++], CBX_MAX_ID_LEN, saved[i]);
+        }
+    }
+
+    a->gamepad_order_count = merged_count;
+    for (int i = 0; i < merged_count; i++)
+        copy_id(a->gamepad_order[i], CBX_MAX_ID_LEN, merged[i]);
+
     return 0;
 }
+
+#ifdef CBX_TESTING
+/* Test seam: prove the grid→order merge preserves disconnected preferences
+ * (task 6 topology-shrink acceptance) without exposing the static helper. */
+int
+cbx_overlay_merge_grid_for_test(cbx_assignments *a, const cbx_select_grid *grid)
+{
+    return overlay_merge_grid(a, grid);
+}
+#endif
 
 typedef struct {
     const cbx_select_grid *grid;
@@ -659,21 +726,33 @@ static void fill_composite_info(cbx_grid_composite_info *info,
     snprintf(info->composite_path, sizeof(info->composite_path),
              "%s", entry->path);
 
-    /* Persistent ID (best-effort).  The synthetic `composite-<index>`
-     * fallback is index-derived, not a real identity: it is NOT stable
-     * across a hotplug rebuild (a different controller can land on the same
-     * index).  Mark it degraded so consumers such as Host Mode never use it
-     * to hand one physical controller another's privileges (SPEC §4.4). */
-    char *id = NULL;
-    if (ip_composite_get_persistent_id(backend, bus, entry->path, &id) == 0
-        && id && id[0]) {
-        snprintf(info->id, sizeof(info->id), "%s", id);
-        info->id_stable = true;
-        free(id);
+    /* Identity from the composite's physical source devices (SPEC §6.2–6.3),
+     * never the opaque PersistentId.  `cbx_composite_identity_extract`
+     * chooses BT MAC → USB serial → USB port path → connection order and
+     * falls back to ORDER:<index> when the source list is legitimately
+     * absent, so the row keeps a valid, persistable identity instead of the
+     * invalid `composite-<index>` synthetic id (cbx_validate_id rejects it).
+     * A *transient* identity query failure leaves the id empty: the row must
+     * not be matched against a saved assignment or persisted, so a DBus
+     * hiccup can never reroute or erase another controller's preference
+     * (task 6 acceptance).  Only real physical layers are stable for Host
+     * Mode. */
+    cbx_identity ident;
+    cbx_composite_identity_status ident_status = CBX_COMPOSITE_IDENTITY_OK;
+    int order = entry->index >= 0 ? entry->index : 0;
+    int ident_rc = cbx_composite_identity_extract(backend, bus, entry->path,
+                                                  order, &ident,
+                                                  &ident_status);
+    if (ident_rc == 0 &&
+        ident_status != CBX_COMPOSITE_IDENTITY_QUERY_FAILED &&
+        ident.layer != CBX_IDENTITY_LAYER_NONE) {
+        snprintf(info->id, sizeof(info->id), "%s", ident.id);
+        info->id_stable = (ident.layer == CBX_IDENTITY_LAYER_BT_MAC ||
+                           ident.layer == CBX_IDENTITY_LAYER_USB_SERIAL ||
+                           ident.layer == CBX_IDENTITY_LAYER_USB_PORT);
     } else {
-        snprintf(info->id, sizeof(info->id), "composite-%d", entry->index);
+        info->id[0] = '\0';
         info->id_stable = false;
-        free(id);
     }
 
     /* Model name (best-effort) */
@@ -797,22 +876,28 @@ csv_is_exact_singleton(const char *csv, const char *path)
     return csv_token_count(csv) == 1 && csv_exact_path_count(csv, path) == 1;
 }
 
-/* Resolve a persisted physical assignment by stable composite PersistentId.
- * Virtual slots do not imply physical composites: an absent assignment is a
- * valid ready-but-unassigned slot. */
+/* Resolve a persisted physical assignment by the composite's source-derived
+ * physical identity (SPEC §6.2), not the opaque PersistentId.  `entries` are
+ * the identities extracted once for the current model.  Composites whose
+ * identity query failed transiently are never matched: a DBus hiccup must
+ * not route one controller's target onto another controller's slot.  Virtual
+ * slots do not imply physical composites: an absent assignment is a valid
+ * ready-but-unassigned slot. */
 static const char *
-assigned_composite_for_slot(cbx_overlay_service_ctx *svc, int slot)
+assigned_composite_for_slot(const cbx_composite_identity_entry *entries,
+                            int entry_count,
+                            const cbx_assignments *assignments, int slot)
 {
-    for (int ai = 0; ai < svc->assignments.assignment_count; ai++) {
-        const cbx_assignment *a = &svc->assignments.assignments[ai];
+    for (int ai = 0; ai < assignments->assignment_count; ai++) {
+        const cbx_assignment *a = &assignments->assignments[ai];
         if (a->slot != slot) continue;
-        for (int ci = 0; ci < svc->model.composite_count; ci++) {
-            char *id = NULL;
-            int rc = ip_composite_get_persistent_id(svc->conn.backend,
-                svc->conn.bus, svc->model.composites[ci].path, &id);
-            bool match = rc == 0 && id && strcmp(id, a->id) == 0;
-            free(id);
-            if (match) return svc->model.composites[ci].path;
+        for (int ci = 0; ci < entry_count; ci++) {
+            if (entries[ci].status == CBX_COMPOSITE_IDENTITY_QUERY_FAILED)
+                continue;
+            if (entries[ci].ident.layer == CBX_IDENTITY_LAYER_NONE)
+                continue;
+            if (strcmp(entries[ci].ident.id, a->id) == 0)
+                return entries[ci].path;
         }
     }
     return NULL;
@@ -965,6 +1050,14 @@ cbx_reconcile_startup_targets(cbx_overlay_service_ctx *svc)
     const char *kind = "";
     char path[CBX_MAX_PATH_LEN] = "";
 
+    /* Extract each composite's source-derived identity once for this pass.
+     * Assignment→composite attachment must resolve by physical identity
+     * (SPEC §6.2), and a transient identity query failure must not match. */
+    cbx_composite_identity_entry idents[CBX_MAX_COMPOSITES];
+    int ident_count = 0;
+    (void)cbx_model_extract_identities(svc->conn.backend, svc->conn.bus,
+                                       &svc->model, idents, &ident_count);
+
     /* Targets are persistent virtual player slots, independent of physical
      * composite cardinality.  Zero composites is a normal ready topology;
      * only persisted, identity-matched assignments are attached below. */
@@ -1032,7 +1125,10 @@ cbx_reconcile_startup_targets(cbx_overlay_service_ctx *svc)
         operation = "confirm-replacement-publication";
         rc = wait_for_exact_target(svc, path, kind, true);
         if (rc != 0) goto fail;
-        const char *assigned = assigned_composite_for_slot(svc, slot);
+        const char *assigned = assigned_composite_for_slot(idents,
+                                                           ident_count,
+                                                           &svc->assignments,
+                                                           slot);
         if (assigned) {
             phase = "attachment"; operation = "Set TargetDevices property";
             rc = ip_composite_set_target_device_paths(svc->conn.backend,
@@ -1056,7 +1152,10 @@ cbx_reconcile_startup_targets(cbx_overlay_service_ctx *svc)
     /* Attach only explicitly persisted physical assignments.  Unassigned
      * virtual slots remain created and ready without a composite. */
     for (int slot = 0; slot < desired; slot++) {
-        const char *assigned = assigned_composite_for_slot(svc, slot);
+        const char *assigned = assigned_composite_for_slot(idents,
+                                                           ident_count,
+                                                           &svc->assignments,
+                                                           slot);
         if (!assigned) continue;
         memcpy(path, slots[slot], sizeof(path));
         path[sizeof(path) - 1] = '\0';
@@ -1355,12 +1454,32 @@ overlay_set_readiness_detail(cbx_overlay_service_ctx *svc, const char *phase,
              ip_connection_reason_for_error(rc), rc);
 }
 
+static int
+overlay_restore_gamepad_order(cbx_overlay_service_ctx *svc)
+{
+    int restored = 0;
+    int skipped = 0;
+    bool query_failed = false;
+    int rc = cbx_gamepad_order_restore(svc->conn.backend, svc->conn.bus,
+                                       &svc->model, &restored, &skipped,
+                                       &query_failed);
+    if (rc == -ENOENT)
+        return 0;  /* nothing persisted yet — not a failure */
+    if (rc == 0) {
+        fprintf(stderr,
+                "controller-box: gamepad-order restored=%d skipped=%d\n",
+                restored, skipped);
+    }
+    return rc;
+}
+
 /*
  * Run every required post-rebuild step once the owner is verified and the
  * device model/grid are current.  This is the single definition of the
  * fail-closed readiness sequence shared by startup and recovery: assignment
- * restoration, input mapping, both required signal subscriptions, trigger
- * registration, intercept-poll arming and the PropertiesChanged wiring.
+ * and gamepad-order restoration, input mapping, both required signal
+ * subscriptions, trigger registration, intercept-poll arming and the
+ * PropertiesChanged wiring.
  *
  * Stops at the first failure, records the failing phase in
  * svc->readiness_detail, and returns the negative errno so the caller keeps
@@ -1373,12 +1492,22 @@ overlay_wire_required_steps(cbx_overlay_service_ctx *svc)
     if (!svc || !svc->conn.backend || !svc->conn.bus)
         return -EINVAL;
 
+    /* Restore the persisted GamepadOrder first, resolving saved identity IDs
+     * to current composite paths by source-derived identity (SPEC §10.3 gap
+     * #2).  A transient identity query failure defers this step (-EAGAIN)
+     * instead of applying a misleading partial/empty order. */
+    int rc = overlay_restore_gamepad_order(svc);
+    if (rc != 0) {
+        overlay_set_readiness_detail(svc, "gamepad order restoration", rc);
+        return rc;
+    }
+
     /* Restore persisted slot/profile topology to the live engine before
      * advertising the overlay as ready (SPEC §§4.1-4.7: startup/restart
      * restores order/profile).  A restoration failure is a required-step
      * failure: operations stay disabled rather than running with stale or
      * partial routing. */
-    int rc = cbx_overlay_on_save(svc);
+    rc = cbx_overlay_on_save(svc);
     if (rc != 0) {
         overlay_set_readiness_detail(svc, "assignment restoration", rc);
         return rc;

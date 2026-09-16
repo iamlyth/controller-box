@@ -331,7 +331,7 @@ test_resolve_no_downgrade_matching_id(void **state)
         "USB:SN12345", 0, "fighting");
     cbx_identity new_id = make_ident("USB:SN12345", CBX_IDENTITY_LAYER_USB_SERIAL);
     cbx_identity out;
-    int rc = cbx_downgrade_resolve(&a, &new_id, 5, &out);
+    int rc = cbx_downgrade_resolve(&a, NULL, &new_id, 5, &out);
     assert_int_equal(rc, 0);
     assert_string_equal(out.id, "USB:SN12345");
     assert_int_equal(out.layer, CBX_IDENTITY_LAYER_USB_SERIAL);
@@ -347,7 +347,7 @@ test_resolve_downgrade_stronger_exists(void **state)
         "USB:SN12345", 0, "fighting");
     cbx_identity new_id = make_ident("USB:phys:usb-3-2", CBX_IDENTITY_LAYER_USB_PORT);
     cbx_identity out;
-    int rc = cbx_downgrade_resolve(&a, &new_id, 3, &out);
+    int rc = cbx_downgrade_resolve(&a, NULL, &new_id, 3, &out);
     assert_int_equal(rc, 1);
     assert_string_equal(out.id, "ORDER:3");
     assert_int_equal(out.layer, CBX_IDENTITY_LAYER_ORDER);
@@ -363,7 +363,7 @@ test_resolve_no_downgrade_no_stronger(void **state)
         "ORDER:0", 0, "default");
     cbx_identity new_id = make_ident("USB:phys:usb-3-2", CBX_IDENTITY_LAYER_USB_PORT);
     cbx_identity out;
-    int rc = cbx_downgrade_resolve(&a, &new_id, 3, &out);
+    int rc = cbx_downgrade_resolve(&a, NULL, &new_id, 3, &out);
     assert_int_equal(rc, 0);
     assert_string_equal(out.id, "USB:phys:usb-3-2");
 }
@@ -378,7 +378,7 @@ test_resolve_downgrade_bt_stronger(void **state)
         "BT:AB:CD:01:02:03:04", 0, "fighting");
     cbx_identity new_id = make_ident("USB:SN99999", CBX_IDENTITY_LAYER_USB_SERIAL);
     cbx_identity out;
-    int rc = cbx_downgrade_resolve(&a, &new_id, 5, &out);
+    int rc = cbx_downgrade_resolve(&a, NULL, &new_id, 5, &out);
     assert_int_equal(rc, 1);
     assert_string_equal(out.id, "ORDER:5");
 }
@@ -391,7 +391,7 @@ test_resolve_no_downgrade_empty_assignments(void **state)
     cbx_assignments_init(&a);
     cbx_identity new_id = make_ident("USB:SN12345", CBX_IDENTITY_LAYER_USB_SERIAL);
     cbx_identity out;
-    int rc = cbx_downgrade_resolve(&a, &new_id, 5, &out);
+    int rc = cbx_downgrade_resolve(&a, NULL, &new_id, 5, &out);
     assert_int_equal(rc, 0);
     assert_string_equal(out.id, "USB:SN12345");
 }
@@ -402,7 +402,7 @@ test_resolve_null_assignments(void **state)
     (void)state;
     cbx_identity new_id = make_ident("USB:SN12345", CBX_IDENTITY_LAYER_USB_SERIAL);
     cbx_identity out;
-    int rc = cbx_downgrade_resolve(NULL, &new_id, 5, &out);
+    int rc = cbx_downgrade_resolve(NULL, NULL, &new_id, 5, &out);
     assert_int_equal(rc, 0);
     assert_string_equal(out.id, "USB:SN12345");
 }
@@ -415,7 +415,7 @@ test_resolve_new_identity_none(void **state)
         "USB:SN12345", 0, "default");
     cbx_identity new_id = make_ident("", CBX_IDENTITY_LAYER_NONE);
     cbx_identity out;
-    int rc = cbx_downgrade_resolve(&a, &new_id, 5, &out);
+    int rc = cbx_downgrade_resolve(&a, NULL, &new_id, 5, &out);
     assert_int_equal(rc, -ENOENT);
 }
 
@@ -425,8 +425,8 @@ test_resolve_null_args(void **state)
     (void)state;
     cbx_identity new_id = make_ident("USB:SN12345", CBX_IDENTITY_LAYER_USB_SERIAL);
     cbx_identity out;
-    assert_int_equal(cbx_downgrade_resolve(NULL, NULL, 5, &out), -EINVAL);
-    assert_int_equal(cbx_downgrade_resolve(NULL, &new_id, 5, NULL), -EINVAL);
+    assert_int_equal(cbx_downgrade_resolve(NULL, NULL, NULL, 5, &out), -EINVAL);
+    assert_int_equal(cbx_downgrade_resolve(NULL, NULL, &new_id, 5, NULL), -EINVAL);
 }
 
 static void
@@ -437,7 +437,7 @@ test_resolve_downgrade_negative_order(void **state)
         "USB:SN12345", 0, "fighting");
     cbx_identity new_id = make_ident("USB:phys:usb-3-2", CBX_IDENTITY_LAYER_USB_PORT);
     cbx_identity out;
-    int rc = cbx_downgrade_resolve(&a, &new_id, -1, &out);
+    int rc = cbx_downgrade_resolve(&a, NULL, &new_id, -1, &out);
     assert_int_equal(rc, 1);
     assert_string_equal(out.id, "");
     assert_int_equal(out.layer, CBX_IDENTITY_LAYER_ORDER);
@@ -454,7 +454,7 @@ test_resolve_multiple_stronger(void **state)
         "USB:phys:usb-1-1", 2, "default");
     cbx_identity new_id = make_ident("ORDER:3", CBX_IDENTITY_LAYER_ORDER);
     cbx_identity out;
-    int rc = cbx_downgrade_resolve(&a, &new_id, 3, &out);
+    int rc = cbx_downgrade_resolve(&a, NULL, &new_id, 3, &out);
     assert_int_equal(rc, 1);
     assert_string_equal(out.id, "ORDER:3");
 }
@@ -469,9 +469,61 @@ test_resolve_id_matches_no_downgrade(void **state)
         "ORDER:3", 1, "default");
     cbx_identity new_id = make_ident("ORDER:3", CBX_IDENTITY_LAYER_ORDER);
     cbx_identity out;
-    int rc = cbx_downgrade_resolve(&a, &new_id, 3, &out);
+    int rc = cbx_downgrade_resolve(&a, NULL, &new_id, 3, &out);
     assert_int_equal(rc, 0);
     assert_string_equal(out.id, "ORDER:3");
+}
+
+/*
+ * A stronger stored identity already claimed by another live controller is
+ * unrelated: a new weak controller must NOT be inferred as its downgrade
+ * (task 6 acceptance — "do not infer a downgrade from an unrelated stronger
+ * stored identity").  The new identity is used as-is.
+ */
+static void
+test_resolve_claimed_stronger_is_unrelated(void **state)
+{
+    (void)state;
+    cbx_assignments a = make_assignments(1,
+        "BT:AB:CD:01:02:03:04", 0, "fighting");
+    cbx_identity new_id = make_ident("USB:phys:usb-9-9",
+                                     CBX_IDENTITY_LAYER_USB_PORT);
+    cbx_identity out;
+    int rc = cbx_downgrade_resolve(&a, "BT:AB:CD:01:02:03:04", &new_id, 5,
+                                   &out);
+    assert_int_equal(rc, 0);
+    assert_string_equal(out.id, "USB:phys:usb-9-9");
+    assert_int_equal(out.layer, CBX_IDENTITY_LAYER_USB_PORT);
+}
+
+/* An unclaimed stronger identity is still an uncertain (possible) downgrade. */
+static void
+test_resolve_unclaimed_stronger_still_downgrades(void **state)
+{
+    (void)state;
+    cbx_assignments a = make_assignments(1,
+        "BT:AB:CD:01:02:03:04", 0, "fighting");
+    cbx_identity new_id = make_ident("USB:phys:usb-9-9",
+                                     CBX_IDENTITY_LAYER_USB_PORT);
+    cbx_identity out;
+    int rc = cbx_downgrade_resolve(&a, "ORDER:7", &new_id, 5, &out);
+    assert_int_equal(rc, 1);
+    assert_string_equal(out.id, "ORDER:5");
+}
+
+static void
+test_find_stronger_unclaimed_skips_claimed(void **state)
+{
+    (void)state;
+    cbx_assignments a = make_assignments(2,
+        "BT:AB:CD:01:02:03:04", 0, "fighting",
+        "USB:SN12345", 1, "default");
+    char out_id[CBX_IDENTITY_MAX_LEN];
+    bool found = cbx_downgrade_find_stronger_unclaimed(
+        &a, CBX_IDENTITY_LAYER_USB_PORT, "BT:AB:CD:01:02:03:04",
+        out_id, sizeof(out_id));
+    assert_true(found);
+    assert_string_equal(out_id, "USB:SN12345");
 }
 
 /* --- Integration tests ---------------------------------------------------- */
@@ -502,7 +554,7 @@ test_integration_downgrade_flow(void **state)
     assert_int_equal(new_id.layer, CBX_IDENTITY_LAYER_USB_PORT);
 
     cbx_identity resolved;
-    rc = cbx_downgrade_resolve(&a, &new_id, 5, &resolved);
+    rc = cbx_downgrade_resolve(&a, NULL, &new_id, 5, &resolved);
     assert_int_equal(rc, 1);
     assert_string_equal(resolved.id, "ORDER:5");
     assert_int_equal(resolved.layer, CBX_IDENTITY_LAYER_ORDER);
@@ -525,7 +577,7 @@ test_integration_no_downgrade_new_controller(void **state)
 
     cbx_identity new_id = make_ident("USB:SN99999", CBX_IDENTITY_LAYER_USB_SERIAL);
     cbx_identity resolved;
-    int rc = cbx_downgrade_resolve(&a, &new_id, 0, &resolved);
+    int rc = cbx_downgrade_resolve(&a, NULL, &new_id, 0, &resolved);
     assert_int_equal(rc, 0);
     assert_string_equal(resolved.id, "USB:SN99999");
 
@@ -576,6 +628,9 @@ main(void)
         cmocka_unit_test(test_resolve_downgrade_negative_order),
         cmocka_unit_test(test_resolve_multiple_stronger),
         cmocka_unit_test(test_resolve_id_matches_no_downgrade),
+        cmocka_unit_test(test_resolve_claimed_stronger_is_unrelated),
+        cmocka_unit_test(test_resolve_unclaimed_stronger_still_downgrades),
+        cmocka_unit_test(test_find_stronger_unclaimed_skips_claimed),
         /* Integration */
         cmocka_unit_test(test_integration_downgrade_flow),
         cmocka_unit_test(test_integration_no_downgrade_new_controller),

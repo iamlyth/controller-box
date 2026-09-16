@@ -13,12 +13,13 @@
  * Stale IDs (saved IDs with no matching composite after restart) are
  * skipped.  The caller is informed of restored and skipped counts.
  *
- * This module requires a DBus backend and bus handle — it queries
- * PersistentId for each composite and calls the GamepadOrder setter.
+ * This module requires a DBus backend and bus handle — it reads source
+ * device properties and calls the GamepadOrder setter.
  */
 #ifndef CBX_GAMEPAD_ORDER_RESTORE_H
 #define CBX_GAMEPAD_ORDER_RESTORE_H
 
+#include <stdbool.h>
 #include <stddef.h>
 
 #include "dbus/dbus_interface.h"            /* ip_dbus_backend, ip_bus_handle */
@@ -35,11 +36,17 @@ extern "C" {
  * device model is fully rebuilt from GetManagedObjects).  It:
  *
  *   1. Loads the saved gamepad_order IDs from assignments.yaml.
- *   2. For each composite in the device model, queries PersistentId.
- *   3. Matches saved IDs against composite PersistentIds.
+ *   2. Extracts each composite's physical identity from its source devices
+ *      (composite_identity.h) — never from the opaque PersistentId.
+ *   3. Matches saved IDs against the extracted identities.
  *   4. Builds a comma-separated list of composite paths in the saved
  *      order (skipping stale IDs that have no matching composite).
  *   5. Calls ip_manager_set_gamepad_order() to re-apply the order.
+ *
+ * A transient source-property read failure is NOT absence: when any
+ * composite's identity query failed, the order is left untouched and
+ * -EAGAIN is returned so the caller can retry after recovery instead of
+ * applying a misleading (partial or empty) order.
  *
  * @param backend             DBus backend vtable.
  * @param bus                 DBus bus handle.
@@ -49,9 +56,14 @@ extern "C" {
  * @param out_skipped_count   Output: number of saved IDs skipped
  *                            because no matching composite was found
  *                            (may be NULL).
+ * @param out_query_failed    Output: true when a transient identity query
+ *                            failure made the mapping uncertain (may be
+ *                            NULL).
  * @return 0 on success (order restored or empty order applied);
  *         -EINVAL if null args (backend, bus, or model);
  *         -ENOENT if no saved gamepad_order exists (nothing to restore);
+ *         -EAGAIN if a transient identity query failure deferred the
+ *         restore (saved order untouched);
  *         negative errno from ip_gamepad_order_load or
  *         ip_manager_set_gamepad_order on error.
  */
@@ -59,7 +71,8 @@ int cbx_gamepad_order_restore(const ip_dbus_backend *backend,
                                ip_bus_handle bus,
                                const cbx_device_model *model,
                                int *out_restored_count,
-                               int *out_skipped_count);
+                               int *out_skipped_count,
+                               bool *out_query_failed);
 
 /*
  * Map saved gamepad_order IDs to composite device paths.
@@ -82,6 +95,9 @@ int cbx_gamepad_order_restore(const ip_dbus_backend *backend,
  * @param paths_csv_len     Size of out_paths_csv buffer.
  * @param out_restored_count Output: number of IDs matched.
  * @param out_skipped_count  Output: number of IDs skipped (stale).
+ * @param out_query_failed   Output: true when at least one ID could not be
+ *                           classified because a composite identity query
+ *                           failed transiently (may be NULL).
  * @return 0 on success; -EINVAL null args; -ENOSPC if output buffer
  *         is too small.
  */
@@ -92,7 +108,8 @@ int cbx_gamepad_order_map_ids(const ip_dbus_backend *backend,
                                char *out_paths_csv,
                                size_t paths_csv_len,
                                int *out_restored_count,
-                               int *out_skipped_count);
+                               int *out_skipped_count,
+                               bool *out_query_failed);
 
 #ifdef __cplusplus
 }

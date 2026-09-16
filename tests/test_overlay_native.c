@@ -1912,6 +1912,46 @@ test_readiness_input_mapping_failure_recovers(void **state)
 }
 
 /* ================================================================== */
+/*  Task 6 — grid→order merge preserves disconnected preferences        */
+/* ================================================================== */
+
+/*
+ * Topology shrink: only one of two saved controllers is connected.  The
+ * grid→order merge used by the startup/close save path must keep the
+ * disconnected controller's saved order entry instead of dropping it, while
+ * placing the currently-connected row first.
+ */
+static void
+test_overlay_merge_order_preserves_disconnected(void **state)
+{
+    (void)state;
+
+    cbx_assignments a;
+    cbx_assignments_init(&a);
+    snprintf(a.gamepad_order[0], CBX_MAX_ID_LEN, "USB:phys:usb-3-1");
+    snprintf(a.gamepad_order[1], CBX_MAX_ID_LEN, "USB:phys:usb-3-2");
+    a.gamepad_order_count = 2;
+
+    cbx_select_grid grid;
+    cbx_select_grid_init(&grid);
+    grid.col_count = 2;               /* Unassigned + P1 */
+    grid.row_count = 1;               /* only usb-3-2 is connected */
+    snprintf(grid.rows[0].id, CBX_MAX_ID_LEN, "USB:phys:usb-3-2");
+    grid.rows[0].cur_col = 1;         /* P1 */
+    snprintf(grid.rows[0].profile, CBX_GRID_PROFILE_LEN, "default");
+    snprintf(grid.rows[0].composite_path, CBX_MAX_PATH_LEN,
+             "/org/shadowblip/InputPlumber/CompositeDevice0");
+
+    assert_int_equal(cbx_overlay_merge_grid_for_test(&a, &grid), 0);
+
+    /* Both saved ids survive; the connected controller takes its slot
+     * position first, the disconnected one keeps its place after. */
+    assert_int_equal(a.gamepad_order_count, 2);
+    assert_string_equal(a.gamepad_order[0], "USB:phys:usb-3-2");
+    assert_string_equal(a.gamepad_order[1], "USB:phys:usb-3-1");
+}
+
+/* ================================================================== */
 /*  Main                                                               */
 /* ================================================================== */
 
@@ -2015,6 +2055,11 @@ static const struct CMUnitTest tests[] = {
                                      native_setup, native_teardown),
     cmocka_unit_test_setup_teardown(
         test_readiness_input_mapping_failure_recovers,
+        native_setup, native_teardown),
+
+    /* Task 6 — grid→order merge preserves disconnected preferences */
+    cmocka_unit_test_setup_teardown(
+        test_overlay_merge_order_preserves_disconnected,
         native_setup, native_teardown),
 };
 

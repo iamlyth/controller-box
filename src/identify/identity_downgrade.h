@@ -58,20 +58,20 @@ int cbx_downgrade_check(const char *old_id,
 /*
  * Resolve identity downgrade by scanning the assignments table.
  *
- * Given the loaded assignments and a newly extracted identity, determines
- * whether to use the new identity as-is or fall back to ORDER:n.
+ * A downgrade is only inferred for an *unclaimed* stronger identity.  An
+ * assignment whose id appears in `claimed_ids_csv` is already matched to a
+ * currently-connected controller, so it is unrelated to this device and can
+ * never be a downgrade of it — inferring one there would fall back to
+ * ORDER:n and mismatch a genuinely new controller (task 6 acceptance).
  *
- * A downgrade is detected when:
- *   1. The new identity's ID does NOT match any existing assignment.
- *   2. There EXISTS an assignment whose ID is at a STRONGER layer than
- *      the new identity (i.e. lower layer number).
- *
- * The rationale: if a controller reconnects with a weaker identity and
- * no assignment matches, it may be the same physical device that
- * previously had a stronger identity.  Falling back to ORDER:n avoids
- * creating a duplicate permanent assignment with an unstable identifier.
+ * When a stronger unclaimed assignment exists the device may be the same
+ * physical controller that lost its strong identity, so the caller applies
+ * the safe ORDER:n fallback and reports uncertainty rather than creating a
+ * permanent weak assignment.
  *
  * @param a               Loaded assignments (may be NULL — treated as empty).
+ * @param claimed_ids_csv Comma-separated ids already claimed by live
+ *                        controllers (may be NULL/empty).
  * @param new_ident       Newly extracted identity.
  * @param connection_order Current connection order.
  * @param out_ident       Output: the identity to use.
@@ -81,9 +81,27 @@ int cbx_downgrade_check(const char *old_id,
  *         -ENOENT if new_ident layer is NONE.
  */
 int cbx_downgrade_resolve(const cbx_assignments *a,
+                          const char *claimed_ids_csv,
                           const cbx_identity *new_ident,
                           int connection_order,
                           cbx_identity *out_ident);
+
+/*
+ * Find the strongest unclaimed stored identity that is stronger than
+ * `new_layer` (SPEC §6.3).  Ids present in `claimed_ids_csv` are skipped.
+ *
+ * @param a               Loaded assignments.
+ * @param new_layer       New identity layer.
+ * @param claimed_ids_csv Comma-separated ids already claimed by live
+ *                        controllers (may be NULL/empty).
+ * @param out_id          Output buffer for the strongest unclaimed id.
+ * @param out_len         Size of out_id buffer.
+ * @return true if a stronger unclaimed assignment was found.
+ */
+bool cbx_downgrade_find_stronger_unclaimed(const cbx_assignments *a,
+                                           cbx_identity_layer new_layer,
+                                           const char *claimed_ids_csv,
+                                           char *out_id, size_t out_len);
 
 /*
  * Find the strongest stored identity that doesn't match the new identity.

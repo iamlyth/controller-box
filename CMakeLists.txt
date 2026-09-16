@@ -169,6 +169,7 @@ add_library(controllerbox STATIC
     src/manager/settings_tab.c
     src/manager/service_install.c
     src/identify/identity.c
+    src/identify/composite_identity.c
     src/identify/assign.c
     src/identify/assign_persist.c
     src/identify/identity_downgrade.c
@@ -255,6 +256,7 @@ add_library(controllerbox_testing STATIC
     src/manager/settings_tab.c
     src/manager/service_install.c
     src/identify/identity.c
+    src/identify/composite_identity.c
     src/identify/assign.c
     src/identify/assign_persist.c
     src/identify/identity_downgrade.c

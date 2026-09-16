@@ -6,8 +6,9 @@
  * provides the persistence layer:
  *
  *   - ip_gamepad_order_save(): Takes the current GamepadOrder from DBus
- *     (comma-separated composite device paths), queries PersistentId for
- *     each composite, and saves the IDs to assignments.yaml.
+ *     (comma-separated composite device paths), extracts each composite's
+ *     source-derived physical identity (SPEC §6.2), and saves the IDs to
+ *     assignments.yaml.
  *   - ip_gamepad_order_load(): Reads the saved gamepad order from
  *     assignments.yaml and returns the IDs as a CSV string.
  *
@@ -32,12 +33,12 @@ extern "C" {
  * Save the current GamepadOrder to assignments.yaml.
  *
  * Iterates the comma-separated composite device paths, verifies each
- * path exists in the device model (skips stale paths), queries
- * PersistentId via the DBus backend, and stores the resulting IDs in
- * assignments.yaml's gamepad_order array.  Existing assignment entries
- * are preserved.
+ * path exists in the device model (skips stale paths), extracts the
+ * composite's physical identity from its source devices (SPEC §6.2), and
+ * stores the resulting IDs in assignments.yaml's gamepad_order array.
+ * Existing assignment entries are preserved.
  *
- * @param backend     DBus backend vtable (for PersistentId queries).
+ * @param backend     DBus backend vtable (for source property reads).
  * @param bus         DBus bus handle.
  * @param model       Device model (to verify composite paths exist).
  * @param paths_csv   Comma-separated composite device paths from the

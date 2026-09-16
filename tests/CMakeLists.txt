@@ -438,6 +438,11 @@ if(CMOCKA_FOUND)
     target_link_libraries(test_identity PRIVATE controllerbox PkgConfig::CMOCKA)
     add_test(NAME test_identity COMMAND test_identity)
 
+    # Task 6 — Composite identity from physical source devices.
+    add_executable(test_composite_identity tests/test_composite_identity.c)
+    target_link_libraries(test_composite_identity PRIVATE controllerbox cbx_test_support)
+    add_test(NAME test_composite_identity COMMAND test_composite_identity)
+
     add_executable(test_assign tests/test_assign.c)
     target_link_libraries(test_assign PRIVATE controllerbox PkgConfig::CMOCKA)
     add_test(NAME test_assign COMMAND test_assign)

@@ -1,13 +1,16 @@
 /*
  * ip_gamepad_order.c — GamepadOrder persistence layer (Task 15, gap #2).
  *
- * See ip_gamepad_order.h for the gap #2 workaround description.
+ * See ip_gamepad_order.h for the gap #2 workaround description.  The order is
+ * keyed by the source-derived physical identity (SPEC §6.2), not by the
+ * opaque InputPlumber PersistentId (task 6 acceptance).
  */
 #include "ip_gamepad_order.h"
 
-#include "dbus/ip_composite.h"  /* ip_composite_get_persistent_id */
+#include "identify/composite_identity.h" /* cbx_composite_identity_extract */
 
 #include <errno.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -43,9 +46,10 @@ ip_gamepad_order_save(const ip_dbus_backend *backend,
     if (!backend || !model || !paths_csv)
         return -EINVAL;
 
-    /* Resolve composite paths → PersistentId outside the config lock (DBus
-     * latency must not serialize config writers).  Stale paths and IDs are
-     * skipped and duplicate IDs are collapsed. */
+    /* Resolve composite paths → source-derived identities outside the config
+     * lock (DBus latency must not serialize config writers).  Stale paths and
+     * IDs are skipped and duplicate IDs are collapsed.  A transient identity
+     * query failure is skipped rather than persisted as a wrong/opaque id. */
     order_txn_args args;
     memset(&args, 0, sizeof(args));
 
@@ -64,29 +68,31 @@ ip_gamepad_order_save(const ip_dbus_backend *backend,
         memcpy(path, p, len);
         path[len] = '\0';
 
-        if (cbx_device_model_find_composite(model, path)) {
-            char *persistent_id = NULL;
-            int rc = ip_composite_get_persistent_id(backend, bus, path,
-                                                    &persistent_id);
-            if (rc == 0 && persistent_id) {
-                if (cbx_validate_id(persistent_id) &&
-                    args.count < CBX_MAX_GAMEPAD_ORDER) {
-                    bool duplicate = false;
-                    for (int i = 0; i < args.count; i++) {
-                        if (strcmp(args.ids[i], persistent_id) == 0) {
-                            duplicate = true;
-                            break;
-                        }
-                    }
-                    if (!duplicate) {
-                        strncpy(args.ids[args.count], persistent_id,
-                                CBX_MAX_ID_LEN - 1);
-                        args.ids[args.count][CBX_MAX_ID_LEN - 1] = '\0';
-                        args.count++;
+        const cbx_composite_entry *comp =
+            cbx_device_model_find_composite(model, path);
+        if (comp) {
+            int order = comp->index >= 0 ? comp->index : 0;
+            cbx_identity ident;
+            cbx_composite_identity_status status = CBX_COMPOSITE_IDENTITY_OK;
+            if (cbx_composite_identity_extract(backend, bus, path, order,
+                                               &ident, &status) == 0 &&
+                status != CBX_COMPOSITE_IDENTITY_QUERY_FAILED &&
+                ident.layer != CBX_IDENTITY_LAYER_NONE &&
+                cbx_validate_id(ident.id) &&
+                args.count < CBX_MAX_GAMEPAD_ORDER) {
+                bool duplicate = false;
+                for (int i = 0; i < args.count; i++) {
+                    if (strcmp(args.ids[i], ident.id) == 0) {
+                        duplicate = true;
+                        break;
                     }
                 }
+                if (!duplicate) {
+                    snprintf(args.ids[args.count], CBX_MAX_ID_LEN, "%s",
+                             ident.id);
+                    args.count++;
+                }
             }
-            free(persistent_id);
         }
 
         if (!comma)

@@ -23,6 +23,7 @@
 #include "config/config_assignments.h"  /* cbx_assignments_load/save for auto-Unassign */
 #include "config/config_io.h"          /* cross-process config transaction lock */
 #include "identify/assign.h"           /* cbx_assign_find_index */
+#include "identify/composite_identity.h" /* cbx_composite_identity_extract */
 
 /* ------------------------------------------------------------------ */
 /*  Layout constants                                                  */
@@ -469,21 +470,31 @@ assigned_id_for_slot(const cbx_assignments *asgn, int slot,
     return 0;
 }
 
-/* Resolve a persistent id to a currently enumerated composite path. */
+/* Resolve a persisted identity id to a currently enumerated composite path
+ * using the composite's source-derived physical identity (SPEC §6.2), not the
+ * opaque PersistentId.  A transient identity query failure is never matched:
+ * it must not route a slot onto the wrong physical controller. */
 static bool
 composite_path_for_id(cbx_controllers_tab *tab, const char *id,
                       char out[CBX_MAX_PATH_LEN])
 {
+    if (!tab || !id || !id[0])
+        return false;
+
     for (int ci = 0; ci < tab->model.composite_count; ci++) {
-        char *persistent_id = NULL;
-        int rc = ip_composite_get_persistent_id(tab->backend, tab->bus,
-            tab->model.composites[ci].path, &persistent_id);
-        bool match = rc == 0 && persistent_id &&
-            strcmp(persistent_id, id) == 0;
-        free(persistent_id);
-        if (match) {
-            snprintf(out, CBX_MAX_PATH_LEN, "%s",
-                     tab->model.composites[ci].path);
+        const cbx_composite_entry *comp = &tab->model.composites[ci];
+        int order = comp->index >= 0 ? comp->index : ci;
+        cbx_identity ident;
+        cbx_composite_identity_status status = CBX_COMPOSITE_IDENTITY_OK;
+        if (cbx_composite_identity_extract(tab->backend, tab->bus,
+                                           comp->path, order, &ident,
+                                           &status) != 0)
+            continue;
+        if (status == CBX_COMPOSITE_IDENTITY_QUERY_FAILED)
+            continue;
+        if (ident.layer != CBX_IDENTITY_LAYER_NONE &&
+            strcmp(ident.id, id) == 0) {
+            snprintf(out, CBX_MAX_PATH_LEN, "%s", comp->path);
             return true;
         }
     }

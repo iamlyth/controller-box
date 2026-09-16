@@ -619,23 +619,24 @@ test_hotplug_target_remove_clamps_positions(void **state)
 /* ====================================================================== */
 
 /*
- * Align the fixture grid's persistent ids with what the hotplug rebuild
- * will derive from the device model.  With no PersistentId expectation the
- * mock returns -ENXIO, so fill_composite_info falls back to the degraded
- * composite-<index> identity keyed on the DBus path (id_stable = false).
- * Host Mode re-resolves such degraded rows by composite path, so these
- * tests still prove privilege follows the same physical path rather than a
- * stale row index — while a row with a real PersistentId would be matched
- * by that stable id instead.
+ * Align the fixture grid's identity with what the hotplug rebuild will
+ * derive from the device model.  With no SourceDevicePaths/identity
+ * expectations the mock returns -ENXIO, so fill_composite_info falls back to
+ * the degraded ORDER:<index> connection-order identity (id_stable = false) —
+ * a valid identity (unlike the old invalid `composite-<index>`).  Host Mode
+ * re-resolves such degraded rows by composite path, so these tests still
+ * prove privilege follows the same physical path rather than a stale row
+ * index.
  */
 static void
 sync_grid_identity_from_model(cbx_overlay_service_ctx *svc)
 {
     for (int i = 0; i < svc->grid.row_count &&
                     i < svc->model.composite_count; i++) {
-        snprintf(svc->grid.rows[i].id, CBX_MAX_ID_LEN, "composite-%d",
-                 svc->model.composites[i].index);
-        svc->grid.rows[i].id_stable = false;  /* degraded fallback id */
+        /* Transient identity-query failure at hotplug leaves the rebuilt
+         * row identity-less (safe: no assignment match / no persistence). */
+        svc->grid.rows[i].id[0] = '\0';
+        svc->grid.rows[i].id_stable = false;
         snprintf(svc->grid.rows[i].composite_path, CBX_MAX_PATH_LEN, "%s",
                  svc->model.composites[i].path);
     }
@@ -682,7 +683,7 @@ test_hotplug_host_removed_exits_host_mode(void **state)
 
     assert_false(svc->hp.model_changed);
     assert_int_equal(svc->grid.row_count, 1);
-    assert_string_equal(svc->grid.rows[0].id, "composite-1");
+    assert_string_equal(svc->grid.rows[0].id, "");
     /* Host gone → host mode exited; the surviving controller is not frozen. */
     assert_false(cbx_host_mode_is_active(&svc->hm));
     assert_false(cbx_host_mode_is_frozen(&svc->hm, 0));
@@ -726,7 +727,7 @@ test_hotplug_host_row_shift_preserves_host(void **state)
      * shift to any other controller and the host is not frozen. */
     assert_true(cbx_host_mode_is_active(&svc->hm));
     assert_int_equal(cbx_host_mode_get_host_row(&svc->hm), 0);
-    assert_string_equal(svc->grid.rows[0].id, "composite-1");
+    assert_string_equal(svc->grid.rows[0].id, "");
     assert_false(cbx_host_mode_is_frozen(&svc->hm, 0));
 }
 

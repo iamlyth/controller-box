@@ -81,6 +81,47 @@ cbx_downgrade_find_stronger(const cbx_assignments *a,
                               cbx_identity_layer new_layer,
                               char *out_id, size_t out_len)
 {
+    /* Backwards-compatible wrapper: no claimed set means every stronger id is
+     * treated as potentially related.  Production callers use the _unclaimed
+     * variant so a stronger id already owned by another live controller is
+     * never mistaken for a downgrade of this device. */
+    return cbx_downgrade_find_stronger_unclaimed(a, new_layer, NULL,
+                                                 out_id, out_len);
+}
+
+/* Test membership of `id` in a comma-separated claimed list. */
+static bool
+csv_contains_id(const char *csv, const char *id)
+{
+    if (!csv || !id || !*id)
+        return false;
+
+    const char *p = csv;
+    while (*p) {
+        while (*p == ' ' || *p == '\t' || *p == ',')
+            p++;
+        if (!*p)
+            break;
+        const char *end = strchr(p, ',');
+        if (!end)
+            end = p + strlen(p);
+        const char *trim_end = end;
+        while (trim_end > p && (trim_end[-1] == ' ' || trim_end[-1] == '\t'))
+            trim_end--;
+        if ((size_t)(trim_end - p) == strlen(id) &&
+            strncmp(p, id, (size_t)(trim_end - p)) == 0)
+            return true;
+        p = *end ? end + 1 : end;
+    }
+    return false;
+}
+
+bool
+cbx_downgrade_find_stronger_unclaimed(const cbx_assignments *a,
+                                       cbx_identity_layer new_layer,
+                                       const char *claimed_ids_csv,
+                                       char *out_id, size_t out_len)
+{
     if (!a || !out_id || out_len == 0)
         return false;
 
@@ -95,6 +136,9 @@ cbx_downgrade_find_stronger(const cbx_assignments *a,
             cbx_identity_parse_layer(a->assignments[i].id);
         if (layer == CBX_IDENTITY_LAYER_NONE)
             continue;
+        /* A stronger id already claimed by a live controller is unrelated. */
+        if (csv_contains_id(claimed_ids_csv, a->assignments[i].id))
+            continue;
         /* Looking for a STRONGER (lower) layer than new_layer. */
         if ((int)layer < (int)new_layer && (int)layer < (int)strongest) {
             strongest = layer;
@@ -105,7 +149,7 @@ cbx_downgrade_find_stronger(const cbx_assignments *a,
     if (strongest_idx < 0)
         return false;
 
-    /* Copy the strongest ID to output. */
+    /* Copy the strongest id to output. */
     const char *src = a->assignments[strongest_idx].id;
     size_t len = strlen(src);
     if (len >= out_len)
@@ -116,6 +160,7 @@ cbx_downgrade_find_stronger(const cbx_assignments *a,
 
 int
 cbx_downgrade_resolve(const cbx_assignments *a,
+                       const char *claimed_ids_csv,
                        const cbx_identity *new_ident,
                        int connection_order,
                        cbx_identity *out_ident)
@@ -138,15 +183,18 @@ cbx_downgrade_resolve(const cbx_assignments *a,
             return 0;   /* Existing match — no downgrade. */
     }
 
-    /* Scan for a stronger-layer assignment. */
+    /* Scan for a stronger *unclaimed* assignment.  A stronger id already
+     * matched to another live controller is unrelated and is not inferred as
+     * a downgrade of this device. */
     char stronger_id[CBX_IDENTITY_MAX_LEN];
-    bool found = cbx_downgrade_find_stronger(a, new_ident->layer,
-                                              stronger_id,
-                                              sizeof(stronger_id));
+    bool found = cbx_downgrade_find_stronger_unclaimed(a, new_ident->layer,
+                                                        claimed_ids_csv,
+                                                        stronger_id,
+                                                        sizeof(stronger_id));
     if (!found)
-        return 0;   /* No stronger assignment — no downgrade. */
+        return 0;   /* No related stronger assignment — no downgrade. */
 
-    /* Downgrade detected — fall back to ORDER:n. */
+    /* Downgrade (uncertain) detected — fall back to ORDER:n. */
     cbx_identity_init(out_ident);
     int rc = build_order_identity(connection_order,
                                    out_ident->id,
