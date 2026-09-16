@@ -150,6 +150,13 @@ void ip_input_events_init(ip_input_events *ie,
  * Returns 0 on success, negative errno on failure. */
 int ip_input_events_subscribe(ip_input_events *ie);
 
+/* Release the InputEvent subscription registered by
+ * ip_input_events_subscribe().  Returns 0 on success (including when there
+ * is no matching subscription) and negative errno on failure.  A backend
+ * without unsubscribe support is treated as a no-op success so callers can
+ * always release unconditionally. */
+int ip_input_events_unsubscribe(ip_input_events *ie);
+
 /*
  * Process an InputEvent payload.
  * Validates sender, parses the event string, validates the value,

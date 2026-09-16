@@ -374,6 +374,29 @@ static int mock_subscribe_signal(ip_bus_handle bus, const char *iface,
     return 0;
 }
 
+static int mock_unsubscribe_signal(ip_bus_handle bus, const char *iface,
+                                   const char *member, ip_signal_cb cb,
+                                   void *userdata) {
+    (void)cb;
+    (void)userdata;
+    ip_dbus_mock *mock = (ip_dbus_mock *)bus;
+    if (!mock || !iface || !member) return -EINVAL;
+
+    /* Clear the matching binding's callback instead of compacting the
+     * array: inject_signal/process iterate it live and a re-subscribe
+     * refreshes the same (iface, member) slot, so no duplicate is added
+     * across acquire/release cycles. */
+    for (int i = 0; i < mock->sub_count; i++) {
+        if (strcmp(mock->subscriptions[i].iface, iface) == 0 &&
+            strcmp(mock->subscriptions[i].member, member) == 0) {
+            mock->subscriptions[i].cb       = NULL;
+            mock->subscriptions[i].userdata = NULL;
+            return 0;
+        }
+    }
+    return 0;   /* no matching subscription: idempotent no-op */
+}
+
 static int mock_inject_signal(ip_bus_handle bus, const char *iface,
                               const char *member, const void *payload) {
     ip_dbus_mock *mock = (ip_dbus_mock *)bus;
@@ -448,6 +471,7 @@ const ip_dbus_backend *ip_dbus_mock_backend(ip_dbus_mock *mock) {
     s_mock_backend.set_property         = mock_set_property;
     s_mock_backend.get_managed_objects  = mock_get_managed_objects;
     s_mock_backend.subscribe_signal      = mock_subscribe_signal;
+    s_mock_backend.unsubscribe_signal    = mock_unsubscribe_signal;
     s_mock_backend.inject_signal         = mock_inject_signal;
     s_mock_backend.process               = mock_process;
     return &s_mock_backend;

@@ -385,6 +385,13 @@ editor_enter_target_pick_ptr(cbx_manager *mgr)
 /*  Setup / Teardown                                                   */
 /* ================================================================== */
 
+/* One-shot DbusDevices probe-failure injection for the next forked server.
+ * Set by a dedicated setup before mnp_setup_common() forks the child; the
+ * child inherits the value and returns a DBus error on its first
+ * DbusDevices read.  Reset to 0 after each setup so other tests are
+ * unaffected. */
+static volatile sig_atomic_t s_mnp_fail_next_dbus_devices = 0;
+
 static void
 mnp_setup_common(mnp_fixture *f, bool with_profiles)
 {
@@ -452,6 +459,10 @@ mnp_setup_common(mnp_fixture *f, bool with_profiles)
     g_nip_intercept_mode[0] = 0;
     g_nip_intercept_mode[1] = 0;
 
+    /* Inject a one-shot DbusDevices probe failure into the forked child
+     * when a dedicated setup requested it. */
+    g_nip_fail_next_dbus_devices = s_mnp_fail_next_dbus_devices;
+
     const nip_server_config cfg = { .num_composites = 2, .version = "0.78.0" };
     f->server_pid = nip_fork_server(f->bus_address, &cfg);
     assert_true(f->server_pid > 0);
@@ -507,6 +518,22 @@ mnp_setup_empty(void **state)
     f->daemon_pid = -1;
     f->server_pid = -1;
     mnp_setup_common(f, false);
+    *state = f;
+    return 0;
+}
+
+static int
+mnp_setup_dbus_devices_fail(void **state)
+{
+    mnp_fixture *f = calloc(1, sizeof(*f));
+    assert_non_null(f);
+    f->joy_device_index = -1;
+    f->daemon_pid = -1;
+    f->server_pid = -1;
+    /* The forked server's first DbusDevices read fails once. */
+    s_mnp_fail_next_dbus_devices = 1;
+    mnp_setup_common(f, true);
+    s_mnp_fail_next_dbus_devices = 0;
     *state = f;
     return 0;
 }
@@ -1609,6 +1636,62 @@ test_t16_capture_interception_native(void **state)
     cbx_manager_shutdown(&mgr);
 }
 
+/* A DbusDevices probe failure on the native service fails closed: capture
+ * refuses to start, the composite keeps its prior InterceptMode, and the
+ * editor returns to LIST.  The one-shot fault is injected through the
+ * native server (g_nip_fail_next_dbus_devices); a second attempt recovers
+ * and observes interception on the exact selected composite. */
+static void
+test_t16_dbus_devices_failure_aborts_capture(void **state)
+{
+    mnp_fixture *f = *state;
+    cbx_manager mgr;
+    mnp_init_manager(f, &mgr);
+
+    open_editor_with_composite(f, &mgr);
+    cbx_profiles_tab *pt = cbx_manager_profiles_tab(&mgr);
+
+    /* Enter capture: binding -> BINDING_EDIT -> Capture -> CAPTURE.  The
+     * first DbusDevices probe fails, so acquire aborts before the mode is
+     * changed. */
+    ctrl_press(&mgr, f->joystick, 0);
+    ctrl_press(&mgr, f->joystick, 12);
+    ctrl_press(&mgr, f->joystick, 0);
+    assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
+                     CBX_EDITOR_MODE_LIST);
+    assert_false(cbx_profile_editor_is_capture_active(&pt->editor));
+    assert_false(cbx_profile_editor_intercept_active(&pt->editor));
+    assert_string_equal(cbx_profile_editor_get_status(&pt->editor),
+                        "Capture unavailable: input intercept failed");
+
+    char *mode = NULL;
+    assert_int_equal(ip_composite_get_intercept_mode(f->backend, f->bus,
+                                                     NIP_COMP0, &mode), 0);
+    assert_string_equal(mode, "0");   /* prior mode left untouched */
+    free(mode); mode = NULL;
+
+    /* The fault is consumed: a second attempt acquires interception and
+     * cancels cleanly, restoring the prior mode. */
+    ctrl_press(&mgr, f->joystick, 0);
+    ctrl_press(&mgr, f->joystick, 12);
+    ctrl_press(&mgr, f->joystick, 0);
+    assert_int_equal(cbx_profile_editor_get_mode(&pt->editor),
+                     CBX_EDITOR_MODE_CAPTURE);
+    assert_true(cbx_profile_editor_intercept_active(&pt->editor));
+    assert_int_equal(ip_composite_get_intercept_mode(f->backend, f->bus,
+                                                     NIP_COMP0, &mode), 0);
+    assert_string_equal(mode, "3");
+    free(mode); mode = NULL;
+
+    cbx_profile_editor_cancel_capture(&pt->editor);
+    assert_int_equal(ip_composite_get_intercept_mode(f->backend, f->bus,
+                                                     NIP_COMP0, &mode), 0);
+    assert_string_equal(mode, "0");
+    free(mode);
+
+    cbx_manager_shutdown(&mgr);
+}
+
 /* A physical InputEvent emitted by the native service for the selected
  * composite is dispatched through the full DBus chain and updates the
  * binding; an event from a different composite's DBusDevice is rejected. */
@@ -2587,6 +2670,9 @@ main(void)
         /* Task 16 — native interception and authenticated capture */
         cmocka_unit_test_setup_teardown(
             test_t16_capture_interception_native, mnp_setup, mnp_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_t16_dbus_devices_failure_aborts_capture,
+            mnp_setup_dbus_devices_fail, mnp_teardown),
         cmocka_unit_test_setup_teardown(
             test_t16_capture_input_dispatch_and_reject_foreign,
             mnp_setup, mnp_teardown),

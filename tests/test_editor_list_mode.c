@@ -1128,6 +1128,103 @@ static void test_capture_subscription_failure_aborts(void **state)
     assert_int_not_equal(strcmp(f->mock.last_set_prop, "InterceptMode"), 0);
 }
 
+/* With a composite selected, a DbusDevices probe failure is a required-step
+ * failure: capture refuses to start, the subscription is released and the
+ * InterceptMode is never changed, so a foreign device's events can never be
+ * accepted as the capture source (fail-closed). */
+static void test_capture_dbus_devices_failure_aborts(void **state)
+{
+    pe_fixture *f = *state;
+    cbx_profile p = make_test_profile(1);
+    cbx_profile_editor_load_profile(&f->ed, &p);
+    pe_set_composite_context(f, "1");
+    /* Override DbusDevices with a one-shot probe failure. */
+    assert_int_equal(ip_dbus_mock_expect_error(&f->mock, IP_IFACE_COMPOSITE,
+                                               "DbusDevices", -EIO), 0);
+
+    assert_int_equal(cbx_profile_editor_begin_capture(&f->ed), -EIO);
+    assert_false(cbx_profile_editor_is_capture_active(&f->ed));
+    assert_false(cbx_profile_editor_intercept_active(&f->ed));
+    assert_false(cbx_profile_editor_subscription_active(&f->ed));
+    assert_int_equal(cbx_profile_editor_get_mode(&f->ed),
+                     CBX_EDITOR_MODE_LIST);
+    /* InterceptMode was never written; the composite keeps its prior mode. */
+    assert_int_not_equal(strcmp(f->mock.last_set_prop, "InterceptMode"), 0);
+
+    /* Capture is not active, so no event reaches the binding. */
+    cbx_profile_editor_on_input_event(IP_INPUT_A, IP_INPUT_CAT_BUTTON, 1.0,
+                                      "A", "/other/dbus0", &f->ed);
+    assert_false(cbx_profile_editor_is_capture_active(&f->ed));
+}
+
+/* A prior-InterceptMode read failure aborts acquisition instead of guessing
+ * a restore value, so the composite is never left in a state this editor
+ * did not observe. */
+static void test_capture_prior_mode_failure_aborts(void **state)
+{
+    pe_fixture *f = *state;
+    cbx_profile p = make_test_profile(1);
+    cbx_profile_editor_load_profile(&f->ed, &p);
+    pe_set_composite_context(f, "1");
+    assert_int_equal(ip_dbus_mock_expect_error(&f->mock, IP_IFACE_COMPOSITE,
+                                               "InterceptMode", -EIO), 0);
+
+    assert_int_equal(cbx_profile_editor_begin_capture(&f->ed), -EIO);
+    assert_false(cbx_profile_editor_is_capture_active(&f->ed));
+    assert_false(cbx_profile_editor_intercept_active(&f->ed));
+    assert_false(cbx_profile_editor_subscription_active(&f->ed));
+    assert_int_equal(cbx_profile_editor_get_mode(&f->ed),
+                     CBX_EDITOR_MODE_LIST);
+    assert_int_not_equal(strcmp(f->mock.last_set_prop, "InterceptMode"), 0);
+}
+
+/* The InputEvent subscription is released on cancel, so an idle editor no
+ * longer receives/parses InputEvent payloads. */
+static void test_capture_releases_subscription_on_cancel(void **state)
+{
+    pe_fixture *f = *state;
+    cbx_profile p = make_test_profile(1);
+    cbx_profile_editor_load_profile(&f->ed, &p);
+    pe_set_composite_context(f, "1");
+
+    assert_int_equal(cbx_profile_editor_begin_capture(&f->ed), 0);
+    assert_true(cbx_profile_editor_subscription_active(&f->ed));
+    bool bound = false;
+    for (int i = 0; i < f->mock.sub_count; i++)
+        if (f->mock.subscriptions[i].cb)
+            bound = true;
+    assert_true(bound);
+
+    cbx_profile_editor_cancel_capture(&f->ed);
+    assert_false(cbx_profile_editor_subscription_active(&f->ed));
+    bound = false;
+    for (int i = 0; i < f->mock.sub_count; i++)
+        if (f->mock.subscriptions[i].cb)
+            bound = true;
+    assert_false(bound);
+}
+
+/* A successful capture ends ownership of both the interception and the
+ * subscription, restoring the exact prior InterceptMode. */
+static void test_capture_completion_releases_ownership(void **state)
+{
+    pe_fixture *f = *state;
+    cbx_profile p = make_test_profile(1);
+    cbx_profile_editor_load_profile(&f->ed, &p);
+    pe_set_composite_context(f, "1");
+
+    assert_int_equal(cbx_profile_editor_begin_capture(&f->ed), 0);
+    assert_true(cbx_profile_editor_intercept_active(&f->ed));
+    assert_true(cbx_profile_editor_subscription_active(&f->ed));
+
+    cbx_profile_editor_on_input_event(IP_INPUT_A, IP_INPUT_CAT_BUTTON, 1.0,
+                                      "A", PE_TEST_DBUS_DEVICE, &f->ed);
+    assert_false(cbx_profile_editor_is_capture_active(&f->ed));
+    assert_false(cbx_profile_editor_intercept_active(&f->ed));
+    assert_false(cbx_profile_editor_subscription_active(&f->ed));
+    assert_string_equal(f->mock.last_set_value, "1");
+}
+
 /* Sequential capture also owns interception and restores it on cancel. */
 static void test_sequential_acquires_and_restores_interception(void **state)
 {
@@ -1170,6 +1267,54 @@ static void test_backend_replacement_releases_and_repoints(void **state)
 
     cbx_profile_editor_cancel_capture(&f->ed);
     assert_false(cbx_profile_editor_intercept_active(&f->ed));
+}
+
+/* A backend/composite replacement whose new DbusDevices probe fails aborts
+ * the open capture instead of leaving it running with no device filter. */
+static void test_backend_replacement_probe_failure_aborts_capture(void **state)
+{
+    pe_fixture *f = *state;
+    cbx_profile p = make_test_profile(1);
+    cbx_profile_editor_load_profile(&f->ed, &p);
+    pe_set_composite_context(f, "1");
+    assert_int_equal(cbx_profile_editor_begin_capture(&f->ed), 0);
+    assert_true(cbx_profile_editor_intercept_active(&f->ed));
+
+    /* Repoint at another composite whose DbusDevices probe fails. */
+    assert_int_equal(ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                                            "InterceptMode", "1"), 0);
+    assert_int_equal(ip_dbus_mock_expect_error(&f->mock, IP_IFACE_COMPOSITE,
+                                               "DbusDevices", -EIO), 0);
+    cbx_profile_editor_set_dbus(&f->ed, f->backend, &f->mock,
+        "/org/shadowblip/InputPlumber/CompositeDevice1");
+
+    assert_false(cbx_profile_editor_is_capture_active(&f->ed));
+    assert_false(cbx_profile_editor_intercept_active(&f->ed));
+    assert_false(cbx_profile_editor_subscription_active(&f->ed));
+    assert_int_equal(cbx_profile_editor_get_mode(&f->ed),
+                     CBX_EDITOR_MODE_LIST);
+    assert_string_equal(cbx_profile_editor_get_status(&f->ed),
+                        "Capture unavailable: input intercept failed");
+}
+
+/* Losing the backend while a capture is open aborts it rather than leaving
+ * the editor accepting every device's events. */
+static void test_backend_loss_aborts_capture(void **state)
+{
+    pe_fixture *f = *state;
+    cbx_profile p = make_test_profile(1);
+    cbx_profile_editor_load_profile(&f->ed, &p);
+    pe_set_composite_context(f, "1");
+    assert_int_equal(cbx_profile_editor_begin_capture(&f->ed), 0);
+    assert_true(cbx_profile_editor_intercept_active(&f->ed));
+
+    cbx_profile_editor_set_dbus(&f->ed, NULL, NULL, NULL);
+
+    assert_false(cbx_profile_editor_is_capture_active(&f->ed));
+    assert_false(cbx_profile_editor_intercept_active(&f->ed));
+    assert_false(cbx_profile_editor_subscription_active(&f->ed));
+    assert_int_equal(cbx_profile_editor_get_mode(&f->ed),
+                     CBX_EDITOR_MODE_LIST);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1603,9 +1748,22 @@ int main(void)
         cmocka_unit_test_setup_teardown(
             test_capture_subscription_failure_aborts, setup, teardown),
         cmocka_unit_test_setup_teardown(
+            test_capture_dbus_devices_failure_aborts, setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            test_capture_prior_mode_failure_aborts, setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            test_capture_releases_subscription_on_cancel, setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            test_capture_completion_releases_ownership, setup, teardown),
+        cmocka_unit_test_setup_teardown(
             test_sequential_acquires_and_restores_interception, setup, teardown),
         cmocka_unit_test_setup_teardown(
             test_backend_replacement_releases_and_repoints, setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            test_backend_replacement_probe_failure_aborts_capture,
+            setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            test_backend_loss_aborts_capture, setup, teardown),
 
         /* Accessors */
         cmocka_unit_test(test_accessors_null_safe),

@@ -161,6 +161,15 @@ typedef struct ip_dbus_backend {
                              const char *member, ip_signal_cb cb,
                              void *userdata);
 
+    /* Release a signal subscription previously registered via
+     * subscribe_signal for the same (iface, member, cb, userdata).
+     * Returns 0 on success (including when no matching subscription
+     * exists) and negative errno on failure.  Implementations that cannot
+     * release may leave this NULL; callers must treat NULL as a no-op. */
+    int  (*unsubscribe_signal)(ip_bus_handle bus, const char *iface,
+                               const char *member, ip_signal_cb cb,
+                               void *userdata);
+
     /* Test-only: inject a fake signal message into the mock bus.  This
      * triggers any registered callbacks for (iface, member).  Production
      * implementations set this to NULL. */

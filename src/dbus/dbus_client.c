@@ -875,6 +875,8 @@ sd_subscribe_signal(ip_bus_handle bus, const char *iface,
     }
 
     if (r < 0) {
+        free(data->iface);
+        free(data->member);
         free(data);
         return r;
     }
@@ -883,6 +885,51 @@ sd_subscribe_signal(ip_bus_handle bus, const char *iface,
     w->slot_data[w->slot_count] = data;
     w->slot_count++;
     return 0;
+}
+
+/* --- Vtable: unsubscribe_signal ------------------------------------------ */
+
+static int
+sd_unsubscribe_signal(ip_bus_handle bus, const char *iface,
+                      const char *member, ip_signal_cb cb,
+                      void *userdata)
+{
+    sd_bus_wrapper *w = (sd_bus_wrapper *)bus;
+    if (!w || !iface || !member)
+        return -EINVAL;
+
+    for (int i = 0; i < w->slot_count; i++) {
+        sd_signal_data *sd = (sd_signal_data *)w->slot_data[i];
+        if (!sd || !sd->iface || !sd->member)
+            continue;
+        if (strcmp(sd->iface, iface) != 0 ||
+            strcmp(sd->member, member) != 0)
+            continue;
+        if (sd->cb != cb || sd->userdata != userdata)
+            continue;
+
+        /* Drop the daemon-side match rule and this slot's callback data.
+         * This is safe from inside the slot's own callback: sd-bus holds
+         * its own reference for the duration of dispatch. */
+        if (w->slots[i])
+            w->slots[i] = sd_bus_slot_unref(w->slots[i]);
+        free(sd->iface);
+        free(sd->member);
+        free(sd);
+
+        /* Compact the slot arrays so no hole remains. */
+        int last = w->slot_count - 1;
+        if (i != last) {
+            w->slots[i]     = w->slots[last];
+            w->slot_data[i] = w->slot_data[last];
+        }
+        w->slots[last]     = NULL;
+        w->slot_data[last] = NULL;
+        w->slot_count--;
+        return 0;
+    }
+
+    return 0;   /* no matching subscription: idempotent no-op */
 }
 
 /* --- Vtable: call_method (Task 12) --------------------------------------- */
@@ -1383,6 +1430,7 @@ static const ip_dbus_backend s_sd_backend = {
     .set_property         = sd_set_property,
     .get_managed_objects  = sd_get_managed_objects,
     .subscribe_signal     = sd_subscribe_signal,
+    .unsubscribe_signal   = sd_unsubscribe_signal,
     .inject_signal        = sd_inject_signal,
     .process              = sd_process,
 };

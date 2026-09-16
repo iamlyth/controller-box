@@ -250,6 +250,22 @@ ip_input_events_subscribe(ip_input_events *ie)
         input_event_signal_cb, ie);
 }
 
+int
+ip_input_events_unsubscribe(ip_input_events *ie)
+{
+    if (!ie || !ie->backend)
+        return -EINVAL;
+
+    /* A backend may not implement release (e.g. a partial test vtable);
+     * treat that as an idempotent no-op so callers can always release. */
+    if (!ie->backend->unsubscribe_signal)
+        return 0;
+
+    return ie->backend->unsubscribe_signal(
+        ie->bus, IP_IFACE_DBUS_DEVICE, "InputEvent",
+        input_event_signal_cb, ie);
+}
+
 void
 ip_input_events_handle(ip_input_events *ie,
                         const ip_input_event_payload *payload)

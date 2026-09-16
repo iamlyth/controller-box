@@ -390,7 +390,10 @@ parse_dbus_devices_csv(cbx_profile_editor *ed, const char *csv)
 }
 
 /* True when a signal's DBusDevice path belongs to the selected composite.
- * With no resolved device list the check is skipped (degraded/no-info). */
+ * With no resolved device list the check is skipped: that state is only
+ * reachable when no composite is selected (or without a DBus backend), and
+ * acquire_interception() fails closed rather than allowing a zero-length
+ * filter for a selected composite. */
 static bool
 event_device_accepted(const cbx_profile_editor *ed, const char *path)
 {
@@ -405,15 +408,26 @@ event_device_accepted(const cbx_profile_editor *ed, const char *path)
 void
 cbx_profile_editor_release_interception(cbx_profile_editor *ed)
 {
-    if (!ed || !ed->intercept_active)
+    if (!ed)
         return;
-    if (ed->backend && ed->bus && ed->composite_path[0]) {
-        const char *mode = ed->prior_intercept_mode[0]
-                           ? ed->prior_intercept_mode : "1";
-        ip_composite_set_intercept_mode(ed->backend, ed->bus,
-                                        ed->composite_path, mode);
+
+    /* Give back the InputEvent subscription this editor owns.  This runs
+     * even when the mode was never changed: a failed acquisition can leave
+     * a subscription armed with no interception. */
+    if (ed->subscription_active) {
+        ip_input_events_unsubscribe(&ed->input_events);
+        ed->subscription_active = false;
     }
-    ed->intercept_active = false;
+
+    if (ed->intercept_active) {
+        if (ed->backend && ed->bus && ed->composite_path[0]) {
+            const char *mode = ed->prior_intercept_mode[0]
+                               ? ed->prior_intercept_mode : "1";
+            ip_composite_set_intercept_mode(ed->backend, ed->bus,
+                                            ed->composite_path, mode);
+        }
+        ed->intercept_active = false;
+    }
     ed->prior_intercept_mode[0] = '\0';
 }
 
@@ -423,6 +437,12 @@ cbx_profile_editor_acquire_interception(cbx_profile_editor *ed)
     if (!ed || !ed->backend || !ed->bus)
         return 0;   /* degraded: capture still works via direct callbacks */
 
+    /* Re-entrancy guard: this editor already owns the mode/subscription.
+     * Acquiring again would save "3" (our own value) as the prior mode and
+     * leave the composite intercepted after release. */
+    if (ed->intercept_active || ed->subscription_active)
+        return 0;
+
     /* Subscribe first so a failure aborts before the composite's mode is
      * touched (fail-closed: never leave interception on with no handler). */
     ip_input_events_init(&ed->input_events, ed->backend, ed->bus,
@@ -431,6 +451,7 @@ cbx_profile_editor_acquire_interception(cbx_profile_editor *ed)
     int rc = ip_input_events_subscribe(&ed->input_events);
     if (rc != 0)
         return rc;
+    ed->subscription_active = true;
 
     /* No composite selected: nothing to intercept and no device list to
      * load; the editor still receives InputEvents (degraded behaviour). */
@@ -439,34 +460,52 @@ cbx_profile_editor_acquire_interception(cbx_profile_editor *ed)
         return 0;
     }
 
-    /* Remember the composite's current ownership so completion, cancel,
-     * editor close, disconnect and shutdown can restore it exactly. */
+    /* A composite being selected makes the prior-mode read a required
+     * step.  Guessing a restore value would impose a persistent,
+     * owner-visible state change, so abort (subscription released, mode
+     * untouched) instead. */
     ed->prior_intercept_mode[0] = '\0';
     char *cur = NULL;
-    if (ip_composite_get_intercept_mode(ed->backend, ed->bus,
-                                        ed->composite_path, &cur) == 0
-        && cur && cur[0]) {
-        snprintf(ed->prior_intercept_mode,
-                 sizeof(ed->prior_intercept_mode), "%s", cur);
+    rc = ip_composite_get_intercept_mode(ed->backend, ed->bus,
+                                         ed->composite_path, &cur);
+    if (rc != 0 || !cur || !cur[0]) {
+        free(cur);
+        cbx_profile_editor_release_interception(ed);
+        return rc != 0 ? rc : -ENODATA;
     }
+    snprintf(ed->prior_intercept_mode,
+             sizeof(ed->prior_intercept_mode), "%s", cur);
     free(cur);
-    if (!ed->prior_intercept_mode[0])
-        snprintf(ed->prior_intercept_mode,
-                 sizeof(ed->prior_intercept_mode), "%s", "1");
+
+    /* A composite being selected makes the DbusDevices probe a required
+     * step too: without the composite's own device paths the capture filter
+     * cannot reject events from other controllers.  Probe before changing
+     * the mode so a failure is side-effect free (fail-closed). */
+    ed->dbus_device_count = 0;
+    char *devs = NULL;
+    rc = ip_composite_get_dbus_devices(ed->backend, ed->bus,
+                                       ed->composite_path, &devs);
+    if (rc != 0 || !devs) {
+        free(devs);
+        cbx_profile_editor_release_interception(ed);
+        return rc != 0 ? rc : -ENODATA;
+    }
+    parse_dbus_devices_csv(ed, devs);
+    free(devs);
+    if (ed->dbus_device_count == 0) {
+        /* The composite advertises no usable DBusDevice path, so no event
+         * could be authenticated to it; refuse rather than accept all. */
+        cbx_profile_editor_release_interception(ed);
+        return -ENODATA;
+    }
 
     rc = ip_composite_set_intercept_mode(ed->backend, ed->bus,
                                          ed->composite_path, "3");
-    if (rc != 0)
+    if (rc != 0) {
+        cbx_profile_editor_release_interception(ed);
         return rc;   /* mode unchanged: nothing to restore */
+    }
     ed->intercept_active = true;
-
-    /* Resolve the composite's own DBusDevice paths so events from another
-     * device are rejected. */
-    char *devs = NULL;
-    if (ip_composite_get_dbus_devices(ed->backend, ed->bus,
-                                      ed->composite_path, &devs) == 0 && devs)
-        parse_dbus_devices_csv(ed, devs);
-    free(devs);
     return 0;
 }
 
@@ -858,6 +897,24 @@ cbx_profile_editor_get_profile(const cbx_profile_editor *ed)
 /*  DBus / capabilities                                                */
 /* ------------------------------------------------------------------ */
 
+/* Abort an in-progress capture/sequential run after a backend or composite
+ * replacement could not be re-armed.  Releases any ownership this editor
+ * still holds and returns to the LIST baseline so capture can never
+ * continue with a missing device filter (fail-closed). */
+static void
+editor_abort_capture(cbx_profile_editor *ed)
+{
+    if (!ed)
+        return;
+    cbx_profile_editor_release_interception(ed);
+    ed->capture_active = false;
+    ed->seq_active = false;
+    ed->seq_step = 0;
+    editor_return_to_list(ed);
+    cbx_label_set_text(&ed->status_lbl,
+                       "Capture unavailable: input intercept failed");
+}
+
 void
 cbx_profile_editor_set_dbus(cbx_profile_editor *ed,
                               const ip_dbus_backend *backend,
@@ -901,9 +958,16 @@ cbx_profile_editor_set_dbus(cbx_profile_editor *ed,
     }
 
     /* Re-arm an in-progress capture against the replacement backend so an
-     * open editor keeps working (or restores cleanly on failure). */
-    if (changed && (ed->capture_active || ed->seq_active) && backend && bus)
-        cbx_profile_editor_acquire_interception(ed);
+     * open editor keeps working.  If the backend/composite cannot be
+     * intercepted and authenticated, abort the capture rather than leave
+     * it running with no device filter (fail-closed). */
+    if (changed && (ed->capture_active || ed->seq_active)) {
+        int rc = (backend && bus)
+                 ? cbx_profile_editor_acquire_interception(ed)
+                 : -ENOTCONN;
+        if (rc != 0)
+            editor_abort_capture(ed);
+    }
 }
 
 int
@@ -1557,6 +1621,12 @@ bool
 cbx_profile_editor_intercept_active(const cbx_profile_editor *ed)
 {
     return ed ? ed->intercept_active : false;
+}
+
+bool
+cbx_profile_editor_subscription_active(const cbx_profile_editor *ed)
+{
+    return ed ? ed->subscription_active : false;
 }
 
 int

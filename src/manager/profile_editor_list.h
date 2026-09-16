@@ -156,8 +156,14 @@ typedef struct {
      * therefore owns restoring prior_intercept_mode on exit. */
     bool          intercept_active;
     char          prior_intercept_mode[16]; /* saved "0".."3" before capture */
+    /* true while this editor holds the InputEvent subscription acquired
+     * by acquire_interception(); release_interception() gives it back so an
+     * idle editor no longer receives/parses InputEvent payloads. */
+    bool          subscription_active;
     /* DBusDevice object paths owned by the selected composite.  InputEvents
-     * from any other device path are rejected during capture. */
+     * from any other device path are rejected during capture.  These are
+     * resolved only when a composite is selected; a failed probe aborts
+     * acquisition (fail-closed) rather than accepting every device. */
     char          dbus_devices[CBX_PE_MAX_DBUS_DEVICES][256];
     int           dbus_device_count;
 
@@ -352,17 +358,23 @@ void cbx_profile_editor_cancel_capture(cbx_profile_editor *ed);
 
 /*
  * Acquire the interception + InputEvent subscription needed to capture
- * physical input.  Saves the composite's current InterceptMode, subscribes
- * to InputEvent (idempotent on the production/mock backend), then sets
- * InterceptMode = GAMEPAD_ONLY (3) and resolves the composite's
- * DBusDevice paths.  On failure the prior mode is restored / not changed
- * and a negative errno is returned so the caller can abort capture.
- * With no DBus backend the call is a no-op success (degraded capture).
+ * physical input.  Subscribes to InputEvent, reads and remembers the
+ * composite's current InterceptMode, probes the composite's DbusDevices,
+ * then sets InterceptMode = GAMEPAD_ONLY (3).  With a composite selected
+ * the prior-mode and DbusDevices reads are required steps: a failed or
+ * empty probe aborts with a negative errno, releases the subscription and
+ * leaves the InterceptMode untouched (fail-closed) so events from another
+ * controller can never be captured.  With no DBus backend or no composite
+ * selected the call is a degraded success (no device filter).
  */
 int  cbx_profile_editor_acquire_interception(cbx_profile_editor *ed);
 
-/* Restore the InterceptMode this editor changed during capture, if any.
- * Safe to call repeatedly and on a zeroed editor. */
+/* Restore the InterceptMode this editor changed during capture and release
+ * the InputEvent subscription it owns, if any.  Safe to call repeatedly and
+ * on a zeroed editor.  The release does not re-read the mode: the manager
+ * editor and the overlay service are the only writers for a composite and
+ * run in separate processes, so this editor is the single writer of the
+ * mode it set for the duration of the capture. */
 void cbx_profile_editor_release_interception(cbx_profile_editor *ed);
 
 /*
@@ -404,6 +416,8 @@ int             cbx_profile_editor_get_editing_index(
 bool            cbx_profile_editor_is_capture_active(
     const cbx_profile_editor *ed);
 bool            cbx_profile_editor_intercept_active(
+    const cbx_profile_editor *ed);
+bool            cbx_profile_editor_subscription_active(
     const cbx_profile_editor *ed);
 int             cbx_profile_editor_dbus_device_count(
     const cbx_profile_editor *ed);
