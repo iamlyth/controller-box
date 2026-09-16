@@ -226,7 +226,7 @@ static const cbx_interaction_entry inventory[] = {
 
     { "M23", CBX_CAT_MANAGER_SETTINGS, "Settings tab",
       CBX_WIDGET_EDIT_MODE,
-      "A on theme/opacity/count/type/trigger/icon-override",
+      "A on opacity/count/type/trigger/icon-override (theme is display-only)",
       AVAIL, "Mouse click on item",
       "Edit mode entered for that setting",
       "cbx_manager_handle_event → cbx_settings_tab_activate",

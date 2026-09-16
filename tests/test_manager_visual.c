@@ -674,31 +674,32 @@ test_settings_edit_changes_region(void **state)
     while (cbx_manager_active_tab(mgr) != CBX_MGR_TAB_SETTINGS)
         send_key(mgr, SDLK_RIGHT);
 
-    /* Navigate to theme row (index 1) and enter edit mode. */
+    /* Navigate to opacity row (index 2) and enter edit mode. */
     send_key(mgr, SDLK_DOWN);  /* tabbar -> list */
-    send_key(mgr, SDLK_DOWN);  /* item 1 = theme */
+    send_key(mgr, SDLK_DOWN);  /* item 1 */
+    send_key(mgr, SDLK_DOWN);  /* item 2 = opacity */
     render_and_read(mgr, f->buf_a);
 
-    /* Record the theme row region before editing. */
+    /* Record the opacity row region before editing. */
     int item_h = st->settings_list.item_h;
     int list_x = st->settings_list.base.rect.x;
     int list_w = st->settings_list.base.rect.w;
     int list_y = st->settings_list.base.rect.y;
-    SDL_Rect theme_rect = { list_x, list_y + 1 * item_h, list_w, item_h };
+    SDL_Rect opacity_rect = { list_x, list_y + 2 * item_h, list_w, item_h };
 
     /* Enter edit mode (KEYDOWN + KEYUP to fire on_select -> activate). */
     send_key_press(mgr, SDLK_a);
     assert_int_equal(cbx_settings_tab_mode(st), CBX_ST_MODE_EDIT);
 
-    /* Cycle the theme value. */
-    send_key(mgr, SDLK_UP);  /* default -> dark */
+    /* Adjust the opacity value. */
+    send_key(mgr, SDLK_UP);
 
     /* Render after edit and compare. */
     render_and_read(mgr, f->buf_b);
 
-    /* The theme row region should differ (value label changed). */
+    /* The opacity row region should differ (value label changed). */
     assert_true(region_differs(f->buf_a, f->buf_b, MGR_W,
-                                    &theme_rect));
+                                    &opacity_rect));
 }
 
 /* ------------------------------------------------------------------ */

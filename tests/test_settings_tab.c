@@ -227,40 +227,25 @@ static void test_toggle_launch_boot(void **state)
 
 /* --- Edit tests --------------------------------------------------------- */
 
-/* Edit theme: enter edit mode, cycle up. */
-static void test_edit_theme(void **state)
+/* Theme is fixed to the one implemented palette: the row must not enter an
+ * inert edit mode and every advertised theme must actually be implemented
+ * (SPEC §5.5, §13). */
+static void test_theme_fixed_to_default(void **state)
 {
     st_fixture *f = FIX(state);
     cbx_panel *panel = &f->mgr.panels[CBX_MGR_TAB_SETTINGS];
     cbx_settings_tab_init(&f->tab, panel, &f->mgr.text_cache,
                             &f->mgr.theme, f->mgr.font_id);
 
+    for (int i = 0; cbx_st_themes[i]; i++)
+        assert_true(cbx_theme_is_known(cbx_st_themes[i]));
+
+    assert_false(cbx_settings_tab_row_editable(&f->tab, CBX_ST_SET_THEME));
     f->tab.selected = CBX_ST_SET_THEME;
+    assert_int_equal(cbx_settings_tab_activate(&f->tab), 0);
     assert_int_equal(cbx_settings_tab_mode(&f->tab), CBX_ST_MODE_LIST);
-
-    /* Enter edit mode. */
-    cbx_settings_tab_activate(&f->tab);
-    assert_int_equal(cbx_settings_tab_mode(&f->tab), CBX_ST_MODE_EDIT);
-
-    /* Cycle up: default → dark. */
-    cbx_settings_tab_edit_up(&f->tab);
-    assert_string_equal(f->tab.settings.theme, "dark");
-
-    /* Cycle up: dark → light. */
-    cbx_settings_tab_edit_up(&f->tab);
-    assert_string_equal(f->tab.settings.theme, "light");
-
-    /* Cycle up: light → default (wrap). */
-    cbx_settings_tab_edit_up(&f->tab);
     assert_string_equal(f->tab.settings.theme, "default");
-
-    /* Cycle down: default → light. */
-    cbx_settings_tab_edit_down(&f->tab);
-    assert_string_equal(f->tab.settings.theme, "light");
-
-    /* Confirm edit. */
-    cbx_settings_tab_confirm_edit(&f->tab);
-    assert_int_equal(cbx_settings_tab_mode(&f->tab), CBX_ST_MODE_LIST);
+    assert_non_null(cbx_settings_tab_status(&f->tab));
 }
 
 /* Edit opacity: adjust up and down. */
@@ -437,20 +422,19 @@ static void test_cancel_edit_reverts(void **state)
 
     /* Save initial settings to disk. */
     cbx_settings_tab_save(&f->tab);
-    char orig_theme[64];
-    strncpy(orig_theme, f->tab.settings.theme, sizeof(orig_theme) - 1);
-    orig_theme[sizeof(orig_theme) - 1] = '\0';
+    double orig_opacity = f->tab.settings.overlay_opacity;
 
-    /* Edit theme. */
-    f->tab.selected = CBX_ST_SET_THEME;
+    /* Edit opacity. */
+    f->tab.selected = CBX_ST_SET_OPACITY;
     cbx_settings_tab_activate(&f->tab);
     cbx_settings_tab_edit_up(&f->tab);
-    assert_string_not_equal(f->tab.settings.theme, orig_theme);
+    assert_float_equal(f->tab.settings.overlay_opacity,
+                       orig_opacity + 0.05, 0.001);
 
     /* Cancel reverts. */
     cbx_settings_tab_cancel_edit(&f->tab);
     assert_int_equal(cbx_settings_tab_mode(&f->tab), CBX_ST_MODE_LIST);
-    assert_string_equal(f->tab.settings.theme, orig_theme);
+    assert_float_equal(f->tab.settings.overlay_opacity, orig_opacity, 0.001);
 }
 
 /* --- Save test ---------------------------------------------------------- */
@@ -513,7 +497,7 @@ static void test_accessors_null_safe(void **state)
     assert_int_equal(cbx_settings_tab_mode(NULL), CBX_ST_MODE_LIST);
     assert_int_equal(cbx_settings_tab_selected(NULL), 0);
     assert_null(cbx_settings_tab_status(NULL));
-    assert_int_equal(cbx_settings_tab_setting_count(NULL), CBX_ST_SET_COUNT);
+    assert_int_equal(cbx_settings_tab_setting_count(NULL), 0);
 }
 
 /* --- Icon overrides test ------------------------------------------------ */
@@ -647,6 +631,220 @@ static void test_validate_rejects_empty_icon_override(void **state)
 }
 
 /* ------------------------------------------------------------------ */
+/*  Task 9 — every startup slot, theme honesty, persistence/restart    */
+/* ------------------------------------------------------------------ */
+
+/* Growing/shrinking the count changes the number of type rows and the
+ * trailing rows move with it; every configured slot is reachable. */
+static void test_type_rows_track_count_growth_and_shrink(void **state)
+{
+    st_fixture *f = FIX(state);
+    cbx_panel *panel = &f->mgr.panels[CBX_MGR_TAB_SETTINGS];
+    cbx_settings_tab_init(&f->tab, panel, &f->mgr.text_cache,
+                            &f->mgr.theme, f->mgr.font_id);
+
+    /* Default count = 4 ⇒ 4 type rows, trigger/save immediately after. */
+    assert_int_equal(cbx_settings_tab_type_row_count(&f->tab), 4);
+    assert_int_equal(cbx_settings_tab_trigger_row(&f->tab), 8);
+    assert_int_equal(cbx_settings_tab_icon_override_row(&f->tab), 9);
+    assert_int_equal(cbx_settings_tab_save_row(&f->tab), 10);
+
+    /* Grow to slot 5 through the production edit path. */
+    f->tab.selected = CBX_ST_SET_VC_COUNT;
+    assert_int_equal(cbx_settings_tab_activate(&f->tab), 0);
+    cbx_settings_tab_edit_up(&f->tab);
+    cbx_settings_tab_confirm_edit(&f->tab);
+    assert_int_equal(f->tab.settings.virtual_controllers.count, 5);
+    assert_int_equal(cbx_settings_tab_type_row_count(&f->tab), 5);
+    assert_int_equal(cbx_settings_tab_row_for_type(&f->tab, 4), 8);
+    assert_int_equal(cbx_settings_tab_trigger_row(&f->tab), 9);
+    assert_int_equal(cbx_settings_tab_save_row(&f->tab), 11);
+    assert_int_equal(cbx_list_item_count(&f->tab.settings_list), 12);
+
+    /* Shrink back to 4 through the production edit path. */
+    f->tab.selected = CBX_ST_SET_VC_COUNT;
+    cbx_settings_tab_activate(&f->tab);
+    cbx_settings_tab_edit_down(&f->tab);
+    cbx_settings_tab_confirm_edit(&f->tab);
+    assert_int_equal(f->tab.settings.virtual_controllers.count, 4);
+    assert_int_equal(cbx_settings_tab_type_row_count(&f->tab), 4);
+    assert_int_equal(cbx_settings_tab_save_row(&f->tab), 10);
+}
+
+/* Slot 5 and slot 16 (the maximum) are exposed as editable type rows and
+ * the large list scrolls rather than clipping them. */
+static void test_all_slots_exposed_and_scrollable(void **state)
+{
+    st_fixture *f = FIX(state);
+    cbx_panel *panel = &f->mgr.panels[CBX_MGR_TAB_SETTINGS];
+    cbx_settings_tab_init(&f->tab, panel, &f->mgr.text_cache,
+                            &f->mgr.theme, f->mgr.font_id);
+
+    f->tab.settings.virtual_controllers.count = CBX_MAX_CONTROLLERS;
+    for (int i = 0; i < CBX_MAX_CONTROLLERS; i++)
+        snprintf(f->tab.settings.virtual_controllers.types[i],
+                 CBX_MAX_TYPE_LEN, "xb360");
+    assert_int_equal(cbx_settings_tab_refresh(&f->tab), 0);
+
+    assert_int_equal(cbx_settings_tab_type_row_count(&f->tab),
+                     CBX_MAX_CONTROLLERS);
+    assert_int_equal(cbx_settings_tab_setting_count(&f->tab),
+                     CBX_ST_BASE_ROWS + CBX_MAX_CONTROLLERS +
+                     CBX_ST_TRAILING_ROWS);
+    assert_int_equal(cbx_list_item_count(&f->tab.settings_list),
+                     cbx_settings_tab_setting_count(&f->tab));
+
+    for (int slot = 0; slot < CBX_MAX_CONTROLLERS; slot++) {
+        int row = cbx_settings_tab_row_for_type(&f->tab, slot);
+        assert_int_equal(row, CBX_ST_BASE_ROWS + slot);
+        assert_int_equal(cbx_settings_tab_type_slot(&f->tab, row), slot);
+        assert_true(cbx_settings_tab_row_editable(&f->tab, row));
+    }
+
+    /* Slot 5 = row 9, slot 16 = row 19. */
+    assert_int_equal(cbx_settings_tab_row_for_type(&f->tab, 4), 8);
+    assert_int_equal(cbx_settings_tab_row_for_type(&f->tab, 15), 19);
+
+    /* The final save row must be reachable by scrolling the list, and the
+     * selected row must land inside the visible window. */
+    int save_row = cbx_settings_tab_save_row(&f->tab);
+    assert_int_equal(save_row, 22);
+    cbx_list_set_selected(&f->tab.settings_list, save_row);
+    assert_int_equal(cbx_list_get_selected(&f->tab.settings_list), save_row);
+    int vis = f->tab.settings_list.visible_count;
+    int off = f->tab.settings_list.scroll_offset;
+    assert_true(vis >= 1);
+    assert_true(off <= save_row && save_row < off + vis);
+}
+
+/* Edit slot 5 and slot 16 through the production activate/edit path, save,
+ * restart, and verify both values persisted. */
+static void test_slot5_and_slot16_edit_persist_restart(void **state)
+{
+    st_fixture *f = FIX(state);
+    cbx_panel *panel = &f->mgr.panels[CBX_MGR_TAB_SETTINGS];
+    cbx_settings_tab_init(&f->tab, panel, &f->mgr.text_cache,
+                            &f->mgr.theme, f->mgr.font_id);
+
+    /* Grow to the maximum through the production edit path. */
+    f->tab.selected = CBX_ST_SET_VC_COUNT;
+    cbx_settings_tab_activate(&f->tab);
+    while (f->tab.settings.virtual_controllers.count < CBX_MAX_CONTROLLERS)
+        cbx_settings_tab_edit_up(&f->tab);
+    cbx_settings_tab_confirm_edit(&f->tab);
+    assert_int_equal(f->tab.settings.virtual_controllers.count,
+                     CBX_MAX_CONTROLLERS);
+
+    char slot5_before[CBX_MAX_TYPE_LEN];
+    char slot16_before[CBX_MAX_TYPE_LEN];
+    snprintf(slot5_before, sizeof(slot5_before), "%s",
+             f->tab.settings.virtual_controllers.types[4]);
+    snprintf(slot16_before, sizeof(slot16_before), "%s",
+             f->tab.settings.virtual_controllers.types[15]);
+
+    /* Slot 5 (list row 8). */
+    f->tab.selected = cbx_settings_tab_row_for_type(&f->tab, 4);
+    assert_int_equal(cbx_settings_tab_activate(&f->tab), 0);
+    assert_int_equal(cbx_settings_tab_mode(&f->tab), CBX_ST_MODE_EDIT);
+    cbx_settings_tab_edit_up(&f->tab);
+    assert_string_not_equal(f->tab.settings.virtual_controllers.types[4],
+                            slot5_before);
+    cbx_settings_tab_confirm_edit(&f->tab);
+
+    /* Slot 16 (list row 19). */
+    f->tab.selected = cbx_settings_tab_row_for_type(&f->tab, 15);
+    assert_int_equal(cbx_settings_tab_activate(&f->tab), 0);
+    assert_int_equal(cbx_settings_tab_mode(&f->tab), CBX_ST_MODE_EDIT);
+    cbx_settings_tab_edit_up(&f->tab);
+    assert_string_not_equal(f->tab.settings.virtual_controllers.types[15],
+                            slot16_before);
+    cbx_settings_tab_confirm_edit(&f->tab);
+
+    char slot5_after[CBX_MAX_TYPE_LEN];
+    char slot16_after[CBX_MAX_TYPE_LEN];
+    snprintf(slot5_after, sizeof(slot5_after), "%s",
+             f->tab.settings.virtual_controllers.types[4]);
+    snprintf(slot16_after, sizeof(slot16_after), "%s",
+             f->tab.settings.virtual_controllers.types[15]);
+
+    assert_int_equal(cbx_settings_tab_save(&f->tab), 0);
+
+    /* Restart: discard the working copy and reload from disk. */
+    cbx_settings_tab_shutdown(&f->tab);
+    assert_int_equal(cbx_settings_tab_init(&f->tab, panel, &f->mgr.text_cache,
+                                            &f->mgr.theme, f->mgr.font_id), 0);
+    assert_int_equal(f->tab.settings.virtual_controllers.count,
+                     CBX_MAX_CONTROLLERS);
+    assert_string_equal(f->tab.settings.virtual_controllers.types[4],
+                        slot5_after);
+    assert_string_equal(f->tab.settings.virtual_controllers.types[15],
+                        slot16_after);
+}
+
+/* All remaining settings and an icon override round-trip through save and a
+ * simulated process restart. */
+static void test_remaining_settings_icon_override_persist_restart(void **state)
+{
+    st_fixture *f = FIX(state);
+    cbx_panel *panel = &f->mgr.panels[CBX_MGR_TAB_SETTINGS];
+    cbx_settings_tab_init(&f->tab, panel, &f->mgr.text_cache,
+                            &f->mgr.theme, f->mgr.font_id);
+
+    bool boot = f->tab.settings.launch_at_boot;
+    double opacity = f->tab.settings.overlay_opacity;
+    char trigger[CBX_MAX_STR_LEN];
+    snprintf(trigger, sizeof(trigger), "%s", f->tab.settings.overlay_trigger);
+
+    /* Toggle launch at boot. */
+    f->tab.selected = CBX_ST_SET_LAUNCH_BOOT;
+    assert_int_equal(cbx_settings_tab_activate(&f->tab), 0);
+    assert_int_equal(f->tab.settings.launch_at_boot, !boot);
+
+    /* Opacity +0.05. */
+    f->tab.selected = CBX_ST_SET_OPACITY;
+    cbx_settings_tab_activate(&f->tab);
+    cbx_settings_tab_edit_up(&f->tab);
+    cbx_settings_tab_confirm_edit(&f->tab);
+
+    /* Cycle the trigger to the next combo. */
+    f->tab.selected = cbx_settings_tab_trigger_row(&f->tab);
+    cbx_settings_tab_activate(&f->tab);
+    cbx_settings_tab_edit_up(&f->tab);
+    cbx_settings_tab_confirm_edit(&f->tab);
+    char new_trigger[CBX_MAX_STR_LEN];
+    snprintf(new_trigger, sizeof(new_trigger), "%s",
+             f->tab.settings.overlay_trigger);
+    assert_string_not_equal(new_trigger, trigger);
+
+    /* Icon override: first preset. */
+    f->tab.selected = cbx_settings_tab_icon_override_row(&f->tab);
+    cbx_settings_tab_activate(&f->tab);
+    cbx_settings_tab_edit_up(&f->tab);
+    assert_int_equal(f->tab.settings.icon_override_count, 1);
+    char icon_type[CBX_ICON_OVR_TYPE_LEN];
+    char icon_name[CBX_ICON_OVR_ICON_LEN];
+    snprintf(icon_type, sizeof(icon_type), "%s",
+             f->tab.settings.icon_overrides[0].type);
+    snprintf(icon_name, sizeof(icon_name), "%s",
+             f->tab.settings.icon_overrides[0].icon);
+    cbx_settings_tab_confirm_edit(&f->tab);
+
+    assert_int_equal(cbx_settings_tab_save(&f->tab), 0);
+
+    /* Restart. */
+    cbx_settings_tab_shutdown(&f->tab);
+    assert_int_equal(cbx_settings_tab_init(&f->tab, panel, &f->mgr.text_cache,
+                                            &f->mgr.theme, f->mgr.font_id), 0);
+    const cbx_settings *s = cbx_settings_tab_settings(&f->tab);
+    assert_int_equal(s->launch_at_boot, !boot);
+    assert_float_equal(s->overlay_opacity, opacity + 0.05, 0.001);
+    assert_string_equal(s->overlay_trigger, new_trigger);
+    assert_int_equal(s->icon_override_count, 1);
+    assert_string_equal(s->icon_overrides[0].type, icon_type);
+    assert_string_equal(s->icon_overrides[0].icon, icon_name);
+}
+
+/* ------------------------------------------------------------------ */
 /*  Production-dispatch tests (through cbx_manager_handle_event)        */
 /* ------------------------------------------------------------------ */
 
@@ -734,25 +932,24 @@ test_settings_edit_via_dispatch(void **state)
     /* Down to settings list. */
     send_key_dn(&mgr, SDLK_DOWN);
 
-    /* Navigate to Theme (index 1). */
+    /* Navigate to Overlay Opacity (index 2). */
     send_key_dn(&mgr, SDLK_DOWN);
-    assert_int_equal(cbx_list_get_selected(&st->settings_list), CBX_ST_SET_THEME);
+    send_key_dn(&mgr, SDLK_DOWN);
+    assert_int_equal(cbx_list_get_selected(&st->settings_list), CBX_ST_SET_OPACITY);
 
     /* A to enter edit mode. */
     send_key_dn(&mgr, SDLK_a);
     assert_true(send_key_up(&mgr, SDLK_a));
     assert_int_equal(st->mode, CBX_ST_MODE_EDIT);
 
-    /* Up cycles theme forward. */
-    char orig_theme[64];
-    strncpy(orig_theme, st->settings.theme, sizeof(orig_theme) - 1);
-    orig_theme[sizeof(orig_theme) - 1] = '\0';
+    /* Up adjusts opacity forward. */
+    double orig_opacity = st->settings.overlay_opacity;
     send_key_dn(&mgr, SDLK_UP);
-    assert_string_not_equal(st->settings.theme, orig_theme);
+    assert_float_equal(st->settings.overlay_opacity, orig_opacity + 0.05, 0.001);
 
-    /* Down cycles back. */
+    /* Down adjusts back. */
     send_key_dn(&mgr, SDLK_DOWN);
-    assert_string_equal(st->settings.theme, orig_theme);
+    assert_float_equal(st->settings.overlay_opacity, orig_opacity, 0.001);
 
     /* A confirms edit. */
     send_key_dn(&mgr, SDLK_a);
@@ -785,25 +982,25 @@ test_settings_edit_cancel_via_dispatch(void **state)
     cbx_settings_tab *st = cbx_manager_settings_tab(&mgr);
 
     send_key_dn(&mgr, SDLK_DOWN);
-    send_key_dn(&mgr, SDLK_DOWN);  /* Theme */
+    send_key_dn(&mgr, SDLK_DOWN);  /* item 1 */
+    send_key_dn(&mgr, SDLK_DOWN);  /* item 2 = opacity */
 
     /* Enter edit mode. */
     send_key_dn(&mgr, SDLK_a);
     send_key_up(&mgr, SDLK_a);
     assert_int_equal(st->mode, CBX_ST_MODE_EDIT);
 
-    char orig_theme[64];
-    strncpy(orig_theme, st->settings.theme, sizeof(orig_theme) - 1);
-    orig_theme[sizeof(orig_theme) - 1] = '\0';
+    double orig_opacity = st->settings.overlay_opacity;
 
-    /* Adjust theme. */
+    /* Adjust opacity. */
     send_key_dn(&mgr, SDLK_UP);
-    assert_string_not_equal(st->settings.theme, orig_theme);
+    assert_float_equal(st->settings.overlay_opacity,
+                       orig_opacity + 0.05, 0.001);
 
     /* B cancels edit — reverts from disk. */
     send_key_dn(&mgr, SDLK_b);
     assert_int_equal(st->mode, CBX_ST_MODE_LIST);
-    assert_string_equal(st->settings.theme, orig_theme);
+    assert_float_equal(st->settings.overlay_opacity, orig_opacity, 0.001);
 
     cbx_manager_shutdown(&mgr);
 
@@ -831,7 +1028,7 @@ int main(void)
             st_setup, st_teardown),
         cmocka_unit_test_setup_teardown(test_toggle_launch_boot,
             st_setup, st_teardown),
-        cmocka_unit_test_setup_teardown(test_edit_theme,
+        cmocka_unit_test_setup_teardown(test_theme_fixed_to_default,
             st_setup, st_teardown),
         cmocka_unit_test_setup_teardown(test_edit_opacity,
             st_setup, st_teardown),
@@ -854,6 +1051,17 @@ int main(void)
         cmocka_unit_test(test_icon_overrides_round_trip),
         cmocka_unit_test(test_icon_overrides_full),
         cmocka_unit_test(test_validate_rejects_empty_icon_override),
+        cmocka_unit_test_setup_teardown(
+            test_type_rows_track_count_growth_and_shrink,
+            st_setup, st_teardown),
+        cmocka_unit_test_setup_teardown(test_all_slots_exposed_and_scrollable,
+            st_setup, st_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_slot5_and_slot16_edit_persist_restart,
+            st_setup, st_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_remaining_settings_icon_override_persist_restart,
+            st_setup, st_teardown),
         cmocka_unit_test(test_settings_activate_via_dispatch),
         cmocka_unit_test(test_settings_edit_via_dispatch),
         cmocka_unit_test(test_settings_edit_cancel_via_dispatch),

@@ -95,16 +95,109 @@ static const char *str_prev(const char *const *arr, const char *current)
     return arr[idx];
 }
 
-/* Build a display label for a setting row. */
-static void format_setting_label(cbx_settings_tab *tab, char *buf,
-                                   size_t buflen, cbx_st_setting setting)
+/* ------------------------------------------------------------------ */
+/*  Dynamic row mapping (see settings_tab.h)                          */
+/* ------------------------------------------------------------------ */
+
+int cbx_settings_tab_type_row_count(const cbx_settings_tab *tab)
 {
-    if (!buf || buflen == 0)
+    if (!tab)
+        return 0;
+    int n = tab->settings.virtual_controllers.count;
+    if (n < 1)
+        n = 1;
+    if (n > CBX_MAX_CONTROLLERS)
+        n = CBX_MAX_CONTROLLERS;
+    return n;
+}
+
+int cbx_settings_tab_row_for_type(const cbx_settings_tab *tab, int slot)
+{
+    if (slot < 0 || slot >= cbx_settings_tab_type_row_count(tab))
+        return -1;
+    return CBX_ST_BASE_ROWS + slot;
+}
+
+int cbx_settings_tab_trigger_row(const cbx_settings_tab *tab)
+{
+    return CBX_ST_BASE_ROWS + cbx_settings_tab_type_row_count(tab);
+}
+
+int cbx_settings_tab_icon_override_row(const cbx_settings_tab *tab)
+{
+    return cbx_settings_tab_trigger_row(tab) + 1;
+}
+
+int cbx_settings_tab_save_row(const cbx_settings_tab *tab)
+{
+    return cbx_settings_tab_trigger_row(tab) + 2;
+}
+
+int cbx_settings_tab_type_slot(const cbx_settings_tab *tab, int row)
+{
+    int slot = row - CBX_ST_BASE_ROWS;
+    if (slot < 0 || slot >= cbx_settings_tab_type_row_count(tab))
+        return -1;
+    return slot;
+}
+
+bool cbx_settings_tab_row_editable(const cbx_settings_tab *tab, int row)
+{
+    if (!tab || row < 0)
+        return false;
+    /* Only "default" has an implemented palette (SPEC §13); presenting an
+     * inert theme cycle would be dishonest. */
+    if (row == CBX_ST_SET_THEME)
+        return false;
+    if (row < CBX_ST_BASE_ROWS)
+        return true;
+    if (cbx_settings_tab_type_slot(tab, row) >= 0)
+        return true;
+    if (row == cbx_settings_tab_trigger_row(tab))
+        return true;
+    if (row == cbx_settings_tab_icon_override_row(tab))
+        return true;
+    if (row == cbx_settings_tab_save_row(tab))
+        return true;
+    return false;
+}
+
+/* Map a list row to its logical setting kind.  Type rows all report
+ * CBX_ST_SET_VC_TYPE_0 as a generic marker; callers must resolve the slot
+ * with cbx_settings_tab_type_slot(). */
+static cbx_st_setting st_row_kind(const cbx_settings_tab *tab, int row)
+{
+    if (!tab)
+        return CBX_ST_SET_COUNT;
+    switch (row) {
+    case 0: return CBX_ST_SET_LAUNCH_BOOT;
+    case 1: return CBX_ST_SET_THEME;
+    case 2: return CBX_ST_SET_OPACITY;
+    case 3: return CBX_ST_SET_VC_COUNT;
+    default: break;
+    }
+    if (cbx_settings_tab_type_slot(tab, row) >= 0)
+        return CBX_ST_SET_VC_TYPE_0;
+    if (row == cbx_settings_tab_trigger_row(tab))
+        return CBX_ST_SET_TRIGGER;
+    if (row == cbx_settings_tab_icon_override_row(tab))
+        return CBX_ST_SET_ICON_OVERRIDE;
+    if (row == cbx_settings_tab_save_row(tab))
+        return CBX_ST_SET_SAVE;
+    return CBX_ST_SET_COUNT;
+}
+
+/* Build a display label for a settings-list row. */
+static void format_setting_label(cbx_settings_tab *tab, char *buf,
+                                   size_t buflen, int row)
+{
+    if (!buf || buflen == 0 || !tab)
         return;
 
     const cbx_settings *s = &tab->settings;
+    cbx_st_setting kind = st_row_kind(tab, row);
 
-    switch (setting) {
+    switch (kind) {
     case CBX_ST_SET_LAUNCH_BOOT:
         snprintf(buf, buflen, "Launch at Boot: %s",
                  s->launch_at_boot ? "On" : "Off");
@@ -119,16 +212,13 @@ static void format_setting_label(cbx_settings_tab *tab, char *buf,
         snprintf(buf, buflen, "Virtual Controllers: %d",
                  s->virtual_controllers.count);
         break;
-    case CBX_ST_SET_VC_TYPE_0:
-    case CBX_ST_SET_VC_TYPE_1:
-    case CBX_ST_SET_VC_TYPE_2:
-    case CBX_ST_SET_VC_TYPE_3: {
-        int slot = setting - CBX_ST_SET_VC_TYPE_0;
-        if (slot < s->virtual_controllers.count)
+    case CBX_ST_SET_VC_TYPE_0: {
+        int slot = cbx_settings_tab_type_slot(tab, row);
+        if (slot >= 0)
             snprintf(buf, buflen, "  Controller %d Type: %s",
                      slot + 1, s->virtual_controllers.types[slot]);
         else
-            snprintf(buf, buflen, "  Controller %d Type: (unused)", slot + 1);
+            buf[0] = '\0';
         break;
     }
     case CBX_ST_SET_TRIGGER:
@@ -268,16 +358,16 @@ int cbx_settings_tab_refresh(cbx_settings_tab *tab)
 
     cbx_list_clear(&tab->settings_list);
 
+    int rows = cbx_settings_tab_setting_count(tab);
     char label[CBX_ST_LABEL_LEN];
-    for (int i = 0; i < CBX_ST_SET_COUNT; i++) {
-        format_setting_label(tab, label, sizeof(label),
-                               (cbx_st_setting)i);
+    for (int i = 0; i < rows; i++) {
+        format_setting_label(tab, label, sizeof(label), i);
         cbx_list_add_item(&tab->settings_list, label, NULL, tab);
     }
 
     /* Clamp selection. */
-    if (tab->selected >= CBX_ST_SET_COUNT)
-        tab->selected = CBX_ST_SET_COUNT - 1;
+    if (tab->selected >= rows)
+        tab->selected = rows - 1;
     if (tab->selected < 0)
         tab->selected = 0;
     cbx_list_set_selected(&tab->settings_list, tab->selected);
@@ -312,7 +402,17 @@ int cbx_settings_tab_save(cbx_settings_tab *tab)
     if (!tab)
         return -EINVAL;
 
-    int rc = cbx_settings_save(&tab->settings);
+    /* Publish the working copy into the Manager's authoritative struct so
+     * the Controllers tab and process-restart paths observe the same values.
+     * The working copy is synchronised from the authoritative struct
+     * whenever the tab becomes active, so it can never resurrect a stale
+     * topology over a newer Controllers-tab change. */
+    if (tab->external && tab->external != &tab->settings)
+        *tab->external = tab->settings;
+
+    const cbx_settings *to_save = tab->external ? tab->external
+                                                : &tab->settings;
+    int rc = cbx_settings_save(to_save);
     if (rc < 0) {
         cbx_label_set_text(&tab->status_lbl, "Save failed!");
         return rc;
@@ -320,6 +420,40 @@ int cbx_settings_tab_save(cbx_settings_tab *tab)
 
     cbx_label_set_text(&tab->status_lbl, "Settings saved.");
     return 0;
+}
+
+int cbx_settings_tab_set_external(cbx_settings_tab *tab,
+                                   cbx_settings *external)
+{
+    if (!tab)
+        return -EINVAL;
+    tab->external = external;
+    if (external) {
+        tab->settings = *external;
+        tab->loaded = true;
+    }
+    return cbx_settings_tab_refresh(tab);
+}
+
+int cbx_settings_tab_sync(cbx_settings_tab *tab)
+{
+    if (!tab)
+        return -EINVAL;
+    /* Never discard a setting being edited; the user must confirm or cancel
+     * before the tab refreshes from the authoritative state. */
+    if (tab->mode == CBX_ST_MODE_EDIT)
+        return 0;
+
+    if (tab->external) {
+        tab->settings = *tab->external;
+        tab->loaded = true;
+    } else {
+        int rc = cbx_settings_load(&tab->settings);
+        if (rc < 0)
+            cbx_settings_defaults(&tab->settings);
+        tab->loaded = true;
+    }
+    return cbx_settings_tab_refresh(tab);
 }
 
 int cbx_settings_tab_move_up(cbx_settings_tab *tab)
@@ -357,15 +491,22 @@ int cbx_settings_tab_activate(cbx_settings_tab *tab)
     if (!tab)
         return -EINVAL;
 
-    cbx_st_setting sel = (cbx_st_setting)tab->selected;
-
-    if (tab->mode == CBX_ST_MODE_EDIT) {
-        /* A in edit mode = confirm edit. */
+    if (tab->mode == CBX_ST_MODE_EDIT)
         return cbx_settings_tab_confirm_edit(tab);
+
+    int row = tab->selected;
+    cbx_st_setting kind = st_row_kind(tab, row);
+
+    /* A row that is not adjustable must not silently enter an inert edit
+     * mode (SPEC §5.5, §13). */
+    if (!cbx_settings_tab_row_editable(tab, row)) {
+        if (kind == CBX_ST_SET_THEME)
+            cbx_label_set_text(&tab->status_lbl,
+                "Only the default theme is implemented");
+        return 0;
     }
 
-    /* List mode: activate based on setting type. */
-    switch (sel) {
+    switch (kind) {
     case CBX_ST_SET_LAUNCH_BOOT:
         /* Toggle directly. */
         tab->settings.launch_at_boot = !tab->settings.launch_at_boot;
@@ -375,19 +516,15 @@ int cbx_settings_tab_activate(cbx_settings_tab *tab)
     case CBX_ST_SET_SAVE:
         return cbx_settings_tab_save(tab);
 
-    case CBX_ST_SET_THEME:
     case CBX_ST_SET_OPACITY:
     case CBX_ST_SET_VC_COUNT:
     case CBX_ST_SET_VC_TYPE_0:
-    case CBX_ST_SET_VC_TYPE_1:
-    case CBX_ST_SET_VC_TYPE_2:
-    case CBX_ST_SET_VC_TYPE_3:
     case CBX_ST_SET_TRIGGER:
     case CBX_ST_SET_ICON_OVERRIDE:
         /* Enter edit mode for adjustable settings. */
         tab->mode = CBX_ST_MODE_EDIT;
         /* For icon override, initialize preset index from current state. */
-        if (sel == CBX_ST_SET_ICON_OVERRIDE) {
+        if (kind == CBX_ST_SET_ICON_OVERRIDE) {
             tab->icon_preset_idx = 0;  /* default to "None" */
             if (tab->settings.icon_override_count > 0) {
                 /* Find matching preset for the first override. */
@@ -438,15 +575,10 @@ int cbx_settings_tab_edit_up(cbx_settings_tab *tab)
     if (!tab || tab->mode != CBX_ST_MODE_EDIT)
         return -EINVAL;
 
-    cbx_st_setting sel = (cbx_st_setting)tab->selected;
+    int row = tab->selected;
+    cbx_st_setting kind = st_row_kind(tab, row);
 
-    switch (sel) {
-    case CBX_ST_SET_THEME: {
-        const char *next = str_next(cbx_st_themes, tab->settings.theme);
-        strncpy(tab->settings.theme, next, sizeof(tab->settings.theme) - 1);
-        tab->settings.theme[sizeof(tab->settings.theme) - 1] = '\0';
-        break;
-    }
+    switch (kind) {
     case CBX_ST_SET_OPACITY:
         tab->settings.overlay_opacity += 0.05;
         if (tab->settings.overlay_opacity > 1.0)
@@ -462,12 +594,9 @@ int cbx_settings_tab_edit_up(cbx_settings_tab *tab)
                         sizeof(tab->settings.virtual_controllers.types[i]) - 1);
         }
         break;
-    case CBX_ST_SET_VC_TYPE_0:
-    case CBX_ST_SET_VC_TYPE_1:
-    case CBX_ST_SET_VC_TYPE_2:
-    case CBX_ST_SET_VC_TYPE_3: {
-        int slot = sel - CBX_ST_SET_VC_TYPE_0;
-        if (slot < tab->settings.virtual_controllers.count) {
+    case CBX_ST_SET_VC_TYPE_0: {
+        int slot = cbx_settings_tab_type_slot(tab, row);
+        if (slot >= 0) {
             const char *next = str_next(st_known_types,
                                         tab->settings.virtual_controllers.types[slot]);
             strncpy(tab->settings.virtual_controllers.types[slot], next,
@@ -504,15 +633,10 @@ int cbx_settings_tab_edit_down(cbx_settings_tab *tab)
     if (!tab || tab->mode != CBX_ST_MODE_EDIT)
         return -EINVAL;
 
-    cbx_st_setting sel = (cbx_st_setting)tab->selected;
+    int row = tab->selected;
+    cbx_st_setting kind = st_row_kind(tab, row);
 
-    switch (sel) {
-    case CBX_ST_SET_THEME: {
-        const char *prev = str_prev(cbx_st_themes, tab->settings.theme);
-        strncpy(tab->settings.theme, prev, sizeof(tab->settings.theme) - 1);
-        tab->settings.theme[sizeof(tab->settings.theme) - 1] = '\0';
-        break;
-    }
+    switch (kind) {
     case CBX_ST_SET_OPACITY:
         tab->settings.overlay_opacity -= 0.05;
         if (tab->settings.overlay_opacity < 0.0)
@@ -522,12 +646,9 @@ int cbx_settings_tab_edit_down(cbx_settings_tab *tab)
         if (tab->settings.virtual_controllers.count > 1)
             tab->settings.virtual_controllers.count--;
         break;
-    case CBX_ST_SET_VC_TYPE_0:
-    case CBX_ST_SET_VC_TYPE_1:
-    case CBX_ST_SET_VC_TYPE_2:
-    case CBX_ST_SET_VC_TYPE_3: {
-        int slot = sel - CBX_ST_SET_VC_TYPE_0;
-        if (slot < tab->settings.virtual_controllers.count) {
+    case CBX_ST_SET_VC_TYPE_0: {
+        int slot = cbx_settings_tab_type_slot(tab, row);
+        if (slot >= 0) {
             const char *prev = str_prev(st_known_types,
                                           tab->settings.virtual_controllers.types[slot]);
             strncpy(tab->settings.virtual_controllers.types[slot], prev,
@@ -577,8 +698,12 @@ void cbx_settings_tab_cancel_edit(cbx_settings_tab *tab)
     if (tab->mode != CBX_ST_MODE_EDIT)
         return;
 
-    /* Reload settings from disk to revert changes. */
-    if (tab->loaded) {
+    /* Revert the working copy to the last authoritative state.  When bound
+     * to the Manager this is the shared struct, so cancelling one tab's edit
+     * never reverts a newer topology written by the other tab. */
+    if (tab->external) {
+        tab->settings = *tab->external;
+    } else if (tab->loaded) {
         int rc = cbx_settings_load(&tab->settings);
         if (rc < 0)
             cbx_settings_defaults(&tab->settings);
@@ -666,6 +791,8 @@ const char *cbx_settings_tab_status(const cbx_settings_tab *tab)
 
 int cbx_settings_tab_setting_count(const cbx_settings_tab *tab)
 {
-    (void)tab;
-    return CBX_ST_SET_COUNT;
+    if (!tab)
+        return 0;
+    return CBX_ST_BASE_ROWS + cbx_settings_tab_type_row_count(tab) +
+           CBX_ST_TRAILING_ROWS;
 }

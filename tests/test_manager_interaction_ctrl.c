@@ -200,6 +200,14 @@ list_center_x(const cbx_list *lst)
     return lst->base.rect.x + lst->base.rect.w / 2;
 }
 
+/* Y-coordinate of a row within the currently scrolled visible window. */
+static int
+list_visible_item_y(const cbx_list *lst, int index)
+{
+    int vis_index = index - lst->scroll_offset;
+    return lst->base.rect.y + vis_index * lst->item_h + lst->item_h / 2;
+}
+
 /* ------------------------------------------------------------------ */
 /*  Fixture                                                           */
 /* ------------------------------------------------------------------ */
@@ -926,22 +934,21 @@ test_settings_edit_flow_controller_path(void **state)
     switch_to_settings(mgr);
     send_key_dn(mgr, SDLK_DOWN);  /* → list */
 
-    /* Navigate to theme (item 1). */
+    /* Navigate to opacity (item 2). */
+    send_key_dn(mgr, SDLK_DOWN);
     send_key_dn(mgr, SDLK_DOWN);
     assert_int_equal(cbx_list_get_selected(&st->settings_list),
-                     CBX_ST_SET_THEME);
+                     CBX_ST_SET_OPACITY);
 
-    /* A → enter edit mode (fires on_select → st->selected = 1 → activate). */
+    /* A → enter edit mode (fires on_select → st->selected = 2 → activate). */
     send_key_press(mgr, SDLK_a);
     assert_int_equal(cbx_settings_tab_mode(st), CBX_ST_MODE_EDIT);
 
-    /* DOWN → cycle theme value. */
-    char before[256];
-    snprintf(before, sizeof(before), "%s",
-             cbx_settings_tab_settings(st)->theme);
+    /* DOWN → adjust opacity value. */
+    double before = cbx_settings_tab_settings(st)->overlay_opacity;
     send_key_dn(mgr, SDLK_DOWN);
-    const char *after = cbx_settings_tab_settings(st)->theme;
-    assert_string_not_equal(before, after);
+    double after = cbx_settings_tab_settings(st)->overlay_opacity;
+    assert_float_equal(after, before - 0.05, 0.001);
 
     /* A → confirm edit → mode returns to LIST. */
     send_key_press(mgr, SDLK_a);
@@ -958,12 +965,12 @@ test_settings_edit_enter_pointer_path(void **state)
 
     switch_to_settings(mgr);
 
-    /* Click on theme (item 1) → on_select → activate → edit mode. */
+    /* Click on opacity (item 2) → on_select → activate → edit mode. */
     int px = list_center_x(&st->settings_list);
-    int py = list_item_y(&st->settings_list, 1);
+    int py = list_item_y(&st->settings_list, 2);
     send_mouse_click(mgr, px, py);
 
-    assert_int_equal(cbx_settings_tab_selected(st), CBX_ST_SET_THEME);
+    assert_int_equal(cbx_settings_tab_selected(st), CBX_ST_SET_OPACITY);
     assert_int_equal(cbx_settings_tab_mode(st), CBX_ST_MODE_EDIT);
 }
 
@@ -982,13 +989,12 @@ test_settings_cancel_edit_controller_path(void **state)
 
     switch_to_settings(mgr);
     send_key_dn(mgr, SDLK_DOWN);  /* → list */
-    send_key_dn(mgr, SDLK_DOWN);  /* → theme (item 1) */
+    send_key_dn(mgr, SDLK_DOWN);  /* → item 1 */
+    send_key_dn(mgr, SDLK_DOWN);  /* → item 2 = opacity */
     assert_int_equal(cbx_list_get_selected(&st->settings_list),
-                     CBX_ST_SET_THEME);
+                     CBX_ST_SET_OPACITY);
 
-    const char *original = cbx_settings_tab_settings(st)->theme;
-    char saved[256];
-    snprintf(saved, sizeof(saved), "%s", original);
+    double saved = cbx_settings_tab_settings(st)->overlay_opacity;
 
     /* Enter edit. */
     send_key_press(mgr, SDLK_a);
@@ -996,12 +1002,14 @@ test_settings_cancel_edit_controller_path(void **state)
 
     /* Change value. */
     send_key_dn(mgr, SDLK_DOWN);
-    assert_string_not_equal(cbx_settings_tab_settings(st)->theme, saved);
+    assert_float_equal(cbx_settings_tab_settings(st)->overlay_opacity,
+                       saved - 0.05, 0.001);
 
     /* B → cancel → value reverts. */
     send_key_dn(mgr, SDLK_b);
     assert_int_equal(cbx_settings_tab_mode(st), CBX_ST_MODE_LIST);
-    assert_string_equal(cbx_settings_tab_settings(st)->theme, saved);
+    assert_float_equal(cbx_settings_tab_settings(st)->overlay_opacity,
+                       saved, 0.001);
 }
 
 /* M23 pointer + M26 controller: enter edit via click, then B to cancel
@@ -1015,25 +1023,25 @@ test_settings_cancel_edit_pointer_path(void **state)
 
     switch_to_settings(mgr);
 
-    const char *original = cbx_settings_tab_settings(st)->theme;
-    char saved[256];
-    snprintf(saved, sizeof(saved), "%s", original);
+    double saved = cbx_settings_tab_settings(st)->overlay_opacity;
 
-    /* Click on theme row → enters edit mode. */
+    /* Click on opacity row (item 2) → enters edit mode. */
     int px = list_center_x(&st->settings_list);
-    int py = list_item_y(&st->settings_list, 1);
+    int py = list_item_y(&st->settings_list, 2);
     send_mouse_click(mgr, px, py);
-    assert_int_equal(cbx_settings_tab_selected(st), CBX_ST_SET_THEME);
+    assert_int_equal(cbx_settings_tab_selected(st), CBX_ST_SET_OPACITY);
     assert_int_equal(cbx_settings_tab_mode(st), CBX_ST_MODE_EDIT);
 
     /* Change value via keyboard. */
     send_key_dn(mgr, SDLK_DOWN);
-    assert_string_not_equal(cbx_settings_tab_settings(st)->theme, saved);
+    assert_float_equal(cbx_settings_tab_settings(st)->overlay_opacity,
+                       saved - 0.05, 0.001);
 
     /* B → cancel → value reverts. */
     send_key_dn(mgr, SDLK_b);
     assert_int_equal(cbx_settings_tab_mode(st), CBX_ST_MODE_LIST);
-    assert_string_equal(cbx_settings_tab_settings(st)->theme, saved);
+    assert_float_equal(cbx_settings_tab_settings(st)->overlay_opacity,
+                       saved, 0.001);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1645,6 +1653,280 @@ test_settings_icon_override_pointer_path(void **state)
     assert_int_equal(loaded.icon_override_count, 1);
     assert_string_equal(cbx_settings_icon_override(&loaded, "xb360"),
                          "cc-ps5");
+}
+
+/* ------------------------------------------------------------------ */
+/*  Task 9 — all startup slots and Settings/Controllers synchronisation */
+/* ------------------------------------------------------------------ */
+
+/* Move the settings-list highlight to a specific row through the production
+ * focus/navigation path (DOWN/UP dispatched to the manager). */
+static void
+nav_settings_to_row(cbx_manager *mgr, cbx_settings_tab *st, int row)
+{
+    if (!st->settings_list.base.focused)
+        send_key_dn(mgr, SDLK_DOWN);
+    while (cbx_list_get_selected(&st->settings_list) < row)
+        send_key_dn(mgr, SDLK_DOWN);
+    while (cbx_list_get_selected(&st->settings_list) > row)
+        send_key_dn(mgr, SDLK_UP);
+    assert_int_equal(cbx_list_get_selected(&st->settings_list), row);
+}
+
+/* Click a top-level tab through production pointer dispatch. */
+static void
+click_tab(cbx_manager *mgr, int tab)
+{
+    SDL_Rect tb;
+    cbx_widget_get_rect(&mgr->tabbar.base, &tb);
+    int tab_w = tb.w / CBX_MGR_TAB_COUNT;
+    send_mouse_click(mgr, tb.x + tab_w * tab + tab_w / 2,
+                     tb.y + tb.h / 2);
+}
+
+/* Saving the Settings tab after the Controllers tab added a slot must not
+ * overwrite the newer topology with the settings tab's stale copy. */
+static void
+test_settings_save_preserves_newer_controllers_topology(void **state)
+{
+    mi_fixture *f = *state;
+    cbx_manager *mgr = &f->mgr;
+    cbx_controllers_tab *ct = cbx_manager_controllers_tab(mgr);
+    cbx_settings_tab *st = cbx_manager_settings_tab(mgr);
+
+    /* Controllers tab adds one slot through the production DBus path. */
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "CreateTargetDevice",
+                            "/org/shadowblip/InputPlumber/devices/target/gamepad1");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_OBJECT_MANAGER,
+                            "GetManagedObjects", FIXTURE_2C2T);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_TARGET,
+                            "DeviceType", "ds5");
+    assert_int_equal(cbx_controllers_tab_add(ct, "ds5"), 0);
+    assert_int_equal(mgr->settings.virtual_controllers.count, 5);
+    assert_int_equal(ct->expected_target_count, 5);
+
+    /* Entering Settings synchronises the working copy to that topology. */
+    switch_to_settings(mgr);
+    const cbx_settings *s = cbx_settings_tab_settings(st);
+    assert_int_equal(s->virtual_controllers.count, 5);
+
+    /* Change a settings-owned field and save. */
+    nav_settings_to_row(mgr, st, CBX_ST_SET_LAUNCH_BOOT);
+    bool boot = s->launch_at_boot;
+    send_key_press(mgr, SDLK_a);
+    assert_int_equal(s->launch_at_boot, !boot);
+
+    nav_settings_to_row(mgr, st, cbx_settings_tab_save_row(st));
+    send_key_press(mgr, SDLK_a);
+    assert_string_equal(cbx_settings_tab_status(st), "Settings saved.");
+
+    /* The newer topology survives; the settings change is persisted. */
+    cbx_settings loaded;
+    assert_int_equal(cbx_settings_load(&loaded), 0);
+    assert_int_equal(loaded.virtual_controllers.count, 5);
+    assert_int_equal(loaded.launch_at_boot, !boot);
+}
+
+/* An in-progress Settings edit abandoned by switching tabs must not later
+ * overwrite a topology change made on the Controllers tab. */
+static void
+test_settings_abandoned_edit_does_not_overwrite_topology(void **state)
+{
+    mi_fixture *f = *state;
+    cbx_manager *mgr = &f->mgr;
+    cbx_controllers_tab *ct = cbx_manager_controllers_tab(mgr);
+    cbx_settings_tab *st = cbx_manager_settings_tab(mgr);
+
+    switch_to_settings(mgr);
+    /* Start editing the count but leave the tab without confirming. */
+    nav_settings_to_row(mgr, st, CBX_ST_SET_VC_COUNT);
+    send_key_press(mgr, SDLK_a);
+    send_key_dn(mgr, SDLK_UP);   /* working copy 4 -> 5 (unsaved) */
+    assert_int_equal(cbx_settings_tab_settings(st)->virtual_controllers.count,
+                     5);
+    assert_int_equal(cbx_settings_tab_mode(st), CBX_ST_MODE_EDIT);
+
+    /* Leaving Settings discards the in-progress edit. */
+    click_tab(mgr, CBX_MGR_TAB_CONTROLLERS);
+    assert_int_equal(cbx_settings_tab_mode(st), CBX_ST_MODE_LIST);
+    assert_int_equal(cbx_settings_tab_settings(st)->virtual_controllers.count,
+                     4);
+
+    /* Controllers tab adds a slot (external/disk count becomes 5). */
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "CreateTargetDevice",
+                            "/org/shadowblip/InputPlumber/devices/target/gamepad1");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_OBJECT_MANAGER,
+                            "GetManagedObjects", FIXTURE_2C2T);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_TARGET,
+                            "DeviceType", "ds5");
+    assert_int_equal(cbx_controllers_tab_add(ct, "ds5"), 0);
+    assert_int_equal(mgr->settings.virtual_controllers.count, 5);
+
+    /* Return to Settings, change a settings-owned field, and save. */
+    switch_to_settings(mgr);
+    assert_int_equal(cbx_settings_tab_settings(st)->virtual_controllers.count,
+                     5);
+    nav_settings_to_row(mgr, st, CBX_ST_SET_LAUNCH_BOOT);
+    send_key_press(mgr, SDLK_a);
+    nav_settings_to_row(mgr, st, cbx_settings_tab_save_row(st));
+    send_key_press(mgr, SDLK_a);
+
+    cbx_settings loaded;
+    assert_int_equal(cbx_settings_load(&loaded), 0);
+    assert_int_equal(loaded.virtual_controllers.count, 5);
+}
+
+/* A topology change saved from Settings is reflected in the Controllers
+ * tab's expected count when the tab is next activated. */
+static void
+test_settings_topology_change_updates_controllers_expected_count(void **state)
+{
+    mi_fixture *f = *state;
+    cbx_manager *mgr = &f->mgr;
+    cbx_settings_tab *st = cbx_manager_settings_tab(mgr);
+
+    switch_to_settings(mgr);
+    nav_settings_to_row(mgr, st, CBX_ST_SET_VC_COUNT);
+    send_key_press(mgr, SDLK_a);          /* enter edit */
+    send_key_dn(mgr, SDLK_UP);            /* 4 -> 5 */
+    send_key_press(mgr, SDLK_a);          /* confirm */
+    nav_settings_to_row(mgr, st, cbx_settings_tab_save_row(st));
+    send_key_press(mgr, SDLK_a);          /* save */
+    assert_int_equal(mgr->settings.virtual_controllers.count, 5);
+
+    click_tab(mgr, CBX_MGR_TAB_CONTROLLERS);
+    assert_int_equal(cbx_manager_active_tab(mgr), CBX_MGR_TAB_CONTROLLERS);
+    assert_int_equal(cbx_manager_controllers_tab(mgr)->expected_target_count,
+                     5);
+}
+
+/* Slot 5 and slot 16 selectors are reachable and editable through normal
+ * controller dispatch, and the values persist across save/restart. */
+static void
+test_settings_slot5_slot16_controller_path(void **state)
+{
+    mi_fixture *f = *state;
+    cbx_manager *mgr = &f->mgr;
+    cbx_settings_tab *st = cbx_manager_settings_tab(mgr);
+
+    switch_to_settings(mgr);
+    nav_settings_to_row(mgr, st, CBX_ST_SET_VC_COUNT);
+    send_key_press(mgr, SDLK_a);
+    for (int i = 0; i < CBX_MAX_CONTROLLERS - 4; i++)
+        send_key_dn(mgr, SDLK_UP);
+    send_key_press(mgr, SDLK_a);
+    assert_int_equal(cbx_settings_tab_settings(st)->virtual_controllers.count,
+                     CBX_MAX_CONTROLLERS);
+
+    /* Slot 5 (row 8). */
+    int row5 = cbx_settings_tab_row_for_type(st, 4);
+    nav_settings_to_row(mgr, st, row5);
+    char before5[CBX_MAX_TYPE_LEN];
+    snprintf(before5, sizeof(before5), "%s",
+             cbx_settings_tab_settings(st)->virtual_controllers.types[4]);
+    send_key_press(mgr, SDLK_a);
+    assert_int_equal(cbx_settings_tab_mode(st), CBX_ST_MODE_EDIT);
+    send_key_dn(mgr, SDLK_UP);
+    assert_string_not_equal(
+        cbx_settings_tab_settings(st)->virtual_controllers.types[4], before5);
+    send_key_press(mgr, SDLK_a);
+
+    /* Slot 16 (row 19) is reachable after the list scrolls. */
+    int row16 = cbx_settings_tab_row_for_type(st, 15);
+    nav_settings_to_row(mgr, st, row16);
+    char before16[CBX_MAX_TYPE_LEN];
+    snprintf(before16, sizeof(before16), "%s",
+             cbx_settings_tab_settings(st)->virtual_controllers.types[15]);
+    send_key_press(mgr, SDLK_a);
+    assert_int_equal(cbx_settings_tab_mode(st), CBX_ST_MODE_EDIT);
+    send_key_dn(mgr, SDLK_UP);
+    assert_string_not_equal(
+        cbx_settings_tab_settings(st)->virtual_controllers.types[15], before16);
+    send_key_press(mgr, SDLK_a);
+
+    /* Save and confirm persistence. */
+    char after5[CBX_MAX_TYPE_LEN];
+    char after16[CBX_MAX_TYPE_LEN];
+    snprintf(after5, sizeof(after5), "%s",
+             cbx_settings_tab_settings(st)->virtual_controllers.types[4]);
+    snprintf(after16, sizeof(after16), "%s",
+             cbx_settings_tab_settings(st)->virtual_controllers.types[15]);
+    nav_settings_to_row(mgr, st, cbx_settings_tab_save_row(st));
+    send_key_press(mgr, SDLK_a);
+
+    cbx_settings loaded;
+    assert_int_equal(cbx_settings_load(&loaded), 0);
+    assert_int_equal(loaded.virtual_controllers.count, CBX_MAX_CONTROLLERS);
+    assert_string_equal(loaded.virtual_controllers.types[4], after5);
+    assert_string_equal(loaded.virtual_controllers.types[15], after16);
+}
+
+/* Slot 5 and slot 16 selectors are also reachable by pointer click inside
+ * their rendered (scrolled) bounds — no clipping at the maximum count. */
+static void
+test_settings_slot5_slot16_pointer_path(void **state)
+{
+    mi_fixture *f = *state;
+    cbx_manager *mgr = &f->mgr;
+    cbx_settings_tab *st = cbx_manager_settings_tab(mgr);
+
+    switch_to_settings(mgr);
+    /* Grow to the maximum through the production edit path. */
+    nav_settings_to_row(mgr, st, CBX_ST_SET_VC_COUNT);
+    send_key_press(mgr, SDLK_a);
+    for (int i = 0; i < CBX_MAX_CONTROLLERS - 4; i++)
+        send_key_dn(mgr, SDLK_UP);
+    send_key_press(mgr, SDLK_a);
+
+    int px = list_center_x(&st->settings_list);
+
+    /* Slot 5 click. */
+    int row5 = cbx_settings_tab_row_for_type(st, 4);
+    cbx_list_set_selected(&st->settings_list, row5);
+    char before5[CBX_MAX_TYPE_LEN];
+    snprintf(before5, sizeof(before5), "%s",
+             cbx_settings_tab_settings(st)->virtual_controllers.types[4]);
+    send_mouse_click(mgr, px, list_visible_item_y(&st->settings_list, row5));
+    assert_int_equal(cbx_settings_tab_selected(st), row5);
+    assert_int_equal(cbx_settings_tab_mode(st), CBX_ST_MODE_EDIT);
+    send_key_dn(mgr, SDLK_UP);
+    assert_string_not_equal(
+        cbx_settings_tab_settings(st)->virtual_controllers.types[4], before5);
+    send_key_press(mgr, SDLK_a);
+
+    /* Slot 16 click — the list must scroll the row into view first. */
+    int row16 = cbx_settings_tab_row_for_type(st, 15);
+    cbx_list_set_selected(&st->settings_list, row16);
+    int vis = st->settings_list.visible_count;
+    int off = st->settings_list.scroll_offset;
+    assert_true(vis >= 1);
+    assert_true(off <= row16 && row16 < off + vis);
+
+    char before16[CBX_MAX_TYPE_LEN];
+    snprintf(before16, sizeof(before16), "%s",
+             cbx_settings_tab_settings(st)->virtual_controllers.types[15]);
+    send_mouse_click(mgr, px, list_visible_item_y(&st->settings_list, row16));
+    assert_int_equal(cbx_settings_tab_selected(st), row16);
+    assert_int_equal(cbx_settings_tab_mode(st), CBX_ST_MODE_EDIT);
+    send_key_dn(mgr, SDLK_UP);
+    assert_string_not_equal(
+        cbx_settings_tab_settings(st)->virtual_controllers.types[15], before16);
+    send_key_press(mgr, SDLK_a);
+
+    /* Save and reload. */
+    char after16[CBX_MAX_TYPE_LEN];
+    snprintf(after16, sizeof(after16), "%s",
+             cbx_settings_tab_settings(st)->virtual_controllers.types[15]);
+    nav_settings_to_row(mgr, st, cbx_settings_tab_save_row(st));
+    send_key_press(mgr, SDLK_a);
+    cbx_settings loaded;
+    assert_int_equal(cbx_settings_load(&loaded), 0);
+    assert_int_equal(loaded.virtual_controllers.count, CBX_MAX_CONTROLLERS);
+    assert_string_equal(loaded.virtual_controllers.types[15], after16);
 }
 
 /* ------------------------------------------------------------------ */
@@ -2339,6 +2621,23 @@ main(void)
             test_settings_icon_override_controller_path, mi_setup, mi_teardown),
         cmocka_unit_test_setup_teardown(
             test_settings_icon_override_pointer_path, mi_setup, mi_teardown),
+
+        /* Task 9 — all startup slots and Settings/Controllers sync */
+        cmocka_unit_test_setup_teardown(
+            test_settings_save_preserves_newer_controllers_topology,
+            mi_setup, mi_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_settings_abandoned_edit_does_not_overwrite_topology,
+            mi_setup, mi_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_settings_topology_change_updates_controllers_expected_count,
+            mi_setup, mi_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_settings_slot5_slot16_controller_path,
+            mi_setup, mi_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_settings_slot5_slot16_pointer_path,
+            mi_setup, mi_teardown),
 
         /* Disabled / degraded scenarios */
         cmocka_unit_test(test_d01_inputplumber_unavailable),

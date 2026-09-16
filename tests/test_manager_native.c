@@ -820,27 +820,27 @@ test_m26_cancel_edit_controller(void **state)
 
     cbx_settings_tab *st = cbx_manager_settings_tab(&mgr);
 
-    /* Navigate to theme (index 1) */
-    nav_to_setting_ctrl(&mgr, f->joystick, CBX_ST_SET_THEME);
-    assert_int_equal(cbx_list_get_selected(&st->settings_list), CBX_ST_SET_THEME);
+    /* Navigate to opacity (index 2) */
+    nav_to_setting_ctrl(&mgr, f->joystick, CBX_ST_SET_OPACITY);
+    assert_int_equal(cbx_list_get_selected(&st->settings_list), CBX_ST_SET_OPACITY);
 
     /* Save original value */
-    char saved[64];
-    snprintf(saved, sizeof(saved), "%s",
-             cbx_settings_tab_settings(st)->theme);
+    float saved = (float)cbx_settings_tab_settings(st)->overlay_opacity;
 
     /* Enter edit mode */
     ctrl_press(&mgr, f->joystick, 0);
     assert_int_equal(cbx_settings_tab_mode(st), CBX_ST_MODE_EDIT);
 
-    /* Change value (wraps: default → light) */
+    /* Change value (dpad down -> opacity decreases) */
     ctrl_press(&mgr, f->joystick, 12);
-    assert_string_equal(cbx_settings_tab_settings(st)->theme, "light");
+    assert_float_equal(cbx_settings_tab_settings(st)->overlay_opacity,
+                       saved - 0.05f, 0.001f);
 
     /* B → cancel → value reverts */
     ctrl_press(&mgr, f->joystick, 1);
     assert_int_equal(cbx_settings_tab_mode(st), CBX_ST_MODE_LIST);
-    assert_string_equal(cbx_settings_tab_settings(st)->theme, saved);
+    assert_float_equal(cbx_settings_tab_settings(st)->overlay_opacity,
+                       saved, 0.001f);
 
     cbx_manager_shutdown(&mgr);
 }
@@ -862,24 +862,24 @@ test_m26_cancel_edit_pointer(void **state)
     send_key_dn(&mgr, SDLK_RIGHT);
 
     /* Save original value */
-    char saved[64];
-    snprintf(saved, sizeof(saved), "%s",
-             cbx_settings_tab_settings(st)->theme);
+    float saved = (float)cbx_settings_tab_settings(st)->overlay_opacity;
 
-    /* Click on theme (index 1) → enter edit mode */
+    /* Click on opacity (index 2) → enter edit mode */
     int px = list_center_x(&st->settings_list);
-    int py = list_item_y(&st->settings_list, CBX_ST_SET_THEME);
+    int py = list_item_y(&st->settings_list, CBX_ST_SET_OPACITY);
     send_mouse_click(&mgr, px, py);
     assert_int_equal(cbx_settings_tab_mode(st), CBX_ST_MODE_EDIT);
 
-    /* Change value (wraps: default → light) */
+    /* Change value (opacity decreases) */
     send_key_dn(&mgr, SDLK_DOWN);
-    assert_string_equal(cbx_settings_tab_settings(st)->theme, "light");
+    assert_float_equal(cbx_settings_tab_settings(st)->overlay_opacity,
+                       saved - 0.05f, 0.001f);
 
     /* B → cancel → value reverts */
     send_key_dn(&mgr, SDLK_b);
     assert_int_equal(cbx_settings_tab_mode(st), CBX_ST_MODE_LIST);
-    assert_string_equal(cbx_settings_tab_settings(st)->theme, saved);
+    assert_float_equal(cbx_settings_tab_settings(st)->overlay_opacity,
+                       saved, 0.001f);
 
     cbx_manager_shutdown(&mgr);
 }

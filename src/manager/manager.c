@@ -766,6 +766,11 @@ cbx_manager_init_with_dbus(cbx_manager *mgr, const char *font_path,
         return rc;
     }
 
+    /* Bind the Settings tab to the Manager's authoritative settings.  Both
+     * tabs then edit one topology, and a save from either cannot overwrite a
+     * newer value written by the other (SPEC §5.5). */
+    cbx_settings_tab_set_external(&mgr->st, &mgr->settings);
+
     /* Reactive PropertiesChanged subscription (Task 5): observe the live
      * per-device property state in the Manager as well as the overlay
      * (SPEC §10.1).  Best-effort — a degraded bus has no trusted sender yet
@@ -1467,7 +1472,14 @@ cbx_manager_on_tab_change(cbx_widget *w, int new_tab, void *user_data)
     if (!mgr || new_tab < 0 || new_tab >= CBX_MGR_TAB_COUNT)
         return;
 
+    int old_tab = mgr->active_tab;
     mgr->active_tab = new_tab;
+
+    /* Leaving Settings abandons an in-progress edit so a stale working copy
+     * cannot later overwrite a topology changed on the Controllers tab. */
+    if (old_tab == CBX_MGR_TAB_SETTINGS && new_tab != CBX_MGR_TAB_SETTINGS &&
+        cbx_settings_tab_mode(&mgr->st) == CBX_ST_MODE_EDIT)
+        cbx_settings_tab_cancel_edit(&mgr->st);
 
     /* Show only the active panel. */
     for (int i = 0; i < CBX_MGR_TAB_COUNT; i++)
@@ -1476,6 +1488,10 @@ cbx_manager_on_tab_change(cbx_widget *w, int new_tab, void *user_data)
     /* Refresh the newly active tab to replace stale data. */
     switch (new_tab) {
     case CBX_MGR_TAB_CONTROLLERS:
+        /* Pick up any topology change saved from the Settings tab before
+         * checking for orphan columns. */
+        cbx_controllers_tab_set_expected_count(&mgr->ct,
+            mgr->settings.virtual_controllers.count);
         /* Guard against NULL backend (degraded mode). */
         if (mgr->ct.backend) {
             if (!mgr->ct.add_btn.base.interactive)
@@ -1508,7 +1524,9 @@ cbx_manager_on_tab_change(cbx_widget *w, int new_tab, void *user_data)
         break;
     }
     case CBX_MGR_TAB_SETTINGS:
-        cbx_settings_tab_refresh(&mgr->st);
+        /* Refresh the working copy from the shared authoritative settings so
+         * a Controllers-tab topology change is visible (and preserved) here. */
+        cbx_settings_tab_sync(&mgr->st);
         break;
     default:
         break;

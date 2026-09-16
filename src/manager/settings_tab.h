@@ -27,7 +27,15 @@
 /* ------------------------------------------------------------------ */
 
 #define CBX_ST_LABEL_LEN   256
-#define CBX_ST_SETTING_COUNT 10 /* number of editable setting rows */
+
+/* The settings list is dynamic: four fixed leading rows (launch, theme,
+ * opacity, virtual-controller count), one type selector row for every
+ * configured slot (1..CBX_MAX_CONTROLLERS), then three trailing rows
+ * (trigger, icon override, save).  The enum values below name the logical
+ * kinds; only for the default 4-slot layout do they also equal the row
+ * index.  Production code must map rows through the helpers below. */
+#define CBX_ST_BASE_ROWS       4
+#define CBX_ST_TRAILING_ROWS   3
 
 /* ------------------------------------------------------------------ */
 /*  Setting identifiers                                               */
@@ -35,13 +43,13 @@
 
 typedef enum {
     CBX_ST_SET_LAUNCH_BOOT = 0,   /* toggle: On/Off                    */
-    CBX_ST_SET_THEME,            /* cycle: default, dark, light       */
+    CBX_ST_SET_THEME,            /* display: implemented theme name   */
     CBX_ST_SET_OPACITY,          /* adjust: 0.0–1.0 in 0.05 steps     */
     CBX_ST_SET_VC_COUNT,         /* adjust: 1–16                       */
-    CBX_ST_SET_VC_TYPE_0,        /* cycle through known types (slot 0) */
-    CBX_ST_SET_VC_TYPE_1,        /* slot 1                             */
-    CBX_ST_SET_VC_TYPE_2,        /* slot 2                             */
-    CBX_ST_SET_VC_TYPE_3,        /* slot 3                             */
+    CBX_ST_SET_VC_TYPE_0,        /* type-selector row (slot carried)  */
+    CBX_ST_SET_VC_TYPE_1,        /* legacy alias (slot 1)             */
+    CBX_ST_SET_VC_TYPE_2,        /* legacy alias (slot 2)             */
+    CBX_ST_SET_VC_TYPE_3,        /* legacy alias (slot 3)             */
     CBX_ST_SET_TRIGGER,         /* cycle: Select+A, Start+B, L3+R3    */
     CBX_ST_SET_ICON_OVERRIDE,   /* cycle: preset icon overrides (§8.4) */
     CBX_ST_SET_SAVE,            /* Save button                        */
@@ -63,8 +71,13 @@ typedef enum {
 
 typedef struct {
     /* --- Data (owned) ---------------------------------------------- */
-    cbx_settings settings;       /* current settings (loaded from disk) */
+    cbx_settings settings;       /* current working settings             */
     bool          loaded;         /* settings have been loaded            */
+    /* Optional authoritative settings owned by the Manager.  When set, the
+     * working copy above is edited locally and only published on save, so
+     * Controllers-topology changes made on the other tab are never
+     * overwritten with a stale copy.  Borrowed, never freed. */
+    cbx_settings *external;
 
     /* --- Widgets (owned) ------------------------------------------- */
     cbx_list   settings_list;    /* list of setting rows                 */
@@ -188,8 +201,49 @@ int                 cbx_settings_tab_selected(const cbx_settings_tab *tab);
 const char         *cbx_settings_tab_status(const cbx_settings_tab *tab);
 int                 cbx_settings_tab_setting_count(const cbx_settings_tab *tab);
 
-/* Known theme values for cycling. */
-static const char *const cbx_st_themes[] = {"default", "dark", "light", NULL};
+/*
+ * Dynamic row mapping.  A settings-list row is one of:
+ *   [0] launch at boot
+ *   [1] theme
+ *   [2] overlay opacity
+ *   [3] virtual-controller count
+ *   [4 .. 3+count]  one type selector per configured slot
+ *   [4+count]       overlay trigger
+ *   [5+count]       icon override
+ *   [6+count]       save
+ *
+ * The helpers below map between row indices and logical settings so callers
+ * never assume the default 4-slot layout.  `type_slot` returns -1 when the
+ * row is not a configured type row.
+ */
+int  cbx_settings_tab_type_row_count(const cbx_settings_tab *tab);
+int  cbx_settings_tab_row_for_type(const cbx_settings_tab *tab, int slot);
+int  cbx_settings_tab_trigger_row(const cbx_settings_tab *tab);
+int  cbx_settings_tab_icon_override_row(const cbx_settings_tab *tab);
+int  cbx_settings_tab_save_row(const cbx_settings_tab *tab);
+int  cbx_settings_tab_type_slot(const cbx_settings_tab *tab, int row);
+
+/* True when the row is an enabled, adjustable setting.  The theme row is
+ * non-editable while only the built-in default theme is implemented
+ * (SPEC §5.5, §13): presenting an inert cycle would be dishonest. */
+bool cbx_settings_tab_row_editable(const cbx_settings_tab *tab, int row);
+
+/*
+ * Bind the tab to the Manager's authoritative settings struct.  The working
+ * copy is refreshed from it immediately.  Passing NULL unbinds.
+ */
+int cbx_settings_tab_set_external(cbx_settings_tab *tab,
+                                   cbx_settings *external);
+
+/*
+ * Refresh the working copy from the authoritative struct (or disk when
+ * unbound) and rebuild the list.  Does not discard an edit in progress.
+ */
+int cbx_settings_tab_sync(cbx_settings_tab *tab);
+
+/* Known, actually-implemented theme values (SPEC §13).  Only "default" has
+ * a palette in cbx_theme_load(); do not list unimplemented names. */
+static const char *const cbx_st_themes[] = {"default", NULL};
 
 /* Known trigger combos for cycling. */
 static const char *const cbx_st_triggers[] = {"Select+A", "Start+B", "L3+R3", NULL};
