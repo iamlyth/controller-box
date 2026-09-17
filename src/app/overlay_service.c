@@ -2655,6 +2655,8 @@ int run_overlay_service(int dry_run)
 
     /* --- 6. Build the selection grid --------------------------------- */
     svc->comp_count = svc->model.composite_count;
+    fprintf(stderr, "controller-box: comp_count=%d composite_count=%d\n",
+            svc->comp_count, svc->model.composite_count);
     if (svc->comp_count > CBX_MAX_COMPOSITES)
         svc->comp_count = CBX_MAX_COMPOSITES;
     if (svc->comp_count > 0)
@@ -2812,6 +2814,9 @@ int run_overlay_service(int dry_run)
     }
 
     /* --- 12. Poll loop (Task 4) -------------------------------------- */
+    fprintf(stderr, "controller-box: entering main loop (backend_ready=%d, comp_count=%d)\n",
+            svc->backend_ready, svc->comp_count);
+
     while (g_running) {
         cbx_overlay_service_step(svc);
         SDL_Delay(10);
