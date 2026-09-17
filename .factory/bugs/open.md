@@ -199,3 +199,123 @@ SDL2 does not natively support system tray icons. Options:
 
 This is a UX enhancement, not a functional bug, but it significantly
 improves usability for end users who need confirmation the service is running.
+
+---
+
+## BUG-0025: Overlay service finds no composite devices (comp_count=0)
+
+**Severity:** Critical
+**Component:** overlay service / InputPlumber integration
+**Date discovered:** 2026-09-16
+
+### Description
+
+The overlay service connects to InputPlumber (dbus connected=1,
+backend_ready=1) and reports "triggers registered, overlay ready", but
+no poll ticks ever fire. Pressing Select+A does nothing. The service
+runs silently until killed.
+
+Debug logging shows:
+- DBus connection succeeds
+- Wire steps succeed (returns 0)
+- But no poll events are generated (poll_count stays 0)
+
+The most likely cause is comp_count=0: the service's reconcile_enumerate
+found no composite devices from InputPlumber's ObjectManager, so
+cbx_overlay_rearm_polls arms 0 polls, and the trigger registration loop
+does nothing. The service reports "ready" because
+overlay_wire_required_steps returns 0 even when comp_count is 0.
+
+### Root cause hypothesis
+
+InputPlumber v0.78.0 (nixpkgs) may not expose virtual controllers as
+composite devices in the ObjectManager interface the way the code
+expects. The service enumerates composites via
+`org.freedesktop.DBus.ObjectManager.GetManagedObjects` at
+`/org/shadowblip/InputPlumber`, filtering for
+`org.shadowblip.Input.CompositeDevice` interfaces. If InputPlumber
+doesn't create composite devices until a source device is assigned to
+a target, or if the D-Bus interface names changed in v0.78, the
+enumeration returns 0 composites.
+
+### Why tests pass but real usage fails
+
+All 91 tests pass because they use mock DBus (tests/dbus_mock.c) which
+always returns the expected composite devices. Real InputPlumber may:
+1. Not expose composites via ObjectManager at all in v0.78
+2. Use different interface names or object paths
+3. Require explicit composite device creation before enumeration
+4. Need the manager to create/assign composites first
+
+This is a fundamental testing gap: mock DBus tests don't validate real
+InputPlumber integration.
+
+### Fix approach (for the campaign)
+
+1. **Diagnose**: Add a diagnostic mode that dumps what InputPlumber's
+   ObjectManager.GetManagedObjects actually returns at runtime. Or
+   use `dbus-send`/`gdbus` to inspect the real ObjectManager tree.
+
+2. **Fix enumeration**: Compare what the code expects vs what InputPlumber
+   v0.78 actually exposes. The interface name
+   `org.shadowblip.Input.CompositeDevice` and object path prefix
+   `/org/shadowblip/InputPlumber/CompositeDevice` may have changed.
+
+3. **Add integration tests**: Create a test that connects to a real
+   (or more realistic mock) InputPlumber instance and verifies the
+   enumeration path works. The mock should simulate v0.78's actual
+   ObjectManager behavior, not just return hardcoded test data.
+
+4. **Fail loudly when comp_count=0**: The service should not report
+   "overlay ready" when there are 0 composite devices. It should
+   either wait for devices or log a clear error.
+
+5. **Handle degraded mode gracefully**: If no composites are found,
+   the service should enter a waiting state and re-enumerate when
+   InputPlumber's NameOwnerChanged fires, rather than silently
+   running with 0 polls.
+
+---
+
+## BUG-0026: Tests use mock DBus that doesn't match real InputPlumber behavior
+
+**Severity:** Major
+**Component:** testing infrastructure
+**Date discovered:** 2026-09-16
+
+### Description
+
+The entire test suite (91 tests) uses mock DBus (tests/dbus_mock.c) that
+returns hardcoded responses. This means tests pass even when the code
+doesn't work with real InputPlumber. Multiple bugs (BUG-0020 overlay
+not appearing, BUG-0021 D-pad navigation, BUG-0022 B button conflict,
+BUG-0025 no composite devices) were not caught by tests because the
+mock doesn't simulate real InputPlumber behavior.
+
+### Root cause
+
+The mock DBus (tests/dbus_mock.c) is a test harness that returns
+predefined responses for DBus method calls. It doesn't:
+- Simulate ObjectManager.GetManagedObjects with realistic data
+- Simulate intercept mode state transitions
+- Simulate signal emission (InputEvent, PropertiesChanged)
+- Simulate the trigger activation flow
+- Match InputPlumber v0.78's actual interface/path structure
+
+### Fix approach (for the campaign)
+
+1. Create an integration test that runs against a real InputPlumber
+   instance (or a more realistic mock that reads actual interface
+   definitions from InputPlumber's D-Bus XML)
+
+2. Add a test mode that connects to the system bus and verifies
+   the enumeration, trigger registration, and intercept mode flow
+   against a running InputPlumber (skip with exit 77 if unavailable)
+
+3. The native DBus tests (test_native_dbus.c, test_overlay_native.c)
+   use a private DBus server, but it still uses the mock — make it
+   use a more realistic InputPlumber simulation
+
+4. Consider adding a "smoke test" that actually launches InputPlumber
+   (from nixpkgs) in a test fixture and runs the overlay service
+   against it
