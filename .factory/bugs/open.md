@@ -173,3 +173,29 @@ The controllers tab should display the active profile name for each
 controller slot. The code has `controllers_tab.c:610` which can retrieve
 the profile routed through a target path, but it may not be displayed
 prominently in the UI.
+---
+
+## BUG-0024: System tray icon for overlay service
+
+**Severity:** Enhancement
+**Component:** overlay service / UX
+**Date discovered:** 2026-09-16
+
+### Description
+
+The overlay service runs as a background process with no visible
+indication that it's running. A system tray icon would:
+
+1. Reassure the user the service is active
+2. Provide menu access to settings, manager, or quit
+3. Show status (connected to InputPlumber, number of controllers)
+
+### Implementation notes
+
+SDL2 does not natively support system tray icons. Options:
+- Freedesktop StatusNotifierItem via DBus (works on KDE, GNOME with extension)
+- AppIndicator via libappindicator
+- Simple GTK tray icon
+
+This is a UX enhancement, not a functional bug, but it significantly
+improves usability for end users who need confirmation the service is running.
