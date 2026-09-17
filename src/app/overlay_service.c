@@ -119,6 +119,8 @@ on_intercept_activating(void *userdata)
     cbx_poll_activation_ctx *act = (cbx_poll_activation_ctx *)userdata;
     if (!act || !act->lifecycle)
         return;
+    fprintf(stderr, "controller-box: trigger detected on %s — activating overlay\n",
+            act->composite_path[0] ? act->composite_path : "(unknown)");
     /* Update lifecycle's composite_path to the activating composite. */
     if (act->composite_path[0]) {
         size_t len = strlen(act->composite_path);
@@ -128,6 +130,7 @@ on_intercept_activating(void *userdata)
         act->lifecycle->composite_path[len] = '\0';
     }
     cbx_overlay_lifecycle_activate(act->lifecycle);
+    fprintf(stderr, "controller-box: overlay lifecycle activated\n");
 }
 
 #ifdef CBX_TESTING
@@ -2369,8 +2372,12 @@ cbx_overlay_service_step(cbx_overlay_service_ctx *svc)
              * event performs exactly one DBus read per device (linear reads).
              * The ownership+generation policy is in
              * poll_event_targets_live_poll. */
-            if (poll_event_targets_live_poll(svc, &ev))
+            if (poll_event_targets_live_poll(svc, &ev)) {
                 ip_intercept_poll_tick((ip_intercept_poll *)ev.user.data1);
+                svc->poll_count++;
+                if (svc->poll_count % 100 == 0)
+                    fprintf(stderr, "controller-box: poll tick #%d\n", svc->poll_count);
+            }
         } else if (ev.type == SDL_QUIT) {
             g_running = 0;
         } else if (ev.type == SDL_RENDER_TARGETS_RESET) {
