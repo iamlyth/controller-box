@@ -2582,6 +2582,8 @@ int run_overlay_service(int dry_run)
         return 1;
     }
     svc->backend_ready = ip_connection_is_connected(&svc->conn);
+    fprintf(stderr, "controller-box: dbus connected=%d backend_ready=%d\n",
+            svc->conn.bus ? 1 : 0, svc->backend_ready);
 
     /* Keep the service alive in degraded mode so NameOwnerChanged can
      * recover it without depending on a system/user unit relationship. */
@@ -2786,8 +2788,12 @@ int run_overlay_service(int dry_run)
         overlay_set_call_deadline(svc, overlay_pass_deadline_ms(svc));
         int wire_rc = overlay_wire_required_steps(svc);
         overlay_set_call_deadline(svc, 0);
-        if (wire_rc != 0)
+        if (wire_rc != 0) {
+            fprintf(stderr, "controller-box: readiness steps failed: %d\n", wire_rc);
             svc->backend_ready = false;
+        } else {
+            fprintf(stderr, "controller-box: triggers registered, overlay ready\n");
+        }
     }
 
     if (!svc->backend_ready) {
