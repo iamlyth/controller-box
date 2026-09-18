@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 /* --- Small helpers -------------------------------------------------------- */
 
@@ -32,7 +33,9 @@ cbx_source_iface
 cbx_source_iface_for_path(const char *source_path)
 {
     const char *base = path_basename(source_path);
-    if (strncmp(base, "hidraw", 6) == 0)
+    /* Accept both kernel-style hidrawN and descriptive HIDRawDeviceN
+     * object names used by alternate InputPlumber exporters. */
+    if (strncasecmp(base, "hidraw", 6) == 0)
         return CBX_SOURCE_IFACE_HIDRAW;
     /* eventN, iio:deviceN, ledN, ... all use the evdev/udev property set. */
     return CBX_SOURCE_IFACE_EVDEV;
@@ -191,7 +194,7 @@ cbx_composite_identity_extract(const ip_dbus_backend *backend,
                                cbx_identity *out_ident,
                                cbx_composite_identity_status *out_status)
 {
-    if (!backend || !composite_path || !out_ident)
+    if (!backend || !bus || !composite_path || !out_ident)
         return -EINVAL;
 
     cbx_identity_init(out_ident);
@@ -215,10 +218,11 @@ cbx_composite_identity_extract(const ip_dbus_backend *backend,
     char *paths = NULL;
     int rc = ip_composite_get_source_device_paths(backend, bus,
                                                   composite_path, &paths);
-    if (rc != 0) {
-        /* A transient property-read failure is not absence: report it so
-         * order/assignment restoration keeps the saved state and retries
-         * instead of applying a misleading empty result. */
+    if (rc != 0 || !paths) {
+        /* A successful DBus call with no allocated string is not a confirmed
+         * empty array.  Treat it exactly like a transient read failure so a
+         * backend hiccup cannot erase durable order or bind ORDER:n to the
+         * wrong controller. */
         free(paths);
         if (out_status)
             *out_status = CBX_COMPOSITE_IDENTITY_QUERY_FAILED;
@@ -226,11 +230,12 @@ cbx_composite_identity_extract(const ip_dbus_backend *backend,
             *out_ident = order_ident;
             return 0;
         }
-        return rc;
+        return rc != 0 ? rc : -EIO;
     }
 
     bool saw_source = false;
     bool read_failed_any = false;
+    bool malformed_source_list = false;
     if (paths && paths[0]) {
         const char *p = paths;
         while (*p) {
@@ -238,8 +243,27 @@ cbx_composite_identity_extract(const ip_dbus_backend *backend,
             const char *end = comma ? comma : p + strlen(p);
 
             char source_path[CBX_MAX_PATH_LEN];
-            if (copy_trimmed_token(p, end, source_path,
-                                   sizeof(source_path)) > 0) {
+            const char *token_begin = p;
+            const char *token_end = end;
+            while (token_begin < token_end &&
+                   (*token_begin == ' ' || *token_begin == '\t'))
+                token_begin++;
+            while (token_end > token_begin &&
+                   (token_end[-1] == ' ' || token_end[-1] == '\t'))
+                token_end--;
+            size_t token_len = (size_t)(token_end - token_begin);
+            if (token_len == 0) {
+                /* Only an exactly empty SourceDevicePaths value is a
+                 * confirmed absence.  A nonempty array representation with
+                 * empty tokens is malformed/partial, not a weak device. */
+                malformed_source_list = true;
+            } else if (token_len >= sizeof(source_path)) {
+                /* Truncating an object path could query a different object.
+                 * Treat it as an uncertain snapshot rather than guessing. */
+                saw_source = true;
+                read_failed_any = true;
+            } else if (copy_trimmed_token(p, end, source_path,
+                                          sizeof(source_path)) > 0) {
                 saw_source = true;
                 cbx_identity candidate;
                 bool source_read_failed = false;
@@ -256,9 +280,13 @@ cbx_composite_identity_extract(const ip_dbus_backend *backend,
 
             if (!comma)
                 break;
+            if (comma[1] == '\0')
+                malformed_source_list = true;
             p = comma + 1;
         }
     }
+    if (malformed_source_list)
+        read_failed_any = true;
     free(paths);
 
     /* A successful identity from one property is not enough to make the
@@ -279,7 +307,7 @@ cbx_composite_identity_extract(const ip_dbus_backend *backend,
      * failure, not a confirmed weak identity: report it as uncertain so
      * assignment/order matchers skip the entry instead of letting the
      * ORDER fallback match another controller's saved weak preference. */
-    if (!saw_source) {
+    if (!saw_source && !malformed_source_list) {
         if (out_status)
             *out_status = CBX_COMPOSITE_IDENTITY_ABSENT;
     } else if (read_failed_any) {
@@ -302,12 +330,15 @@ cbx_model_extract_identities(const ip_dbus_backend *backend,
                              cbx_composite_identity_entry *entries,
                              int *out_count)
 {
-    if (!backend || !model || !entries || !out_count)
+    if (!backend || !bus || !model || !entries || !out_count)
         return -EINVAL;
+    if (model->composite_count < 0 ||
+        model->composite_count > CBX_MAX_COMPOSITES)
+        return -E2BIG;
 
     *out_count = 0;
 
-    for (int i = 0; i < model->composite_count && i < CBX_MAX_COMPOSITES; i++) {
+    for (int i = 0; i < model->composite_count; i++) {
         const cbx_composite_entry *comp = &model->composites[i];
         cbx_composite_identity_entry *e = &entries[i];
 
@@ -315,9 +346,15 @@ cbx_model_extract_identities(const ip_dbus_backend *backend,
         snprintf(e->path, sizeof(e->path), "%s", comp->path);
 
         int order = cbx_composite_identity_order(comp, i);
-        (void)cbx_composite_identity_extract(backend, bus, comp->path, order,
-                                             &e->ident, &e->status);
+        int rc = cbx_composite_identity_extract(backend, bus, comp->path,
+                                                order, &e->ident, &e->status);
         (*out_count)++;
+        /* -ENOENT means the source list was confirmed but no fallback order
+         * was available; the entry remains a valid, identity-less row.  Any
+         * other error is a broken snapshot and must fail closed instead of
+         * allowing callers to treat an uninitialised entry as absent. */
+        if (rc != 0 && rc != -ENOENT)
+            return rc;
     }
 
     return 0;

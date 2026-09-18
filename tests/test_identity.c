@@ -148,6 +148,20 @@ test_extract_bt_mac_hidraw_fallback(void **state)
 }
 
 static void
+test_extract_bt_invalid_preferred_mac_uses_alternative(void **state)
+{
+    (void)state;
+    /* A malformed UniqueId must not hide a valid dual-interface MAC. */
+    cbx_source_props p = make_props(CBX_SOURCE_IFACE_EVDEV,
+                                     "not-a-mac", NULL,
+                                     "ab:cd:01:ef:23:45", "5");
+    cbx_identity ident;
+    assert_int_equal(cbx_identity_extract(&p, 0, &ident), 0);
+    assert_int_equal(ident.layer, CBX_IDENTITY_LAYER_BT_MAC);
+    assert_string_equal(ident.id, "BT:AB:CD:01:EF:23:45");
+}
+
+static void
 test_extract_bt_empty_uniq_falls_through(void **state)
 {
     (void)state;
@@ -235,6 +249,33 @@ test_extract_usb_serial_evdev_fallback_to_hidraw(void **state)
     cbx_identity ident;
     int rc = cbx_identity_extract(&p, 0, &ident);
     assert_int_equal(rc, 0);
+    assert_int_equal(ident.layer, CBX_IDENTITY_LAYER_USB_SERIAL);
+    assert_string_equal(ident.id, "USB:SN42424");
+}
+
+static void
+test_extract_invalid_preferred_serial_uses_alternative(void **state)
+{
+    (void)state;
+    /* UniqueId is present but malformed; a valid HIDRaw serial remains a
+     * safe stable identity and must win over a weaker port fallback. */
+    cbx_source_props p = make_props(CBX_SOURCE_IFACE_EVDEV,
+                                     "SN with spaces", "usb-3-2",
+                                     "SN42424", "3");
+    cbx_identity ident;
+    assert_int_equal(cbx_identity_extract(&p, 0, &ident), 0);
+    assert_int_equal(ident.layer, CBX_IDENTITY_LAYER_USB_SERIAL);
+    assert_string_equal(ident.id, "USB:SN42424");
+}
+
+static void
+test_extract_invalid_hidraw_serial_uses_unique_id(void **state)
+{
+    (void)state;
+    cbx_source_props p = make_props(CBX_SOURCE_IFACE_HIDRAW,
+                                     "SN42424", NULL, "SN with spaces", "3");
+    cbx_identity ident;
+    assert_int_equal(cbx_identity_extract(&p, 0, &ident), 0);
     assert_int_equal(ident.layer, CBX_IDENTITY_LAYER_USB_SERIAL);
     assert_string_equal(ident.id, "USB:SN42424");
 }
@@ -404,6 +445,16 @@ test_extract_null_output(void **state)
     assert_int_equal(rc, -EINVAL);
 }
 
+static void
+test_extract_invalid_interface(void **state)
+{
+    (void)state;
+    cbx_source_props p = make_props((cbx_source_iface)99,
+                                     "SN12345", NULL, NULL, "3");
+    cbx_identity ident;
+    assert_int_equal(cbx_identity_extract(&p, 0, &ident), -EINVAL);
+}
+
 /* --- Layer precedence tests ---------------------------------------------- */
 
 static void
@@ -556,6 +607,7 @@ main(void)
         cmocka_unit_test(test_extract_bt_mac),
         cmocka_unit_test(test_extract_bt_mac_uppercase_input),
         cmocka_unit_test(test_extract_bt_mac_hidraw_fallback),
+        cmocka_unit_test(test_extract_bt_invalid_preferred_mac_uses_alternative),
         cmocka_unit_test(test_extract_bt_empty_uniq_falls_through),
         cmocka_unit_test(test_extract_bt_invalid_mac_falls_through),
 
@@ -564,6 +616,8 @@ main(void)
         cmocka_unit_test(test_extract_usb_serial_hidraw),
         cmocka_unit_test(test_extract_usb_serial_hidraw_fallback_to_unique_id),
         cmocka_unit_test(test_extract_usb_serial_evdev_fallback_to_hidraw),
+        cmocka_unit_test(test_extract_invalid_preferred_serial_uses_alternative),
+        cmocka_unit_test(test_extract_invalid_hidraw_serial_uses_unique_id),
         cmocka_unit_test(test_extract_usb_serial_with_underscores_dashes),
         cmocka_unit_test(test_extract_usb_serial_invalid_chars_falls_through),
         cmocka_unit_test(test_extract_usb_serial_too_long_falls_through),
@@ -582,6 +636,7 @@ main(void)
         /* Null args */
         cmocka_unit_test(test_extract_null_props),
         cmocka_unit_test(test_extract_null_output),
+        cmocka_unit_test(test_extract_invalid_interface),
 
         /* Layer precedence */
         cmocka_unit_test(test_layer_precedence_bt_over_serial),

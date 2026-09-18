@@ -202,6 +202,21 @@ test_extract_order_fallback_absent(void **state)
 }
 
 static void
+test_extract_malformed_nonempty_source_list_is_uncertain(void **state)
+{
+    ci_fixture *f = FIX(state);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                           "SourceDevicePaths", " ,");
+
+    cbx_identity ident;
+    cbx_composite_identity_status status = CBX_COMPOSITE_IDENTITY_OK;
+    assert_int_equal(cbx_composite_identity_extract(f->backend, f->mock.bus,
+        COMP_PATH, 2, &ident, &status), 0);
+    assert_int_equal(status, CBX_COMPOSITE_IDENTITY_QUERY_FAILED);
+    assert_int_equal(ident.layer, CBX_IDENTITY_LAYER_ORDER);
+}
+
+static void
 test_extract_query_failure_is_uncertain(void **state)
 {
     ci_fixture *f = FIX(state);
@@ -342,6 +357,9 @@ main(void)
                                          setup, teardown),
         cmocka_unit_test_setup_teardown(test_extract_order_fallback_absent,
                                          setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            test_extract_malformed_nonempty_source_list_is_uncertain,
+            setup, teardown),
         cmocka_unit_test_setup_teardown(test_extract_query_failure_is_uncertain,
                                          setup, teardown),
         cmocka_unit_test_setup_teardown(test_extract_source_with_empty_props_is_confirmed_weak,

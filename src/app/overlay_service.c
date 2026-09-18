@@ -916,6 +916,9 @@ overlay_validate_identities(cbx_overlay_service_ctx *svc)
         return -EINVAL;
 
     svc->identities_valid = false;
+    /* Drop the previous pass's snapshot: a failed identity pass must never
+     * leave a stale entry readable at an index the grid still fills. */
+    svc->identity_count = 0;
     cbx_composite_identity_entry entries[CBX_MAX_COMPOSITES];
     int count = 0;
     int rc = cbx_model_extract_identities(svc->conn.backend, svc->conn.bus,
@@ -939,6 +942,19 @@ overlay_validate_identities(cbx_overlay_service_ctx *svc)
     svc->identity_count = count;
     svc->identities_valid = true;
     return 0;
+}
+
+/* Identity entry for composite `i`, or an all-zero entry when the current
+ * reconciliation pass did not validate one.  On a failed identity pass
+ * `identity_count` is 0 while `svc->composites` still has model rows to
+ * render, so callers must never index the retained snapshot directly. */
+static const cbx_composite_identity_entry *
+overlay_identity_for(const cbx_overlay_service_ctx *svc, int i)
+{
+    static const cbx_composite_identity_entry none;
+    if (svc && i >= 0 && i < svc->identity_count)
+        return &svc->identities[i];
+    return &none;
 }
 
 /* ================================================================== */
@@ -1745,7 +1761,8 @@ cbx_overlay_reconcile_hotplug(cbx_overlay_service_ctx *svc)
     if (identity_changed || old_comp_count != new_comp_count) {
         for (int i = 0; i < new_comp_count; i++)
             fill_composite_info(&svc->composites[i],
-                                 &svc->model.composites[i], &svc->identities[i],
+                                 &svc->model.composites[i],
+                                 overlay_identity_for(svc, i),
                                  svc->conn.backend, svc->conn.bus);
     }
 
@@ -2041,7 +2058,8 @@ overlay_recover(cbx_overlay_service_ctx *svc)
         svc->comp_count = CBX_MAX_COMPOSITES;
     for (int i = 0; i < svc->comp_count; i++)
         fill_composite_info(&svc->composites[i], &svc->model.composites[i],
-                             &svc->identities[i], svc->conn.backend, svc->conn.bus);
+                             overlay_identity_for(svc, i),
+                             svc->conn.backend, svc->conn.bus);
     cbx_select_grid_build(&svc->grid, svc->composites, svc->comp_count,
                            &svc->settings, &svc->assignments);
     cbx_profile_cycle_load_profiles(&svc->grid, &svc->profiles);
@@ -2761,7 +2779,8 @@ int run_overlay_service(int dry_run)
         overlay_set_call_deadline(svc, overlay_pass_deadline_ms(svc));
     for (int i = 0; i < svc->comp_count; i++)
         fill_composite_info(&svc->composites[i], &svc->model.composites[i],
-                             &svc->identities[i], svc->conn.backend, svc->conn.bus);
+                             overlay_identity_for(svc, i),
+                             svc->conn.backend, svc->conn.bus);
     overlay_set_call_deadline(svc, 0);
 
     cbx_select_grid_init(&svc->grid);

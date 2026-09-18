@@ -170,7 +170,11 @@ format_usb_phys(const char *phys, cbx_identity *out)
 
     /* Validate characters: printable non-space */
     for (const char *p = phys; *p; p++) {
-        if ((unsigned char)*p <= ' ' || (unsigned char)*p == 127)
+        /* Physical paths are later serialized in comma-separated
+         * GamepadOrder values.  A comma would make an otherwise valid path
+         * ambiguous and could restore the wrong controller. */
+        if ((unsigned char)*p <= ' ' || (unsigned char)*p == 127 ||
+            *p == ',')
             return -EINVAL;
     }
 
@@ -199,30 +203,20 @@ format_order(int connection_order, cbx_identity *out)
     return 0;
 }
 
-/*
- * Get the serial string from source properties based on interface type.
- * For evdev: use unique_id (UniqueId property).
- * For HIDRaw: use serial_number (SerialNumber property).
- * Falls back to unique_id if serial_number is NULL.
- */
-static const char *
-get_serial(const cbx_source_props *props)
+/* Return the two possible serial sources in their interface-defined order.
+ * Keep both candidates available: a present but malformed preferred property
+ * must not hide a valid alternative from a dual-interface device. */
+static void
+serial_candidates(const cbx_source_props *props,
+                  const char *out_candidates[2])
 {
     if (props->iface == CBX_SOURCE_IFACE_HIDRAW) {
-        /* HIDRaw: prefer SerialNumber, fall back to UniqueId */
-        if (props->serial_number && *props->serial_number)
-            return props->serial_number;
-        if (props->unique_id && *props->unique_id)
-            return props->unique_id;
+        out_candidates[0] = props->serial_number;
+        out_candidates[1] = props->unique_id;
     } else {
-        /* evdev/udev: use UniqueId */
-        if (props->unique_id && *props->unique_id)
-            return props->unique_id;
-        /* Fall back to HIDRaw serial if available (dual-interface device) */
-        if (props->serial_number && *props->serial_number)
-            return props->serial_number;
+        out_candidates[0] = props->unique_id;
+        out_candidates[1] = props->serial_number;
     }
-    return NULL;
 }
 
 /* --- Main extraction ----------------------------------------------------- */
@@ -233,6 +227,9 @@ cbx_identity_extract(const cbx_source_props *props,
                       cbx_identity *out_ident)
 {
     if (!props || !out_ident)
+        return -EINVAL;
+    if (props->iface != CBX_SOURCE_IFACE_EVDEV &&
+        props->iface != CBX_SOURCE_IFACE_HIDRAW)
         return -EINVAL;
 
     cbx_identity_init(out_ident);
@@ -247,30 +244,28 @@ cbx_identity_extract(const cbx_source_props *props,
          * Some controllers may have empty uniq — check both unique_id
          * and serial_number as fallback (SPEC §6.2: "handles empty uniq
          * for Bluetooth devices"). */
-        const char *candidate = NULL;
-        if (props->unique_id && *props->unique_id)
-            candidate = props->unique_id;
-        else if (props->serial_number && *props->serial_number)
-            candidate = props->serial_number;
-
-        if (candidate && cbx_identity_is_mac_address(candidate)) {
-            if (format_bt_mac(candidate, out_ident) == 0)
+        const char *candidates[2];
+        serial_candidates(props, candidates);
+        for (size_t i = 0; i < 2; i++) {
+            const char *candidate = candidates[i];
+            if (candidate && *candidate &&
+                cbx_identity_is_mac_address(candidate) &&
+                format_bt_mac(candidate, out_ident) == 0)
                 return 0;
         }
-        /* BT device but no valid MAC — fall through to lower layers */
+        /* BT device but no valid MAC — fall through to lower layers. */
     }
 
-    /* Layer 2: USB serial.
-     * The serial is unique_id (evdev) or serial_number (HIDRaw).
-     * It must be non-empty and NOT a MAC address (MACs are layer 1).
-     * Also, if the bus type is USB, we have higher confidence this is
-     * a real serial number rather than something else. */
-    const char *serial = get_serial(props);
-    if (serial && *serial && !cbx_identity_is_mac_address(serial)) {
-        /* A regular USB serial.  A MAC-format serial contains ':' and never
-         * passes the serial character check, so it simply falls through to
-         * the phys/order layers below (SPEC §6.2 layers 3/4). */
-        if (format_usb_serial(serial, out_ident) == 0)
+    /* Layer 2: USB serial.  Try both interface-defined candidates rather
+     * than stopping at the first non-empty value.  Real devices can expose
+     * a stale/malformed UniqueId while HIDRaw still supplies a valid
+     * SerialNumber (and vice versa). */
+    const char *serials[2];
+    serial_candidates(props, serials);
+    for (size_t i = 0; i < 2; i++) {
+        const char *serial = serials[i];
+        if (serial && *serial && !cbx_identity_is_mac_address(serial) &&
+            format_usb_serial(serial, out_ident) == 0)
             return 0;
     }
 

@@ -19,6 +19,7 @@
 /* Assignment-list gamepad_order replacement applied under the config lock. */
 typedef struct {
     char ids[CBX_MAX_GAMEPAD_ORDER][CBX_MAX_ID_LEN];
+    char paths[CBX_MAX_GAMEPAD_ORDER][CBX_MAX_PATH_LEN];
     int  count;
 } order_txn_args;
 
@@ -43,8 +44,11 @@ ip_gamepad_order_save(const ip_dbus_backend *backend,
                        const cbx_device_model *model,
                        const char *paths_csv)
 {
-    if (!backend || !model || !paths_csv)
+    if (!backend || !bus || !model || !paths_csv)
         return -EINVAL;
+    if (model->composite_count < 0 ||
+        model->composite_count > CBX_MAX_COMPOSITES)
+        return -E2BIG;
 
     /* Resolve composite paths → source-derived identities outside the config
      * lock (DBus latency must not serialize config writers).  Stale paths and
@@ -53,6 +57,7 @@ ip_gamepad_order_save(const ip_dbus_backend *backend,
     order_txn_args args;
     memset(&args, 0, sizeof(args));
     bool query_failed = false;
+    bool ambiguous_identity = false;
 
     const char *p = paths_csv;
     while (*p) {
@@ -72,7 +77,23 @@ ip_gamepad_order_save(const ip_dbus_backend *backend,
         const cbx_composite_entry *comp =
             cbx_device_model_find_composite(model, path);
         if (comp) {
-            int order = cbx_composite_identity_order(comp, 0);
+            int order = -1;
+            for (int i = 0; i < model->composite_count; i++) {
+                if (strcmp(model->composites[i].path, path) == 0) {
+                    order = i;
+                    break;
+                }
+            }
+            if (order < 0) {
+                /* The model changed between lookup and this pass.  Do not
+                 * manufacture ORDER:0 for an unresolved path. */
+                query_failed = true;
+                if (!comma)
+                    break;
+                p = comma + 1;
+                continue;
+            }
+            order = cbx_composite_identity_order(comp, order);
             cbx_identity ident;
             cbx_composite_identity_status status = CBX_COMPOSITE_IDENTITY_OK;
             int ident_rc = cbx_composite_identity_extract(backend, bus,
@@ -84,16 +105,20 @@ ip_gamepad_order_save(const ip_dbus_backend *backend,
                 cbx_composite_identity_is_matchable(&ident, status) &&
                 cbx_validate_id(ident.id) &&
                 args.count < CBX_MAX_GAMEPAD_ORDER) {
-                bool duplicate = false;
+                bool duplicate_path = false;
                 for (int i = 0; i < args.count; i++) {
-                    if (strcmp(args.ids[i], ident.id) == 0) {
-                        duplicate = true;
+                    if (strcmp(args.paths[i], path) == 0) {
+                        duplicate_path = true;
                         break;
                     }
+                    if (strcmp(args.ids[i], ident.id) == 0)
+                        ambiguous_identity = true;
                 }
-                if (!duplicate) {
+                if (!duplicate_path && args.count < CBX_MAX_GAMEPAD_ORDER) {
                     snprintf(args.ids[args.count], CBX_MAX_ID_LEN, "%s",
                              ident.id);
+                    snprintf(args.paths[args.count], CBX_MAX_PATH_LEN, "%s",
+                             path);
                     args.count++;
                 }
             }
@@ -109,7 +134,11 @@ ip_gamepad_order_save(const ip_dbus_backend *backend,
      * transient DBus failure must preserve the last durable preference.
      * Keep the no-file/empty-order case backward compatible by reporting
      * success without creating or rewriting a file. */
-    if (query_failed) {
+    if (query_failed || ambiguous_identity) {
+        /* Never replace a good durable order with a partial or ambiguous
+         * snapshot.  Preserve the historical no-file result (there is no
+         * durable state to damage), but report uncertainty when an existing
+         * order was protected. */
         char *saved = NULL;
         int load_rc = ip_gamepad_order_load(&saved);
         if (load_rc != 0) {

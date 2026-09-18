@@ -1912,6 +1912,70 @@ test_readiness_input_mapping_failure_recovers(void **state)
     assert_int_equal(svc->input_ctx.path_count, svc->comp_count);
 }
 
+/*
+ * Owner reacquisition (the production overlay_backend_ready callback wired
+ * by cbx_overlay_install_recovery_callbacks) must restore the durable
+ * GamepadOrder: after InputPlumber restarts and the overlay re-acquires the
+ * owner, the saved source-derived identity order is resolved to the current
+ * composite paths and re-applied (SPEC §7.4 / §10.3 gap #2; task 6
+ * acceptance "production startup, hotplug and owner reacquisition").
+ *
+ * The fixture exposes no source devices, so each composite's confirmed
+ * identity is its ORDER:<index> fallback.  The saved order deliberately
+ * reverses the enumeration order and the restarted server starts with an
+ * empty GamepadOrder, so the assertion cannot pass by coincidence.
+ */
+static void
+test_owner_reacquisition_restores_gamepad_order(void **state)
+{
+    native_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    cbx_overlay_install_recovery_callbacks(svc);
+    assert_true(svc->backend_ready);
+
+    /* Persist a durable order keyed by physical identity (ORDER:n here). */
+    cbx_assignments saved;
+    cbx_assignments_init(&saved);
+    snprintf(saved.gamepad_order[0], CBX_MAX_ID_LEN, "ORDER:1");
+    snprintf(saved.gamepad_order[1], CBX_MAX_ID_LEN, "ORDER:0");
+    saved.gamepad_order_count = 2;
+    assert_int_equal(cbx_assignments_save(&saved), 0);
+
+    /* Phase 1: owner loss → fail closed. */
+    kill(f->server_pid, SIGTERM);
+    waitpid(f->server_pid, NULL, 0);
+    f->server_pid = -1;
+    uint32_t t0 = SDL_GetTicks();
+    while (svc->backend_ready && SDL_GetTicks() - t0 < 2000) {
+        svc->conn.backend->process(svc->conn.bus);
+        SDL_Delay(10);
+    }
+    assert_false(svc->backend_ready);
+
+    /* Phase 2: a fresh server re-acquires the owner.  It starts with an
+     * empty GamepadOrder, so the property read below proves recovery
+     * re-applied the saved order. */
+    f->server_pid = restart_native_server(f, 0, 0);
+    assert_true(f->server_pid > 0);
+
+    t0 = SDL_GetTicks();
+    while (!svc->backend_ready && SDL_GetTicks() - t0 < 2000) {
+        cbx_overlay_service_step(svc);
+        SDL_Delay(10);
+    }
+    assert_true(svc->backend_ready);
+    assert_true(SDL_GetTicks() - t0 <= 2000);
+
+    /* The saved reversed order maps onto the current composite paths. */
+    char *order = NULL;
+    assert_int_equal(ip_manager_get_gamepad_order(f->backend, f->bus, &order),
+                     0);
+    assert_non_null(order);
+    assert_string_equal(order, COMP_PATH_1 "," COMP_PATH_0);
+    free(order);
+}
+
 /* ================================================================== */
 /*  Task 6 — grid→order merge preserves disconnected preferences        */
 /* ================================================================== */
@@ -2056,6 +2120,11 @@ static const struct CMUnitTest tests[] = {
                                      native_setup, native_teardown),
     cmocka_unit_test_setup_teardown(
         test_readiness_input_mapping_failure_recovers,
+        native_setup, native_teardown),
+
+    /* Task 6 — owner reacquisition restores the durable GamepadOrder */
+    cmocka_unit_test_setup_teardown(
+        test_owner_reacquisition_restores_gamepad_order,
         native_setup, native_teardown),
 
     /* Task 6 — grid→order merge preserves disconnected preferences */

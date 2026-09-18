@@ -186,6 +186,36 @@ test_snapshot_duplicate_identity_is_uncertain(void **state)
     assert_string_equal(paths, "");
 }
 
+/*
+ * SPEC §6.3 / task 6 acceptance: a controller that reconnects with a weaker
+ * identity (its serial is gone; only a port path or connection order remains)
+ * must NOT be inferred onto an unrelated stronger stored preference.  The
+ * mapper is exact-match only, so the weak current identity simply does not
+ * match the saved strong key and the preference stays untouched for its real
+ * owner instead of being mismatched onto the wrong physical controller.
+ */
+static void
+test_snapshot_no_downgrade_inference(void **state)
+{
+    (void)state;
+    cbx_composite_identity_entry entries[2] = {
+        {.path = "/composite0", .ident = {.id = "USB:phys:usb-1",
+            .layer = CBX_IDENTITY_LAYER_USB_PORT}},
+        {.path = "/composite1", .ident = {.id = "ORDER:1",
+            .layer = CBX_IDENTITY_LAYER_ORDER}},
+    };
+    char paths[128];
+    int restored = -1, skipped = -1;
+    bool failed = true;
+    assert_int_equal(cbx_gamepad_order_map_snapshot(entries, 2,
+        "USB:SN12345,BT:AA:BB:CC:DD:EE:FF", paths, sizeof(paths),
+        &restored, &skipped, &failed), 0);
+    assert_false(failed);
+    assert_int_equal(restored, 0);
+    assert_int_equal(skipped, 2);
+    assert_string_equal(paths, "");
+}
+
 /* --- cbx_gamepad_order_map_ids tests ------------------------------------- */
 
 static void
@@ -717,6 +747,7 @@ main(void)
         cmocka_unit_test(test_snapshot_reversed_order_and_disconnected_preference),
         cmocka_unit_test(test_snapshot_unique_match_with_failed_peer_is_uncertain),
         cmocka_unit_test(test_snapshot_duplicate_identity_is_uncertain),
+        cmocka_unit_test(test_snapshot_no_downgrade_inference),
         cmocka_unit_test_setup_teardown(test_map_ids_single_match,
                                          setup, teardown),
         cmocka_unit_test_setup_teardown(test_map_ids_no_match_stale,
