@@ -29,6 +29,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <errno.h>
+#include <unistd.h>
 
 #include <SDL2/SDL.h>
 
@@ -55,6 +57,10 @@
 #define COMP_PATH_1 "/org/shadowblip/InputPlumber/CompositeDevice1"
 #define TARGET_PATH_0 "/org/shadowblip/InputPlumber/devices/target/gamepad0"
 #define TARGET_PATH_1 "/org/shadowblip/InputPlumber/devices/target/gamepad1"
+#define SOURCE_PATH_0 "/org/shadowblip/InputPlumber/devices/source/event0"
+#define SOURCE_PATH_1 "/org/shadowblip/InputPlumber/devices/source/event1"
+#define PHYSICAL_ID_0 "USB:phys:usb-test-0"
+#define PHYSICAL_ID_1 "USB:phys:usb-test-1"
 
 /* --- Test-local poll callbacks (replicate production per-composite logic) */
 
@@ -159,13 +165,81 @@ typedef struct {
     cbx_overlay_service_ctx *svc;
     ip_dbus_mock             mock;
     const ip_dbus_backend   *backend;
+    ip_dbus_backend         physical_backend;
+    char                    temp_config[64];
+    char                   *saved_config;
 } reconcile_fixture;
+
+/* The shared mock has one value per property.  This fixture adds a second
+ * physical device while still delegating reads/errors/call accounting to
+ * the mock.  Only successful identity replies for device 1 differ. */
+static int
+physical_get_property(ip_bus_handle bus, const char *dest, const char *path,
+                      const char *iface, const char *prop, char **out)
+{
+    const ip_dbus_backend *mock_backend = ip_dbus_mock_backend(bus);
+    int rc = mock_backend->get_property(bus, dest, path, iface, prop, out);
+    if (rc != 0)
+        return rc;
+    const char *value = NULL;
+    if (strcmp(path, COMP_PATH_1) == 0 &&
+        strcmp(iface, IP_IFACE_COMPOSITE) == 0 &&
+        strcmp(prop, "SourceDevicePaths") == 0)
+        value = SOURCE_PATH_1;
+    if (strcmp(path, SOURCE_PATH_1) == 0 &&
+        strcmp(iface, IP_IFACE_SOURCE_EVENT) == 0 &&
+        strcmp(prop, "PhysPath") == 0)
+        value = "usb-test-1";
+    if (value) {
+        free(*out);
+        *out = strdup(value);
+        if (!*out)
+            return -ENOMEM;
+    }
+    return 0;
+}
+
+static void
+stage_composite_reconcile_expectations(ip_dbus_mock *mock)
+{
+    ip_dbus_mock_reset(mock);
+    ip_dbus_mock_expect_ok(mock, IP_IFACE_COMPOSITE, "SourceDevicePaths", "");
+    ip_dbus_mock_expect_ok(mock, IP_IFACE_COMPOSITE, "DbusDevices", "");
+    ip_dbus_mock_expect_ok(mock, IP_IFACE_COMPOSITE, "TargetDevices", "");
+    ip_dbus_mock_expect_ok(mock, IP_IFACE_MANAGER, "GamepadOrder", NULL);
+    ip_dbus_mock_expect_ok(mock, IP_IFACE_TARGET, "DeviceType", "xb360");
+    ip_dbus_mock_expect_ok(mock, IP_IFACE_COMPOSITE, "InterceptMode", "1");
+    ip_dbus_mock_expect_ok(mock, IP_IFACE_COMPOSITE,
+                            "SetInterceptActivation", NULL);
+}
+
+static void
+stage_physical_reconcile(reconcile_fixture *f)
+{
+    stage_composite_reconcile_expectations(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                            "SourceDevicePaths", SOURCE_PATH_0);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_SOURCE_EVENT, "UniqueId", "");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_SOURCE_EVENT,
+                            "PhysPath", "usb-test-0");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_SOURCE_EVENT, "IdBustype", "3");
+    f->physical_backend = *f->backend;
+    f->physical_backend.get_property = physical_get_property;
+    f->svc->conn.backend = &f->physical_backend;
+}
 
 static int
 reconcile_setup(void **state)
 {
     reconcile_fixture *f = malloc(sizeof(*f));
     memset(f, 0, sizeof(*f));
+
+    /* Saved order is read during every successful reconcile. */
+    const char *config = getenv("XDG_CONFIG_HOME");
+    f->saved_config = config ? strdup(config) : NULL;
+    snprintf(f->temp_config, sizeof(f->temp_config), "/tmp/cbx-or-XXXXXX");
+    assert_non_null(mkdtemp(f->temp_config));
+    assert_int_equal(setenv("XDG_CONFIG_HOME", f->temp_config, 1), 0);
 
     SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_TIMER);
     SDL_VideoInit("dummy");
@@ -333,6 +407,21 @@ reconcile_teardown(void **state)
         ip_dbus_mock_reset(&f->mock);
         SDL_VideoQuit();
         SDL_Quit();
+        char path[256];
+        snprintf(path, sizeof(path), "%s/controller-box/assignments.yaml",
+                 f->temp_config);
+        unlink(path);
+        snprintf(path, sizeof(path), "%s/controller-box/.controller-box.lock",
+                 f->temp_config);
+        unlink(path);
+        snprintf(path, sizeof(path), "%s/controller-box", f->temp_config);
+        rmdir(path);
+        assert_int_equal(rmdir(f->temp_config), 0);
+        if (f->saved_config)
+            setenv("XDG_CONFIG_HOME", f->saved_config, 1);
+        else
+            unsetenv("XDG_CONFIG_HOME");
+        free(f->saved_config);
         free(f);
     }
     return 0;
@@ -556,20 +645,15 @@ test_hotplug_target_add_rebuilds_columns(void **state)
     assert_true(svc->hp.model_changed);
     assert_int_equal(svc->model.target_count, 3);
 
-    /* Set up mock expectations for the reconcile. */
-    ip_dbus_mock_reset(&f->mock);
-    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_TARGET,
-                            "DeviceType", "xb360");
-    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
-                            "InterceptMode", "1");
-    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
-                            "SetInterceptActivation", NULL);
+    /* Successful source reads distinguish ORDER fallback from read failure. */
+    stage_composite_reconcile_expectations(&f->mock);
 
     flush_events();
     cbx_overlay_service_step(svc);
 
     assert_false(svc->hp.model_changed);
     assert_int_equal(svc->grid.col_count, 4);
+    assert_true(svc->backend_ready);
 
     /* The hotplug pass bounds its synchronous DBus chain with a nonzero
      * deadline and clears it on exit (efficiency BLOCKER: no unbounded
@@ -590,7 +674,14 @@ test_hotplug_target_remove_clamps_positions(void **state)
 
     assert_int_equal(svc->grid.col_count, 3);
 
-    /* Place row 0 in column 2 (P2 slot). */
+    /* Rebuild derives positions from saved assignments, not old cur_col.
+     * Give this controller a real P2 preference so this proves clamping,
+     * rather than merely rebuilding an already-unassigned controller. */
+    svc->assignments.assignment_count = 1;
+    snprintf(svc->assignments.assignments[0].id, CBX_MAX_ID_LEN,
+             "%s", "ORDER:0");
+    svc->assignments.assignments[0].slot = 1;
+    snprintf(svc->grid.rows[0].id, CBX_MAX_ID_LEN, "%s", "ORDER:0");
     svc->grid.rows[0].cur_col = 2;
 
     /* Simulate removing target 1 via hotplug. */
@@ -604,57 +695,38 @@ test_hotplug_target_remove_clamps_positions(void **state)
     assert_true(svc->hp.model_changed);
     assert_int_equal(svc->model.target_count, 1);
 
-    ip_dbus_mock_reset(&f->mock);
-    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_TARGET,
-                            "DeviceType", "xb360");
-    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
-                            "InterceptMode", "1");
-    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
-                            "SetInterceptActivation", NULL);
+    stage_composite_reconcile_expectations(&f->mock);
 
     flush_events();
     cbx_overlay_service_step(svc);
 
     assert_false(svc->hp.model_changed);
     assert_int_equal(svc->grid.col_count, 2);
+    assert_string_equal(svc->grid.rows[0].id, "ORDER:0");
     assert_int_equal(svc->grid.rows[0].cur_col, 0);
+    assert_int_equal(svc->assignments.assignments[0].slot, 1);
+    assert_true(svc->backend_ready);
+    assert_true(f->mock.target_devices_written);
+    assert_string_equal(f->mock.target_devices_value, "");
 }
 
 /* ====================================================================== */
 /*  Test 4b: Hotplug while Host Mode is active (SPEC §4.4/§10.1)          */
 /* ====================================================================== */
 
-/*
- * Align the fixture grid's identity with what the hotplug rebuild will
- * derive from the device model.  With no SourceDevicePaths/identity
- * expectations the mock returns -ENXIO, so fill_composite_info falls back to
- * the degraded ORDER:<index> connection-order identity (id_stable = false) —
- * a valid identity (unlike the old invalid `composite-<index>`).  Host Mode
- * re-resolves such degraded rows by composite path, so these tests still
- * prove privilege follows the same physical path rather than a stale row
- * index.
- */
+/* Align host-mode rows with the distinct source-derived physical identities
+ * returned by stage_physical_reconcile, never opaque PersistentId values. */
 static void
 sync_grid_identity_from_model(cbx_overlay_service_ctx *svc)
 {
     for (int i = 0; i < svc->grid.row_count &&
                     i < svc->model.composite_count; i++) {
-        /* Transient identity-query failure at hotplug leaves the rebuilt
-         * row identity-less (safe: no assignment match / no persistence). */
-        svc->grid.rows[i].id[0] = '\0';
-        svc->grid.rows[i].id_stable = false;
+        snprintf(svc->grid.rows[i].id, CBX_MAX_ID_LEN, "%s",
+                 i == 0 ? PHYSICAL_ID_0 : PHYSICAL_ID_1);
+        svc->grid.rows[i].id_stable = true;
         snprintf(svc->grid.rows[i].composite_path, CBX_MAX_PATH_LEN, "%s",
                  svc->model.composites[i].path);
     }
-}
-
-static void
-stage_composite_reconcile_expectations(ip_dbus_mock *mock)
-{
-    ip_dbus_mock_reset(mock);
-    ip_dbus_mock_expect_ok(mock, IP_IFACE_COMPOSITE, "InterceptMode", "1");
-    ip_dbus_mock_expect_ok(mock, IP_IFACE_COMPOSITE,
-                            "SetInterceptActivation", NULL);
 }
 
 /* Hot-unplugging the host must exit Host Mode, not freeze every input. */
@@ -681,15 +753,18 @@ test_hotplug_host_removed_exits_host_mode(void **state)
     ip_hotplug_handle_removed(&svc->hp, &payload);
     assert_true(svc->hp.model_changed);
     assert_int_equal(svc->model.composite_count, 1);
+    assert_true(svc->hp.identity_changed);
 
-    stage_composite_reconcile_expectations(&f->mock);
+    stage_physical_reconcile(f);
 
     flush_events();
     cbx_overlay_service_step(svc);
 
     assert_false(svc->hp.model_changed);
     assert_int_equal(svc->grid.row_count, 1);
-    assert_string_equal(svc->grid.rows[0].id, "");
+    assert_string_equal(svc->grid.rows[0].id, PHYSICAL_ID_1);
+    assert_true(svc->backend_ready);
+    assert_false(svc->hp.identity_changed);
     /* Host gone → host mode exited; the surviving controller is not frozen. */
     assert_false(cbx_host_mode_is_active(&svc->hm));
     assert_false(cbx_host_mode_is_frozen(&svc->hm, 0));
@@ -721,8 +796,9 @@ test_hotplug_host_row_shift_preserves_host(void **state)
     payload.interfaces = IP_IFACE_COMPOSITE;
     ip_hotplug_handle_removed(&svc->hp, &payload);
     assert_true(svc->hp.model_changed);
+    assert_true(svc->hp.identity_changed);
 
-    stage_composite_reconcile_expectations(&f->mock);
+    stage_physical_reconcile(f);
 
     flush_events();
     cbx_overlay_service_step(svc);
@@ -733,7 +809,9 @@ test_hotplug_host_row_shift_preserves_host(void **state)
      * shift to any other controller and the host is not frozen. */
     assert_true(cbx_host_mode_is_active(&svc->hm));
     assert_int_equal(cbx_host_mode_get_host_row(&svc->hm), 0);
-    assert_string_equal(svc->grid.rows[0].id, "");
+    assert_string_equal(svc->grid.rows[0].id, PHYSICAL_ID_1);
+    assert_true(svc->backend_ready);
+    assert_false(svc->hp.identity_changed);
     assert_false(cbx_host_mode_is_frozen(&svc->hm, 0));
 }
 
@@ -1050,6 +1128,148 @@ test_hotplug_composite_add_stale_profile_falls_back(void **state)
     assert_string_equal(f->mock.gamepad_order_value, COMP_PATH_0);
 }
 
+/* Persist an order deliberately opposite to the player-slot ordering. */
+static void
+save_reversed_physical_order(cbx_overlay_service_ctx *svc)
+{
+    cbx_assignments_init(&svc->assignments);
+    svc->assignments.assignment_count = 2;
+    svc->assignments.gamepad_order_count = 2;
+    for (int i = 0; i < 2; i++) {
+        snprintf(svc->assignments.assignments[i].id, CBX_MAX_ID_LEN, "%s",
+                 i == 0 ? PHYSICAL_ID_0 : PHYSICAL_ID_1);
+        svc->assignments.assignments[i].slot = i;
+        snprintf(svc->assignments.gamepad_order[i], CBX_MAX_ID_LEN, "%s",
+                 i == 0 ? PHYSICAL_ID_1 : PHYSICAL_ID_0);
+    }
+    assert_int_equal(cbx_assignments_save(&svc->assignments), 0);
+}
+
+static void
+assert_saved_physical_order(void)
+{
+    cbx_assignments saved;
+    cbx_assignments_init(&saved);
+    assert_int_equal(cbx_assignments_load(&saved), 0);
+    assert_int_equal(saved.assignment_count, 2);
+    assert_int_equal(saved.gamepad_order_count, 2);
+    assert_string_equal(saved.gamepad_order[0], PHYSICAL_ID_1);
+    assert_string_equal(saved.gamepad_order[1], PHYSICAL_ID_0);
+    for (int i = 0; i < 2; i++) {
+        assert_string_equal(saved.assignments[i].id,
+                            i == 0 ? PHYSICAL_ID_0 : PHYSICAL_ID_1);
+        assert_int_equal(saved.assignments[i].slot, i);
+    }
+}
+
+/* Source removal leaves composite cardinality unchanged.  Its identity
+ * invalidation flag must survive the service-step boundary, and a rebuilt
+ * slot grid must not overwrite the separately saved GamepadOrder. */
+static void
+test_hotplug_saved_order_and_source_removal(void **state)
+{
+    reconcile_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+    save_reversed_physical_order(svc);
+    /* An auxiliary source comes and goes; the two gamepads' own source
+     * properties remain unchanged but must be queried on both passes. */
+    ip_interfaces_changed_payload source = {
+        .sender = ":1.42",
+        .path = "/org/shadowblip/InputPlumber/devices/source/event2",
+        .interfaces = IP_IFACE_SOURCE_EVENT,
+    };
+
+    for (int removing = 0; removing < 2; removing++) {
+        stage_physical_reconcile(f);
+        if (removing)
+            ip_hotplug_handle_removed(&svc->hp, &source);
+        else
+            ip_hotplug_handle_added(&svc->hp, &source);
+        assert_true(svc->hp.model_changed);
+        assert_true(svc->hp.identity_changed);
+        assert_int_equal(svc->model.composite_count, 2);
+        assert_int_equal(svc->model.source_count, removing ? 0 : 1);
+
+        flush_events();
+        cbx_overlay_service_step(svc);
+
+        assert_true(svc->backend_ready);
+        assert_true(svc->identities_valid);
+        assert_false(svc->hp.model_changed);
+        assert_false(svc->hp.identity_changed);
+        assert_false(svc->identity_reconcile_pending);
+        assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_COMPOSITE,
+                                                 "SourceDevicePaths"), 2);
+        assert_int_equal(svc->grid.rows[0].cur_col, 1);
+        assert_int_equal(svc->grid.rows[1].cur_col, 2);
+        assert_string_equal(svc->grid.rows[0].id, PHYSICAL_ID_0);
+        assert_string_equal(svc->grid.rows[1].id, PHYSICAL_ID_1);
+        assert_true(f->mock.target_devices_written);
+        assert_string_equal(f->mock.target_devices_value, TARGET_PATH_1);
+        assert_true(f->mock.gamepad_order_written);
+        assert_string_equal(f->mock.gamepad_order_value,
+                            COMP_PATH_1 "," COMP_PATH_0);
+        assert_saved_physical_order();
+    }
+}
+
+static void
+check_uncertain_identity_no_writes(reconcile_fixture *f, bool duplicate)
+{
+    cbx_overlay_service_ctx *svc = f->svc;
+    save_reversed_physical_order(svc);
+    stage_physical_reconcile(f);
+    if (duplicate) {
+        /* Both composites expose the same physical source and identity. */
+        svc->conn.backend = f->backend;
+    } else {
+        ip_dbus_mock_expect_error(&f->mock, IP_IFACE_COMPOSITE,
+                                  "SourceDevicePaths", IP_ERR_NO_REPLY);
+    }
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "AttachTargetDevice", NULL);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                            "LoadProfilePath", NULL);
+    ip_interfaces_changed_payload source = {
+        .sender = ":1.42", .path = SOURCE_PATH_0,
+        .interfaces = IP_IFACE_SOURCE_EVENT,
+    };
+    ip_hotplug_handle_added(&svc->hp, &source);
+    assert_true(svc->hp.identity_changed);
+    flush_events();
+    cbx_overlay_service_step(svc);
+
+    assert_false(svc->backend_ready);
+    assert_false(svc->identities_valid);
+    assert_non_null(strstr(svc->readiness_detail, "identity enumeration"));
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_COMPOSITE,
+                                             "SourceDevicePaths"), 2);
+    /* No partially rebuilt grid, routing/profile mutation, or order write. */
+    assert_int_equal(svc->grid.row_count, 2);
+    assert_string_equal(svc->grid.rows[0].id, "TEST:0");
+    assert_string_equal(svc->grid.rows[1].id, "TEST:1");
+    assert_false(f->mock.target_devices_written);
+    assert_false(f->mock.gamepad_order_written);
+    assert_int_equal(f->mock.set_property_count, 0);
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_MANAGER,
+                                             "AttachTargetDevice"), 0);
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_COMPOSITE,
+                                             "LoadProfilePath"), 0);
+    assert_saved_physical_order();
+}
+
+static void
+test_hotplug_duplicate_identity_no_writes(void **state)
+{
+    check_uncertain_identity_no_writes(*state, true);
+}
+
+static void
+test_hotplug_identity_read_failure_no_writes(void **state)
+{
+    check_uncertain_identity_no_writes(*state, false);
+}
+
 /* --- Test runner ------------------------------------------------------- */
 
 int
@@ -1097,6 +1317,15 @@ main(void)
             reconcile_setup, reconcile_teardown),
         cmocka_unit_test_setup_teardown(
             test_hotplug_composite_add_stale_profile_falls_back,
+            reconcile_setup, reconcile_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_hotplug_saved_order_and_source_removal,
+            reconcile_setup, reconcile_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_hotplug_duplicate_identity_no_writes,
+            reconcile_setup, reconcile_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_hotplug_identity_read_failure_no_writes,
             reconcile_setup, reconcile_teardown),
     };
 

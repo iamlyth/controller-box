@@ -942,6 +942,11 @@ reconcile_setup(void **state)
         "/org/shadowblip/InputPlumber/Manager");
     cbx_device_model_add_composite(&f->svc->model,
         "/org/shadowblip/InputPlumber/CompositeDevice0");
+    /* An explicitly empty source list is a valid ORDER:0 identity, not a
+     * failed identity query.  Keep failure tests focused on their named
+     * create/enumeration operation rather than failing before it. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+        "SourceDevicePaths", "");
 
     *state = f;
     return 0;
@@ -973,8 +978,13 @@ test_reconcile_grow_and_attach(void **state)
 {
     conn_step_fixture *f = *state;
 
-    /* Start with 0 targets. */
+    /* Start with 0 targets and an identity-matched saved assignment. */
     f->svc->model.target_count = 0;
+    cbx_assignments_init(&f->svc->assignments);
+    f->svc->assignments.assignment_count = 1;
+    snprintf(f->svc->assignments.assignments[0].id, CBX_MAX_ID_LEN,
+             "%s", "ORDER:0");
+    f->svc->assignments.assignments[0].slot = 0;
 
     /* Expect CreateTargetDevice to return a path. */
     ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
@@ -983,9 +993,7 @@ test_reconcile_grow_and_attach(void **state)
     /* Expect GetManagedObjects with 1 target. */
     ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_OBJECT_MANAGER,
         "GetManagedObjects", FIXTURE_1C1T_RECON);
-    /* Expect AttachTargetDevice to succeed (returns NULL = void). */
-    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
-        "AttachTargetDevice", NULL);
+    /* Exact routing is a TargetDevices property replacement. */
     /* Expect DeviceType and exact attachment verification. */
     ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_TARGET, "DeviceType", "xb360");
     ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE, "TargetDevices",
@@ -994,6 +1002,12 @@ test_reconcile_grow_and_attach(void **state)
     int rc = cbx_reconcile_startup_targets(f->svc);
     assert_int_equal(rc, 0);
     assert_int_equal(f->svc->model.target_count, 1);
+    assert_true(f->mock.target_devices_written);
+    assert_int_equal(f->mock.set_property_count, 1);
+    assert_string_equal(f->mock.last_set_iface, IP_IFACE_COMPOSITE);
+    assert_string_equal(f->mock.last_set_prop, "TargetDevices");
+    assert_string_equal(f->mock.target_devices_value,
+        "/org/shadowblip/InputPlumber/devices/target/xb3600");
 }
 
 /* Test: reconcile returns error when CreateTargetDevice fails. */
@@ -1010,6 +1024,8 @@ test_reconcile_create_fails(void **state)
     int rc = cbx_reconcile_startup_targets(f->svc);
     assert_true(rc < 0);
     assert_int_equal(f->svc->model.target_count, 0);
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_MANAGER,
+        "CreateTargetDevice"), 1);
 }
 
 /* Test: reconcile returns error when GetManagedObjects fails after create. */
@@ -1034,8 +1050,12 @@ test_reconcile_enumerate_fails(void **state)
 
     int rc = cbx_reconcile_startup_targets(f->svc);
     assert_true(rc < 0);
-    /* Rollback should leave 0 targets. */
+    /* Rollback should leave 0 targets, after the intended create attempt. */
     assert_int_equal(f->svc->model.target_count, 0);
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_MANAGER,
+        "CreateTargetDevice"), 1);
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_MANAGER,
+        "StopTargetDevice"), 1);
 }
 
 /* Test: reconcile shrinks from 2 to 1 target. */
@@ -1068,6 +1088,11 @@ test_reconcile_shrink(void **state)
     int rc = cbx_reconcile_startup_targets(f->svc);
     assert_int_equal(rc, 0);
     assert_int_equal(f->svc->model.target_count, 1);
+    char args[IP_MOCK_LAST_ARGS_LEN];
+    assert_int_equal(ip_dbus_mock_last_call_args(&f->mock, IP_IFACE_MANAGER,
+        "StopTargetDevice", args, sizeof(args)), 0);
+    assert_string_equal(args,
+        "/org/shadowblip/InputPlumber/devices/target/xb3601");
 }
 
 

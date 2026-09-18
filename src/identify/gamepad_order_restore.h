@@ -26,6 +26,7 @@
 
 #include "dbus/dbus_interface.h"            /* ip_dbus_backend, ip_bus_handle */
 #include "dbus/ip_device_model.h" /* cbx_device_model */
+#include "identify/composite_identity.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -115,6 +116,15 @@ int cbx_gamepad_order_map_ids(const ip_dbus_backend *backend,
                                int *out_restored_count,
                                int *out_skipped_count,
                                bool *out_query_failed);
+
+/* Same mapping contract, using an already checked enumeration snapshot.
+ * Allows routing, grid construction and order restoration to share identity
+ * reads rather than accepting different results within one recovery pass. */
+int cbx_gamepad_order_map_snapshot(const cbx_composite_identity_entry *entries,
+                                  int entry_count, const char *saved_ids_csv,
+                                  char *out_paths_csv, size_t paths_csv_len,
+                                  int *out_restored_count, int *out_skipped_count,
+                                  bool *out_query_failed);
 
 #ifdef __cplusplus
 }

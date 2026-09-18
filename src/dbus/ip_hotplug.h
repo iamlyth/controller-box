@@ -27,6 +27,9 @@ typedef struct {
     const char            *expected_sender;  /* InputPlumber's unique bus name */
     cbx_device_model      *model;            /* device model to update */
     bool                   model_changed;    /* set when a signal modified the model */
+    /* A source/composite change invalidates physical identity resolution;
+     * target-only hotplug must not trigger unnecessary source DBus reads. */
+    bool                   identity_changed;
 } ip_hotplug;
 
 /* Initialise the hotplug handler.  Does not subscribe yet. */

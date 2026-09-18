@@ -1456,6 +1456,13 @@ static void
 expect_reconcile(ip_dbus_mock *mock, ip_hotplug *hp)
 {
     ip_dbus_mock_reset(mock);
+    /* Empty, successfully read source lists yield distinct ORDER identities
+     * from the composite indices, unlike a missing mock property. */
+    ip_dbus_mock_expect_ok(mock, IP_IFACE_COMPOSITE,
+                            "SourceDevicePaths", "");
+    ip_dbus_mock_expect_ok(mock, IP_IFACE_COMPOSITE, "DbusDevices", "");
+    ip_dbus_mock_expect_ok(mock, IP_IFACE_COMPOSITE, "TargetDevices", "");
+    ip_dbus_mock_expect_ok(mock, IP_IFACE_MANAGER, "GamepadOrder", NULL);
     ip_dbus_mock_expect_ok(mock, IP_IFACE_TARGET,
                             "DeviceType", "xb360");
     ip_dbus_mock_expect_ok(mock, IP_IFACE_COMPOSITE,
@@ -1471,6 +1478,9 @@ test_hotplug_target_add_remove_through_dispatch(void **state)
 {
     interaction_fixture *f = *state;
     cbx_overlay_service_ctx *svc = f->svc;
+
+    /* This test starts from an operational backend, before hotplug. */
+    svc->backend_ready = true;
 
     /* Align device-model target_count with the grid column count.
      * The fixture builds the grid with 4 virtual controllers (col_count=5:
@@ -1519,12 +1529,19 @@ test_hotplug_target_add_remove_through_dispatch(void **state)
     /* Reconcile should have rebuilt columns: 5 targets → 6 columns. */
     assert_false(svc->hp.model_changed);
     assert_int_equal(svc->grid.col_count, 6);
+    assert_true(svc->backend_ready);
 
     /* --- Phase 2: Hotplug REMOVE the 5th target, clamp positions --- */
     /* Place row 0 in column 5 (P5).  After removing target gamepad4,
      * col_count drops to 5 and column 5 is out of range — the row must
      * be clamped to Unassigned (col 0). */
     svc->grid.rows[0].cur_col = 5;
+    /* Production rebuild restores saved slots; retain a P5 preference so
+     * Unassigned below proves out-of-range clamping, not a missing match. */
+    svc->assignments.assignment_count = 1;
+    snprintf(svc->assignments.assignments[0].id, CBX_MAX_ID_LEN, "%s",
+             svc->grid.rows[0].id);
+    svc->assignments.assignments[0].slot = 4;
 
     inject_hotplug(f, "InterfacesRemoved",
                    "/org/shadowblip/InputPlumber/devices/target/gamepad4",
@@ -1543,6 +1560,13 @@ test_hotplug_target_add_remove_through_dispatch(void **state)
     assert_false(svc->hp.model_changed);
     assert_int_equal(svc->grid.col_count, 5);
     assert_int_equal(svc->grid.rows[0].cur_col, 0);
+    assert_int_equal(svc->assignments.assignments[0].slot, 4);
+    assert_true(svc->backend_ready);
+    assert_true(f->mock.target_devices_written);
+    assert_string_equal(f->mock.target_devices_value, "");
+    /* Target-only removal reuses the checked physical snapshot. */
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_COMPOSITE,
+                                             "SourceDevicePaths"), 0);
 }
 
 /* ================================================================== */

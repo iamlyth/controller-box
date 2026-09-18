@@ -52,6 +52,7 @@ ip_gamepad_order_save(const ip_dbus_backend *backend,
      * query failure is skipped rather than persisted as a wrong/opaque id. */
     order_txn_args args;
     memset(&args, 0, sizeof(args));
+    bool query_failed = false;
 
     const char *p = paths_csv;
     while (*p) {
@@ -74,8 +75,12 @@ ip_gamepad_order_save(const ip_dbus_backend *backend,
             int order = cbx_composite_identity_order(comp, 0);
             cbx_identity ident;
             cbx_composite_identity_status status = CBX_COMPOSITE_IDENTITY_OK;
-            if (cbx_composite_identity_extract(backend, bus, path, order,
-                                               &ident, &status) == 0 &&
+            int ident_rc = cbx_composite_identity_extract(backend, bus,
+                                                            path, order,
+                                                            &ident, &status);
+            if (status == CBX_COMPOSITE_IDENTITY_QUERY_FAILED)
+                query_failed = true;
+            if (ident_rc == 0 &&
                 cbx_composite_identity_is_matchable(&ident, status) &&
                 cbx_validate_id(ident.id) &&
                 args.count < CBX_MAX_GAMEPAD_ORDER) {
@@ -97,6 +102,23 @@ ip_gamepad_order_save(const ip_dbus_backend *backend,
         if (!comma)
             break;
         p = comma + 1;
+    }
+
+    /* A partial source-property snapshot is not an authoritative empty
+     * order.  Do not run the replacement transaction in that case: a
+     * transient DBus failure must preserve the last durable preference.
+     * Keep the no-file/empty-order case backward compatible by reporting
+     * success without creating or rewriting a file. */
+    if (query_failed) {
+        char *saved = NULL;
+        int load_rc = ip_gamepad_order_load(&saved);
+        if (load_rc != 0) {
+            free(saved);
+            return load_rc;
+        }
+        bool had_saved_order = saved && saved[0] != '\0';
+        free(saved);
+        return had_saved_order ? -EAGAIN : 0;
     }
 
     /* Replace the persisted order on top of the current on-disk assignment

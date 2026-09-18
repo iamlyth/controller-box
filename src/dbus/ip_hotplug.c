@@ -166,17 +166,26 @@ ip_hotplug_handle_added(ip_hotplug *hp,
     if (iface_list_contains(ifaces, IP_IFACE_MANAGER))
         changed |= cbx_device_model_set_manager(model, path);
 
-    if (iface_list_contains(ifaces, IP_IFACE_COMPOSITE))
-        changed |= cbx_device_model_add_composite(model, path);
+    bool identity_changed = false;
+    if (iface_list_contains(ifaces, IP_IFACE_COMPOSITE)) {
+        bool added = cbx_device_model_add_composite(model, path);
+        changed |= added;
+        identity_changed |= added;
+    }
 
     char dev_class = classify_device_path(path);
-    if (dev_class == 's')
-        changed |= cbx_device_model_add_source(model, path);
-    else if (dev_class == 't')
+    if (dev_class == 's') {
+        bool added = cbx_device_model_add_source(model, path);
+        changed |= added;
+        identity_changed |= added;
+    } else if (dev_class == 't') {
         changed |= cbx_device_model_add_target(model, path);
+    }
 
     if (changed)
         hp->model_changed = true;
+    if (identity_changed)
+        hp->identity_changed = true;
 }
 
 void
@@ -204,15 +213,24 @@ ip_hotplug_handle_removed(ip_hotplug *hp,
     if (iface_list_contains(ifaces, IP_IFACE_MANAGER))
         changed |= cbx_device_model_remove_manager(model);
 
-    if (iface_list_contains(ifaces, IP_IFACE_COMPOSITE))
-        changed |= cbx_device_model_remove_composite(model, path);
+    bool identity_changed = false;
+    if (iface_list_contains(ifaces, IP_IFACE_COMPOSITE)) {
+        bool removed = cbx_device_model_remove_composite(model, path);
+        changed |= removed;
+        identity_changed |= removed;
+    }
 
     char dev_class = classify_device_path(path);
-    if (dev_class == 's')
-        changed |= cbx_device_model_remove_source(model, path);
-    else if (dev_class == 't')
+    if (dev_class == 's') {
+        bool removed = cbx_device_model_remove_source(model, path);
+        changed |= removed;
+        identity_changed |= removed;
+    } else if (dev_class == 't') {
         changed |= cbx_device_model_remove_target(model, path);
+    }
 
     if (changed)
         hp->model_changed = true;
+    if (identity_changed)
+        hp->identity_changed = true;
 }

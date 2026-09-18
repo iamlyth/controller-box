@@ -182,7 +182,7 @@ find_font(void)
     }
 
     FILE *fp = popen(
-        "find /nix/store -maxdepth 4 -name DejaVuSans.ttf "
+        "find /nix/store -maxdepth 6 -name DejaVuSans.ttf "
         "-path '*/share/X11/fonts/*' 2>/dev/null | head -1",
         "r");
     if (fp) {

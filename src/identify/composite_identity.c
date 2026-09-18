@@ -261,6 +261,16 @@ cbx_composite_identity_extract(const ip_dbus_backend *backend,
     }
     free(paths);
 
+    /* A successful identity from one property is not enough to make the
+     * composite safe to match when another required property read failed.
+     * SourceDevicePaths can describe a composite made from several source
+     * interfaces; accepting the first identity here would let a partial
+     * DBus snapshot bind the controller to an unrelated saved assignment.
+     * Keep the fallback value for display, but mark the whole result
+     * uncertain so every restoration caller defers it. */
+    if (read_failed_any && out_status)
+        *out_status = CBX_COMPOSITE_IDENTITY_QUERY_FAILED;
+
     if (out_ident->layer != CBX_IDENTITY_LAYER_NONE)
         return 0;
 

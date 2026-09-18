@@ -123,6 +123,69 @@ expect_no_sources(restore_fixture *f)
                            "SourceDevicePaths", "");
 }
 
+/* The snapshot mapper is shared by production grid/order restoration. */
+static void
+test_snapshot_reversed_order_and_disconnected_preference(void **state)
+{
+    (void)state;
+    cbx_composite_identity_entry entries[2] = {
+        {.path = "/composite9", .ident = {.id = "USB:serial-b",
+            .layer = CBX_IDENTITY_LAYER_USB_SERIAL}},
+        {.path = "/composite4", .ident = {.id = "USB:serial-a",
+            .layer = CBX_IDENTITY_LAYER_USB_SERIAL}},
+    };
+    char paths[128];
+    int restored, skipped;
+    bool failed;
+    assert_int_equal(cbx_gamepad_order_map_snapshot(entries, 2,
+        "USB:serial-a,USB:disconnected,USB:serial-b", paths, sizeof(paths),
+        &restored, &skipped, &failed), 0);
+    assert_false(failed);
+    assert_int_equal(restored, 2);
+    assert_int_equal(skipped, 1);
+    assert_string_equal(paths, "/composite4,/composite9");
+}
+
+static void
+test_snapshot_unique_match_with_failed_peer_is_uncertain(void **state)
+{
+    (void)state;
+    cbx_composite_identity_entry entries[2] = {
+        {.path = "/composite0", .ident = {.id = "USB:serial-a",
+            .layer = CBX_IDENTITY_LAYER_USB_SERIAL}},
+        {.path = "/composite1", .status = CBX_COMPOSITE_IDENTITY_QUERY_FAILED},
+    };
+    char paths[128];
+    int restored, skipped;
+    bool failed;
+    assert_int_equal(cbx_gamepad_order_map_snapshot(entries, 2,
+        "USB:serial-a", paths, sizeof(paths), &restored, &skipped, &failed), 0);
+    assert_true(failed);
+    assert_int_equal(restored, 0);
+    assert_int_equal(skipped, 0);
+    assert_string_equal(paths, "");
+}
+
+static void
+test_snapshot_duplicate_identity_is_uncertain(void **state)
+{
+    (void)state;
+    cbx_composite_identity_entry entries[2] = {
+        {.path = "/composite0", .ident = {.id = "USB:serial-a",
+            .layer = CBX_IDENTITY_LAYER_USB_SERIAL}},
+        {.path = "/composite1", .ident = {.id = "USB:serial-a",
+            .layer = CBX_IDENTITY_LAYER_USB_SERIAL}},
+    };
+    char paths[128];
+    bool failed;
+    int restored;
+    assert_int_equal(cbx_gamepad_order_map_snapshot(entries, 2,
+        "USB:serial-a", paths, sizeof(paths), &restored, NULL, &failed), 0);
+    assert_true(failed);
+    assert_int_equal(restored, 0);
+    assert_string_equal(paths, "");
+}
+
 /* --- cbx_gamepad_order_map_ids tests ------------------------------------- */
 
 static void
@@ -651,6 +714,9 @@ main(void)
 {
     const struct CMUnitTest tests[] = {
         /* cbx_gamepad_order_map_ids */
+        cmocka_unit_test(test_snapshot_reversed_order_and_disconnected_preference),
+        cmocka_unit_test(test_snapshot_unique_match_with_failed_peer_is_uncertain),
+        cmocka_unit_test(test_snapshot_duplicate_identity_is_uncertain),
         cmocka_unit_test_setup_teardown(test_map_ids_single_match,
                                          setup, teardown),
         cmocka_unit_test_setup_teardown(test_map_ids_no_match_stale,

@@ -49,7 +49,14 @@ issue, not just the symptom.
 
 ## Output contract
 
-Output your proposed changes clearly: which files you would edit, what code
-you would add/change, and why. Include actual code snippets. Do NOT commit —
-the integration developer will evaluate your proposal alongside other
-approaches and apply the best one.
+Implement the task by **editing files directly** in your worktree. Build and
+test your changes. Do NOT commit — your changes will be collected as a
+git patch and evaluated by the integration developer.
+
+Verify your changes compile:
+```
+nix-shell --run 'cmake -B build -S . -DCMAKE_BUILD_TYPE=Debug && cmake --build build -j$(nproc) 2>&1 | tail -20'
+```
+
+If tests are specified for the task, run them. Leave a coherent set of file
+changes in your worktree.

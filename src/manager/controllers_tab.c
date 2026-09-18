@@ -481,6 +481,8 @@ composite_path_for_id(cbx_controllers_tab *tab, const char *id,
     if (!tab || !id || !id[0])
         return false;
 
+    const char *match = NULL;
+    bool query_failed = false;
     for (int ci = 0; ci < tab->model.composite_count; ci++) {
         const cbx_composite_entry *comp = &tab->model.composites[ci];
         int order = cbx_composite_identity_order(comp, ci);
@@ -490,14 +492,23 @@ composite_path_for_id(cbx_controllers_tab *tab, const char *id,
                                            comp->path, order, &ident,
                                            &status) != 0)
             continue;
+        if (status == CBX_COMPOSITE_IDENTITY_QUERY_FAILED)
+            query_failed = true;
         if (!cbx_composite_identity_is_matchable(&ident, status))
             continue;
         if (strcmp(ident.id, id) == 0) {
-            snprintf(out, CBX_MAX_PATH_LEN, "%s", comp->path);
-            return true;
+            /* Identical weak/stable properties are ambiguous.  Returning the
+             * first ObjectManager path would make routing depend on DBus
+             * enumeration order, so leave the slot untouched. */
+            if (match)
+                return false;
+            match = comp->path;
         }
     }
-    return false;
+    if (query_failed || !match)
+        return false;
+    snprintf(out, CBX_MAX_PATH_LEN, "%s", match);
+    return true;
 }
 
 static int

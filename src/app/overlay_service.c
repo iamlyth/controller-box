@@ -45,6 +45,7 @@
 #include "identify/assign.h"            /* CBX_DEFAULT_PROFILE */
 #include "identify/composite_identity.h"
 #include "identify/gamepad_order_restore.h"
+#include "dbus/ip_gamepad_order.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -282,6 +283,14 @@ cbx_overlay_on_prop_change(const char *object_path, const char *iface_name,
         overlay_apply_grid_profile(svc, object_path);
     }
 
+    /* SourceDevicePaths is part of the physical identity contract.  The
+     * signal callback only records the need for reconciliation; doing
+     * property reads here would re-enter DBus dispatch and could race the
+     * hotplug model update.  The service loop performs the bounded pass. */
+    if (strcmp(iface_name, IP_IFACE_COMPOSITE) == 0 &&
+        strcmp(prop_name, "SourceDevicePaths") == 0)
+        svc->identity_reconcile_pending = true;
+
     /* A validated change to a tracked property is a dirty trigger: re-render
      * so the presented frame reflects InputPlumber's live property state. */
     if (svc->initialized)
@@ -473,20 +482,6 @@ overlay_build_gamepad_order(const cbx_select_grid *grid,
     return 0;
 }
 
-/* True when at least one grid row holds a player slot (i.e. there is a
- * persisted assignment to make effective on the engine). */
-static bool
-overlay_grid_has_assigned_row(const cbx_select_grid *grid)
-{
-    if (!grid)
-        return false;
-    for (int i = 0; i < grid->row_count; i++) {
-        if (cbx_select_grid_col_to_slot(grid->rows[i].cur_col) >= 0)
-            return true;
-    }
-    return false;
-}
-
 /*
  * Choose the profile to load for `row` from the enumerated profile list.
  *
@@ -542,7 +537,8 @@ overlay_pick_profile(const cbx_overlay_service_ctx *svc,
  * of the controllers that are already attached.
  */
 static int
-overlay_apply_grid_engine(cbx_overlay_service_ctx *svc, bool clear_all)
+overlay_apply_grid_engine(cbx_overlay_service_ctx *svc, bool clear_all,
+                           bool restore_order)
 {
     if (!svc || !svc->conn.backend || !svc->conn.bus)
         return -EINVAL;
@@ -552,9 +548,35 @@ overlay_apply_grid_engine(cbx_overlay_service_ctx *svc, bool clear_all)
     if (rc != 0)
         return rc;
 
+    /* Resolve durable order before any engine mutation, from the same
+     * checked physical snapshot used by the assignment grid. */
+    if (restore_order) {
+        char *saved = NULL;
+        rc = ip_gamepad_order_load(&saved);
+        if (rc != 0)
+            return rc;
+        if (saved && saved[0]) {
+            bool uncertain = false;
+            rc = cbx_gamepad_order_map_snapshot(svc->identities,
+                svc->identity_count, saved, order, sizeof(order),
+                NULL, NULL, &uncertain);
+            if (rc == 0 && uncertain)
+                rc = -EAGAIN;
+        }
+        free(saved);
+        if (rc != 0)
+            return rc;
+    }
+
     /* Phase 1: exact replacement routing (SPEC §§4.1-4.7). */
-    if (clear_all) {
+    {
         for (int i = 0; i < svc->grid.row_count; i++) {
+            /* A changed physical identity may no longer authorize the old
+             * route.  Unassigned must mean detached on hotplug too, while
+             * unaffected assigned controllers retain their routing. */
+            if (!clear_all &&
+                cbx_select_grid_col_to_slot(svc->grid.rows[i].cur_col) >= 0)
+                continue;
             const char *composite = svc->grid.rows[i].composite_path;
             int clear_rc = ip_composite_set_target_device_paths(
                 svc->conn.backend, svc->conn.bus, composite, "");
@@ -637,7 +659,7 @@ cbx_overlay_on_save(void *userdata)
 
     /* Apply the conflict-resolved topology to the engine (exact
      * TargetDevices replacement, verified profile load, GamepadOrder). */
-    int rc = overlay_apply_grid_engine(svc, true);
+    int rc = overlay_apply_grid_engine(svc, true, false);
     if (rc != 0)
         return rc;
 
@@ -841,7 +863,7 @@ cbx_overlay_on_lifecycle_closed(void *userdata)
 /* ================================================================== */
 static void fill_composite_info(cbx_grid_composite_info *info,
                                  const cbx_composite_entry *entry,
-                                 int fallback_index,
+                                 const cbx_composite_identity_entry *identity,
                                  const ip_dbus_backend *backend,
                                  ip_bus_handle bus)
 {
@@ -860,18 +882,12 @@ static void fill_composite_info(cbx_grid_composite_info *info,
      * hiccup can never reroute or erase another controller's preference
      * (task 6 acceptance).  Only real physical layers are stable for Host
      * Mode. */
-    cbx_identity ident;
-    cbx_composite_identity_status ident_status = CBX_COMPOSITE_IDENTITY_OK;
-    int order = cbx_composite_identity_order(entry, fallback_index);
-    int ident_rc = cbx_composite_identity_extract(backend, bus, entry->path,
-                                                  order, &ident,
-                                                  &ident_status);
-    if (ident_rc == 0 &&
-        cbx_composite_identity_is_matchable(&ident, ident_status)) {
-        snprintf(info->id, sizeof(info->id), "%s", ident.id);
-        info->id_stable = (ident.layer == CBX_IDENTITY_LAYER_BT_MAC ||
-                           ident.layer == CBX_IDENTITY_LAYER_USB_SERIAL ||
-                           ident.layer == CBX_IDENTITY_LAYER_USB_PORT);
+    const cbx_identity *ident = &identity->ident;
+    if (cbx_composite_identity_is_matchable(ident, identity->status)) {
+        snprintf(info->id, sizeof(info->id), "%s", ident->id);
+        info->id_stable = (ident->layer == CBX_IDENTITY_LAYER_BT_MAC ||
+                           ident->layer == CBX_IDENTITY_LAYER_USB_SERIAL ||
+                           ident->layer == CBX_IDENTITY_LAYER_USB_PORT);
     } else {
         info->id[0] = '\0';
         info->id_stable = false;
@@ -887,6 +903,42 @@ static void fill_composite_info(cbx_grid_composite_info *info,
         snprintf(info->model_name, sizeof(info->model_name),
                  "Controller %d", entry->index);
     }
+}
+
+/* Probe every composite before changing the grid or routing.  A failed
+ * source-property read is uncertainty, not confirmed device absence; doing
+ * this pass first keeps the previous assignment/order state intact while a
+ * recovery retry obtains a complete snapshot. */
+static int
+overlay_validate_identities(cbx_overlay_service_ctx *svc)
+{
+    if (!svc || !svc->conn.backend || !svc->conn.bus)
+        return -EINVAL;
+
+    svc->identities_valid = false;
+    cbx_composite_identity_entry entries[CBX_MAX_COMPOSITES];
+    int count = 0;
+    int rc = cbx_model_extract_identities(svc->conn.backend, svc->conn.bus,
+                                          &svc->model, entries, &count);
+    if (rc != 0)
+        return rc;
+
+    for (int i = 0; i < count; i++) {
+        if (entries[i].status == CBX_COMPOSITE_IDENTITY_QUERY_FAILED)
+            return -EAGAIN;
+        for (int j = 0; j < i; j++) {
+            if (entries[i].ident.id[0] &&
+                strcmp(entries[i].ident.id, entries[j].ident.id) == 0) {
+                fprintf(stderr, "controller-box: ambiguous physical identity %s\n",
+                        entries[i].ident.id);
+                return -EAGAIN;
+            }
+        }
+    }
+    memcpy(svc->identities, entries, sizeof(entries[0]) * (size_t)count);
+    svc->identity_count = count;
+    svc->identities_valid = true;
+    return 0;
 }
 
 /* ================================================================== */
@@ -1058,16 +1110,31 @@ assigned_composite_for_slot(const cbx_composite_identity_entry *entries,
                             int entry_count,
                             const cbx_assignments *assignments, int slot)
 {
+    for (int ci = 0; ci < entry_count; ci++) {
+        if (entries[ci].status == CBX_COMPOSITE_IDENTITY_QUERY_FAILED)
+            return NULL;
+    }
+
     for (int ai = 0; ai < assignments->assignment_count; ai++) {
         const cbx_assignment *a = &assignments->assignments[ai];
         if (a->slot != slot) continue;
+
+        const char *match = NULL;
         for (int ci = 0; ci < entry_count; ci++) {
             if (!cbx_composite_identity_is_matchable(&entries[ci].ident,
                                                      entries[ci].status))
                 continue;
-            if (strcmp(entries[ci].ident.id, a->id) == 0)
-                return entries[ci].path;
+            if (strcmp(entries[ci].ident.id, a->id) != 0)
+                continue;
+            /* A duplicated serial/port/order identity is not a physical
+             * match.  Refuse the attachment rather than silently routing the
+             * slot to whichever DBus object happened to be enumerated first. */
+            if (match)
+                return NULL;
+            match = entries[ci].path;
         }
+        if (match)
+            return match;
     }
     return NULL;
 }
@@ -1240,10 +1307,15 @@ cbx_reconcile_startup_targets(cbx_overlay_service_ctx *svc)
     /* Extract each composite's source-derived identity once for this pass.
      * Assignment→composite attachment must resolve by physical identity
      * (SPEC §6.2), and a transient identity query failure must not match. */
-    cbx_composite_identity_entry idents[CBX_MAX_COMPOSITES];
-    int ident_count = 0;
-    (void)cbx_model_extract_identities(svc->conn.backend, svc->conn.bus,
-                                       &svc->model, idents, &ident_count);
+    int identity_rc = overlay_validate_identities(svc);
+    if (identity_rc != 0) {
+        reconcile_diag(svc, "identity enumeration", "resolve-physical-identity",
+                       "", "", orig_count, svc->model.target_count,
+                       identity_rc, started, false);
+        return identity_rc;
+    }
+    const cbx_composite_identity_entry *idents = svc->identities;
+    int ident_count = svc->identity_count;
 
     /* Targets are persistent virtual player slots, independent of physical
      * composite cardinality.  Zero composites is a normal ready topology;
@@ -1385,6 +1457,19 @@ cbx_reconcile_startup_targets(cbx_overlay_service_ctx *svc)
     if (rc != 0) { phase = "enumeration"; operation = "final-enumeration"; goto fail; }
     if (svc->model.target_count != desired) {
         rc = -EIO; phase = "enumeration"; operation = "final-cardinality";
+        goto fail;
+    }
+    /* A composite topology change during target publication invalidates the
+     * physical snapshot.  Retry rather than index identities from the old
+     * enumeration into a different set/order of composite paths. */
+    bool same_composites = svc->model.composite_count == svc->identity_count;
+    for (int i = 0; same_composites && i < svc->identity_count; i++)
+        same_composites = strcmp(svc->model.composites[i].path,
+                                 svc->identities[i].path) == 0;
+    if (!same_composites) {
+        svc->identities_valid = false;
+        rc = -EAGAIN; phase = "identity enumeration";
+        operation = "confirm-composite-snapshot";
         goto fail;
     }
     rc = reconcile_order_targets(&svc->model, slots, desired);
@@ -1617,8 +1702,31 @@ cbx_overlay_reconcile_hotplug(cbx_overlay_service_ctx *svc)
     /* The device model was already updated incrementally by ip_hotplug
      * (SPEC §10.1: InterfacesAdded/InterfacesRemoved).  No full
      * re-enumeration needed — use the current model state directly. */
+    bool identity_changed = svc->identity_reconcile_pending ||
+                             svc->hp.identity_changed || !svc->identities_valid ||
+                             svc->identity_count != svc->model.composite_count;
+    for (int i = 0; !identity_changed && i < svc->identity_count; i++)
+        identity_changed = strcmp(svc->identities[i].path,
+                                   svc->model.composites[i].path) != 0;
+    /* Consume only this pass's signals.  Synchronous attachment waits can
+     * dispatch new changes; those must remain pending for the next pass. */
+    svc->identity_reconcile_pending = false;
+    svc->hp.model_changed = false;
+    svc->hp.identity_changed = false;
+    if (identity_changed) {
+        int identity_rc = overlay_validate_identities(svc);
+        if (identity_rc != 0) {
+            overlay_set_readiness_detail(svc, "identity enumeration",
+                                         identity_rc);
+            overlay_set_call_deadline(svc, 0);
+            return identity_rc;
+        }
+    }
 
-    /* Update composite info from the device model. */
+    /* Update composite info from the device model.  Target-only hotplug does
+     * not invalidate physical identities; retain the already resolved rows
+     * so an unrelated source-property read cannot erase assignments. */
+    int old_comp_count = svc->comp_count;
     int new_comp_count = svc->model.composite_count;
     if (new_comp_count > CBX_MAX_COMPOSITES)
         new_comp_count = CBX_MAX_COMPOSITES;
@@ -1634,9 +1742,12 @@ cbx_overlay_reconcile_hotplug(cbx_overlay_service_ctx *svc)
 
     /* Update composite info. */
     svc->comp_count = new_comp_count;
-    for (int i = 0; i < new_comp_count; i++)
-        fill_composite_info(&svc->composites[i], &svc->model.composites[i],
-                             i, svc->conn.backend, svc->conn.bus);
+    if (identity_changed || old_comp_count != new_comp_count) {
+        for (int i = 0; i < new_comp_count; i++)
+            fill_composite_info(&svc->composites[i],
+                                 &svc->model.composites[i], &svc->identities[i],
+                                 svc->conn.backend, svc->conn.bus);
+    }
 
     /* Check if target count changed → rebuild with dynamic columns
      * (SPEC §4.7).  Otherwise just rebuild the grid rows. */
@@ -1689,16 +1800,14 @@ cbx_overlay_reconcile_hotplug(cbx_overlay_service_ctx *svc)
      * controller added mid-session would not control its virtual gamepad
      * until the overlay is next saved.  Pass clear_all=false so adding or
      * removing one controller never tears down the routing of controllers
-     * that are already attached.  When no row is assigned there is nothing
-     * to make effective and the engine order cannot change. */
-    if (overlay_grid_has_assigned_row(&svc->grid)) {
-        int apply_rc = overlay_apply_grid_engine(svc, false);
-        if (apply_rc != 0) {
-            overlay_set_readiness_detail(svc, "assignment restoration",
-                                         apply_rc);
-            overlay_set_call_deadline(svc, 0);
-            return apply_rc;
-        }
+     * that are already attached.  Apply even when the grid has no assigned
+     * rows: a confirmed topology shrink must publish an empty GamepadOrder
+     * rather than leaving a removed path live in InputPlumber. */
+    int apply_rc = overlay_apply_grid_engine(svc, false, true);
+    if (apply_rc != 0) {
+        overlay_set_readiness_detail(svc, "assignment restoration", apply_rc);
+        overlay_set_call_deadline(svc, 0);
+        return apply_rc;
     }
 
     /* Rebuild input map.  A DbusDevices probe failure is a required-step
@@ -1764,23 +1873,18 @@ overlay_set_readiness_detail(cbx_overlay_service_ctx *svc, const char *phase,
              ip_connection_reason_for_error(rc), rc);
 }
 
+/* Apply saved slots/profiles and physical order without rewriting durable
+ * preferences, including preferences for disconnected controllers. */
 static int
-overlay_restore_gamepad_order(cbx_overlay_service_ctx *svc)
+overlay_restore_assignments(cbx_overlay_service_ctx *svc)
 {
-    int restored = 0;
-    int skipped = 0;
-    bool query_failed = false;
-    int rc = cbx_gamepad_order_restore(svc->conn.backend, svc->conn.bus,
-                                       &svc->model, &restored, &skipped,
-                                       &query_failed);
-    if (rc == -ENOENT)
-        return 0;  /* nothing persisted yet — not a failure */
-    if (rc == 0) {
-        fprintf(stderr,
-                "controller-box: gamepad-order restored=%d skipped=%d\n",
-                restored, skipped);
-    }
-    return rc;
+    if (!svc)
+        return -EINVAL;
+
+    cbx_conflict_list_init(&svc->conflicts);
+    cbx_conflict_detect(&svc->grid, &svc->conflicts);
+    cbx_conflict_resolve(&svc->grid, &svc->conflicts);
+    return overlay_apply_grid_engine(svc, true, true);
 }
 
 /*
@@ -1802,22 +1906,11 @@ overlay_wire_required_steps(cbx_overlay_service_ctx *svc)
     if (!svc || !svc->conn.backend || !svc->conn.bus)
         return -EINVAL;
 
-    /* Restore the persisted GamepadOrder first, resolving saved identity IDs
-     * to current composite paths by source-derived identity (SPEC §10.3 gap
-     * #2).  A transient identity query failure defers this step (-EAGAIN)
-     * instead of applying a misleading partial/empty order. */
-    int rc = overlay_restore_gamepad_order(svc);
-    if (rc != 0) {
-        overlay_set_readiness_detail(svc, "gamepad order restoration", rc);
-        return rc;
-    }
-
-    /* Restore persisted slot/profile topology to the live engine before
-     * advertising the overlay as ready (SPEC §§4.1-4.7: startup/restart
-     * restores order/profile).  A restoration failure is a required-step
-     * failure: operations stay disabled rather than running with stale or
-     * partial routing. */
-    rc = cbx_overlay_on_save(svc);
+    /* Apply persisted slot/profile assignments first.  This establishes a
+     * complete, verified current topology but does not persist any new
+     * preference.  In particular, it must not replace a saved physical
+     * GamepadOrder with the current grid order before restoration. */
+    int rc = overlay_restore_assignments(svc);
     if (rc != 0) {
         overlay_set_readiness_detail(svc, "assignment restoration", rc);
         return rc;
@@ -1948,7 +2041,7 @@ overlay_recover(cbx_overlay_service_ctx *svc)
         svc->comp_count = CBX_MAX_COMPOSITES;
     for (int i = 0; i < svc->comp_count; i++)
         fill_composite_info(&svc->composites[i], &svc->model.composites[i],
-                             i, svc->conn.backend, svc->conn.bus);
+                             &svc->identities[i], svc->conn.backend, svc->conn.bus);
     cbx_select_grid_build(&svc->grid, svc->composites, svc->comp_count,
                            &svc->settings, &svc->assignments);
     cbx_profile_cycle_load_profiles(&svc->grid, &svc->profiles);
@@ -2374,9 +2467,14 @@ cbx_overlay_service_step(cbx_overlay_service_ctx *svc)
              * poll_event_targets_live_poll. */
             if (poll_event_targets_live_poll(svc, &ev)) {
                 ip_intercept_poll_tick((ip_intercept_poll *)ev.user.data1);
-                svc->poll_count++;
-                if (svc->poll_count % 100 == 0)
-                    fprintf(stderr, "controller-box: poll tick #%d\n", svc->poll_count);
+                /* poll_count is the number of armed slots and is used as
+                 * the bound for every rearm/cleanup loop.  Keep the event
+                 * diagnostic separate; incrementing poll_count per timer
+                 * event eventually indexed beyond CBX_MAX_COMPOSITES. */
+                svc->poll_ticks++;
+                if (svc->poll_ticks % 100 == 0)
+                    fprintf(stderr, "controller-box: poll tick #%llu\n",
+                            (unsigned long long)svc->poll_ticks);
             }
         } else if (ev.type == SDL_QUIT) {
             g_running = 0;
@@ -2489,9 +2587,9 @@ cbx_overlay_service_step(cbx_overlay_service_ctx *svc)
     /* 4. Check if hotplug signals modified the device model and reconcile
      *    grid rows, columns, input mappings, triggers, and polls
      *    (SPEC §10.1: InterfacesAdded/InterfacesRemoved). */
-    if (svc->hp.model_changed) {
-        svc->hp.model_changed = false;
-        if (cbx_overlay_reconcile_hotplug(svc) != 0) {
+    if (svc->hp.model_changed || svc->identity_reconcile_pending) {
+        int hotplug_rc = cbx_overlay_reconcile_hotplug(svc);
+        if (hotplug_rc != 0) {
             overlay_backend_degraded(
                 svc->readiness_detail[0] ? svc->readiness_detail
                                          : "hotplug reconciliation failed",
@@ -2663,7 +2761,7 @@ int run_overlay_service(int dry_run)
         overlay_set_call_deadline(svc, overlay_pass_deadline_ms(svc));
     for (int i = 0; i < svc->comp_count; i++)
         fill_composite_info(&svc->composites[i], &svc->model.composites[i],
-                             i, svc->conn.backend, svc->conn.bus);
+                             &svc->identities[i], svc->conn.backend, svc->conn.bus);
     overlay_set_call_deadline(svc, 0);
 
     cbx_select_grid_init(&svc->grid);

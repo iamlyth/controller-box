@@ -202,6 +202,30 @@ test_save_query_failure_skipped(void **state)
 }
 
 static void
+test_save_partial_query_failure_preserves_order(void **state)
+{
+    gamepad_fixture *f = FIX(state);
+    write_raw_gamepad_order(f->temp_home,
+        "assignments:\n  - id: USB:serial-aaaa\n    slot: 1\n"
+        "    profile: fighting\ngamepad_order:\n  - USB:serial-aaaa\n"
+        "  - USB:disconnected\n");
+    assert_true(cbx_device_model_add_composite(&f->model,
+        "/org/shadowblip/InputPlumber/CompositeDevice0"));
+    expect_evdev_source(f, "serial-aaaa", "", "3");
+    /* Even a usable serial is uncertain when another property failed. */
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_SOURCE_EVENT, "PhysPath", -EIO);
+    assert_int_equal(ip_gamepad_order_save(f->backend, f->mock.bus, &f->model,
+        "/org/shadowblip/InputPlumber/CompositeDevice0"), -EAGAIN);
+    cbx_assignments a = load_assignments();
+    assert_int_equal(a.gamepad_order_count, 2);
+    assert_string_equal(a.gamepad_order[0], "USB:serial-aaaa");
+    assert_string_equal(a.gamepad_order[1], "USB:disconnected");
+    assert_int_equal(a.assignment_count, 1);
+    assert_int_equal(a.assignments[0].slot, 1);
+    assert_string_equal(a.assignments[0].profile, "fighting");
+}
+
+static void
 test_save_preserves_assignments(void **state)
 {
     gamepad_fixture *f = FIX(state);
@@ -427,6 +451,8 @@ main(void)
                                          setup, teardown),
         cmocka_unit_test_setup_teardown(test_save_query_failure_skipped,
                                          setup, teardown),
+        cmocka_unit_test_setup_teardown(test_save_partial_query_failure_preserves_order,
+                                        setup, teardown),
         cmocka_unit_test_setup_teardown(test_save_preserves_assignments,
                                          setup, teardown),
         cmocka_unit_test_setup_teardown(test_save_null_args,

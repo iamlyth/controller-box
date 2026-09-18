@@ -64,9 +64,28 @@ cbx_gamepad_order_map_ids(const ip_dbus_backend *backend,
                            int *out_skipped_count,
                            bool *out_query_failed)
 {
-    if (!backend || !model || !saved_ids_csv || !out_paths_csv)
+    if (!backend || !model)
         return -EINVAL;
-    if (paths_csv_len == 0)
+    cbx_composite_identity_entry entries[CBX_MAX_COMPOSITES];
+    int entry_count = 0;
+    int rc = cbx_model_extract_identities(backend, bus, model, entries,
+                                          &entry_count);
+    if (rc != 0)
+        return rc;
+    return cbx_gamepad_order_map_snapshot(entries, entry_count, saved_ids_csv,
+        out_paths_csv, paths_csv_len, out_restored_count, out_skipped_count,
+        out_query_failed);
+}
+
+int
+cbx_gamepad_order_map_snapshot(const cbx_composite_identity_entry *entries,
+                               int entry_count, const char *saved_ids_csv,
+                               char *out_paths_csv, size_t paths_csv_len,
+                               int *out_restored_count, int *out_skipped_count,
+                               bool *out_query_failed)
+{
+    if (!entries || entry_count < 0 || entry_count > CBX_MAX_COMPOSITES ||
+        !saved_ids_csv || !out_paths_csv || paths_csv_len == 0)
         return -EINVAL;
 
     out_paths_csv[0] = '\0';
@@ -77,17 +96,21 @@ cbx_gamepad_order_map_ids(const ip_dbus_backend *backend,
     if (out_query_failed)
         *out_query_failed = false;
 
-    /* Extract every composite's identity exactly once. */
-    cbx_composite_identity_entry entries[CBX_MAX_COMPOSITES];
-    int entry_count = 0;
-    int rc = cbx_model_extract_identities(backend, bus, model, entries,
-                                          &entry_count);
-    if (rc != 0)
-        return rc;
+    /* An unread controller could duplicate any apparently unique match.
+     * Do not publish even a partial mapping from an uncertain snapshot. */
+    for (int i = 0; i < entry_count; i++) {
+        if (entries[i].status == CBX_COMPOSITE_IDENTITY_QUERY_FAILED) {
+            if (out_query_failed)
+                *out_query_failed = true;
+            return 0;
+        }
+    }
 
+    int rc;
     int restored = 0;
     int skipped = 0;
     bool query_failed = false;
+    bool used_entries[CBX_MAX_COMPOSITES] = {false};
     size_t pos = 0;
 
     const char *p = saved_ids_csv;
@@ -114,28 +137,31 @@ cbx_gamepad_order_map_ids(const ip_dbus_backend *backend,
             memcpy(saved_id, p, len);
             saved_id[len] = '\0';
 
-            const char *match = NULL;
-            bool any_failed = false;
+            int match_count = 0;
+            int match_index = -1;
             for (int i = 0; i < entry_count; i++) {
                 if (cbx_composite_identity_is_matchable(&entries[i].ident,
                                                         entries[i].status)) {
                     if (strcmp(entries[i].ident.id, saved_id) == 0) {
-                        match = entries[i].path;
-                        break;
+                        match_count++;
+                        match_index = i;
                     }
-                } else if (entries[i].status ==
-                           CBX_COMPOSITE_IDENTITY_QUERY_FAILED) {
-                    any_failed = true;
                 }
             }
 
-            if (match) {
-                rc = append_path(out_paths_csv, paths_csv_len, &pos, match);
+            if (match_count == 1 && !used_entries[match_index]) {
+                rc = append_path(out_paths_csv, paths_csv_len, &pos,
+                                 entries[match_index].path);
                 if (rc != 0)
                     return rc;
+                used_entries[match_index] = true;
                 restored++;
-            } else if (any_failed) {
-                /* Cannot distinguish stale from a transient read failure. */
+            } else if (match_count > 1 ||
+                       (match_count == 1 && used_entries[match_index])) {
+                /* Duplicate physical identities and read failures are both
+                 * ambiguous.  Neither may be silently treated as a stale
+                 * preference or mapped to the first object-path returned by
+                 * DBus; the caller must retry/report uncertainty. */
                 query_failed = true;
             } else {
                 skipped++;

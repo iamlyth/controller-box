@@ -36,6 +36,7 @@
 #include "overlay/dynamic_columns.h"
 #include "dbus/ip_hotplug.h"
 #include "dbus/ip_properties.h"
+#include "identify/composite_identity.h"
 
 /* --- Per-composite activation context (Task 9) ----------------------- */
 
@@ -161,6 +162,10 @@ typedef struct cbx_overlay_service_ctx {
     /* --- Grid + composites --- */
     cbx_grid_composite_info composites[CBX_MAX_COMPOSITES];
     int                    comp_count;
+    /* One complete physical-identity snapshot per reconciliation pass. */
+    cbx_composite_identity_entry identities[CBX_MAX_COMPOSITES];
+    int                    identity_count;
+    bool                   identities_valid;
     cbx_select_grid        grid;
 
     /* --- Overlay surface --- */
@@ -184,7 +189,8 @@ typedef struct cbx_overlay_service_ctx {
     /* --- InterceptMode polling --- */
     ip_intercept_poll      polls[CBX_MAX_COMPOSITES];
     cbx_poll_activation_ctx poll_acts[CBX_MAX_COMPOSITES];
-    int                    poll_count;
+    int                    poll_count;       /* currently armed poll slots */
+    uint64_t               poll_ticks;       /* diagnostic timer events */
     uint32_t               poll_event_type;
 
     /* --- Hotplug --- */
@@ -192,6 +198,10 @@ typedef struct cbx_overlay_service_ctx {
 
     /* --- Reactive PropertiesChanged handling (Task 5) --- */
     ip_properties         props;          /* PropertiesChanged subscription    */
+    /* SourceDevicePaths changes alter the physical identity used by
+     * assignments and GamepadOrder.  Defer the identity pass to the service
+     * loop so the signal callback never performs synchronous DBus I/O. */
+    bool                   identity_reconcile_pending;
 
     /* --- Reconciliation status ------------------------------------ */
     struct {
