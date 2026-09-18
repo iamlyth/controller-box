@@ -1,0 +1,1671 @@
+/*
+ * profile_editor_list.c — Binding list mode editor (Task 37, right panel).
+ *
+ * Implements the profile editor's list mode with a controller diagram
+ * (left) and binding list (right).  The user navigates bindings with
+ * Up/Down, presses A to edit (target-pick or capture mode), and the
+ * diagram stays synchronised with the list selection.
+ *
+ * Task 37 — Profile editor — controller diagram and binding list mode.
+ */
+#include "manager/profile_editor_list.h"
+
+#include <SDL2/SDL.h>
+#include <errno.h>
+#include <limits.h>
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "dbus/ip_composite.h"
+#include "config/config_paths.h"
+#include "icons/icon_lookup.h"      /* cbx_icon_lookup (device->texture) */
+#include "icons/icon_map.h"          /* cbx_icon_map_lookup / default path */
+#include "icons/icon_cache.h"        /* cbx_icon_cache_init / load_one */
+
+/* Licensed diagrams are never rasterised below the release-evidence floor.
+ * The renderer/output scale may raise this further for HiDPI or a resized
+ * drawable, but a 1x 300px widget still gets a 512px source texture. */
+#define CBX_PE_DIAGRAM_RASTER 512
+
+/* ------------------------------------------------------------------ */
+/*  Layout constants                                                  */
+/* ------------------------------------------------------------------ */
+
+#define CBX_PE_DIAGRAM_W  300
+#define CBX_PE_DIAGRAM_H  300
+#define CBX_PE_LIST_X     330
+#define CBX_PE_LIST_W     580
+#define CBX_PE_LIST_H     420
+#define CBX_PE_LIST_Y     60
+#define CBX_PE_TITLE_H     40
+#define CBX_PE_STATUS_H   36
+#define CBX_PE_TARGET_LIST_H 420
+
+/* Progress bar (sequential mode, Task 38) */
+#define CBX_PE_PROGRESS_W  580
+#define CBX_PE_PROGRESS_H  24
+#define CBX_PE_PROGRESS_Y  (CBX_PE_LIST_Y + CBX_PE_LIST_H + 8)
+
+/* ------------------------------------------------------------------ */
+/*  Helpers                                                            */
+/* ------------------------------------------------------------------ */
+
+/*
+ * True if a source-event prop key names a virtual button or axis.  This is
+ * the single predicate the list and sequential modes share, so adding a
+ * future source-prop key happens in one place.
+ */
+static bool
+source_button_key(const char *key)
+{
+    return key && (strcmp(key, "button") == 0 || strcmp(key, "axis") == 0);
+}
+
+/* Index of the mapping's source prop that names a button/axis, or -1. */
+static int
+source_button_prop_index(const cbx_profile_mapping *m)
+{
+    if (!m)
+        return -1;
+    for (int i = 0; i < m->source_event.prop_count; i++)
+        if (source_button_key(m->source_event.props[i].key))
+            return i;
+    return -1;
+}
+
+/* Find (or append) the source prop that names a button/axis in `m`.
+ * Returns the prop index, or -1 when `m` is NULL or its prop array is full.
+ * Shared with the sequential binding mode (BUG-0016). */
+int
+cbx_profile_editor_source_button_prop(cbx_profile_mapping *m)
+{
+    int idx = source_button_prop_index(m);
+    if (idx >= 0)
+        return idx;
+    if (!m || m->source_event.prop_count >= CBX_MAX_EVENT_PROPS)
+        return -1;
+    idx = m->source_event.prop_count++;
+    strncpy(m->source_event.props[idx].key, "button",
+            sizeof(m->source_event.props[idx].key) - 1);
+    m->source_event.props[idx].key
+        [sizeof(m->source_event.props[idx].key) - 1] = '\0';
+    return idx;
+}
+
+/*
+ * Find the "button" property in a source event's props.
+ * Returns the value string, or NULL if not found.
+ */
+static const char *
+source_event_button(const cbx_source_event *se)
+{
+    if (!se)
+        return NULL;
+    for (int i = 0; i < se->prop_count; i++) {
+        if (strcmp(se->props[i].key, "button") == 0)
+            return se->props[i].value;
+    }
+    /* Also check "axis" for stick axes */
+    for (int i = 0; i < se->prop_count; i++) {
+        if (strcmp(se->props[i].key, "axis") == 0)
+            return se->props[i].value;
+    }
+    return NULL;
+}
+
+/*
+ * Build a display label for a binding: "source → target1, target2"
+ */
+static void
+format_binding_label(char *buf, size_t buflen,
+                       const cbx_profile_mapping *m)
+{
+    if (!buf || buflen == 0 || !m)
+        return;
+
+    const char *btn = source_event_button(&m->source_event);
+    if (!btn || !btn[0])
+        btn = m->source_event.device_class;
+
+    /* Build targets string */
+    char targets_str[128] = "";
+    size_t offset = 0;
+    for (int i = 0; i < m->target_event_count && i < 8; i++) {
+        const char *sep = (i > 0) ? ", " : "";
+        int written = snprintf(targets_str + offset,
+                               sizeof(targets_str) - offset,
+                               "%s%s", sep, m->target_events[i].value);
+        if (written > 0 && (size_t)written < sizeof(targets_str) - offset)
+            offset += (size_t)written;
+        else
+            break;  /* buffer full */
+    }
+    if (targets_str[0] == '\0')
+        snprintf(targets_str, sizeof(targets_str), "(none)");
+
+    snprintf(buf, buflen, "%s → %s", btn, targets_str);
+}
+
+/*
+ * Presentation order for the supported virtual-button catalog (BUG-0016).
+ * The NES-minimum buttons used by profile_validate.c come first, then the
+ * remaining cbx_diag_button entries in enum order.  Every one of the
+ * CBX_DIAG_BTN_COUNT supported buttons appears exactly once, so the binding
+ * list can show and edit a profile for any button, bound or not.
+ */
+static const cbx_diag_button s_catalog_order[CBX_DIAG_BTN_COUNT] = {
+    CBX_DIAG_BTN_A, CBX_DIAG_BTN_B,
+    CBX_DIAG_BTN_UP, CBX_DIAG_BTN_DOWN, CBX_DIAG_BTN_LEFT, CBX_DIAG_BTN_RIGHT,
+    CBX_DIAG_BTN_X, CBX_DIAG_BTN_Y,
+    CBX_DIAG_BTN_START, CBX_DIAG_BTN_SELECT, CBX_DIAG_BTN_GUIDE,
+    CBX_DIAG_BTN_L1, CBX_DIAG_BTN_R1, CBX_DIAG_BTN_L2, CBX_DIAG_BTN_R2,
+    CBX_DIAG_BTN_L3, CBX_DIAG_BTN_R3,
+};
+
+/* True if the mapping's source event binds `btn` on any button/axis prop. */
+static bool
+mapping_has_button(const cbx_profile_mapping *m, cbx_diag_button btn)
+{
+    if (!m || btn <= CBX_DIAG_BTN_NONE || btn >= CBX_DIAG_BTN_COUNT)
+        return false;
+    const char *name = cbx_profile_diagram_button_name(btn);
+    if (!name)
+        return false;
+    for (int i = 0; i < m->source_event.prop_count; i++) {
+        if (source_button_key(m->source_event.props[i].key) &&
+            strcmp(m->source_event.props[i].value, name) == 0)
+            return true;
+    }
+    return false;
+}
+
+/* First mapping in `p` that binds `btn`, or -1 when none does. */
+static int
+find_mapping_index_for_button(const cbx_profile *p, cbx_diag_button btn)
+{
+    if (!p)
+        return -1;
+    for (int i = 0; i < p->mapping_count; i++)
+        if (mapping_has_button(&p->mappings[i], btn))
+            return i;
+    return -1;
+}
+
+/* First supported catalog button bound by the mapping, or NONE. */
+static cbx_diag_button
+mapping_button(const cbx_profile_mapping *m)
+{
+    if (!m)
+        return CBX_DIAG_BTN_NONE;
+    for (int i = 0; i < m->source_event.prop_count; i++) {
+        if (!source_button_key(m->source_event.props[i].key))
+            continue;
+        cbx_diag_button b = cbx_profile_diagram_button_from_name(
+            m->source_event.props[i].value);
+        if (b != CBX_DIAG_BTN_NONE)
+            return b;
+    }
+    return CBX_DIAG_BTN_NONE;
+}
+
+int
+cbx_profile_editor_find_or_create_mapping(cbx_profile *p, cbx_diag_button btn)
+{
+    if (!p || btn <= CBX_DIAG_BTN_NONE || btn >= CBX_DIAG_BTN_COUNT)
+        return -1;
+
+    const char *btn_name = cbx_profile_diagram_button_name(btn);
+    if (!btn_name)
+        return -1;
+
+    int existing = find_mapping_index_for_button(p, btn);
+    if (existing >= 0)
+        return existing;
+
+    if (p->mapping_count >= CBX_MAX_MAPPINGS)
+        return -1;
+
+    int idx = p->mapping_count;
+    cbx_profile_mapping *m = &p->mappings[idx];
+    memset(m, 0, sizeof(*m));
+
+    /* Set the mapping name to the button name and source to a gamepad
+     * button.  The intended target event is chosen by the caller. */
+    strncpy(m->name, btn_name, sizeof(m->name) - 1);
+    strncpy(m->source_event.device_class, "gamepad",
+            sizeof(m->source_event.device_class) - 1);
+    m->source_event.prop_count = 1;
+    strncpy(m->source_event.props[0].key, "button",
+            sizeof(m->source_event.props[0].key) - 1);
+    strncpy(m->source_event.props[0].value, btn_name,
+            sizeof(m->source_event.props[0].value) - 1);
+
+    p->mapping_count++;
+    return idx;
+}
+
+/*
+ * Update the editor title label from the profile name and model label.
+ */
+static void
+update_editor_title(cbx_profile_editor *ed)
+{
+    if (!ed)
+        return;
+    const char *profile = (ed->profile_loaded && ed->profile.name[0])
+                          ? ed->profile.name : "Profile Editor";
+    const char *model = cbx_profile_diagram_model_label(&ed->diagram);
+    char title[CBX_PE_LABEL_LEN];
+    if (model && model[0])
+        snprintf(title, sizeof(title), "%.110s — %.110s", profile, model);
+    else
+        snprintf(title, sizeof(title), "%s", profile);
+    cbx_label_set_text(&ed->title_lbl, title);
+}
+
+static void
+sync_diagram_highlight(cbx_profile_editor *ed)
+{
+    if (!ed)
+        return;
+
+    if (ed->selected_index < 0 || ed->selected_index >= ed->row_count) {
+        cbx_profile_diagram_clear_highlight(&ed->diagram);
+        return;
+    }
+
+    /* The row's catalog button, so selecting an unbound row still lights
+     * up the control the user is editing. */
+    cbx_profile_diagram_highlight(&ed->diagram,
+                                  ed->rows[ed->selected_index].button);
+}
+
+/*
+ * Restore the binding-list baseline shared by every "leave a sub-mode"
+ * path: the target picker and progress bar are hidden, the binding list
+ * is shown, the edit cursor is cleared, and the editor returns to LIST.
+ */
+static void
+editor_return_to_list(cbx_profile_editor *ed)
+{
+    if (!ed)
+        return;
+    cbx_widget_set_visible(&ed->target_list.base, false);
+    cbx_widget_set_visible(&ed->binding_list.base, true);
+    cbx_widget_set_visible(&ed->progress_bar.base, false);
+    ed->editing_index = -1;
+    ed->mode = CBX_EDITOR_MODE_LIST;
+    cbx_label_set_text(&ed->status_lbl, "");
+}
+
+/*
+ * Parse a comma-separated capabilities string into target entries.
+ * Each token becomes a target with device_class = cap (the capability
+ * name as-is) and value = the token.  The label is "cap:token".
+ */
+static int
+parse_capabilities_csv(const char *csv, cbx_pe_target *targets,
+                         int *count, int max, const char *device_class)
+{
+    if (!csv || !targets || !count)
+        return 0;
+
+    int added = 0;
+    const char *p = csv;
+
+    /* Bound by the cumulative count, not this call's additions: the
+     * function is invoked once per capability source (Capabilities,
+     * OutputCapabilities, TargetCapabilities) against the same shared
+     * targets[] array, so a per-call bound would let a later call write
+     * past targets[max-1]. */
+    while (*p && *count < max) {
+        while (*p == ' ' || *p == '\t')
+            p++;
+        if (*p == '\0')
+            break;
+
+        const char *start = p;
+        while (*p && *p != ',')
+            p++;
+        const char *end = p;
+
+        while (end > start && (end[-1] == ' ' || end[-1] == '\t'))
+            end--;
+
+        int len = (int)(end - start);
+        if (len > 0 && len < (int)sizeof(targets[*count].value)) {
+            cbx_pe_target *t = &targets[*count];
+            strncpy(t->device_class, device_class, sizeof(t->device_class) - 1);
+            t->device_class[sizeof(t->device_class) - 1] = '\0';
+            memcpy(t->value, start, (size_t)len);
+            t->value[len] = '\0';
+            snprintf(t->label, sizeof(t->label), "%s:%s",
+                      device_class, t->value);
+            (*count)++;
+            added++;
+        }
+
+        if (*p == ',')
+            p++;
+    }
+
+    return added;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Capture interception ownership (Task 16)                          */
+/* ------------------------------------------------------------------ */
+
+/* Parse a comma-separated DbusDevices list into ed->dbus_devices[]. */
+static void
+parse_dbus_devices_csv(cbx_profile_editor *ed, const char *csv)
+{
+    ed->dbus_device_count = 0;
+    if (!csv)
+        return;
+    const char *p = csv;
+    while (*p && ed->dbus_device_count < CBX_PE_MAX_DBUS_DEVICES) {
+        while (*p == ' ' || *p == '\t' || *p == ',')
+            p++;
+        if (!*p)
+            break;
+        const char *start = p;
+        const char *end = p;
+        while (*end && *end != ',')
+            end++;
+        while (end > start && (end[-1] == ' ' || end[-1] == '\t'))
+            end--;
+        size_t len = (size_t)(end - start);
+        if (len > 0 && len < sizeof(ed->dbus_devices[0])) {
+            memcpy(ed->dbus_devices[ed->dbus_device_count], start, len);
+            ed->dbus_devices[ed->dbus_device_count][len] = '\0';
+            ed->dbus_device_count++;
+        }
+        if (!*end)
+            break;
+        p = end + 1;
+    }
+}
+
+/* True when a signal's DBusDevice path belongs to the selected composite.
+ * With no resolved device list the check is skipped: that state is only
+ * reachable when no composite is selected (or without a DBus backend), and
+ * acquire_interception() fails closed rather than allowing a zero-length
+ * filter for a selected composite. */
+static bool
+event_device_accepted(const cbx_profile_editor *ed, const char *path)
+{
+    if (!path || ed->dbus_device_count == 0)
+        return true;
+    for (int i = 0; i < ed->dbus_device_count; i++)
+        if (strcmp(ed->dbus_devices[i], path) == 0)
+            return true;
+    return false;
+}
+
+void
+cbx_profile_editor_release_interception(cbx_profile_editor *ed)
+{
+    if (!ed)
+        return;
+
+    /* Give back the InputEvent subscription this editor owns.  This runs
+     * even when the mode was never changed: a failed acquisition can leave
+     * a subscription armed with no interception. */
+    if (ed->subscription_active) {
+        ip_input_events_unsubscribe(&ed->input_events);
+        ed->subscription_active = false;
+    }
+
+    if (ed->intercept_active) {
+        if (ed->backend && ed->bus && ed->composite_path[0]) {
+            const char *mode = ed->prior_intercept_mode[0]
+                               ? ed->prior_intercept_mode : "1";
+            ip_composite_set_intercept_mode(ed->backend, ed->bus,
+                                            ed->composite_path, mode);
+        }
+        ed->intercept_active = false;
+    }
+    ed->prior_intercept_mode[0] = '\0';
+}
+
+int
+cbx_profile_editor_acquire_interception(cbx_profile_editor *ed)
+{
+    if (!ed || !ed->backend || !ed->bus)
+        return 0;   /* degraded: capture still works via direct callbacks */
+
+    /* Re-entrancy guard: this editor already owns the mode/subscription.
+     * Acquiring again would save "3" (our own value) as the prior mode and
+     * leave the composite intercepted after release. */
+    if (ed->intercept_active || ed->subscription_active)
+        return 0;
+
+    /* Subscribe first so a failure aborts before the composite's mode is
+     * touched (fail-closed: never leave interception on with no handler). */
+    ip_input_events_init(&ed->input_events, ed->backend, ed->bus,
+                         ed->expected_sender[0] ? ed->expected_sender : NULL,
+                         cbx_profile_editor_on_input_event, ed);
+    int rc = ip_input_events_subscribe(&ed->input_events);
+    if (rc != 0)
+        return rc;
+    ed->subscription_active = true;
+
+    /* No composite selected: nothing to intercept and no device list to
+     * load; the editor still receives InputEvents (degraded behaviour). */
+    if (!ed->composite_path[0]) {
+        ed->dbus_device_count = 0;
+        return 0;
+    }
+
+    /* A composite being selected makes the prior-mode read a required
+     * step.  Guessing a restore value would impose a persistent,
+     * owner-visible state change, so abort (subscription released, mode
+     * untouched) instead. */
+    ed->prior_intercept_mode[0] = '\0';
+    char *cur = NULL;
+    rc = ip_composite_get_intercept_mode(ed->backend, ed->bus,
+                                         ed->composite_path, &cur);
+    if (rc != 0 || !cur || !cur[0]) {
+        free(cur);
+        cbx_profile_editor_release_interception(ed);
+        return rc != 0 ? rc : -ENODATA;
+    }
+    snprintf(ed->prior_intercept_mode,
+             sizeof(ed->prior_intercept_mode), "%s", cur);
+    free(cur);
+
+    /* A composite being selected makes the DbusDevices probe a required
+     * step too: without the composite's own device paths the capture filter
+     * cannot reject events from other controllers.  Probe before changing
+     * the mode so a failure is side-effect free (fail-closed). */
+    ed->dbus_device_count = 0;
+    char *devs = NULL;
+    rc = ip_composite_get_dbus_devices(ed->backend, ed->bus,
+                                       ed->composite_path, &devs);
+    if (rc != 0 || !devs) {
+        free(devs);
+        cbx_profile_editor_release_interception(ed);
+        return rc != 0 ? rc : -ENODATA;
+    }
+    parse_dbus_devices_csv(ed, devs);
+    free(devs);
+    if (ed->dbus_device_count == 0) {
+        /* The composite advertises no usable DBusDevice path, so no event
+         * could be authenticated to it; refuse rather than accept all. */
+        cbx_profile_editor_release_interception(ed);
+        return -ENODATA;
+    }
+
+    rc = ip_composite_set_intercept_mode(ed->backend, ed->bus,
+                                         ed->composite_path, "3");
+    if (rc != 0) {
+        cbx_profile_editor_release_interception(ed);
+        return rc;   /* mode unchanged: nothing to restore */
+    }
+    ed->intercept_active = true;
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Pointer-path callbacks for editor lists                          */
+/* ------------------------------------------------------------------ */
+
+/* Fires when the binding list is activated via mouse click or A-KEYUP.
+ * Calls the same activate function the controller path reaches via
+ * cbx_profiles_tab_activate, so both paths produce the same outcome.
+ * The pointer path clicks an arbitrary row, so the editor selection must
+ * be synced to the clicked row before activating it. */
+static void
+on_binding_selected(cbx_widget *w, int index, void *user_data)
+{
+    (void)w;
+    cbx_profile_editor *ed = (cbx_profile_editor *)user_data;
+    if (!ed)
+        return;
+    if (index >= 0 && index < ed->row_count) {
+        ed->selected_index = index;
+        sync_diagram_highlight(ed);
+    }
+    cbx_profile_editor_activate(ed);
+}
+
+/* Fires when the target list is activated via mouse click or A-KEYUP.
+ * Works in both BINDING_EDIT mode (selecting Pick Target / Capture /
+ * Sequential) and TARGET_PICK mode (confirming a target event). */
+static void
+on_target_selected(cbx_widget *w, int index, void *user_data)
+{
+    (void)w;
+    (void)index;
+    cbx_profile_editor *ed = (cbx_profile_editor *)user_data;
+    if (ed)
+        cbx_profile_editor_activate(ed);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Lifecycle                                                         */
+/* ------------------------------------------------------------------ */
+
+int
+cbx_profile_editor_init(cbx_profile_editor *ed,
+                          cbx_panel *panel,
+                          SDL_Renderer *renderer,
+                          cbx_text_cache *cache,
+                          const cbx_theme *theme,
+                          int font_id)
+{
+    if (!ed || !panel)
+        return -EINVAL;
+
+    memset(ed, 0, sizeof(*ed));
+    ed->panel = panel;
+    ed->text_cache = cache;
+    ed->theme = theme;
+    ed->font_id = font_id;
+    ed->renderer = renderer;
+    ed->mode = CBX_EDITOR_MODE_LIST;
+    ed->selected_index = -1;
+    ed->editing_index = -1;
+    ed->capture_active = false;
+
+    cbx_profile_init(&ed->profile);
+
+    /* Get panel origin for relative widget positioning. */
+    SDL_Rect pr = {0, 0, 0, 0};
+    cbx_widget_get_rect(&panel->base, &pr);
+    const int px = pr.x;
+    const int py = pr.y;
+
+    /* --- Diagram (left panel) ------------------------------------- */
+    /* BUG-0018: the diagram base image + marker layout are resolved
+     * through the production icon mapping utilities (cbx_icon_map +
+     * cbx_icon_cache + cbx_icon_lookup) keyed by the device type, instead
+     * of the former ad-hoc `cbx_icon_dir()/svg/generic-gamepad.svg` path
+     * build.  This keeps the diagram device-mapped (the correct licensed
+     * Controllercons asset for the connected device) and reuses the
+     * existing mapping/caching path rather than ad-hoc logic.  The base
+     * image is owned by the icon cache; the diagram adopts it borrowed. */
+    cbx_icon_map_init(&ed->icon_map);
+    {
+        char icon_map_path[512];
+        ed->icon_map_status = cbx_icon_map_default_path(icon_map_path,
+                                                        sizeof(icon_map_path));
+        if (ed->icon_map_status == 0)
+            ed->icon_map_status = cbx_icon_map_load(&ed->icon_map, icon_map_path);
+    }
+    float sx = 1.0f, sy = 1.0f;
+    SDL_RenderGetScale(renderer, &sx, &sy);
+    int logical_w = 0, logical_h = 0, output_w = 0, output_h = 0;
+    SDL_RenderGetLogicalSize(renderer, &logical_w, &logical_h);
+    if (SDL_GetRendererOutputSize(renderer, &output_w, &output_h) == 0 &&
+        logical_w > 0 && logical_h > 0) {
+        float ox = (float)output_w / (float)logical_w;
+        float oy = (float)output_h / (float)logical_h;
+        if (ox > sx) sx = ox;
+        if (oy > sy) sy = oy;
+    }
+    float renderer_scale = sx > sy ? sx : sy;
+    if (renderer_scale < 1.0f) renderer_scale = 1.0f;
+    int raster_size = (int)ceilf(CBX_PE_DIAGRAM_RASTER * renderer_scale);
+    cbx_icon_cache_init(&ed->icon_cache, renderer, cbx_icon_dir(), raster_size);
+    ed->device_type[0] = '\0';
+
+    int rc = cbx_profile_diagram_init(&ed->diagram, renderer, NULL, theme);
+    if (rc != 0)
+        return rc;
+    SDL_Rect diag_rect = { px + 16, py + CBX_PE_TITLE_H, CBX_PE_DIAGRAM_W,
+                            CBX_PE_DIAGRAM_H };
+    cbx_widget_set_rect(&ed->diagram.base, &diag_rect);
+
+    /* --- Title label ---------------------------------------------- */
+    rc = cbx_label_init(&ed->title_lbl, "Profile Editor", font_id,
+                          cache, theme);
+    if (rc != 0) {
+        cbx_widget_destroy(&ed->diagram.base);
+        return rc;
+    }
+    SDL_Rect title_rect = { px + 16, py + 8, CBX_PE_DIAGRAM_W, CBX_PE_TITLE_H };
+    cbx_widget_set_rect(&ed->title_lbl.base, &title_rect);
+    cbx_profile_editor_set_diagram_selection(ed, NULL, NULL);
+
+    /* --- Binding list (right panel) ------------------------------- */
+    rc = cbx_list_init(&ed->binding_list, font_id, cache, theme);
+    if (rc != 0) {
+        cbx_widget_destroy(&ed->diagram.base);
+        cbx_widget_destroy(&ed->title_lbl.base);
+        return rc;
+    }
+    SDL_Rect list_rect = { px + CBX_PE_LIST_X, py + CBX_PE_LIST_Y,
+                            CBX_PE_LIST_W, CBX_PE_LIST_H };
+    cbx_widget_set_rect(&ed->binding_list.base, &list_rect);
+
+    /* --- Target picker list (hidden initially) -------------------- */
+    rc = cbx_list_init(&ed->target_list, font_id, cache, theme);
+    if (rc != 0) {
+        cbx_widget_destroy(&ed->diagram.base);
+        cbx_widget_destroy(&ed->title_lbl.base);
+        cbx_widget_destroy(&ed->binding_list.base);
+        return rc;
+    }
+    cbx_widget_set_visible(&ed->target_list.base, false);
+    cbx_widget_set_rect(&ed->target_list.base, &list_rect);
+
+    /* Wire on_select callbacks so pointer (mouse) activation works.
+     * For the controller path, A-KEYUP falls through to
+     * cbx_profiles_tab_activate -> cbx_profile_editor_activate.
+     * For the pointer path, MOUSEUP fires on_select which calls
+     * the same activate function. */
+    cbx_list_set_select_cb(&ed->binding_list, on_binding_selected);
+    cbx_list_set_select_cb(&ed->target_list, on_target_selected);
+
+    /* --- Status label --------------------------------------------- */
+    rc = cbx_label_init(&ed->status_lbl, "", font_id, cache, theme);
+    if (rc != 0) {
+        cbx_widget_destroy(&ed->diagram.base);
+        cbx_widget_destroy(&ed->title_lbl.base);
+        cbx_widget_destroy(&ed->binding_list.base);
+        cbx_widget_destroy(&ed->target_list.base);
+        return rc;
+    }
+    SDL_Rect status_rect = { px + 16,
+        py + CBX_PE_TITLE_H + CBX_PE_DIAGRAM_H + 8,
+        CBX_PE_LIST_X + CBX_PE_LIST_W - 16,
+        CBX_PE_STATUS_H };
+    cbx_widget_set_rect(&ed->status_lbl.base, &status_rect);
+
+    /* --- Progress bar (Task 38 — sequential mode) ------------------- */
+    rc = cbx_progress_init(&ed->progress_bar, theme);
+    if (rc != 0) {
+        cbx_widget_destroy(&ed->diagram.base);
+        cbx_widget_destroy(&ed->title_lbl.base);
+        cbx_widget_destroy(&ed->binding_list.base);
+        cbx_widget_destroy(&ed->target_list.base);
+        cbx_widget_destroy(&ed->status_lbl.base);
+        return rc;
+    }
+    SDL_Rect prog_rect = { px + CBX_PE_LIST_X, py + CBX_PE_PROGRESS_Y,
+                             CBX_PE_PROGRESS_W, CBX_PE_PROGRESS_H };
+    cbx_widget_set_rect(&ed->progress_bar.base, &prog_rect);
+    cbx_widget_set_visible(&ed->progress_bar.base, false);
+
+    /* --- Add widgets to panel ------------------------------------- */
+    cbx_panel_add_child(panel, &ed->title_lbl.base);
+    cbx_panel_add_child(panel, &ed->diagram.base);
+    cbx_panel_add_child(panel, &ed->binding_list.base);
+    cbx_panel_add_child(panel, &ed->target_list.base);
+    cbx_panel_add_child(panel, &ed->status_lbl.base);
+    cbx_panel_add_child(panel, &ed->progress_bar.base);
+
+    return 0;
+}
+
+void
+cbx_profile_editor_shutdown(cbx_profile_editor *ed)
+{
+    if (!ed)
+        return;
+
+    /* Restore interception before the DBus deps are cleared. */
+    cbx_profile_editor_release_interception(ed);
+
+    /* Remove children from panel */
+    if (ed->panel) {
+        cbx_panel_remove_child(ed->panel, &ed->title_lbl.base);
+        cbx_panel_remove_child(ed->panel, &ed->diagram.base);
+        cbx_panel_remove_child(ed->panel, &ed->binding_list.base);
+        cbx_panel_remove_child(ed->panel, &ed->target_list.base);
+        cbx_panel_remove_child(ed->panel, &ed->status_lbl.base);
+        cbx_panel_remove_child(ed->panel, &ed->progress_bar.base);
+    }
+
+    cbx_widget_destroy(&ed->title_lbl.base);
+    cbx_widget_destroy(&ed->diagram.base);
+    cbx_widget_destroy(&ed->binding_list.base);
+    cbx_widget_destroy(&ed->target_list.base);
+    cbx_widget_destroy(&ed->status_lbl.base);
+    cbx_widget_destroy(&ed->progress_bar.base);
+
+    /* The diagram's base image is borrowed from the icon cache; the cache
+     * owns and destroys those textures.  Clean it up now that the diagram
+     * widget has been destroyed (so the borrowed texture is not used after
+     * it is freed). */
+    cbx_icon_cache_cleanup(&ed->icon_cache);
+
+    memset(ed, 0, sizeof(*ed));
+}
+
+/* ------------------------------------------------------------------ */
+/*  Device-mapped diagram resolution (BUG-0018)                       */
+/* ------------------------------------------------------------------ */
+
+static const cbx_icon_entry *
+map_entry_for_type(const cbx_icon_map *map, const char *type)
+{
+    if (!map || !map->loaded || !type)
+        return NULL;
+    for (int i = 0; i < map->count; i++)
+        if (strcmp(map->entries[i].type, type) == 0)
+            return &map->entries[i];
+    return NULL;
+}
+
+int
+cbx_profile_editor_set_diagram_selection(cbx_profile_editor *ed,
+                                          const char *device_type,
+                                          const char *icon_override)
+{
+    if (!ed)
+        return -EINVAL;
+    snprintf(ed->device_type, sizeof(ed->device_type), "%s",
+             device_type ? device_type : "");
+    snprintf(ed->icon_override, sizeof(ed->icon_override), "%s",
+             icon_override ? icon_override : "");
+
+    char icon_name[CBX_ICON_ICON_LEN] = CBX_ICON_DEFAULT_ICON;
+    cbx_diag_provenance provenance = CBX_DIAG_PROVENANCE_EXPLICIT_GENERIC;
+    /* Resolve the device's mapped entry once and reuse it for both the
+     * geometry check and the asset-consistency check below. */
+    const cbx_icon_entry *mapped_entry = map_entry_for_type(
+        &ed->icon_map, ed->device_type);
+    if (ed->icon_override[0]) {
+        if (cbx_profile_diagram_device_geometry_known(ed->icon_override)) {
+            snprintf(icon_name, sizeof(icon_name), "%s", ed->icon_override);
+            provenance = strcmp(icon_name, CBX_ICON_DEFAULT_ICON) == 0
+                         ? CBX_DIAG_PROVENANCE_EXPLICIT_GENERIC
+                         : CBX_DIAG_PROVENANCE_PROFILE_OVERRIDE;
+        } else {
+            provenance = CBX_DIAG_PROVENANCE_UNSUPPORTED_FALLBACK;
+        }
+    } else if (ed->device_type[0]) {
+        if (ed->icon_map_status != 0) {
+            cbx_profile_diagram_apply_selection(&ed->diagram, NULL,
+                CBX_ICON_DEFAULT_ICON,
+                CBX_DIAG_PROVENANCE_SUPPORTED_LOAD_FAILURE);
+            update_editor_title(ed);
+            return ed->icon_map_status;
+        }
+        bool mapped = mapped_entry != NULL;
+        char display[CBX_ICON_NAME_LEN];
+        cbx_icon_map_lookup(&ed->icon_map, ed->device_type,
+                            icon_name, sizeof(icon_name), display,
+                            sizeof(display));
+        if (!mapped || !cbx_profile_diagram_device_geometry_known(icon_name)) {
+            snprintf(icon_name, sizeof(icon_name), "%s", CBX_ICON_DEFAULT_ICON);
+            provenance = CBX_DIAG_PROVENANCE_UNSUPPORTED_FALLBACK;
+        } else {
+            provenance = strcmp(icon_name, CBX_ICON_DEFAULT_ICON) == 0
+                         ? CBX_DIAG_PROVENANCE_EXPLICIT_GENERIC
+                         : CBX_DIAG_PROVENANCE_SUPPORTED_MODEL;
+        }
+    }
+
+    const char *asset = NULL;
+    if (!cbx_profile_diagram_catalog_asset(icon_name, &asset, NULL))
+        return -ENOENT;
+    if (!ed->icon_override[0] && mapped_entry && mapped_entry->asset[0] &&
+        strcmp(mapped_entry->asset, asset) != 0) {
+        cbx_profile_diagram_apply_selection(&ed->diagram, NULL, icon_name,
+            CBX_DIAG_PROVENANCE_SUPPORTED_LOAD_FAILURE);
+        update_editor_title(ed);
+        return -EINVAL;
+    }
+    int rc = cbx_icon_cache_load_asset(&ed->icon_cache, icon_name, asset);
+    SDL_Texture *tex = rc == 0 ? cbx_icon_cache_get(&ed->icon_cache, icon_name) : NULL;
+    if (!tex) {
+        cbx_profile_diagram_apply_selection(&ed->diagram, NULL, icon_name,
+            provenance == CBX_DIAG_PROVENANCE_UNSUPPORTED_FALLBACK
+            ? provenance : CBX_DIAG_PROVENANCE_SUPPORTED_LOAD_FAILURE);
+        update_editor_title(ed);
+        fprintf(stderr, "profile-diagram: icon=%s asset=%s provenance=%s result=cleared\n",
+                icon_name, asset,
+                cbx_profile_diagram_provenance_name(
+                    cbx_profile_diagram_provenance(&ed->diagram)));
+        return rc != 0 ? rc : -ENOENT;
+    }
+    rc = cbx_profile_diagram_apply_selection(&ed->diagram, tex, icon_name,
+                                              provenance);
+    update_editor_title(ed);
+    int rw = 0, rh = 0;
+    cbx_icon_cache_get_dims(&ed->icon_cache, icon_name, &rw, &rh);
+    fprintf(stderr, "profile-diagram: icon=%s asset=%s provenance=%s raster=%dx%d result=loaded\n",
+            icon_name, asset, cbx_profile_diagram_provenance_name(provenance),
+            rw, rh);
+    return rc;
+}
+
+int
+cbx_profile_editor_set_device(cbx_profile_editor *ed, const char *device_type)
+{
+    return cbx_profile_editor_set_diagram_selection(ed, device_type, NULL);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Profile loading                                                    */
+/* ------------------------------------------------------------------ */
+
+int
+cbx_profile_editor_load_profile(cbx_profile_editor *ed,
+                                   const cbx_profile *profile)
+{
+    if (!ed || !profile)
+        return -EINVAL;
+
+    /* A load always starts from a clean LIST baseline: the editor is
+     * lazily reused across profiles, so any sub-mode left over from a
+     * previous session (target pick, capture, sequential) must not
+     * survive into the newly loaded profile. */
+    cbx_profile_editor_reset_mode(ed);
+
+    ed->profile = *profile;
+    ed->profile_loaded = true;
+    ed->dirty = false;             /* fresh load: no unsaved edits */
+
+    update_editor_title(ed);
+    return cbx_profile_editor_refresh(ed);
+}
+
+void
+cbx_profile_editor_reset_mode(cbx_profile_editor *ed)
+{
+    if (!ed)
+        return;
+
+    /* Leaving a sub-mode (or loading another profile) must restore the
+     * composite ownership this editor's capture changed. */
+    cbx_profile_editor_release_interception(ed);
+
+    ed->capture_active = false;
+    ed->seq_active = false;
+    ed->seq_step = 0;
+    ed->selected_index = -1;
+    ed->editing_index = -1;
+    ed->mode = CBX_EDITOR_MODE_LIST;
+}
+
+const cbx_profile *
+cbx_profile_editor_get_profile(const cbx_profile_editor *ed)
+{
+    if (!ed || !ed->profile_loaded)
+        return NULL;
+    return &ed->profile;
+}
+
+/* ------------------------------------------------------------------ */
+/*  DBus / capabilities                                                */
+/* ------------------------------------------------------------------ */
+
+/* Abort an in-progress capture/sequential run after a backend or composite
+ * replacement could not be re-armed.  Releases any ownership this editor
+ * still holds and returns to the LIST baseline so capture can never
+ * continue with a missing device filter (fail-closed). */
+static void
+editor_abort_capture(cbx_profile_editor *ed)
+{
+    if (!ed)
+        return;
+    cbx_profile_editor_release_interception(ed);
+    ed->capture_active = false;
+    ed->seq_active = false;
+    ed->seq_step = 0;
+    editor_return_to_list(ed);
+    cbx_label_set_text(&ed->status_lbl,
+                       "Capture unavailable: input intercept failed");
+}
+
+void
+cbx_profile_editor_set_dbus(cbx_profile_editor *ed,
+                              const ip_dbus_backend *backend,
+                              ip_bus_handle bus,
+                              const char *composite_path)
+{
+    if (!ed)
+        return;
+
+    const char *new_path = composite_path ? composite_path : "";
+    bool changed = (ed->backend != backend || ed->bus != bus ||
+                    strcmp(ed->composite_path, new_path) != 0);
+
+    /* A backend replacement must not leak the old composite's interception
+     * or keep a stale device list.  Restore on the old owner first. */
+    if (changed)
+        cbx_profile_editor_release_interception(ed);
+
+    ed->backend = backend;
+    ed->bus = bus;
+    snprintf(ed->composite_path, sizeof(ed->composite_path), "%s", new_path);
+
+    /* Capabilities and device filters belong to the previous composite. */
+    ed->target_count = 0;
+    ed->dbus_device_count = 0;
+
+    /* Resolve InputPlumber's unique bus name for InputEvent sender
+     * verification.  DBus message sender fields contain unique
+     * connection names (e.g. ":1.42"), not well-known names — using
+     * the well-known name (IP_DBUS_NAME) means strcmp always fails
+     * and all legitimate InputEvent signals are silently dropped. */
+    ed->expected_sender[0] = '\0';
+    if (backend && bus && backend->get_unique_name) {
+        char *unique = NULL;
+        if (backend->get_unique_name(bus, IP_DBUS_NAME, &unique) == 0
+            && unique) {
+            snprintf(ed->expected_sender, sizeof(ed->expected_sender),
+                     "%s", unique);
+            free(unique);
+        }
+    }
+
+    /* Re-arm an in-progress capture against the replacement backend so an
+     * open editor keeps working.  If the backend/composite cannot be
+     * intercepted and authenticated, abort the capture rather than leave
+     * it running with no device filter (fail-closed). */
+    if (changed && (ed->capture_active || ed->seq_active)) {
+        int rc = (backend && bus)
+                 ? cbx_profile_editor_acquire_interception(ed)
+                 : -ENOTCONN;
+        if (rc != 0)
+            editor_abort_capture(ed);
+    }
+}
+
+int
+cbx_profile_editor_load_capabilities(cbx_profile_editor *ed)
+{
+    if (!ed)
+        return -EINVAL;
+
+    ed->target_count = 0;
+
+    /* Read capabilities from DBus if backend is set */
+    if (ed->backend && ed->bus && ed->composite_path[0]) {
+        char *caps = NULL;
+        char *out_caps = NULL;
+        char *tgt_caps = NULL;
+
+        if (ip_composite_get_capabilities(ed->backend, ed->bus,
+                                            ed->composite_path, &caps) == 0
+            && caps) {
+            parse_capabilities_csv(caps, ed->targets, &ed->target_count,
+                                     CBX_PE_MAX_TARGETS, "gamepad");
+            free(caps);
+        }
+
+        if (ip_composite_get_output_capabilities(ed->backend, ed->bus,
+                                                   ed->composite_path,
+                                                   &out_caps) == 0
+            && out_caps) {
+            parse_capabilities_csv(out_caps, ed->targets, &ed->target_count,
+                                     CBX_PE_MAX_TARGETS, "output");
+            free(out_caps);
+        }
+
+        if (ip_composite_get_target_capabilities(ed->backend, ed->bus,
+                                                    ed->composite_path,
+                                                    &tgt_caps) == 0
+            && tgt_caps) {
+            parse_capabilities_csv(tgt_caps, ed->targets, &ed->target_count,
+                                     CBX_PE_MAX_TARGETS, "target");
+            free(tgt_caps);
+        }
+    }
+
+    /* If no targets loaded from DBus, add some defaults */
+    if (ed->target_count == 0) {
+        static const char *default_targets[] = {
+            "keyboard:KeyA", "keyboard:KeyB", "keyboard:KeyC",
+            "keyboard:KeyD", "keyboard:KeyE", "keyboard:KeyF",
+            "keyboard:KeyEsc", "keyboard:KeyReturn",
+            "mouse:ButtonLeft", "mouse:ButtonRight",
+        };
+        int n = (int)(sizeof(default_targets) / sizeof(default_targets[0]));
+        for (int i = 0; i < n && ed->target_count < CBX_PE_MAX_TARGETS; i++) {
+            cbx_pe_target *t = &ed->targets[ed->target_count];
+            const char *colon = strchr(default_targets[i], ':');
+            if (colon) {
+                int dlen = (int)(colon - default_targets[i]);
+                if (dlen >= (int)sizeof(t->device_class))
+                    dlen = (int)sizeof(t->device_class) - 1;
+                memcpy(t->device_class, default_targets[i], (size_t)dlen);
+                t->device_class[dlen] = '\0';
+                strncpy(t->value, colon + 1, sizeof(t->value) - 1);
+                t->value[sizeof(t->value) - 1] = '\0';
+            } else {
+                strncpy(t->device_class, "keyboard",
+                         sizeof(t->device_class) - 1);
+                t->device_class[sizeof(t->device_class) - 1] = '\0';
+                strncpy(t->value, default_targets[i], sizeof(t->value) - 1);
+                t->value[sizeof(t->value) - 1] = '\0';
+            }
+            snprintf(t->label, sizeof(t->label), "%s", default_targets[i]);
+            ed->target_count++;
+        }
+    }
+
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Refresh: rebuild binding list from profile                        */
+/* ------------------------------------------------------------------ */
+
+int
+cbx_profile_editor_refresh(cbx_profile_editor *ed)
+{
+    if (!ed)
+        return -EINVAL;
+
+    cbx_list_clear(&ed->binding_list);
+    ed->row_count = 0;
+
+    /* Build a button -> first-mapping index table in one O(M*P) pass so
+     * the catalog and extra-row passes never rescan every mapping for
+     * every button.  This matches find_mapping_index_for_button(): the
+     * earliest mapping that binds the button on any button/axis prop. */
+    int button_to_mapping[CBX_DIAG_BTN_COUNT];
+    for (int b = 0; b < CBX_DIAG_BTN_COUNT; b++)
+        button_to_mapping[b] = -1;
+    for (int i = 0; i < ed->profile.mapping_count; i++) {
+        const cbx_profile_mapping *m = &ed->profile.mappings[i];
+        for (int j = 0; j < m->source_event.prop_count; j++) {
+            if (!source_button_key(m->source_event.props[j].key))
+                continue;
+            cbx_diag_button b = cbx_profile_diagram_button_from_name(
+                m->source_event.props[j].value);
+            if (b != CBX_DIAG_BTN_NONE && button_to_mapping[b] < 0)
+                button_to_mapping[b] = i;
+        }
+    }
+
+    /* 1. Every supported virtual button, bound or unbound (BUG-0016).
+     *    The list is the catalog, not merely the loaded profile's mappings,
+     *    so a user can bind a button the profile does not yet contain. */
+    for (int i = 0; i < CBX_DIAG_BTN_COUNT && ed->row_count < CBX_PE_MAX_ROWS; i++) {
+        cbx_diag_button btn = s_catalog_order[i];
+        const char *name = cbx_profile_diagram_button_name(btn);
+        int m = button_to_mapping[btn];
+        char label[CBX_PE_LABEL_LEN];
+        if (m >= 0) {
+            format_binding_label(label, sizeof(label),
+                                   &ed->profile.mappings[m]);
+        } else {
+            snprintf(label, sizeof(label), "%s → (unbound)",
+                     name ? name : "?");
+        }
+        ed->rows[ed->row_count].button = btn;
+        ed->rows[ed->row_count].mapping_index = m;
+        cbx_list_add_item(&ed->binding_list, label, NULL, ed);
+        ed->row_count++;
+    }
+
+    /* 2. Any remaining mapping whose source is not the catalog row for its
+     *    button, so advanced sources stay visible and editable. */
+    for (int i = 0; i < ed->profile.mapping_count && ed->row_count < CBX_PE_MAX_ROWS; i++) {
+        cbx_diag_button b = mapping_button(&ed->profile.mappings[i]);
+        if (b != CBX_DIAG_BTN_NONE && button_to_mapping[b] == i)
+            continue;  /* already shown as that button's catalog row */
+        char label[CBX_PE_LABEL_LEN];
+        format_binding_label(label, sizeof(label), &ed->profile.mappings[i]);
+        ed->rows[ed->row_count].button = b;
+        ed->rows[ed->row_count].mapping_index = i;
+        cbx_list_add_item(&ed->binding_list, label, NULL, ed);
+        ed->row_count++;
+    }
+
+    /* Set selection.  The catalog is never empty, but an unloaded editor
+     * (init before any load) has no rows and therefore no selection. */
+    if (ed->row_count > 0) {
+        if (ed->selected_index < 0)
+            ed->selected_index = 0;
+        if (ed->selected_index >= ed->row_count)
+            ed->selected_index = ed->row_count - 1;
+    } else {
+        ed->selected_index = -1;
+    }
+    cbx_list_set_selected(&ed->binding_list, ed->selected_index);
+
+    sync_diagram_highlight(ed);
+
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Navigation                                                         */
+/* ------------------------------------------------------------------ */
+
+int
+cbx_profile_editor_move_up(cbx_profile_editor *ed)
+{
+    if (!ed)
+        return -1;
+
+    if (ed->mode == CBX_EDITOR_MODE_TARGET_PICK ||
+        ed->mode == CBX_EDITOR_MODE_BINDING_EDIT) {
+        int sel = cbx_list_get_selected(&ed->target_list);
+        if (sel > 0)
+            cbx_list_set_selected(&ed->target_list, sel - 1);
+        return cbx_list_get_selected(&ed->target_list);
+    }
+
+    if (ed->row_count <= 0)
+        return -1;
+
+    if (ed->selected_index > 0)
+        ed->selected_index--;
+    else
+        ed->selected_index = ed->row_count - 1;  /* wrap */
+
+    cbx_list_set_selected(&ed->binding_list, ed->selected_index);
+    sync_diagram_highlight(ed);
+    return ed->selected_index;
+}
+
+int
+cbx_profile_editor_move_down(cbx_profile_editor *ed)
+{
+    if (!ed)
+        return -1;
+
+    if (ed->mode == CBX_EDITOR_MODE_TARGET_PICK ||
+        ed->mode == CBX_EDITOR_MODE_BINDING_EDIT) {
+        int sel = cbx_list_get_selected(&ed->target_list);
+        int cnt = cbx_list_item_count(&ed->target_list);
+        if (sel < cnt - 1)
+            cbx_list_set_selected(&ed->target_list, sel + 1);
+        return cbx_list_get_selected(&ed->target_list);
+    }
+
+    if (ed->row_count <= 0)
+        return -1;
+
+    if (ed->selected_index < ed->row_count - 1)
+        ed->selected_index++;
+    else
+        ed->selected_index = 0;  /* wrap */
+
+    cbx_list_set_selected(&ed->binding_list, ed->selected_index);
+    sync_diagram_highlight(ed);
+    return ed->selected_index;
+}
+
+int
+cbx_profile_editor_activate(cbx_profile_editor *ed)
+{
+    if (!ed)
+        return -EINVAL;
+
+    if (ed->mode == CBX_EDITOR_MODE_TARGET_PICK)
+        return cbx_profile_editor_confirm_target_pick(ed);
+
+    if (ed->mode == CBX_EDITOR_MODE_CAPTURE) {
+        /* In capture mode, A does nothing (wait for physical press) */
+        return 0;
+    }
+
+    if (ed->mode == CBX_EDITOR_MODE_BINDING_EDIT) {
+        /* Confirm the selected action in the binding edit sub-menu. */
+        int idx = cbx_list_get_selected(&ed->target_list);
+        if (idx < 0)
+            return -EINVAL;
+
+        /* Restore binding list visibility before dispatching. */
+        cbx_widget_set_visible(&ed->target_list.base, false);
+        cbx_widget_set_visible(&ed->binding_list.base, true);
+
+        switch (idx) {
+        case 0:  /* Pick Target */
+            return cbx_profile_editor_begin_target_pick(ed);
+        case 1:  /* Capture */
+            return cbx_profile_editor_begin_capture(ed);
+        case 2:  /* Sequential (All Buttons) */
+            return cbx_profile_editor_begin_sequential(ed);
+        default:
+            editor_return_to_list(ed);
+            return -EINVAL;
+        }
+    }
+
+    if (ed->mode == CBX_EDITOR_MODE_SEQUENTIAL) {
+        /* A in sequential mode does nothing (wait for physical press) */
+        return 0;
+    }
+
+    /* LIST mode: an Empty profile has no mapping to edit, so A is the
+     * explicit add-first-binding action and starts sequential capture,
+     * which creates mappings as input arrives.  This keeps the empty
+     * profile's add/sequential action reachable (SPEC \u00a75.3). */
+    if (ed->profile.mapping_count == 0)
+        return cbx_profile_editor_begin_sequential(ed);
+
+    if (ed->selected_index < 0 || ed->selected_index >= ed->row_count)
+        return -EINVAL;
+
+    /* Activating an unbound catalog row creates the intended mapping
+     * (find-or-create, never a duplicate) so the user can bind a button
+     * the profile does not contain yet. */
+    int map_idx = ed->rows[ed->selected_index].mapping_index;
+    cbx_diag_button row_btn = ed->rows[ed->selected_index].button;
+    if (map_idx < 0 && row_btn != CBX_DIAG_BTN_NONE) {
+        map_idx = cbx_profile_editor_find_or_create_mapping(&ed->profile,
+                                                             row_btn);
+        if (map_idx < 0) {
+            cbx_label_set_text(&ed->status_lbl, "Profile is full");
+            return -ENOSPC;
+        }
+        ed->dirty = true;
+        /* Rebuild rows so this row now shows as bound; refresh() keeps
+         * the cursor on the same row (it only clamps the selection) and
+         * re-syncs the diagram highlight. */
+        cbx_profile_editor_refresh(ed);
+    }
+    if (map_idx < 0 || map_idx >= ed->profile.mapping_count)
+        return -EINVAL;
+
+    ed->editing_index = map_idx;
+    ed->mode = CBX_EDITOR_MODE_BINDING_EDIT;
+
+    /* Populate target list with the three edit options. */
+    cbx_list_clear(&ed->target_list);
+    cbx_list_add_item(&ed->target_list, "Pick Target", NULL, ed);
+    cbx_list_add_item(&ed->target_list, "Capture", NULL, ed);
+    cbx_list_add_item(&ed->target_list, "Sequential (All Buttons)", NULL, ed);
+    cbx_list_set_selected(&ed->target_list, 0);
+
+    /* Show target list, hide binding list. */
+    cbx_widget_set_visible(&ed->binding_list.base, false);
+    cbx_widget_set_visible(&ed->target_list.base, true);
+    cbx_label_set_text(&ed->status_lbl,
+                         "Edit binding: A=select  B=back");
+
+    return 0;
+}
+
+int
+cbx_profile_editor_cancel(cbx_profile_editor *ed)
+{
+    if (!ed)
+        return -EINVAL;
+
+    if (ed->mode == CBX_EDITOR_MODE_TARGET_PICK) {
+        cbx_profile_editor_cancel_target_pick(ed);
+        return 0;
+    }
+
+    if (ed->mode == CBX_EDITOR_MODE_CAPTURE) {
+        cbx_profile_editor_cancel_capture(ed);
+        return 0;
+    }
+
+    if (ed->mode == CBX_EDITOR_MODE_SEQUENTIAL) {
+        cbx_profile_editor_cancel_sequential(ed);
+        return 0;
+    }
+
+    if (ed->mode == CBX_EDITOR_MODE_BINDING_EDIT) {
+        /* Cancel binding edit sub-menu, return to list mode. */
+        editor_return_to_list(ed);
+        return 0;
+    }
+
+    return -ENOENT;  /* in list mode, nothing to cancel */
+}
+
+/* ------------------------------------------------------------------ */
+/*  Target pick mode                                                   */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Resolve the profile mapping index the editor is editing.  In BINDING_EDIT
+ * the mapping was selected by cbx_profile_editor_activate(); when called
+ * directly in LIST mode it comes from the selected row.  Returns -1 when
+ * the selection has no mapping (an unbound row or an unloaded editor).
+ */
+static int
+editor_editing_mapping(cbx_profile_editor *ed)
+{
+    if (!ed)
+        return -1;
+    if (ed->editing_index >= 0 && ed->editing_index < ed->profile.mapping_count)
+        return ed->editing_index;
+    if (ed->selected_index >= 0 && ed->selected_index < ed->row_count)
+        return ed->rows[ed->selected_index].mapping_index;
+    return -1;
+}
+
+int
+cbx_profile_editor_begin_target_pick(cbx_profile_editor *ed)
+{
+    if (!ed)
+        return -EINVAL;
+    int map_idx = editor_editing_mapping(ed);
+    if (map_idx < 0)
+        return -EINVAL;
+
+    /* Ensure we have targets */
+    if (ed->target_count == 0) {
+        int rc = cbx_profile_editor_load_capabilities(ed);
+        if (rc != 0)
+            return rc;
+    }
+
+    if (ed->target_count == 0)
+        return -ENODATA;
+
+    /* Populate target list */
+    cbx_list_clear(&ed->target_list);
+    for (int i = 0; i < ed->target_count; i++) {
+        cbx_list_add_item(&ed->target_list, ed->targets[i].label,
+                           NULL, ed);
+    }
+    cbx_list_set_selected(&ed->target_list, 0);
+
+    /* Switch UI: hide binding list, show target list */
+    cbx_widget_set_visible(&ed->binding_list.base, false);
+    cbx_widget_set_visible(&ed->target_list.base, true);
+
+    ed->editing_index = map_idx;
+    ed->mode = CBX_EDITOR_MODE_TARGET_PICK;
+    cbx_label_set_text(&ed->status_lbl,
+                         "Select target event.  A=Confirm  B=Cancel");
+
+    return 0;
+}
+
+int
+cbx_profile_editor_confirm_target_pick(cbx_profile_editor *ed)
+{
+    if (!ed || ed->mode != CBX_EDITOR_MODE_TARGET_PICK)
+        return -EINVAL;
+
+    int tgt_idx = cbx_list_get_selected(&ed->target_list);
+    if (tgt_idx < 0 || tgt_idx >= ed->target_count)
+        return -EINVAL;
+
+    int map_idx = ed->editing_index;
+    if (map_idx < 0 || map_idx >= ed->profile.mapping_count)
+        return -EINVAL;
+
+    /* Apply the selected target to the binding */
+    cbx_profile_mapping *m = &ed->profile.mappings[map_idx];
+    cbx_pe_target *tgt = &ed->targets[tgt_idx];
+
+    /* Set the first target event to the selected target */
+    if (m->target_event_count == 0)
+        m->target_event_count = 1;
+
+    strncpy(m->target_events[0].device_class, tgt->device_class,
+             sizeof(m->target_events[0].device_class) - 1);
+    m->target_events[0].device_class[sizeof(m->target_events[0].device_class) - 1] = '\0';
+    strncpy(m->target_events[0].value, tgt->value,
+             sizeof(m->target_events[0].value) - 1);
+    m->target_events[0].value[sizeof(m->target_events[0].value) - 1] = '\0';
+
+    /* Return to list mode */
+    cbx_profile_editor_cancel_target_pick(ed);
+
+    /* Mark profile as having unsaved edits */
+    ed->dirty = true;
+
+    /* Refresh binding list to show updated label */
+    cbx_profile_editor_refresh(ed);
+
+    return 0;
+}
+
+void
+cbx_profile_editor_cancel_target_pick(cbx_profile_editor *ed)
+{
+    editor_return_to_list(ed);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Capture mode                                                       */
+/* ------------------------------------------------------------------ */
+
+int
+cbx_profile_editor_begin_capture(cbx_profile_editor *ed)
+{
+    if (!ed)
+        return -EINVAL;
+    int map_idx = editor_editing_mapping(ed);
+    if (map_idx < 0)
+        return -EINVAL;
+
+    /* Acquire interception before entering the mode so a subscription or
+     * intercept-mode failure aborts cleanly with the prior mode restored. */
+    int rc = cbx_profile_editor_acquire_interception(ed);
+    if (rc != 0) {
+        ed->capture_active = false;
+        ed->editing_index = -1;
+        ed->mode = CBX_EDITOR_MODE_LIST;
+        cbx_label_set_text(&ed->status_lbl,
+                             "Capture unavailable: input intercept failed");
+        return rc;
+    }
+
+    ed->editing_index = map_idx;
+    ed->capture_active = true;
+    ed->mode = CBX_EDITOR_MODE_CAPTURE;
+    cbx_label_set_text(&ed->status_lbl,
+                         "Press a button to capture...  B=Cancel");
+
+    return 0;
+}
+
+void
+cbx_profile_editor_cancel_capture(cbx_profile_editor *ed)
+{
+    if (!ed)
+        return;
+
+    cbx_profile_editor_release_interception(ed);
+    ed->capture_active = false;
+    editor_return_to_list(ed);
+}
+
+void
+cbx_profile_editor_on_input_event(ip_input_id input,
+                                    ip_input_category category,
+                                    double value,
+                                    const char *raw_event,
+                                    const char *device_path,
+                                    void *userdata)
+{
+    cbx_profile_editor *ed = (cbx_profile_editor *)userdata;
+    if (!ed)
+        return;
+
+    /* Only accept input owned by the selected composite's DBusDevices. */
+    if (!event_device_accepted(ed, device_path))
+        return;
+
+    /* Dispatch to sequential mode handler if active */
+    if (ed->mode == CBX_EDITOR_MODE_SEQUENTIAL) {
+        cbx_profile_editor_seq_on_input(input, category, value,
+                                           raw_event, device_path, userdata);
+        return;
+    }
+
+    /* Otherwise, handle capture mode */
+    if (!ed->capture_active)
+        return;
+
+    /* Only capture button presses (value == 1.0), not releases */
+    if (value != 1.0)
+        return;
+
+    if (!raw_event)
+        return;
+
+    int map_idx = ed->editing_index;
+    if (map_idx < 0 || map_idx >= ed->profile.mapping_count)
+        return;
+
+    /* Set the source event's button to the captured event */
+    cbx_profile_mapping *m = &ed->profile.mappings[map_idx];
+
+    /* Find or create the source prop that names the captured button. */
+    int prop_idx = cbx_profile_editor_source_button_prop(m);
+    if (prop_idx < 0)
+        return;
+
+    strncpy(m->source_event.props[prop_idx].value, raw_event,
+             sizeof(m->source_event.props[prop_idx].value) - 1);
+    m->source_event.props[prop_idx].value
+        [sizeof(m->source_event.props[prop_idx].value) - 1] = '\0';
+
+    /* Exit capture mode and release the interception this capture owned. */
+    cbx_profile_editor_release_interception(ed);
+    ed->capture_active = false;
+    ed->mode = CBX_EDITOR_MODE_LIST;
+    ed->editing_index = -1;
+    ed->dirty = true;           /* capture modified the profile */
+    cbx_label_set_text(&ed->status_lbl, "Captured!");
+
+    /* Refresh binding list */
+    cbx_profile_editor_refresh(ed);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Accessors (for testing)                                             */
+/* ------------------------------------------------------------------ */
+
+cbx_editor_mode
+cbx_profile_editor_get_mode(const cbx_profile_editor *ed)
+{
+    if (!ed)
+        return CBX_EDITOR_MODE_LIST;
+    return ed->mode;
+}
+
+int
+cbx_profile_editor_binding_count(const cbx_profile_editor *ed)
+{
+    if (!ed)
+        return 0;
+    return ed->profile.mapping_count;
+}
+
+int
+cbx_profile_editor_row_count(const cbx_profile_editor *ed)
+{
+    return ed ? ed->row_count : 0;
+}
+
+cbx_diag_button
+cbx_profile_editor_row_button(const cbx_profile_editor *ed, int row)
+{
+    if (!ed || row < 0 || row >= ed->row_count)
+        return CBX_DIAG_BTN_NONE;
+    return ed->rows[row].button;
+}
+
+int
+cbx_profile_editor_row_mapping(const cbx_profile_editor *ed, int row)
+{
+    if (!ed || row < 0 || row >= ed->row_count)
+        return -1;
+    return ed->rows[row].mapping_index;
+}
+
+int
+cbx_profile_editor_get_selected(const cbx_profile_editor *ed)
+{
+    if (!ed)
+        return -1;
+    return ed->selected_index;
+}
+
+cbx_diag_button
+cbx_profile_editor_get_diagram_highlight(const cbx_profile_editor *ed)
+{
+    if (!ed)
+        return CBX_DIAG_BTN_NONE;
+    return cbx_profile_diagram_get_highlight(&ed->diagram);
+}
+
+int
+cbx_profile_editor_get_target_count(const cbx_profile_editor *ed)
+{
+    if (!ed)
+        return 0;
+    return ed->target_count;
+}
+
+const char *
+cbx_profile_editor_get_status(const cbx_profile_editor *ed)
+{
+    if (!ed)
+        return NULL;
+    return ed->status_lbl.text;
+}
+
+int
+cbx_profile_editor_get_editing_index(const cbx_profile_editor *ed)
+{
+    if (!ed)
+        return -1;
+    return ed->editing_index;
+}
+
+bool
+cbx_profile_editor_is_capture_active(const cbx_profile_editor *ed)
+{
+    if (!ed)
+        return false;
+    return ed->capture_active;
+}
+
+bool
+cbx_profile_editor_intercept_active(const cbx_profile_editor *ed)
+{
+    return ed ? ed->intercept_active : false;
+}
+
+bool
+cbx_profile_editor_subscription_active(const cbx_profile_editor *ed)
+{
+    return ed ? ed->subscription_active : false;
+}
+
+int
+cbx_profile_editor_dbus_device_count(const cbx_profile_editor *ed)
+{
+    return ed ? ed->dbus_device_count : 0;
+}
+
+const char *
+cbx_profile_editor_dbus_device(const cbx_profile_editor *ed, int index)
+{
+    if (!ed || index < 0 || index >= ed->dbus_device_count)
+        return NULL;
+    return ed->dbus_devices[index];
+}
+
+const char *
+cbx_profile_editor_composite_path(const cbx_profile_editor *ed)
+{
+    return ed ? ed->composite_path : NULL;
+}
+
+bool
+cbx_profile_editor_is_dirty(const cbx_profile_editor *ed)
+{
+    if (!ed)
+        return false;
+    return ed->dirty;
+}
+
+const char *cbx_profile_editor_resolved_icon(const cbx_profile_editor *ed)
+{ return ed ? cbx_profile_diagram_resolved_icon(&ed->diagram) : NULL; }
+const char *cbx_profile_editor_resolved_asset(const cbx_profile_editor *ed)
+{ return ed ? cbx_profile_diagram_asset_filename(&ed->diagram) : NULL; }
+const char *cbx_profile_editor_model_label(const cbx_profile_editor *ed)
+{ return ed ? cbx_profile_diagram_model_label(&ed->diagram) : NULL; }
+cbx_diag_provenance
+cbx_profile_editor_diagram_provenance(const cbx_profile_editor *ed)
+{
+    return ed ? cbx_profile_diagram_provenance(&ed->diagram)
+              : CBX_DIAG_PROVENANCE_NONE;
+}

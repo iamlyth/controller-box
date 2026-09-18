@@ -1,0 +1,1248 @@
+/*
+ * native_ip_server.c — Reusable private InputPlumber-compatible DBus server.
+ *
+ * See native_ip_server.h for documentation.
+ */
+#include "native_ip_server.h"
+
+#include <errno.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <time.h>
+#include <systemd/sd-bus.h>
+
+#include "dbus/dbus_interface.h"  /* IP_DBUS_NAME, IP_IFACE_* */
+
+/* --- Global state (visible to parent before fork) --- */
+
+char   g_nip_profile_path[NIP_MAX_COMPOSITES][256];
+char   g_nip_profile_name[NIP_MAX_COMPOSITES][64];
+char   g_nip_profile_yaml[NIP_MAX_COMPOSITES][NIP_MAX_PROFILE_YAML];
+char   g_nip_gamepad_order[NIP_MAX_COMPOSITES][256];
+int    g_nip_gamepad_order_count = 0;
+
+char   g_nip_target_paths[NIP_MAX_TARGETS][256];
+char   g_nip_target_types[NIP_MAX_TARGETS][32];
+int    g_nip_target_count = 0;
+
+char   g_nip_attached[NIP_MAX_COMPOSITES][NIP_MAX_ATTACHED][256];
+int    g_nip_attached_counts[NIP_MAX_COMPOSITES];
+
+uint32_t g_nip_intercept_mode[NIP_MAX_COMPOSITES];
+char   g_nip_dbus_devices[NIP_MAX_COMPOSITES][256];
+char   g_nip_comp_names[NIP_MAX_COMPOSITES][64];
+char   g_nip_persistent_ids[NIP_MAX_COMPOSITES][32];
+
+/* Physical source devices (task 6). */
+char   g_nip_source_paths[NIP_MAX_COMPOSITES][256];
+char   g_nip_source_path[NIP_MAX_SOURCES][256];
+char   g_nip_source_unique_id[NIP_MAX_SOURCES][64];
+char   g_nip_source_phys_path[NIP_MAX_SOURCES][64];
+char   g_nip_source_bustype[NIP_MAX_SOURCES][16];
+char   g_nip_source_serial[NIP_MAX_SOURCES][64];
+char   g_nip_source_hidraw[NIP_MAX_SOURCES];
+int    g_nip_source_count = 0;
+
+int    g_nip_manage_all_devices = 0;
+volatile sig_atomic_t g_nip_fail_next_create = 0;
+volatile sig_atomic_t g_nip_fail_next_dbus_devices = 0;
+volatile sig_atomic_t g_nip_fail_next_source_paths = 0;
+
+/* Server configuration (set by parent before fork, read by child) */
+static int      s_num_composites = 1;
+static char     s_version[32] = "9.8.7";
+static volatile sig_atomic_t s_service_running = 1;
+static unsigned s_publication_delay_ms;
+static unsigned s_removal_delay_ms;
+static unsigned s_attachment_delay_ms;
+/* Delay the first GetManagedObjects reply once (per-call deadline test). */
+static unsigned s_stall_managed_objects_ms;
+static bool     s_reverse_object_order;
+static bool     s_fail_stop;
+static bool     s_fail_attach;
+static int      s_hide_attachment_for_composite;
+static uint64_t s_target_publish_at[NIP_MAX_TARGETS];
+static uint64_t s_target_remove_at[NIP_MAX_TARGETS];
+static uint64_t s_attachment_apply_at[NIP_MAX_COMPOSITES];
+static char s_pending_attached[NIP_MAX_COMPOSITES][NIP_MAX_ATTACHED][256];
+static int s_pending_attached_counts[NIP_MAX_COMPOSITES];
+
+/* ================================================================== */
+/*  Helpers                                                            */
+/* ================================================================== */
+
+static uint64_t monotonic_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
+}
+
+static bool target_is_visible(int i)
+{
+    uint64_t now = monotonic_ms();
+    return i >= 0 && i < g_nip_target_count &&
+           now >= s_target_publish_at[i] &&
+           (s_target_remove_at[i] == 0 || now < s_target_remove_at[i]);
+}
+
+static int composite_idx_from_path(const char *path)
+{
+    const char *p = strstr(path, "CompositeDevice");
+    if (p) return atoi(p + strlen("CompositeDevice"));
+    return -1;
+}
+
+static void apply_pending_attachment(int ci)
+{
+    if (ci < 0 || ci >= NIP_MAX_COMPOSITES ||
+        s_attachment_apply_at[ci] == 0 ||
+        monotonic_ms() < s_attachment_apply_at[ci])
+        return;
+    g_nip_attached_counts[ci] = s_pending_attached_counts[ci];
+    memcpy(g_nip_attached[ci], s_pending_attached[ci],
+           sizeof(g_nip_attached[ci]));
+    s_attachment_apply_at[ci] = 0;
+}
+
+static void stop_service(int signo)
+{
+    (void)signo;
+    s_service_running = 0;
+}
+
+/* ================================================================== */
+/*  Manager property getter/setter                                     */
+/* ================================================================== */
+
+static int
+manager_property_get(sd_bus *bus, const char *path, const char *interface,
+                      const char *property, sd_bus_message *reply,
+                      void *userdata, sd_bus_error *error)
+{
+    (void)bus; (void)path; (void)interface; (void)userdata; (void)error;
+
+    if (strcmp(property, "Version") == 0)
+        return sd_bus_message_append(reply, "s", s_version);
+    if (strcmp(property, "SupportedTargetDeviceIds") == 0) {
+        int rc = sd_bus_message_open_container(reply, 'a', "s");
+        if (rc < 0) return rc;
+        rc = sd_bus_message_append(reply, "s", "xb360");
+        if (rc >= 0) rc = sd_bus_message_append(reply, "s", "ds5");
+        if (rc >= 0) rc = sd_bus_message_append(reply, "s", "gamepad");
+        if (rc >= 0) rc = sd_bus_message_close_container(reply);
+        return rc;
+    }
+    if (strcmp(property, "SupportedTargetDevices") == 0) {
+        int rc = sd_bus_message_open_container(reply, 'a', "s");
+        if (rc < 0) return rc;
+        rc = sd_bus_message_append(reply, "s", "Xbox 360 Controller");
+        if (rc >= 0) rc = sd_bus_message_append(reply, "s", "DualSense");
+        if (rc >= 0) rc = sd_bus_message_append(reply, "s", "Generic Gamepad");
+        if (rc >= 0) rc = sd_bus_message_close_container(reply);
+        return rc;
+    }
+    if (strcmp(property, "InterceptMode") == 0)
+        return sd_bus_message_append(reply, "u", (uint32_t)2);
+    if (strcmp(property, "Enabled") == 0)
+        return sd_bus_message_append(reply, "b", 1);
+    if (strcmp(property, "ManageAllDevices") == 0)
+        return sd_bus_message_append(reply, "b", g_nip_manage_all_devices);
+    if (strcmp(property, "GamepadOrder") == 0) {
+        int rc = sd_bus_message_open_container(reply, 'a', "s");
+        if (rc < 0) return rc;
+        for (int i = 0; i < g_nip_gamepad_order_count; i++) {
+            rc = sd_bus_message_append(reply, "s", g_nip_gamepad_order[i]);
+            if (rc < 0) return rc;
+        }
+        return sd_bus_message_close_container(reply);
+    }
+    return -ENOENT;
+}
+
+static int
+manager_property_set(sd_bus *bus, const char *path, const char *interface,
+                      const char *property, sd_bus_message *value,
+                      void *userdata, sd_bus_error *error)
+{
+    (void)bus; (void)path; (void)interface; (void)userdata; (void)error;
+    if (strcmp(property, "GamepadOrder") == 0) {
+        int rc = sd_bus_message_enter_container(value, 'a', "s");
+        if (rc < 0) return rc;
+        g_nip_gamepad_order_count = 0;
+        const char *p = NULL;
+        while ((rc = sd_bus_message_read_basic(value, 's', &p)) > 0) {
+            if (g_nip_gamepad_order_count < NIP_MAX_COMPOSITES) {
+                snprintf(g_nip_gamepad_order[g_nip_gamepad_order_count],
+                         sizeof(g_nip_gamepad_order[g_nip_gamepad_order_count]),
+                         "%s", p);
+                g_nip_gamepad_order_count++;
+            }
+        }
+        if (rc < 0) return rc;
+        return sd_bus_message_exit_container(value);
+    }
+    if (strcmp(property, "ManageAllDevices") == 0) {
+        int bval = 0;
+        int rc = sd_bus_message_read(value, "b", &bval);
+        if (rc < 0) return rc;
+        g_nip_manage_all_devices = bval;
+        return 0;
+    }
+    return -ENOENT;
+}
+/* ================================================================== */
+
+static int
+target_property_get(sd_bus *bus, const char *path, const char *interface,
+                     const char *property, sd_bus_message *reply,
+                     void *userdata, sd_bus_error *error)
+{
+    (void)bus; (void)interface; (void)userdata; (void)error;
+    if (strcmp(property, "DeviceType") != 0)
+        return -ENOENT;
+    for (int i = 0; i < g_nip_target_count; i++) {
+        if (target_is_visible(i) && strcmp(g_nip_target_paths[i], path) == 0)
+            return sd_bus_message_append(reply, "s", g_nip_target_types[i]);
+    }
+    return -ENOENT;
+}
+
+static const sd_bus_vtable target_vtable[] = {
+    SD_BUS_VTABLE_START(0),
+    SD_BUS_PROPERTY("DeviceType", "s", target_property_get, 0,
+                    SD_BUS_VTABLE_PROPERTY_CONST),
+    SD_BUS_VTABLE_END
+};
+
+/* ================================================================== */
+/*  Source device property getter (fallback vtable, task 6)             */
+/* ================================================================== */
+
+static int
+source_index_from_path(const char *path)
+{
+    if (!path)
+        return -1;
+    for (int i = 0; i < g_nip_source_count; i++)
+        if (strcmp(g_nip_source_path[i], path) == 0)
+            return i;
+    return -1;
+}
+
+static int
+source_property_get(sd_bus *bus, const char *path, const char *interface,
+                     const char *property, sd_bus_message *reply,
+                     void *userdata, sd_bus_error *error)
+{
+    (void)bus; (void)interface; (void)userdata; (void)error;
+    int i = source_index_from_path(path);
+    if (i < 0)
+        return -ENOENT;
+    if (strcmp(property, "UniqueId") == 0)
+        return sd_bus_message_append(reply, "s", g_nip_source_unique_id[i]);
+    if (strcmp(property, "PhysPath") == 0)
+        return sd_bus_message_append(reply, "s", g_nip_source_phys_path[i]);
+    if (strcmp(property, "IdBustype") == 0)
+        return sd_bus_message_append(reply, "s", g_nip_source_bustype[i]);
+    if (strcmp(property, "SerialNumber") == 0)
+        return sd_bus_message_append(reply, "s", g_nip_source_serial[i]);
+    if (strcmp(property, "Name") == 0)
+        return sd_bus_message_append(reply, "s", path);
+    return -ENOENT;
+}
+
+static const sd_bus_vtable source_vtable[] = {
+    SD_BUS_VTABLE_START(0),
+    SD_BUS_PROPERTY("UniqueId", "s", source_property_get, 0,
+                    SD_BUS_VTABLE_PROPERTY_CONST),
+    SD_BUS_PROPERTY("PhysPath", "s", source_property_get, 0,
+                    SD_BUS_VTABLE_PROPERTY_CONST),
+    SD_BUS_PROPERTY("IdBustype", "s", source_property_get, 0,
+                    SD_BUS_VTABLE_PROPERTY_CONST),
+    SD_BUS_PROPERTY("SerialNumber", "s", source_property_get, 0,
+                    SD_BUS_VTABLE_PROPERTY_CONST),
+    SD_BUS_PROPERTY("Name", "s", source_property_get, 0,
+                    SD_BUS_VTABLE_PROPERTY_CONST),
+    SD_BUS_VTABLE_END
+};
+
+static int
+target_find(sd_bus *bus, const char *path, const char *interface,
+             void *userdata, void **ret_found, sd_bus_error *error)
+{
+    (void)bus; (void)interface; (void)userdata; (void)error;
+    for (int i = 0; i < g_nip_target_count; i++) {
+        if (target_is_visible(i) && strcmp(g_nip_target_paths[i], path) == 0) {
+            *ret_found = (void *)(intptr_t)(i + 1);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* ================================================================== */
+/*  Composite property getter/setter                                    */
+/* ================================================================== */
+
+static int
+composite_property_get(sd_bus *bus, const char *path, const char *interface,
+                        const char *property, sd_bus_message *reply,
+                        void *userdata, sd_bus_error *error)
+{
+    (void)bus; (void)interface; (void)userdata; (void)error;
+    int ci = composite_idx_from_path(path);
+    if (ci < 0 || ci >= NIP_MAX_COMPOSITES) return -ENOENT;
+
+    if (strcmp(property, "TargetDevices") == 0) {
+        apply_pending_attachment(ci);
+        int rc = sd_bus_message_open_container(reply, 'a', "s");
+        if (rc < 0) return rc;
+        for (int j = 0; j < g_nip_attached_counts[ci]; j++) {
+            if (s_hide_attachment_for_composite == ci + 1)
+                continue;
+            bool visible = false;
+            for (int ti = 0; ti < g_nip_target_count; ti++)
+                if (target_is_visible(ti) &&
+                    strcmp(g_nip_target_paths[ti], g_nip_attached[ci][j]) == 0) {
+                    visible = true;
+                    break;
+                }
+            if (!visible)
+                continue;
+            rc = sd_bus_message_append(reply, "s", g_nip_attached[ci][j]);
+            if (rc < 0) break;
+        }
+        if (rc >= 0) rc = sd_bus_message_close_container(reply);
+        return rc;
+    }
+    if (strcmp(property, "ProfileName") == 0)
+        return sd_bus_message_append(reply, "s", g_nip_profile_name[ci]);
+    if (strcmp(property, "ProfilePath") == 0)
+        return sd_bus_message_append(reply, "s", g_nip_profile_path[ci]);
+    if (strcmp(property, "PersistentId") == 0)
+        return sd_bus_message_append(reply, "s", g_nip_persistent_ids[ci]);
+    if (strcmp(property, "SourceDevicePaths") == 0) {
+        if (g_nip_fail_next_source_paths) {
+            g_nip_fail_next_source_paths = 0;
+            return sd_bus_error_set(error,
+                "org.freedesktop.DBus.Error.Failed",
+                "simulated SourceDevicePaths read failure");
+        }
+        int rc = sd_bus_message_open_container(reply, 'a', "s");
+        if (rc < 0) return rc;
+        if (g_nip_source_paths[ci][0]) {
+            char buf[256];
+            snprintf(buf, sizeof(buf), "%s", g_nip_source_paths[ci]);
+            char *tok = strtok(buf, ",");
+            while (tok) {
+                rc = sd_bus_message_append(reply, "s", tok);
+                if (rc < 0) break;
+                tok = strtok(NULL, ",");
+            }
+        }
+        if (rc >= 0) rc = sd_bus_message_close_container(reply);
+        return rc;
+    }
+    if (strcmp(property, "InterceptMode") == 0)
+        return sd_bus_message_append(reply, "u", g_nip_intercept_mode[ci]);
+    if (strcmp(property, "DbusDevices") == 0) {
+        if (g_nip_fail_next_dbus_devices) {
+            g_nip_fail_next_dbus_devices = 0;
+            return sd_bus_error_set(error,
+                "org.freedesktop.DBus.Error.Failed",
+                "simulated DbusDevices read failure");
+        }
+        int rc = sd_bus_message_open_container(reply, 'a', "s");
+        if (rc < 0) return rc;
+        if (g_nip_dbus_devices[ci][0]) {
+            char buf[256];
+            snprintf(buf, sizeof(buf), "%s", g_nip_dbus_devices[ci]);
+            char *tok = strtok(buf, ",");
+            while (tok) {
+                rc = sd_bus_message_append(reply, "s", tok);
+                if (rc < 0) break;
+                tok = strtok(NULL, ",");
+            }
+        }
+        if (rc >= 0) rc = sd_bus_message_close_container(reply);
+        return rc;
+    }
+    if (strcmp(property, "Name") == 0)
+        return sd_bus_message_append(reply, "s", g_nip_comp_names[ci]);
+    return -ENOENT;
+}
+
+static int
+composite_property_set(sd_bus *bus, const char *path, const char *interface,
+                        const char *property, sd_bus_message *value,
+                        void *userdata, sd_bus_error *error)
+{
+    (void)bus; (void)interface; (void)userdata; (void)error;
+    int ci = composite_idx_from_path(path);
+    if (ci < 0 || ci >= NIP_MAX_COMPOSITES) return -ENOENT;
+
+    if (strcmp(property, "InterceptMode") == 0) {
+        uint32_t mode;
+        int rc = sd_bus_message_read(value, "u", &mode);
+        if (rc < 0) return rc;
+        g_nip_intercept_mode[ci] = mode;
+        return 0;
+    }
+    if (strcmp(property, "TargetDevices") == 0) {
+        if (s_fail_attach)
+            return sd_bus_error_set(error,
+                "org.freedesktop.DBus.Error.Failed",
+                "simulated TargetDevices replacement failure");
+        int rc = sd_bus_message_enter_container(value, 'a', "s");
+        if (rc < 0) return rc;
+        s_pending_attached_counts[ci] = 0;
+        const char *target = NULL;
+        while ((rc = sd_bus_message_read_basic(value, 's', &target)) > 0) {
+            bool found = false;
+            for (int ti = 0; ti < g_nip_target_count; ti++)
+                if (target_is_visible(ti) &&
+                    strcmp(g_nip_target_paths[ti], target) == 0) {
+                    found = true;
+                    break;
+                }
+            if (!found)
+                return sd_bus_error_set(error,
+                    "org.freedesktop.DBus.Error.UnknownObject",
+                    "target not found");
+            int n = s_pending_attached_counts[ci];
+            if (n >= NIP_MAX_ATTACHED)
+                return -E2BIG;
+            snprintf(s_pending_attached[ci][n],
+                     sizeof(s_pending_attached[ci][n]), "%s", target);
+            s_pending_attached_counts[ci]++;
+        }
+        if (rc < 0) return rc;
+        rc = sd_bus_message_exit_container(value);
+        if (rc < 0) return rc;
+        s_attachment_apply_at[ci] = monotonic_ms() + s_attachment_delay_ms;
+        if (s_attachment_apply_at[ci] == 0)
+            s_attachment_apply_at[ci] = 1;
+        apply_pending_attachment(ci);
+        return 0;
+    }
+    return -ENOENT;
+}
+
+/* ================================================================== */
+/*  Composite method handlers                                           */
+/* ================================================================== */
+
+static int
+method_load_profile_path(sd_bus_message *m, void *userdata, sd_bus_error *error)
+{
+    (void)userdata; (void)error;
+    const char *profile_path = NULL;
+    int rc = sd_bus_message_read(m, "s", &profile_path);
+    if (rc < 0) return rc;
+    const char *obj_path = sd_bus_message_get_path(m);
+    int ci = composite_idx_from_path(obj_path);
+    if (ci < 0 || ci >= NIP_MAX_COMPOSITES)
+        return sd_bus_error_set(error, "org.freedesktop.DBus.Error.UnknownObject",
+                                "composite not found");
+    snprintf(g_nip_profile_path[ci], sizeof(g_nip_profile_path[ci]),
+             "%s", profile_path);
+    const char *base = strrchr(profile_path, '/');
+    base = base ? base + 1 : profile_path;
+    snprintf(g_nip_profile_name[ci], sizeof(g_nip_profile_name[ci]),
+             "%s", base);
+    char *dot = strstr(g_nip_profile_name[ci], ".yaml");
+    if (dot) *dot = '\0';
+    return sd_bus_reply_method_return(m, "");
+}
+
+static int
+method_load_profile_from_yaml(sd_bus_message *m, void *userdata,
+                              sd_bus_error *error)
+{
+    (void)userdata;
+    const char *yaml = NULL;
+    int rc = sd_bus_message_read(m, "s", &yaml);
+    if (rc < 0) return rc;
+    if (!yaml) yaml = "";
+    const char *obj_path = sd_bus_message_get_path(m);
+    int ci = composite_idx_from_path(obj_path);
+    if (ci < 0 || ci >= NIP_MAX_COMPOSITES)
+        return sd_bus_error_set(error,
+            "org.freedesktop.DBus.Error.UnknownObject", "composite not found");
+    if (strlen(yaml) >= NIP_MAX_PROFILE_YAML)
+        return sd_bus_error_set(error,
+            "org.freedesktop.DBus.Error.InvalidArgs", "profile YAML too large");
+    snprintf(g_nip_profile_yaml[ci], NIP_MAX_PROFILE_YAML, "%s", yaml);
+    return sd_bus_reply_method_return(m, "");
+}
+
+static int
+method_get_profile_yaml(sd_bus_message *m, void *userdata, sd_bus_error *error)
+{
+    (void)userdata; (void)error;
+    const char *obj_path = sd_bus_message_get_path(m);
+    int ci = composite_idx_from_path(obj_path);
+    if (ci < 0 || ci >= NIP_MAX_COMPOSITES)
+        return sd_bus_error_set(error,
+            "org.freedesktop.DBus.Error.UnknownObject", "composite not found");
+    return sd_bus_reply_method_return(m, "s", g_nip_profile_yaml[ci]);
+}
+
+static int
+method_set_intercept_activation(sd_bus_message *m, void *userdata,
+                                  sd_bus_error *error)
+{
+    (void)userdata; (void)error;
+    /* Read (as events, s target) — consume and reply OK. */
+    int rc = sd_bus_message_enter_container(m, 'a', "s");
+    if (rc < 0) return rc;
+    const char *s = NULL;
+    while ((rc = sd_bus_message_read_basic(m, 's', &s)) > 0)
+        ;
+    if (rc < 0) return rc;
+    rc = sd_bus_message_exit_container(m);
+    if (rc < 0) return rc;
+    rc = sd_bus_message_read(m, "s", &s);
+    if (rc < 0) return rc;
+    return sd_bus_reply_method_return(m, "");
+}
+
+/* ================================================================== */
+/*  DBusDevice interface (InputEvent signal + test trigger)             */
+/* ================================================================== */
+
+static int
+method_emit_input_event(sd_bus_message *m, void *userdata, sd_bus_error *error)
+{
+    (void)userdata; (void)error;
+    const char *event = NULL;
+    const char *value_str = NULL;
+    int rc = sd_bus_message_read(m, "ss", &event, &value_str);
+    if (rc < 0) return rc;
+
+    /* Parse the value string to double. */
+    double value = strtod(value_str, NULL);
+
+    sd_bus *bus = sd_bus_message_get_bus(m);
+    const char *path = sd_bus_message_get_path(m);
+
+    /* Emit the InputEvent signal with native (sd) signature. */
+    rc = sd_bus_emit_signal(bus, path, IP_IFACE_DBUS_DEVICE,
+                            "InputEvent", "sd", event, value);
+    if (rc < 0) return rc;
+
+    return sd_bus_reply_method_return(m, "");
+}
+
+/* ================================================================== */
+/*  PropertiesChanged emission (native sa{sv}as signature)             */
+/* ================================================================== */
+
+/* Build and emit a real org.freedesktop.DBus.Properties PropertiesChanged
+ * signal (signature: sa{sv}as) on `path` for a single changed property.
+ *
+ * elem_type 's': emit a string-typed variant (ProfileName/ProfilePath).
+ * elem_type 'a': emit a string-array-typed variant (GamepadOrder /
+ *                TargetDevices / SourceDevicePaths) from arr_vals[0..n).
+ * This exercises the client's production sd-bus parse path
+ * (sd_properties_changed_callback) with a faithful wire message rather than
+ * a mock bypass. */
+static int
+emit_properties_changed(sd_bus *bus, const char *path, const char *iface,
+                        const char *prop, char elem_type, const char *str_val,
+                        const char *const *arr_vals, unsigned arr_count)
+{
+    sd_bus_message *sig = NULL;
+    int rc = sd_bus_message_new_signal(bus, &sig, path,
+                                       "org.freedesktop.DBus.Properties",
+                                       "PropertiesChanged");
+    if (rc < 0) return rc;
+
+    rc = sd_bus_message_append(sig, "s", iface);
+    if (rc < 0) goto out;
+
+    /* a{sv}: changed-properties dict. */
+    rc = sd_bus_message_open_container(sig, 'a', "{sv}");
+    if (rc < 0) goto out;
+    rc = sd_bus_message_open_container(sig, 'e', "sv");
+    if (rc < 0) goto out;
+    rc = sd_bus_message_append(sig, "s", prop);
+    if (rc < 0) goto out;
+
+    if (elem_type == 's') {
+        rc = sd_bus_message_open_container(sig, 'v', "s");
+        if (rc < 0) goto out;
+        rc = sd_bus_message_append(sig, "s", str_val);
+        if (rc < 0) goto out;
+        rc = sd_bus_message_close_container(sig); /* v */
+        if (rc < 0) goto out;
+    } else { /* 'a' — string array variant */
+        rc = sd_bus_message_open_container(sig, 'v', "as");
+        if (rc < 0) goto out;
+        rc = sd_bus_message_open_container(sig, 'a', "s");
+        if (rc < 0) goto out;
+        for (unsigned i = 0; i < arr_count; i++) {
+            rc = sd_bus_message_append(sig, "s", arr_vals[i]);
+            if (rc < 0) goto out;
+        }
+        rc = sd_bus_message_close_container(sig); /* a */
+        if (rc < 0) goto out;
+        rc = sd_bus_message_close_container(sig); /* v */
+        if (rc < 0) goto out;
+    }
+
+    rc = sd_bus_message_close_container(sig); /* e */
+    if (rc < 0) goto out;
+    rc = sd_bus_message_close_container(sig); /* a{sv} */
+    if (rc < 0) goto out;
+
+    /* as: invalidated properties (empty). */
+    rc = sd_bus_message_open_container(sig, 'a', "s");
+    if (rc < 0) goto out;
+    rc = sd_bus_message_close_container(sig);
+    if (rc < 0) goto out;
+
+    rc = sd_bus_send(bus, sig, NULL);
+out:
+    sd_bus_message_unref(sig);
+    return rc;
+}
+
+/* EmitStringProp(ss): emit a string-typed PropertiesChanged for `prop` with
+ * value `value`, originating on the method's object path.  The emitting
+ * interface follows the object: the Manager object emits on
+ * org.shadowblip.InputManager, composite objects on CompositeDevice. */
+static int
+method_emit_string_prop(sd_bus_message *m, void *userdata, sd_bus_error *error)
+{
+    (void)userdata; (void)error;
+    const char *prop = NULL, *value = NULL;
+    int rc = sd_bus_message_read(m, "ss", &prop, &value);
+    if (rc < 0) return rc;
+
+    sd_bus *bus = sd_bus_message_get_bus(m);
+    const char *path = sd_bus_message_get_path(m);
+    const char *iface = (strcmp(path, IP_DBUS_PATH "/Manager") == 0)
+                            ? IP_IFACE_MANAGER : IP_IFACE_COMPOSITE;
+    rc = emit_properties_changed(bus, path, iface, prop,
+                                 's', value ? value : "", NULL, 0);
+    if (rc < 0) return rc;
+    return sd_bus_reply_method_return(m, "");
+}
+
+/* EmitArrayProp(sas): emit a string-array-typed PropertiesChanged for `prop`
+ * from the supplied string array. */
+static int
+method_emit_array_prop(sd_bus_message *m, void *userdata, sd_bus_error *error)
+{
+    (void)userdata; (void)error;
+    const char *prop = NULL;
+    const char *elems[64];
+    unsigned count = 0;
+    int rc = sd_bus_message_read(m, "s", &prop);
+    if (rc < 0) return rc;
+
+    rc = sd_bus_message_enter_container(m, 'a', "s");
+    if (rc < 0) return rc;
+    const char *s = NULL;
+    while (count < 64 &&
+           (rc = sd_bus_message_read_basic(m, 's', &s)) > 0)
+        elems[count++] = s;
+    if (rc < 0) { sd_bus_message_exit_container(m); return rc; }
+    rc = sd_bus_message_exit_container(m);
+    if (rc < 0) return rc;
+
+    sd_bus *bus = sd_bus_message_get_bus(m);
+    const char *path = sd_bus_message_get_path(m);
+    const char *iface = (strcmp(path, IP_DBUS_PATH "/Manager") == 0)
+                            ? IP_IFACE_MANAGER : IP_IFACE_COMPOSITE;
+    rc = emit_properties_changed(bus, path, iface, prop,
+                                 'a', NULL, elems, count);
+    if (rc < 0) return rc;
+    return sd_bus_reply_method_return(m, "");
+}
+
+/* EmitInvalidatedProp(s): emit a PropertiesChanged whose invalidated list
+ * names `prop` on the method's object path.  Lets native tests drive the
+ * client's bounded authoritative-read path. */
+static int
+method_emit_invalidated_prop(sd_bus_message *m, void *userdata,
+                             sd_bus_error *error)
+{
+    (void)userdata; (void)error;
+    const char *prop = NULL;
+    int rc = sd_bus_message_read(m, "s", &prop);
+    if (rc < 0) return rc;
+
+    sd_bus *bus = sd_bus_message_get_bus(m);
+    const char *path = sd_bus_message_get_path(m);
+    const char *iface = (strcmp(path, IP_DBUS_PATH "/Manager") == 0)
+                            ? IP_IFACE_MANAGER : IP_IFACE_COMPOSITE;
+
+    sd_bus_message *sig = NULL;
+    rc = sd_bus_message_new_signal(bus, &sig, path,
+                                   "org.freedesktop.DBus.Properties",
+                                   "PropertiesChanged");
+    if (rc < 0) return rc;
+    rc = sd_bus_message_append(sig, "s", iface);
+    if (rc < 0) goto inv_out;
+    rc = sd_bus_message_open_container(sig, 'a', "{sv}");
+    if (rc < 0) goto inv_out;
+    rc = sd_bus_message_close_container(sig);   /* no changed properties */
+    if (rc < 0) goto inv_out;
+    rc = sd_bus_message_open_container(sig, 'a', "s");
+    if (rc < 0) goto inv_out;
+    rc = sd_bus_message_append(sig, "s", prop);
+    if (rc < 0) goto inv_out;
+    rc = sd_bus_message_close_container(sig);
+    if (rc < 0) goto inv_out;
+    rc = sd_bus_send(bus, sig, NULL);
+inv_out:
+    sd_bus_message_unref(sig);
+    if (rc < 0) return rc;
+    return sd_bus_reply_method_return(m, "");
+}
+
+static const sd_bus_vtable dbus_device_vtable[] = {
+    SD_BUS_VTABLE_START(0),
+    SD_BUS_SIGNAL("InputEvent", "sd", 0),
+    SD_BUS_METHOD("EmitInputEvent", "ss", "", method_emit_input_event, 0),
+    SD_BUS_METHOD("EmitStringProp", "ss", "", method_emit_string_prop, 0),
+    SD_BUS_METHOD("EmitArrayProp", "sas", "", method_emit_array_prop, 0),
+    SD_BUS_METHOD("EmitInvalidatedProp", "s", "",
+                  method_emit_invalidated_prop, 0),
+    SD_BUS_VTABLE_END
+};
+
+/* ================================================================== */
+/*  Composite vtable (assembles all composite properties + methods)    */
+/* ================================================================== */
+
+static const sd_bus_vtable composite_vtable[] = {
+    SD_BUS_VTABLE_START(0),
+    SD_BUS_WRITABLE_PROPERTY("TargetDevices", "as", composite_property_get,
+                              composite_property_set, 0, 0),
+    SD_BUS_PROPERTY("ProfileName", "s", composite_property_get, 0,
+                    SD_BUS_VTABLE_PROPERTY_CONST),
+    SD_BUS_PROPERTY("ProfilePath", "s", composite_property_get, 0,
+                    SD_BUS_VTABLE_PROPERTY_CONST),
+    SD_BUS_PROPERTY("PersistentId", "s", composite_property_get, 0,
+                    SD_BUS_VTABLE_PROPERTY_CONST),
+    SD_BUS_PROPERTY("SourceDevicePaths", "as", composite_property_get, 0,
+                    SD_BUS_VTABLE_PROPERTY_CONST),
+    SD_BUS_PROPERTY("DbusDevices", "as", composite_property_get, 0,
+                    SD_BUS_VTABLE_PROPERTY_CONST),
+    SD_BUS_PROPERTY("Name", "s", composite_property_get, 0,
+                    SD_BUS_VTABLE_PROPERTY_CONST),
+    SD_BUS_WRITABLE_PROPERTY("InterceptMode", "u", composite_property_get,
+                              composite_property_set, 0, 0),
+    SD_BUS_METHOD("LoadProfilePath", "s", "", method_load_profile_path, 0),
+    SD_BUS_METHOD("LoadProfileFromYaml", "s", "",
+                  method_load_profile_from_yaml, 0),
+    SD_BUS_METHOD("GetProfileYaml", "", "s", method_get_profile_yaml, 0),
+    SD_BUS_METHOD("SetInterceptActivation", "ass", "",
+                  method_set_intercept_activation, 0),
+    SD_BUS_VTABLE_END
+};
+
+/* ================================================================== */
+/*  Manager vtable                                                      */
+/* ================================================================== */
+
+static int
+method_create_target(sd_bus_message *m, void *userdata, sd_bus_error *error)
+{
+    (void)userdata; (void)error;
+    const char *kind = NULL;
+    int rc = sd_bus_message_read(m, "s", &kind);
+    if (rc < 0) return rc;
+    if (g_nip_fail_next_create) {
+        g_nip_fail_next_create = 0;
+        return sd_bus_error_set(error, "org.freedesktop.DBus.Error.Failed",
+                                "simulated CreateTargetDevice failure");
+    }
+    if (g_nip_target_count >= NIP_MAX_TARGETS)
+        return sd_bus_error_set(error, "org.freedesktop.DBus.Error.LimitsExceeded",
+                                "too many targets");
+    int idx = g_nip_target_count;
+    /* Native InputPlumber object identity is independent of DeviceType;
+     * mixed models therefore retain creation/slot order. */
+    snprintf(g_nip_target_paths[idx], sizeof(g_nip_target_paths[idx]),
+             "/org/shadowblip/InputPlumber/devices/target/gamepad%d", idx);
+    snprintf(g_nip_target_types[idx], sizeof(g_nip_target_types[idx]), "%s", kind);
+    s_target_publish_at[idx] = monotonic_ms() + s_publication_delay_ms;
+    s_target_remove_at[idx] = 0;
+    g_nip_target_count++;
+    return sd_bus_reply_method_return(m, "s", g_nip_target_paths[idx]);
+}
+
+static int
+method_stop_target(sd_bus_message *m, void *userdata, sd_bus_error *error)
+{
+    (void)userdata; (void)error;
+    const char *path = NULL;
+    int rc = sd_bus_message_read(m, "s", &path);
+    if (rc < 0) return rc;
+    if (s_fail_stop)
+        return sd_bus_error_set(error, "org.freedesktop.DBus.Error.Failed",
+                                "simulated StopTargetDevice failure");
+    for (int i = 0; i < g_nip_target_count; i++) {
+        if (strcmp(g_nip_target_paths[i], path) == 0) {
+            s_target_remove_at[i] = monotonic_ms() + s_removal_delay_ms;
+            if (s_target_remove_at[i] == 0)
+                s_target_remove_at[i] = 1;
+            break;
+        }
+    }
+    return sd_bus_reply_method_return(m, "");
+}
+
+static int
+method_attach_target(sd_bus_message *m, void *userdata, sd_bus_error *error)
+{
+    (void)userdata; (void)error;
+    const char *target_path = NULL;
+    const char *composite_path = NULL;
+    int rc = sd_bus_message_read(m, "ss", &target_path, &composite_path);
+    if (rc < 0) return rc;
+    if (s_fail_attach)
+        return sd_bus_error_set(error, "org.freedesktop.DBus.Error.Failed",
+                                "simulated AttachTargetDevice failure");
+    bool found = false;
+    for (int i = 0; i < g_nip_target_count; i++) {
+        if (strcmp(g_nip_target_paths[i], target_path) == 0) {
+            found = true;
+            break;
+        }
+    }
+    if (!found)
+        return sd_bus_error_set(error, "org.freedesktop.DBus.Error.UnknownObject",
+                                "target not found");
+    int ci = composite_idx_from_path(composite_path);
+    if (ci < 0 || ci >= NIP_MAX_COMPOSITES)
+        return sd_bus_error_set(error, "org.freedesktop.DBus.Error.UnknownObject",
+                                "composite not found");
+    for (int j = 0; j < g_nip_attached_counts[ci]; j++)
+        if (strcmp(g_nip_attached[ci][j], target_path) == 0)
+            return sd_bus_reply_method_return(m, "");
+    if (g_nip_attached_counts[ci] < NIP_MAX_ATTACHED) {
+        snprintf(g_nip_attached[ci][g_nip_attached_counts[ci]],
+                 sizeof(g_nip_attached[ci][g_nip_attached_counts[ci]]),
+                 "%s", target_path);
+        g_nip_attached_counts[ci]++;
+    }
+    return sd_bus_reply_method_return(m, "");
+}
+
+static const sd_bus_vtable manager_vtable[] = {
+    SD_BUS_VTABLE_START(0),
+    SD_BUS_PROPERTY("Version", "s", manager_property_get, 0,
+                    SD_BUS_VTABLE_PROPERTY_CONST),
+    SD_BUS_PROPERTY("SupportedTargetDeviceIds", "as", manager_property_get, 0,
+                    SD_BUS_VTABLE_PROPERTY_CONST),
+    SD_BUS_PROPERTY("SupportedTargetDevices", "as", manager_property_get, 0,
+                    SD_BUS_VTABLE_PROPERTY_CONST),
+    SD_BUS_PROPERTY("InterceptMode", "u", manager_property_get, 0,
+                    SD_BUS_VTABLE_PROPERTY_CONST),
+    SD_BUS_PROPERTY("Enabled", "b", manager_property_get, 0,
+                    SD_BUS_VTABLE_PROPERTY_CONST),
+    SD_BUS_WRITABLE_PROPERTY("ManageAllDevices", "b", manager_property_get,
+                              manager_property_set, 0, 0),
+    SD_BUS_WRITABLE_PROPERTY("GamepadOrder", "as", manager_property_get,
+                              manager_property_set, 0, 0),
+    SD_BUS_METHOD("CreateTargetDevice", "s", "s", method_create_target, 0),
+    SD_BUS_METHOD("StopTargetDevice", "s", "", method_stop_target, 0),
+    SD_BUS_METHOD("AttachTargetDevice", "ss", "", method_attach_target, 0),
+    SD_BUS_VTABLE_END
+};
+
+/* ================================================================== */
+/*  ObjectManager (GetManagedObjects)                                    */
+/* ================================================================== */
+
+static int
+method_get_managed_objects(sd_bus_message *m, void *userdata, sd_bus_error *error)
+{
+    (void)userdata; (void)error;
+
+    /* One-shot reply stall so a client with an active deadline can prove the
+     * synchronous call is bounded rather than waiting on the bus default. */
+    if (s_stall_managed_objects_ms) {
+        usleep(s_stall_managed_objects_ms * 1000);
+        s_stall_managed_objects_ms = 0;
+    }
+
+    sd_bus_message *reply = NULL;
+    int rc = sd_bus_message_new_method_return(m, &reply);
+    if (rc < 0) return rc;
+
+    rc = sd_bus_message_open_container(reply, 'a', "{oa{sa{sv}}}");
+    if (rc < 0) goto fail;
+
+    /* Manager object. */
+    {
+        rc = sd_bus_message_open_container(reply, 'e', "oa{sa{sv}}");
+        if (rc < 0) goto fail;
+        rc = sd_bus_message_append(reply, "o",
+                "/org/shadowblip/InputPlumber/Manager");
+        if (rc < 0) goto fail;
+        rc = sd_bus_message_open_container(reply, 'a', "{sa{sv}}");
+        if (rc < 0) goto fail;
+        rc = sd_bus_message_open_container(reply, 'e', "sa{sv}");
+        if (rc < 0) goto fail;
+        rc = sd_bus_message_append(reply, "s", "org.shadowblip.InputManager");
+        if (rc < 0) goto fail;
+        rc = sd_bus_message_open_container(reply, 'a', "{sv}");
+        if (rc < 0) goto fail;
+        rc = sd_bus_message_close_container(reply);
+        if (rc < 0) goto fail;
+        rc = sd_bus_message_close_container(reply);
+        if (rc < 0) goto fail;
+        rc = sd_bus_message_close_container(reply);
+        if (rc < 0) goto fail;
+        rc = sd_bus_message_close_container(reply);
+        if (rc < 0) goto fail;
+    }
+
+    /* Composite devices (configurable count; dictionary order is arbitrary). */
+    for (int n = 0; n < s_num_composites; n++) {
+        int c = s_reverse_object_order ? s_num_composites - 1 - n : n;
+        char comp_path[128];
+        snprintf(comp_path, sizeof(comp_path),
+                 "/org/shadowblip/InputPlumber/CompositeDevice%d", c);
+        rc = sd_bus_message_open_container(reply, 'e', "oa{sa{sv}}");
+        if (rc < 0) goto fail;
+        rc = sd_bus_message_append(reply, "o", comp_path);
+        if (rc < 0) goto fail;
+        rc = sd_bus_message_open_container(reply, 'a', "{sa{sv}}");
+        if (rc < 0) goto fail;
+        rc = sd_bus_message_open_container(reply, 'e', "sa{sv}");
+        if (rc < 0) goto fail;
+        rc = sd_bus_message_append(reply, "s", "org.shadowblip.Input.CompositeDevice");
+        if (rc < 0) goto fail;
+        rc = sd_bus_message_open_container(reply, 'a', "{sv}");
+        if (rc < 0) goto fail;
+        rc = sd_bus_message_close_container(reply);
+        if (rc < 0) goto fail;
+        rc = sd_bus_message_close_container(reply);
+        if (rc < 0) goto fail;
+        rc = sd_bus_message_close_container(reply);
+        if (rc < 0) goto fail;
+        rc = sd_bus_message_close_container(reply);
+        if (rc < 0) goto fail;
+    }
+
+    /* Target objects. */
+    for (int n = 0; n < g_nip_target_count; n++) {
+        int i = s_reverse_object_order ? g_nip_target_count - 1 - n : n;
+        if (!target_is_visible(i))
+            continue;
+        rc = sd_bus_message_open_container(reply, 'e', "oa{sa{sv}}");
+        if (rc < 0) goto fail;
+        rc = sd_bus_message_append(reply, "o", g_nip_target_paths[i]);
+        if (rc < 0) goto fail;
+        rc = sd_bus_message_open_container(reply, 'a', "{sa{sv}}");
+        if (rc < 0) goto fail;
+        rc = sd_bus_message_open_container(reply, 'e', "sa{sv}");
+        if (rc < 0) goto fail;
+        rc = sd_bus_message_append(reply, "s", "org.shadowblip.Input.Target");
+        if (rc < 0) goto fail;
+        rc = sd_bus_message_open_container(reply, 'a', "{sv}");
+        if (rc < 0) goto fail;
+        rc = sd_bus_message_close_container(reply);
+        if (rc < 0) goto fail;
+        rc = sd_bus_message_close_container(reply);
+        if (rc < 0) goto fail;
+        rc = sd_bus_message_close_container(reply);
+        if (rc < 0) goto fail;
+        rc = sd_bus_message_close_container(reply);
+        if (rc < 0) goto fail;
+    }
+
+    /* Source objects (physical controllers, SPEC §6.2). */
+    for (int i = 0; i < g_nip_source_count; i++) {
+        const char *siface = g_nip_source_hidraw[i] ?
+            "org.shadowblip.Input.Source.HIDRawDevice" :
+            "org.shadowblip.Input.Source.EventDevice";
+        rc = sd_bus_message_open_container(reply, 'e', "oa{sa{sv}}");
+        if (rc < 0) goto fail;
+        rc = sd_bus_message_append(reply, "o", g_nip_source_path[i]);
+        if (rc < 0) goto fail;
+        rc = sd_bus_message_open_container(reply, 'a', "{sa{sv}}");
+        if (rc < 0) goto fail;
+        rc = sd_bus_message_open_container(reply, 'e', "sa{sv}");
+        if (rc < 0) goto fail;
+        rc = sd_bus_message_append(reply, "s", siface);
+        if (rc < 0) goto fail;
+        rc = sd_bus_message_open_container(reply, 'a', "{sv}");
+        if (rc < 0) goto fail;
+        rc = sd_bus_message_close_container(reply);
+        if (rc < 0) goto fail;
+        rc = sd_bus_message_close_container(reply);
+        if (rc < 0) goto fail;
+        rc = sd_bus_message_close_container(reply);
+        if (rc < 0) goto fail;
+        rc = sd_bus_message_close_container(reply);
+        if (rc < 0) goto fail;
+    }
+
+    rc = sd_bus_message_close_container(reply);
+    if (rc < 0) goto fail;
+    return sd_bus_message_send(reply);
+
+fail:
+    sd_bus_message_unref(reply);
+    return rc;
+}
+
+static int
+root_object_handler(sd_bus_message *m, void *userdata, sd_bus_error *error)
+{
+    const char *iface = sd_bus_message_get_interface(m);
+    const char *member = sd_bus_message_get_member(m);
+    if (iface && member &&
+        strcmp(iface, "org.freedesktop.DBus.ObjectManager") == 0 &&
+        strcmp(member, "GetManagedObjects") == 0)
+        return method_get_managed_objects(m, userdata, error);
+    return 0;
+}
+
+/* ================================================================== */
+/*  Server run loop                                                     */
+/* ================================================================== */
+
+static int
+run_server(const char *address)
+{
+    signal(SIGTERM, stop_service);
+    sd_bus *bus = NULL;
+    int rc = sd_bus_new(&bus);
+    if (rc < 0) return 20;
+
+    if ((rc = sd_bus_set_address(bus, address)) < 0 ||
+        (rc = sd_bus_set_bus_client(bus, 1)) < 0 ||
+        (rc = sd_bus_start(bus)) < 0 ||
+        /* Manager */
+        (rc = sd_bus_add_object_vtable(bus, NULL,
+              "/org/shadowblip/InputPlumber/Manager",
+              "org.shadowblip.InputManager", manager_vtable, NULL)) < 0 ||
+        /* Emit helpers are also reachable on the Manager object so tests
+         * can drive Manager-interface PropertiesChanged signals. */
+        (rc = sd_bus_add_object_vtable(bus, NULL,
+              "/org/shadowblip/InputPlumber/Manager",
+              IP_IFACE_DBUS_DEVICE, dbus_device_vtable, NULL)) < 0 ||
+        /* ObjectManager root */
+        (rc = sd_bus_add_object(bus, NULL,
+              "/org/shadowblip/InputPlumber",
+              root_object_handler, NULL)) < 0 ||
+        /* Target fallback vtable */
+        (rc = sd_bus_add_fallback_vtable(bus, NULL,
+              "/org/shadowblip/InputPlumber/devices/target",
+              "org.shadowblip.Input.Target",
+              target_vtable, target_find, NULL)) < 0) {
+        sd_bus_unref(bus);
+        return 21;
+    }
+
+    /* Composite devices + DBusDevice interface per composite. */
+    for (int c = 0; c < s_num_composites; c++) {
+        char comp_path[128];
+        snprintf(comp_path, sizeof(comp_path),
+                 "/org/shadowblip/InputPlumber/CompositeDevice%d", c);
+
+        if ((rc = sd_bus_add_object_vtable(bus, NULL,
+              comp_path,
+              "org.shadowblip.Input.CompositeDevice",
+              composite_vtable, NULL)) < 0) {
+            sd_bus_unref(bus);
+            return 22;
+        }
+        /* Register DBusDevice (InputEvent signal) on the same path. */
+        if ((rc = sd_bus_add_object_vtable(bus, NULL,
+              comp_path,
+              IP_IFACE_DBUS_DEVICE,
+              dbus_device_vtable, NULL)) < 0) {
+            sd_bus_unref(bus);
+            return 23;
+        }
+    }
+
+    /* Physical source device objects (SPEC §6.2, task 6). */
+    for (int i = 0; i < g_nip_source_count; i++) {
+        const char *siface = g_nip_source_hidraw[i] ?
+            IP_IFACE_SOURCE_HIDRAW : IP_IFACE_SOURCE_EVENT;
+        if ((rc = sd_bus_add_object_vtable(bus, NULL,
+              g_nip_source_path[i], siface, source_vtable, NULL)) < 0) {
+            sd_bus_unref(bus);
+            return 26;
+        }
+    }
+
+    if ((rc = sd_bus_request_name(bus, IP_DBUS_NAME, 0)) < 0) {
+        sd_bus_unref(bus);
+        return 24;
+    }
+
+    while (s_service_running) {
+        while ((rc = sd_bus_process(bus, NULL)) > 0) {}
+        if (rc < 0) break;
+        sd_bus_wait(bus, 100000);
+    }
+    sd_bus_flush_close_unref(bus);
+    return rc < 0 ? 25 : 0;
+}
+
+/* ================================================================== */
+/*  Public API                                                          */
+/* ================================================================== */
+
+void nip_reset_server_state(int num_composites)
+{
+    g_nip_target_count = 0;
+    memset(g_nip_target_paths, 0, sizeof(g_nip_target_paths));
+    memset(g_nip_target_types, 0, sizeof(g_nip_target_types));
+    memset(s_target_publish_at, 0, sizeof(s_target_publish_at));
+    memset(s_target_remove_at, 0, sizeof(s_target_remove_at));
+
+    memset(g_nip_attached, 0, sizeof(g_nip_attached));
+    memset(g_nip_attached_counts, 0, sizeof(g_nip_attached_counts));
+    memset(s_pending_attached, 0, sizeof(s_pending_attached));
+    memset(s_pending_attached_counts, 0, sizeof(s_pending_attached_counts));
+    memset(s_attachment_apply_at, 0, sizeof(s_attachment_apply_at));
+
+    memset(g_nip_profile_path, 0, sizeof(g_nip_profile_path));
+    memset(g_nip_profile_name, 0, sizeof(g_nip_profile_name));
+    memset(g_nip_profile_yaml, 0, sizeof(g_nip_profile_yaml));
+
+    g_nip_gamepad_order_count = 0;
+    memset(g_nip_gamepad_order, 0, sizeof(g_nip_gamepad_order));
+
+    memset(g_nip_intercept_mode, 0, sizeof(g_nip_intercept_mode));
+    memset(g_nip_dbus_devices, 0, sizeof(g_nip_dbus_devices));
+    memset(g_nip_comp_names, 0, sizeof(g_nip_comp_names));
+    memset(g_nip_persistent_ids, 0, sizeof(g_nip_persistent_ids));
+    memset(g_nip_source_paths, 0, sizeof(g_nip_source_paths));
+    memset(g_nip_source_path, 0, sizeof(g_nip_source_path));
+    memset(g_nip_source_unique_id, 0, sizeof(g_nip_source_unique_id));
+    memset(g_nip_source_phys_path, 0, sizeof(g_nip_source_phys_path));
+    memset(g_nip_source_bustype, 0, sizeof(g_nip_source_bustype));
+    memset(g_nip_source_serial, 0, sizeof(g_nip_source_serial));
+    memset(g_nip_source_hidraw, 0, sizeof(g_nip_source_hidraw));
+    g_nip_source_count = 0;
+    g_nip_fail_next_create = 0;
+    g_nip_fail_next_dbus_devices = 0;
+    g_nip_fail_next_source_paths = 0;
+    g_nip_manage_all_devices = 0;
+
+    /* Initialize composite names and persistent IDs. */
+    int n = num_composites >= 0 ? num_composites : 1;
+    if (n > NIP_MAX_COMPOSITES) n = NIP_MAX_COMPOSITES;
+    for (int i = 0; i < n; i++) {
+        g_nip_intercept_mode[i] = 0;  /* NONE */
+        snprintf(g_nip_comp_names[i], sizeof(g_nip_comp_names[i]),
+                 "Composite Device %d", i);
+        snprintf(g_nip_persistent_ids[i], sizeof(g_nip_persistent_ids[i]),
+                 "ORDER:%d", i);
+    }
+}
+
+int nip_start_private_bus(char *address, size_t address_len, pid_t *bus_pid)
+{
+    int pipefd[2];
+    if (pipe(pipefd) != 0)
+        return -errno;
+    pid_t pid = fork();
+    if (pid < 0)
+        return -errno;
+    if (pid == 0) {
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[0]); close(pipefd[1]);
+        execlp("dbus-daemon", "dbus-daemon", "--config-file",
+               DBUS_SESSION_CONFIG,
+               "--nofork", "--print-address=1", (char *)NULL);
+        _exit(127);
+    }
+    close(pipefd[1]);
+    FILE *fp = fdopen(pipefd[0], "r");
+    if (!fp || !fgets(address, (int)address_len, fp)) {
+        if (fp) fclose(fp); else close(pipefd[0]);
+        kill(pid, SIGTERM); waitpid(pid, NULL, 0);
+        return -EIO;
+    }
+    fclose(fp);
+    address[strcspn(address, "\r\n")] = '\0';
+    *bus_pid = pid;
+    return address[0] ? 0 : -EIO;
+}
+
+pid_t nip_fork_server(const char *address, const nip_server_config *cfg)
+{
+    /* Set server configuration (copied so child inherits via fork). */
+    s_num_composites = (cfg && cfg->num_composites >= 0) ? cfg->num_composites : 1;
+    if (cfg && cfg->version)
+        snprintf(s_version, sizeof(s_version), "%s", cfg->version);
+    else
+        snprintf(s_version, sizeof(s_version), "9.8.7");
+
+    s_publication_delay_ms = cfg ? cfg->publication_delay_ms : 0;
+    s_removal_delay_ms = cfg ? cfg->removal_delay_ms : 0;
+    s_attachment_delay_ms = cfg ? cfg->attachment_delay_ms : 0;
+    s_stall_managed_objects_ms = cfg ? cfg->stall_managed_objects_ms : 0;
+    s_reverse_object_order = cfg && cfg->reverse_object_order;
+    s_fail_stop = cfg && cfg->fail_stop;
+    s_fail_attach = cfg && cfg->fail_attach;
+    s_hide_attachment_for_composite = cfg ?
+        cfg->hide_attachment_for_composite : 0;
+    s_service_running = 1;
+
+    pid_t server_pid = fork();
+    if (server_pid < 0)
+        return -errno;
+    if (server_pid == 0)
+        _exit(run_server(address));
+    return server_pid;
+}
+
+int nip_start_server(nip_server_handle *h, const nip_server_config *cfg)
+{
+    memset(h, 0, sizeof(*h));
+
+    /* Start private dbus-daemon. */
+    int rc = nip_start_private_bus(h->address, sizeof(h->address),
+                                    &h->daemon_pid);
+    if (rc < 0)
+        return rc;
+
+    setenv("DBUS_SYSTEM_BUS_ADDRESS", h->address, 1);
+
+    /* Fork the InputPlumber-compatible server. */
+    pid_t server_pid = nip_fork_server(h->address, cfg);
+    if (server_pid < 0) {
+        kill(h->daemon_pid, SIGTERM);
+        waitpid(h->daemon_pid, NULL, 0);
+        h->daemon_pid = 0;
+        return (int)server_pid;
+    }
+
+    h->server_pid = server_pid;
+    return 0;
+}
+
+void nip_stop_server(nip_server_handle *h)
+{
+    if (h->server_pid > 1) {
+        kill(h->server_pid, SIGTERM);
+        waitpid(h->server_pid, NULL, 0);
+        h->server_pid = 0;
+    }
+    if (h->daemon_pid > 1) {
+        kill(h->daemon_pid, SIGTERM);
+        waitpid(h->daemon_pid, NULL, 0);
+        h->daemon_pid = 0;
+    }
+    unsetenv("DBUS_SYSTEM_BUS_ADDRESS");
+}

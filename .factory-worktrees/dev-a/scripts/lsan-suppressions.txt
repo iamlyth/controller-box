@@ -1,0 +1,15 @@
+# LeakSanitizer suppression file for third-party library leaks.
+#
+# These libraries allocate internal caches/global state that are never
+# freed during process lifetime.  They are not bugs in our code.
+#
+# Usage:  LSAN_OPTIONS=suppressions=scripts/lsan-suppressions.txt
+
+# harfbuzz — internal font shaping caches (allocated via hb_shape_plan_*)
+leak:libharfbuzz
+
+# SDL2_ttf — font loading caches that delegate to harfbuzz
+leak:libSDL2_ttf
+
+# SDL2 — global subsystem state freed by SDL_Quit (optional in tests)
+leak:libSDL2

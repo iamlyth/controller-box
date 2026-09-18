@@ -1,0 +1,270 @@
+/*
+ * manager.h — Manager application.
+ *
+ * The manager is a separate SDL2 window mode (SPEC §5.1) providing a
+ * console-style settings menu navigated entirely by controller:
+ *   - Left/Right switches tabs (Controllers / Profiles / Settings)
+ *   - Up/Down navigates within the active panel
+ *
+ * The manager owns its own cbx_renderer (a separate window from the
+ * overlay service), text cache, theme, and focus chain.  It also owns
+ * the complete lifecycle of all three tab modules — cbx_controllers_tab,
+ * cbx_profiles_tab, and cbx_settings_tab — which are initialised during
+ * cbx_manager_init() and torn down during cbx_manager_shutdown().
+ * Each tab populates its corresponding cbx_panel; only the active tab's
+ * panel is visible.
+ */
+#ifndef CBX_MANAGER_H
+#define CBX_MANAGER_H
+
+#include <SDL2/SDL.h>
+#include <stdbool.h>
+
+#include "ui/renderer.h"
+#include "ui/widget.h"
+#include "ui/text.h"
+#include "ui/theme.h"
+#include "ui/focus.h"
+#include "config/config_settings.h"
+#include "manager/controllers_tab.h"
+#include "manager/profiles_tab.h"
+#include "manager/settings_tab.h"
+#include "manager/service_install.h"
+#include "dbus/dbus_interface.h"  /* ip_dbus_backend, ip_bus_handle, ip_dbus_sd_backend */
+#include "dbus/ip_connection.h"
+#include "dbus/ip_properties.h"    /* ip_properties, ip_prop_changed_cb */
+
+/* ------------------------------------------------------------------ */
+/*  Tab identifiers                                                   */
+/* ------------------------------------------------------------------ */
+
+typedef enum {
+    CBX_MGR_TAB_CONTROLLERS = 0,
+    CBX_MGR_TAB_PROFILES    = 1,
+    CBX_MGR_TAB_SETTINGS    = 2,
+    CBX_MGR_TAB_COUNT       = 3,
+} cbx_mgr_tab;
+
+/* Layout constants. */
+#define CBX_MGR_WINDOW_W  1280
+#define CBX_MGR_WINDOW_H  720
+#define CBX_MGR_TABBAR_H  48
+#define CBX_MGR_FONT_SIZE 18
+#define CBX_MGR_MAX_GAMECONTROLLERS 16
+#define CBX_MGR_CONTROLLERS_REFRESH_MS 1000u
+
+/* ------------------------------------------------------------------ */
+/*  Manager                                                           */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    /* Rendering — manager owns its own window (SPEC §5.1). */
+    cbx_renderer  rend;
+    cbx_text_cache text_cache;
+    cbx_theme     theme;
+    cbx_settings  settings;
+    int           font_id;       /* -1 = no font loaded */
+
+    /* UI widgets. */
+    cbx_tabbar    tabbar;
+    cbx_panel     panels[CBX_MGR_TAB_COUNT];  /* one per tab */
+    int           active_tab;
+
+    /* Focus navigation. */
+    cbx_focus_chain focus;
+
+    /* Tab module state — manager owns the full lifecycle. */
+    cbx_controllers_tab ct;   /* Controllers tab (DBus-backed)  */
+    cbx_profiles_tab    pt;   /* Profiles tab (filesystem)      */
+    cbx_settings_tab    st;   /* Settings tab (local settings)  */
+
+    /* DBus connection (for controllers tab). */
+    const ip_dbus_backend *dbus_backend;  /* NULL if no bus available  */
+    ip_bus_handle          dbus_bus;      /* NULL if not connected      */
+    bool                   dbus_connected;
+    bool                   owns_dbus_connection;
+    int                    dbus_init_rc;  /* saved connect rc for degraded reason */
+    ip_connection          connection;
+    uint32_t               last_controller_refresh_ms;
+
+    /* Reactive PropertiesChanged handling (Task 5).  The manager applies
+     * validated InputPlumber property changes to the controllers-tab device
+     * model so the Manager observes the same per-device state as the
+     * overlay (SPEC §10.1). */
+    ip_properties          props;
+    char                   expected_sender[128];
+
+    /* Real SDL game-controller transport (keyboard is supplemental only). */
+    SDL_GameController    *gamecontrollers[CBX_MGR_MAX_GAMECONTROLLERS];
+    int                    gamecontroller_count;
+
+    /* Bounded recovery retry (Task 7): a failed startup/recovery pass keeps
+     * backend-dependent controls disabled with an actionable diagnostic and
+     * retries within the two-second readiness window. */
+    bool                   recovery_pending;
+    int                    recovery_attempts;
+    uint32_t               recovery_deadline_ms;
+    /* SDL tick of the next paced retry attempt; 0 means "attempt
+     * immediately" so a manually seeded budget retries without waiting. */
+    uint32_t               recovery_next_attempt_ms;
+    char                   readiness_detail[256];
+
+    /* First-run service installation dialog (SPEC §9.1). */
+    bool          first_run_active;       /* dialog is showing        */
+    bool          first_run_initialized;  /* dialog widgets created   */
+    cbx_label     first_run_label;
+    cbx_button    first_run_yes;
+    cbx_button    first_run_no;
+    char          service_status[256];
+
+    /* Running flag. */
+    bool          running;
+} cbx_manager;
+
+/*
+ * Initialise the manager: create the SDL2 window, load theme/settings,
+ * build the tab bar with 3 tabs, create panels, connect to the system DBus
+ * (best-effort), initialise all three tab modules (controllers, profiles,
+ * settings), set up the focus chain, and show the window.
+ *
+ * @param mgr       Output struct (overwritten).
+ * @param font_path Path to a TTF font, or NULL to skip font loading.
+ * @return 0 on success, negative errno on error.
+ */
+int  cbx_manager_init(cbx_manager *mgr, const char *font_path);
+
+/*
+ * Initialise the manager with an optional DBus backend injection point.
+ *
+ * When @p backend is non-NULL, it is used directly instead of calling
+ * ip_dbus_sd_backend() and no connect() is attempted — the caller is
+ * responsible for providing a pre-connected @p bus handle.  This enables
+ * production-path connected-mode testing with a mock backend without
+ * post-init field replacement.
+ *
+ * When @p backend is NULL, falls back to the current behaviour:
+ * ip_dbus_sd_backend() + real connect (best-effort, degraded mode on
+ * failure).
+ *
+ * @param mgr       Output struct (overwritten).
+ * @param font_path Path to a TTF font, or NULL to skip font loading.
+ * @param backend   Optional DBus backend vtable (NULL = production).
+ * @param bus       Pre-connected bus handle (used only when backend != NULL).
+ * @return 0 on success, negative errno on error.
+ */
+int  cbx_manager_init_with_dbus(cbx_manager *mgr, const char *font_path,
+                                  const ip_dbus_backend *backend,
+                                  ip_bus_handle bus);
+
+/*
+ * Run the main event loop.  Polls SDL events, dispatches them, renders
+ * the frame, and presents.  Returns when the window is closed or
+ * cbx_manager_stop() is called.
+ *
+ * @return 0 on normal exit, negative errno on fatal error.
+ */
+int  cbx_manager_run(cbx_manager *mgr);
+
+/*
+ * Signal the main loop to stop.  Safe to call from event handlers.
+ */
+void cbx_manager_stop(cbx_manager *mgr);
+
+/*
+ * Process a single SDL event.  Public for testing.  Returns true if
+ * the event was consumed.
+ */
+bool cbx_manager_handle_event(cbx_manager *mgr, const SDL_Event *ev);
+
+/* Bounded visible-tab freshness fallback.  ObjectManager target changes are
+ * refreshed at most once per second while Controllers is visible. */
+int cbx_manager_refresh_controllers_if_due(cbx_manager *mgr, uint32_t now_ms);
+
+/*
+ * Render one frame.  Clears the screen, draws the tab bar and the
+ * active panel.  Public for testing.
+ */
+void cbx_manager_render(cbx_manager *mgr);
+
+/*
+ * Check whether this is a first run (no systemd user service installed)
+ * and if so, show the "Enable overlay service?" dialog (SPEC §9.1).
+ * Called automatically by cbx_manager_run(); also callable directly
+ * by tests that need to exercise the first-run dialog through
+ * cbx_manager_handle_event.
+ */
+void cbx_manager_check_first_run(cbx_manager *mgr);
+
+/*
+ * Returns true if the first-run service-install dialog is currently active.
+ */
+bool cbx_manager_first_run_active(const cbx_manager *mgr);
+
+/* Shut down and free all resources.  Safe to call on a zeroed struct. */
+void cbx_manager_shutdown(cbx_manager *mgr);
+
+/* --- Accessors (for testing) -------------------------------------- */
+
+int  cbx_manager_active_tab(const cbx_manager *mgr);
+int  cbx_manager_tab_count(const cbx_manager *mgr);
+const cbx_tabbar *cbx_manager_tabbar(const cbx_manager *mgr);
+const cbx_panel  *cbx_manager_panel(const cbx_manager *mgr, int tab);
+const cbx_focus_chain *cbx_manager_focus(const cbx_manager *mgr);
+
+/* --- Tab module accessors (for testing) --------------------------- */
+
+/*
+ * Return a pointer to the manager-owned controllers/profiles/settings
+ * tab instance.  These are populated by cbx_manager_init() and allow
+ * tests to inspect or configure the tabs without manual init.
+ */
+cbx_controllers_tab *cbx_manager_controllers_tab(cbx_manager *mgr);
+cbx_profiles_tab    *cbx_manager_profiles_tab(cbx_manager *mgr);
+cbx_settings_tab    *cbx_manager_settings_tab(cbx_manager *mgr);
+
+/* --- Backend lifecycle callbacks (exposed for testing) ----------------- */
+
+/* Called when InputPlumber's bus name is (re-)acquired — re-enumerates
+ * devices and enables the controllers tab. */
+void cbx_manager_backend_ready(void *userdata);
+
+/* Maximum number of bounded recovery attempts within the readiness window. */
+#define CBX_MANAGER_RECOVERY_MAX_ATTEMPTS 8
+/* Two-second readiness window (SPEC §2.4) with attempts paced across it so
+ * the window is actually usable rather than spent in consecutive frames. */
+#define CBX_MANAGER_RECOVERY_WINDOW_MS 2000u
+#define CBX_MANAGER_RECOVERY_ATTEMPT_INTERVAL_MS 250u
+
+/*
+ * Bounded recovery retry: called from the manager run loop.  While a ready
+ * pass is pending and the two-second retry budget is not exhausted, re-runs
+ * the full readiness pass so a transient startup/recovery failure becomes
+ * operational without restarting the manager.
+ */
+void cbx_manager_recovery_tick(cbx_manager *mgr, uint32_t now_ms);
+
+/* Called when InputPlumber's bus name is lost — disables controls and
+ * shows a degraded reason in the controllers tab. */
+void cbx_manager_backend_degraded(const char *reason, void *userdata);
+
+/*
+ * Production PropertiesChanged callback for the Manager: applies the
+ * validated change to the controllers-tab per-device model and repaints the
+ * Controllers tab so the displayed state reflects InputPlumber (SPEC §10.1).
+ * Exposed for testing.
+ */
+void cbx_manager_on_prop_change(const char *object_path, const char *iface_name,
+                                const char *prop_name, ip_prop_type type,
+                                const char *value, int count, void *userdata);
+
+/*
+ * Wire the PropertiesChanged subscription into the Manager's live
+ * connection using the exact production init/subscribe path.  Resolves
+ * InputPlumber's unique name for sender verification when the connection
+ * does not already track it.  Safe to call again after a backend
+ * reacquisition (idempotent re-subscribe refreshes the binding).  Returns 0
+ * on success, negative errno on failure.
+ */
+int cbx_manager_props_wire(cbx_manager *mgr);
+
+#endif /* CBX_MANAGER_H */

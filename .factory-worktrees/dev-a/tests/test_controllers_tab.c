@@ -1,0 +1,1566 @@
+/*
+ * test_controllers_tab.c — Tests for the Controllers tab (Task 35).
+ *
+ * Tests the controllers tab module using mock DBus.  Verifies:
+ *   - Init populates the panel with widgets
+ *   - Refresh enumerates devices and queries their types
+ *   - Load supported types parses SupportedTargetDeviceIds
+ *   - Add calls CreateTargetDevice and refreshes
+ *   - Remove calls StopTargetDevice and refreshes
+ *   - Change type calls SetTargetDevices and refreshes
+ *   - Type picker mode (begin/confirm/cancel)
+ *   - NULL safety and error handling
+ *   - Mixed types allowed
+ *
+ * Task 35 — Controllers tab.
+ */
+#include <stdarg.h>
+#include <stddef.h>
+#include <setjmp.h>
+#include <setjmp.h>
+#include <cmocka.h>
+
+#include <SDL2/SDL.h>
+#include <SDL2/SDL_ttf.h>
+#include <errno.h>
+#include <stdio.h>
+#include <sys/stat.h>
+#include <limits.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#include "manager/controllers_tab.h"
+#include "manager/manager.h"
+#include "dbus_mock.h"
+#include "dbus/ip_manager.h"
+#include "dbus/ip_target.h"
+#include "dbus/ip_composite.h"
+#include "dbus/ip_connection.h"
+#include "config/config_assignments.h"
+#include "ui/widget.h"
+
+#ifndef CBX_FONT_PATH
+#define CBX_FONT_PATH ""
+#endif
+
+/* --- Fixture data -------------------------------------------------- */
+
+/* ObjectManager reply with 2 composites and 2 targets. */
+static const char *FIXTURE_2C2T =
+    "/org/shadowblip/InputPlumber/Manager\t"
+        "org.shadowblip.InputManager\n"
+    "/org/shadowblip/InputPlumber/CompositeDevice0\t"
+        "org.shadowblip.Input.CompositeDevice\n"
+    "/org/shadowblip/InputPlumber/CompositeDevice1\t"
+        "org.shadowblip.Input.CompositeDevice\n"
+    "/org/shadowblip/InputPlumber/devices/target/gamepad0\t"
+        "org.shadowblip.Input.Target,org.shadowblip.Input.Gamepad\n"
+    "/org/shadowblip/InputPlumber/devices/target/gamepad1\t"
+        "org.shadowblip.Input.Target,org.shadowblip.Input.Gamepad\n";
+
+/* ObjectManager reply with 1 composite and 1 target. */
+static const char *FIXTURE_1C1T =
+    "/org/shadowblip/InputPlumber/Manager\t"
+        "org.shadowblip.InputManager\n"
+    "/org/shadowblip/InputPlumber/CompositeDevice0\t"
+        "org.shadowblip.Input.CompositeDevice\n"
+    "/org/shadowblip/InputPlumber/devices/target/gamepad0\t"
+        "org.shadowblip.Input.Target,org.shadowblip.Input.Gamepad\n";
+
+/* Remaining objects after gamepad0 is confirmed removed. */
+static const char *FIXTURE_AFTER_REMOVE_0 =
+    "/org/shadowblip/InputPlumber/Manager\t"
+        "org.shadowblip.InputManager\n"
+    "/org/shadowblip/InputPlumber/CompositeDevice1\t"
+        "org.shadowblip.Input.CompositeDevice\n"
+    "/org/shadowblip/InputPlumber/devices/target/gamepad1\t"
+        "org.shadowblip.Input.Target,org.shadowblip.Input.Gamepad\n";
+
+/* ObjectManager reply with 0 devices. */
+static const char *FIXTURE_EMPTY = "";
+
+/* Supported types CSV. */
+static const char *SUPPORTED_TYPES = "xb360,ds5,deck,gamepad,mouse,keyboard";
+
+/* --- Helpers ------------------------------------------------------- */
+
+static void
+ensure_dummy_driver(void)
+{
+    if (getenv("SDL_VIDEODRIVER") == NULL)
+        SDL_SetHintWithPriority(SDL_HINT_VIDEODRIVER, "dummy",
+                                 SDL_HINT_OVERRIDE);
+}
+
+/* --- Test fixture -------------------------------------------------- */
+
+typedef struct {
+    ip_dbus_mock          mock;
+    const ip_dbus_backend *backend;
+    cbx_manager           mgr;
+    cbx_controllers_tab  tab;
+} ct_fixture;
+
+static int
+setup(void **state)
+{
+    ct_fixture *f = malloc(sizeof(*f));
+    if (!f)
+        return -1;
+    memset(f, 0, sizeof(*f));
+    ensure_dummy_driver();
+
+    ip_dbus_mock_init(&f->mock);
+    f->backend = ip_dbus_mock_backend(&f->mock);
+
+    /* Init manager (creates SDL2 window, panels, tabbar, and now
+     * initialises all three tab modules).  Shut down the manager-owned
+     * controllers tab so these tests can re-initialise it with
+     * specific mock DBus data. */
+    int rc = cbx_manager_init(&f->mgr, NULL);
+    if (rc != 0) {
+        ip_dbus_mock_free(&f->mock);
+        free(f);
+        return -1;
+    }
+    cbx_controllers_tab_shutdown(cbx_manager_controllers_tab(&f->mgr));
+
+    *state = f;
+    return 0;
+}
+
+static int
+teardown(void **state)
+{
+    ct_fixture *f = *state;
+    if (f) {
+        cbx_controllers_tab_shutdown(&f->tab);
+        cbx_manager_shutdown(&f->mgr);
+        ip_dbus_mock_free(&f->mock);
+        free(f);
+    }
+    return 0;
+}
+
+#define FIX(state) (*(ct_fixture **)(state))
+
+/* Helper: set up mock expectations for a full refresh. */
+static void
+expect_refresh(ip_dbus_mock *mock, const char *fixture,
+               const char *type0, const char *type1)
+{
+    ip_dbus_mock_expect_ok(mock, IP_IFACE_OBJECT_MANAGER,
+                            "GetManagedObjects", fixture);
+    if (type0)
+        ip_dbus_mock_expect_ok(mock, IP_IFACE_TARGET,
+                                "DeviceType", type0);
+    if (type1)
+        ip_dbus_mock_expect_ok(mock, IP_IFACE_TARGET,
+                                "DeviceType", type1);
+}
+
+/* Helper: init the controllers tab with standard expectations. */
+static void
+init_tab_with_devices(ct_fixture *f, const char *fixture,
+                       const char *type0, const char *type1)
+{
+    /* SupportedTargetDeviceIds. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "SupportedTargetDeviceIds", SUPPORTED_TYPES);
+    /* Refresh: enumerate + device types. */
+    expect_refresh(&f->mock, fixture, type0, type1);
+
+    cbx_panel *panel = &f->mgr.panels[CBX_MGR_TAB_CONTROLLERS];
+    int rc = cbx_controllers_tab_init(&f->tab, panel, f->backend,
+                                        f->mock.bus, &f->mgr.text_cache,
+                                        &f->mgr.theme, f->mgr.font_id);
+    assert_int_equal(rc, 0);
+}
+
+/* ================================================================== */
+/*  Tests                                                              */
+/* ================================================================== */
+
+/* --- Init ---------------------------------------------------------- */
+
+static void
+test_init_populates_panel(void **state)
+{
+    ct_fixture *f = FIX(state);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "SupportedTargetDeviceIds", SUPPORTED_TYPES);
+    expect_refresh(&f->mock, FIXTURE_1C1T, "xb360", NULL);
+
+    cbx_panel *panel = &f->mgr.panels[CBX_MGR_TAB_CONTROLLERS];
+    int rc = cbx_controllers_tab_init(&f->tab, panel, f->backend,
+                                        f->mock.bus, &f->mgr.text_cache,
+                                        &f->mgr.theme, f->mgr.font_id);
+    assert_int_equal(rc, 0);
+
+    /* Device controls plus visible backend/operation status. */
+    assert_int_equal(cbx_panel_child_count(panel), 6);
+
+    /* Mode is list. */
+    assert_int_equal(cbx_controllers_tab_mode(&f->tab), CBX_CT_MODE_LIST);
+
+    /* Supported types loaded. */
+    assert_int_equal(cbx_controllers_tab_supported_type_count(&f->tab), 6);
+    assert_string_equal(cbx_controllers_tab_supported_type(&f->tab, 0),
+                         "xb360");
+    assert_string_equal(cbx_controllers_tab_supported_type(&f->tab, 1),
+                         "ds5");
+}
+
+static void
+test_init_without_dbus(void **state)
+{
+    ct_fixture *f = FIX(state);
+    cbx_panel *panel = &f->mgr.panels[CBX_MGR_TAB_CONTROLLERS];
+
+    /* Init with NULL backend — should succeed, just no refresh. */
+    int rc = cbx_controllers_tab_init(&f->tab, panel, NULL, NULL,
+                                        &f->mgr.text_cache, &f->mgr.theme,
+                                        f->mgr.font_id);
+    assert_int_equal(rc, 0);
+    assert_int_equal(cbx_controllers_tab_device_count(&f->tab), 0);
+    assert_int_equal(cbx_controllers_tab_supported_type_count(&f->tab), 0);
+    assert_true(cbx_widget_is_visible(&f->tab.status_lbl.base));
+    assert_false(cbx_widget_is_visible(&f->tab.add_btn.base));
+    assert_false(f->tab.add_btn.base.interactive);
+}
+
+static void
+test_init_null_args(void **state)
+{
+    (void)state;
+    cbx_controllers_tab tab;
+    cbx_panel panel;
+    memset(&tab, 0, sizeof(tab));
+    memset(&panel, 0, sizeof(panel));
+
+    assert_int_equal(cbx_controllers_tab_init(NULL, &panel, NULL, NULL,
+                                                  NULL, NULL, -1), -EINVAL);
+    assert_int_equal(cbx_controllers_tab_init(&tab, NULL, NULL, NULL,
+                                                  NULL, NULL, -1), -EINVAL);
+}
+
+/* --- Refresh ------------------------------------------------------- */
+
+static void
+test_refresh_enumerates_devices(void **state)
+{
+    ct_fixture *f = FIX(state);
+    /* Mock DBus returns first match for (iface, member), so both
+     * DeviceType queries return the same value. Use one type. */
+    init_tab_with_devices(f, FIXTURE_2C2T, "xb360", NULL);
+
+    /* 2 target devices. */
+    assert_int_equal(cbx_controllers_tab_device_count(&f->tab), 2);
+
+    /* Device types queried (both get first match = "xb360"). */
+    assert_string_equal(cbx_controllers_tab_device_type(&f->tab, 0),
+                         "xb360");
+
+    /* Device paths. */
+    assert_string_equal(cbx_controllers_tab_device_path(&f->tab, 0),
+        "/org/shadowblip/InputPlumber/devices/target/gamepad0");
+    assert_string_equal(cbx_controllers_tab_device_path(&f->tab, 1),
+        "/org/shadowblip/InputPlumber/devices/target/gamepad1");
+}
+
+static void
+test_refresh_empty(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_EMPTY, NULL, NULL);
+
+    assert_int_equal(cbx_controllers_tab_device_count(&f->tab), 0);
+}
+
+static void
+test_refresh_calls_enumerate_again(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+
+    /* Now refresh with a different fixture. */
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_OBJECT_MANAGER,
+                            "GetManagedObjects", FIXTURE_2C2T);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_TARGET,
+                            "DeviceType", "ds5");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_TARGET,
+                            "DeviceType", "xb360");
+
+    int rc = cbx_controllers_tab_refresh(&f->tab);
+    assert_int_equal(rc, 0);
+    assert_int_equal(cbx_controllers_tab_device_count(&f->tab), 2);
+}
+
+static void
+test_refresh_enumerate_error(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_OBJECT_MANAGER,
+                                "GetManagedObjects", IP_ERR_NO_REPLY);
+
+    int rc = cbx_controllers_tab_refresh(&f->tab);
+    assert_int_equal(rc, IP_ERR_NO_REPLY);
+}
+
+static void
+test_refresh_null_tab(void **state)
+{
+    (void)state;
+    assert_int_equal(cbx_controllers_tab_refresh(NULL), -EINVAL);
+}
+
+/* --- Load supported types ----------------------------------------- */
+
+static void
+test_load_supported_types_success(void **state)
+{
+    ct_fixture *f = FIX(state);
+    /* Init without dbus to get a clean tab. */
+    cbx_panel *panel = &f->mgr.panels[CBX_MGR_TAB_CONTROLLERS];
+    cbx_controllers_tab_init(&f->tab, panel, f->backend, f->mock.bus,
+                                &f->mgr.text_cache, &f->mgr.theme,
+                                f->mgr.font_id);
+
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "SupportedTargetDeviceIds", "xb360,ds5,deck");
+
+    int rc = cbx_controllers_tab_load_supported_types(&f->tab);
+    assert_int_equal(rc, 0);
+    assert_int_equal(cbx_controllers_tab_supported_type_count(&f->tab), 3);
+    assert_string_equal(cbx_controllers_tab_supported_type(&f->tab, 0),
+                         "xb360");
+    assert_string_equal(cbx_controllers_tab_supported_type(&f->tab, 2),
+                         "deck");
+}
+
+static void
+test_load_supported_types_error(void **state)
+{
+    ct_fixture *f = FIX(state);
+    cbx_panel *panel = &f->mgr.panels[CBX_MGR_TAB_CONTROLLERS];
+    cbx_controllers_tab_init(&f->tab, panel, f->backend, f->mock.bus,
+                                &f->mgr.text_cache, &f->mgr.theme,
+                                f->mgr.font_id);
+
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_MANAGER,
+                                "SupportedTargetDeviceIds", IP_ERR_NO_REPLY);
+
+    int rc = cbx_controllers_tab_load_supported_types(&f->tab);
+    assert_int_equal(rc, IP_ERR_NO_REPLY);
+    assert_int_equal(cbx_controllers_tab_supported_type_count(&f->tab), 0);
+}
+
+static void
+test_load_supported_types_whitespace(void **state)
+{
+    ct_fixture *f = FIX(state);
+    cbx_panel *panel = &f->mgr.panels[CBX_MGR_TAB_CONTROLLERS];
+    cbx_controllers_tab_init(&f->tab, panel, f->backend, f->mock.bus,
+                                &f->mgr.text_cache, &f->mgr.theme,
+                                f->mgr.font_id);
+
+    /* Types with whitespace around them. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "SupportedTargetDeviceIds",
+                            " xb360 , ds5 , deck ");
+
+    int rc = cbx_controllers_tab_load_supported_types(&f->tab);
+    assert_int_equal(rc, 0);
+    assert_int_equal(cbx_controllers_tab_supported_type_count(&f->tab), 3);
+    assert_string_equal(cbx_controllers_tab_supported_type(&f->tab, 0),
+                         "xb360");
+}
+
+/* --- Add ----------------------------------------------------------- */
+
+static void
+test_add_success(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+
+    /* CreateTargetDevice returns a new path. */
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "CreateTargetDevice",
+                            "/org/shadowblip/InputPlumber/devices/target/gamepad1");
+    /* Refresh after add: enumerate + type queries. */
+    expect_refresh(&f->mock, FIXTURE_2C2T, "xb360", "ds5");
+    /* CT-05: TargetDevices check for routability + AttachTargetDevice. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                            "TargetDevices", "");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "AttachTargetDevice", NULL);
+
+    int rc = cbx_controllers_tab_add(&f->tab, "ds5");
+    assert_int_equal(rc, 0);
+    assert_int_equal(cbx_controllers_tab_device_count(&f->tab), 2);
+
+    /* An added virtual slot is ready but unassigned; it must not be
+     * attached by unrelated list/composite index. */
+    char buf[IP_MOCK_LAST_ARGS_LEN];
+    assert_int_equal(ip_dbus_mock_last_call(&f->mock,
+                        IP_IFACE_MANAGER, "AttachTargetDevice",
+                        buf, sizeof(buf)), -ENOENT);
+}
+
+static void
+test_add_rejects_unconfirmed_model(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "CreateTargetDevice",
+                            "/org/shadowblip/InputPlumber/devices/target/gamepad1");
+    expect_refresh(&f->mock, FIXTURE_1C1T, "xb360", NULL);
+    assert_int_equal(cbx_controllers_tab_add(&f->tab, "ds5"), -EIO);
+    /* The delayed publication could not be cleaned up, so mutation stays
+     * disabled until a fresh enumeration confirms recovery (SPEC §5.2). */
+    assert_false(cbx_widget_is_visible(&f->tab.add_btn.base));
+}
+
+static void
+test_add_error(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_MANAGER,
+                                "CreateTargetDevice", IP_ERR_INVALID_ARGS);
+
+    int rc = cbx_controllers_tab_add(&f->tab, "xb360");
+    assert_int_equal(rc, IP_ERR_INVALID_ARGS);
+}
+
+static void
+test_add_null_args(void **state)
+{
+    (void)state;
+    cbx_controllers_tab tab;
+    memset(&tab, 0, sizeof(tab));
+    /* No backend set. */
+    assert_int_equal(cbx_controllers_tab_add(&tab, "xb360"), -EINVAL);
+}
+
+/* SPEC §5.2: Add succeeds only after ObjectManager exposes one
+ * additional target of the selected type. */
+static void
+test_add_rejects_type_mismatch(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "CreateTargetDevice",
+                            "/org/shadowblip/InputPlumber/devices/target/gamepad1");
+    /* Refresh shows 2 targets but DeviceType returns "xb360" (wrong type). */
+    expect_refresh(&f->mock, FIXTURE_2C2T, "xb360", "xb360");
+
+    int rc = cbx_controllers_tab_add(&f->tab, "ds5");
+    assert_int_equal(rc, -EIO);
+}
+
+/* SPEC §5.2: Failures show the failed DBus operation. */
+static void
+test_error_display_on_failed_add(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+
+    cbx_controllers_tab_begin_type_pick(&f->tab, CBX_CT_ACTION_ADD);
+    f->tab.selected_type = 1; /* ds5 */
+
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_MANAGER,
+                               "CreateTargetDevice", IP_ERR_SERVICE_UNKNOWN);
+
+    int rc = cbx_controllers_tab_confirm_type_pick(&f->tab);
+    assert_int_equal(rc, IP_ERR_SERVICE_UNKNOWN);
+    /* Status label should show the error. */
+    assert_true(cbx_widget_is_visible(&f->tab.status_lbl.base));
+    assert_true(strstr(f->tab.status_lbl.text, "Add failed:") != NULL);
+}
+
+static void
+test_error_display_on_unconfirmed_add(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+
+    cbx_controllers_tab_begin_type_pick(&f->tab, CBX_CT_ACTION_ADD);
+    f->tab.selected_type = 1; /* ds5 */
+
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "CreateTargetDevice",
+                            "/org/shadowblip/InputPlumber/devices/target/gamepad1");
+    /* Refresh shows the same 1 target (unconfirmed). */
+    expect_refresh(&f->mock, FIXTURE_1C1T, "xb360", NULL);
+
+    int rc = cbx_controllers_tab_confirm_type_pick(&f->tab);
+    assert_int_equal(rc, -EIO);
+    assert_true(cbx_widget_is_visible(&f->tab.status_lbl.base));
+    assert_true(strstr(f->tab.status_lbl.text, "Add failed:") != NULL);
+}
+
+static void
+test_error_clear_on_new_operation(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+
+    /* Trigger an error first. */
+    cbx_controllers_tab_begin_type_pick(&f->tab, CBX_CT_ACTION_ADD);
+    f->tab.selected_type = 1;
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_MANAGER,
+                               "CreateTargetDevice", IP_ERR_SERVICE_UNKNOWN);
+    cbx_controllers_tab_confirm_type_pick(&f->tab);
+    assert_true(cbx_widget_is_visible(&f->tab.status_lbl.base));
+
+    /* Starting a new operation should clear the error. */
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "SupportedTargetDeviceIds", "xb360,ds5");
+    cbx_controllers_tab_begin_type_pick(&f->tab, CBX_CT_ACTION_ADD);
+    assert_false(cbx_widget_is_visible(&f->tab.status_lbl.base));
+}
+
+/* --- Remove -------------------------------------------------------- */
+
+static void
+test_remove_success(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_2C2T, "xb360", "ds5");
+
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "StopTargetDevice", NULL);
+    /* Refresh after remove must omit the exact stopped object. */
+    expect_refresh(&f->mock, FIXTURE_AFTER_REMOVE_0, "ds5", NULL);
+
+    int rc = cbx_controllers_tab_remove(&f->tab, 0);
+    assert_int_equal(rc, 0);
+    assert_int_equal(cbx_controllers_tab_device_count(&f->tab), 1);
+}
+
+static void
+test_remove_rejects_unconfirmed_model(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "StopTargetDevice", NULL);
+    expect_refresh(&f->mock, FIXTURE_1C1T, "xb360", NULL);
+    assert_int_equal(cbx_controllers_tab_remove(&f->tab, 0), -EIO);
+    /* The stop was issued but its removal readback is unconfirmed: the
+     * removed slot is not resurrected and mutation stays disabled until a
+     * fresh enumeration confirms recovery (SPEC §5.2). */
+    assert_false(cbx_widget_is_visible(&f->tab.add_btn.base));
+}
+
+static void
+test_remove_error(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_MANAGER,
+                                "StopTargetDevice", IP_ERR_NO_REPLY);
+
+    int rc = cbx_controllers_tab_remove(&f->tab, 0);
+    assert_int_equal(rc, IP_ERR_NO_REPLY);
+}
+
+static void
+test_remove_bad_index(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+
+    assert_int_equal(cbx_controllers_tab_remove(&f->tab, -1), -EINVAL);
+    assert_int_equal(cbx_controllers_tab_remove(&f->tab, 99), -EINVAL);
+}
+
+/* --- Change type --------------------------------------------------- */
+
+static void __attribute__((unused))
+test_change_type_success(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                            "SetTargetDevices", NULL);
+    /* Refresh after change. */
+    expect_refresh(&f->mock, FIXTURE_1C1T, "ds5", NULL);
+
+    int rc = cbx_controllers_tab_change_type(&f->tab, 0, "ds5");
+    assert_int_equal(rc, 0);
+    assert_string_equal(cbx_controllers_tab_device_type(&f->tab, 0),
+                         "ds5");
+
+    /* SPEC §5.2: "Type change replaces only the selected slot and
+     * preserves all other topology."  SetTargetDevices is the
+     * CompositeDevice method that REPLACES ALL targets on one composite;
+     * in the slot model (target[i]↔composite[i]) the selected composite
+     * owns one target, so the request CSV must be exactly the new type,
+     * not a CSV of every model target's type. */
+    char buf[IP_MOCK_LAST_ARGS_LEN];
+    assert_int_equal(ip_dbus_mock_last_call(&f->mock,
+                        IP_IFACE_COMPOSITE, "SetTargetDevices",
+                        buf, sizeof(buf)), 0);
+    assert_string_equal(buf, "ds5");
+}
+
+static void __attribute__((unused))
+test_change_type_mixed(void **state)
+{
+    ct_fixture *f = FIX(state);
+    /* Mock DBus returns first match for DeviceType, so both devices
+     * initially report "xb360". */
+    init_tab_with_devices(f, FIXTURE_2C2T, "xb360", NULL);
+
+    ip_dbus_mock_reset(&f->mock);
+    /* SetTargetDevices on CompositeDevice1 (index 1) with new type. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                            "SetTargetDevices", NULL);
+    /* Refresh: both targets still present. Mock returns first DeviceType
+     * match for all queries. */
+    expect_refresh(&f->mock, FIXTURE_2C2T, "deck", NULL);
+
+    int rc = cbx_controllers_tab_change_type(&f->tab, 1, "deck");
+    assert_int_equal(rc, 0);
+    /* Both devices report "deck" (mock limitation), but the test
+     * verifies the change_type call succeeded with mixed types allowed
+     * — the SetTargetDevices CSV includes both types. */
+    assert_int_equal(cbx_controllers_tab_device_count(&f->tab), 2);
+
+    /* SPEC §5.2: replacing slot 1's type must preserve slot 0.  The
+     * request CSV sent to CompositeDevice1 must be exactly the single
+     * new type "deck", NOT a CSV of every model target's type (which
+     * would overwrite composite 1 with N targets and corrupt slot 0's
+     * topology). */
+    char buf[IP_MOCK_LAST_ARGS_LEN];
+    assert_int_equal(ip_dbus_mock_last_call(&f->mock,
+                        IP_IFACE_COMPOSITE, "SetTargetDevices",
+                        buf, sizeof(buf)), 0);
+    assert_string_equal(buf, "deck");
+}
+
+static void __attribute__((unused))
+test_change_type_rejects_unconfirmed_model(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                            "SetTargetDevices", NULL);
+    expect_refresh(&f->mock, FIXTURE_1C1T, "xb360", NULL);
+    assert_int_equal(cbx_controllers_tab_change_type(&f->tab, 0, "ds5"),
+                     -EIO);
+}
+
+static void
+test_change_type_error(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_MANAGER,
+                                "CreateTargetDevice", IP_ERR_NO_REPLY);
+
+    int rc = cbx_controllers_tab_change_type(&f->tab, 0, "ds5");
+    assert_int_equal(rc, IP_ERR_NO_REPLY);
+}
+
+static void
+test_change_type_bad_index(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+
+    assert_int_equal(cbx_controllers_tab_change_type(&f->tab, -1, "ds5"),
+                      -EINVAL);
+    assert_int_equal(cbx_controllers_tab_change_type(&f->tab, 99, "ds5"),
+                      -EINVAL);
+}
+
+static void __attribute__((unused))
+test_change_type_no_composite(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+
+    /* Device index 0 is valid, but if we pretend there's no composite
+     * at that index... Actually our fixture has 1 composite. Let's
+     * test index 1 which has a target but no composite (only 1
+     * composite in fixture). */
+    /* Actually FIXTURE_1C1T has 1 composite and 1 target, so index 0
+     * is valid. Let's add a second target with no composite. */
+    ip_dbus_mock_reset(&f->mock);
+    /* Fixture with 1 composite but 2 targets. */
+    const char *fixture =
+        "/org/shadowblip/InputPlumber/Manager\t"
+            "org.shadowblip.InputManager\n"
+        "/org/shadowblip/InputPlumber/CompositeDevice0\t"
+            "org.shadowblip.Input.CompositeDevice\n"
+        "/org/shadowblip/InputPlumber/devices/target/gamepad0\t"
+            "org.shadowblip.Input.Target,org.shadowblip.Input.Gamepad\n"
+        "/org/shadowblip/InputPlumber/devices/target/gamepad1\t"
+            "org.shadowblip.Input.Target,org.shadowblip.Input.Gamepad\n";
+    expect_refresh(&f->mock, fixture, "xb360", "ds5");
+
+    cbx_controllers_tab_refresh(&f->tab);
+    assert_int_equal(cbx_controllers_tab_device_count(&f->tab), 2);
+
+    /* Change type on index 1 — no composite at index 1. */
+    int rc = cbx_controllers_tab_change_type(&f->tab, 1, "deck");
+    assert_int_equal(rc, -EINVAL);
+}
+
+/* --- Type picker --------------------------------------------------- */
+
+static void
+test_type_picker_begin(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+
+    int rc = cbx_controllers_tab_begin_type_pick(&f->tab,
+                                                   CBX_CT_ACTION_ADD);
+    assert_int_equal(rc, 0);
+    assert_int_equal(cbx_controllers_tab_mode(&f->tab),
+                      CBX_CT_MODE_TYPE_PICK);
+
+    /* Type picker should have supported types. */
+    assert_int_equal(cbx_list_item_count(&f->tab.type_picker), 6);
+}
+
+static void
+test_type_picker_confirm_add(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+
+    /* Begin type pick for add. */
+    cbx_controllers_tab_begin_type_pick(&f->tab, CBX_CT_ACTION_ADD);
+    f->tab.selected_type = 1; /* ds5 */
+
+    /* CreateTargetDevice + refresh. */
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "CreateTargetDevice",
+                            "/org/shadowblip/InputPlumber/devices/target/gamepad1");
+    expect_refresh(&f->mock, FIXTURE_2C2T, "xb360", "ds5");
+    /* CT-05: TargetDevices check + AttachTargetDevice. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                            "TargetDevices", "");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "AttachTargetDevice", NULL);
+
+    int rc = cbx_controllers_tab_confirm_type_pick(&f->tab);
+    assert_int_equal(rc, 0);
+    assert_int_equal(cbx_controllers_tab_mode(&f->tab),
+                      CBX_CT_MODE_LIST);
+    assert_int_equal(cbx_controllers_tab_device_count(&f->tab), 2);
+}
+
+static void __attribute__((unused))
+test_type_picker_confirm_change(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+    f->tab.selected_device = 0;
+
+    cbx_controllers_tab_begin_type_pick(&f->tab, CBX_CT_ACTION_CHANGE);
+    f->tab.selected_type = 1; /* ds5 */
+
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                            "SetTargetDevices", NULL);
+    expect_refresh(&f->mock, FIXTURE_1C1T, "ds5", NULL);
+
+    int rc = cbx_controllers_tab_confirm_type_pick(&f->tab);
+    assert_int_equal(rc, 0);
+    assert_string_equal(cbx_controllers_tab_device_type(&f->tab, 0),
+                         "ds5");
+}
+
+static void
+test_type_picker_cancel(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+
+    cbx_controllers_tab_begin_type_pick(&f->tab, CBX_CT_ACTION_ADD);
+    assert_int_equal(cbx_controllers_tab_mode(&f->tab),
+                      CBX_CT_MODE_TYPE_PICK);
+
+    cbx_controllers_tab_cancel_type_pick(&f->tab);
+    assert_int_equal(cbx_controllers_tab_mode(&f->tab),
+                      CBX_CT_MODE_LIST);
+    assert_int_equal(f->tab.pending_action, CBX_CT_ACTION_NONE);
+}
+
+static void
+test_type_picker_no_supported_types(void **state)
+{
+    ct_fixture *f = FIX(state);
+    /* Init without DBus so no supported types loaded. */
+    cbx_panel *panel = &f->mgr.panels[CBX_MGR_TAB_CONTROLLERS];
+    cbx_controllers_tab_init(&f->tab, panel, NULL, NULL,
+                                &f->mgr.text_cache, &f->mgr.theme,
+                                f->mgr.font_id);
+
+    int rc = cbx_controllers_tab_begin_type_pick(&f->tab,
+                                                   CBX_CT_ACTION_ADD);
+    assert_int_equal(rc, -ENOENT);
+}
+
+static void
+test_type_picker_confirm_not_in_pick_mode(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+
+    /* Not in type-pick mode. */
+    int rc = cbx_controllers_tab_confirm_type_pick(&f->tab);
+    assert_int_equal(rc, -EINVAL);
+}
+
+/* --- Shutdown ------------------------------------------------------ */
+
+static void
+test_shutdown_removes_panel_children(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+
+    cbx_panel *panel = &f->mgr.panels[CBX_MGR_TAB_CONTROLLERS];
+    assert_int_equal(cbx_panel_child_count(panel), 6);
+
+    cbx_controllers_tab_shutdown(&f->tab);
+    assert_int_equal(cbx_panel_child_count(panel), 0);
+
+    /* Mark tab as shutdown so teardown doesn't double-free. */
+    memset(&f->tab, 0, sizeof(f->tab));
+}
+
+static void
+test_shutdown_null_safe(void **state)
+{
+    (void)state;
+    cbx_controllers_tab_shutdown(NULL);
+}
+
+/* --- Accessors ----------------------------------------------------- */
+
+static void
+test_accessors_null_safe(void **state)
+{
+    (void)state;
+    assert_int_equal(cbx_controllers_tab_device_count(NULL), 0);
+    assert_int_equal(cbx_controllers_tab_supported_type_count(NULL), 0);
+    assert_null(cbx_controllers_tab_device_type(NULL, 0));
+    assert_null(cbx_controllers_tab_device_path(NULL, 0));
+    assert_null(cbx_controllers_tab_supported_type(NULL, 0));
+    assert_int_equal(cbx_controllers_tab_selected_device(NULL), -1);
+    assert_int_equal(cbx_controllers_tab_mode(NULL), CBX_CT_MODE_LIST);
+}
+
+static void
+test_accessors_bad_index(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+
+    assert_null(cbx_controllers_tab_device_type(&f->tab, -1));
+    assert_null(cbx_controllers_tab_device_type(&f->tab, 99));
+    assert_null(cbx_controllers_tab_device_path(&f->tab, -1));
+    assert_null(cbx_controllers_tab_supported_type(&f->tab, -1));
+}
+
+/* --- Full workflow ------------------------------------------------- */
+
+static void __attribute__((unused))
+test_full_workflow(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_EMPTY, NULL, NULL);
+
+    /* Start with 0 devices. */
+    assert_int_equal(cbx_controllers_tab_device_count(&f->tab), 0);
+
+    /* Add a device. */
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "CreateTargetDevice",
+                            "/org/shadowblip/InputPlumber/devices/target/gamepad0");
+    expect_refresh(&f->mock, FIXTURE_1C1T, "xb360", NULL);
+    /* CT-05: TargetDevices check + AttachTargetDevice. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                            "TargetDevices", "");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "AttachTargetDevice", NULL);
+
+    int rc = cbx_controllers_tab_add(&f->tab, "xb360");
+    assert_int_equal(rc, 0);
+    assert_int_equal(cbx_controllers_tab_device_count(&f->tab), 1);
+    assert_string_equal(cbx_controllers_tab_device_type(&f->tab, 0),
+                         "xb360");
+
+    /* Change type. */
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                            "SetTargetDevices", NULL);
+    expect_refresh(&f->mock, FIXTURE_1C1T, "ds5", NULL);
+
+    rc = cbx_controllers_tab_change_type(&f->tab, 0, "ds5");
+    assert_int_equal(rc, 0);
+    assert_string_equal(cbx_controllers_tab_device_type(&f->tab, 0),
+                         "ds5");
+
+    /* Remove device. */
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "StopTargetDevice", NULL);
+    expect_refresh(&f->mock, FIXTURE_EMPTY, NULL, NULL);
+
+    rc = cbx_controllers_tab_remove(&f->tab, 0);
+    assert_int_equal(rc, 0);
+    assert_int_equal(cbx_controllers_tab_device_count(&f->tab), 0);
+}
+
+/* ================================================================== */
+/*  Production-dispatch tests (through cbx_manager_handle_event)        */
+/* ================================================================== */
+
+static bool ct_send_key_dn(cbx_manager *mgr, SDL_Keycode sym)
+{
+    SDL_Event ev = {0};
+    ev.type = SDL_KEYDOWN;
+    ev.key.keysym.sym = sym;
+    return cbx_manager_handle_event(mgr, &ev);
+}
+
+static bool ct_send_key_up(cbx_manager *mgr, SDL_Keycode sym)
+{
+    SDL_Event ev = {0};
+    ev.type = SDL_KEYUP;
+    ev.key.keysym.sym = sym;
+    return cbx_manager_handle_event(mgr, &ev);
+}
+
+static void
+test_type_pick_via_dispatch(void **state)
+{
+    (void)state;
+    /* Set up mock DBus with supported types and 2 devices. */
+    ip_dbus_mock mock;
+    ip_dbus_mock_init(&mock);
+    const ip_dbus_backend *backend = ip_dbus_mock_backend(&mock);
+
+    /* Expectations for cbx_controllers_tab_init: */
+    ip_dbus_mock_expect_ok(&mock, IP_IFACE_MANAGER,
+                            "SupportedTargetDeviceIds", SUPPORTED_TYPES);
+    ip_dbus_mock_expect_ok(&mock, IP_IFACE_OBJECT_MANAGER,
+                            "GetManagedObjects", FIXTURE_2C2T);
+    ip_dbus_mock_expect_ok(&mock, IP_IFACE_TARGET,
+                            "DeviceType", "xb360");
+    ip_dbus_mock_expect_ok(&mock, IP_IFACE_TARGET,
+                            "DeviceType", "ds5");
+
+    ensure_dummy_driver();
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init_with_dbus(&mgr, NULL, backend,
+                                                     mock.bus), 0);
+
+    cbx_controllers_tab *ct = cbx_manager_controllers_tab(&mgr);
+    assert_non_null(ct);
+    assert_int_equal(cbx_controllers_tab_supported_type_count(ct), 6);
+    assert_int_equal(cbx_controllers_tab_device_count(ct), 2);
+
+    /* Click on the Add button to open the type picker. */
+    SDL_Rect btn_rect;
+    cbx_widget_get_rect(&ct->add_btn.base, &btn_rect);
+    int cx = btn_rect.x + btn_rect.w / 2;
+    int cy = btn_rect.y + btn_rect.h / 2;
+    SDL_Event mev = {0};
+    mev.type = SDL_MOUSEBUTTONDOWN;
+    mev.button.button = SDL_BUTTON_LEFT;
+    mev.button.x = cx; mev.button.y = cy;
+    cbx_manager_handle_event(&mgr, &mev);
+    mev.type = SDL_MOUSEBUTTONUP;
+    cbx_manager_handle_event(&mgr, &mev);
+    assert_int_equal(cbx_controllers_tab_mode(ct), CBX_CT_MODE_TYPE_PICK);
+    assert_true(ct->type_picker.base.visible);
+
+    /* Navigate down in the type picker. */
+    ct_send_key_dn(&mgr, SDLK_DOWN);
+    assert_int_equal(cbx_list_get_selected(&ct->type_picker), 1);
+
+    /* B to cancel the type picker. */
+    ct_send_key_dn(&mgr, SDLK_b);
+    assert_int_equal(cbx_controllers_tab_mode(ct), CBX_CT_MODE_LIST);
+    assert_false(ct->type_picker.base.visible);
+    assert_true(ct->device_list.base.visible);
+
+    cbx_manager_shutdown(&mgr);
+    ip_dbus_mock_free(&mock);
+}
+
+static void
+test_type_pick_confirm_via_dispatch(void **state)
+{
+    (void)state;
+    ip_dbus_mock mock;
+    ip_dbus_mock_init(&mock);
+    const ip_dbus_backend *backend = ip_dbus_mock_backend(&mock);
+
+    /* Init expectations. */
+    ip_dbus_mock_expect_ok(&mock, IP_IFACE_MANAGER,
+                            "SupportedTargetDeviceIds", SUPPORTED_TYPES);
+    ip_dbus_mock_expect_ok(&mock, IP_IFACE_OBJECT_MANAGER,
+                            "GetManagedObjects", FIXTURE_2C2T);
+    ip_dbus_mock_expect_ok(&mock, IP_IFACE_TARGET,
+                            "DeviceType", "xb360");
+    ip_dbus_mock_expect_ok(&mock, IP_IFACE_TARGET,
+                            "DeviceType", "ds5");
+
+    /* Expect CreateTargetDevice when confirming. */
+    ip_dbus_mock_expect_ok(&mock, IP_IFACE_MANAGER,
+                            "CreateTargetDevice",
+                            "/org/shadowblip/InputPlumber/devices/target/new0");
+    /* Expect refresh after add. */
+    ip_dbus_mock_expect_ok(&mock, IP_IFACE_OBJECT_MANAGER,
+                            "GetManagedObjects", FIXTURE_2C2T);
+    ip_dbus_mock_expect_ok(&mock, IP_IFACE_TARGET,
+                            "DeviceType", "xb360");
+    ip_dbus_mock_expect_ok(&mock, IP_IFACE_TARGET,
+                            "DeviceType", "ds5");
+
+    ensure_dummy_driver();
+    cbx_manager mgr;
+    assert_int_equal(cbx_manager_init_with_dbus(&mgr, NULL, backend,
+                                                     mock.bus), 0);
+
+    cbx_controllers_tab *ct = cbx_manager_controllers_tab(&mgr);
+
+    /* Click on the Add button to open the type picker. */
+    SDL_Rect btn_rect;
+    cbx_widget_get_rect(&ct->add_btn.base, &btn_rect);
+    int cx = btn_rect.x + btn_rect.w / 2;
+    int cy = btn_rect.y + btn_rect.h / 2;
+    SDL_Event mev = {0};
+    mev.type = SDL_MOUSEBUTTONDOWN;
+    mev.button.button = SDL_BUTTON_LEFT;
+    mev.button.x = cx; mev.button.y = cy;
+    cbx_manager_handle_event(&mgr, &mev);
+    mev.type = SDL_MOUSEBUTTONUP;
+    cbx_manager_handle_event(&mgr, &mev);
+    assert_int_equal(cbx_controllers_tab_mode(ct), CBX_CT_MODE_TYPE_PICK);
+
+    /* Navigate to second type (ds5) and confirm with A. */
+    ct_send_key_dn(&mgr, SDLK_DOWN);
+    assert_int_equal(cbx_list_get_selected(&ct->type_picker), 1);
+
+    ct_send_key_dn(&mgr, SDLK_a);
+    assert_true(ct_send_key_up(&mgr, SDLK_a));
+    /* on_select fires → confirm_type_pick → CreateTargetDevice → back to list. */
+    assert_int_equal(cbx_controllers_tab_mode(ct), CBX_CT_MODE_LIST);
+
+    cbx_manager_shutdown(&mgr);
+    ip_dbus_mock_free(&mock);
+}
+
+/* ================================================================== */
+/*  Task 2: CT-02 — Auto-Unassign on remove                            */
+/* ================================================================== */
+
+/* Fixture for auto-Unassign tests: sets up an isolated HOME with a
+ * pre-written assignments.yaml so we can verify the remove path
+ * updates the assignment file. */
+typedef struct {
+    ip_dbus_mock          mock;
+    const ip_dbus_backend *backend;
+    cbx_manager           mgr;
+    cbx_controllers_tab  tab;
+    char                  tmp_home[4096];
+} ct_unassign_fixture;
+
+static int
+unassign_setup(void **state)
+{
+    ct_unassign_fixture *f = malloc(sizeof(*f));
+    if (!f)
+        return -1;
+    memset(f, 0, sizeof(*f));
+    ensure_dummy_driver();
+
+    /* Isolated HOME. */
+    snprintf(f->tmp_home, sizeof(f->tmp_home),
+             "/tmp/cbx_ct_unassign_%d", (int)getpid());
+    char cmd[8192];
+    snprintf(cmd, sizeof(cmd), "rm -rf '%s'", f->tmp_home);
+    int r0 = system(cmd); (void)r0;
+    mkdir(f->tmp_home, 0700);
+    setenv("HOME", f->tmp_home, 1);
+    unsetenv("XDG_CONFIG_HOME");
+    unsetenv("XDG_DATA_HOME");
+
+    ip_dbus_mock_init(&f->mock);
+    f->backend = ip_dbus_mock_backend(&f->mock);
+
+    int rc = cbx_manager_init(&f->mgr, NULL);
+    if (rc != 0) {
+        ip_dbus_mock_free(&f->mock);
+        free(f);
+        return -1;
+    }
+    cbx_controllers_tab_shutdown(cbx_manager_controllers_tab(&f->mgr));
+    *state = f;
+    return 0;
+}
+
+static int
+unassign_teardown(void **state)
+{
+    ct_unassign_fixture *f = *state;
+    if (f) {
+        cbx_controllers_tab_shutdown(&f->tab);
+        cbx_manager_shutdown(&f->mgr);
+        ip_dbus_mock_free(&f->mock);
+        char cmd[8192];
+        snprintf(cmd, sizeof(cmd), "rm -rf '%s'", f->tmp_home);
+        int r = system(cmd); (void)r;
+        unsetenv("HOME");
+        unsetenv("XDG_CONFIG_HOME");
+        unsetenv("XDG_DATA_HOME");
+        free(f);
+    }
+    return 0;
+}
+
+/* Helper: write assignments.yaml with one controller assigned to slot 0. */
+static void
+write_test_assignments(int slot, const char *profile)
+{
+    char path[8192];
+    /* Use the same resolution as the production code. */
+    const char *home = getenv("HOME");
+    snprintf(path, sizeof(path), "%s/.config/controller-box/assignments.yaml",
+             home ? home : "/tmp");
+    /* Ensure parent directories exist. */
+    char dir[8192];
+    snprintf(dir, sizeof(dir), "%s/.config", home ? home : "/tmp");
+    mkdir(dir, 0700);
+    snprintf(dir, sizeof(dir), "%s/.config/controller-box",
+             home ? home : "/tmp");
+    mkdir(dir, 0700);
+    FILE *fp = fopen(path, "w");
+    assert_non_null(fp);
+    fprintf(fp, "assignments:\n");
+    fprintf(fp, "  - id: \"USB:testserial01\"\n");
+    fprintf(fp, "    slot: %d\n", slot);
+    if (profile && profile[0])
+        fprintf(fp, "    profile: \"%s\"\n", profile);
+    fprintf(fp, "gamepad_order:\n");
+    fprintf(fp, "  - \"USB:testserial01\"\n");
+    fclose(fp);
+}
+
+/* Helper: load assignments and find the slot for a given id.
+ * Returns the slot, or -1 if not found. */
+static int
+find_assignment_slot(const char *id)
+{
+    cbx_assignments a;
+    cbx_assignments_init(&a);
+    if (cbx_assignments_load(&a) != 0)
+        return -2;
+    for (int i = 0; i < a.assignment_count; i++) {
+        if (strcmp(a.assignments[i].id, id) == 0)
+            return a.assignments[i].slot;
+    }
+    return -1; /* not found = unassigned */
+}
+
+/* CT-02: Removing a slot mid-session moves the physical controller in
+ * that slot to Unassigned (assignment entry removed). */
+static void
+test_remove_auto_unassign(void **state)
+{
+    ct_unassign_fixture *f = *state;
+
+    /* Write an assignment mapping a controller to slot 0. */
+    write_test_assignments(0, "test-profile");
+    assert_int_equal(find_assignment_slot("USB:testserial01"), 0);
+
+    /* Init controllers tab with 2 targets. */
+    init_tab_with_devices((ct_fixture *)f, FIXTURE_2C2T, "xb360", "ds5");
+
+    /* Remove slot 0. */
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "StopTargetDevice", NULL);
+    expect_refresh(&f->mock, FIXTURE_AFTER_REMOVE_0, "ds5", NULL);
+
+    int rc = cbx_controllers_tab_remove(&f->tab, 0);
+    assert_int_equal(rc, 0);
+    assert_int_equal(cbx_controllers_tab_device_count(&f->tab), 1);
+
+    /* Verify the physical controller was auto-Unassigned:
+     * the assignment entry for USB:testserial01 should be gone. */
+    int slot = find_assignment_slot("USB:testserial01");
+    assert_int_equal(slot, -1); /* -1 = not found = Unassigned */
+}
+
+/* CT-02: Removing a slot shifts higher-slot assignments down. */
+static void
+test_remove_shifts_higher_slots(void **state)
+{
+    ct_unassign_fixture *f = *state;
+
+    /* Write two assignments: slot 0 and slot 1. */
+    {
+        const char *home = getenv("HOME");
+        char dir[8192];
+        snprintf(dir, sizeof(dir), "%s/.config", home ? home : "/tmp");
+        mkdir(dir, 0700);
+        snprintf(dir, sizeof(dir), "%s/.config/controller-box",
+                 home ? home : "/tmp");
+        mkdir(dir, 0700);
+        char path[16384];
+        snprintf(path, sizeof(path), "%s/assignments.yaml", dir);
+        FILE *fp = fopen(path, "w");
+        assert_non_null(fp);
+        fprintf(fp, "assignments:\n");
+        fprintf(fp, "  - id: \"USB:ctrlA\"\n    slot: 0\n    profile: \"pa\"\n");
+        fprintf(fp, "  - id: \"USB:ctrlB\"\n    slot: 1\n    profile: \"pb\"\n");
+        fprintf(fp, "gamepad_order:\n  - \"USB:ctrlA\"\n  - \"USB:ctrlB\"\n");
+        fclose(fp);
+    }
+
+    init_tab_with_devices((ct_fixture *)f, FIXTURE_2C2T, "xb360", "ds5");
+
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "StopTargetDevice", NULL);
+    expect_refresh(&f->mock, FIXTURE_AFTER_REMOVE_0, "ds5", NULL);
+
+    int rc = cbx_controllers_tab_remove(&f->tab, 0);
+    assert_int_equal(rc, 0);
+
+    /* ctrlA (was slot 0) should be unassigned (removed). */
+    assert_int_equal(find_assignment_slot("USB:ctrlA"), -1);
+    /* ctrlB (was slot 1) should be shifted to slot 0. */
+    assert_int_equal(find_assignment_slot("USB:ctrlB"), 0);
+}
+
+/* CT-02: Remove with no assignments file should not fail. */
+static void
+test_remove_no_assignments_file(void **state)
+{
+    ct_unassign_fixture *f = *state;
+    init_tab_with_devices((ct_fixture *)f, FIXTURE_1C1T, "xb360", NULL);
+
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "StopTargetDevice", NULL);
+    expect_refresh(&f->mock, FIXTURE_EMPTY, NULL, NULL);
+
+    int rc = cbx_controllers_tab_remove(&f->tab, 0);
+    assert_int_equal(rc, 0);
+}
+
+/* ================================================================== */
+/*  Task 2: CT-03 — Orphan columns error                               */
+/* ================================================================== */
+
+/* CT-03: When expected_target_count is set and actual count is lower,
+ * refresh shows an error in the status label (not silent success). */
+static void
+test_orphan_columns_shows_error(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_2C2T, "xb360", "ds5");
+
+    /* Set expected count to 4 — only 2 targets exist. */
+    cbx_controllers_tab_set_expected_count(&f->tab, 4);
+
+    /* Refresh to trigger the orphan check. */
+    ip_dbus_mock_reset(&f->mock);
+    expect_refresh(&f->mock, FIXTURE_2C2T, "xb360", "ds5");
+
+    int rc = cbx_controllers_tab_refresh(&f->tab);
+    assert_int_equal(rc, 0);
+
+    /* The status label should show the orphan-columns error. */
+    assert_true(cbx_widget_is_visible(&f->tab.status_lbl.base));
+    const char *text = f->tab.status_lbl.text;
+    assert_non_null(text);
+    assert_true(strstr(text, "Topology incomplete") != NULL);
+    assert_true(strstr(text, "2 of 4") != NULL);
+}
+
+/* CT-03: When expected matches actual, no error is shown. */
+static void
+test_orphan_columns_match_no_error(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_2C2T, "xb360", "ds5");
+
+    /* Set expected count to 2 — matches actual. */
+    cbx_controllers_tab_set_expected_count(&f->tab, 2);
+
+    ip_dbus_mock_reset(&f->mock);
+    expect_refresh(&f->mock, FIXTURE_2C2T, "xb360", "ds5");
+
+    int rc = cbx_controllers_tab_refresh(&f->tab);
+    assert_int_equal(rc, 0);
+
+    /* No error should be visible (label text should be empty or hidden). */
+    const char *text = f->tab.status_lbl.text;
+    assert_true(text == NULL || text[0] == '\0' ||
+                !cbx_widget_is_visible(&f->tab.status_lbl.base) ||
+                strstr(text, "Topology incomplete") == NULL);
+}
+
+/* CT-03: When expected_target_count is 0 (unset), no orphan check. */
+static void
+test_orphan_columns_unset_no_error(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+
+    /* expected_target_count defaults to 0 (unset). */
+    assert_int_equal(f->tab.expected_target_count, 0);
+
+    ip_dbus_mock_reset(&f->mock);
+    expect_refresh(&f->mock, FIXTURE_1C1T, "xb360", NULL);
+
+    int rc = cbx_controllers_tab_refresh(&f->tab);
+    assert_int_equal(rc, 0);
+
+    /* No error should be shown. */
+    const char *text = f->tab.status_lbl.text;
+    assert_true(text == NULL || text[0] == '\0' ||
+                strstr(text, "Topology incomplete") == NULL);
+}
+
+/* ================================================================== */
+/*  Task 2: CT-05 — Add routability check                              */
+/* ================================================================== */
+
+/* CT-05: Add verifies the new target is attached/routable to its
+ * composite.  When not yet attached, AttachTargetDevice is called. */
+static void
+test_add_attaches_target_if_not_routable(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "CreateTargetDevice",
+                            "/org/shadowblip/InputPlumber/devices/target/gamepad1");
+    expect_refresh(&f->mock, FIXTURE_2C2T, "xb360", "ds5");
+    /* TargetDevices returns empty (target not attached yet). */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                            "TargetDevices", "");
+    /* AttachTargetDevice should be called. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "AttachTargetDevice", NULL);
+
+    int rc = cbx_controllers_tab_add(&f->tab, "ds5");
+    assert_int_equal(rc, 0);
+    assert_int_equal(cbx_controllers_tab_device_count(&f->tab), 2);
+}
+
+/* CT-05: Add succeeds without calling AttachTargetDevice when target
+ * is already routable (listed in TargetDevices). */
+static void
+test_add_skips_attach_when_already_routable(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "CreateTargetDevice",
+                            "/org/shadowblip/InputPlumber/devices/target/gamepad1");
+    expect_refresh(&f->mock, FIXTURE_2C2T, "xb360", "ds5");
+    /* TargetDevices already includes the new target path. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                            "TargetDevices",
+                            "/org/shadowblip/InputPlumber/devices/target/gamepad1");
+
+    int rc = cbx_controllers_tab_add(&f->tab, "ds5");
+    assert_int_equal(rc, 0);
+    assert_int_equal(cbx_controllers_tab_device_count(&f->tab), 2);
+}
+
+/* A standalone add never consumes an unrelated attachment failure. */
+static void
+test_add_ignores_unrelated_attach_failure(void **state)
+{
+    ct_fixture *f = FIX(state);
+    init_tab_with_devices(f, FIXTURE_1C1T, "xb360", NULL);
+
+    ip_dbus_mock_reset(&f->mock);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                            "CreateTargetDevice",
+                            "/org/shadowblip/InputPlumber/devices/target/gamepad1");
+    expect_refresh(&f->mock, FIXTURE_2C2T, "xb360", "ds5");
+    /* TargetDevices returns empty (not attached). */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                            "TargetDevices", "");
+    /* AttachTargetDevice fails. */
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_MANAGER,
+                                "AttachTargetDevice", IP_ERR_NO_REPLY);
+
+    int rc = cbx_controllers_tab_add(&f->tab, "ds5");
+    assert_int_equal(rc, 0);
+    char buf[IP_MOCK_LAST_ARGS_LEN];
+    assert_int_equal(ip_dbus_mock_last_call(&f->mock,
+        IP_IFACE_MANAGER, "AttachTargetDevice", buf, sizeof(buf)), -ENOENT);
+}
+
+/* ================================================================== */
+/*  Main                                                               */
+/* ================================================================== */
+
+int
+main(void)
+{
+    const struct CMUnitTest tests[] = {
+        /* Init. */
+        cmocka_unit_test_setup_teardown(test_init_populates_panel,
+                                         setup, teardown),
+        cmocka_unit_test_setup_teardown(test_init_without_dbus,
+                                         setup, teardown),
+        cmocka_unit_test(test_init_null_args),
+
+        /* Refresh. */
+        cmocka_unit_test_setup_teardown(test_refresh_enumerates_devices,
+                                         setup, teardown),
+        cmocka_unit_test_setup_teardown(test_refresh_empty,
+                                         setup, teardown),
+        cmocka_unit_test_setup_teardown(test_refresh_calls_enumerate_again,
+                                         setup, teardown),
+        cmocka_unit_test_setup_teardown(test_refresh_enumerate_error,
+                                         setup, teardown),
+        cmocka_unit_test(test_refresh_null_tab),
+
+        /* Load supported types. */
+        cmocka_unit_test_setup_teardown(test_load_supported_types_success,
+                                         setup, teardown),
+        cmocka_unit_test_setup_teardown(test_load_supported_types_error,
+                                         setup, teardown),
+        cmocka_unit_test_setup_teardown(test_load_supported_types_whitespace,
+                                         setup, teardown),
+
+        /* Add. */
+        cmocka_unit_test_setup_teardown(test_add_success, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_add_rejects_unconfirmed_model,
+                                         setup, teardown),
+        cmocka_unit_test_setup_teardown(test_add_error, setup, teardown),
+        cmocka_unit_test(test_add_null_args),
+        cmocka_unit_test_setup_teardown(test_add_rejects_type_mismatch,
+                                         setup, teardown),
+        cmocka_unit_test_setup_teardown(test_error_display_on_failed_add,
+                                         setup, teardown),
+        cmocka_unit_test_setup_teardown(test_error_display_on_unconfirmed_add,
+                                         setup, teardown),
+        cmocka_unit_test_setup_teardown(test_error_clear_on_new_operation,
+                                         setup, teardown),
+
+        /* Remove. */
+        cmocka_unit_test_setup_teardown(test_remove_success, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_remove_rejects_unconfirmed_model,
+                                         setup, teardown),
+        cmocka_unit_test_setup_teardown(test_remove_error, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_remove_bad_index,
+                                         setup, teardown),
+
+        /* Task 2: CT-02 — Auto-Unassign on remove. */
+        cmocka_unit_test_setup_teardown(test_remove_auto_unassign,
+                                         unassign_setup, unassign_teardown),
+        cmocka_unit_test_setup_teardown(test_remove_shifts_higher_slots,
+                                         unassign_setup, unassign_teardown),
+        cmocka_unit_test_setup_teardown(test_remove_no_assignments_file,
+                                         unassign_setup, unassign_teardown),
+
+        /* Task 2: CT-03 — Orphan columns error. */
+        cmocka_unit_test_setup_teardown(test_orphan_columns_shows_error,
+                                         setup, teardown),
+        cmocka_unit_test_setup_teardown(test_orphan_columns_match_no_error,
+                                         setup, teardown),
+        cmocka_unit_test_setup_teardown(test_orphan_columns_unset_no_error,
+                                         setup, teardown),
+
+        /* Task 2: CT-05 — Add routability check. */
+        cmocka_unit_test_setup_teardown(test_add_attaches_target_if_not_routable,
+                                         setup, teardown),
+        cmocka_unit_test_setup_teardown(test_add_skips_attach_when_already_routable,
+                                         setup, teardown),
+        cmocka_unit_test_setup_teardown(test_add_ignores_unrelated_attach_failure,
+                                         setup, teardown),
+
+        /* Change type argument/error boundary.  Asynchronous replacement
+         * publication/removal is covered by the native sd-bus suite; the
+         * lookup-table mock cannot represent ordered ObjectManager states. */
+        cmocka_unit_test_setup_teardown(test_change_type_error,
+                                         setup, teardown),
+        cmocka_unit_test_setup_teardown(test_change_type_bad_index,
+                                         setup, teardown),
+
+        /* Type picker. */
+        cmocka_unit_test_setup_teardown(test_type_picker_begin,
+                                         setup, teardown),
+        cmocka_unit_test_setup_teardown(test_type_picker_confirm_add,
+                                         setup, teardown),
+
+        cmocka_unit_test_setup_teardown(test_type_picker_cancel,
+                                         setup, teardown),
+        cmocka_unit_test_setup_teardown(test_type_picker_no_supported_types,
+                                         setup, teardown),
+        cmocka_unit_test_setup_teardown(test_type_picker_confirm_not_in_pick_mode,
+                                         setup, teardown),
+
+        /* Shutdown. */
+        cmocka_unit_test_setup_teardown(test_shutdown_removes_panel_children,
+                                         setup, teardown),
+        cmocka_unit_test(test_shutdown_null_safe),
+
+        /* Accessors. */
+        cmocka_unit_test(test_accessors_null_safe),
+        cmocka_unit_test_setup_teardown(test_accessors_bad_index,
+                                         setup, teardown),
+
+        /* Production-dispatch tests. */
+        cmocka_unit_test(test_type_pick_via_dispatch),
+        cmocka_unit_test(test_type_pick_confirm_via_dispatch),
+    };
+
+    return cmocka_run_group_tests(tests, NULL, NULL);
+}

@@ -1,0 +1,8 @@
+{
+  "schema": "controller-box-layout/v1",
+  "model": "xb360",
+  "icon": "cc-xbox-360",
+  "asset": "xbox-360.svg",
+  "raster_min": [512, 512],
+  "controls": ["A", "B", "X", "Y", "Up", "Down", "Left", "Right", "Start", "Select", "Guide", "L1", "R1", "L2", "R2", "L3", "R3"]
+}

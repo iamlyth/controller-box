@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Controller-Box
+Comment=Configure virtual controllers and profiles for InputPlumber
+Exec=/usr/bin/controller-box --manager
+Icon=controller-box
+Categories=Game;Settings;
+Terminal=false
