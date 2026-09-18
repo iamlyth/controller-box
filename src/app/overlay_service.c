@@ -483,6 +483,56 @@ overlay_build_gamepad_order(const cbx_select_grid *grid,
 }
 
 /*
+ * Append every comma-separated path in `extra` that is not already a whole
+ * token of `order`, preserving `order`'s existing sequence.  A restored
+ * saved order is authoritative for the controllers it names, but a
+ * controller that arrived since the order was persisted (a hotplug add, or a
+ * controller whose identity had no saved entry) must still be included for
+ * the engine's GamepadOrder to describe the current topology.  Returns 0, or
+ * -ENOSPC when the destination cannot hold the merged list.
+ */
+static int
+overlay_order_append_missing(char *order, size_t order_size, const char *extra)
+{
+    if (!order || order_size == 0 || !extra)
+        return -EINVAL;
+
+    const char *p = extra;
+    while (*p) {
+        const char *comma = strchr(p, ',');
+        size_t len = comma ? (size_t)(comma - p) : strlen(p);
+        if (len > 0) {
+            bool present = false;
+            for (const char *q = order; *q; ) {
+                const char *qc = strchr(q, ',');
+                size_t qlen = qc ? (size_t)(qc - q) : strlen(q);
+                if (qlen == len && memcmp(q, p, len) == 0) {
+                    present = true;
+                    break;
+                }
+                if (!qc)
+                    break;
+                q = qc + 1;
+            }
+            if (!present) {
+                size_t olen = strlen(order);
+                size_t need = len + (olen > 0 ? 1 : 0);
+                if (olen + need + 1 > order_size)
+                    return -ENOSPC;
+                if (olen > 0)
+                    order[olen++] = ',';
+                memcpy(order + olen, p, len);
+                order[olen + len] = '\0';
+            }
+        }
+        if (!comma)
+            break;
+        p = comma + 1;
+    }
+    return 0;
+}
+
+/*
  * Choose the profile to load for `row` from the enumerated profile list.
  *
  * The saved preference is used when it still exists.  When it does not (the
@@ -543,10 +593,17 @@ overlay_apply_grid_engine(cbx_overlay_service_ctx *svc, bool clear_all,
     if (!svc || !svc->conn.backend || !svc->conn.bus)
         return -EINVAL;
 
-    char order[CBX_MAX_COMPOSITES * (CBX_MAX_PATH_LEN + 1)];
-    int rc = overlay_build_gamepad_order(&svc->grid, order, sizeof(order));
+    /* The grid-derived order is the baseline (current slot order) and is
+     * also the set of controllers currently enumerated.  It is kept aside so
+     * a restored durable order can be augmented rather than allowed to drop
+     * a controller that has no saved entry. */
+    char grid_order[CBX_MAX_COMPOSITES * (CBX_MAX_PATH_LEN + 1)];
+    int rc = overlay_build_gamepad_order(&svc->grid, grid_order,
+                                          sizeof(grid_order));
     if (rc != 0)
         return rc;
+    char order[CBX_MAX_COMPOSITES * (CBX_MAX_PATH_LEN + 1)];
+    snprintf(order, sizeof(order), "%s", grid_order);
 
     /* Resolve durable order before any engine mutation, from the same
      * checked physical snapshot used by the assignment grid. */
@@ -562,6 +619,9 @@ overlay_apply_grid_engine(cbx_overlay_service_ctx *svc, bool clear_all,
                 NULL, NULL, &uncertain);
             if (rc == 0 && uncertain)
                 rc = -EAGAIN;
+            if (rc == 0)
+                rc = overlay_order_append_missing(order, sizeof(order),
+                                                   grid_order);
         }
         free(saved);
         if (rc != 0)

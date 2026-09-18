@@ -1213,6 +1213,54 @@ test_hotplug_saved_order_and_source_removal(void **state)
     }
 }
 
+/* A durable order that names only some of the current controllers must not
+ * drop the others from the live engine.  This is the hotplug/startup case
+ * where a controller was assigned before the order was last persisted (or a
+ * controller reappeared while another still had no saved entry): the saved
+ * order is authoritative for the controllers it names, and any controller
+ * enumerated now but absent from the saved list is appended. */
+static void
+test_hotplug_saved_order_appends_unsaved_controller(void **state)
+{
+    reconcile_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    /* Both controllers are assigned, but the durable gamepad_order only
+     * names the first. */
+    cbx_assignments_init(&svc->assignments);
+    svc->assignments.assignment_count = 2;
+    snprintf(svc->assignments.assignments[0].id, CBX_MAX_ID_LEN, "%s",
+             PHYSICAL_ID_0);
+    svc->assignments.assignments[0].slot = 0;
+    snprintf(svc->assignments.assignments[1].id, CBX_MAX_ID_LEN, "%s",
+             PHYSICAL_ID_1);
+    svc->assignments.assignments[1].slot = 1;
+    snprintf(svc->assignments.gamepad_order[0], CBX_MAX_ID_LEN, "%s",
+             PHYSICAL_ID_0);
+    svc->assignments.gamepad_order_count = 1;
+    assert_int_equal(cbx_assignments_save(&svc->assignments), 0);
+
+    stage_physical_reconcile(f);
+    ip_interfaces_changed_payload source = {
+        .sender = ":1.42",
+        .path = "/org/shadowblip/InputPlumber/devices/source/event2",
+        .interfaces = IP_IFACE_SOURCE_EVENT,
+    };
+    ip_hotplug_handle_added(&svc->hp, &source);
+    assert_true(svc->hp.model_changed);
+    assert_true(svc->hp.identity_changed);
+
+    flush_events();
+    cbx_overlay_service_step(svc);
+
+    assert_true(svc->backend_ready);
+    assert_true(f->mock.gamepad_order_written);
+    /* The saved controller keeps its restored position; the controller that
+     * has no saved order entry is still reported in the live order. */
+    assert_string_equal(f->mock.gamepad_order_value,
+                        COMP_PATH_0 "," COMP_PATH_1);
+}
+
 static void
 check_uncertain_identity_no_writes(reconcile_fixture *f, bool duplicate)
 {
@@ -1320,6 +1368,9 @@ main(void)
             reconcile_setup, reconcile_teardown),
         cmocka_unit_test_setup_teardown(
             test_hotplug_saved_order_and_source_removal,
+            reconcile_setup, reconcile_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_hotplug_saved_order_appends_unsaved_controller,
             reconcile_setup, reconcile_teardown),
         cmocka_unit_test_setup_teardown(
             test_hotplug_duplicate_identity_no_writes,
