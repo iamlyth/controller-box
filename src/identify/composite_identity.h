@@ -76,6 +76,30 @@ int cbx_composite_identity_order(const cbx_composite_entry *entry,
                                  int fallback_index);
 
 /*
+ * Resolve a saved assignment/order identity against an already-extracted
+ * snapshot of the current composites.
+ *
+ * This is the single definition of the match rule shared by assignment
+ * restoration (overlay), target routing (manager) and GamepadOrder
+ * restoration, so the absence-vs-failure and duplicate-identity policies
+ * cannot drift between call sites (task 6 acceptance).
+ *
+ * Returns:
+ *    1  exactly one matchable entry matches; `out_path` (when non-NULL) and
+ *       `out_index` (when non-NULL) describe it;
+ *    0  no entry matches — a confirmed stale preference;
+ *   -1  uncertain or ambiguous: an entry's transient read failed, or more
+ *       than one matchable entry shares the identity.  Callers must leave
+ *       saved state untouched and report uncertainty rather than choosing
+ *       the first ObjectManager path.
+ * Null args or an empty saved_id also return -1.
+ */
+int cbx_composite_identity_resolve_id(
+    const cbx_composite_identity_entry *entries, int entry_count,
+    const char *saved_id, char *out_path, size_t out_path_size,
+    int *out_index);
+
+/*
  * Classify a source device object path by its interface subtype, derived
  * from the last path component (SPEC §10.2):
  *   - "hidrawN"                    → HIDRawDevice
@@ -91,7 +115,13 @@ cbx_source_iface cbx_source_iface_for_path(const char *source_path);
  *
  * Reads `SourceDevicePaths` from the composite, reads each source device's
  * interface-appropriate properties, extracts the strongest per-source
- * identity, and keeps the strongest across all sources.  When no property
+ * identity, and keeps the strongest across all sources.  Each
+ * SourceDevicePaths entry is a physical device node (e.g.
+ * "/dev/input/event3", "/dev/hidraw0"); it is mapped to the DBus source
+ * object path InputPlumber registers at
+ * /org/shadowblip/InputPlumber/devices/source/<sysname> before its
+ * properties are read, because a device node is not a DBus object path.
+ * When no property
  * yields a stable identity and `connection_order >= 0`, falls back to
  * ORDER:n (SPEC §6.2 layer 4).
  *

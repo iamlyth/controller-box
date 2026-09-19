@@ -1707,10 +1707,11 @@ seed_identical_sources(bool reversed, bool udev_only)
 
     g_nip_source_count = 0;
     for (int i = 0; i < 2; i++) {
+        const char *kind = udev_only ? "udev" : "event";
         char spath[256];
         snprintf(spath, sizeof(spath),
                  "/org/shadowblip/InputPlumber/devices/source/%s%d",
-                 udev_only ? "udev" : "event", i);
+                 kind, i);
         snprintf(g_nip_source_path[i], sizeof(g_nip_source_path[i]),
                  "%s", spath);
         if (udev_only)
@@ -1725,8 +1726,13 @@ seed_identical_sources(bool reversed, bool udev_only)
         g_nip_source_serial[i][0] = '\0';
         g_nip_source_hidraw[i] = 0;
         g_nip_source_udev[i] = udev_only ? 1 : 0;
+        /* InputPlumber's SourceDevicePaths reports physical device nodes
+         * (/dev/input/eventN), while the identification properties live on
+         * the DBus source object seeded above.  Seed the two differently so
+         * the extraction path must map the device node to the registered
+         * object path (SPEC §10.2, task 6). */
         snprintf(g_nip_source_paths[i], sizeof(g_nip_source_paths[i]),
-                 "%s", spath);
+                 "/dev/input/%s%d", kind, i);
         g_nip_source_count++;
     }
 }

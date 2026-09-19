@@ -100,6 +100,7 @@ typedef struct {
     int                  unique_name_rc; /* 0 = success; <0 to simulate get_unique_name failure */
     ip_mock_last_call    last_call;   /* most recent method call's string args */
     int                  get_property_count; /* number of get_property calls */
+    char                 last_get_property_path[256]; /* path of the most recent get_property */
     int                  set_property_count; /* number of set_property calls */
     uint64_t             deadline_ms;  /* last value passed to set_deadline (0 = none) */
     int                  set_deadline_count; /* number of set_deadline calls */

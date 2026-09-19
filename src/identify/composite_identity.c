@@ -62,6 +62,54 @@ copy_trimmed_token(const char *begin, const char *end, char *out, size_t out_siz
     return len;
 }
 
+/* SourceDevicePaths entries are physical device nodes (e.g.
+ * "/dev/input/event3", "/dev/hidraw0") because InputPlumber builds them
+ * from each source device's node path.  The per-device identification
+ * properties are exposed on the DBus source object InputPlumber registers
+ * at IP_DBUS_PATH "/devices/source/<sysname>" (SPEC §10.2).  Derive that
+ * object path from the device-node basename so a real service is not
+ * queried with a device node as an object path.  InputPlumber sanitizes
+ * the sysname for non-evdev subsystems (iio:device0 → iio_device0,
+ * led/tty separators → '_'); evdev/hidraw sysnames contain none of these
+ * characters, so the same substitution is exact for every subsystem.  A
+ * value that already names an object path is passed through, so test
+ * backends and any future object-path contract keep working. */
+static bool
+source_object_path(const char *token, char *out, size_t out_size)
+{
+    if (!token || !*token || out_size == 0)
+        return false;
+
+    static const char root_prefix[] = IP_DBUS_PATH "/";
+    if (strncmp(token, root_prefix, sizeof(root_prefix) - 1) == 0) {
+        snprintf(out, out_size, "%s", token);
+        return true;
+    }
+
+    if (token[0] != '/')
+        return false;
+
+    const char *base = path_basename(token);
+    if (!*base)
+        return false;
+
+    char element[CBX_MAX_PATH_LEN];
+    size_t j = 0;
+    for (size_t i = 0; base[i] && j + 1 < sizeof(element); i++) {
+        char c = base[i];
+        if (c == ':' || c == '-' || c == '.')
+            c = '_';
+        element[j++] = c;
+    }
+    element[j] = '\0';
+    if (j == 0)
+        return false;
+
+    int n = snprintf(out, out_size, IP_DBUS_PATH "/devices/source/%s",
+                     element);
+    return n > 0 && (size_t)n < out_size;
+}
+
 /* --- Per-source extraction ------------------------------------------------ */
 
 /*
@@ -223,6 +271,50 @@ cbx_composite_identity_order(const cbx_composite_entry *entry,
 }
 
 int
+cbx_composite_identity_resolve_id(const cbx_composite_identity_entry *entries,
+                                  int entry_count, const char *saved_id,
+                                  char *out_path, size_t out_path_size,
+                                  int *out_index)
+{
+    if (out_index)
+        *out_index = -1;
+    if (out_path && out_path_size)
+        out_path[0] = '\0';
+    if (!entries || entry_count < 0 || entry_count > CBX_MAX_COMPOSITES ||
+        !saved_id || !saved_id[0])
+        return -1;
+
+    int match_index = -1;
+    for (int i = 0; i < entry_count; i++) {
+        /* A transient read is uncertainty for the whole snapshot: an
+         * unreadable composite could be the real owner of the saved id, so
+         * no entry may be resolved from this pass. */
+        if (entries[i].status == CBX_COMPOSITE_IDENTITY_QUERY_FAILED)
+            return -1;
+        if (!cbx_composite_identity_is_matchable(&entries[i].ident,
+                                                 entries[i].status))
+            continue;
+        if (strcmp(entries[i].ident.id, saved_id) != 0)
+            continue;
+        /* A duplicated serial/port/order identity is not a physical match.
+         * Refuse it rather than routing to whichever DBus object happened to
+         * be enumerated first. */
+        if (match_index >= 0)
+            return -1;
+        match_index = i;
+    }
+
+    if (match_index < 0)
+        return 0;
+
+    if (out_path && out_path_size)
+        snprintf(out_path, out_path_size, "%s", entries[match_index].path);
+    if (out_index)
+        *out_index = match_index;
+    return 1;
+}
+
+int
 cbx_composite_identity_extract(const ip_dbus_backend *backend,
                                ip_bus_handle bus,
                                const char *composite_path,
@@ -294,24 +386,36 @@ cbx_composite_identity_extract(const ip_dbus_backend *backend,
                  * empty tokens is malformed/partial, not a weak device. */
                 malformed_source_list = true;
             } else if (token_len >= sizeof(source_path)) {
-                /* Truncating an object path could query a different object.
+                /* Truncating a source path could name a different device.
                  * Treat it as an uncertain snapshot rather than guessing. */
                 saw_source = true;
                 read_failed_any = true;
             } else if (copy_trimmed_token(p, end, source_path,
                                           sizeof(source_path)) > 0) {
                 saw_source = true;
-                cbx_identity candidate;
-                bool source_read_failed = false;
-                if (extract_from_source(backend, bus, source_path,
-                                        &candidate, &source_read_failed) == 0) {
-                    /* Keep the strongest (lowest layer number). */
-                    if (out_ident->layer == CBX_IDENTITY_LAYER_NONE ||
-                        (int)candidate.layer < (int)out_ident->layer)
-                        *out_ident = candidate;
-                }
-                if (source_read_failed)
+                /* SourceDevicePaths reports device nodes; the identity
+                 * properties live on the derived source object path. */
+                char object_path[CBX_MAX_PATH_LEN];
+                if (!source_object_path(source_path, object_path,
+                                        sizeof(object_path))) {
+                    /* A source entry that cannot name a DBus object is a
+                     * broken snapshot, not a confirmed identity-less
+                     * device. */
                     read_failed_any = true;
+                } else {
+                    cbx_identity candidate;
+                    bool source_read_failed = false;
+                    if (extract_from_source(backend, bus, object_path,
+                                            &candidate,
+                                            &source_read_failed) == 0) {
+                        /* Keep the strongest (lowest layer number). */
+                        if (out_ident->layer == CBX_IDENTITY_LAYER_NONE ||
+                            (int)candidate.layer < (int)out_ident->layer)
+                            *out_ident = candidate;
+                    }
+                    if (source_read_failed)
+                        read_failed_any = true;
+                }
             }
 
             if (!comma)

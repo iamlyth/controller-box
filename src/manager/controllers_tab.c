@@ -480,35 +480,23 @@ composite_path_for_id(cbx_controllers_tab *tab, const char *id,
 {
     if (!tab || !id || !id[0])
         return false;
-
-    const char *match = NULL;
-    bool query_failed = false;
-    for (int ci = 0; ci < tab->model.composite_count; ci++) {
-        const cbx_composite_entry *comp = &tab->model.composites[ci];
-        int order = cbx_composite_identity_order(comp, ci);
-        cbx_identity ident;
-        cbx_composite_identity_status status = CBX_COMPOSITE_IDENTITY_OK;
-        if (cbx_composite_identity_extract(tab->backend, tab->bus,
-                                           comp->path, order, &ident,
-                                           &status) != 0)
-            continue;
-        if (status == CBX_COMPOSITE_IDENTITY_QUERY_FAILED)
-            query_failed = true;
-        if (!cbx_composite_identity_is_matchable(&ident, status))
-            continue;
-        if (strcmp(ident.id, id) == 0) {
-            /* Identical weak/stable properties are ambiguous.  Returning the
-             * first ObjectManager path would make routing depend on DBus
-             * enumeration order, so leave the slot untouched. */
-            if (match)
-                return false;
-            match = comp->path;
-        }
-    }
-    if (query_failed || !match)
+    if (tab->model.composite_count < 0 ||
+        tab->model.composite_count > CBX_MAX_COMPOSITES)
         return false;
-    snprintf(out, CBX_MAX_PATH_LEN, "%s", match);
-    return true;
+
+    /* Extract every composite's source-derived identity once, then apply the
+     * shared match rule (composite_identity.h) so routing uses the same
+     * absence-vs-failure and duplicate policy as overlay restoration.  A
+     * transient identity query failure is never matched: it must not route a
+     * slot onto the wrong physical controller. */
+    cbx_composite_identity_entry entries[CBX_MAX_COMPOSITES];
+    int count = 0;
+    if (cbx_model_extract_identities(tab->backend, tab->bus, &tab->model,
+                                     entries, &count) != 0)
+        return false;
+
+    return cbx_composite_identity_resolve_id(entries, count, id, out,
+                                             CBX_MAX_PATH_LEN, NULL) == 1;
 }
 
 static int

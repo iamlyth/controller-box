@@ -1186,31 +1186,21 @@ assigned_composite_for_slot(const cbx_composite_identity_entry *entries,
                             int entry_count,
                             const cbx_assignments *assignments, int slot)
 {
-    for (int ci = 0; ci < entry_count; ci++) {
-        if (entries[ci].status == CBX_COMPOSITE_IDENTITY_QUERY_FAILED)
-            return NULL;
-    }
-
     for (int ai = 0; ai < assignments->assignment_count; ai++) {
         const cbx_assignment *a = &assignments->assignments[ai];
-        if (a->slot != slot) continue;
+        if (a->slot != slot)
+            continue;
 
-        const char *match = NULL;
-        for (int ci = 0; ci < entry_count; ci++) {
-            if (!cbx_composite_identity_is_matchable(&entries[ci].ident,
-                                                     entries[ci].status))
-                continue;
-            if (strcmp(entries[ci].ident.id, a->id) != 0)
-                continue;
-            /* A duplicated serial/port/order identity is not a physical
-             * match.  Refuse the attachment rather than silently routing the
-             * slot to whichever DBus object happened to be enumerated first. */
-            if (match)
-                return NULL;
-            match = entries[ci].path;
-        }
-        if (match)
-            return match;
+        /* Single shared match rule (composite_identity.h): a transient read
+         * or a duplicated physical identity is uncertainty, not a routing
+         * choice.  A stale id falls through to the next assignment. */
+        int index = -1;
+        int r = cbx_composite_identity_resolve_id(entries, entry_count, a->id,
+                                                  NULL, 0, &index);
+        if (r == 1)
+            return entries[index].path;
+        if (r == -1)
+            return NULL;
     }
     return NULL;
 }

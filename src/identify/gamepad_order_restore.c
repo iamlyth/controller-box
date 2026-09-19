@@ -137,29 +137,27 @@ cbx_gamepad_order_map_snapshot(const cbx_composite_identity_entry *entries,
             memcpy(saved_id, p, len);
             saved_id[len] = '\0';
 
-            int match_count = 0;
+            /* Single shared match rule (composite_identity.h): one matchable
+             * entry resolves, none is stale, and a transient read or a
+             * duplicated identity is uncertainty that must not become a
+             * routing/order choice. */
+            char match_path[CBX_MAX_PATH_LEN];
             int match_index = -1;
-            for (int i = 0; i < entry_count; i++) {
-                if (cbx_composite_identity_is_matchable(&entries[i].ident,
-                                                        entries[i].status)) {
-                    if (strcmp(entries[i].ident.id, saved_id) == 0) {
-                        match_count++;
-                        match_index = i;
-                    }
-                }
-            }
-
-            if (match_count == 1 && !used_entries[match_index]) {
+            int r = cbx_composite_identity_resolve_id(entries, entry_count,
+                                                      saved_id, match_path,
+                                                      sizeof(match_path),
+                                                      &match_index);
+            if (r == 1 && !used_entries[match_index]) {
                 rc = append_path(out_paths_csv, paths_csv_len, &pos,
-                                 entries[match_index].path);
+                                 match_path);
                 if (rc != 0)
                     return rc;
                 used_entries[match_index] = true;
                 restored++;
-            } else if (match_count > 1 ||
-                       (match_count == 1 && used_entries[match_index])) {
-                /* Duplicate physical identities and read failures are both
-                 * ambiguous.  Neither may be silently treated as a stale
+            } else if (r == -1 || (r == 1 && used_entries[match_index])) {
+                /* Duplicate physical identities, read failures and a second
+                 * saved entry naming an already-used composite are all
+                 * ambiguous.  None may be silently treated as a stale
                  * preference or mapped to the first object-path returned by
                  * DBus; the caller must retry/report uncertainty. */
                 query_failed = true;

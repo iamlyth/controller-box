@@ -306,8 +306,12 @@ static int mock_get_property(ip_bus_handle bus, const char *dest,
                              const char *prop, char **out_value) {
     (void)dest; (void)path;
     ip_dbus_mock *mock = (ip_dbus_mock *)bus;
-    if (mock)
+    if (mock) {
         mock->get_property_count++;
+        snprintf(mock->last_get_property_path,
+                 sizeof(mock->last_get_property_path), "%s",
+                 path ? path : "");
+    }
     ip_mock_expectation *e = mock_find_mut(mock, iface, prop);
     if (e) e->calls++;
     if (!e) return -ENXIO;

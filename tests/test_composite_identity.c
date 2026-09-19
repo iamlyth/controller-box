@@ -268,6 +268,88 @@ test_extract_hidraw_serial(void **state)
     assert_string_equal(ident.id, "USB:SN-HID-9");
 }
 
+/*
+ * InputPlumber's SourceDevicePaths property reports physical device nodes
+ * (e.g. "/dev/input/event3"), while the identification properties are
+ * exposed on the DBus source object at
+ * /org/shadowblip/InputPlumber/devices/source/<sysname>.  The extraction
+ * path must map the device node to that object path before querying; a
+ * device node passed straight through as an object path would fail against
+ * the real service.  This asserts the derived object path, not merely that
+ * some property read succeeded.
+ */
+static void
+test_extract_device_node_source_path(void **state)
+{
+    ci_fixture *f = FIX(state);
+    expect_evdev(f, "/dev/input/event3", "SN12345", "", "3");
+
+    cbx_identity ident;
+    cbx_composite_identity_status status = CBX_COMPOSITE_IDENTITY_OK;
+    int rc = cbx_composite_identity_extract(f->backend, f->mock.bus,
+                                            COMP_PATH, 0, &ident, &status);
+    assert_int_equal(rc, 0);
+    assert_int_equal(status, CBX_COMPOSITE_IDENTITY_OK);
+    assert_string_equal(ident.id, "USB:SN12345");
+    assert_string_equal(f->mock.last_get_property_path,
+                        "/org/shadowblip/InputPlumber/devices/source/event3");
+}
+
+/* The same device-node mapping applies to HIDRaw sources. */
+static void
+test_extract_hidraw_device_node_source_path(void **state)
+{
+    ci_fixture *f = FIX(state);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                           "SourceDevicePaths", "/dev/hidraw2");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_SOURCE_HIDRAW,
+                           "SerialNumber", "SN-HID-2");
+
+    cbx_identity ident;
+    int rc = cbx_composite_identity_extract(f->backend, f->mock.bus,
+                                            COMP_PATH, 0, &ident, NULL);
+    assert_int_equal(rc, 0);
+    assert_string_equal(ident.id, "USB:SN-HID-2");
+    assert_string_equal(f->mock.last_get_property_path,
+                        "/org/shadowblip/InputPlumber/devices/source/hidraw2");
+}
+
+/*
+ * Non-evdev/udev source subsystems (iio, leds, tty) register their DBus
+ * source object under a sanitized sysname (InputPlumber replaces ':', '-'
+ * and '.' with '_').  A composite commonly includes an IMU source, so its
+ * path must resolve to the registered object (UdevDevice answers there)
+ * instead of being misread as an uncertain evdev source.
+ */
+static void
+test_extract_iio_device_node_source_path(void **state)
+{
+    ci_fixture *f = FIX(state);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+        "SourceDevicePaths",
+        "/sys/bus/iio/devices/iio:device0");
+    /* EventDevice is absent on an IIO object; fall back to UdevDevice. */
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_SOURCE_EVENT, "UniqueId",
+                              IP_ERR_UNKNOWN_INTERFACE);
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_SOURCE_EVENT, "PhysPath",
+                              IP_ERR_UNKNOWN_INTERFACE);
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_SOURCE_EVENT, "IdBustype",
+                              IP_ERR_UNKNOWN_INTERFACE);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_SOURCE_UDEV, "UniqueId", "");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_SOURCE_UDEV, "PhysPath", "");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_SOURCE_UDEV, "IdBustype", "0");
+
+    cbx_identity ident;
+    cbx_composite_identity_status status = CBX_COMPOSITE_IDENTITY_OK;
+    int rc = cbx_composite_identity_extract(f->backend, f->mock.bus,
+                                            COMP_PATH, 4, &ident, &status);
+    assert_int_equal(rc, 0);
+    assert_int_equal(status, CBX_COMPOSITE_IDENTITY_OK);
+    assert_string_equal(ident.id, "ORDER:4");
+    assert_string_equal(f->mock.last_get_property_path,
+                        "/org/shadowblip/InputPlumber/devices/source/iio_device0");
+}
+
 static void
 test_extract_order_fallback_absent(void **state)
 {
@@ -450,6 +532,91 @@ test_model_extract_identities(void **state)
     assert_string_equal(entries[1].ident.id, "USB:SN12345");
 }
 
+/* --- Shared identity resolver (single match rule) ------------------------ */
+
+static void
+test_resolve_id_unique_match(void **state)
+{
+    (void)state;
+    cbx_composite_identity_entry entries[2] = {
+        {.path = "/c0", .ident = {.id = "USB:SN0",
+            .layer = CBX_IDENTITY_LAYER_USB_SERIAL}},
+        {.path = "/c1", .ident = {.id = "USB:SN1",
+            .layer = CBX_IDENTITY_LAYER_USB_SERIAL}},
+    };
+    char path[CBX_MAX_PATH_LEN];
+    int index = -1;
+    assert_int_equal(cbx_composite_identity_resolve_id(entries, 2, "USB:SN1",
+                     path, sizeof(path), &index), 1);
+    assert_string_equal(path, "/c1");
+    assert_int_equal(index, 1);
+}
+
+static void
+test_resolve_id_no_match_is_stale(void **state)
+{
+    (void)state;
+    cbx_composite_identity_entry entries[1] = {
+        {.path = "/c0", .ident = {.id = "USB:SN0",
+            .layer = CBX_IDENTITY_LAYER_USB_SERIAL}},
+    };
+    char path[CBX_MAX_PATH_LEN] = "keep";
+    int index = 7;
+    assert_int_equal(cbx_composite_identity_resolve_id(entries, 1, "USB:SN9",
+                     path, sizeof(path), &index), 0);
+    assert_string_equal(path, "");
+    assert_int_equal(index, -1);
+}
+
+static void
+test_resolve_id_duplicate_is_uncertain(void **state)
+{
+    (void)state;
+    cbx_composite_identity_entry entries[2] = {
+        {.path = "/c0", .ident = {.id = "USB:SN0",
+            .layer = CBX_IDENTITY_LAYER_USB_SERIAL}},
+        {.path = "/c1", .ident = {.id = "USB:SN0",
+            .layer = CBX_IDENTITY_LAYER_USB_SERIAL}},
+    };
+    char path[CBX_MAX_PATH_LEN];
+    assert_int_equal(cbx_composite_identity_resolve_id(entries, 2, "USB:SN0",
+                     path, sizeof(path), NULL), -1);
+}
+
+static void
+test_resolve_id_query_failure_is_uncertain(void **state)
+{
+    (void)state;
+    cbx_composite_identity_entry entries[2] = {
+        {.path = "/c0", .ident = {.id = "USB:SN0",
+            .layer = CBX_IDENTITY_LAYER_USB_SERIAL}},
+        {.path = "/c1", .status = CBX_COMPOSITE_IDENTITY_QUERY_FAILED},
+    };
+    char path[CBX_MAX_PATH_LEN];
+    assert_int_equal(cbx_composite_identity_resolve_id(entries, 2, "USB:SN0",
+                     path, sizeof(path), NULL), -1);
+}
+
+static void
+test_resolve_id_null_args(void **state)
+{
+    (void)state;
+    cbx_composite_identity_entry entries[1] = {
+        {.path = "/c0", .ident = {.id = "USB:SN0",
+            .layer = CBX_IDENTITY_LAYER_USB_SERIAL}},
+    };
+    char path[CBX_MAX_PATH_LEN];
+    assert_int_equal(cbx_composite_identity_resolve_id(NULL, 1, "USB:SN0",
+                     path, sizeof(path), NULL), -1);
+    assert_int_equal(cbx_composite_identity_resolve_id(entries, 1, NULL,
+                     path, sizeof(path), NULL), -1);
+    assert_int_equal(cbx_composite_identity_resolve_id(entries, 1, "",
+                     path, sizeof(path), NULL), -1);
+    /* A NULL output path is allowed: callers that only need the verdict. */
+    assert_int_equal(cbx_composite_identity_resolve_id(entries, 1, "USB:SN0",
+                     NULL, 0, NULL), 1);
+}
+
 int
 main(void)
 {
@@ -466,6 +633,14 @@ main(void)
                                          setup, teardown),
         cmocka_unit_test_setup_teardown(test_extract_hidraw_serial,
                                          setup, teardown),
+        cmocka_unit_test_setup_teardown(test_extract_device_node_source_path,
+                                         setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            test_extract_hidraw_device_node_source_path,
+            setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            test_extract_iio_device_node_source_path,
+            setup, teardown),
         cmocka_unit_test_setup_teardown(test_extract_udev_serial,
                                          setup, teardown),
         cmocka_unit_test_setup_teardown(
@@ -492,6 +667,16 @@ main(void)
         cmocka_unit_test_setup_teardown(test_extract_null_args,
                                          setup, teardown),
         cmocka_unit_test_setup_teardown(test_model_extract_identities,
+                                         setup, teardown),
+        cmocka_unit_test_setup_teardown(test_resolve_id_unique_match,
+                                         setup, teardown),
+        cmocka_unit_test_setup_teardown(test_resolve_id_no_match_is_stale,
+                                         setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            test_resolve_id_duplicate_is_uncertain, setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            test_resolve_id_query_failure_is_uncertain, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_resolve_id_null_args,
                                          setup, teardown),
     };
 
