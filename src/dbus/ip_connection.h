@@ -32,6 +32,12 @@
 #define IP_ERR_NO_REPLY         (-ETIMEDOUT) /* org.freedesktop.DBus.Error.NoReply        */
 #define IP_ERR_INVALID_ARGS     (-EINVAL)    /* org.freedesktop.DBus.Error.InvalidArgs     */
 #define IP_ERR_NOT_CONNECTED    (-ENOTCONN)  /* no bus connection                          */
+/* The requested interface is not present on the object.  This is a
+ * confirmed API-availability failure, not a transient read error: callers
+ * that support an interface fallback (e.g. EventDevice → UdevDevice) may
+ * safely retry the alternative interface, while transient/object/property
+ * errors must remain uncertain. */
+#define IP_ERR_UNKNOWN_INTERFACE (-ENXIO)    /* org.freedesktop.DBus.Error.UnknownInterface */
 #define IP_ERR_INTERNAL         (-EIO)       /* other / unexpected sd-bus failure          */
 #define IP_ERR_INCOMPATIBLE      (-ENOSYS)    /* version too old / incompatible              */
 #define IP_ERR_UNVERIFIED        (-EKEYREJECTED) /* owner present but not credential-verified */

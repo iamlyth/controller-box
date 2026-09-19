@@ -1699,7 +1699,7 @@ test_manager_recovery_exhaustion_fails_closed(void **state)
  * opposite order.
  */
 static void
-seed_identical_sources(bool reversed)
+seed_identical_sources(bool reversed, bool udev_only)
 {
     const char *phys[2];
     phys[0] = reversed ? "usb-3-2" : "usb-3-1";
@@ -1709,16 +1709,22 @@ seed_identical_sources(bool reversed)
     for (int i = 0; i < 2; i++) {
         char spath[256];
         snprintf(spath, sizeof(spath),
-                 "/org/shadowblip/InputPlumber/devices/source/event%d", i);
+                 "/org/shadowblip/InputPlumber/devices/source/%s%d",
+                 udev_only ? "udev" : "event", i);
         snprintf(g_nip_source_path[i], sizeof(g_nip_source_path[i]),
                  "%s", spath);
-        g_nip_source_unique_id[i][0] = '\0';
+        if (udev_only)
+            snprintf(g_nip_source_unique_id[i],
+                     sizeof(g_nip_source_unique_id[i]), "SN-UDEV-%d", i);
+        else
+            g_nip_source_unique_id[i][0] = '\0';
         snprintf(g_nip_source_phys_path[i], sizeof(g_nip_source_phys_path[i]),
                  "%s", phys[i]);
         snprintf(g_nip_source_bustype[i], sizeof(g_nip_source_bustype[i]),
                  "3");
         g_nip_source_serial[i][0] = '\0';
         g_nip_source_hidraw[i] = 0;
+        g_nip_source_udev[i] = udev_only ? 1 : 0;
         snprintf(g_nip_source_paths[i], sizeof(g_nip_source_paths[i]),
                  "%s", spath);
         g_nip_source_count++;
@@ -1726,7 +1732,8 @@ seed_identical_sources(bool reversed)
 }
 
 static void
-mn_setup_sources_common(mn_fixture *f, bool reversed, bool fail_sources)
+mn_setup_sources_common(mn_fixture *f, bool reversed, bool fail_sources,
+                        bool udev_only)
 {
     snprintf(f->tmp_home, sizeof(f->tmp_home),
              "/tmp/cbx_mn_src_%d", (int)getpid());
@@ -1756,7 +1763,7 @@ mn_setup_sources_common(mn_fixture *f, bool reversed, bool fail_sources)
         snprintf(g_nip_persistent_ids[i], sizeof(g_nip_persistent_ids[i]),
                  "opaque-pid-%d", i);
     }
-    seed_identical_sources(reversed);
+    seed_identical_sources(reversed, udev_only);
 
     if (fail_sources) {
         /* One-shot transient identity read failure in the child, and a
@@ -1785,7 +1792,7 @@ mn_setup_sources(void **state)
     f->joy_device_index = -1;
     f->daemon_pid = -1;
     f->server_pid = -1;
-    mn_setup_sources_common(f, false, false);
+    mn_setup_sources_common(f, false, false, false);
     *state = f;
     return 0;
 }
@@ -1798,7 +1805,20 @@ mn_setup_sources_reversed(void **state)
     f->joy_device_index = -1;
     f->daemon_pid = -1;
     f->server_pid = -1;
-    mn_setup_sources_common(f, true, false);
+    mn_setup_sources_common(f, true, false, false);
+    *state = f;
+    return 0;
+}
+
+static int
+mn_setup_sources_udev(void **state)
+{
+    mn_fixture *f = calloc(1, sizeof(*f));
+    assert_non_null(f);
+    f->joy_device_index = -1;
+    f->daemon_pid = -1;
+    f->server_pid = -1;
+    mn_setup_sources_common(f, false, false, true);
     *state = f;
     return 0;
 }
@@ -1811,7 +1831,7 @@ mn_setup_sources_fail(void **state)
     f->joy_device_index = -1;
     f->daemon_pid = -1;
     f->server_pid = -1;
-    mn_setup_sources_common(f, false, true);
+    mn_setup_sources_common(f, false, true, false);
     *state = f;
     return 0;
 }
@@ -1836,6 +1856,31 @@ test_identity_native_distinct_physical_identities(void **state)
     assert_int_equal(entries[1].status, CBX_COMPOSITE_IDENTITY_OK);
     assert_string_equal(entries[0].ident.id, "USB:phys:usb-3-1");
     assert_string_equal(entries[1].ident.id, "USB:phys:usb-3-2");
+}
+
+/* Inject UnknownInterface on the wire for EventDevice property reads while
+ * UdevDevice is readable.  The production backend must translate the named
+ * error to -ENXIO and permit UdevDevice fallback.  The fixture registers a
+ * rejecting EventDevice vtable; this tests error translation, not real-service
+ * interface discovery or hardware conformance. */
+static void
+test_identity_native_udev_interface_fallback(void **state)
+{
+    mn_fixture *f = *state;
+    cbx_device_model model;
+    cbx_device_model_init(&model);
+    assert_int_equal(cbx_objectmanager_enumerate(f->backend, f->bus, &model),
+                     0);
+
+    cbx_composite_identity_entry entries[CBX_MAX_COMPOSITES];
+    int count = 0;
+    assert_int_equal(cbx_model_extract_identities(f->backend, f->bus, &model,
+                                                  entries, &count), 0);
+    assert_int_equal(count, 2);
+    assert_int_equal(entries[0].status, CBX_COMPOSITE_IDENTITY_OK);
+    assert_int_equal(entries[1].status, CBX_COMPOSITE_IDENTITY_OK);
+    assert_string_equal(entries[0].ident.id, "USB:SN-UDEV-0");
+    assert_string_equal(entries[1].ident.id, "USB:SN-UDEV-1");
 }
 
 /*
@@ -2025,6 +2070,9 @@ main(void)
         cmocka_unit_test_setup_teardown(
             test_identity_native_distinct_physical_identities,
             mn_setup_sources, mn_teardown),
+        cmocka_unit_test_setup_teardown(
+            test_identity_native_udev_interface_fallback,
+            mn_setup_sources_udev, mn_teardown),
         cmocka_unit_test_setup_teardown(
             test_identity_native_reversed_reconnect_restores_order,
             mn_setup_sources_reversed, mn_teardown),

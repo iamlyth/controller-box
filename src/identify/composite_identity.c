@@ -11,6 +11,7 @@
 
 #include "dbus/ip_composite.h"   /* ip_composite_get_source_device_paths */
 #include "dbus/ip_source.h"      /* ip_source_get_*                    */
+#include "dbus/ip_connection.h"  /* IP_ERR_UNKNOWN_INTERFACE           */
 
 #include <errno.h>
 #include <stdio.h>
@@ -67,36 +68,63 @@ copy_trimmed_token(const char *begin, const char *end, char *out, size_t out_siz
  * Probe the shared evdev/udev identification property set
  * (UniqueId/PhysPath/IdBustype, SPEC §10.2) on one interface subtype.
  * `iface` is IP_IFACE_SOURCE_EVENT or IP_IFACE_SOURCE_UDEV.  Returns true
- * when at least one read succeeded, and sets *out_read_failed when any read
- * failed so a partial/transient failure can be distinguished from a
- * confirmed identity-less device.  The three values are heap-allocated on
- * success; the caller owns them.
+ * when at least one read succeeded.  A false result is split into two
+ * cases: all three reads returned -ENXIO (the interface is absent and a
+ * UdevDevice retry is valid), or at least one read failed for another reason
+ * (the source is uncertain and must not be retried as another interface).
+ * This distinction is important with the native sd-bus backend, where a
+ * DBus UnknownInterface error is translated to -ENXIO while object,
+ * property, and transport failures retain their own error codes.
+ * The three values are heap-allocated on success; the caller owns them.
  */
 static bool
 probe_evdev_props(const ip_dbus_backend *backend, ip_bus_handle bus,
                   const char *source_path, const char *iface,
                   char **unique_id, char **phys_path, char **id_bustype,
-                  bool *out_read_failed)
+                  bool *out_read_failed, bool *out_interface_absent)
 {
     bool any_ok = false;
     bool failed = false;
+    int absent_reads = 0;
+    const int property_count = 3;
+    int rc;
 
-    if (ip_source_get_unique_id(backend, bus, source_path, iface,
-                                unique_id) != 0)
-        failed = true;
-    else
+    rc = ip_source_get_unique_id(backend, bus, source_path, iface,
+                                 unique_id);
+    if (rc == 0)
         any_ok = true;
-    if (ip_source_get_phys_path(backend, bus, source_path, iface,
-                                phys_path) != 0)
-        failed = true;
+    else if (rc == IP_ERR_UNKNOWN_INTERFACE)
+        absent_reads++;
     else
-        any_ok = true;
-    if (ip_source_get_id_bustype(backend, bus, source_path, iface,
-                                 id_bustype) != 0)
         failed = true;
-    else
-        any_ok = true;
 
+    rc = ip_source_get_phys_path(backend, bus, source_path, iface,
+                                 phys_path);
+    if (rc == 0)
+        any_ok = true;
+    else if (rc == IP_ERR_UNKNOWN_INTERFACE)
+        absent_reads++;
+    else
+        failed = true;
+
+    rc = ip_source_get_id_bustype(backend, bus, source_path, iface,
+                                  id_bustype);
+    if (rc == 0)
+        any_ok = true;
+    else if (rc == IP_ERR_UNKNOWN_INTERFACE)
+        absent_reads++;
+    else
+        failed = true;
+
+    /* A partially readable interface is not an absent interface.  Treat a
+     * missing one of the contract properties as an incomplete snapshot even
+     * when another property supplied a plausible identity. */
+    if (any_ok && absent_reads > 0)
+        failed = true;
+
+    if (out_interface_absent)
+        *out_interface_absent = !any_ok && absent_reads == property_count &&
+                                !failed;
     if (out_read_failed)
         *out_read_failed = failed;
     return any_ok;
@@ -133,18 +161,26 @@ extract_from_source(const ip_dbus_backend *backend, ip_bus_handle bus,
         /* EventDevice and UdevDevice expose the same identification property
          * set (SPEC §10.2); probe EventDevice first and fall back to
          * UdevDevice so a non-event source (e.g. iio:deviceN) is not lost. */
+        bool event_absent = false;
         bool event_ok = probe_evdev_props(backend, bus, source_path,
                                           IP_IFACE_SOURCE_EVENT,
                                           &unique_id, &phys_path,
-                                          &id_bustype, &read_failed);
-        if (!event_ok) {
-            /* No EventDevice property was readable: retry the same set on
-             * UdevDevice.  The retry supersedes the EventDevice attempt, so
-             * only the retry's failures are reported. */
-            (void)probe_evdev_props(backend, bus, source_path,
-                                    IP_IFACE_SOURCE_UDEV,
-                                    &unique_id, &phys_path,
-                                    &id_bustype, &read_failed);
+                                          &id_bustype, &read_failed,
+                                          &event_absent);
+        if (!event_ok && event_absent) {
+            /* Only an authoritative UnknownInterface result permits the
+             * UdevDevice retry.  Do not conceal a transient/object/property
+             * failure by probing a second interface and accepting a partial
+             * answer.  A source object with neither supported interface is
+             * uncertain, not a confirmed empty device. */
+            bool udev_absent = false;
+            bool udev_ok = probe_evdev_props(backend, bus, source_path,
+                                             IP_IFACE_SOURCE_UDEV,
+                                             &unique_id, &phys_path,
+                                             &id_bustype, &read_failed,
+                                             &udev_absent);
+            if (!udev_ok && udev_absent)
+                read_failed = true;
         }
     }
 

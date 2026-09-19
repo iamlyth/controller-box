@@ -84,6 +84,7 @@ extern char   g_nip_source_phys_path[NIP_MAX_SOURCES][64];
 extern char   g_nip_source_bustype[NIP_MAX_SOURCES][16];
 extern char   g_nip_source_serial[NIP_MAX_SOURCES][64];
 extern char   g_nip_source_hidraw[NIP_MAX_SOURCES]; /* 1 = HIDRawDevice */
+extern char   g_nip_source_udev[NIP_MAX_SOURCES];   /* 1 = UdevDevice */
 extern int    g_nip_source_count;
 
 /* ManageAllDevices is a writable boolean on the Manager interface. */

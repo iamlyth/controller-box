@@ -1326,6 +1326,17 @@ translate_sd_error(int rc, const sd_bus_error *error)
     if (sd_bus_error_has_name(error,
             "org.freedesktop.DBus.Error.InvalidArgs"))
         return IP_ERR_INVALID_ARGS;
+    /* sd-bus commonly reports UnknownInterface as -EBADR.  That errno is
+     * indistinguishable from a malformed/failed property operation to the
+     * callers that probe the EventDevice then UdevDevice interfaces.  Map
+     * only this precise DBus error to the established "interface absent"
+     * value used by the test backend (-ENXIO).  UnknownObject,
+     * UnknownProperty, transport errors, and all other failures remain
+     * failures: falling back after those could turn a transient read into a
+     * misleading weak identity. */
+    if (sd_bus_error_has_name(error,
+            "org.freedesktop.DBus.Error.UnknownInterface"))
+        return IP_ERR_UNKNOWN_INTERFACE;
     return rc;  /* already negative errno */
 }
 

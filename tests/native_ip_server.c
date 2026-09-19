@@ -44,6 +44,7 @@ char   g_nip_source_phys_path[NIP_MAX_SOURCES][64];
 char   g_nip_source_bustype[NIP_MAX_SOURCES][16];
 char   g_nip_source_serial[NIP_MAX_SOURCES][64];
 char   g_nip_source_hidraw[NIP_MAX_SOURCES];
+char   g_nip_source_udev[NIP_MAX_SOURCES];
 int    g_nip_source_count = 0;
 
 int    g_nip_manage_all_devices = 0;
@@ -267,6 +268,34 @@ static const sd_bus_vtable source_vtable[] = {
                     SD_BUS_VTABLE_PROPERTY_CONST),
     SD_BUS_PROPERTY("Name", "s", source_property_get, 0,
                     SD_BUS_VTABLE_PROPERTY_CONST),
+    SD_BUS_VTABLE_END
+};
+
+/* Keep the native fixture's first-interface probe honest.  sd-bus's
+ * Properties implementation otherwise reports UnknownProperty for a
+ * completely unexported interface, while a real InputPlumber source may
+ * report UnknownInterface.  Exporting a rejecting EventDevice vtable lets
+ * the fixture exercise the production UnknownInterface translation without
+ * advertising EventDevice in GetManagedObjects. */
+static int
+source_absent_property_get(sd_bus *bus, const char *path,
+                           const char *interface, const char *property,
+                           sd_bus_message *reply, void *userdata,
+                           sd_bus_error *error)
+{
+    (void)bus; (void)path; (void)interface; (void)property;
+    (void)reply; (void)userdata;
+    (void)sd_bus_error_set_const(
+        error, "org.freedesktop.DBus.Error.UnknownInterface",
+        "EventDevice interface is not available for this source");
+    return -ENXIO;
+}
+
+static const sd_bus_vtable source_absent_event_vtable[] = {
+    SD_BUS_VTABLE_START(0),
+    SD_BUS_PROPERTY("UniqueId", "s", source_absent_property_get, 0, 0),
+    SD_BUS_PROPERTY("PhysPath", "s", source_absent_property_get, 0, 0),
+    SD_BUS_PROPERTY("IdBustype", "s", source_absent_property_get, 0, 0),
     SD_BUS_VTABLE_END
 };
 
@@ -966,8 +995,9 @@ method_get_managed_objects(sd_bus_message *m, void *userdata, sd_bus_error *erro
     /* Source objects (physical controllers, SPEC §6.2). */
     for (int i = 0; i < g_nip_source_count; i++) {
         const char *siface = g_nip_source_hidraw[i] ?
-            "org.shadowblip.Input.Source.HIDRawDevice" :
-            "org.shadowblip.Input.Source.EventDevice";
+            IP_IFACE_SOURCE_HIDRAW :
+            (g_nip_source_udev[i] ? IP_IFACE_SOURCE_UDEV :
+                                     IP_IFACE_SOURCE_EVENT);
         rc = sd_bus_message_open_container(reply, 'e', "oa{sa{sv}}");
         if (rc < 0) goto fail;
         rc = sd_bus_message_append(reply, "o", g_nip_source_path[i]);
@@ -1074,11 +1104,20 @@ run_server(const char *address)
     /* Physical source device objects (SPEC §6.2, task 6). */
     for (int i = 0; i < g_nip_source_count; i++) {
         const char *siface = g_nip_source_hidraw[i] ?
-            IP_IFACE_SOURCE_HIDRAW : IP_IFACE_SOURCE_EVENT;
+            IP_IFACE_SOURCE_HIDRAW :
+            (g_nip_source_udev[i] ? IP_IFACE_SOURCE_UDEV :
+                                     IP_IFACE_SOURCE_EVENT);
         if ((rc = sd_bus_add_object_vtable(bus, NULL,
               g_nip_source_path[i], siface, source_vtable, NULL)) < 0) {
             sd_bus_unref(bus);
             return 26;
+        }
+        if (g_nip_source_udev[i] &&
+            (rc = sd_bus_add_object_vtable(
+                bus, NULL, g_nip_source_path[i], IP_IFACE_SOURCE_EVENT,
+                source_absent_event_vtable, NULL)) < 0) {
+            sd_bus_unref(bus);
+            return 27;
         }
     }
 
@@ -1132,6 +1171,7 @@ void nip_reset_server_state(int num_composites)
     memset(g_nip_source_bustype, 0, sizeof(g_nip_source_bustype));
     memset(g_nip_source_serial, 0, sizeof(g_nip_source_serial));
     memset(g_nip_source_hidraw, 0, sizeof(g_nip_source_hidraw));
+    memset(g_nip_source_udev, 0, sizeof(g_nip_source_udev));
     g_nip_source_count = 0;
     g_nip_fail_next_create = 0;
     g_nip_fail_next_dbus_devices = 0;

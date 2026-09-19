@@ -8,6 +8,7 @@
  * HIDRaw) and that a transient read failure is not reported as absence.
  */
 #include "dbus_mock.h"
+#include "dbus/ip_connection.h"   /* IP_ERR_UNKNOWN_INTERFACE */
 #include "identify/composite_identity.h"
 #include "dbus/ip_device_model.h"
 
@@ -152,7 +153,14 @@ test_extract_udev_serial(void **state)
     ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
         "SourceDevicePaths",
         "/org/shadowblip/InputPlumber/devices/source/iio:device0");
-    /* No EventDevice expectations: the UdevDevice interface must be probed. */
+    /* EventDevice is confirmed absent (UnknownInterface), so the UdevDevice
+     * interface must be probed. */
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_SOURCE_EVENT, "UniqueId",
+                              IP_ERR_UNKNOWN_INTERFACE);
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_SOURCE_EVENT, "PhysPath",
+                              IP_ERR_UNKNOWN_INTERFACE);
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_SOURCE_EVENT, "IdBustype",
+                              IP_ERR_UNKNOWN_INTERFACE);
     ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_SOURCE_UDEV, "UniqueId",
                            "SN-UDEV-1");
     ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_SOURCE_UDEV, "PhysPath", "");
@@ -164,6 +172,82 @@ test_extract_udev_serial(void **state)
     assert_int_equal(rc, 0);
     assert_int_equal(ident.layer, CBX_IDENTITY_LAYER_USB_SERIAL);
     assert_string_equal(ident.id, "USB:SN-UDEV-1");
+}
+
+/*
+ * A transient EventDevice failure is NOT an absent interface.  When
+ * EventDevice exists but its properties cannot be read, borrowing a valid
+ * UdevDevice identity would conceal the uncertain snapshot and could bind
+ * the composite to the wrong saved assignment.  The result must remain
+ * uncertain (QUERY_FAILED) with the ORDER fallback, even though UdevDevice
+ * would answer.
+ */
+static void
+test_extract_udev_not_used_on_transient_event_failure(void **state)
+{
+    ci_fixture *f = FIX(state);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+        "SourceDevicePaths",
+        "/org/shadowblip/InputPlumber/devices/source/event0");
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_SOURCE_EVENT, "UniqueId",
+                              -EIO);
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_SOURCE_EVENT, "PhysPath",
+                              -EIO);
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_SOURCE_EVENT, "IdBustype",
+                              -EIO);
+    /* A valid UdevDevice identity must not be used to paper over the
+     * EventDevice failure. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_SOURCE_UDEV, "UniqueId",
+                           "SN-UDEV-1");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_SOURCE_UDEV, "PhysPath", "");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_SOURCE_UDEV, "IdBustype", "3");
+
+    cbx_identity ident;
+    cbx_composite_identity_status status = CBX_COMPOSITE_IDENTITY_OK;
+    int rc = cbx_composite_identity_extract(f->backend, f->mock.bus,
+                                            COMP_PATH, 5, &ident, &status);
+    assert_int_equal(rc, 0);
+    assert_int_equal(status, CBX_COMPOSITE_IDENTITY_QUERY_FAILED);
+    assert_int_equal(ident.layer, CBX_IDENTITY_LAYER_ORDER);
+    assert_string_equal(ident.id, "ORDER:5");
+    /* The UdevDevice probe was never issued. */
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_SOURCE_UDEV,
+                                             "UniqueId"), 0);
+}
+
+/*
+ * Both evdev interfaces confirmed absent for a path that names an evdev
+ * source is an inconsistent snapshot: neither borrowed nor weak-OK, it must
+ * stay uncertain so no saved preference is erased or mismatched.
+ */
+static void
+test_extract_both_evdev_interfaces_absent_is_uncertain(void **state)
+{
+    ci_fixture *f = FIX(state);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+        "SourceDevicePaths",
+        "/org/shadowblip/InputPlumber/devices/source/event0");
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_SOURCE_EVENT, "UniqueId",
+                              IP_ERR_UNKNOWN_INTERFACE);
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_SOURCE_EVENT, "PhysPath",
+                              IP_ERR_UNKNOWN_INTERFACE);
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_SOURCE_EVENT, "IdBustype",
+                              IP_ERR_UNKNOWN_INTERFACE);
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_SOURCE_UDEV, "UniqueId",
+                              IP_ERR_UNKNOWN_INTERFACE);
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_SOURCE_UDEV, "PhysPath",
+                              IP_ERR_UNKNOWN_INTERFACE);
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_SOURCE_UDEV, "IdBustype",
+                              IP_ERR_UNKNOWN_INTERFACE);
+
+    cbx_identity ident;
+    cbx_composite_identity_status status = CBX_COMPOSITE_IDENTITY_OK;
+    int rc = cbx_composite_identity_extract(f->backend, f->mock.bus,
+                                            COMP_PATH, 5, &ident, &status);
+    assert_int_equal(rc, 0);
+    assert_int_equal(status, CBX_COMPOSITE_IDENTITY_QUERY_FAILED);
+    assert_int_equal(ident.layer, CBX_IDENTITY_LAYER_ORDER);
+    assert_string_equal(ident.id, "ORDER:5");
 }
 
 static void
@@ -232,6 +316,35 @@ test_extract_query_failure_is_uncertain(void **state)
     assert_int_equal(rc, 0);
     assert_int_equal(status, CBX_COMPOSITE_IDENTITY_QUERY_FAILED);
     assert_string_equal(ident.id, "ORDER:7");
+}
+
+/* A failed EventDevice property read is not an absent interface.  Even if
+ * UdevDevice would provide a plausible identity, retrying it could hide a
+ * transient read and bind the wrong saved preference. */
+static void
+test_extract_property_failure_does_not_fallback(void **state)
+{
+    ci_fixture *f = FIX(state);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                           "SourceDevicePaths",
+                           "/org/shadowblip/InputPlumber/devices/source/event0");
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_SOURCE_EVENT,
+                              "UniqueId", -EIO);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_SOURCE_UDEV,
+                           "UniqueId", "SHOULD-NOT-BE-USED");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_SOURCE_UDEV,
+                           "PhysPath", "");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_SOURCE_UDEV,
+                           "IdBustype", "3");
+
+    cbx_identity ident;
+    cbx_composite_identity_status status = CBX_COMPOSITE_IDENTITY_OK;
+    assert_int_equal(cbx_composite_identity_extract(f->backend, f->mock.bus,
+        COMP_PATH, 4, &ident, &status), 0);
+    assert_int_equal(status, CBX_COMPOSITE_IDENTITY_QUERY_FAILED);
+    assert_string_equal(ident.id, "ORDER:4");
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_SOURCE_UDEV,
+                                             "UniqueId"), 0);
 }
 
 static void
@@ -355,12 +468,20 @@ main(void)
                                          setup, teardown),
         cmocka_unit_test_setup_teardown(test_extract_udev_serial,
                                          setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            test_extract_udev_not_used_on_transient_event_failure,
+            setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            test_extract_both_evdev_interfaces_absent_is_uncertain,
+            setup, teardown),
         cmocka_unit_test_setup_teardown(test_extract_order_fallback_absent,
                                          setup, teardown),
         cmocka_unit_test_setup_teardown(
             test_extract_malformed_nonempty_source_list_is_uncertain,
             setup, teardown),
         cmocka_unit_test_setup_teardown(test_extract_query_failure_is_uncertain,
+                                         setup, teardown),
+        cmocka_unit_test_setup_teardown(test_extract_property_failure_does_not_fallback,
                                          setup, teardown),
         cmocka_unit_test_setup_teardown(test_extract_source_with_empty_props_is_confirmed_weak,
                                          setup, teardown),
