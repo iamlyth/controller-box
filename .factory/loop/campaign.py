@@ -644,6 +644,12 @@ def run_implementation_phase(
                 if not result.success:
                     print(f"  {label}: {name} failed (exit {result.exit_code})",
                           file=sys.stderr)
+                    if result.stderr:
+                        print(f"  {label}: {name} stderr: {result.stderr[:500]}",
+                              file=sys.stderr)
+                    if result.stdout:
+                        print(f"  {label}: {name} stdout: {result.stdout[:300]}",
+                              file=sys.stderr)
             except Exception as exc:
                 all_dev_results.append(SubagentResult(
                     name=name, success=False, stdout="",
