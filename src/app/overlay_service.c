@@ -1070,17 +1070,30 @@ overlay_validate_identities(cbx_overlay_service_ctx *svc)
 }
 
 /* Identity entry for composite `i`, or an all-zero entry when the current
- * reconciliation pass did not validate one.  On a failed identity pass
- * `identity_count` is 0 while `svc->composites` still has model rows to
- * render, so callers must never index the retained snapshot directly. */
+ * reconciliation pass did not validate one.  `identities_valid` is the
+ * authoritative gate: the composite-set-changed branch of
+ * cbx_reconcile_startup_targets clears that flag without clearing
+ * identity_count, so checking the count alone could pair a new composite
+ * path with the previous pass's identity at the same index.  A caller must
+ * therefore never read the retained snapshot directly. */
 static const cbx_composite_identity_entry *
 overlay_identity_for(const cbx_overlay_service_ctx *svc, int i)
 {
     static const cbx_composite_identity_entry none;
-    if (svc && i >= 0 && i < svc->identity_count)
+    if (svc && svc->identities_valid && i >= 0 && i < svc->identity_count)
         return &svc->identities[i];
     return &none;
 }
+
+#ifdef CBX_TESTING
+/* Test seam: prove a failed identity pass cannot expose the retained
+ * snapshot through the composite-info fill path. */
+const cbx_composite_identity_entry *
+cbx_overlay_identity_for_test(const cbx_overlay_service_ctx *svc, int i)
+{
+    return overlay_identity_for(svc, i);
+}
+#endif
 
 /* ================================================================== */
 /*  Helper: set InterceptMode = PASS on all composites                 */

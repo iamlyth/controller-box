@@ -450,6 +450,12 @@ void cbx_overlay_install_recovery_callbacks(cbx_overlay_service_ctx *svc);
  * topology shrink (task 6). */
 int cbx_overlay_merge_grid_for_test(cbx_assignments *a,
                                     const cbx_select_grid *grid);
+
+/* Test seam for the production identity-snapshot accessor used when filling
+ * composite info.  Proves a failed identity pass cannot expose the retained
+ * snapshot from a previous enumeration (task 6). */
+const cbx_composite_identity_entry *
+cbx_overlay_identity_for_test(const cbx_overlay_service_ctx *svc, int i);
 #endif /* CBX_TESTING */
 
 #endif /* CBX_OVERLAY_SERVICE_H */

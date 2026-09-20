@@ -2105,6 +2105,182 @@ test_owner_reacquisition_stable_identities_changed_paths(void **state)
     free(order);
 }
 
+/*
+ * Owner reacquisition must restore each controller's saved *preferred
+ * profile* too, keyed by the same physical identity and applied to the
+ * composite that now owns that identity after the identity→path mapping
+ * changed (SPEC §6.2/§7.4).  The routing/order half is asserted above; this
+ * proves the profile half, which a composite-index-based restore would put
+ * on the wrong controller.
+ */
+static void
+test_owner_reacquisition_restores_saved_profiles(void **state)
+{
+    native_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    cbx_overlay_install_recovery_callbacks(svc);
+    assert_true(svc->backend_ready);
+
+    /* Saved preferences: usb-3-1 → P1/"custom", usb-3-2 → P2/"gamepad". */
+    cbx_assignments_init(&svc->assignments);
+    svc->assignments.assignment_count = 2;
+    snprintf(svc->assignments.assignments[0].id, CBX_MAX_ID_LEN,
+             "USB:phys:usb-3-1");
+    svc->assignments.assignments[0].slot = 0;
+    snprintf(svc->assignments.assignments[0].profile, CBX_MAX_PROFILE_LEN,
+             "custom");
+    snprintf(svc->assignments.assignments[1].id, CBX_MAX_ID_LEN,
+             "USB:phys:usb-3-2");
+    svc->assignments.assignments[1].slot = 1;
+    snprintf(svc->assignments.assignments[1].profile, CBX_MAX_PROFILE_LEN,
+             "gamepad");
+    assert_int_equal(cbx_assignments_save(&svc->assignments), 0);
+
+    /* Phase 1: owner loss → fail closed. */
+    kill(f->server_pid, SIGTERM);
+    waitpid(f->server_pid, NULL, 0);
+    f->server_pid = -1;
+    uint32_t t0 = SDL_GetTicks();
+    while (svc->backend_ready && SDL_GetTicks() - t0 < 2000) {
+        svc->conn.backend->process(svc->conn.bus);
+        SDL_Delay(10);
+    }
+    assert_false(svc->backend_ready);
+
+    /* Phase 2: reconnect with the identity→path mapping reversed, so
+     * usb-3-1 now enumerates as CompositeDevice1. */
+    f->server_pid = restart_native_server_with_sources(f, true);
+    assert_true(f->server_pid > 0);
+    t0 = SDL_GetTicks();
+    while (!svc->backend_ready && SDL_GetTicks() - t0 < 2000) {
+        cbx_overlay_service_step(svc);
+        SDL_Delay(10);
+    }
+    assert_true(svc->backend_ready);
+
+    /* Each saved profile must follow its physical identity to the current
+     * path, not stay on the composite index it was saved under. */
+    char *p0 = NULL;
+    char *p1 = NULL;
+    assert_int_equal(ip_composite_get_profile_path(svc->conn.backend,
+                     svc->conn.bus, COMP_PATH_0, &p0), 0);
+    assert_int_equal(ip_composite_get_profile_path(svc->conn.backend,
+                     svc->conn.bus, COMP_PATH_1, &p1), 0);
+    assert_non_null(p0);
+    assert_non_null(p1);
+    assert_non_null(strstr(p0, "gamepad.yaml"));
+    assert_non_null(strstr(p1, "custom.yaml"));
+    free(p0);
+    free(p1);
+}
+
+/*
+ * A saved preferred profile that no longer exists must degrade to a valid
+ * alternative (the built-in default) and repair the durable preference, so
+ * the dead id is not re-resolved on every reconnect and the engine never
+ * stays on an unavailable profile (task 6: invalid preferred properties
+ * with valid alternatives).
+ */
+static void
+test_owner_reacquisition_invalid_profile_falls_back(void **state)
+{
+    native_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    cbx_overlay_install_recovery_callbacks(svc);
+    assert_true(svc->backend_ready);
+
+    cbx_assignments_init(&svc->assignments);
+    svc->assignments.assignment_count = 1;
+    snprintf(svc->assignments.assignments[0].id, CBX_MAX_ID_LEN,
+             "USB:phys:usb-3-1");
+    svc->assignments.assignments[0].slot = 0;
+    snprintf(svc->assignments.assignments[0].profile, CBX_MAX_PROFILE_LEN,
+             "deleted-profile");
+    assert_int_equal(cbx_assignments_save(&svc->assignments), 0);
+
+    kill(f->server_pid, SIGTERM);
+    waitpid(f->server_pid, NULL, 0);
+    f->server_pid = -1;
+    uint32_t t0 = SDL_GetTicks();
+    while (svc->backend_ready && SDL_GetTicks() - t0 < 2000) {
+        svc->conn.backend->process(svc->conn.bus);
+        SDL_Delay(10);
+    }
+    assert_false(svc->backend_ready);
+
+    f->server_pid = restart_native_server_with_sources(f, true);
+    assert_true(f->server_pid > 0);
+    t0 = SDL_GetTicks();
+    while (!svc->backend_ready && SDL_GetTicks() - t0 < 2000) {
+        cbx_overlay_service_step(svc);
+        SDL_Delay(10);
+    }
+    assert_true(svc->backend_ready);
+
+    /* usb-3-1 now lives on CompositeDevice1; the unavailable preference
+     * must have fallen back to the shipped default there. */
+    char *p1 = NULL;
+    assert_int_equal(ip_composite_get_profile_path(svc->conn.backend,
+                     svc->conn.bus, COMP_PATH_1, &p1), 0);
+    assert_non_null(p1);
+    assert_non_null(strstr(p1, "default.yaml"));
+    free(p1);
+
+    /* The durable preference is repaired in place, not left dead. */
+    cbx_assignments on_disk;
+    cbx_assignments_init(&on_disk);
+    assert_int_equal(cbx_assignments_load(&on_disk), 0);
+    assert_int_equal(on_disk.assignment_count, 1);
+    assert_string_equal(on_disk.assignments[0].id, "USB:phys:usb-3-1");
+    assert_int_equal(on_disk.assignments[0].slot, 0);
+    assert_string_equal(on_disk.assignments[0].profile, "default");
+}
+
+/*
+ * A failed identity pass must not expose the previous pass's retained
+ * snapshot through the composite-info fill path.  The composite-set-changed
+ * branch of cbx_reconcile_startup_targets clears identities_valid without
+ * clearing identity_count, so the accessor must gate on the flag, not the
+ * count alone, or a new composite path could inherit an unrelated identity.
+ */
+static void
+test_identity_snapshot_hidden_when_invalid(void **state)
+{
+    native_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    /* Seed a retained snapshot exactly as a successful pass would. */
+    svc->identity_count = 2;
+    snprintf(svc->identities[0].path, CBX_MAX_PATH_LEN, "%s", COMP_PATH_0);
+    snprintf(svc->identities[0].ident.id, CBX_IDENTITY_MAX_LEN, "%s",
+             "USB:phys:usb-a");
+    svc->identities[0].ident.layer = CBX_IDENTITY_LAYER_USB_PORT;
+    svc->identities[0].status = CBX_COMPOSITE_IDENTITY_OK;
+    snprintf(svc->identities[1].path, CBX_MAX_PATH_LEN, "%s", COMP_PATH_1);
+    snprintf(svc->identities[1].ident.id, CBX_IDENTITY_MAX_LEN, "%s",
+             "USB:phys:usb-b");
+    svc->identities[1].ident.layer = CBX_IDENTITY_LAYER_USB_PORT;
+    svc->identities[1].status = CBX_COMPOSITE_IDENTITY_OK;
+
+    svc->identities_valid = true;
+    assert_string_equal(cbx_overlay_identity_for_test(svc, 0)->ident.id,
+                        "USB:phys:usb-a");
+    assert_string_equal(cbx_overlay_identity_for_test(svc, 1)->ident.id,
+                        "USB:phys:usb-b");
+
+    /* identities_valid alone invalidates the snapshot; the stale count must
+     * not keep returning the old identity for a changed composite set. */
+    svc->identities_valid = false;
+    assert_string_equal(cbx_overlay_identity_for_test(svc, 0)->ident.id, "");
+    assert_string_equal(cbx_overlay_identity_for_test(svc, 1)->ident.id, "");
+    assert_int_equal(cbx_overlay_identity_for_test(svc, 0)->ident.layer,
+                     CBX_IDENTITY_LAYER_NONE);
+    assert_int_equal(cbx_overlay_identity_for_test(svc, 99)->ident.layer,
+                     CBX_IDENTITY_LAYER_NONE);
+}
+
 /* ================================================================== */
 /*  Task 6 — grid→order merge preserves disconnected preferences        */
 /* ================================================================== */
@@ -2259,6 +2435,15 @@ static const struct CMUnitTest tests[] = {
     /* Task 6 — stable identities resolve to changed paths on reacquisition */
     cmocka_unit_test_setup_teardown(
         test_owner_reacquisition_stable_identities_changed_paths,
+        native_setup, native_teardown),
+    cmocka_unit_test_setup_teardown(
+        test_owner_reacquisition_restores_saved_profiles,
+        native_setup, native_teardown),
+    cmocka_unit_test_setup_teardown(
+        test_owner_reacquisition_invalid_profile_falls_back,
+        native_setup, native_teardown),
+    cmocka_unit_test_setup_teardown(
+        test_identity_snapshot_hidden_when_invalid,
         native_setup, native_teardown),
 
     /* Task 6 — grid→order merge preserves disconnected preferences */
