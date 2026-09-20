@@ -1976,6 +1976,135 @@ test_owner_reacquisition_restores_gamepad_order(void **state)
     free(order);
 }
 
+/*
+ * Restart the InputPlumber-compatible server with two *identical* USB
+ * controllers that differ only by physical port path, so the saved stable
+ * identities must resolve against properties rather than the opaque
+ * PersistentId.  `reversed` swaps which composite index each port enumerates
+ * as, modelling a reconnect where the identity→object-path mapping changed.
+ */
+static pid_t
+restart_native_server_with_sources(native_fixture *f, bool reversed)
+{
+    nip_reset_server_state(2);
+    for (int i = 0; i < 2; i++) {
+        snprintf(g_nip_comp_names[i], sizeof(g_nip_comp_names[i]),
+                 "TestController%d", i);
+        snprintf(g_nip_persistent_ids[i], sizeof(g_nip_persistent_ids[i]),
+                 "ORDER:%d", i);
+        snprintf(g_nip_dbus_devices[i], sizeof(g_nip_dbus_devices[i]),
+                 "/org/shadowblip/InputPlumber/CompositeDevice%d", i);
+        g_nip_intercept_mode[i] = IP_INTERCEPT_PASS;
+    }
+
+    const char *phys[2] = { reversed ? "usb-3-2" : "usb-3-1",
+                            reversed ? "usb-3-1" : "usb-3-2" };
+    for (int i = 0; i < 2; i++) {
+        snprintf(g_nip_source_path[i], sizeof(g_nip_source_path[i]),
+                 "/org/shadowblip/InputPlumber/devices/source/event%d", i);
+        g_nip_source_unique_id[i][0] = '\0';
+        snprintf(g_nip_source_phys_path[i],
+                 sizeof(g_nip_source_phys_path[i]), "%s", phys[i]);
+        snprintf(g_nip_source_bustype[i], sizeof(g_nip_source_bustype[i]),
+                 "3");
+        g_nip_source_serial[i][0] = '\0';
+        g_nip_source_hidraw[i] = 0;
+        g_nip_source_udev[i] = 0;
+        /* SourceDevicePaths reports the device node; the properties live on
+         * the derived DBus source object above. */
+        snprintf(g_nip_source_paths[i], sizeof(g_nip_source_paths[i]),
+                 "/dev/input/event%d", i);
+        g_nip_source_count++;
+    }
+
+    const nip_server_config cfg = { .num_composites = 2,
+                                    .version = "0.78.0" };
+    return nip_fork_server(f->bus_address, &cfg);
+}
+
+/*
+ * Owner reacquisition with two *stable* physical identities must resolve the
+ * saved identity→slot/profile preferences and GamepadOrder against the new
+ * object paths after the identity→path mapping changed.  This is the
+ * lifecycle regression the startup/hotplug acceptance requires: a restart is
+ * not enough by itself because the mapping must be re-derived from the
+ * reconnecting controllers' source properties.
+ */
+static void
+test_owner_reacquisition_stable_identities_changed_paths(void **state)
+{
+    native_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    cbx_overlay_install_recovery_callbacks(svc);
+    assert_true(svc->backend_ready);
+
+    /* Saved preferences keyed by physical port path: P1 = usb-3-1,
+     * P2 = usb-3-2, with a deliberately reversed GamepadOrder. */
+    cbx_assignments_init(&svc->assignments);
+    svc->assignments.assignment_count = 2;
+    snprintf(svc->assignments.assignments[0].id, CBX_MAX_ID_LEN,
+             "USB:phys:usb-3-1");
+    svc->assignments.assignments[0].slot = 0;
+    snprintf(svc->assignments.assignments[1].id, CBX_MAX_ID_LEN,
+             "USB:phys:usb-3-2");
+    svc->assignments.assignments[1].slot = 1;
+    snprintf(svc->assignments.gamepad_order[0], CBX_MAX_ID_LEN,
+             "USB:phys:usb-3-1");
+    snprintf(svc->assignments.gamepad_order[1], CBX_MAX_ID_LEN,
+             "USB:phys:usb-3-2");
+    svc->assignments.gamepad_order_count = 2;
+    assert_int_equal(cbx_assignments_save(&svc->assignments), 0);
+
+    /* Phase 1: owner loss → fail closed. */
+    kill(f->server_pid, SIGTERM);
+    waitpid(f->server_pid, NULL, 0);
+    f->server_pid = -1;
+    uint32_t t0 = SDL_GetTicks();
+    while (svc->backend_ready && SDL_GetTicks() - t0 < 2000) {
+        svc->conn.backend->process(svc->conn.bus);
+        SDL_Delay(10);
+    }
+    assert_false(svc->backend_ready);
+
+    /* Phase 2: reconnect with the identity→path mapping reversed. */
+    f->server_pid = restart_native_server_with_sources(f, true);
+    assert_true(f->server_pid > 0);
+
+    t0 = SDL_GetTicks();
+    while (!svc->backend_ready && SDL_GetTicks() - t0 < 2000) {
+        cbx_overlay_service_step(svc);
+        SDL_Delay(10);
+    }
+    assert_true(svc->backend_ready);
+    assert_true(SDL_GetTicks() - t0 <= 2000);
+    assert_true(svc->model.target_count >= 2);
+
+    /* The identities now live on the opposite composites.  P1's target must
+     * follow usb-3-1 to CompositeDevice1 and P2's target must follow
+     * usb-3-2 to CompositeDevice0. */
+    char *p1_targets = NULL;
+    char *p2_targets = NULL;
+    assert_int_equal(ip_composite_get_target_devices(svc->conn.backend,
+                     svc->conn.bus, COMP_PATH_1, &p1_targets), 0);
+    assert_int_equal(ip_composite_get_target_devices(svc->conn.backend,
+                     svc->conn.bus, COMP_PATH_0, &p2_targets), 0);
+    assert_non_null(p1_targets);
+    assert_non_null(p2_targets);
+    assert_string_equal(p1_targets, svc->model.targets[0].path);
+    assert_string_equal(p2_targets, svc->model.targets[1].path);
+    free(p1_targets);
+    free(p2_targets);
+
+    /* The durable order resolves by identity to the current paths. */
+    char *order = NULL;
+    assert_int_equal(ip_manager_get_gamepad_order(svc->conn.backend,
+                     svc->conn.bus, &order), 0);
+    assert_non_null(order);
+    assert_string_equal(order, COMP_PATH_1 "," COMP_PATH_0);
+    free(order);
+}
+
 /* ================================================================== */
 /*  Task 6 — grid→order merge preserves disconnected preferences        */
 /* ================================================================== */
@@ -2125,6 +2254,11 @@ static const struct CMUnitTest tests[] = {
     /* Task 6 — owner reacquisition restores the durable GamepadOrder */
     cmocka_unit_test_setup_teardown(
         test_owner_reacquisition_restores_gamepad_order,
+        native_setup, native_teardown),
+
+    /* Task 6 — stable identities resolve to changed paths on reacquisition */
+    cmocka_unit_test_setup_teardown(
+        test_owner_reacquisition_stable_identities_changed_paths,
         native_setup, native_teardown),
 
     /* Task 6 — grid→order merge preserves disconnected preferences */

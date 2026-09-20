@@ -429,6 +429,30 @@ overlay_txn_merge_grid(cbx_assignments *a, void *userdata)
     return overlay_merge_grid(a, args->grid);
 }
 
+/* Targeted durable repair: update only the profiles of the saved entries whose
+ * stored profile no longer exists, leaving every other assignment (including
+ * entries for disconnected controllers and newly connected ones) untouched.
+ * This is deliberately narrower than the close-path grid merge, so a startup
+ * profile repair can never create or remove a preference as a side effect. */
+typedef struct {
+    char ids[CBX_MAX_COMPOSITES][CBX_MAX_ID_LEN];
+    char profiles[CBX_MAX_COMPOSITES][CBX_MAX_PROFILE_LEN];
+    int  count;
+} overlay_profile_repair_args;
+
+static int
+overlay_txn_repair_profiles(cbx_assignments *a, void *userdata)
+{
+    overlay_profile_repair_args *args = userdata;
+    for (int i = 0; i < args->count; i++) {
+        int idx = cbx_assign_find_index(a, args->ids[i]);
+        if (idx >= 0)
+            snprintf(a->assignments[idx].profile, CBX_MAX_PROFILE_LEN, "%s",
+                     args->profiles[i]);
+    }
+    return 0;
+}
+
 typedef struct {
     const char *id;
     const char *profile;
@@ -605,6 +629,13 @@ overlay_apply_grid_engine(cbx_overlay_service_ctx *svc, bool clear_all,
     char order[CBX_MAX_COMPOSITES * (CBX_MAX_PATH_LEN + 1)];
     snprintf(order, sizeof(order), "%s", grid_order);
 
+    /* Set when a saved profile was unavailable and a valid alternative was
+     * applied.  On the startup/hotplug restore path this repair must be
+     * persisted so the dead preference is not re-resolved on every pass; the
+     * close/save path already persists its merged grid. */
+    overlay_profile_repair_args repairs;
+    memset(&repairs, 0, sizeof(repairs));
+
     /* Resolve durable order before any engine mutation, from the same
      * checked physical snapshot used by the assignment grid. */
     if (restore_order) {
@@ -678,6 +709,13 @@ overlay_apply_grid_engine(cbx_overlay_service_ctx *svc, bool clear_all,
                             apply_profile);
                     snprintf(svc->grid.rows[i].profile,
                              CBX_GRID_PROFILE_LEN, "%s", apply_profile);
+                    if (repairs.count < CBX_MAX_COMPOSITES) {
+                        copy_id(repairs.ids[repairs.count], CBX_MAX_ID_LEN,
+                                row->id);
+                        copy_id(repairs.profiles[repairs.count],
+                                CBX_MAX_PROFILE_LEN, apply_profile);
+                        repairs.count++;
+                    }
                 }
                 int profile_rc = cbx_profile_cycle_apply(
                     &svc->profile_cycle, &svc->grid, i,
@@ -699,8 +737,35 @@ overlay_apply_grid_engine(cbx_overlay_service_ctx *svc, bool clear_all,
     }
 
     /* Phase 2: Set GamepadOrder on the engine. */
-    return ip_manager_set_gamepad_order(svc->conn.backend, svc->conn.bus,
-                                        order, &svc->model);
+    rc = ip_manager_set_gamepad_order(svc->conn.backend, svc->conn.bus,
+                                      order, &svc->model);
+    if (rc != 0)
+        return rc;
+
+    /* Durable stale-profile repair: persist exactly the fallback profiles so
+     * the dead preferences are not re-resolved on every startup/hotplug pass.
+     * Only the restore path does this (the save path persists its merged
+     * grid), and the update runs under the shared bounded config lock so a
+     * concurrent Manager transaction is serialized against it.  An entry that
+     * is not on disk is left alone rather than created.  The in-memory table
+     * already carries the repair from cbx_profile_cycle_apply, so the
+     * committed snapshot is not copied back over it (that would drop an
+     * in-session assignment that has not been saved yet).  A repair that cannot
+     * be persisted is reported but does not disable the already-working
+     * engine state; the next pass retries. */
+    if (restore_order && repairs.count > 0) {
+        int repair_rc = cbx_assignments_transaction_timeout(
+            overlay_txn_repair_profiles, &repairs, NULL,
+            CBX_OVERLAY_CONFIG_LOCK_TIMEOUT_MS);
+        if (repair_rc != 0) {
+            fprintf(stderr,
+                    "controller-box: could not persist repaired profile "
+                    "assignment (%s); will retry\n",
+                    ip_connection_reason_for_error(repair_rc));
+        }
+    }
+
+    return 0;
 }
 
 /* ================================================================== */

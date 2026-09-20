@@ -43,6 +43,7 @@
 #include "dbus/ip_hotplug.h"
 #include "config/config_settings.h"
 #include "config/config_assignments.h"
+#include "identify/assign.h"          /* cbx_assign_find_index */
 #include "ui/renderer.h"
 #include "overlay/surface_build.h"
 #include "overlay/lifecycle.h"
@@ -1070,6 +1071,9 @@ test_hotplug_composite_add_stale_profile_falls_back(void **state)
     snprintf(saved.profile, sizeof(saved.profile), "%s", "missing");
     svc->assignments.assignments[0] = saved;
     svc->assignments.assignment_count = 1;
+    /* The stale preference is durable state, so persist it before the
+     * reconcile: the repair must update the saved entry, not invent one. */
+    assert_int_equal(cbx_assignments_save(&svc->assignments), 0);
 
     /* The saved profile is not present; default is a valid alternative. */
     memset(&svc->profiles, 0, sizeof(svc->profiles));
@@ -1126,6 +1130,15 @@ test_hotplug_composite_add_stale_profile_falls_back(void **state)
     assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_COMPOSITE,
                                               "LoadProfilePath"), 1);
     assert_string_equal(f->mock.gamepad_order_value, COMP_PATH_0);
+
+    /* The dead preference is repaired durably: the on-disk table names the
+     * fallback profile, so it is not re-resolved on every future pass. */
+    cbx_assignments on_disk;
+    cbx_assignments_init(&on_disk);
+    assert_int_equal(cbx_assignments_load(&on_disk), 0);
+    int repaired = cbx_assign_find_index(&on_disk, "USB:phys:usb-3-1");
+    assert_true(repaired >= 0);
+    assert_string_equal(on_disk.assignments[repaired].profile, "default");
 }
 
 /* Persist an order deliberately opposite to the player-slot ordering. */

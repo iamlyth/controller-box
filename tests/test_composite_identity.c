@@ -532,6 +532,50 @@ test_model_extract_identities(void **state)
     assert_string_equal(entries[1].ident.id, "USB:SN12345");
 }
 
+/*
+ * Topology compaction must not shift a live weak controller's connection-order
+ * identity.  ORDER:n is derived from the composite's own path index (the
+ * tracked creation order), not from the survivor's position in the current
+ * composite array, so removing another controller leaves it unchanged.
+ */
+static void
+test_order_survives_topology_compaction(void **state)
+{
+    ci_fixture *f = FIX(state);
+    ip_dbus_mock_reset(&f->mock);
+
+    cbx_device_model model;
+    cbx_device_model_init(&model);
+    assert_true(cbx_device_model_add_composite(&model,
+        "/org/shadowblip/InputPlumber/CompositeDevice1"));
+    assert_true(cbx_device_model_add_composite(&model,
+        "/org/shadowblip/InputPlumber/CompositeDevice3"));
+
+    /* No stable source property: only the ORDER fallback is available. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE, "SourceDevicePaths",
+                           "/dev/input/event0");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_SOURCE_EVENT, "UniqueId", "");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_SOURCE_EVENT, "PhysPath", "");
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_SOURCE_EVENT, "IdBustype", "3");
+
+    cbx_composite_identity_entry entries[CBX_MAX_COMPOSITES];
+    int count = 0;
+    assert_int_equal(cbx_model_extract_identities(f->backend, f->mock.bus,
+                                                  &model, entries, &count), 0);
+    assert_int_equal(count, 2);
+    assert_string_equal(entries[0].ident.id, "ORDER:1");
+    assert_string_equal(entries[1].ident.id, "ORDER:3");
+
+    /* The first controller disconnects; the survivor's tracked order is
+     * still ORDER:3, not collapsed to its new array position ORDER:0. */
+    assert_true(cbx_device_model_remove_composite(&model,
+        "/org/shadowblip/InputPlumber/CompositeDevice1"));
+    assert_int_equal(cbx_model_extract_identities(f->backend, f->mock.bus,
+                                                  &model, entries, &count), 0);
+    assert_int_equal(count, 1);
+    assert_string_equal(entries[0].ident.id, "ORDER:3");
+}
+
 /* --- Shared identity resolver (single match rule) ------------------------ */
 
 static void
@@ -668,6 +712,8 @@ main(void)
                                          setup, teardown),
         cmocka_unit_test_setup_teardown(test_model_extract_identities,
                                          setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            test_order_survives_topology_compaction, setup, teardown),
         cmocka_unit_test_setup_teardown(test_resolve_id_unique_match,
                                          setup, teardown),
         cmocka_unit_test_setup_teardown(test_resolve_id_no_match_is_stale,
