@@ -456,6 +456,14 @@ int cbx_overlay_merge_grid_for_test(cbx_assignments *a,
  * snapshot from a previous enumeration (task 6). */
 const cbx_composite_identity_entry *
 cbx_overlay_identity_for_test(const cbx_overlay_service_ctx *svc, int i);
+
+/* Test seam for the production grid→engine apply used by the startup/hotplug
+ * restore path.  Proves that saved order restoration defers (rather than
+ * resolving a saved id against a stale identity snapshot) when the current
+ * enumeration's identities were not validated (task 6). */
+int cbx_overlay_apply_grid_engine_for_test(cbx_overlay_service_ctx *svc,
+                                           bool clear_all,
+                                           bool restore_order);
 #endif /* CBX_TESTING */
 
 #endif /* CBX_OVERLAY_SERVICE_H */

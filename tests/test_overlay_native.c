@@ -208,6 +208,13 @@ static int native_setup(void **state)
     /* 1. Create isolated HOME with profile files. */
     snprintf(f->tmp_home, sizeof(f->tmp_home),
              "/tmp/cbx_overlay_native_%d", (int)getpid());
+    /* A prior run that reused this PID (or crashed before teardown) can
+     * leave the directory behind; mkdir alone would then abort every test
+     * in the fixture. Remove any stale copy first. */
+    char rm_cmd[PATH_MAX + 64];
+    snprintf(rm_cmd, sizeof(rm_cmd), "rm -rf '%s'", f->tmp_home);
+    int _rm_rc = system(rm_cmd);
+    (void)_rm_rc;
     assert_int_equal(mkdir(f->tmp_home, 0700), 0);
     setenv("HOME", f->tmp_home, 1);
     unsetenv("XDG_CONFIG_HOME");
@@ -1797,8 +1804,10 @@ restart_native_server(native_fixture *f, int fail_create,
     for (int i = 0; i < 2; i++) {
         snprintf(g_nip_comp_names[i], sizeof(g_nip_comp_names[i]),
                  "TestController%d", i);
+        /* Deliberately opaque: the GUI must key restoration on the
+         * source-derived physical identity, never PersistentId. */
         snprintf(g_nip_persistent_ids[i], sizeof(g_nip_persistent_ids[i]),
-                 "ORDER:%d", i);
+                 "opaque-pid-%d", i);
         snprintf(g_nip_dbus_devices[i], sizeof(g_nip_dbus_devices[i]),
                  "/org/shadowblip/InputPlumber/CompositeDevice%d", i);
         g_nip_intercept_mode[i] = IP_INTERCEPT_PASS;
@@ -1921,9 +1930,12 @@ test_readiness_input_mapping_failure_recovers(void **state)
  * acceptance "production startup, hotplug and owner reacquisition").
  *
  * The fixture exposes no source devices, so each composite's confirmed
- * identity is its ORDER:<index> fallback.  The saved order deliberately
- * reverses the enumeration order and the restarted server starts with an
- * empty GamepadOrder, so the assertion cannot pass by coincidence.
+ * identity is its ORDER:<index> fallback.  The restarted server reports a
+ * deliberately opaque PersistentId, so the restore can only succeed through
+ * the source-derived identity and not through the opaque property.  The
+ * saved order deliberately reverses the enumeration order and the restarted
+ * server starts with an empty GamepadOrder, so the assertion cannot pass by
+ * coincidence.
  */
 static void
 test_owner_reacquisition_restores_gamepad_order(void **state)
@@ -1967,6 +1979,15 @@ test_owner_reacquisition_restores_gamepad_order(void **state)
     assert_true(svc->backend_ready);
     assert_true(SDL_GetTicks() - t0 <= 2000);
 
+    /* The opaque PersistentId must not be the restore key: it differs from
+     * the ORDER:n identities the saved order is keyed by. */
+    char *pid0 = NULL;
+    assert_int_equal(ip_composite_get_persistent_id(svc->conn.backend,
+                     svc->conn.bus, COMP_PATH_0, &pid0), 0);
+    assert_non_null(pid0);
+    assert_string_equal(pid0, "opaque-pid-0");
+    free(pid0);
+
     /* The saved reversed order maps onto the current composite paths. */
     char *order = NULL;
     assert_int_equal(ip_manager_get_gamepad_order(f->backend, f->bus, &order),
@@ -1991,7 +2012,7 @@ restart_native_server_with_sources(native_fixture *f, bool reversed)
         snprintf(g_nip_comp_names[i], sizeof(g_nip_comp_names[i]),
                  "TestController%d", i);
         snprintf(g_nip_persistent_ids[i], sizeof(g_nip_persistent_ids[i]),
-                 "ORDER:%d", i);
+                 "opaque-pid-%d", i);
         snprintf(g_nip_dbus_devices[i], sizeof(g_nip_dbus_devices[i]),
                  "/org/shadowblip/InputPlumber/CompositeDevice%d", i);
         g_nip_intercept_mode[i] = IP_INTERCEPT_PASS;
@@ -2281,6 +2302,75 @@ test_identity_snapshot_hidden_when_invalid(void **state)
                      CBX_IDENTITY_LAYER_NONE);
 }
 
+/*
+ * The order-restore half of the identity-snapshot rule (task 6): a saved
+ * order may only be resolved against identities that belong to the current
+ * enumeration.  A retained snapshot from an earlier pass (identities_valid
+ * cleared, identity_count still nonzero) must make the engine defer with
+ * -EAGAIN instead of applying an order derived from composites that may no
+ * longer own those identities.  The positive half proves the guard is not
+ * vacuous: once the snapshot is validated, the reversed saved order resolves
+ * by identity onto the current paths.
+ */
+static void
+test_order_restore_defers_on_unvalidated_snapshot(void **state)
+{
+    native_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    /* Both rows assigned and profiled so the grid order is non-empty and a
+     * wrong implementation would mutate the engine before failing. */
+    svc->grid.rows[0].cur_col = 1;  /* P1 */
+    snprintf(svc->grid.rows[0].profile, CBX_GRID_PROFILE_LEN, "default");
+    svc->grid.rows[1].cur_col = 2;  /* P2 */
+    snprintf(svc->grid.rows[1].profile, CBX_GRID_PROFILE_LEN, "custom");
+
+    /* Durable order deliberately reverses the current slot order. */
+    cbx_assignments saved;
+    cbx_assignments_init(&saved);
+    snprintf(saved.gamepad_order[0], CBX_MAX_ID_LEN, "USB:phys:usb-b");
+    snprintf(saved.gamepad_order[1], CBX_MAX_ID_LEN, "USB:phys:usb-a");
+    saved.gamepad_order_count = 2;
+    assert_int_equal(cbx_assignments_save(&saved), 0);
+
+    /* A valid identity snapshot for the current composites. */
+    svc->identity_count = 2;
+    snprintf(svc->identities[0].path, CBX_MAX_PATH_LEN, "%s", COMP_PATH_0);
+    snprintf(svc->identities[0].ident.id, CBX_IDENTITY_MAX_LEN, "%s",
+             "USB:phys:usb-a");
+    svc->identities[0].ident.layer = CBX_IDENTITY_LAYER_USB_PORT;
+    svc->identities[0].status = CBX_COMPOSITE_IDENTITY_OK;
+    snprintf(svc->identities[1].path, CBX_MAX_PATH_LEN, "%s", COMP_PATH_1);
+    snprintf(svc->identities[1].ident.id, CBX_IDENTITY_MAX_LEN, "%s",
+             "USB:phys:usb-b");
+    svc->identities[1].ident.layer = CBX_IDENTITY_LAYER_USB_PORT;
+    svc->identities[1].status = CBX_COMPOSITE_IDENTITY_OK;
+
+    /* Unvalidated snapshot (retained count stays nonzero): defer, and do not
+     * apply an order mapped from the stale snapshot. */
+    svc->identities_valid = false;
+    assert_int_equal(cbx_overlay_apply_grid_engine_for_test(svc, false, true),
+                     -EAGAIN);
+
+    char *order = NULL;
+    assert_int_equal(ip_manager_get_gamepad_order(f->backend, f->bus, &order),
+                     0);
+    assert_non_null(order);
+    assert_string_equal(order, "");
+    free(order);
+
+    /* Validated snapshot: the saved reversed order resolves by identity. */
+    svc->identities_valid = true;
+    assert_int_equal(cbx_overlay_apply_grid_engine_for_test(svc, false, true),
+                     0);
+    order = NULL;
+    assert_int_equal(ip_manager_get_gamepad_order(f->backend, f->bus, &order),
+                     0);
+    assert_non_null(order);
+    assert_string_equal(order, COMP_PATH_1 "," COMP_PATH_0);
+    free(order);
+}
+
 /* ================================================================== */
 /*  Task 6 — grid→order merge preserves disconnected preferences        */
 /* ================================================================== */
@@ -2444,6 +2534,9 @@ static const struct CMUnitTest tests[] = {
         native_setup, native_teardown),
     cmocka_unit_test_setup_teardown(
         test_identity_snapshot_hidden_when_invalid,
+        native_setup, native_teardown),
+    cmocka_unit_test_setup_teardown(
+        test_order_restore_defers_on_unvalidated_snapshot,
         native_setup, native_teardown),
 
     /* Task 6 — grid→order merge preserves disconnected preferences */

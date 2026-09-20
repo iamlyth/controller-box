@@ -187,6 +187,37 @@ test_snapshot_duplicate_identity_is_uncertain(void **state)
 }
 
 /*
+ * A saved order that names the same composite twice is ambiguous: the second
+ * occurrence cannot be mapped onto a second physical controller.  It must be
+ * reported as uncertainty (not silently skipped as stale, and not applied to
+ * the first controller twice), matching the shared resolve policy (task 6).
+ */
+static void
+test_snapshot_duplicate_saved_entry_is_uncertain(void **state)
+{
+    (void)state;
+    cbx_composite_identity_entry entries[2] = {
+        {.path = "/composite0", .ident = {.id = "USB:serial-a",
+            .layer = CBX_IDENTITY_LAYER_USB_SERIAL}},
+        {.path = "/composite1", .ident = {.id = "USB:serial-b",
+            .layer = CBX_IDENTITY_LAYER_USB_SERIAL}},
+    };
+    char paths[128];
+    int restored = -1, skipped = -1;
+    bool failed = false;
+    assert_int_equal(cbx_gamepad_order_map_snapshot(entries, 2,
+        "USB:serial-a,USB:serial-a", paths, sizeof(paths),
+        &restored, &skipped, &failed), 0);
+    assert_true(failed);
+    assert_int_equal(restored, 1);
+    assert_int_equal(skipped, 0);
+    /* The first mapping is emitted, but the caller discards the whole result
+     * because `failed` is set, so the duplicate can never be applied as a
+     * second controller. */
+    assert_string_equal(paths, "/composite0");
+}
+
+/*
  * SPEC §6.3 / task 6 acceptance: a controller that reconnects with a weaker
  * identity (its serial is gone; only a port path or connection order remains)
  * must NOT be inferred onto an unrelated stronger stored preference.  The
@@ -747,6 +778,7 @@ main(void)
         cmocka_unit_test(test_snapshot_reversed_order_and_disconnected_preference),
         cmocka_unit_test(test_snapshot_unique_match_with_failed_peer_is_uncertain),
         cmocka_unit_test(test_snapshot_duplicate_identity_is_uncertain),
+        cmocka_unit_test(test_snapshot_duplicate_saved_entry_is_uncertain),
         cmocka_unit_test(test_snapshot_no_downgrade_inference),
         cmocka_unit_test_setup_teardown(test_map_ids_single_match,
                                          setup, teardown),

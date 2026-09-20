@@ -637,8 +637,16 @@ overlay_apply_grid_engine(cbx_overlay_service_ctx *svc, bool clear_all,
     memset(&repairs, 0, sizeof(repairs));
 
     /* Resolve durable order before any engine mutation, from the same
-     * checked physical snapshot used by the assignment grid. */
+     * checked physical snapshot used by the assignment grid.  The snapshot
+     * is authoritative only after a successful validation pass
+     * (overlay_validate_identities): resolving a saved id against a retained
+     * array from an earlier enumeration could route the preference onto a
+     * composite that no longer owns that physical identity.  A transient
+     * read failure therefore defers the whole apply instead of persisting a
+     * mismatched or misleading order (task 6 acceptance). */
     if (restore_order) {
+        if (!svc->identities_valid)
+            return -EAGAIN;
         char *saved = NULL;
         rc = ip_gamepad_order_load(&saved);
         if (rc != 0)
@@ -767,6 +775,17 @@ overlay_apply_grid_engine(cbx_overlay_service_ctx *svc, bool clear_all,
 
     return 0;
 }
+
+#ifdef CBX_TESTING
+/* Test seam: prove the order-restore path refuses to resolve saved ids from
+ * an unvalidated identity snapshot (task 6). */
+int
+cbx_overlay_apply_grid_engine_for_test(cbx_overlay_service_ctx *svc,
+                                       bool clear_all, bool restore_order)
+{
+    return overlay_apply_grid_engine(svc, clear_all, restore_order);
+}
+#endif
 
 /* ================================================================== */
 /*  Lifecycle on_save callback: conflict resolution + assignment save */
