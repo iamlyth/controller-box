@@ -28,13 +28,14 @@ fire_state_change(cbx_host_mode *hm, bool active)
 }
 
 /* Copy a grid row's persistent identity into the given buffers.  When the
- * row has a stable InputPlumber PersistentId, only `id` is recorded — the
- * composite path is NOT an identity and is deliberately left empty so
- * resolve_row_identity can never re-grant host privileges through a path
- * that a different physical controller may now occupy (SPEC §4.4).  For a
- * degraded row (no stable PersistentId) the composite path is the only
- * local identity, so it is recorded and `id` is left empty.  Buffers are
- * cleared when the row is out of range or the grid is absent. */
+ * row has a stable source-derived physical identity (SPEC §6.2: BT MAC,
+ * USB serial, USB port path), only `id` is recorded — the composite path
+ * is NOT an identity and is deliberately left empty so resolve_row_identity
+ * can never re-grant host privileges through a path that a different
+ * physical controller may now occupy (SPEC §4.4).  For a degraded row (no
+ * stable source-derived identity) the composite path is the only local
+ * identity, so it is recorded and `id` is left empty.  Buffers are cleared
+ * when the row is out of range or the grid is absent. */
 static void
 record_row_identity(char *id, size_t id_size,
                     char *path, size_t path_size,
@@ -56,16 +57,16 @@ record_row_identity(char *id, size_t id_size,
 }
 
 /* Re-resolve a persisted row identity against a rebuilt grid.  The stable
- * PersistentId is authoritative (SPEC §4.4); the composite path is only a
- * degraded fallback when no stable id was recorded.  Returns the row index
- * or -1.
+ * source-derived physical identity is authoritative (SPEC §4.4/§6.2); the
+ * composite path is only a degraded fallback when no stable id was
+ * recorded.  Returns the row index or -1.
  *
  * No-privilege-inheritance invariant: when a stable id was recorded but no
  * longer matches a row, the host is gone and we must NOT fall back to the
  * composite path — a different controller may have reused it.  Likewise a
  * degraded (path-only) identity may only match a row that is itself
- * degraded; a controller that now reports a stable PersistentId is a
- * different physical device and must not inherit host privileges. */
+ * degraded; a controller that now reports a stable source-derived identity
+ * is a different physical device and must not inherit host privileges. */
 static int
 resolve_row_identity(const cbx_select_grid *grid,
                      const char *id, const char *path)

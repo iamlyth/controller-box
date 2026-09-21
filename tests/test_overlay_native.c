@@ -1819,6 +1819,35 @@ restart_native_server(native_fixture *f, int fail_create,
     return nip_fork_server(f->bus_address, &cfg);
 }
 
+/* Restart the server for the durable-order transient-failure test: seed a
+ * sentinel GamepadOrder that must survive a deferred restore, and arm a
+ * one-shot SourceDevicePaths read failure so the first post-reacquisition
+ * identity pass is uncertain.  With no source properties in this fixture
+ * each composite's confirmed identity is its ORDER:<index> fallback. */
+static pid_t
+restart_native_server_deferred_order(native_fixture *f)
+{
+    nip_reset_server_state(2);
+    for (int i = 0; i < 2; i++) {
+        snprintf(g_nip_comp_names[i], sizeof(g_nip_comp_names[i]),
+                 "TestController%d", i);
+        snprintf(g_nip_persistent_ids[i], sizeof(g_nip_persistent_ids[i]),
+                 "opaque-pid-%d", i);
+        snprintf(g_nip_dbus_devices[i], sizeof(g_nip_dbus_devices[i]),
+                 "/org/shadowblip/InputPlumber/CompositeDevice%d", i);
+        g_nip_intercept_mode[i] = IP_INTERCEPT_PASS;
+    }
+    /* A live engine order that must not be replaced by a misleading
+     * empty/partial order while the identity snapshot is uncertain. */
+    snprintf(g_nip_gamepad_order[0], sizeof(g_nip_gamepad_order[0]),
+             "/sentinel/order");
+    g_nip_gamepad_order_count = 1;
+    g_nip_fail_next_source_paths = 1;
+    const nip_server_config cfg = { .num_composites = 2,
+                                    .version = "0.78.0" };
+    return nip_fork_server(f->bus_address, &cfg);
+}
+
 /* Owner loss must clear readiness (no trusted sender), and a healthy
  * reacquisition must become operational within two seconds.  A transient
  * first recovery failure must be retried (bounded) rather than leaving the
@@ -1989,6 +2018,90 @@ test_owner_reacquisition_restores_gamepad_order(void **state)
     free(pid0);
 
     /* The saved reversed order maps onto the current composite paths. */
+    char *order = NULL;
+    assert_int_equal(ip_manager_get_gamepad_order(f->backend, f->bus, &order),
+                     0);
+    assert_non_null(order);
+    assert_string_equal(order, COMP_PATH_1 "," COMP_PATH_0);
+    free(order);
+}
+
+/*
+ * A transient source-property read failure during owner reacquisition must
+ * be treated as uncertainty, not confirmed absence: the identity snapshot
+ * is not published, the durable order is not resolved against it, and the
+ * engine's live GamepadOrder is left exactly as it was instead of being
+ * replaced with a misleading empty/partial order.  Once the transient fault
+ * clears, the bounded recovery retry resolves the saved identity order onto
+ * the current composite paths within the two-second window (SPEC §6.2/§7.4,
+ * task 6 acceptance "production startup, hotplug and owner reacquisition").
+ */
+static void
+test_owner_reacquisition_transient_identity_failure_defers_order(void **state)
+{
+    native_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    cbx_overlay_install_recovery_callbacks(svc);
+    assert_true(svc->backend_ready);
+
+    /* Persist a durable order keyed by physical identity (ORDER:n here). */
+    cbx_assignments saved;
+    cbx_assignments_init(&saved);
+    snprintf(saved.gamepad_order[0], CBX_MAX_ID_LEN, "ORDER:1");
+    snprintf(saved.gamepad_order[1], CBX_MAX_ID_LEN, "ORDER:0");
+    saved.gamepad_order_count = 2;
+    assert_int_equal(cbx_assignments_save(&saved), 0);
+
+    /* Phase 1: owner loss → fail closed. */
+    kill(f->server_pid, SIGTERM);
+    waitpid(f->server_pid, NULL, 0);
+    f->server_pid = -1;
+    uint32_t t0 = SDL_GetTicks();
+    while (svc->backend_ready && SDL_GetTicks() - t0 < 2000) {
+        svc->conn.backend->process(svc->conn.bus);
+        SDL_Delay(10);
+    }
+    assert_false(svc->backend_ready);
+
+    /* Phase 2: reconnect with a sentinel GamepadOrder and a one-shot
+     * SourceDevicePaths read failure. */
+    f->server_pid = restart_native_server_deferred_order(f);
+    assert_true(f->server_pid > 0);
+
+    bool observed_disabled = false;
+    bool saw_identity_failure = false;
+    bool sentinel_survived = false;
+    t0 = SDL_GetTicks();
+    while (!svc->backend_ready && SDL_GetTicks() - t0 < 2000) {
+        cbx_overlay_service_step(svc);
+        if (!svc->backend_ready) {
+            observed_disabled = true;
+            if (strstr(svc->readiness_detail, "identity enumera") ||
+                strstr(svc->readiness_detail, "assignment restoration"))
+                saw_identity_failure = true;
+            if (saw_identity_failure) {
+                /* The deferred restore must not have touched the engine
+                 * order: it still holds the sentinel, not empty. */
+                char *order = NULL;
+                if (ip_manager_get_gamepad_order(f->backend, f->bus,
+                                                 &order) == 0 && order) {
+                    if (strcmp(order, "/sentinel/order") == 0)
+                        sentinel_survived = true;
+                }
+                free(order);
+            }
+        }
+        SDL_Delay(10);
+    }
+
+    assert_true(observed_disabled);
+    assert_true(saw_identity_failure);
+    assert_true(sentinel_survived);
+    assert_true(svc->backend_ready);
+    assert_true(SDL_GetTicks() - t0 <= 2000);
+
+    /* The retry resolves the saved identity order onto current paths. */
     char *order = NULL;
     assert_int_equal(ip_manager_get_gamepad_order(f->backend, f->bus, &order),
                      0);
@@ -2531,6 +2644,9 @@ static const struct CMUnitTest tests[] = {
         native_setup, native_teardown),
     cmocka_unit_test_setup_teardown(
         test_owner_reacquisition_invalid_profile_falls_back,
+        native_setup, native_teardown),
+    cmocka_unit_test_setup_teardown(
+        test_owner_reacquisition_transient_identity_failure_defers_order,
         native_setup, native_teardown),
     cmocka_unit_test_setup_teardown(
         test_identity_snapshot_hidden_when_invalid,

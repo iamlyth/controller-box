@@ -298,7 +298,9 @@ int cbx_overlay_rearm_polls(cbx_overlay_service_ctx *svc);
  * InputPlumber exposes no intrinsic target-slot property, lexical object-path
  * order is the deterministic fallback and exact returned paths take over for
  * mutations.  Physical composites are optional and attached only by persisted
- * PersistentId assignment.  Exact singleton TargetDevices sets are required.
+ * source-derived physical identity (SPEC §6.2) assignment; the opaque
+ * InputPlumber PersistentId is never used as the restore key.  Exact
+ * singleton TargetDevices sets are required.
  *
  * On failure, all paths created by this call are stopped with bounded exact-
  * path confirmation.  Originals stopped by type correction/shrink are not
