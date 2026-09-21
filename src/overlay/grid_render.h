@@ -118,6 +118,10 @@ typedef struct {
     const cbx_theme   *theme;          /* optional — NULL uses defaults */
     cbx_text_cache    *text_cache;     /* optional — NULL skips text */
     int                font_id;        /* font ID for text cache */
+    /* Full layout dimensions.  Dirty clips must not change geometry; when
+     * zero, the legacy 800x600/default clip dimensions are used. */
+    int                layout_width;
+    int                layout_height;
     const struct cbx_conflict_list *conflicts; /* optional — NULL skips red */
     const cbx_settings *settings;      /* optional — NULL skips icon overrides */
     const cbx_host_mode *hm;           /* optional — NULL skips host-mode visuals */

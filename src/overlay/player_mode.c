@@ -10,6 +10,7 @@
 #include "overlay/player_mode.h"
 
 #include <errno.h>
+#include <stdio.h>
 #include <string.h>
 
 /* --- API -------------------------------------------------------------- */
@@ -33,61 +34,61 @@ cbx_player_mode_handle(cbx_player_mode *pm, int row_idx,
         return CBX_PM_RESULT_ERROR;
 
     switch (input) {
-    case CBX_PM_LEFT: {
-        int rc = cbx_select_grid_move_left(pm->grid, row_idx);
-        if (rc == 0) {
-            /* Fire slot change callback. */
-            if (pm->on_slot_change) {
-                int new_slot = cbx_select_grid_col_to_slot(
-                    pm->grid->rows[row_idx].cur_col);
-                pm->on_slot_change(row_idx, new_slot,
-                                    pm->slot_change_data);
-            }
-            return CBX_PM_RESULT_MOVED;
-        }
-        return CBX_PM_RESULT_NONE;  /* at boundary, no move */
-    }
-
+    case CBX_PM_LEFT:
     case CBX_PM_RIGHT: {
-        int rc = cbx_select_grid_move_right(pm->grid, row_idx);
-        if (rc == 0) {
-            if (pm->on_slot_change) {
-                int new_slot = cbx_select_grid_col_to_slot(
-                    pm->grid->rows[row_idx].cur_col);
-                pm->on_slot_change(row_idx, new_slot,
+        int old_col = pm->grid->rows[row_idx].cur_col;
+        uint64_t old_arrival = pm->grid->row_arrival_seq[row_idx];
+        bool old_live_edits = pm->grid->live_edits;
+        int rc = input == CBX_PM_LEFT
+            ? cbx_select_grid_move_left(pm->grid, row_idx)
+            : cbx_select_grid_move_right(pm->grid, row_idx);
+        if (rc != 0)
+            return rc == -ERANGE ? CBX_PM_RESULT_NONE : CBX_PM_RESULT_ERROR;
+
+        if (pm->on_slot_change) {
+            int new_slot = cbx_select_grid_col_to_slot(
+                pm->grid->rows[row_idx].cur_col);
+            rc = pm->on_slot_change(row_idx, new_slot,
                                     pm->slot_change_data);
+            if (rc != 0) {
+                /* Navigation is staged in the grid.  A rejected side effect
+                 * must not leave the display claiming that the slot changed. */
+                pm->grid->rows[row_idx].cur_col = old_col;
+                pm->grid->row_arrival_seq[row_idx] = old_arrival;
+                pm->grid->live_edits = old_live_edits;
+                return rc;
             }
-            return CBX_PM_RESULT_MOVED;
         }
-        return CBX_PM_RESULT_NONE;
+        return CBX_PM_RESULT_MOVED;
     }
 
-    case CBX_PM_UP: {
-        int rc = cbx_select_grid_cycle_profile_up(pm->grid, row_idx);
-        if (rc == 0) {
-            if (pm->on_profile_change) {
-                pm->on_profile_change(row_idx,
-                    pm->grid->rows[row_idx].profile,
-                    pm->grid->rows[row_idx].composite_path,
-                    pm->profile_change_data);
-            }
-            return CBX_PM_RESULT_PROFILE;
-        }
-        return CBX_PM_RESULT_NONE;  /* no profiles or error */
-    }
-
+    case CBX_PM_UP:
     case CBX_PM_DOWN: {
-        int rc = cbx_select_grid_cycle_profile_down(pm->grid, row_idx);
-        if (rc == 0) {
-            if (pm->on_profile_change) {
-                pm->on_profile_change(row_idx,
+        char old_profile[CBX_GRID_PROFILE_LEN];
+        bool old_live_edits = pm->grid->live_edits;
+        snprintf(old_profile, sizeof(old_profile), "%s",
+                 pm->grid->rows[row_idx].profile);
+        int rc = input == CBX_PM_UP
+            ? cbx_select_grid_cycle_profile_up(pm->grid, row_idx)
+            : cbx_select_grid_cycle_profile_down(pm->grid, row_idx);
+        if (rc != 0)
+            return rc == -ENOENT ? CBX_PM_RESULT_NONE : CBX_PM_RESULT_ERROR;
+
+        if (pm->on_profile_change) {
+            rc = pm->on_profile_change(row_idx,
                     pm->grid->rows[row_idx].profile,
                     pm->grid->rows[row_idx].composite_path,
                     pm->profile_change_data);
+            if (rc != 0) {
+                /* The callback is the confirmation boundary for a profile
+                 * change.  Restore the last confirmed value on failure. */
+                snprintf(pm->grid->rows[row_idx].profile,
+                         CBX_GRID_PROFILE_LEN, "%s", old_profile);
+                pm->grid->live_edits = old_live_edits;
+                return rc;
             }
-            return CBX_PM_RESULT_PROFILE;
         }
-        return CBX_PM_RESULT_NONE;
+        return CBX_PM_RESULT_PROFILE;
     }
 
     case CBX_PM_B:

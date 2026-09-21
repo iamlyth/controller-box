@@ -178,12 +178,12 @@ Evidence: verification exit 0 on local
 
 ## Task 20: Make overlay activation, save and close truthful
 Title: Make overlay activation, save and close truthful
-Status: pending
+Status: completed
 Dependencies: 7, 10, 18, 19, 21
 Acceptance: Production DBus input cannot mutate slots/profiles or enter Host Mode while hidden/idle or backend-unready; preserve legitimate activation dispatch. Propagate navigation/profile callback errors and restore the displayed confirmed selection on failure. Stage assignment/profile changes until verified routing/order/save succeeds; avoid clearing all routes then silently closing after a later error. Wire observable lifecycle errors and bounded PASS recovery so failed input release is never reported as successful hidden/IDLE gameplay restoration. Restore temporary callback/context fields in cbx_overlay_request_close even on rejected close. Present intermediate fade frames without rebuilding the grid and honor configured opacity; dirty regions clip a stable full layout rather than relaying out inside each region. Test repeated activation, long sessions, failed save/PASS, error visibility, configured alpha and full-versus-partial redraw equivalence through the real service path. Task 25 measures the actual latency requirements.
 Verification: ./scripts/verify.sh; ctest --test-dir build -R 'test_close|test_overlay_lifecycle|test_overlay_interaction|test_overlay_native|test_overlay_visual|test_surface_build|test_grid_render|test_animation' --output-on-failure; ./scripts/verify-sanitizers.sh
 Runner: none
-Evidence: none
+Evidence: verification exit 0 on local
 
 ## Task 21: Make shared settings and assignment persistence reliable
 Title: Make shared settings and assignment persistence reliable

@@ -27,6 +27,8 @@ begin_fade_in(cbx_overlay_lifecycle *lc)
 {
     if (lc->fade_in_ms > 0) {
         cbx_anim_fade_in(&lc->fade, lc->target_opacity, lc->fade_in_ms);
+        if (lc->surface)
+            cbx_overlay_surface_set_opacity(lc->surface, 0.0);
         /* Mark surface dirty so the render callback redraws. */
         if (lc->surface)
             cbx_overlay_surface_mark_dirty_all(lc->surface);
@@ -158,6 +160,8 @@ cbx_overlay_lifecycle_init(cbx_overlay_lifecycle *lc,
     lc->target_opacity = 1.0;
     lc->max_visible_ticks = CBX_OVERLAY_DEFAULT_MAX_VISIBLE_TICKS;
     lc->max_errors = CBX_OVERLAY_DEFAULT_MAX_ERRORS;
+    lc->require_pass_for_close = false;
+    lc->close_blocked = false;
     cbx_anim_init(&lc->fade);
 }
 
@@ -169,6 +173,7 @@ cbx_overlay_lifecycle_activate(cbx_overlay_lifecycle *lc)
     if (lc->state != CBX_OVERLAY_IDLE)
         return -EPERM;
 
+    lc->close_blocked = false;
     lc->state = CBX_OVERLAY_ACTIVATING;
 
     if (lc->fade_in_ms == 0) {
@@ -191,6 +196,7 @@ cbx_overlay_lifecycle_close(cbx_overlay_lifecycle *lc)
     if (lc->state != CBX_OVERLAY_VISIBLE && lc->state != CBX_OVERLAY_ACTIVATING)
         return -EPERM;
 
+    lc->close_blocked = false;
     lc->state = CBX_OVERLAY_CLOSING;
 
     /* Set InterceptMode back to PASS FIRST so input flows to the game in
@@ -201,7 +207,16 @@ cbx_overlay_lifecycle_close(cbx_overlay_lifecycle *lc)
      * that whole window, one to two orders of magnitude over the budget on a
      * healthy bus and unbounded on a stalled one.  PASS must be the first
      * work the close performs. */
-    set_intercept_pass(lc);
+    int pass_rc = set_intercept_pass(lc);
+    if (pass_rc != 0 && lc->require_pass_for_close) {
+        /* A failed release must remain visible and actionable; hiding here
+         * would falsely report restored gameplay while input is intercepted. */
+        lc->state = CBX_OVERLAY_VISIBLE;
+        lc->visible_ticks = 0;
+        lc->close_blocked = true;
+        show_surface(lc);
+        return pass_rc;
+    }
 
     /* Fire save callback (caller handles persistence + conflict resolution).
      * The caller bounds this callback's synchronous DBus chain with the same
@@ -217,12 +232,14 @@ cbx_overlay_lifecycle_close(cbx_overlay_lifecycle *lc)
     /* An unresolved conflict is not a close.  Returning to VISIBLE keeps
      * the red/safe state actionable and prevents duplicate routing from being
      * reported as a successful resolution.  PASS has already been requested
-     * above, so a later retry starts from a known input mode.  Other backend
-     * save errors retain the historical close semantics; the broader close
-     * error contract belongs to the dependent lifecycle task. */
-    if (save_rc == -ENOSPC) {
+     * above, so a later retry starts from a known input mode.  Production
+     * enables the same fail-closed behavior for every save error; the
+     * state-machine-only compatibility mode keeps best-effort close semantics. */
+    if (save_rc == -ENOSPC ||
+        (save_rc < 0 && lc->require_pass_for_close)) {
         lc->state = CBX_OVERLAY_VISIBLE;
         lc->visible_ticks = 0;
+        lc->close_blocked = true;
         show_surface(lc);
         return save_rc;
     }
@@ -316,9 +333,20 @@ cbx_overlay_lifecycle_force_close(cbx_overlay_lifecycle *lc)
     if (!lc)
         return;
 
-    /* Set InterceptMode=PASS regardless of current state. */
-    if (lc->state != CBX_OVERLAY_IDLE)
-        set_intercept_pass(lc);
+    /* Set InterceptMode=PASS regardless of current state.  In the
+     * production fail-closed mode, do not claim IDLE if release failed:
+     * hidden/IDLE is a gameplay-restored state, not merely a rendering
+     * decision. */
+    if (lc->state != CBX_OVERLAY_IDLE) {
+        int rc = set_intercept_pass(lc);
+        if (rc != 0 && lc->require_pass_for_close) {
+            lc->state = CBX_OVERLAY_VISIBLE;
+            lc->visible_ticks = 0;
+            lc->close_blocked = true;
+            show_surface(lc);
+            return;
+        }
+    }
 
     enter_idle(lc);
 }

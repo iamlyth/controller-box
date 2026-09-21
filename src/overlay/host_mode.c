@@ -224,56 +224,57 @@ cbx_host_mode_handle(cbx_host_mode *hm, int row_idx,
         }
         return CBX_HM_RESULT_NONE;
 
-    case CBX_HM_LEFT: {
-        int rc = cbx_select_grid_move_left(grid, hm->selected_row);
-        if (rc == 0) {
-            int slot = cbx_select_grid_col_to_slot(
-                cbx_select_grid_get_cur_col(grid, hm->selected_row));
-            if (hm->on_slot_change)
-                hm->on_slot_change(hm->selected_row, slot,
-                                   hm->slot_change_data);
-            return CBX_HM_RESULT_SLOT;
-        }
-        return CBX_HM_RESULT_NONE;
-    }
-
+    case CBX_HM_LEFT:
     case CBX_HM_RIGHT: {
-        int rc = cbx_select_grid_move_right(grid, hm->selected_row);
-        if (rc == 0) {
-            int slot = cbx_select_grid_col_to_slot(
-                cbx_select_grid_get_cur_col(grid, hm->selected_row));
-            if (hm->on_slot_change)
-                hm->on_slot_change(hm->selected_row, slot,
-                                   hm->slot_change_data);
-            return CBX_HM_RESULT_SLOT;
+        int old_col = grid->rows[hm->selected_row].cur_col;
+        uint64_t old_arrival = grid->row_arrival_seq[hm->selected_row];
+        bool old_live_edits = grid->live_edits;
+        int rc = input == CBX_HM_LEFT
+            ? cbx_select_grid_move_left(grid, hm->selected_row)
+            : cbx_select_grid_move_right(grid, hm->selected_row);
+        if (rc != 0)
+            return rc == -ERANGE ? CBX_HM_RESULT_NONE : CBX_HM_RESULT_ERROR;
+
+        int slot = cbx_select_grid_col_to_slot(
+            cbx_select_grid_get_cur_col(grid, hm->selected_row));
+        if (hm->on_slot_change) {
+            rc = hm->on_slot_change(hm->selected_row, slot,
+                                    hm->slot_change_data);
+            if (rc != 0) {
+                grid->rows[hm->selected_row].cur_col = old_col;
+                grid->row_arrival_seq[hm->selected_row] = old_arrival;
+                grid->live_edits = old_live_edits;
+                return rc;
+            }
         }
-        return CBX_HM_RESULT_NONE;
+        return CBX_HM_RESULT_SLOT;
     }
 
-    case CBX_HM_PROFILE_PREV: {
-        int rc = cbx_select_grid_cycle_profile_up(grid, hm->selected_row);
-        if (rc == 0) {
-            if (hm->on_profile_change)
-                hm->on_profile_change(hm->selected_row,
-                    grid->rows[hm->selected_row].profile,
-                    grid->rows[hm->selected_row].composite_path,
-                    hm->profile_change_data);
-            return CBX_HM_RESULT_PROFILE;
-        }
-        return CBX_HM_RESULT_NONE;  /* no profiles or error */
-    }
-
+    case CBX_HM_PROFILE_PREV:
     case CBX_HM_PROFILE_NEXT: {
-        int rc = cbx_select_grid_cycle_profile_down(grid, hm->selected_row);
-        if (rc == 0) {
-            if (hm->on_profile_change)
-                hm->on_profile_change(hm->selected_row,
+        char old_profile[CBX_GRID_PROFILE_LEN];
+        bool old_live_edits = grid->live_edits;
+        snprintf(old_profile, sizeof(old_profile), "%s",
+                 grid->rows[hm->selected_row].profile);
+        int rc = input == CBX_HM_PROFILE_PREV
+            ? cbx_select_grid_cycle_profile_up(grid, hm->selected_row)
+            : cbx_select_grid_cycle_profile_down(grid, hm->selected_row);
+        if (rc != 0)
+            return rc == -ENOENT ? CBX_HM_RESULT_NONE : CBX_HM_RESULT_ERROR;
+
+        if (hm->on_profile_change) {
+            rc = hm->on_profile_change(hm->selected_row,
                     grid->rows[hm->selected_row].profile,
                     grid->rows[hm->selected_row].composite_path,
                     hm->profile_change_data);
-            return CBX_HM_RESULT_PROFILE;
+            if (rc != 0) {
+                snprintf(grid->rows[hm->selected_row].profile,
+                         CBX_GRID_PROFILE_LEN, "%s", old_profile);
+                grid->live_edits = old_live_edits;
+                return rc;
+            }
         }
-        return CBX_HM_RESULT_NONE;  /* no profiles or error */
+        return CBX_HM_RESULT_PROFILE;
     }
 
     case CBX_HM_R3:

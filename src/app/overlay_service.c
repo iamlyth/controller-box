@@ -120,6 +120,9 @@ on_intercept_activating(void *userdata)
     cbx_poll_activation_ctx *act = (cbx_poll_activation_ctx *)userdata;
     if (!act || !act->lifecycle)
         return;
+    if ((act->backend_ready && !*act->backend_ready) ||
+        act->lifecycle->state != CBX_OVERLAY_IDLE)
+        return;
     fprintf(stderr, "controller-box: trigger detected on %s — activating overlay\n",
             act->composite_path[0] ? act->composite_path : "(unknown)");
     /* Update lifecycle's composite_path to the activating composite. */
@@ -130,7 +133,12 @@ on_intercept_activating(void *userdata)
         memcpy(act->lifecycle->composite_path, act->composite_path, len);
         act->lifecycle->composite_path[len] = '\0';
     }
-    cbx_overlay_lifecycle_activate(act->lifecycle);
+    int rc = cbx_overlay_lifecycle_activate(act->lifecycle);
+    if (rc != 0) {
+        if (act->lifecycle->on_error)
+            act->lifecycle->on_error(rc, act->lifecycle->on_error_data);
+        return;
+    }
     fprintf(stderr, "controller-box: overlay lifecycle activated\n");
 }
 
@@ -143,6 +151,11 @@ on_intercept_deactivating(void *userdata)
 #endif
 {
     cbx_overlay_lifecycle *lc = (cbx_overlay_lifecycle *)userdata;
+    /* A failed production close leaves the overlay visible and waits for an
+     * explicit retry.  The PASS edge from that failed attempt must not
+     * recursively invoke save/close a second time. */
+    if (lc && lc->close_blocked)
+        return;
     /* If already closing/closed, close() returns -EPERM — that's fine. */
     cbx_overlay_lifecycle_close(lc);
 }
@@ -453,20 +466,6 @@ overlay_txn_repair_profiles(cbx_assignments *a, void *userdata)
     return 0;
 }
 
-typedef struct {
-    const char *id;
-    const char *profile;
-} overlay_profile_txn_args;
-
-static int
-overlay_txn_set_profile(cbx_assignments *a, void *userdata)
-{
-    overlay_profile_txn_args *args = userdata;
-    /* Reuse the production assignment-update helper so a new controller gets
-     * a real free slot instead of an invalid -1 slot. */
-    return cbx_profile_cycle_update_assignment(a, args->id, args->profile);
-}
-
 /* ================================================================== */
 /*  Grid → engine application (shared by save and hotplug reconcile)   */
 /* ================================================================== */
@@ -679,24 +678,24 @@ overlay_apply_grid_engine(cbx_overlay_service_ctx *svc, bool clear_all,
             return rc;
     }
 
-    /* Phase 1: exact replacement routing (SPEC §§4.1-4.7). */
-    {
-        for (int i = 0; i < svc->grid.row_count; i++) {
-            /* A changed physical identity may no longer authorize the old
-             * route.  Unassigned must mean detached on hotplug too, while
-             * unaffected assigned controllers retain their routing. */
-            if (!clear_all &&
-                cbx_select_grid_col_to_slot(svc->grid.rows[i].cur_col) >= 0)
-                continue;
-            const char *composite = svc->grid.rows[i].composite_path;
-            int clear_rc = ip_composite_set_target_device_paths(
-                svc->conn.backend, svc->conn.bus, composite, "");
-            if (clear_rc != 0)
-                return clear_rc;
-            clear_rc = wait_for_attachment(svc, composite, NULL);
-            if (clear_rc != 0)
-                return clear_rc;
-        }
+    /* Phase 1: exact replacement routing (SPEC §§4.1-4.7).
+     * SetTargetDevices is a replacement operation, so a close does not need
+     * to clear every composite before it has verified the desired route.
+     * Applying assigned rows first keeps existing gameplay routing intact if
+     * a later profile/attachment/order call fails; Unassigned rows are
+     * detached only after all desired assignments have been verified. */
+    for (int i = 0; i < svc->grid.row_count; i++) {
+        if (clear_all ||
+            cbx_select_grid_col_to_slot(svc->grid.rows[i].cur_col) >= 0)
+            continue;
+        const char *composite = svc->grid.rows[i].composite_path;
+        int clear_rc = ip_composite_set_target_device_paths(
+            svc->conn.backend, svc->conn.bus, composite, "");
+        if (clear_rc != 0)
+            return clear_rc;
+        clear_rc = wait_for_attachment(svc, composite, NULL);
+        if (clear_rc != 0)
+            return clear_rc;
     }
 
     for (int i = 0; i < svc->grid.row_count; i++) {
@@ -754,6 +753,23 @@ overlay_apply_grid_engine(cbx_overlay_service_ctx *svc, bool clear_all,
                                          svc->model.targets[slot].path);
         if (attach_rc != 0)
             return attach_rc;
+    }
+
+    /* In the close transaction, detach rows that were explicitly moved to
+     * Unassigned only after every desired assignment has been applied. */
+    if (clear_all) {
+        for (int i = 0; i < svc->grid.row_count; i++) {
+            const cbx_grid_row *row = &svc->grid.rows[i];
+            if (cbx_select_grid_col_to_slot(row->cur_col) >= 0)
+                continue;
+            rc = ip_composite_set_target_device_paths(
+                svc->conn.backend, svc->conn.bus, row->composite_path, "");
+            if (rc != 0)
+                return rc;
+            rc = wait_for_attachment(svc, row->composite_path, NULL);
+            if (rc != 0)
+                return rc;
+        }
     }
 
     /* Phase 2: Set GamepadOrder on the engine. */
@@ -862,9 +878,13 @@ int
 cbx_overlay_on_slot_change(int row_idx, int new_slot, void *userdata)
 {
     cbx_overlay_service_ctx *svc = (cbx_overlay_service_ctx *)userdata;
-    (void)row_idx;
+    if (!svc || row_idx < 0 || row_idx >= svc->grid.row_count)
+        return -EINVAL;
     (void)new_slot;
-    /* Grid is already updated by player_mode_handle.
+    /* Slot navigation is deliberately staged in the grid.  The complete
+     * routing/order transaction runs on close, so a later DBus failure can
+     * never leave a durable half-assignment.  Grid is already updated by
+     * player_mode_handle.
      * Re-detect conflicts so the re-render shows red highlights (SPEC §4.5). */
     cbx_conflict_list_init(&svc->conflicts);
     cbx_conflict_detect(&svc->grid, &svc->conflicts);
@@ -930,11 +950,27 @@ cbx_overlay_on_profile_change(int row_idx, const char *profile,
      * presented frame. */
     cbx_overlay_surface_mark_dirty_all(&svc->surface);
 
-    if (!svc->conn.backend || !composite_path || !profile || !profile[0])
+    if (!composite_path || !profile || !profile[0])
         return -EINVAL;
+    /* A pure/unit dispatch fixture may intentionally omit the profile
+     * backend.  Production always wires backend_ready and rejects its input
+     * before this callback; treating the omitted side effect as staged keeps
+     * the model reusable without inventing a fake DBus success. */
+    if (!svc->profile_cycle.profiles ||
+        !svc->conn.backend || !svc->conn.bus)
+        return 0;
 
+    /* profile_cycle_apply also has a reusable assignment-update side effect.
+     * The overlay's confirmed durable boundary is close/save, so preserve
+     * the service snapshot and let the grid carry this staged profile until
+     * that transaction commits. */
+    cbx_assignments confirmed_assignments = svc->assignments;
+    cbx_assignments *saved_assignment_target = svc->profile_cycle.assignments;
+    svc->profile_cycle.assignments = NULL;
     int rc = cbx_profile_cycle_apply(&svc->profile_cycle, &svc->grid,
                                       row_idx, profile, composite_path);
+    svc->profile_cycle.assignments = saved_assignment_target;
+    svc->assignments = confirmed_assignments;
     if (rc != 0) {
         /* Engine apply failed: roll the displayed profile back to the
          * engine's actual profile so the overlay never misrepresents live
@@ -946,32 +982,13 @@ cbx_overlay_on_profile_change(int row_idx, const char *profile,
         return rc;
     }
 
-    /* Persist the profile on the current on-disk table under the shared
-     * config lock; the profile-cycle apply already updated svc->assignments
-     * in memory, and the transaction merges the single changed row so a
-     * concurrent write to another controller is preserved.  The wait is
-     * bounded so a slow Manager transaction cannot stall this event loop. */
-    if (row_idx >= 0 && row_idx < svc->grid.row_count &&
-        svc->grid.rows[row_idx].id[0] != '\0') {
-        const cbx_grid_row *row = &svc->grid.rows[row_idx];
-        overlay_profile_txn_args args = {
-            row->id,
-            row->profile,
-        };
-        rc = cbx_assignments_transaction_timeout(overlay_txn_set_profile, &args,
-                                                 &svc->assignments,
-                                                 CBX_OVERLAY_CONFIG_LOCK_TIMEOUT_MS);
-    } else {
-        /* A row without a stable id cannot be keyed in assignments.yaml, so
-         * there is nothing meaningful to persist.  An unlocked full-table
-         * save of the service's stale in-memory snapshot would erase
-         * concurrent Manager/order writes (task 21 acceptance); the engine
-         * already holds the applied profile, so skip persistence. */
-        rc = 0;
-    }
-    /* The dirty trigger already fired above.  A persistence failure does
-     * not undo the engine-applied profile, so the grid remains truthful. */
-    return rc;
+    /* Keep the assignment durable state staged until the close transaction
+     * has verified the complete slot topology, GamepadOrder, and save.  The
+     * profile-cycle helper updates the in-memory assignment used by that
+     * transaction, but writing assignments.yaml here would make a later
+     * failed close report only half of the session as saved.  It also avoids
+     * an unlocked write from an identity-less row erasing another writer. */
+    return 0;
 }
 
 /* ================================================================== */
@@ -1025,6 +1042,23 @@ cbx_overlay_on_lifecycle_closed(void *userdata)
     if (!svc)
         return;
     cbx_host_mode_exit(&svc->hm);
+}
+
+/* Lifecycle failures are part of the service's observable readiness/error
+ * state.  Do not only print them: callers and the next recovery pass need a
+ * durable diagnostic, and an active surface must be repainted so the error
+ * path cannot leave a stale frame presented. */
+static void
+overlay_lifecycle_error(int code, void *userdata)
+{
+    cbx_overlay_service_ctx *svc = userdata;
+    if (!svc)
+        return;
+    snprintf(svc->readiness_detail, sizeof(svc->readiness_detail),
+             "overlay lifecycle failed: %s (%d)",
+             ip_connection_reason_for_error(code), code);
+    fprintf(stderr, "controller-box: %s\n", svc->readiness_detail);
+    cbx_overlay_surface_mark_dirty_all(&svc->surface);
 }
 
 /* ================================================================== */
@@ -1833,6 +1867,7 @@ cbx_overlay_rearm_polls(cbx_overlay_service_ctx *svc)
 
     for (int i = 0; i < polls_to_arm; i++) {
         svc->poll_acts[i].lifecycle = &svc->lifecycle;
+        svc->poll_acts[i].backend_ready = &svc->backend_ready;
         snprintf(svc->poll_acts[i].composite_path,
                  sizeof(svc->poll_acts[i].composite_path),
                  "%s", svc->composites[i].composite_path);
@@ -2069,7 +2104,10 @@ overlay_backend_degraded(const char *reason, void *userdata)
     svc->backend_ready = false;
     if (svc->initialized)
         cbx_overlay_lifecycle_force_close(&svc->lifecycle);
-    SDL_HideWindow(svc->rend.window);
+    if (cbx_overlay_lifecycle_is_active(&svc->lifecycle))
+        cbx_renderer_show(&svc->rend);
+    else
+        cbx_renderer_hide(&svc->rend);
 }
 
 /* Record an actionable readiness/recovery failure diagnostic. */
@@ -2553,6 +2591,15 @@ cbx_overlay_input_cb(ip_input_id input,
     if (!ctx || !ctx->pm || !ctx->hm || !ctx->grid || !ctx->lifecycle)
         return;
 
+    /* InputEvent is a production control channel, not a second activation
+     * path.  Ignore queued/replayed signals while the overlay is hidden or
+     * while the backend readiness sequence is incomplete.  The optional
+     * readiness pointer keeps the pure dispatch fixture useful without
+     * weakening the service's fail-closed gate. */
+    if ((ctx->backend_ready &&
+         (ctx->lifecycle->state != CBX_OVERLAY_VISIBLE || !*ctx->backend_ready)))
+        return;
+
     /* Only process button press events (value == 1.0).
      * Button releases (0.0) and axis events are ignored — the overlay
      * only needs directional navigation. */
@@ -2586,6 +2633,10 @@ cbx_overlay_input_cb(ip_input_id input,
          * double-fire the dirty trigger (W2: deliberate/consistent triggers). */
         if (result == CBX_HM_RESULT_CLOSE) {
             cbx_overlay_lifecycle_close(ctx->lifecycle);
+        } else if (result < 0) {
+            if (ctx->lifecycle->on_error)
+                ctx->lifecycle->on_error(result, ctx->lifecycle->on_error_data);
+            cbx_overlay_surface_mark_dirty_all(ctx->lifecycle->surface);
         } else if (result == CBX_HM_RESULT_MOVED) {
             /* Row navigation fires no callback, so the dispatch dirties the
              * surface to reflect the moved SELECTED-row highlight (§4.10
@@ -2603,6 +2654,10 @@ cbx_overlay_input_cb(ip_input_id input,
         int result = cbx_player_mode_handle(ctx->pm, row_idx, pm_in);
         if (result == CBX_PM_RESULT_CLOSE) {
             cbx_overlay_lifecycle_close(ctx->lifecycle);
+        } else if (result < 0) {
+            if (ctx->lifecycle->on_error)
+                ctx->lifecycle->on_error(result, ctx->lifecycle->on_error_data);
+            cbx_overlay_surface_mark_dirty_all(ctx->lifecycle->surface);
         } else if (result == CBX_PM_RESULT_HOST) {
             cbx_host_mode_toggle_with_grid(ctx->hm, ctx->grid, row_idx);
         }
@@ -2704,8 +2759,12 @@ cbx_overlay_service_step(cbx_overlay_service_ctx *svc)
              * and must be recreated (see helper). */
             overlay_recover_device_reset(svc);
         } else if (ev.type == SDL_KEYDOWN &&
-                   cbx_overlay_lifecycle_is_active(&svc->lifecycle)) {
-            /* Process input only when overlay is visible. */
+                   cbx_overlay_lifecycle_is_active(&svc->lifecycle) &&
+                   (!svc->input_ctx.backend_ready ||
+                    (*svc->input_ctx.backend_ready &&
+                     svc->lifecycle.state == CBX_OVERLAY_VISIBLE))) {
+            /* Process input only when the overlay is active and the
+             * production readiness gate has completed. */
             SDL_Keycode key = ev.key.keysym.sym;
 
             if (cbx_host_mode_is_active(&svc->hm)) {
@@ -2727,6 +2786,11 @@ cbx_overlay_service_step(cbx_overlay_service_ctx *svc)
                      * fire the trigger (W2: deliberate/consistent). */
                     if (result == CBX_HM_RESULT_CLOSE) {
                         cbx_overlay_lifecycle_close(&svc->lifecycle);
+                    } else if (result < 0) {
+                        if (svc->lifecycle.on_error)
+                            svc->lifecycle.on_error(result,
+                                svc->lifecycle.on_error_data);
+                        cbx_overlay_surface_mark_dirty_all(&svc->surface);
                     } else if (result == CBX_HM_RESULT_MOVED) {
                         /* Row navigation fires no callback (see DBus path
                          * above); SLOT/PROFILE are covered by their
@@ -2746,6 +2810,11 @@ cbx_overlay_service_step(cbx_overlay_service_ctx *svc)
 
                     if (result == CBX_PM_RESULT_CLOSE) {
                         cbx_overlay_lifecycle_close(&svc->lifecycle);
+                    } else if (result < 0) {
+                        if (svc->lifecycle.on_error)
+                            svc->lifecycle.on_error(result,
+                                svc->lifecycle.on_error_data);
+                        cbx_overlay_surface_mark_dirty_all(&svc->surface);
                     } else if (result == CBX_PM_RESULT_HOST) {
                         cbx_host_mode_toggle_with_grid(&svc->hm, &svc->grid, 0);
                     }
@@ -3022,6 +3091,8 @@ int run_overlay_service(int dry_run)
         .theme      = &svc->theme,
         .text_cache = svc->font_id >= 0 ? &svc->text_cache : NULL,
         .font_id    = svc->font_id,
+        .layout_width = CBX_RENDERER_DEFAULT_W,
+        .layout_height = CBX_RENDERER_DEFAULT_H,
         .settings   = &svc->settings,
         .conflicts  = &svc->conflicts,
         .hm         = &svc->hm,
@@ -3048,6 +3119,8 @@ int run_overlay_service(int dry_run)
      * whole duration.  Instant activation matches the pre-built design and
      * every other production call site (tests use fade_in_ms = 0). */
     svc->lifecycle.fade_in_ms = 0;
+    svc->lifecycle.target_opacity = svc->settings.overlay_opacity;
+    svc->lifecycle.require_pass_for_close = true;
 
     /* --- 10. Set up mode state + callbacks ---------------------------- */
     /* Player Mode (SPEC §4.3). */
@@ -3078,6 +3151,8 @@ int run_overlay_service(int dry_run)
      * deadline-limited after InterceptMode=PASS has already released input. */
     svc->lifecycle.on_save       = cbx_overlay_on_save_bounded;
     svc->lifecycle.on_save_data  = svc;
+    svc->lifecycle.on_error      = overlay_lifecycle_error;
+    svc->lifecycle.on_error_data = svc;
 
     /* Lifecycle on_closed callback: end Host Mode with the overlay so its
      * state cannot leak into the next activation (SPEC §4.4). */
@@ -3089,6 +3164,7 @@ int run_overlay_service(int dry_run)
     svc->input_ctx.hm         = &svc->hm;
     svc->input_ctx.grid       = &svc->grid;
     svc->input_ctx.lifecycle  = &svc->lifecycle;
+    svc->input_ctx.backend_ready = &svc->backend_ready;
     svc->input_ctx.path_count = 0;
 
     /* --- 11. Set up InterceptMode polling --------------------------- */

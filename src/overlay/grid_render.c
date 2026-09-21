@@ -361,9 +361,15 @@ cbx_select_grid_render(SDL_Renderer *r,
 {
     if (!r || !ctx || !ctx->grid)
         return 0;  /* NULL-safe no-op */
+    (void)clip; /* SDL has already installed the clip rectangle. */
 
     cbx_select_grid *g = ctx->grid;
-    SDL_Rect area = clip ? *clip : (SDL_Rect){0, 0, 800, 600};
+    /* `clip` is only a scissor region.  Layout is always computed from the
+     * complete surface so a partial repaint lands on the same cells as a
+     * full repaint. */
+    int layout_w = ctx->layout_width > 0 ? ctx->layout_width : 800;
+    int layout_h = ctx->layout_height > 0 ? ctx->layout_height : 600;
+    SDL_Rect area = { 0, 0, layout_w, layout_h };
 
     /* Default colors if no theme. */
     SDL_Color bg       = {30, 30, 40, 255};

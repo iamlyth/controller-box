@@ -100,6 +100,14 @@ typedef struct {
     /* Error tracking for InterceptMode set failures. */
     int error_count;
     int max_errors;
+    /* Production closes must not hide the overlay when PASS or the staged
+     * save fails: gameplay restoration is only truthful after release is
+     * confirmed.  Kept explicit so state-machine-only callers can retain
+     * the historical best-effort policy. */
+    bool require_pass_for_close;
+    /* A failed close remains visible; ignore the poll's PASS deactivation
+     * edge until the user explicitly retries close. */
+    bool close_blocked;
 
     /* Callbacks (all optional — NULL = skipped). */
     cbx_overlay_transition_cb on_visible;

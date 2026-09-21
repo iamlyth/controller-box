@@ -47,6 +47,8 @@
  */
 typedef struct {
     cbx_overlay_lifecycle *lifecycle;
+    /* Optional readiness gate; production points at the service flag. */
+    const bool *backend_ready;
     char composite_path[CBX_MAX_PATH_LEN];
 } cbx_poll_activation_ctx;
 
@@ -78,6 +80,9 @@ typedef struct {
     cbx_host_mode         *hm;
     cbx_select_grid       *grid;
     cbx_overlay_lifecycle *lifecycle;
+    /* Production readiness gate.  Optional for small unit fixtures that
+     * exercise the pure dispatch path; the service always wires it. */
+    const bool           *backend_ready;
 
     /* Device path→row index mapping. */
     char  device_paths[CBX_MAX_DBUS_DEVICES][256];
@@ -378,9 +383,10 @@ int cbx_overlay_on_save_bounded(void *userdata);
 int cbx_overlay_on_slot_change(int row_idx, int new_slot, void *userdata);
 
 /*
- * Player-mode profile-change callback: loads the new profile on
- * InputPlumber via LoadProfilePath DBus call and marks the surface dirty.
- * Fired by cbx_player_mode_handle().
+ * Player-mode profile-change callback: verifies the new profile on
+ * InputPlumber via LoadProfilePath DBus call, keeps the assignment staged
+ * until close/save, and marks the surface dirty. Fired by
+ * cbx_player_mode_handle().
  */
 int cbx_overlay_on_profile_change(int row_idx, const char *profile,
                                      const char *composite_path,
