@@ -519,6 +519,7 @@ def run_implementation_phase(
     roles: dict, config: dict, args,
     task: Task, root: Path,
     runners: list = None,
+    plan = None,
     repair_context: str = "",
     verification_output: str = "",
 ) -> tuple[str, list[SubagentResult]]:
@@ -792,7 +793,8 @@ def run_implementation_phase(
         task.status = "completed"
         task.evidence = (f"verification exit {vresult.exit_code} "
                         f"on {vresult.runner}")
-        PLAN_PATH.write_text(dump(plan), encoding="utf-8")
+        if plan:
+            PLAN_PATH.write_text(dump(plan), encoding="utf-8")
         for f in patches_dir.glob("*.patch"):
             f.unlink()
         msg = (f"factory: task {task.id} "
@@ -1072,6 +1074,7 @@ def cmd_run(args, config: dict, env: dict) -> int:
                     commit, dev_results = run_implementation_phase(
                         roles, config, args, task, ROOT,
                         runners=env["runners"],
+                        plan=plan,
                         verification_output=last_voutput,
                     )
                     impl_time_total += time.time() - impl_start
@@ -1110,7 +1113,8 @@ def cmd_run(args, config: dict, env: dict) -> int:
                         f"attempt(s); last exit "
                         f"{vresult.exit_code if vresult else 'N/A'}"
                     )
-                    PLAN_PATH.write_text(dump(plan), encoding="utf-8")
+                    if plan:
+                        PLAN_PATH.write_text(dump(plan), encoding="utf-8")
                     # No separate commit — plan update folds into next
                     # implementation commit via git add -A.
 
@@ -1144,7 +1148,8 @@ def cmd_run(args, config: dict, env: dict) -> int:
                 task.status = "completed"
                 task.evidence = (f"verification exit {vresult.exit_code} "
                                 f"on {vresult.runner}")
-                PLAN_PATH.write_text(dump(plan), encoding="utf-8")
+                if plan:
+                    PLAN_PATH.write_text(dump(plan), encoding="utf-8")
 
                 # ── 3. AUDIT ──
                 print(f"  audit: running specialist auditors...",
@@ -1234,7 +1239,8 @@ def cmd_run(args, config: dict, env: dict) -> int:
                             f"verification passed but audit BLOCKERs "
                             f"unresolved after {max_repairs} repair cycles"
                         )
-                        PLAN_PATH.write_text(dump(plan), encoding="utf-8")
+                        if plan:
+                            PLAN_PATH.write_text(dump(plan), encoding="utf-8")
                         # No separate commit — plan update folds into next
                         # implementation commit via git add -A.
 
