@@ -658,6 +658,57 @@ test_request_close_intercept_mode_fail(void **state)
      * first (SPEC §11) but still runs on_save even when that set fails. */
     assert_int_equal(a.assignment_count, 1);
 }
+
+/*
+ * Production close path (require_pass_for_close = true): a failed release
+ * must not run the staged save, must stay VISIBLE with close_blocked set,
+ * and cbx_overlay_request_close must restore the caller's temporary
+ * on_save/on_save_data even though the close was rejected.
+ */
+static int
+sentinel_save(void *userdata)
+{
+    (void)userdata;
+    return 0;
+}
+
+static void
+test_request_close_fail_closed_restores_context(void **state)
+{
+    close_fixture *f = *state;
+    cbx_select_grid g;
+    build_test_grid(&g, 1);
+    move_to_col(&g, 0, 1);
+
+    cbx_assignments a;
+    cbx_assignments_init(&a);
+
+    f->lc.require_pass_for_close = true;
+    cbx_overlay_lifecycle_activate(&f->lc);
+    assert_int_equal(cbx_overlay_lifecycle_get_state(&f->lc),
+                     CBX_OVERLAY_VISIBLE);
+
+    /* Pre-existing caller callback that must survive the failed close. */
+    int sentinel_ctx = 0;
+    f->lc.on_save = sentinel_save;
+    f->lc.on_save_data = &sentinel_ctx;
+
+    /* Release (PASS) fails. */
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_COMPOSITE,
+                               "InterceptMode", IP_ERR_NO_REPLY);
+
+    int rc = cbx_overlay_request_close(&f->lc, &g, &a);
+    assert_int_equal(rc, IP_ERR_NO_REPLY);
+    assert_int_equal(cbx_overlay_lifecycle_get_state(&f->lc),
+                     CBX_OVERLAY_VISIBLE);
+    assert_true(f->lc.close_blocked);
+    /* The staged save never ran: nothing was persisted. */
+    assert_int_equal(a.assignment_count, 0);
+    /* Temporary wiring was restored on the rejected close. */
+    assert_ptr_equal(f->lc.on_save, sentinel_save);
+    assert_ptr_equal(f->lc.on_save_data, &sentinel_ctx);
+}
+
 static void
 test_sync_full_table_enospc(void **state)
 {
@@ -724,6 +775,9 @@ main(void)
                                           setup_close, teardown_close),
         cmocka_unit_test_setup_teardown(test_request_close_intercept_mode_fail,
                                           setup_close, teardown_close),
+        cmocka_unit_test_setup_teardown(
+            test_request_close_fail_closed_restores_context,
+            setup_close, teardown_close),
     };
 
     return cmocka_run_group_tests(tests, NULL, NULL);

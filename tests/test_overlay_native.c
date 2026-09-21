@@ -391,6 +391,8 @@ static int native_setup(void **state)
     f->svc->lifecycle.fade_in_ms = 0;
     f->svc->lifecycle.fade_out_ms = 0;
     f->svc->lifecycle.state = CBX_OVERLAY_IDLE;
+    /* Match run_overlay_service(): production closes are fail-closed. */
+    f->svc->lifecycle.require_pass_for_close = true;
 
     /* 17. Wire on_save to the bounded close-path callback — the exact
      * production wiring, so the close deadline is exercised on real DBus. */
@@ -1203,6 +1205,50 @@ test_host_mode_exits_on_close_native(void **state)
     cbx_overlay_service_step(svc);
     assert_true(cbx_host_mode_is_active(&svc->hm));
     assert_int_equal(cbx_host_mode_get_host_row(&svc->hm), 1);
+}
+
+/* --- Task 20: close_blocked suppresses the PASS deactivation edge --- */
+/*
+ * A failed production close (PASS release failure) leaves the overlay VISIBLE
+ * and sets close_blocked.  The InterceptMode=PASS deactivation edge produced
+ * by that failed attempt must not recursively invoke a second close; only an
+ * explicit close retry may clear the block.  This drives the exact production
+ * on_intercept_deactivating callback on the fail-closed configuration the
+ * fixture now shares with run_overlay_service().
+ */
+static void
+test_close_blocked_ignores_pass_edge(void **state)
+{
+    native_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    activate_overlay(f);
+    assert_true(svc->lifecycle.require_pass_for_close);
+
+    /* Force a failed release: with no composite path set_intercept_pass
+     * returns -EINVAL before touching the bus, driving the real fail-closed
+     * branch. */
+    char saved_path[CBX_MAX_PATH_LEN];
+    snprintf(saved_path, sizeof(saved_path), "%s",
+             svc->lifecycle.composite_path);
+    svc->lifecycle.composite_path[0] = '\0';
+
+    on_intercept_deactivating(&svc->lifecycle);
+    assert_int_equal(svc->lifecycle.state, CBX_OVERLAY_VISIBLE);
+    assert_true(svc->lifecycle.close_blocked);
+    assert_int_equal(svc->assignments.assignment_count, 0);
+
+    /* The PASS deactivation edge from the failed attempt is ignored. */
+    on_intercept_deactivating(&svc->lifecycle);
+    assert_int_equal(svc->lifecycle.state, CBX_OVERLAY_VISIBLE);
+
+    /* An explicit close retry (the B-press path) with a working release
+     * completes and clears the block. */
+    snprintf(svc->lifecycle.composite_path,
+             sizeof(svc->lifecycle.composite_path), "%s", saved_path);
+    assert_int_equal(cbx_overlay_lifecycle_close(&svc->lifecycle), 0);
+    assert_false(svc->lifecycle.close_blocked);
+    assert_int_equal(svc->lifecycle.state, CBX_OVERLAY_IDLE);
 }
 
 /* --- O11: Multi-controller independence via DBus InputEvent --- */
@@ -2583,6 +2629,8 @@ static const struct CMUnitTest tests[] = {
     cmocka_unit_test_setup_teardown(test_o10b_close_conflict_resolution,
                                      native_setup, native_teardown),
     cmocka_unit_test_setup_teardown(test_host_mode_exits_on_close_native,
+                                     native_setup, native_teardown),
+    cmocka_unit_test_setup_teardown(test_close_blocked_ignores_pass_edge,
                                      native_setup, native_teardown),
 
     /* O11 — Multi-controller independence */

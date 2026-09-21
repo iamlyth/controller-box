@@ -464,6 +464,103 @@ test_save_fail_reports_error(void **state)
     assert_int_equal(f->lc.state, CBX_OVERLAY_IDLE);
 }
 
+/* --- Production fail-closed close semantics --------------------------- */
+/*
+ * Production sets require_pass_for_close = true (run_overlay_service).  A
+ * failed release or a failed save must then leave the overlay VISIBLE and
+ * block the PASS deactivation edge, so hidden/IDLE is only ever reached
+ * after gameplay input was really released.  These are the truthfulness
+ * guarantees of Task 20; without these tests deleting a gate would keep the
+ * suite green.
+ */
+
+static void
+test_close_pass_fail_fail_closed(void **state)
+{
+    lc_fixture *f = FIX(state);
+    f->lc.require_pass_for_close = true;
+    cbx_overlay_lifecycle_activate(&f->lc);
+    assert_int_equal(f->lc.state, CBX_OVERLAY_VISIBLE);
+
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_COMPOSITE,
+                               "InterceptMode", IP_ERR_NO_REPLY);
+
+    int rc = cbx_overlay_lifecycle_close(&f->lc);
+    /* A failed release is not a close. */
+    assert_int_equal(rc, IP_ERR_NO_REPLY);
+    assert_int_equal(f->lc.state, CBX_OVERLAY_VISIBLE);
+    assert_true(f->lc.close_blocked);
+    /* The staged save never ran and the surface was not hidden. */
+    assert_int_equal(f->callbacks.save_fired, 0);
+    assert_int_equal(f->callbacks.closed_fired, 0);
+    assert_int_equal(f->callbacks.error_fired, 1);
+    assert_int_equal(f->callbacks.error_code, IP_ERR_NO_REPLY);
+}
+
+static void
+test_close_save_fail_fail_closed(void **state)
+{
+    lc_fixture *f = FIX(state);
+    f->lc.require_pass_for_close = true;
+    cbx_overlay_lifecycle_activate(&f->lc);
+
+    /* PASS succeeds, but the staged save fails. */
+    f->callbacks.save_rc = -EIO;
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                            "InterceptMode", "1");
+
+    int rc = cbx_overlay_lifecycle_close(&f->lc);
+    assert_int_equal(rc, -EIO);
+    assert_int_equal(f->lc.state, CBX_OVERLAY_VISIBLE);
+    assert_true(f->lc.close_blocked);
+    assert_int_equal(f->callbacks.save_fired, 1);
+    assert_int_equal(f->callbacks.closed_fired, 0);
+    assert_int_equal(f->callbacks.error_fired, 1);
+    assert_int_equal(f->callbacks.error_code, -EIO);
+}
+
+static void
+test_force_close_pass_fail_fail_closed(void **state)
+{
+    lc_fixture *f = FIX(state);
+    f->lc.require_pass_for_close = true;
+    cbx_overlay_lifecycle_activate(&f->lc);
+
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_COMPOSITE,
+                               "InterceptMode", IP_ERR_NO_REPLY);
+
+    cbx_overlay_lifecycle_force_close(&f->lc);
+    /* Failed release must not be reported as a restored (IDLE) state. */
+    assert_int_equal(f->lc.state, CBX_OVERLAY_VISIBLE);
+    assert_true(f->lc.close_blocked);
+    assert_int_equal(f->callbacks.closed_fired, 0);
+    assert_int_equal(f->callbacks.save_fired, 0);
+}
+
+static void
+test_close_blocked_retry_clears(void **state)
+{
+    lc_fixture *f = FIX(state);
+    f->lc.require_pass_for_close = true;
+    cbx_overlay_lifecycle_activate(&f->lc);
+
+    /* First attempt blocks on a failed release. */
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_COMPOSITE,
+                               "InterceptMode", IP_ERR_NO_REPLY);
+    assert_int_equal(cbx_overlay_lifecycle_close(&f->lc), IP_ERR_NO_REPLY);
+    assert_true(f->lc.close_blocked);
+    assert_int_equal(f->lc.state, CBX_OVERLAY_VISIBLE);
+
+    /* Retry with a working release completes and clears the block. */
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                            "InterceptMode", "1");
+    assert_int_equal(cbx_overlay_lifecycle_close(&f->lc), 0);
+    assert_false(f->lc.close_blocked);
+    assert_int_equal(f->lc.state, CBX_OVERLAY_IDLE);
+    assert_int_equal(f->callbacks.closed_fired, 1);
+    assert_int_equal(f->callbacks.save_fired, 1);
+}
+
 /* --- Close ordering: PASS before save (SPEC §11) ---------------------- */
 
 typedef struct {
@@ -782,6 +879,17 @@ main(void)
                                           setup, teardown),
         cmocka_unit_test_setup_teardown(test_save_fail_reports_error,
                                           setup, teardown),
+
+        /* Production fail-closed close semantics (require_pass_for_close). */
+        cmocka_unit_test_setup_teardown(test_close_pass_fail_fail_closed,
+                                          setup, teardown),
+        cmocka_unit_test_setup_teardown(test_close_save_fail_fail_closed,
+                                          setup, teardown),
+        cmocka_unit_test_setup_teardown(test_force_close_pass_fail_fail_closed,
+                                          setup, teardown),
+        cmocka_unit_test_setup_teardown(test_close_blocked_retry_clears,
+                                          setup, teardown),
+
         cmocka_unit_test_setup_teardown(test_close_sets_pass_before_save,
                                           setup, teardown),
 
