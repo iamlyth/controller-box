@@ -617,6 +617,18 @@ overlay_apply_grid_engine(cbx_overlay_service_ctx *svc, bool clear_all,
     if (!svc || !svc->conn.backend || !svc->conn.bus)
         return -EINVAL;
 
+    /* Never send duplicate slot ownership to InputPlumber.  During an active
+     * edit a conflict is intentionally retained for the user to resolve; a
+     * hotplug/recovery pass must fail closed rather than mutate half the
+     * topology and report success.  The close path resolves free conflicts
+     * before calling this function. */
+    cbx_conflict_list live_conflicts;
+    cbx_conflict_list_init(&live_conflicts);
+    if (cbx_conflict_detect(&svc->grid, &live_conflicts) != 0)
+        return -EINVAL;
+    if (live_conflicts.count > 0)
+        return -EADDRINUSE;
+
     /* The grid-derived order is the baseline (current slot order) and is
      * also the set of controllers currently enumerated.  It is kept aside so
      * a restored durable order can be augmented rather than allowed to drop
@@ -795,11 +807,23 @@ int
 cbx_overlay_on_save(void *userdata)
 {
     cbx_overlay_service_ctx *svc = (cbx_overlay_service_ctx *)userdata;
+    if (!svc)
+        return -EINVAL;
 
     /* Detect and resolve conflicts (SPEC §4.5). */
     cbx_conflict_list_init(&svc->conflicts);
-    cbx_conflict_detect(&svc->grid, &svc->conflicts);
+    int conflict_rc = cbx_conflict_detect(&svc->grid, &svc->conflicts);
+    if (conflict_rc != 0)
+        return conflict_rc;
     cbx_conflict_resolve(&svc->grid, &svc->conflicts);
+    if (svc->conflicts.unresolved_count > 0) {
+        /* Keep the conflict list and grid untouched enough to render the red
+         * row; no routing or persistence operation is safe here. */
+        cbx_overlay_surface_mark_dirty_all(&svc->surface);
+        return -ENOSPC;
+    }
+    cbx_conflict_list_init(&svc->conflicts);
+    cbx_conflict_detect(&svc->grid, &svc->conflicts);
 
     /* Apply the conflict-resolved topology to the engine (exact
      * TargetDevices replacement, verified profile load, GamepadOrder). */
@@ -819,6 +843,7 @@ cbx_overlay_on_save(void *userdata)
                                              CBX_OVERLAY_CONFIG_LOCK_TIMEOUT_MS);
     if (rc != 0)
         return rc;
+    svc->grid.live_edits = false;
 
     /* Save/close path: the presented frame reflects the persisted and
      * conflict-resolved topology, so it is deliberately kept in the
@@ -1833,6 +1858,57 @@ cbx_overlay_rearm_polls(cbx_overlay_service_ctx *svc)
     return 0;
 }
 
+/* Build columns from the live target objects on every topology pass.  A
+ * same-count DeviceType change is still a rebuild, and a zero-target model
+ * deliberately produces only the Unassigned column.  All type probes happen
+ * before the grid is touched so a partial DBus snapshot cannot discard active
+ * edits. */
+static int
+overlay_rebuild_grid_preserving(cbx_overlay_service_ctx *svc,
+                                      int composite_count)
+{
+    if (!svc || composite_count < 0 ||
+        composite_count > CBX_GRID_MAX_ROWS)
+        return -EINVAL;
+
+    char target_types[CBX_MAX_CONTROLLERS][CBX_MAX_TYPE_LEN];
+    memset(target_types, 0, sizeof(target_types));
+    int target_count = svc->model.target_count;
+    if (target_count < 0 || target_count > CBX_MAX_CONTROLLERS)
+        return -EINVAL;
+    for (int i = 0; i < target_count; i++) {
+        char *dtype = NULL;
+        int rc = ip_target_get_device_type(svc->conn.backend,
+                                            svc->conn.bus,
+                                            svc->model.targets[i].path,
+                                            &dtype);
+        if (rc != 0 || !dtype || !dtype[0]) {
+            /* A type read can race publication.  Keep a previously known
+             * column type (or the configured type) rather than inventing a
+             * xb360 column; a completely unknown type still fails closed. */
+            const char *fallback = NULL;
+            if (i + 1 < svc->grid.col_count &&
+                svc->grid.cols[i + 1].device_type[0])
+                fallback = svc->grid.cols[i + 1].device_type;
+            else if (i < svc->settings.virtual_controllers.count &&
+                     svc->settings.virtual_controllers.types[i][0])
+                fallback = svc->settings.virtual_controllers.types[i];
+            free(dtype);
+            if (!fallback)
+                return rc != 0 ? rc : -EPROTO;
+            snprintf(target_types[i], CBX_MAX_TYPE_LEN, "%s", fallback);
+        } else {
+            snprintf(target_types[i], CBX_MAX_TYPE_LEN, "%s", dtype);
+            free(dtype);
+        }
+    }
+
+    const char (*types_arg)[CBX_MAX_TYPE_LEN] = target_count > 0
+        ? (const char (*)[CBX_MAX_TYPE_LEN])target_types : NULL;
+    return cbx_dynamic_columns_rebuild(&svc->grid, types_arg, target_count,
+        svc->composites, composite_count, &svc->assignments);
+}
+
 /* Forward declaration: the readiness diagnostic helper is defined below,
  * after the hotplug reconciler that also records required-step failures. */
 static void overlay_set_readiness_detail(cbx_overlay_service_ctx *svc,
@@ -1894,15 +1970,6 @@ cbx_overlay_reconcile_hotplug(cbx_overlay_service_ctx *svc)
     if (new_comp_count > CBX_MAX_COMPOSITES)
         new_comp_count = CBX_MAX_COMPOSITES;
 
-    /* Save current profiles before grid rebuild. */
-    char saved_profiles[CBX_GRID_MAX_PROFILES][CBX_GRID_PROFILE_LEN];
-    int saved_profile_count = svc->grid.profile_count;
-    if (saved_profile_count > CBX_GRID_MAX_PROFILES)
-        saved_profile_count = CBX_GRID_MAX_PROFILES;
-    for (int i = 0; i < saved_profile_count; i++)
-        snprintf(saved_profiles[i], sizeof(saved_profiles[i]),
-                 "%s", svc->grid.profiles[i]);
-
     /* Update composite info. */
     svc->comp_count = new_comp_count;
     if (identity_changed || old_comp_count != new_comp_count) {
@@ -1913,34 +1980,14 @@ cbx_overlay_reconcile_hotplug(cbx_overlay_service_ctx *svc)
                                  svc->conn.backend, svc->conn.bus);
     }
 
-    /* Check if target count changed → rebuild with dynamic columns
-     * (SPEC §4.7).  Otherwise just rebuild the grid rows. */
-    if (cbx_dynamic_columns_needs_rebuild(&svc->grid,
-                                             svc->model.target_count)) {
-        char target_types[CBX_MAX_CONTROLLERS][CBX_MAX_TYPE_LEN];
-        int target_count = svc->model.target_count;
-        if (target_count > CBX_MAX_CONTROLLERS)
-            target_count = CBX_MAX_CONTROLLERS;
-        for (int i = 0; i < target_count; i++) {
-            char *dtype = NULL;
-            if (ip_target_get_device_type(svc->conn.backend,
-                                            svc->conn.bus,
-                                            svc->model.targets[i].path,
-                                            &dtype) == 0 && dtype) {
-                snprintf(target_types[i], CBX_MAX_TYPE_LEN, "%s", dtype);
-                free(dtype);
-            } else {
-                snprintf(target_types[i], CBX_MAX_TYPE_LEN, "xb360");
-            }
-        }
-        cbx_dynamic_columns_rebuild(&svc->grid,
-                                      (const char (*)[CBX_MAX_TYPE_LEN])target_types,
-                                      target_count, svc->composites,
-                                      new_comp_count, &svc->assignments);
-    } else {
-        cbx_select_grid_build(&svc->grid, svc->composites,
-                               new_comp_count, &svc->settings,
-                               &svc->assignments);
+    /* Always rebuild through the preserving path.  This handles row/path
+     * changes even when the target count is unchanged, catches same-count
+     * DeviceType changes, and safely supports zero targets. */
+    int grid_rc = overlay_rebuild_grid_preserving(svc, new_comp_count);
+    if (grid_rc != 0) {
+        overlay_set_readiness_detail(svc, "dynamic grid rebuild", grid_rc);
+        overlay_set_call_deadline(svc, 0);
+        return grid_rc;
     }
 
     /* Restore profiles onto the rebuilt grid. */
@@ -2207,8 +2254,11 @@ overlay_recover(cbx_overlay_service_ctx *svc)
         fill_composite_info(&svc->composites[i], &svc->model.composites[i],
                              overlay_identity_for(svc, i),
                              svc->conn.backend, svc->conn.bus);
-    cbx_select_grid_build(&svc->grid, svc->composites, svc->comp_count,
-                           &svc->settings, &svc->assignments);
+    rc = overlay_rebuild_grid_preserving(svc, svc->comp_count);
+    if (rc != 0) {
+        overlay_set_readiness_detail(svc, "dynamic grid rebuild", rc);
+        goto out;
+    }
     cbx_profile_cycle_load_profiles(&svc->grid, &svc->profiles);
 
     /* Backend recovery rebuilt the grid from a fresh enumeration.  Re-resolve

@@ -207,10 +207,24 @@ cbx_overlay_lifecycle_close(cbx_overlay_lifecycle *lc)
      * The caller bounds this callback's synchronous DBus chain with the same
      * wall-clock deadline used by readiness/recovery so a wedged bus cannot
      * hold the UI thread (or the fade-out/hide) indefinitely. */
+    int save_rc = 0;
     if (lc->on_save) {
-        int rc = lc->on_save(lc->on_save_data);
-        if (rc < 0 && lc->on_error)
-            lc->on_error(rc, lc->on_error_data);
+        save_rc = lc->on_save(lc->on_save_data);
+        if (save_rc < 0 && lc->on_error)
+            lc->on_error(save_rc, lc->on_error_data);
+    }
+
+    /* An unresolved conflict is not a close.  Returning to VISIBLE keeps
+     * the red/safe state actionable and prevents duplicate routing from being
+     * reported as a successful resolution.  PASS has already been requested
+     * above, so a later retry starts from a known input mode.  Other backend
+     * save errors retain the historical close semantics; the broader close
+     * error contract belongs to the dependent lifecycle task. */
+    if (save_rc == -ENOSPC) {
+        lc->state = CBX_OVERLAY_VISIBLE;
+        lc->visible_ticks = 0;
+        show_surface(lc);
+        return save_rc;
     }
 
     if (lc->fade_out_ms == 0) {

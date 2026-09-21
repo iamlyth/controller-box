@@ -63,6 +63,11 @@ int cbx_dynamic_columns_build_vcs(const char (*types)[CBX_MAX_TYPE_LEN],
 bool cbx_dynamic_columns_needs_rebuild(const cbx_select_grid *grid,
                                           int target_count);
 
+/* Return whether the current target columns have changed type/order. */
+bool cbx_dynamic_columns_types_changed(const cbx_select_grid *grid,
+                                        const char (*target_types)[CBX_MAX_TYPE_LEN],
+                                        int target_type_count);
+
 /*
  * Rebuild the grid with columns from target device types.
  *
@@ -73,7 +78,8 @@ bool cbx_dynamic_columns_needs_rebuild(const cbx_select_grid *grid,
  *
  * @param grid              The select grid to rebuild (profile list preserved).
  * @param target_types      Array of device type strings per target.
- * @param target_type_count Number of target types.
+ * @param target_type_count Number of target types (zero is valid; pass
+ *                          NULL for target_types in that case).
  * @param composites        Composite device info for rows.
  * @param composite_count   Number of composite devices.
  * @param assignments       Current assignments (for slot/profile lookup).

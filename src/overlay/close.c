@@ -132,6 +132,8 @@ cbx_close_on_save(void *userdata)
     /* 2. Resolve conflicts (move second arrivals to free P-slots). */
     if (conflicts.count > 0)
         cbx_conflict_resolve(ctx->grid, &conflicts);
+    if (conflicts.unresolved_count > 0)
+        return -ENOSPC; /* retain the visible duplicate as an actionable error */
 
     /* 3+4. Sync grid state onto the current on-disk assignments and save in
      * one serialized transaction, so a concurrent Manager/overlay write is
@@ -142,6 +144,9 @@ cbx_close_on_save(void *userdata)
     if (rc < 0)
         return rc;
 
+    /* The session edits are now durable; later topology rebuilds should use
+     * the committed table unless a new navigation event marks the grid dirty. */
+    ctx->grid->live_edits = false;
     return 0;
 }
 
@@ -159,8 +164,16 @@ cbx_overlay_request_close(cbx_overlay_lifecycle *lc,
      * the callback invocation.  After close returns, on_save_data is
      * never used again (the lifecycle never calls on_save twice). */
     cbx_close_ctx ctx = { .grid = grid, .assignments = assignments };
+    cbx_overlay_save_cb previous_save = lc->on_save;
+    void *previous_data = lc->on_save_data;
     lc->on_save = cbx_close_on_save;
     lc->on_save_data = &ctx;
 
-    return cbx_overlay_lifecycle_close(lc);
+    int rc = cbx_overlay_lifecycle_close(lc);
+    /* The context is stack-owned.  Restore both callback fields even when a
+     * close is rejected or the save fails and lifecycle returns to VISIBLE;
+     * no later tick may dereference a dead stack address. */
+    lc->on_save = previous_save;
+    lc->on_save_data = previous_data;
+    return rc;
 }

@@ -27,6 +27,17 @@ clamp_int(int v, int lo, int hi)
     return v;
 }
 
+static uint64_t
+next_arrival_sequence(cbx_select_grid *g)
+{
+    if (g->next_arrival_seq == 0)
+        g->next_arrival_seq = 1;
+    uint64_t seq = g->next_arrival_seq++;
+    if (g->next_arrival_seq == 0)
+        g->next_arrival_seq = 1;
+    return seq;
+}
+
 /* --- Lifecycle -------------------------------------------------------- */
 
 void
@@ -35,6 +46,7 @@ cbx_select_grid_init(cbx_select_grid *g)
     if (!g)
         return;
     memset(g, 0, sizeof(*g));
+    g->next_arrival_seq = 1;
 }
 
 /* --- Build ----------------------------------------------------------- */
@@ -52,7 +64,7 @@ cbx_select_grid_build(cbx_select_grid *g,
         return -EINVAL;
     if (composite_count > 0 && !composites)
         return -EINVAL;
-    if (settings->virtual_controllers.count < 1 ||
+    if (settings->virtual_controllers.count < 0 ||
         settings->virtual_controllers.count > CBX_MAX_CONTROLLERS)
         return -EINVAL;
 
@@ -107,6 +119,12 @@ cbx_select_grid_build(cbx_select_grid *g,
                 }
             }
         }
+
+        /* Durable assignments have no historical arrival timestamp.  Give
+         * assigned rows a deterministic initial claim order; live movement
+         * replaces this with a newer sequence in the navigation functions. */
+        if (row->cur_col > CBX_GRID_UNASSIGNED_COL)
+            g->row_arrival_seq[i] = next_arrival_sequence(g);
     }
 
     return 0;
@@ -166,6 +184,9 @@ cbx_select_grid_move_left(cbx_select_grid *g, int row_idx)
         return -ERANGE;  /* already at Unassigned (leftmost) */
 
     g->rows[row_idx].cur_col--;
+    g->live_edits = true;
+    if (g->rows[row_idx].cur_col > CBX_GRID_UNASSIGNED_COL)
+        g->row_arrival_seq[row_idx] = next_arrival_sequence(g);
     return 0;
 }
 
@@ -179,6 +200,9 @@ cbx_select_grid_move_right(cbx_select_grid *g, int row_idx)
         return -ERANGE;  /* already at rightmost column */
 
     g->rows[row_idx].cur_col++;
+    g->live_edits = true;
+    if (g->rows[row_idx].cur_col > CBX_GRID_UNASSIGNED_COL)
+        g->row_arrival_seq[row_idx] = next_arrival_sequence(g);
     return 0;
 }
 
@@ -199,6 +223,7 @@ cbx_select_grid_cycle_profile_up(cbx_select_grid *g, int row_idx)
 
     strncpy(row->profile, g->profiles[idx], CBX_GRID_PROFILE_LEN - 1);
     row->profile[CBX_GRID_PROFILE_LEN - 1] = '\0';
+    g->live_edits = true;
     return 0;
 }
 
@@ -219,6 +244,7 @@ cbx_select_grid_cycle_profile_down(cbx_select_grid *g, int row_idx)
 
     strncpy(row->profile, g->profiles[idx], CBX_GRID_PROFILE_LEN - 1);
     row->profile[CBX_GRID_PROFILE_LEN - 1] = '\0';
+    g->live_edits = true;
     return 0;
 }
 

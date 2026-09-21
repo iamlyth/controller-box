@@ -7,6 +7,7 @@
 
 #include <errno.h>
 #include <string.h>
+#include <stdint.h>
 
 void
 cbx_conflict_list_init(cbx_conflict_list *list)
@@ -14,6 +15,20 @@ cbx_conflict_list_init(cbx_conflict_list *list)
     if (!list)
         return;
     memset(list, 0, sizeof(*list));
+}
+
+static bool
+row_arrived_before(const cbx_select_grid *grid, int lhs, int rhs)
+{
+    uint64_t lseq = grid->row_arrival_seq[lhs];
+    uint64_t rseq = grid->row_arrival_seq[rhs];
+    if (lseq != 0 && rseq != 0 && lseq != rseq)
+        return lseq < rseq;
+    if (lseq != 0 && rseq == 0)
+        return true;
+    if (lseq == 0 && rseq != 0)
+        return false;
+    return lhs < rhs;
 }
 
 int
@@ -25,29 +40,37 @@ cbx_conflict_detect(const cbx_select_grid *grid, cbx_conflict_list *out)
     cbx_conflict_list_init(out);
 
     int row_count = cbx_select_grid_get_row_count(grid);
-    if (row_count <= 0)
+    if (row_count < 0 || row_count > CBX_GRID_MAX_ROWS)
+        return -EINVAL;
+    if (row_count == 0)
         return 0;
 
-    /*
-     * For each row, check if its column (> 0) is also used by an
-     * earlier row. If so, this row is a "second arrival" → conflicted.
-     */
+    /* Choose an owner by claim time, not by the current row index. */
     for (int i = 0; i < row_count; i++) {
         int col = cbx_select_grid_get_cur_col(grid, i);
         if (col <= 0)
-            continue; /* Unassigned — never a conflict */
+            continue;
 
-        for (int j = 0; j < i; j++) {
-            int jcol = cbx_select_grid_get_cur_col(grid, j);
-            if (jcol == col) {
-                /* Row i is the second arrival on this column */
-                if (out->count < CBX_GRID_MAX_ROWS) {
-                    out->conflicts[out->count].row_idx       = i;
-                    out->conflicts[out->count].conflicting_col = col;
-                    out->count++;
-                }
-                break; /* only record once */
+        int owner = i;
+        for (int j = 0; j < row_count; j++) {
+            if (j == i || cbx_select_grid_get_cur_col(grid, j) != col)
+                continue;
+            if (row_arrived_before(grid, j, owner))
+                owner = j;
+        }
+        if (i == owner)
+            continue;
+
+        bool recorded = false;
+        for (int k = 0; k < out->count; k++)
+            if (out->conflicts[k].row_idx == i) {
+                recorded = true;
+                break;
             }
+        if (!recorded && out->count < CBX_GRID_MAX_ROWS) {
+            out->conflicts[out->count].row_idx = i;
+            out->conflicts[out->count].conflicting_col = col;
+            out->count++;
         }
     }
 
@@ -57,7 +80,7 @@ cbx_conflict_detect(const cbx_select_grid *grid, cbx_conflict_list *out)
 bool
 cbx_conflict_is_row_conflicted(const cbx_conflict_list *list, int row_idx)
 {
-    if (!list)
+    if (!list || list->count < 0 || list->count > CBX_GRID_MAX_ROWS)
         return false;
     for (int i = 0; i < list->count; i++) {
         if (list->conflicts[i].row_idx == row_idx)
@@ -127,7 +150,11 @@ cbx_conflict_resolve(cbx_select_grid *grid, cbx_conflict_list *list)
     if (!grid || !list)
         return -EINVAL;
 
+    if (list->count < 0 || list->count > CBX_GRID_MAX_ROWS)
+        return -EINVAL;
+
     int moved = 0;
+    list->unresolved_count = 0;
 
     for (int i = 0; i < list->count; i++) {
         int row_idx = list->conflicts[i].row_idx;
@@ -153,8 +180,11 @@ cbx_conflict_resolve(cbx_select_grid *grid, cbx_conflict_list *list)
 
         /* Find the lowest free P-slot */
         int free_slot = cbx_conflict_find_lowest_free_slot(grid, row_idx);
-        if (free_slot < 0)
-            continue; /* all occupied — leave in place */
+        if (free_slot < 0) {
+            /* Keep the red row visible; callers must not route a duplicate. */
+            list->unresolved_count++;
+            continue;
+        }
 
         /* Move the conflicted row to the free slot */
         /* Move left/right until we reach the target column */
@@ -171,5 +201,10 @@ cbx_conflict_resolve(cbx_select_grid *grid, cbx_conflict_list *list)
         moved++;
     }
 
+    if (list->unresolved_count == 0) {
+        cbx_conflict_list remaining;
+        cbx_conflict_detect(grid, &remaining);
+        list->unresolved_count = remaining.count;
+    }
     return moved;
 }

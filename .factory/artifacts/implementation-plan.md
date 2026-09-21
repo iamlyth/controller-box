@@ -169,12 +169,12 @@ Evidence: verification exit 0 on local
 
 ## Task 19: Preserve active edits and second-arrival conflict ownership
 Title: Preserve active edits and second-arrival conflict ownership
-Status: pending
+Status: completed
 Dependencies: 4, 5, 6, 18
 Acceptance: SPEC §§4.3–4.7: conflict red marking follows second arrival, not row index. Test a lower-index row entering a higher-index incumbent's slot and vice versa, including Host edits and departure/re-entry. On close resolve to the lowest available P slot; when none exists, prevent duplicate routing and visibly retain an actionable safe state rather than claiming successful resolution. Hotplug/rebuild preserves surviving rows' unsaved slot/profile choices and host identity by stable identity/path, updates same-count type changes and handles zero targets without constructing fictitious columns. Host disconnect exits/remaps safely; active-session reconciliation must not reset all surviving controllers to PASS and discard edits.
 Verification: ./scripts/verify.sh; ctest --test-dir build -R 'test_conflict|test_dynamic_columns|test_host_mode|test_overlay_reconcile|test_overlay_interaction|test_overlay_native|test_overlay_visual' --output-on-failure
 Runner: none
-Evidence: none
+Evidence: verification exit 0 on local
 
 ## Task 20: Make overlay activation, save and close truthful
 Title: Make overlay activation, save and close truthful

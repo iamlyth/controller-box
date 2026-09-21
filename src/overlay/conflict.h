@@ -25,6 +25,10 @@ typedef struct {
 typedef struct cbx_conflict_list {
     cbx_conflict_info conflicts[CBX_GRID_MAX_ROWS];
     int               count;
+    /* Conflicts that could not be moved because every P-slot was occupied.
+     * Such a list is unsafe to apply to the backend: callers must retain the
+     * visible conflict instead of claiming that close resolved it. */
+    int               unresolved_count;
 } cbx_conflict_list;
 
 /* --- API -------------------------------------------------------------- */
@@ -61,7 +65,8 @@ bool cbx_conflict_is_row_conflicted(const cbx_conflict_list *list,
  *   - All P-slots occupied: conflicted controller stays in place
  *   - Conflicted controller on Unassigned: not a conflict (skipped)
  *
- * Returns the number of controllers moved, or -EINVAL on bad args.
+ * Returns the number of controllers moved, or -EINVAL on bad args.  The
+ * list's unresolved_count is set when a conflicted row has no safe slot.
  */
 int cbx_conflict_resolve(cbx_select_grid *grid, cbx_conflict_list *list);
 

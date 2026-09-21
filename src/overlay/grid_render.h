@@ -26,6 +26,7 @@
 
 #include <SDL2/SDL.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "config/config_assignments.h"
 #include "config/config_settings.h"
@@ -95,6 +96,12 @@ typedef struct {
 typedef struct {
     cbx_grid_row rows[CBX_GRID_MAX_ROWS];
     int          row_count;
+    /* Monotonic claim sequence used to identify the arrival order of a row
+     * at a P-slot.  It is deliberately separate from row index: hotplug
+     * enumeration order may change while an active session is being edited. */
+    uint64_t     next_arrival_seq;
+    uint64_t     row_arrival_seq[CBX_GRID_MAX_ROWS];
+    bool         live_edits; /* unsaved slot/profile changes in this session */
     cbx_grid_col cols[CBX_GRID_MAX_COLS];
     int          col_count;                  /* = num_virtual_controllers + 1 */
 
