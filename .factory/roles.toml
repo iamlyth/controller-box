@@ -123,8 +123,8 @@ provider = "openai-codex"
 name = "approach-c"
 prompt = ".factory/prompts/developer-d.md"
 description = "Refactor and reuse existing patterns"
-model = "gemini-3.8-flash"
-provider = "google"
+model = "gpt-5.6-luna"
+provider = "openai-codex"
 
 # Single developer (old behavior, no ensemble):
 # [[implementation.developers]]
@@ -169,8 +169,8 @@ provider = "ollama-cloud"
 name = "spec-compliance"
 prompt = ".factory/prompts/auditor-spec.md"
 description = "Compliance with the project specification"
-model = "gemini-3.8-flash"
-provider = "google"
+model = "gpt-5.6-sol"
+provider = "openai-codex"
 
 [[audit.auditors]]
 name = "readability"

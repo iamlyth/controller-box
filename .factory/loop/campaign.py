@@ -518,6 +518,7 @@ def _collect_patch(wt_path: str, base_commit: str, root: Path,
 def run_implementation_phase(
     roles: dict, config: dict, args,
     task: Task, root: Path,
+    runners: list = None,
     repair_context: str = "",
     verification_output: str = "",
 ) -> tuple[str, list[SubagentResult]]:
@@ -770,7 +771,7 @@ def run_implementation_phase(
         _clean_untracked(root)
         _clean_verification_dirs(root, config)
         vresult = run_task_verification(
-            task, env["runners"], root,
+            task, runners or [], root,
             gitutil.current_commit(root),
             config_build_command(config),
         )
@@ -1070,6 +1071,7 @@ def cmd_run(args, config: dict, env: dict) -> int:
                     impl_start = time.time()
                     commit, dev_results = run_implementation_phase(
                         roles, config, args, task, ROOT,
+                        runners=env["runners"],
                         verification_output=last_voutput,
                     )
                     impl_time_total += time.time() - impl_start
