@@ -1207,6 +1207,51 @@ test_host_mode_exits_on_close_native(void **state)
     assert_int_equal(cbx_host_mode_get_host_row(&svc->hm), 1);
 }
 
+/* --- Task 20: activation restores configured opacity ----------------- */
+/*
+ * The production service activates instantly but keeps the default fade-out.
+ * A completed fade-out therefore leaves the native window and target texture
+ * at alpha 0.  Reopen through the native DBus/input and service-step paths;
+ * the next activation must restore the configured opacity before presenting.
+ */
+static void
+test_repeated_activation_restores_configured_opacity(void **state)
+{
+    native_fixture *f = *state;
+    cbx_overlay_service_ctx *svc = f->svc;
+
+    svc->lifecycle.target_opacity = 0.85;
+    /* Leave enough time for the signal drain and the first service step to
+     * observe CLOSING before the animation completes. */
+    svc->lifecycle.fade_out_ms = 250;
+    assert_int_equal(cbx_overlay_surface_set_opacity(&svc->surface, 0.85), 0);
+
+    activate_overlay(f);
+    assert_int_equal(cbx_overlay_surface_get_opacity(&svc->surface), 217);
+
+    /* Close through the production InputEvent callback, then let the service
+     * advance the real fade-out until its hidden/IDLE state is reached. */
+    emit_input_event(svc->conn.backend, svc->conn.bus,
+                     COMP_PATH_0, "B", 1.0);
+    drain_bus(svc->conn.backend, svc->conn.bus, 100);
+    cbx_overlay_service_step(svc);
+    assert_int_equal(svc->lifecycle.state, CBX_OVERLAY_CLOSING);
+
+    uint32_t deadline = SDL_GetTicks() + 500;
+    while (svc->lifecycle.state != CBX_OVERLAY_IDLE &&
+           SDL_GetTicks() < deadline) {
+        SDL_Delay(10);
+        cbx_overlay_service_step(svc);
+    }
+    assert_int_equal(svc->lifecycle.state, CBX_OVERLAY_IDLE);
+    assert_int_equal(cbx_overlay_surface_get_opacity(&svc->surface), 0);
+
+    /* This is the production instant-activation configuration. */
+    activate_overlay(f);
+    assert_int_equal(svc->lifecycle.state, CBX_OVERLAY_VISIBLE);
+    assert_int_equal(cbx_overlay_surface_get_opacity(&svc->surface), 217);
+}
+
 /* --- Task 20: close_blocked suppresses the PASS deactivation edge --- */
 /*
  * A failed production close (PASS release failure) leaves the overlay VISIBLE
@@ -2630,6 +2675,9 @@ static const struct CMUnitTest tests[] = {
                                      native_setup, native_teardown),
     cmocka_unit_test_setup_teardown(test_host_mode_exits_on_close_native,
                                      native_setup, native_teardown),
+    cmocka_unit_test_setup_teardown(
+        test_repeated_activation_restores_configured_opacity,
+        native_setup, native_teardown),
     cmocka_unit_test_setup_teardown(test_close_blocked_ignores_pass_edge,
                                      native_setup, native_teardown),
 

@@ -112,6 +112,16 @@ set_intercept_pass(cbx_overlay_lifecycle *lc)
 static void
 enter_visible(cbx_overlay_lifecycle *lc)
 {
+    /* A completed fade-out leaves both the target texture and the native
+     * window at alpha 0.  Instant activation (the production configuration)
+     * deliberately skips begin_fade_in(), so restore the configured opacity
+     * at the visible-state boundary before presenting.  Doing this here also
+     * covers the animation-completion path and keeps every activation from
+     * depending on the previous session's final alpha. */
+    if (lc->surface)
+        (void)cbx_overlay_surface_set_opacity(lc->surface,
+                                               lc->target_opacity);
+
     lc->state = CBX_OVERLAY_VISIBLE;
     lc->visible_ticks = 0;
     show_surface(lc);
