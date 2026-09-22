@@ -13,6 +13,8 @@
  * SPEC §10.2 — CompositeDevice interface.
  */
 #include "ip_composite.h"
+#include "ip_connection.h"   /* IP_ERR_UNKNOWN_PROPERTY */
+#include "ip_manager.h"      /* ip_manager_attach_target_device fallback */
 
 #include <errno.h>
 #include <stdlib.h>
@@ -179,10 +181,35 @@ ip_composite_set_target_device_paths(const ip_dbus_backend *backend,
     if (!backend || !composite_path || !paths_csv)
         return -EINVAL;
 
-    return backend->set_property(bus, IP_DBUS_NAME,
+    int rc = backend->set_property(bus, IP_DBUS_NAME,
                                   composite_path,
                                   IP_IFACE_COMPOSITE,
                                   "TargetDevices", paths_csv);
+    if (rc != IP_ERR_UNKNOWN_PROPERTY && rc != IP_ERR_UNKNOWN_INTERFACE &&
+        rc != IP_ERR_PROPERTY_READ_ONLY)
+        return rc;
+
+    /* Live InputPlumber >= 0.78 exposes TargetDevices as a *read-only*
+     * property (the object server answers Properties.Set with
+     * UnknownProperty), so path-based replacement must use the supported
+     * method surface instead:
+     *   - SetTargetDevices(target_device_types) replaces the composite's
+     *     target devices; an empty type list clears them, and
+     *   - Manager.AttachTargetDevice(target, composite) then attaches the
+     *     exact pre-created target path for this slot.
+     * The clear is per-composite and happens immediately before the attach,
+     * so a failure is returned (never a silent partial route) without the
+     * save path having to tear every composite down first. */
+    if (paths_csv[0] == '\0')
+        return ip_composite_set_target_devices(backend, bus, composite_path, "");
+
+    int clear_rc = ip_composite_set_target_devices(backend, bus,
+                                                    composite_path, "");
+    if (clear_rc != 0)
+        return clear_rc;
+
+    return ip_manager_attach_target_device(backend, bus, paths_csv,
+                                            composite_path);
 }
 
 int

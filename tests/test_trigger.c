@@ -199,6 +199,51 @@ test_register_success(void **state)
     assert_int_equal(rc, 0);
 }
 
+/*
+ * The live engine's SetInterceptActivation rejects any event string that is
+ * not a Button capability.  The short settings names must therefore be sent
+ * as InputPlumber Capability strings.
+ */
+static void
+test_register_translates_to_capabilities(void **state)
+{
+    trigger_fixture *f = FIX(state);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                           "SetInterceptActivation", NULL);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                           "InterceptMode", NULL);
+
+    int rc = cbx_trigger_register(f->backend, f->mock.bus,
+                                   COMP_PATH, "Select+A");
+    assert_int_equal(rc, 0);
+
+    char args[256];
+    assert_int_equal(ip_dbus_mock_last_call_args(&f->mock,
+                       IP_IFACE_COMPOSITE, "SetInterceptActivation",
+                       args, sizeof(args)), 0);
+    assert_string_equal(args,
+        "Gamepad:Button:Select,Gamepad:Button:South,Select+A");
+}
+
+static void
+test_register_single_button_capability(void **state)
+{
+    trigger_fixture *f = FIX(state);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                           "SetInterceptActivation", NULL);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                           "InterceptMode", NULL);
+
+    assert_int_equal(cbx_trigger_register(f->backend, f->mock.bus,
+                                           COMP_PATH, "A"), 0);
+    char args[256];
+    assert_int_equal(ip_dbus_mock_last_call_args(&f->mock,
+                       IP_IFACE_COMPOSITE, "SetInterceptActivation",
+                       args, sizeof(args)), 0);
+    assert_string_equal(args,
+        "Gamepad:Button:South,A");
+}
+
 static void
 test_register_activation_fails(void **state)
 {
@@ -209,6 +254,28 @@ test_register_activation_fails(void **state)
     int rc = cbx_trigger_register(f->backend, f->mock.bus,
                                    COMP_PATH, "Select+A");
     assert_int_equal(rc, IP_ERR_INVALID_ARGS);
+}
+
+/*
+ * Hotplug reconciliation re-registers triggers on a live session and must
+ * not force PASS (that would deactivate the active intercept mode and fire
+ * the PASS edge that closes the overlay).
+ */
+static void
+test_register_only_does_not_force_pass(void **state)
+{
+    trigger_fixture *f = FIX(state);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                           "SetInterceptActivation", NULL);
+
+    int rc = cbx_trigger_register_only(f->backend, f->mock.bus,
+                                       COMP_PATH, "Select+A");
+    assert_int_equal(rc, 0);
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_COMPOSITE,
+                                              "SetInterceptActivation"), 1);
+    /* No PASS write is issued. */
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_COMPOSITE,
+                                              "InterceptMode"), 0);
 }
 
 static void
@@ -400,8 +467,15 @@ main(void)
         /* Register tests (need trigger fixture with mock DBus) */
         cmocka_unit_test_setup_teardown(test_register_success,
                                           setup, teardown),
+        cmocka_unit_test_setup_teardown(test_register_translates_to_capabilities,
+                                          setup, teardown),
+        cmocka_unit_test_setup_teardown(test_register_single_button_capability,
+                                          setup, teardown),
         cmocka_unit_test_setup_teardown(test_register_activation_fails,
                                           setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            test_register_only_does_not_force_pass,
+            setup, teardown),
         cmocka_unit_test_setup_teardown(test_register_intercept_mode_fails,
                                           setup, teardown),
         cmocka_unit_test_setup_teardown(test_register_no_expectation,

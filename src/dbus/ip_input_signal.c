@@ -78,6 +78,28 @@ static const input_entry s_input_table[] = {
     { "LeftStickY",  IP_INPUT_LEFT_STICK_Y,  IP_INPUT_CAT_AXIS },
     { "RightStickX", IP_INPUT_RIGHT_STICK_X, IP_INPUT_CAT_AXIS },
     { "RightStickY", IP_INPUT_RIGHT_STICK_Y, IP_INPUT_CAT_AXIS },
+
+    /* InputPlumber DBusDevice action vocabulary (event/dbus.rs Action::as_str).
+     * The live engine emits these ui_* names on InputEvent, never the short
+     * display names above, so the overlay would otherwise drop every signal.
+     * D-pad/axis actions arrive as 0.0/1.0 threshold values (buttons). */
+    { "ui_up",          IP_INPUT_UP,       IP_INPUT_CAT_BUTTON },
+    { "ui_down",        IP_INPUT_DOWN,     IP_INPUT_CAT_BUTTON },
+    { "ui_left",        IP_INPUT_LEFT,     IP_INPUT_CAT_BUTTON },
+    { "ui_right",       IP_INPUT_RIGHT,    IP_INPUT_CAT_BUTTON },
+    { "ui_accept",      IP_INPUT_A,        IP_INPUT_CAT_BUTTON },
+    { "ui_back",        IP_INPUT_B,        IP_INPUT_CAT_BUTTON },
+    { "ui_context",     IP_INPUT_X,        IP_INPUT_CAT_BUTTON },
+    { "ui_action",      IP_INPUT_Y,        IP_INPUT_CAT_BUTTON },
+    { "ui_option",      IP_INPUT_START,    IP_INPUT_CAT_BUTTON },
+    { "ui_select",      IP_INPUT_SELECT,   IP_INPUT_CAT_BUTTON },
+    { "ui_guide",       IP_INPUT_GUIDE,    IP_INPUT_CAT_BUTTON },
+    { "ui_l1",          IP_INPUT_L1,       IP_INPUT_CAT_BUTTON },
+    { "ui_r1",          IP_INPUT_R1,       IP_INPUT_CAT_BUTTON },
+    { "ui_l2",          IP_INPUT_L2,       IP_INPUT_CAT_BUTTON },
+    { "ui_r2",          IP_INPUT_R2,       IP_INPUT_CAT_BUTTON },
+    { "ui_l3",          IP_INPUT_L3,       IP_INPUT_CAT_BUTTON },
+    { "ui_r3",          IP_INPUT_R3,       IP_INPUT_CAT_BUTTON },
 };
 
 #define NUM_INPUT_ENTRIES \

@@ -38,6 +38,16 @@
  * safely retry the alternative interface, while transient/object/property
  * errors must remain uncertain. */
 #define IP_ERR_UNKNOWN_INTERFACE (-ENXIO)    /* org.freedesktop.DBus.Error.UnknownInterface */
+/* The requested property does not exist on the object.  This is a confirmed
+ * API-availability failure (the live InputPlumber object server answers an
+ * unknown property with UnknownProperty), never a transient read error, so
+ * callers may use it to select a supported fallback path. */
+#define IP_ERR_UNKNOWN_PROPERTY (-ENOTSUP)   /* org.freedesktop.DBus.Error.UnknownProperty */
+/* The property exists but is read-only.  Some object servers answer a Set on
+ * a getter-only property with PropertyReadOnly rather than UnknownProperty;
+ * both are confirmed "no writable property here" results that the routing
+ * wrapper may translate into the supported method fallback. */
+#define IP_ERR_PROPERTY_READ_ONLY (-EROFS)   /* org.freedesktop.DBus.Error.PropertyReadOnly */
 #define IP_ERR_INTERNAL         (-EIO)       /* other / unexpected sd-bus failure          */
 #define IP_ERR_INCOMPATIBLE      (-ENOSYS)    /* version too old / incompatible              */
 #define IP_ERR_UNVERIFIED        (-EKEYREJECTED) /* owner present but not credential-verified */

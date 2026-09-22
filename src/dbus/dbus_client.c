@@ -1337,6 +1337,12 @@ translate_sd_error(int rc, const sd_bus_error *error)
     if (sd_bus_error_has_name(error,
             "org.freedesktop.DBus.Error.UnknownInterface"))
         return IP_ERR_UNKNOWN_INTERFACE;
+    if (sd_bus_error_has_name(error,
+            "org.freedesktop.DBus.Error.UnknownProperty"))
+        return IP_ERR_UNKNOWN_PROPERTY;
+    if (sd_bus_error_has_name(error,
+            "org.freedesktop.DBus.Error.PropertyReadOnly"))
+        return IP_ERR_PROPERTY_READ_ONLY;
     return rc;  /* already negative errno */
 }
 

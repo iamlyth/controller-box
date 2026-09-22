@@ -22,13 +22,30 @@
  */
 static const char *default_title = "Controller-Box";
 
+static int renderer_init_impl(cbx_renderer *r, const char *title,
+                              int w, int h, bool fullscreen, bool overlay);
+
 int cbx_renderer_init(cbx_renderer *r, const char *title,
                       int w, int h, bool fullscreen)
+{
+    return renderer_init_impl(r, title, w, h, fullscreen, false);
+}
+
+int cbx_renderer_init_overlay(cbx_renderer *r, const char *title,
+                              int w, int h, bool fullscreen)
+{
+    return renderer_init_impl(r, title, w, h, fullscreen, true);
+}
+
+static int
+renderer_init_impl(cbx_renderer *r, const char *title,
+                   int w, int h, bool fullscreen, bool overlay)
 {
     if (!r)
         return -EINVAL;
 
     memset(r, 0, sizeof(*r));
+    r->is_overlay = overlay;
 
     if (w <= 0) w = CBX_RENDERER_DEFAULT_W;
     if (h <= 0) h = CBX_RENDERER_DEFAULT_H;
@@ -41,10 +58,14 @@ int cbx_renderer_init(cbx_renderer *r, const char *title,
         return -EIO;
     }
 
-    /* Window flags. */
+    /* Window flags.  The overlay must behave like a game overlay: no
+     * decorations, absent from the taskbar, and stacked above the game. */
     Uint32 win_flags = SDL_WINDOW_HIDDEN;
     if (fullscreen)
         win_flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+    if (overlay)
+        win_flags |= SDL_WINDOW_BORDERLESS | SDL_WINDOW_ALWAYS_ON_TOP |
+                     SDL_WINDOW_SKIP_TASKBAR;
 
     r->window = SDL_CreateWindow(title,
                                  SDL_WINDOWPOS_UNDEFINED,
@@ -56,6 +77,11 @@ int cbx_renderer_init(cbx_renderer *r, const char *title,
         SDL_QuitSubSystem(SDL_INIT_VIDEO);
         return -EIO;
     }
+
+    /* Some backends ignore the creation-flag hint; enforce stacking too. */
+    if (overlay)
+        SDL_SetWindowAlwaysOnTop(r->window, SDL_TRUE);
+
     r->window_w = w;
     r->window_h = h;
 
@@ -197,6 +223,10 @@ void cbx_renderer_show(cbx_renderer *r)
 {
     if (!r || !r->window) return;
     SDL_ShowWindow(r->window);
+    /* Explicitly raise the overlay above the game; some compositors only
+     * honour the always-on-top hint after the window is mapped. */
+    if (r->is_overlay)
+        SDL_RaiseWindow(r->window);
 }
 
 void cbx_renderer_hide(cbx_renderer *r)

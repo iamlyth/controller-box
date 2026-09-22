@@ -421,49 +421,75 @@ composite_property_set(sd_bus *bus, const char *path, const char *interface,
         g_nip_intercept_mode[ci] = mode;
         return 0;
     }
-    if (strcmp(property, "TargetDevices") == 0) {
-        if (s_fail_attach)
-            return sd_bus_error_set(error,
-                "org.freedesktop.DBus.Error.Failed",
-                "simulated TargetDevices replacement failure");
-        int rc = sd_bus_message_enter_container(value, 'a', "s");
-        if (rc < 0) return rc;
-        s_pending_attached_counts[ci] = 0;
-        const char *target = NULL;
-        while ((rc = sd_bus_message_read_basic(value, 's', &target)) > 0) {
-            bool found = false;
-            for (int ti = 0; ti < g_nip_target_count; ti++)
-                if (target_is_visible(ti) &&
-                    strcmp(g_nip_target_paths[ti], target) == 0) {
-                    found = true;
-                    break;
-                }
-            if (!found)
-                return sd_bus_error_set(error,
-                    "org.freedesktop.DBus.Error.UnknownObject",
-                    "target not found");
-            int n = s_pending_attached_counts[ci];
-            if (n >= NIP_MAX_ATTACHED)
-                return -E2BIG;
-            snprintf(s_pending_attached[ci][n],
-                     sizeof(s_pending_attached[ci][n]), "%s", target);
-            s_pending_attached_counts[ci]++;
-        }
-        if (rc < 0) return rc;
-        rc = sd_bus_message_exit_container(value);
-        if (rc < 0) return rc;
-        s_attachment_apply_at[ci] = monotonic_ms() + s_attachment_delay_ms;
-        if (s_attachment_apply_at[ci] == 0)
-            s_attachment_apply_at[ci] = 1;
-        apply_pending_attachment(ci);
-        return 0;
-    }
+    /* TargetDevices is read-only on the live engine (see
+     * method_set_target_devices); it is not writable here. */
     return -ENOENT;
 }
 
 /* ================================================================== */
 /*  Composite method handlers                                           */
 /* ================================================================== */
+
+/*
+ * Live InputPlumber >= 0.78 exposes TargetDevices as a *read-only*
+ * property and changes routing only through SetTargetDevices(types) and
+ * Manager.AttachTargetDevice.  Model that: SetTargetDevices replaces the
+ * composite's target devices.  An empty type list clears every attachment
+ * (the wrapper's exact-replacement fallback); a non-empty list attaches any
+ * visible target whose created type matches.
+ */
+static int
+method_set_target_devices(sd_bus_message *m, void *userdata,
+                          sd_bus_error *error)
+{
+    (void)userdata;
+    const char *obj_path = sd_bus_message_get_path(m);
+    int ci = composite_idx_from_path(obj_path);
+    if (ci < 0 || ci >= NIP_MAX_COMPOSITES)
+        return sd_bus_error_set(error,
+                                "org.freedesktop.DBus.Error.UnknownObject",
+                                "composite not found");
+
+    int rc = sd_bus_message_enter_container(m, 'a', "s");
+    if (rc < 0) return rc;
+    s_pending_attached_counts[ci] = 0;
+    const char *kind = NULL;
+    while ((rc = sd_bus_message_read_basic(m, 's', &kind)) > 0) {
+        for (int ti = 0; ti < g_nip_target_count; ti++) {
+            if (!target_is_visible(ti))
+                continue;
+            if (strcmp(g_nip_target_types[ti], kind) != 0)
+                continue;
+            bool already = false;
+            for (int j = 0; j < s_pending_attached_counts[ci]; j++) {
+                if (strcmp(s_pending_attached[ci][j],
+                           g_nip_target_paths[ti]) == 0) {
+                    already = true;
+                    break;
+                }
+            }
+            if (already)
+                continue;
+            int n = s_pending_attached_counts[ci];
+            if (n >= NIP_MAX_ATTACHED)
+                return -E2BIG;
+            snprintf(s_pending_attached[ci][n],
+                     sizeof(s_pending_attached[ci][n]), "%.*s",
+                     (int)sizeof(s_pending_attached[ci][n]) - 1,
+                     g_nip_target_paths[ti]);
+            s_pending_attached_counts[ci]++;
+        }
+    }
+    if (rc < 0) return rc;
+    rc = sd_bus_message_exit_container(m);
+    if (rc < 0) return rc;
+
+    s_attachment_apply_at[ci] = monotonic_ms() + s_attachment_delay_ms;
+    if (s_attachment_apply_at[ci] == 0)
+        s_attachment_apply_at[ci] = 1;
+    apply_pending_attachment(ci);
+    return sd_bus_reply_method_return(m, "");
+}
 
 static int
 method_load_profile_path(sd_bus_message *m, void *userdata, sd_bus_error *error)
@@ -753,8 +779,7 @@ static const sd_bus_vtable dbus_device_vtable[] = {
 
 static const sd_bus_vtable composite_vtable[] = {
     SD_BUS_VTABLE_START(0),
-    SD_BUS_WRITABLE_PROPERTY("TargetDevices", "as", composite_property_get,
-                              composite_property_set, 0, 0),
+    SD_BUS_PROPERTY("TargetDevices", "as", composite_property_get, 0, 0),
     SD_BUS_PROPERTY("ProfileName", "s", composite_property_get, 0,
                     SD_BUS_VTABLE_PROPERTY_CONST),
     SD_BUS_PROPERTY("ProfilePath", "s", composite_property_get, 0,
@@ -775,6 +800,8 @@ static const sd_bus_vtable composite_vtable[] = {
     SD_BUS_METHOD("GetProfileYaml", "", "s", method_get_profile_yaml, 0),
     SD_BUS_METHOD("SetInterceptActivation", "ass", "",
                   method_set_intercept_activation, 0),
+    SD_BUS_METHOD("SetTargetDevices", "as", "",
+                  method_set_target_devices, 0),
     SD_BUS_VTABLE_END
 };
 

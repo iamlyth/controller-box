@@ -49,8 +49,16 @@ surface_create_texture(cbx_overlay_surface *s, SDL_Renderer *renderer)
     if (!s->texture)
         return -ENOMEM;
 
-    /* Apply opacity */
+    /* Resolve the owning window so the compositor can blend the overlay over
+     * the game (SDL2 has no per-pixel window transparency). */
+    s->window = SDL_RenderGetWindow(renderer);
+
+    /* Apply opacity to the texture ... */
     SDL_SetTextureAlphaMod(s->texture, s->opacity);
+    /* ... and to the native window so it is not composited as an opaque
+     * sheet over the game. */
+    if (s->window)
+        SDL_SetWindowOpacity(s->window, (float)s->opacity / 255.0f);
 
     /* Enable blending so alpha modulation composites correctly */
     SDL_SetTextureBlendMode(s->texture, SDL_BLENDMODE_BLEND);
@@ -131,6 +139,8 @@ cbx_overlay_surface_set_opacity(cbx_overlay_surface *s, double opacity)
         return -EINVAL;
     s->opacity = opacity_to_u8(opacity);
     SDL_SetTextureAlphaMod(s->texture, s->opacity);
+    if (s->window)
+        SDL_SetWindowOpacity(s->window, (float)s->opacity / 255.0f);
     return 0;
 }
 
@@ -154,6 +164,17 @@ cbx_overlay_surface_show(cbx_overlay_surface *s, SDL_Renderer *r)
 
     /* Ensure we're rendering to the screen, not a target texture */
     SDL_SetRenderTarget(r, NULL);
+
+    /* Clear the previous back buffer before compositing the pre-built
+     * texture.  With texture alpha < 255 (the configured overlay opacity and
+     * every fade frame) RenderCopy blends over whatever the back buffer
+     * already held, so without a clear the GLES/software backends ghost the
+     * previous frame on every present.  Clear to transparent black so window
+     * opacity composites the overlay over the game rather than black. */
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+    SDL_SetRenderDrawColor(r, 0, 0, 0, 0);
+    SDL_RenderClear(r);
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
 
     /* Single render copy of the pre-built texture — no allocation */
     if (SDL_RenderCopy(r, s->texture, NULL, NULL) != 0)

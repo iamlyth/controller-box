@@ -70,6 +70,18 @@ int cbx_trigger_register(const ip_dbus_backend *backend,
                           const char *trigger_str);
 
 /*
+ * Register the trigger combo without forcing InterceptMode=PASS.  Used by
+ * hotplug reconciliation on a live overlay session: re-registering triggers
+ * must not deactivate an active intercept mode (which would fire the PASS
+ * deactivation edge and close the overlay mid-gameplay).  Returns 0 on
+ * success, negative errno on failure (same as cbx_trigger_register).
+ */
+int cbx_trigger_register_only(const ip_dbus_backend *backend,
+                              ip_bus_handle bus,
+                              const char *composite_path,
+                              const char *trigger_str);
+
+/*
  * Register the trigger combo on multiple composite devices.
  *
  * Calls cbx_trigger_register for each path.  If a registration fails

@@ -519,8 +519,8 @@ Object tree:
 | `LoadProfileFromYaml(profile: s)` | method | Load a profile from a YAML/JSON string (used to preview/test edited profiles without writing files) |
 | `GetProfileYaml() → s` | method | Dump current profile |
 | `ProfileName: s`, `ProfilePath: s` | properties, r | Current profile display; `PropertiesChanged` emitted |
-| `SetTargetDevices(target_device_types: as)` | method | Replace all target devices (stops old, creates new) — manager's Controllers tab |
-| `TargetDevices: as` | property, rw | Current target device paths |
+| `SetTargetDevices(target_device_types: as)` | method | Replace all target devices (stops old, creates new) — manager's Controllers tab and the clear half of the overlay's exact-replacement fallback |
+| `TargetDevices: as` | property, r | Current target device paths. **Read-only** on live InputPlumber (the interface exposes a getter only); path assignment uses `Manager.AttachTargetDevice` (see §10.3 gap #6) |
 | `SourceDevicePaths: as` | property, r | Which physical devices compose this device |
 | `PersistentId: s` | property, r | Persistent identifier computed from source devices — used in the identification layer (§6) |
 | `Name: s` | property, r | Display name |
@@ -551,6 +551,7 @@ Object tree:
 | 3 | **`CreateCompositeDevice` requires a YAML file path** — no string-based or source-path-based variant on DBus | GUI writes a temp composite-device YAML (e.g. `/tmp/controller-box-XXXX.yaml`) and passes the path. |
 | 4 | **No DBus method to enumerate profiles / device configs / capability maps on disk** | GUI reads the filesystem directly: `~/.local/share/inputplumber/profiles/`, `/usr/share/inputplumber/profiles/`, `/usr/share/inputplumber/devices/`, `/usr/share/inputplumber/capability_maps/`. (Covered by the Flatpak filesystem permissions, §9.1.) |
 | 5 | **Add/remove individual source devices on a running composite is not exposed on DBus** (internal commands exist but are not on the interface) | **Not needed for v1.** InputPlumber's auto-management builds composites from device configs; the GUI manages slots via target devices only. |
+| 6 | **`TargetDevices` has no property setter** on the CompositeDevice interface (getter only); the writable path surface is `SetTargetDevices(target_device_types: as)` plus `Manager.AttachTargetDevice(target_path, composite_path)` | The GUI requests an exact replacement per composite by clearing the composite's target devices with an empty `SetTargetDevices([])` and then attaching the slot's pre-created target path with `Manager.AttachTargetDevice` (`ip_composite_set_target_device_paths` falls back to this on `UnknownProperty`/`PropertyReadOnly`). |
 
 **Verdict (carried from ticket #6):** the InputPlumber DBus API is sufficient for v1. All gaps have workarounds. No upstream changes required.
 

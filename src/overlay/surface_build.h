@@ -26,8 +26,12 @@
  * the render callback that draws grid content into the target texture; this
  * module manages render target switching and clip-rect scissoring.
  *
- * Opacity from settings.overlay_opacity (0.0–1.0) is applied via
- * SDL_SetTextureAlphaMod so the composited overlay is semi-transparent.
+ * Opacity from settings.overlay_opacity (0.0–1.0) is applied both to the
+ * overlay texture (SDL_SetTextureAlphaMod) and to the native window
+ * (SDL_SetWindowOpacity).  SDL2 has no per-pixel window transparency, so
+ * window opacity is the only mechanism by which the compositor can show the
+ * game through the overlay; applying it here stops the configured opacity
+ * from merely dimming the overlay against its own backbuffer.
  */
 #ifndef CBX_OVERLAY_SURFACE_BUILD_H
 #define CBX_OVERLAY_SURFACE_BUILD_H
@@ -45,6 +49,7 @@ typedef int (*cbx_overlay_render_fn)(SDL_Renderer *r,
 
 typedef struct {
     SDL_Texture    *texture;   /* target texture at screen resolution  */
+    SDL_Window     *window;    /* owning window for compositor opacity */
     int             width;     /* texture / screen width               */
     int             height;    /* texture / screen height              */
     bool            visible;   /* overlay currently shown              */

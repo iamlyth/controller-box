@@ -175,6 +175,16 @@ int cbx_overlay_lifecycle_tick(cbx_overlay_lifecycle *lc);
  */
 void cbx_overlay_lifecycle_force_close(cbx_overlay_lifecycle *lc);
 
+/*
+ * Abandon the overlay because the backend is gone (InputPlumber stopped or
+ * the owner was lost).  There is no live engine to release, so this hides
+ * the surface and returns to IDLE without attempting InterceptMode=PASS and
+ * without setting close_blocked.  Used on the degraded/owner-lost path so a
+ * mid-session backend loss cannot strand a visible, input-dead overlay that
+ * the user cannot dismiss.
+ */
+void cbx_overlay_lifecycle_abandon(cbx_overlay_lifecycle *lc);
+
 /* Query the current state. */
 cbx_overlay_state cbx_overlay_lifecycle_get_state(
     const cbx_overlay_lifecycle *lc);

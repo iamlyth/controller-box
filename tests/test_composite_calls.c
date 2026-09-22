@@ -17,6 +17,7 @@
 #include "dbus/ip_composite.h"
 
 #include <errno.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -504,6 +505,84 @@ test_get_target_devices_null_args(void **state)
       f->backend, f->mock.bus, COMP_PATH, NULL), -EINVAL);
 }
 
+/* --- TargetDevices set: live-engine fallback ----------------------------- */
+/*
+ * Live InputPlumber >= 0.78 exposes TargetDevices as a *read-only* property;
+ * Properties.Set is answered with UnknownProperty.  The wrapper must then
+ * fall back to the supported method surface (SetTargetDevices to clear the
+ * composite, then Manager.AttachTargetDevice for the exact target path)
+ * instead of returning an uncategorized failure that leaves the composite
+ * unrouted.
+ */
+static void
+test_set_target_device_paths_falls_back_on_unknown_property(void **state)
+{
+    composite_fixture *f = FIX(state);
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_COMPOSITE,
+                               "TargetDevices", IP_ERR_UNKNOWN_PROPERTY);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                           "SetTargetDevices", NULL);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_MANAGER,
+                           "AttachTargetDevice", NULL);
+
+    const char *target =
+        "/org/shadowblip/InputPlumber/devices/target/gamepad0";
+    int rc = ip_composite_set_target_device_paths(f->backend, f->mock.bus,
+                                                   COMP_PATH, target);
+    assert_int_equal(rc, 0);
+
+    /* The unsupported property was attempted first ... */
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_COMPOSITE,
+                                              "TargetDevices"), 1);
+    /* ... then the supported clear + attach methods. */
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_COMPOSITE,
+                                              "SetTargetDevices"), 1);
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_MANAGER,
+                                              "AttachTargetDevice"), 1);
+
+    char args[256];
+    assert_int_equal(ip_dbus_mock_last_call_args(&f->mock, IP_IFACE_MANAGER,
+                       "AttachTargetDevice", args, sizeof(args)), 0);
+    char expect[256];
+    snprintf(expect, sizeof(expect), "%s,%s", target, COMP_PATH);
+    assert_string_equal(args, expect);
+}
+
+static void
+test_set_target_device_paths_empty_falls_back_to_clear(void **state)
+{
+    composite_fixture *f = FIX(state);
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_COMPOSITE,
+                               "TargetDevices", IP_ERR_UNKNOWN_PROPERTY);
+    ip_dbus_mock_expect_ok(&f->mock, IP_IFACE_COMPOSITE,
+                           "SetTargetDevices", NULL);
+
+    int rc = ip_composite_set_target_device_paths(f->backend, f->mock.bus,
+                                                   COMP_PATH, "");
+    assert_int_equal(rc, 0);
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_COMPOSITE,
+                                              "SetTargetDevices"), 1);
+    /* An empty path is a clear; no attach is issued. */
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_MANAGER,
+                                              "AttachTargetDevice"), 0);
+}
+
+static void
+test_set_target_device_paths_propagates_real_errors(void **state)
+{
+    composite_fixture *f = FIX(state);
+    /* A transient/real failure must be returned as-is, never masked by the
+     * fallback path. */
+    ip_dbus_mock_expect_error(&f->mock, IP_IFACE_COMPOSITE,
+                               "TargetDevices", IP_ERR_NO_REPLY);
+
+    int rc = ip_composite_set_target_device_paths(f->backend, f->mock.bus,
+                                                   COMP_PATH, "/x");
+    assert_int_equal(rc, IP_ERR_NO_REPLY);
+    assert_int_equal(ip_dbus_mock_call_count(&f->mock, IP_IFACE_COMPOSITE,
+                                              "SetTargetDevices"), 0);
+}
+
 static void
 test_get_source_device_paths_success(void **state)
 {
@@ -855,6 +934,15 @@ main(void)
                                           setup, teardown),
         cmocka_unit_test_setup_teardown(test_get_target_devices_null_args,
                                           setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            test_set_target_device_paths_falls_back_on_unknown_property,
+            setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            test_set_target_device_paths_empty_falls_back_to_clear,
+            setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            test_set_target_device_paths_propagates_real_errors,
+            setup, teardown),
 
         /* SourceDevicePaths get. */
         cmocka_unit_test_setup_teardown(test_get_source_device_paths_success,

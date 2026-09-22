@@ -40,13 +40,17 @@ set(CBX_FONT_INSTALL_DIR "${CBX_DATA_INSTALL_DIR}/fonts")
 find_package(PkgConfig REQUIRED)
 
 # --- Dependency detection -----------------------------------------------------
-# SDL2 core + satellite libraries
-pkg_check_modules(SDL2    REQUIRED IMPORTED_TARGET sdl2)
+# SDL2 core + satellite libraries.  The overlay window uses
+# SDL_SetWindowAlwaysOnTop (2.0.16) and SDL_RenderGetWindow (2.0.18), so the
+# minimum is declared rather than accepting any historical sdl2.
+pkg_check_modules(SDL2    REQUIRED IMPORTED_TARGET "sdl2>=2.0.18")
 pkg_check_modules(SDL2TTF REQUIRED IMPORTED_TARGET SDL2_ttf)
 pkg_check_modules(SDL2IMG REQUIRED IMPORTED_TARGET SDL2_image)
 
-# sd-bus ships with libsystemd (used for DBus in later tasks).
-pkg_check_modules(SYSTEMD REQUIRED IMPORTED_TARGET libsystemd)
+# sd-bus ships with libsystemd.  The implementation relies on the sd-bus
+# object/credential APIs and error-name handling available from systemd 246
+# onward, so the floor is declared instead of accepting older libsystemd.
+pkg_check_modules(SYSTEMD REQUIRED IMPORTED_TARGET "libsystemd>=246")
 
 # YAML parsing (libyaml) — added structurally here, used from Task 4 on.
 pkg_check_modules(YAML REQUIRED IMPORTED_TARGET yaml-0.1)

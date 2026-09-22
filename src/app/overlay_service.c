@@ -2069,13 +2069,25 @@ cbx_overlay_reconcile_hotplug(cbx_overlay_service_ctx *svc)
         return rc;
     }
 
-    /* Re-register triggers on all composites and set PASS (SPEC §2.5). */
-    set_all_pass(svc->conn.backend, svc->conn.bus,
-                  svc->model.composites, svc->comp_count);
-    for (int i = 0; i < svc->comp_count; i++)
-        cbx_trigger_register(svc->conn.backend, svc->conn.bus,
-                              svc->composites[i].composite_path,
-                              svc->settings.overlay_trigger);
+    /* Re-register triggers on all composites.  When the overlay is idle this
+     * also forces PASS (SPEC §2.5).  When the overlay is live, forcing PASS
+     * here would deactivate the active intercept mode and fire the PASS
+     * deactivation edge that closes the overlay mid-gameplay, so only the
+     * activation combo is re-registered and the active mode is preserved. */
+    bool overlay_active = cbx_overlay_lifecycle_is_active(&svc->lifecycle);
+    if (!overlay_active)
+        set_all_pass(svc->conn.backend, svc->conn.bus,
+                      svc->model.composites, svc->comp_count);
+    for (int i = 0; i < svc->comp_count; i++) {
+        if (overlay_active)
+            cbx_trigger_register_only(svc->conn.backend, svc->conn.bus,
+                                       svc->composites[i].composite_path,
+                                       svc->settings.overlay_trigger);
+        else
+            cbx_trigger_register(svc->conn.backend, svc->conn.bus,
+                                  svc->composites[i].composite_path,
+                                  svc->settings.overlay_trigger);
+    }
 
     /* Re-arm polls for current composites (SPEC §2.5, §10.1). */
     cbx_overlay_rearm_polls(svc);
@@ -2102,12 +2114,12 @@ overlay_backend_degraded(const char *reason, void *userdata)
         snprintf(svc->readiness_detail, sizeof(svc->readiness_detail),
                  "%s", msg);
     svc->backend_ready = false;
+    /* The engine is gone, so release is unnecessary and unverifiable.  Abandon
+     * rather than force-close: a failed PASS must not strand a visible,
+     * input-dead overlay that the user cannot dismiss. */
     if (svc->initialized)
-        cbx_overlay_lifecycle_force_close(&svc->lifecycle);
-    if (cbx_overlay_lifecycle_is_active(&svc->lifecycle))
-        cbx_renderer_show(&svc->rend);
-    else
-        cbx_renderer_hide(&svc->rend);
+        cbx_overlay_lifecycle_abandon(&svc->lifecycle);
+    cbx_renderer_hide(&svc->rend);
 }
 
 /* Record an actionable readiness/recovery failure diagnostic. */
@@ -2947,8 +2959,8 @@ int run_overlay_service(int dry_run)
 
     int rc;
 
-    /* --- 1. SDL video + hidden renderer ----------------------------- */
-    rc = cbx_renderer_init(&svc->rend, "Controller-Box Overlay",
+    /* --- 1. SDL video + hidden overlay renderer --------------------- */
+    rc = cbx_renderer_init_overlay(&svc->rend, "Controller-Box Overlay",
                                CBX_RENDERER_DEFAULT_W,
                                CBX_RENDERER_DEFAULT_H, false);
     if (rc != 0) {

@@ -537,6 +537,30 @@ test_force_close_pass_fail_fail_closed(void **state)
     assert_int_equal(f->callbacks.save_fired, 0);
 }
 
+/*
+ * Owner-lost / degraded path: the engine is gone, so there is no PASS to
+ * release.  Abandon must hide the overlay and return to IDLE without
+ * attempting a PASS (which would fail and, under fail-closed close, strand
+ * a visible input-dead overlay).
+ */
+static void
+test_abandon_hides_without_pass_or_block(void **state)
+{
+    lc_fixture *f = FIX(state);
+    f->lc.require_pass_for_close = true;
+    cbx_overlay_lifecycle_activate(&f->lc);
+    assert_int_equal(f->lc.state, CBX_OVERLAY_VISIBLE);
+
+    /* No InterceptMode expectation is registered: any PASS attempt would
+     * fail.  Abandon must not attempt it. */
+    cbx_overlay_lifecycle_abandon(&f->lc);
+    assert_int_equal(f->lc.state, CBX_OVERLAY_IDLE);
+    assert_false(f->lc.close_blocked);
+    assert_int_equal(f->callbacks.closed_fired, 1);
+    assert_int_equal(f->callbacks.error_fired, 0);
+    assert_int_equal(f->callbacks.save_fired, 0);
+}
+
 static void
 test_close_blocked_retry_clears(void **state)
 {
@@ -886,6 +910,8 @@ main(void)
         cmocka_unit_test_setup_teardown(test_close_save_fail_fail_closed,
                                           setup, teardown),
         cmocka_unit_test_setup_teardown(test_force_close_pass_fail_fail_closed,
+                                          setup, teardown),
+        cmocka_unit_test_setup_teardown(test_abandon_hides_without_pass_or_block,
                                           setup, teardown),
         cmocka_unit_test_setup_teardown(test_close_blocked_retry_clears,
                                           setup, teardown),

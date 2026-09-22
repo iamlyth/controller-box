@@ -153,6 +153,34 @@ test_parse_axes(void **state)
     assert_int_equal(ip_input_parse("RightStickY"), IP_INPUT_RIGHT_STICK_Y);
 }
 
+/*
+ * The live InputPlumber DBusDevice emits InputEvent(event) with the DBus
+ * Action::as_str() vocabulary (ui_*), not short display names.  These must
+ * map to the same normalized ids or the overlay drops every real signal.
+ */
+static void
+test_parse_dbus_ui_actions(void **state)
+{
+    (void)state;
+    assert_int_equal(ip_input_parse("ui_up"), IP_INPUT_UP);
+    assert_int_equal(ip_input_parse("ui_down"), IP_INPUT_DOWN);
+    assert_int_equal(ip_input_parse("ui_left"), IP_INPUT_LEFT);
+    assert_int_equal(ip_input_parse("ui_right"), IP_INPUT_RIGHT);
+    assert_int_equal(ip_input_parse("ui_accept"), IP_INPUT_A);
+    assert_int_equal(ip_input_parse("ui_back"), IP_INPUT_B);
+    assert_int_equal(ip_input_parse("ui_context"), IP_INPUT_X);
+    assert_int_equal(ip_input_parse("ui_action"), IP_INPUT_Y);
+    assert_int_equal(ip_input_parse("ui_option"), IP_INPUT_START);
+    assert_int_equal(ip_input_parse("ui_select"), IP_INPUT_SELECT);
+    assert_int_equal(ip_input_parse("ui_guide"), IP_INPUT_GUIDE);
+    assert_int_equal(ip_input_parse("ui_l1"), IP_INPUT_L1);
+    assert_int_equal(ip_input_parse("ui_r1"), IP_INPUT_R1);
+    assert_int_equal(ip_input_parse("ui_l2"), IP_INPUT_L2);
+    assert_int_equal(ip_input_parse("ui_r2"), IP_INPUT_R2);
+    assert_int_equal(ip_input_parse("ui_l3"), IP_INPUT_L3);
+    assert_int_equal(ip_input_parse("ui_r3"), IP_INPUT_R3);
+}
+
 static void
 test_parse_unknown(void **state)
 {
@@ -736,6 +764,7 @@ main(void)
         cmocka_unit_test(test_parse_shoulders),
         cmocka_unit_test(test_parse_stick_clicks),
         cmocka_unit_test(test_parse_axes),
+        cmocka_unit_test(test_parse_dbus_ui_actions),
         cmocka_unit_test(test_parse_unknown),
 
         /* Category */

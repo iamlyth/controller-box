@@ -351,6 +351,20 @@ cbx_overlay_lifecycle_force_close(cbx_overlay_lifecycle *lc)
     enter_idle(lc);
 }
 
+void
+cbx_overlay_lifecycle_abandon(cbx_overlay_lifecycle *lc)
+{
+    if (!lc)
+        return;
+
+    /* The backend is gone, so there is no intercept mode to release and no
+     * truthful PASS to confirm.  Hiding is safe because the engine that
+     * owned the interception no longer exists.  Return to IDLE so a later
+     * reconnect re-registers triggers and resumes normally. */
+    lc->close_blocked = false;
+    enter_idle(lc);
+}
+
 cbx_overlay_state
 cbx_overlay_lifecycle_get_state(const cbx_overlay_lifecycle *lc)
 {

@@ -38,6 +38,7 @@ typedef struct {
     bool          is_gles;          /* true if using OpenGL ES backend       */
     bool          has_target_texture;/* true if SDL_RENDERER_TARGETTEXTURE    */
     bool          vsync_enabled;    /* true if SDL_RENDERER_PRESENTVSYNC      */
+    bool          is_overlay;       /* true for the always-on-top overlay      */
     int           window_w;
     int           window_h;
 } cbx_renderer;
@@ -63,6 +64,17 @@ typedef struct {
  */
 int cbx_renderer_init(cbx_renderer *r, const char *title,
                       int w, int h, bool fullscreen);
+
+/*
+ * Initialise an overlay-service renderer: identical to cbx_renderer_init but
+ * the window is created borderless, skipped from the taskbar, and
+ * always-on-top so it actually composites above a fullscreen game on X11 /
+ * Wayland / Gamescope.  cbx_renderer_show() raises it explicitly.
+ *
+ * @return 0 on success, negative errno on error.
+ */
+int cbx_renderer_init_overlay(cbx_renderer *r, const char *title,
+                              int w, int h, bool fullscreen);
 
 /*
  * Check whether the renderer supports SDL_RENDERER_TARGETTEXTURE.
